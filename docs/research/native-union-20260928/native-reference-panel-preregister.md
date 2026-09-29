@@ -36,3 +36,14 @@ completed. Checker erroneously required2 after building; failed before retaining
 binary or performing CLI rejection checks. Preserve a0001 engineering INVALID.
 Next attempt must require3 and check test output before release build. No next
 paid attempt may start until explicit release of the final reload hold.
+
+## a0002: reuse verified unchanged-source tests, finish pending authority only
+
+Final reload explicitly released2026-09-29. Native source unchanged at
+ce9502a86c503bf085942fb4294731fac8432ddcb5f1e52cdf21c68397fd5f02.
+Reuse a0001's authenticated3passing Rust tests, exact source/Cargo.lock/library
+hashes and terminal/terminated receipt. Worker receives hash-verified test log
+and reuse record. Execute ONLY release binary build and five pending CLI checks;
+retain authenticated binary. No Cargo test or full assurance repetition. Fields
+distinguish focused_tests_reused3 from focused_tests_executed0. Resource and
+cleanup caps remain as above; originala0001 remains engineering INVALID.

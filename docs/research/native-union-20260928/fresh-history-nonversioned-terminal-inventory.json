@@ -1,0 +1,2570 @@
+{
+  "metadata_only": true,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "nonversioned_prefixes_scanned": 62,
+  "terminal_metadata_count": 207,
+  "terminal_metadata": [
+    {
+      "key": "research/bounded-reader-next-result/26716f9eae90688ea0b047a83211d99855062858/runs/bounded-reader-20260921T074858Z-26716f9/a0001/terminal.json",
+      "sha256": "283f560c9a86e0e5a4980519ea216c20105711bf84b156ff706f6fdb79c4c76d",
+      "bytes": 531,
+      "schema": "borsuk-bounded-reader-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "26716f9eae90688ea0b047a83211d99855062858",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/bounded-reader-next-result/80ef77ba4f9b9c76381bacdbf79a5c888bca4286/runs/bounded-reader-20260921T074623Z-80ef77b/a0001/terminal.json",
+      "sha256": "5e8dc259fbec4ad9e70b86f8edc956aa5ccf9a99503beea30656b7d149452839",
+      "bytes": 345,
+      "schema": "borsuk-bounded-reader-terminal-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": null,
+      "source_commit": "80ef77ba4f9b9c76381bacdbf79a5c888bca4286",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/matched-s3-vectors-1m/01320ab960c6d13c69080dad4ca434ec19bcf79d/runs/matched-s3v-20260921T054216Z-01320ab9/a0001/terminal.json",
+      "sha256": "e1179b60b91def3173f86f4f74a73d84d7ef89e3ff8f0fe6547ca6b4b6f34035",
+      "bytes": 268,
+      "schema": "borsuk-matched-s3-vectors-terminal-v1",
+      "status": "failed",
+      "exit_code": 94,
+      "source_archive_sha256": null,
+      "source_commit": "01320ab960c6d13c69080dad4ca434ec19bcf79d",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/matched-s3-vectors-next-result/db47333f3ace06d0e6cb0dbd6fcf41150b5e87c2/runs/matched-20260921T080153Z-db47333/a0001/terminal.json",
+      "sha256": "f502f9443b954a674a296896d138d7e039d58f37850c9f1ee46cbabd6f226488",
+      "bytes": 1830,
+      "schema": "borsuk-matched-s3-vectors-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "db47333f3ace06d0e6cb0dbd6fcf41150b5e87c2",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-ann-100k/1b7f2526b74fe66c7b865c281d9ea884e86e860d/runs/native-100k-dev1000-20260921T042444Z-1b7f2526/a0001/evidence/terminal.json",
+      "sha256": "9186ef6d156d29197bb9dcb4878319594bf6c51f4e770a08dfcf2369e02b1b1b",
+      "bytes": 391,
+      "schema": "borsuk-native-ann-100k-terminal-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "4f27ba047a48cf071d5dab149c3b909963f7a41eae9feeb0e0c6e558ac71848a",
+      "source_commit": "1b7f2526b74fe66c7b865c281d9ea884e86e860d",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-ann-100k/4ec23fe50ae5524292469b008febe85ee1c3f0e2/runs/native-100k-dev1000-20260921T041227Z-4ec23fe5/a0001/evidence/terminal.json",
+      "sha256": "299e8185410b4c4e0d3e64a18989ac7d4aeb2539540618870e8af4b5ee33fb20",
+      "bytes": 391,
+      "schema": "borsuk-native-ann-100k-terminal-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "6e75d126380c15903b3868072e754c2569b3c9ce9d50b3cd04b5f4a31b55ac21",
+      "source_commit": "4ec23fe50ae5524292469b008febe85ee1c3f0e2",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-ann-100k/69be0e20f74b892dce20ecfa33a865c11b55a0a3/runs/native-100k-dev1000-20260921T043822Z-69be0e20/a0001/evidence/terminal.json",
+      "sha256": "8d320c17f76cb24a12c2fc9e1d303e97ebaf81fd4165643a6c400b60aa837f55",
+      "bytes": 393,
+      "schema": "borsuk-native-ann-100k-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "092b9dd850e17cb2d09f3db4be023f2ec6ec820c9de730da399b52079944009b",
+      "source_commit": "69be0e20f74b892dce20ecfa33a865c11b55a0a3",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-ann-100k/74d2f322cec1ac3aa500dacd358262f7ad144808/runs/native-100k-dev1000-20260921T040139Z-74d2f322/a0001/evidence/terminal.json",
+      "sha256": "b8b7c7ee76e1a3e21b5e61525b383b9a63da34440c24d72e93f414c4e16707b1",
+      "bytes": 391,
+      "schema": "borsuk-native-ann-100k-terminal-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "f36ad50b59d9e7b5bbb343675303f6fe2cf40e1e464fa861ee4a42132dca7292",
+      "source_commit": "74d2f322cec1ac3aa500dacd358262f7ad144808",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-ann-100k/9c2435b9229bd75685607f1304b962e628b753a9/runs/native-100k-dev1000-20260921T043239Z-9c2435b9/a0001/evidence/terminal.json",
+      "sha256": "0c741a1428f41c174f781b23d98fa26c69397843fde9a6302868714ea55af33c",
+      "bytes": 391,
+      "schema": "borsuk-native-ann-100k-terminal-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "1e08a7639e3413c61f4f8b68bfaaa16b72f8cf3a3194e84e88b579218642460b",
+      "source_commit": "9c2435b9229bd75685607f1304b962e628b753a9",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/1616cd5105401d6e497af0d4cc369c4a2aedc512/task4-compaction-green-r2/terminal.json",
+      "sha256": "9ec6434da7d4adbd55e132a8856201c8e02b568d786dfc2136ec169769f1bd17",
+      "bytes": 153,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/199136c495ab0e2bb6a12e6a849ae0e30a9c4500/task4-retired-v2-green/terminal.json",
+      "sha256": "b790996b241a2750b3a1a88691ecbf24bd88b3e875995bd9ca64543e8e2b6643",
+      "bytes": 151,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/1c2b1af8997f571aa4b129a4045ef0201daa6265/task4-build-red/terminal.json",
+      "sha256": "81be28f9aad9d26271fed796d0a2052255b7c4035e26d383471c9330e1fd5f65",
+      "bytes": 157,
+      "schema": "borsuk-native-bounded-tdd-terminal-v1",
+      "status": null,
+      "exit_code": 101,
+      "source_archive_sha256": null,
+      "source_commit": "1c2b1af8997f571aa4b129a4045ef0201daa6265",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/31ef7ffd3c6cb310cae305365a290422d08f977f/task4-retired-v2-red/terminal.json",
+      "sha256": "aac6648836ae97d2628bc04bc429819d867f8266b469f4ee8e3169479c73513c",
+      "bytes": 153,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/3ac532999738081df9c400f6632a1be4dcd34154/task3-cpu-authority-green/terminal.json",
+      "sha256": "23cac1aab9b28e6dd919ddbdc29540ecbf8a3f5fda0f5bf63763665b87194189",
+      "bytes": 159,
+      "schema": "borsuk-native-bounded-tdd-terminal-v1",
+      "status": null,
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "3ac532999738081df9c400f6632a1be4dcd34154",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/3ac532999738081df9c400f6632a1be4dcd34154/task3-grouped-green/terminal.json",
+      "sha256": "3fe1cd1f6c6bcdf3e2494c26fa881733da70258f3dbce13f836a853a48cac864",
+      "bytes": 149,
+      "schema": "borsuk-native-bounded-tdd-terminal-v1",
+      "status": null,
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "3ac532999738081df9c400f6632a1be4dcd34154",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/47ea93811e093b4f62c4d34a3d7d1a20982db921/task5-semantic-green-r4/terminal.json",
+      "sha256": "dbca7d5075f65ac2bf2d29d49adf644062b377f72e6605721ced6af75f59b87a",
+      "bytes": 153,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/4a7d75be015eccd65dbfdbc1cbd2716b06832fcb/task1-authority-red/terminal.json",
+      "sha256": "aafcc281126d56747c5b14421d9b3a0ba7896fe27d4d92f399dad09c77054246",
+      "bytes": 161,
+      "schema": "borsuk-native-bounded-tdd-terminal-v1",
+      "status": null,
+      "exit_code": 101,
+      "source_archive_sha256": null,
+      "source_commit": "4a7d75be015eccd65dbfdbc1cbd2716b06832fcb",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/54340a82ceb3a4bc35abe6b33257a206bdc39ebf/task5-semantic-green/terminal.json",
+      "sha256": "566856f7fa6f837930777ba1c0c551f0261371d3f716e0d0c34f485aeef05c09",
+      "bytes": 153,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/561362c26b2911719c5d3757ca9cceb17f970088/task5-semantic-green-r3/terminal.json",
+      "sha256": "b3a1ef405efd9ea26d7157ca260c40d1c746b0cdb897be88460a7cf4ba5570d6",
+      "bytes": 153,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/594a786568f5eca74131fe959f45bf23e8d2eede/task1-format-red/terminal.json",
+      "sha256": "1dec06ce77573ea92814459a167700cb393fdb78b2d749e49126f20715735d9c",
+      "bytes": 158,
+      "schema": "borsuk-native-bounded-tdd-terminal-v1",
+      "status": null,
+      "exit_code": 101,
+      "source_archive_sha256": null,
+      "source_commit": "594a786568f5eca74131fe959f45bf23e8d2eede",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/5af05f87d5d307918c6d199b8974a0df04f1e253/task4-dispatch-green/terminal.json",
+      "sha256": "4cc40774003a61a3221c8f6c001a6d0298a2322d17a4f2bef2a2d05955749d5b",
+      "bytes": 151,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/610995f7a0ce30d44c99a30179abb03d25f4077e/task3-cpu-authority-red/terminal.json",
+      "sha256": "256b32943d5528c9232a366bd7b7db0e7d573420351885eaae7727eb260a9dff",
+      "bytes": 161,
+      "schema": "borsuk-native-bounded-tdd-terminal-v1",
+      "status": null,
+      "exit_code": 101,
+      "source_archive_sha256": null,
+      "source_commit": "610995f7a0ce30d44c99a30179abb03d25f4077e",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/61db86fa815aaee2882d619c2d400fb070357b19/task3-snapshot-green/terminal.json",
+      "sha256": "6a3dfccd7759a2b72030719f19d18136c5f43c6cf5e960f1922c7c7e2adfa85f",
+      "bytes": 158,
+      "schema": "borsuk-native-bounded-tdd-terminal-v1",
+      "status": null,
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "61db86fa815aaee2882d619c2d400fb070357b19",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/6391398fd5f01f0d3c10a3301c5baa24a18942f0/task4-flush-red/terminal.json",
+      "sha256": "9ab6894380ca937376f13d9e5eec7398f3ea4a4d06b69837ea529f963e20349d",
+      "bytes": 153,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/67e4aee83f3ecf863791c9c946fb438e13ccdc16/task4-fail-closed-green/terminal.json",
+      "sha256": "8ba7e5da1b1028bdea5424904515ed2aee2e8ec6e20ab5a7b232c3bd37481ef7",
+      "bytes": 151,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/67e4aee83f3ecf863791c9c946fb438e13ccdc16/task4-final-grouped/terminal.json",
+      "sha256": "1b0225f597f5b270af284ea3766684241927ec8523045b1cb05dfc20bb679f60",
+      "bytes": 152,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/6803d818d15240423cb2aa5f31b81ae4b0fc74e8/task5-fetch-wave-red/terminal.json",
+      "sha256": "f7b4c7f30a645430aeaabadd6b87a77496a5344d2b670373a198cda4cde579cc",
+      "bytes": 153,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/6895875d74c57d0ec8a02dfd8f167d8263b4ea3e/task4-flush-green/terminal.json",
+      "sha256": "b4c00216324597c2fb52732aba8d2f7b8f4bd94f7a01a361085011a5d6058134",
+      "bytes": 151,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/6a2f55e29c29753580f4ee9f824e65b705b8ea1e/task4-build-green/terminal.json",
+      "sha256": "4e3954ff96d4279ec274ae8826732f504aec1c0a117b268047ac67ba09fe7350",
+      "bytes": 155,
+      "schema": "borsuk-native-bounded-tdd-terminal-v1",
+      "status": null,
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "6a2f55e29c29753580f4ee9f824e65b705b8ea1e",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/6c387f22ef400b07f5fd1bf67dde2d033f4c55bf/task1-green/terminal.json",
+      "sha256": "fa972fca36b597d5fc858bab657421730b0fe63a071767f7243419d352564a52",
+      "bytes": 145,
+      "schema": "borsuk-native-bounded-tdd-terminal-v1",
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": "6c387f22ef400b07f5fd1bf67dde2d033f4c55bf",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/6fd917d1b1334c1c29e8ca69cae074111611b6b1/task5-semantic-red/terminal.json",
+      "sha256": "e3c01a44aece326731a3a313b673fa49070e63206ad56fdad5cc64b10eb70178",
+      "bytes": 153,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/7569d27618f818fee83c38c5496a9f4829feac4e/task4-dispatch-red/terminal.json",
+      "sha256": "3db8d707650cee38e9a773bcdd9476d4648aeaa0a38fead0b993d24212922f0d",
+      "bytes": 160,
+      "schema": "borsuk-native-bounded-tdd-terminal-v1",
+      "status": null,
+      "exit_code": 101,
+      "source_archive_sha256": null,
+      "source_commit": "7569d27618f818fee83c38c5496a9f4829feac4e",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/806a86a738cd9edea2b238c1869bd291e4615e79/task2-router-red/terminal.json",
+      "sha256": "00938649311f3f1570af421b64bc22fc8d5ce7a5814288af34c24d74d4e1d1ba",
+      "bytes": 158,
+      "schema": "borsuk-native-bounded-tdd-terminal-v1",
+      "status": null,
+      "exit_code": 101,
+      "source_archive_sha256": null,
+      "source_commit": "806a86a738cd9edea2b238c1869bd291e4615e79",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/8871c39d64d400a2597c8be1f9163c0c65deab75/task5-100k-a0001/terminal.json",
+      "sha256": "5a7c82ba29c54ce4b185f9163e15450d2ab2744af3bac403992e90d2ba378ecb",
+      "bytes": 1231,
+      "schema": "borsuk-bounded-native-100k-terminal-v1",
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/8871c39d64d400a2597c8be1f9163c0c65deab75/task5-fetch-wave-green/terminal.json",
+      "sha256": "922416a9b27b97347d0db74c232c7fb8def2aecff8d724756a5ed48434984bf4",
+      "bytes": 151,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/8c9a4d4/task2-router-green-r2/terminal.json",
+      "sha256": "08c5dd1a6cdf15bc590d10d5c87dffc4bc4bd232dcc83f36d8154a78b65944b2",
+      "bytes": 123,
+      "schema": "borsuk-native-bounded-tdd-terminal-v1",
+      "status": null,
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "8c9a4d4",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/953d49d9cdaa8f4c9ecf0c398995c6baa4c44b1a/task4-compaction-green/terminal.json",
+      "sha256": "665e5bc009509901e0d3b46280864fb9ea549c986368b5b04cbeade810b1442c",
+      "bytes": 153,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/9976b06f93e22892969e46efde90bb71c9030100/task4-fail-closed-red/terminal.json",
+      "sha256": "60d98c2f0daa6b1e3b59ffd0f840b16e25515684e4c5551c6d062c914358cc6a",
+      "bytes": 153,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/abf495132b7c173e97de2b9d068b803e0a980af1/task4-compaction-red/terminal.json",
+      "sha256": "f4b92bb3b90f9926e91eb88f41d38115935f14c89e964ee04343d9dc2c0f0d2c",
+      "bytes": 153,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/cc34ff18120aad0ad1f18a6019e81dbdd74140bc/task5-semantic-green-r2/terminal.json",
+      "sha256": "0c122d4209c77b7708a0bd768c59bdc39f58ce24d9d76c3f549f7221008680d0",
+      "bytes": 153,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/d9d5298d8c75092a932029aa0c5d2dc05c02718d/task4-compaction-green-r3/terminal.json",
+      "sha256": "63ad5fc2e3e1ecfb8a777b711d584710f317d67191ca3c24a4517921ecd1173c",
+      "bytes": 151,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/d9d5298d8c75092a932029aa0c5d2dc05c02718d/task4-grouped-green-r1/terminal.json",
+      "sha256": "fac2fe1edeaaf4221782459f6e9b2b6939b236db6c3e316855d8387888b7103e",
+      "bytes": 152,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/e12f6ce19380f6ab440e2e98f04de42f4c6947ec/task5-100k-a0001/terminal.json",
+      "sha256": "177d781d27a1030b7427d498f5d59c693303f086ea323b4b22b4fc9cf098541b",
+      "bytes": 1105,
+      "schema": "borsuk-bounded-native-100k-terminal-v1",
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/e12f6ce19380f6ab440e2e98f04de42f4c6947ec/task5-example-green/terminal.json",
+      "sha256": "9cc3420312f8b1adecb12c8caa620fec1cdca0cebb6489bb06ec96618ffbb27d",
+      "bytes": 151,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/e12f6ce19380f6ab440e2e98f04de42f4c6947ec/task5-semantic-green-r5/terminal.json",
+      "sha256": "2377831122c92b638d892c52978f292f780364e63a2ed67807a2cd9c89748247",
+      "bytes": 151,
+      "schema": null,
+      "status": null,
+      "exit_code": null,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/e23ba18cd5c34efd95bb5c32723fd2a2025b9e88/task2-router-green/terminal.json",
+      "sha256": "ffce22ac20a9258cb09e08dcd7579fa0b7b7565ff2a2448eb5c52d2a1cdf8335",
+      "bytes": 158,
+      "schema": "borsuk-native-bounded-tdd-terminal-v1",
+      "status": null,
+      "exit_code": 101,
+      "source_archive_sha256": null,
+      "source_commit": "e23ba18cd5c34efd95bb5c32723fd2a2025b9e88",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-bounded-release/ecb2df989650ce4795850aebe5ff2a88f7026f0a/task3-snapshot-red/terminal.json",
+      "sha256": "9572d60b58c28205f1a6c2ec39cd6393a755f5b0ba18a8e3c98c2ef131526305",
+      "bytes": 160,
+      "schema": "borsuk-native-bounded-tdd-terminal-v1",
+      "status": null,
+      "exit_code": 101,
+      "source_archive_sha256": null,
+      "source_commit": "ecb2df989650ce4795850aebe5ff2a88f7026f0a",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-cold/20260928/green-a0001/terminal.json",
+      "sha256": "fa2da5d297da3de8ee633bba6a5f04429efb8cd6291a8bc3fe60a7db64b2d8cd",
+      "bytes": 834,
+      "schema": "borsuk-native-cold-baseline-aws-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "00b03972dc8f5122113752eb196262ac3f71d1e4c4996d67a603457b1c1be493",
+      "source_commit": "73569e89b3d53f75ae022714cf80aecd99a7a058",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-cold/20260928/green-a0002/terminal.json",
+      "sha256": "99d5f754c6c5a35b868fa98645640a1cb0dd70ba53662f00ca4f10c5be75afe9",
+      "bytes": 1278,
+      "schema": "borsuk-native-cold-baseline-aws-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "333bf1f9c62e7bbbb9ec24e7035aec32d7b17c44c22e623d3ab32c04c596f2a0",
+      "source_commit": "73569e89b3d53f75ae022714cf80aecd99a7a058",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-cold/20260928/green-a0003/terminal.json",
+      "sha256": "9b8b8176523fcc2e2b2c321c9256ab2c5d1703c62a1cf67eedc5969b1b82e6e1",
+      "bytes": 747,
+      "schema": "borsuk-native-cold-baseline-aws-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "b3f6be984a863622b6ab0b24de74d0c71068759be544895880fe80bc9cef165a",
+      "source_commit": "73569e89b3d53f75ae022714cf80aecd99a7a058",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-cold/20260928/green-a0004/terminal.json",
+      "sha256": "8aec47d5a88a0816b524a2a2199c43ff85ee9061342aa182611f1acb5f706abd",
+      "bytes": 2275,
+      "schema": "borsuk-native-cold-baseline-aws-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "86018fe4fa2fff505cb06ceeb5af7a05fa8a82fa807294327239828e22bcf0c4",
+      "source_commit": "73569e89b3d53f75ae022714cf80aecd99a7a058",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-cold/20260928/red-a0001/terminal.json",
+      "sha256": "2c5befae1e235cbb2772cd75da3648c438b774de57f230be3ebf5cb84cff7ebb",
+      "bytes": 727,
+      "schema": "borsuk-live-split-red-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "471c7b32ed8dcc9cbc6fda1247b420d98efd14c4ca1ca7710091b7303fb6b833",
+      "source_commit": "73569e89b3d53f75ae022714cf80aecd99a7a058",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-geometric-layout/139da948b1bd2ff277241e15f7da448bd126a551/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "49dae4fff39da6e4b48fa1e81a911a14092aa09e7dc56588578d1433b73be6f7",
+      "bytes": 261,
+      "schema": "borsuk-native-geometric-layout-terminal-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": null,
+      "source_commit": "139da948b1bd2ff277241e15f7da448bd126a551",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-geometric-layout/3c1c5f1fc974f379a8b54029a5e25954f39e678d/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "c8886020ac185e316c9f1763dcbb61be6ff65b2e3d6d47955cffa0050e94a67e",
+      "bytes": 257,
+      "schema": "borsuk-native-geometric-layout-terminal-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": null,
+      "source_commit": "3c1c5f1fc974f379a8b54029a5e25954f39e678d",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-geometric-layout/bc5b1dfdd84d21a254b7a05b5e53858b01f2a038/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "06d61041bf34e4118d86f1b9a754116046e9e9c7e23a0e87c5c35fa253aed7a3",
+      "bytes": 264,
+      "schema": "borsuk-native-geometric-layout-terminal-v1",
+      "status": "failed",
+      "exit_code": 255,
+      "source_archive_sha256": null,
+      "source_commit": "bc5b1dfdd84d21a254b7a05b5e53858b01f2a038",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-geometric-layout/f7a09ea5df975fb6c2e36a53ed56f53492b334fd/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "8f56dddf85b18661ca4619c8e23e8f847516b542d6ba2e72e149cda5cf759ad7",
+      "bytes": 264,
+      "schema": "borsuk-native-geometric-layout-terminal-v1",
+      "status": "failed",
+      "exit_code": 255,
+      "source_archive_sha256": null,
+      "source_commit": "f7a09ea5df975fb6c2e36a53ed56f53492b334fd",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-geometric-router/67c88488fb17a9f02715c6d262a22225cf950de5/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "0e4046a5db4f7ae258d70ab1ee557c35f1b66f2288e9057aede507c4aeb6828e",
+      "bytes": 3074,
+      "schema": "borsuk-native-geometric-layout-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "67c88488fb17a9f02715c6d262a22225cf950de5",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-hundred-thousand-opq8-paired/b0c0c25fb6816af68935690f3c4b6603e37b2d39/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "7407bdaa779ad3aa1d6f57360d832707640933493e93311523ad63b2e5b7e041",
+      "bytes": 3902,
+      "schema": "borsuk-hundred-thousand-opq8-paired-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "b0c0c25fb6816af68935690f3c4b6603e37b2d39",
+      "relevant_artifact_identities": {
+        "plan-seal": {
+          "encoded_bytes": 769,
+          "role": "plan-seal",
+          "sha256": "dbfe45c8a16447144b3f06bbdcb3327bbf4af14df72a8a74a36ba36d9242cf22",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-hundred-thousand-opq8-paired/b0c0c25fb6816af68935690f3c4b6603e37b2d39/runs/relaion-100k-dev1000-a0001/artifacts/plan-seal.json"
+        },
+        "source-seal": {
+          "encoded_bytes": 2823,
+          "role": "source-seal",
+          "sha256": "eb018175572719be32c9c4e7fb7cb8a13fb46ead3e209a918ecdbfb81bf7bc4a",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-hundred-thousand-opq8-paired/b0c0c25fb6816af68935690f3c4b6603e37b2d39/runs/relaion-100k-dev1000-a0001/artifacts/source-seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-hundred-thousand-opq8-router/87236c5765186fb8ab977ef86f87a6b1047effb1/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "c6f2258209634a282abf316730a316e90156ed6e669f0bc938f65a8d3c38c0eb",
+      "bytes": 4161,
+      "schema": "borsuk-hundred-thousand-opq8-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "87236c5765186fb8ab977ef86f87a6b1047effb1",
+      "relevant_artifact_identities": {
+        "seal": {
+          "encoded_bytes": 5993,
+          "role": "seal",
+          "sha256": "e6f1edf3d680dd60e1cb572df70347a8ac8d3c74bfaa6dbcc89dea2cc9c1faf8",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-hundred-thousand-opq8-router/87236c5765186fb8ab977ef86f87a6b1047effb1/runs/relaion-100k-dev1000-a0001/artifacts/seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-hundred-thousand-pq96/88daad4fac6052e36c5533a42da32669aca0c5a5/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "5751b807f725b0e2c2bd3dca08278257ae64b1b713f3eca077d09dfec1d81469",
+      "bytes": 6428,
+      "schema": "borsuk-hundred-thousand-pq96-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "88daad4fac6052e36c5533a42da32669aca0c5a5",
+      "relevant_artifact_identities": {
+        "plan-seal": {
+          "encoded_bytes": 1016,
+          "role": "plan-seal",
+          "sha256": "2ddc3c5666380f454c4e45ba8e21ac2ecbcab0bd808e6fc426875387c55ab81f",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-hundred-thousand-pq96/88daad4fac6052e36c5533a42da32669aca0c5a5/runs/relaion-100k-dev1000-a0001/artifacts/pq96-plan-seal.json"
+        },
+        "pq-seal": {
+          "encoded_bytes": 5300,
+          "role": "pq-seal",
+          "sha256": "5ae52e9b0949e5ad0ee63199b7952da873e853b967773b0df5673f634a381861",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-hundred-thousand-pq96/88daad4fac6052e36c5533a42da32669aca0c5a5/runs/relaion-100k-dev1000-a0001/artifacts/pq96/seal.json"
+        },
+        "source-seal": {
+          "encoded_bytes": 1257,
+          "role": "source-seal",
+          "sha256": "ccc49e1051e3a490bb2d9ca2b2dd7bfc1d770cccc22d75055f176d1d0ba71029",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-hundred-thousand-pq96/88daad4fac6052e36c5533a42da32669aca0c5a5/runs/relaion-100k-dev1000-a0001/artifacts/pq96-source-seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-hundred-thousand-sign96/13c724f667d1af246a3be3e3a0b3bf108aa53fb8/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "ff97081047a65952f440a8d9b5fc2a56350f04adede31bd2c9c1ea2a33017d9f",
+      "bytes": 6494,
+      "schema": "borsuk-hundred-thousand-sign96-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "13c724f667d1af246a3be3e3a0b3bf108aa53fb8",
+      "relevant_artifact_identities": {
+        "plan-seal": {
+          "encoded_bytes": 925,
+          "role": "plan-seal",
+          "sha256": "a1ebff938663413ba3524dbdacb21e134ff4d45af6ac478723bf4155aff6f62a",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-hundred-thousand-sign96/13c724f667d1af246a3be3e3a0b3bf108aa53fb8/runs/relaion-100k-dev1000-a0001/artifacts/sign96-plan-seal.json"
+        },
+        "sign-seal": {
+          "encoded_bytes": 5255,
+          "role": "sign-seal",
+          "sha256": "f7ff31d5f9809e3aa3c080b86a6890e57872d79bcb6147cfa160616c3b6a0c2e",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-hundred-thousand-sign96/13c724f667d1af246a3be3e3a0b3bf108aa53fb8/runs/relaion-100k-dev1000-a0001/artifacts/sign96/seal.json"
+        },
+        "source-seal": {
+          "encoded_bytes": 1065,
+          "role": "source-seal",
+          "sha256": "78e9dfa217f7389d698702761277357d8eec96399ecb85990f751e31b17ddf81",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-hundred-thousand-sign96/13c724f667d1af246a3be3e3a0b3bf108aa53fb8/runs/relaion-100k-dev1000-a0001/artifacts/sign96-source-seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-library-check/arm-platform/20260928/a0002/terminal.json",
+      "sha256": "a0f45578d61b9636274f14bda7d2ae696d1d21a6c8666783b6b96b74e87fa4e8",
+      "bytes": 726,
+      "schema": "borsuk-arm-platform-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "93bc284a78f60a5202b1c612a87a94e7938f17ac132448b5fa905051a45ad5e0",
+      "source_commit": "7df4ef293d28569128f7fb602f0f4e3f7f80cb4f",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/assurance-fixtures/c57a294917cd3d4bbf4d4a89e5b6f219f2b57f0a2bb473785c44a9572e22a2a7/a0001/terminal.json",
+      "sha256": "28aeaf2aaa975f94594e2e28a63c4a8f50288b15c381020e1098cd58974e31e6",
+      "bytes": 632,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "c57a294917cd3d4bbf4d4a89e5b6f219f2b57f0a2bb473785c44a9572e22a2a7",
+      "source_commit": "29e578badbb9d62314b71c7b92aa241e5babcc77",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/callable-compaction/575cd350efed6c03061b4d1e0c74bc1c14f2ec724c5ba4ee8c98fe4c98e3202a/a0002/terminal.json",
+      "sha256": "3c18de28008fac621742b90bed4210f63c854478851410ee8718b1b5e950bb64",
+      "bytes": 632,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "575cd350efed6c03061b4d1e0c74bc1c14f2ec724c5ba4ee8c98fe4c98e3202a",
+      "source_commit": "d06b793feaa3507b5900e71d01f42a59d7822686",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/callable-compaction/bc07b98d5fd01b2579011b138c3401f017ef9e64ab2079b51749a52e4d5273e3/a0001/terminal.json",
+      "sha256": "fcbb2cc2862cf4f009c718a6ee0d81ddbbe9487ffaff8ec191594211861f30fd",
+      "bytes": 837,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "bc07b98d5fd01b2579011b138c3401f017ef9e64ab2079b51749a52e4d5273e3",
+      "source_commit": "d06b793feaa3507b5900e71d01f42a59d7822686",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/compaction-source/586072700a590b6703d89daf299bb10a931dea59019fced6dfd06f0d668d9ba5/a0001/terminal.json",
+      "sha256": "48efe327834ad97890d1426403468bf0539b7fc4112881c357c7e3c27ac9168d",
+      "bytes": 632,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "586072700a590b6703d89daf299bb10a931dea59019fced6dfd06f0d668d9ba5",
+      "source_commit": "9e1f2aeb5f0d6cc1e2c1352aee0095eb2b6b3a5c",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/control-fence/2808fcb892f68b6a95bf1ffcfbabe56a97a0158305f23ca5e752f335ebd6913f/a0001/terminal.json",
+      "sha256": "be3580bdddfb0e793753b931236c7f081554f0a186491b0535fc9b2596fd1251",
+      "bytes": 842,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "2808fcb892f68b6a95bf1ffcfbabe56a97a0158305f23ca5e752f335ebd6913f",
+      "source_commit": "5f704d5b077807fad35110a1a73ca9cc252d4af1",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/diagnostic-authority-assurance/9c043bb9c83215c4596dbabde55f410f89814ee23349d81a5b10a611320fc550/a0001/terminal.json",
+      "sha256": "5221e34f15517059c20ec0455ce9de3d27fea5d648b327948a21b1515ded983b",
+      "bytes": 633,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "9c043bb9c83215c4596dbabde55f410f89814ee23349d81a5b10a611320fc550",
+      "source_commit": "7890cee653a30ac066132bb5f8dfea1d60177b6f",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/diagnostic-lifecycle-assurance/8cdf83cefa8051aa5be6ab0ec6d607a9a920f45e08a2a74a6bed233e7af58021/a0001/terminal.json",
+      "sha256": "0caafeafcf4b3dccd43a4cdb0d6540fd80c7e7bc17e7f18cbc5c62abed689128",
+      "bytes": 627,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "8cdf83cefa8051aa5be6ab0ec6d607a9a920f45e08a2a74a6bed233e7af58021",
+      "source_commit": "83cc6cdbc8f2b6f69185751a83bb764bec76cda1",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/diagnostic-lifecycle-assurance/ed1ca2f6e28ad7a2555bf99930099a561759993e9b8c077f1fd3193cf549da42/a0001/terminal.json",
+      "sha256": "8cad3b2edae667b173e5287a1097716e73956b9adb85b1392ad8090176459dcf",
+      "bytes": 628,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "ed1ca2f6e28ad7a2555bf99930099a561759993e9b8c077f1fd3193cf549da42",
+      "source_commit": "83cc6cdbc8f2b6f69185751a83bb764bec76cda1",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/empty-index/b8a0c51f7e80d2894330b8721fa44b111fedd2ac6c15a5ec251434436fefc367/a0001/terminal.json",
+      "sha256": "b30fdee58e6b1c3f6cc97aa4c10454f9c16e6594b7271148c319f9a263e78603",
+      "bytes": 837,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "b8a0c51f7e80d2894330b8721fa44b111fedd2ac6c15a5ec251434436fefc367",
+      "source_commit": "3bc23eda9cd6425835bec28458154c98ef9c9e11",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/empty-index/b8a0c51f7e80d2894330b8721fa44b111fedd2ac6c15a5ec251434436fefc367/a0002/terminal.json",
+      "sha256": "b6080457cb18e5d882ba8c0f4be0847a826d79bb67416459d74050a5dcf01743",
+      "bytes": 842,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "b8a0c51f7e80d2894330b8721fa44b111fedd2ac6c15a5ec251434436fefc367",
+      "source_commit": "3bc23eda9cd6425835bec28458154c98ef9c9e11",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/gc-delayed-delete/03a8ee3ad4a5b7e4bd97b4aa9eb7513991b5e5c12cc86b9650714bed61161e99/a0006/terminal.json",
+      "sha256": "1232ca7232b5e787b6824eb99b892205deea996288d86f2d4815be4335beb7e0",
+      "bytes": 632,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "03a8ee3ad4a5b7e4bd97b4aa9eb7513991b5e5c12cc86b9650714bed61161e99",
+      "source_commit": "29e578badbb9d62314b71c7b92aa241e5babcc77",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/gc-delayed-delete/1f370ccd3e65ef09f66a9c99e96466a737f8b9e955a22c957e299d85e4e17c07/a0012/terminal.json",
+      "sha256": "1305aa5aad3854d94ea5970622b4ed0edfa6bd4938a3843dc6fc56a741f1564b",
+      "bytes": 632,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "1f370ccd3e65ef09f66a9c99e96466a737f8b9e955a22c957e299d85e4e17c07",
+      "source_commit": "a4027d8ecf088e336dd77a80918ba33161438704",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/gc-delayed-delete/36180c21c2d761f62d361f4cdcc415cc3b3d1feb2645055d845cf7554ddc4ad2/a0009/terminal.json",
+      "sha256": "d1bb455e70560be399f6e837998a89ca66fe2805f9394ee68daac970392cec23",
+      "bytes": 627,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "36180c21c2d761f62d361f4cdcc415cc3b3d1feb2645055d845cf7554ddc4ad2",
+      "source_commit": "a4027d8ecf088e336dd77a80918ba33161438704",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/gc-delayed-delete/65d75f067cf72cfc5c3d2f24763428ee568415c97917d54f6831986f408876ab/a0005/terminal.json",
+      "sha256": "f705e209af63b5780c56ce7651fc977295786e0bada8cfbed09e0e5a898e5a92",
+      "bytes": 630,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "65d75f067cf72cfc5c3d2f24763428ee568415c97917d54f6831986f408876ab",
+      "source_commit": "29e578badbb9d62314b71c7b92aa241e5babcc77",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/gc-delayed-delete/7e7efd62dfa3abd9db31b50c36df6642a15fe6a67bc78ab17a4894ee76c6ef52/a0001/terminal.json",
+      "sha256": "9e7a8b485204dd7f69a837452eb0ec0fe0b5645bf9e4d13c7ae72bdd77ccb6c4",
+      "bytes": 625,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 92,
+      "source_archive_sha256": "7e7efd62dfa3abd9db31b50c36df6642a15fe6a67bc78ab17a4894ee76c6ef52",
+      "source_commit": "29e578badbb9d62314b71c7b92aa241e5babcc77",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/gc-delayed-delete/c4cc556653fba9cb958846a89d839b25161a0aa6d3f456c8b4b940bb228a6761/a0008/terminal.json",
+      "sha256": "cf1cfe497844a3d543b1a64cc3d34afbc255248b2254d62607a8b69afc2d0597",
+      "bytes": 627,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "c4cc556653fba9cb958846a89d839b25161a0aa6d3f456c8b4b940bb228a6761",
+      "source_commit": "a4027d8ecf088e336dd77a80918ba33161438704",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/gc-delayed-delete/d354b201b9b5e9ef05c4cac5937d368793d7b91173b109b406e5019a78d5a282/a0007/terminal.json",
+      "sha256": "b74134aa6379fbe7d0b307423915a580661f3b6369f88d1119a579a615899d21",
+      "bytes": 630,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "d354b201b9b5e9ef05c4cac5937d368793d7b91173b109b406e5019a78d5a282",
+      "source_commit": "a4027d8ecf088e336dd77a80918ba33161438704",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/gc-delayed-delete/d7279f148e1f81fa48c4a9f9702698425f0a4e6192781141f5bd9e20f7e28ef3/a0010/terminal.json",
+      "sha256": "1aaf7d9690aa2358120f265d71cee9f15f8418a26165e30bcdf0bfde177a89e0",
+      "bytes": 627,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "d7279f148e1f81fa48c4a9f9702698425f0a4e6192781141f5bd9e20f7e28ef3",
+      "source_commit": "a4027d8ecf088e336dd77a80918ba33161438704",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/gc-delayed-delete/e87306a174920336a93a70a7243b3fe9ab276af9c769fac27543756e7d8e59dc/a0011/terminal.json",
+      "sha256": "d6f911dbd8c7ce279d1bb6da732c70b2265056996327ed6bbb2c7ef00f233644",
+      "bytes": 627,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "e87306a174920336a93a70a7243b3fe9ab276af9c769fac27543756e7d8e59dc",
+      "source_commit": "a4027d8ecf088e336dd77a80918ba33161438704",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/gc-review-green/04d9692f0e1bca64547048dc3c3ca3e80949a228e6c23216596078c9a7add768/a0001/terminal.json",
+      "sha256": "f3fb8720d79c91d08c0f270091a51bb70d4d9bf6b5b39e8b0c49cab532416efd",
+      "bytes": 836,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "04d9692f0e1bca64547048dc3c3ca3e80949a228e6c23216596078c9a7add768",
+      "source_commit": "29e578badbb9d62314b71c7b92aa241e5babcc77",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/gc-review-green/5432e9053b7d8c8c1b09b96162232fc10522193e1a35a30119c446b8ef31d65e/a0002/terminal.json",
+      "sha256": "c50223738db6863b0756e86870bbae98f9dead054ab0e330b09ccad4e212e87b",
+      "bytes": 628,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "5432e9053b7d8c8c1b09b96162232fc10522193e1a35a30119c446b8ef31d65e",
+      "source_commit": "29e578badbb9d62314b71c7b92aa241e5babcc77",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/gc-review-green/dc5258f45674bc357a11992e46bbc76a66baf6d1035f4e8f6a5005315a347d90/a0003/terminal.json",
+      "sha256": "1d2d2f0da0f457c9165c9d9533a8d25e52ca1f27e7602a6a3e542d38dc354e00",
+      "bytes": 628,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "dc5258f45674bc357a11992e46bbc76a66baf6d1035f4e8f6a5005315a347d90",
+      "source_commit": "29e578badbb9d62314b71c7b92aa241e5babcc77",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/gc-review-red/ee8364f6597458833ed0193930bdf27bc1c8768c469249cafec9722f4bfe9980/a0002/terminal.json",
+      "sha256": "f3a478d98fa22118b272d84b7c837d1a5920439d3f982e1d931c1c9c3d4791a3",
+      "bytes": 626,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "ee8364f6597458833ed0193930bdf27bc1c8768c469249cafec9722f4bfe9980",
+      "source_commit": "29e578badbb9d62314b71c7b92aa241e5babcc77",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/gc/ac3b660b2ab8be583de7099787e63aff8ab9c4320d09fde196b6344066c4f729/a0001/terminal.json",
+      "sha256": "8e507786b05b36ce4eeacbb1b9621786e02e0b1e3dca5eb1fcfd20524dba129f",
+      "bytes": 842,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "ac3b660b2ab8be583de7099787e63aff8ab9c4320d09fde196b6344066c4f729",
+      "source_commit": "29e578badbb9d62314b71c7b92aa241e5babcc77",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/lifetime-pin/5211a5dad1888171b758ac615bbe7d9d1f7f84bf1f9c7d2ac0db10cfaf8e7b2f/a0001/terminal.json",
+      "sha256": "c049735285e032e201aa39bdf30d06f705366ba160b3ebc87034de956432a99e",
+      "bytes": 842,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "5211a5dad1888171b758ac615bbe7d9d1f7f84bf1f9c7d2ac0db10cfaf8e7b2f",
+      "source_commit": "29fa70cd45f45df2d2175df8838285a0cf9e3bae",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/metadata-assurance/54337a60fd6ff3fce1a1e49b24e003f090ed2e3214b0e45ca7eec570ce4d9da4/a0001/terminal.json",
+      "sha256": "1ba6eaf7306a567d784bf9df72576b3825a334b6a58f714264c3370814533f69",
+      "bytes": 632,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "54337a60fd6ff3fce1a1e49b24e003f090ed2e3214b0e45ca7eec570ce4d9da4",
+      "source_commit": "8109c2f2bfd33d7a936fd0f75662277299f0d654",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/native-authority-assurance/e67445adfe940b5c68739628e3ae1ede1f9b0185fd86d6cda431af07943bc587/a0001/terminal.json",
+      "sha256": "458f42de58b300b8808d63e4aa9a3b5b117b3d139b76bc37fa79372f401dc711",
+      "bytes": 626,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "e67445adfe940b5c68739628e3ae1ede1f9b0185fd86d6cda431af07943bc587",
+      "source_commit": "be3e922d76d3dcaa002e1f1b1c1a322184bdb70d",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/native-authority-assurance/e8b8815adb09686c8e2a85c72db137e380a7f1a0892f5a381c5f455fcdbfa39e/a0001/terminal.json",
+      "sha256": "a135ed8b97bdc7d7c5db2a8c7ab44aaf4f468121198a882af77eaa2e1d47bd69",
+      "bytes": 630,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "e8b8815adb09686c8e2a85c72db137e380a7f1a0892f5a381c5f455fcdbfa39e",
+      "source_commit": "be3e922d76d3dcaa002e1f1b1c1a322184bdb70d",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/portable-pq4-assurance/651f44719f8f145855bd419a924635f4991faf10955d9adcf234b9ad3495922b/a0001/terminal.json",
+      "sha256": "7d44120a8870088df5f05f5c35ed6140aea08cd293b32f244c24eb159745f9ff",
+      "bytes": 628,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "651f44719f8f145855bd419a924635f4991faf10955d9adcf234b9ad3495922b",
+      "source_commit": "8ae305858f07874323dcad966b3dde4f4bfbc52c",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/sequential-centroid-diversity/20260928/final-a0001/terminal.json",
+      "sha256": "437feda3834e9ca2ab6e049d6849304fe5ddb435ef27e3a43191c80dd4f847e7",
+      "bytes": 733,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "d08c61749637794a46c65cd9d101e1f4d56706ade22ae8a47917665d3e45ba88",
+      "source_commit": "290c45f5e0dc2883a18fc36b6710aef52e9b34be",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/sequential-centroid-diversity/20260928/green-a0001/terminal.json",
+      "sha256": "9bbbb1b8ae30754569ea6b7e2eff39aac1cb8fb0d68176c50cfafa7f1bdbdd1f",
+      "bytes": 729,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "c3a324f8bf0a4b6c44251a99831dc225cf692b24bdb9d12a66c6a1a54be6a7aa",
+      "source_commit": "290c45f5e0dc2883a18fc36b6710aef52e9b34be",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/sequential-centroid-diversity/20260928/red-a0001/terminal.json",
+      "sha256": "07858fe30835ef49bd3ff7ffb1bb909e415927bed49846b355c3af5a4f77cd43",
+      "bytes": 734,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "1294151441ec7c17f2955aa19fdb71f134f42f08b85e0e6518f4e5240a2f3d77",
+      "source_commit": "290c45f5e0dc2883a18fc36b6710aef52e9b34be",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/source-decoder-assurance/d954ba1b2dac830caaf83e7e4104481c826f3484a272a84476d5b8b79c2369b5/a0001/terminal.json",
+      "sha256": "e675e76b84a95f33cfe27ede9f8168331a07bf6830011c84e834b09da4fc07d7",
+      "bytes": 628,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "d954ba1b2dac830caaf83e7e4104481c826f3484a272a84476d5b8b79c2369b5",
+      "source_commit": "10814d81c8960caada1b9dbceba21cd0ef165928",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/topology-adapter/20260928/green-a0001/terminal.json",
+      "sha256": "84c52b24209e6297b01076faeef700a60e8375a441f87d2bdac869413b4693bd",
+      "bytes": 736,
+      "schema": "borsuk-topology-adapter-green-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "9e626bc95702276eabbe2f86f6431af5ebd9b889d8e4ed92a25380b11f2fe360",
+      "source_commit": "72e803a2a7c583b6be02ea1251f9c991269e107c",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/topology-adapter/20260928/red-a0001/terminal.json",
+      "sha256": "f9727fc63015cb7a594bd011205c426ca6c5ef1147b84b2f1a9435ad5ba1b165",
+      "bytes": 732,
+      "schema": "borsuk-topology-adapter-red-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "1f6687109c852fad0f8fb170a65e4c2dd2ad3883680250a7df130c6d6f01a704",
+      "source_commit": "72e803a2a7c583b6be02ea1251f9c991269e107c",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/topology-controller/20260928/green-a0001/terminal.json",
+      "sha256": "6ee3a89ac86ad48c35092e1d2634badc03c9335d27963472096a1ef2d07c161e",
+      "bytes": 731,
+      "schema": "borsuk-topology-controller-green-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "87d1747663886e3999ed5e0cd9a227d58f73ac30e30e1c68f1adb732a2a4aa01",
+      "source_commit": "346aa524e69001b61751671fcee826af20fb10af",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/topology-controller/20260928/red-a0002/terminal.json",
+      "sha256": "31202dea2eedaa29235513403ee99cf26b61b21f4513f68234cbf6527e923eaf",
+      "bytes": 730,
+      "schema": "borsuk-topology-controller-red-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "8e35a451b79a5a5425b835135b99a7402fb807e858eec109913536f414700192",
+      "source_commit": "346aa524e69001b61751671fcee826af20fb10af",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/topology-controller/20260928/review-green-a0001/terminal.json",
+      "sha256": "cc9adc9f0b95054faaaf536a7fe5fa34aa64f5d0fde313da67566f9355fba0a0",
+      "bytes": 738,
+      "schema": "borsuk-topology-controller-review-green-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "691f6322a1744ce4ecefbfac2794fb9b31d1be86260d07e056197bfaf45002db",
+      "source_commit": "346aa524e69001b61751671fcee826af20fb10af",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/topology-controller/20260928/review-red-a0001/terminal.json",
+      "sha256": "5d58a6e7e165740f91a7f173db7ae555cefa6f07c136af391ddb2686ca467577",
+      "bytes": 737,
+      "schema": "borsuk-topology-controller-review-red-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "656b077154f742d512d1271198cedb6cc81d85136fa2baf40fd1391283db104e",
+      "source_commit": "346aa524e69001b61751671fcee826af20fb10af",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/topology-trace/20260928/green-a0001/terminal.json",
+      "sha256": "d3484117592025be187de44cbb2f648a9d10ac495a6f0d106bec62e667aa079f",
+      "bytes": 734,
+      "schema": "borsuk-topology-trace-green-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "1480ec3a8100485cbdf2598074bbd6e5641b87e1d68aa0cd962446d2f57b6123",
+      "source_commit": "e4438da7ada9f0c5ba64f431258266ec1e6b687a",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/topology-trace/20260928/red-a0001/terminal.json",
+      "sha256": "8bbb648311198a6690d1ef053db2bcadb962036686d3a83238defc98766cac75",
+      "bytes": 726,
+      "schema": "borsuk-topology-trace-red-check-v1",
+      "status": "failed",
+      "exit_code": 92,
+      "source_archive_sha256": "12139d67044c7ce151213c5405667815eed7fecbc3ba10cf7da00cf4e95fb1b0",
+      "source_commit": "e4438da7ada9f0c5ba64f431258266ec1e6b687a",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/topology-trace/20260928/red-a0002/terminal.json",
+      "sha256": "0924feb0834b48e2d543be248b3f9a713b73d7ba6ffd0214153c5c0501c362d5",
+      "bytes": 731,
+      "schema": "borsuk-topology-trace-red-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "2e5a81b87c2bcf6106208d91b96b778af43d4be9c9a6bbd58f38d7ec1c760232",
+      "source_commit": "e4438da7ada9f0c5ba64f431258266ec1e6b687a",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/v26-platform-assurance/cf329c81b6518d7997b3c1dd7832a08bd0b06dfa0358941c64707c496684a685/a0001/terminal.json",
+      "sha256": "b091f4f712805755e4717201149a25da47a6814fa9463bdf188232c8471b4610",
+      "bytes": 632,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "cf329c81b6518d7997b3c1dd7832a08bd0b06dfa0358941c64707c496684a685",
+      "source_commit": "1643c471f43a192a62481a671263105561442fac",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/wal-native-finalization/874f1276d24c310d2b671720a981347b7e7b8d4d77325caa2d8b6ef94ab3d9d8/a0001/terminal.json",
+      "sha256": "6f984e34c4fdab9377db63366147434676133f5930fd779dcf76a7724ecbed73",
+      "bytes": 838,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "874f1276d24c310d2b671720a981347b7e7b8d4d77325caa2d8b6ef94ab3d9d8",
+      "source_commit": "8e4802daeea709b9ee1e99ee17c68897f09ce81e",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-library-check/wal-native-finalization/b232f7c07cb8d9fb0c593c50536271c3a518f1879950ed9795066c4e8c67257e/a0001/terminal.json",
+      "sha256": "c4f3d9ae3d2425f2c36b41565d71dd91a3a6e4a54705026af8fb969a111ee594",
+      "bytes": 625,
+      "schema": "borsuk-native-library-spot-check-v1",
+      "status": "failed",
+      "exit_code": 92,
+      "source_archive_sha256": "b232f7c07cb8d9fb0c593c50536271c3a518f1879950ed9795066c4e8c67257e",
+      "source_commit": "8e4802daeea709b9ee1e99ee17c68897f09ce81e",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-one-million-byte-selector/32660c4e1ca8ef8c505292553f5e7277e8648eed/runs/relaion-1m-dev1000-a0001/terminal.json",
+      "sha256": "4a027b3383be508ceb7cf46346f361d519ebea155ca2884257295da158cee741",
+      "bytes": 3511,
+      "schema": "borsuk-one-million-byte-selector-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "32660c4e1ca8ef8c505292553f5e7277e8648eed",
+      "relevant_artifact_identities": {
+        "seal": {
+          "encoded_bytes": 120815,
+          "role": "seal",
+          "sha256": "ad2c1e079609618ab7428e043364cf4685a1d9cbc2162f7695c7200206f8de41",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-byte-selector/32660c4e1ca8ef8c505292553f5e7277e8648eed/runs/relaion-1m-dev1000-a0001/artifacts/seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-one-million-data-range-selector/d9dd64ac00920eabd2200078291666757b2d25df/runs/relaion-1m-dev1000-a0001/terminal.json",
+      "sha256": "ce0bf33bf97ab390e011474b180ea7c419f47ad1ea0c61d2c47ca4593fe725b5",
+      "bytes": 5580,
+      "schema": "borsuk-one-million-opq8-data-range-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "d9dd64ac00920eabd2200078291666757b2d25df",
+      "relevant_artifact_identities": {
+        "range-plan-seal": {
+          "encoded_bytes": 501,
+          "role": "range-plan-seal",
+          "sha256": "25e03ffa1cd7d5a7eb3534e351fe32b26574afcfe33cc0bcbe24037bee488f53",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-data-range-selector/d9dd64ac00920eabd2200078291666757b2d25df/runs/relaion-1m-dev1000-a0001/artifacts/range-plan-seal.json"
+        },
+        "range-seal": {
+          "encoded_bytes": 682,
+          "role": "range-seal",
+          "sha256": "4055a845a10e164b316d9aaa5961822aa4f9c2a8fdd3422a28ca582628a1ce5f",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-data-range-selector/d9dd64ac00920eabd2200078291666757b2d25df/runs/relaion-1m-dev1000-a0001/artifacts/range-seal.json"
+        },
+        "seal": {
+          "encoded_bytes": 91350,
+          "role": "seal",
+          "sha256": "d91ff6d51da81d9f97ad1cec2bd07914494527e0cdcf0b60c68fda3daeae02f0",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-data-range-selector/d9dd64ac00920eabd2200078291666757b2d25df/runs/relaion-1m-dev1000-a0001/artifacts/seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-one-million-group-selector/6c81003e879eff4e741c9fc4855e47a7562d51b2/runs/relaion-1m-dev1000-a0001/terminal.json",
+      "sha256": "08657936c5bf35735b68e15f42dde1835147525f7a8e0fb14f083bc781025423",
+      "bytes": 3513,
+      "schema": "borsuk-one-million-selector-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "6c81003e879eff4e741c9fc4855e47a7562d51b2",
+      "relevant_artifact_identities": {
+        "seal": {
+          "encoded_bytes": 92567,
+          "role": "seal",
+          "sha256": "ad115e2340a22986589f82f2989e3f4b23d22f0c53191f71c53794f7ba074878",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-group-selector/6c81003e879eff4e741c9fc4855e47a7562d51b2/runs/relaion-1m-dev1000-a0001/artifacts/seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-one-million-layout-selector/c4ca7d184cbd37a4101953ef3f010bb7accd5bc1/runs/relaion-1m-dev1000-a0001/terminal.json",
+      "sha256": "7f50deb16dcade5825f09e0a866b9414c6b9e872afde9259ef84cf51496630ae",
+      "bytes": 3839,
+      "schema": "borsuk-one-million-layout-selector-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "c4ca7d184cbd37a4101953ef3f010bb7accd5bc1",
+      "relevant_artifact_identities": {
+        "seal": {
+          "encoded_bytes": 120815,
+          "role": "seal",
+          "sha256": "ad2c1e079609618ab7428e043364cf4685a1d9cbc2162f7695c7200206f8de41",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-layout-selector/c4ca7d184cbd37a4101953ef3f010bb7accd5bc1/runs/relaion-1m-dev1000-a0001/artifacts/seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-one-million-mass-selector/6c6671ea4ea70c5873bb81df79d3616c6a7d6625/runs/relaion-1m-dev1000-a0001/terminal.json",
+      "sha256": "57efe8847653bc2af229f7ef7f263ea8a03e7bf35c032e959366cc98bb1e5683",
+      "bytes": 3821,
+      "schema": "borsuk-one-million-mass-selector-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "6c6671ea4ea70c5873bb81df79d3616c6a7d6625",
+      "relevant_artifact_identities": {
+        "seal": {
+          "encoded_bytes": 120815,
+          "role": "seal",
+          "sha256": "ad2c1e079609618ab7428e043364cf4685a1d9cbc2162f7695c7200206f8de41",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-mass-selector/6c6671ea4ea70c5873bb81df79d3616c6a7d6625/runs/relaion-1m-dev1000-a0001/artifacts/seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-one-million-opq8-selector/cc0dd60de8b63a87656475591be12127ad4f3769/runs/relaion-1m-dev1000-a0001/terminal.json",
+      "sha256": "257266bffcb7a80402eab465bbf920c188eb3e35d4330afcf2d533cea09feca9",
+      "bytes": 4734,
+      "schema": "borsuk-one-million-opq8-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "cc0dd60de8b63a87656475591be12127ad4f3769",
+      "relevant_artifact_identities": {
+        "plan-seal": {
+          "encoded_bytes": 591,
+          "role": "plan-seal",
+          "sha256": "ee4c9c4c91b2197c16d07a91c726c8d5401fb22f14950470d32f3bfb8250ae4b",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-opq8-selector/cc0dd60de8b63a87656475591be12127ad4f3769/runs/relaion-1m-dev1000-a0001/artifacts/plan-seal.json"
+        },
+        "seal": {
+          "encoded_bytes": 92835,
+          "role": "seal",
+          "sha256": "cfab0c53219f8fc93d07353b36d181ce2b6d424907cc2dc63317cdbc1103f43c",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-opq8-selector/cc0dd60de8b63a87656475591be12127ad4f3769/runs/relaion-1m-dev1000-a0001/artifacts/seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-one-million-page-oracle-selector/5fc9256d4c08a05d7469931b5ab44190bb7fa806/runs/relaion-1m-dev1000-a0001/terminal.json",
+      "sha256": "88448e3aa96db28ba4ebcb0e770fbc0a160508cf09149b8a7f39e139d954f616",
+      "bytes": 3901,
+      "schema": "borsuk-one-million-opq8-page-oracle-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "5fc9256d4c08a05d7469931b5ab44190bb7fa806",
+      "relevant_artifact_identities": {
+        "seal": {
+          "encoded_bytes": 91350,
+          "role": "seal",
+          "sha256": "d91ff6d51da81d9f97ad1cec2bd07914494527e0cdcf0b60c68fda3daeae02f0",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-page-oracle-selector/5fc9256d4c08a05d7469931b5ab44190bb7fa806/runs/relaion-1m-dev1000-a0001/artifacts/seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-one-million-page-selector/7ac8fc842c5cfd5fd6701bdd3bd1f3d04f6dc17c/runs/relaion-1m-dev1000-a0001/terminal.json",
+      "sha256": "977f629270d35c4b571f115b9047aed4a23ff7c5570cabcb9b0da99d51ad9c21",
+      "bytes": 3511,
+      "schema": "borsuk-one-million-page-selector-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "7ac8fc842c5cfd5fd6701bdd3bd1f3d04f6dc17c",
+      "relevant_artifact_identities": {
+        "seal": {
+          "encoded_bytes": 120815,
+          "role": "seal",
+          "sha256": "ad2c1e079609618ab7428e043364cf4685a1d9cbc2162f7695c7200206f8de41",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-page-selector/7ac8fc842c5cfd5fd6701bdd3bd1f3d04f6dc17c/runs/relaion-1m-dev1000-a0001/artifacts/seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-one-million-pq80-selector/b4066786fd0618a17d99c5cea72e08e3bbd0ea2f/runs/relaion-1m-dev1000-a0001/terminal.json",
+      "sha256": "a7e549d588c5b7bd79be03f85b127aeb4fa5d44a55eee86055d48c338b771c2f",
+      "bytes": 3512,
+      "schema": "borsuk-one-million-pq80-selector-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "b4066786fd0618a17d99c5cea72e08e3bbd0ea2f",
+      "relevant_artifact_identities": {
+        "seal": {
+          "encoded_bytes": 120815,
+          "role": "seal",
+          "sha256": "ad2c1e079609618ab7428e043364cf4685a1d9cbc2162f7695c7200206f8de41",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-pq80-selector/b4066786fd0618a17d99c5cea72e08e3bbd0ea2f/runs/relaion-1m-dev1000-a0001/artifacts/seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-one-million-pq96-selector/1a1d2e7380c4d6635a2b370784ea009aa3af0851/runs/relaion-1m-dev1000-a0001/terminal.json",
+      "sha256": "a1d70c80e88844bb412765c0478ee4f2598749205479eeafc209fe47c98b434a",
+      "bytes": 3512,
+      "schema": "borsuk-one-million-pq96-selector-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "1a1d2e7380c4d6635a2b370784ea009aa3af0851",
+      "relevant_artifact_identities": {
+        "seal": {
+          "encoded_bytes": 120815,
+          "role": "seal",
+          "sha256": "ad2c1e079609618ab7428e043364cf4685a1d9cbc2162f7695c7200206f8de41",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-pq96-selector/1a1d2e7380c4d6635a2b370784ea009aa3af0851/runs/relaion-1m-dev1000-a0001/artifacts/seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-one-million-progressive_code_wave-selector/7a06b24b0b5790406ba558d2c0f097493f401de1/runs/relaion-1m-dev1000-a0001/terminal.json",
+      "sha256": "a97a9f2deb402d1b7a016906028849e1ee075f6b295b77f389c684d18784138a",
+      "bytes": 5339,
+      "schema": "borsuk-one-million-progressive-code-wave-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "7a06b24b0b5790406ba558d2c0f097493f401de1",
+      "relevant_artifact_identities": {
+        "progressive-code-wave-plan-seal": {
+          "encoded_bytes": 337,
+          "role": "progressive-code-wave-plan-seal",
+          "sha256": "dc26dd4e834bd217c04ae13206820a99000a01b0bb2e48005639cd4b3280f640",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-progressive_code_wave-selector/7a06b24b0b5790406ba558d2c0f097493f401de1/runs/relaion-1m-dev1000-a0001/artifacts/progressive-code-wave-plan-seal.json"
+        },
+        "seal": {
+          "encoded_bytes": 91350,
+          "role": "seal",
+          "sha256": "d91ff6d51da81d9f97ad1cec2bd07914494527e0cdcf0b60c68fda3daeae02f0",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-progressive_code_wave-selector/7a06b24b0b5790406ba558d2c0f097493f401de1/runs/relaion-1m-dev1000-a0001/artifacts/seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-one-million-progressive_paired-selector/0375f08514c2166453d3268793d52703bee0cf1c/runs/relaion-1m-dev1000-a0001/terminal.json",
+      "sha256": "f0fe51a3b4639fe8bb033e31f8cb102c224b027fa690badc961f01b3b0c5fb75",
+      "bytes": 7624,
+      "schema": "borsuk-one-million-progressive-paired-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "0375f08514c2166453d3268793d52703bee0cf1c",
+      "relevant_artifact_identities": {
+        "progressive-code-seal": {
+          "encoded_bytes": 1412462,
+          "role": "progressive-code-seal",
+          "sha256": "ef5df0e4b0ea792a4463b3d826b2aa7d7ba2ea39125ebac06cf09949c93ed32f",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-progressive_paired-selector/0375f08514c2166453d3268793d52703bee0cf1c/runs/relaion-1m-dev1000-a0001/artifacts/progressive-code-seal.json"
+        },
+        "progressive-paired-plan-seal": {
+          "encoded_bytes": 326,
+          "role": "progressive-paired-plan-seal",
+          "sha256": "c1fce52f779ae11b95cb3a713d8dcdd8207602bae9ca9024cd3dd4d79373e899",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-progressive_paired-selector/0375f08514c2166453d3268793d52703bee0cf1c/runs/relaion-1m-dev1000-a0001/artifacts/progressive-paired-plan-seal.json"
+        },
+        "seal": {
+          "encoded_bytes": 91350,
+          "role": "seal",
+          "sha256": "d91ff6d51da81d9f97ad1cec2bd07914494527e0cdcf0b60c68fda3daeae02f0",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-progressive_paired-selector/0375f08514c2166453d3268793d52703bee0cf1c/runs/relaion-1m-dev1000-a0001/artifacts/seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-one-million-range-selector/1626e78507dbc6531e9e9ff3b51ec79459f26564/runs/relaion-1m-dev1000-a0001/terminal.json",
+      "sha256": "54a878e6acbe683939beda148c94744ef5d975e6efd14cd199e7a9f912964f78",
+      "bytes": 3522,
+      "schema": "borsuk-one-million-range-selector-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "1626e78507dbc6531e9e9ff3b51ec79459f26564",
+      "relevant_artifact_identities": {
+        "seal": {
+          "encoded_bytes": 120815,
+          "role": "seal",
+          "sha256": "ad2c1e079609618ab7428e043364cf4685a1d9cbc2162f7695c7200206f8de41",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-range-selector/1626e78507dbc6531e9e9ff3b51ec79459f26564/runs/relaion-1m-dev1000-a0001/artifacts/seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-one-million-source-range-diagnostic/d4e46abe1ebd62ef18d54486eb4d3d77f2e3776f/runs/relaion-1m-dev1000-a0001/terminal.json",
+      "sha256": "c77f38f7bbd47b75c61297b511a33e7ac9e53766a705a55e878dd58d29c51b9c",
+      "bytes": 5745,
+      "schema": "borsuk-one-million-source-range-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "d4e46abe1ebd62ef18d54486eb4d3d77f2e3776f",
+      "relevant_artifact_identities": {
+        "range-seal": {
+          "encoded_bytes": 682,
+          "role": "range-seal",
+          "sha256": "4055a845a10e164b316d9aaa5961822aa4f9c2a8fdd3422a28ca582628a1ce5f",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-source-range-diagnostic/d4e46abe1ebd62ef18d54486eb4d3d77f2e3776f/runs/relaion-1m-dev1000-a0001/artifacts/range-seal.json"
+        },
+        "seal": {
+          "encoded_bytes": 91350,
+          "role": "seal",
+          "sha256": "d91ff6d51da81d9f97ad1cec2bd07914494527e0cdcf0b60c68fda3daeae02f0",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-source-range-diagnostic/d4e46abe1ebd62ef18d54486eb4d3d77f2e3776f/runs/relaion-1m-dev1000-a0001/artifacts/seal.json"
+        },
+        "source-range-plan-seal": {
+          "encoded_bytes": 696,
+          "role": "source-range-plan-seal",
+          "sha256": "cb30078fa514921f812423fff4660ba5e75177cd81726e0acc2b6129b89efdb4",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-source-range-diagnostic/d4e46abe1ebd62ef18d54486eb4d3d77f2e3776f/runs/relaion-1m-dev1000-a0001/artifacts/source-range-plan-seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-one-million-two_bit_code_wave-selector/658f35f8e3378250c1bc3421f59efddd2c6aa02c/runs/relaion-1m-dev1000-a0001/terminal.json",
+      "sha256": "51f8464490474050d60f56c68e4ab615d46d462fa88ca7f1821361fcfc9c40c8",
+      "bytes": 5219,
+      "schema": "borsuk-one-million-two-bit-code-wave-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "658f35f8e3378250c1bc3421f59efddd2c6aa02c",
+      "relevant_artifact_identities": {
+        "seal": {
+          "encoded_bytes": 91350,
+          "role": "seal",
+          "sha256": "d91ff6d51da81d9f97ad1cec2bd07914494527e0cdcf0b60c68fda3daeae02f0",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-two_bit_code_wave-selector/658f35f8e3378250c1bc3421f59efddd2c6aa02c/runs/relaion-1m-dev1000-a0001/artifacts/seal.json"
+        },
+        "two-bit-code-wave-plan-seal": {
+          "encoded_bytes": 329,
+          "role": "two-bit-code-wave-plan-seal",
+          "sha256": "f72faac7e41f9e6820c888deba1869b3667933eab1b98d6e32b4245c135122cb",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-one-million-two_bit_code_wave-selector/658f35f8e3378250c1bc3421f59efddd2c6aa02c/runs/relaion-1m-dev1000-a0001/artifacts/two-bit-code-wave-plan-seal.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-page-centered-groups/fd3b14ba84c863fede148cd9d8beea80f67dd409/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "06f62bc2e511482697395d36c6035f9205051bf55c55503103f12d2619e91694",
+      "bytes": 3757,
+      "schema": "borsuk-page-centered-group-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "fd3b14ba84c863fede148cd9d8beea80f67dd409",
+      "relevant_artifact_identities": {
+        "code-seal": {
+          "encoded_bytes": 5116,
+          "role": "code-seal",
+          "sha256": "fd8abfb77120351d9d316d59a0288dc8934cea89d05e3c83412895f0fd4ec433",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-page-centered-groups/fd3b14ba84c863fede148cd9d8beea80f67dd409/runs/relaion-100k-dev1000-a0001/artifacts/seal.json"
+        },
+        "sealed": {
+          "encoded_bytes": 1256,
+          "role": "sealed",
+          "sha256": "4ad63381baaa655f2be806852f2518b422e5adf6eff4bace35a5ae0cde3345bf",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-page-centered-groups/fd3b14ba84c863fede148cd9d8beea80f67dd409/runs/relaion-100k-dev1000-a0001/artifacts/sealed.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-page-microcluster/6d9109ccff27f6134c8ff97dad754d88514161e9/runs/relaion-100k-dev1000-a0003/terminal.json",
+      "sha256": "2ed41e2a013562b4d4f5002385a07356e3ca38dda4cea895469801b5143c4b9c",
+      "bytes": 267,
+      "schema": "borsuk-page-microcluster-terminal-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": null,
+      "source_commit": "6d9109ccff27f6134c8ff97dad754d88514161e9",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-pq192-returned-g0c/d0c9b801c2c107008419a64dd31c54465fff9220/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "897084a09abafee8ddcbab51d48729e97e054940dfd857e0df8daa35483e2df3",
+      "bytes": 3575,
+      "schema": "borsuk-pq192-returned-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "d0c9b801c2c107008419a64dd31c54465fff9220",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-product-tdd/113b6d3422bd7688d3764ac650ec46e74309d057/pending-write-red-a0002/terminal.json",
+      "sha256": "2bc5aa32d615cd3d73706931cd6a357eafa98de1552978b162467d033659b85f",
+      "bytes": 301,
+      "schema": "borsuk-native-product-tdd-terminal-v1",
+      "status": "red",
+      "exit_code": 98,
+      "source_archive_sha256": "fec5df68a8c340d927f499af9dd512426066cfa33bcf0cb6ed3554ee88b5ddd6",
+      "source_commit": "113b6d3422bd7688d3764ac650ec46e74309d057",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-product-tdd/113b6d3422bd7688d3764ac650ec46e74309d057/pending-write-red-a0003/terminal.json",
+      "sha256": "1aa38e1ece496004fed1eb7b79e9695aa14e848d771d85d5e62d0aeef245d4b1",
+      "bytes": 302,
+      "schema": "borsuk-native-product-tdd-terminal-v1",
+      "status": "green",
+      "exit_code": 0,
+      "source_archive_sha256": "fec5df68a8c340d927f499af9dd512426066cfa33bcf0cb6ed3554ee88b5ddd6",
+      "source_commit": "113b6d3422bd7688d3764ac650ec46e74309d057",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-product-tdd/113b6d3422bd7688d3764ac650ec46e74309d057/pending-write-red/terminal.json",
+      "sha256": "efb53b4d43509dd33a8cb0e810a96e742af521a8bf03b4f5c84f12d9717e669a",
+      "bytes": 302,
+      "schema": "borsuk-native-product-tdd-terminal-v1",
+      "status": "green",
+      "exit_code": 0,
+      "source_archive_sha256": "fec5df68a8c340d927f499af9dd512426066cfa33bcf0cb6ed3554ee88b5ddd6",
+      "source_commit": "113b6d3422bd7688d3764ac650ec46e74309d057",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-product-tdd/239977ef64e9993ccb69006d5f0512c44e49b389/pending-write-native-green/terminal.json",
+      "sha256": "3720b347a9341a90af3a4a1cf1de455edc81322d131e2b990a23a7996b14008a",
+      "bytes": 302,
+      "schema": "borsuk-native-product-tdd-terminal-v1",
+      "status": "green",
+      "exit_code": 0,
+      "source_archive_sha256": "e26810cffba7219eea650917306133e5a0e0aa9549e4c8df4dc1c2752dc82c9d",
+      "source_commit": "239977ef64e9993ccb69006d5f0512c44e49b389",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-product-tdd/4cf38729350ecb2ad09f4a1f33c6dd8d4350dfb/pending-write-native-red-a0003/terminal.json",
+      "sha256": "0050184e134d5b0857478073ce2a898d9728e29f58a075329479be2caf6d761e",
+      "bytes": 301,
+      "schema": "borsuk-native-product-tdd-terminal-v1",
+      "status": "red",
+      "exit_code": 101,
+      "source_archive_sha256": "6cfad5cbe70932cd7ed932256310b21940f692ff93765f4a634c721ee47f2732",
+      "source_commit": "4cf38729350ecb2ad09f4a1f33c6dd8d4350dfb",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-product-tdd/dd7c380889e8d1c09433b12d9c44c7bda712603e/pending-delete-native-red/terminal.json",
+      "sha256": "dd565471a19fabf6935635adac229d45dccbbc685db59031067f6db5125c6347",
+      "bytes": 302,
+      "schema": "borsuk-native-product-tdd-terminal-v1",
+      "status": "red",
+      "exit_code": 101,
+      "source_archive_sha256": "40107e40203ce7429a77117c6bb1614f2ecd96c3a447a95c60d46b2f18db96fa",
+      "source_commit": "dd7c380889e8d1c09433b12d9c44c7bda712603e",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-product-tdd/fd7c94dd1a5a338e0ca2cd48aad5a977df3fdf7c/grouped-native-ann/terminal.json",
+      "sha256": "5d0eecd620be71206f0e70b467d1ef1b467624a970ddc9800a9f8aca8d71660d",
+      "bytes": 302,
+      "schema": "borsuk-native-product-tdd-terminal-v1",
+      "status": "green",
+      "exit_code": 0,
+      "source_archive_sha256": "3618c5f35d9b39f411b1ee00e378c630aa1fcb319ad079382ffda07c530e328b",
+      "source_commit": "fd7c94dd1a5a338e0ca2cd48aad5a977df3fdf7c",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-product-tdd/fd7c94dd1a5a338e0ca2cd48aad5a977df3fdf7c/pending-delete-native-green/terminal.json",
+      "sha256": "da0f9792f86431ee6a40e9aff8a224f4cfd7e69f5b49e2d622e81a2dc6b6fc97",
+      "bytes": 302,
+      "schema": "borsuk-native-product-tdd-terminal-v1",
+      "status": "green",
+      "exit_code": 0,
+      "source_archive_sha256": "3618c5f35d9b39f411b1ee00e378c630aa1fcb319ad079382ffda07c530e328b",
+      "source_commit": "fd7c94dd1a5a338e0ca2cd48aad5a977df3fdf7c",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-residual-row-score/8fc9c497a85dbdbfc016346e8fc1cd3100a089a6/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "d566574793cb46f2742ba4bd6473df23c8562d44e7dd20a68ecb8508aa203ea0",
+      "bytes": 3732,
+      "schema": "borsuk-residual-row-score-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "8fc9c497a85dbdbfc016346e8fc1cd3100a089a6",
+      "relevant_artifact_identities": {
+        "code-seal": {
+          "encoded_bytes": 1213,
+          "role": "code-seal",
+          "sha256": "851ac0265ee9d2100e41bb01c390e125da407870eae1f06f174fb03899f01d3b",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-residual-row-score/8fc9c497a85dbdbfc016346e8fc1cd3100a089a6/runs/relaion-100k-dev1000-a0001/artifacts/seal.json"
+        },
+        "sealed": {
+          "encoded_bytes": 1170,
+          "role": "sealed",
+          "sha256": "d2b1a2a6c725dcf97351e402aa907df1075ecf0cbdc5de0c2df7ca6d3c08c1dc",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-residual-row-score/8fc9c497a85dbdbfc016346e8fc1cd3100a089a6/runs/relaion-100k-dev1000-a0001/artifacts/sealed.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-rotated-two-bit/68b4439351b137425931a22a88b70f741aff0a7c/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "a26e87ff9e64f5697ca23bddce2985d4f8a386fdc4722c1ad9e98ae531230ac2",
+      "bytes": 612,
+      "schema": "borsuk-rotated-two-bit-terminal-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": null,
+      "source_commit": "68b4439351b137425931a22a88b70f741aff0a7c",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-rotated-two-bit/80ddf40533aefd3c24b7d3ea4539887aa94f91bb/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "82875585b8854d0a5f20ff4ebafe629e50ff64808ae8d0f577a1e1935e9caf19",
+      "bytes": 4679,
+      "schema": "borsuk-rotated-two-bit-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "80ddf40533aefd3c24b7d3ea4539887aa94f91bb",
+      "relevant_artifact_identities": {
+        "code-seal": {
+          "encoded_bytes": 5283,
+          "role": "code-seal",
+          "sha256": "ee0d87790e8e65970340126dfea62f4eb625910df974a992ee5af58411f8067e",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-rotated-two-bit/80ddf40533aefd3c24b7d3ea4539887aa94f91bb/runs/relaion-100k-dev1000-a0001/artifacts/seal.json"
+        },
+        "sealed": {
+          "encoded_bytes": 1228,
+          "role": "sealed",
+          "sha256": "40239155cb36be4c6a41c292bb7acc31b00726ecc01ba5acef6b72e5c683da4b",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-rotated-two-bit/80ddf40533aefd3c24b7d3ea4539887aa94f91bb/runs/relaion-100k-dev1000-a0001/artifacts/sealed.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-rotated-two-bit/8d920de52b6d1469b9af565faf8dbf3049ce0f00/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "6d8e0ab7b4f9aa61970475651a5a0708339b6786856f07aaaae55759f2c86f11",
+      "bytes": 4345,
+      "schema": "borsuk-rotated-two-bit-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "8d920de52b6d1469b9af565faf8dbf3049ce0f00",
+      "relevant_artifact_identities": {
+        "code-seal": {
+          "encoded_bytes": 5283,
+          "role": "code-seal",
+          "sha256": "ee0d87790e8e65970340126dfea62f4eb625910df974a992ee5af58411f8067e",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-rotated-two-bit/8d920de52b6d1469b9af565faf8dbf3049ce0f00/runs/relaion-100k-dev1000-a0001/artifacts/seal.json"
+        },
+        "sealed": {
+          "encoded_bytes": 1228,
+          "role": "sealed",
+          "sha256": "0e4c65598676f2c4e15f1f8254188fbced11bcbdf01fcb2d294b89894508c68b",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-rotated-two-bit/8d920de52b6d1469b9af565faf8dbf3049ce0f00/runs/relaion-100k-dev1000-a0001/artifacts/sealed.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-rotated-two-bit/e06ae59998063ec8fd12b98d86af2079e0558fc7/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "5efc73701185f3db50e9b656b5b632087787826ac3f119cc0aa213d47d200389",
+      "bytes": 612,
+      "schema": "borsuk-rotated-two-bit-terminal-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": null,
+      "source_commit": "e06ae59998063ec8fd12b98d86af2079e0558fc7",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-row-score/b19e9cc236dedd6fa832df97021502b34adc9137/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "6161c044a5d019a6df3694c5ef547799b7cb9d03e466d320410198afe59463b5",
+      "bytes": 3280,
+      "schema": "borsuk-row-score-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "b19e9cc236dedd6fa832df97021502b34adc9137",
+      "relevant_artifact_identities": {
+        "code-seal": {
+          "encoded_bytes": 1204,
+          "role": "code-seal",
+          "sha256": "cf343effde68bbfc107cd50858ce7efc70a0e60ee65a8115d3da67969c82b029",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-row-score/b19e9cc236dedd6fa832df97021502b34adc9137/runs/relaion-100k-dev1000-a0001/artifacts/seal.json"
+        },
+        "sealed": {
+          "encoded_bytes": 1121,
+          "role": "sealed",
+          "sha256": "5eed08dc7ecbce502a3f74955d34ba8223a972de780d7a89f46df8a50fe5a2bb",
+          "uri": "s3://borsuk-bench-453182569524-euc1/research/native-row-score/b19e9cc236dedd6fa832df97021502b34adc9137/runs/relaion-100k-dev1000-a0001/artifacts/sealed.json"
+        }
+      }
+    },
+    {
+      "key": "research/native-two-bit-norm-g0b/915e5a2eea297ccb07f7765c4d4614f2d51f99de/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "f25263ca73340aab9286c781a4c815ff4e4d55137e153b2f5bb52a87319535be",
+      "bytes": 2922,
+      "schema": "borsuk-two-bit-norm-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "915e5a2eea297ccb07f7765c4d4614f2d51f99de",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-two-bit-returned/9cf22cad5eba477b688806327f14fa248c8afb2b/runs/relaion-100k-dev1000-a0001/terminal.json",
+      "sha256": "80bc90f0f45f9511c67c5ed4914184bcc4c83e4e0c91951fc22f297e7d864f51",
+      "bytes": 2926,
+      "schema": "borsuk-two-bit-returned-terminal-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": "9cf22cad5eba477b688806327f14fa248c8afb2b",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/cold-a0001/terminal.json",
+      "sha256": "c419d609f2a7f50e90c08fd4e2d6eeb502ffb8f31d0a14768903c51c03ceac1e",
+      "bytes": 7849,
+      "schema": "borsuk-native-union-cold-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "76465d7227c5a8f8b8b1c6ade9b897e633fa208d16cd79db990c11377837f5a2",
+      "source_commit": "b8e44d31bc81f1ac5dd7b65dddf1cdf04136b89b",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/connectivity-check-a0001/terminal.json",
+      "sha256": "a29d0b4e923ebb4e539732b33d32c24c383b8562cd32df3f274311a29d1259c6",
+      "bytes": 2094,
+      "schema": "borsuk-native-connectivity-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "3081e7b6761a81331f0b593f962bc98a408378e68d3f69762ba67d11a40cdeb0",
+      "source_commit": "b2e3074aad5406a1052cc9e7c5562ece8b817294",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/connectivity-layout-a0002/terminal.json",
+      "sha256": "94f3e33a6491a4c3d480c122364eab3a41ab7939dad84a3e0f07ccf22235e550",
+      "bytes": 3454,
+      "schema": "borsuk-native-connectivity-layout-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "b5e208ef37f41fd0882878b7784691cc89b34e76a84daab3d565e59291ea4af7",
+      "source_commit": "29b4344a8fe0b6aedd96a2dd4650e0c5f178974b",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/fine-source-check-a0001/terminal.json",
+      "sha256": "7e224a33b22a01bcc2609902eee4f028f04061820d952cbbdbe2546123080c16",
+      "bytes": 1271,
+      "schema": "borsuk-native-fine-source-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "76f6f031f3caa934cc38f257e3ec763072f6dcf7743cb50fe1a0911b8de744c9",
+      "source_commit": "c1943a821c482e9a3eb9ed6801b299a838c58200",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/fine-source-check-a0002/terminal.json",
+      "sha256": "6da3a9fdd184d3d4f0869139c017b3c79e761680349d9a885e44193a24b69c84",
+      "bytes": 2427,
+      "schema": "borsuk-native-fine-source-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "da6033f0558d9eb7100faf6d30e3a6c4ff7e21030c511bbea08363d7e9c71bb7",
+      "source_commit": "b729a7f18887b3b29d51f218565dd51c19cb246b",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/fine-source-layout-a0001/terminal.json",
+      "sha256": "1cb444dff25743facbe62a101642bf4ea1bbbbe430b2bd3499e131478415e91c",
+      "bytes": 3454,
+      "schema": "borsuk-native-fine-source-layout-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "f4b8612a9b7d2c2aa5d73ccb5fe8c6f632af76f0447915a500e3985c123b0ad6",
+      "source_commit": "1b89535c97238ce7a05dfc6b24bf5b0b3503c447",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/fresh-a0001/terminal.json",
+      "sha256": "09f250871ab9bf0cdac6dd8adb984251347ef4a1f96fd94ee28edbc8d59210d6",
+      "bytes": 1281,
+      "schema": "borsuk-native-union-fresh-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "478188fb1653c4aeca6ef82706e95cdae603c2b283bd4da2cce5a569c9618d15",
+      "source_commit": "5bd6a5bd88f82a7e7e569cd1c7d9c68d239b086f",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/fresh-a0002/terminal.json",
+      "sha256": "e69fcf4d3e8c9a76d905646920bc0aa92546d44682c675e45b6eeae4cc0efe98",
+      "bytes": 1646,
+      "schema": "borsuk-native-union-fresh-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "4b9b78f3f74c863930f7d03b9b0bc4d64377f89324985c5abb708cad94c6b319",
+      "source_commit": "5bd6a5bd88f82a7e7e569cd1c7d9c68d239b086f",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/green-a0001/terminal.json",
+      "sha256": "9e5902858fa71fba139947c599ab7edf9806e806c1ecfc1688e4fbaba0bdbd1e",
+      "bytes": 829,
+      "schema": "borsuk-native-union-green-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "98c5fa02789078f593cc0b728d86f17f40aa256230f5e413feac37ae3e5dd25a",
+      "source_commit": "897cb2587c744b6aa348fcc46841907c796e13db",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/green-a0002/terminal.json",
+      "sha256": "39c7860a60dc224551c2eb3dffa8685888e37c3678b13f50c509e3ab414f692d",
+      "bytes": 828,
+      "schema": "borsuk-native-union-green-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": "2b5732b3e420bb846282097a7e5d853b20b4c7c636ad22dd205c5458008dbbad",
+      "source_commit": "897cb2587c744b6aa348fcc46841907c796e13db",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/green-a0003/terminal.json",
+      "sha256": "e9049db8260e186f2fd218dc79a3d60d7b2521fe7281cfa0afc5a7d3da312746",
+      "bytes": 1293,
+      "schema": "borsuk-native-union-green-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "975b050eaa36f17de7b9502e8849f8349f366f1a46a56ce4386ddbaaca39bc97",
+      "source_commit": "897cb2587c744b6aa348fcc46841907c796e13db",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/http-a0001/terminal.json",
+      "sha256": "6e7c26cffeddf53ec5bb2f23ab29995bafcb8f1a1c2f0f5fa318e2bed9f3effe",
+      "bytes": 8455,
+      "schema": "borsuk-native-http-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "400ccf28a4aae978942dcd15f10391323f519bcb4db4450288283e350fe2b34f",
+      "source_commit": "0e96983c91fc10e5b9df64587739e715b858ec7d",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/http-check-a0001/terminal.json",
+      "sha256": "2ec4cd42f98af1f208a4723916d96750b5d3edf7d00ff2916ed49e367d6e795f",
+      "bytes": 941,
+      "schema": "borsuk-native-http-check-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "dc16298770e9628cefbf956b9aec3334f8eec6b4eada440855883f6ad08d02b0",
+      "source_commit": "213973ec75a2dcaaea3014e6115b2314e260db80",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/http-check-a0002/terminal.json",
+      "sha256": "acf69a64ec5fd7e2c48fe3a0f69a573b05747d67efc1985e5d54149b2e0e5fba",
+      "bytes": 1587,
+      "schema": "borsuk-native-http-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "67acdf5698cbd5f58f59f5a5bc0c8e330d3be19a8911b773090bc723c225a977",
+      "source_commit": "213973ec75a2dcaaea3014e6115b2314e260db80",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/http-offered-protocol-a0002/terminal.json",
+      "sha256": "4e063dafec3b96386d8dd1b45e42a2fe9a8b7f20234a84c6a892a8443b77955a",
+      "bytes": 632,
+      "schema": "borsuk-native-http-offered-protocol-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "aaa91c3abad65ce423c9441c9f9d37e4640364baf81d4a70b0e18fe9bcb14c8e",
+      "source_commit": "83c72d1f4d1ca9be0fb80b81be79c6279e188355",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/http-offered-protocol-a0003/terminal.json",
+      "sha256": "d17b23371cd0d909055c7fa4b5369e32a9c7198c14a6a08a6de5a306c2166080",
+      "bytes": 742,
+      "schema": "borsuk-native-http-offered-protocol-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "b060b0c919a620a43cea3dab08aaac28a1e0c7b843f95f1d93e72c83a7309bde",
+      "source_commit": "83c72d1f4d1ca9be0fb80b81be79c6279e188355",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/http-topk-authority-a0002/terminal.json",
+      "sha256": "3767c83a8552e08db72bcd575c45a79cecac60f6b74eea866fe078fb5d536644",
+      "bytes": 1493,
+      "schema": "borsuk-native-http-topk-authority-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "c85e2a1fc6943a26c995a26da1a091ef6773157f035ba24d0ecb66d83d5cafd3",
+      "source_commit": "0323a20a54ef581d701205123ca4b8bfe9a3aea8",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/layout-a0001/terminal.json",
+      "sha256": "287cc0fa0e8f5672c8aac2514cba33ec45e1b5e378359fe88c40f4e514907761",
+      "bytes": 3290,
+      "schema": "borsuk-native-union-layout-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "1450ae56cfb6a90e69ade5b02164816005bcbd3bb42c150434259d6ff2e791de",
+      "source_commit": "3858e183aecfaa9f604efd0e8ceec4a75d44336f",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/locality-source-check-a0001/terminal.json",
+      "sha256": "967c922507ec0bc81302ef42712cc7ebb2bebf790d6466fd32ca0c6714037452",
+      "bytes": 2550,
+      "schema": "borsuk-native-locality-source-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "06c40c0959719bd7738430312b770beedee53ab65e2fb1bd713329b922f3caeb",
+      "source_commit": "c29ef100da2ff0208b91e0c2f101907fb787cfcb",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/locality-source-layout-a0001/terminal.json",
+      "sha256": "1fbcb08cc45da80fbd91baba5feeb54b3a605633f55106d0239f0b7a5d89792d",
+      "bytes": 3458,
+      "schema": "borsuk-native-locality-source-layout-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "dc534ae0c3a648f84b54fedee55c910a7ebdec59da3763475f8d06bcb0ec2a41",
+      "source_commit": "a9118ad2cd90015dc430f48d094ab609a0f3f6b7",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/native-memory-authority-a0001/terminal.json",
+      "sha256": "a3ab7a1cfd7129bd1d1976d5d2f7589ef3880702ef68c70bbf8b4beaf4ee7876",
+      "bytes": 1515,
+      "schema": "borsuk-native-native-memory-authority-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "eacca7fe01e846b28d3f72ab9119278788651b17aa4dfb13de83502817bc482d",
+      "source_commit": "8e7e9130f570f0f4afde3e80dea7da870db65ca3",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/native-reference-panel-a0001/terminal.json",
+      "sha256": "ae108df55093349a57cf2a5a7ea06166835b153b8fee4a316de558902623d898",
+      "bytes": 1056,
+      "schema": "borsuk-native-reference-panel-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "e28b438626b77f5abaaea10b48ef86a85ae1f06e9982314d22fab2c5e8a11742",
+      "source_commit": "1fb7d7e30c66fea2398daf327cc7cc112e6ebd61",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/red-a0001/terminal.json",
+      "sha256": "a4a9fc10d827bcdbbd3bf56d5ad4b39cecccc2ea1b3f613360e530329f67945d",
+      "bytes": 723,
+      "schema": "borsuk-native-union-red-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "165030ab68c92d870ce9444e0135cf4cfe2587d82e64c0d7afa8510e9f2c8b7a",
+      "source_commit": "897cb2587c744b6aa348fcc46841907c796e13db",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/source-completion-1m-a0001/terminal.json",
+      "sha256": "2e3306d61c5ecc83a7bd95578e9a9f0dd1c163b500b76761796febb1b3e3e365",
+      "bytes": 4973,
+      "schema": "borsuk-native-source-completion-1m-dev-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "1546dd67b81a2f09f5100d10cab959a38c8c13b02af9b8867d877b6a08ffb38c",
+      "source_commit": "86719351f8edb0377e7c3572eb77cb894bf5c6a8",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/source-completion-http-a0001/terminal.json",
+      "sha256": "bb027f633bce5293ba09b7568506b6f7d53cdb8a85480fcd98669644a8d7bbcd",
+      "bytes": 17016,
+      "schema": "borsuk-native-source-completion-http-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "6fdf1e8a3ce4d4878300b1eff354f9b7283a26b6d155123ba6473ea44769b2cb",
+      "source_commit": "7049691ae90b4ab84398d57e3746f944dc181ded",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/source-completion-integration-a0002/terminal.json",
+      "sha256": "d9a7f53bf0f2f1bbf60a3e295e7ed145916afb8cae411ca4ce05fa689456d80b",
+      "bytes": 1658,
+      "schema": "borsuk-native-source-completion-integration-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "d1d69ab138a702f93edbaae6e606818e0506a6fd94d1d4c7e9a11e2f7cb65be3",
+      "source_commit": "2ac26b5239efe6f0b38286315d86779cfd64e02b",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/source-completion-red-a0001/terminal.json",
+      "sha256": "5db3fc2f58475bf258fa77abaedd3403b9c5bacf28ae74572690e919a3ed2cdb",
+      "bytes": 952,
+      "schema": "borsuk-native-source-completion-red-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "3b561ba1a3dd203dd654b49d81fd66368e74e3d72eee21ea7400359b00406900",
+      "source_commit": "2ac26b5239efe6f0b38286315d86779cfd64e02b",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/source-completion-red-a0002/terminal.json",
+      "sha256": "e15c4eaf3b938a1dd8e11530f7684b0407ebc48a7a3e3516a366761325a77f95",
+      "bytes": 1059,
+      "schema": "borsuk-native-source-completion-red-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "81cb0b5b7e2845cb83992b247c1da4563d1b7c907d5cb7d90ae20c35b4c16f2f",
+      "source_commit": "2ac26b5239efe6f0b38286315d86779cfd64e02b",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/source-frontier-http-a0003/terminal.json",
+      "sha256": "8d83d7f58381a6d7f8c26fb8c96c90fe14af59f1c3916df6df4b6215b38c686a",
+      "bytes": 3955,
+      "schema": "borsuk-native-source-frontier-http-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "035539a35d9677f223411d937c330523e632d3aa7ec9465f0208d62d0b456e6b",
+      "source_commit": "dc60ef6156d95c2f1481ccc546be2fe3e5b9c6d3",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/source-frontier-integration-a0003/terminal.json",
+      "sha256": "309388f4bddaa58fa397f150b0c4ae0ad46e1958320758bd25c063f2c947567d",
+      "bytes": 1863,
+      "schema": "borsuk-native-source-frontier-integration-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "71edd9a491c53a3970168fe65554716c361126929dd32b9c58496288f9d4a182",
+      "source_commit": "3b7a949b56ea919300a9b156d7318e661af7dd7e",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/source-precision-1m-a0001/terminal.json",
+      "sha256": "a54d27503fd359561930b7b8b210cc1970efef5a1309911e2fb305e82580dde1",
+      "bytes": 4474,
+      "schema": "borsuk-native-source-precision-1m-dev-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "f89e949b29e807231c480858921262f1b9d6650fcc991473f0c56c591ddae6ca",
+      "source_commit": "8e7e9130f570f0f4afde3e80dea7da870db65ca3",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/source-precision-1m-a0002/terminal.json",
+      "sha256": "adfa18d717c607e723a54bc3882bfe6ea962a3f001e4cd3303f5017b8ab13a60",
+      "bytes": 4972,
+      "schema": "borsuk-native-source-precision-1m-dev-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "6f14dbbc3956c748dd65504301089c96e48c0110a9f43662d99c5577231e9991",
+      "source_commit": "762deb20a1b1edecc44f591c1965e87a441f7a05",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/source-precision-http-a0002/terminal.json",
+      "sha256": "585d06384718cb4d80b99eb3f8e0aedbe4c199cd6724873336c5ac0c3f02481c",
+      "bytes": 17013,
+      "schema": "borsuk-native-source-precision-http-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "1bcd18a5a845f5e12e9771a6cf6562c94a4c153d2a060cfeabc220e5541573c2",
+      "source_commit": "75650175f845b00117888924afbc42c996dfdcd4",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/source-precision-integration-a0001/terminal.json",
+      "sha256": "ab22b9eb3e502f4bd28556f181a062a9735c8171df7428884c09303c86716a40",
+      "bytes": 962,
+      "schema": "borsuk-native-source-precision-integration-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "468190d64f855134bffddee3991e672fde58b477a8e2e7ae4dc119995849cf0a",
+      "source_commit": "1cb200314172e93ecf40419c59017c2948874ca8",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/source-precision-integration-a0002/terminal.json",
+      "sha256": "bdf0a8955a33b4b624f24983ad435ade078d49546433d84609031de85a9bc14e",
+      "bytes": 961,
+      "schema": "borsuk-native-source-precision-integration-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "8c1b3599983609e50acf91cf45ec9debcc664e697f7666134e0de4276842dafe",
+      "source_commit": "1cb200314172e93ecf40419c59017c2948874ca8",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/source-precision-integration-a0003/terminal.json",
+      "sha256": "31bca4ce97aff9ad2f24945c321337e8f88dfc986952b8b8e14f087187fcd4bb",
+      "bytes": 1657,
+      "schema": "borsuk-native-source-precision-integration-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "6e9c07cab0e4f2d1a69350e8a6aaa9584d5aaf6a4b8294c4e64bccd111110b46",
+      "source_commit": "1cb200314172e93ecf40419c59017c2948874ca8",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/source-precision-red-a0003/terminal.json",
+      "sha256": "851c7e49740a2a6603ac6cdcef752e549d460d7dd3154f96af66d9d55110bfbd",
+      "bytes": 1058,
+      "schema": "borsuk-native-source-precision-red-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "b36adbddc4af1c24de72af8aa0b64f46bc849c2860893a895f175932d1246c2e",
+      "source_commit": "1cb200314172e93ecf40419c59017c2948874ca8",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/validation-a0001/terminal.json",
+      "sha256": "16f12839d97237ce2c41c3d05cb2c8358352bb041bfb75030bd7cbad27abdce7",
+      "bytes": 1817,
+      "schema": "borsuk-native-union-validation-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "ca205b3168acda7a8eef9380cfcbbaf69ebc986c1137df2778f8f14f9b51859c",
+      "source_commit": "0286df020589fd07aec07c1f59a8b3dc68b4abea",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/validation-a0002/terminal.json",
+      "sha256": "58487d8bd914e21b1d915115d23b8011356de4b31be3ddcecb223aca74d0e567",
+      "bytes": 5000,
+      "schema": "borsuk-native-union-validation-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "15b853f3dcd0b7995676e94a94e8e14d96cbd26abc9ff6d46e377d4d4381eb34",
+      "source_commit": "0286df020589fd07aec07c1f59a8b3dc68b4abea",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/walk-source-1m-a0002/terminal.json",
+      "sha256": "ce455c3c717d223118462a78010d9296aac7152a51ea4e3e2a36854bde8bb1de",
+      "bytes": 3943,
+      "schema": "borsuk-native-walk-source-1m-dev-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "91ef85db170dcb7a6966435f3ae60233b5a9ff09117c1c31c0ffaa2159d73c4f",
+      "source_commit": "eb6fe27556b46436d972e75236debd002896ea5e",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/walk-source-1m-a0003/terminal.json",
+      "sha256": "b90b737a11563582a867cfe09e31ae90cea328128e47ee255b1a03eb58fd6c49",
+      "bytes": 4828,
+      "schema": "borsuk-native-walk-source-1m-dev-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "e562dd14ede7664533c16d2c5fb41d79d55b377e2151574b93e62ca291082449",
+      "source_commit": "9f2ab12615bb834e12d581e8daa0bb57d865ab37",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/walk-source-check-a0001/terminal.json",
+      "sha256": "38a246558f3a7a743efc0c7fa273f8503bf252bdd54518e46e74c40ebf9ce2b7",
+      "bytes": 1513,
+      "schema": "borsuk-native-walk-source-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "f281b31e11e7ec4e7f7102bf690d06773097a63b1ad663026fa33b4d16b48156",
+      "source_commit": "ecab901b5d3f3ba3480016def2c22a66cd4cc6aa",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/walk-source-http-a0001/terminal.json",
+      "sha256": "8c9ae23ccfa0f93970c9b6b5c53e38ea263d714cf5f5cdb02c79bdd734a786a5",
+      "bytes": 10530,
+      "schema": "borsuk-native-walk-source-http-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "1b3c856003b1ec2f0420f5042f233cfa4a59244a7b97f83325c93a49cd749355",
+      "source_commit": "b06648c161a2071738d30288b67a6d5f3c5fb30f",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/walk-source-http-a0002/terminal.json",
+      "sha256": "fb32ead222b368a159b1f9f4107a0bf0a0e2c009f8f3526c149b5149de47d124",
+      "bytes": 14539,
+      "schema": "borsuk-native-walk-source-http-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "cc71bc011fc06a2dc1e8d7143bc6f9323291902d6324bbe92ccec2a2ff296553",
+      "source_commit": "1bafec1828f11eb1dbcf957a458b8fb08a96dc38",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/walk-source-integration-a0001/terminal.json",
+      "sha256": "3b91dadde8185af5a0a85a80eafe0930ddf6bf7459513ed83a29d949b97c4ec1",
+      "bytes": 1733,
+      "schema": "borsuk-native-walk-source-integration-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "6001cb85dce6a88008cb0aa4d78ab0698aab2a4dc53bc9553e3b51db5b895997",
+      "source_commit": "28cf76694f9864366065d59683ac482520037e74",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/native-union/20260928/walk-source-replay-a0001/terminal.json",
+      "sha256": "738da455adc884deef5bc589c2b7695ba848b831e0a3e88293ba4a0c34518f26",
+      "bytes": 3693,
+      "schema": "borsuk-native-walk-source-replay-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "eaaa5bac4b3499a859fe95ebb237b7f777602ed778eab852bf1ae92788e3b1b6",
+      "source_commit": "26522bab4287293778b6078243185c791a6f2d4d",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/prod-check/exact-serving/31993f67/20260924T054418Z/terminal.json",
+      "sha256": "605f1790084ebb9672226817140c6fef71a7da1b564f081778302b34ed48f3fb",
+      "bytes": 201,
+      "schema": "borsuk-prod-exact-serving-check-v1",
+      "status": "failed",
+      "exit_code": 127,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/prod-check/exact-serving/31993f67/20260924T054525Z/terminal.json",
+      "sha256": "9085de901cf9f96dc18c12952fd0713f12f162585e9285d1b8485e75d7fb7202",
+      "bytes": 201,
+      "schema": "borsuk-prod-exact-serving-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/prod-check/exact-serving/31993f67/20260924T054816Z/terminal.json",
+      "sha256": "a55db98db51881d17b10a1b95215f419cf255f5af7e3faa45a74eab90214dbd4",
+      "bytes": 201,
+      "schema": "borsuk-prod-exact-serving-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/prod-check/full-rust-v26-fix/31993f67/20260924T055423Z/terminal.json",
+      "sha256": "c779d8e269ee741f11fe7057caadcaf1d9e4380e8f0e9d1242da3d9e8b43fe11",
+      "bytes": 201,
+      "schema": "borsuk-prod-exact-serving-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/prod-check/full-rust-v26-type/31993f67/20260924T055636Z/terminal.json",
+      "sha256": "535c6d7740b6081fa0f7969ea348cf3440f4796ea77e726d4336740809f30fdc",
+      "bytes": 201,
+      "schema": "borsuk-prod-exact-serving-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/prod-check/full-rust/31993f67/20260924T055139Z/terminal.json",
+      "sha256": "28fcc53d5119cd537bdcc6fcecb09115aa69d99dae421e3b065a94ae5924d292",
+      "bytes": 201,
+      "schema": "borsuk-prod-exact-serving-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/prod-check/reverse-map/d14fe66c/20260924T061026Z/terminal.json",
+      "sha256": "1804f8dafe22f113a7bedeef8b8e68d604aec129c978391559cd4dd4fc0fee6b",
+      "bytes": 199,
+      "schema": "borsuk-prod-reverse-map-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/prod-check/v26-platform-check/31993f67/20260924T060317Z/terminal.json",
+      "sha256": "332a0bcaae47c8e8ef6595f8c002514c13cd84bc02a80f6d0c390924b5046c31",
+      "bytes": 201,
+      "schema": "borsuk-prod-exact-serving-check-v1",
+      "status": "failed",
+      "exit_code": 101,
+      "source_archive_sha256": null,
+      "source_commit": null,
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/rust-slices/140f89672a820af45834cf304cf9c4de009b4919/runs/20260924T070137Z/a0001/terminal.json",
+      "sha256": "bf6fb24ba3bdd576c78a637728384f2c1cd927e4195bb77335d6889e5b31d77f",
+      "bytes": 749,
+      "schema": "borsuk-rust-slice-spot-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "6fe94f39b0f7eedefa3edbe35ca8633c049cf0897ba5cdd3ddbdb3721b9b5149",
+      "source_commit": "140f89672a820af45834cf304cf9c4de009b4919",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/rust-slices/2289c58a77dfd51f0d86f89272fb3709d627e99a/runs/20260924T071714Z/a0001/terminal.json",
+      "sha256": "e50a29f51ef4184244d5fc7c8217ac04e769710e724f7fc4b203ea5d2a9ce419",
+      "bytes": 731,
+      "schema": "borsuk-rust-slice-spot-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "4441ffde2b05a516e51ea2c2c951d643da0155740e874f8c8eae0bcfb9b6a9d6",
+      "source_commit": "2289c58a77dfd51f0d86f89272fb3709d627e99a",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/rust-slices/24f7b0305d6056d037dce1bba724283b64783919/runs/20260925T033727Z/a0001/terminal.json",
+      "sha256": "4930c3a867cf0cdda4347e91f31a598d896b88fbd4cd663036c283cd89c17dc2",
+      "bytes": 676,
+      "schema": "borsuk-rust-slice-spot-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "d75ec8ff029e3610b5401aa1b80caeebe00ff14b0db5ebfc05f2b2c52a9634ef",
+      "source_commit": "24f7b0305d6056d037dce1bba724283b64783919",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/rust-slices/7b6047df7eb34d037e7626e539a9b09012fc10a7/runs/20260924T073129Z/a0001/terminal.json",
+      "sha256": "5447f75c1dda412c2eea6ddcd140170cfff6b571a63f6d4c30b32ab70ec3a59c",
+      "bytes": 676,
+      "schema": "borsuk-rust-slice-spot-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "70823b8b9464b94e00ed211cd3cdaea760ba58286269bece86ca092edbb8820d",
+      "source_commit": "7b6047df7eb34d037e7626e539a9b09012fc10a7",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/source-fit-cost/20260928/a0001/terminal.json",
+      "sha256": "354c2f217540d696319c65e9ccd4b703a2821d6f3cf248b0527aaa177c7191a5",
+      "bytes": 3617,
+      "schema": "borsuk-source-fit-cost-spot-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "9075006cab1b455a4b491069ee4f9aa3d4187f34876da5098d74a411843b2de8",
+      "source_commit": "bc5c87ad3fa8636fc15ec303c466632fcf521f92",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/topology-mechanism-screen/20260928/a0001/terminal.json",
+      "sha256": "66a20d0bb14608287e2914665ea94e32084408e7293f54963c9c2fd4397648c1",
+      "bytes": 4405,
+      "schema": "borsuk-topology-mechanism-screen-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "45a1264d6da792f2b8ad30b3745f2d02022a8114a47b64cf27e5ee0de47df2a8",
+      "source_commit": "3cf3b515bc9cfffa73e61911d1bf4e7f83f6fefb",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/topology-mechanism-screen/20260928/a0002/terminal.json",
+      "sha256": "0b3acc01d9cf3ce3a19f4ff9bb7a0fe6f6679a8dd98d8abb85837e28bb90a440",
+      "bytes": 7346,
+      "schema": "borsuk-topology-mechanism-screen-v1",
+      "status": "failed",
+      "exit_code": 1,
+      "source_archive_sha256": "c11940854d11f2ebe12a0f5761293f776a84ee51549d152e601001672b6fedf5",
+      "source_commit": "3cf3b515bc9cfffa73e61911d1bf4e7f83f6fefb",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/topology-mechanism-screen/20260928/a0003/terminal.json",
+      "sha256": "c3a57ae052d72ab846c0d62e820a5e9674e2f2a8e057e16ff5da6498451e0d69",
+      "bytes": 14811,
+      "schema": "borsuk-topology-mechanism-screen-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "08d1d06fdff7f62bbb7adc5a37fff1b1947c5865e1e5199e07ac356de6681557",
+      "source_commit": "3cf3b515bc9cfffa73e61911d1bf4e7f83f6fefb",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/topology-mechanism-screen/20260928/plane-red-a0001/terminal.json",
+      "sha256": "19fbf250f338ab40f930a6c4a954ad68ed3f3312658e445c048eb14fd01cac25",
+      "bytes": 728,
+      "schema": "borsuk-plane-fingerprint-red-check-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "09b70dbf44254adaa6a5b5034c3e465560bb4becbbea479b434cd36e9f9fb2ff",
+      "source_commit": "3cf3b515bc9cfffa73e61911d1bf4e7f83f6fefb",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/union-nomination/20260928/green-a0001/terminal.json",
+      "sha256": "fb39f11ff0efa9f99439b1f167f32ae0f3985be67093c6a71e99a82340d2be55",
+      "bytes": 2746,
+      "schema": "borsuk-union-nomination-aws-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "18741a7b22c8e49e15fbf3f6e7804c703edd403942e59769546cf179b7354527",
+      "source_commit": "9813e37bcf66751109c40cf4dc1f3fafcc3a2186",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/union-nomination/20260928/red-a0001/terminal.json",
+      "sha256": "5626761278a28a6ccf01bd183cb5157a82886b28ce0e0965616841b833e7497d",
+      "bytes": 724,
+      "schema": "borsuk-union-nomination-red-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "694a4e58ae3d651ed78c89a0e268a36b9a26a354ca85cf05156c560a53b407ad",
+      "source_commit": "9813e37bcf66751109c40cf4dc1f3fafcc3a2186",
+      "relevant_artifact_identities": {}
+    },
+    {
+      "key": "research/validation-loss-diagnostic/20260928/a0001/terminal.json",
+      "sha256": "f88f2500a3a48c4606eaf344b464bb5acfffcfd55d61343b80c4a35dd5dcc1e9",
+      "bytes": 5256,
+      "schema": "borsuk-historical-validation-loss-spot-v1",
+      "status": "complete",
+      "exit_code": 0,
+      "source_archive_sha256": "c3c5854a53b0b00c23b4d818a433be86a4263b6ff99ce116824bcb633e7cda3f",
+      "source_commit": "5ca0caf46395650e7c4d8f0c8dd49ba19dd20f28",
+      "relevant_artifact_identities": {}
+    }
+  ],
+  "complete_prior_query_audit": false,
+  "query_gt_or_sealed_bodies_opened": false,
+  "scope": "Nonversioned campaign terminal identity and named metadata locators only; archive-bound lineage still required"
+}

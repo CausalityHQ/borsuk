@@ -41,3 +41,34 @@ Next after explicit SAME-goal resume: rerun corrected narrow reference authority
 then finish all-history source/query exclusions and preregister an entirely
 novel representative panel; actual f64GT10/100/native ordered IDs/incomingHTTP8QPS,
 RSS/GET/bytes/errors/cost and scale curve. Goal remains BOTH-vendor production.
+
+## a0002 CLOSED complete authority after final reload release
+
+Original54687 CLOSED0; independent12647 CLOSED0 PASS. Same native source
+ce9502a86c503bf085942fb4294731fac8432ddcb5f1e52cdf21c68397fd5f02.
+Reuse unchanged a0001's3 passing tests (executed0/reused3 in this attempt);
+release build and all5 pending CLI checks completed. No Cargo test/full assurance
+repeat. Qualified binary11,460,464B SHA
+`a2a9ca63d3bb2f6df8ce80d72020361bbba210d593d5c8db7f2401394340c04c`,
+retained under a0002 S3 artifacts/binaries/two_bit_plan_demo.
+
+Source54947cc1693b6485138d9c7ca5213f0c9f5f630d5d9f9ff708a113c7212d7bc3;
+terminaldaec7b4fec08bfd178d45655520de42ae41306ed8bef9e346a77945f7f348263.
+395 native files/10 artifacts/reused test-source-terminal chain independently
+authenticated. Workeri-0e6ee76bb1776280f terminated413s,$0.0206compute ESTIMATED,
+excludes EBS/S3/invoice. Compiler peak5,481,590,784B,zero swap/OOM,not serverRSS.
+Originala0001 engineering INVALID remains immutable. Its checker defect is
+closed; new binary is now available for actual nativek10/k100 reference panels.
+No corpus query, fresh recall,1MHTTP/QPS or vendor measurement from this gate.
+
+SAME native UUID01a0e7f3-5c4b-7fb3-8f3e-a456f0170555/goal ACTIVE after explicit
+FINAL RELOAD RELEASED. No paid hold remains; no more reload required. Separate
+metadata scan original52475 CLOSED0:62 nonversioned prefixes,207 terminal records,
+24 query locators. Combined341 prefixes/697 terminal metadata; full query-source
+identity closure remains incomplete. CoHere20 historical query manifests collapse
+to one authenticated fixed1000-test-query hash; V248 source archive authenticated.
+Next substantive measurement: existing consumed ReLAION1M development panel,
+actual nativek10/k100 and incomingHTTP offered8QPS, source/scorer parity, honest
+published-target context. This does not certify fresh qualification or revive
+the old strict diagnostic gate. Complete novel-panel identity closure separately
+before any new quality/GT access.

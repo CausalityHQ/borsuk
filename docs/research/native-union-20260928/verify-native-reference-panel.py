@@ -46,6 +46,16 @@ if terminal['status']=='failed':
 assert terminal['status']=='complete' and terminal['exit_code']==0
 check=json.loads(get('reference-check.json'))
 assert check['qualified'] and check['focused_tests_passed']==3 and len(check['cli_preopen_rejection_checks'])==5
+assert check['focused_tests_reused']==3 and check['focused_tests_executed']==0
+reuse=json.loads(get('reused-tests.json'))
+partial=root/'native-reference-panel/a0001';partial_proof=json.loads((partial/'verification.json').read_text());partial_raw=(partial/'aws-terminal.json').read_bytes();partial_terminal=json.loads(partial_raw)
+assert partial_proof['engineering_invalid'] and partial_proof['focused_native_tests_passed']==3 and partial_proof['state']=='terminated'
+assert hashlib.sha256(partial_raw).hexdigest()==partial_proof['terminal_sha256']==reuse['terminal_sha256']==reservation['reused_test_terminal_sha256']
+assert reuse['source_archive_sha256']==partial_proof['source_archive_sha256']==reservation['reused_test_source_archive_sha256']
+assert reuse['compiled_source_sha256']==partial_proof['compiled_source_sha256']==check['compiled_source_sha256']
+assert hashlib.sha256(get('tests.log')).hexdigest()==reuse['tests_sha256']==partial_terminal['artifacts']['tests.log']['sha256']
+assert get('tests.log')==gzip.decompress((partial/'tests.log.gz').read_bytes())
+assert reuse['passed']==reservation['reused_native_tests']==3
 assert all(r['returncode']==1 and 'Error:' in r['stderr'] for r in check['cli_preopen_rejection_checks'])
 assert check['unchanged_library_assurance_reused']==2696 and check['no_corpus_query'] and not check['full_workspace_repeated']
 assert hashlib.sha256(frozen[changed[0]]).hexdigest()==check['compiled_source_sha256']
@@ -57,5 +67,5 @@ assert 'live_scope_is_development_only ... ok' in log and 'test result: ok. 3 pa
 cgroup=json.loads(get('reference-cgroup.json'))
 assert int(cgroup['memory.swap.peak'])==0 and all(int(row.split()[1])==0 for row in cgroup['memory.events'].splitlines() if row.split()[0] in ['oom','oom_kill'])
 assert reservation['reused_library_terminal_sha256']==prior['terminal_sha256'] and reservation['reused_http_boundary_terminal_sha256']==boundary['terminal_sha256']
-report=dict(valid_check=True,state='terminated',instance_id=launch['instance_id'],source_archive_sha256=launch['source_archive_sha256'],terminal_sha256=hashlib.sha256(raw).hexdigest(),native_files_matched=395,unchanged_native_files=394,artifacts_verified=len(terminal['artifacts']),focused_tests_passed=3,cli_preopen_rejection_checks=5,compiled_source_sha256=check['compiled_source_sha256'],binary_sha256=check['binary_sha256'],unchanged_library_assurance_reused=2696,no_corpus_query=True,full_workspace_repeated=False,cgroup=cgroup)
+report=dict(valid_check=True,state='terminated',instance_id=launch['instance_id'],source_archive_sha256=launch['source_archive_sha256'],terminal_sha256=hashlib.sha256(raw).hexdigest(),native_files_matched=395,unchanged_native_files=394,artifacts_verified=len(terminal['artifacts']),focused_tests_passed=3,focused_tests_reused=3,focused_tests_executed=0,cli_preopen_rejection_checks=5,compiled_source_sha256=check['compiled_source_sha256'],binary_sha256=check['binary_sha256'],unchanged_library_assurance_reused=2696,no_corpus_query=True,full_workspace_repeated=False,cgroup=cgroup)
 (out/'verification.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report))

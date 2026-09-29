@@ -52,7 +52,7 @@ reservation={'schema':SCHEMA,'source_base_commit':base,'source_archive_sha256':s
     'source_dirty':True,'attempt':ATTEMPT,'profile':'causality','region':REGION,
     'instance_type':'c7g.2xlarge','availability_zone':az,'wall_seconds':2100,'test_timeout_seconds':1800,
     'cargo_jobs':4,'spot_price_observed_usd_per_hour':quote['SpotPrice'],'spot_quote_timestamp':quote['Timestamp'].isoformat(),'spot_max_usd_per_hour':'0.30',
-    'cost_cap_compute_usd':0.175,'cost_allowance_ebs_s3_usd':0.10,'scope':'Affected native reference bin panel-count/k10/k100 CLI tests and release build only; no corpus/full gate; unchanged2696 library and HTTP authority',
+    'cost_cap_compute_usd':0.175,'cost_allowance_ebs_s3_usd':0.10,'scope':'Reuse unchanged-source3passing native tests; release build and5pendingCLIchecks/binary retention only; no corpus/full gate; unchanged2696 library and HTTP authority',
     'interruption_policy':'Discard incomplete check; no automatic replacement',
     'image':'ami-03748c04dc81412c6'}
 previous=ROOT_OUT/'source-completion-integration/a0002'
@@ -64,7 +64,20 @@ expected['crates/borsuk/examples/two_bit_http.rs']=boundary['compiled_http_sha25
 changed=[n for n,d in expected.items() if hashlib.sha256(Path(n).read_bytes()).hexdigest()!=d]
 assert len(expected)==395 and changed==['crates/borsuk/src/bin/two_bit_plan_demo.rs']
 reservation.update(existing_native_files_verified_except_declared_change=395,changed_native_files=changed,reused_library_terminal_sha256=proof['terminal_sha256'],reused_http_boundary_terminal_sha256=boundary['terminal_sha256'],measurement_memory_max_bytes=10737418240,swap_max_bytes=0,cpu_affinity='0-3',threads=4)
-runner.WALL_SECONDS=2100; runner.SCHEMA=SCHEMA; runner.ARTIFACTS += ('cpu.txt','tests.log','release.log','reference-check.json','reference-cgroup.json','binaries/two_bit_plan_demo')
+partial=ROOT_OUT/'native-reference-panel/a0001'
+partial_proof=json.loads((partial/'verification.json').read_text())
+partial_launch=json.loads((partial/'aws-launch.json').read_text())
+partial_raw=(partial/'aws-terminal.json').read_bytes();partial_terminal=json.loads(partial_raw)
+assert partial_proof['engineering_invalid'] and partial_proof['focused_native_tests_passed']==3 and partial_proof['release_build_completed'] and partial_proof['state']=='terminated'
+assert hashlib.sha256(partial_raw).hexdigest()==partial_proof['terminal_sha256']
+assert partial_proof['compiled_source_sha256']==hashlib.sha256(Path(changed[0]).read_bytes()).hexdigest()
+assert ec2.describe_instances(InstanceIds=[partial_launch['instance_id']])['Reservations'][0]['Instances'][0]['State']['Name']=='terminated'
+test_ident=partial_terminal['artifacts']['tests.log']
+test_body=s3.get_object(Bucket=BUCKET,Key=partial_launch['prefix']+'/artifacts/tests.log')['Body'].read()
+assert len(test_body)==test_ident['bytes'] and hashlib.sha256(test_body).hexdigest()==test_ident['sha256'] and b'test result: ok. 3 passed; 0 failed;' in test_body
+reuse=dict(passed=3,compiled_source_sha256=partial_proof['compiled_source_sha256'],terminal_sha256=partial_proof['terminal_sha256'],source_archive_sha256=partial_proof['source_archive_sha256'],tests_sha256=test_ident['sha256'])
+reservation.update(reused_native_tests=3,reused_test_terminal_sha256=partial_proof['terminal_sha256'],reused_test_source_archive_sha256=partial_proof['source_archive_sha256'])
+runner.WALL_SECONDS=2100; runner.SCHEMA=SCHEMA; runner.ARTIFACTS += ('cpu.txt','tests.log','reused-tests.json','release.log','reference-check.json','reference-cgroup.json','binaries/two_bit_plan_demo')
 body=runner.user_data(base,sha,archive_key,prefix).replace('v174-relaid-bind-compile','native-reference-panel')
 body=body.replace('gcc gcc-c++ cmake perl tar gzip time', 'gcc gcc-c++ cmake perl tar gzip time python3-devel pkgconf-pkg-config')
 body=body.replace("'source_commit':", "'source_base_commit':")
@@ -80,6 +93,13 @@ systemd-run --unit=native-reference-panel --wait --pipe -p MemoryMax=10G -p Memo
 phase=check-artifacts
 for name in reference-check.json reference-cgroup.json release.log tests.log binaries/two_bit_plan_demo; do test -s "$root/$name"; done
 '''
+reuse_setup=f"""aws s3 cp 's3://{BUCKET}/{partial_launch['prefix']}/artifacts/tests.log' tests.log --only-show-errors
+echo '{test_ident['sha256']}  tests.log' | sha256sum -c -
+cat >reused-tests.json <<'REUSED_NATIVE_TESTS'
+{json.dumps(reuse,sort_keys=True)}
+REUSED_NATIVE_TESTS
+"""
+check=check.replace('phase=reference-check\n','phase=reference-check\n'+reuse_setup)
 body=body[:a]+check+body[b:]
 subprocess.run(['bash','-n'],input=body,text=True,check=True)
 try:

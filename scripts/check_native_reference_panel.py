@@ -15,12 +15,14 @@ def resources():
 atexit.register(resources)
 args = ['--release', '--locked', '--manifest-path', str(repo / 'Cargo.toml'),
         '--target-dir', str(out / 'target'), '-p', 'borsuk', '--jobs', '4', '--bin', 'two_bit_plan_demo']
-for label, operation in [('tests', 'test'), ('release', 'build')]:
-    with (out / (label + '.log')).open('x') as log:
-        status = subprocess.run([cargo, operation, *args], stdout=log, stderr=subprocess.STDOUT).returncode
-    assert status == 0, (label, status)
-    if operation == 'test':
-        assert 'test result: ok. 3 passed; 0 failed;' in (out / 'tests.log').read_text()
+reuse = json.loads((out / 'reused-tests.json').read_text())
+source = 'crates/borsuk/src/bin/two_bit_plan_demo.rs'
+assert reuse['passed'] == 3 and reuse['compiled_source_sha256'] == hashlib.sha256((repo / source).read_bytes()).hexdigest()
+assert reuse['tests_sha256'] == hashlib.sha256((out / 'tests.log').read_bytes()).hexdigest()
+assert 'test result: ok. 3 passed; 0 failed;' in (out / 'tests.log').read_text()
+with (out / 'release.log').open('x') as log:
+    status = subprocess.run([cargo, 'build', *args], stdout=log, stderr=subprocess.STDOUT).returncode
+assert status == 0, ('release', status)
 binary = out / 'target/release/two_bit_plan_demo'
 # Invalid options are checked before reading a root or opening S3.
 checks = []
@@ -33,7 +35,7 @@ for options in [[], ['--top-k', '10'], ['--panel-count', '0', '--top-k', '10'],
 data = binary.read_bytes()
 (out / 'binaries/two_bit_plan_demo').write_bytes(data)
 source = 'crates/borsuk/src/bin/two_bit_plan_demo.rs'
-result = dict(qualified=True, focused_tests_passed=3, cli_preopen_rejection_checks=checks,
+result = dict(qualified=True, focused_tests_passed=3, focused_tests_reused=3, focused_tests_executed=0, cli_preopen_rejection_checks=checks,
               compiled_source_sha256=hashlib.sha256((repo / source).read_bytes()).hexdigest(),
               binary_sha256=hashlib.sha256(data).hexdigest(), binary_bytes=len(data),
               unchanged_library_assurance_reused=2696, no_corpus_query=True, full_workspace_repeated=False)

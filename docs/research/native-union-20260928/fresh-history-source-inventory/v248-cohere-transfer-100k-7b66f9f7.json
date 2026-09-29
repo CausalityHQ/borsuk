@@ -1,0 +1,362 @@
+{
+  "terminal_key": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/terminal.json",
+  "terminal_sha256": "9e45f55216518fec13bba3c40002aedb8d356ce8fe1fa943d6ac4caf9ac817f6",
+  "terminal_status": "complete",
+  "archive_key": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/sources/221f65fcbb4623a712fd2762dceb3fb6f6ba84dbce7c822f2aa4b137b178eeae.tar.gz",
+  "archive_sha256": "221f65fcbb4623a712fd2762dceb3fb6f6ba84dbce7c822f2aa4b137b178eeae",
+  "source_code": {
+    "scripts/launch_v248_cohere_transfer_100k_spot.py": {
+      "sha256": "4fae6fc54df247110d53bc83272d8784611eaea8d21534b08de6a5204a80b703",
+      "lines": [
+        {
+          "line": 2,
+          "text": "\"\"\"One immutable CoHere-100k source-only graph transfer gate on Causality Spot.\"\"\""
+        },
+        {
+          "line": 17,
+          "text": "    archive_source, missing, put_if_absent,"
+        },
+        {
+          "line": 23,
+          "text": "SOURCE = \"publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/\""
+        },
+        {
+          "line": 28,
+          "text": "             \"vectors.raw\", \"plane.bin\", \"books.bin\", \"codes.bin\", \"map.u32\","
+        },
+        {
+          "line": 29,
+          "text": "             \"prep-resources.txt\", \"graph-resources.txt\", \"serving-resources.txt\","
+        },
+        {
+          "line": 30,
+          "text": "             \"truth-resources.txt\", \"build.log\", \"install.log\", \"run-closed.log\")"
+        },
+        {
+          "line": 59,
+          "text": "        with path.open('rb') as source:"
+        },
+        {
+          "line": 60,
+          "text": "            for block in iter(lambda:source.read(1024*1024),b''):"
+        },
+        {
+          "line": 65,
+          "text": "print(json.dumps({'schema':'@@SCHEMA@@','source_commit':'@@COMMIT@@',"
+        },
+        {
+          "line": 66,
+          "text": "    'source_archive_sha256':'@@ARCHIVE_SHA@@','instance_id':os.environ['INSTANCE_ID'],"
+        },
+        {
+          "line": 78,
+          "text": "aws s3 cp 's3://@@BUCKET@@/@@ARCHIVE_KEY@@' source.tar.gz --only-show-errors"
+        },
+        {
+          "line": 79,
+          "text": "printf '%s  source.tar.gz\\n' '@@ARCHIVE_SHA@@' | sha256sum -c -"
+        },
+        {
+          "line": 80,
+          "text": "mkdir repo && tar -xzf source.tar.gz -C repo"
+        },
+        {
+          "line": 89,
+          "text": "aws s3 cp 's3://@@BUCKET@@/@@SOURCE@@/STAGING_COMPLETE.json' receipt.json --only-show-errors"
+        },
+        {
+          "line": 92,
+          "text": "  name=$(printf 'train-%08d.parquet' \"$n\")"
+        },
+        {
+          "line": 93,
+          "text": "  aws s3 cp \"s3://@@BUCKET@@/@@SOURCE@@/materialized/$name\" \"$name\" --only-show-errors"
+        },
+        {
+          "line": 96,
+          "text": "/usr/bin/time -v -o prep-resources.txt .venv/bin/python -m scripts.v248_prepare_cohere_graph \\"
+        },
+        {
+          "line": 98,
+          "text": "  --train train-0000000{0,1,2,3,4}.parquet --rows 100000 --generation 248 --output prepared"
+        },
+        {
+          "line": 107,
+          "text": "/usr/bin/time -v -o graph-resources.txt \"$CARGO_TARGET_DIR/release/v248_build_cohere_graph_100k\" \\"
+        },
+        {
+          "line": 108,
+          "text": "  prep.json plane.bin vectors.raw graph.bin build.json"
+        },
+        {
+          "line": 109,
+          "text": "phase=queries"
+        },
+        {
+          "line": 110,
+          "text": "aws s3 cp 's3://@@BUCKET@@/@@SOURCE@@/materialized/test.parquet' test.parquet --only-show-errors"
+        },
+        {
+          "line": 111,
+          "text": "printf '%s  test.parquet\\n' '@@TEST_SHA@@' | sha256sum -c -"
+        },
+        {
+          "line": 113,
+          "text": "  --test test.parquet --request-file requests.jsonl --output requests.json"
+        },
+        {
+          "line": 115,
+          "text": "/usr/bin/time -v -o serving-resources.txt \"$CARGO_TARGET_DIR/release/v248_serve_cohere_graph_100k\" \\"
+        },
+        {
+          "line": 125,
+          "text": "/usr/bin/time -v -o truth-resources.txt .venv/bin/python -m scripts.v248_score_cohere_graph score \\"
+        },
+        {
+          "line": 126,
+          "text": "  --source vectors.raw --prep prep.json --request-file requests.jsonl \\"
+        },
+        {
+          "line": 134,
+          "text": "                       \"ARCHIVE_KEY\": archive_key, \"SOURCE\": SOURCE.rstrip(\"/\"),"
+        },
+        {
+          "line": 151,
+          "text": "        raise ValueError(\"source is not a fast-forward descendant of origin/main\")"
+        },
+        {
+          "line": 152,
+          "text": "    archive = archive_source(commit)"
+        },
+        {
+          "line": 154,
+          "text": "    archive_key = f\"research/v248-cohere-transfer-100k/{commit}/sources/{archive_sha}.tar.gz\""
+        },
+        {
+          "line": 169,
+          "text": "        raise ValueError(\"source archive length differs\")"
+        },
+        {
+          "line": 171,
+          "text": "        \"schema\": SCHEMA, \"source_commit\": commit,"
+        },
+        {
+          "line": 172,
+          "text": "        \"source_archive_sha256\": archive_sha, \"staging_receipt_sha256\": RECEIPT_SHA,"
+        },
+        {
+          "line": 176,
+          "text": "                         \"workers\": 8, \"source_only_pq64\": True},"
+        },
+        {
+          "line": 193,
+          "text": "        TagSpecifications=[{\"ResourceType\": \"instance\", \"Tags\": ["
+        },
+        {
+          "line": 200,
+          "text": "                      \"source_commit\": commit, \"source_archive_sha256\": archive_sha}), flush=True)"
+        },
+        {
+          "line": 210,
+          "text": "                        or terminal.get(\"source_commit\") != commit"
+        },
+        {
+          "line": 211,
+          "text": "                        or terminal.get(\"source_archive_sha256\") != archive_sha):"
+        }
+      ]
+    },
+    "scripts/v248_prepare_cohere_graph.py": {
+      "sha256": "e85a14b7ba32937de2040d17f56c4077149fae85a75b9fd5003dc1fab42d4ab8",
+      "lines": [
+        {
+          "line": 2,
+          "text": "\"\"\"Prepare authenticated source-only FP16 and PQ64 planes from staged shards.\"\"\""
+        },
+        {
+          "line": 12,
+          "text": "import pyarrow.parquet as pq"
+        },
+        {
+          "line": 14,
+          "text": "from scripts.v115_source_router import _encode, _train_books"
+        },
+        {
+          "line": 22,
+          "text": "    with path.open(\"rb\") as source:"
+        },
+        {
+          "line": 23,
+          "text": "        for block in iter(lambda: source.read(1024 * 1024), b\"\"):"
+        },
+        {
+          "line": 38,
+          "text": "        raise ValueError(\"source authority or geometry differs\")"
+        },
+        {
+          "line": 41,
+          "text": "    source_objects = sorted((row for row in authority[\"objects\"]"
+        },
+        {
+          "line": 42,
+          "text": "                             if row[\"role\"] == \"train\"), key=lambda row: row[\"uri\"])"
+        },
+        {
+          "line": 43,
+          "text": "    if (len(source_objects) != 458"
+        },
+        {
+          "line": 44,
+          "text": "            or [path.name for path in args.train]"
+        },
+        {
+          "line": 45,
+          "text": "            != [row[\"uri\"].rsplit(\"/\", 1)[-1] for row in source_objects[:len(args.train)]]):"
+        },
+        {
+          "line": 46,
+          "text": "        raise ValueError(\"train shards are not the canonical prefix\")"
+        },
+        {
+          "line": 49,
+          "text": "    for path, identity in zip(args.train, source_objects, strict=False):"
+        },
+        {
+          "line": 52,
+          "text": "            raise ValueError(f\"train shard differs: {path.name}\")"
+        },
+        {
+          "line": 61,
+          "text": "            raise ValueError(f\"train shard geometry differs: {path.name}\")"
+        },
+        {
+          "line": 70,
+          "text": "        raise ValueError(\"train shards do not cover requested rows\")"
+        },
+        {
+          "line": 73,
+          "text": "        raise ValueError(\"source contains invalid vectors\")"
+        },
+        {
+          "line": 75,
+          "text": "    raw = args.output / \"vectors.raw\""
+        },
+        {
+          "line": 77,
+          "text": "    source_sha = digest(raw)"
+        },
+        {
+          "line": 80,
+          "text": "              + bytes.fromhex(source_sha))"
+        },
+        {
+          "line": 90,
+          "text": "    books = _train_books(data, 64, seed=7301)"
+        },
+        {
+          "line": 95,
+          "text": "    summary = {\"schema\": \"borsuk-v248-source-preparation-v1\","
+        },
+        {
+          "line": 99,
+          "text": "               \"source_sha256\": source_sha,"
+        },
+        {
+          "line": 102,
+          "text": "                             for name in (\"vectors.raw\", \"plane.bin\", \"books.bin\","
+        },
+        {
+          "line": 112,
+          "text": "    parser.add_argument(\"--train\", nargs=\"+\", required=True, type=Path)"
+        }
+      ]
+    },
+    "scripts/v248_score_cohere_graph.py": {
+      "sha256": "adf8bb92bcb312e56ecd38d856ef30b56b8d7bd9079c3420be1f580d9268ae11",
+      "lines": [
+        {
+          "line": 2,
+          "text": "\"\"\"Prepare CoHere queries, then score sealed IDs against exact 100k cosine truth.\"\"\""
+        },
+        {
+          "line": 11,
+          "text": "import pyarrow.parquet as pq"
+        },
+        {
+          "line": 38,
+          "text": "        for ordinal, query in enumerate(data):"
+        },
+        {
+          "line": 39,
+          "text": "            destination.write(canonical({\"query_ordinal\": ordinal,"
+        },
+        {
+          "line": 40,
+          "text": "                                         \"query\": query.astype(float).tolist()}))"
+        },
+        {
+          "line": 42,
+          "text": "            \"requests_sha256\": digest(output), \"queries\": 1000}"
+        },
+        {
+          "line": 49,
+          "text": "def score(source: Path, prep: Path, request_file: Path, raw_file: Path,"
+        },
+        {
+          "line": 53,
+          "text": "    if (prepared[\"schema\"] != \"borsuk-v248-source-preparation-v1\""
+        },
+        {
+          "line": 55,
+          "text": "            or prepared[\"source_sha256\"] != digest(source)"
+        },
+        {
+          "line": 59,
+          "text": "        raise ValueError(\"CoHere source or pretruth identity differs\")"
+        },
+        {
+          "line": 61,
+          "text": "    queries = [json.loads(line) for line in request_file.read_text().splitlines()]"
+        },
+        {
+          "line": 62,
+          "text": "    if (len(rows) != 1000 or len(queries) != 1000"
+        },
+        {
+          "line": 65,
+          "text": "                   or queries[i][\"query_ordinal\"] != i"
+        },
+        {
+          "line": 67,
+          "text": "        raise ValueError(\"CoHere query or returned ID panel differs\")"
+        },
+        {
+          "line": 68,
+          "text": "    data = np.memmap(source, dtype=\"<f4\", mode=\"r\", shape=(100_000, DIMS))"
+        },
+        {
+          "line": 71,
+          "text": "    q = np.asarray([row[\"query\"] for row in queries], dtype=np.float64)"
+        },
+        {
+          "line": 96,
+          "text": "            return {\"queries\": len(values), \"gt100_hits\": sum(values),"
+        },
+        {
+          "line": 110,
+          "text": "        \"source_sha256\": digest(source), \"test_sha256\": TEST_SHA,"
+        },
+        {
+          "line": 120,
+          "text": "    for name in (\"test\", \"source\", \"prep\", \"request_file\", \"raw_file\","
+        },
+        {
+          "line": 127,
+          "text": "        score(args.source, args.prep, args.request_file, args.raw_file,"
+        }
+      ]
+    }
+  },
+  "complete_prior_query_audit": false,
+  "query_gt_or_sealed_bodies_opened": false
+}
