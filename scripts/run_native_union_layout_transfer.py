@@ -29,7 +29,7 @@ def evaluate(item,directory,config,binaries,prefix):
     native(directory,'normalize',[fit,'normalize',raw,item['raw_sha256'],100000,768,1073741824,normalized])
     native(directory,'hier-fit',[fit,'hier-fit',normalized,sha(normalized),100000,768,1073741824,order])
     recipe=json.loads((directory/'hier-fit.log').read_text());values=np.fromfile(order,dtype='<u8')
-    if values.shape!=(100000,) or not np.array_equal(np.sort(values),np.arange(100000)) or recipe['order_sha256']!=sha(order) or recipe['query_or_truth_used'] is not False or recipe['recipe']!='borsuk-hierarchical-extents-chacha8-v1' or recipe['extents'][0][0]!=0 or recipe['extents'][-1][1]!=100000 or any(not 0<b-a<=1024 for a,b in recipe['extents']) or any(recipe['extents'][i][1]!=recipe['extents'][i+1][0] for i in range(len(recipe['extents'])-1)):raise ValueError('source-only hierarchical order authority')
+    if values.shape!=(100000,) or not np.array_equal(np.sort(values),np.arange(100000)) or recipe['order_sha256']!=sha(order) or recipe['query_or_truth_used'] is not False or recipe['recipe']!=config['source_recipe'] or recipe['extents'][0][0]!=0 or recipe['extents'][-1][1]!=100000 or any(not 0<b-a<=1024 for a,b in recipe['extents']) or any(recipe['extents'][i][1]!=recipe['extents'][i+1][0] for i in range(len(recipe['extents'])-1)):raise ValueError('source-only hierarchical order authority')
     native(directory,'sq8',[fit,normalized,sha(normalized),768,order,sha(order),1073741824,new_sq8])
     sq8_receipt=json.loads((directory/'sq8.log').read_text())
     for field in ['low','step']:
