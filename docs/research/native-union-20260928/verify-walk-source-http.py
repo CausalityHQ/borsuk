@@ -75,7 +75,9 @@ for item in config['items'][:len(decision['results'])]:
             assert stages['candidate']<=walk_gt
             for key,value in [('gt_walk_pool',len(query_gt-walk_gt)),('gt_centroid_roster',len(walk_gt-stages['candidate'])),('flat_gt_walk_pool',len(flat_gt-walk_gt)),('flat_gt_centroid_roster',len((flat_gt&walk_gt)-stages['candidate'])),('seed_evaluated_gt',len(seed_gt))]:discovery_loss[a][key]+=value
             for discovery in r['discoveries']:
-                evaluated=discovery['walk_evaluated_units'];assert len(evaluated)==len(set(evaluated))==1272 and all(0<=unit<3125 for unit in evaluated)
+                evaluated=discovery['walk_evaluated_units'];assert 0<len(evaluated)==len(set(evaluated))<=1272 and all(0<=unit<3125 for unit in evaluated)
+                assert not discovery['walk_work_exhausted'] or len(evaluated)==1272
+                assert set(range(discovery['seed_page']*8,min((discovery['seed_page']+1)*8,3125)))<=set(evaluated)
                 pages={unit//8 for unit in evaluated}|{discovery['seed_page']};assert len(pages)>=159
                 discovery_work[a].append(len(evaluated))
             assert set(sample['stages']['nominated'])<=set(sample['stages']['candidate']) and set(sample['stages']['nominated'])<=set(sample['stages']['fetched']) and set(sample['stages']['returned'])<=set(sample['stages']['fetched']) and sample['gets']==len(r['ranges'])<=32 and sample['bytes']==r['planned_bytes']<=16773120
@@ -126,7 +128,7 @@ for item in config['items'][:len(decision['results'])]:
             d,n,f,t,z=(set(sample['stages'][key]) for key in ['candidate','nominated','fetched','returned','flat'])
             losses['gt_physical']+=len(n-f);losses['gt_physical_spill']+=len(f-n)
             for key,value in [('flat_gt_discovery',len(z-d)),('flat_gt_nomination',len((z&d)-n)),('flat_gt_physical',len((z&n)-f)),('flat_gt_ranking',len((z&f)-t)),('returned_outside_flat',len(t-z))]:losses[key]+=value
-        decomposition[arm]=dict(counts=counts,losses=losses,discovery_loss=discovery_loss[arm],graph_walks_verified=len(discovery_work[arm]),work_evaluations_per_walk=1272)
+        decomposition[arm]=dict(counts=counts,losses=losses,discovery_loss=discovery_loss[arm],graph_walks_verified=len(discovery_work[arm]),work_evaluations_cap=1272,work_evaluations_min=min(discovery_work[arm]),work_evaluations_max=max(discovery_work[arm]),naturally_ended_walks=sum(n<1272 for n in discovery_work[arm]))
     rows.append(dict(dataset=item['name'],returned_hits=result['returned_hits'],p05=result['p05'],decision=result['decision'],physical_cold_measured=result['physical_cold_measured'],decomposition=decomposition,arm_median_incoming_http_ms=result.get('arm_median_incoming_http_ms'),arm_median_serial_qps=result.get('arm_median_serial_qps'),runs=result.get('runs')))
 cgroup=obj('screen/cgroup.json');assert int(cgroup['memory.max'])==8589934592 and int(cgroup['memory.swap.max'])==int(cgroup['memory.swap.peak'])==0 and all(int(s.split()[1])==0 for s in cgroup['memory.events'].splitlines() if s.split()[0] in ['oom','oom_kill']);report.update(valid_measurement=True,rows=rows,cgroup=cgroup,helper=helper,decision=decision['decision'],fresh_cohort_used=False)
 (out/'verification.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report))

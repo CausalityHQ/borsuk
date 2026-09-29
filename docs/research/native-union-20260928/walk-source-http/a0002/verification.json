@@ -1,0 +1,442 @@
+{
+  "instance_id": "i-0834d3cb3e90d0b56",
+  "state": "terminated",
+  "source_archive_sha256": "cc71bc011fc06a2dc1e8d7143bc6f9323291902d6324bbe92ccec2a2ff296553",
+  "terminal_sha256": "fb32ead222b368a159b1f9f4107a0bf0a0e2c009f8f3526c149b5149de47d124",
+  "native_files_matched": 394,
+  "source_files_matched": 402,
+  "artifacts_verified": 112,
+  "qualification": false,
+  "valid_measurement": true,
+  "rows": [
+    {
+      "dataset": "relaion",
+      "returned_hits": {
+        "candidate": 6366,
+        "control": 6363
+      },
+      "p05": {
+        "candidate": 99,
+        "control": 99
+      },
+      "decision": "GO actual core and HTTP development envelope only",
+      "physical_cold_measured": true,
+      "decomposition": {
+        "control": {
+          "counts": {
+            "candidate_hits": 6392,
+            "nominated_hits": 6392,
+            "fetched_hits": 6392,
+            "returned_hits": 6363,
+            "flat_hits": 6369,
+            "gets": 1663,
+            "bytes": 1072281600
+          },
+          "losses": {
+            "gt_discovery": 8,
+            "gt_nomination": 0,
+            "gt_physical": 0,
+            "gt_quantization_or_ranking": 29,
+            "flat_gt_discovery": 8,
+            "flat_gt_nomination": 0,
+            "flat_gt_physical": 0,
+            "flat_gt_ranking": 0,
+            "returned_outside_flat": 2,
+            "gt_physical_spill": 0
+          },
+          "discovery_loss": {
+            "gt_walk_pool": 0,
+            "gt_centroid_roster": 8,
+            "flat_gt_walk_pool": 0,
+            "flat_gt_centroid_roster": 8,
+            "seed_evaluated_gt": 5138
+          },
+          "graph_walks_verified": 128,
+          "work_evaluations_cap": 1272,
+          "work_evaluations_min": 1272,
+          "work_evaluations_max": 1272,
+          "naturally_ended_walks": 0
+        },
+        "candidate": {
+          "counts": {
+            "candidate_hits": 6398,
+            "nominated_hits": 6395,
+            "fetched_hits": 6395,
+            "returned_hits": 6366,
+            "flat_hits": 6369,
+            "gets": 1671,
+            "bytes": 1073105280
+          },
+          "losses": {
+            "gt_discovery": 2,
+            "gt_nomination": 3,
+            "gt_physical": 0,
+            "gt_quantization_or_ranking": 29,
+            "flat_gt_discovery": 2,
+            "flat_gt_nomination": 3,
+            "flat_gt_physical": 0,
+            "flat_gt_ranking": 0,
+            "returned_outside_flat": 2,
+            "gt_physical_spill": 0
+          },
+          "discovery_loss": {
+            "gt_walk_pool": 0,
+            "gt_centroid_roster": 2,
+            "flat_gt_walk_pool": 0,
+            "flat_gt_centroid_roster": 2,
+            "seed_evaluated_gt": 4902
+          },
+          "graph_walks_verified": 128,
+          "work_evaluations_cap": 1272,
+          "work_evaluations_min": 1272,
+          "work_evaluations_max": 1272,
+          "naturally_ended_walks": 0
+        }
+      },
+      "arm_median_incoming_http_ms": {
+        "candidate": {
+          "p50": 106.71734925,
+          "p90": 112.66403115,
+          "p95": 117.70516624999999,
+          "p99": 140.3510540299999
+        },
+        "control": {
+          "p50": 104.81537900000001,
+          "p90": 107.2750252,
+          "p95": 108.3570397,
+          "p99": 127.40149366499998
+        }
+      },
+      "arm_median_serial_qps": {
+        "candidate": 9.1655805472204,
+        "control": 9.415363347987006
+      },
+      "runs": [
+        {
+          "arm": "control",
+          "authority": {
+            "control_epoch": 1,
+            "generation": 1,
+            "root_sha256": "75debd103ff5de9a706fdb84ecf52bfd068af920db4a9f475ca17b92ff55f6d3"
+          },
+          "count": 64,
+          "data_get_attempts": 1663,
+          "failed_gets": 0,
+          "incoming_http_ms": {
+            "p50": 105.1222585,
+            "p90": 107.5318118,
+            "p95": 108.7213227,
+            "p99": 127.51202261999997
+          },
+          "measurement_wall_ns": 6809721902,
+          "p05": 99,
+          "rep": 0,
+          "returned_hits": 6363,
+          "serial_observed_qps": 9.398327996507955,
+          "source_scorer_ordered_id_parity": true,
+          "verified_bytes": 1072281600,
+          "process_max_rss_kib": 82896
+        },
+        {
+          "arm": "candidate",
+          "authority": {
+            "control_epoch": 1,
+            "generation": 1,
+            "root_sha256": "577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b"
+          },
+          "count": 64,
+          "data_get_attempts": 1671,
+          "failed_gets": 0,
+          "incoming_http_ms": {
+            "p50": 107.062276,
+            "p90": 113.0205248,
+            "p95": 121.6169144,
+            "p99": 140.5125890999999
+          },
+          "measurement_wall_ns": 7016822351,
+          "p05": 99,
+          "rep": 1,
+          "returned_hits": 6366,
+          "serial_observed_qps": 9.12093776905711,
+          "source_scorer_ordered_id_parity": true,
+          "verified_bytes": 1073105280,
+          "process_max_rss_kib": 89348
+        },
+        {
+          "arm": "candidate",
+          "authority": {
+            "control_epoch": 1,
+            "generation": 1,
+            "root_sha256": "577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b"
+          },
+          "count": 64,
+          "data_get_attempts": 1671,
+          "failed_gets": 0,
+          "incoming_http_ms": {
+            "p50": 106.3724225,
+            "p90": 112.3075375,
+            "p95": 113.7934181,
+            "p99": 140.1895189599999
+          },
+          "measurement_wall_ns": 6948800017,
+          "p05": 99,
+          "rep": 2,
+          "returned_hits": 6366,
+          "serial_observed_qps": 9.210223325383692,
+          "source_scorer_ordered_id_parity": true,
+          "verified_bytes": 1073105280,
+          "process_max_rss_kib": 87064
+        },
+        {
+          "arm": "control",
+          "authority": {
+            "control_epoch": 1,
+            "generation": 1,
+            "root_sha256": "75debd103ff5de9a706fdb84ecf52bfd068af920db4a9f475ca17b92ff55f6d3"
+          },
+          "count": 64,
+          "data_get_attempts": 1663,
+          "failed_gets": 0,
+          "incoming_http_ms": {
+            "p50": 104.5084995,
+            "p90": 107.0182386,
+            "p95": 107.9927567,
+            "p99": 127.29096470999997
+          },
+          "measurement_wall_ns": 6785124552,
+          "p05": 99,
+          "rep": 3,
+          "returned_hits": 6363,
+          "serial_observed_qps": 9.432398699466056,
+          "source_scorer_ordered_id_parity": true,
+          "verified_bytes": 1072281600,
+          "process_max_rss_kib": 79340
+        }
+      ]
+    },
+    {
+      "dataset": "cohere",
+      "returned_hits": {
+        "candidate": 6349,
+        "control": 6347
+      },
+      "p05": {
+        "candidate": 98,
+        "control": 98
+      },
+      "decision": "GO actual core and HTTP development envelope only",
+      "physical_cold_measured": true,
+      "decomposition": {
+        "control": {
+          "counts": {
+            "candidate_hits": 6395,
+            "nominated_hits": 6393,
+            "fetched_hits": 6393,
+            "returned_hits": 6347,
+            "flat_hits": 6351,
+            "gets": 1934,
+            "bytes": 1072955520
+          },
+          "losses": {
+            "gt_discovery": 5,
+            "gt_nomination": 2,
+            "gt_physical": 0,
+            "gt_quantization_or_ranking": 46,
+            "flat_gt_discovery": 5,
+            "flat_gt_nomination": 2,
+            "flat_gt_physical": 0,
+            "flat_gt_ranking": 0,
+            "returned_outside_flat": 3,
+            "gt_physical_spill": 0
+          },
+          "discovery_loss": {
+            "gt_walk_pool": 0,
+            "gt_centroid_roster": 5,
+            "flat_gt_walk_pool": 0,
+            "flat_gt_centroid_roster": 5,
+            "seed_evaluated_gt": 4632
+          },
+          "graph_walks_verified": 128,
+          "work_evaluations_cap": 1272,
+          "work_evaluations_min": 985,
+          "work_evaluations_max": 1272,
+          "naturally_ended_walks": 9
+        },
+        "candidate": {
+          "counts": {
+            "candidate_hits": 6400,
+            "nominated_hits": 6395,
+            "fetched_hits": 6395,
+            "returned_hits": 6349,
+            "flat_hits": 6351,
+            "gets": 1969,
+            "bytes": 1072805760
+          },
+          "losses": {
+            "gt_discovery": 0,
+            "gt_nomination": 5,
+            "gt_physical": 0,
+            "gt_quantization_or_ranking": 46,
+            "flat_gt_discovery": 0,
+            "flat_gt_nomination": 5,
+            "flat_gt_physical": 0,
+            "flat_gt_ranking": 0,
+            "returned_outside_flat": 3,
+            "gt_physical_spill": 0
+          },
+          "discovery_loss": {
+            "gt_walk_pool": 0,
+            "gt_centroid_roster": 0,
+            "flat_gt_walk_pool": 0,
+            "flat_gt_centroid_roster": 0,
+            "seed_evaluated_gt": 4467
+          },
+          "graph_walks_verified": 128,
+          "work_evaluations_cap": 1272,
+          "work_evaluations_min": 1272,
+          "work_evaluations_max": 1272,
+          "naturally_ended_walks": 0
+        }
+      },
+      "arm_median_incoming_http_ms": {
+        "candidate": {
+          "p50": 105.83931150000001,
+          "p90": 107.898551,
+          "p95": 111.35305654999999,
+          "p99": 122.43653026499996
+        },
+        "control": {
+          "p50": 104.29092225000001,
+          "p90": 106.46508689999999,
+          "p95": 107.96973735,
+          "p99": 114.44668338999996
+        }
+      },
+      "arm_median_serial_qps": {
+        "candidate": 9.344978348411342,
+        "control": 9.50460779099486
+      },
+      "runs": [
+        {
+          "arm": "control",
+          "authority": {
+            "control_epoch": 1,
+            "generation": 1,
+            "root_sha256": "bf9d8777e51f4bf2150a014af9584513f64b27822fea4711b011271c37474a99"
+          },
+          "count": 64,
+          "data_get_attempts": 1934,
+          "failed_gets": 0,
+          "incoming_http_ms": {
+            "p50": 104.2056445,
+            "p90": 106.29366399999999,
+            "p95": 107.55312249999999,
+            "p99": 113.95199003999997
+          },
+          "measurement_wall_ns": 6725389728,
+          "p05": 98,
+          "rep": 0,
+          "returned_hits": 6347,
+          "serial_observed_qps": 9.516177141905553,
+          "source_scorer_ordered_id_parity": true,
+          "verified_bytes": 1072955520,
+          "process_max_rss_kib": 79440
+        },
+        {
+          "arm": "candidate",
+          "authority": {
+            "control_epoch": 1,
+            "generation": 1,
+            "root_sha256": "9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521"
+          },
+          "count": 64,
+          "data_get_attempts": 1969,
+          "failed_gets": 0,
+          "incoming_http_ms": {
+            "p50": 105.4355355,
+            "p90": 107.570657,
+            "p95": 107.97014255,
+            "p99": 115.89960363999995
+          },
+          "measurement_wall_ns": 6817088182,
+          "p05": 98,
+          "rep": 1,
+          "returned_hits": 6349,
+          "serial_observed_qps": 9.388172529290014,
+          "source_scorer_ordered_id_parity": true,
+          "verified_bytes": 1072805760,
+          "process_max_rss_kib": 81256
+        },
+        {
+          "arm": "candidate",
+          "authority": {
+            "control_epoch": 1,
+            "generation": 1,
+            "root_sha256": "9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521"
+          },
+          "count": 64,
+          "data_get_attempts": 1969,
+          "failed_gets": 0,
+          "incoming_http_ms": {
+            "p50": 106.2430875,
+            "p90": 108.226445,
+            "p95": 114.73597054999998,
+            "p99": 128.97345688999997
+          },
+          "measurement_wall_ns": 6880400453,
+          "p05": 98,
+          "rep": 2,
+          "returned_hits": 6349,
+          "serial_observed_qps": 9.301784167532668,
+          "source_scorer_ordered_id_parity": true,
+          "verified_bytes": 1072805760,
+          "process_max_rss_kib": 78860
+        },
+        {
+          "arm": "control",
+          "authority": {
+            "control_epoch": 1,
+            "generation": 1,
+            "root_sha256": "bf9d8777e51f4bf2150a014af9584513f64b27822fea4711b011271c37474a99"
+          },
+          "count": 64,
+          "data_get_attempts": 1934,
+          "failed_gets": 0,
+          "incoming_http_ms": {
+            "p50": 104.37620000000001,
+            "p90": 106.6365098,
+            "p95": 108.3863522,
+            "p99": 114.94137673999995
+          },
+          "measurement_wall_ns": 6741782455,
+          "p05": 98,
+          "rep": 3,
+          "returned_hits": 6347,
+          "serial_observed_qps": 9.493038440084167,
+          "source_scorer_ordered_id_parity": true,
+          "verified_bytes": 1072955520,
+          "process_max_rss_kib": 79252
+        }
+      ]
+    }
+  ],
+  "cgroup": {
+    "cpu.stat": "usage_usec 191284577\nuser_usec 171011388\nsystem_usec 20273189\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "memory.max": "8589934592\n",
+    "memory.peak": "3652743168\n",
+    "memory.swap.max": "0\n",
+    "memory.swap.peak": "0\n"
+  },
+  "helper": {
+    "bytes": 1266704,
+    "sha256": "be0a1ae28817b99ae925e9f7db2f5b68c5741a5a58b518d7cf5f5f9bc8963abe",
+    "source_archive_sha256": "06c40c0959719bd7738430312b770beedee53ab65e2fb1bd713329b922f3caeb",
+    "existing_target": "borsuk example build_sq8_source",
+    "native_source_matches_compiled_transformation": true,
+    "no_full_assurance_rerun": true,
+    "reused_binary": true
+  },
+  "decision": "GO actual core and HTTP development envelope only",
+  "fresh_cohort_used": false
+}
