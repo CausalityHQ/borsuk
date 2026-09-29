@@ -1,0 +1,103 @@
+# Nearest-edge source-cell order: one paired falsifier
+
+## Launch authority
+
+Launch only after `locality-source-check/a0001` has closed with actual instance
+termination and independently verified asserted RED, constructor and recipe
+GREEN, exact compiled authority for all 393 native files, and 2689 top-level
+passes / 0 failures / 26 existing ignores. The full gate must retain the same
+145 Cargo targets: 144 test harnesses and one benchmark with 12 smoke checks.
+Adopt only the three exact authenticated source transformations. Reuse the
+retained generation builder, native demo, and SQ8 helper; this measurement
+cell runs no build or full assurance gate.
+
+## One causal change and paired authority
+
+The candidate changes only whole source-cell rank: start at the existing
+source-assignment graph entry, append its nearest unvisited outgoing base
+neighbor, and fall back to the lowest unvisited cell ID when no edge remains.
+Keep fine256 groups, original global reservoir, source seed8201, trainer12,
+HNSW assignments, within-cell radius/ordinal order and1024 extent ceiling
+unchanged. Degree32 successor-cycle query graphs, scorer, discovery work,
+nomination and physical caps remain fixed. This is not the killed numeric
+fine256 order, a group-count sweep or row-level BFS packing. Prior V61/V63
+row BFS failures are reconciled in locality-source-preregister.md.
+
+The source primitive visits each cell once, inspects at most32*C outgoing
+edges and has O(C) ordinal fallback scans. Seen/output/caller rank use13*C
+payload bytes plus Vec headers, within existing8192bytes/cell conservative
+source admission; no extra graph build or quadratic global centroid chain.
+No claim of100M measured feasibility follows from these bounds.
+
+`locality-source-config.json` copies the original fine-source identities and
+changes only source_recipe to v3. The public receipt additionally binds
+source_cell_order=nearest-unvisited-layer0-entry-ordinal-fallback-v1.
+Historical v1/v2 arms and archived code remain immutable. Current compiled
+query/scorer is paired against the authenticated original flat-union control,
+not the killed fine256 candidate or stale timing references.
+
+Before quality, verify original source identity, order permutation, native
+recipe, coefficient f32 bits, every per-ID SQ8 and two-bit payload, source
+mean, and actual SQ8 object HEAD. Construction sees no queries or truth.
+The current compiled binary queries the authenticated old flat-union control;
+all control discoveries, plans, and quality must replay exactly. Historical
+reference numbers alone cannot satisfy matched-control authority.
+
+## Fixed scientific gates
+
+Use first-100k D768 cosine k100, consumed development query ordinals 0–63.
+Run ReLAION first; run CoHere only if ReLAION passes. Require the complete
+128-plan paired roster per corpus, with 128 seed evaluations and 1272 walk
+evaluations per graph, 159 pages per graph and at most 318 union pages.
+Keep source two-bit nomination and the 32 GET / 16,773,120 byte caps.
+
+The candidate must meet all of:
+
+- Mean recall@100 at least 98%; p05 at least 95%.
+- Exhaustive SQ8 deficit at most 0.5 percentage points.
+- Aggregate nonregression against the matched flat-union control: 6363 hits
+  for ReLAION and 6347 for CoHere, out of 6400. Exhaustive SQ8 has 6369 and
+  6351 hits respectively.
+- All fixed physical work caps.
+
+A quality KILL ends this exact source-cell-order arm and skips remaining corpus,
+cold, and scale work. Decompose loss into walk-page exposure, centroid
+roster, nomination, physical containment, and exhaustive-flat GT ranking.
+Do not sweep, increase work, or weaken gates.
+
+## Conditional native cold measurement
+
+Only after quality GO, run existing native client-cold ABBA:
+control, candidate, candidate, control; 64 calls per repetition. Require
+exact IDs, ranges, and actual counters, zero failed GETs, and candidate
+median p90 at most 250 ms / p95 at most 400 ms. Sync every completed
+repetition to S3 before starting the next.
+
+The router is resident, client SQ8 cache absent, valid warmups absent,
+connections reused, and S3 server cache uncontrolled. Timing covers the
+complete native library call and excludes incoming HTTP. Report actual
+startup, RSS, tails, and serial observed QPS; do not transfer old HTTP timing
+or claim sustained throughput, vendor, or lifecycle superiority. Fresh
+sealed cohorts remain unopened.
+
+## Resources and terminal safety
+
+Use one Causality eu-central-1c c7g.2xlarge Spot instance, four threads on
+CPU 0–3, 80 GiB encrypted disposable EBS, 900-second worker cap,
+600-second measurement cap, 300-second native phase cap, 8 GiB cgroup,
+4 GiB process address space, and zero swap. Spot quote must be at most
+$0.30/hour; compute cap $0.075 plus $0.10 EBS/S3 allowance.
+
+Assert idempotency token length at most 64 before registration. Preserve
+immutable reservation, source, config, and prefix; use the shared lock and
+active-tag guard. Observe only the original native session, terminal marker,
+and infrastructure health while active. Never inspect incomplete measurement
+logs or CSV files. Require nonempty decision, cgroup, ReLAION result, and
+resource artifacts before producer completion; independent verification
+rejects their absence regardless of reported terminal success. Sync terminal
+artifacts and terminate compute immediately. No automatic replacement.
+Preserve INVALID evidence before an explicit correction.
+
+A GO advances only development source/build/native-cold qualification.
+Fresh 1M HTTP, maintenance, both vendors, 100M phase/pin RAM, lifecycle cost,
+and recovery remain mandatory. Do not freeze production defaults.
