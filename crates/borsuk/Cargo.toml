@@ -55,6 +55,10 @@ borsuk-fma = { version = "0.1.0", path = "../borsuk-fma" }
 borsuk-pq4 = { version = "0.1.0", path = "../borsuk-pq4" }
 zstd = "0.13"
 
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+# sha2 0.10 requires this feature for runtime-detected ARM SHA instructions.
+sha2 = { version = "0.10", features = ["asm"] }
+
 [dev-dependencies]
 axum = "0.8"
 criterion = "0.7"

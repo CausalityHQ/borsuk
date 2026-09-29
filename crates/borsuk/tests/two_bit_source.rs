@@ -7,6 +7,22 @@ fn hash(bytes: &[u8]) -> String {
 }
 
 #[test]
+fn authentication_backend_matches_sha256_known_answers() {
+    assert_eq!(
+        hash(b"abc"),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    let mut digest = Sha256::new();
+    for _ in 0..1000 {
+        digest.update([b'a'; 1000]);
+    }
+    assert_eq!(
+        format!("{:x}", digest.finalize()),
+        "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
+    );
+}
+
+#[test]
 fn streams_source_records_and_rejects_wrong_identity_order_budget_and_overwrite() {
     let directory = tempfile::tempdir().unwrap();
     let row = [1.0_f32, 2.0, -1.0, 0.5, 3.0];

@@ -1,0 +1,14 @@
+{
+  "local_source_tests_passed": 3,
+  "local_arch": "x86_64",
+  "arm_feature_asm_selected": true,
+  "x86_feature_asm_selected": false,
+  "arm_binary_qualified": false,
+  "arm_performance_measured": false,
+  "full_workspace_repeated": false,
+  "source_sha256": {
+    "Cargo.lock": "92c0da6805ad13fa78a7d6cbffaccf7738e346d3605ed8c8ac763cf5079f2590",
+    "crates/borsuk/Cargo.toml": "474efdef5bd398bef758009882c8bdd859553de8f0271230430469dd96bc4d71",
+    "crates/borsuk/tests/two_bit_source.rs": "d341033f45c614da69b70c3f3c4b1ce86ebaf1f26ba59da03a54e926d00a98d3"
+  }
+}
