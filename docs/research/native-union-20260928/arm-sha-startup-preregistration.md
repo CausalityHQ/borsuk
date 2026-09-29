@@ -10,8 +10,10 @@ Control: independently verified startup-profile/a0001, source217a33df/archive
 4a8437ff664adbbd4cf8fb6e09382ac7dc923f886615a8a0be6e7990ab6cf6c0, reuse its authenticated
 ARM executable and compiled-source/boundary receipts. Candidate native source
 must equal that control for the original four compiled files; only the declared
-Cargo feature/lock and new source test differ. Toolchain/environment differences
-must be recorded; unknown equality is not claimed. No source patch during build.
+Cargo feature/lock and new source test differ. The closed control installer log retains rustc1.98.0 (88d9e12ae2026-08-18);
+candidate rustc release/commit must match. Full verbose toolchain and Cargo
+parity are not proven. Other environment differences must be recorded; unknown
+equality is not claimed. No source patch during build.
 
 Same c7g.2xlarge Spot host/region/roots and worker. Four ordered blocks ABBA,
 control0,candidate1,candidate2,control3. Each uses the original six interleaved

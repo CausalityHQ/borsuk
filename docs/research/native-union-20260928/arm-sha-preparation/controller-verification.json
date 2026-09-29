@@ -1,0 +1,11 @@
+{
+  "controller_checks_passed": true,
+  "source_preflight_passed": true,
+  "source_file_count": 395,
+  "artifact_count": 138,
+  "user_data_bytes": 15575,
+  "arm_binary_qualified": false,
+  "arm_performance_measured": false,
+  "independent_reducer_checks_passed": true,
+  "exact_dependency_delta_passed": true
+}
