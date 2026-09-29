@@ -1,0 +1,26 @@
+{
+  "metadata_verified": true,
+  "complete_prior_query_audit": false,
+  "qualification": false,
+  "query_embedding_gt_or_quality_bodies_opened": false,
+  "terminal_key": "research/v198-real-query-resident-fp16/fdc51a358be350678d9f6f279a2be95a57709c02/runs/a0001/terminal.json",
+  "terminal_sha256": "b3ae47adc77e155b12ddd23e2a061f90ca06415d828586bc4df36e51dd833994",
+  "source_archive_key": "research/v198-real-query-resident-fp16/fdc51a358be350678d9f6f279a2be95a57709c02/sources/19afd543e0685a425c7c7b3591c0f1d71059f224c0a0317c86a57c257eaa09af.tar.gz",
+  "source_archive_sha256": "19afd543e0685a425c7c7b3591c0f1d71059f224c0a0317c86a57c257eaa09af",
+  "archived_source_sha256": {
+    "scripts/v198_real_query_resident_fp16.py": "1942fd9abed0e9054429c3280e018528b86fbd475df714fda1e30197f7274c73",
+    "scripts/launch_v198_real_query_resident_fp16_spot.py": "ade5b1f2a8d6f93fcbd5aedcb6704ac9b430e5944c030f11fa28b5454e31880b"
+  },
+  "prepare_seal": {
+    "bytes": 4368,
+    "sha256": "f3254834d87ed68b215ab2716ca5d385cd9f81ca429e29b072fc98fc5176b66c"
+  },
+  "identity_mapping_qualification": false,
+  "prior_request_sha256": "c250ef3c871af55ee1ea91e61214a93903b3d575ef458926b1f8c5ad0547b2c9",
+  "prior_query_ordinals_inclusive": [
+    0,
+    999
+  ],
+  "split": "validation-1000-already-used",
+  "action": "Prior external validation query derivative is consumed; map original query identities from authenticated parent authority before fresh selection."
+}

@@ -42,7 +42,8 @@
       "sha256": "1942fd9abed0e9054429c3280e018528b86fbd475df714fda1e30197f7274c73",
       "dataset": "ReLAION",
       "code_inventory_observation": "External-query derivative; inspect archived source and CLOSED query authority.",
-      "closed_execution_authenticated_here": false
+      "closed_execution_authenticated_here": true,
+      "closed_identity_proof": "fresh-relaion-prior-identities/v198-verification.json"
     },
     {
       "path": "scripts/audit_native_union_fresh_novelty.py",

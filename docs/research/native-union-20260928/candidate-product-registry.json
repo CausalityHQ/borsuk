@@ -1,0 +1,73 @@
+{
+  "scope": "Recent source-mechanism candidates only; not an all-history registry",
+  "operator_acceptance_correction_applied": true,
+  "immutable_raw_verdicts_preserved": true,
+  "same_protocol_pareto_dominance_only": true,
+  "cross_campaign_dominance_claimed": false,
+  "fresh_product_qualification": false,
+  "current_implementation": "bounded source completion / two-bit v4 / native2696 authority",
+  "candidates": [
+    {
+      "candidate": "Two-bit integrated walk source",
+      "classification": "valid/product-eligible",
+      "verification": "docs/research/native-union-20260928/walk-source-http/a0002/verification.json",
+      "verification_sha256": "6f960382dfb1a255e619bb432b64a9454c92e38f74bbe5a2f4702d9304d7a466",
+      "terminal_sha256": "fb32ead222b368a159b1f9f4107a0bf0a0e2c009f8f3526c149b5149de47d124",
+      "original_verdict": "GO actual core and HTTP development envelope only",
+      "reason": "Both100k actual HTTP and quality valid;1M strict failure does not establish product failure. Historical baseline retained.",
+      "product_target_attainment_verified": false
+    },
+    {
+      "candidate": "Source-priority roster",
+      "classification": "insufficient evidence",
+      "verification": "docs/research/native-union-20260928/source-frontier-http/a0003/verification.json",
+      "verification_sha256": "161e63f519dbd68b2c7c4a9fb6bba03d73d3fb50c20a44ea42287c01a46ba0ac",
+      "terminal_sha256": "8d83d7f58381a6d7f8c26fb8c96c90fe14af59f1c3916df6df4b6215b38c686a",
+      "original_verdict": "KILL actual core quality",
+      "reason": "Valid R100k scientific measurement failed internal nonregression by2hits; no C/HTTP/1M. Preserve candidate/source, do not infer architecture failure or restart closed strict arm.",
+      "product_target_attainment_verified": false
+    },
+    {
+      "candidate": "Three-bit source precision",
+      "classification": "valid/product-eligible",
+      "verification": "docs/research/native-union-20260928/source-precision-http/a0002/verification.json",
+      "verification_sha256": "b1afd9f520c9d06caf1534bc55c4f51eb52d8edcfaf2821c754da3101a6bae3e",
+      "terminal_sha256": "585d06384718cb4d80b99eb3f8e0aedbe4c199cd6724873336c5ac0c3f02481c",
+      "original_verdict": "GO actual core and HTTP development envelope only",
+      "reason": "Valid BOTH100k quality/HTTP; R equal recall/slower than paired control, C+1hit/slower tradeoff. Not globally dominated across both datasets; higher memory. Withdrawn current format but archive retained.",
+      "product_target_attainment_verified": false
+    },
+    {
+      "candidate": "Three-bit source precision1M",
+      "classification": "insufficient evidence",
+      "verification": "docs/research/native-union-20260928/source-precision-1m/a0002/verification.json",
+      "verification_sha256": "14fc5054e22ef64fe37d21bd84db6a505550f34fe64f65a074b2a1ac72af33e7",
+      "terminal_sha256": "adfa18d717c607e723a54bc3882bfe6ea962a3f001e4cd3303f5017b8ab13a60",
+      "original_verdict": "KILL 1M consumed development quality",
+      "reason": "Valid1M strict failure; equal mean andp05gain versus control. No1MHTTP/freshR@10. Preserve as valid historical candidate, no automatic architecture KILL.",
+      "product_target_attainment_verified": false
+    },
+    {
+      "candidate": "Bounded completion100k",
+      "classification": "valid/product-eligible",
+      "verification": "docs/research/native-union-20260928/source-completion-http/a0001/verification.json",
+      "verification_sha256": "1c0a3403644c75b6722a792069392df9784ffc6f2f035af824deebe9c97ec51b",
+      "terminal_sha256": "bb027f633bce5293ba09b7568506b6f7d53cdb8a85480fcd98669644a8d7bbcd",
+      "original_verdict": "GO actual core and HTTP development envelope only",
+      "reason": "Valid BOTH100k quality improvements with actualHTTP within development caps; slower controltails. Freshk10 and scales unknown.",
+      "product_target_attainment_verified": false
+    },
+    {
+      "candidate": "Bounded completion1M current source",
+      "classification": "valid/product-eligible",
+      "verification": "docs/research/native-union-20260928/source-completion-1m/a0001/verification.json",
+      "verification_sha256": "aefcc55b9ad0e90a1812879c43b57ef00fb3a6eeaacbbeb1a24507a0c31cc13f",
+      "terminal_sha256": "2e3306d61c5ecc83a7bd95578e9a9f0dd1c163b500b76761796febb1b3e3e365",
+      "original_verdict": "KILL 1M consumed development quality",
+      "reason": "Valid1M+30hits/p05+5pp, strictflatgapFAIL. Retain current2696qualified implementation for prospective freshproductpanel; no1MHTTP measured.",
+      "product_target_attainment_verified": false
+    }
+  ],
+  "engineering_invalid_attempts": "Preserve each existing invalid-verification.json/prelaunch-invalid.json separately; no engineering invalid or interrupted attempt becomes a scientific product result.",
+  "next_decisive_gate": "Fresh representative identity PASS, preregistered recall@10>=95 and separately recall@100, actual1MD768coldincomingHTTP against dated444msp90 context then8QPS/quality/latency/lifecyclecostcurve; no new paid launch while reload hold active."
+}
