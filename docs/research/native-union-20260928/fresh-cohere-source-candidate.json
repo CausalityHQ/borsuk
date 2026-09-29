@@ -1,0 +1,60 @@
+{
+  "schema": "borsuk-fresh-cohere-source-candidate-v1",
+  "metadata_only": true,
+  "vector_gt_or_query_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "query_selection_status": "provisional",
+  "dataset": "CoHere-large-10M D768 cosine",
+  "indexed_source_rows": [
+    0,
+    999999
+  ],
+  "candidate_query_rows_inclusive": [
+    1005000,
+    1005999
+  ],
+  "source_receipt": {
+    "key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/STAGING_COMPLETE.json",
+    "sha256": "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87"
+  },
+  "source_shard": {
+    "key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000046.parquet",
+    "bytes": 67122091,
+    "sha256": "13195bd1a643b659679156745e45dfdf3f2be7d8e340da1dd97bf84352cbf0c4",
+    "etag": "\"facd911e0ed15f9ab516862960990bb4\"",
+    "row_start": 1004870,
+    "row_end_exclusive": 1026715
+  },
+  "known_consumed_train_ranges_inclusive": [
+    [
+      100000,
+      103999
+    ],
+    [
+      104000,
+      104999
+    ],
+    [
+      1000000,
+      1000999
+    ],
+    [
+      1001000,
+      1001999
+    ]
+  ],
+  "registered_test_rows_inclusive": [
+    0,
+    999
+  ],
+  "known_query_proof_sha256": {
+    "registered_test": "9081d1bebdb795c8326e69ff3eaf3c64104658284123801d8f44f257e887ba11",
+    "stress_train": "844506cbeed7a29c92afb905c373d568e2262c9d0a3f59c448454330ac63ddfd",
+    "v271_train": "86bb1ebb7902c573f22d54a08179cccffb20f2bc71e5a94cffbc82a8e9f16867",
+    "v277_train": "15ebb42b8a793836fbb4a5b196de2f3c7a37c8666391ee46f021e02056a5ee62",
+    "v278_train": "d14a4b745d5d9b3f1686d50c4b186892bdf9db7ccdeb131147588b39bb2fd342"
+  },
+  "exact_archive_git_source_commits_scanned": 149,
+  "literal_query_source_references": [],
+  "remaining_gate": "Audit indirect prior query inputs and source/vector duplicate identity before sealing GT; then build current CoHere1M generation with source/scorer parity."
+}
