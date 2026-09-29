@@ -1,4 +1,4 @@
-"""One frozen fresh ReLAION development or prospective native/HTTP worker."""
+"""One frozen fresh 1M development or prospective native/HTTP worker."""
 
 import fcntl
 import gzip
@@ -29,13 +29,15 @@ def sha(body):
     return hashlib.sha256(body).hexdigest()
 
 
-def main(attempt, subnet, mode="dev64"):
+def main(attempt, subnet, mode="dev64", family="rank16"):
     if mode not in ("dev64", "confirm936"):
         raise ValueError("unknown fresh panel mode")
+    if family not in ("rank16", "cohere"):
+        raise ValueError("unknown fresh dataset family")
     confirm = mode == "confirm936"
-    campaign = "fresh-rank16-confirm936" if confirm else "fresh-rank16-dev64"
+    campaign = "fresh-" + family + "-" + mode
     config_path = ROOT / (campaign + "-config.json")
-    schema = "borsuk-fresh-rank16-1m-" + mode + "-spot-v1"
+    schema = "borsuk-fresh-" + family + "-1m-" + mode + "-spot-v1"
     tag = "borsuk-" + campaign
     wall = 3600 if confirm else 1800
     process = 3000 if confirm else 1500
@@ -49,17 +51,21 @@ def main(attempt, subnet, mode="dev64"):
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     subprocess.run(["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"], check=True)
     config = json.loads(config_path.read_text())
-    if config["schema"] != "borsuk-fresh-rank16-1m-" + mode + "-v1":
+    if config["schema"] != "borsuk-fresh-" + family + "-1m-" + mode + "-v1":
         raise ValueError("fresh protocol config differs")
     for name, expected in config["code_sha256"].items():
         if sha(Path(name).read_bytes()) != expected:
             raise ValueError(f"frozen source/protocol differs: {name}")
-    sealed_proof = json.loads((ROOT / "fresh-rank16-seal/a0001/verification.json").read_text())
-    if (sha((ROOT / "fresh-rank16-seal/a0001/verification.json").read_bytes())
-            != config["sealed_construction_verification_sha256"]
-            or not sealed_proof["valid_construction"] or sealed_proof["state"] != "terminated"
+    seal_path = ROOT / ("fresh-" + family + "-seal/a0001/verification.json")
+    sealed_proof = json.loads(seal_path.read_text())
+    expected_raw = ("6c82a340e3e1b4226640e593efa9c4000c6a5962d4b13063093a1dab689a9005"
+                    if family == "cohere" else
+                    "a3eac4dedae5006843ea2ad243ec590440fe5b983ca8cd969dbc92b3e3406c33")
+    if (sha(seal_path.read_bytes()) != config["sealed_construction_verification_sha256"]
+            or not sealed_proof["valid_construction"]
+            or sealed_proof["state"] != ("local-complete" if family == "cohere" else "terminated")
             or sealed_proof["sealed_artifacts"] != config["sealed"]
-            or config["source_raw_sha256"] != "a3eac4dedae5006843ea2ad243ec590440fe5b983ca8cd969dbc92b3e3406c33"):
+            or config["source_raw_sha256"] != expected_raw):
         raise ValueError("fresh query/source construction authority differs")
     for folder, flag, digest_key in (
         ("native-reference-panel/a0002", "valid_check", "qualified_reference_verification_sha256"),
@@ -74,14 +80,27 @@ def main(attempt, subnet, mode="dev64"):
             or sha(Path("crates/borsuk/examples/two_bit_http.rs").read_bytes())
             != "2adc14246cda4f7ff2318a985ba61b27e4e7e6db865be67260b0252e4b0d9e49"):
         raise ValueError("current native source differs from qualified binaries")
-    current = json.loads((ROOT / "current-1m-offered-http-config.json").read_text())
-    expected_generation = {name: ident for name, ident in current["artifacts"].items()
-                           if name.startswith("generation/")}
+    if family == "cohere":
+        source_path = ROOT / "cohere-source-1m/a0001/verification.json"
+        source = json.loads(source_path.read_text())
+        if (sha(source_path.read_bytes()) != config["source_construction_verification_sha256"]
+                or not source["valid_source_construction"] or source["state"] != "local-complete"
+                or not source["remote_bodies_independently_hashed"]
+                or source["query_or_truth_used"] or source["quality_measured"]
+                or source["source_raw_sha256"] != expected_raw
+                or source["root_sha256"] != config["root_sha256"]
+                or sealed_proof["root_sha256"] != config["root_sha256"]):
+            raise ValueError("closed CoHere source authority differs")
+        expected_generation = source["generation_artifacts"]
+    else:
+        current = json.loads((ROOT / "current-1m-offered-http-config.json").read_text())
+        expected_generation = {name: ident for name, ident in current["artifacts"].items()
+                               if name.startswith("generation/")}
     if (config["generation_artifacts"] != expected_generation
             or config["root_manifest"] != expected_generation["generation/manifest.json"]):
         raise ValueError("closed generation artifact roster differs")
     if confirm:
-        prior = ROOT / "fresh-rank16-dev64/a0002"
+        prior = ROOT / ("fresh-" + family + "-dev64/" + ("a0001" if family == "cohere" else "a0002"))
         proof = json.loads((prior / "verification.json").read_text())
         terminal = json.loads((prior / "aws-terminal.json").read_text())
         if (not proof["valid_measurement"] or proof["state"] != "terminated"
@@ -96,12 +115,12 @@ def main(attempt, subnet, mode="dev64"):
         zipped.write(raw)
     source = archive.getvalue()
     with tarfile.open(fileobj=io.BytesIO(source), mode="r:gz") as tar:
-        if not {str(config_path), str(ROOT / (campaign + "-preregister.md")),
+        if not {str(config_path), str(ROOT / ("fresh-cohere-1m-preregister.md" if family == "cohere" else campaign + "-preregister.md")),
                 "scripts/run_native_fresh_rank16_dev64.py"}.issubset(tar.getnames()):
             raise ValueError("frozen development archive differs")
     archive_sha = sha(source)
     archive_key = f"research/native-library-check/sources/{archive_sha}.tar.gz"
-    prefix = f"research/native-union/20260928/{campaign}-{attempt}"
+    prefix = f"research/native-union/{'20260929' if family == 'cohere' else '20260928'}/{campaign}-{attempt}"
     out = ROOT / campaign / attempt
     out.mkdir(parents=True, exist_ok=True)
     session = boto3.Session(profile_name="causality", region_name=REGION)
@@ -185,8 +204,8 @@ test -s "$root/screen/cgroup.json"
                    "ebs_s3_allowance_usd": .30 if confirm else .15, "wall_seconds": wall,
                    "measurement_memory_max_bytes": 8 * 1024**3, "swap_max_bytes": 0,
                    "interruption_policy": "Discard interrupted cell; no automatic retry",
-                   "scope": ("Frozen rank16 prospective64-999 native R10/R100 then conditional four-slot HTTP; no tuning" if confirm else
-                             "Frozen rank16 fresh dev64 native R10/R100 then conditional four-slot HTTP; prospective untouched")}
+                   "scope": (f"Frozen {family} prospective64-999 native R10/R100 then conditional four-slot HTTP; no tuning" if confirm else
+                             f"Frozen {family} fresh dev64 native R10/R100 then conditional four-slot HTTP; prospective untouched")}
     (out / "aws-user-data.sh").write_text(body)
     (out / "aws-reservation.json").write_text(json.dumps(reservation, indent=2) + "\n")
     put_if_absent(prefix + "/reservation.json", json.dumps(reservation, sort_keys=True).encode())
@@ -259,10 +278,13 @@ test -s "$root/screen/cgroup.json"
 
 
 if __name__ == "__main__":
+    family = "cohere" if len(sys.argv) > 1 and sys.argv[1] == "cohere" else "rank16"
+    if family == "cohere":
+        sys.argv.pop(1)
     mode = "confirm936" if len(sys.argv) > 1 and sys.argv[1] == "confirm936" else "dev64"
     offset = 2 if mode == "confirm936" else 1
     attempt = sys.argv[offset] if len(sys.argv) > offset else "a0001"
     subnet = sys.argv[offset + 1] if len(sys.argv) > offset + 1 else "subnet-0a12dbed0ca6fac25"
     with open("/tmp/borsuk-fresh-rank16-worker.lock", "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        main(attempt, subnet, mode)
+        main(attempt, subnet, mode, family)
