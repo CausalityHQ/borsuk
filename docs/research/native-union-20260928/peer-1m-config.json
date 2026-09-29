@@ -12,9 +12,9 @@
   "offered_qps": 8,
   "workers": 8,
   "binary": {
-    "key": "research/native-union/20260928/four-slot-1m-offered-http-a0001/artifacts/binaries/two_bit_http",
-    "bytes": 12546280,
-    "sha256": "fe7084ce75e56788f156639f534d41fe9fb576ce771bc6f9f5094a1f20264f82"
+    "bytes": 12475240,
+    "sha256": "75cbcff863e60625ca2a728eebdc48361f03153ec016a22042f6e22bcd6f7925",
+    "key": "research/native-union/20260929/peer-http-build-a0001/artifacts/binaries/two_bit_http"
   },
   "items": [
     {
@@ -117,5 +117,9 @@
   "metadata_resident": true,
   "application_sq8_cache": false,
   "namespace_cold_start_included": false,
-  "worker_sha256": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3"
+  "worker_sha256": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+  "http_build_verification": {
+    "path": "docs/research/native-union-20260928/peer-http-build/a0001/verification.json",
+    "sha256": "bc37d1e90e36d3548f253499455853f0711b0739d5393c8dd9d30b340374df87"
+  }
 }

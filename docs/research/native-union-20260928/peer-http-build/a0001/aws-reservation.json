@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-peer-http-build-v1",
+  "source_commit": "6c092772f3e7c68cf7c5b7896b12fa8f92f46ab7",
+  "source_archive_sha256": "89233c974c82614ec456b64a06c120c0a3ecfdd567bf0ff851ceb2f3249b087c",
+  "wall_seconds": 2700,
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1c",
+  "spot_price_observed_usd_per_hour": "0.178400",
+  "spot_quote_timestamp": "2026-09-29T21:00:00+00:00",
+  "compute_cap_usd": 0.225,
+  "ebs_s3_allowance_usd": 0.15,
+  "changed_native_files": [
+    "crates/borsuk/examples/two_bit_http.rs"
+  ],
+  "library_assurance_reused": 2696,
+  "prior_assurance_sha256": "5322570dd1d26a8c1f3cb43cafa74bc965e11cc163260105a694426b26584f6f",
+  "interruption_policy": "Discard interrupted build; no automatic replacement"
+}

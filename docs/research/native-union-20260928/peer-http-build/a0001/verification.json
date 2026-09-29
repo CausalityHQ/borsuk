@@ -1,0 +1,23 @@
+{
+  "valid_check": true,
+  "qualification": "private-listener HTTP example only",
+  "no_corpus_query": true,
+  "source_commit": "6c092772f3e7c68cf7c5b7896b12fa8f92f46ab7",
+  "source_archive_sha256": "89233c974c82614ec456b64a06c120c0a3ecfdd567bf0ff851ceb2f3249b087c",
+  "terminal_sha256": "9e32f8314a14e4d06088bb3cbf336b539373d5092cc0e0d5aea12711d123dfdc",
+  "reservation_sha256": "867b004b1003348d1a64d0333b05d22269bf6bb1ca6992e91849d79968b8ae77",
+  "instance_id": "i-0a8159084a1594df6",
+  "state": "terminated",
+  "compiled_http_sha256": "d399d327a9353bb24b91b6afc31dc149c8edd942fb595f41d9897879ca0b133d",
+  "binary": {
+    "bytes": 12475240,
+    "sha256": "75cbcff863e60625ca2a728eebdc48361f03153ec016a22042f6e22bcd6f7925",
+    "key": "research/native-union/20260929/peer-http-build-a0001/artifacts/binaries/two_bit_http"
+  },
+  "library_assurance_reused": 2696,
+  "cgroup_peak_bytes": 5623074816,
+  "swap_peak_bytes": 0,
+  "observed_elapsed_s": 400,
+  "compute_cost_estimate_usd": 0.0198,
+  "cost_scope": "conservative controller elapsed estimate, excludes EBS/S3, not invoice"
+}

@@ -1,0 +1,9 @@
+{
+  "nodes": {
+    "build": {
+      "instance_id": "i-0a8159084a1594df6"
+    }
+  },
+  "state": "terminated",
+  "observed_elapsed_s": 400
+}
