@@ -1,5 +1,5 @@
 """One bounded existing-source-order transfer through native union on Causality Spot."""
-import fcntl, gzip, hashlib, io, json, os, subprocess, sys, tarfile, time
+import base64, fcntl, gzip, hashlib, io, json, os, subprocess, sys, tarfile, time
 from pathlib import Path
 import boto3
 from botocore.exceptions import ClientError
@@ -160,6 +160,14 @@ except Exception:
     reservation['s3_versioning_observed']='Unknown; no physical-space claim'
 (OUT/'aws-user-data.sh').write_text(body)
 (OUT/'aws-reservation.json').write_text(json.dumps(reservation,indent=2)+'\n')
+delivery_body=body
+if len(body.encode())>16384:
+    packed=base64.b64encode(gzip.compress(body.encode(),mtime=0)).decode()
+    delivery_body="#!/bin/bash\nset -euo pipefail\nprintf '%s' '"+packed+"' | base64 -d | gzip -dc | bash\n"
+    assert gzip.decompress(base64.b64decode(packed)).decode()==body
+assert len(delivery_body.encode())<=16384
+subprocess.run(['bash','-n'],input=delivery_body,text=True,check=True)
+(OUT/'aws-user-data-envelope.sh').write_text(delivery_body)
 client_token='precision-http-'+ATTEMPT+'-'+sha[:32]
 assert len(client_token)<=64
 put_if_absent(prefix+'/reservation.json',json.dumps(reservation,sort_keys=True).encode())
@@ -170,7 +178,7 @@ receipt=ec2.run_instances(ClientToken=client_token, ImageId=reservation['image']
     InstanceMarketOptions={'MarketType':'spot','SpotOptions':{'InstanceInterruptionBehavior':'terminate','SpotInstanceType':'one-time','MaxPrice':'0.30'}},
     InstanceInitiatedShutdownBehavior='terminate',
     BlockDeviceMappings=[{'DeviceName':'/dev/xvda','Ebs':{'DeleteOnTermination':True,'Encrypted':True,'VolumeSize':80,'VolumeType':'gp3'}}],
-    TagSpecifications=[{'ResourceType':'instance','Tags':[{'Key':'Name','Value':TAG},{'Key':'BorsukAttempt','Value':ATTEMPT}]}],UserData=body)
+    TagSpecifications=[{'ResourceType':'instance','Tags':[{'Key':'Name','Value':TAG},{'Key':'BorsukAttempt','Value':ATTEMPT}]}],UserData=delivery_body)
 instance=receipt['Instances'][0]['InstanceId']
 started=time.monotonic()
 launch={'instance_id':instance,'prefix':prefix,'bucket':BUCKET,'source_archive_sha256':sha,'source_base_commit':base}

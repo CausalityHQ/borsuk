@@ -43,3 +43,13 @@ Spot causality/eu-central-1 c7g.2xlarge, existing1200worker/900check/8GiBcgroup/
 source/config/scorer identity, terminal sync, actual immediate termination,
 independent CLOSED verifier required. Invalid/interrupted cell discarded,
 no automatic replacement. Freshness,10M100M/lifecycle/BOTHvendor gates remain.
+
+## Delivery correction after prelaunch a0001
+
+Original66329: EC2 rejected inline user data above16KiB, no instance created and
+zero active tag-matching instances verified. Preserve reservation/invalid receipt.
+Explicit next attempt uses a gzip/base64 shell wrapper when needed; decompressed
+body must equal the exact bounded controller script, wrapper <=16KiB and bash-n
+valid. Existing successful frozen workers prove gzip is available before bootstrap
+on this exact AMI (source archive tar extraction precedes package installation).
+No gate, corpus, code, timeout, resource or scientific method changes.

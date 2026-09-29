@@ -1,0 +1,7 @@
+{
+  "valid": false,
+  "original_session": 66329,
+  "reason": "RunInstances rejected user data above16384bytes before instance creation; same exact shell body delivered by checked gzip/base64 wrapper in next explicit attempt",
+  "instance_launched": false,
+  "active_instances_verified": 0
+}
