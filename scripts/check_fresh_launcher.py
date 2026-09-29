@@ -71,13 +71,44 @@ def check():
                 pass
             else:
                 raise AssertionError('actual CoHere authority did not terminate at archive boundary')
+    prospective_path = ROOT / 'fresh-cohere-confirm936-config.json'
+    if prospective_path.exists():
+        prospective = json.loads(prospective_path.read_text())
+
+        def prospective_accepted(config):
+            body = json.dumps(config)
+            with patch.object(Path, 'read_text', lambda p, *a, **k: body if p == prospective_path else old_text(p, *a, **k)), \
+                 patch.object(launcher.subprocess, 'check_output', side_effect=['', 'f' * 40]), \
+                 patch.object(launcher.subprocess, 'run'), \
+                 patch.object(launcher.io, 'BytesIO', side_effect=Accepted), \
+                 patch.object(launcher.boto3, 'Session', side_effect=AssertionError('AWS execution')):
+                try:
+                    launcher.main('a0001', 'subnet-0a12dbed0ca6fac25', 'confirm936', 'cohere')
+                except Accepted:
+                    return True
+                except ValueError:
+                    return False
+            raise AssertionError('prospective preflight did not terminate')
+
+        assert prospective_accepted(prospective)
+        for field, value in [('closed_dev64_attempt', '../a0002'),
+                             ('closed_dev64_attempt', 'a0001'),
+                             ('requests_byte_start', prospective['requests_byte_start'] + 1),
+                             ('closed_dev64_verification_sha256', '0' * 64)]:
+            altered = copy.deepcopy(prospective)
+            altered[field] = value
+            assert not prospective_accepted(altered), field
+        altered = copy.deepcopy(prospective)
+        altered['gates']['native_mean_recall_at_10_minimum'] = .94
+        assert not prospective_accepted(altered), 'candidate gates changed'
     for changed in [('valid_source_construction', False), ('state', 'running'),
                     ('remote_bodies_independently_hashed', False), ('query_or_truth_used', True),
                     ('quality_measured', True), ('root_sha256', '0' * 64),
                     ('source_raw_sha256', '0' * 64)]:
         assert not accepted('cohere', changed), changed
     print(json.dumps(dict(passed=True, accepted_source_authorities=2,
-                          rejected_source_authority_changes=7, aws_or_query_execution=False,
+                          rejected_source_authority_changes=7, rejected_prospective_authority_changes=5,
+                          aws_or_query_execution=False,
                           launcher_sha256=launcher.sha((ROOT / 'aws-fresh-rank16-dev64.py').read_bytes()))))
 
 

@@ -1,0 +1,137 @@
+{
+  "schema": "borsuk-fresh-cohere-1m-confirm936-v1",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "region": "eu-central-1",
+  "rows": 1000000,
+  "dimensions": 768,
+  "count": 936,
+  "offered_qps": 8,
+  "setting_order": [
+    10,
+    100,
+    100,
+    10
+  ],
+  "query_split": "fresh CoHere prospective64-999",
+  "fresh_cohort_used": true,
+  "root_sha256": "a4eb4851c545e828f3d08181a0c3e9cca09ed9341032ee3e69c511b9b7caf67e",
+  "root_manifest": {
+    "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/manifest.json",
+    "bytes": 33963,
+    "sha256": "a4eb4851c545e828f3d08181a0c3e9cca09ed9341032ee3e69c511b9b7caf67e"
+  },
+  "source_raw_sha256": "6c82a340e3e1b4226640e593efa9c4000c6a5962d4b13063093a1dab689a9005",
+  "sealed": {
+    "queries.raw": {
+      "key": "research/native-union/20260929/fresh-cohere-seal-a0001/sealed/queries.raw",
+      "bytes": 3072000,
+      "sha256": "28af674aaa41964d065c0cab8390488961aa4fa7b3d07bef4e95bb2bad7d769c"
+    },
+    "requests.jsonl": {
+      "key": "research/native-union/20260929/fresh-cohere-seal-a0001/sealed/requests.jsonl",
+      "bytes": 15369586,
+      "sha256": "0a273ae5bfb8b258242b2a7063f27e2f2b158ed91e5d1019e403593b91420464"
+    },
+    "truth.u32": {
+      "key": "research/native-union/20260929/fresh-cohere-seal-a0001/sealed/truth.u32",
+      "bytes": 400000,
+      "sha256": "b9dd2d8d6b12560108b55a70f339f2a097ee550df4b6e562aa91b76cbd9e4f41"
+    },
+    "identity.json": {
+      "key": "research/native-union/20260929/fresh-cohere-seal-a0001/sealed/identity.json",
+      "bytes": 1157,
+      "sha256": "5fa4d5df83c24f87863d8115671d42b215c7961caf4822d6b93856da46e4dd20"
+    }
+  },
+  "sealed_construction_verification_sha256": "570f18bbb7080bdae68e59f829eb955ead74f5e9341de2c2e0b79a7be17ca92d",
+  "binaries": {
+    "two_bit_plan_demo": {
+      "key": "research/native-union/20260928/native-reference-panel-a0002/artifacts/binaries/two_bit_plan_demo",
+      "bytes": 11460464,
+      "sha256": "a2a9ca63d3bb2f6df8ce80d72020361bbba210d593d5c8db7f2401394340c04c"
+    },
+    "two_bit_http": {
+      "key": "research/native-union/20260928/four-slot-1m-offered-http-a0001/artifacts/binaries/two_bit_http",
+      "bytes": 12546280,
+      "sha256": "fe7084ce75e56788f156639f534d41fe9fb576ce771bc6f9f5094a1f20264f82"
+    }
+  },
+  "qualified_reference_verification_sha256": "a6e80b23262c6367c09bbc4dfbf1641fa8e24d576f694946c23b875591a269bc",
+  "qualified_http_verification_sha256": "ed8bedf535c61902e6b247a3f15f46daef8da772a52d8d58a899cabb55565a94",
+  "code_sha256": {
+    "scripts/run_native_fresh_rank16_dev64.py": "028a09fe6702706b592228a979c75f283c5b61f747b1091623bb463a3fd8d458",
+    "scripts/run_native_current_1m_offered_http.py": "50920bc77656b915b17c02db86d70d6c884d8181b3f88327f2748b2c8c24c08f",
+    "scripts/run_native_union_offered_http.py": "2e62577aec250d038f12598bdf5a733abdaa9819ab0cb43929177a5d49b4c5e0",
+    "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+    "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd"
+  },
+  "gates": {
+    "native_mean_recall_at_10_minimum": 0.95,
+    "incoming_http_p90_ms_exclusive_maximum": 444,
+    "successful_qps_minimum": 8,
+    "all_offered_success": true
+  },
+  "prospective_ordinals_sealed": [],
+  "matched_control_http_measured": false,
+  "matched_vendor_measured": false,
+  "generation_artifacts": {
+    "generation/centroids.bin": {
+      "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/centroids.bin",
+      "bytes": 48000032,
+      "sha256": "ce87906d375937bd935dff901ef72e970113ec097e542a55837cfd26cb19814b"
+    },
+    "generation/diverse_graph.bin": {
+      "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/diverse_graph.bin",
+      "bytes": 4265768,
+      "sha256": "e5aa5c1370c4d638349171f179d5114142d2b1a3834755aeb6293de5acd94b03"
+    },
+    "generation/graph.bin": {
+      "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/graph.bin",
+      "bytes": 4265768,
+      "sha256": "fec7337384c1170d0a3887999b04742fe970aa1b58e173aab33b233259d5a4d6"
+    },
+    "generation/manifest.json": {
+      "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/manifest.json",
+      "bytes": 33963,
+      "sha256": "a4eb4851c545e828f3d08181a0c3e9cca09ed9341032ee3e69c511b9b7caf67e"
+    },
+    "generation/page_digests.bin": {
+      "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/page_digests.bin",
+      "bytes": 125024,
+      "sha256": "62af37707aa4107df5255288f5fbb325635244d5efc0d6767bf0e5387c825a1f"
+    },
+    "generation/page_manifest.json": {
+      "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/page_manifest.json",
+      "bytes": 280,
+      "sha256": "dd18a4538064cd717aaa1a8a9bb1cae9b14189b171dd60113bff413584fd9142"
+    },
+    "generation/plane/manifest.json": {
+      "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/plane/manifest.json",
+      "bytes": 549,
+      "sha256": "379c7e778672251a362ec2819e9745ec7ed206659e74104bc1a493ce343501b2"
+    },
+    "generation/plane/mean.bin": {
+      "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/plane/mean.bin",
+      "bytes": 3072,
+      "sha256": "b3ab0923a6871b01dc49b7614375a0015406bbd732329201600136d0863cae47"
+    },
+    "generation/plane/records.bin": {
+      "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/plane/records.bin",
+      "bytes": 200000000,
+      "sha256": "491888c5ce5887efb5aaf55106c707b6a3f98566eb0b602643dbec8abb1d4eaf"
+    },
+    "generation/canonical.bin": {
+      "key": "research/native-union/20260929/cohere-source-1m-v4/objects/be2200926dbf7e241523d37c3b061c775911bd94f589a8fc67cadb632659e8dc",
+      "bytes": 3080000000,
+      "sha256": "be2200926dbf7e241523d37c3b061c775911bd94f589a8fc67cadb632659e8dc"
+    }
+  },
+  "dataset": "CoHere",
+  "source_construction_verification_sha256": "c974a2912790dfccf1ff6e8f6555b662d82b61071f0adf0c6fe983a59f9f66cc",
+  "first": 64,
+  "requests_byte_start": 983472,
+  "closed_dev64_attempt": "a0002",
+  "closed_dev64_verification_sha256": "fb2cf8d616618f0fb33a42340358c2704ed30751557fbb16c23fda0964dd7912",
+  "closed_dev64_terminal_sha256": "cdf6163ae3fa22fa1fbc9768ed599d8569489ad3004b40c1b463b47a8fc2ec25",
+  "native_reference_timeout_seconds": 840
+}

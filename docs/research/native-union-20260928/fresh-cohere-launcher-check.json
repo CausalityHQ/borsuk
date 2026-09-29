@@ -1,1 +1,1 @@
-{"passed": true, "accepted_source_authorities": 2, "rejected_source_authority_changes": 7, "aws_or_query_execution": false, "launcher_sha256": "564c6bc5a5f997dc4d8cd7bdfdde1324ea130331bbca6d67cfefb5693dd576d4"}
+{"passed": true, "accepted_source_authorities": 2, "rejected_source_authority_changes": 7, "rejected_prospective_authority_changes": 5, "aws_or_query_execution": false, "launcher_sha256": "3ebb79eee64180b3263d85c90c0391739a41159d702cacf1a63e11859ce51f85"}

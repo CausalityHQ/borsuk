@@ -101,7 +101,10 @@ def main(attempt, subnet, mode="dev64", family="rank16"):
             or config["root_manifest"] != expected_generation["generation/manifest.json"]):
         raise ValueError("closed generation artifact roster differs")
     if confirm:
-        prior = ROOT / ("fresh-" + family + "-dev64/" + ("a0001" if family == "cohere" else "a0002"))
+        prior_attempt = config["closed_dev64_attempt"] if family == "cohere" else "a0002"
+        if len(prior_attempt) != 5 or not prior_attempt.startswith("a") or not prior_attempt[1:].isdigit():
+            raise ValueError("invalid closed development attempt")
+        prior = ROOT / ("fresh-" + family + "-dev64/" + prior_attempt)
         proof = json.loads((prior / "verification.json").read_text())
         terminal = json.loads((prior / "aws-terminal.json").read_text())
         if (not proof["valid_measurement"] or proof["state"] != "terminated"
@@ -109,6 +112,17 @@ def main(attempt, subnet, mode="dev64", family="rank16"):
                 or sha((prior / "aws-terminal.json").read_bytes()) != config["closed_dev64_terminal_sha256"]
                 or config["requests_byte_start"] != terminal["artifacts"]["screen/requests64.jsonl"]["bytes"]):
             raise ValueError("frozen prospective suffix boundary differs")
+        if family == "cohere":
+            dev_path = ROOT / "fresh-cohere-dev64-config.json"
+            dev = json.loads(dev_path.read_text())
+            if (proof["config_sha256"] != sha(dev_path.read_bytes())
+                    or proof["decision"] != "GO fresh CoHere1M " + dev["query_split"]
+                    or proof["prospective_queries_opened"]
+                    or any(config[key] != dev[key] for key in
+                           ("root_sha256", "root_manifest", "source_raw_sha256", "sealed",
+                            "binaries", "generation_artifacts", "code_sha256", "gates",
+                            "rows", "dimensions", "offered_qps", "setting_order"))):
+                raise ValueError("prospective candidate differs from closed development GO")
     archive = io.BytesIO()
     raw = subprocess.run(["git", "archive", "--format=tar", "HEAD"],
                          capture_output=True, check=True).stdout
@@ -116,7 +130,7 @@ def main(attempt, subnet, mode="dev64", family="rank16"):
         zipped.write(raw)
     source = archive.getvalue()
     with tarfile.open(fileobj=io.BytesIO(source), mode="r:gz") as tar:
-        if not {str(config_path), str(ROOT / ("fresh-cohere-1m-preregister.md" if family == "cohere" else campaign + "-preregister.md")),
+        if not {str(config_path), str(ROOT / (("fresh-cohere-confirm936-preregister.md" if confirm else "fresh-cohere-1m-preregister.md") if family == "cohere" else campaign + "-preregister.md")),
                 "scripts/run_native_fresh_rank16_dev64.py"}.issubset(tar.getnames()):
             raise ValueError("frozen development archive differs")
     archive_sha = sha(source)

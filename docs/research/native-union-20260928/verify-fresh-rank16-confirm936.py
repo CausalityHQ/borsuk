@@ -1,4 +1,4 @@
-"""Independently verify the CLOSED rank16 prospective native and HTTP run."""
+"""Independently verify the CLOSED fresh 1M prospective native and HTTP run."""
 
 from collections import Counter
 import gzip
@@ -26,9 +26,12 @@ def percentile(values, p):
     return values[lo] + (values[hi] - values[lo]) * (x - lo)
 
 
-def main(attempt):
-    directory = ROOT / "fresh-rank16-confirm936" / attempt
-    config_bytes = (ROOT / "fresh-rank16-confirm936-config.json").read_bytes()
+def main(attempt, family="rank16"):
+    if family not in ("rank16", "cohere"):
+        raise ValueError("unknown fresh dataset family")
+    campaign = "fresh-" + family + "-confirm936"
+    directory = ROOT / campaign / attempt
+    config_bytes = (ROOT / (campaign + "-config.json")).read_bytes()
     config = json.loads(config_bytes)
     launch = json.loads((directory / "aws-launch.json").read_text())
     close = json.loads((directory / "aws-closeout.json").read_text())
@@ -45,7 +48,7 @@ def main(attempt):
     reservation = json.loads(reservation_bytes)
     assert terminal_bytes == (directory / "aws-terminal.json").read_bytes()
     assert reservation == json.loads((directory / "aws-reservation.json").read_text())
-    assert terminal["schema"] == reservation["schema"] == "borsuk-fresh-rank16-1m-confirm936-spot-v1"
+    assert terminal["schema"] == reservation["schema"] == "borsuk-fresh-" + family + "-1m-confirm936-spot-v1"
     assert terminal["status"] == "complete" and terminal["exit_code"] == 0
     assert terminal["instance_id"] == launch["instance_id"] == close["instance_id"]
     assert terminal["source_base_commit"] == reservation["source_base_commit"] == launch["source_base_commit"]
@@ -90,6 +93,8 @@ def main(attempt):
 
     quality = json.loads(artifact("native-quality.json"))
     decision = json.loads(artifact("decision.json"))
+    if family == "cohere":
+        assert quality["dataset"] == "CoHere FIRST1M D768 cosine"
     assert quality["split"] == config["query_split"] and quality["root_sha256"] == config["root_sha256"]
     assert quality["opened_original_ordinals"] == [64, 999] and not quality["only_dev64_ranges_read"]
     assert quality["query_prefix_sha256"] == sha(raw)
@@ -199,4 +204,6 @@ def main(attempt):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "a0001")
+    family = "cohere" if len(sys.argv) > 1 and sys.argv[1] == "cohere" else "rank16"
+    offset = 2 if family == "cohere" else 1
+    main(sys.argv[offset] if len(sys.argv) > offset else "a0001", family)
