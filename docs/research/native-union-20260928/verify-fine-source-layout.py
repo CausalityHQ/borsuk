@@ -89,8 +89,10 @@ for item in config['items'][:len(decision['results'])]:
     for arm in orders:
         samples=result['samples'][arm];counts={key:sum(sample[key] for sample in samples) for key in ['candidate_hits','nominated_hits','fetched_hits','returned_hits','flat_hits','gets','bytes']}
         losses=dict(gt_discovery=6400-counts['candidate_hits'],gt_nomination=counts['candidate_hits']-counts['nominated_hits'],gt_physical=counts['nominated_hits']-counts['fetched_hits'],gt_quantization_or_ranking=counts['fetched_hits']-counts['returned_hits'],flat_gt_discovery=0,flat_gt_nomination=0,flat_gt_physical=0,flat_gt_ranking=0,returned_outside_flat=0)
+        losses['gt_physical']=0;losses['gt_physical_spill']=0
         for sample in samples:
             d,n,f,t,z=(set(sample['stages'][key]) for key in ['candidate','nominated','fetched','returned','flat'])
+            losses['gt_physical']+=len(n-f);losses['gt_physical_spill']+=len(f-n)
             for key,value in [('flat_gt_discovery',len(z-d)),('flat_gt_nomination',len((z&d)-n)),('flat_gt_physical',len((z&n)-f)),('flat_gt_ranking',len((z&f)-t)),('returned_outside_flat',len(t-z))]:losses[key]+=value
         decomposition[arm]=dict(counts=counts,losses=losses,discovery_loss=discovery_loss[arm],graph_walks_verified=len(discovery_work[arm]),work_evaluations_per_walk=1272)
     rows.append(dict(dataset=item['name'],returned_hits=result['returned_hits'],p05=result['p05'],decision=result['decision'],physical_cold_measured=result['physical_cold_measured'],decomposition=decomposition,arm_median_complete_call_ms=result.get('arm_median_complete_call_ms')))

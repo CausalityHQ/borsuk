@@ -1,0 +1,110 @@
+{
+  "instance_id": "i-08e5a91ed55423d9b",
+  "state": "terminated",
+  "source_archive_sha256": "f4b8612a9b7d2c2aa5d73ccb5fe8c6f632af76f0447915a500e3985c123b0ad6",
+  "terminal_sha256": "1cb444dff25743facbe62a101642bf4ea1bbbbe430b2bd3499e131478415e91c",
+  "native_files_matched": 393,
+  "source_files_matched": 396,
+  "artifacts_verified": 27,
+  "qualification": false,
+  "valid_measurement": true,
+  "rows": [
+    {
+      "dataset": "relaion",
+      "returned_hits": {
+        "candidate": 6360,
+        "control": 6363
+      },
+      "p05": {
+        "candidate": 98,
+        "control": 99
+      },
+      "decision": "KILL source-order quality",
+      "physical_cold_measured": false,
+      "decomposition": {
+        "control": {
+          "counts": {
+            "candidate_hits": 6392,
+            "nominated_hits": 6392,
+            "fetched_hits": 6392,
+            "returned_hits": 6363,
+            "flat_hits": 6369,
+            "gets": 1663,
+            "bytes": 1072281600
+          },
+          "losses": {
+            "gt_discovery": 8,
+            "gt_nomination": 0,
+            "gt_physical": 0,
+            "gt_quantization_or_ranking": 29,
+            "flat_gt_discovery": 8,
+            "flat_gt_nomination": 0,
+            "flat_gt_physical": 0,
+            "flat_gt_ranking": 0,
+            "returned_outside_flat": 2,
+            "gt_physical_spill": 0
+          },
+          "discovery_loss": {
+            "gt_walk_pool": 0,
+            "gt_centroid_roster": 8,
+            "flat_gt_walk_pool": 0,
+            "flat_gt_centroid_roster": 8,
+            "seed_evaluated_gt": 5138
+          },
+          "graph_walks_verified": 128,
+          "work_evaluations_per_walk": 1272
+        },
+        "candidate": {
+          "counts": {
+            "candidate_hits": 6381,
+            "nominated_hits": 6381,
+            "fetched_hits": 6383,
+            "returned_hits": 6360,
+            "flat_hits": 6369,
+            "gets": 1750,
+            "bytes": 1073105280
+          },
+          "losses": {
+            "gt_discovery": 19,
+            "gt_nomination": 0,
+            "gt_physical": 0,
+            "gt_quantization_or_ranking": 23,
+            "flat_gt_discovery": 19,
+            "flat_gt_nomination": 0,
+            "flat_gt_physical": 0,
+            "flat_gt_ranking": 0,
+            "returned_outside_flat": 8,
+            "gt_physical_spill": 2
+          },
+          "discovery_loss": {
+            "gt_walk_pool": 4,
+            "gt_centroid_roster": 15,
+            "flat_gt_walk_pool": 4,
+            "flat_gt_centroid_roster": 15,
+            "seed_evaluated_gt": 4800
+          },
+          "graph_walks_verified": 128,
+          "work_evaluations_per_walk": 1272
+        }
+      },
+      "arm_median_complete_call_ms": null
+    }
+  ],
+  "cgroup": {
+    "cpu.stat": "usage_usec 54539288\nuser_usec 49849349\nsystem_usec 4689938\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "memory.peak": "2024153088\n",
+    "memory.swap.peak": "0\n"
+  },
+  "helper": {
+    "bytes": 1270448,
+    "sha256": "48b8e02d664f7bd8727a5e095fc90308be5fc6f72b83d1add1677c07534655bb",
+    "source_archive_sha256": "da6033f0558d9eb7100faf6d30e3a6c4ff7e21030c511bbea08363d7e9c71bb7",
+    "existing_target": "borsuk example build_sq8_source",
+    "native_source_matches_compiled_transformation": true,
+    "no_full_assurance_rerun": true,
+    "reused_binary": true
+  },
+  "decision": "KILL source-order quality",
+  "fresh_cohort_used": false
+}

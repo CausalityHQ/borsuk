@@ -1,0 +1,20 @@
+{
+  "scope": "Closed GT membership and source extent boundaries only; no query/scoring kernel",
+  "extents": 353,
+  "micro_units": 3125,
+  "boundary_micro_units": 323,
+  "physical_pages": 391,
+  "boundary_pages": 253,
+  "discovery_loss": {
+    "walk_absent": {
+      "total": 4,
+      "boundary_micro": 1,
+      "boundary_page": 3
+    },
+    "roster_drop": {
+      "total": 15,
+      "boundary_micro": 4,
+      "boundary_page": 8
+    }
+  }
+}
