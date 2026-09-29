@@ -83,6 +83,7 @@ def evaluate(item,directory,config,binaries,prefix):
         for q,r in enumerate(live[1:-1]):
             if plan(r)!=plans[arm][q] or r['ids']!=expected_ids[arm][q] or r['submitted_gets']!=len(r['ranges']) or r['verified_bytes']!=r['planned_bytes'] or r['failed_gets']:raise ValueError('actual native source/scorer/physical parity')
         latency=dict(zip(['p50','p90','p95','p99'],np.quantile([r['query_wall_ns']/1e6 for r in live[1:-1]],[.5,.9,.95,.99]).tolist()));run_result=dict(rep=rep,arm=arm,complete_library_call_ms=latency,serial_observed_qps=64e9/live[-1]['measurement_wall_ns'],data_get_attempts=sum(r['submitted_gets'] for r in live[1:-1]),verified_bytes=sum(r['verified_bytes'] for r in live[1:-1]),failed_gets=0,startup=live[0]);write(run/'result.json',run_result);runs.append(run_result)
+        subprocess.run(['aws','s3','sync',str(run),'s3://'+config['bucket']+'/'+prefix+'/closed-repetitions/'+item['name']+'/'+run.name,'--only-show-errors'],check=True)
     medians={a:{p:float(np.median([r['complete_library_call_ms'][p] for r in runs if r['arm']==a])) for p in ['p50','p90','p95','p99']} for a in samples};latency_pass=medians['candidate']['p90']<=250 and medians['candidate']['p95']<=400
     result.update(decision='GO source-order development and cold envelope only' if latency_pass else 'KILL source-order cold envelope',runs=runs,arm_median_complete_call_ms=medians,physical_cold_measured=True,native_library_search_calls=256,incoming_service_http_measured=False)
     write(directory/'result.json',result);return result
