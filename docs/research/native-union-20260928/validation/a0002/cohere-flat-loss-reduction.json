@@ -1,0 +1,12 @@
+{
+  "dataset": "cohere",
+  "scope": "Closed GT-set reductions only; no queries/scoring",
+  "flat_gt_missing_returned": 110,
+  "flat_gt_missing_discovery": 92,
+  "flat_gt_lost_nomination": 18,
+  "flat_gt_missing_physical": 0,
+  "flat_gt_fetched_not_returned": 0,
+  "returned_gt_outside_flat": 35,
+  "returned_gt_gained": 145,
+  "returned_gt_lost": 29
+}

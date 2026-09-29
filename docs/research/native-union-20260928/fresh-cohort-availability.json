@@ -1,0 +1,74 @@
+[
+  {
+    "dataset": "cohere-large-10m-768",
+    "receipt_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/STAGING_COMPLETE.json",
+    "receipt_sha256": "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87",
+    "dataset_content_sha256": "fa8ccb38e5c761388e0c2ac211cc219438cd79e802e69debd6197d74f83f11ad",
+    "recorded_query_objects": [
+      {
+        "bytes": 3073101,
+        "format": "parquet",
+        "role": "query",
+        "rows": 1000,
+        "sha256": "5e0123f163df0e53a7e329fd92fbfd49f079756acfb47387ee6664c267b6f94e",
+        "uri": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/test.parquet"
+      }
+    ],
+    "train_rows": 10000000,
+    "prospective_unused_query_rows": [
+      100000,
+      101000
+    ],
+    "containing_train_objects": [
+      {
+        "bytes": 67122011,
+        "format": "parquet",
+        "role": "train",
+        "rows": 21845,
+        "sha256": "e34b10b5b8f0f17cfc345b1fdda736337a78883e3b62bad485a1e1bee404da30",
+        "uri": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000004.parquet",
+        "row_start": 87380,
+        "row_end_exclusive": 109225
+      }
+    ],
+    "source_parity_to_current100k_verified": false,
+    "qualification": false,
+    "scope": "Read-only staged object metadata; no queries, GT, fitting or scoring generated. Prospective cohort needs source parity and frozen methodology."
+  },
+  {
+    "dataset": "laion-100m-768",
+    "receipt_key": "publication/v3/20260812/datasets/laion-100m-768/attempts/0001/STAGING_COMPLETE.json",
+    "receipt_sha256": "f21f775b29862398387b68343d60dd4fa52765bbdef82c53c1f22eb345c307f8",
+    "dataset_content_sha256": "649fdaff2a60e27322796f146049237caeee4bb363dd4efc18fbdc15dddefe3d",
+    "recorded_query_objects": [
+      {
+        "bytes": 2950990,
+        "format": "parquet",
+        "role": "query",
+        "rows": 1000,
+        "sha256": "e2523aeab8ce6498d19f53374d6893eef5f61c456956dce3669fe5169dca0bb8",
+        "uri": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/laion-100m-768/attempts/0001/materialized/test.parquet"
+      }
+    ],
+    "train_rows": 100000000,
+    "prospective_unused_query_rows": [
+      100000,
+      101000
+    ],
+    "containing_train_objects": [
+      {
+        "bytes": 65437525,
+        "format": "parquet",
+        "role": "train",
+        "rows": 21845,
+        "sha256": "f02e0848d415edc6d1ba15820dee9ab94a0673d10168c512115fd83106e0e517",
+        "uri": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/laion-100m-768/attempts/0001/materialized/train-00000004.parquet",
+        "row_start": 87380,
+        "row_end_exclusive": 109225
+      }
+    ],
+    "source_parity_to_current100k_verified": false,
+    "qualification": false,
+    "scope": "Read-only staged object metadata; no queries, GT, fitting or scoring generated. Prospective cohort needs source parity and frozen methodology."
+  }
+]

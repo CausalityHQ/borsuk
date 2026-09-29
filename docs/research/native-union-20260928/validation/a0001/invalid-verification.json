@@ -1,0 +1,13 @@
+{
+  "instance_id": "i-0572e2fe4fa308de5",
+  "state": "terminated",
+  "source_archive_sha256": "ca205b3168acda7a8eef9380cfcbbaf69ebc986c1137df2778f8f14f9b51859c",
+  "terminal_sha256": "16f12839d97237ce2c41c3d05cb2c8358352bb041bfb75030bd7cbad27abdce7",
+  "native_files_matched": 392,
+  "source_files_matched": 396,
+  "artifacts_verified": 13,
+  "qualification": false,
+  "valid_measurement": false,
+  "phase": "validation",
+  "exit_code": 1
+}

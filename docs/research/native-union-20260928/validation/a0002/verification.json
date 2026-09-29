@@ -1,0 +1,221 @@
+{
+  "instance_id": "i-063388ea7d6d411a6",
+  "state": "terminated",
+  "source_archive_sha256": "15b853f3dcd0b7995676e94a94e8e14d96cbd26abc9ff6d46e377d4d4381eb34",
+  "terminal_sha256": "58487d8bd914e21b1d915115d23b8011356de4b31be3ddcecb223aca74d0e567",
+  "native_files_matched": 392,
+  "source_files_matched": 396,
+  "artifacts_verified": 38,
+  "qualification": false,
+  "valid_measurement": true,
+  "rows": [
+    {
+      "dataset": "relaion",
+      "split": "consumed method-validation256-999",
+      "metrics": {
+        "candidate": {
+          "candidate_hits": {
+            "mean": 99.86827956989248,
+            "p05": 99,
+            "total": 74302
+          },
+          "flat_hits": {
+            "mean": 99.56854838709677,
+            "p05": 99,
+            "total": 74079
+          },
+          "nominated_hits": {
+            "mean": 99.86827956989248,
+            "p05": 99,
+            "total": 74302
+          },
+          "physical_hits": {
+            "mean": 99.86962365591398,
+            "p05": 99,
+            "total": 74303
+          },
+          "returned_hits": {
+            "mean": 99.46370967741936,
+            "p05": 98,
+            "total": 74001
+          },
+          "seed_hits": {
+            "mean": 66.38709677419355,
+            "p05": 15,
+            "total": 49392
+          },
+          "visited_hits": {
+            "mean": 99.85349462365592,
+            "p05": 99,
+            "total": 74291
+          },
+          "walk_hits": {
+            "mean": 99.85215053763442,
+            "p05": 99,
+            "total": 74290
+          }
+        },
+        "control": {
+          "candidate_hits": {
+            "mean": 99.22446236559139,
+            "p05": 97,
+            "total": 73823
+          },
+          "flat_hits": {
+            "mean": 99.56854838709677,
+            "p05": 99,
+            "total": 74079
+          },
+          "nominated_hits": {
+            "mean": 99.22446236559139,
+            "p05": 97,
+            "total": 73823
+          },
+          "physical_hits": {
+            "mean": 99.22446236559139,
+            "p05": 97,
+            "total": 73823
+          },
+          "returned_hits": {
+            "mean": 98.8508064516129,
+            "p05": 97,
+            "total": 73545
+          },
+          "seed_hits": {
+            "mean": 50.11021505376344,
+            "p05": 0,
+            "total": 37282
+          },
+          "visited_hits": {
+            "mean": 98.71639784946237,
+            "p05": 95,
+            "total": 73445
+          },
+          "walk_hits": {
+            "mean": 98.6975806451613,
+            "p05": 95,
+            "total": 73431
+          }
+        }
+      },
+      "stage_loss": {
+        "discovery": 98,
+        "exhaustive_sq8_missing": 321,
+        "extra_fetched_gt": 1,
+        "fetched_not_returned": 302,
+        "nomination": 0,
+        "physical_gap": 0
+      },
+      "decision": "GO method-validation only"
+    },
+    {
+      "dataset": "cohere",
+      "split": "consumed method-validation256-999",
+      "metrics": {
+        "candidate": {
+          "candidate_hits": {
+            "mean": 99.875,
+            "p05": 99,
+            "total": 74307
+          },
+          "flat_hits": {
+            "mean": 99.31586021505376,
+            "p05": 98,
+            "total": 73891
+          },
+          "nominated_hits": {
+            "mean": 99.8508064516129,
+            "p05": 99,
+            "total": 74289
+          },
+          "physical_hits": {
+            "mean": 99.8508064516129,
+            "p05": 99,
+            "total": 74289
+          },
+          "returned_hits": {
+            "mean": 99.21505376344086,
+            "p05": 98,
+            "total": 73816
+          },
+          "seed_hits": {
+            "mean": 51.18817204301075,
+            "p05": 13,
+            "total": 38084
+          },
+          "visited_hits": {
+            "mean": 99.88306451612904,
+            "p05": 99,
+            "total": 74313
+          },
+          "walk_hits": {
+            "mean": 99.88306451612904,
+            "p05": 99,
+            "total": 74313
+          }
+        },
+        "control": {
+          "candidate_hits": {
+            "mean": 99.6760752688172,
+            "p05": 98,
+            "total": 74159
+          },
+          "flat_hits": {
+            "mean": 99.31586021505376,
+            "p05": 98,
+            "total": 73891
+          },
+          "nominated_hits": {
+            "mean": 99.65994623655914,
+            "p05": 98,
+            "total": 74147
+          },
+          "physical_hits": {
+            "mean": 99.65994623655914,
+            "p05": 98,
+            "total": 74147
+          },
+          "returned_hits": {
+            "mean": 99.05913978494624,
+            "p05": 98,
+            "total": 73700
+          },
+          "seed_hits": {
+            "mean": 34.461021505376344,
+            "p05": 2,
+            "total": 25639
+          },
+          "visited_hits": {
+            "mean": 92.15725806451613,
+            "p05": 69,
+            "total": 68565
+          },
+          "walk_hits": {
+            "mean": 92.15725806451613,
+            "p05": 69,
+            "total": 68565
+          }
+        }
+      },
+      "stage_loss": {
+        "discovery": 93,
+        "exhaustive_sq8_missing": 509,
+        "extra_fetched_gt": 0,
+        "fetched_not_returned": 473,
+        "nomination": 18,
+        "physical_gap": 0
+      },
+      "decision": "GO method-validation only"
+    }
+  ],
+  "decision": "GO method-validation only",
+  "cgroup": {
+    "cpu.stat": "usage_usec 801845555\nuser_usec 790365046\nsystem_usec 11480509\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "memory.peak": "709160960\n",
+    "memory.swap.peak": "0\n"
+  },
+  "physical_reads_measured": false,
+  "new_exhaustive_queries": 1492,
+  "native_planner_calls": 3232
+}

@@ -1,0 +1,12 @@
+{
+  "dataset": "relaion",
+  "scope": "Closed GT-set reductions only; no queries/scoring",
+  "flat_gt_missing_returned": 96,
+  "flat_gt_missing_discovery": 97,
+  "flat_gt_lost_nomination": 0,
+  "flat_gt_missing_physical": 0,
+  "flat_gt_fetched_not_returned": 0,
+  "returned_gt_outside_flat": 18,
+  "returned_gt_gained": 480,
+  "returned_gt_lost": 24
+}
