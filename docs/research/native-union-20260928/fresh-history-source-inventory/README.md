@@ -83,3 +83,9 @@ Further source proof, 2026-09-29:
   overlap**. The whole candidate bank is therefore ineligible as a fresh
   panel. Exclude shared IDs before any frozen query selection; historical
   query lineage still needs closure. No cohort was selected or quality measured.
+- `../fresh-history-direct-source-scan.json` authenticates35 original source
+  archives (including both V126 attempts, V114–V116 and V130–V155) and reuses
+  149 exact Git archive matches. Within code files under `scripts/` and
+  `crates/`, literal raw ReLAION source references occur only in the V36
+  builder/tests. This narrows direct-import risk; indirect runtime inputs and
+  query transformations still require separate lineage checks.

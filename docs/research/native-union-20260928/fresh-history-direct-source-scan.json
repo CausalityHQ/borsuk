@@ -1,0 +1,1734 @@
+{
+  "metadata_only": true,
+  "query_gt_or_sealed_bodies_opened": false,
+  "complete_prior_query_audit": false,
+  "method": "Exact Git archive source matches or original terminal/reservation-bound archive SHA, then literal direct physical-source references in scripts/ and crates/ code only.",
+  "original_archives_scanned": 35,
+  "exact_git_source_commits_scanned": 149,
+  "original_archives": [
+    {
+      "archive_key": "research/v114-1m-paired/87881c71e048d557c5c1285ffa0ac1d8c381f764/source/source.tar.gz",
+      "archive_sha256": "dc4b98b92f935a5a65c529c26ea42d2c08606c465a4c52fc5da658be46d8ba05",
+      "archive_bytes": 11504263,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/source/source.tar.gz",
+      "archive_sha256": "e3acaee12267d25fb40ae6d43df57f0fb0e7e4269a3690468fb185e0aad1e1d2",
+      "archive_bytes": 11485691,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v114-exact-local/584f456ecd17c05afd6d086e16df8f0a02d64767/source/source.tar.gz",
+      "archive_sha256": "4c72bc13cfeeb87a996b54ad40741ed193dde652be9d1d38fdcc14a632e15e10",
+      "archive_bytes": 11486179,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v115-returned-replay/40c1b150448913466f67832a5ff8c2eaeda915a1/source/source.tar.gz",
+      "archive_sha256": "8e33e9949c0692126ddaaa4b129a5998c6e2bdd9e7144671022ad0d658648ec1",
+      "archive_bytes": 11538506,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v116-validation-paired/5e9b35ad40ea023eab4407aa611d759e1893bb34/source/source.tar.gz",
+      "archive_sha256": "a56f17b40b4c747c6361393ca3d03d727dfa5b9de45d4b18599fbe4efec54f30",
+      "archive_bytes": 11541885,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v126-relaion-expansion-source/c334ec638932f579f2ee62766d24c722c7c9b07c/source/source-full.tar.gz",
+      "archive_sha256": "497b3f8cdb1110d0bbff918b0726672cf71bb9fe9218520e7a5523280ee4b9db",
+      "archive_bytes": 11615121,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v126-relaion-expansion-source/c334ec638932f579f2ee62766d24c722c7c9b07c/source/source.tar.gz",
+      "archive_sha256": "db3a4133d6340a54a00a582e7812ddbe62260a818969bca964f74229ee47af43",
+      "archive_bytes": 22067,
+      "direct_source_reference_files": []
+    },
+    {
+      "archive_key": "research/v130-source-replay/56f7071716681fde524432d29a436015584df773/runs/v130-20260924T051018Z/a0001/source.tar.gz",
+      "archive_sha256": "1eddaf458f2a6278744a1c743d5a1c056eb4a546e28495cab0f3c82e5d755a0a",
+      "archive_bytes": 4943242,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v130-source-replay/56f7071716681fde524432d29a436015584df773/runs/v130-20260924T051504Z/a0002/source.tar.gz",
+      "archive_sha256": "5b6441bd8c3701b96560e434f2f261e3f9c7a71b34e4aef6515addc6279a51a4",
+      "archive_bytes": 4943262,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v130-source-replay/56f7071716681fde524432d29a436015584df773/runs/v130-20260924T052116Z/a0003/source.tar.gz",
+      "archive_sha256": "1ff0889c19283b2c9adcfa5443fef592a11ee0eab62c3b7b42ca67e192ecd997",
+      "archive_bytes": 4943215,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v131-source-replay/56f7071716681fde524432d29a436015584df773/runs/v131-20260924T052935Z/a0001/source.tar.gz",
+      "archive_sha256": "25c935e2498be9c6fdca92a182dea7c9643ed078194995576c982f37b2b4c4b2",
+      "archive_bytes": 4943643,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v132-live-s3/8f57a2d3faabd0353270d3b55850ae038b464e56/source/6ca9957867febc227ac4bf635f83f99bf987eb593202947a094a252985f2b3a9.tar.gz",
+      "archive_sha256": "6ca9957867febc227ac4bf635f83f99bf987eb593202947a094a252985f2b3a9",
+      "archive_bytes": 11649618,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v133-local-sq8/e6e99b58ec1e47a8445e7f2f3a96bb7407766246/source/94723a431e332bb91c90a0a39b1d9c8db283ff285c631ba218326125d777a16f.tar.gz",
+      "archive_sha256": "94723a431e332bb91c90a0a39b1d9c8db283ff285c631ba218326125d777a16f",
+      "archive_bytes": 11658465,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v134-native-route/5cb3936dbbddacbc552f558c3b9078ffeb46402c/source/54edbf901d3a9bbaaf003756ef36a578b093cd4dd441a119c1312e50c91e68ef.tar.gz",
+      "archive_sha256": "54edbf901d3a9bbaaf003756ef36a578b093cd4dd441a119c1312e50c91e68ef",
+      "archive_bytes": 11661871,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v135-hull-route/7f17b45cab5b26083eab80ef72416b1a64932a48/source/0c9bb30261772beaee3feb37337afe53e55614bfd8cf0d4d704ef3aa136795ee.tar.gz",
+      "archive_sha256": "0c9bb30261772beaee3feb37337afe53e55614bfd8cf0d4d704ef3aa136795ee",
+      "archive_bytes": 11663940,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v136-concurrent-route/717757d9ad18139fb8dc020414ec4a1b4f3e9931/source/49ad3ea4df570823b1681bacebb5be866c92cc23f68e59e773756bd63679486a.tar.gz",
+      "archive_sha256": "49ad3ea4df570823b1681bacebb5be866c92cc23f68e59e773756bd63679486a",
+      "archive_bytes": 11670284,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v136-concurrent-route/af689bab9e441aa8d7c4cced218860b02bfbae6a/source/c4a8bef23eb42f48e6b4ca0e916932fc40182f539a953688677e28c79d1e6cc5.tar.gz",
+      "archive_sha256": "c4a8bef23eb42f48e6b4ca0e916932fc40182f539a953688677e28c79d1e6cc5",
+      "archive_bytes": 11673626,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v138-unit-bound/2832f76339547fa5facf785fe53083ead6bb364c/source/3e6a3fabdfad670c32adca3d08ef08fa86c876c1326d506a8429671689d621b2.tar.gz",
+      "archive_sha256": "3e6a3fabdfad670c32adca3d08ef08fa86c876c1326d506a8429671689d621b2",
+      "archive_bytes": 11688959,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v138-unit-bound/b1afc2f8361d46317d2e6b34e394688f7a5396a6/source/b459a99896a9b3187ee11da33d6c9f17882bc6a66eb299ba87eeaebbe83de8f8.tar.gz",
+      "archive_sha256": "b459a99896a9b3187ee11da33d6c9f17882bc6a66eb299ba87eeaebbe83de8f8",
+      "archive_bytes": 11962267,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v140-budgeted-page/3213ca34cf6a8c32824dec6967b39eb06dd5fba6/source/7be1f3c95280e6c7449308d41807f775037d5b4d022523a635c88ae41b36ba59.tar.gz",
+      "archive_sha256": "7be1f3c95280e6c7449308d41807f775037d5b4d022523a635c88ae41b36ba59",
+      "archive_bytes": 12252827,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v141-deep-returned/f4fb48461e323e148fd2905da43558932d122768/source/b699523bb325d619ddc69e366e39007836ce582b1d7d30082006393f5841409f.tar.gz",
+      "archive_sha256": "b699523bb325d619ddc69e366e39007836ce582b1d7d30082006393f5841409f",
+      "archive_bytes": 13949725,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v142-relaion-returned/38e626d98f13f285476595ffa67c124dacf043b9/source/7184bc5581fa6be9f0e9caba78e976a22d1c58e00a6c91c091dc7d304881ddde.tar.gz",
+      "archive_sha256": "7184bc5581fa6be9f0e9caba78e976a22d1c58e00a6c91c091dc7d304881ddde",
+      "archive_bytes": 13955636,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v142-relaion-returned/70aed5ac666fb658b3f3d7f35edbf2d3c33916ba/source/fe9a356295a4e816a946b954602538b51c67d5cf72634b8a3122834f9e6aafe9.tar.gz",
+      "archive_sha256": "fe9a356295a4e816a946b954602538b51c67d5cf72634b8a3122834f9e6aafe9",
+      "archive_bytes": 13953918,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v142-relaion-returned/da63de3292905fe9246ee50c078345592e7c9083/source/e015d844fca66f945c37cc03adbfdbe6c48cbaa96969526ccaee46cc666071bf.tar.gz",
+      "archive_sha256": "e015d844fca66f945c37cc03adbfdbe6c48cbaa96969526ccaee46cc666071bf",
+      "archive_bytes": 13955877,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v144-page-parity/094fc86460da04e904a0e33625c70a3043870abb/source/b6e07a5e9cd29cbe8882e9cde1d1d7180adc5911ca9ec0a6daa694cefe2fc656.tar.gz",
+      "archive_sha256": "b6e07a5e9cd29cbe8882e9cde1d1d7180adc5911ca9ec0a6daa694cefe2fc656",
+      "archive_bytes": 13967809,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v145-page-parity/e0e8e01f89be2c40438e09f325d9c1f72da1ca76/source/66e9cf38a2c0ebf3d3678b4a60cee54a98a689c0e1d159ddea5044201c4d2a0f.tar.gz",
+      "archive_sha256": "66e9cf38a2c0ebf3d3678b4a60cee54a98a689c0e1d159ddea5044201c4d2a0f",
+      "archive_bytes": 13972242,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v146-centroid-score/ac9c60b3b2a8cb18bfa3c9a9417b0f8e7d831bc0/source/3e1819686295eb3a4f5c206a2628a447e28b281baed7872538eff82adcc649fa.tar.gz",
+      "archive_sha256": "3e1819686295eb3a4f5c206a2628a447e28b281baed7872538eff82adcc649fa",
+      "archive_bytes": 13982441,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v149-contiguous-hierarchy/052bdb9785d405a3da621ff95582d2ed64ea18b6/source/8601e9913bfddc15393cc0c183fffb4b1a2c317b8027d6b0253294b7b293aebb/source.tar.gz",
+      "archive_sha256": "8601e9913bfddc15393cc0c183fffb4b1a2c317b8027d6b0253294b7b293aebb",
+      "archive_bytes": 14003285,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v150-unit-centroid-graph/1bb1559a775a241f1049f812f40a93d7f1c22fdc/source/7a2b21341e8d435732b185ecee76ac9975bd1d88cdff1b89680b0b19a899c320/source.tar.gz",
+      "archive_sha256": "7a2b21341e8d435732b185ecee76ac9975bd1d88cdff1b89680b0b19a899c320",
+      "archive_bytes": 16825716,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v151-page-seeded-graph/84bfeefc73f4ccca8d785e2c63fb4f642df82ddd/source/9089fda4eecfc371e3f1c5c0593c4eff9bea70a57d96738e840591054d77eca4/source.tar.gz",
+      "archive_sha256": "9089fda4eecfc371e3f1c5c0593c4eff9bea70a57d96738e840591054d77eca4",
+      "archive_bytes": 14046542,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v152-cached-page-graph/0cf15985a352d5143d4c9dfb56ff5652a202c4e0/source/9e8fc956619a63b6cf67d837b8b98110378210d2ede9d7e8a9c054149a3a195e/source.tar.gz",
+      "archive_sha256": "9e8fc956619a63b6cf67d837b8b98110378210d2ede9d7e8a9c054149a3a195e",
+      "archive_bytes": 13982479,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v152-cached-page-graph/1cd267782e52fb3cca2c9ce176b2e48970f85c7a/source/c58ec56108c9e295eb09f00bff00ddfece743ffe4ebcf284898e8e9cb39d8e6b/source.tar.gz",
+      "archive_sha256": "c58ec56108c9e295eb09f00bff00ddfece743ffe4ebcf284898e8e9cb39d8e6b",
+      "archive_bytes": 14064521,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v154-relaion-graph/6513bc4c18dbadd1f570c01083086e71066fa290/source/11cf3183069547d66945356f6a27a10172dd93f47106c1fbaf25d67e29b86aa9/source.tar.gz",
+      "archive_sha256": "11cf3183069547d66945356f6a27a10172dd93f47106c1fbaf25d67e29b86aa9",
+      "archive_bytes": 13991127,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v154-relaion-graph/8f2c5ce4bffadc421fb4a48e4deccf989f803770/source/5fe7bfcd84cc5fa6a3ecf66c45a6f265a6c0d12e9e04fcd2d92a5679c5e5badc/source.tar.gz",
+      "archive_sha256": "5fe7bfcd84cc5fa6a3ecf66c45a6f265a6c0d12e9e04fcd2d92a5679c5e5badc",
+      "archive_bytes": 13993053,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "archive_key": "research/v155-relaion-returned-quality/10850f917c4583f05d8c33afec459f4f76b194bd/source/de67cc65077f58cbbff1328cbcd668f950b45f3b4c1f03410bdee664ebe52683/source.tar.gz",
+      "archive_sha256": "de67cc65077f58cbbff1328cbcd668f950b45f3b4c1f03410bdee664ebe52683",
+      "archive_bytes": 14003539,
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    }
+  ],
+  "exact_git_source_commits": [
+    {
+      "commit": "008ab6fbc50e6293e0599a33993c619702109bd9",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "014d1fb36f9f69004c2c25b0648765bc369c4cd0",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "0168b667c32907ce2dd62e3648d03f220bc98479",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "03e9c6d53cdcd055ad09ccec8b1d6c376245773d",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "06437bd3bdeb3be60b8ecb1571ad2cbbe27bdcf5",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "0a603ba7395045d706227e239085d2ed8856ef5e",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "0e705d5aed7998f58526447d00fd5b19fe01ae54",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "128b45b823ec4ce0b448448d241d9152a9220a89",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "1341344b6a620e9419ee58d6f57d7a115402f02a",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "134613f2d6ac206eed2af5dce94544901eb51712",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "136e6ed61e64a5a9ee8b18ab86fd8637b3f2d771",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "140f89672a820af45834cf304cf9c4de009b4919",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "17f855b7768060c7e4850f9c68aff23c4a459058",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "1a874d21abe5166bbd769c91eb2de29746af0957",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "1b6d257e10e528c971539b9e25da257548cebf2f",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "1ba78eaf8322ad47b9553ede6f1d9f8848277678",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "1e3055819e8303b92cb68793f6fd1a819e844884",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "1eee3ac3e8663e95a735c9f61297d5259b28b623",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "2289c58a77dfd51f0d86f89272fb3709d627e99a",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "236e29e8fef01c30434b6827d17c6dd3d58153bc",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "24f7b0305d6056d037dce1bba724283b64783919",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "2678f8ea8de52c7a801dd6dbf1496f2fe4b44521",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "27570a87e95192b9199fcb315cf212a7936972ff",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "2cc92e1afc1d084f5979d6123eb5c092cb02bc19",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "2cfbb7108eeda0895ae5dc17e072fc75d18725d5",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "2dee58896e42f84d74e2653dc0960e19d6defc63",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "2e27d18e4d0bea332fabd6c54db5022f390e9ddd",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "34a38d6427405ade5931e0cfc8e2f19e5436a6d8",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "34c352195bf748fc0d89be21f8adf6febff0449e",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "34fd11f56559cc7d453f3bd04c92aba83d62d5fc",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "36b9a3e31e376b0e28a4fb2d0a43007fa63be3fe",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "36f1dcebf7377f9bab2f0f547fcac2cc5e5f7128",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "375d7a3be26735eebda43f30920e5eb2f31620a2",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "38c846cfd92cadf9710255784400aca981150d8c",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "38cbf7e5f1b2142615ba63f1a690cfcc13b2ccab",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "39793c43b7e6b21d426632e58fe88247fda06354",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "3d85095e5094742fc1272824dda24263f5ea3fc5",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "3eb74be9761506b872c75dc34c015d96fb8e5619",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "42c48d5e8e6696d9c991faec0d9b43f00dc1b61e",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "44c573a88ac931febe0321ec81629e6a51785d84",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "47339e2a4eb8b1c1a84568c48da7c32efed765f1",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "47cbeeeceb49bf52b235d2017ee5a55297d080bf",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "488fc4702f6fd408385e532f67d0a110daf1ba33",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "493a8b28076caef2a82a4ed76046f17de4ffdf96",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "4958d9bf10d1efd911823363935379dd547c469e",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "49b97ad8bb72a40df29a3eb5296e55e99c1c48dd",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "4fae4b97fe7a73258432fc48d68a5305ac650024",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "4fde270ac6a27833626701aa777c646fb2cff95a",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "50170297e61b3b923f83cae91668a1f7db7e72d0",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "51f78a6f9f5c8cdf5fcfeccdab698d84b91799a8",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "5221e5c2075e59f8d068a182a406dbc33d095d89",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "576479788947be9c3d9df26a4b65b794a1079fbd",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "5b83f6c3ba50bb09b2cb65ca063df925c284a555",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "5c9e4c52d0c97df7fb2b917ee618de4e66e710f6",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "5db6ac8f1beb9e9318e95fb2fd297d9d64a12b2f",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "5dca961dbe8c4e3d8635867a3c0bd55f2e6940b6",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "60dc982cce46bd1baf2fb4bdf163d90be32f1aea",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "61ee6f321162f3d4bc5be13ec001ccb7eb6ef511",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "65684cc922a9a81e654ffb58722691c0f7b2a11b",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "65c6ea810077824363953a01e8cd6a24a79eacb4",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "68c35e24a648e2036c3d7f568a3b5d6a27fcaa18",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "6b7884a6a24e6467d82c9ced1a00ca3706cf0aca",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "6bcd55bd223fdd9fb679d29f4bb5aca3b03be39c",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "6e9059256d903080c293be231f6e78c3f53092ba",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "6f0f0b0ee59ed5fb9b3237cafd23a74d7550487a",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "6fa72aae30df9f7d5b5ae2e29d32ddad702f1ab7",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "72bf198eadfbaa0e438cc0871b9931900319cb2e",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "762c6b13c684ec0356f707eed3529f36a3dbd214",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "7b58fa467b1cb19cd285467fac402b55697c3d25",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "7b6047df7eb34d037e7626e539a9b09012fc10a7",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "7b66f9f7d306a0f1febc2091783de68a6ece72c7",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "7c11454043c45c38fb2285c3ec1dbd90f86d954a",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "804e630833e740baf11231f2d57be8483218990d",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "80f9d35c1283e0161983e578b3d779c58aebd62e",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "8206cbc9a7d0949146b2a8739f4964725871a913",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "848cffab4cdb6696a069d592e7cc23069586fa34",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "85c73dde4964779336ad856f7170ffbaa020711d",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "8a97841fa34dd51aa3d2d047bb0c1e45788bb4ee",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "8b4b28b039dc322aaa1ff0660077d259f735d89a",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "8cb587328cd3cb236499d37877d3c08141eb9286",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "8f8cbd15852ccab48d80ea3c44d21627727b890f",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "910229f936368bf409ea08215790c234ecef9eb9",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "9789438c356bd582126b2c984ae67ef2e5c11779",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "979f9a2db13a5c2406071add1864edeb043f0241",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "98861a488218510f6362d589c99879b1ecc2a97a",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "9933ae6a5445e0eaf4b408d63e6cc0f135817447",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "9b7bcc581887688247b4fab244a5dab8d37dd3c9",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "9cb5a36a18b061d0a9f1cb5eedc4dfcd2b719b08",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "9da6ef74a6f28f57578e7e8438ff930b9a690266",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "9f8007a507e06970639a71432544d7fe0a22bf63",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "9fb01434081bae33c7cc8a18d5eb89968ccc894a",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "a0bb625628d41d4286333239bc547956a929b2c9",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "a0f313e55eb3614edde0b61d99f36ddaf57ad308",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "a1dea4e668ab53f5e202c60c7baff99315e5a53f",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "a22a0d7c6f9cfc71f627bdafa85875750c2048f9",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "a45c8f9635b7663334367960d2e423ddf29769f4",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "a7def2219cb4cc402637e8bbfd905d1d300840f2",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "a80b855ef325e8c395754cac69f63f2506baa4ae",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "a923fc399a8777743b969bcae48d5e1a30b8abcd",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "ac0f991bceb9606b4c9b476123f9aba7f29fee28",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "ac6738bdec80e9ba94ee505c271168ab50d0ff88",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "ad367b68fa2fb47e96851fe29460a120535c64dc",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "ae0b160e0b48c419a6bac1b6d9e5964f7fd4b63b",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "b38e2df41106dd8d546458da737f41764aa4a2ea",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "b4553447419d82388f93109abcf2a84bc0515648",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "b573a2fcf6300d2d37acd400521d9a1a504f8b61",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "b5ae9ce5d9fdeae47ee4047d5e6b3eff08d9ad3d",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "b69621d801e41d4378ec0aaa387939a95d71fd99",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "b9b5b752b78e85bd9c9b8d015ab8674bc1858e39",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "ba10488847a87925c1ae962229bfdcad6826c926",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "bb798d12f74f9b717fce81ca2360ace27af9513e",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "bd14239fbc22156fc7fe53bfbe0e9a7bdcb6879a",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "bf5db61a8f0f84543e57338be224e8636a41a170",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "c38e4a0da557a9e41e5ce86020c5cb83609fe9d0",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "c5fbb27ffba5fe5a78f15a4fb9e9c836a2afba04",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "c65a6b2d5154204a344291ed8f410863e8326903",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "c6bd8de6b51beb34fdd45a883d79cadc5fc60cd3",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "c6ea3f71c6c612ab5de575e096d44d9b2c9f0260",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "c94c841cb40b064c7b88984d50249e74f58ce968",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "cdbe66a269a2cd580dd46940e1838ef9a915ceb3",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "ce317cac8d1eb0a1b8a8610f0a3756b96090514c",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "d01aa1b77fde0c45874692b7cd90ef9c0a15c14f",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "d347cd5320fb17fd28514258bff5a56783f8263a",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "d7f4aff208dc225adcdeec1f364122574aeac6c2",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "d861520e8559d28dd10def977c9e941c550d7099",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "d9404a9d081c7fbfa492ae0a0e9c4c87ffdec7b6",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "dbf9399eb66c6ae5b9e6f8ef93a53c4e98bc4075",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "dfdacbc8fb9fb4bd968291f4a011af05e0912489",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "e2b8294914096784493366946112b32b7ae7cae5",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "e3f6ee9b35923397f3ca037be4640bd831b363ea",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "e49ef38e4c02d955242a9849a03fa0beb0d56d86",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "e74d75acb40647f606b498023b11dec26701e4aa",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "e8e5f465f4a1a0ddc254d8c783179a89ea94e27f",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "e92fec66f2d026429d0ab0a083371953b1e03415",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "ea73f6f4dd4bc11cfca99a559df04aba4506f65c",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "eb16c09004a4d06852600b5f151e44b105ed22b6",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "ed8f233404da8df4cc6d6b082540c58e1faa7308",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "eda7dc6456c66a520cf161ff1001ca5c7e97671f",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "f1252ec7e65dedb9eff60320663322e09d3b725b",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "f12d5638c48962a8b0fd35811d2efe777873de3a",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "f22299a618636c32570b2006c7c24502b8bf4acb",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "f278c0c24a264ad6b88661a7ee6f63d40c341277",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "f40baabc9a8851aa57ed5b6fe35115fa795c3192",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "f5cc5a01a7184112adb609c3fff4e59508da5ecb",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "fa81d37d98dab534104625de1347c52d35132d17",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "fb246786f9380a72c88987c0c4dba65f44278594",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "fc61a4e3bb41c082833507e55f019b4192d83a25",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "fd2ee58cc213ee03f57015081b9be48c35a37753",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    },
+    {
+      "commit": "fdc51a358be350678d9f6f279a2be95a57709c02",
+      "direct_source_reference_files": [
+        "crates/borsuk/src/v36_funnel.rs",
+        "crates/borsuk/tests/v36_prefix_dataset.rs",
+        "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+        "scripts/run_v36_prefix_screen.py"
+      ]
+    }
+  ],
+  "qualification": false
+}
