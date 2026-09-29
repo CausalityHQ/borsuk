@@ -53,3 +53,10 @@ invoice. Conditional unique attempt reservation before launch, one original
 controller/instance, terminal artifact sync and independent termination check.
 Spot interruption discards its cell; no automatic replacement or overlapping
 job. No full core/workspace gate: Rust core and qualified binaries are unchanged.
+
+Execution amendment after original a0001's CLOSED pre-query failure: the
+qualified local generation requires all ten SHA-bound artifacts from
+`current-1m-offered-http-config.json`, not only its root manifest. Corrected
+attempt a0002 downloads that same roster and retains native error logs on
+terminal failure. This changes no query, GT, binary, source/scorer, method,
+threshold or measurement order; a0001 remains an infrastructure failure.

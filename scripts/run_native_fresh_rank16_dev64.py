@@ -66,12 +66,18 @@ def main():
                                      "address_space_limit": list(resource.getrlimit(resource.RLIMIT_AS)),
                                      "cpu_affinity": sorted(os.sched_getaffinity(0))})
     atexit.register(resources)
-    root = config["root_manifest"]
     generation = out / "generation"
     generation.mkdir()
-    subprocess.run(["aws", "s3", "cp", "s3://" + config["bucket"] + "/" + root["key"],
-                    str(generation / "manifest.json"), "--only-show-errors"], check=True)
-    if (generation / "manifest.json").stat().st_size != root["bytes"] or sha(generation / "manifest.json") != root["sha256"] or root["sha256"] != config["root_sha256"]:
+    for name, ident in config["generation_artifacts"].items():
+        if not name.startswith("generation/"):
+            raise ValueError("unexpected generation artifact")
+        path = out / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["aws", "s3", "cp", "s3://" + config["bucket"] + "/" + ident["key"],
+                        str(path), "--only-show-errors"], check=True)
+        if path.stat().st_size != ident["bytes"] or sha(path) != ident["sha256"]:
+            raise ValueError("current generation artifact differs")
+    if sha(generation / "manifest.json") != config["root_sha256"]:
         raise ValueError("current root manifest differs")
     sealed = config["sealed"]
     raw_path = out / "queries64.raw"

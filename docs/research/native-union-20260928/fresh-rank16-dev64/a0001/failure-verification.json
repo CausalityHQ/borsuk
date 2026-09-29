@@ -1,0 +1,13 @@
+{
+  "valid_terminal": true,
+  "scientific_result": false,
+  "attempt": "a0001",
+  "instance_id": "i-0bb37dc0648c62d34",
+  "state": "terminated",
+  "terminal_sha256": "eddb627c3891d7d50fb88c34ca27ef6e28ba618232fa2681246fd596108a55a1",
+  "failed_phase": "measure",
+  "exit_code": 1,
+  "artifacts_verified": 7,
+  "native_quality_present": false,
+  "http_measured": false
+}

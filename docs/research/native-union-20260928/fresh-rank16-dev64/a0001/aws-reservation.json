@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-fresh-rank16-1m-dev64-spot-v1",
+  "attempt": "a0001",
+  "source_base_commit": "c305cd896fa8d13c976c19ea5b7d7e73bfb12944",
+  "source_archive_sha256": "a10adbff9078f542fa839f6736c9dba43ab975ae489c5bd0955d2f9a62f132ac",
+  "config_sha256": "dc09d7cc267ba1d546689ded0235b480d54fed04ded2ec97034c5a7a16c1d34a",
+  "sealed_construction_terminal_sha256": "c22cea7e147632511873a0cbc0350d39d691f181ad3281bd9042ff21c0e81e88",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "availability_zone": "eu-central-1c",
+  "instance_type": "c7g.2xlarge",
+  "spot_price_observed_usd_per_hour": "0.178900",
+  "spot_quote_timestamp": "2026-09-29T15:00:00+00:00",
+  "spot_max_usd_per_hour": "0.30",
+  "compute_cost_cap_usd": 0.15,
+  "ebs_s3_allowance_usd": 0.15,
+  "wall_seconds": 1800,
+  "measurement_memory_max_bytes": 8589934592,
+  "swap_max_bytes": 0,
+  "interruption_policy": "Discard interrupted cell; no automatic retry",
+  "scope": "Frozen rank16 fresh dev64 native R10/R100 then conditional four-slot HTTP; prospective untouched"
+}

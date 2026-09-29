@@ -68,6 +68,12 @@ def main(attempt, subnet):
             or sha(Path("crates/borsuk/examples/two_bit_http.rs").read_bytes())
             != "2adc14246cda4f7ff2318a985ba61b27e4e7e6db865be67260b0252e4b0d9e49"):
         raise ValueError("current native source differs from qualified binaries")
+    current = json.loads((ROOT / "current-1m-offered-http-config.json").read_text())
+    expected_generation = {name: ident for name, ident in current["artifacts"].items()
+                           if name.startswith("generation/")}
+    if (config["generation_artifacts"] != expected_generation
+            or config["root_manifest"] != expected_generation["generation/manifest.json"]):
+        raise ValueError("closed generation artifact roster differs")
     archive = io.BytesIO()
     raw = subprocess.run(["git", "archive", "--format=tar", "HEAD"],
                          capture_output=True, check=True).stdout
@@ -113,7 +119,9 @@ def main(attempt, subnet):
     runner.SCHEMA = SCHEMA
     artifacts = ["cpu.txt", "environment.txt", "screen/decision.json", "screen/cgroup.json",
                  "screen/native-quality.json", "screen/requests64.jsonl",
-                 "screen/reference-k10.jsonl", "screen/reference-k100.jsonl"]
+                 "screen/reference-k10.jsonl", "screen/reference-k100.jsonl",
+                 "screen/reference-k10.log", "screen/reference-k10.time",
+                 "screen/reference-k100.log", "screen/reference-k100.time"]
     for rep, k in enumerate(config["setting_order"]):
         artifacts.extend(f"screen/run{rep}-k{k}/{name}" for name in
                          ("http.jsonl", "result.json", "server.log", "server.time",
