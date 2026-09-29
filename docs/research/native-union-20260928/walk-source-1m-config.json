@@ -1,0 +1,38 @@
+{
+  "schema": "borsuk-native-walk-source-1m-dev-v1",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "region": "eu-central-1",
+  "rows": 1000000,
+  "dimensions": 768,
+  "k": 100,
+  "first": 0,
+  "count": 64,
+  "arm_order": [
+    "control",
+    "candidate",
+    "candidate",
+    "control"
+  ],
+  "fresh_cohort_used": false,
+  "raw_sha256": "a3eac4dedae5006843ea2ad243ec590440fe5b983ca8cd969dbc92b3e3406c33",
+  "normalized_sha256": "a079010d0beb3f3fb2b117f4b759995220ac92715388bbb480bbce4e166f1999",
+  "artifacts": {
+    "source.parquet": {
+      "key": "research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/source.parquet",
+      "bytes": 1458450077,
+      "sha256": "2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86"
+    },
+    "requests": {
+      "key": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+      "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0",
+      "bytes": 17714558
+    }
+  },
+  "dependencies": {
+    "scripts/run_native_union_cold.py": "6a4bbd483c28432587b8ee9c92e72c679fea73bd65af1a773ee255e67606f7d9",
+    "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+    "scripts/run_native_cold.py": "adc14ad6580b328e8bee9c75660493d6b7bb526865686f8e110e83feea5a262c",
+    "scripts/native_two_bit_cosine_development.py": "ad439e50a8a5e448d520136516e0e4a3813c51d0a01bb570a19c13ffb092244d",
+    "scripts/v291_two_stage_development.py": "2c55907696c22273f8adec826059969d4262fcfbb97de9cd5ef579cb75073916"
+  }
+}
