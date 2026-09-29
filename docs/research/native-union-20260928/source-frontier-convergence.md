@@ -6,16 +6,18 @@ The original BOTH-vendor production goal remains active.
 
 | Baseline | Current candidate / actual quality delta | Measured latency, throughput, resources and cost | Remaining BOTH-vendor gap | Next decisive gate |
 |---|---|---|---|---|
-| ReLAION FIRST1M D768 cosine, consumed external development0–63. Same-source offline R@100 control6288/6400=98.25%; flatSQ86363/6400=99.421875%. No matched1M HTTP control. | Each k10 repetition635/640=99.21875%; each k100 repetition6318/6400=98.71875%. R100 delta+.46875pp vs offline control,−.703125pp vs flat. | All256 incoming HTTP requests successful; each cell8.0 successfulQPS at offered8QPS. k10 reps p90=302.7780583/146.6433489ms, p95=449.20857815/180.09771570ms; k100 p90=112.4303208/117.4496405ms. Process maxRSS400248KiB; measurement cgroup peak682176512B. Total7784 actual dataGET /4293918720 verifiedB, zero failedGET. Worker compute$0.0233 **estimate**, excludes EBS/S3; lifecycle$/query unmeasured. | **GO consumed development1M only.** No fresh representative panel, CoHere1M, warm/saturation,10M/100M, lifecycle or paired vendor qualification. | Close query-bank/source exclusions; preregister wholly separate quality-blind1M queries, meanR10>=95%, R100 separate. Reuse exact qualified native code/binaries for incoming coldHTTP, namespace hydration, offered rate/cost curve. |
+| ReLAION FIRST1M D768 cosine, **fresh rank16 development0–63**; practical competitor-based floor mean R@10>=95%. No matched fresh control. Consumed R@100control98.25% and flat99.421875% are stale/different split. | Native/current HTTP R@10=636/640=99.375%, +4.375pp vs stated floor; R@100=6299/6400=98.421875% reported separately. No actual fresh matched-control delta. | All256 offers success at8.0QPS each cell. k10 incoming p90=124.6767/115.9056ms, p95=139.2233/118.6152ms; namespace ready4.71–4.81s separate. 7,708 actual GET/4,293,918,720B; RSSmax376420KiB, cgroup peak4,000,931,840B. Spot compute$0.0159 **estimate**, EBS/S3/lifecycle unknown. | **GO fresh development only.** Published Turbo1MD768 coldp90444ms is nonpaired context. Prospective936, CoHere,10M/100M, saturation/lifecycle and matched BOTH vendors open. | Fixed prospective64–999 confirmation without tuning; then CoHere and bounded scale/lifecycle/vendor protocol. |
 
-Fixed order[k10,k100,k100,k10],64 requests per cell, fresh HTTP process per cell,
+The measured protocol uses fixed order[k10,k100,k100,k10],64 requests per cell, fresh HTTP process per cell,
 8 workers and5s request timeout. Data fetches use no application SQ8 cache;
 source/router metadata is resident, namespace hydration is excluded from request
 timing, S3 service cache is uncontrolled, client is loopback with separate
-connections. Both k10 repetitions pass the frozen development gates: all64
-successful, R10>=95%, p90<444ms and successfulQPS>=8. First k10 p95 misses the old
-400ms engineering stretch. Prior strict R100, one-slot and two-slot FAILs remain
-immutable; the current candidate remains product-eligible.
+connections. Both fresh k10 repetitions pass the frozen development gates:
+all64 successful, R10>=95%, p90<444ms and successfulQPS>=8. Prior consumed
+development R@10=635/640=99.21875%, R@100=6318/6400=98.71875%, k10
+p90=302.778/146.643ms at8QPS are different-split historical evidence. Its
+first k10 p95=449.209ms missed the old400ms engineering stretch. Original
+strict R100, one-slot and two-slot FAILs remain immutable.
 
 Published comparison context: Turbopuffer1M D768 coldp90=444ms; its published8QPS
 homepage workload is10M D1024. These are disclosed differences, not paired vendor
@@ -52,17 +54,17 @@ exact-GT construction. That [one Spot construction cell](fresh-rank16-seal-decis
 has now sealed all1,000 query vectors and exhaustive f64 GT100, verified16
 candidate shards, exact original1M raw-source parity, three immutable S3
 artifact SHA256s and actual instance termination. Cgroup peak5.865GB;
-compute$0.0264 **estimated** excluding EBS/S3. **Complete all-history
-query-artifact closure remains false.** No fresh ANN recall or cold HTTP result
-exists; reject all1,000 IDs if later authenticated input proves reuse. Next
-run the frozen fresh development0–63 native quality and offered8QPS gate;
-prospective64–999 stay sealed.
+compute$0.0264 **estimated** excluding EBS/S3. The subsequent
+[fresh development gate](fresh-rank16-dev64-decision.md) passed on ordinals0–63;
+prospective64–999 remain sealed. **Complete all-history query-artifact closure
+remains false.** Reject all1,000 IDs if later authenticated input proves reuse.
 
-Recent code/measurement evidence: [four-slot decision](four-slot-1m-offered-http-decision.md),
+Recent code/measurement evidence: [fresh development decision](fresh-rank16-dev64-decision.md),
+[four-slot consumed decision](four-slot-1m-offered-http-decision.md),
 [frozen strict1M decision](source-completion-1m-decision.md),
 [prior two-slot decision](two-slot-1m-offered-http-decision.md),
 [prior one-slot decision](current-1m-offered-http-decision.md).
 Unchanged2696-pass core assurance and five offered-protocol checks are reused.
-All original cloud jobs are closed and their instances terminated. No new paid
-job, admission bump, architecture cycle, review or operator decision is needed
-for the current metadata work.
+The original construction and fresh development jobs are CLOSED; both instances
+are terminated. No operator decision is needed for the next fixed prospective
+confirmation design.

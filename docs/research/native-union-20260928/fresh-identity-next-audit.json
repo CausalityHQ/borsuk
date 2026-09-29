@@ -55,9 +55,9 @@
   ],
   "existing_authenticated_population_authority": "fresh-identity-authorities/verification.json",
   "next_actions": [
-    "Run one frozen ReLAION FIRST1M rank16 development0-63 native candidate with exact sealed requests/GT, current root/SQ8/scorer/binary and immutable source-parity authority; native mean recall@10 >=95% is the first product gate, report recall@100 separately.",
-    "Only if native quality passes, run fresh incoming HTTP at offered8 successful QPS and disclose hydration, physical GET/bytes, p90/p95/p99, RSS, failures, cost and published-context differences. Terminate original Spot worker at terminal.",
-    "Keep prospective ordinals64-999 sealed until development protocol and architecture are frozen; reject whole panel on later authenticated selected-ID reuse. Then CoHere and 10M/100M scale, lifecycle, mutations/pins/GC and matched both-vendor comparison."
+    "Freeze unchanged root/binaries/scorer, exactGT and external rank16 prospective ordinals64-999 into one quality-blind confirmation protocol. No tuning or panel replacement after its results.",
+    "Measure representative prospective mean R@10 >=95%, report R@100 separately, incoming cold HTTP p90<444ms and8 successful QPS under disclosed metadata/S3 cache/loopback conditions, hydration and total physical costs separately; preserve every offer/failure.",
+    "Then CoHere1M,10M/100M scale, saturation and lifecycle/mutation/pin/recovery/compaction/GC, followed by matched both-vendor comparisons. Reject whole panel on later authenticated selected-ID reuse."
   ],
   "paid_launch_hold": "Lifted by FINAL RELOAD RELEASED immediate-1790693371082917915-2014084; SAME native goal ACTIVE, no further reload needed.",
   "additional_closed_history_inventory": "All341research prefixes scanned:279versioned/490terminals +62nonversioned/207terminals;697 metadata records/125 named query locators. Complete query-source closure remains false.",
@@ -75,5 +75,7 @@
   "provisional_panel": "fresh-rank16-provisional-ids.json SHAa8bd97d6e6468e715c4b26d9df8c400f649e5428b2a85f151307f20cb030230c: 1000 quality-blind rank16-31 IDs; zero selected IDs in original16 independently confirmed. Selected-ID source lineage supports sealed vector/GT construction only; full global query-artifact closure false; no ANN quality or cold HTTP yet.",
   "selected_id_construction_go": true,
   "selected_id_construction_authority": "fresh-rank16-identity-decision.md: 35 original and 33 nonversioned SHA-authenticated source archives, 149 exact Git source trees, 701 closed terminal direct-reference checks, 50 native-union terminal/reservation input checks, independent zero-overlap ID check. Scoped inference; not full query-artifact closure or ANN quality.",
-  "sealed_rank16_construction": "fresh-rank16-seal/a0001/verification.json: original Spot terminal complete, c7g.4xlarge terminated; 1000 quality-blind query vectors and exact f64 GT100 sealed under SHA-authenticated S3 keys, indexed raw source parity exact, 16 selected source shards authenticated; no ANN quality or HTTP measured."
+  "sealed_rank16_construction": "fresh-rank16-seal/a0001/verification.json: original Spot terminal complete, c7g.4xlarge terminated; 1000 quality-blind query vectors and exact f64 GT100 sealed under SHA-authenticated S3 keys, indexed raw source parity exact, 16 selected source shards authenticated; no ANN quality or HTTP measured.",
+  "fresh_rank16_development": "fresh-rank16-dev64/a0002/verification.json: CLOSED Spot terminal/instance verified; fresh FIRST1M D768 cosine rank16 dev0-63 native R10=636/640=99.375%, R100=6299/6400=98.421875%; all256HTTP offers success, each8.0QPS, k10 p90=124.6767/115.9056ms; 7708GET/4293918720B, cgroup peak4000931840B; compute$0.0159 estimate excluding EBS/S3. Development GO only; no matched fresh control/vendor or prospective result.",
+  "fresh_rank16_development_failed_preflight": "fresh-rank16-dev64/a0001/failure-verification.json: CLOSED pre-query infrastructure failure from incomplete local generation artifact roster, no ANN quality; instance terminated. Corrected a0002 has full ten authenticated artifacts."
 }
