@@ -1,0 +1,27 @@
+{
+  "schema": "borsuk-v36-rank16-fresh-1m-seal-v1",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "region": "eu-central-1",
+  "rows": 1000000,
+  "dimensions": 768,
+  "k": 100,
+  "metric": "cosine",
+  "source_parquet": {
+    "key": "research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/source.parquet",
+    "bytes": 1458450077,
+    "sha256": "2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86"
+  },
+  "source_raw_sha256": "a3eac4dedae5006843ea2ad243ec590440fe5b983ca8cd969dbc92b3e3406c33",
+  "panel_path": "docs/research/native-union-20260928/fresh-rank16-provisional-ids.json",
+  "panel_sha256": "a8bd97d6e6468e715c4b26d9df8c400f649e5428b2a85f151307f20cb030230c",
+  "registry_path": "docs/research/v36-prefix-source-registry.json",
+  "registry_sha256": "b9a19e2f142fd54983ed1db9f09862f2c5623b6b2105d66e538664f8adda9180",
+  "code_sha256": {
+    "scripts/seal_v36_rank16_fresh_1m.py": "d2c29bec002e8b45a81ee108d52bbe0ef32addcdc8e563cc0f84e3d6a05ba871",
+    "scripts/audit_v36_ranked_physical_ids.py": "67af40bf3d505d45979f269218f4bfd426aaaa5f1e6705b6947bd32831d8bb2b",
+    "scripts/run_native_source_frontier_1m.py": "fe91b3afbd95648fa2d6de371ae4fa3b31d549df873496010a643f365bff450d",
+    "scripts/native_two_bit_cosine_development.py": "ad439e50a8a5e448d520136516e0e4a3813c51d0a01bb570a19c13ffb092244d",
+    "scripts/v291_two_stage_development.py": "2c55907696c22273f8adec826059969d4262fcfbb97de9cd5ef579cb75073916"
+  },
+  "quality_peek_allowed": false
+}
