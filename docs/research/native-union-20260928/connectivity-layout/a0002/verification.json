@@ -1,0 +1,108 @@
+{
+  "instance_id": "i-07aae6dec1c914314",
+  "state": "terminated",
+  "source_archive_sha256": "b5e208ef37f41fd0882878b7784691cc89b34e76a84daab3d565e59291ea4af7",
+  "terminal_sha256": "94f3e33a6491a4c3d480c122364eab3a41ab7939dad84a3e0f07ccf22235e550",
+  "native_files_matched": 393,
+  "source_files_matched": 396,
+  "artifacts_verified": 27,
+  "qualification": false,
+  "valid_measurement": true,
+  "rows": [
+    {
+      "dataset": "relaion",
+      "returned_hits": {
+        "candidate": 6342,
+        "control": 6363
+      },
+      "p05": {
+        "candidate": 97,
+        "control": 99
+      },
+      "decision": "KILL source-order quality",
+      "physical_cold_measured": false,
+      "decomposition": {
+        "control": {
+          "counts": {
+            "candidate_hits": 6392,
+            "nominated_hits": 6392,
+            "fetched_hits": 6392,
+            "returned_hits": 6363,
+            "flat_hits": 6369,
+            "gets": 1663,
+            "bytes": 1072281600
+          },
+          "losses": {
+            "gt_discovery": 8,
+            "gt_nomination": 0,
+            "gt_physical": 0,
+            "gt_quantization_or_ranking": 29,
+            "flat_gt_discovery": 8,
+            "flat_gt_nomination": 0,
+            "flat_gt_physical": 0,
+            "flat_gt_ranking": 0,
+            "returned_outside_flat": 2
+          },
+          "discovery_loss": {
+            "gt_walk_pool": 0,
+            "gt_centroid_roster": 8,
+            "flat_gt_walk_pool": 0,
+            "flat_gt_centroid_roster": 8,
+            "seed_evaluated_gt": 5138
+          },
+          "graph_walks_verified": 128,
+          "work_evaluations_per_walk": 1272
+        },
+        "candidate": {
+          "counts": {
+            "candidate_hits": 6367,
+            "nominated_hits": 6367,
+            "fetched_hits": 6367,
+            "returned_hits": 6342,
+            "flat_hits": 6369,
+            "gets": 1514,
+            "bytes": 1073030400
+          },
+          "losses": {
+            "gt_discovery": 33,
+            "gt_nomination": 0,
+            "gt_physical": 0,
+            "gt_quantization_or_ranking": 25,
+            "flat_gt_discovery": 33,
+            "flat_gt_nomination": 0,
+            "flat_gt_physical": 0,
+            "flat_gt_ranking": 0,
+            "returned_outside_flat": 6
+          },
+          "discovery_loss": {
+            "gt_walk_pool": 10,
+            "gt_centroid_roster": 23,
+            "flat_gt_walk_pool": 10,
+            "flat_gt_centroid_roster": 23,
+            "seed_evaluated_gt": 4531
+          },
+          "graph_walks_verified": 128,
+          "work_evaluations_per_walk": 1272
+        }
+      },
+      "arm_median_complete_call_ms": null
+    }
+  ],
+  "cgroup": {
+    "cpu.stat": "usage_usec 49085564\nuser_usec 45356023\nsystem_usec 3729540\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "memory.peak": "2025263104\n",
+    "memory.swap.peak": "0\n"
+  },
+  "helper": {
+    "bytes": 1268624,
+    "sha256": "7d666c5049d2c37532fdc16aef9c5d946d65895448c859a677ee5c3d75198497",
+    "source_archive_sha256": "3081e7b6761a81331f0b593f962bc98a408378e68d3f69762ba67d11a40cdeb0",
+    "existing_target": "borsuk example build_sq8_source",
+    "native_source_matches_compiled_transformation": true,
+    "no_full_assurance_rerun": true,
+    "reused_binary": true
+  },
+  "decision": "KILL source-order quality",
+  "fresh_cohort_used": false
+}

@@ -1,3 +1,5 @@
+> Follow-up closed scientific KILL: see connectivity-layout-decision.md. Engineering reachability remains verified; hierarchical source order is not quality qualified.
+
 # Source graph reachability: engineering GO, quality pending
 
 The existing seeded graph walk can exhaust its directed frontier before the fixed159-page discovery roster. The new regression measures exactly33 evaluated units before failure under old construction (duplicate-centroid fixture, not a corpus measurement). The worker then applied the preregistered successor cycle to each graph base layer, appending within degree32 or replacing its last link when full. Higher layers, query algorithm,128 seed/1272 walk caps, scorer, source, format, physical32GET/16773120B caps and quality gates unchanged. Graph bytes/root hashes authenticate new construction; no persistent layout change or new query route. One-node construction retains its existing special case.

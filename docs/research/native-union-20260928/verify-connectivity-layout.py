@@ -3,6 +3,7 @@ import gzip,hashlib,io,json,math,struct,sys,tarfile
 from pathlib import Path
 import boto3
 out=Path(sys.argv[1]);root=out.parents[1];launch=json.loads((out/'aws-launch.json').read_text());raw=(out/'aws-terminal.json').read_bytes();terminal=json.loads(raw);close=json.loads((out/'aws-closeout.json').read_text());reservation=json.loads((out/'aws-reservation.json').read_text())
+assert terminal['schema']=='borsuk-native-connectivity-layout-v1'
 assert hashlib.sha256(raw).hexdigest()==(out/'aws-terminal.sha256').read_text().split()[0] and all(terminal[k]==launch[k] for k in ['source_archive_sha256','source_base_commit','instance_id']) and close['state']=='terminated' and close['instance_id']==launch['instance_id']
 session=boto3.Session(profile_name='causality',region_name='eu-central-1');s3=session.client('s3');assert session.client('ec2').describe_instances(InstanceIds=[launch['instance_id']])['Reservations'][0]['Instances'][0]['State']['Name']=='terminated'
 def get(name):
@@ -27,10 +28,32 @@ def near(a,b):assert math.isclose(a,b,rel_tol=1e-12,abs_tol=1e-8),(a,b)
 for item in config['items'][:len(decision['results'])]:
     base='screen/'+item['name']+'/';result=obj(base+'result.json');binding=obj(base+'binding.json');assert binding['control_root_sha256']==item['control_root_sha256'] and binding['per_id_sq8_and_two_bit_payload_exact'] and binding['coefficient_f32_bits_exact']
     records=[json.loads(s) for s in get(base+'paired.jsonl').splitlines()];assert len(records)==128;plans={a:[] for a in ['control','candidate']}
+    ident=item['artifacts']['truth'];truth=s3.get_object(Bucket=config['bucket'],Key=ident['key'])['Body'].read();assert len(truth)==ident['bytes'] and hashlib.sha256(truth).hexdigest()==ident['sha256'];gt=struct.unpack('<100000I',truth)
+    ident=item['artifacts']['sq8.bin'];old_sq8=s3.get_object(Bucket=config['bucket'],Key=ident['key'])['Body'].read();assert len(old_sq8)==ident['bytes'] and hashlib.sha256(old_sq8).hexdigest()==ident['sha256']
+    old_ids=[struct.unpack_from('<q',old_sq8,pos*780)[0] for pos in range(100000)];del old_sq8
+    encoded_order=get(base+'order.u64');assert hashlib.sha256(encoded_order).hexdigest()==binding['source_order_sha256'];new_ids=struct.unpack('<100000Q',encoded_order)
+    assert set(old_ids)==set(new_ids)==set(range(100000)) and len(set(old_ids))==len(set(new_ids))==100000
+    orders={'control':old_ids,'candidate':new_ids};positions={arm:{i:pos for pos,i in enumerate(ids)} for arm,ids in orders.items()}
+    discovery_work={arm:[] for arm in orders};discovery_loss={arm:dict(gt_walk_pool=0,gt_centroid_roster=0,flat_gt_walk_pool=0,flat_gt_centroid_roster=0,seed_evaluated_gt=0) for arm in orders}
+
     for q in range(64):
         for r in records[q*2:q*2+2]:
             a=r['arm'];assert r['query_ordinal']==q and r['root_sha256']==binding[a+'_root_sha256'];plans[a].append({k:r[k] for k in ['query_ordinal','ranges','planned_bytes']});sample=result['samples'][a][q]
             for stage,field in [('candidate','candidate_hits'),('nominated','nominated_hits'),('fetched','fetched_hits'),('returned','returned_hits'),('flat','flat_hits')]:assert len(set(sample['stages'][stage]))==len(sample['stages'][stage])==sample[field]
+            query_gt=set(gt[q*100:(q+1)*100]);stages={key:set(value) for key,value in sample['stages'].items()};assert all(values<=query_gt for values in stages.values())
+            expected_discovered={i for i in query_gt if positions[a][i]//256 in r['ranked_candidate_pages']};expected_nominated={i for i in query_gt if positions[a][i]//256 in r['selected_pages']}
+            physically_present={i for i in query_gt if any(begin//780<=positions[a][i]<end//780 for begin,end in r['ranges'])}
+            assert stages['candidate']==expected_discovered and stages['nominated']==expected_nominated and stages['fetched']==physically_present
+            assert len(r['discoveries'])==2
+            walk_pages={unit//8 for discovery in r['discoveries'] for unit in discovery['walk_evaluated_units']}|{discovery['seed_page'] for discovery in r['discoveries']}
+            seed_pages={unit//8 for discovery in r['discoveries'] for unit in discovery['seed_evaluated_units']}
+            walk_gt={i for i in query_gt if positions[a][i]//256 in walk_pages};seed_gt={i for i in query_gt if positions[a][i]//256 in seed_pages};flat_gt=stages['flat']
+            assert stages['candidate']<=walk_gt
+            for key,value in [('gt_walk_pool',len(query_gt-walk_gt)),('gt_centroid_roster',len(walk_gt-stages['candidate'])),('flat_gt_walk_pool',len(flat_gt-walk_gt)),('flat_gt_centroid_roster',len((flat_gt&walk_gt)-stages['candidate'])),('seed_evaluated_gt',len(seed_gt))]:discovery_loss[a][key]+=value
+            for discovery in r['discoveries']:
+                evaluated=discovery['walk_evaluated_units'];assert len(evaluated)==len(set(evaluated))==1272 and all(0<=unit<3125 for unit in evaluated)
+                pages={unit//8 for unit in evaluated}|{discovery['seed_page']};assert len(pages)>=159
+                discovery_work[a].append(len(evaluated))
             assert set(sample['stages']['nominated'])<=set(sample['stages']['candidate']) and set(sample['stages']['nominated'])<=set(sample['stages']['fetched']) and set(sample['stages']['returned'])<=set(sample['stages']['fetched']) and sample['gets']==len(r['ranges'])<=32 and sample['bytes']==r['planned_bytes']<=16773120
     for a in plans:
         normal=''.join(json.dumps(p,sort_keys=True,separators=(',',':'))+'\n' for p in plans[a]);assert hashlib.sha256(normal.encode()).hexdigest()==result['normal_plans_sha256'][a];assert result['returned_hits'][a]==sum(s['returned_hits'] for s in result['samples'][a]) and result['p05'][a]==sorted(s['returned_hits'] for s in result['samples'][a])[3]
@@ -54,6 +77,14 @@ for item in config['items'][:len(decision['results'])]:
             for label in medians[arm]:near(medians[arm][label],result['arm_median_complete_call_ms'][arm][label])
         tail_pass=medians['candidate']['p90']<=250 and medians['candidate']['p95']<=400
         assert result['decision']==('GO source-order development and cold envelope only' if tail_pass else 'KILL source-order cold envelope')
-    rows.append(dict(dataset=item['name'],returned_hits=result['returned_hits'],p05=result['p05'],decision=result['decision'],physical_cold_measured=result['physical_cold_measured'],arm_median_complete_call_ms=result.get('arm_median_complete_call_ms')))
+    decomposition={}
+    for arm in orders:
+        samples=result['samples'][arm];counts={key:sum(sample[key] for sample in samples) for key in ['candidate_hits','nominated_hits','fetched_hits','returned_hits','flat_hits','gets','bytes']}
+        losses=dict(gt_discovery=6400-counts['candidate_hits'],gt_nomination=counts['candidate_hits']-counts['nominated_hits'],gt_physical=counts['nominated_hits']-counts['fetched_hits'],gt_quantization_or_ranking=counts['fetched_hits']-counts['returned_hits'],flat_gt_discovery=0,flat_gt_nomination=0,flat_gt_physical=0,flat_gt_ranking=0,returned_outside_flat=0)
+        for sample in samples:
+            d,n,f,t,z=(set(sample['stages'][key]) for key in ['candidate','nominated','fetched','returned','flat'])
+            for key,value in [('flat_gt_discovery',len(z-d)),('flat_gt_nomination',len((z&d)-n)),('flat_gt_physical',len((z&n)-f)),('flat_gt_ranking',len((z&f)-t)),('returned_outside_flat',len(t-z))]:losses[key]+=value
+        decomposition[arm]=dict(counts=counts,losses=losses,discovery_loss=discovery_loss[arm],graph_walks_verified=len(discovery_work[arm]),work_evaluations_per_walk=1272)
+    rows.append(dict(dataset=item['name'],returned_hits=result['returned_hits'],p05=result['p05'],decision=result['decision'],physical_cold_measured=result['physical_cold_measured'],decomposition=decomposition,arm_median_complete_call_ms=result.get('arm_median_complete_call_ms')))
 cgroup=obj('screen/cgroup.json');assert int(cgroup['memory.swap.peak'])==0 and all(int(s.split()[1])==0 for s in cgroup['memory.events'].splitlines() if s.split()[0] in ['oom','oom_kill']);report.update(valid_measurement=True,rows=rows,cgroup=cgroup,helper=helper,decision=decision['decision'],fresh_cohort_used=False)
 (out/'verification.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report))
