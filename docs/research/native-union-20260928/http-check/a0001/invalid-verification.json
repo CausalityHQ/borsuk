@@ -1,0 +1,14 @@
+{
+  "instance_id": "i-04fee36a9f60e9309",
+  "state": "terminated",
+  "source_archive_sha256": "dc16298770e9628cefbf956b9aec3334f8eec6b4eada440855883f6ad08d02b0",
+  "terminal_sha256": "2ec4cd42f98af1f208a4723916d96750b5d3edf7d00ff2916ed49e367d6e795f",
+  "native_files_matched": 393,
+  "source_files_matched": 395,
+  "artifacts_verified": 6,
+  "qualification": false,
+  "no_ann_query_run": true,
+  "valid_check": false,
+  "phase": "boundary-check",
+  "exit_code": 1
+}

@@ -231,7 +231,7 @@ async fn rank_verified_sq8_pages_inner(
         }
         previous_last = Some(last);
     }
-    let outcomes = stream::iter(ranges.iter().map(|&(first, last)| async move {
+    let outcomes = stream::iter(ranges.iter().copied().map(|(first, last)| async move {
         fetch_verified_pages_inner(store, location, authority, first, last, etag, max_bytes).await
     }))
     .buffered(max_parallel)
@@ -364,6 +364,29 @@ mod tests {
     };
     use std::thread;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn bounded_range_query_future_is_send() {
+        fn require_send<T: Send>(_: T) {}
+        let store = InMemory::new();
+        let location = Path::from("sq8.bin");
+        let (authority, _) = short_tail_authority();
+        require_send(rank_verified_sq8_pages_inner(
+            &store,
+            &location,
+            &authority,
+            &[(0, 0)],
+            "etag",
+            &[1.0],
+            &[0.0],
+            &[1.0],
+            1,
+            1,
+            3328,
+            1,
+            &[],
+        ));
+    }
 
     fn short_tail_authority() -> (PageAuthority, Vec<u8>) {
         let object = vec![7u8; 273 * 13];

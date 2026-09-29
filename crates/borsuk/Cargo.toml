@@ -71,6 +71,9 @@ workspace = true
 name = "build_sq8_source"
 
 [[example]]
+name = "two_bit_http"
+
+[[example]]
 name = "local_index"
 
 [[example]]

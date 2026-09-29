@@ -1,0 +1,36 @@
+{
+  "instance_id": "i-045b5c06a11565216",
+  "state": "terminated",
+  "source_archive_sha256": "67acdf5698cbd5f58f59f5a5bc0c8e330d3be19a8911b773090bc723c225a977",
+  "terminal_sha256": "acf69a64ec5fd7e2c48fe3a0f69a573b05747d67efc1985e5d54149b2e0e5fba",
+  "native_files_matched": 393,
+  "source_files_matched": 395,
+  "artifacts_verified": 12,
+  "qualification": false,
+  "no_ann_query_run": true,
+  "valid_check": true,
+  "boundary": {
+    "qualified": false,
+    "original_example_sha256": "7c35c8203fbe745611358356afb6cb09556980195eb31a615eabcea21e7c4ffa",
+    "red_example_sha256": "3abe439882a149f8aaa30d122b0515dfed71e4b4746d83d4299a82dba2549f60",
+    "red_status": 101,
+    "green_passed": true,
+    "binary_bytes": 12523896,
+    "binary_sha256": "9202a5358e080454404cef15e2ef1f0605c29b6a5c6f73d3f015b7ed257707ab",
+    "full_workspace_repeated": true,
+    "no_ann_query_run": true
+  },
+  "cgroup": {
+    "memory.peak": "10737418240\n",
+    "memory.swap.peak": "0\n",
+    "memory.events": "low 0\nhigh 0\nmax 18550\noom 0\noom_kill 0\noom_group_kill 0\n",
+    "cpu.stat": "usage_usec 7108819178\nuser_usec 6818538765\nsystem_usec 290280412\nnice_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n"
+  },
+  "core_full_assurance_reused": false,
+  "full_assurance": {
+    "passed": 2690,
+    "failed": 0,
+    "ignored": 26,
+    "targets": 148
+  }
+}
