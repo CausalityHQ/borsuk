@@ -1,0 +1,13 @@
+{
+  "dataset": "CoHere",
+  "split": "FIRST100k D768 cosine consumed development ordinals0-63",
+  "unit": "borsuk-semantic-router-coverage-cohere-a0001.service",
+  "invocation_id": "cac9ba5597504dd5a5873506dcff3219",
+  "session_id": 13279,
+  "exit": 0,
+  "state": "inactive",
+  "output_sha256": "5d16baec6aa2b6c8579240e1632f48d02a639f7a20893970bb18e6758a26adb4",
+  "script_sha256": "221695c725d79dfbc7f0ac3c2a4bd4e46445fc32628a1fd989eb328270356ff3",
+  "quality": "coverage ceiling only; no returned recall/control latency/QPS/cost claim",
+  "construction_verification_sha256": "e791a11017dceae248e92fcf566ab2e41de1f627dc1827dfc7fb7066c3487d1f"
+}
