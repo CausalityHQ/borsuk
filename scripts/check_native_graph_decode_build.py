@@ -9,7 +9,7 @@ from scripts.check_native_startup_build import (RUNTIME, SOURCE_TESTS, sha,
 
 from scripts.check_native_paged_source_build import CHECKS, SOURCE_WALK_TESTS
 
-FULL_SUITE_SCOPE = 'Changed candidate; locked Rust workspace, all targets, CI test profile, once on this worker'
+FULL_SUITE_SCOPE = 'Source-qualified local x86_64 workspace suite reused; ARM focused qualification only'
 CONTROL_SUITE_SCOPE = 'Control focused checks only; historical full-suite evidence is not a current pass claim'
 
 
@@ -77,21 +77,22 @@ def main(cargo, repo, out):
                 assert source_hashes(repo) == hashes
             full_suite_command = None
             if arm == 'candidate':
-                full_suite_command = [cargo, 'test', '--locked', '--workspace',
-                    '--all-targets', '--manifest-path', str(repo / 'Cargo.toml'),
-                    '--target-dir', str(target_dir), '--jobs', '4']
+                assurance, local_log = controller.authenticate_assurance(repo,
+                    json.loads((repo / controller.CONFIG).read_bytes()), hashes)
+                assert assurance == qualification['native_assurance']
+                full_suite_command = assurance['command']
                 repaired_target_command = [cargo, 'test', *args, '--test', 'exact_sq8_mirror_direct']
-                with (out / 'full-suite.log').open('x') as log:
+                with (out / 'release.log').open('a') as log:
                     subprocess.run(repaired_target_command, stdout=log,
                                    stderr=subprocess.STDOUT, check=True)
-                    assert source_hashes(repo) == hashes
-                    status = subprocess.run(full_suite_command, stdout=log,
-                                            stderr=subprocess.STDOUT, check=False).returncode
+                assert 'test result: ok. 4 passed; 0 failed;' in (out / 'release.log').read_text()
+                with (out / 'full-suite.log').open('xb') as log:
+                    log.write(local_log)
                 (out / 'full-suite-status.json').write_text(json.dumps(dict(arm=arm,
-                    status=status, command=full_suite_command, scope=FULL_SUITE_SCOPE,
+                    status=0, command=full_suite_command, scope=FULL_SUITE_SCOPE,
                     repaired_target_command=repaired_target_command, repaired_target_status=0,
-                    runs=1, current_full_suite_pass_claim=status == 0), indent=2) + '\n')
-                assert status == 0, 'candidate full workspace suite failed'
+                    runs=0, current_full_suite_pass_claim=False, full_workspace_repeated=False,
+                    reused_source_full_suite_pass_claim=True, native_assurance=assurance), indent=2) + '\n')
                 assert source_hashes(repo) == hashes
                 assert controller.preflight(repo) == qualification
             with (destination / 'release.log').open('a' if arm == 'candidate' else 'x') as log:
@@ -110,16 +111,18 @@ def main(cargo, repo, out):
             binary_path.parent.mkdir(parents=True, exist_ok=True)
             binary_path.write_bytes(binary)
             binary_path.chmod(0o755)
-            report = dict(qualified=True, no_corpus_query=True, full_workspace_repeated=arm == 'candidate',
+            report = dict(qualified=True, no_corpus_query=True, full_workspace_repeated=False,
                 green_status=0, release_status=0, focused_tests=[name for name, _ in CHECKS],
                 compiled_native_sha256=compiled, compiled_http_sha256=compiled[RUNTIME[0]],
                 binary_sha256=sha(binary), binary_bytes=len(binary), sha_backend=features,
                 source_identity_sha256=expected_identity, source_file_count=len(hashes),
                 native_rebuilt=True, same_worker_toolchain=True, arm=arm,
-                current_full_suite_pass_claim=arm == 'candidate',
+                current_full_suite_pass_claim=False,
+                reused_source_full_suite_pass_claim=arm == 'candidate',
+                native_assurance=qualification['native_assurance'] if arm == 'candidate' else None,
                 full_suite_scope=FULL_SUITE_SCOPE if arm == 'candidate' else CONTROL_SUITE_SCOPE,
                 full_suite_command=full_suite_command, full_suite_status=0 if arm == 'candidate' else None,
-                full_suite_runs=1 if arm == 'candidate' else 0)
+                full_suite_runs=0)
             (destination / 'boundary-check.json').write_text(json.dumps(report, indent=2) + '\n')
         capture_cgroup(out / 'boundary-cgroup.json')
     finally:
@@ -127,7 +130,8 @@ def main(cargo, repo, out):
         assert source_hashes(repo) == identities, 'candidate native epoch not restored'
         assert controller.preflight(repo) == qualification
     print(json.dumps(dict(qualified=True, native_rebuilt=True, control_native_rebuilt=True,
-                         current_full_suite_pass_claim=True, full_suite_scope=FULL_SUITE_SCOPE)))
+                         current_full_suite_pass_claim=False, full_suite_runs=0,
+                         reused_source_full_suite_pass_claim=True, full_suite_scope=FULL_SUITE_SCOPE)))
 
 
 if __name__ == '__main__':

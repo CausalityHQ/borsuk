@@ -14,6 +14,57 @@ sha = paged.base.sha
 BLOCKS = worker.paired.BLOCKS
 
 
+def validate_local_assurance(archived, config, hashes):
+    """Authenticate the archived local authority independently of build reports."""
+    pointer = config['native_assurance']
+    assert set(pointer) == {'path', 'sha256'}
+    path = Path(pointer['path'])
+    assert not path.is_absolute() and '..' not in path.parts
+    body = archived[str(path)]
+    assert sha(body) == pointer['sha256']
+    proof = json.loads(body)
+    assert proof['schema'] == 'borsuk-implementation-overlap-repair-proof-v1'
+    assert proof['source_sha256'] == hashes and proof['source_file_count'] == len(hashes) == 395
+    assert proof['source_identity_sha256'] == source_identity(hashes)
+    assert proof['full_workspace_execution_pending'] is False
+    for key in ('full_workspace_execution_status', 'workspace_test_compilation_status',
+                'clippy_status', 'affected_target_status', 'controller_selfcheck_status'):
+        assert type(proof[key]) is int and proof[key] == 0, key
+    assert proof['workspace_command'] == ['cargo', 'test', '--locked', '--workspace', '--all-targets']
+    assert proof['workspace_platform'] == 'x86_64-unknown-linux-gnu'
+    assert proof['workspace_env'] == dict(CARGO_BUILD_JOBS='2', CARGO_TARGET_DIR='/data/target', RUSTC_WRAPPER='')
+    log_path = path.parent / 'full-workspace.log.gz'
+    log = gzip.decompress(archived[str(log_path)])
+    identity = proof['artifacts']['full-workspace.log']
+    assert len(log) == identity['bytes'] > 0 and sha(log) == identity['sha256']
+    assert b'test result: ok.' in log and b'0 failed;' in log and b'FAILED' not in log
+    return dict(pointer, log_path=str(log_path), log_sha256=sha(log), log_bytes=len(log),
+        platform=proof['workspace_platform'], command=proof['workspace_command'],
+        source_identity_sha256=source_identity(hashes), source_file_count=395,
+        scope='Source-qualified local x86_64 workspace suite reused; ARM focused qualification only'), log
+
+
+def validate_reused_suite(artifacts, boundary, assurance, log):
+    status = json.loads(artifacts['full-suite-status.json'])
+    for report in (boundary, status):
+        assert report['arm'] == 'candidate'
+        assert report['current_full_suite_pass_claim'] is report['full_workspace_repeated'] is False
+        assert report['reused_source_full_suite_pass_claim'] is True
+        assert report['native_assurance'] == assurance
+    assert boundary['full_suite_runs'] == status['runs'] == 0
+    assert boundary['full_suite_status'] == status['status'] == 0
+    assert boundary['full_suite_command'] == status['command'] == assurance['command']
+    assert boundary['full_suite_scope'] == status['scope'] == assurance['scope']
+    assert artifacts['full-suite.log'] == log
+    command = status['repaired_target_command']
+    assert command[1:5] == ['test', '--release', '--locked', '--manifest-path']
+    assert command[5].endswith('/repo/Cargo.toml')
+    assert command[6] == '--target-dir' and command[7].endswith('/target')
+    assert command[8:] == ['-p', 'borsuk', '--jobs', '4', '--test', 'exact_sq8_mirror_direct']
+    assert status['repaired_target_status'] == 0
+    assert b'test result: ok. 4 passed; 0 failed;' in artifacts['release.log']
+
+
 def validate_manifest(archived, config):
     pointer = config['native_manifest']; body = archived[pointer['path']]
     assert sha(body) == pointer['sha256']
@@ -104,7 +155,11 @@ def main(attempt):
     def remote(key): return s3.get_object(Bucket=paged.base.BUCKET,Key=key)['Body'].read()
     launch,reservation,terminal,artifacts,archived,config = paged.authenticate_closed(directory,campaign,remote,validate_manifest)
     manifest,hashes,control = validate_manifest(archived,config)
+    assurance, local_log = validate_local_assurance(archived, config, hashes)
     proof = reservation['qualification']
+    assert proof['native_assurance'] == assurance
+    assert proof['current_full_suite_pass_claim'] is False and proof['full_suite_runs'] == 0
+    assert proof['reused_source_full_suite_pass_claim'] is True and proof['full_suite_scope'] == assurance['scope']
     assert proof['source_identity_sha256'] == manifest['candidate_identity']
     assert proof['control_source_identity_sha256'] == manifest['control_identity']
     assert proof['compiled_native_sha256'] == config['compiled_sha256']
@@ -123,7 +178,11 @@ def main(attempt):
         assert boundary['focused_tests'] == [name for name,_ in campaign.CHECKS]
         for key,name in [('rustc_sha256','rustc-version.txt'),('cargo_sha256','cargo-version.txt'),('cpuinfo_sha256','cpuinfo.txt')]:
             assert boundary['sha_backend'][key] == sha(artifacts[prefix+name])
-        if arm == 'control': assert boundary['current_full_suite_pass_claim'] is False
+        assert boundary['current_full_suite_pass_claim'] is boundary['full_workspace_repeated'] is False
+        assert boundary['full_suite_runs'] == 0
+        if arm == 'control':
+            assert boundary['reused_source_full_suite_pass_claim'] is False and boundary['native_assurance'] is None
+            assert boundary['full_suite_command'] is boundary['full_suite_status'] is None
         assert boundary['binary_sha256'] == sha(artifacts[prefix+'binaries/two_bit_http'])
         assert boundary['binary_bytes'] == len(artifacts[prefix+'binaries/two_bit_http'])
         for name,digest in compiled.items(): assert sha(artifacts[prefix+'compiled-source/'+name]) == digest
@@ -134,21 +193,7 @@ def main(attempt):
         assert boundary['sha_backend']['arm_asm_selected'] is boundary['sha_backend']['cpu_sha2_capable'] is True
         assert boundary['sha_backend']['x86_asm_selected'] is False
         if arm == 'candidate':
-            assert boundary['full_suite_status'] == 0 and boundary['current_full_suite_pass_claim'] is True
-            command = boundary['full_suite_command']
-            assert command[1:5] == ['test','--locked','--workspace','--all-targets']
-            assert command[5] == '--manifest-path' and command[6].endswith('/repo/Cargo.toml')
-            assert command[7] == '--target-dir' and command[8].endswith('/target')
-            assert command[9:] == ['--jobs','4'] and boundary['full_suite_runs'] == 1
-            status = json.loads(artifacts['full-suite-status.json'])
-            assert status['status'] == 0 and status['runs'] == 1 and status['arm'] == 'candidate'
-            assert status['command'] == command and status['scope'] == boundary['full_suite_scope']
-            assert status['repaired_target_status'] == 0
-            assert status['repaired_target_command'] == [command[0], 'test', '--release', '--locked',
-                '--manifest-path', command[6], '--target-dir', command[8], '-p', 'borsuk',
-                '--jobs', '4', '--test', 'exact_sq8_mirror_direct']
-            assert status['current_full_suite_pass_claim'] is True
-            log = artifacts['full-suite.log'];assert b'0 failed;' in log and b'FAILED' not in log
+            validate_reused_suite(artifacts, boundary, assurance, local_log)
     for name in ('rustc-version.txt','cargo-version.txt','cpuinfo.txt','arm-feature-tree.txt','x86-feature-tree.txt'):
         assert artifacts[name] == artifacts['control/'+name]
     for name,limit in [('boundary-cgroup.json',10*1024**3),('profile-cgroup.json',8*1024**3)]:
@@ -182,9 +227,87 @@ def main(attempt):
     report = dict(valid_measurement=True,state='terminated',source_commit=launch['source_commit'],
         source_archive_sha256=launch['source_archive_sha256'],terminal_sha256=sha((directory/'aws-terminal.json').read_bytes()),
         config_sha256=reservation['config_sha256'],candidate_native_identity=manifest['candidate_identity'],
-        control_native_identity=manifest['control_identity'],candidate_full_suite_verified=True,
+        control_native_identity=manifest['control_identity'],candidate_full_suite_verified=False,
+        candidate_source_full_suite_verified=True, candidate_arm_full_suite_runs=0,
+        native_assurance=assurance, full_suite_scope=assurance['scope'],
         matched_vendor_measured=False,total_cost_measured=False,offered_or_saturation_qps_measured=False,**result)
     (directory/'verification.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report))
+
+
+def assurance_self_check():
+    """Only synthetic proof/log/build receipts; no quality inputs or AWS calls."""
+    import tempfile
+    from scripts import launch_native_graph_decode_spot as campaign
+    original = Path(__file__).resolve().parent.parent
+    hashes = json.loads((original / campaign.MANIFEST).read_bytes())['source_sha256']
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        config = campaign.assurance_fixture(repo, {}, hashes)
+        path = config['native_assurance']['path']
+        log_path = str(Path(path).parent / 'full-workspace.log.gz')
+        archived = {name: (repo/name).read_bytes() for name in (path, log_path)}
+        assurance, log = validate_local_assurance(archived, config, hashes)
+        assert campaign.authenticate_assurance(repo, config, hashes) == (assurance, log)
+        for key, value in [('full_workspace_execution_pending', True),
+                ('full_workspace_execution_status', None), ('full_workspace_execution_status', 101),
+                ('workspace_test_compilation_status', 1), ('clippy_status', 1),
+                ('affected_target_status', 1), ('controller_selfcheck_status', 1),
+                ('source_sha256', {}), ('source_file_count', 394), ('source_identity_sha256', '0'*64),
+                ('workspace_command', assurance['command'] + ['--release']),
+                ('workspace_platform', 'aarch64-unknown-linux-gnu'), ('workspace_env', {})]:
+            proof = json.loads(archived[path]); proof[key] = value
+            body = json.dumps(proof).encode()
+            changed = dict(config, native_assurance=dict(path=path, sha256=sha(body)))
+            try: validate_local_assurance(dict(archived, **{path: body}), changed, hashes)
+            except AssertionError: pass
+            else: raise AssertionError('changed local proof accepted: '+key)
+        for key, value in [('bytes', len(log)+1), ('sha256', '0'*64)]:
+            proof = json.loads(archived[path]); proof['artifacts']['full-workspace.log'][key] = value
+            body = json.dumps(proof).encode()
+            changed = dict(config, native_assurance=dict(path=path, sha256=sha(body)))
+            try: validate_local_assurance(dict(archived, **{path: body}), changed, hashes)
+            except AssertionError: pass
+            else: raise AssertionError('changed local log identity accepted: '+key)
+        for name in (path, log_path):
+            changed = dict(archived)
+            changed[name] = archived[name] + b'changed' if name == path else gzip.compress(b'changed log')
+            try: validate_local_assurance(changed, config, hashes)
+            except AssertionError: pass
+            else: raise AssertionError('changed archived body accepted: '+name)
+        repaired = ['cargo', 'test', '--release', '--locked', '--manifest-path',
+            '/fixture/repo/Cargo.toml', '--target-dir', '/fixture/target', '-p', 'borsuk',
+            '--jobs', '4', '--test', 'exact_sq8_mirror_direct']
+        common = dict(arm='candidate', current_full_suite_pass_claim=False,
+            full_workspace_repeated=False, reused_source_full_suite_pass_claim=True,
+            native_assurance=assurance)
+        boundary = dict(common, full_suite_runs=0, full_suite_status=0,
+            full_suite_command=assurance['command'], full_suite_scope=assurance['scope'])
+        status = dict(common, runs=0, status=0, command=assurance['command'],
+            scope=assurance['scope'], repaired_target_command=repaired, repaired_target_status=0)
+        artifacts = {'full-suite.log': log, 'full-suite-status.json': json.dumps(status).encode(),
+            'release.log': b'test result: ok. 4 passed; 0 failed;\n'}
+        validate_reused_suite(artifacts, boundary, assurance, log)
+        for target, mutations in [('boundary', dict(current_full_suite_pass_claim=True,
+                full_workspace_repeated=True, reused_source_full_suite_pass_claim=False,
+                native_assurance={}, full_suite_runs=1, full_suite_status=1,
+                full_suite_command=repaired, full_suite_scope='same worker ARM full suite')),
+                ('status', dict(current_full_suite_pass_claim=True, full_workspace_repeated=True,
+                reused_source_full_suite_pass_claim=False, native_assurance={}, runs=1,
+                status=1, command=repaired, scope='same worker ARM full suite',
+                repaired_target_command=assurance['command'], repaired_target_status=1))]:
+            for key, value in mutations.items():
+                bad = dict(artifacts); report = dict(boundary)
+                if target == 'boundary': report[key] = value
+                else: bad['full-suite-status.json'] = json.dumps(dict(status, **{key:value})).encode()
+                try: validate_reused_suite(bad, report, assurance, log)
+                except AssertionError: pass
+                else: raise AssertionError('changed reuse report accepted: '+target+'/'+key)
+        for name in ('full-suite.log', 'release.log'):
+            bad = dict(artifacts); bad[name] = b'changed'
+            try: validate_reused_suite(bad, boundary, assurance, log)
+            except AssertionError: pass
+            else: raise AssertionError('changed ARM artifact accepted: '+name)
+    print('PASS independent fixture assurance/provenance/status/zero ARM full-suite guards')
 
 
 def runtime_check():
@@ -289,7 +412,8 @@ def self_check():
 
 
 if __name__ == '__main__':
-    if sys.argv[1:] == ['--self-check']: self_check()
+    if sys.argv[1:] == ['--assurance-self-check']: assurance_self_check()
+    elif sys.argv[1:] == ['--self-check']: self_check()
     else:
         assert len(sys.argv) == 2
         main(sys.argv[1])

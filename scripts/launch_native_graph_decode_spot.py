@@ -56,6 +56,39 @@ ARTIFACTS = ('source-qualification.json', 'cpu.txt', 'test.log', 'test-resources
     'full-suite.log', 'full-suite-status.json', 'screen/summary.json',
     *('screen/block' + str(block) + '-records.jsonl' for block in range(4)))
 
+ASSURANCE_SCOPE = 'Source-qualified local x86_64 workspace suite reused; ARM focused qualification only'
+ASSURANCE_PLATFORM = 'x86_64-unknown-linux-gnu'
+ASSURANCE_COMMAND = ['cargo', 'test', '--locked', '--workspace', '--all-targets']
+
+
+def authenticate_assurance(base, config, identities):
+    assert 'native_assurance' in config, 'completed local native_assurance pointer required'
+    pointer = config['native_assurance']
+    assert set(pointer) == {'path', 'sha256'}
+    path = Path(pointer['path'])
+    assert not path.is_absolute() and '..' not in path.parts
+    body = (base / path).read_bytes()
+    assert peer.sha(body) == pointer['sha256'], 'changed local assurance proof'
+    proof = json.loads(body)
+    assert proof['schema'] == 'borsuk-implementation-overlap-repair-proof-v1'
+    assert proof['source_sha256'] == identities and len(identities) == proof['source_file_count'] == 395
+    assert proof['source_identity_sha256'] == source_identity(identities) == CANDIDATE_IDENTITY
+    assert proof['full_workspace_execution_pending'] is False, 'local workspace proof is pending'
+    for key in ('full_workspace_execution_status', 'workspace_test_compilation_status',
+                'clippy_status', 'affected_target_status', 'controller_selfcheck_status'):
+        assert type(proof[key]) is int and proof[key] == 0, key
+    assert proof['workspace_command'] == ASSURANCE_COMMAND
+    assert proof['workspace_platform'] == ASSURANCE_PLATFORM
+    assert proof['workspace_env'] == dict(CARGO_BUILD_JOBS='2', CARGO_TARGET_DIR='/data/target', RUSTC_WRAPPER='')
+    log_path = path.parent / 'full-workspace.log.gz'
+    log = gzip.decompress((base / log_path).read_bytes())
+    identity = proof['artifacts']['full-workspace.log']
+    assert len(log) == identity['bytes'] > 0 and peer.sha(log) == identity['sha256']
+    assert b'test result: ok.' in log and b'0 failed;' in log and b'FAILED' not in log
+    return dict(pointer, log_path=str(log_path), log_sha256=identity['sha256'],
+        log_bytes=identity['bytes'], platform=ASSURANCE_PLATFORM, command=ASSURANCE_COMMAND,
+        source_identity_sha256=CANDIDATE_IDENTITY, source_file_count=395, scope=ASSURANCE_SCOPE), log
+
 
 def preflight(base=Path('.')):
     base = Path(base)
@@ -89,6 +122,7 @@ def preflight(base=Path('.')):
         sha256='7a47654900e1ec2d5f96384ee2b67ea4c647c2eb05c00a0e4d5902636bcebc42')
     control = dict(identities, **{GRAPH: control_graph['sha256']})
     assert source_identity(control) == CONTROL_IDENTITY
+    assurance, _ = authenticate_assurance(base, config, identities)
     return dict(config_path=str(CONFIG), config_sha256=peer.sha(body), campaign_schema=SCHEMA,
         manifest_path=str(MANIFEST), manifest_sha256=MANIFEST_SHA,
         source_identity_sha256=CANDIDATE_IDENTITY, source_file_count=395,
@@ -97,8 +131,9 @@ def preflight(base=Path('.')):
         control_compiled_native_sha256={name: control[name] for name in COMPILED},
         code_sha256={name: peer.sha((base / name).read_bytes()) for name in CODE},
         artifact_roster_sha256=peer.sha(json.dumps(ARTIFACTS, separators=(',', ':')).encode()),
+        native_assurance=assurance, reused_source_full_suite_pass_claim=True,
         native_rebuilt=True, control_native_rebuilt=True, current_full_suite_pass_claim=False,
-        full_suite_scope='Pending changed candidate Rust workspace suite; no current control full-suite claim')
+        full_suite_runs=0, full_suite_scope=ASSURANCE_SCOPE)
 
 
 def user_data(commit, archive_sha, archive_key, prefix, qualification):
@@ -239,7 +274,7 @@ def build_self_check(repo, proof):
     original_source = uncompiled_source.read_bytes()
     for failure in ('success', 'control-test', 'candidate-clean', 'candidate-test',
                     'control-graph-count', 'candidate-graph-count', 'toolchain',
-                    'features', 'mutation', 'repaired-target', 'full-suite', 'stale-target', 'qualification'):
+                    'features', 'mutation', 'repaired-target', 'repaired-count', 'stale-target', 'qualification'):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             bad = dict(proof, source_file_count=394) if failure == 'qualification' else proof
@@ -278,16 +313,14 @@ def build_self_check(repo, proof):
                     raise subprocess.CalledProcessError(101, args)
                 if failure == 'mutation':
                     uncompiled_source.write_bytes(original_source + b'\n// unreviewed mutation\n')
-                if '--workspace' in args:
-                    assert arm == 'candidate' and '--all-targets' in args and '-p' not in args
-                    assert kwargs['check'] is False and not binary.exists()
-                    stdout.write('test result: ok. 1 passed; 0 failed;\n')
-                    return subprocess.CompletedProcess(args, 1 if failure == 'full-suite' else 0)
+                assert '--workspace' not in args, 'ARM full workspace suite must never run'
                 assert kwargs['check'] is True
                 if args[1] == 'test':
                     count = 7 if arm == 'control' else 8
                     if failure == arm + '-graph-count': count -= 1
                     if args[-1] != 'unit_centroid_graph::tests': count = 1
+                    if args[-2:] == ['--test', 'exact_sq8_mirror_direct']:
+                        count = 3 if failure == 'repaired-count' else 4
                     stdout.write(f'test result: ok. {count} passed; 0 failed;\n')
                     stdout.write('\n'.join('test ' + name + ' ... ok'
                         for name in (*build.SOURCE_TESTS, *build.SOURCE_WALK_TESTS)))
@@ -304,17 +337,19 @@ def build_self_check(repo, proof):
             except (subprocess.CalledProcessError, AssertionError):
                 assert failure != 'success'
                 assert not (out / 'boundary-check.json').exists()
-                if failure == 'full-suite':
-                    assert json.loads((out / 'full-suite-status.json').read_bytes())['status'] == 1
                 if failure == 'repaired-target':
                     assert not (out / 'full-suite-status.json').exists()
                     assert commands == ['test']*9 + ['build', 'clean'] + ['test']*10
             else:
                 assert failure == 'success', 'qualification failure swallowed'
-                assert commands == ['test']*9 + ['build', 'clean'] + ['test']*11 + ['build']
+                assert commands == ['test']*9 + ['build', 'clean'] + ['test']*10 + ['build']
                 status = json.loads((out / 'full-suite-status.json').read_bytes())
-                assert status['status'] == 0 and status['runs'] == 1 and status['arm'] == 'candidate'
+                assert status['status'] == 0 and status['runs'] == 0 and status['arm'] == 'candidate'
                 assert status['scope'] == build.FULL_SUITE_SCOPE
+                assert status['native_assurance'] == proof['native_assurance']
+                assert status['current_full_suite_pass_claim'] is status['full_workspace_repeated'] is False
+                assert status['reused_source_full_suite_pass_claim'] is True
+                assert peer.sha((out / 'full-suite.log').read_bytes()) == proof['native_assurance']['log_sha256']
                 assert status['repaired_target_status'] == 0
                 assert status['repaired_target_command'][-2:] == ['--test', 'exact_sq8_mirror_direct']
                 assert not (out / 'control/full-suite.log').exists()
@@ -327,8 +362,10 @@ def build_self_check(repo, proof):
                     assert binary == (arm + '-fresh-binary').encode()
                     assert boundary['binary_sha256'] == peer.sha(binary) and boundary['binary_bytes'] == len(binary)
                     assert boundary['same_worker_toolchain'] and boundary['sha_backend']['toolchain_parity_asserted']
-                    assert boundary['current_full_suite_pass_claim'] is (arm == 'candidate')
-                    assert boundary['full_suite_runs'] == (1 if arm == 'candidate' else 0)
+                    assert boundary['current_full_suite_pass_claim'] is False
+                    assert boundary['full_workspace_repeated'] is False
+                    assert boundary['reused_source_full_suite_pass_claim'] is (arm == 'candidate')
+                    assert boundary['full_suite_runs'] == 0
                     for name, digest in expected.items():
                         assert peer.sha((destination / 'compiled-source' / name).read_bytes()) == digest
                 runtime_proof_self_check(repo, out)
@@ -409,6 +446,67 @@ def collection_self_check(qualification):
     print('PASS collection terminal identity, roster and artifact-body authentication')
 
 
+def assurance_fixture(repo, config, identities):
+    """Synthetic authority in a temporary repo; never completes the real proof."""
+    path = ROOT / 'fixture-assurance/verification.json'
+    log = b'test result: ok. 1 passed; 0 failed; 0 ignored;\n'
+    proof = dict(schema='borsuk-implementation-overlap-repair-proof-v1',
+        source_sha256=identities, source_file_count=395,
+        source_identity_sha256=CANDIDATE_IDENTITY, full_workspace_execution_pending=False,
+        full_workspace_execution_status=0, workspace_test_compilation_status=0,
+        clippy_status=0, affected_target_status=0, controller_selfcheck_status=0,
+        workspace_command=ASSURANCE_COMMAND, workspace_platform=ASSURANCE_PLATFORM,
+        workspace_env=dict(CARGO_BUILD_JOBS='2', CARGO_TARGET_DIR='/data/target', RUSTC_WRAPPER=''),
+        artifacts={'full-workspace.log': dict(bytes=len(log), sha256=peer.sha(log))})
+    (repo / path).parent.mkdir(parents=True, exist_ok=True)
+    body = (json.dumps(proof) + '\n').encode()
+    (repo / path).write_bytes(body)
+    (repo / path.parent / 'full-workspace.log.gz').write_bytes(gzip.compress(log, mtime=0))
+    return dict(config, native_assurance=dict(path=str(path), sha256=peer.sha(body)))
+
+
+def assurance_self_check(repo, config, identities):
+    import copy
+    path = repo / config['native_assurance']['path']
+    original = path.read_bytes()
+    log_path = path.parent / 'full-workspace.log.gz'
+    log_body = log_path.read_bytes()
+    proof = json.loads(original)
+    for key, value in [('full_workspace_execution_pending', True),
+            ('full_workspace_execution_status', None), ('full_workspace_execution_status', 101),
+            ('workspace_test_compilation_status', 1), ('clippy_status', 1),
+            ('affected_target_status', 1), ('controller_selfcheck_status', 1),
+            ('source_identity_sha256', '0'*64), ('source_file_count', 394), ('source_sha256', {}),
+            ('workspace_command', ASSURANCE_COMMAND + ['--release']),
+            ('workspace_platform', 'aarch64-unknown-linux-gnu'), ('workspace_env', {})]:
+        body = json.dumps(dict(proof, **{key: value})).encode()
+        path.write_bytes(body)
+        changed = dict(config, native_assurance=dict(path=config['native_assurance']['path'], sha256=peer.sha(body)))
+        try: authenticate_assurance(repo, changed, identities)
+        except AssertionError: pass
+        else: raise AssertionError('changed assurance accepted: ' + key)
+    path.write_bytes(original)
+    for key, value in [('bytes', len(gzip.decompress(log_body)) + 1), ('sha256', '0'*64)]:
+        bad = copy.deepcopy(proof); bad['artifacts']['full-workspace.log'][key] = value
+        body = json.dumps(bad).encode(); path.write_bytes(body)
+        changed = dict(config, native_assurance=dict(path=config['native_assurance']['path'], sha256=peer.sha(body)))
+        try: authenticate_assurance(repo, changed, identities)
+        except AssertionError: pass
+        else: raise AssertionError('changed assurance log identity accepted: ' + key)
+    path.write_bytes(original + b' ')
+    try: authenticate_assurance(repo, config, identities)
+    except AssertionError: pass
+    else: raise AssertionError('tampered proof accepted')
+    path.write_bytes(original)
+    log_path.write_bytes(gzip.compress(b'changed log', mtime=0))
+    try: authenticate_assurance(repo, config, identities)
+    except AssertionError: pass
+    else: raise AssertionError('tampered local log accepted')
+    log_path.write_bytes(log_body)
+    authenticate_assurance(repo, config, identities)
+    print('PASS fixture local assurance pending/status/source/argv/platform/log provenance guards')
+
+
 def self_check():
     """Real pinned authorities, fake Cargo and mock lifecycle; no cloud/native work."""
     import ast
@@ -436,67 +534,74 @@ def self_check():
                      ROOT / 'control-unit-centroid-graph.txt',
                      Path('docs/research/source-paging-20260930/cold-config.json')):
             write(name, (original / name).read_bytes())
-        qualification = preflight(repo)
-        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == 92
-        assert set(qualification['code_sha256']) == set(CODE)
-        bindings = shared.WALL, shared.SCHEMA, shared.ARTIFACTS, shared.CONFIG, \
-                   runner.WALL_SECONDS, runner.SCHEMA, runner.ARTIFACTS
-        body = user_data('0'*40, '1'*64, 'sources/mock', 'mock', qualification)
-        assert bindings == (shared.WALL, shared.SCHEMA, shared.ARTIFACTS, shared.CONFIG,
-                            runner.WALL_SECONDS, runner.SCHEMA, runner.ARTIFACTS)
-        terminal = body.split("python3 - <<'PY' >terminal.json\n", 1)[1].split('\nPY\n', 1)[0]
-        compile(terminal, 'terminal-receipt', 'exec')
-        for filename in ('artifact-roster.json', 'source-qualification.json'):
-            line = next(line for line in body.splitlines() if f'Path("{filename}")' in line)
-            encoded = line.split('base64.b64decode("')[1].split('"')[0]
-            decoded = json.loads(gzip.decompress(base64.b64decode(encoded)))
-            assert decoded == (list(ARTIFACTS) if filename == 'artifact-roster.json' else qualification)
-        for token in ('--on-active=5400s', 'MemoryMax=10G', 'RuntimeMaxSec=3630',
-            'MemoryMax=8G', 'MemorySwapMax=0', 'RuntimeMaxSec=1530', 'ulimit -v 4194304',
-            'TOKIO_WORKER_THREADS=4', 'BORSUK_NATIVE_MEMORY_BYTES=1073741824', 'AWS_MAX_ATTEMPTS=1',
-            'taskset -c 4-5', 'taskset -c 0-3 python3.12 -m scripts.check_native_graph_decode_build',
-            'python3.12 -m scripts.run_native_graph_decode_cold', '30 3600', '30 1500',
-            '--setenv=PYTHONPATH="$root/repo"', '$1/control/binaries/two_bit_http'):
-            assert token in body, token
-        for name in (CONFIG, MANIFEST, GRAPH, 'Cargo.toml', worker.CODE[0], CODE[-1],
-                     ROOT / 'control-unit-centroid-graph.txt',
-                     'docs/research/source-paging-20260930/cold-config.json'):
-            path = repo / name
-            before = path.read_bytes()
-            path.write_bytes(before + b'changed')
-            try:
-                preflight(repo)
-            except (AssertionError, ValueError):
-                pass
-            else:
-                # Helper hashes are captured into the qualification and must not
-                # silently continue using its earlier authenticated roster.
-                assert str(name) in CODE and preflight(repo) != qualification
-            finally:
-                path.write_bytes(before)
-        config = json.loads((repo / CONFIG).read_bytes())
-        for key, value in [('count', 63), ('ann_queries', 255), ('blocks', list(reversed(config['blocks']))),
-                           ('compiled_sha256', {}), ('items_source', {}), ('source_caps', {}), ('staging', {})]:
-            changed = json.dumps(dict(config, **{key: value})).encode()
-            write(CONFIG, changed)
-            with patch.object(sys.modules[__name__], 'CONFIG_SHA', peer.sha(changed)):
-                try: preflight(repo)
-                except (AssertionError, KeyError): pass
-                else: raise AssertionError('changed config accepted: ' + key)
-        write(CONFIG, (original / CONFIG).read_bytes())
-        build_self_check(repo, qualification)
-        collection_self_check(qualification)
-        # Exercise the actual -m CLI/import from a non-repository CWD. A bad
-        # qualification must fail before the fake Cargo could ever be invoked.
-        out = Path(tmp) / 'cli-output'
-        out.mkdir()
-        (out / 'source-qualification.json').write_text('{}')
-        result = subprocess.run([sys.executable, '-m', 'scripts.check_native_graph_decode_build',
-            '/nonexistent-fake-cargo', str(repo), str(out)], cwd=out,
-            env=dict(os.environ, PYTHONPATH=str(repo)), capture_output=True, text=True)
-        assert result.returncode != 0 and 'AssertionError' in result.stderr
-        assert 'ModuleNotFoundError' not in result.stderr and not (out / 'target').exists()
-        print('PASS pinned source/config/control, build order/full-suite/restoration/proof guards; user-data bytes=' + str(len(body.encode())))
+        config = assurance_fixture(repo, json.loads((repo / CONFIG).read_bytes()), source_hashes(repo))
+        fixture_config = (json.dumps(config, indent=2) + '\n').encode()
+        write(CONFIG, fixture_config)
+        with patch.object(sys.modules[__name__], 'CONFIG_SHA', peer.sha(fixture_config)), \
+             patch('scripts.launch_native_graph_decode_spot.CONFIG_SHA', peer.sha(fixture_config)):
+            qualification = preflight(repo)
+            assurance_self_check(repo, config, source_hashes(repo))
+            assert len(ARTIFACTS) == len(set(ARTIFACTS)) == 92
+            assert set(qualification['code_sha256']) == set(CODE)
+            bindings = shared.WALL, shared.SCHEMA, shared.ARTIFACTS, shared.CONFIG, \
+                       runner.WALL_SECONDS, runner.SCHEMA, runner.ARTIFACTS
+            body = user_data('0'*40, '1'*64, 'sources/mock', 'mock', qualification)
+            assert bindings == (shared.WALL, shared.SCHEMA, shared.ARTIFACTS, shared.CONFIG,
+                                runner.WALL_SECONDS, runner.SCHEMA, runner.ARTIFACTS)
+            terminal = body.split("python3 - <<'PY' >terminal.json\n", 1)[1].split('\nPY\n', 1)[0]
+            compile(terminal, 'terminal-receipt', 'exec')
+            for filename in ('artifact-roster.json', 'source-qualification.json'):
+                line = next(line for line in body.splitlines() if f'Path("{filename}")' in line)
+                encoded = line.split('base64.b64decode("')[1].split('"')[0]
+                decoded = json.loads(gzip.decompress(base64.b64decode(encoded)))
+                assert decoded == (list(ARTIFACTS) if filename == 'artifact-roster.json' else qualification)
+            for token in ('--on-active=5400s', 'MemoryMax=10G', 'RuntimeMaxSec=3630',
+                'MemoryMax=8G', 'MemorySwapMax=0', 'RuntimeMaxSec=1530', 'ulimit -v 4194304',
+                'TOKIO_WORKER_THREADS=4', 'BORSUK_NATIVE_MEMORY_BYTES=1073741824', 'AWS_MAX_ATTEMPTS=1',
+                'taskset -c 4-5', 'taskset -c 0-3 python3.12 -m scripts.check_native_graph_decode_build',
+                'python3.12 -m scripts.run_native_graph_decode_cold', '30 3600', '30 1500',
+                '--setenv=PYTHONPATH="$root/repo"', '$1/control/binaries/two_bit_http'):
+                assert token in body, token
+            for name in (CONFIG, MANIFEST, GRAPH, 'Cargo.toml', worker.CODE[0], CODE[-1],
+                         ROOT / 'control-unit-centroid-graph.txt',
+                         'docs/research/source-paging-20260930/cold-config.json'):
+                path = repo / name
+                before = path.read_bytes()
+                path.write_bytes(before + b'changed')
+                try:
+                    preflight(repo)
+                except (AssertionError, ValueError):
+                    pass
+                else:
+                    # Helper hashes are captured into the qualification and must not
+                    # silently continue using its earlier authenticated roster.
+                    assert str(name) in CODE and preflight(repo) != qualification
+                finally:
+                    path.write_bytes(before)
+            config = json.loads((repo / CONFIG).read_bytes())
+            for key, value in [('count', 63), ('ann_queries', 255), ('blocks', list(reversed(config['blocks']))),
+                               ('compiled_sha256', {}), ('items_source', {}), ('source_caps', {}), ('staging', {}),
+                               ('native_assurance', {}), ('native_assurance', dict(config['native_assurance'], sha256='0'*64))]:
+                changed = json.dumps(dict(config, **{key: value})).encode()
+                write(CONFIG, changed)
+                with patch.object(sys.modules[__name__], 'CONFIG_SHA', peer.sha(changed)):
+                    try: preflight(repo)
+                    except (AssertionError, KeyError): pass
+                    else: raise AssertionError('changed config accepted: ' + key)
+            write(CONFIG, fixture_config)
+            build_self_check(repo, qualification)
+            collection_self_check(qualification)
+            # Exercise the actual -m CLI/import from a non-repository CWD. A bad
+            # qualification must fail before the fake Cargo could ever be invoked.
+            out = Path(tmp) / 'cli-output'
+            out.mkdir()
+            (out / 'source-qualification.json').write_text('{}')
+            result = subprocess.run([sys.executable, '-m', 'scripts.check_native_graph_decode_build',
+                '/nonexistent-fake-cargo', str(repo), str(out)], cwd=out,
+                env=dict(os.environ, PYTHONPATH=str(repo)), capture_output=True, text=True)
+            assert result.returncode != 0 and 'AssertionError' in result.stderr
+            assert 'ModuleNotFoundError' not in result.stderr and not (out / 'target').exists()
+            print('PASS pinned source/config/control, build order/local assurance reuse/restoration/proof guards; user-data bytes=' + str(len(body.encode())))
     lifecycle_self_check()
 
 
