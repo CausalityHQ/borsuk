@@ -1,0 +1,79 @@
+{
+  "base_revision": "3b53af2cf1dbd9611212cf59dba212df8f23b6bb",
+  "source_sha256": "d36bae69fb4196d22983ce2d941434c955156f980d6d347f01a4b91420fb3423",
+  "scope": "original complete workspace execution plus final repaired standalone-builder build/6tests/workspaceClippy/fulltestcompilation; all other Rust and dependencies unchanged, no second full execution claimed",
+  "root_cargo_handle": "85980 closed; explicit release received; no duplicate full workspace execution",
+  "repair": "Nonblocking std Unix descriptor open; retain regular-file validation",
+  "tests_added": [
+    "FIFO rejection with one-second timeout",
+    "2049 distinct-unit D2, 33-center recursive fit; deterministic repeat; complete lossless partition; <=64 units per leaf",
+    "forged group ordinal >= training centers and chunk continuation after short leaf"
+  ],
+  "red_repro_log": "/tmp/borsuk-semantic-router-checks/08-fifo-red.log",
+  "static_checks": {
+    "rustfmt": 0,
+    "git diff --check": 0
+  },
+  "cargo_checks": "All allowed exact-source build, target test, workspace Clippy and workspace test-build gates passed. All original handles collected; no full workspace execution repeated.",
+  "original_receipts": "/tmp/borsuk-semantic-router-checks/verification.json",
+  "compiler_slot_release": "Parent explicit message immediate-1790790473595792831-1602347: original root85980 closed exit0; original full workspace source3b53 scope preserved.",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_TARGET_DIR": "/data/target",
+    "RUSTC_WRAPPER": "",
+    "BORSUK_TEST_BUILD_COMMAND": "unset",
+    "BORSUK_TEST_BUILD_JOBS": "unset; script defaults to 2"
+  },
+  "runs": [
+    {
+      "command": "cargo build --locked -p borsuk --bin build_semantic_unit_router",
+      "exit": 0,
+      "log": "/tmp/borsuk-semantic-router-checks/09-repair-build.log"
+    },
+    {
+      "command": "cargo test --locked -p borsuk --bin build_semantic_unit_router",
+      "exit": 0,
+      "log": "/tmp/borsuk-semantic-router-checks/10-repair-test.log",
+      "result": "6 tests passed; 0.36 seconds; RUST_TEST_THREADS=1"
+    },
+    {
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "exit": 0,
+      "log": "/tmp/borsuk-semantic-router-checks/11-repair-clippy.log",
+      "owned_file_warnings": 0
+    },
+    {
+      "command": "bash scripts/check_rust_test_build.sh",
+      "exit": 0,
+      "log": "/tmp/borsuk-semantic-router-checks/12-repair-test-build.log",
+      "result": "rust-test-build status=0; elapsed_seconds=9; jobs=2; compile only"
+    }
+  ],
+  "commit": "2cfb31c33f655108e6b09b6da6635c7e6978c134",
+  "working_tree_clean": true,
+  "artifacts": {
+    "09-repair-build.log": {
+      "bytes": 63929,
+      "sha256": "b1dc1ffdf5f871e3c121ad56cd7f3550815785c3156056e88adfbf8920bc9ccd"
+    },
+    "10-repair-test.log": {
+      "bytes": 64531,
+      "sha256": "ca04e3297f3b0241adabc944d2d0295c6acb2351d6cf3cf81ad007cfaeceeeb2"
+    },
+    "11-repair-clippy.log": {
+      "bytes": 182924,
+      "sha256": "77b569ed687f7b47d05e541328cbef5a1f0c27013a45e5a12cbdbf0e14f63e2d"
+    },
+    "12-repair-test-build.log": {
+      "bytes": 84302,
+      "sha256": "50f43832935e557e58812f8a6ec277c70a057f648730013a4578c2d380ac0084"
+    }
+  },
+  "binary": {
+    "path": "/data/target/debug/build_semantic_unit_router",
+    "bytes": 9287312,
+    "sha256": "cc737bf67883af436a12deaf092d486ed1af7bea90f472da41c470415f5c4445",
+    "profile": "dev; construction only"
+  },
+  "current_repaired_source_full_workspace_execution_claim": false
+}
