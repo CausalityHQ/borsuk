@@ -1,0 +1,81 @@
+#!/bin/bash
+set -euo pipefail
+systemd-run --unit=native-geometry-cold-offered-stop --on-active=2700s /usr/sbin/shutdown -h now
+root=/mnt/native-geometry-cold-offered
+mkdir -p "$root" && cd "$root"
+cat >artifact-roster.json <<'ROSTER'
+["source-qualification.json","boundary-check.json","compiled-source.json","binaries/two_bit_http","cpu.txt","test.log","run-closed.log","profile.log","profile-resources.txt","profile-cgroup.json","screen/summary.json","screen/rate0-relaion-records.jsonl","screen/rate0-cohere-records.jsonl","screen/rate1-relaion-records.jsonl","screen/rate1-cohere-records.jsonl","screen/rate2-relaion-records.jsonl","screen/rate2-cohere-records.jsonl","screen/rate3-relaion-records.jsonl","screen/rate3-cohere-records.jsonl","screen/rate4-relaion-records.jsonl","screen/rate4-cohere-records.jsonl","screen/rate5-relaion-records.jsonl","screen/rate5-cohere-records.jsonl","frozen/binaries/two_bit_http","frozen/boundary-check.json","frozen/compiled-source.json","frozen/source-qualification.json","frozen/rustc-version.txt","frozen/cargo-version.txt","frozen/cpuinfo.txt","frozen/arm-feature-tree.txt","frozen/x86-feature-tree.txt","frozen/run-closed.log","frozen/compiled-source/crates/borsuk/examples/two_bit_http.rs","frozen/compiled-source/crates/borsuk/src/object_native_generation.rs","frozen/compiled-source/crates/borsuk/src/two_bit_generation.rs","frozen/compiled-source/crates/borsuk/tests/two_bit_generation.rs","frozen/compiled-source/Cargo.toml","frozen/compiled-source/Cargo.lock","frozen/compiled-source/crates/borsuk/Cargo.toml","frozen/compiled-source/crates/borsuk/tests/two_bit_source.rs","frozen/compiled-source/crates/borsuk/src/unit_centroid_graph.rs"]
+ROSTER
+phase=bootstrap
+finish() {
+  code=$?
+  trap - EXIT TERM
+  set +e
+  cd "$root"
+  cp run.log run-closed.log || code=96
+  token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)
+  instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
+  for name in $(python3 -c 'import json; print(" ".join(json.load(open("artifact-roster.json"))))'); do
+    if [ -f "$name" ]; then
+      aws s3 cp "$name" "s3://borsuk-bench-453182569524-euc1/research/native-union/20260930/geometry-cold-offered-a0001/artifacts/$name" --only-show-errors || code=96
+    fi
+  done
+  INSTANCE_ID="$instance_id" EXIT_CODE="$code" PHASE="$phase" python3 - <<'PY' >terminal.json
+import hashlib,json,os
+from pathlib import Path
+artifacts={}
+for name in json.loads(Path("artifact-roster.json").read_text()):
+    path=Path(name)
+    if path.is_file():
+        digest=hashlib.sha256()
+        with path.open('rb') as source:
+            for chunk in iter(lambda: source.read(1024*1024),b''):
+                digest.update(chunk)
+        artifacts[name]={'bytes':path.stat().st_size,'sha256':digest.hexdigest()}
+code=int(os.environ['EXIT_CODE'])
+print(json.dumps({'schema':'borsuk-native-geometry-cold-offered-spot-v1','source_commit':'0c909c5735748bd413145672c262e4c8abf832dc',
+  'source_archive_sha256':'13e3fcc2e4b742848a010179575a8ef954d7bbb2cd02b96ac4f6ce3c0568565b',
+  'instance_id':os.environ['INSTANCE_ID'],'exit_code':code,
+  'phase':os.environ['PHASE'],
+  'status':'complete' if code==0 and os.environ['PHASE']=='complete' else 'failed',
+  'artifacts':artifacts},sort_keys=True,separators=(',',':')))
+PY
+  aws s3 cp terminal.json "s3://borsuk-bench-453182569524-euc1/research/native-union/20260930/geometry-cold-offered-a0001/terminal.json" --only-show-errors
+  shutdown -h now || true
+  exit "$code"
+}
+trap finish EXIT
+trap 'exit 97' TERM
+exec >run.log 2>&1
+aws s3 cp 's3://borsuk-bench-453182569524-euc1/research/native-library-check/sources/13e3fcc2e4b742848a010179575a8ef954d7bbb2cd02b96ac4f6ce3c0568565b.tar.gz' source.tar.gz --only-show-errors
+printf '%s  source.tar.gz\n' '13e3fcc2e4b742848a010179575a8ef954d7bbb2cd02b96ac4f6ce3c0568565b' | sha256sum -c -
+mkdir repo && tar -xzf source.tar.gz -C repo
+phase=install
+dnf install -y -q tar gzip time python3.12
+python3.12 -m ensurepip
+python3.12 -m pip install -q boto3
+cat >source-qualification.json <<'QUALIFICATION'
+{"artifact_roster_sha256":"93f9b7033e48a2fba710efcc18dbba7b8ed15e997cdac9892a054300e3bb1c04","campaign_schema":"borsuk-native-geometry-cold-offered-spot-v1","code_sha256":{"scripts/check_native_metadata_ranges_stats.py":"3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3","scripts/check_native_startup_build.py":"5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52","scripts/check_native_startup_stats.py":"56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29","scripts/launch_native_cold_first_query_spot.py":"be3d4c85c88bef6396db5c0e47914c22741b4fcdbf465df03e9f30e71c131849","scripts/launch_native_geometry_cold_offered_spot.py":"3f5a7387e5afc2d40b2896f5537f8b3eaaefb8a02703586f4ececfc79e6e242c","scripts/launch_native_metadata_ranges_cold_spot.py":"a32b2be2fea8ffba6f6c636db63d6878fae7a6fd421be4d950773e829713233a","scripts/rest_coexistence_load.py":"04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd","scripts/run_native_cold_first_query.py":"9ced034924594c7443b5e5a435da22e8f2204151ba6ecc7869ff0ef5b87b0c42","scripts/run_native_cold_offered.py":"a20716290c4ed82c24553b5bc8f721ce2b692560e0ef4f82ecb9d1ea90989ba9","scripts/run_native_geometry_cold_offered.py":"dec76540107c8c73f95abfb7a013b55f6adde82cd53e1182e4fabaa75876e078","scripts/run_native_metadata_ranges_cold.py":"1322fe19b705caeab275bce69ea6b4a9f2ed84cb6505dcbfe01b25301fdb71b8","scripts/run_native_peer_1m_worker.py":"8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3","scripts/run_native_peer_offered_http.py":"7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b","scripts/run_native_union_http.py":"886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880","scripts/run_native_union_offered_http.py":"8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6"},"compiled_native_sha256":{"Cargo.lock":"92c0da6805ad13fa78a7d6cbffaccf7738e346d3605ed8c8ac763cf5079f2590","Cargo.toml":"1ec9ac514515662a0f3a371b1a65d72bf825d67f218dc3f6cc1e5fb0925547d6","crates/borsuk/Cargo.toml":"474efdef5bd398bef758009882c8bdd859553de8f0271230430469dd96bc4d71","crates/borsuk/examples/two_bit_http.rs":"c8f2327561304a088b0bfd3a4509047a94c05210b8d5d44e008b90faea3cdc29","crates/borsuk/src/object_native_generation.rs":"36dc8f040f862b329164be2cb58151270518f5c659bfbb317f77f1e8855f579c","crates/borsuk/src/two_bit_generation.rs":"7a134fe3e03e735bad63c611ce2b78d865345c8617a6a4b1c5dd70ce1384cc45","crates/borsuk/src/unit_centroid_graph.rs":"7a47654900e1ec2d5f96384ee2b67ea4c647c2eb05c00a0e4d5902636bcebc42","crates/borsuk/tests/two_bit_generation.rs":"da29358a0c797f2ad232a3efd033d7c8a7eb370dd43d44fbb37264885cbdf0f6","crates/borsuk/tests/two_bit_source.rs":"d341033f45c614da69b70c3f3c4b1ce86ebaf1f26ba59da03a54e926d00a98d3"},"config_path":"docs/research/native-union-20260928/geometry-cold-offered-config.json","config_sha256":"6200cc0d4b1b6a88a6498ec16a865c7436814605976658114c59ad3416ab4f44","current_full_suite_pass_claim":false,"frozen_binary_artifacts":{"arm-feature-tree.txt":{"bytes":47673,"sha256":"9f73640ef4bc3341cac24b1b9758d11502dca4f99e203298938e0d0006ea51dc"},"binaries/two_bit_http":{"bytes":12470768,"sha256":"256dcf6c9d3f893d5c709564a099bf440b482e617800598ddd6538e1ec0cbb21"},"boundary-check.json":{"bytes":2111,"sha256":"2443fe5ab774a3eb908046617d723ca1c70797e5da4254314a8a04aeb87912cb"},"cargo-version.txt":{"bytes":36,"sha256":"fb3f25aefd6d5441842d285f5a9b125b3f0f0b0bf2013d9a32677f9e99c6c854"},"compiled-source.json":{"bytes":953,"sha256":"5907e6b08f315e1d4323634aee8d56ca366231736adca25d37649ce0b9a7182b"},"compiled-source/Cargo.lock":{"bytes":90530,"sha256":"92c0da6805ad13fa78a7d6cbffaccf7738e346d3605ed8c8ac763cf5079f2590"},"compiled-source/Cargo.toml":{"bytes":621,"sha256":"1ec9ac514515662a0f3a371b1a65d72bf825d67f218dc3f6cc1e5fb0925547d6"},"compiled-source/crates/borsuk/Cargo.toml":{"bytes":2640,"sha256":"474efdef5bd398bef758009882c8bdd859553de8f0271230430469dd96bc4d71"},"compiled-source/crates/borsuk/examples/two_bit_http.rs":{"bytes":9731,"sha256":"c8f2327561304a088b0bfd3a4509047a94c05210b8d5d44e008b90faea3cdc29"},"compiled-source/crates/borsuk/src/object_native_generation.rs":{"bytes":54783,"sha256":"36dc8f040f862b329164be2cb58151270518f5c659bfbb317f77f1e8855f579c"},"compiled-source/crates/borsuk/src/two_bit_generation.rs":{"bytes":38553,"sha256":"7a134fe3e03e735bad63c611ce2b78d865345c8617a6a4b1c5dd70ce1384cc45"},"compiled-source/crates/borsuk/src/unit_centroid_graph.rs":{"bytes":39417,"sha256":"7a47654900e1ec2d5f96384ee2b67ea4c647c2eb05c00a0e4d5902636bcebc42"},"compiled-source/crates/borsuk/tests/two_bit_generation.rs":{"bytes":32488,"sha256":"da29358a0c797f2ad232a3efd033d7c8a7eb370dd43d44fbb37264885cbdf0f6"},"compiled-source/crates/borsuk/tests/two_bit_source.rs":{"bytes":7871,"sha256":"d341033f45c614da69b70c3f3c4b1ce86ebaf1f26ba59da03a54e926d00a98d3"},"cpuinfo.txt":{"bytes":2856,"sha256":"91561b86cc166f6c939619e5bcb5b755b52e874a5284639f17179ec51278646d"},"run-closed.log":{"bytes":18993,"sha256":"eda819a0d7d58c770171ca63e6fb1acc1c1e8a4335a8814c4c1d81923f2077eb"},"rustc-version.txt":{"bytes":197,"sha256":"ec378196e9fa222ab807fd49cb9dae156a9bd18069b9440fd4e0a6c57c6971cb"},"source-qualification.json":{"bytes":3978,"sha256":"4520200b14ee04c3b5ff99ac00515581a61db31434c8b0681ead64546523fadc"},"x86-feature-tree.txt":{"bytes":47597,"sha256":"6f27644b4539804fe5f1968d72c9ae6ffbbc2799d11de5e32660fda38c11e9c4"}},"frozen_native_qualification":{"path":"docs/research/native-union-20260928/metadata-geometry/a0002/verification.json","sha256":"cbc369cfe714653173525b6557af49c0462b458bf29a9c9ce5a4aacce318452c","source_archive_sha256":"48bb877cdbe947401084ab56ec237eca1c4d9cff7bbb49a9c35d9380ae235959","source_commit":"3315455568ea727f277911de96a2231289d6ae5b","terminal_sha256":"37268e9f0125ef0a3f770271458a0378d27b018571cb4c701965833b9fa1e826"},"native_rebuilt":false,"native_source_commit":"3315455568ea727f277911de96a2231289d6ae5b","source_file_count":395,"source_identity_sha256":"4bbc6c332e78e5a068001913597cdc82d6c13bd147acd96e019149c190a39a1c"}
+QUALIFICATION
+phase=binary-qualification
+lscpu >cpu.txt
+(cd repo; PYTHONPATH=. python3.12 -m scripts.launch_native_geometry_cold_offered_spot --extract-frozen "$root") >test.log 2>&1
+phase=profile
+systemd-run --unit=native-geometry-cold-offered --wait --pipe -p MemoryMax=7G -p MemorySwapMax=0 -p RuntimeMaxSec=2430 -p WorkingDirectory="$root/repo" \
+ --setenv=PYTHONPATH="$root/repo" --setenv=TOKIO_WORKER_THREADS=4 --setenv=AWS_MAX_ATTEMPTS=1 --setenv=BORSUK_NATIVE_MEMORY_BYTES=1073741824 \
+ /usr/bin/time -v -o "$root/profile-resources.txt" timeout --signal=TERM --kill-after=30 2400 \
+ bash -c 'ulimit -v 4194304 || exit 96; taskset -c 4-5 python3.12 -m scripts.run_native_geometry_cold_offered docs/research/native-union-20260928/geometry-cold-offered-config.json 6200cc0d4b1b6a88a6498ec16a865c7436814605976658114c59ad3416ab4f44 "$1/binaries/two_bit_http" "$1/boundary-check.json" "$1/screen"; code=$?; taskset -c 0-3 python3.12 scripts/check_native_startup_build.py --cgroup "$1/profile-cgroup.json" 7516192768 || exit 96; exit "$code"' _ "$root" >profile.log 2>&1
+test -s "$root/screen/summary.json"
+test -s "$root/screen/rate0-relaion-records.jsonl"
+test -s "$root/screen/rate0-cohere-records.jsonl"
+test -s "$root/screen/rate1-relaion-records.jsonl"
+test -s "$root/screen/rate1-cohere-records.jsonl"
+test -s "$root/screen/rate2-relaion-records.jsonl"
+test -s "$root/screen/rate2-cohere-records.jsonl"
+test -s "$root/screen/rate3-relaion-records.jsonl"
+test -s "$root/screen/rate3-cohere-records.jsonl"
+test -s "$root/screen/rate4-relaion-records.jsonl"
+test -s "$root/screen/rate4-cohere-records.jsonl"
+test -s "$root/screen/rate5-relaion-records.jsonl"
+test -s "$root/screen/rate5-cohere-records.jsonl"
+phase=complete

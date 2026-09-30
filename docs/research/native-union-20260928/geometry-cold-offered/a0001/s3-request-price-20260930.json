@@ -1,0 +1,62 @@
+{
+  "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/eu-central-1/index.json",
+  "retrieved_at": "2026-09-30T04:13:32.856383+00:00",
+  "publication_date": "2026-09-28T23:04:16Z",
+  "source_sha256": "45ab76fa16a9ec1d427afa9a12f4638d28b99e3e95fb16848520a0967521cb6e",
+  "region": "eu-central-1",
+  "candidates": [
+    {
+      "sku": "MR87ZRAZFSGZD648",
+      "attributes": {
+        "servicecode": "AmazonS3",
+        "location": "EU (Frankfurt)",
+        "locationType": "AWS Region",
+        "group": "S3-API-Tier2",
+        "groupDescription": "Tier2 Annotation Requests",
+        "usagetype": "EUC1-Requests-Annotation-Tier2",
+        "operation": "",
+        "regionCode": "eu-central-1",
+        "servicename": "Amazon Simple Storage Service"
+      },
+      "effective_date": "2026-09-01T00:00:00Z",
+      "price": {
+        "rateCode": "MR87ZRAZFSGZD648.JRTCKXETXF.6YS6EN2CT7",
+        "description": "$0.00043 per 1,000 Tier2 Annotation Requests",
+        "beginRange": "0",
+        "endRange": "Inf",
+        "unit": "Requests",
+        "pricePerUnit": {
+          "USD": "0.0000004300"
+        },
+        "appliesTo": []
+      }
+    },
+    {
+      "sku": "TUSXZSTYY6YJH244",
+      "attributes": {
+        "servicecode": "AmazonS3",
+        "location": "EU (Frankfurt)",
+        "locationType": "AWS Region",
+        "group": "S3-API-Tier2",
+        "groupDescription": "GET and all other requests",
+        "usagetype": "EUC1-Requests-Tier2",
+        "operation": "",
+        "regionCode": "eu-central-1",
+        "servicename": "Amazon Simple Storage Service"
+      },
+      "effective_date": "2026-09-01T00:00:00Z",
+      "price": {
+        "rateCode": "TUSXZSTYY6YJH244.JRTCKXETXF.6YS6EN2CT7",
+        "description": "$0.0043 per 10,000 GET and all other requests",
+        "beginRange": "0",
+        "endRange": "Inf",
+        "unit": "Requests",
+        "pricePerUnit": {
+          "USD": "0.0000004300"
+        },
+        "appliesTo": []
+      }
+    }
+  ],
+  "scope": "published price only, not billed or observed SDK request cost"
+}

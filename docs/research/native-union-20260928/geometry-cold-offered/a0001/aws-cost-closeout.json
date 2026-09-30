@@ -1,0 +1,9 @@
+{
+  "observed_at": "2026-09-30T04:21:38.519693+00:00",
+  "instance_id": "i-0d411ec33273ad4c1",
+  "state": "terminated",
+  "launch_time": "2026-09-30T04:02:05+00:00",
+  "state_transition_reason": "User initiated (2026-09-30 04:20:16 GMT)",
+  "owned_volume_id": "vol-09c769995a52c3cb0",
+  "owned_volume_deleted": true
+}

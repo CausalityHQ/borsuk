@@ -1,0 +1,20 @@
+{
+  "observed_at": "2026-09-30T04:15:11.349894+00:00",
+  "instance_id": "i-0d411ec33273ad4c1",
+  "instance_launch_time": "2026-09-30T04:02:05+00:00",
+  "instance_state": "running",
+  "public_ipv4_present": true,
+  "volumes": [
+    {
+      "volume_id": "vol-09c769995a52c3cb0",
+      "create_time": "2026-09-30T04:02:06.310000+00:00",
+      "provisioned_gib": 80,
+      "volume_type": "gp3",
+      "iops": 3000,
+      "throughput_mib_per_second": 125,
+      "encrypted": true,
+      "delete_on_termination": true
+    }
+  ],
+  "scope": "infrastructure only; published-price estimate inputs, not invoice; no measurement files inspected"
+}
