@@ -1,0 +1,10 @@
+{
+  "valid_closed_artifacts": true,
+  "state": "terminated",
+  "instance_id": "i-0518b84effd15c2dd",
+  "performance_measured": false,
+  "recall_measured": false,
+  "root_cause": "restore CLI lacked PYTHONPATH for scripts imports",
+  "artifact_count": 3,
+  "terminal_sha256": "8cbac8f45fefb8386a19bf955dfc40a744332b0b38f8c5a1fa24715d31aab113"
+}

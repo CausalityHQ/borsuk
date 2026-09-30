@@ -3,6 +3,7 @@ import fcntl
 import base64
 import gzip
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -161,10 +162,14 @@ def reuse_self_check():
         body = user_data('0'*40, 'a'*64, 'fixture', 'fixture', proof)
         assert 'systemd-run --unit=paged-source-build' not in body
         assert '--restore-qualified' in body
+        assert 'PYTHONPATH="$root/repo" python3.12 -m scripts.launch_native_paged_source_cold_spot --restore-qualified' in body
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             (out/'source-qualification.json').write_text(json.dumps(proof))
-            restore_qualified(Path('.'), out)
+            repo = Path('.').resolve()
+            subprocess.run([sys.executable, '-m', 'scripts.launch_native_paged_source_cold_spot',
+                '--restore-qualified', str(repo), str(out)], cwd=out,
+                env=dict(os.environ, PYTHONPATH=str(repo)), check=True)
             config = json.loads((out/'resolved-config.json').read_bytes())
             worker.validate_config(config)
             worker.validate_runtime(config, out/'binaries/two_bit_http', out/'boundary-check.json')
@@ -253,7 +258,7 @@ systemd-run --unit=native-paged-source-cold --wait --pipe -p MemoryMax=8G -p Mem
             "python3.12 -c 'import base64,gzip; from pathlib import Path; "
             f'Path("source-qualification.json").write_bytes(gzip.decompress(base64.b64decode("{encoded}")))\'')
         begin, finish = command.index('systemd-run --unit=paged-source-build'), command.index('test -s boundary-check.json')
-        command = command[:begin] + 'python3.12 "$root/repo/scripts/launch_native_paged_source_cold_spot.py" --restore-qualified "$root/repo" "$root"\n' + command[finish:]
+        command = command[:begin] + 'PYTHONPATH="$root/repo" python3.12 -m scripts.launch_native_paged_source_cold_spot --restore-qualified "$root/repo" "$root"\n' + command[finish:]
     body = body[:start] + command + body[end:]
     subprocess.run(['bash', '-n'], input=body, text=True, check=True)
     assert len(body.encode()) < 16384
