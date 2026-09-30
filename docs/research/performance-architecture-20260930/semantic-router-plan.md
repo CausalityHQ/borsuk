@@ -21,3 +21,12 @@ At `eee07f45`, add only `crates/borsuk/src/bin/build_semantic_unit_router.rs`. P
 **Blocker before corpus execution:** root must freeze boundary coverage, leaf/GET/byte limits, physical closure and query roster. Builder implementation is unblocked; its artifact alone cannot test that hypothesis. No builds/tests ran here.
 
 Root acceptance: preserve original FP16 bytes, no real corpus fit/cloud, one owned Rust binary. Compiler concurrency2 and shared /data/target used serially; no overlapping gate. Actual affected build/test, workspace Clippy and workspace test-build required. Root alone runs final full assurance and authorizes subsequent dataset gate.
+
+## Pinned research input correction
+
+The frozen 100k corpus roots used by this offline adapter are
+`borsuk-two-bit-generation-v4`, not current generation v6. Parse only this
+research input shape: authenticated `canonical.rows`, `canonical.dimensions`
+and `centroids_sha256`, then independently check the centroid header. Do not
+invoke a production generation reader or add multiple-version compatibility.
+The new output remains research v1. Production readers and schemas are untouched.
