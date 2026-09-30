@@ -263,6 +263,84 @@ impl TwoBitPlanTrace {
             + units.min(2544) * std::mem::size_of::<usize>()
     }
 }
+/// Offline source nomination and SQ8 page admission using the production planner.
+/// The caller binds the prepared query and authenticated records to one source;
+/// discovery, source-read charges and retained trace memory remain caller-owned.
+#[doc(hidden)]
+pub fn plan_two_bit_source_walks<'a>(
+    rows: usize,
+    dimensions: usize,
+    walks: &[(usize, Vec<usize>)],
+    prepared: &PreparedTwoBit,
+    mut record: impl FnMut(usize) -> Option<&'a [u8]>,
+    max_query_gets: usize,
+    max_query_bytes: usize,
+    trace: Option<&mut TwoBitPlanTrace>,
+) -> Result<BudgetedPagePlan> {
+    // Reuse physical admission to reject overflowing geometry before walk/row
+    // arithmetic. Actual query budgets are applied after nomination as before.
+    choose_budgeted_pages_sparse(&[], &[0], rows, dimensions, 1, 1, usize::MAX)
+        .map_err(TwoBitGenerationError::Budget)?;
+    let mut nomination_evaluated_units = Vec::with_capacity(if trace.is_some() { 2544 } else { 0 });
+    let ranked = rank_walked_source(rows, walks, |unit| {
+        if trace.is_some() {
+            nomination_evaluated_units.push(unit);
+        }
+        let mut maximum = f64::NEG_INFINITY;
+        for row in unit * 32..((unit + 1) * 32).min(rows) {
+            maximum = maximum.max(
+                prepared
+                    .score(
+                        record(row)
+                            .ok_or(TwoBitGenerationError::Invalid("missing source record"))?,
+                    )
+                    .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?,
+            );
+        }
+        Ok(maximum)
+    })?;
+    if let Some(trace) = trace {
+        trace.primary_page = ranked[0].0;
+        trace.nomination_evaluated_units = nomination_evaluated_units;
+        trace.ranked_candidate_pages = ranked.iter().map(|&(page, _)| page).collect();
+    }
+    let primary = [ranked[0].0 * 256];
+    let order = ranked
+        .iter()
+        .enumerate()
+        .map(|(rank, &(page, _))| (page, rank as f32))
+        .collect::<Vec<_>>();
+    choose_budgeted_pages_sparse(
+        &order,
+        &primary,
+        rows,
+        dimensions,
+        rows.div_ceil(256),
+        max_query_gets,
+        max_query_bytes,
+    )
+    .map_err(TwoBitGenerationError::Budget)
+}
+
+/// Offline source-page closure with the production cover and byte admission.
+#[doc(hidden)]
+pub fn plan_two_bit_source_cover(
+    closure: &BTreeSet<usize>,
+    rows: usize,
+    record_bytes: usize,
+    max_source_gets: usize,
+    max_source_bytes: usize,
+) -> Result<(Vec<std::ops::Range<usize>>, usize)> {
+    let (cover, bytes) = cover_pages(closure, rows, record_bytes, 256, max_source_gets)
+        .map_err(TwoBitGenerationError::Budget)?;
+    if bytes > max_source_bytes {
+        return Err(TwoBitGenerationError::Budget(
+            BudgetedPageError::InsufficientBudget,
+        ));
+    }
+    Ok((cover, bytes))
+}
+
 // Source nomination over bounded graph walks; no corpus-sized query allocation.
 fn rank_walked_source(
     rows: usize,
@@ -801,19 +879,13 @@ impl TwoBitGeneration {
             .flat_map(|(_, units)| units.iter().map(|unit| unit / 8))
             .collect::<BTreeSet<_>>();
         let width = self.plane.receipt().record_bytes;
-        let (cover, bytes) = cover_pages(
+        let (cover, _) = plan_two_bit_source_cover(
             &closure,
             self.rows(),
             width,
-            256,
             self.limits.max_source_gets,
-        )
-        .map_err(TwoBitGenerationError::Budget)?;
-        if bytes > self.limits.max_source_bytes {
-            return Err(TwoBitGenerationError::Budget(
-                BudgetedPageError::InsufficientBudget,
-            ));
-        }
+            self.limits.max_source_bytes,
+        )?;
         let unit_bytes = width
             .checked_mul(32)
             .ok_or(TwoBitGenerationError::Invalid("source unit geometry"))?;
@@ -912,49 +984,19 @@ impl TwoBitGeneration {
         &self,
         walks: &[(usize, Vec<usize>)],
         prepared: &PreparedTwoBit,
-        mut record: impl FnMut(usize) -> Option<&'a [u8]>,
+        record: impl FnMut(usize) -> Option<&'a [u8]>,
         trace: Option<&mut TwoBitPlanTrace>,
     ) -> Result<BudgetedPagePlan> {
-        let mut nomination_evaluated_units =
-            Vec::with_capacity(if trace.is_some() { 2544 } else { 0 });
-        let ranked = rank_walked_source(self.pages.rows(), walks, |unit| {
-            if trace.is_some() {
-                nomination_evaluated_units.push(unit);
-            }
-            let mut maximum = f64::NEG_INFINITY;
-            for row in unit * 32..((unit + 1) * 32).min(self.pages.rows()) {
-                maximum = maximum.max(
-                    prepared
-                        .score(
-                            record(row)
-                                .ok_or(TwoBitGenerationError::Invalid("missing source record"))?,
-                        )
-                        .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?,
-                );
-            }
-            Ok(maximum)
-        })?;
-        if let Some(trace) = trace {
-            trace.primary_page = ranked[0].0;
-            trace.nomination_evaluated_units = nomination_evaluated_units;
-            trace.ranked_candidate_pages = ranked.iter().map(|&(page, _)| page).collect();
-        }
-        let primary = [ranked[0].0 * 256];
-        let order = ranked
-            .iter()
-            .enumerate()
-            .map(|(rank, &(page, _))| (page, rank as f32))
-            .collect::<Vec<_>>();
-        choose_budgeted_pages_sparse(
-            &order,
-            &primary,
+        plan_two_bit_source_walks(
             self.pages.rows(),
             self.pages.dimensions(),
-            self.pages.rows().div_ceil(256),
+            walks,
+            prepared,
+            record,
             self.limits.max_query_gets,
             self.limits.max_query_bytes,
+            trace,
         )
-        .map_err(TwoBitGenerationError::Budget)
     }
     /// Offline physical plan and candidate pages in nomination order.
     /// Charges bounded retained trace payload from scratch; uses normal admission.
@@ -1333,6 +1375,54 @@ mod source_walk_tests {
         let query = [0.5, 0.25];
         let mut expected_trace = TwoBitPlanTrace::default();
         let (expected_plan, _) = local.plan_inner(&query, Some(&mut expected_trace)).unwrap();
+        if !fragmented {
+            let prepared = local.plane.prepare_query(&query, 400_000).unwrap();
+            let normalized = crate::sq8_source::cosine_vector(&query).unwrap();
+            for (gets, bytes) in [(32, rows * 14), (1, 256 * 14)] {
+                let mut trace = TwoBitPlanTrace::default();
+                let walks = local
+                    .discover_walks(normalized.as_ref(), Some(&mut trace))
+                    .unwrap();
+                let diagnostic = plan_two_bit_source_walks(
+                    rows,
+                    2,
+                    &walks,
+                    &prepared,
+                    |row| local.plane.record(row),
+                    gets,
+                    bytes,
+                    Some(&mut trace),
+                )
+                .unwrap();
+                let mut control_limits = local.limits;
+                control_limits.max_query_gets = gets;
+                control_limits.max_query_bytes = bytes;
+                let control = TwoBitGeneration::open(&root, &root_sha, control_limits).unwrap();
+                let mut control_trace = TwoBitPlanTrace::default();
+                let (control_plan, _) = control
+                    .plan_inner(&query, Some(&mut control_trace))
+                    .unwrap();
+                assert_eq!(diagnostic, control_plan);
+                assert_eq!(
+                    serde_json::to_value(&trace).unwrap(),
+                    serde_json::to_value(&control_trace).unwrap()
+                );
+                assert_eq!(
+                    diagnostic,
+                    plan_two_bit_source_walks(
+                        rows,
+                        2,
+                        &walks,
+                        &prepared,
+                        |row| local.plane.record(row),
+                        gets,
+                        bytes,
+                        None,
+                    )
+                    .unwrap()
+                );
+            }
+        }
         let mut actual_trace = TwoBitPlanTrace::default();
         let (actual_plan, _, source_stats) = remote
             .plan_paged(&store, &query, Some(&mut actual_trace))
@@ -1436,6 +1526,92 @@ mod source_walk_tests {
             })
         ));
         assert!(error.read_stats().0.failed_gets > 0);
+    }
+    #[test]
+    fn diagnostic_source_cover_charges_bridges_and_partial_tail_before_scoring() {
+        let closure = BTreeSet::from([0, 2]);
+        assert_eq!(
+            plan_two_bit_source_cover(&closure, 513, 9, 2, 2313).unwrap(),
+            (vec![0..2304, 4608..4617], 2313)
+        );
+        assert_eq!(
+            plan_two_bit_source_cover(&closure, 513, 9, 1, 4617).unwrap(),
+            (std::iter::once(0..4617).collect::<Vec<_>>(), 4617)
+        );
+        assert!(matches!(
+            plan_two_bit_source_cover(&closure, 513, 9, 1, 4616),
+            Err(TwoBitGenerationError::Budget(
+                BudgetedPageError::InsufficientBudget
+            ))
+        ));
+        assert!(plan_two_bit_source_cover(&BTreeSet::from([3]), 513, 9, 2, 4617).is_err());
+    }
+    #[test]
+    fn diagnostic_source_walks_reject_missing_nonfinite_and_invalid_inputs() {
+        use crate::rotated_two_bit::{RotatedTwoBitCodec, TwoBitError};
+        let codec = RotatedTwoBitCodec::new(&[0.0; 2], 20260923).unwrap();
+        let prepared = codec.prepare_query(&[1.0, 0.0], 400_000).unwrap();
+        let record = codec.encode(&[1.0, 0.0]).unwrap();
+        let walks = [(0, (0..9).collect())];
+        assert!(matches!(
+            plan_two_bit_source_walks(257, 2, &walks, &prepared, |_| None, 32, 257 * 14, None),
+            Err(TwoBitGenerationError::Invalid("missing source record"))
+        ));
+        let mut nonfinite = record.clone();
+        let scale = nonfinite.len() - 8;
+        nonfinite[scale..scale + 4].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(matches!(
+            plan_two_bit_source_walks(
+                257,
+                2,
+                &walks,
+                &prepared,
+                |_| Some(&nonfinite),
+                32,
+                257 * 14,
+                None,
+            ),
+            Err(TwoBitGenerationError::Plane(SourceBuildError::Codec(
+                TwoBitError::Record
+            )))
+        ));
+        for invalid in [
+            vec![],
+            vec![(0, vec![0]); 3],
+            vec![(2, (0..9).collect())],
+            vec![(0, vec![0, 0])],
+            vec![(0, (0..10).collect())],
+            vec![(0, vec![0, 1])],
+        ] {
+            assert!(
+                plan_two_bit_source_walks(
+                    257,
+                    2,
+                    &invalid,
+                    &prepared,
+                    |_| panic!("invalid walk scored"),
+                    32,
+                    257 * 14,
+                    None,
+                )
+                .is_err()
+            );
+        }
+        for (rows, dimensions) in [(0, 2), (257, 0), (usize::MAX, 2), (257, usize::MAX)] {
+            assert!(
+                plan_two_bit_source_walks(
+                    rows,
+                    dimensions,
+                    &walks,
+                    &prepared,
+                    |_| panic!("invalid geometry scored"),
+                    32,
+                    257 * 14,
+                    None,
+                )
+                .is_err()
+            );
+        }
     }
     #[test]
     fn bounded_completion_recovers_unvisited_rows_without_duplicate_or_extra_work() {
