@@ -1,0 +1,502 @@
+"""Bounded paired graph-decode campaign; --self-check uses mocks only."""
+import base64
+import fcntl
+import gzip
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+from unittest.mock import patch
+
+from scripts import launch_native_metadata_ranges_cold_spot as shared
+from scripts import launch_native_peer_1m_spot as peer
+from scripts import launch_v174_relaid_bind_compile_spot as runner
+from scripts import run_native_graph_decode_cold as worker
+from scripts.check_native_startup_build import FOCUSED_ARM, source_hashes, source_identity
+from scripts.check_native_paged_source_build import CHECKS
+
+ROOT = Path('docs/research/source-paging-20260930/decode')
+CONFIG = ROOT / 'config.json'
+CONFIG_SHA = '0d1734b626f88dc80f491f5e424c3db28865630e943a8589bf444081e823a513'
+MANIFEST = ROOT / 'native-source-manifest.json'
+MANIFEST_SHA = 'dccf895e92da7b11eaa1afaf15e7915946e2ef7bd764a032cfc967d01f64627b'
+SCHEMA = 'borsuk-native-graph-decode-spot-v1'
+PREFIX = 'research/source-paging/20260930/graph-decode-'
+NAME = 'cold'
+TOKEN_PREFIX = 'graph-decode-cold-'
+TAG = 'borsuk-graph-decode-cold'
+SUBNET = 'subnet-034528fbd6977848f'
+WALL = 5400
+COMPUTE_CAP = .45
+CANDIDATE_IDENTITY = '42b66e80fc81cd6c368244eaa245ef6b59c8fa8fcce0eb104cc088c00c3e4f24'
+CONTROL_IDENTITY = '3f05bdfd2c399fb4f93ab5c73827c7b55d8fd31f73ed967e6ac235976a7d7f64'
+GRAPH = STAGE = worker.GRAPH
+COMPILED = (*FOCUSED_ARM, *('crates/borsuk/src/' + name for name in (
+    'sq8_s3_range.rs', 'sq8_page_authority.rs', 'two_bit_source.rs', 'two_bit_build.rs',
+    'two_bit_index.rs', 'unit_centroid_graph.rs', 'bin/build_two_bit_graph_variant.rs',
+    'bin/two_bit_plan_demo.rs', 'bin/two_bit_union_nomination.rs', 'bin/two_bit_walk_nomination.rs')),
+    'crates/borsuk/tests/two_bit_application_ids.rs', 'crates/borsuk/tests/two_bit_gc_delayed_delete.rs')
+# Include late imports in the shared helpers, including their self-check paths.
+CODE = (*worker.CODE, 'scripts/launch_native_graph_decode_spot.py',
+    'scripts/check_native_graph_decode_build.py',
+    'scripts/launch_native_metadata_ranges_cold_spot.py',
+    'scripts/launch_native_startup_profile_spot.py', 'scripts/launch_native_peer_1m_spot.py',
+    'scripts/launch_v174_relaid_bind_compile_spot.py', 'scripts/launch_v157_primary_feasibility_spot.py',
+    'scripts/check_native_startup_build.py', 'scripts/check_native_paged_source_build.py',
+    'scripts/check_native_metadata_ranges_build.py', 'scripts/launch_native_paged_source_cold_spot.py')
+TOOLCHAIN = ('rustc-version.txt', 'cargo-version.txt', 'cpuinfo.txt',
+             'arm-feature-tree.txt', 'x86-feature-tree.txt')
+ARM_ARTIFACTS = ('binaries/two_bit_http', 'boundary-check.json', 'compiled-source.json',
+    *('compiled-source/' + name for name in COMPILED),
+    *(name + '.log' for name, _ in CHECKS), 'release.log', *TOOLCHAIN)
+ARTIFACTS = ('source-qualification.json', 'cpu.txt', 'test.log', 'test-resources.txt',
+    'run-closed.log', 'boundary-cgroup.json', 'profile.log', 'profile-resources.txt',
+    'profile-cgroup.json', *ARM_ARTIFACTS, *('control/' + name for name in ARM_ARTIFACTS),
+    'full-suite.log', 'full-suite-status.json', 'screen/summary.json',
+    *('screen/block' + str(block) + '-records.jsonl' for block in range(4)))
+
+
+def preflight(base=Path('.')):
+    base = Path(base)
+    body = (base / CONFIG).read_bytes()
+    assert peer.sha(body) == CONFIG_SHA, 'unregistered campaign config'
+    config = json.loads(body)
+    assert len(worker.CODE) == 12
+    manifest = worker.validate_config(config, base)
+    assert config['native_manifest'] == dict(path=str(MANIFEST), sha256=MANIFEST_SHA)
+    assert manifest['schema'] == 'borsuk-graph-decode-source-v1'
+    assert manifest['candidate_identity'] == CANDIDATE_IDENTITY
+    assert manifest['control_identity'] == CONTROL_IDENTITY
+    assert manifest['current_full_suite_pass_claim'] is False
+    assert manifest['native_qualification_pending'] is True
+    assert config['items_source'] == dict(path='docs/research/source-paging-20260930/cold-config.json',
+        sha256='92a5e94ab57cced22405d42527bd4f1b54f0f0a839b8444722b7a111145100b9')
+    old = json.loads((base / config['items_source']['path']).read_bytes())
+    for key, value in old.items():
+        if key not in {'schema', 'binary', 'code_sha256', 'machine_limit_seconds',
+                       'native_source_identity_sha256', 'native_source_file_count', 'native_source_manifest'}:
+            assert config[key] == value, key
+    assert (config['region'], config['bucket']) == (peer.REGION, peer.BUCKET)
+    assert config['machine_limit_seconds'] == WALL and config['worker_limit_seconds'] == 1500
+    assert not {'binary', 'control_binary', 'frozen_native_qualification'} & config.keys()
+    identities = manifest['source_sha256']
+    assert manifest['candidate_graph_sha256'] == identities[GRAPH]
+    compiled = {name: identities[name] for name in COMPILED}
+    assert len(COMPILED) == len(compiled) == 20 and config['compiled_sha256'] == compiled
+    control_graph = manifest['control_graph']
+    assert control_graph == dict(path=str(ROOT / 'control-unit-centroid-graph.txt'),
+        sha256='7a47654900e1ec2d5f96384ee2b67ea4c647c2eb05c00a0e4d5902636bcebc42')
+    control = dict(identities, **{GRAPH: control_graph['sha256']})
+    assert source_identity(control) == CONTROL_IDENTITY
+    return dict(config_path=str(CONFIG), config_sha256=peer.sha(body), campaign_schema=SCHEMA,
+        manifest_path=str(MANIFEST), manifest_sha256=MANIFEST_SHA,
+        source_identity_sha256=CANDIDATE_IDENTITY, source_file_count=395,
+        control_source_identity_sha256=CONTROL_IDENTITY, control_graph=control_graph,
+        compiled_native_sha256=compiled,
+        control_compiled_native_sha256={name: control[name] for name in COMPILED},
+        code_sha256={name: peer.sha((base / name).read_bytes()) for name in CODE},
+        artifact_roster_sha256=peer.sha(json.dumps(ARTIFACTS, separators=(',', ':')).encode()),
+        native_rebuilt=True, control_native_rebuilt=True, current_full_suite_pass_claim=False,
+        full_suite_scope='Pending changed candidate Rust workspace suite; no current control full-suite claim')
+
+
+def user_data(commit, archive_sha, archive_key, prefix, qualification):
+    # Reuse the reviewed uploader/bootstrap and replace only this campaign's commands.
+    minimal = dict(config_sha256=qualification['config_sha256'])
+    with patch.multiple(shared, WALL=WALL, SCHEMA=SCHEMA, ARTIFACTS=ARTIFACTS, CONFIG=CONFIG), \
+         patch.multiple(runner, WALL_SECONDS=WALL, SCHEMA=SCHEMA, ARTIFACTS=ARTIFACTS):
+        body = shared.user_data(commit, archive_sha, archive_key, prefix, minimal)
+    for filename, value, marker in [('artifact-roster.json', ARTIFACTS, 'ROSTER'),
+                                   ('source-qualification.json', qualification, 'QUALIFICATION')]:
+        begin = body.index(f"cat >{filename} <<'{marker}'")
+        end = body.index('\n' + marker, begin) + len(marker) + 1
+        encoded = base64.b64encode(gzip.compress(json.dumps(value, sort_keys=True,
+            separators=(',', ':')).encode(), mtime=0)).decode()
+        command = "python3 -c 'import base64,gzip; from pathlib import Path; " + \
+            f'Path("{filename}").write_bytes(gzip.decompress(base64.b64decode("{encoded}")))\''
+        body = body[:begin] + command + body[end:]
+    body = body.replace('native-metadata-ranges-cold', 'native-graph-decode-cold')
+    body = body.replace('metadata-ranges-build', 'graph-decode-build')
+    body = body.replace('RuntimeMaxSec=2430', 'RuntimeMaxSec=3630').replace('30 2400', '30 3600')
+    body = body.replace('python3.12 "$root/repo/scripts/check_native_metadata_ranges_build.py"',
+                        'python3.12 -m scripts.check_native_graph_decode_build')
+    body = body.replace('python3.12 scripts/run_native_metadata_ranges_cold.py',
+                        'python3.12 -m scripts.run_native_graph_decode_cold')
+    body = body.replace('python3.12 scripts/check_native_startup_build.py --cgroup',
+                        'python3.12 -m scripts.check_native_startup_build --cgroup')
+    body = body.replace("  'artifacts':artifacts}",
+        f"  'config_sha256':'{qualification['config_sha256']}',\n"
+        f"  'manifest_sha256':'{qualification['manifest_sha256']}',\n"
+        f"  'artifact_roster_sha256':'{qualification['artifact_roster_sha256']}',\n"
+        "  'artifacts':artifacts}")
+    subprocess.run(['bash', '-n'], input=body, text=True, check=True)
+    assert len(body.encode()) < 16384
+    return body
+
+
+def poll(ec2, s3, prefix, instance_id, started):
+    with patch.object(shared, 'WALL', WALL):
+        return shared.poll(ec2, s3, prefix, instance_id, started)
+
+
+def collect(s3, prefix, out, instance_id, commit, digest):
+    with patch.multiple(shared, SCHEMA=SCHEMA, ARTIFACTS=ARTIFACTS):
+        terminal = shared.collect(s3, prefix, out, instance_id, commit, digest)
+    qualification = json.loads((out / 'aws-reservation.json').read_bytes())['qualification']
+    for key in ('config_sha256', 'manifest_sha256', 'artifact_roster_sha256'):
+        assert terminal[key] == qualification[key], key
+    return terminal
+
+
+def main(attempt):
+    return shared.main(attempt, sys.modules[__name__])
+
+
+def lifecycle_self_check():
+    """Exercise this campaign through shared main; every AWS method is mocked."""
+    from datetime import datetime, timezone
+    from unittest.mock import Mock
+    import contextlib
+    import io
+    import tempfile
+    module = sys.modules[__name__]
+    tokens = []
+    for failure in (None, 'fsync', 'upload', 'poll', 'interrupt', 'multi-ack'):
+        with tempfile.TemporaryDirectory() as tmp:
+            ec2, s3, session = Mock(), Mock(), Mock()
+            session.client.side_effect = [ec2, s3]
+            ec2.describe_instances.return_value = {'Reservations': []}
+            ec2.describe_subnets.return_value = {'Subnets': [{'AvailabilityZone': 'eu-central-1a'}]}
+            ec2.describe_spot_price_history.return_value = {'SpotPriceHistory': [
+                {'SpotPrice': '.1', 'Timestamp': datetime.now(timezone.utc)}]}
+            ids = ['i-owned', 'i-extra'] if failure == 'multi-ack' else ['i-owned']
+            ec2.run_instances.return_value = {'Instances': [{'InstanceId': value} for value in ids]}
+            events = []
+            ec2.terminate_instances.side_effect = lambda **kwargs: events.append('terminate')
+            ec2.get_waiter.return_value.wait.side_effect = lambda **kwargs: events.append('wait')
+            def collected(*args):
+                assert events == ['terminate', 'wait']
+                assert args[3] == 'i-owned'
+                events.append('collect')
+                return dict(status='complete', phase='complete', exit_code=0,
+                    artifacts={name: {} for name in ARTIFACTS})
+            error = KeyboardInterrupt() if failure == 'interrupt' else RuntimeError('mock failure')
+            writes = [None, None, OSError('upload')] if failure == 'upload' else [None, None, None]
+            with patch.object(module, 'ROOT', Path(tmp)), \
+                    patch.object(module, 'preflight', return_value={'config_sha256': 'a'*64}), \
+                    patch.object(module, 'user_data', return_value='mock'), \
+                    patch.object(module, 'poll', side_effect=error if failure in ('poll', 'interrupt') else None), \
+                    patch.object(module, 'collect', side_effect=collected), \
+                    patch.object(shared.boto3, 'Session', return_value=session), \
+                    patch.object(shared.subprocess, 'check_output', side_effect=['', '0'*40, b'archive']), \
+                    patch.object(peer, 'missing', return_value=True), \
+                    patch.object(peer, 'put_if_absent', side_effect=writes), \
+                    patch.object(shared.os, 'fsync', side_effect=OSError('persist') if failure == 'fsync' else None), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                attempt = 'a0002' if failure == 'multi-ack' else 'a0001'
+                try:
+                    main(attempt)
+                except (OSError, RuntimeError, KeyboardInterrupt):
+                    assert failure is not None
+                else:
+                    assert failure in (None, 'multi-ack')
+            assert events == ['terminate', 'wait', 'collect']
+            ec2.terminate_instances.assert_called_once_with(InstanceIds=ids)
+            ec2.get_waiter.return_value.wait.assert_called_once_with(InstanceIds=ids)
+            ec2.run_instances.assert_called_once()
+            launch = ec2.run_instances.call_args.kwargs
+            assert launch['InstanceType'] == 'c7g.2xlarge'
+            assert launch['MinCount'] == launch['MaxCount'] == 1
+            assert launch['InstanceMarketOptions']['SpotOptions']['MaxPrice'] == '0.30'
+            assert launch['BlockDeviceMappings'][0]['Ebs'] == dict(
+                DeleteOnTermination=True, Encrypted=True, VolumeSize=80, VolumeType='gp3')
+            assert launch['NetworkInterfaces'][0]['SubnetId'] == SUBNET
+            assert launch['TagSpecifications'][0]['Tags'][0]['Value'] == TAG
+            tokens.append(launch['ClientToken'])
+            receipt = json.loads((Path(tmp)/NAME/attempt/'aws-launch.json').read_bytes())
+            assert receipt['nodes'] == {str(i): dict(instance_id=value) for i, value in enumerate(ids)}
+            reservation = json.loads((Path(tmp)/NAME/attempt/'aws-reservation.json').read_bytes())
+            assert reservation['schema'] == SCHEMA and reservation['wall_seconds'] == WALL
+            assert reservation['compute_cap_usd'] == COMPUTE_CAP and reservation['ebs_s3_allowance_usd'] == .15
+            assert reservation['total_cost_measured'] is False
+            close = json.loads((Path(tmp)/NAME/attempt/'aws-closeout.json').read_bytes())
+            assert close['state'] == 'terminated'
+            assert close['nodes'] == {str(i): dict(instance_id=value) for i, value in enumerate(ids)}
+    assert tokens[0] != tokens[-1]
+    assert all(token.startswith(TOKEN_PREFIX) and len(token) == 64 for token in tokens)
+    print('PASS shared ACK/fsync/upload/poll/interrupt, same owned IDs waited before collection')
+
+
+def build_self_check(repo, proof):
+    import contextlib
+    import io
+    import tempfile
+    from scripts import check_native_graph_decode_build as build
+    candidate_body = (repo / GRAPH).read_bytes()
+    control_body = (repo / proof['control_graph']['path']).read_bytes()
+    uncompiled_source = repo / 'crates/borsuk/src/lib.rs'
+    original_source = uncompiled_source.read_bytes()
+    for failure in ('success', 'control-test', 'candidate-clean', 'candidate-test',
+                    'control-graph-count', 'candidate-graph-count', 'toolchain',
+                    'features', 'mutation', 'full-suite', 'stale-target', 'qualification'):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            bad = dict(proof, source_file_count=394) if failure == 'qualification' else proof
+            (out / 'source-qualification.json').write_text(json.dumps(bad))
+            if failure == 'stale-target':
+                (out / 'target').mkdir()
+            commands = []
+            arm = 'control'
+            def features(cargo, base, destination):
+                for name in TOOLCHAIN:
+                    (destination / name).write_bytes(('same-worker-' + name +
+                        ('changed' if failure == 'toolchain' and destination == out else '')).encode())
+                return dict(arm_asm_selected=failure != 'features', x86_asm_selected=False,
+                            cpu_sha2_capable=True, toolchain_parity_asserted=False)
+            def fake_cargo(args, stdout, **kwargs):
+                nonlocal arm
+                commands.append(args[1])
+                assert args[0] == 'fake-cargo'
+                assert args[args.index('--target-dir') + 1] == str(out / 'target')
+                binary = out / 'target/release/examples/two_bit_http'
+                if args[1] == 'clean':
+                    assert commands == ['test']*9 + ['build', 'clean']
+                    arm = 'candidate'
+                    assert (repo / GRAPH).read_bytes() == candidate_body
+                    if failure == 'candidate-clean':
+                        raise subprocess.CalledProcessError(1, args)
+                    binary.unlink()
+                    return
+                assert '--locked' in args and '--release' in args
+                assert args[args.index('--jobs') + 1] == '4'
+                assert (repo / GRAPH).read_bytes() == (control_body if arm == 'control' else candidate_body)
+                if failure == arm + '-test':
+                    raise subprocess.CalledProcessError(1, args)
+                if failure == 'mutation':
+                    uncompiled_source.write_bytes(original_source + b'\n// unreviewed mutation\n')
+                if '--workspace' in args:
+                    assert arm == 'candidate' and '--all-targets' in args and '-p' not in args
+                    assert kwargs['check'] is False and not binary.exists()
+                    stdout.write('test result: ok. 1 passed; 0 failed;\n')
+                    return subprocess.CompletedProcess(args, 1 if failure == 'full-suite' else 0)
+                assert kwargs['check'] is True
+                if args[1] == 'test':
+                    count = 7 if arm == 'control' else 8
+                    if failure == arm + '-graph-count': count -= 1
+                    if args[-1] != 'unit_centroid_graph::tests': count = 1
+                    stdout.write(f'test result: ok. {count} passed; 0 failed;\n')
+                    stdout.write('\n'.join('test ' + name + ' ... ok'
+                        for name in (*build.SOURCE_TESTS, *build.SOURCE_WALK_TESTS)))
+                else:
+                    assert not binary.exists()
+                    binary.parent.mkdir(parents=True, exist_ok=True)
+                    binary.write_bytes((arm + '-fresh-binary').encode())
+            try:
+                with patch.object(build, 'feature_checks', side_effect=features), \
+                     patch.object(build, 'capture_cgroup'), \
+                     patch.object(subprocess, 'run', side_effect=fake_cargo), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    build.main('fake-cargo', repo, out)
+            except (subprocess.CalledProcessError, AssertionError):
+                assert failure != 'success'
+                assert not (out / 'boundary-check.json').exists()
+                if failure == 'full-suite':
+                    assert json.loads((out / 'full-suite-status.json').read_bytes())['status'] == 1
+            else:
+                assert failure == 'success', 'qualification failure swallowed'
+                assert commands == ['test']*9 + ['build', 'clean'] + ['test']*10 + ['build']
+                status = json.loads((out / 'full-suite-status.json').read_bytes())
+                assert status['status'] == 0 and status['runs'] == 1 and status['arm'] == 'candidate'
+                assert status['scope'] == build.FULL_SUITE_SCOPE
+                assert not (out / 'control/full-suite.log').exists()
+                for arm, destination in [('control', out / 'control'), ('candidate', out)]:
+                    boundary = json.loads((destination / 'boundary-check.json').read_bytes())
+                    expected = proof['control_compiled_native_sha256' if arm == 'control' else 'compiled_native_sha256']
+                    assert boundary['compiled_native_sha256'] == expected
+                    assert boundary['focused_tests'] == [name for name, _ in CHECKS]
+                    binary = (destination / 'binaries/two_bit_http').read_bytes()
+                    assert binary == (arm + '-fresh-binary').encode()
+                    assert boundary['binary_sha256'] == peer.sha(binary) and boundary['binary_bytes'] == len(binary)
+                    assert boundary['same_worker_toolchain'] and boundary['sha_backend']['toolchain_parity_asserted']
+                    assert boundary['current_full_suite_pass_claim'] is (arm == 'candidate')
+                    assert boundary['full_suite_runs'] == (1 if arm == 'candidate' else 0)
+                    for name, digest in expected.items():
+                        assert peer.sha((destination / 'compiled-source' / name).read_bytes()) == digest
+                runtime_proof_self_check(repo, out)
+            finally:
+                assert (repo / GRAPH).read_bytes() == candidate_body
+                uncompiled_source.write_bytes(original_source)
+
+
+def runtime_proof_self_check(repo, out):
+    import copy
+    from unittest.mock import Mock
+    config = json.loads((repo / CONFIG).read_bytes())
+    manifest = worker.validate_config(config, repo)
+    proofs = {arm: out / ('' if arm == 'candidate' else 'control') / 'boundary-check.json'
+              for arm in ('candidate', 'control')}
+    argv = [worker.__file__, str(repo / CONFIG), CONFIG_SHA,
+        str(out / 'binaries/two_bit_http'), str(proofs['candidate']),
+        str(out / 'control/binaries/two_bit_http'), str(proofs['control']), str(out / 'unused')]
+    run = Mock()
+    with patch.object(sys, 'argv', argv), patch.object(worker, 'validate_config', return_value=manifest), \
+         patch.object(worker.os, 'sched_getaffinity', return_value={4, 5}), \
+         patch.dict(os.environ, TOKIO_WORKER_THREADS='4', AWS_MAX_ATTEMPTS='1',
+                    BORSUK_NATIVE_MEMORY_BYTES='1073741824'), patch.object(worker, 'run', run):
+        worker.main()
+        run.assert_called_once()
+        for arm, path in proofs.items():
+            original = path.read_bytes()
+            proof = json.loads(original)
+            mutations = dict(qualified=False, green_status=1, release_status=1,
+                arm='wrong', same_worker_toolchain=False, source_identity_sha256='0'*64,
+                source_file_count=394, binary_sha256='0'*64, binary_bytes=0,
+                compiled_native_sha256={}, sha_backend=dict(proof['sha_backend'], x86_asm_selected=True))
+            for key, value in mutations.items():
+                path.write_text(json.dumps(dict(copy.deepcopy(proof), **{key: value})))
+                try:
+                    worker.main()
+                except AssertionError:
+                    pass
+                else:
+                    raise AssertionError('changed runtime proof accepted: ' + arm + '/' + key)
+                finally:
+                    path.write_bytes(original)
+        run.assert_called_once()
+
+
+def collection_self_check(qualification):
+    import copy
+    import io
+    import tempfile
+    from unittest.mock import Mock
+    artifact = b'authenticated closed log'
+    terminal = dict(schema=SCHEMA, instance_id='i-owned', source_commit='0'*40,
+        source_archive_sha256='1'*64, status='complete', phase='complete', exit_code=0,
+        artifacts={'run-closed.log': dict(bytes=len(artifact), sha256=peer.sha(artifact))},
+        **{key: qualification[key] for key in ('config_sha256', 'manifest_sha256', 'artifact_roster_sha256')})
+    for mutation in (None, 'schema', 'instance_id', 'source_commit', 'source_archive_sha256',
+                     'config_sha256', 'manifest_sha256', 'artifact_roster_sha256', 'body', 'bytes', 'roster'):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / 'aws-reservation.json').write_text(json.dumps(dict(qualification=qualification)))
+            changed = copy.deepcopy(terminal)
+            if mutation in changed: changed[mutation] = 'wrong'
+            if mutation == 'bytes': changed['artifacts']['run-closed.log']['bytes'] += 1
+            if mutation == 'roster': changed['artifacts']['../unowned'] = changed['artifacts']['run-closed.log']
+            def get_object(**kwargs):
+                body = json.dumps(changed).encode() if kwargs['Key'].endswith('/terminal.json') else artifact
+                if mutation == 'body' and not kwargs['Key'].endswith('/terminal.json'): body += b'changed'
+                return dict(Body=io.BytesIO(body))
+            s3 = Mock()
+            s3.get_object.side_effect = get_object
+            try:
+                collected = collect(s3, 'mock', out, 'i-owned', '0'*40, '1'*64)
+            except AssertionError:
+                assert mutation is not None
+            else:
+                assert mutation is None and collected == terminal
+                assert gzip.decompress((out / 'run-closed.log.gz').read_bytes()) == artifact
+    print('PASS collection terminal identity, roster and artifact-body authentication')
+
+
+def self_check():
+    """Real pinned authorities, fake Cargo and mock lifecycle; no cloud/native work."""
+    import ast
+    import tempfile
+    original = Path(__file__).resolve().parent.parent
+    # Ensure the explicit small code roster covers every transitive scripts import.
+    assert len(CODE) == len(set(CODE)) == 23
+    for name in CODE:
+        for node in ast.walk(ast.parse((original / name).read_text())):
+            imports = []
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith('scripts'):
+                imports = [node.module] if node.module != 'scripts' else ['scripts.' + a.name for a in node.names]
+            elif isinstance(node, ast.Import):
+                imports = [a.name for a in node.names if a.name.startswith('scripts.')]
+            for module in imports:
+                path = module.replace('.', '/') + '.py'
+                if (original / path).is_file(): assert path in CODE, path
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / 'repo'
+        def write(name, body):
+            path = repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(body)
+        for name in (*source_hashes(original), *CODE, CONFIG, MANIFEST,
+                     ROOT / 'control-unit-centroid-graph.txt',
+                     Path('docs/research/source-paging-20260930/cold-config.json')):
+            write(name, (original / name).read_bytes())
+        qualification = preflight(repo)
+        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == 92
+        assert set(qualification['code_sha256']) == set(CODE)
+        bindings = shared.WALL, shared.SCHEMA, shared.ARTIFACTS, shared.CONFIG, \
+                   runner.WALL_SECONDS, runner.SCHEMA, runner.ARTIFACTS
+        body = user_data('0'*40, '1'*64, 'sources/mock', 'mock', qualification)
+        assert bindings == (shared.WALL, shared.SCHEMA, shared.ARTIFACTS, shared.CONFIG,
+                            runner.WALL_SECONDS, runner.SCHEMA, runner.ARTIFACTS)
+        terminal = body.split("python3 - <<'PY' >terminal.json\n", 1)[1].split('\nPY\n', 1)[0]
+        compile(terminal, 'terminal-receipt', 'exec')
+        for filename in ('artifact-roster.json', 'source-qualification.json'):
+            line = next(line for line in body.splitlines() if f'Path("{filename}")' in line)
+            encoded = line.split('base64.b64decode("')[1].split('"')[0]
+            decoded = json.loads(gzip.decompress(base64.b64decode(encoded)))
+            assert decoded == (list(ARTIFACTS) if filename == 'artifact-roster.json' else qualification)
+        for token in ('--on-active=5400s', 'MemoryMax=10G', 'RuntimeMaxSec=3630',
+            'MemoryMax=8G', 'MemorySwapMax=0', 'RuntimeMaxSec=1530', 'ulimit -v 4194304',
+            'TOKIO_WORKER_THREADS=4', 'BORSUK_NATIVE_MEMORY_BYTES=1073741824', 'AWS_MAX_ATTEMPTS=1',
+            'taskset -c 4-5', 'taskset -c 0-3 python3.12 -m scripts.check_native_graph_decode_build',
+            'python3.12 -m scripts.run_native_graph_decode_cold', '30 3600', '30 1500',
+            '--setenv=PYTHONPATH="$root/repo"', '$1/control/binaries/two_bit_http'):
+            assert token in body, token
+        for name in (CONFIG, MANIFEST, GRAPH, 'Cargo.toml', worker.CODE[0], CODE[-1],
+                     ROOT / 'control-unit-centroid-graph.txt',
+                     'docs/research/source-paging-20260930/cold-config.json'):
+            path = repo / name
+            before = path.read_bytes()
+            path.write_bytes(before + b'changed')
+            try:
+                preflight(repo)
+            except (AssertionError, ValueError):
+                pass
+            else:
+                # Helper hashes are captured into the qualification and must not
+                # silently continue using its earlier authenticated roster.
+                assert str(name) in CODE and preflight(repo) != qualification
+            finally:
+                path.write_bytes(before)
+        config = json.loads((repo / CONFIG).read_bytes())
+        for key, value in [('count', 63), ('ann_queries', 255), ('blocks', list(reversed(config['blocks']))),
+                           ('compiled_sha256', {}), ('items_source', {}), ('source_caps', {}), ('staging', {})]:
+            changed = json.dumps(dict(config, **{key: value})).encode()
+            write(CONFIG, changed)
+            with patch.object(sys.modules[__name__], 'CONFIG_SHA', peer.sha(changed)):
+                try: preflight(repo)
+                except (AssertionError, KeyError): pass
+                else: raise AssertionError('changed config accepted: ' + key)
+        write(CONFIG, (original / CONFIG).read_bytes())
+        build_self_check(repo, qualification)
+        collection_self_check(qualification)
+        # Exercise the actual -m CLI/import from a non-repository CWD. A bad
+        # qualification must fail before the fake Cargo could ever be invoked.
+        out = Path(tmp) / 'cli-output'
+        out.mkdir()
+        (out / 'source-qualification.json').write_text('{}')
+        result = subprocess.run([sys.executable, '-m', 'scripts.check_native_graph_decode_build',
+            '/nonexistent-fake-cargo', str(repo), str(out)], cwd=out,
+            env=dict(os.environ, PYTHONPATH=str(repo)), capture_output=True, text=True)
+        assert result.returncode != 0 and 'AssertionError' in result.stderr
+        assert 'ModuleNotFoundError' not in result.stderr and not (out / 'target').exists()
+        print('PASS pinned source/config/control, build order/full-suite/restoration/proof guards; user-data bytes=' + str(len(body.encode())))
+    lifecycle_self_check()
+
+
+if __name__ == '__main__':
+    if sys.argv[1:] == ['--self-check']:
+        self_check()
+    else:
+        assert len(sys.argv) == 2, 'usage: python3 -m scripts.launch_native_graph_decode_spot aNNNN'
+        with open('/tmp/borsuk-native-graph-decode-launch.lock', 'a+') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            main(sys.argv[1])
