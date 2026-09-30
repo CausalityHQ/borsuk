@@ -1,0 +1,155 @@
+{
+  "schema": "borsuk-semantic-native-import-authority-audit-v1",
+  "source_revision": "c39be09f0504f6d9dc7eb461bb65b2e25640fa32",
+  "native_import_qualified": false,
+  "payloads_transformed": false,
+  "queries_or_truth_opened": false,
+  "datasets": {
+    "relaion": {
+      "config": {
+        "path": "docs/research/performance-architecture-20260930/semantic-router-scorer-relaion-config.json",
+        "sha256": "63161431127a3dd6065d90ac7e18c1be1831a5a52359966814634805c1d4fd5f"
+      },
+      "authenticated_inputs": {
+        "root": {
+          "bytes": 33951,
+          "path": "/tmp/borsuk-semantic-router-inputs/relaion/manifest.json",
+          "sha256": "577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b"
+        },
+        "centroids": {
+          "bytes": 4800032,
+          "path": "/tmp/borsuk-semantic-router-inputs/relaion/centroids.bin",
+          "sha256": "42bdea567bdc606333c9f09e07bc33742c1bec7cdcb69dd93b7489547ec3d2fb"
+        },
+        "plane_manifest": {
+          "bytes": 548,
+          "path": "/tmp/borsuk-semantic-router-inputs/relaion/plane-manifest.json",
+          "sha256": "16dd4cfabb6e2a079fd261c4f0626cafa4bcb4ec3e82aee303b066f08d2ae4fa"
+        },
+        "plane_mean": {
+          "bytes": 3072,
+          "path": "/tmp/borsuk-semantic-router-inputs/relaion/plane-mean.bin",
+          "sha256": "197a8ead172a5a41e029c8f0c9d39b981150c69fc3b0367316fb89c920eb1beb"
+        },
+        "plane_records": {
+          "bytes": 20000000,
+          "path": "/tmp/borsuk-semantic-router-inputs/relaion/plane-records.bin",
+          "sha256": "624e63de5905210bde24a4e7752573d6811d9fa5142e5b529ff0e9f65054ce83"
+        },
+        "order": {
+          "bytes": 800000,
+          "path": "/tmp/borsuk-semantic-router-inputs/relaion/order.u64",
+          "sha256": "22abeb087000ea2978c4fef8e85c2f7fda4e4b22c4e5126ba37a1c19816fab18"
+        },
+        "sq8": {
+          "bytes": 78000000,
+          "path": "/tmp/borsuk-semantic-router-inputs/relaion/sq8.bin",
+          "sha256": "be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b"
+        },
+        "router_manifest": {
+          "bytes": 752232,
+          "path": "/tmp/borsuk-semantic-router-construction-relaion-a0001/router/manifest.json",
+          "sha256": "4f008f68f244ef6cca8f18262cff64b36d69be87a6d529c2e85a55f584ae0760"
+        },
+        "router_membership": {
+          "bytes": 12500,
+          "path": "/tmp/borsuk-semantic-router-construction-relaion-a0001/router/membership.bin",
+          "sha256": "185f51cc44130ff760e905377cb04234cf3464bec754d80c1d554b58424432d6"
+        },
+        "router_leaves": {
+          "bytes": 4812500,
+          "path": "/tmp/borsuk-semantic-router-construction-relaion-a0001/router/leaves.bin",
+          "sha256": "e7f2ff4ce0ff44b68a8a23970e5b0452a6f3b7d145315d720274c87fe0ef8785"
+        }
+      },
+      "original_router_source_identity": {
+        "input_schema": "borsuk-two-bit-generation-v4",
+        "input_root_sha256": "577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b",
+        "input_centroids_sha256": "42bdea567bdc606333c9f09e07bc33742c1bec7cdcb69dd93b7489547ec3d2fb"
+      },
+      "plane_source_sha256": "0d55a09756f41361c89f0ca355a3bc98da6799b4dc7ea39ab34a905844a758c2",
+      "canonical": {
+        "bytes": 308000000,
+        "dimensions": 768,
+        "object_key": "research/native-union/20260928/locality-source-layout-a0001/data/relaion/objects/c260b7fe0b6a54de98dfba3f2599d272242f724421064ed5ca18c0cd63e6283d",
+        "rows": 100000,
+        "sha256": "c260b7fe0b6a54de98dfba3f2599d272242f724421064ed5ca18c0cd63e6283d"
+      },
+      "sq8_codec_tables_sha256": "6b24032da3cd53c92275d21fc479d88194331440a1a234cca0a57f76a537abd7",
+      "new_authority_requirement": "Preserve payload/order/mean/SQ8/low/step; add plane-v3 32-row digest authority; compare freshly SQ8-derived FP16 centroid digest and full router publication proof before native-v7 publication. Historical provenance root differs from new plane/generation root."
+    },
+    "cohere": {
+      "config": {
+        "path": "docs/research/performance-architecture-20260930/semantic-router-scorer-cohere-config.json",
+        "sha256": "fb507db819c77aaef4128237f637923db2bc37b0558c685e91e1d30e21631f1e"
+      },
+      "authenticated_inputs": {
+        "root": {
+          "bytes": 33988,
+          "path": "/tmp/borsuk-semantic-router-inputs/cohere/manifest.json",
+          "sha256": "9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521"
+        },
+        "centroids": {
+          "bytes": 4800032,
+          "path": "/tmp/borsuk-semantic-router-inputs/cohere/centroids.bin",
+          "sha256": "755fa712fc3d2c3a0e35f9eba95d429b269dc32968da58354d9c328d8d1405a7"
+        },
+        "plane_manifest": {
+          "bytes": 548,
+          "path": "/tmp/borsuk-semantic-router-inputs/cohere/plane-manifest.json",
+          "sha256": "5b945745af8709927f078e19e0fe7b14466675c9ec21b9227ac21ef1d04be31f"
+        },
+        "plane_mean": {
+          "bytes": 3072,
+          "path": "/tmp/borsuk-semantic-router-inputs/cohere/plane-mean.bin",
+          "sha256": "b50ffae3e16cc5e155ceee3adffcac0dc04d6812b0a1bb8fc01cbd259b58440a"
+        },
+        "plane_records": {
+          "bytes": 20000000,
+          "path": "/tmp/borsuk-semantic-router-inputs/cohere/plane-records.bin",
+          "sha256": "f47e344a6a959bfe1e9fe301785410b06667cf07d2bc0386892f510c7f5c6cf8"
+        },
+        "order": {
+          "bytes": 800000,
+          "path": "/tmp/borsuk-semantic-router-inputs/cohere/order.u64",
+          "sha256": "e2314ca14f5aa6f08b02cc328b863c921e55b1461a413ad6d3d66e781ff42d50"
+        },
+        "sq8": {
+          "bytes": 78000000,
+          "path": "/tmp/borsuk-semantic-router-inputs/cohere/sq8.bin",
+          "sha256": "c16929252705c831c6846022eec46481fc004f521f0c0814a53d49fece8771e0"
+        },
+        "router_manifest": {
+          "bytes": 736275,
+          "path": "/tmp/borsuk-semantic-router-construction-cohere-a0001/router/manifest.json",
+          "sha256": "c489beec0f555e402036a6bcba4268c67868a63f256943d2272f8f16bd4b531a"
+        },
+        "router_membership": {
+          "bytes": 12500,
+          "path": "/tmp/borsuk-semantic-router-construction-cohere-a0001/router/membership.bin",
+          "sha256": "12416365085dddecc150cc82a0cfdc4efb8981e9aa5ab75b26d4f9c3bd13dda1"
+        },
+        "router_leaves": {
+          "bytes": 4812500,
+          "path": "/tmp/borsuk-semantic-router-construction-cohere-a0001/router/leaves.bin",
+          "sha256": "add8f77ba14ecb438a5674fb58b02f8ef4fefaaddaa7fbb7f67b83f4e1f1199d"
+        }
+      },
+      "original_router_source_identity": {
+        "input_schema": "borsuk-two-bit-generation-v4",
+        "input_root_sha256": "9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521",
+        "input_centroids_sha256": "755fa712fc3d2c3a0e35f9eba95d429b269dc32968da58354d9c328d8d1405a7"
+      },
+      "plane_source_sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e",
+      "canonical": {
+        "bytes": 308000000,
+        "dimensions": 768,
+        "object_key": "research/native-union/20260928/walk-source-http-a0001/data/cohere/objects/38304c3b448f2f62b32da8b443bbe52f20ccc63f5472d0e7885d5c268dd7a6df",
+        "rows": 100000,
+        "sha256": "38304c3b448f2f62b32da8b443bbe52f20ccc63f5472d0e7885d5c268dd7a6df"
+      },
+      "sq8_codec_tables_sha256": "07ec63a1c09cc7096e37f997d188f1a8198ceadcff3bfe25d5feab81e61798e5",
+      "new_authority_requirement": "Preserve payload/order/mean/SQ8/low/step; add plane-v3 32-row digest authority; compare freshly SQ8-derived FP16 centroid digest and full router publication proof before native-v7 publication. Historical provenance root differs from new plane/generation root."
+    }
+  }
+}
