@@ -97,11 +97,11 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     fs::write(root.join("canonical.bin"), &canonical).unwrap();
     let canonical_descriptor = serde_json::json!({"rows":512,"dimensions":2,
         "bytes":canonical.len(),"sha256":hash(&canonical),"object_key":format!("tenant/g1/objects/{}",hash(&canonical))});
-    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v6",
+    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v7",
         "generation":1,"base_epoch":0,"plane_manifest_sha256":hash(&fs::read(root.join("plane/manifest.json")).unwrap()),
-        "page_manifest_sha256":hash(&page_manifest),"centroids_sha256":hash(&centroid),
+        "page_manifest_sha256":hash(&page_manifest),"discovery":{"mode":"graph","centroids_sha256":hash(&centroid),
         "graph_sha256":hash(&graph),"graph_resident_bytes":graph_resident,
-        "diverse_graph_sha256":hash(&diverse_graph),"diverse_graph_resident_bytes":diverse_graph_resident,
+        "diverse_graph_sha256":hash(&diverse_graph),"diverse_graph_resident_bytes":diverse_graph_resident},
         "sq8_object_sha256":sq8_sha,"sq8_object_key":format!("tenant/g1/objects/{sq8_sha}"),
         "sq8_etag":"etag-1","low":[0.,0.],"step":[1_f32/255.,1_f32/255.],"canonical":canonical_descriptor})).unwrap();
     fs::write(root.join("manifest.json"), &manifest).unwrap();
@@ -902,11 +902,11 @@ fn graph_variant_adapter_preserves_components_and_rejects_untrusted_roots() {
     let mut candidate_manifest: serde_json::Value =
         serde_json::from_slice(&candidate_bytes).unwrap();
     assert_ne!(
-        candidate_manifest["graph_sha256"],
-        control_manifest["graph_sha256"]
+        candidate_manifest["discovery"]["graph_sha256"],
+        control_manifest["discovery"]["graph_sha256"]
     );
     for field in ["graph_sha256", "graph_resident_bytes"] {
-        candidate_manifest[field] = control_manifest[field].clone();
+        candidate_manifest["discovery"][field] = control_manifest["discovery"][field].clone();
     }
     assert_eq!(candidate_manifest, control_manifest);
     for (name, bytes) in names.into_iter().zip(&before) {

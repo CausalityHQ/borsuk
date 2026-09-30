@@ -1,11 +1,12 @@
 //! A single authenticated root for frozen two-bit nomination and on-demand SQ8.
+use crate::semantic_unit_router::{SemanticUnitRouter, SourceIdentity};
 use crate::{
     budgeted_page_rank::{
         BudgetedPageError, BudgetedPagePlan, choose_budgeted_pages_sparse, cover_pages,
     },
     canonical_source::CanonicalSource,
     object_native_generation::{
-        MetadataReadStats, ObjectNativeOpenError, metadata_location, stage_generation_metadata,
+        MetadataReadStats, ObjectNativeOpenError, metadata_location, stage_two_bit_metadata,
     },
     rotated_two_bit::PreparedTwoBit,
     sq8_page_authority::{PageAuthority, PageError},
@@ -18,8 +19,10 @@ use crate::{
     unit_centroid_graph::{UnitCentroidGraph, UnitCentroidGraphError},
     unit_centroid_pages::{UnitCentroidError, UnitCentroidPages},
 };
+use futures_util::{StreamExt, stream};
+use object_store::GetOptions;
 use object_store::{ObjectStore, ObjectStoreExt, path::Path as ObjectPath};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, collections::BTreeSet, fs, path::Path};
 use tokio::sync::Semaphore;
 
@@ -60,6 +63,22 @@ pub enum TwoBitGenerationError {
         /// Original nomination or physical-admission error.
         error: Box<TwoBitGenerationError>,
     },
+    /// Semantic router authentication or policy failure.
+    Router(String),
+    /// Incurred leaf charges, retained through later failures.
+    RouterCharged {
+        /// Logical leaf reads and verified bytes already incurred.
+        stats: Sq8ReadStats,
+        /// Failure in leaf validation or a downstream stage.
+        error: Box<TwoBitGenerationError>,
+    },
+    /// Query intervals retained even when an admitted stage fails.
+    Query {
+        /// Observed intervals, including failed admitted stages.
+        stages: QueryStages,
+        /// Underlying error and incurred I/O charges.
+        error: Box<TwoBitGenerationError>,
+    },
     /// Source HEAD transport failure during startup.
     SourceHead(object_store::Error),
 }
@@ -67,11 +86,38 @@ impl TwoBitGenerationError {
     /// Source and SQ8 logical request/verified-byte charges for this failure.
     pub fn read_stats(&self) -> (Sq8ReadStats, Sq8ReadStats) {
         match self {
+            Self::RouterCharged { error, .. } | Self::Query { error, .. } => error.read_stats(),
             Self::Read(failure) => (Sq8ReadStats::default(), failure.stats),
             Self::SourceRead(failure) => (failure.stats, Sq8ReadStats::default()),
             Self::PagedRead { source, sq8 } => (*source, sq8.stats),
             Self::SourcePlanning { stats, .. } => (*stats, Sq8ReadStats::default()),
             _ => (Sq8ReadStats::default(), Sq8ReadStats::default()),
+        }
+    }
+    /// Selected-leaf logical requests and authenticated bytes, including failures.
+    pub fn router_stats(&self) -> Sq8ReadStats {
+        match self {
+            Self::RouterCharged { stats, .. } => *stats,
+            Self::Query { error, .. } => error.router_stats(),
+            _ => Sq8ReadStats::default(),
+        }
+    }
+    /// Monotonic intervals since the admitted query began, if search reached a stage.
+    pub fn stages(&self) -> Option<&QueryStages> {
+        match self {
+            Self::Query { stages, .. } => Some(stages),
+            Self::RouterCharged { error, .. } => error.stages(),
+            _ => None,
+        }
+    }
+    fn with_router(self, stats: Sq8ReadStats) -> Self {
+        if stats.submitted_gets == 0 {
+            self
+        } else {
+            Self::RouterCharged {
+                stats,
+                error: Box::new(self),
+            }
         }
     }
     fn charged_read(source: Sq8ReadStats, sq8: RankedSq8Failure) -> Self {
@@ -115,7 +161,7 @@ pub struct TwoBitGenerationLimits {
     /// Payload charged to other pinned generations and immutable mutation snapshots.
     pub already_pinned_bytes: u64,
 }
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Manifest {
     pub(crate) schema: String,
@@ -123,11 +169,7 @@ pub(crate) struct Manifest {
     pub(crate) base_epoch: u64,
     pub(crate) plane_manifest_sha256: String,
     pub(crate) page_manifest_sha256: String,
-    pub(crate) centroids_sha256: String,
-    pub(crate) graph_sha256: String,
-    pub(crate) graph_resident_bytes: usize,
-    pub(crate) diverse_graph_sha256: String,
-    pub(crate) diverse_graph_resident_bytes: usize,
+    pub(crate) discovery: Discovery,
     pub(crate) sq8_object_sha256: String,
     pub(crate) sq8_object_key: String,
     pub(crate) sq8_etag: String,
@@ -135,7 +177,7 @@ pub(crate) struct Manifest {
     pub(crate) low: Vec<f32>,
     pub(crate) step: Vec<f32>,
 }
-pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v6";
+pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v7";
 pub(crate) const METADATA_FILES: [&str; 10] = [
     "manifest.json",
     "page_manifest.json",
@@ -148,22 +190,210 @@ pub(crate) const METADATA_FILES: [&str; 10] = [
     "plane/records.bin",
     "plane/page_digests.bin",
 ];
-// Persistent publication/GC keeps records; startup only stages the authority.
-const STARTUP_FILES: [&str; 9] = [
-    "manifest.json",
-    "page_manifest.json",
-    "page_digests.bin",
-    "centroids.bin",
-    "graph.bin",
-    "diverse_graph.bin",
-    "plane/manifest.json",
-    "plane/mean.bin",
-    "plane/page_digests.bin",
+pub(crate) const ROUTER_FILES: [&str; 3] = [
+    "router/manifest.json",
+    "router/membership.bin",
+    "router/leaves.bin",
 ];
+pub(crate) const ROUTER_ROOT_CAP: usize = 1024 * 1024;
+const LEAF_BYTES: usize = 2 * 1024 * 1024;
+
+/// Concrete discovery policy. Compaction inherits it unless explicitly changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryMode {
+    /// Contemporaneous two-graph control.
+    Graph,
+    /// Fixed semantic unit-leaf discovery.
+    Semantic,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum Discovery {
+    Graph {
+        centroids_sha256: String,
+        graph_sha256: String,
+        graph_resident_bytes: usize,
+        diverse_graph_sha256: String,
+        diverse_graph_resident_bytes: usize,
+    },
+    Semantic {
+        root_sha256: String,
+        root_bytes: usize,
+        membership_sha256: String,
+        membership_bytes: usize,
+        leaves_sha256: String,
+        leaves_bytes: usize,
+        // Construction provenance, independent of the new generation root.
+        input_schema: String,
+        input_root_sha256: String,
+        centroids_sha256: String,
+        source_sha256: String,
+        source_order_sha256: String,
+        mean_sha256: String,
+        records_sha256: String,
+        sq8_sha256: String,
+    },
+}
+impl Discovery {
+    pub(crate) fn mode(&self) -> DiscoveryMode {
+        match self {
+            Self::Graph { .. } => DiscoveryMode::Graph,
+            Self::Semantic { .. } => DiscoveryMode::Semantic,
+        }
+    }
+    pub(crate) fn valid(&self, rows: usize, dimensions: usize) -> bool {
+        use crate::resident_graph_generation::valid_sha256 as valid;
+        match self {
+            Self::Graph {
+                centroids_sha256,
+                graph_sha256,
+                graph_resident_bytes,
+                diverse_graph_sha256,
+                diverse_graph_resident_bytes,
+            } => {
+                valid(centroids_sha256)
+                    && valid(graph_sha256)
+                    && valid(diverse_graph_sha256)
+                    && *graph_resident_bytes > 0
+                    && *diverse_graph_resident_bytes > 0
+            }
+            Self::Semantic {
+                root_sha256,
+                root_bytes,
+                membership_sha256,
+                membership_bytes,
+                leaves_sha256,
+                leaves_bytes,
+                input_schema,
+                input_root_sha256,
+                centroids_sha256,
+                source_sha256,
+                source_order_sha256,
+                mean_sha256,
+                records_sha256,
+                sq8_sha256,
+            } => {
+                (1..=100_000).contains(&rows)
+                    && (1..=768).contains(&dimensions)
+                    && (1..=ROUTER_ROOT_CAP).contains(root_bytes)
+                    && (1..=256).contains(&input_schema.len())
+                    && *membership_bytes == rows.div_ceil(32) * 4
+                    && *leaves_bytes == rows.div_ceil(32) * (4 + dimensions * 2)
+                    && [
+                        root_sha256,
+                        membership_sha256,
+                        leaves_sha256,
+                        input_root_sha256,
+                        centroids_sha256,
+                        source_sha256,
+                        source_order_sha256,
+                        mean_sha256,
+                        records_sha256,
+                        sq8_sha256,
+                    ]
+                    .into_iter()
+                    .all(|s| valid(s))
+            }
+        }
+    }
+    pub(crate) fn files(&self, startup: bool) -> Vec<&'static str> {
+        let mut files = METADATA_FILES
+            .into_iter()
+            .filter(|name| {
+                !(startup && *name == "plane/records.bin")
+                    && (self.mode() == DiscoveryMode::Graph
+                        || !["centroids.bin", "graph.bin", "diverse_graph.bin"].contains(name))
+            })
+            .collect::<Vec<_>>();
+        if self.mode() == DiscoveryMode::Semantic {
+            files.extend(
+                ROUTER_FILES
+                    .into_iter()
+                    .filter(|name| !startup || *name != "router/leaves.bin"),
+            );
+        }
+        files
+    }
+    fn graph_memory(&self) -> Option<u64> {
+        match self {
+            Self::Graph {
+                graph_resident_bytes,
+                diverse_graph_resident_bytes,
+                ..
+            } => (*graph_resident_bytes as u64).checked_add(*diverse_graph_resident_bytes as u64),
+            Self::Semantic { .. } => Some(0),
+        }
+    }
+    pub(crate) fn input<'a>(&'a self, plane: &SourcePlaneReceipt) -> Result<SourceIdentity<'a>> {
+        let Self::Semantic {
+            input_schema,
+            input_root_sha256,
+            centroids_sha256,
+            source_sha256,
+            source_order_sha256,
+            mean_sha256,
+            records_sha256,
+            sq8_sha256,
+            ..
+        } = self
+        else {
+            return Err(TwoBitGenerationError::Invalid("semantic descriptor"));
+        };
+        if source_sha256 != &plane.source_sha256
+            || source_order_sha256 != &plane.source_order_sha256
+            || mean_sha256 != &plane.mean_sha256
+            || records_sha256 != &plane.records_sha256
+            || sq8_sha256 != &plane.sq8_sha256
+        {
+            return Err(TwoBitGenerationError::Invalid("router source binding"));
+        }
+        Ok(SourceIdentity {
+            schema: input_schema,
+            root_sha256: input_root_sha256,
+            centroids_sha256,
+            rows: plane.rows,
+            dimensions: plane.dimensions,
+        })
+    }
+}
+enum LoadedDiscovery {
+    Graph {
+        centroids: UnitCentroidPages,
+        graphs: [UnitCentroidGraph; 2],
+    },
+    Semantic {
+        router: SemanticUnitRouter,
+        local: std::path::PathBuf,
+        remote: Option<(ObjectPath, String)>,
+    },
+}
 struct RemoteSource {
     authority: PageAuthority,
     location: ObjectPath,
     etag: String,
+}
+/// Monotonic stage boundaries relative to the admitted query's start.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct StageInterval {
+    /// Nanoseconds from query start.
+    pub start_ns: u128,
+    /// Nanoseconds from query start, including failed attempts.
+    pub end_ns: u128,
+}
+/// Query phase intervals, not inferred network waves or wire accounting.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct QueryStages {
+    /// Query preparation and graph/semantic discovery, including leaf reads.
+    pub discovery: StageInterval,
+    /// Authenticated source range fetch, after releasing leaf bodies.
+    pub source: StageInterval,
+    /// Shared source scoring and physical SQ8 plan.
+    pub planning: StageInterval,
+    /// Native authenticated SQ8 fetch/rank, after releasing source bodies.
+    pub sq8: StageInterval,
+    /// Maximum simultaneous selected-leaf read futures actually entered.
+    pub leaf_peak_inflight: usize,
 }
 /// A bounded generation query with independently charged source and SQ8 reads.
 pub struct TwoBitSearchResult {
@@ -173,6 +403,10 @@ pub struct TwoBitSearchResult {
     pub ranked: RankedSq8,
     /// Source nomination reads; zero for the local resident reference.
     pub source_stats: Sq8ReadStats,
+    /// Selected whole-leaf charges; separate from source/SQ8.
+    pub router_stats: Sq8ReadStats,
+    /// Stage intervals from the admitted query.
+    pub stages: QueryStages,
 }
 /// Remote namespace startup accounting; query measurements remain separate.
 #[derive(Debug, serde::Serialize)]
@@ -187,6 +421,10 @@ pub struct RemoteOpenStats {
     pub source_head_requests: u64,
     /// Source HEAD wall time, excluded from local decoding time.
     pub source_head_wall_ns: u128,
+    /// Logical whole-leaf object HEAD; zero for graph mode.
+    pub router_head_requests: u64,
+    /// Whole-leaf HEAD interval, separate from local decode.
+    pub router_head_wall_ns: u128,
 }
 
 /// Immutable metadata; SQ8 rows are fetched conditionally and never cached here.
@@ -195,8 +433,7 @@ pub struct TwoBitGeneration {
     modeled_memory_bytes: u64,
     plane: TwoBitPlane,
     pages: PageAuthority,
-    centroids: UnitCentroidPages,
-    graphs: [UnitCentroidGraph; 2],
+    discovery: LoadedDiscovery,
     manifest: Manifest,
     limits: TwoBitGenerationLimits,
     slots: Semaphore,
@@ -214,6 +451,10 @@ pub struct TwoBitMutationSearchResult {
     pub stats: Sq8ReadStats,
     /// Authenticated source reads before base SQ8 ranking.
     pub source_stats: Sq8ReadStats,
+    /// Selected whole-leaf charges; separate from source/SQ8.
+    pub router_stats: Sq8ReadStats,
+    /// Stage intervals from the admitted query.
+    pub stages: QueryStages,
     /// Latest-state rows visited, including tombstones.
     pub mutation_rows_scanned: usize,
     /// Normalized pending puts scored in this query.
@@ -251,6 +492,12 @@ pub struct TwoBitPlanTrace {
     pub primary_page: usize,
     /// Nearest then diversity discovery; identical graph identities run once.
     pub discoveries: Vec<TwoBitDiscoveryTrace>,
+    /// Authenticated semantic nomination, absent for graph mode.
+    pub semantic_leaves: Vec<usize>,
+    /// Original semantic units before seed completion.
+    pub semantic_units: Vec<usize>,
+    /// Units added within the selected seed page.
+    pub semantic_seed_additions: Vec<usize>,
 }
 impl TwoBitPlanTrace {
     /// Conservative retained ID/record payload excluding allocator overhead.
@@ -266,8 +513,8 @@ impl TwoBitPlanTrace {
 /// Offline source nomination and SQ8 page admission using the production planner.
 /// The caller binds the prepared query and authenticated records to one source;
 /// discovery, source-read charges and retained trace memory remain caller-owned.
-/// The explicit nomination limit must be in 1..=min(total pages,159); production
-/// uses that maximum, while shorter diagnostic closures must opt in explicitly.
+/// The explicit nomination limit must fit the physical pages; graph production
+/// retains min(total pages,159), while semantic discovery supplies its full closure.
 #[doc(hidden)]
 pub fn plan_two_bit_source_walks<'a>(
     rows: usize,
@@ -376,7 +623,7 @@ fn rank_walked_source_with_limit(
         || walks.is_empty()
         || walks.len() > 2
         || page_limit == 0
-        || page_limit > rows.div_ceil(256).min(159)
+        || page_limit > rows.div_ceil(256)
     {
         return Err(invalid());
     }
@@ -512,14 +759,13 @@ impl TwoBitGeneration {
         scratch_parent: &Path,
     ) -> Result<Self> {
         let staging_started = std::time::Instant::now();
-        let (scratch, metadata) = stage_generation_metadata(
+        let (scratch, metadata) = stage_two_bit_metadata(
             store,
             prefix,
             trusted_sha256,
             limits
                 .max_memory_bytes
                 .saturating_sub(limits.already_pinned_bytes),
-            &STARTUP_FILES,
             scratch_parent,
         )
         .await
@@ -534,7 +780,9 @@ impl TwoBitGeneration {
         let source_head_wall_ns = head_started.elapsed().as_nanos();
         let etag = head
             .e_tag
-            .filter(|etag| !etag.is_empty() && !etag.starts_with("W/"))
+            .filter(|etag| {
+                !etag.is_empty() && !etag.starts_with("W/") && !etag.chars().any(char::is_control)
+            })
             .ok_or(TwoBitGenerationError::Invalid("source ETag"))?;
         let decode_started = std::time::Instant::now();
         let mut generation = Self::open_inner(
@@ -543,12 +791,39 @@ impl TwoBitGeneration {
             limits,
             Some((location, etag, head.size)),
         )?;
+        let decode_wall_ns = decode_started.elapsed().as_nanos();
+        let router_head_started = std::time::Instant::now();
+        let mut router_head_requests = 0;
+        if let LoadedDiscovery::Semantic { router, remote, .. } = &mut generation.discovery {
+            router_head_requests = 1;
+            let location = metadata_location(prefix, "router/leaves.bin");
+            let head = store
+                .head(&location)
+                .await
+                .map_err(TwoBitGenerationError::SourceHead)?;
+            let etag = head
+                .e_tag
+                .filter(|tag| {
+                    !tag.is_empty() && !tag.starts_with("W/") && !tag.chars().any(char::is_control)
+                })
+                .ok_or(TwoBitGenerationError::Invalid("leaf ETag"))?;
+            if head.size != router.manifest().leaf_payload.bytes as u64 {
+                return Err(TwoBitGenerationError::Invalid("leaf HEAD geometry"));
+            }
+            *remote = Some((location, etag));
+        }
         generation.remote_open_stats = Some(RemoteOpenStats {
             metadata,
             staging_wall_ns,
-            decode_wall_ns: decode_started.elapsed().as_nanos(),
+            decode_wall_ns,
             source_head_requests: 1,
             source_head_wall_ns,
+            router_head_requests,
+            router_head_wall_ns: if router_head_requests == 0 {
+                0
+            } else {
+                router_head_started.elapsed().as_nanos()
+            },
         });
         Ok(generation)
     }
@@ -570,6 +845,7 @@ impl TwoBitGeneration {
         remote: Option<(ObjectPath, String, u64)>,
     ) -> Result<Self> {
         let paged = remote.is_some();
+        let mut limits = limits;
         let bad = TwoBitGenerationError::Invalid;
         let size = |name: &str| {
             fs::metadata(root.join(name))
@@ -579,7 +855,10 @@ impl TwoBitGeneration {
         let manifest_size = size("manifest.json")?;
         if manifest_size == 0
             || manifest_size > 65536
-            || limits.max_memory_bytes < 131072
+            || limits
+                .max_memory_bytes
+                .saturating_sub(limits.already_pinned_bytes)
+                < 131072
             || limits.max_active_queries == 0
             || limits.max_query_bytes == 0
             || limits.max_query_gets == 0
@@ -601,9 +880,11 @@ impl TwoBitGeneration {
         let key = manifest.sq8_object_key.split('/').collect::<Vec<_>>();
         if manifest.schema != SCHEMA
             || manifest.generation == 0
-            || manifest.graph_resident_bytes == 0
-            || manifest.diverse_graph_resident_bytes == 0
+            || !manifest
+                .discovery
+                .valid(manifest.canonical.rows, manifest.canonical.dimensions)
             || manifest.sq8_etag.is_empty()
+            || manifest.sq8_etag.starts_with("W/")
             || manifest.sq8_etag.chars().any(char::is_control)
             || key.len() < 2
             || key[key.len() - 2] != "objects"
@@ -624,26 +905,34 @@ impl TwoBitGeneration {
         {
             return Err(bad("root identity"));
         }
-        let files = [
-            "plane/manifest.json",
-            "plane/mean.bin",
-            "plane/records.bin",
-            "plane/page_digests.bin",
-            "page_manifest.json",
-            "page_digests.bin",
-            "centroids.bin",
-            "graph.bin",
-            "diverse_graph.bin",
-        ];
+        if manifest.discovery.mode() == DiscoveryMode::Semantic {
+            limits.max_source_bytes = limits.max_source_bytes.min(64 * 1024 * 1024);
+            limits.max_source_gets = limits.max_source_gets.min(128);
+            limits.max_parallel_source_gets = limits.max_parallel_source_gets.min(16);
+            limits.max_query_bytes = limits.max_query_bytes.min(16_773_120);
+            limits.max_query_gets = limits.max_query_gets.min(32);
+            limits.max_parallel_gets = limits.max_parallel_gets.min(16);
+        }
+        let files = manifest.discovery.files(paged);
         let mut disk = manifest_size;
         let mut sizes = Vec::with_capacity(files.len());
         for name in files {
-            if paged && name == "plane/records.bin" {
+            if name == "manifest.json" || name == "router/leaves.bin" {
                 continue;
             }
             let length = size(name)?;
             disk = disk.checked_add(length).ok_or(bad("metadata size"))?;
             sizes.push((name, length));
+        }
+        // Admit all encoded/decoded metadata copies before loading the plane
+        // receipt, then refine the model with authenticated geometry below.
+        if disk
+            .checked_mul(3)
+            .and_then(|n| n.checked_add(131072))
+            .and_then(|n| n.checked_add(limits.already_pinned_bytes))
+            .is_none_or(|n| n > limits.max_memory_bytes)
+        {
+            return Err(bad("metadata memory cap"));
         }
         // Keep the admitted lengths; never allocate from a later, larger stat.
         let admitted_size = |name: &str| -> Result<usize> {
@@ -723,8 +1012,20 @@ impl TwoBitGeneration {
             .checked_mul(3)
             .and_then(|n| n.checked_add(codec_memory))
             .and_then(|n| n.checked_add(131072))
-            .and_then(|n| n.checked_add(manifest.graph_resident_bytes as u64))
-            .and_then(|n| n.checked_add(manifest.diverse_graph_resident_bytes as u64))
+            .and_then(|n| n.checked_add(manifest.discovery.graph_memory()?))
+            .and_then(|n| {
+                n.checked_add(if manifest.discovery.mode() == DiscoveryMode::Semantic {
+                    // JSON decoding/prototype allocations plus root/membership encoded copies;
+                    // leaf buffers/validated units for every concurrent query, no cache.
+                    let root = admitted_size("router/manifest.json").ok()? as u64;
+                    root.checked_mul(32)?.checked_add(
+                        (LEAF_BYTES as u64 * 2 + 1024 * 1024)
+                            .checked_mul(limits.max_active_queries as u64)?,
+                    )?
+                } else {
+                    0
+                })
+            })
             .and_then(|n| n.checked_add(query_memory))
             .and_then(|n| n.checked_add(source_query_memory))
             .and_then(|n| n.checked_add(limits.already_pinned_bytes))
@@ -788,45 +1089,96 @@ impl TwoBitGeneration {
         }
         let pages = PageAuthority::load(&page_body, &manifest.page_manifest_sha256, &sidecar)
             .map_err(TwoBitGenerationError::Page)?;
-        let centroid_blob = read("centroids.bin", &manifest.centroids_sha256)?;
-        let centroids =
-            UnitCentroidPages::decode(&centroid_blob).map_err(TwoBitGenerationError::Centroid)?;
-        let mut graphs = Vec::with_capacity(2);
-        for (name, digest, resident) in [
-            (
-                "graph.bin",
-                manifest.graph_sha256.as_str(),
-                manifest.graph_resident_bytes,
-            ),
-            (
-                "diverse_graph.bin",
-                manifest.diverse_graph_sha256.as_str(),
-                manifest.diverse_graph_resident_bytes,
-            ),
-        ] {
-            let blob = read(name, digest)?;
-            if UnitCentroidGraph::preflight_resident_bytes(&blob, &centroids)
-                .map_err(TwoBitGenerationError::Graph)?
-                != resident
-            {
-                return Err(bad("graph memory declaration"));
+        let discovery = match &manifest.discovery {
+            Discovery::Graph {
+                centroids_sha256,
+                graph_sha256,
+                graph_resident_bytes,
+                diverse_graph_sha256,
+                diverse_graph_resident_bytes,
+            } => {
+                let centroid_blob = read("centroids.bin", centroids_sha256)?;
+                let centroids = UnitCentroidPages::decode(&centroid_blob)
+                    .map_err(TwoBitGenerationError::Centroid)?;
+                if centroids.rows() != geometry.rows
+                    || centroids.dimensions() != geometry.dimensions
+                    || centroids.page_rows() != 256
+                    || centroids.unit_rows() != 32
+                {
+                    return Err(bad("centroid geometry"));
+                }
+                let mut graphs = Vec::with_capacity(2);
+                for (name, digest, resident) in [
+                    ("graph.bin", graph_sha256, *graph_resident_bytes),
+                    (
+                        "diverse_graph.bin",
+                        diverse_graph_sha256,
+                        *diverse_graph_resident_bytes,
+                    ),
+                ] {
+                    let blob = read(name, digest)?;
+                    if UnitCentroidGraph::preflight_resident_bytes(&blob, &centroids)
+                        .map_err(TwoBitGenerationError::Graph)?
+                        != resident
+                    {
+                        return Err(bad("graph memory declaration"));
+                    }
+                    graphs.push(
+                        UnitCentroidGraph::decode_bounded(
+                            &blob,
+                            &centroid_blob,
+                            &centroids,
+                            resident,
+                        )
+                        .map_err(TwoBitGenerationError::Graph)?,
+                    );
+                }
+                LoadedDiscovery::Graph {
+                    centroids,
+                    graphs: graphs.try_into().map_err(|_| bad("graph roster"))?,
+                }
             }
-            graphs.push(
-                UnitCentroidGraph::decode_bounded(&blob, &centroid_blob, &centroids, resident)
-                    .map_err(TwoBitGenerationError::Graph)?,
-            );
-        }
-        let graphs: [UnitCentroidGraph; 2] = graphs.try_into().map_err(|_| bad("graph roster"))?;
+            Discovery::Semantic {
+                root_sha256,
+                root_bytes,
+                membership_sha256,
+                membership_bytes,
+                leaves_sha256,
+                leaves_bytes,
+                ..
+            } => {
+                if admitted_size("router/manifest.json")? != *root_bytes
+                    || admitted_size("router/membership.bin")? != *membership_bytes
+                {
+                    return Err(bad("router metadata length"));
+                }
+                let input = manifest.discovery.input(plane.receipt())?;
+                let router = SemanticUnitRouter::open(
+                    &read("router/manifest.json", root_sha256)?,
+                    &read("router/membership.bin", membership_sha256)?,
+                    root_sha256,
+                    &input,
+                    ROUTER_ROOT_CAP,
+                )
+                .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
+                if router.manifest().leaf_payload.sha256 != *leaves_sha256
+                    || router.manifest().leaf_payload.bytes != *leaves_bytes
+                {
+                    return Err(bad("router payload binding"));
+                }
+                LoadedDiscovery::Semantic {
+                    router,
+                    local: root.join("router/leaves.bin"),
+                    remote: None,
+                }
+            }
+        };
         let receipt = plane.receipt();
         if pages.generation() != manifest.generation
             || pages.object_sha256() != manifest.sq8_object_sha256
             || pages.rows() != receipt.rows
             || pages.dimensions() != receipt.dimensions
             || pages.page_rows() != 256
-            || centroids.rows() != receipt.rows
-            || centroids.dimensions() != receipt.dimensions
-            || centroids.page_rows() != 256
-            || centroids.unit_rows() != 32
             || manifest.low.len() != receipt.dimensions
         {
             return Err(bad("generation binding"));
@@ -836,14 +1188,168 @@ impl TwoBitGeneration {
             modeled_memory_bytes: modeled,
             plane,
             pages,
-            centroids,
-            graphs,
+            discovery,
             manifest,
             limits,
             slots: Semaphore::new(limits.max_active_queries),
             remote_open_stats: None,
             source,
         })
+    }
+    /// Authenticated concrete discovery mode.
+    pub fn discovery_mode(&self) -> DiscoveryMode {
+        self.manifest.discovery.mode()
+    }
+
+    fn semantic_walks(
+        router: &SemanticUnitRouter,
+        ids: &[usize],
+        bodies: &[Vec<u8>],
+        trace: Option<&mut TwoBitPlanTrace>,
+    ) -> Result<Vec<(usize, Vec<usize>)>> {
+        let parts = bodies.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let nomination = router
+            .validate_selected(ids, &parts)
+            .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
+        if let Some(trace) = trace {
+            trace.semantic_leaves = nomination.leaf_ids;
+            trace.semantic_units = nomination.units.into_iter().collect();
+            trace.semantic_seed_additions = nomination.seed_additions;
+        }
+        Ok(vec![(nomination.seed_page, nomination.walk_units)])
+    }
+    fn local_walks(
+        &self,
+        normalized: &[f32],
+        trace: Option<&mut TwoBitPlanTrace>,
+    ) -> Result<Vec<(usize, Vec<usize>)>> {
+        let LoadedDiscovery::Semantic { router, local, .. } = &self.discovery else {
+            return self.discover_walks(normalized, trace);
+        };
+        let ids = router
+            .select_leaves(normalized)
+            .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
+        let mut file = fs::File::open(local).map_err(TwoBitGenerationError::Io)?;
+        if file.metadata().map_err(TwoBitGenerationError::Io)?.len()
+            != router.manifest().leaf_payload.bytes as u64
+        {
+            return Err(TwoBitGenerationError::Invalid("leaf file length"));
+        }
+        let mut bodies = Vec::with_capacity(ids.len());
+        use std::io::{Read, Seek, SeekFrom};
+        for &id in &ids {
+            let leaf = &router.manifest().leaves[id];
+            file.seek(SeekFrom::Start(leaf.offset as u64))
+                .map_err(TwoBitGenerationError::Io)?;
+            let mut body = vec![0; leaf.bytes];
+            file.read_exact(&mut body)
+                .map_err(TwoBitGenerationError::Io)?;
+            bodies.push(body);
+        }
+        Self::semantic_walks(router, &ids, &bodies, trace)
+    }
+    async fn remote_walks(
+        &self,
+        store: &dyn ObjectStore,
+        normalized: &[f32],
+        trace: Option<&mut TwoBitPlanTrace>,
+        peak: &std::sync::atomic::AtomicUsize,
+    ) -> Result<(Vec<(usize, Vec<usize>)>, Sq8ReadStats)> {
+        let LoadedDiscovery::Semantic {
+            router,
+            remote: Some((location, etag)),
+            ..
+        } = &self.discovery
+        else {
+            return Ok((
+                self.local_walks(normalized, trace)?,
+                Sq8ReadStats::default(),
+            ));
+        };
+        let ids = router
+            .select_leaves(normalized)
+            .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
+        let bytes = ids
+            .iter()
+            .map(|id| router.manifest().leaves[*id].bytes)
+            .sum::<usize>();
+        if ids.len() > 16 || bytes > LEAF_BYTES {
+            return Err(TwoBitGenerationError::Invalid("leaf admission"));
+        }
+        let active = std::sync::atomic::AtomicUsize::new(0);
+        struct Active<'a>(&'a std::sync::atomic::AtomicUsize);
+        impl Drop for Active<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        let active = &active;
+        let outcomes = stream::iter(ids.clone().into_iter().map(|id| async move {
+            let _active = Active(active);
+            peak.fetch_max(
+                active.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            let leaf = &router.manifest().leaves[id];
+            let range = leaf.offset as u64..(leaf.offset + leaf.bytes) as u64;
+            let result = store
+                .get_opts(
+                    location,
+                    GetOptions::new()
+                        .with_range(Some(range.clone()))
+                        .with_if_match(Some(etag.clone())),
+                )
+                .await
+                .map_err(TwoBitGenerationError::SourceHead)?;
+            if result.range != range
+                || result.meta.size != router.manifest().leaf_payload.bytes as u64
+                || result.meta.e_tag.as_ref() != Some(etag)
+            {
+                return Err(TwoBitGenerationError::Invalid("leaf response identity"));
+            }
+            let mut body = Vec::with_capacity(leaf.bytes);
+            let mut chunks = result.into_stream();
+            while let Some(chunk) = chunks.next().await {
+                let chunk = chunk.map_err(TwoBitGenerationError::SourceHead)?;
+                if chunk.len() > leaf.bytes - body.len() {
+                    return Err(TwoBitGenerationError::Invalid("leaf response length"));
+                }
+                body.extend_from_slice(&chunk);
+            }
+            router
+                .validate_leaf(id, &body)
+                .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
+            Ok(body)
+        }))
+        .buffered(self.limits.max_parallel_source_gets.min(16))
+        .collect::<Vec<_>>()
+        .await;
+        // Drain every admitted read, including after the first error.
+        let mut stats = Sq8ReadStats {
+            submitted_gets: ids.len(),
+            ..Default::default()
+        };
+        let mut bodies = Vec::with_capacity(ids.len());
+        let mut error = None;
+        for outcome in outcomes {
+            match outcome {
+                Ok(body) => {
+                    stats.verified_bytes += body.len();
+                    bodies.push(body);
+                }
+                Err(e) => {
+                    stats.failed_gets += 1;
+                    error.get_or_insert(e);
+                }
+            }
+        }
+        if let Some(error) = error {
+            return Err(error.with_router(stats));
+        }
+        let walks = Self::semantic_walks(router, &ids, &bodies, trace)
+            .map_err(|error| error.with_router(stats))?;
+        // No leaf buffer survives into source cover/planning/fetch.
+        Ok((walks, stats))
     }
     fn plan_inner<'a>(
         &self,
@@ -870,7 +1376,7 @@ impl TwoBitGeneration {
         // The codec already validated finite, nonzero input. Normalize after its
         // temporary preparation buffer is released, within the same scratch cap.
         let normalized = normalize_two_bit_diagnostic_query(query)?;
-        let walks = self.discover_walks(normalized.as_ref(), trace.as_deref_mut())?;
+        let walks = self.local_walks(normalized.as_ref(), trace.as_deref_mut())?;
         let plan = self.plan_walks(&walks, &prepared, |row| self.plane.record(row), trace)?;
         Ok((plan, normalized))
     }
@@ -879,8 +1385,26 @@ impl TwoBitGeneration {
         &self,
         store: &dyn ObjectStore,
         query: &'a [f32],
+        trace: Option<&mut TwoBitPlanTrace>,
+    ) -> Result<(BudgetedPagePlan, Cow<'a, [f32]>, Sq8ReadStats, Sq8ReadStats)> {
+        self.plan_paged_measured(
+            store,
+            query,
+            trace,
+            &mut QueryStages::default(),
+            std::time::Instant::now(),
+        )
+        .await
+    }
+    async fn plan_paged_measured<'a>(
+        &self,
+        store: &dyn ObjectStore,
+        query: &'a [f32],
         mut trace: Option<&mut TwoBitPlanTrace>,
-    ) -> Result<(BudgetedPagePlan, Cow<'a, [f32]>, Sq8ReadStats)> {
+        stages: &mut QueryStages,
+        started: std::time::Instant,
+    ) -> Result<(BudgetedPagePlan, Cow<'a, [f32]>, Sq8ReadStats, Sq8ReadStats)> {
+        stages.discovery.start_ns = started.elapsed().as_nanos().max(1);
         let source = self
             .source
             .as_ref()
@@ -900,59 +1424,75 @@ impl TwoBitGeneration {
             .prepare_query(query, scratch)
             .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?;
         let normalized = normalize_two_bit_diagnostic_query(query)?;
-        let walks = self.discover_walks(normalized.as_ref(), trace.as_deref_mut())?;
-        let closure = walks
-            .iter()
-            .flat_map(|(_, units)| units.iter().map(|unit| unit / 8))
-            .collect::<BTreeSet<_>>();
-        let width = self.plane.receipt().record_bytes;
-        let (cover, _) = plan_two_bit_source_cover(
-            &closure,
-            self.rows(),
-            width,
-            self.limits.max_source_gets,
-            self.limits.max_source_bytes,
-        )?;
-        let unit_bytes = width
-            .checked_mul(32)
-            .ok_or(TwoBitGenerationError::Invalid("source unit geometry"))?;
-        let ranges = cover
-            .iter()
-            .map(|r| (r.start / unit_bytes, (r.end - 1) / unit_bytes))
-            .collect::<Vec<_>>();
-        let (verified, stats) = fetch_verified_ranges_inner(
-            store,
-            &source.location,
-            &source.authority,
-            &ranges,
-            &source.etag,
-            self.limits.max_source_gets,
-            self.limits.max_source_bytes,
-            self.limits.max_parallel_source_gets,
-        )
-        .await
-        .map_err(TwoBitGenerationError::SourceRead)?;
-        let plan = self
-            .plan_walks(
-                &walks,
-                &prepared,
-                |row| {
-                    let offset = row.checked_mul(width)?;
-                    let index = verified
-                        .partition_point(|range| range.start <= offset)
-                        .checked_sub(1)?;
-                    let relative = offset.checked_sub(verified[index].start)?;
-                    verified[index]
-                        .bytes
-                        .get(relative..relative.checked_add(width)?)
-                },
-                trace,
+        let peak = std::sync::atomic::AtomicUsize::new(0);
+        let result = self
+            .remote_walks(store, normalized.as_ref(), trace.as_deref_mut(), &peak)
+            .await;
+        stages.discovery.end_ns = started.elapsed().as_nanos();
+        stages.leaf_peak_inflight = peak.load(std::sync::atomic::Ordering::Relaxed);
+        let (walks, router_stats) = result?;
+        async {
+            let closure = walks
+                .iter()
+                .flat_map(|(_, units)| units.iter().map(|unit| unit / 8))
+                .collect::<BTreeSet<_>>();
+            let width = self.plane.receipt().record_bytes;
+            let (cover, _) = plan_two_bit_source_cover(
+                &closure,
+                self.rows(),
+                width,
+                self.limits.max_source_gets,
+                self.limits.max_source_bytes,
+            )?;
+            let unit_bytes = width
+                .checked_mul(32)
+                .ok_or(TwoBitGenerationError::Invalid("source unit geometry"))?;
+            let ranges = cover
+                .iter()
+                .map(|r| (r.start / unit_bytes, (r.end - 1) / unit_bytes))
+                .collect::<Vec<_>>();
+            stages.source.start_ns = started.elapsed().as_nanos().max(1);
+            let fetched = fetch_verified_ranges_inner(
+                store,
+                &source.location,
+                &source.authority,
+                &ranges,
+                &source.etag,
+                self.limits.max_source_gets,
+                self.limits.max_source_bytes,
+                self.limits.max_parallel_source_gets,
             )
-            .map_err(|error| TwoBitGenerationError::SourcePlanning {
-                stats,
-                error: Box::new(error),
-            })?;
-        Ok((plan, normalized, stats))
+            .await;
+            stages.source.end_ns = started.elapsed().as_nanos();
+            let (verified, stats) = fetched.map_err(TwoBitGenerationError::SourceRead)?;
+            stages.planning.start_ns = started.elapsed().as_nanos().max(1);
+            let plan = self
+                .plan_walks(
+                    &walks,
+                    &prepared,
+                    |row| {
+                        let offset = row.checked_mul(width)?;
+                        let index = verified
+                            .partition_point(|range| range.start <= offset)
+                            .checked_sub(1)?;
+                        let relative = offset.checked_sub(verified[index].start)?;
+                        verified[index]
+                            .bytes
+                            .get(relative..relative.checked_add(width)?)
+                    },
+                    trace,
+                )
+                .map_err(|error| TwoBitGenerationError::SourcePlanning {
+                    stats,
+                    error: Box::new(error),
+                });
+            stages.planning.end_ns = started.elapsed().as_nanos();
+            let plan = plan?;
+            drop(verified);
+            Ok((plan, normalized, stats, router_stats))
+        }
+        .await
+        .map_err(|error: TwoBitGenerationError| error.with_router(router_stats))
     }
 
     fn discover_walks(
@@ -962,14 +1502,27 @@ impl TwoBitGeneration {
     ) -> Result<Vec<(usize, Vec<usize>)>> {
         let count = self.pages.rows().div_ceil(256).min(159);
         let mut walks = Vec::with_capacity(2);
-        let graph_count = if self.manifest.graph_sha256 == self.manifest.diverse_graph_sha256 {
+        let LoadedDiscovery::Graph { centroids, graphs } = &self.discovery else {
+            return Err(TwoBitGenerationError::Invalid(
+                "semantic plan requires leaf reader",
+            ));
+        };
+        let Discovery::Graph {
+            graph_sha256,
+            diverse_graph_sha256,
+            ..
+        } = &self.manifest.discovery
+        else {
+            unreachable!()
+        };
+        let graph_count = if graph_sha256 == diverse_graph_sha256 {
             1
         } else {
             2
         };
-        for graph in &self.graphs[..graph_count] {
+        for graph in &graphs[..graph_count] {
             let seed = graph
-                .search(&self.centroids, normalized, 1, 128)
+                .search(centroids, normalized, 1, 128)
                 .map_err(TwoBitGenerationError::Graph)?;
             let seed_page = seed
                 .units
@@ -979,7 +1532,7 @@ impl TwoBitGeneration {
                 / 8;
             let (evaluated, exhausted) = if count > 1 {
                 let found = graph
-                    .search_pages_seeded(&self.centroids, normalized, &[seed_page], count - 1, 1272)
+                    .search_pages_seeded(centroids, normalized, &[seed_page], count - 1, 1272)
                     .map_err(TwoBitGenerationError::Graph)?;
                 (found.evaluated_units, found.work_exhausted)
             } else {
@@ -1017,7 +1570,15 @@ impl TwoBitGeneration {
         plan_two_bit_source_walks(
             self.pages.rows(),
             self.pages.dimensions(),
-            self.pages.rows().div_ceil(256).min(159),
+            if self.manifest.discovery.mode() == DiscoveryMode::Semantic {
+                walks
+                    .iter()
+                    .flat_map(|(_, units)| units.iter().map(|u| u / 8))
+                    .collect::<BTreeSet<_>>()
+                    .len()
+            } else {
+                self.pages.rows().div_ceil(256).min(159)
+            },
             walks,
             prepared,
             record,
@@ -1051,25 +1612,43 @@ impl TwoBitGeneration {
         &self,
         reader: &OneAttemptS3,
         query: &[f32],
-    ) -> Result<(BudgetedPagePlan, TwoBitPlanTrace, Sq8ReadStats)> {
+    ) -> Result<(
+        BudgetedPagePlan,
+        TwoBitPlanTrace,
+        Sq8ReadStats,
+        Sq8ReadStats,
+    )> {
+        self.diagnostic_plan_with_store(reader.store(), query).await
+    }
+    /// Admitted diagnostic plan with semantic trace and all source/leaf charges.
+    pub async fn diagnostic_plan_with_store(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+    ) -> Result<(
+        BudgetedPagePlan,
+        TwoBitPlanTrace,
+        Sq8ReadStats,
+        Sq8ReadStats,
+    )> {
         let _permit = self
             .slots
             .acquire()
             .await
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
         let mut trace = TwoBitPlanTrace::default();
-        let (plan, stats) = if self.source.is_some() {
-            let (plan, _, stats) = self
-                .plan_paged(reader.store(), query, Some(&mut trace))
-                .await?;
-            (plan, stats)
+        if self.source.is_some() {
+            let (plan, _, source, leaves) = self.plan_paged(store, query, Some(&mut trace)).await?;
+            Ok((plan, trace, source, leaves))
         } else {
-            (
-                self.plan_inner(query, Some(&mut trace))?.0,
+            let (plan, _) = self.plan_inner(query, Some(&mut trace))?;
+            Ok((
+                plan,
+                trace,
                 Sq8ReadStats::default(),
-            )
-        };
-        Ok((plan, trace, stats))
+                Sq8ReadStats::default(),
+            ))
+        }
     }
     /// Shared-source two-graph discovery union, nomination and physical admission.
     pub async fn plan(&self, query: &[f32]) -> Result<BudgetedPagePlan> {
@@ -1088,17 +1667,21 @@ impl TwoBitGeneration {
         &self,
         store: &dyn ObjectStore,
         query: &[f32],
-    ) -> Result<(BudgetedPagePlan, Sq8ReadStats)> {
+    ) -> Result<(BudgetedPagePlan, Sq8ReadStats, Sq8ReadStats)> {
         let _permit = self
             .slots
             .acquire()
             .await
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
         if self.source.is_some() {
-            let (plan, _, stats) = self.plan_paged(store, query, None).await?;
-            Ok((plan, stats))
+            let (plan, _, stats, leaves) = self.plan_paged(store, query, None).await?;
+            Ok((plan, stats, leaves))
         } else {
-            Ok((self.plan_inner(query, None)?.0, Sq8ReadStats::default()))
+            Ok((
+                self.plan_inner(query, None)?.0,
+                Sq8ReadStats::default(),
+                Sq8ReadStats::default(),
+            ))
         }
     }
     /// Plan, fetch authenticated conditional ranges in one bounded wave, and rank.
@@ -1148,6 +1731,17 @@ impl TwoBitGeneration {
         top_k: usize,
         mutations: &TwoBitMutationSnapshot,
     ) -> Result<TwoBitMutationSearchResult> {
+        self.search_with_mutations_store(reader.store(), query, top_k, mutations)
+            .await
+    }
+    /// Generation-bound mutation search using the admitted ObjectStore path.
+    pub async fn search_with_mutations_store(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+        top_k: usize,
+        mutations: &TwoBitMutationSnapshot,
+    ) -> Result<TwoBitMutationSearchResult> {
         if !mutations.binds(&self.root_sha256, self.pages.dimensions())
             || mutations.resident_payload_bytes() as u64 > self.limits.already_pinned_bytes
         {
@@ -1182,8 +1776,8 @@ impl TwoBitGeneration {
             .await
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
         let base = self
-            .search_unadmitted(
-                reader,
+            .search_store_unadmitted(
+                store,
                 query,
                 top_k.min(self.pages.rows()),
                 Some(mutations.excluded_ids()),
@@ -1199,12 +1793,15 @@ impl TwoBitGeneration {
                         stats: base.ranked.stats,
                     },
                 )
+                .with_router(base.router_stats)
             })?;
         Ok(TwoBitMutationSearchResult {
             plan: base.plan,
             candidates,
             stats: base.ranked.stats,
             source_stats: base.source_stats,
+            router_stats: base.router_stats,
+            stages: base.stages,
             mutation_rows_scanned: mutations.rows().len(),
             mutation_put_rows_scored: mutations.put_rows(),
             mutation_revision: mutations.revision(),
@@ -1238,22 +1835,96 @@ impl TwoBitGeneration {
         top_k: usize,
         excluded_ids: Option<&[i64]>,
     ) -> Result<TwoBitSearchResult> {
-        self.search_with_store(reader.store(), query, top_k, excluded_ids)
+        self.search_store_unadmitted(reader.store(), query, top_k, excluded_ids)
             .await
     }
 
-    async fn search_with_store(
+    /// Full search through a caller-owned ObjectStore, under native query admission.
+    /// Transport attempts/retries are caller-owned; logical charges are returned.
+    pub async fn search_with_store(
         &self,
         store: &dyn ObjectStore,
         query: &[f32],
         top_k: usize,
         excluded_ids: Option<&[i64]>,
     ) -> Result<TwoBitSearchResult> {
-        let (plan, normalized, source_stats) = if self.source.is_some() {
-            self.plan_paged(store, query, None).await?
+        if top_k == 0
+            || top_k > self.rows()
+            || excluded_ids.is_some_and(|ids| {
+                ids.windows(2).any(|v| v[0] >= v[1])
+                    || ids
+                        .len()
+                        .checked_mul(8)
+                        .is_none_or(|n| n as u64 > self.limits.already_pinned_bytes)
+            })
+        {
+            return Err(TwoBitGenerationError::Invalid("search admission"));
+        }
+        let _permit = self
+            .slots
+            .acquire()
+            .await
+            .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
+        self.search_store_unadmitted(store, query, top_k, excluded_ids)
+            .await
+    }
+
+    async fn search_store_unadmitted(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+        top_k: usize,
+        excluded_ids: Option<&[i64]>,
+    ) -> Result<TwoBitSearchResult> {
+        let started = std::time::Instant::now();
+        let mut stages = QueryStages::default();
+        let result = self
+            .search_store_measured(store, query, top_k, excluded_ids, &mut stages, started)
+            .await;
+        for stage in [
+            &mut stages.discovery,
+            &mut stages.source,
+            &mut stages.planning,
+            &mut stages.sq8,
+        ] {
+            if stage.start_ns > 0 && stage.end_ns == 0 {
+                stage.end_ns = started.elapsed().as_nanos().max(stage.start_ns);
+            }
+        }
+        match result {
+            Ok(mut result) => {
+                result.stages = stages;
+                Ok(result)
+            }
+            Err(error) => Err(TwoBitGenerationError::Query {
+                stages,
+                error: Box::new(error),
+            }),
+        }
+    }
+    async fn search_store_measured(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+        top_k: usize,
+        excluded_ids: Option<&[i64]>,
+        stages: &mut QueryStages,
+        started: std::time::Instant,
+    ) -> Result<TwoBitSearchResult> {
+        let (plan, normalized, source_stats, router_stats) = if self.source.is_some() {
+            self.plan_paged_measured(store, query, None, stages, started)
+                .await?
         } else {
-            let (plan, normalized) = self.plan_inner(query, None)?;
-            (plan, normalized, Sq8ReadStats::default())
+            stages.discovery.start_ns = started.elapsed().as_nanos().max(1);
+            let result = self.plan_inner(query, None);
+            stages.discovery.end_ns = started.elapsed().as_nanos();
+            let (plan, normalized) = result?;
+            (
+                plan,
+                normalized,
+                Sq8ReadStats::default(),
+                Sq8ReadStats::default(),
+            )
         };
 
         let page_bytes = 256 * (self.pages.dimensions() + 12);
@@ -1262,6 +1933,7 @@ impl TwoBitGeneration {
             .iter()
             .map(|r| (r.start / page_bytes, (r.end - 1) / page_bytes))
             .collect::<Vec<_>>();
+        stages.sq8.start_ns = started.elapsed().as_nanos().max(1);
         let ranked = rank_verified_sq8_pages_inner(
             store,
             &ObjectPath::from(self.manifest.sq8_object_key.clone()),
@@ -1277,8 +1949,11 @@ impl TwoBitGeneration {
             self.limits.max_parallel_gets,
             excluded_ids.unwrap_or(&[]),
         )
-        .await
-        .map_err(|sq8| TwoBitGenerationError::charged_read(source_stats, sq8))?;
+        .await;
+        stages.sq8.end_ns = started.elapsed().as_nanos();
+        let ranked = ranked.map_err(|sq8| {
+            TwoBitGenerationError::charged_read(source_stats, sq8).with_router(router_stats)
+        })?;
         if excluded_ids.is_none() && ranked.candidates.len() < top_k {
             return Err(TwoBitGenerationError::charged_read(
                 source_stats,
@@ -1288,12 +1963,15 @@ impl TwoBitGeneration {
                     ),
                     stats: ranked.stats,
                 },
-            ));
+            )
+            .with_router(router_stats));
         }
         Ok(TwoBitSearchResult {
             plan,
             ranked,
             source_stats,
+            router_stats,
+            stages: *stages,
         })
     }
 }
@@ -1301,6 +1979,644 @@ impl TwoBitGeneration {
 #[cfg(test)]
 mod source_walk_tests {
     use super::*;
+
+    #[derive(Debug, Default)]
+    struct RecordedStore {
+        inner: object_store::memory::InMemory,
+        reads: std::sync::Mutex<Vec<(String, bool, std::ops::Range<u64>, Option<String>)>>,
+        writes: std::sync::Mutex<Vec<String>>,
+        fail_head: std::sync::atomic::AtomicUsize,
+    }
+    impl std::fmt::Display for RecordedStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "recorded-memory")
+        }
+    }
+    #[async_trait::async_trait]
+    impl ObjectStore for RecordedStore {
+        async fn get_opts(
+            &self,
+            path: &ObjectPath,
+            options: object_store::GetOptions,
+        ) -> object_store::Result<object_store::GetResult> {
+            let head = options.head;
+            let etag = options.if_match.clone();
+            let result = self.inner.get_opts(path, options).await?;
+            self.reads
+                .lock()
+                .unwrap()
+                .push((path.to_string(), head, result.range.clone(), etag));
+            tokio::task::yield_now().await;
+            Ok(result)
+        }
+        async fn put_opts(
+            &self,
+            path: &ObjectPath,
+            body: object_store::PutPayload,
+            options: object_store::PutOptions,
+        ) -> object_store::Result<object_store::PutResult> {
+            if path.as_ref().ends_with("/head.json")
+                && self
+                    .fail_head
+                    .fetch_update(
+                        std::sync::atomic::Ordering::SeqCst,
+                        std::sync::atomic::Ordering::SeqCst,
+                        |n| n.checked_sub(1),
+                    )
+                    .ok()
+                    == Some(1)
+            {
+                return Err(object_store::Error::Generic {
+                    store: "recorded",
+                    source: std::io::Error::other("HEAD-last failure").into(),
+                });
+            }
+            self.writes.lock().unwrap().push(path.to_string());
+            self.inner.put_opts(path, body, options).await
+        }
+        async fn put_multipart_opts(
+            &self,
+            path: &ObjectPath,
+            options: object_store::PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+            self.writes.lock().unwrap().push(path.to_string());
+            self.inner.put_multipart_opts(path, options).await
+        }
+        fn delete_stream(
+            &self,
+            paths: futures_util::stream::BoxStream<'static, object_store::Result<ObjectPath>>,
+        ) -> futures_util::stream::BoxStream<'static, object_store::Result<ObjectPath>> {
+            self.inner.delete_stream(paths)
+        }
+        fn list(
+            &self,
+            prefix: Option<&ObjectPath>,
+        ) -> futures_util::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>>
+        {
+            self.inner.list(prefix)
+        }
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&ObjectPath>,
+        ) -> object_store::Result<object_store::ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+        async fn copy_opts(
+            &self,
+            from: &ObjectPath,
+            to: &ObjectPath,
+            options: object_store::CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+
+    #[tokio::test]
+    async fn semantic_object_store_parity() {
+        use crate::two_bit_build::TwoBitGenerationBuilder;
+        use crate::two_bit_source::TwoBitSource;
+        use object_store::PutPayload;
+        use sha2::{Digest, Sha256};
+        let hash = |body: &[u8]| format!("{:x}", Sha256::digest(body));
+        let rows = 16_385;
+        let temp = tempfile::tempdir().unwrap();
+        let mut raw = Vec::new();
+        let mut sq8 = Vec::new();
+        for row in 0..rows {
+            let a = (1 + (row / 32 * 73) % 251) as u8;
+            let b = (1 + (row / 32 * 137) % 251) as u8;
+            raw.extend_from_slice(&(a as f32).to_le_bytes());
+            raw.extend_from_slice(&(b as f32).to_le_bytes());
+            sq8.extend_from_slice(&((rows - row + 1000) as i64).to_le_bytes());
+            sq8.extend_from_slice(&((a as f32).powi(2) + (b as f32).powi(2)).to_le_bytes());
+            sq8.extend_from_slice(&[a, b]);
+        }
+        let raw_path = temp.path().join("raw");
+        let sq8_path = temp.path().join("sq8");
+        fs::write(&raw_path, &raw).unwrap();
+        fs::write(&sq8_path, &sq8).unwrap();
+        let store = std::sync::Arc::new(RecordedStore::default());
+        let sq8_sha = hash(&sq8);
+        let key = ObjectPath::from(format!("semantic/objects/{sq8_sha}"));
+        store.put(&key, sq8.clone().into()).await.unwrap();
+        let etag = store.head(&key).await.unwrap().e_tag.unwrap();
+        let root = temp.path().join("generation");
+        let order = (0..rows as u64).collect::<Vec<_>>();
+        let builder = TwoBitGenerationBuilder {
+            source: TwoBitSource {
+                raw: &raw_path,
+                raw_sha256: &hash(&raw),
+                sq8: &sq8_path,
+                sq8_sha256: &sq8_sha,
+                rows,
+                dimensions: 2,
+            },
+            base_epoch: 0,
+            generation: 1,
+            low: &[0.; 2],
+            step: &[1.; 2],
+            sq8_object_key: key.as_ref(),
+            sq8_etag: &etag,
+        };
+        let root_sha = builder
+            .build_with_discovery(Some(&order), DiscoveryMode::Semantic, &root, 128_000_000)
+            .unwrap();
+        assert!(!root.join("graph.bin").exists() && !root.join("diverse_graph.bin").exists());
+        let limits = TwoBitGenerationLimits {
+            max_memory_bytes: 128_000_000,
+            max_active_queries: 2,
+            max_query_bytes: 32 * 256 * 14,
+            max_query_gets: 32,
+            max_parallel_gets: 4,
+            max_source_bytes: 64 * 1024 * 1024,
+            max_source_gets: 128,
+            max_parallel_source_gets: 4,
+            max_query_scratch_bytes: 400_000,
+            already_pinned_bytes: 0,
+        };
+        let index = ObjectPath::from("semantic/index");
+        let head = crate::two_bit_store::publish_two_bit_generation(
+            store.as_ref(),
+            &index,
+            &root,
+            &root_sha,
+            limits,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            store.writes.lock().unwrap().last().unwrap(),
+            "semantic/index/head.json"
+        );
+        let prefix = head.metadata_prefix();
+        for name in ["centroids.bin", "graph.bin", "diverse_graph.bin"] {
+            assert!(store.head(&metadata_location(&prefix, name)).await.is_err());
+        }
+        store.reads.lock().unwrap().clear();
+        let mut lazy =
+            TwoBitGeneration::open_remote(store.as_ref(), &prefix, &root_sha, limits, temp.path())
+                .await
+                .unwrap();
+        assert!(lazy.plane.record(0).is_none());
+        let startup = lazy.remote_open_stats().unwrap();
+        assert_eq!(startup.source_head_requests, 1);
+        assert_eq!(startup.router_head_requests, 1);
+        assert!(startup.router_head_wall_ns > 0);
+        assert_eq!(startup.metadata.len(), 8);
+        assert!(
+            store
+                .reads
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(name, head, _, _)| *head
+                    || ![
+                        "router/leaves.bin",
+                        "plane/records.bin",
+                        "centroids.bin",
+                        "graph.bin",
+                        "diverse_graph.bin"
+                    ]
+                    .iter()
+                    .any(|suffix| name.ends_with(suffix)))
+        );
+        let eager = TwoBitGeneration::open(&root, &root_sha, limits).unwrap();
+        let LoadedDiscovery::Semantic { router, .. } = &eager.discovery else {
+            panic!("semantic lost")
+        };
+        assert!(router.manifest().leaves.len() > 8);
+        assert_eq!(router.manifest().final_unit_rows, 1);
+        let query = [0.8, 0.35];
+        let mut expected_trace = TwoBitPlanTrace::default();
+        let (expected_plan, _) = eager.plan_inner(&query, Some(&mut expected_trace)).unwrap();
+        let mut actual_trace = TwoBitPlanTrace::default();
+        store.reads.lock().unwrap().clear();
+        let (plan, _, source, leaves) = lazy
+            .plan_paged(store.as_ref(), &query, Some(&mut actual_trace))
+            .await
+            .unwrap();
+        assert_eq!(expected_plan, plan);
+        assert_eq!(
+            serde_json::to_value(&expected_trace).unwrap(),
+            serde_json::to_value(&actual_trace).unwrap()
+        );
+        assert!(actual_trace.semantic_leaves.len() >= 8);
+        assert!(actual_trace.semantic_units.len() > 256);
+        assert!(actual_trace.nomination_evaluated_units.iter().all(|unit| {
+            actual_trace
+                .semantic_units
+                .iter()
+                .any(|n| n / 8 == unit / 8)
+        }));
+        let reads = store.reads.lock().unwrap().clone();
+        let leaf_reads = reads
+            .iter()
+            .filter(|(name, head, _, _)| !head && name.ends_with("router/leaves.bin"))
+            .collect::<Vec<_>>();
+        assert_eq!(leaf_reads.len(), actual_trace.semantic_leaves.len());
+        for (read, &id) in leaf_reads.iter().zip(&actual_trace.semantic_leaves) {
+            let leaf = &router.manifest().leaves[id];
+            assert_eq!(
+                read.2,
+                leaf.offset as u64..(leaf.offset + leaf.bytes) as u64
+            );
+            assert!(read.3.is_some());
+        }
+        assert!(leaves.submitted_gets <= 16 && leaves.verified_bytes <= LEAF_BYTES);
+        assert!(source.submitted_gets <= 128 && source.verified_bytes <= 64 * 1024 * 1024);
+        let expected = eager
+            .search_with_store(store.as_ref(), &query, 100, None)
+            .await
+            .unwrap();
+        let actual = lazy
+            .search_with_store(store.as_ref(), &query, 100, None)
+            .await
+            .unwrap();
+        assert_eq!(expected.ranked.candidates, actual.ranked.candidates);
+        assert_eq!(expected.plan, actual.plan);
+        assert_eq!(actual.router_stats, leaves);
+        assert!(actual.stages.discovery.end_ns <= actual.stages.source.start_ns);
+        assert!(actual.stages.source.end_ns <= actual.stages.planning.start_ns);
+        assert!(actual.stages.planning.end_ns <= actual.stages.sq8.start_ns);
+        assert!((2..=4).contains(&actual.stages.leaf_peak_inflight));
+        assert!(actual.ranked.candidates.iter().all(|hit| hit.id >= 1001));
+        // The public store seam must hold the same generation semaphore.
+        store.reads.lock().unwrap().clear();
+        {
+            let first = lazy.slots.acquire().await.unwrap();
+            let second = lazy.slots.acquire().await.unwrap();
+            let mut pending =
+                std::pin::pin!(lazy.search_with_store(store.as_ref(), &query, 100, None));
+            assert!(futures_util::poll!(pending.as_mut()).is_pending());
+            assert!(store.reads.lock().unwrap().is_empty());
+            drop(first);
+            drop(second);
+            pending.await.unwrap();
+        }
+        store.reads.lock().unwrap().clear();
+        assert!(
+            lazy.search_with_store(store.as_ref(), &query, 0, None)
+                .await
+                .is_err()
+        );
+        assert!(
+            lazy.search_with_store(store.as_ref(), &query, 100, Some(&[2, 1]))
+                .await
+                .is_err()
+        );
+        assert!(store.reads.lock().unwrap().is_empty());
+        let invalid = lazy
+            .search_with_store(store.as_ref(), &[0., 0.], 100, None)
+            .await
+            .err()
+            .unwrap();
+        let stages = invalid.stages().unwrap();
+        assert!(
+            stages.discovery.start_ns > 0 && stages.discovery.end_ns >= stages.discovery.start_ns
+        );
+        assert_eq!(stages.source.start_ns, 0);
+        assert_eq!(stages.source.end_ns, 0);
+        assert_eq!(invalid.router_stats(), Sq8ReadStats::default());
+        assert!(store.reads.lock().unwrap().is_empty());
+        // Admission precedes SQ8/source submissions excluded by the reduced cap.
+        lazy.limits.max_source_bytes = 1;
+        store.reads.lock().unwrap().clear();
+        let error = lazy
+            .search_with_store(store.as_ref(), &query, 100, None)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.router_stats(), leaves);
+        assert_eq!(
+            error.read_stats(),
+            (Sq8ReadStats::default(), Sq8ReadStats::default())
+        );
+        assert!(
+            store
+                .reads
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(name, _, _, _)| name.ends_with("router/leaves.bin"))
+        );
+        lazy.limits = limits;
+        let leaf_key = metadata_location(&prefix, "router/leaves.bin");
+        let original = fs::read(root.join("router/leaves.bin")).unwrap();
+        let mut corrupt = original.clone();
+        corrupt[router.manifest().leaves[actual_trace.semantic_leaves[0]].offset + 4] ^= 1;
+        store
+            .put(&leaf_key, PutPayload::from(corrupt))
+            .await
+            .unwrap();
+        if let LoadedDiscovery::Semantic {
+            remote: Some((_, tag)),
+            ..
+        } = &mut lazy.discovery
+        {
+            *tag = store.head(&leaf_key).await.unwrap().e_tag.unwrap();
+        }
+        store.reads.lock().unwrap().clear();
+        let error = lazy
+            .search_with_store(store.as_ref(), &query, 100, None)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.router_stats().submitted_gets, leaves.submitted_gets);
+        assert_eq!(error.router_stats().failed_gets, 1);
+        assert_eq!(
+            error.read_stats(),
+            (Sq8ReadStats::default(), Sq8ReadStats::default())
+        );
+        assert!(
+            store
+                .reads
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(name, _, _, _)| name.ends_with("router/leaves.bin"))
+        );
+        store.put(&leaf_key, original.into()).await.unwrap();
+        // Memory/pins are rejected before allocating decoded semantic metadata.
+        assert!(
+            TwoBitGeneration::open(
+                &root,
+                &root_sha,
+                TwoBitGenerationLimits {
+                    max_memory_bytes: eager.modeled_memory_bytes - 1,
+                    ..limits
+                }
+            )
+            .is_err()
+        );
+        // Publication revalidates every leaf, including unselected partitions, before HEAD.
+        let original = fs::read(root.join("router/leaves.bin")).unwrap();
+        let mut corrupt = original.clone();
+        *corrupt.last_mut().unwrap() ^= 1;
+        fs::write(root.join("router/leaves.bin"), corrupt).unwrap();
+        let bad_prefix = ObjectPath::from("semantic/bad");
+        assert!(
+            crate::two_bit_store::publish_two_bit_generation(
+                store.as_ref(),
+                &bad_prefix,
+                &root,
+                &root_sha,
+                limits,
+                None
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            crate::two_bit_store::read_two_bit_head(store.as_ref(), &bad_prefix)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        fs::write(root.join("router/leaves.bin"), original).unwrap();
+
+        use crate::two_bit_compaction::{
+            TwoBitCompactionOptions, compact_two_bit_index, compact_two_bit_index_with_discovery,
+        };
+        use crate::two_bit_mutations::{
+            TwoBitMutation, TwoBitMutationLimits, apply_two_bit_mutations,
+        };
+        let mutation_limits = TwoBitMutationLimits {
+            max_snapshot_bytes: 65536,
+            max_memory_bytes: 2_000_000,
+        };
+        let mutations = apply_two_bit_mutations(
+            store.as_ref(),
+            &head,
+            2,
+            None,
+            &[
+                TwoBitMutation {
+                    id: 42,
+                    vector: Some(vec![1., 0.]),
+                },
+                TwoBitMutation {
+                    id: 1001,
+                    vector: None,
+                },
+                TwoBitMutation {
+                    id: 1002,
+                    vector: Some(vec![0., 1.]),
+                },
+            ],
+            mutation_limits,
+        )
+        .await
+        .unwrap();
+        let mutable = TwoBitGeneration::open_remote(
+            store.as_ref(),
+            &prefix,
+            &root_sha,
+            TwoBitGenerationLimits {
+                already_pinned_bytes: mutations.resident_payload_bytes() as u64,
+                ..limits
+            },
+            temp.path(),
+        )
+        .await
+        .unwrap();
+        let visible = mutable
+            .search_with_mutations_store(store.as_ref(), &[1., 0.], 100, &mutations)
+            .await
+            .unwrap();
+        assert!(visible.candidates.iter().any(|h| h.id == 42));
+        assert!(visible.candidates.iter().all(|h| h.id != 1001));
+        assert!(visible.router_stats.submitted_gets > 0);
+        let maintenance = temp.path().join("maintenance");
+        let options = TwoBitCompactionOptions {
+            mutations: mutation_limits,
+            source: crate::canonical_source::TwoBitCompactionLimits {
+                max_memory_bytes: 128_000_000,
+                max_disk_bytes: 128_000_000,
+                max_source_chunk_bytes: 1_048_576,
+            },
+            generation: limits,
+        };
+        store
+            .fail_head
+            .store(2, std::sync::atomic::Ordering::SeqCst);
+        let failed = compact_two_bit_index(store.clone(), &index, &maintenance, options)
+            .await
+            .unwrap_err();
+        let job_dir = maintenance.join(&root_sha);
+        assert!(
+            job_dir.join("ready.json").exists(),
+            "must fail after durable ready: {failed:?}"
+        );
+        let job: serde_json::Value =
+            serde_json::from_slice(&fs::read(job_dir.join("job.json")).unwrap()).unwrap();
+        assert_eq!(job["discovery"], "semantic");
+        assert_eq!(job["base_discovery"], "semantic");
+        assert!(
+            compact_two_bit_index_with_discovery(
+                store.clone(),
+                &index,
+                &maintenance,
+                options,
+                Some(DiscoveryMode::Graph)
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(
+            crate::two_bit_store::read_two_bit_head(store.as_ref(), &index)
+                .await
+                .unwrap()
+                .unwrap()
+                .root_sha256(),
+            root_sha
+        );
+        let compacted = compact_two_bit_index(store.clone(), &index, &maintenance, options)
+            .await
+            .unwrap();
+        assert_eq!(
+            crate::two_bit_store::discovery_mode(store.as_ref(), &compacted)
+                .await
+                .unwrap(),
+            DiscoveryMode::Semantic
+        );
+        let current = TwoBitGeneration::open_remote(
+            store.as_ref(),
+            &compacted.metadata_prefix(),
+            compacted.root_sha256(),
+            limits,
+            temp.path(),
+        )
+        .await
+        .unwrap();
+        let found = current
+            .search_with_store(store.as_ref(), &[1., 0.], 100, None)
+            .await
+            .unwrap();
+        assert!(found.ranked.candidates.iter().any(|h| h.id == 42));
+        assert!(found.ranked.candidates.iter().all(|h| h.id != 1001));
+        drop(current);
+        drop(mutable);
+        drop(lazy);
+        drop(eager);
+        let report = crate::two_bit_gc::collect_two_bit_garbage(
+            store.clone(),
+            &index,
+            &maintenance,
+            crate::two_bit_gc::TwoBitGcLimits {
+                max_memory_bytes: 4_000_000,
+                mutations: mutation_limits,
+                max_objects_scanned: 1000,
+                max_objects_deleted: 1000,
+                max_deleted_object_bytes: 128_000_000,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(report.scan_complete);
+        for name in ROUTER_FILES {
+            assert!(
+                store
+                    .head(&metadata_location(&compacted.metadata_prefix(), name))
+                    .await
+                    .is_ok()
+            );
+        }
+        assert!(
+            store
+                .head(&metadata_location(&prefix, "router/leaves.bin"))
+                .await
+                .is_err()
+        );
+
+        // Empty roots preserve concrete semantic mode through deletion and revival.
+        let empty_prefix = ObjectPath::from("semantic/empty");
+        let empty = crate::two_bit_store::publish_empty_with_mode(
+            store.as_ref(),
+            &empty_prefix,
+            2,
+            1,
+            None,
+            Some(DiscoveryMode::Semantic),
+        )
+        .await
+        .unwrap();
+        let directory = temp.path().join("empty-maintenance");
+        apply_two_bit_mutations(
+            store.as_ref(),
+            &empty,
+            2,
+            None,
+            &[TwoBitMutation {
+                id: 17,
+                vector: Some(vec![1., 0.]),
+            }],
+            mutation_limits,
+        )
+        .await
+        .unwrap();
+        let revived = compact_two_bit_index(store.clone(), &empty_prefix, &directory, options)
+            .await
+            .unwrap();
+        assert!(!revived.is_empty());
+        assert_eq!(
+            crate::two_bit_store::discovery_mode(store.as_ref(), &revived)
+                .await
+                .unwrap(),
+            DiscoveryMode::Semantic
+        );
+        apply_two_bit_mutations(
+            store.as_ref(),
+            &revived,
+            2,
+            None,
+            &[TwoBitMutation {
+                id: 17,
+                vector: None,
+            }],
+            mutation_limits,
+        )
+        .await
+        .unwrap();
+        let empty = compact_two_bit_index(store.clone(), &empty_prefix, &directory, options)
+            .await
+            .unwrap();
+        assert!(empty.is_empty());
+        assert_eq!(
+            crate::two_bit_store::discovery_mode(store.as_ref(), &empty)
+                .await
+                .unwrap(),
+            DiscoveryMode::Semantic
+        );
+        apply_two_bit_mutations(
+            store.as_ref(),
+            &empty,
+            2,
+            None,
+            &[TwoBitMutation {
+                id: 19,
+                vector: Some(vec![0., 1.]),
+            }],
+            mutation_limits,
+        )
+        .await
+        .unwrap();
+        let graph = compact_two_bit_index_with_discovery(
+            store.clone(),
+            &empty_prefix,
+            &directory,
+            options,
+            Some(DiscoveryMode::Graph),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            crate::two_bit_store::discovery_mode(store.as_ref(), &graph)
+                .await
+                .unwrap(),
+            DiscoveryMode::Graph
+        );
+    }
 
     #[tokio::test]
     async fn paged_source_matches_reference_and_preserves_failure_charges() {
@@ -1454,7 +2770,7 @@ mod source_walk_tests {
             }
         }
         let mut actual_trace = TwoBitPlanTrace::default();
-        let (actual_plan, _, source_stats) = remote
+        let (actual_plan, _, source_stats, _) = remote
             .plan_paged(&store, &query, Some(&mut actual_trace))
             .await
             .unwrap();
@@ -1481,7 +2797,7 @@ mod source_walk_tests {
             ]) {
                 remote.limits.max_source_gets = cap;
                 let mut trace = TwoBitPlanTrace::default();
-                let (plan, _, stats) = remote
+                let (plan, _, stats, _) = remote
                     .plan_paged(&store, &query, Some(&mut trace))
                     .await
                     .unwrap();
@@ -1530,7 +2846,9 @@ mod source_walk_tests {
             .await
             .err()
             .unwrap();
-        assert!(matches!(error, TwoBitGenerationError::PagedRead { .. }));
+        assert!(
+            matches!(&error, TwoBitGenerationError::Query { error, .. } if matches!(error.as_ref(), TwoBitGenerationError::PagedRead { .. }))
+        );
         let (source, sq8) = error.read_stats();
         assert_eq!(source, source_stats);
         assert!(sq8.submitted_gets > 0 && sq8.failed_gets == sq8.submitted_gets);

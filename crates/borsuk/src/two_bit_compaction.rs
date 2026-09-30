@@ -9,11 +9,11 @@ use crate::{
     rotated_two_bit::RotatedTwoBitCodec,
     sq8_source::build_sq8_source_with_ids,
     two_bit_build::TwoBitGenerationBuilder,
-    two_bit_generation::{Manifest, TwoBitGenerationError, TwoBitGenerationLimits},
+    two_bit_generation::{DiscoveryMode, Manifest, TwoBitGenerationError, TwoBitGenerationLimits},
     two_bit_mutations::{TwoBitMutationLimits, read_two_bit_mutations, seal_two_bit_mutations},
     two_bit_source::{SourceBuildError, TwoBitSource, read_authenticated},
     two_bit_store::{
-        EmptyRoot, TwoBitHead, TwoBitStoreError, publish_empty_two_bit_generation,
+        EmptyRoot, TwoBitHead, TwoBitStoreError, discovery_mode, publish_empty_with_mode,
         publish_two_bit_generation, read_two_bit_head,
     },
 };
@@ -61,6 +61,8 @@ struct Job {
     dimensions: usize,
     mutation_sha256: String,
     mutation_revision: u64,
+    base_discovery: DiscoveryMode,
+    discovery: DiscoveryMode,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -176,6 +178,79 @@ fn prepared_manifest(directory: &Path, ready: &Ready) -> Result<Manifest> {
         read_authenticated(&path, length as usize, &ready.target_root_sha256).map_err(plane)?;
     serde_json::from_slice(&root).map_err(|_| bad("compaction root schema"))
 }
+fn validate_target(
+    directory: &Path,
+    root: &Manifest,
+    job: &Job,
+    input: &TwoBitCompactionSource,
+    generation: u64,
+) -> Result<()> {
+    if root.schema != crate::two_bit_generation::SCHEMA
+        || root.generation != generation
+        || root.base_epoch != job.base_epoch
+        || root.discovery.mode() != job.discovery
+        || root.canonical.rows != input.rows
+        || root.canonical.dimensions != input.dimensions
+    {
+        return Err(bad("compaction target mode/input/job"));
+    }
+    let path = directory.join("plane/manifest.json");
+    let length = fs::metadata(&path)?.len();
+    if length > 65536 {
+        return Err(bad("compaction plane length"));
+    }
+    let body =
+        read_authenticated(&path, length as usize, &root.plane_manifest_sha256).map_err(plane)?;
+    let receipt: crate::two_bit_source::SourcePlaneReceipt =
+        serde_json::from_slice(&body).map_err(|_| bad("compaction plane schema"))?;
+    if receipt.source_sha256 != input.raw_sha256
+        || receipt.rows != input.rows
+        || receipt.dimensions != input.dimensions
+    {
+        return Err(bad("compaction source binding"));
+    }
+    // Bind physical logical IDs and normalized vectors to the authenticated
+    // prepared input, with one row of scratch. Source hash alone omits IDs.
+    let input_dir = directory
+        .parent()
+        .ok_or(bad("compaction input directory"))?
+        .join("input");
+    let mut raw =
+        std::io::BufReader::with_capacity(65536, File::open(input_dir.join("source.f32"))?);
+    let mut ids = std::io::BufReader::with_capacity(65536, File::open(input_dir.join("ids.i64"))?);
+    let mut row = vec![
+        0;
+        input
+            .dimensions
+            .checked_mul(4)
+            .ok_or(bad("compaction row width"))?
+    ];
+    let mut values = vec![0.; input.dimensions];
+    let mut canonical = Sha256::new();
+    for _ in 0..input.rows {
+        let mut id = [0; 8];
+        ids.read_exact(&mut id)?;
+        raw.read_exact(&mut row)?;
+        for (value, encoded) in values.iter_mut().zip(row.chunks_exact(4)) {
+            *value = f32::from_le_bytes(encoded.try_into().unwrap());
+        }
+        canonical.update(id);
+        for value in crate::sq8_source::cosine_vector(&values)
+            .map_err(plane)?
+            .iter()
+        {
+            canonical.update(value.to_le_bytes());
+        }
+    }
+    if raw.read(&mut [0])? != 0
+        || ids.read(&mut [0])? != 0
+        || !root.canonical.valid()
+        || format!("{:x}", canonical.finalize()) != root.canonical.sha256
+    {
+        return Err(bad("compaction canonical input/ID binding"));
+    }
+    Ok(())
+}
 fn disk_bound(rows: usize, dimensions: usize) -> Result<u64> {
     let codec = RotatedTwoBitCodec::padded_dimensions(dimensions)
         .map_err(|e| plane(SourceBuildError::Codec(e)))?
@@ -265,6 +340,17 @@ pub async fn compact_two_bit_index(
     maintenance_directory: &Path,
     options: TwoBitCompactionOptions,
 ) -> Result<TwoBitHead> {
+    compact_two_bit_index_with_discovery(store, prefix, maintenance_directory, options, None).await
+}
+/// Compact with an explicit mode change, authenticated in the durable job.
+/// None inherits the base mode (or a previously captured job on restart).
+pub async fn compact_two_bit_index_with_discovery(
+    store: Arc<dyn ObjectStore>,
+    prefix: &ObjectPath,
+    maintenance_directory: &Path,
+    options: TwoBitCompactionOptions,
+    requested: Option<DiscoveryMode>,
+) -> Result<TwoBitHead> {
     let prefix = prefix.clone();
     let directory = maintenance_directory.to_path_buf();
     tokio::task::spawn_blocking(move || {
@@ -282,7 +368,13 @@ pub async fn compact_two_bit_index(
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        let result = runtime.block_on(compact_owned(store.as_ref(), &prefix, &directory, options));
+        let result = runtime.block_on(compact_owned(
+            store.as_ref(),
+            &prefix,
+            &directory,
+            options,
+            requested,
+        ));
         drop(lock);
         result
     })
@@ -295,6 +387,7 @@ async fn compact_owned(
     prefix: &ObjectPath,
     directory: &Path,
     options: TwoBitCompactionOptions,
+    requested: Option<DiscoveryMode>,
 ) -> Result<TwoBitHead> {
     if options.mutations.max_memory_bytes > options.source.max_memory_bytes
         || options.source.max_memory_bytes < 262144
@@ -333,7 +426,7 @@ async fn compact_owned(
             return Err(bad("unmanaged compaction path"));
         }
         let (job, _): (Job, _) = read_json(&entry.path().join("job.json"))?;
-        if job.schema != "borsuk-two-bit-compaction-job-v2"
+        if job.schema != "borsuk-two-bit-compaction-job-v3"
             || job.index_prefix != prefix.as_ref()
             || job.base_root_sha256 != name
             || job.base_generation >= base.generation()
@@ -346,8 +439,12 @@ async fn compact_owned(
         .generation()
         .checked_add(1)
         .ok_or(bad("compaction generation overflow"))?;
+    let base_discovery = discovery_mode(store, &base).await?;
     let latest = read_two_bit_mutations(store, &base, base.dimensions(), options.mutations).await?;
     let Some(latest) = latest else {
+        if requested.is_some_and(|mode| mode != base_discovery) {
+            return Err(bad("discovery change requires a mutation snapshot"));
+        }
         return Ok(base);
     };
     let sealed = seal_two_bit_mutations(store, &base, Some(&latest), options.mutations).await?;
@@ -356,8 +453,15 @@ async fn compact_owned(
     fs::create_dir_all(&job_dir)?;
     let (authority, _) =
         crate::two_bit_mutations::require_sealed_two_bit_mutations(store, &base).await?;
+    let job_path = job_dir.join("job.json");
+    let captured = if job_path.exists() {
+        Some(read_json::<Job>(&job_path)?.0.discovery)
+    } else {
+        None
+    };
+    let discovery = requested.or(captured).unwrap_or(base_discovery);
     let job = Job {
-        schema: "borsuk-two-bit-compaction-job-v2".into(),
+        schema: "borsuk-two-bit-compaction-job-v3".into(),
         index_prefix: prefix.as_ref().into(),
         base_root_sha256: base.root_sha256().into(),
         base_generation: base.generation(),
@@ -365,6 +469,8 @@ async fn compact_owned(
         dimensions: base.dimensions(),
         mutation_sha256: sealed.sha256().into(),
         mutation_revision: sealed.revision(),
+        base_discovery,
+        discovery,
     };
     let job_path = job_dir.join("job.json");
     let job_bytes = serde_json::to_vec(&job).map_err(|_| bad("compaction job"))?;
@@ -406,6 +512,7 @@ async fn compact_owned(
         }
         if ready.rows > 0 {
             let root = prepared_manifest(&generation_dir, &ready)?;
+            validate_target(&generation_dir, &root, &job, &input, target_generation)?;
             let staged = async {
                 store
                     .head(&ObjectPath::from(root.sq8_object_key.clone()))
@@ -464,10 +571,11 @@ async fn compact_owned(
         let target = if input.rows == 0 {
             hash(
                 &serde_json::to_vec(&EmptyRoot {
-                    schema: "borsuk-two-bit-empty-generation-v2".into(),
+                    schema: "borsuk-two-bit-empty-generation-v3".into(),
                     generation: target_generation,
                     dimensions: base.dimensions(),
                     base_epoch: job.base_epoch,
+                    discovery: job.discovery,
                 })
                 .map_err(|_| bad("empty root"))?,
             )
@@ -576,7 +684,12 @@ async fn compact_owned(
                 sq8_object_key: key.as_ref(),
                 sq8_etag: &etag,
             }
-            .build_with_order(&order, &generation_dir, build_budget)?;
+            .build_with_discovery(
+                Some(&order),
+                job.discovery,
+                &generation_dir,
+                build_budget,
+            )?;
             root
         };
         let ready = Ready {
@@ -592,29 +705,36 @@ async fn compact_owned(
     let published = if ready.rows == 0 {
         let expected = hash(
             &serde_json::to_vec(&EmptyRoot {
-                schema: "borsuk-two-bit-empty-generation-v2".into(),
+                schema: "borsuk-two-bit-empty-generation-v3".into(),
                 generation: target_generation,
                 dimensions: base.dimensions(),
                 base_epoch: job.base_epoch,
+                discovery: job.discovery,
             })
             .map_err(|_| bad("empty root"))?,
         );
         if ready.target_root_sha256 != expected {
             return Err(bad("empty ready root"));
         }
-        publish_empty_two_bit_generation(
+        publish_empty_with_mode(
             store,
             prefix,
             base.dimensions(),
             target_generation,
             Some(&base),
+            Some(job.discovery),
         )
         .await?
     } else {
         let root = prepared_manifest(&generation_dir, &ready)?;
+        let (input, _) = verified_input(&input_dir, &job, Some(&ready.input_sha256))?;
+        validate_target(&generation_dir, &root, &job, &input, target_generation)?;
         if root.generation != target_generation
             || root.canonical.rows != ready.rows
             || root.canonical.dimensions != base.dimensions()
+            || root.base_epoch != job.base_epoch
+            || root.discovery.mode() != job.discovery
+            || root.schema != crate::two_bit_generation::SCHEMA
         {
             return Err(bad("compaction target binding"));
         }
@@ -640,4 +760,96 @@ async fn compact_owned(
     // the next call removes this recognized obsolete job before doing more work.
     let _ = fs::remove_dir_all(&job_dir);
     Ok(published)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prepared_target_binds_logical_ids_even_with_identical_raw_source() {
+        for wrong in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let input_dir = temp.path().join("input");
+            fs::create_dir(&input_dir).unwrap();
+            let raw = [1.0_f32, 0.0, 0.0, 1.0]
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>();
+            let ids = [71_i64, 92]
+                .into_iter()
+                .flat_map(i64::to_le_bytes)
+                .collect::<Vec<_>>();
+            let raw_path = input_dir.join("source.f32");
+            fs::write(&raw_path, &raw).unwrap();
+            fs::write(input_dir.join("ids.i64"), &ids).unwrap();
+            let sq8_path = temp.path().join("sq8");
+            let encoding = build_sq8_source_with_ids(
+                &raw_path,
+                &hash(&raw),
+                2,
+                &[0, 1],
+                if wrong { &[72, 93] } else { &[71, 92] },
+                &sq8_path,
+                1_000_000,
+            )
+            .unwrap();
+            let input = TwoBitCompactionSource {
+                schema: "borsuk-two-bit-compaction-source-v1".into(),
+                rows: 2,
+                dimensions: 2,
+                raw_sha256: hash(&raw),
+                ids_sha256: hash(&ids),
+                base_root_sha256: "1".repeat(64),
+                mutation_sha256: "2".repeat(64),
+                mutation_revision: 1,
+                recovery: Default::default(),
+            };
+            let job = Job {
+                schema: "borsuk-two-bit-compaction-job-v3".into(),
+                index_prefix: "test".into(),
+                base_root_sha256: input.base_root_sha256.clone(),
+                base_generation: 1,
+                base_epoch: 7,
+                dimensions: 2,
+                mutation_sha256: input.mutation_sha256.clone(),
+                mutation_revision: 1,
+                base_discovery: DiscoveryMode::Graph,
+                discovery: DiscoveryMode::Graph,
+            };
+            let generation = temp.path().join("generation");
+            TwoBitGenerationBuilder {
+                source: TwoBitSource {
+                    raw: &raw_path,
+                    raw_sha256: &input.raw_sha256,
+                    sq8: &sq8_path,
+                    sq8_sha256: &encoding.sha256,
+                    rows: 2,
+                    dimensions: 2,
+                },
+                base_epoch: 7,
+                generation: 2,
+                low: &encoding.low,
+                step: &encoding.step,
+                sq8_object_key: &format!("test/objects/{}", encoding.sha256),
+                sq8_etag: "etag",
+            }
+            .build_with_order(&[0, 1], &generation, 1_000_000)
+            .unwrap();
+            let root: Manifest =
+                serde_json::from_slice(&fs::read(generation.join("manifest.json")).unwrap())
+                    .unwrap();
+            let result = validate_target(&generation, &root, &job, &input, 2);
+            if wrong {
+                assert!(matches!(
+                    result,
+                    Err(TwoBitStoreError::Invalid(
+                        "compaction canonical input/ID binding"
+                    ))
+                ));
+            } else {
+                result.unwrap();
+            }
+        }
+    }
 }

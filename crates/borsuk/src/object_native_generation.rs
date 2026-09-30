@@ -241,6 +241,46 @@ pub(crate) async fn stage_generation_metadata(
     names: &[&str],
     scratch_parent: &Path,
 ) -> Result<(tempfile::TempDir, Vec<MetadataReadStats>), ObjectNativeOpenError> {
+    stage_metadata(
+        store,
+        prefix,
+        trusted_sha256,
+        max_bytes,
+        names,
+        scratch_parent,
+        false,
+    )
+    .await
+}
+
+/// Derive the v7 startup roster only after authenticating its bounded root.
+pub(crate) async fn stage_two_bit_metadata(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    trusted_sha256: &str,
+    max_bytes: u64,
+    scratch_parent: &Path,
+) -> Result<(tempfile::TempDir, Vec<MetadataReadStats>), ObjectNativeOpenError> {
+    stage_metadata(
+        store,
+        prefix,
+        trusted_sha256,
+        max_bytes,
+        &["manifest.json"],
+        scratch_parent,
+        true,
+    )
+    .await
+}
+async fn stage_metadata(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    trusted_sha256: &str,
+    max_bytes: u64,
+    names: &[&str],
+    scratch_parent: &Path,
+    two_bit: bool,
+) -> Result<(tempfile::TempDir, Vec<MetadataReadStats>), ObjectNativeOpenError> {
     if !is_hash(trusted_sha256) || max_bytes == 0 {
         return Err(ObjectNativeOpenError::Invalid(
             "trusted digest or memory cap",
@@ -252,7 +292,12 @@ pub(crate) async fn stage_generation_metadata(
     let scratch = tempfile::tempdir_in(scratch_parent).map_err(ObjectNativeOpenError::Io)?;
     let mut total = 0_u64;
     let mut stats = Vec::with_capacity(names.len());
-    for &name in names {
+    let mut authenticated: Option<crate::two_bit_generation::Manifest> = None;
+    let mut names = names.to_vec();
+    let mut index = 0;
+    while index < names.len() {
+        let name = names[index];
+        index += 1;
         let location = metadata_location(prefix, name);
         let head_started = std::time::Instant::now();
         let head = store
@@ -263,11 +308,40 @@ pub(crate) async fn stage_generation_metadata(
         let limit = max_bytes
             .saturating_sub(total)
             .min(if name.ends_with(".json") {
-                MAX_MANIFEST as u64
+                if two_bit && name == "router/manifest.json" {
+                    crate::two_bit_generation::ROUTER_ROOT_CAP as u64
+                } else {
+                    MAX_MANIFEST as u64
+                }
             } else {
                 u64::MAX
             });
         let expected = head.size;
+        if let Some(root) = &authenticated {
+            let rows = root.canonical.rows;
+            let dimensions = root.canonical.dimensions;
+            let exact = match name {
+                "plane/mean.bin" => dimensions.checked_mul(4),
+                "plane/page_digests.bin" => rows.div_ceil(32).checked_mul(32),
+                "page_digests.bin" => rows.div_ceil(256).checked_mul(32),
+                "router/manifest.json" => match &root.discovery {
+                    crate::two_bit_generation::Discovery::Semantic { root_bytes, .. } => {
+                        Some(*root_bytes)
+                    }
+                    _ => None,
+                },
+                "router/membership.bin" => match &root.discovery {
+                    crate::two_bit_generation::Discovery::Semantic {
+                        membership_bytes, ..
+                    } => Some(*membership_bytes),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if exact.is_some_and(|n| n as u64 != expected) {
+                return Err(ObjectNativeOpenError::Invalid("descriptor metadata length"));
+            }
+        }
         if expected == 0 || expected > limit {
             return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
         }
@@ -380,6 +454,37 @@ pub(crate) async fn stage_generation_metadata(
         drop(output);
         if name == "manifest.json" && format!("{:x}", digest.finalize()) != trusted_sha256 {
             return Err(ObjectNativeOpenError::HashMismatch("generation manifest"));
+        }
+        if two_bit && name == "manifest.json" {
+            let root: crate::two_bit_generation::Manifest =
+                serde_json::from_slice(&fs::read(&local).map_err(ObjectNativeOpenError::Io)?)
+                    .map_err(|_| ObjectNativeOpenError::Invalid("two-bit root schema"))?;
+            if root.schema != crate::two_bit_generation::SCHEMA
+                || !root.canonical.valid()
+                || !root
+                    .discovery
+                    .valid(root.canonical.rows, root.canonical.dimensions)
+            {
+                return Err(ObjectNativeOpenError::Invalid(
+                    "two-bit discovery descriptor",
+                ));
+            }
+            if let crate::two_bit_generation::Discovery::Semantic {
+                root_bytes,
+                membership_bytes,
+                ..
+            } = &root.discovery
+            {
+                let modeled = (*root_bytes as u64)
+                    .checked_mul(35)
+                    .and_then(|n| n.checked_add(*membership_bytes as u64 * 8))
+                    .and_then(|n| n.checked_add(131072));
+                if modeled.is_none_or(|n| n > max_bytes) {
+                    return Err(ObjectNativeOpenError::Invalid("router metadata admission"));
+                }
+            }
+            names = root.discovery.files(true);
+            authenticated = Some(root);
         }
         total = total
             .checked_add(count)
@@ -1413,12 +1518,18 @@ mod tests {
         .unwrap();
         assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 1);
         // No new batch is admitted while the first batch is pending.
-        assert_eq!(store.requests.lock().unwrap().len(), 3 + METADATA_PARALLEL_GETS as usize);
+        assert_eq!(
+            store.requests.lock().unwrap().len(),
+            3 + METADATA_PARALLEL_GETS as usize
+        );
         drop(staging);
         assert_eq!(store.active.load(Ordering::SeqCst), 0);
         assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
         tokio::task::yield_now().await;
-        assert_eq!(store.requests.lock().unwrap().len(), 3 + METADATA_PARALLEL_GETS as usize);
+        assert_eq!(
+            store.requests.lock().unwrap().len(),
+            3 + METADATA_PARALLEL_GETS as usize
+        );
         assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
     }
 }

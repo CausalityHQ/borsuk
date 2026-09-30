@@ -4,7 +4,8 @@ use crate::{
     resident_graph_generation::{Artifact, valid_sha256},
     resident_graph_store::{ResidentGraphStoreError, upload_authenticated_file},
     two_bit_generation::{
-        METADATA_FILES, Manifest, TwoBitGeneration, TwoBitGenerationError, TwoBitGenerationLimits,
+        Discovery, DiscoveryMode, Manifest, TwoBitGeneration, TwoBitGenerationError,
+        TwoBitGenerationLimits,
     },
     two_bit_source::{SourcePlaneReceipt, read_authenticated},
 };
@@ -69,10 +70,11 @@ pub(crate) struct EmptyRoot {
     pub(crate) generation: u64,
     pub(crate) dimensions: usize,
     pub(crate) base_epoch: u64,
+    pub(crate) discovery: DiscoveryMode,
 }
 impl EmptyRoot {
     pub(crate) fn valid(&self) -> bool {
-        self.schema == "borsuk-two-bit-empty-generation-v2"
+        self.schema == "borsuk-two-bit-empty-generation-v3"
             && self.generation > 0
             && self.dimensions > 0
             && u32::try_from(self.dimensions).is_ok()
@@ -264,7 +266,10 @@ async fn head_from_control(
                 && !manifest.low.is_empty()
                 && manifest.low.len() == manifest.step.len()
                 && manifest.canonical.valid()
-                && manifest.canonical.dimensions == manifest.low.len() =>
+                && manifest.canonical.dimensions == manifest.low.len()
+                && manifest
+                    .discovery
+                    .valid(manifest.canonical.rows, manifest.canonical.dimensions) =>
         {
             (manifest.low.len(), false)
         }
@@ -279,6 +284,34 @@ async fn head_from_control(
         prefix: prefix.clone(),
         version,
     })
+}
+pub(crate) async fn discovery_mode(
+    store: &dyn ObjectStore,
+    head: &TwoBitHead,
+) -> Result<DiscoveryMode> {
+    let (body, _) =
+        small_object(store, &head.metadata_prefix().join("manifest.json"), 65536).await?;
+    use sha2::{Digest, Sha256};
+    if format!("{:x}", Sha256::digest(&body)) != head.root_sha256 {
+        return Err(TwoBitStoreError::Invalid("discovery root identity"));
+    }
+    let root: Root =
+        serde_json::from_slice(&body).map_err(|_| TwoBitStoreError::Invalid("discovery schema"))?;
+    match root {
+        Root::Empty(root) if root.valid() && root.generation == head.generation => {
+            Ok(root.discovery)
+        }
+        Root::Populated(root)
+            if root.schema == crate::two_bit_generation::SCHEMA
+                && root.generation == head.generation
+                && root
+                    .discovery
+                    .valid(root.canonical.rows, root.canonical.dimensions) =>
+        {
+            Ok(root.discovery.mode())
+        }
+        _ => Err(TwoBitStoreError::Invalid("discovery authority")),
+    }
 }
 // Maintenance keys include the owning epoch in their physical namespace. A claim
 // cannot relabel an old key after GC: the key itself must match the captured epoch.
@@ -314,7 +347,7 @@ async fn validate_owned_object(
     .await?;
     let claim: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|_| TwoBitStoreError::Invalid("maintenance claim schema"))?;
-    if claim["schema"] != "borsuk-two-bit-compaction-job-v2"
+    if claim["schema"] != "borsuk-two-bit-compaction-job-v3"
         || claim["index_prefix"].as_str() != Some(prefix.as_ref())
         || claim["base_epoch"].as_u64() != Some(epoch)
     {
@@ -407,20 +440,87 @@ pub async fn publish_two_bit_generation(
     if source.size != source_size as u64 || source.e_tag.as_deref() != Some(&manifest.sq8_etag) {
         return Err(TwoBitStoreError::Invalid("SQ8 HEAD identity"));
     }
-    let digests = [
-        trusted_root_sha256,
-        &manifest.page_manifest_sha256,
-        pages["page_digest_sha256"]
-            .as_str()
-            .ok_or(TwoBitStoreError::Invalid("page digest"))?,
-        &manifest.centroids_sha256,
-        &manifest.graph_sha256,
-        &manifest.diverse_graph_sha256,
-        &manifest.plane_manifest_sha256,
-        &plane.mean_sha256,
-        &plane.records_sha256,
-        &plane.page_digest_sha256,
+    let mut roster = vec![
+        ("manifest.json", trusted_root_sha256),
+        ("page_manifest.json", manifest.page_manifest_sha256.as_str()),
+        (
+            "page_digests.bin",
+            pages["page_digest_sha256"]
+                .as_str()
+                .ok_or(TwoBitStoreError::Invalid("page digest"))?,
+        ),
+        (
+            "plane/manifest.json",
+            manifest.plane_manifest_sha256.as_str(),
+        ),
+        ("plane/mean.bin", plane.mean_sha256.as_str()),
+        ("plane/records.bin", plane.records_sha256.as_str()),
+        ("plane/page_digests.bin", plane.page_digest_sha256.as_str()),
     ];
+    match &manifest.discovery {
+        Discovery::Graph {
+            centroids_sha256,
+            graph_sha256,
+            diverse_graph_sha256,
+            ..
+        } => {
+            roster.extend([
+                ("centroids.bin", centroids_sha256.as_str()),
+                ("graph.bin", graph_sha256.as_str()),
+                ("diverse_graph.bin", diverse_graph_sha256.as_str()),
+            ]);
+        }
+        Discovery::Semantic {
+            root_sha256,
+            root_bytes,
+            membership_sha256,
+            membership_bytes,
+            leaves_sha256,
+            leaves_bytes,
+            centroids_sha256,
+            ..
+        } => {
+            let geometry = crate::semantic_unit_router::Geometry {
+                rows: plane.rows,
+                dimensions: plane.dimensions,
+                units: plane.rows.div_ceil(32),
+                blob_bytes: 32 + plane.rows.div_ceil(32) * plane.dimensions * 2,
+            };
+            let cap = usize::try_from(
+                limits
+                    .max_memory_bytes
+                    .saturating_sub(limits.already_pinned_bytes),
+            )
+            .map_err(|_| TwoBitStoreError::Invalid("publication memory"))?;
+            crate::semantic_unit_router::admit(geometry, cap)
+                .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
+            let read = |name: &str, size, sha: &str| {
+                read_authenticated(&local.join(name), size, sha)
+                    .map_err(TwoBitGenerationError::Plane)
+            };
+            let root = read("router/manifest.json", *root_bytes, root_sha256)?;
+            let membership = read(
+                "router/membership.bin",
+                *membership_bytes,
+                membership_sha256,
+            )?;
+            let leaves = read("router/leaves.bin", *leaves_bytes, leaves_sha256)?;
+            let centroids = read("centroids.bin", geometry.blob_bytes, centroids_sha256)?;
+            crate::semantic_unit_router::validate_publication(
+                &root,
+                &membership,
+                &leaves,
+                &manifest.discovery.input(&plane)?,
+                &centroids,
+            )
+            .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
+            roster.extend([
+                ("router/manifest.json", root_sha256.as_str()),
+                ("router/membership.bin", membership_sha256.as_str()),
+                ("router/leaves.bin", leaves_sha256.as_str()),
+            ]);
+        }
+    }
     let budget = usize::try_from(
         limits
             .max_memory_bytes
@@ -439,7 +539,7 @@ pub async fn publish_two_bit_generation(
         budget,
     )
     .await?;
-    for (name, digest) in METADATA_FILES.iter().zip(digests) {
+    for (name, digest) in roster {
         let artifact = Artifact {
             bytes: fs::metadata(local.join(name))?.len(),
             sha256: digest.to_owned(),
@@ -524,12 +624,23 @@ pub async fn publish_empty_two_bit_generation(
     generation: u64,
     expected: Option<&TwoBitHead>,
 ) -> Result<TwoBitHead> {
+    publish_empty_with_mode(store, prefix, dimensions, generation, expected, None).await
+}
+pub(crate) async fn publish_empty_with_mode(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    dimensions: usize,
+    generation: u64,
+    expected: Option<&TwoBitHead>,
+    mode: Option<DiscoveryMode>,
+) -> Result<TwoBitHead> {
     let bad = TwoBitStoreError::Invalid;
     let mut root = EmptyRoot {
-        schema: "borsuk-two-bit-empty-generation-v2".into(),
+        schema: "borsuk-two-bit-empty-generation-v3".into(),
         generation,
         dimensions,
         base_epoch: 0,
+        discovery: mode.unwrap_or(DiscoveryMode::Graph),
     };
     if !root.valid()
         || expected.is_some_and(|h| {
@@ -537,6 +648,11 @@ pub async fn publish_empty_two_bit_generation(
         })
     {
         return Err(bad("empty generation namespace/order/dimensions"));
+    }
+    if mode.is_none()
+        && let Some(previous) = expected
+    {
+        root.discovery = discovery_mode(store, previous).await?;
     }
     let authority = if let Some(previous) = expected {
         Some(crate::two_bit_mutations::require_sealed_two_bit_mutations(store, previous).await?)

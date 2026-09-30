@@ -3,7 +3,7 @@ use crate::{
     object_native_generation::{metadata_location, valid_object_key},
     resident_graph_generation::valid_sha256,
     two_bit_compaction::lifecycle_lock,
-    two_bit_generation::{METADATA_FILES, Manifest},
+    two_bit_generation::{METADATA_FILES, Manifest, ROUTER_FILES},
     two_bit_mutations::TwoBitMutationLimits,
     two_bit_store::{
         TwoBitStoreError, TwoBitWriteFence, begin_two_bit_write_fence, end_two_bit_write_fence,
@@ -72,6 +72,7 @@ fn recognized(prefix: &str, key: &str) -> bool {
     {
         return valid_sha256(root)
             && (METADATA_FILES.contains(&name)
+                || ROUTER_FILES.contains(&name)
                 || name.strip_prefix("mutations/").is_some_and(valid_sha256));
     }
     if let Some((owner, name)) = relative
@@ -114,13 +115,16 @@ async fn keep_set(
         if manifest.schema != crate::two_bit_generation::SCHEMA
             || manifest.generation != head.generation()
             || !manifest.canonical.valid()
+            || !manifest
+                .discovery
+                .valid(manifest.canonical.rows, manifest.canonical.dimensions)
             || manifest.canonical.dimensions != head.dimensions()
             || manifest.low.len() != head.dimensions()
             || manifest.step.len() != head.dimensions()
         {
             return Err(bad("GC root geometry"));
         }
-        for name in METADATA_FILES {
+        for name in manifest.discovery.files(false) {
             keep.insert(metadata_location(&head.metadata_prefix(), name));
         }
         keep_object(

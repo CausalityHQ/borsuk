@@ -38,20 +38,25 @@ fn graph_root_body(
     graph_sha: &str,
     resident: usize,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
+    if manifest["discovery"]["mode"] != "graph" {
+        return Err("graph discovery required".into());
+    }
     // Preserve authenticated numeric tokens: parsing/re-emitting f64 can change their bits.
     let mut text = std::str::from_utf8(body)?.to_owned();
     for (before, after) in [
         (
             format!(
                 "\"graph_sha256\":\"{}\"",
-                manifest["graph_sha256"].as_str().ok_or("graph hash")?
+                manifest["discovery"]["graph_sha256"]
+                    .as_str()
+                    .ok_or("graph hash")?
             ),
             format!("\"graph_sha256\":\"{graph_sha}\""),
         ),
         (
             format!(
                 "\"graph_resident_bytes\":{},",
-                manifest["graph_resident_bytes"]
+                manifest["discovery"]["graph_resident_bytes"]
                     .as_u64()
                     .ok_or("graph resident bytes")?
             ),
@@ -80,6 +85,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("root identity".into());
     }
     let manifest: serde_json::Value = serde_json::from_slice(&body)?;
+    if manifest["schema"] != "borsuk-two-bit-generation-v7"
+        || manifest["discovery"]["mode"] != "graph"
+    {
+        return Err("current graph generation required".into());
+    }
     let rows = manifest["canonical"]["rows"]
         .as_u64()
         .ok_or("row geometry")?;
@@ -105,7 +115,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     drop(TwoBitGeneration::open(root, &args[2], limits)?);
     let blob = bounded(&root.join("centroids.bin"), 64 * 1024 * 1024)?;
     if hash(&blob)
-        != manifest["centroids_sha256"]
+        != manifest["discovery"]["centroids_sha256"]
             .as_str()
             .ok_or("centroid hash")?
     {
@@ -113,7 +123,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let centroids = UnitCentroidPages::decode(&blob)?;
     let old = bounded(&root.join("graph.bin"), 64 * 1024 * 1024)?;
-    if hash(&old) != manifest["graph_sha256"].as_str().ok_or("graph hash")? {
+    if hash(&old)
+        != manifest["discovery"]["graph_sha256"]
+            .as_str()
+            .ok_or("graph hash")?
+    {
         return Err("graph identity".into());
     }
     let wall = Instant::now();
@@ -150,7 +164,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let stats = serde_json::json!({"schema":"borsuk-topology-only-build-v1","rows":rows,"dimensions":dimensions,
         "centroids_sha256":hash(&blob),"control_root_sha256":args[2],
         "control":{"graph_sha256":hash(&nearest_blob),"graph_bytes":nearest_blob.len(),
-            "graph_resident_bytes":manifest["graph_resident_bytes"],"node_layer_degrees":nearest_degrees,
+            "graph_resident_bytes":manifest["discovery"]["graph_resident_bytes"],"node_layer_degrees":nearest_degrees,
             "build_wall_ns":nearest_wall,"build_process_cpu_ns":nearest_cpu},
         "candidate":{"graph_sha256":hash(&diverse_blob),"graph_bytes":diverse_blob.len(),
             "graph_resident_bytes":resident,"node_layer_degrees":diverse_degrees,
@@ -202,9 +216,9 @@ mod tests {
 
     #[test]
     fn graph_root_preserves_unrelated_numeric_tokens() {
-        let body = br#"{"graph_resident_bytes":12,"graph_sha256":"old","low":[-0.11186065524816513],"step":[0.0009437487460672855]}"#;
-        let manifest = serde_json::from_slice(body).unwrap();
-        let expected = br#"{"graph_resident_bytes":34,"graph_sha256":"new","low":[-0.11186065524816513],"step":[0.0009437487460672855]}"#;
+        let body = br#"{"discovery":{"mode":"graph","graph_resident_bytes":12,"graph_sha256":"old"},"low":[-0.11186065524816513],"step":[0.0009437487460672855]}"#;
+        let mut manifest = serde_json::from_slice(body).unwrap();
+        let expected = br#"{"discovery":{"mode":"graph","graph_resident_bytes":34,"graph_sha256":"new"},"low":[-0.11186065524816513],"step":[0.0009437487460672855]}"#;
         assert_eq!(
             graph_root_body(body, &manifest, "new", 34).unwrap(),
             expected
@@ -212,5 +226,7 @@ mod tests {
         assert!(graph_root_body(b"{}", &manifest, "new", 34).is_err());
         let duplicate = [body.as_slice(), body.as_slice()].concat();
         assert!(graph_root_body(&duplicate, &manifest, "new", 34).is_err());
+        manifest["discovery"]["mode"] = "semantic".into();
+        assert!(graph_root_body(body, &manifest, "new", 34).is_err());
     }
 }
