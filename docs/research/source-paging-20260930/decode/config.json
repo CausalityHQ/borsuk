@@ -17,7 +17,7 @@
     "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
     "scripts/check_native_paged_source_stats.py": "51219979f622c74e5521a68bff59982b1db03e18b77930034b3ea01fabaf6116",
     "scripts/run_native_paged_cold_first_query.py": "e3a4c1c1674dda0c29c1ea28f01801452bb5d9fe6ba87ea8096fa4820263e795",
-    "scripts/run_native_graph_decode_cold.py": "51d7fee68dc79bfb7bc9937a77e0c40be2858734c950980be17fe4cb03e0a52d"
+    "scripts/run_native_graph_decode_cold.py": "d118231f6b51fc4526b12006035516f4c36c8c27490bf3d86addb4627445b8f4"
   },
   "cold_boundary": "preencoded request; process launch through first HTTP response; refused TCP connects included",
   "count": 64,
@@ -211,5 +211,15 @@
     "crates/borsuk/src/bin/two_bit_walk_nomination.rs": "ba2383c638f1254a17dd08b45d4035070da897d991246029f5fa2cd8b442e437",
     "crates/borsuk/tests/two_bit_application_ids.rs": "18bcf05e43f88ce95794279f48ae311325b023a06688577d656aaae532307531",
     "crates/borsuk/tests/two_bit_gc_delayed_delete.rs": "197c64ec26bf6ece0a0a812b8e6d1de6c1197e26b8234424d3023d5d8b923341"
+  },
+  "staging": {
+    "control": {
+      "range_bytes": 4194304,
+      "parallel_gets": 8
+    },
+    "candidate": {
+      "range_bytes": 4194304,
+      "parallel_gets": 8
+    }
   }
 }

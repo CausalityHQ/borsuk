@@ -16,7 +16,7 @@ from scripts import verify_native_cold_first_query as base
 from scripts.check_native_paged_source_stats import validate_response, validate_startup
 
 
-def authenticate_closed(directory, campaign, remote):
+def authenticate_closed(directory, campaign, remote, manifest_validator=None):
     """Authenticate remote terminal, archive and every locally collected body."""
     directory = Path(directory)
     launch = json.loads((directory/'aws-launch.json').read_bytes())
@@ -56,6 +56,9 @@ def authenticate_closed(directory, campaign, remote):
     for name, digest in qualification['code_sha256'].items():
         assert base.sha(archived[name]) == digest == base.sha(Path(name).read_bytes()), name
     for name, digest in config['code_sha256'].items(): assert base.sha(archived[name]) == digest
+    if manifest_validator is not None:
+        manifest_validator(archived, config)
+        return launch, reservation, terminal, artifacts, archived, config
     pointer = config['native_source_manifest']
     manifest_body = archived[pointer['path']]
     assert base.sha(manifest_body) == pointer['sha256']

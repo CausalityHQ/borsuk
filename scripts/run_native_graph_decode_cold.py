@@ -20,6 +20,7 @@ def validate_config(config, base=Path('.')):
     assert config['blocks'] == [dict(arm=a, begin=b, end=e) for a,b,e in paired.BLOCKS]
     assert config['dataset_order'] == ['ReLAION','CoHere']
     assert config['source_caps'] == paged.SOURCE_CAPS
+    assert config['staging'] == {arm:dict(range_bytes=4194304,parallel_gets=8) for arm in ('control','candidate')}
     assert set(config['code_sha256']) == set(CODE)
     for name, digest in config['code_sha256'].items(): assert paired.cold.sha(base/name) == digest
     reference = config['items_source']; body = (base/reference['path']).read_bytes()
