@@ -1,0 +1,246 @@
+{
+  "schema": "borsuk-native-paged-source-cold-spot-v1",
+  "source_commit": "24342b9e5a740049cdb7f02e859af04b8eb9fa32",
+  "source_archive_sha256": "3ea1f9903194747d7f741753fc66f48a21c89f22985e6bc9a4660b1f347abca9",
+  "wall_seconds": 4200,
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1b",
+  "subnet_id": "subnet-00243d923761c047c",
+  "spot_price_observed_usd_per_hour": "0.194000",
+  "spot_quote_timestamp": "2026-09-30T06:00:00+00:00",
+  "spot_max_usd_per_hour": 0.3,
+  "compute_cap_usd": 0.35,
+  "ebs_s3_allowance_usd": 0.15,
+  "total_cost_measured": false,
+  "cost_scope": "4200s at capped Spot rate; boot/termination overhead and EBS/S3 allowance estimated",
+  "qualification": {
+    "config_sha256": "92a5e94ab57cced22405d42527bd4f1b54f0f0a839b8444722b7a111145100b9",
+    "config_path": "docs/research/source-paging-20260930/cold-config.json",
+    "campaign_schema": "borsuk-native-paged-source-cold-spot-v1",
+    "manifest_path": "docs/research/source-paging-20260930/native-source-manifest.json",
+    "manifest_sha256": "e23787927669acf07cbf0d5e687e99ef5a09b24f27e42e76de4c2070991a744c",
+    "native_source_commit": "2b0827369965ede5414a23e7be3abfefb92166b9",
+    "source_identity_sha256": "3f05bdfd2c399fb4f93ab5c73827c7b55d8fd31f73ed967e6ac235976a7d7f64",
+    "source_file_count": 395,
+    "compiled_native_sha256": {
+      "crates/borsuk/examples/two_bit_http.rs": "7d2d97b2a0579bfbaffd4ff8e5b35f13f7ecbd323d9b4f0b24598569129adfa7",
+      "crates/borsuk/src/object_native_generation.rs": "36dc8f040f862b329164be2cb58151270518f5c659bfbb317f77f1e8855f579c",
+      "crates/borsuk/src/two_bit_generation.rs": "3ced573da33bc0c82a9562eb7973c6ae1821fb613dab8c3b79b04b5ff34b8e34",
+      "crates/borsuk/tests/two_bit_generation.rs": "81ac7d2281269445b6ee2c8d7fd7267fa45c413d76f024ae4f4baddb903d403a",
+      "Cargo.toml": "1ec9ac514515662a0f3a371b1a65d72bf825d67f218dc3f6cc1e5fb0925547d6",
+      "Cargo.lock": "178c5f35a744ec2d11e21f040e72e74016e4502e532dbc2edfd8e2a5433b3b76",
+      "crates/borsuk/Cargo.toml": "76f88b2f0d8805f7727d1aef19469974fe8735aa24c0bd7f12175a3f88826c45",
+      "crates/borsuk/tests/two_bit_source.rs": "bb034601f3b2813d7dd6f22f2493c6005bb872c0ff39c03c6569ae408ab47f11",
+      "crates/borsuk/src/sq8_s3_range.rs": "80022b4b8669015b24dfc055dda162877f096fd20530fcb2811232d483e40c12",
+      "crates/borsuk/src/sq8_page_authority.rs": "e4b34461509c78ca558f49a0ff11151dc1454589f472a5911913b5dbcea9af23",
+      "crates/borsuk/src/two_bit_source.rs": "11016833a444183e8f8a3cb1303d5244f7becb2684ff156d2dcbb8b9b5f4f93d",
+      "crates/borsuk/src/two_bit_build.rs": "fe5e18007b2db7b240ab792024b81be12e5dc3c35cbf82190f1159555876171f",
+      "crates/borsuk/src/two_bit_index.rs": "0d5588593477518d7620a976c11759ffaf8a0c286555ce9b8110049cc53eb640",
+      "crates/borsuk/src/unit_centroid_graph.rs": "7a47654900e1ec2d5f96384ee2b67ea4c647c2eb05c00a0e4d5902636bcebc42",
+      "crates/borsuk/src/bin/build_two_bit_graph_variant.rs": "2278f5d0811c21c3252e287c87717dcb34e59570f9b4dccdebedcc963604a9a7",
+      "crates/borsuk/src/bin/two_bit_plan_demo.rs": "2a89f80da6ba650cb9b3c3de5650c43d9facdbfb0a6c5ce00c41522d37b0ef54",
+      "crates/borsuk/src/bin/two_bit_union_nomination.rs": "79ed545cdee7183e921295e2cb40fa9371bd1078b8a930c2db7a6cdbb68b03e9",
+      "crates/borsuk/src/bin/two_bit_walk_nomination.rs": "ba2383c638f1254a17dd08b45d4035070da897d991246029f5fa2cd8b442e437",
+      "crates/borsuk/tests/two_bit_application_ids.rs": "18bcf05e43f88ce95794279f48ae311325b023a06688577d656aaae532307531",
+      "crates/borsuk/tests/two_bit_gc_delayed_delete.rs": "197c64ec26bf6ece0a0a812b8e6d1de6c1197e26b8234424d3023d5d8b923341"
+    },
+    "code_sha256": {
+      "scripts/run_native_cold_first_query.py": "9ced034924594c7443b5e5a435da22e8f2204151ba6ecc7869ff0ef5b87b0c42",
+      "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+      "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+      "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+      "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6",
+      "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+      "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+      "scripts/check_native_paged_source_stats.py": "51219979f622c74e5521a68bff59982b1db03e18b77930034b3ea01fabaf6116",
+      "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
+      "scripts/run_native_paged_cold_first_query.py": "e3a4c1c1674dda0c29c1ea28f01801452bb5d9fe6ba87ea8096fa4820263e795",
+      "scripts/launch_native_paged_source_cold_spot.py": "021ac8d82f2c05f7231ca35d59316b4bf2e95dab21e4ae5fbc304b541ee7170b",
+      "scripts/check_native_paged_source_build.py": "c2c323aa614c58b306292103282236f60bdd9059e124ba3d6b57b639e489372b",
+      "scripts/launch_native_metadata_ranges_cold_spot.py": "dcafc370d72fb2df6643a234ab4714ddebcaa484cf56bfa89c824382a2ba36b3",
+      "scripts/check_native_startup_build.py": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52"
+    },
+    "artifact_roster_sha256": "29ee67a9c41d5de129c1f76879badbc34a82397ac1495452ee4f0c37e6ec7d7f",
+    "native_rebuilt": false,
+    "current_full_suite_pass_claim": false,
+    "matched_control_latency_measured": false,
+    "matched_vendor_measured": false,
+    "qualified_binary_reused": true,
+    "frozen_build": {
+      "path": "docs/research/source-paging-20260930/cold/a0002",
+      "terminal_sha256": "2ba5a4457384d4f3e8a42638fabbf77bf07c0bbfabdd9a0e89f24163da5db1b1",
+      "artifacts": {
+        "test.log": {
+          "bytes": 12214,
+          "sha256": "2362bc719368a983f92361ced15db096f6e689acba41ea35375697720bd41a36"
+        },
+        "test-resources.txt": {
+          "bytes": 1004,
+          "sha256": "6ccb9e2d8e11e94c54e760645df693f56c47d42c4f1e9f1e52f46ed29a662aa1"
+        },
+        "boundary-check.json": {
+          "bytes": 3981,
+          "sha256": "870e160718fc989f54b66344db81e2ab09e24a34e358a6065adfd70c0b294403"
+        },
+        "boundary-cgroup.json": {
+          "bytes": 527,
+          "sha256": "bf114a03940647a5d511eab88e84e65c0565c7ed8e297c3fe8493c571058317d"
+        },
+        "compiled-source.json": {
+          "bytes": 2227,
+          "sha256": "f16483848a2b46fd22881b9e26592131204274c2b2d49cb4157a69cd185e0c98"
+        },
+        "binaries/two_bit_http": {
+          "bytes": 12544008,
+          "sha256": "99cf800558a6cebc710a3da28f6f4afa5743680efc8839a0b7b849b60c11eace"
+        },
+        "resolved-config.json": {
+          "bytes": 7002,
+          "sha256": "cc168b045ebb28b5413aa3d7101ae3a1c3cd0cc5cfae3fca4b18ff8affa7e559"
+        },
+        "source.log": {
+          "bytes": 72795,
+          "sha256": "e6b77db45de2aafa4688c54d5440e3d188cbf9b5ccd6c6e78cbbc4673297b110"
+        },
+        "source-walk.log": {
+          "bytes": 59972,
+          "sha256": "b14c899b027d379cdc19d9f7a1eb6cba986cdd821e452cdabc0247116d9b1d10"
+        },
+        "sq8-transport.log": {
+          "bytes": 59980,
+          "sha256": "9278b18b0f3ab35f756cef07f250f632fc681de68b8bcfe3d2db3d18678c4213"
+        },
+        "object-native.log": {
+          "bytes": 59822,
+          "sha256": "9339bf22033b1a6f630ac92896f5a00fe960015fc74362b3c6358b6a53659a93"
+        },
+        "graph.log": {
+          "bytes": 59969,
+          "sha256": "9a9dcf83d1267de9df797e54e25b81792e32ee66dcf9737845ce4d2d0518281c"
+        },
+        "generation.log": {
+          "bytes": 64861,
+          "sha256": "6a99e5ea1ede00e3f24e46ca0ea48a28b6c752ba57515249a069bb993f3e828d"
+        },
+        "application-ids.log": {
+          "bytes": 65500,
+          "sha256": "bf9d9a1e0daa2a07225a8f6053e87a1cf24db05d9274a7f1fb73820223bcdb00"
+        },
+        "gc.log": {
+          "bytes": 64921,
+          "sha256": "5f374e36f0c7ddf4b46cfcdac9c6a9fe73d7bcdf45fa91ddf010cc2a0739ba7c"
+        },
+        "http.log": {
+          "bytes": 64322,
+          "sha256": "76b6f3de62bbc4082b00d2159af5b95402e0515c2d1de7b0503c0daebe5f3b76"
+        },
+        "release.log": {
+          "bytes": 63897,
+          "sha256": "1ba542a6800945ce85e17083dd733b45c47928870c0add33eb328ca3edf9f584"
+        },
+        "rustc-version.txt": {
+          "bytes": 197,
+          "sha256": "ec378196e9fa222ab807fd49cb9dae156a9bd18069b9440fd4e0a6c57c6971cb"
+        },
+        "cargo-version.txt": {
+          "bytes": 36,
+          "sha256": "fb3f25aefd6d5441842d285f5a9b125b3f0f0b0bf2013d9a32677f9e99c6c854"
+        },
+        "cpuinfo.txt": {
+          "bytes": 2856,
+          "sha256": "91561b86cc166f6c939619e5bcb5b755b52e874a5284639f17179ec51278646d"
+        },
+        "arm-feature-tree.txt": {
+          "bytes": 47693,
+          "sha256": "036fe64b2c113c7250fa6adf22e917c3641645ec22b94add7cec8ed591e810ab"
+        },
+        "x86-feature-tree.txt": {
+          "bytes": 47617,
+          "sha256": "56dd1d5eb64294993fef507908f9f237dcd5de24c12a11d2ff11e24f1c72c5a0"
+        },
+        "compiled-source/crates/borsuk/examples/two_bit_http.rs": {
+          "bytes": 9837,
+          "sha256": "7d2d97b2a0579bfbaffd4ff8e5b35f13f7ecbd323d9b4f0b24598569129adfa7"
+        },
+        "compiled-source/crates/borsuk/src/object_native_generation.rs": {
+          "bytes": 54783,
+          "sha256": "36dc8f040f862b329164be2cb58151270518f5c659bfbb317f77f1e8855f579c"
+        },
+        "compiled-source/crates/borsuk/src/two_bit_generation.rs": {
+          "bytes": 59165,
+          "sha256": "3ced573da33bc0c82a9562eb7973c6ae1821fb613dab8c3b79b04b5ff34b8e34"
+        },
+        "compiled-source/crates/borsuk/tests/two_bit_generation.rs": {
+          "bytes": 33379,
+          "sha256": "81ac7d2281269445b6ee2c8d7fd7267fa45c413d76f024ae4f4baddb903d403a"
+        },
+        "compiled-source/Cargo.toml": {
+          "bytes": 621,
+          "sha256": "1ec9ac514515662a0f3a371b1a65d72bf825d67f218dc3f6cc1e5fb0925547d6"
+        },
+        "compiled-source/Cargo.lock": {
+          "bytes": 90542,
+          "sha256": "178c5f35a744ec2d11e21f040e72e74016e4502e532dbc2edfd8e2a5433b3b76"
+        },
+        "compiled-source/crates/borsuk/Cargo.toml": {
+          "bytes": 2697,
+          "sha256": "76f88b2f0d8805f7727d1aef19469974fe8735aa24c0bd7f12175a3f88826c45"
+        },
+        "compiled-source/crates/borsuk/tests/two_bit_source.rs": {
+          "bytes": 10845,
+          "sha256": "bb034601f3b2813d7dd6f22f2493c6005bb872c0ff39c03c6569ae408ab47f11"
+        },
+        "compiled-source/crates/borsuk/src/sq8_s3_range.rs": {
+          "bytes": 52293,
+          "sha256": "80022b4b8669015b24dfc055dda162877f096fd20530fcb2811232d483e40c12"
+        },
+        "compiled-source/crates/borsuk/src/sq8_page_authority.rs": {
+          "bytes": 14674,
+          "sha256": "e4b34461509c78ca558f49a0ff11151dc1454589f472a5911913b5dbcea9af23"
+        },
+        "compiled-source/crates/borsuk/src/two_bit_source.rs": {
+          "bytes": 20785,
+          "sha256": "11016833a444183e8f8a3cb1303d5244f7becb2684ff156d2dcbb8b9b5f4f93d"
+        },
+        "compiled-source/crates/borsuk/src/two_bit_build.rs": {
+          "bytes": 14981,
+          "sha256": "fe5e18007b2db7b240ab792024b81be12e5dc3c35cbf82190f1159555876171f"
+        },
+        "compiled-source/crates/borsuk/src/two_bit_index.rs": {
+          "bytes": 9544,
+          "sha256": "0d5588593477518d7620a976c11759ffaf8a0c286555ce9b8110049cc53eb640"
+        },
+        "compiled-source/crates/borsuk/src/unit_centroid_graph.rs": {
+          "bytes": 39417,
+          "sha256": "7a47654900e1ec2d5f96384ee2b67ea4c647c2eb05c00a0e4d5902636bcebc42"
+        },
+        "compiled-source/crates/borsuk/src/bin/build_two_bit_graph_variant.rs": {
+          "bytes": 8234,
+          "sha256": "2278f5d0811c21c3252e287c87717dcb34e59570f9b4dccdebedcc963604a9a7"
+        },
+        "compiled-source/crates/borsuk/src/bin/two_bit_plan_demo.rs": {
+          "bytes": 14204,
+          "sha256": "2a89f80da6ba650cb9b3c3de5650c43d9facdbfb0a6c5ce00c41522d37b0ef54"
+        },
+        "compiled-source/crates/borsuk/src/bin/two_bit_union_nomination.rs": {
+          "bytes": 9028,
+          "sha256": "79ed545cdee7183e921295e2cb40fa9371bd1078b8a930c2db7a6cdbb68b03e9"
+        },
+        "compiled-source/crates/borsuk/src/bin/two_bit_walk_nomination.rs": {
+          "bytes": 11398,
+          "sha256": "ba2383c638f1254a17dd08b45d4035070da897d991246029f5fa2cd8b442e437"
+        },
+        "compiled-source/crates/borsuk/tests/two_bit_application_ids.rs": {
+          "bytes": 69271,
+          "sha256": "18bcf05e43f88ce95794279f48ae311325b023a06688577d656aaae532307531"
+        },
+        "compiled-source/crates/borsuk/tests/two_bit_gc_delayed_delete.rs": {
+          "bytes": 11099,
+          "sha256": "197c64ec26bf6ece0a0a812b8e6d1de6c1197e26b8234424d3023d5d8b923341"
+        }
+      }
+    }
+  },
+  "config_sha256": "92a5e94ab57cced22405d42527bd4f1b54f0f0a839b8444722b7a111145100b9",
+  "interruption_policy": "Discard interrupted worker; no automatic replacement"
+}

@@ -1,0 +1,74 @@
+{
+  "panels": {
+    "relaion": {
+      "phases_ms": {
+        "metadata_stage": {
+          "p50": 448.660825,
+          "p90": 480.1345205,
+          "p95": 531.03266525
+        },
+        "decode": {
+          "p50": 351.52154099999996,
+          "p90": 353.9040851,
+          "p95": 354.943118
+        },
+        "source_head": {
+          "p50": 9.596843499999999,
+          "p90": 12.3110244,
+          "p95": 12.7833028
+        },
+        "head_read": {
+          "p50": 91.0315245,
+          "p90": 94.4430443,
+          "p95": 95.73060215
+        },
+        "incoming_http": {
+          "p50": 363.723827,
+          "p90": 455.73989660000007,
+          "p95": 507.0802273499999
+        }
+      },
+      "max_source_gets": 128,
+      "max_source_verified_bytes": 43520000,
+      "max_combined_gets": 160
+    },
+    "cohere": {
+      "phases_ms": {
+        "metadata_stage": {
+          "p50": 437.9585435,
+          "p90": 485.54844130000004,
+          "p95": 510.54864854999994
+        },
+        "decode": {
+          "p50": 351.83733,
+          "p90": 353.4236548,
+          "p95": 354.4915625
+        },
+        "source_head": {
+          "p50": 9.302960500000001,
+          "p90": 12.1494112,
+          "p95": 18.022546699999975
+        },
+        "head_read": {
+          "p50": 90.604896,
+          "p90": 96.61960619999999,
+          "p95": 97.4397963
+        },
+        "incoming_http": {
+          "p50": 356.979494,
+          "p90": 455.6081290000001,
+          "p95": 555.4302242499997
+        }
+      },
+      "max_source_gets": 128,
+      "max_source_verified_bytes": 37888000,
+      "max_combined_gets": 160
+    }
+  },
+  "compute_cost_estimate_usd": 0.016220555555555554,
+  "controller_elapsed_seconds": 301,
+  "spot_quote_usd_per_hour": 0.194,
+  "total_cost_measured": false,
+  "cost_scope": "controller elapsed at reserved Spot quote; excludes EBS/IP/S3/storage/setup/failed arms/invoice",
+  "matched_control_latency_measured": false
+}
