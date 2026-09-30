@@ -55,6 +55,8 @@
   "borrowed_canonical_and_sq8_head_checked": true,
   "bucket": "borsuk-bench-453182569524-euc1",
   "dataset": "ReLAION",
+  "execution_script_path": "/tmp/borsuk-publish-paged-inputs.py",
+  "execution_script_sha256": "2772f0714bcbbc9d8b1360426ec1481b289e58a4e036a60f89987d70078058f5",
   "head": {
     "bytes": 171,
     "key": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10/HEAD.json",
@@ -62,6 +64,10 @@
   },
   "performance_measured": false,
   "prefix": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10",
+  "publication_helper": {
+    "path": "scripts/publish_cohere_1m_source.py",
+    "sha256": "50d341c4481ee864643537e6047c70c8392319cf35c2ebcca45f28db9c1d3221"
+  },
   "query_or_truth_used": false,
   "remote_bodies_independently_hashed": true,
   "root_sha256": "b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b",
