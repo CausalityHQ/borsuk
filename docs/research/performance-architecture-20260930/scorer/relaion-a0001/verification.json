@@ -1,0 +1,686 @@
+{
+  "status": "PASS",
+  "invocation_id": "0d196cb5886241d085cdb7683a00987c",
+  "launch": {
+    "status": "LAUNCHED",
+    "command": [
+      "systemd-run",
+      "--user",
+      "--unit=borsuk-semantic-scorer-relaion-a0001",
+      "--property=MemoryMax=512M",
+      "--property=MemorySwapMax=0",
+      "--property=CPUQuota=200%",
+      "--property=CPUAffinity=0 1",
+      "--property=TasksMax=32",
+      "--property=RuntimeMaxSec=900",
+      "--setenv=BORSUK_CPU_THREADS=2",
+      "/usr/bin/python3",
+      "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-router-scorer-wrapper.py",
+      "/tmp/borsuk-semantic-router-scorer-qualified-2b01f7b",
+      "3a91d87d9aaf11c34013e3c36ecaabc835e7224e4b83fd7fa44c53ed4deb4506",
+      "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-router-scorer-relaion-config.json",
+      "63161431127a3dd6065d90ac7e18c1be1831a5a52359966814634805c1d4fd5f",
+      "/tmp/borsuk-semantic-router-scorer-relaion-a0001"
+    ],
+    "requires": "explicit Devbox compiler/selfdeploy lane release",
+    "source_commit": "9ad75f379fcd010a4552e345fa38fba86d172890",
+    "launch_exit": 0,
+    "launch_stdout": "",
+    "launch_stderr": "Running as unit: borsuk-semantic-scorer-relaion-a0001.service; invocation ID: 0d196cb5886241d085cdb7683a00987c\n",
+    "lane_release": "immediate-1790800628689303529-1684853"
+  },
+  "artifacts": {
+    "result.json": {
+      "bytes": 6950749,
+      "sha256": "fd9ceec51064a8a3ff41bda048beb82d6b97ac27fcbf3b61267dd8d2ee8b4f7e",
+      "gzip_bytes": 1166076,
+      "gzip_sha256": "c8bd878c622e000b075250e18f6fcf2b22c18cd32fb05ec818d0077eb6ed38f2"
+    },
+    "terminal.json": {
+      "bytes": 2033,
+      "sha256": "105fb246cf8a58b0283257013042691060625bafec7325d2c8676bd237b8f3ad",
+      "gzip_bytes": 745,
+      "gzip_sha256": "9a70735c08820e6596e0953494a634d468ddcc4fe9d1d129686bccb4b1978a2a"
+    },
+    "before.json": {
+      "bytes": 554,
+      "sha256": "f8f880c94d1b691a8946d054884c7f2f2356c37cfe6fd6a710942ddbbbcbd3bc",
+      "gzip_bytes": 273,
+      "gzip_sha256": "06e73799d732daeb789a4c6c02d3b986807b629d10cfa40a4a8293ca8578ee1c"
+    },
+    "time.txt": {
+      "bytes": 1032,
+      "sha256": "fe3d3f5d47056a99c1d6401acc57128286983cb7c80fe8c1ccb87af6c793d0ac",
+      "gzip_bytes": 553,
+      "gzip_sha256": "b9ed90201544387dfdd63b8f94ed2702b8c17f1317f445b112dd5f36b7216a2b"
+    },
+    "stdout.log": {
+      "bytes": 111,
+      "sha256": "bbb253e2ad2e16a30565a423774439efa003040dbb37e15fa373b23d114238af",
+      "gzip_bytes": 120,
+      "gzip_sha256": "d5791b13f37d3923d60efebdf1b4807707cf9bcd75b187abdc2601a0b2204a41"
+    },
+    "stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "gzip_bytes": 20,
+      "gzip_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    }
+  },
+  "summary": {
+    "candidate": {
+      "mean_r10": 0.98125,
+      "mean_r100": 0.97140625,
+      "modeled_io": {
+        "combined_bytes": {
+          "max": 24638720.0,
+          "mean": 21857100.0,
+          "min": 12042240.0,
+          "p05": 15805440.0,
+          "p50": 22456320.0,
+          "p95": 23326720.0
+        },
+        "combined_gets": {
+          "max": 56.0,
+          "mean": 33.421875,
+          "min": 10.0,
+          "p05": 16.0,
+          "p50": 34.0,
+          "p95": 52.0
+        },
+        "router_leaf_bytes": {
+          "max": 1359820.0,
+          "mean": 1077205.9375,
+          "min": 531300.0,
+          "p05": 685300.0,
+          "p50": 1102640.0,
+          "p95": 1238160.0
+        },
+        "router_leaf_gets": {
+          "max": 16.0,
+          "mean": 15.40625,
+          "min": 8.0,
+          "p05": 12.0,
+          "p50": 16.0,
+          "p95": 16.0
+        },
+        "router_root_bytes": {
+          "max": 752232.0,
+          "mean": 752232.0,
+          "min": 752232.0,
+          "p05": 752232.0,
+          "p50": 752232.0,
+          "p95": 752232.0
+        },
+        "router_root_gets": {
+          "max": 1.0,
+          "mean": 1.0,
+          "min": 1.0,
+          "p05": 1.0,
+          "p50": 1.0,
+          "p95": 1.0
+        },
+        "source_bridge_rows": {
+          "max": 0.0,
+          "mean": 0.0,
+          "min": 0.0,
+          "p05": 0.0,
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "source_bytes": {
+          "max": 7865600.0,
+          "mean": 5465400.0,
+          "min": 2457600.0,
+          "p05": 3225600.0,
+          "p50": 5683200.0,
+          "p95": 6553600.0
+        },
+        "source_gets": {
+          "max": 25.0,
+          "mean": 15.140625,
+          "min": 5.0,
+          "p05": 8.0,
+          "p50": 15.0,
+          "p95": 24.0
+        },
+        "source_rows": {
+          "max": 39328.0,
+          "mean": 27327.0,
+          "min": 12288.0,
+          "p05": 16128.0,
+          "p50": 28416.0,
+          "p95": 32768.0
+        },
+        "sq8_bytes": {
+          "max": 16773120.0,
+          "mean": 16391700.0,
+          "min": 9584640.0,
+          "p05": 12579840.0,
+          "p50": 16773120.0,
+          "p95": 16773120.0
+        },
+        "sq8_gets": {
+          "max": 31.0,
+          "mean": 18.28125,
+          "min": 5.0,
+          "p05": 8.0,
+          "p50": 18.0,
+          "p95": 28.0
+        },
+        "total_query_bytes": {
+          "max": 26750772.0,
+          "mean": 23686537.9375,
+          "min": 13325772.0,
+          "p05": 17242972.0,
+          "p50": 24301192.0,
+          "p95": 25297912.0
+        },
+        "total_query_gets": {
+          "max": 73.0,
+          "mean": 49.828125,
+          "min": 19.0,
+          "p05": 29.0,
+          "p50": 51.0,
+          "p95": 69.0
+        }
+      },
+      "offline_total_process_cpu_ns": {
+        "max": 36242618.0,
+        "mean": 30743215.609375,
+        "min": 16660850.0,
+        "p05": 21568735.0,
+        "p50": 31175876.0,
+        "p95": 34064952.0
+      },
+      "offline_total_wall_ns": {
+        "max": 50013396.0,
+        "mean": 31383052.734375,
+        "min": 16662758.0,
+        "p05": 21570537.0,
+        "p50": 31382723.0,
+        "p95": 35706033.0
+      },
+      "stage_quality": {
+        "discovery_units": {
+          "r10": {
+            "max": 1.0,
+            "mean": 0.9765625,
+            "min": 0.5,
+            "p05": 0.8,
+            "p50": 1.0,
+            "p95": 1.0
+          },
+          "r100": {
+            "max": 1.0,
+            "mean": 0.9568749999999999,
+            "min": 0.33,
+            "p05": 0.8,
+            "p50": 0.99,
+            "p95": 1.0
+          }
+        },
+        "page_closure": {
+          "r10": {
+            "max": 1.0,
+            "mean": 0.984375,
+            "min": 0.7,
+            "p05": 0.9,
+            "p50": 1.0,
+            "p95": 1.0
+          },
+          "r100": {
+            "max": 1.0,
+            "mean": 0.9734374999999998,
+            "min": 0.77,
+            "p05": 0.89,
+            "p50": 0.99,
+            "p95": 1.0
+          }
+        },
+        "returned": {
+          "r10": {
+            "max": 1.0,
+            "mean": 0.98125,
+            "min": 0.7,
+            "p05": 0.9,
+            "p50": 1.0,
+            "p95": 1.0
+          },
+          "r100": {
+            "max": 1.0,
+            "mean": 0.9714062500000002,
+            "min": 0.77,
+            "p05": 0.89,
+            "p50": 0.99,
+            "p95": 1.0
+          }
+        },
+        "seed_augmented_units": {
+          "r10": {
+            "max": 1.0,
+            "mean": 0.9765625,
+            "min": 0.5,
+            "p05": 0.8,
+            "p50": 1.0,
+            "p95": 1.0
+          },
+          "r100": {
+            "max": 1.0,
+            "mean": 0.9568749999999999,
+            "min": 0.33,
+            "p05": 0.8,
+            "p50": 0.99,
+            "p95": 1.0
+          }
+        },
+        "source_fetched": {
+          "r10": {
+            "max": 1.0,
+            "mean": 0.984375,
+            "min": 0.7,
+            "p05": 0.9,
+            "p50": 1.0,
+            "p95": 1.0
+          },
+          "r100": {
+            "max": 1.0,
+            "mean": 0.9734374999999998,
+            "min": 0.77,
+            "p05": 0.89,
+            "p50": 0.99,
+            "p95": 1.0
+          }
+        },
+        "source_scored_units": {
+          "r10": {
+            "max": 1.0,
+            "mean": 0.984375,
+            "min": 0.7,
+            "p05": 0.9,
+            "p50": 1.0,
+            "p95": 1.0
+          },
+          "r100": {
+            "max": 1.0,
+            "mean": 0.9734374999999998,
+            "min": 0.77,
+            "p05": 0.89,
+            "p50": 0.99,
+            "p95": 1.0
+          }
+        },
+        "source_selected_pages": {
+          "r10": {
+            "max": 1.0,
+            "mean": 0.984375,
+            "min": 0.7,
+            "p05": 0.9,
+            "p50": 1.0,
+            "p95": 1.0
+          },
+          "r100": {
+            "max": 1.0,
+            "mean": 0.9734374999999998,
+            "min": 0.77,
+            "p05": 0.89,
+            "p50": 0.99,
+            "p95": 1.0
+          }
+        },
+        "sq8_fetched": {
+          "r10": {
+            "max": 1.0,
+            "mean": 0.984375,
+            "min": 0.7,
+            "p05": 0.9,
+            "p50": 1.0,
+            "p95": 1.0
+          },
+          "r100": {
+            "max": 1.0,
+            "mean": 0.9734374999999998,
+            "min": 0.77,
+            "p05": 0.89,
+            "p50": 0.99,
+            "p95": 1.0
+          }
+        }
+      },
+      "successful_queries": 64,
+      "total_returned_r100_hits": 6217,
+      "total_returned_r10_hits": 628
+    },
+    "control": {
+      "mean_r10": 0.996875,
+      "mean_r100": 0.99515625,
+      "modeled_io": {
+        "combined_bytes": {
+          "max": 33445120.0,
+          "mean": 31356970.0,
+          "min": 29861120.0,
+          "p05": 30270720.0,
+          "p50": 31262720.0,
+          "p95": 32625920.0
+        },
+        "combined_gets": {
+          "max": 88.0,
+          "mean": 67.53125,
+          "min": 55.0,
+          "p05": 58.0,
+          "p50": 67.0,
+          "p95": 77.0
+        },
+        "router_leaf_bytes": {
+          "max": 0.0,
+          "mean": 0.0,
+          "min": 0.0,
+          "p05": 0.0,
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "router_leaf_gets": {
+          "max": 0.0,
+          "mean": 0.0,
+          "min": 0.0,
+          "p05": 0.0,
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "router_root_bytes": {
+          "max": 0.0,
+          "mean": 0.0,
+          "min": 0.0,
+          "p05": 0.0,
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "router_root_gets": {
+          "max": 0.0,
+          "mean": 0.0,
+          "min": 0.0,
+          "p05": 0.0,
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "source_bridge_rows": {
+          "max": 0.0,
+          "mean": 0.0,
+          "min": 0.0,
+          "p05": 0.0,
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "source_bytes": {
+          "max": 16672000.0,
+          "mean": 14589700.0,
+          "min": 13088000.0,
+          "p05": 13497600.0,
+          "p50": 14489600.0,
+          "p95": 15852800.0
+        },
+        "source_gets": {
+          "max": 56.0,
+          "mean": 40.78125,
+          "min": 32.0,
+          "p05": 33.0,
+          "p50": 40.0,
+          "p95": 49.0
+        },
+        "source_rows": {
+          "max": 83360.0,
+          "mean": 72948.5,
+          "min": 65440.0,
+          "p05": 67488.0,
+          "p50": 72448.0,
+          "p95": 79264.0
+        },
+        "sq8_bytes": {
+          "max": 16773120.0,
+          "mean": 16767270.0,
+          "min": 16698240.0,
+          "p05": 16698240.0,
+          "p50": 16773120.0,
+          "p95": 16773120.0
+        },
+        "sq8_gets": {
+          "max": 32.0,
+          "mean": 26.75,
+          "min": 15.0,
+          "p05": 17.0,
+          "p50": 28.0,
+          "p95": 32.0
+        },
+        "total_query_bytes": {
+          "max": 33445120.0,
+          "mean": 31356970.0,
+          "min": 29861120.0,
+          "p05": 30270720.0,
+          "p50": 31262720.0,
+          "p95": 32625920.0
+        },
+        "total_query_gets": {
+          "max": 88.0,
+          "mean": 67.53125,
+          "min": 55.0,
+          "p05": 58.0,
+          "p50": 67.0,
+          "p95": 77.0
+        }
+      },
+      "offline_total_process_cpu_ns": {
+        "max": 62999937.0,
+        "mean": 51787326.8125,
+        "min": 48296657.0,
+        "p05": 49089805.0,
+        "p50": 51695162.0,
+        "p95": 54116865.0
+      },
+      "offline_total_wall_ns": {
+        "max": 63679602.0,
+        "mean": 52604603.96875,
+        "min": 48300246.0,
+        "p05": 49101894.0,
+        "p50": 51941452.0,
+        "p95": 58338633.0
+      },
+      "stage_quality": {
+        "discovery_units": {
+          "r10": {
+            "max": 1.0,
+            "mean": 1.0,
+            "min": 1.0,
+            "p05": 1.0,
+            "p50": 1.0,
+            "p95": 1.0
+          },
+          "r100": {
+            "max": 1.0,
+            "mean": 0.9984375,
+            "min": 0.98,
+            "p05": 0.99,
+            "p50": 1.0,
+            "p95": 1.0
+          }
+        },
+        "page_closure": {
+          "r10": {
+            "max": 1.0,
+            "mean": 1.0,
+            "min": 1.0,
+            "p05": 1.0,
+            "p50": 1.0,
+            "p95": 1.0
+          },
+          "r100": {
+            "max": 1.0,
+            "mean": 1.0,
+            "min": 1.0,
+            "p05": 1.0,
+            "p50": 1.0,
+            "p95": 1.0
+          }
+        },
+        "returned": {
+          "r10": {
+            "max": 1.0,
+            "mean": 0.996875,
+            "min": 0.9,
+            "p05": 1.0,
+            "p50": 1.0,
+            "p95": 1.0
+          },
+          "r100": {
+            "max": 1.0,
+            "mean": 0.9951562499999997,
+            "min": 0.99,
+            "p05": 0.99,
+            "p50": 1.0,
+            "p95": 1.0
+          }
+        },
+        "seed_augmented_units": {
+          "r10": {
+            "max": 1.0,
+            "mean": 1.0,
+            "min": 1.0,
+            "p05": 1.0,
+            "p50": 1.0,
+            "p95": 1.0
+          },
+          "r100": {
+            "max": 1.0,
+            "mean": 0.9984375,
+            "min": 0.98,
+            "p05": 0.99,
+            "p50": 1.0,
+            "p95": 1.0
+          }
+        },
+        "source_fetched": {
+          "r10": {
+            "max": 1.0,
+            "mean": 1.0,
+            "min": 1.0,
+            "p05": 1.0,
+            "p50": 1.0,
+            "p95": 1.0
+          },
+          "r100": {
+            "max": 1.0,
+            "mean": 1.0,
+            "min": 1.0,
+            "p05": 1.0,
+            "p50": 1.0,
+            "p95": 1.0
+          }
+        },
+        "source_scored_units": {
+          "r10": {
+            "max": 1.0,
+            "mean": 1.0,
+            "min": 1.0,
+            "p05": 1.0,
+            "p50": 1.0,
+            "p95": 1.0
+          },
+          "r100": {
+            "max": 1.0,
+            "mean": 1.0,
+            "min": 1.0,
+            "p05": 1.0,
+            "p50": 1.0,
+            "p95": 1.0
+          }
+        },
+        "source_selected_pages": {
+          "r10": {
+            "max": 1.0,
+            "mean": 1.0,
+            "min": 1.0,
+            "p05": 1.0,
+            "p50": 1.0,
+            "p95": 1.0
+          },
+          "r100": {
+            "max": 1.0,
+            "mean": 1.0,
+            "min": 1.0,
+            "p05": 1.0,
+            "p50": 1.0,
+            "p95": 1.0
+          }
+        },
+        "sq8_fetched": {
+          "r10": {
+            "max": 1.0,
+            "mean": 1.0,
+            "min": 1.0,
+            "p05": 1.0,
+            "p50": 1.0,
+            "p95": 1.0
+          },
+          "r100": {
+            "max": 1.0,
+            "mean": 1.0,
+            "min": 1.0,
+            "p05": 1.0,
+            "p50": 1.0,
+            "p95": 1.0
+          }
+        }
+      },
+      "successful_queries": 64,
+      "total_returned_r100_hits": 6369,
+      "total_returned_r10_hits": 638
+    },
+    "exhaustive_native_sq8": {
+      "offline_total_timing": {
+        "process_cpu_ns": 10317827408,
+        "wall_ns": 10338068095
+      },
+      "purpose": "quantization/native-kernel rounding loss against exact truth; reference IDs never enter nomination",
+      "r10": {
+        "max": 1.0,
+        "mean": 0.996875,
+        "min": 0.9,
+        "p05": 1.0,
+        "p50": 1.0,
+        "p95": 1.0
+      },
+      "r100": {
+        "max": 1.0,
+        "mean": 0.9951562499999997,
+        "min": 0.99,
+        "p05": 0.99,
+        "p50": 1.0,
+        "p95": 1.0
+      },
+      "reference_bytes_per_query": 78000000,
+      "total_reference_bytes": 4992000000
+    },
+    "failure_stage": null,
+    "gate": {
+      "all_64_paired_queries_successful": true,
+      "all_identity_and_budget_gates_passed": true,
+      "candidate_returned_r10_passed": true,
+      "denominator": 640,
+      "historical_control_parity": true,
+      "required_integer_hits": 608
+    },
+    "scope": "consumed development panel; modeled offline IO and CPU only; no physical S3/cold HTTP/serving/QPS claim",
+    "status": "PASS",
+    "whole_evaluator_offline_timing": {
+      "process_cpu_ns": 17259593923,
+      "wall_ns": 17452380401
+    },
+    "whole_evaluator_timing_includes": "authentication, evaluator work, synchronous evidence writes and control parity; use per-stage timings for CPU conclusions"
+  },
+  "resources": {
+    "cgroup_peak_bytes": 177057792,
+    "maximum_rss_KiB": 161836,
+    "swap_peak_bytes": 0
+  },
+  "physical_s3_measured": false,
+  "cold_http_measured": false
+}
