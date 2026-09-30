@@ -7,7 +7,7 @@ use std::{error::Error, net::SocketAddr, sync::Arc, time::Instant};
 use axum::{
     Json, Router,
     body::Body,
-    extract::{DefaultBodyLimit, State},
+    extract::{DefaultBodyLimit, State, rejection::JsonRejection},
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::Response,
@@ -50,6 +50,21 @@ struct AppState {
     permits: Arc<Semaphore>,
 }
 
+fn transport_report(reader: &OneAttemptS3) -> Value {
+    json!({
+        "schema":"borsuk-native-transport-v1",
+        "scope":"process_all_native_s3_readers",
+        "per_query_delta":false,
+        "attempt_measurement":"submitted HttpService calls, not confirmed wire or S3 requests",
+        "totals":reader.transport_stats(),
+        "method_order":["GET","HEAD","PUT","DELETE","POST","PATCH","OPTIONS","CONNECT","TRACE","other"],
+        "status_counts_format":"[http_status,count] nonzero entries",
+        "payload_measurement":"consumed response data frames, including unauthenticated payload",
+        "dropped_error_body_consumed_bytes":0,
+        "unknown":["unread_response_payload_bytes","response_header_bytes","request_wire_bytes","kernel_tls_wire_bytes"],
+    })
+}
+
 fn validate(
     request: &SearchRequest,
     authority: &Authority,
@@ -82,18 +97,37 @@ async fn gate(
     State(state): State<Arc<AppState>>,
     request: Request<Body>,
     next: Next,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, (StatusCode, Json<Value>)> {
     // Admit before JSON extraction, so rejected requests never allocate vector bodies.
-    let _permit = admit(&state.permits)?;
+    let _permit = admit(&state.permits).map_err(|status| {
+        (
+            status,
+            Json(json!({
+                "error":"query_capacity", "transport":transport_report(&state.reader),
+            })),
+        )
+    })?;
     Ok(next.run(request).await)
 }
 
 async fn search(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<SearchRequest>,
+    request: Result<Json<SearchRequest>, JsonRejection>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    validate(&request, &state.authority, state.dimensions)
-        .map_err(|status| (status, Json(json!({"error":"invalid_request"}))))?;
+    let Json(request) = request.map_err(|error| {
+        (
+            error.status(),
+            Json(json!({
+                "error":"invalid_request", "transport":transport_report(&state.reader),
+            })),
+        )
+    })?;
+    validate(&request, &state.authority, state.dimensions).map_err(|status| {
+        (
+            status,
+            Json(json!({"error":"invalid_request", "transport":transport_report(&state.reader)})),
+        )
+    })?;
     let started = Instant::now();
     let result = state
         .generation
@@ -101,9 +135,16 @@ async fn search(
         .await
         .map_err(|error| {
             let (source, stats) = error.read_stats();
+            let router = error.router_stats();
             (
                 StatusCode::BAD_GATEWAY,
                 Json(json!({"error":"search_failed",
+                "native_wall_ns":started.elapsed().as_nanos(),
+                "router_submitted_gets":router.submitted_gets,
+                "router_verified_bytes":router.verified_bytes,
+                "router_failed_gets":router.failed_gets,
+                "query_stages":error.stages(),
+                "transport":transport_report(&state.reader),
                 "authority":state.authority,
                 "submitted_gets":stats.submitted_gets,
                 "verified_bytes":stats.verified_bytes,
@@ -115,6 +156,11 @@ async fn search(
         })?;
     let stats = result.ranked.stats;
     Ok(Json(json!({"authority":state.authority,
+        "router_submitted_gets":result.router_stats.submitted_gets,
+        "router_verified_bytes":result.router_stats.verified_bytes,
+        "router_failed_gets":result.router_stats.failed_gets,
+        "query_stages":result.stages,
+        "transport":transport_report(&state.reader),
         "ids":result.ranked.candidates.iter().map(|r|r.id).collect::<Vec<_>>(),
         "ranges":result.plan.ranges.iter().map(|r|[r.start,r.end]).collect::<Vec<_>>(),
         "planned_bytes":result.plan.planned_bytes,"native_wall_ns":started.elapsed().as_nanos(),
@@ -197,7 +243,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "/health",
             get(|State(state): State<Arc<AppState>>| async move {
                 Json(
-                    json!({"ready":true,"authority":state.authority,"dimensions":state.dimensions}),
+                    json!({"ready":true,"authority":state.authority,"dimensions":state.dimensions,
+                        "transport":transport_report(&state.reader)}),
                 )
             }),
         )
@@ -207,6 +254,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!(
         "{}",
         json!({"phase":"ready","listen":listener.local_addr()?,
+        "transport":transport_report(&state.reader),
         "authority":state.authority,"head_read_wall_ns":head_read_wall_ns,
         "remote_open_wall_ns":remote_open_wall_ns,
         "remote_open_stats":state.generation.remote_open_stats()})

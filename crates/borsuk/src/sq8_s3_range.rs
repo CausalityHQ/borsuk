@@ -7,12 +7,14 @@ use crate::{
 };
 use bytes::{Bytes, BytesMut};
 use futures_util::{StreamExt, stream};
+use http_body_util::BodyExt;
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::client::{
     ClientConfigKey, ClientOptions, HttpClient, HttpConnector, HttpError, HttpErrorKind,
     HttpRequest, HttpResponse, HttpResponseBody, HttpService,
 };
 use object_store::{GetOptions, GetResultPayload, ObjectStore, RetryConfig, path::Path};
+use std::sync::{Arc, LazyLock, Mutex};
 
 #[derive(Debug)]
 pub enum RangeFetchError {
@@ -51,21 +53,74 @@ pub struct VerifiedRange {
     pub bytes: Bytes,
 }
 
+/// Cumulative native transport observations across all production readers in this
+/// process. Concurrent queries overlap: these are never per-query charges.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct NativeTransportStats {
+    /// Submitted HttpService calls, including scheme/preconnect failures; not
+    /// proof that a request reached the wire or S3.
+    pub attempts: u64,
+    /// GET, HEAD, PUT, DELETE, POST, PATCH, OPTIONS, CONNECT, TRACE, other.
+    pub method_counts: [u64; 10],
+    /// Nonzero (HTTP status code, count) pairs from a fixed 100..=999 histogram.
+    pub status_counts: Vec<(u16, u64)>,
+    pub transport_failures: u64,
+    pub stream_failures: u64,
+    pub consumed_payload_bytes: u64,
+    /// Non-success response bodies discarded at headers, without reading them.
+    pub dropped_error_bodies: u64,
+}
+
+#[derive(Debug)]
+struct TransportCounters {
+    attempts: u64,
+    methods: [u64; 10],
+    statuses: [u64; 900],
+    transport_failures: u64,
+    stream_failures: u64,
+    consumed_payload_bytes: u64,
+    dropped_error_bodies: u64,
+}
+
+impl Default for TransportCounters {
+    fn default() -> Self {
+        Self {
+            attempts: 0,
+            methods: [0; 10],
+            statuses: [0; 900],
+            transport_failures: 0,
+            stream_failures: 0,
+            consumed_payload_bytes: 0,
+            dropped_error_bodies: 0,
+        }
+    }
+}
+
+// ponytail: one short lock per observation makes snapshots coherent; use
+// atomics if measured contention warrants giving up that snapshot guarantee.
+static PROCESS_TRANSPORT: LazyLock<Arc<Mutex<TransportCounters>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(TransportCounters::default())));
+
 /// S3 data reader with the `object_store` request retry loop disabled. The
 /// query coordinator owns explicit retries and must charge every wire GET
 /// against the physical cap. A live HTTP fixture must still verify this
 /// transport's request accounting before a bounded-cost claim.
 pub struct OneAttemptS3 {
     store: AmazonS3,
+    counters: Arc<Mutex<TransportCounters>>,
 }
 
 #[derive(Debug)]
-struct NativeConnector(reqwest::Client);
+struct NativeConnector {
+    client: reqwest::Client,
+    counters: Arc<Mutex<TransportCounters>>,
+}
 
 impl HttpConnector for NativeConnector {
     fn connect(&self, options: &ClientOptions) -> object_store::Result<HttpClient> {
         Ok(HttpClient::new(NativeHttp {
-            client: self.0.clone(),
+            client: self.client.clone(),
+            counters: self.counters.clone(),
             allow_http: options
                 .get_config_value(&ClientConfigKey::AllowHttp)
                 .as_deref()
@@ -77,31 +132,88 @@ impl HttpConnector for NativeConnector {
 #[derive(Debug)]
 struct NativeHttp {
     client: reqwest::Client,
+    counters: Arc<Mutex<TransportCounters>>,
     allow_http: bool,
 }
 
 #[async_trait::async_trait]
 impl HttpService for NativeHttp {
     async fn call(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        {
+            let mut counters = self.counters.lock().unwrap();
+            counters.attempts = counters.attempts.saturating_add(1);
+            let method = match request.method().as_str() {
+                "GET" => 0,
+                "HEAD" => 1,
+                "PUT" => 2,
+                "DELETE" => 3,
+                "POST" => 4,
+                "PATCH" => 5,
+                "OPTIONS" => 6,
+                "CONNECT" => 7,
+                "TRACE" => 8,
+                _ => 9,
+            };
+            counters.methods[method] = counters.methods[method].saturating_add(1);
+        }
         if request.uri().scheme_str() != Some("https")
             && !(self.allow_http && request.uri().scheme_str() == Some("http"))
         {
+            let mut counters = self.counters.lock().unwrap();
+            counters.transport_failures = counters.transport_failures.saturating_add(1);
             return Err(HttpError::new(
                 HttpErrorKind::Request,
                 std::io::Error::other("native transport requires HTTPS"),
             ));
         }
-        let mut response = HttpService::call(&self.client, request).await?;
+        let mut response = HttpService::call(&self.client, request)
+            .await
+            .inspect_err(|_| {
+                let mut counters = self.counters.lock().unwrap();
+                counters.transport_failures = counters.transport_failures.saturating_add(1);
+            })?;
+        {
+            let mut counters = self.counters.lock().unwrap();
+            let status = usize::from(response.status().as_u16()) - 100;
+            counters.statuses[status] = counters.statuses[status].saturating_add(1);
+            if !response.status().is_success() {
+                counters.dropped_error_bodies = counters.dropped_error_bodies.saturating_add(1);
+            }
+        }
         // SDK error handling collects bodies before the range guard. Drop them
         // at headers, retaining status and headers for its normal error mapping.
         if !response.status().is_success() {
             *response.body_mut() = HttpResponseBody::from(Bytes::new());
+        } else {
+            let body = std::mem::replace(response.body_mut(), HttpResponseBody::from(Bytes::new()));
+            let chunks = self.counters.clone();
+            let failures = self.counters.clone();
+            *response.body_mut() = HttpResponseBody::new(
+                body.map_frame(move |frame| {
+                    if let Some(data) = frame.data_ref() {
+                        let mut counters = chunks.lock().unwrap();
+                        counters.consumed_payload_bytes = counters
+                            .consumed_payload_bytes
+                            .saturating_add(data.len() as u64);
+                    }
+                    frame
+                })
+                .map_err(move |error| {
+                    let mut counters = failures.lock().unwrap();
+                    counters.stream_failures = counters.stream_failures.saturating_add(1);
+                    error
+                }),
+            );
         }
         Ok(response)
     }
 }
 
-fn one_attempt_builder(bucket: &str, region: &str) -> Result<AmazonS3Builder, RangeFetchError> {
+fn one_attempt_builder(
+    bucket: &str,
+    region: &str,
+    counters: Arc<Mutex<TransportCounters>>,
+) -> Result<AmazonS3Builder, RangeFetchError> {
     if bucket.is_empty() || region.is_empty() {
         return Err(RangeFetchError::UnexpectedMetadata);
     }
@@ -123,7 +235,7 @@ fn one_attempt_builder(bucket: &str, region: &str) -> Result<AmazonS3Builder, Ra
     Ok(AmazonS3Builder::new()
         .with_bucket_name(bucket)
         .with_region(region)
-        .with_http_connector(NativeConnector(client))
+        .with_http_connector(NativeConnector { client, counters })
         .with_retry(RetryConfig {
             max_retries: 0,
             ..Default::default()
@@ -131,15 +243,39 @@ fn one_attempt_builder(bucket: &str, region: &str) -> Result<AmazonS3Builder, Ra
 }
 
 impl OneAttemptS3 {
+    /// Process totals since the first native reader was created. Only chunks
+    /// actually delivered by the body count, including later-rejected payloads.
+    /// Unread/cancelled bodies, headers and kernel/TLS wire bytes are unknown.
+    /// Counters saturate at u64::MAX and never reset between queries.
+    pub fn transport_stats(&self) -> NativeTransportStats {
+        let counters = self.counters.lock().unwrap();
+        NativeTransportStats {
+            attempts: counters.attempts,
+            method_counts: counters.methods,
+            status_counts: counters
+                .statuses
+                .iter()
+                .enumerate()
+                .filter(|(_, count)| **count != 0)
+                .map(|(index, count)| ((index + 100) as u16, *count))
+                .collect(),
+            transport_failures: counters.transport_failures,
+            stream_failures: counters.stream_failures,
+            consumed_payload_bytes: counters.consumed_payload_bytes,
+            dropped_error_bodies: counters.dropped_error_bodies,
+        }
+    }
+
     /// Reuse the same bounded transport for metadata and HEAD admission.
     pub fn store(&self) -> &dyn ObjectStore {
         &self.store
     }
     pub fn new(bucket: &str, region: &str) -> Result<Self, RangeFetchError> {
-        let store = one_attempt_builder(bucket, region)?
+        let counters = PROCESS_TRANSPORT.clone();
+        let store = one_attempt_builder(bucket, region, counters.clone())?
             .build()
             .map_err(RangeFetchError::Store)?;
-        Ok(Self { store })
+        Ok(Self { store, counters })
     }
 
     pub async fn fetch_verified_pages(
@@ -749,7 +885,9 @@ mod tests {
                 }
             }
         });
-        let store = one_attempt_builder("fixture", "eu-central-1")
+        // Isolate live fixtures from each other while exercising the same boundary.
+        let counters = Arc::new(Mutex::new(TransportCounters::default()));
+        let store = one_attempt_builder("fixture", "eu-central-1", counters.clone())
             .unwrap()
             .with_endpoint(format!("http://{address}"))
             .with_allow_http(true)
@@ -757,14 +895,18 @@ mod tests {
             .with_secret_access_key("fixture")
             .build()
             .unwrap();
-        let reader = OneAttemptS3 { store };
+        let reader = OneAttemptS3 { store, counters };
         (reader, stop, requests, server)
     }
 
     async fn request_fixture_once(
         authority: &PageAuthority,
         response: Vec<u8>,
-    ) -> (Result<VerifiedRange, RangeFetchError>, Vec<String>) {
+    ) -> (
+        Result<VerifiedRange, RangeFetchError>,
+        Vec<String>,
+        NativeTransportStats,
+    ) {
         let (reader, stop, requests, server) = http_fixture(response);
         let result = tokio::time::timeout(
             Duration::from_secs(5),
@@ -782,7 +924,7 @@ mod tests {
         stop.store(true, Ordering::Relaxed);
         server.join().unwrap();
         let captured = requests.lock().unwrap().clone();
-        (result, captured)
+        (result, captured, reader.transport_stats())
     }
 
     #[tokio::test]
@@ -1237,15 +1379,11 @@ mod tests {
             .unwrap();
             stop.store(true, Ordering::Relaxed);
             server.join().unwrap();
-            let Err(TwoBitGenerationError::PagedRead {
-                source,
-                sq8: failure,
-            }) = result
-            else {
-                panic!("bad data was not rejected with physical accounting");
-            };
+            let failure = result.err().expect("bad data must be rejected");
+            assert!(failure.stages().is_some());
+            let (source, sq8) = failure.read_stats();
             assert_eq!(
-                failure.stats,
+                sq8,
                 Sq8ReadStats {
                     submitted_gets: 1,
                     verified_bytes: 0,
@@ -1276,7 +1414,14 @@ mod tests {
             tail.len(),
             tail,
         );
-        let (fetched, requests) = request_fixture_once(&authority, good).await;
+        let (fetched, requests, stats) = request_fixture_once(&authority, good).await;
+        assert_eq!(stats.attempts, 1);
+        assert_eq!(stats.method_counts, [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(stats.status_counts, vec![(206, 1)]);
+        assert_eq!(stats.consumed_payload_bytes, tail.len() as u64);
+        assert_eq!(stats.transport_failures, 0);
+        assert_eq!(stats.stream_failures, 0);
+        assert_eq!(stats.dropped_error_bodies, 0);
         assert_eq!(fetched.unwrap().bytes.as_ref(), tail);
         assert_eq!(requests.len(), 1);
         let request = requests[0].to_ascii_lowercase();
@@ -1321,14 +1466,81 @@ mod tests {
                 tail.len(),
                 &tail[..tail.len() - 1],
             ),
-            http_response("412 Precondition Failed", None, "\"changed\"", 0, &[]),
-            http_response("500 Internal Server Error", None, "\"frozen\"", 0, &[]),
+            http_response(
+                "412 Precondition Failed",
+                None,
+                "\"changed\"",
+                7,
+                b"unread!",
+            ),
+            http_response(
+                "500 Internal Server Error",
+                None,
+                "\"frozen\"",
+                7,
+                b"unread!",
+            ),
+            Vec::new(), // Closed connection before headers: one transport failure.
         ];
-        for response in faulty {
-            let (result, requests) = request_fixture_once(&authority, response).await;
+        for (case, response) in faulty.into_iter().enumerate() {
+            let (result, requests, stats) = request_fixture_once(&authority, response).await;
             assert!(result.is_err());
             assert_eq!(requests.len(), 1, "unexpected hidden HTTP retry");
+            assert_eq!(stats.attempts, 1);
+            assert_eq!(stats.method_counts, [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+            let status = match case {
+                0 => 200,
+                5 => 412,
+                6 => 500,
+                _ => 206,
+            };
+            assert_eq!(
+                stats.status_counts,
+                if case == 7 { vec![] } else { vec![(status, 1)] }
+            );
+            assert_eq!(stats.transport_failures, u64::from(case == 7));
+            assert_eq!(stats.stream_failures, u64::from(case == 4));
+            assert_eq!(stats.dropped_error_bodies, u64::from(matches!(case, 5 | 6)));
+            match case {
+                3 => assert_eq!(stats.consumed_payload_bytes, tail.len() as u64),
+                // A truncated chunk can be delivered or rejected whole by HTTP framing.
+                4 => assert!(stats.consumed_payload_bytes < tail.len() as u64),
+                _ => assert_eq!(stats.consumed_payload_bytes, 0),
+            }
         }
+
+        let (reader, stop, requests, server) = http_fixture(http_response(
+            "206 Partial Content",
+            Some(correct_range),
+            "\"frozen\"",
+            tail.len(),
+            tail,
+        ));
+        let location = Path::from("sq8.bin");
+        // Receiving headers then cancelling consumption must not charge Content-Length.
+        let unread = reader
+            .store()
+            .get_opts(&location, GetOptions::new().with_range(Some(3328..3549)))
+            .await
+            .unwrap();
+        assert_eq!(reader.transport_stats().consumed_payload_bytes, 0);
+        drop(unread);
+        let fetch =
+            || reader.fetch_verified_pages(&location, &authority, 1, 1, "\"frozen\"", tail.len());
+        let (first, second, head) = tokio::join!(fetch(), fetch(), reader.store().head(&location));
+        assert!(first.is_ok() && second.is_ok() && head.is_ok());
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+        let stats = reader.transport_stats();
+        assert_eq!(requests.lock().unwrap().len(), 4);
+        assert_eq!(stats.attempts, 4);
+        assert_eq!(stats.method_counts, [3, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(stats.status_counts, vec![(206, 4)]);
+        assert_eq!(stats.consumed_payload_bytes, 2 * tail.len() as u64);
+        assert_eq!(
+            stats.transport_failures + stats.stream_failures + stats.dropped_error_bodies,
+            0
+        );
     }
 
     #[tokio::test]
