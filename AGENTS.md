@@ -24,6 +24,14 @@ first release, schema stability and backward compatibility are non-goals.
 
 ## Delivery and evidence policy
 
+- Before handing off Rust implementation work, compile the affected test
+  target and pass `cargo clippy --locked --workspace --all-targets -- -D
+  clippy::correctness -D clippy::suspicious` on the exact source revision.
+  Run `bash scripts/check_rust_test_build.sh` before integration to compile
+  the complete workspace test surface with bounded compiler concurrency.
+  Record commands, revision and exit statuses. Mock/controller checks do not
+  establish Rust compilation or Clippy success. If an authorized build
+  environment is unavailable, report the work as unverified, not complete.
 - Do not create pull requests.
 - Commit coherent, verified slices and push them directly to `origin/main`.
 - Never force push. Before every push, verify that `origin/main` is an ancestor
