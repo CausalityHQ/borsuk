@@ -46,7 +46,8 @@ def authenticate_closed(directory, campaign, remote):
     assert base.sha(config_body) == reservation['config_sha256']
     config = json.loads(config_body)
     qualification = reservation['qualification']
-    assert qualification == json.loads(artifacts['source-qualification.json'])
+    built_qualification = json.loads(artifacts['source-qualification.json'])
+    assert all(built_qualification[key] == value for key, value in qualification.items())
     assert qualification['config_sha256'] == base.sha(config_body)
     assert set(qualification['code_sha256']) == set(campaign.CODE)
     for name, digest in qualification['code_sha256'].items():
@@ -63,6 +64,42 @@ def authenticate_closed(directory, campaign, remote):
     identity = base.sha(json.dumps(hashes, sort_keys=True, separators=(',', ':')).encode())
     assert identity == manifest['source_identity_sha256'] == config['native_source_identity_sha256']
     return launch, reservation, terminal, artifacts, archived, config
+
+
+def validate_build(artifacts, archived, config, reservation, terminal, campaign):
+    proof = json.loads(artifacts['boundary-check.json'])
+    resolved_body = artifacts['resolved-config.json']; resolved = json.loads(resolved_body)
+    binary = artifacts['binaries/two_bit_http']
+    binary_identity = dict(sha256=base.sha(binary), bytes=len(binary))
+    assert config['binary'] is None and resolved == dict(config, binary=binary_identity)
+    assert terminal['resolved_config_sha256'] == proof['resolved_config_sha256'] == base.sha(resolved_body)
+    assert proof['original_config_sha256'] == proof['config_sha256'] == reservation['config_sha256']
+    assert proof['binary_sha256'] == binary_identity['sha256'] and proof['binary_bytes'] == len(binary)
+    assert proof['qualified'] is True and proof['green_status'] == proof['release_status'] == 0
+    assert proof['native_rebuilt'] is True and proof['current_full_suite_pass_claim'] is False
+    assert proof['source_file_count'] == 395
+    assert proof['source_identity_sha256'] == config['native_source_identity_sha256']
+    compiled = {name: base.sha(archived[name]) for name in campaign.COMPILED}
+    assert compiled == json.loads(artifacts['compiled-source.json']) == proof['compiled_native_sha256']
+    assert compiled == reservation['qualification']['compiled_native_sha256']
+    for name, digest in compiled.items(): assert base.sha(artifacts['compiled-source/'+name]) == digest
+    for name, _ in campaign.CHECKS:
+        text = artifacts[name+'.log'].decode()
+        assert '0 failed;' in text and 'test result: ok. 0 passed;' not in text, name
+    assert b'sha2 feature "asm"' in artifacts['arm-feature-tree.txt']
+    assert b'force-soft' not in artifacts['arm-feature-tree.txt']
+    assert b'sha2 feature "asm"' not in artifacts['x86-feature-tree.txt']
+    flags = [line.split(b':', 1)[1].split() for line in artifacts['cpuinfo.txt'].splitlines()
+             if line.split(b':', 1)[0].strip() == b'Features']
+    assert flags and all(b'sha2' in row for row in flags)
+    for name, limit in [('boundary-cgroup.json', 10*1024**3), ('profile-cgroup.json', 8*1024**3)]:
+        group = json.loads(artifacts[name])
+        assert int(group['memory.max']) == limit and 0 < int(group['memory.peak']) < limit
+        assert int(group['memory.swap.max']) == int(group['memory.swap.peak']) == 0
+        events = dict(line.split() for line in group['memory.events'].splitlines())
+        assert events['oom'] == events['oom_kill'] == '0' and group['cpu_affinity'] == [0, 1, 2, 3]
+        if name == 'profile-cgroup.json': assert group['rlimit_as_bytes'] == [4*1024**3]*2
+    return resolved
 
 
 def reduce_records(records, requests, references, truth, item):
@@ -169,7 +206,36 @@ def authentication_check():
             try: authenticate_closed(directory, campaign, bad.__getitem__)
             except AssertionError: pass
             else: raise AssertionError('tampered closed authority accepted')
+        campaign.COMPILED = ('crates/fixture/0.rs',); campaign.CHECKS = (('source', []),)
+        config['binary'] = None
+        binary = b'fixture executable'
+        resolved_body = json.dumps(dict(config, binary=dict(sha256=base.sha(binary), bytes=len(binary)))).encode()
+        compiled = {name: hashes[name] for name in campaign.COMPILED}
+        reservation['qualification']['compiled_native_sha256'] = compiled
+        proof = dict(resolved_config_sha256=base.sha(resolved_body), original_config_sha256=reservation['config_sha256'],
+            config_sha256=reservation['config_sha256'], binary_sha256=base.sha(binary), binary_bytes=len(binary),
+            qualified=True, green_status=0, release_status=0, native_rebuilt=True,
+            current_full_suite_pass_claim=False, source_file_count=395,
+            source_identity_sha256=identity, compiled_native_sha256=compiled)
+        terminal['resolved_config_sha256'] = base.sha(resolved_body)
+        artifacts = {'boundary-check.json': json.dumps(proof).encode(), 'resolved-config.json': resolved_body,
+            'binaries/two_bit_http': binary, 'compiled-source.json': json.dumps(compiled).encode(),
+            'compiled-source/crates/fixture/0.rs': source['crates/fixture/0.rs'],
+            'source.log': b'test result: ok. 1 passed; 0 failed;',
+            'arm-feature-tree.txt': b'sha2 feature "asm"', 'x86-feature-tree.txt': b'sha2',
+            'cpuinfo.txt': b'Features : sha2\n'}
+        for name, limit in [('boundary-cgroup.json', 10*1024**3), ('profile-cgroup.json', 8*1024**3)]:
+            artifacts[name] = json.dumps({'memory.max': str(limit), 'memory.peak': '1024',
+                'memory.swap.max': '0', 'memory.swap.peak': '0', 'memory.events': 'oom 0\noom_kill 0',
+                'cpu_affinity': [0,1,2,3], 'rlimit_as_bytes': [4*1024**3]*2}).encode()
+        validate_build(artifacts, archived, config, reservation, terminal, campaign)
+        for key in ('binaries/two_bit_http', 'compiled-source/crates/fixture/0.rs', 'resolved-config.json'):
+            bad = dict(artifacts); bad[key] += b' '
+            try: validate_build(bad, archived, config, reservation, terminal, campaign)
+            except AssertionError: pass
+            else: raise AssertionError('tampered build authority accepted')
     print('PASS closed authentication: terminal, artifact and archive tamper rejection')
+    print('PASS build authority: binary, compiled snapshot and resolved config tamper rejection')
 
 
 if __name__ == '__main__':
