@@ -36,23 +36,33 @@ def scoped_runner():
         yield
 
 
+def validate_config(config, base=Path('.')):
+    assert config['schema'] == SCHEMA and config['offered_qps'] == RATES
+    assert (config['count'], config['k'], config['workers'], config['base_port']) == (64,10,6,18080)
+    assert config['dataset_order'] == ['ReLAION','CoHere']
+    assert config['client_cpu_affinity'] == [4,5]
+    assert config['native_cpu_affinity'] == [0,1,2,3]
+    assert config['worker_limit_seconds'] == 2400 and config['machine_limit_seconds'] == 2700
+    assert config['worker_memory_bytes'] == 7*1024**3 and config['native_memory_bytes'] == 1024**3
+    assert config['source_caps'] == paged.SOURCE_CAPS
+    assert config['gates'] == dict(recall_at_10_minimum=.95, all_offers_success=True,
+        source_scorer_ordered_id_physical_parity=True, cold_p90_ms_exclusive_maximum=444)
+    assert set(config['code_sha256']) == set(CODE)
+    for name, value in config['code_sha256'].items(): assert offered.cold.sha(base/name) == value
+    reference = config['items_source']; body = (base/reference['path']).read_bytes()
+    assert offered.cold.sha(base/reference['path']) == reference['sha256']
+    assert config['items'] == json.loads(body)['items']
+
+
 def main():
     config_path, digest, binary, proof_path, output = sys.argv[1:]
     assert offered.cold.sha(config_path) == digest
     config = json.loads(Path(config_path).read_bytes())
-    assert config['schema'] == SCHEMA and config['offered_qps'] == RATES
-    assert (config['count'], config['k'], config['workers'], config['base_port']) == (64,10,6,18080)
-    assert config['dataset_order'] == ['ReLAION','CoHere']
-    assert sorted(os.sched_getaffinity(0)) == config['client_cpu_affinity'] == [4,5]
-    assert config['native_cpu_affinity'] == [0,1,2,3]
+    validate_config(config)
+    assert sorted(os.sched_getaffinity(0)) == [4,5]
     assert os.environ['TOKIO_WORKER_THREADS'] == '4'
     assert os.environ['AWS_MAX_ATTEMPTS'] == '1'
     assert os.environ['BORSUK_NATIVE_MEMORY_BYTES'] == '1073741824'
-    assert set(config['code_sha256']) == set(CODE)
-    for name, value in config['code_sha256'].items(): assert offered.cold.sha(name) == value
-    reference = config['items_source']; body = Path(reference['path']).read_bytes()
-    assert offered.cold.sha(reference['path']) == reference['sha256']
-    assert config['items'] == json.loads(body)['items']
     assert offered.cold.sha(proof_path) == config['boundary_proof']['sha256']
     assert Path(proof_path).stat().st_size == config['boundary_proof']['bytes']
     proof = json.loads(Path(proof_path).read_bytes())
