@@ -65,3 +65,30 @@ Latest authenticated closed offered records at 1 QPS: p90
 terminal FAILED its postmeasurement resource assertion; records were verified
 separately, not retroactively declared a passing campaign. These are historical
 references, not measurements of either new arm. No projected speedup is used.
+
+## Preparation evidence
+
+Controller child `28b8d549` was reviewed and integrated as `5235520b`.
+Parent original mock execution 53109 closed with exit 0: source/config/code
+rejection, both five-class builds, crate-output invalidation, restoration on
+failure, graph-count and toolchain-parity rejection, transient observations,
+ACK ownership and termination before collection. No compute was launched by
+these checks. Actual preflight binds 395 native files per arm, nine compiled
+snapshots per arm, eleven runtime/controller code files and sixty artifacts;
+generated user data is 10,527 bytes and passes shell syntax checking.
+
+Config SHA256: `410ce351d764bccccafcfe6e34697dcc961856288c67f8519c451fa4266143c3`.
+Control native identity: `6566a30c7ccfbf5ec8a8d4481b2568fc020b67e831e5d186a94f5025ab156ec2`.
+Candidate native identity: `4bbc6c332e78e5a068001913597cdc82d6c13bd147acd96e019149c190a39a1c`.
+The candidate additionally corrects its buffer documentation to 32 MiB; this
+changes no behavior. Local staging execution 29333 passed all four affected
+tests before that comment correction. Fresh ARM qualification precedes queries.
+
+Geometry record and binary-authority checks pass, including rejection of a
+wrong fresh-control GET count, source identity, binary size, compiled graph
+hash, false full-suite claim and oversized concurrency. The legacy default
+cold-call cleanup/parity check passes. The independent closeout reader's
+reduction was checked synthetically; its full remote path awaits real receipts.
+An unchanged baseline repository-policy check fails because the package
+metadata test lacks its expected repository URL string. No full native suite
+was repeated or claimed, and that unrelated source was not modified.
