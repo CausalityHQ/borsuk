@@ -1,4 +1,4 @@
-"""Paired graph decode intervention using the existing ABBA cold protocol."""
+"""Paired centroid bulk conversion intervention using the existing ABBA cold protocol."""
 import json
 import os
 from pathlib import Path
@@ -9,9 +9,9 @@ from scripts import run_native_metadata_ranges_cold as paired
 from scripts import run_native_paged_cold_first_query as paged
 from scripts.check_native_startup_build import source_hashes, source_identity
 
-SCHEMA = 'borsuk-native-graph-decode-cold-v1'
-GRAPH = 'crates/borsuk/src/unit_centroid_graph.rs'
-CODE = tuple(dict.fromkeys((*paired.CODE, *paged.CODE, 'scripts/run_native_graph_decode_cold.py')))
+SCHEMA = 'borsuk-native-centroid-bulk-cold-v1'
+STAGE = 'crates/borsuk/src/unit_centroid_pages.rs'
+CODE = tuple(dict.fromkeys((*paired.CODE, *paged.CODE, 'scripts/run_native_centroid_bulk_cold.py')))
 
 
 def validate_config(config, base=Path('.')):
@@ -29,13 +29,15 @@ def validate_config(config, base=Path('.')):
     manifest = config['native_manifest']; body = (base/manifest['path']).read_bytes()
     assert paired.cold.sha(base/manifest['path']) == manifest['sha256']
     manifest = json.loads(body)
+    assert manifest['schema'] == 'borsuk-centroid-bulk-source-v1'
     identities = source_hashes(base)
     assert identities == manifest['source_sha256'] and len(identities) == manifest['source_file_count'] == 395
     assert source_identity(identities) == manifest['candidate_identity']
-    assert len(config['compiled_sha256']) == 20
+    assert manifest['candidate_stage_sha256'] == identities[STAGE]
+    assert len(config['compiled_sha256']) == 21
     assert all(identities[name] == digest for name,digest in config['compiled_sha256'].items())
-    control = dict(identities, **{GRAPH: manifest['control_graph']['sha256']})
-    assert paired.cold.sha(base/manifest['control_graph']['path']) == control[GRAPH]
+    control = dict(identities, **{STAGE: manifest['control_source']['sha256']})
+    assert paired.cold.sha(base/manifest['control_source']['path']) == control[STAGE]
     assert source_identity(control) == manifest['control_identity']
     return manifest
 
@@ -53,7 +55,7 @@ def run(config, binaries, output):
         for label,p in [('p50',.5),('p90',.9),('p95',.95),('p99',.99)]}
         for dataset in config['dataset_order']} for arm in binaries}
     summary.update(decode_ms=decode, source_caps=paged.SOURCE_CAPS,
-        intervention='adjacency prefix duplicate check; immutable graph and scorer unchanged',
+        intervention='bounded bulk FP16 centroid conversion; immutable indexes, graph and scorer unchanged',
         decode_gate_passed=all(decode['candidate'][d]['p50'] < decode['control'][d]['p50']
             for d in config['dataset_order']), matched_vendor_measured=False)
     (output/'summary.json').write_text(json.dumps(summary,indent=2,allow_nan=False)+'\n')
@@ -74,21 +76,26 @@ def main():
         assert proof['source_identity_sha256'] == manifest[arm+'_identity'] and proof['source_file_count'] == 395
         assert paired.cold.sha(binary) == proof['binary_sha256'] and Path(binary).stat().st_size == proof['binary_bytes']
         expected = dict(config['compiled_sha256'])
-        if arm == 'control': expected[GRAPH] = manifest['control_graph']['sha256']
-        assert proof['compiled_native_sha256'] == expected and len(expected) == 20
+        if arm == 'control': expected[STAGE] = manifest['control_source']['sha256']
+        assert proof['compiled_native_sha256'] == expected and len(expected) == 21
         assert proof['sha_backend']['arm_asm_selected'] is proof['sha_backend']['cpu_sha2_capable'] is True
         assert proof['sha_backend']['x86_asm_selected'] is False
     run(config,dict(candidate=candidate,control=control),Path(output))
 
 
-def self_check():
+def self_check(config=None, base=None):
     import copy
-    config = json.loads(Path('docs/research/source-paging-20260930/decode/config.json').read_bytes())
-    validate_config(config)
+    if config is None:
+        import tempfile
+        from scripts import launch_native_centroid_bulk_spot as controller
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            return self_check(controller.config_fixture(base, Path(__file__).resolve().parent.parent), base)
+    validate_config(config, base)
     for key in ('count', 'source_caps', 'compiled_sha256'):
         changed = copy.deepcopy(config)
         changed[key] = 63 if key == 'count' else {}
-        try: validate_config(changed)
+        try: validate_config(changed, base)
         except AssertionError: pass
         else: raise AssertionError('changed authority accepted: '+key)
     original = paired.cold.cold_call, paired.validate_transfer
@@ -97,7 +104,7 @@ def self_check():
         except RuntimeError: pass
         else: raise AssertionError('cancellation accepted')
     assert (paired.cold.cold_call, paired.validate_transfer) == original
-    print('PASS graph-decode config/source guards and paged scope restoration')
+    print('PASS centroid-bulk config/source guards and paged scope restoration')
 
 
 if __name__ == '__main__':

@@ -1,4 +1,4 @@
-"""Build and qualify both authenticated native graph-decode arms on one ARM worker."""
+"""Build and qualify both authenticated native centroid-bulk arms on one ARM worker."""
 import json
 from pathlib import Path
 import subprocess
@@ -7,22 +7,24 @@ import sys
 from scripts.check_native_startup_build import (RUNTIME, SOURCE_TESTS, sha,
     source_hashes, source_identity, feature_checks, capture_cgroup)
 
-from scripts.check_native_paged_source_build import CHECKS, SOURCE_WALK_TESTS
+from scripts.check_native_paged_source_build import CHECKS as PAGED_CHECKS, SOURCE_WALK_TESTS
+
+CHECKS = (*PAGED_CHECKS, ('centroid', ['--lib', 'unit_centroid_pages::tests']))
 
 FULL_SUITE_SCOPE = 'Source-qualified local x86_64 workspace suite reused; ARM focused qualification only'
 CONTROL_SUITE_SCOPE = 'Control focused checks only; historical full-suite evidence is not a current pass claim'
 
 
 def main(cargo, repo, out):
-    from scripts import launch_native_graph_decode_spot as controller
+    from scripts import launch_native_centroid_bulk_spot as controller
     repo, out = Path(repo).resolve(), Path(out).resolve()
     qualification = json.loads((out / 'source-qualification.json').read_text())
     assert controller.preflight(repo) == qualification
     identities = source_hashes(repo)
     stage = repo / controller.STAGE
     candidate_body = stage.read_bytes()
-    control_body = (repo / qualification['control_graph']['path']).read_bytes()
-    assert sha(control_body) == qualification['control_graph']['sha256']
+    control_body = (repo / qualification['control_source']['path']).read_bytes()
+    assert sha(control_body) == qualification['control_source']['sha256']
     control = dict(identities, **{controller.STAGE: sha(control_body)})
     target_dir = out / 'target'
     assert not target_dir.exists(), 'fresh build target already exists'
@@ -72,7 +74,10 @@ def main(cargo, repo, out):
                 if name == 'source-walk':
                     assert all(test + ' ... ok' in text for test in SOURCE_WALK_TESTS)
                 if name == 'graph':
-                    count = 7 if arm == 'control' else 8
+                    count = 8
+                    assert f'test result: ok. {count} passed; 0 failed;' in text
+                if name == 'centroid':
+                    count = 3 if arm == 'control' else 4
                     assert f'test result: ok. {count} passed; 0 failed;' in text
                 assert source_hashes(repo) == hashes
             full_suite_command = None
@@ -135,5 +140,5 @@ def main(cargo, repo, out):
 
 
 if __name__ == '__main__':
-    assert len(sys.argv) == 4, 'usage: python3 -m scripts.check_native_graph_decode_build CARGO REPO OUTPUT'
+    assert len(sys.argv) == 4, 'usage: python3 -m scripts.check_native_centroid_bulk_build CARGO REPO OUTPUT'
     main(*sys.argv[1:])

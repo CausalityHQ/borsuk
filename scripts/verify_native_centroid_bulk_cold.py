@@ -7,7 +7,7 @@ import struct
 import sys
 
 from scripts import verify_native_paged_cold_first_query as paged
-from scripts import run_native_graph_decode_cold as worker
+from scripts import run_native_centroid_bulk_cold as worker
 from scripts.check_native_startup_build import source_identity
 
 sha = paged.base.sha
@@ -19,16 +19,17 @@ def validate_local_assurance(archived, config, hashes):
     pointer = config['native_assurance']
     assert set(pointer) == {'path', 'sha256'}
     path = Path(pointer['path'])
+    assert path == Path('docs/research/source-paging-20260930/centroid-bulk/implementation-gates/verification.json')
     assert not path.is_absolute() and '..' not in path.parts
     body = archived[str(path)]
     assert sha(body) == pointer['sha256']
     proof = json.loads(body)
-    assert proof['schema'] == 'borsuk-implementation-overlap-repair-proof-v1'
+    assert proof['schema'] == 'borsuk-centroid-bulk-implementation-gates-v1'
     assert proof['source_sha256'] == hashes and proof['source_file_count'] == len(hashes) == 395
     assert proof['source_identity_sha256'] == source_identity(hashes)
     assert proof['full_workspace_execution_pending'] is False
     for key in ('full_workspace_execution_status', 'workspace_test_compilation_status',
-                'clippy_status', 'affected_target_status', 'controller_selfcheck_status'):
+                'clippy_status', 'affected_target_status'):
         assert type(proof[key]) is int and proof[key] == 0, key
     assert proof['workspace_command'] == ['cargo', 'test', '--locked', '--workspace', '--all-targets']
     assert proof['workspace_platform'] == 'x86_64-unknown-linux-gnu'
@@ -66,19 +67,25 @@ def validate_reused_suite(artifacts, boundary, assurance, log):
 
 
 def validate_manifest(archived, config):
+    from scripts import launch_native_centroid_bulk_spot as campaign
     pointer = config['native_manifest']; body = archived[pointer['path']]
     assert sha(body) == pointer['sha256']
     manifest = json.loads(body)
+    assert manifest['schema'] == 'borsuk-centroid-bulk-source-v1'
+    assert manifest['candidate_identity'] == campaign.CANDIDATE_IDENTITY
+    assert manifest['control_identity'] == campaign.CONTROL_IDENTITY
     hashes = {name: sha(body) for name,body in archived.items()
               if name.endswith('.rs') or Path(name).name in ('Cargo.toml','Cargo.lock')}
     assert hashes == manifest['source_sha256'] and len(hashes) == manifest['source_file_count'] == 395
     assert source_identity(hashes) == manifest['candidate_identity']
-    control_body = archived[manifest['control_graph']['path']]
-    assert sha(control_body) == manifest['control_graph']['sha256']
-    control = dict(hashes, **{worker.GRAPH:sha(control_body)})
+    assert manifest['candidate_stage_sha256'] == hashes[worker.STAGE]
+    control_body = archived[manifest['control_source']['path']]
+    assert sha(control_body) == manifest['control_source']['sha256']
+    control = dict(hashes, **{worker.STAGE:sha(control_body)})
     assert source_identity(control) == manifest['control_identity']
-    assert {name for name in hashes if hashes[name] != control[name]} == {worker.GRAPH}
-    assert len(config['compiled_sha256']) == 20
+    assert {name for name in hashes if hashes[name] != control[name]} == {worker.STAGE}
+    assert len(config['compiled_sha256']) == 21
+    assert set(config['compiled_sha256']) == set(campaign.COMPILED)
     assert config['compiled_sha256'] == {name:hashes[name] for name in config['compiled_sha256']}
     pointer = config['items_source']; body = archived[pointer['path']]
     assert sha(body) == pointer['sha256'] and config['items'] == json.loads(body)['items']
@@ -148,7 +155,7 @@ def inputs_from_remote(config, remote, observed):
 
 def main(attempt):
     import boto3
-    from scripts import launch_native_graph_decode_spot as campaign
+    from scripts import launch_native_centroid_bulk_spot as campaign
     directory = campaign.ROOT/campaign.NAME/attempt
     session = boto3.Session(profile_name='causality',region_name=paged.base.REGION)
     s3,ec2 = session.client('s3'),session.client('ec2')
@@ -189,7 +196,8 @@ def main(attempt):
         for name,_ in campaign.CHECKS:
             log = artifacts[prefix+name+'.log']
             assert b'0 failed;' in log and b'ok. 0 passed;' not in log
-        assert ('test result: ok. '+str(8 if arm == 'candidate' else 7)+' passed; 0 failed;').encode() in artifacts[prefix+'graph.log']
+        assert b'test result: ok. 8 passed; 0 failed;' in artifacts[prefix+'graph.log']
+        assert ('test result: ok. '+str(4 if arm == 'candidate' else 3)+' passed; 0 failed;').encode() in artifacts[prefix+'centroid.log']
         assert boundary['sha_backend']['arm_asm_selected'] is boundary['sha_backend']['cpu_sha2_capable'] is True
         assert boundary['sha_backend']['x86_asm_selected'] is False
         if arm == 'candidate':
@@ -237,9 +245,9 @@ def main(attempt):
 def assurance_self_check():
     """Only synthetic proof/log/build receipts; no quality inputs or AWS calls."""
     import tempfile
-    from scripts import launch_native_graph_decode_spot as campaign
+    from scripts import launch_native_centroid_bulk_spot as campaign
     original = Path(__file__).resolve().parent.parent
-    hashes = json.loads((original / campaign.MANIFEST).read_bytes())['source_sha256']
+    hashes = campaign.source_hashes(original)
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp)
         config = campaign.assurance_fixture(repo, {}, hashes)
@@ -248,10 +256,11 @@ def assurance_self_check():
         archived = {name: (repo/name).read_bytes() for name in (path, log_path)}
         assurance, log = validate_local_assurance(archived, config, hashes)
         assert campaign.authenticate_assurance(repo, config, hashes) == (assurance, log)
-        for key, value in [('full_workspace_execution_pending', True),
+        for key, value in [('schema', 'wrong-schema'), ('full_workspace_execution_pending', True),
+                ('full_workspace_execution_status', False),
                 ('full_workspace_execution_status', None), ('full_workspace_execution_status', 101),
                 ('workspace_test_compilation_status', 1), ('clippy_status', 1),
-                ('affected_target_status', 1), ('controller_selfcheck_status', 1),
+                ('affected_target_status', 1),
                 ('source_sha256', {}), ('source_file_count', 394), ('source_identity_sha256', '0'*64),
                 ('workspace_command', assurance['command'] + ['--release']),
                 ('workspace_platform', 'aarch64-unknown-linux-gnu'), ('workspace_env', {})]:
@@ -310,19 +319,20 @@ def assurance_self_check():
     print('PASS independent fixture assurance/provenance/status/zero ARM full-suite guards')
 
 
-def runtime_check():
+def runtime_check(config, base):
     import os
     import tempfile
     from unittest.mock import patch
-    path = Path('docs/research/source-paging-20260930/decode/config.json')
-    config = json.loads(path.read_bytes())
-    manifest = json.loads(Path(config['native_manifest']['path']).read_bytes())
+    from scripts import launch_native_centroid_bulk_spot as campaign
+    path = base / campaign.CONFIG
+    manifest = json.loads((base / config['native_manifest']['path']).read_bytes())
+    worker_validate_config = worker.validate_config
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp); binary = root/'binary'; binary.write_bytes(b'synthetic fixture binary')
         proofs = {}
         for arm in ('candidate','control'):
             compiled = dict(config['compiled_sha256'])
-            if arm == 'control': compiled[worker.GRAPH] = manifest['control_graph']['sha256']
+            if arm == 'control': compiled[worker.STAGE] = manifest['control_source']['sha256']
             proofs[arm] = dict(qualified=True,green_status=0,release_status=0,arm=arm,
                 same_worker_toolchain=True,source_identity_sha256=manifest[arm+'_identity'],
                 source_file_count=395,binary_sha256=sha(binary.read_bytes()),binary_bytes=binary.stat().st_size,
@@ -337,7 +347,9 @@ def runtime_check():
             for arm,proof in shaped.items(): (root/(arm+'.json')).write_text(json.dumps(proof))
             argv = ['worker',str(path),sha(path.read_bytes()),str(binary),str(root/'candidate.json'),
                 str(binary),str(root/'control.json'),str(root/'screen')]
-            with patch.object(sys,'argv',argv),patch.object(worker.os,'sched_getaffinity',return_value={4,5}), \
+            with patch.object(sys,'argv',argv),patch.object(worker, 'validate_config',
+                    side_effect=lambda shaped: worker_validate_config(shaped, base)), \
+                 patch.object(worker.os,'sched_getaffinity',return_value={4,5}), \
                  patch.dict(os.environ,TOKIO_WORKER_THREADS='8' if mutation == 'env' else '4',
                     AWS_MAX_ATTEMPTS='1',BORSUK_NATIVE_MEMORY_BYTES='1073741824'),patch.object(worker,'run') as run:
                 if mutation is None:
@@ -351,16 +363,24 @@ def runtime_check():
 
 
 def self_check():
+    import tempfile
+    from scripts import launch_native_centroid_bulk_spot as campaign
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        config = campaign.config_fixture(base, Path(__file__).resolve().parent.parent)
+        reducer_self_check(config, base)
+
+
+def reducer_self_check(config, base):
     from unittest.mock import patch
-    worker.self_check()
-    runtime_check()
+    worker.self_check(config, base)
+    runtime_check(config, base)
     paged.authentication_check()  # Original manifest path remains unchanged.
-    config = json.loads(Path('docs/research/source-paging-20260930/decode/config.json').read_bytes())
-    manifest = json.loads(Path(config['native_manifest']['path']).read_bytes())
-    names = [*manifest['source_sha256'],config['native_manifest']['path'],manifest['control_graph']['path'],config['items_source']['path']]
-    archived = {name:Path(name).read_bytes() for name in names}
+    manifest = json.loads((base / config['native_manifest']['path']).read_bytes())
+    names = [*manifest['source_sha256'],config['native_manifest']['path'],manifest['control_source']['path'],config['items_source']['path']]
+    archived = {name:(base / name).read_bytes() for name in names}
     validate_manifest(archived,config)
-    for name in (worker.GRAPH,manifest['control_graph']['path'],config['native_manifest']['path']):
+    for name in (worker.STAGE,manifest['control_source']['path'],config['native_manifest']['path']):
         changed = dict(archived);changed[name] += b'changed'
         try: validate_manifest(changed,config)
         except AssertionError: pass

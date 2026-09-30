@@ -1,4 +1,4 @@
-"""Bounded paired graph-decode campaign; --self-check uses mocks only."""
+"""Bounded paired centroid-bulk campaign; --self-check uses mocks only."""
 import base64
 import fcntl
 import gzip
@@ -12,34 +12,35 @@ from unittest.mock import patch
 from scripts import launch_native_metadata_ranges_cold_spot as shared
 from scripts import launch_native_peer_1m_spot as peer
 from scripts import launch_v174_relaid_bind_compile_spot as runner
-from scripts import run_native_graph_decode_cold as worker
+from scripts import run_native_centroid_bulk_cold as worker
 from scripts.check_native_startup_build import FOCUSED_ARM, source_hashes, source_identity
-from scripts.check_native_paged_source_build import CHECKS
+from scripts.check_native_centroid_bulk_build import CHECKS
 
-ROOT = Path('docs/research/source-paging-20260930/decode')
+ROOT = Path('docs/research/source-paging-20260930/centroid-bulk')
 CONFIG = ROOT / 'config.json'
-CONFIG_SHA = 'b7dfcdf159b9c19f97279776ea97d06719d567a0c3d12787a91fb530d782dbef'
+# The parent freezes the config after integration and completed local assurance.
+CONFIG_SHA = None
 MANIFEST = ROOT / 'native-source-manifest.json'
-MANIFEST_SHA = '5e7ae4ed3234910e3c31f662f157e6e58c7f01f1774190e250573dba16bd5ff8'
-SCHEMA = 'borsuk-native-graph-decode-spot-v1'
-PREFIX = 'research/source-paging/20260930/graph-decode-'
+MANIFEST_SHA = '0dcb1b0342bc257edc772c6106b813648537ef7930f6d5a2e53b2dbc7b2505a2'
+SCHEMA = 'borsuk-native-centroid-bulk-spot-v1'
+PREFIX = 'research/source-paging/20260930/centroid-bulk-'
 NAME = 'cold'
-TOKEN_PREFIX = 'graph-decode-cold-'
-TAG = 'borsuk-graph-decode-cold'
+TOKEN_PREFIX = 'centroid-bulk-cold-'
+TAG = 'borsuk-centroid-bulk-cold'
 SUBNET = 'subnet-034528fbd6977848f'
 WALL = 5400
 COMPUTE_CAP = .45
-CANDIDATE_IDENTITY = '46e5ca162da947f3596b00291211ecd05e2059b721938047b8c1487189aedb6d'
-CONTROL_IDENTITY = '72f1f5d14dccf209dfb5fdc5bf6562d06322348144fd99bb5c356ef9fc9c8c97'
-GRAPH = STAGE = worker.GRAPH
+CANDIDATE_IDENTITY = '14fa7148e55d898ab79b1a8b4a208dfc02266f7e2610e1c084080550d78b882c'
+CONTROL_IDENTITY = '46e5ca162da947f3596b00291211ecd05e2059b721938047b8c1487189aedb6d'
+STAGE = worker.STAGE
 COMPILED = (*FOCUSED_ARM, *('crates/borsuk/src/' + name for name in (
     'sq8_s3_range.rs', 'sq8_page_authority.rs', 'two_bit_source.rs', 'two_bit_build.rs',
     'two_bit_index.rs', 'unit_centroid_graph.rs', 'bin/build_two_bit_graph_variant.rs',
     'bin/two_bit_plan_demo.rs', 'bin/two_bit_union_nomination.rs', 'bin/two_bit_walk_nomination.rs')),
-    'crates/borsuk/tests/two_bit_application_ids.rs', 'crates/borsuk/tests/two_bit_gc_delayed_delete.rs')
+    'crates/borsuk/tests/two_bit_application_ids.rs', 'crates/borsuk/tests/two_bit_gc_delayed_delete.rs', STAGE)
 # Include late imports in the shared helpers, including their self-check paths.
-CODE = (*worker.CODE, 'scripts/launch_native_graph_decode_spot.py',
-    'scripts/check_native_graph_decode_build.py',
+CODE = (*worker.CODE, 'scripts/launch_native_centroid_bulk_spot.py',
+    'scripts/check_native_centroid_bulk_build.py',
     'scripts/launch_native_metadata_ranges_cold_spot.py',
     'scripts/launch_native_startup_profile_spot.py', 'scripts/launch_native_peer_1m_spot.py',
     'scripts/launch_v174_relaid_bind_compile_spot.py', 'scripts/launch_v157_primary_feasibility_spot.py',
@@ -66,16 +67,17 @@ def authenticate_assurance(base, config, identities):
     pointer = config['native_assurance']
     assert set(pointer) == {'path', 'sha256'}
     path = Path(pointer['path'])
+    assert path == ROOT / 'implementation-gates/verification.json'
     assert not path.is_absolute() and '..' not in path.parts
     body = (base / path).read_bytes()
     assert peer.sha(body) == pointer['sha256'], 'changed local assurance proof'
     proof = json.loads(body)
-    assert proof['schema'] == 'borsuk-implementation-overlap-repair-proof-v1'
+    assert proof['schema'] == 'borsuk-centroid-bulk-implementation-gates-v1'
     assert proof['source_sha256'] == identities and len(identities) == proof['source_file_count'] == 395
     assert proof['source_identity_sha256'] == source_identity(identities) == CANDIDATE_IDENTITY
     assert proof['full_workspace_execution_pending'] is False, 'local workspace proof is pending'
     for key in ('full_workspace_execution_status', 'workspace_test_compilation_status',
-                'clippy_status', 'affected_target_status', 'controller_selfcheck_status'):
+                'clippy_status', 'affected_target_status'):
         assert type(proof[key]) is int and proof[key] == 0, key
     assert proof['workspace_command'] == ASSURANCE_COMMAND
     assert proof['workspace_platform'] == ASSURANCE_PLATFORM
@@ -98,7 +100,7 @@ def preflight(base=Path('.')):
     assert len(worker.CODE) == 12
     manifest = worker.validate_config(config, base)
     assert config['native_manifest'] == dict(path=str(MANIFEST), sha256=MANIFEST_SHA)
-    assert manifest['schema'] == 'borsuk-graph-decode-source-v1'
+    assert manifest['schema'] == 'borsuk-centroid-bulk-source-v1'
     assert manifest['candidate_identity'] == CANDIDATE_IDENTITY
     assert manifest['control_identity'] == CONTROL_IDENTITY
     assert manifest['current_full_suite_pass_claim'] is False
@@ -114,19 +116,19 @@ def preflight(base=Path('.')):
     assert config['machine_limit_seconds'] == WALL and config['worker_limit_seconds'] == 1500
     assert not {'binary', 'control_binary', 'frozen_native_qualification'} & config.keys()
     identities = manifest['source_sha256']
-    assert manifest['candidate_graph_sha256'] == identities[GRAPH]
+    assert manifest['candidate_stage_sha256'] == identities[STAGE]
     compiled = {name: identities[name] for name in COMPILED}
-    assert len(COMPILED) == len(compiled) == 20 and config['compiled_sha256'] == compiled
-    control_graph = manifest['control_graph']
-    assert control_graph == dict(path=str(ROOT / 'control-unit-centroid-graph.txt'),
-        sha256='7a47654900e1ec2d5f96384ee2b67ea4c647c2eb05c00a0e4d5902636bcebc42')
-    control = dict(identities, **{GRAPH: control_graph['sha256']})
+    assert len(COMPILED) == len(compiled) == 21 and config['compiled_sha256'] == compiled
+    control_source = manifest['control_source']
+    assert control_source == dict(path=str(ROOT / 'control-unit-centroid-pages.txt'),
+        sha256='8135bbe4b766f66a944c17636a976dec958189adc227dbeb3e40cda58911ecd2')
+    control = dict(identities, **{STAGE: control_source['sha256']})
     assert source_identity(control) == CONTROL_IDENTITY
     assurance, _ = authenticate_assurance(base, config, identities)
     return dict(config_path=str(CONFIG), config_sha256=peer.sha(body), campaign_schema=SCHEMA,
         manifest_path=str(MANIFEST), manifest_sha256=MANIFEST_SHA,
         source_identity_sha256=CANDIDATE_IDENTITY, source_file_count=395,
-        control_source_identity_sha256=CONTROL_IDENTITY, control_graph=control_graph,
+        control_source_identity_sha256=CONTROL_IDENTITY, control_source=control_source,
         compiled_native_sha256=compiled,
         control_compiled_native_sha256={name: control[name] for name in COMPILED},
         code_sha256={name: peer.sha((base / name).read_bytes()) for name in CODE},
@@ -151,13 +153,13 @@ def user_data(commit, archive_sha, archive_key, prefix, qualification):
         command = "python3 -c 'import base64,gzip; from pathlib import Path; " + \
             f'Path("{filename}").write_bytes(gzip.decompress(base64.b64decode("{encoded}")))\''
         body = body[:begin] + command + body[end:]
-    body = body.replace('native-metadata-ranges-cold', 'native-graph-decode-cold')
-    body = body.replace('metadata-ranges-build', 'graph-decode-build')
+    body = body.replace('native-metadata-ranges-cold', 'native-centroid-bulk-cold')
+    body = body.replace('metadata-ranges-build', 'centroid-bulk-build')
     body = body.replace('RuntimeMaxSec=2430', 'RuntimeMaxSec=3630').replace('30 2400', '30 3600')
     body = body.replace('python3.12 "$root/repo/scripts/check_native_metadata_ranges_build.py"',
-                        'python3.12 -m scripts.check_native_graph_decode_build')
+                        'python3.12 -m scripts.check_native_centroid_bulk_build')
     body = body.replace('python3.12 scripts/run_native_metadata_ranges_cold.py',
-                        'python3.12 -m scripts.run_native_graph_decode_cold')
+                        'python3.12 -m scripts.run_native_centroid_bulk_cold')
     body = body.replace('python3.12 scripts/check_native_startup_build.py --cgroup',
                         'python3.12 -m scripts.check_native_startup_build --cgroup')
     body = body.replace("  'artifacts':artifacts}",
@@ -267,13 +269,14 @@ def build_self_check(repo, proof):
     import contextlib
     import io
     import tempfile
-    from scripts import check_native_graph_decode_build as build
-    candidate_body = (repo / GRAPH).read_bytes()
-    control_body = (repo / proof['control_graph']['path']).read_bytes()
+    from scripts import check_native_centroid_bulk_build as build
+    candidate_body = (repo / STAGE).read_bytes()
+    control_body = (repo / proof['control_source']['path']).read_bytes()
     uncompiled_source = repo / 'crates/borsuk/src/lib.rs'
     original_source = uncompiled_source.read_bytes()
     for failure in ('success', 'control-test', 'candidate-clean', 'candidate-test',
-                    'control-graph-count', 'candidate-graph-count', 'toolchain',
+                    'control-graph-count', 'candidate-graph-count',
+                    'control-centroid-count', 'candidate-centroid-count', 'toolchain',
                     'features', 'mutation', 'repaired-target', 'repaired-count', 'stale-target', 'qualification'):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
@@ -296,9 +299,9 @@ def build_self_check(repo, proof):
                 assert args[args.index('--target-dir') + 1] == str(out / 'target')
                 binary = out / 'target/release/examples/two_bit_http'
                 if args[1] == 'clean':
-                    assert commands == ['test']*9 + ['build', 'clean']
+                    assert commands == ['test']*10 + ['build', 'clean']
                     arm = 'candidate'
-                    assert (repo / GRAPH).read_bytes() == candidate_body
+                    assert (repo / STAGE).read_bytes() == candidate_body
                     if failure == 'candidate-clean':
                         raise subprocess.CalledProcessError(1, args)
                     binary.unlink()
@@ -306,7 +309,7 @@ def build_self_check(repo, proof):
                 assert '--locked' in args
                 assert ('--release' in args) is ('--workspace' not in args)
                 assert args[args.index('--jobs') + 1] == '4'
-                assert (repo / GRAPH).read_bytes() == (control_body if arm == 'control' else candidate_body)
+                assert (repo / STAGE).read_bytes() == (control_body if arm == 'control' else candidate_body)
                 if failure == arm + '-test':
                     raise subprocess.CalledProcessError(1, args)
                 if failure == 'repaired-target' and args[-2:] == ['--test', 'exact_sq8_mirror_direct']:
@@ -316,9 +319,12 @@ def build_self_check(repo, proof):
                 assert '--workspace' not in args, 'ARM full workspace suite must never run'
                 assert kwargs['check'] is True
                 if args[1] == 'test':
-                    count = 7 if arm == 'control' else 8
-                    if failure == arm + '-graph-count': count -= 1
-                    if args[-1] != 'unit_centroid_graph::tests': count = 1
+                    count = 1
+                    if args[-1] == 'unit_centroid_graph::tests':
+                        count = 7 if failure == arm + '-graph-count' else 8
+                    if args[-1] == 'unit_centroid_pages::tests':
+                        count = 3 if arm == 'control' else 4
+                        if failure == arm + '-centroid-count': count -= 1
                     if args[-2:] == ['--test', 'exact_sq8_mirror_direct']:
                         count = 3 if failure == 'repaired-count' else 4
                     stdout.write(f'test result: ok. {count} passed; 0 failed;\n')
@@ -339,10 +345,10 @@ def build_self_check(repo, proof):
                 assert not (out / 'boundary-check.json').exists()
                 if failure == 'repaired-target':
                     assert not (out / 'full-suite-status.json').exists()
-                    assert commands == ['test']*9 + ['build', 'clean'] + ['test']*10
+                    assert commands == ['test']*10 + ['build', 'clean'] + ['test']*11
             else:
                 assert failure == 'success', 'qualification failure swallowed'
-                assert commands == ['test']*9 + ['build', 'clean'] + ['test']*10 + ['build']
+                assert commands == ['test']*10 + ['build', 'clean'] + ['test']*11 + ['build']
                 status = json.loads((out / 'full-suite-status.json').read_bytes())
                 assert status['status'] == 0 and status['runs'] == 0 and status['arm'] == 'candidate'
                 assert status['scope'] == build.FULL_SUITE_SCOPE
@@ -370,7 +376,7 @@ def build_self_check(repo, proof):
                         assert peer.sha((destination / 'compiled-source' / name).read_bytes()) == digest
                 runtime_proof_self_check(repo, out)
             finally:
-                assert (repo / GRAPH).read_bytes() == candidate_body
+                assert (repo / STAGE).read_bytes() == candidate_body
                 uncompiled_source.write_bytes(original_source)
 
 
@@ -448,13 +454,13 @@ def collection_self_check(qualification):
 
 def assurance_fixture(repo, config, identities):
     """Synthetic authority in a temporary repo; never completes the real proof."""
-    path = ROOT / 'fixture-assurance/verification.json'
+    path = ROOT / 'implementation-gates/verification.json'
     log = b'test result: ok. 1 passed; 0 failed; 0 ignored;\n'
-    proof = dict(schema='borsuk-implementation-overlap-repair-proof-v1',
+    proof = dict(schema='borsuk-centroid-bulk-implementation-gates-v1',
         source_sha256=identities, source_file_count=395,
         source_identity_sha256=CANDIDATE_IDENTITY, full_workspace_execution_pending=False,
         full_workspace_execution_status=0, workspace_test_compilation_status=0,
-        clippy_status=0, affected_target_status=0, controller_selfcheck_status=0,
+        clippy_status=0, affected_target_status=0,
         workspace_command=ASSURANCE_COMMAND, workspace_platform=ASSURANCE_PLATFORM,
         workspace_env=dict(CARGO_BUILD_JOBS='2', CARGO_TARGET_DIR='/data/target', RUSTC_WRAPPER=''),
         artifacts={'full-workspace.log': dict(bytes=len(log), sha256=peer.sha(log))})
@@ -465,6 +471,38 @@ def assurance_fixture(repo, config, identities):
     return dict(config, native_assurance=dict(path=str(path), sha256=peer.sha(body)))
 
 
+def config_fixture(repo, original):
+    """Adapt historical protocol inputs only inside a temporary synthetic repository."""
+    for name in (*source_hashes(original), *CODE,
+                 'docs/research/source-paging-20260930/cold-config.json'):
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((original / name).read_bytes())
+    control_path = ROOT / 'control-unit-centroid-pages.txt'
+    control_body = ((original / control_path).read_bytes() if (original / control_path).exists()
+        else subprocess.check_output(['git', 'show', '93b11ab4:' + STAGE], cwd=original))
+    (repo / control_path).parent.mkdir(parents=True, exist_ok=True)
+    (repo / control_path).write_bytes(control_body)
+    hashes = source_hashes(repo)
+    control = dict(hashes, **{STAGE: peer.sha(control_body)})
+    assert source_identity(hashes) == CANDIDATE_IDENTITY
+    assert source_identity(control) == CONTROL_IDENTITY
+    manifest = dict(schema='borsuk-centroid-bulk-source-v1', source_sha256=hashes,
+        source_file_count=395, candidate_identity=CANDIDATE_IDENTITY,
+        control_identity=CONTROL_IDENTITY, candidate_stage_sha256=hashes[STAGE],
+        control_source=dict(path=str(control_path), sha256=peer.sha(control_body)),
+        current_full_suite_pass_claim=False, native_qualification_pending=True)
+    (repo / MANIFEST).write_text(json.dumps(manifest, indent=2) + '\n')
+    config = json.loads((original / 'docs/research/source-paging-20260930/decode/config.json').read_bytes())
+    config.update(schema=worker.SCHEMA,
+        code_sha256={name: peer.sha((repo / name).read_bytes()) for name in worker.CODE},
+        native_manifest=dict(path=str(MANIFEST), sha256=peer.sha((repo / MANIFEST).read_bytes())),
+        compiled_sha256={name: hashes[name] for name in COMPILED})
+    config = assurance_fixture(repo, config, hashes)
+    (repo / CONFIG).write_text(json.dumps(config, indent=2) + '\n')
+    return config
+
+
 def assurance_self_check(repo, config, identities):
     import copy
     path = repo / config['native_assurance']['path']
@@ -472,10 +510,11 @@ def assurance_self_check(repo, config, identities):
     log_path = path.parent / 'full-workspace.log.gz'
     log_body = log_path.read_bytes()
     proof = json.loads(original)
-    for key, value in [('full_workspace_execution_pending', True),
+    for key, value in [('schema', 'wrong-schema'), ('full_workspace_execution_pending', True),
+            ('full_workspace_execution_status', False),
             ('full_workspace_execution_status', None), ('full_workspace_execution_status', 101),
             ('workspace_test_compilation_status', 1), ('clippy_status', 1),
-            ('affected_target_status', 1), ('controller_selfcheck_status', 1),
+            ('affected_target_status', 1),
             ('source_identity_sha256', '0'*64), ('source_file_count', 394), ('source_sha256', {}),
             ('workspace_command', ASSURANCE_COMMAND + ['--release']),
             ('workspace_platform', 'aarch64-unknown-linux-gnu'), ('workspace_env', {})]:
@@ -530,18 +569,15 @@ def self_check():
             path = repo / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(body)
-        for name in (*source_hashes(original), *CODE, CONFIG, MANIFEST,
-                     ROOT / 'control-unit-centroid-graph.txt',
-                     Path('docs/research/source-paging-20260930/cold-config.json')):
-            write(name, (original / name).read_bytes())
-        config = assurance_fixture(repo, json.loads((repo / CONFIG).read_bytes()), source_hashes(repo))
-        fixture_config = (json.dumps(config, indent=2) + '\n').encode()
-        write(CONFIG, fixture_config)
-        with patch.object(sys.modules[__name__], 'CONFIG_SHA', peer.sha(fixture_config)), \
-             patch('scripts.launch_native_graph_decode_spot.CONFIG_SHA', peer.sha(fixture_config)):
+        config = config_fixture(repo, original)
+        fixture_config = (repo / CONFIG).read_bytes()
+        fixture_pins = dict(CONFIG_SHA=peer.sha(fixture_config),
+                            MANIFEST_SHA=peer.sha((repo / MANIFEST).read_bytes()))
+        with patch.multiple(sys.modules[__name__], **fixture_pins), \
+             patch.multiple('scripts.launch_native_centroid_bulk_spot', **fixture_pins):
             qualification = preflight(repo)
             assurance_self_check(repo, config, source_hashes(repo))
-            assert len(ARTIFACTS) == len(set(ARTIFACTS)) == 92
+            assert len(ARTIFACTS) == len(set(ARTIFACTS)) == 96
             assert set(qualification['code_sha256']) == set(CODE)
             bindings = shared.WALL, shared.SCHEMA, shared.ARTIFACTS, shared.CONFIG, \
                        runner.WALL_SECONDS, runner.SCHEMA, runner.ARTIFACTS
@@ -558,12 +594,12 @@ def self_check():
             for token in ('--on-active=5400s', 'MemoryMax=10G', 'RuntimeMaxSec=3630',
                 'MemoryMax=8G', 'MemorySwapMax=0', 'RuntimeMaxSec=1530', 'ulimit -v 4194304',
                 'TOKIO_WORKER_THREADS=4', 'BORSUK_NATIVE_MEMORY_BYTES=1073741824', 'AWS_MAX_ATTEMPTS=1',
-                'taskset -c 4-5', 'taskset -c 0-3 python3.12 -m scripts.check_native_graph_decode_build',
-                'python3.12 -m scripts.run_native_graph_decode_cold', '30 3600', '30 1500',
+                'taskset -c 4-5', 'taskset -c 0-3 python3.12 -m scripts.check_native_centroid_bulk_build',
+                'python3.12 -m scripts.run_native_centroid_bulk_cold', '30 3600', '30 1500',
                 '--setenv=PYTHONPATH="$root/repo"', '$1/control/binaries/two_bit_http'):
                 assert token in body, token
-            for name in (CONFIG, MANIFEST, GRAPH, 'Cargo.toml', worker.CODE[0], CODE[-1],
-                         ROOT / 'control-unit-centroid-graph.txt',
+            for name in (CONFIG, MANIFEST, STAGE, 'Cargo.toml', worker.CODE[0], CODE[-1],
+                         ROOT / 'control-unit-centroid-pages.txt',
                          'docs/research/source-paging-20260930/cold-config.json'):
                 path = repo / name
                 before = path.read_bytes()
@@ -596,7 +632,7 @@ def self_check():
             out = Path(tmp) / 'cli-output'
             out.mkdir()
             (out / 'source-qualification.json').write_text('{}')
-            result = subprocess.run([sys.executable, '-m', 'scripts.check_native_graph_decode_build',
+            result = subprocess.run([sys.executable, '-m', 'scripts.check_native_centroid_bulk_build',
                 '/nonexistent-fake-cargo', str(repo), str(out)], cwd=out,
                 env=dict(os.environ, PYTHONPATH=str(repo)), capture_output=True, text=True)
             assert result.returncode != 0 and 'AssertionError' in result.stderr
@@ -609,7 +645,7 @@ if __name__ == '__main__':
     if sys.argv[1:] == ['--self-check']:
         self_check()
     else:
-        assert len(sys.argv) == 2, 'usage: python3 -m scripts.launch_native_graph_decode_spot aNNNN'
-        with open('/tmp/borsuk-native-graph-decode-launch.lock', 'a+') as lock:
+        assert len(sys.argv) == 2, 'usage: python3 -m scripts.launch_native_centroid_bulk_spot aNNNN'
+        with open('/tmp/borsuk-native-centroid-bulk-launch.lock', 'a+') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             main(sys.argv[1])
