@@ -1,4 +1,4 @@
-//! Generation-bound SHA-256 verification of exact S3 SQ8 page ranges.
+//! Generation-bound SHA-256 verification of exact S3 record-page ranges.
 
 use sha2::{Digest, Sha256};
 use std::ops::Range;
@@ -17,6 +17,8 @@ pub struct PageAuthority {
     generation: u64,
     rows: usize,
     dimensions: usize,
+    record_bytes: usize,
+    sq8: bool,
     page_rows: usize,
     object_sha256: String,
     digests: Vec<[u8; 32]>,
@@ -110,6 +112,8 @@ impl PageAuthority {
             generation,
             rows,
             dimensions,
+            record_bytes: dimensions + 12,
+            sq8: true,
             page_rows,
             object_sha256: object_hash.to_owned(),
             digests: sidecar
@@ -117,6 +121,102 @@ impl PageAuthority {
                 .map(|chunk| chunk.try_into().unwrap())
                 .collect(),
         })
+    }
+
+    /// Load encoded source-unit pages from a pinned v3 source-plane manifest.
+    /// The caller binds both its manifest digest and generation to the trusted
+    /// generation root. This authority is not valid for SQ8 ranking.
+    pub fn load_two_bit(
+        manifest_json: &[u8],
+        expected_manifest_sha256: &str,
+        generation: u64,
+        sidecar: &[u8],
+    ) -> Result<Self, PageError> {
+        if !hex64(expected_manifest_sha256)
+            || format!("{:x}", Sha256::digest(manifest_json)) != expected_manifest_sha256
+        {
+            return Err(PageError::HashMismatch);
+        }
+        let manifest: serde_json::Value =
+            serde_json::from_slice(manifest_json).map_err(|_| PageError::InvalidManifest)?;
+        let fields = manifest.as_object().ok_or(PageError::InvalidManifest)?;
+        let names = [
+            "schema",
+            "rows",
+            "dimensions",
+            "seed",
+            "record_bytes",
+            "source_sha256",
+            "sq8_sha256",
+            "source_order_sha256",
+            "mean_sha256",
+            "records_sha256",
+            "query_or_truth_used",
+            "page_rows",
+            "page_digest_sha256",
+        ];
+        if fields.len() != names.len()
+            || names.iter().any(|key| !fields.contains_key(*key))
+            || manifest["schema"] != "borsuk-two-bit-plane-v3"
+            || manifest["seed"].as_u64() != Some(20260923)
+            || manifest["query_or_truth_used"] != false
+            || generation == 0
+        {
+            return Err(PageError::InvalidManifest);
+        }
+        let positive = |key: &str| -> Result<usize, PageError> {
+            manifest[key]
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .filter(|&n| n > 0)
+                .ok_or(PageError::InvalidManifest)
+        };
+        let rows = positive("rows")?;
+        let dimensions = positive("dimensions")?;
+        let page_rows = positive("page_rows")?;
+        let record_bytes = positive("record_bytes")?;
+        let padded = crate::rotated_two_bit::RotatedTwoBitCodec::padded_dimensions(dimensions)
+            .map_err(|_| PageError::InvalidManifest)?;
+        if page_rows != 32
+            || padded.div_ceil(4).checked_add(8) != Some(record_bytes)
+            || rows.checked_mul(record_bytes).is_none()
+        {
+            return Err(PageError::InvalidManifest);
+        }
+        for key in [
+            "source_sha256",
+            "sq8_sha256",
+            "source_order_sha256",
+            "mean_sha256",
+            "records_sha256",
+            "page_digest_sha256",
+        ] {
+            if !manifest[key].as_str().is_some_and(hex64) {
+                return Err(PageError::InvalidManifest);
+            }
+        }
+        if rows.div_ceil(page_rows).checked_mul(32) != Some(sidecar.len())
+            || format!("{:x}", Sha256::digest(sidecar)) != manifest["page_digest_sha256"]
+        {
+            return Err(PageError::InvalidSidecar);
+        }
+        Ok(Self {
+            generation,
+            rows,
+            dimensions,
+            record_bytes,
+            page_rows,
+            sq8: false,
+            object_sha256: manifest["records_sha256"].as_str().unwrap().to_owned(),
+            digests: sidecar
+                .chunks_exact(32)
+                .map(|chunk| chunk.try_into().unwrap())
+                .collect(),
+        })
+    }
+
+    pub(crate) fn is_sq8(&self) -> bool {
+        self.sq8
     }
 
     pub fn generation(&self) -> u64 {
@@ -136,7 +236,7 @@ impl PageAuthority {
     }
 
     pub fn object_bytes(&self) -> usize {
-        self.rows * (self.dimensions + 12)
+        self.rows * self.record_bytes
     }
 
     pub fn byte_range(
@@ -147,7 +247,7 @@ impl PageAuthority {
         if first_page > last_page || last_page >= self.digests.len() {
             return Err(PageError::InvalidRange);
         }
-        let row_bytes = self.dimensions + 12;
+        let row_bytes = self.record_bytes;
         let start = first_page * self.page_rows * row_bytes;
         let stop = (last_page + 1)
             .saturating_mul(self.page_rows)
@@ -168,7 +268,7 @@ impl PageAuthority {
         if payload.len() != range.end - range.start {
             return Err(PageError::InvalidResponse);
         }
-        let row_bytes = self.dimensions + 12;
+        let row_bytes = self.record_bytes;
         for page in first_page..=last_page {
             let local_start = (page - first_page) * self.page_rows * row_bytes;
             let local_stop =
@@ -212,6 +312,62 @@ impl PageAuthority {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_bit_unit_pages_bind_geometry_and_authenticate_partial_tail() {
+        let object = vec![7u8; 33 * 10];
+        let sidecar = object
+            .chunks(32 * 10)
+            .flat_map(|page| Sha256::digest(page).to_vec())
+            .collect::<Vec<_>>();
+        let manifest = serde_json::json!({
+            "schema":"borsuk-two-bit-plane-v3", "rows":33, "dimensions":5,
+            "seed":20260923, "record_bytes":10, "page_rows":32,
+            "source_sha256":"0".repeat(64), "sq8_sha256":"1".repeat(64),
+            "source_order_sha256":"2".repeat(64), "mean_sha256":"3".repeat(64),
+            "records_sha256":format!("{:x}", Sha256::digest(&object)),
+            "page_digest_sha256":format!("{:x}", Sha256::digest(&sidecar)),
+            "query_or_truth_used":false,
+        });
+        let load = |value: &serde_json::Value, digests: &[u8], generation| {
+            let body = serde_json::to_vec(value).unwrap();
+            PageAuthority::load_two_bit(
+                &body,
+                &format!("{:x}", Sha256::digest(&body)),
+                generation,
+                digests,
+            )
+        };
+        let authority = load(&manifest, &sidecar, 9).unwrap();
+        assert!(!authority.is_sq8());
+        assert_eq!(authority.generation(), 9);
+        assert_eq!(authority.object_bytes(), 330);
+        assert_eq!(authority.byte_range(1, 1), Ok(320..330));
+        assert_eq!(authority.verify_payload(0, 1, &object), Ok(()));
+        assert_eq!(authority.verify_payload(1, 1, &object[320..]), Ok(()));
+        assert_eq!(
+            authority.verify_payload(1, 1, &[8; 10]),
+            Err(PageError::HashMismatch)
+        );
+        assert!(load(&manifest, &sidecar[..32], 9).is_err());
+        assert!(load(&manifest, &sidecar, 0).is_err());
+        for (key, value) in [
+            ("schema", serde_json::json!("borsuk-two-bit-plane-v2")),
+            ("page_rows", serde_json::json!(256)),
+            ("record_bytes", serde_json::json!(11)),
+            ("seed", serde_json::json!(1)),
+            ("rows", serde_json::json!(0)),
+            ("dimensions", serde_json::json!(0)),
+            ("query_or_truth_used", serde_json::json!(true)),
+            ("extra", serde_json::json!(0)),
+        ] {
+            let mut bad = manifest.clone();
+            bad[key] = value;
+            assert!(load(&bad, &sidecar, 9).is_err(), "accepted {key}");
+        }
+        let body = serde_json::to_vec(&manifest).unwrap();
+        assert!(PageAuthority::load_two_bit(&body, &"4".repeat(64), 9, &sidecar).is_err());
+    }
 
     #[test]
     fn authenticates_short_final_page_and_rejects_changed_bytes_or_etag() {

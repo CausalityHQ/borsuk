@@ -200,7 +200,12 @@ async fn rank_verified_sq8_pages_inner(
     if excluded_ids.windows(2).any(|ids| ids[0] >= ids[1]) {
         return Err(fail(RangeFetchError::Score(Sq8ScoreError::InvalidRoster)));
     }
-    if ranges.is_empty() || ranges.len() > max_gets || max_parallel == 0 || etag.is_empty() {
+    if !authority.is_sq8()
+        || ranges.is_empty()
+        || ranges.len() > max_gets
+        || max_parallel == 0
+        || etag.is_empty()
+    {
         return Err(fail(RangeFetchError::UnexpectedMetadata));
     }
     if top_k == 0 || top_k > authority.rows() {
@@ -386,6 +391,51 @@ mod tests {
             1,
             &[],
         ));
+    }
+
+    #[tokio::test]
+    async fn source_authority_is_rejected_before_sq8_get() {
+        let object = vec![7u8; 33 * 10];
+        let sidecar = object
+            .chunks(320)
+            .flat_map(|page| Sha256::digest(page).to_vec())
+            .collect::<Vec<_>>();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-two-bit-plane-v3", "rows":33, "dimensions":5,
+            "seed":20260923, "record_bytes":10, "page_rows":32,
+            "source_sha256":"0".repeat(64), "sq8_sha256":"1".repeat(64),
+            "source_order_sha256":"2".repeat(64), "mean_sha256":"3".repeat(64),
+            "records_sha256":format!("{:x}", Sha256::digest(&object)),
+            "page_digest_sha256":format!("{:x}", Sha256::digest(&sidecar)),
+            "query_or_truth_used":false,
+        }))
+        .unwrap();
+        let authority = PageAuthority::load_two_bit(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            9,
+            &sidecar,
+        )
+        .unwrap();
+        let failure = rank_verified_sq8_pages_inner(
+            &InMemory::new(),
+            &Path::from("absent.bin"),
+            &authority,
+            &[(1, 1)],
+            "etag",
+            &[1.0; 5],
+            &[0.0; 5],
+            &[1.0; 5],
+            1,
+            1,
+            10,
+            1,
+            &[],
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(failure.stats.submitted_gets, 0);
+        assert!(matches!(failure.error, RangeFetchError::UnexpectedMetadata));
     }
 
     fn short_tail_authority() -> (PageAuthority, Vec<u8>) {
