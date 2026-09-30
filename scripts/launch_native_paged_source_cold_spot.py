@@ -1,5 +1,6 @@
 """Bounded fresh ARM paged-source build using the shared owned-Spot lifecycle."""
 import fcntl
+import base64
 import gzip
 import json
 from pathlib import Path
@@ -247,6 +248,10 @@ systemd-run --unit=native-paged-source-cold --wait --pipe -p MemoryMax=8G -p Mem
 '''
     command += '\n'.join('test -s "$root/' + name + '"' for name in ARTIFACTS if name.startswith('screen/')) + '\n'
     if qualification.get('qualified_binary_reused'):
+        encoded = base64.b64encode(gzip.compress(proof.encode(), mtime=0)).decode()
+        command = command.replace(f"cat >source-qualification.json <<'QUALIFICATION'\n{proof}\nQUALIFICATION",
+            "python3.12 -c 'import base64,gzip; from pathlib import Path; "
+            f'Path("source-qualification.json").write_bytes(gzip.decompress(base64.b64decode("{encoded}")))\'')
         begin, finish = command.index('systemd-run --unit=paged-source-build'), command.index('test -s boundary-check.json')
         command = command[:begin] + 'python3.12 "$root/repo/scripts/launch_native_paged_source_cold_spot.py" --restore-qualified "$root/repo" "$root"\n' + command[finish:]
     body = body[:start] + command + body[end:]
