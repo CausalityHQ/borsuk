@@ -1446,9 +1446,11 @@ def main() -> None:
         ],
         "crates/borsuk/tests/package_metadata.rs": [
             "crate_metadata_declares_public_project_urls",
-            'repository = "https://github.com/CausalityHQ/borsuk"',
-            'homepage = "http://causality.pl/borsuk/"',
-            'license-file = "../../LICENSE"',
+            'env!("CARGO_PKG_REPOSITORY")',
+            '"https://github.com/CausalityHQ/borsuk"',
+            'env!("CARGO_PKG_HOMEPAGE")',
+            '"http://causality.pl/borsuk/"',
+            'env!("CARGO_PKG_LICENSE_FILE")',
         ],
         "crates/borsuk/src/lib.rs": [
             "pub use format::{vector_records_from_parquet, vector_records_to_parquet};",
