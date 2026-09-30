@@ -1,0 +1,22 @@
+{
+  "dataset": "ReLAION",
+  "root_sha256": "577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b",
+  "plane_manifest_sha256": "16dd4cfabb6e2a079fd261c4f0626cafa4bcb4ec3e82aee303b066f08d2ae4fa",
+  "artifacts": [
+    {
+      "name": "plane-records.bin",
+      "key": "research/native-union/20260928/walk-source-http-a0002/indexes/relaion/candidate/generations/577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b/plane/records.bin",
+      "bytes": 20000000,
+      "sha256": "624e63de5905210bde24a4e7752573d6811d9fa5142e5b529ff0e9f65054ce83",
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/plane-records.bin"
+    },
+    {
+      "name": "sq8.bin",
+      "key": "research/native-union/20260928/locality-source-layout-a0001/data/relaion/objects/be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b",
+      "bytes": 78000000,
+      "sha256": "be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b",
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/sq8.bin"
+    }
+  ],
+  "scope": "immutable offline scorer input staging only; no scorer evaluation or serving I/O measurement"
+}
