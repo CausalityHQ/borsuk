@@ -1,0 +1,107 @@
+{
+  "count": 64,
+  "dataset": "CoHere",
+  "dimensions": 768,
+  "first": 0,
+  "inputs": {
+    "binding": {
+      "bytes": 15286,
+      "path": "/tmp/borsuk-semantic-router-inputs/cohere/binding.json",
+      "sha256": "35890ec9a8ce156959663bf7d5e56612ab352a51fc425536231b711c49cfb422"
+    },
+    "centroids": {
+      "bytes": 4800032,
+      "path": "/tmp/borsuk-semantic-router-inputs/cohere/centroids.bin",
+      "sha256": "755fa712fc3d2c3a0e35f9eba95d429b269dc32968da58354d9c328d8d1405a7"
+    },
+    "control_plan": {
+      "bytes": 1448375,
+      "path": "/tmp/borsuk-semantic-router-inputs/cohere/core-plan.jsonl",
+      "sha256": "3f58c25d420bf8f18da23b29f36a4de0e4040736ee7083b24d41f4721ee03218"
+    },
+    "control_returned": {
+      "bytes": 89881,
+      "path": "/tmp/borsuk-semantic-router-inputs/cohere/live.jsonl",
+      "sha256": "3cd741e9ad7c4e0d73dbdfeb4d7df594a8bbb85239975fed2d15c12e6c508f3a"
+    },
+    "diverse_graph": {
+      "bytes": 426398,
+      "path": "/tmp/borsuk-semantic-router-inputs/cohere/diverse_graph.bin",
+      "sha256": "98f7bee1606c96299e78a00d477ec6256cc8be4cced38b05a7984071cab4ff5d"
+    },
+    "graph": {
+      "bytes": 426398,
+      "path": "/tmp/borsuk-semantic-router-inputs/cohere/graph.bin",
+      "sha256": "e68e0ae2dc9314083792de5b555f10885178daa0a63b901e35869b57903b227f"
+    },
+    "order": {
+      "bytes": 800000,
+      "path": "/tmp/borsuk-semantic-router-inputs/cohere/order.u64",
+      "sha256": "e2314ca14f5aa6f08b02cc328b863c921e55b1461a413ad6d3d66e781ff42d50"
+    },
+    "plane_manifest": {
+      "bytes": 548,
+      "path": "/tmp/borsuk-semantic-router-inputs/cohere/plane-manifest.json",
+      "sha256": "5b945745af8709927f078e19e0fe7b14466675c9ec21b9227ac21ef1d04be31f"
+    },
+    "plane_mean": {
+      "bytes": 3072,
+      "path": "/tmp/borsuk-semantic-router-inputs/cohere/plane-mean.bin",
+      "sha256": "b50ffae3e16cc5e155ceee3adffcac0dc04d6812b0a1bb8fc01cbd259b58440a"
+    },
+    "plane_records": {
+      "bytes": 20000000,
+      "path": "/tmp/borsuk-semantic-router-inputs/cohere/plane-records.bin",
+      "sha256": "f47e344a6a959bfe1e9fe301785410b06667cf07d2bc0386892f510c7f5c6cf8"
+    },
+    "requests": {
+      "bytes": 15369495,
+      "path": "/tmp/borsuk-semantic-router-inputs/cohere/requests",
+      "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+    },
+    "root": {
+      "bytes": 33988,
+      "path": "/tmp/borsuk-semantic-router-inputs/cohere/manifest.json",
+      "sha256": "9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521"
+    },
+    "router_leaves": {
+      "bytes": 4812500,
+      "path": "/tmp/borsuk-semantic-router-construction-cohere-a0001/router/leaves.bin",
+      "sha256": "add8f77ba14ecb438a5674fb58b02f8ef4fefaaddaa7fbb7f67b83f4e1f1199d"
+    },
+    "router_manifest": {
+      "bytes": 736275,
+      "path": "/tmp/borsuk-semantic-router-construction-cohere-a0001/router/manifest.json",
+      "sha256": "c489beec0f555e402036a6bcba4268c67868a63f256943d2272f8f16bd4b531a"
+    },
+    "router_membership": {
+      "bytes": 12500,
+      "path": "/tmp/borsuk-semantic-router-construction-cohere-a0001/router/membership.bin",
+      "sha256": "12416365085dddecc150cc82a0cfdc4efb8981e9aa5ab75b26d4f9c3bd13dda1"
+    },
+    "sq8": {
+      "bytes": 78000000,
+      "path": "/tmp/borsuk-semantic-router-inputs/cohere/sq8.bin",
+      "sha256": "c16929252705c831c6846022eec46481fc004f521f0c0814a53d49fece8771e0"
+    },
+    "truth": {
+      "bytes": 400000,
+      "path": "/tmp/borsuk-semantic-router-inputs/cohere/truth",
+      "sha256": "06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8"
+    }
+  },
+  "limits": {
+    "combined_bytes": 83881984,
+    "combined_gets": 160,
+    "router_leaf_bytes": 2097152,
+    "router_leaf_gets": 16,
+    "router_root_bytes": 1048576,
+    "source_bytes": 67108864,
+    "source_gets": 128,
+    "source_parallel": 16,
+    "sq8_bytes": 16773120,
+    "sq8_gets": 32
+  },
+  "rows": 100000,
+  "schema": "borsuk-semantic-router-scorer-config-v1"
+}
