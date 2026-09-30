@@ -44,6 +44,16 @@ fn authenticates_full_source_unit_and_partial_tail_on_reopen() {
     assert_eq!(&digests[32..], Sha256::digest(&records[320..]).as_slice());
     let body = fs::read(output.join("manifest.json")).unwrap();
     assert!(TwoBitPlane::open(&output, &hash(&body), &hash(&sq8), 1_000_000).is_ok());
+    assert!(TwoBitPlane::open(&output, &hash(&body), &hash(&sq8), 132_224).is_err());
+    fs::remove_file(output.join("records.bin")).unwrap();
+    let (metadata, authority) =
+        TwoBitPlane::open_metadata(&output, &hash(&body), &hash(&sq8), 42, 132_224).unwrap();
+    assert_eq!(authority.generation(), 42);
+    assert!(metadata.record(0).is_none());
+    assert!(metadata.prepare_query(&[1.0; 5], 65536).is_ok());
+    assert!(authority.verify_payload(0, 1, &records).is_ok());
+    assert!(TwoBitPlane::open_metadata(&output, &hash(&body), &hash(&sq8), 0, 132_224).is_err());
+    fs::write(output.join("records.bin"), &records).unwrap();
     let mut wrong = digests;
     wrong[32] ^= 1;
     fs::write(output.join("page_digests.bin"), &wrong).unwrap();

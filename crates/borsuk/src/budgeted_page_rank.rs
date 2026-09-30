@@ -25,13 +25,22 @@ pub struct BudgetedPagePlan {
     pub target_shortfall: usize,
 }
 
-fn cover_pages(
+pub(crate) fn cover_pages(
     selected: &BTreeSet<usize>,
     rows: usize,
     row_bytes: usize,
+    page_rows: usize,
     max_gets: usize,
 ) -> Result<(Vec<Range<usize>>, usize), BudgetedPageError> {
-    if selected.is_empty() || max_gets == 0 {
+    if rows == 0
+        || row_bytes == 0
+        || page_rows == 0
+        || selected.is_empty()
+        || max_gets == 0
+        || selected
+            .last()
+            .is_some_and(|&page| page >= rows.div_ceil(page_rows))
+    {
         return Err(BudgetedPageError::InvalidGeometry);
     }
     let mut runs = Vec::<Range<usize>>::new();
@@ -67,12 +76,12 @@ fn cover_pages(
     for run in merged {
         let first = run
             .start
-            .checked_mul(PAGE_ROWS)
+            .checked_mul(page_rows)
             .and_then(|value| value.checked_mul(row_bytes))
             .ok_or(BudgetedPageError::ArithmeticOverflow)?;
         let last = run
             .end
-            .checked_mul(PAGE_ROWS)
+            .checked_mul(page_rows)
             .map(|value| value.min(rows))
             .and_then(|value| value.checked_mul(row_bytes))
             .ok_or(BudgetedPageError::ArithmeticOverflow)?;
@@ -208,6 +217,7 @@ fn choose_ranked_pages(
         &selected.iter().copied().collect(),
         rows,
         row_bytes,
+        PAGE_ROWS,
         max_gets,
     )?;
     debug_assert_eq!(final_bytes, exact_charge);
@@ -304,6 +314,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn source_unit_cover_preserves_all_units_and_clips_tail() {
+        let selected = [0, 2, 4].into_iter().collect();
+        let (ranges, bytes) = cover_pages(&selected, 129, 10, 32, 2).unwrap();
+        assert_eq!(ranges, vec![0..960, 1280..1290]);
+        assert_eq!(bytes, 970);
+        assert_eq!(
+            cover_pages(&selected, 129, 10, 32, 1).unwrap(),
+            (vec![0..1290], 1290)
+        );
+        assert!(cover_pages(&[5].into_iter().collect(), 129, 10, 32, 1).is_err());
+        assert!(cover_pages(&selected, 129, 10, 0, 1).is_err());
+    }
+
+    #[test]
     fn sparse_candidates_never_admit_an_unvisited_page() {
         let plan =
             choose_budgeted_pages_sparse(&[(3, 0.1), (1, 0.2)], &[0], 1024, 96, 4, 32, 16_777_216)
@@ -352,9 +376,15 @@ mod tests {
         let pages = [0, 2, 4, 8];
         let mut gaps = Vec::new();
         for max_gets in 1..=4 {
-            let exact = cover_pages(&pages.iter().copied().collect(), rows, row_bytes, max_gets)
-                .unwrap()
-                .1;
+            let exact = cover_pages(
+                &pages.iter().copied().collect(),
+                rows,
+                row_bytes,
+                PAGE_ROWS,
+                max_gets,
+            )
+            .unwrap()
+            .1;
             assert_eq!(
                 cover_charge(
                     &pages,
@@ -380,9 +410,15 @@ mod tests {
                     .filter(|page| mask & (1 << page) != 0)
                     .collect::<Vec<_>>();
                 for max_gets in 1..=4 {
-                    let exact = cover_pages(&pages.iter().copied().collect(), rows, 108, max_gets)
-                        .unwrap()
-                        .1;
+                    let exact = cover_pages(
+                        &pages.iter().copied().collect(),
+                        rows,
+                        108,
+                        PAGE_ROWS,
+                        max_gets,
+                    )
+                    .unwrap()
+                    .1;
                     assert_eq!(
                         cover_charge(&pages, rows, 108, 108 * PAGE_ROWS, max_gets, &mut gaps)
                             .unwrap(),

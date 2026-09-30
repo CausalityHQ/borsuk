@@ -47,3 +47,22 @@ remote source ranges to be supplied without duplicating the nomination algorithm
 Affected generation/application-ID integration checks: five passes, one AWS-only
 smoke test ignored. This does not yet verify local versus paged output parity:
 there is no paged generation runtime at this checkpoint.
+
+## Metadata-only source opening and shared cover
+
+TwoBitPlane::open_metadata now authenticates the source manifest, mean/codec and
+unit-digest table without opening or retaining records.bin. It returns authority
+bound to the caller's positive generation. Metadata and resident-reference opens
+share strict validation; missing resident records return None. The source test
+removes records.bin, verifies metadata opening under a cap that rejects resident
+loading, prepares a query, and authenticates separately supplied record bytes.
+Four source tests passed (the first fixture run's query scratch was corrected
+from 4096 to 65536; codec admission was not weakened).
+
+The existing lossless physical cover accepts explicit page geometry for source
+units; SQ8 keeps 256 rows. It rejects invalid geometry/out-of-bounds blocks before
+range construction. All ten affected admission tests passed, including source
+partial-tail coverage and the existing exact-charge/pattern checks.
+
+Remote generation startup and source query accounting are still pending. These
+prerequisites do not constitute a working paged generation or a performance result.

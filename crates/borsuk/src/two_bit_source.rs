@@ -366,9 +366,49 @@ impl TwoBitPlane {
         expected_sq8_sha256: &str,
         max_memory_bytes: usize,
     ) -> Result<Self, SourceBuildError> {
+        Self::open_inner(
+            root,
+            trusted_manifest_sha256,
+            expected_sq8_sha256,
+            1,
+            max_memory_bytes,
+            true,
+        )
+        .map(|(plane, _)| plane)
+    }
+
+    /// Open codec and authenticated unit digests without reading records.bin.
+    /// Caller binds the manifest hash and generation to its trusted root, then
+    /// supplies conditionally fetched records through the returned authority.
+    pub fn open_metadata(
+        root: &Path,
+        trusted_manifest_sha256: &str,
+        expected_sq8_sha256: &str,
+        generation: u64,
+        max_memory_bytes: usize,
+    ) -> Result<(Self, crate::sq8_page_authority::PageAuthority), SourceBuildError> {
+        Self::open_inner(
+            root,
+            trusted_manifest_sha256,
+            expected_sq8_sha256,
+            generation,
+            max_memory_bytes,
+            false,
+        )
+    }
+
+    fn open_inner(
+        root: &Path,
+        trusted_manifest_sha256: &str,
+        expected_sq8_sha256: &str,
+        generation: u64,
+        max_memory_bytes: usize,
+        resident: bool,
+    ) -> Result<(Self, crate::sq8_page_authority::PageAuthority), SourceBuildError> {
         let bad = SourceBuildError::Invalid;
         const MANIFEST_CAP: usize = 64 * 1024;
-        if !valid_digest(trusted_manifest_sha256)
+        if generation == 0
+            || !valid_digest(trusted_manifest_sha256)
             || !valid_digest(expected_sq8_sha256)
             || max_memory_bytes < MANIFEST_CAP * 2
         {
@@ -421,7 +461,7 @@ impl TwoBitPlane {
             .ok_or(bad("geometry overflow"))?;
         let required = padded
             .checked_mul(128)
-            .and_then(|n| n.checked_add(record_size))
+            .and_then(|n| n.checked_add(if resident { record_size } else { 0 }))
             .and_then(|n| n.checked_add(MANIFEST_CAP * 2))
             .and_then(|n| sidecar_size.checked_mul(2).and_then(|s| n.checked_add(s)))
             .ok_or(bad("memory overflow"))?;
@@ -435,11 +475,15 @@ impl TwoBitPlane {
             .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
             .collect::<Vec<_>>();
         let codec = RotatedTwoBitCodec::new(&mean, receipt.seed)?;
-        let records = read_authenticated(
-            &root.join("records.bin"),
-            record_size,
-            &receipt.records_sha256,
-        )?;
+        let records = if resident {
+            read_authenticated(
+                &root.join("records.bin"),
+                record_size,
+                &receipt.records_sha256,
+            )?
+        } else {
+            Vec::new()
+        };
         let sidecar = read_authenticated(
             &root.join("page_digests.bin"),
             sidecar_size,
@@ -448,19 +492,24 @@ impl TwoBitPlane {
         let authority = crate::sq8_page_authority::PageAuthority::load_two_bit(
             &body,
             trusted_manifest_sha256,
-            1,
+            generation,
             &sidecar,
         )
         .map_err(|_| bad("source page authority"))?;
-        authority
-            .verify_payload(0, receipt.rows.div_ceil(32) - 1, &records)
-            .map_err(|_| bad("source page digest"))?;
+        if resident {
+            authority
+                .verify_payload(0, receipt.rows.div_ceil(32) - 1, &records)
+                .map_err(|_| bad("source page digest"))?;
+        }
         // Scalars are checked by the shared scorer before any value is returned.
-        Ok(Self {
-            receipt,
-            codec,
-            records,
-        })
+        Ok((
+            Self {
+                receipt,
+                codec,
+                records,
+            },
+            authority,
+        ))
     }
 
     /// Generation-bound source geometry and artifact identities.
@@ -474,7 +523,7 @@ impl TwoBitPlane {
             return None;
         }
         let start = physical_row * self.receipt.record_bytes;
-        Some(&self.records[start..start + self.receipt.record_bytes])
+        self.records.get(start..start + self.receipt.record_bytes)
     }
 
     /// Prepare one query using the existing codec and its explicit scratch cap.
