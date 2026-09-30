@@ -2,15 +2,14 @@
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 
-use futures_util::StreamExt;
+use futures_util::{StreamExt, future::try_join_all};
 use object_store::path::Path as ObjectPath;
-use object_store::{ObjectStore, ObjectStoreExt};
+use object_store::{GetOptions, ObjectStore, ObjectStoreExt};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
 use crate::budgeted_page_rank::{
@@ -26,6 +25,8 @@ use crate::unit_centroid_graph::{UnitCentroidGraph, UnitCentroidGraphError};
 use crate::unit_centroid_pages::{UnitCentroidError, UnitCentroidPages};
 
 const MAX_MANIFEST: usize = 64 * 1024;
+const METADATA_RANGE_BYTES: u64 = 8 * 1024 * 1024;
+const METADATA_PARALLEL_GETS: u64 = 4;
 const METADATA_FILES: [&str; 11] = [
     "manifest.json",
     "page_manifest.json",
@@ -170,8 +171,6 @@ pub(crate) fn metadata_location(prefix: &ObjectPath, name: &str) -> ObjectPath {
         .fold(prefix.clone(), |path, segment| path.join(segment))
 }
 
-/// Stream a fixed metadata set to owned scratch; authenticate the root first.
-/// Child identities and decoded memory are checked by the generation opener.
 /// Bounded per-object accounting for authenticated remote metadata staging.
 #[derive(Debug, serde::Serialize)]
 pub struct MetadataReadStats {
@@ -181,14 +180,59 @@ pub struct MetadataReadStats {
     pub bytes: u64,
     /// Number of transport chunks received.
     pub chunks: u64,
-    /// GET response-header wait, in nanoseconds.
+    /// HEAD admission wait, in nanoseconds.
+    pub head_wall_ns: u128,
+    /// Logical HEAD calls; excludes SDK retries (one per admitted object).
+    pub logical_head_requests: u64,
+    /// Logical payload GET calls; excludes SDK retries.
+    pub logical_get_requests: u64,
+    /// Conservative staging payload buffer bound, not measured RSS.
+    /// Excludes transport buffers; at most four 8 MiB range buffers.
+    pub payload_buffer_bound_bytes: u64,
+    /// Small-object GET response-header wait; zero for ranged objects.
+    /// Ranged response-header waits are included in stream_wall_ns.
     pub get_wall_ns: u128,
-    /// Stream consumption and file output, including flush, in nanoseconds.
+    /// Whole payload critical interval and output, including flush.
+    /// Includes concurrent range GETs, never a sum of overlapping waits.
     pub stream_wall_ns: u128,
-    /// Awaited file writes and flush; included in stream_wall_ns.
+    /// File writes and flush; included in stream_wall_ns.
     pub write_wall_ns: u128,
 }
 
+// Collect one exact range without trusting the response length for allocation.
+async fn fetch_metadata_range(
+    store: &dyn ObjectStore,
+    location: &ObjectPath,
+    expected: u64,
+    range: std::ops::Range<u64>,
+) -> Result<(Vec<u8>, u64), ObjectNativeOpenError> {
+    let fetched = store
+        .get_opts(location, GetOptions::new().with_range(Some(range.clone())))
+        .await
+        .map_err(ObjectNativeOpenError::Store)?;
+    if fetched.meta.size != expected || fetched.range != range {
+        return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
+    }
+    let length = (range.end - range.start) as usize;
+    let mut bytes = Vec::with_capacity(length);
+    let mut chunks = 0;
+    let mut stream = fetched.into_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(ObjectNativeOpenError::Store)?;
+        if chunk.len() > length - bytes.len() {
+            return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
+        }
+        bytes.extend_from_slice(&chunk);
+        chunks += 1;
+    }
+    if bytes.len() != length {
+        return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
+    }
+    Ok((bytes, chunks))
+}
+
+/// Stage a fixed metadata set to owned scratch; authenticate the root first.
+/// Child identities and decoded memory are checked by the generation opener.
 pub(crate) async fn stage_generation_metadata(
     store: &dyn ObjectStore,
     prefix: &ObjectPath,
@@ -202,16 +246,20 @@ pub(crate) async fn stage_generation_metadata(
             "trusted digest or memory cap",
         ));
     }
+    if names.first() != Some(&"manifest.json") {
+        return Err(ObjectNativeOpenError::Invalid("metadata root order"));
+    }
     let scratch = tempfile::tempdir_in(scratch_parent).map_err(ObjectNativeOpenError::Io)?;
     let mut total = 0_u64;
     let mut stats = Vec::with_capacity(names.len());
     for &name in names {
-        let get_started = std::time::Instant::now();
-        let fetched = store
-            .get(&metadata_location(prefix, name))
+        let location = metadata_location(prefix, name);
+        let head_started = std::time::Instant::now();
+        let head = store
+            .head(&location)
             .await
             .map_err(ObjectNativeOpenError::Store)?;
-        let get_wall_ns = get_started.elapsed().as_nanos();
+        let head_wall_ns = head_started.elapsed().as_nanos();
         let limit = max_bytes
             .saturating_sub(total)
             .min(if name.ends_with(".json") {
@@ -219,54 +267,112 @@ pub(crate) async fn stage_generation_metadata(
             } else {
                 u64::MAX
             });
-        if fetched.meta.size == 0 || fetched.meta.size > limit {
+        let expected = head.size;
+        if expected == 0 || expected > limit {
             return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
         }
-        let local = scratch.path().join(name);
-        if let Some(parent) = local.parent() {
-            tokio::fs::create_dir_all(parent)
+        let ranged = expected > METADATA_RANGE_BYTES;
+        let get_started = std::time::Instant::now();
+        let fetched = if ranged {
+            None
+        } else {
+            let fetched = store
+                .get(&location)
                 .await
-                .map_err(ObjectNativeOpenError::Io)?;
+                .map_err(ObjectNativeOpenError::Store)?;
+            if fetched.meta.size != expected || fetched.range != (0..expected) {
+                return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
+            }
+            Some(fetched)
+        };
+        let get_wall_ns = if ranged {
+            0
+        } else {
+            get_started.elapsed().as_nanos()
+        };
+        let local = scratch.path().join(name);
+        // Create directories/files synchronously: cancellation cannot leave a
+        // queued directory creation that recreates scratch after TempDir drops.
+        if let Some(parent) = local.parent() {
+            fs::create_dir_all(parent).map_err(ObjectNativeOpenError::Io)?;
         }
-        let mut output = tokio::fs::File::create(&local)
-            .await
-            .map_err(ObjectNativeOpenError::Io)?;
+        // ponytail: direct writes block this worker; use zero-copy async output
+        // if runtime stalls matter. No copied payload or detached write task.
+        let mut output = File::create(&local).map_err(ObjectNativeOpenError::Io)?;
         let mut count = 0_u64;
         let mut digest = Sha256::new();
-        let expected = fetched.meta.size;
-        let mut stream = fetched.into_stream();
         let stream_started = std::time::Instant::now();
         let mut chunks = 0_u64;
         let mut write_wall_ns = 0_u128;
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(ObjectNativeOpenError::Store)?;
-            count = count
-                .checked_add(chunk.len() as u64)
-                .ok_or(ObjectNativeOpenError::Invalid("remote metadata length"))?;
-            if count > limit || count > expected {
-                return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
+        if let Some(fetched) = fetched {
+            let mut stream = fetched.into_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(ObjectNativeOpenError::Store)?;
+                count = count
+                    .checked_add(chunk.len() as u64)
+                    .ok_or(ObjectNativeOpenError::Invalid("remote metadata length"))?;
+                if count > expected {
+                    return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
+                }
+                if name == "manifest.json" {
+                    digest.update(&chunk);
+                }
+                chunks += 1;
+                let write_started = std::time::Instant::now();
+                output
+                    .write_all(&chunk)
+                    .map_err(ObjectNativeOpenError::Io)?;
+                write_wall_ns += write_started.elapsed().as_nanos();
             }
-            if name == "manifest.json" {
-                digest.update(&chunk);
+        } else {
+            while count < expected {
+                let batch_end = count
+                    .saturating_add(METADATA_RANGE_BYTES * METADATA_PARALLEL_GETS)
+                    .min(expected);
+                // Finish and drain this batch before admitting another, so
+                // output backpressure cannot accumulate completed range buffers.
+                let batch = try_join_all(
+                    (count..batch_end)
+                        .step_by(METADATA_RANGE_BYTES as usize)
+                        .map(|start| {
+                            fetch_metadata_range(
+                                store,
+                                &location,
+                                expected,
+                                start..start.saturating_add(METADATA_RANGE_BYTES).min(expected),
+                            )
+                        }),
+                )
+                .await?;
+                for (bytes, range_chunks) in batch {
+                    count += bytes.len() as u64;
+                    chunks += range_chunks;
+                    let write_started = std::time::Instant::now();
+                    output
+                        .write_all(&bytes)
+                        .map_err(ObjectNativeOpenError::Io)?;
+                    write_wall_ns += write_started.elapsed().as_nanos();
+                }
             }
-            chunks += 1;
-            let write_started = std::time::Instant::now();
-            output
-                .write_all(&chunk)
-                .await
-                .map_err(ObjectNativeOpenError::Io)?;
-            write_wall_ns += write_started.elapsed().as_nanos();
         }
         if count != expected {
             return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
         }
         let flush_started = std::time::Instant::now();
-        output.flush().await.map_err(ObjectNativeOpenError::Io)?;
+        output.flush().map_err(ObjectNativeOpenError::Io)?;
         write_wall_ns += flush_started.elapsed().as_nanos();
         stats.push(MetadataReadStats {
             name: name.to_owned(),
             bytes: count,
             chunks,
+            head_wall_ns,
+            logical_head_requests: 1,
+            logical_get_requests: if ranged {
+                expected.div_ceil(METADATA_RANGE_BYTES)
+            } else {
+                1
+            },
+            payload_buffer_bound_bytes: expected.min(METADATA_RANGE_BYTES * METADATA_PARALLEL_GETS),
             get_wall_ns,
             stream_wall_ns: stream_started.elapsed().as_nanos(),
             write_wall_ns,
@@ -704,8 +810,179 @@ impl ObjectNativeGeneration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::stream::{self, BoxStream};
+    use object_store::{
+        CopyOptions, GetRange, GetResult, GetResultPayload, ListResult, MultipartUpload,
+        ObjectMeta, PutMultipartOptions, PutOptions, PutResult,
+    };
     use object_store::{ObjectStoreExt, PutPayload, memory::InMemory};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[derive(Clone, Copy, Debug, Default)]
+    enum RangeFault {
+        #[default]
+        None,
+        Short,
+        Long,
+        WrongRange,
+        WrongSize,
+        Error,
+        Pending,
+    }
+
+    #[derive(Debug, Default)]
+    struct StagingStore {
+        inner: InMemory,
+        fault: RangeFault,
+        requests: Mutex<Vec<(String, bool, Option<std::ops::Range<u64>>)>>,
+        active: Arc<AtomicUsize>,
+        peak: AtomicUsize,
+    }
+
+    struct ActiveRange(Arc<AtomicUsize>);
+    impl Drop for ActiveRange {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    impl std::fmt::Display for StagingStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "metadata staging test store")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for StagingStore {
+        async fn get_opts(
+            &self,
+            location: &ObjectPath,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            let range = match &options.range {
+                Some(GetRange::Bounded(range)) => Some(range.clone()),
+                None => None,
+                _ => panic!("unexpected metadata range"),
+            };
+            self.requests
+                .lock()
+                .unwrap()
+                .push((location.to_string(), options.head, range.clone()));
+            let mut result = self.inner.get_opts(location, options).await?;
+            if let Some(range) = range {
+                let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+                self.peak.fetch_max(active, Ordering::SeqCst);
+                let guard = ActiveRange(self.active.clone());
+                let fault = if range.start == 0 {
+                    self.fault
+                } else {
+                    RangeFault::None
+                };
+                if matches!(fault, RangeFault::WrongRange) {
+                    result.range.start += 1;
+                }
+                if matches!(fault, RangeFault::WrongSize) {
+                    result.meta.size += 1;
+                }
+                let original = result.payload;
+                result.payload = GetResultPayload::Stream(
+                    stream::once(async move {
+                        let _guard = guard;
+                        // Ensure other requests can start before this body completes.
+                        tokio::task::yield_now().await;
+                        if matches!(fault, RangeFault::Pending) {
+                            std::future::pending::<()>().await;
+                        }
+                        if matches!(fault, RangeFault::Error) {
+                            return Err(object_store::Error::Generic {
+                                store: "staging test",
+                                source: std::io::Error::other("payload failure").into(),
+                            });
+                        }
+                        let GetResultPayload::Stream(mut body) = original else {
+                            unreachable!()
+                        };
+                        let bytes = body.next().await.unwrap()?;
+                        Ok(match fault {
+                            RangeFault::Short => bytes.slice(..bytes.len() - 1),
+                            RangeFault::Long => bytes::Bytes::from(vec![0; bytes.len() + 1]),
+                            _ => bytes,
+                        })
+                    })
+                    .boxed(),
+                );
+            }
+            Ok(result)
+        }
+        async fn put_opts(
+            &self,
+            p: &ObjectPath,
+            b: PutPayload,
+            o: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            self.inner.put_opts(p, b, o).await
+        }
+        async fn put_multipart_opts(
+            &self,
+            p: &ObjectPath,
+            o: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.inner.put_multipart_opts(p, o).await
+        }
+        fn delete_stream(
+            &self,
+            p: BoxStream<'static, object_store::Result<ObjectPath>>,
+        ) -> BoxStream<'static, object_store::Result<ObjectPath>> {
+            self.inner.delete_stream(p)
+        }
+        fn list(
+            &self,
+            p: Option<&ObjectPath>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.inner.list(p)
+        }
+        async fn list_with_delimiter(
+            &self,
+            p: Option<&ObjectPath>,
+        ) -> object_store::Result<ListResult> {
+            self.inner.list_with_delimiter(p).await
+        }
+        async fn copy_opts(
+            &self,
+            a: &ObjectPath,
+            b: &ObjectPath,
+            o: CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(a, b, o).await
+        }
+    }
+
+    async fn staging_fixture(
+        fault: RangeFault,
+        size: usize,
+    ) -> (StagingStore, ObjectPath, Vec<u8>) {
+        let store = StagingStore {
+            fault,
+            ..StagingStore::default()
+        };
+        let prefix = ObjectPath::from("profile/metadata");
+        let payload = (0..size).map(|i| (i % 251) as u8).collect::<Vec<_>>();
+        for (name, body) in [
+            ("manifest.json", b"{}".as_slice()),
+            ("nested/payload.bin", payload.as_slice()),
+        ] {
+            store
+                .inner
+                .put(&metadata_location(&prefix, name), body.to_vec().into())
+                .await
+                .unwrap();
+        }
+        (store, prefix, payload)
+    }
 
     #[tokio::test]
     async fn opens_bound_metadata_without_vector_plane_and_rejects_changes() {
@@ -897,43 +1174,247 @@ mod tests {
     }
     #[tokio::test]
     async fn metadata_staging_reports_exact_bounded_transfer_geometry() {
-        let store = InMemory::new();
-        let prefix = ObjectPath::from("profile/metadata");
-        let manifest = b"{}";
-        let payload = vec![7_u8; 32768];
-        for (name, body) in [
-            ("manifest.json", manifest.as_slice()),
-            ("payload.bin", payload.as_slice()),
+        for size in [
+            32768,
+            METADATA_RANGE_BYTES as usize,
+            METADATA_RANGE_BYTES as usize + 1,
+            (METADATA_RANGE_BYTES * METADATA_PARALLEL_GETS) as usize + 17,
         ] {
-            store
-                .put(
-                    &metadata_location(&prefix, name),
-                    PutPayload::from(body.to_vec()),
+            let (store, prefix, payload) = staging_fixture(RangeFault::None, size).await;
+            let parent = tempfile::tempdir().unwrap();
+            let started = std::time::Instant::now();
+            let (scratch, stats) = stage_generation_metadata(
+                &store,
+                &prefix,
+                &sha256(b"{}"),
+                size as u64 + 2,
+                &["manifest.json", "nested/payload.bin"],
+                parent.path(),
+            )
+            .await
+            .unwrap();
+            let elapsed = started.elapsed().as_nanos();
+            assert_eq!(stats.len(), 2);
+            assert_eq!(stats[0].name, "manifest.json");
+            assert_eq!(stats[0].bytes, 2);
+            assert_eq!(stats[1].bytes, size as u64);
+            let ranged = size as u64 > METADATA_RANGE_BYTES;
+            let gets = if ranged {
+                (size as u64).div_ceil(METADATA_RANGE_BYTES)
+            } else {
+                1
+            };
+            assert_eq!(stats[1].logical_get_requests, gets);
+            assert_eq!(
+                stats[1].payload_buffer_bound_bytes,
+                (size as u64).min(METADATA_RANGE_BYTES * METADATA_PARALLEL_GETS)
+            );
+            if ranged {
+                assert_eq!(stats[1].get_wall_ns, 0);
+            }
+            assert!(stats.iter().all(|entry| entry.chunks > 0
+                && entry.logical_head_requests == 1
+                && entry.write_wall_ns <= entry.stream_wall_ns));
+            assert!(
+                stats
+                    .iter()
+                    .map(|e| e.head_wall_ns + e.get_wall_ns + e.stream_wall_ns)
+                    .sum::<u128>()
+                    <= elapsed
+            );
+            assert_eq!(
+                fs::read(scratch.path().join("nested/payload.bin")).unwrap(),
+                payload
+            );
+            assert_eq!(store.active.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                store.peak.load(Ordering::SeqCst),
+                if ranged { gets.min(4) as usize } else { 0 }
+            );
+            let requests = store.requests.lock().unwrap();
+            assert_eq!(requests.len(), 3 + gets as usize);
+            assert_eq!(
+                requests[0],
+                (
+                    metadata_location(&prefix, "manifest.json").to_string(),
+                    true,
+                    None
                 )
-                .await
-                .unwrap();
+            );
+            assert_eq!(
+                requests[1],
+                (
+                    metadata_location(&prefix, "manifest.json").to_string(),
+                    false,
+                    None
+                )
+            );
+            assert_eq!(
+                requests[2],
+                (
+                    metadata_location(&prefix, "nested/payload.bin").to_string(),
+                    true,
+                    None
+                )
+            );
+            for (index, (_, head, range)) in requests[3..].iter().enumerate() {
+                assert!(!head);
+                assert_eq!(
+                    *range,
+                    if ranged {
+                        let start = index as u64 * METADATA_RANGE_BYTES;
+                        Some(start..(start + METADATA_RANGE_BYTES).min(size as u64))
+                    } else {
+                        None
+                    }
+                );
+            }
+            drop(scratch);
+            assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
         }
+    }
+
+    #[tokio::test]
+    async fn metadata_staging_rejects_bad_ranges_and_cleans_scratch() {
+        for fault in [
+            RangeFault::Short,
+            RangeFault::Long,
+            RangeFault::WrongRange,
+            RangeFault::WrongSize,
+            RangeFault::Error,
+        ] {
+            let (store, prefix, _) =
+                staging_fixture(fault, METADATA_RANGE_BYTES as usize + 1).await;
+            let parent = tempfile::tempdir().unwrap();
+            let result = stage_generation_metadata(
+                &store,
+                &prefix,
+                &sha256(b"{}"),
+                METADATA_RANGE_BYTES + 3,
+                &["manifest.json", "nested/payload.bin"],
+                parent.path(),
+            )
+            .await;
+            if matches!(fault, RangeFault::Error) {
+                assert!(matches!(result, Err(ObjectNativeOpenError::Store(_))));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ObjectNativeOpenError::Invalid("remote metadata length"))
+                ));
+            }
+            assert_eq!(store.active.load(Ordering::SeqCst), 0);
+            assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn metadata_staging_authenticates_root_and_admits_before_payload() {
+        let (store, prefix, _) =
+            staging_fixture(RangeFault::None, METADATA_RANGE_BYTES as usize + 1).await;
         let parent = tempfile::tempdir().unwrap();
-        let (scratch, stats) = stage_generation_metadata(
+        for (hash, cap, expected_requests) in [
+            ("f".repeat(64), METADATA_RANGE_BYTES + 3, 2),
+            (sha256(b"{}"), METADATA_RANGE_BYTES + 2, 3),
+        ] {
+            store.requests.lock().unwrap().clear();
+            let result = stage_generation_metadata(
+                &store,
+                &prefix,
+                &hash,
+                cap,
+                &["manifest.json", "nested/payload.bin"],
+                parent.path(),
+            )
+            .await;
+            if expected_requests == 2 {
+                assert!(matches!(
+                    result,
+                    Err(ObjectNativeOpenError::HashMismatch("generation manifest"))
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ObjectNativeOpenError::Invalid("remote metadata length"))
+                ));
+            }
+            assert_eq!(store.requests.lock().unwrap().len(), expected_requests);
+            assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+        }
+        store
+            .inner
+            .put(
+                &metadata_location(&prefix, "manifest.json"),
+                vec![0; MAX_MANIFEST + 1].into(),
+            )
+            .await
+            .unwrap();
+        store.requests.lock().unwrap().clear();
+        assert!(matches!(
+            stage_generation_metadata(
+                &store,
+                &prefix,
+                &sha256(b"{}"),
+                u64::MAX,
+                &["manifest.json", "nested/payload.bin"],
+                parent.path()
+            )
+            .await,
+            Err(ObjectNativeOpenError::Invalid("remote metadata length"))
+        ));
+        assert_eq!(store.requests.lock().unwrap().len(), 1);
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+        assert!(matches!(
+            stage_generation_metadata(
+                &store,
+                &prefix,
+                &sha256(b"{}"),
+                u64::MAX,
+                &["nested/payload.bin", "manifest.json"],
+                parent.path()
+            )
+            .await,
+            Err(ObjectNativeOpenError::Invalid("metadata root order"))
+        ));
+    }
+
+    #[tokio::test]
+    async fn metadata_staging_cancellation_drops_inflight_ranges_and_scratch() {
+        let (store, prefix, _) = staging_fixture(
+            RangeFault::Pending,
+            (METADATA_RANGE_BYTES * METADATA_PARALLEL_GETS) as usize + 17,
+        )
+        .await;
+        let parent = tempfile::tempdir().unwrap();
+        let hash = sha256(b"{}");
+        let mut staging = Box::pin(stage_generation_metadata(
             &store,
             &prefix,
-            &sha256(manifest),
-            32770,
-            &["manifest.json", "payload.bin"],
+            &hash,
+            u64::MAX,
+            &["manifest.json", "nested/payload.bin"],
             parent.path(),
-        )
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                tokio::select! {
+                    result = &mut staging => panic!("pending range completed: {result:?}"),
+                    _ = tokio::task::yield_now() => {
+                        if store.peak.load(Ordering::SeqCst) == 4 { break; }
+                    }
+                }
+            }
+        })
         .await
         .unwrap();
-        assert_eq!(stats.len(), 2);
-        assert_eq!(stats[0].name, "manifest.json");
-        assert_eq!(stats[0].bytes, 2);
-        assert_eq!(stats[1].bytes, 32768);
-        assert!(stats.iter().all(|entry| entry.chunks > 0));
-        assert_eq!(
-            fs::read(scratch.path().join("payload.bin")).unwrap(),
-            payload
-        );
-        drop(scratch);
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 1);
+        // No fifth request is admitted while the first batch is pending.
+        assert_eq!(store.requests.lock().unwrap().len(), 7);
+        drop(staging);
+        assert_eq!(store.active.load(Ordering::SeqCst), 0);
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+        tokio::task::yield_now().await;
+        assert_eq!(store.requests.lock().unwrap().len(), 7);
         assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
     }
 }
