@@ -1,0 +1,56 @@
+{
+  "control": {
+    "ReLAION": {
+      "staging_median_ms": 2692.213398,
+      "stream_output_median_ms": 2485.7090135,
+      "write_median_ms": 97.0252965,
+      "decode_median_ms": 648.2272325,
+      "head_read_median_ms": 90.774701,
+      "remote_open_median_ms": 3361.687353,
+      "records_stream_median_ms": 1978.459664,
+      "centroids_stream_median_ms": 459.1846585,
+      "cold_p90_reduction_percent": 0.0
+    },
+    "CoHere": {
+      "staging_median_ms": 2693.172935,
+      "stream_output_median_ms": 2488.112898,
+      "write_median_ms": 94.7062785,
+      "decode_median_ms": 647.6008585,
+      "head_read_median_ms": 91.036392,
+      "remote_open_median_ms": 3361.4636715,
+      "records_stream_median_ms": 1979.8539865,
+      "centroids_stream_median_ms": 459.030986,
+      "cold_p90_reduction_percent": 0.0
+    }
+  },
+  "candidate": {
+    "ReLAION": {
+      "staging_median_ms": 1080.4779195,
+      "stream_output_median_ms": 833.1500655,
+      "write_median_ms": 74.736672,
+      "decode_median_ms": 644.8407415,
+      "head_read_median_ms": 90.792553,
+      "remote_open_median_ms": 1745.947445,
+      "records_stream_median_ms": 591.9660005,
+      "centroids_stream_median_ms": 192.9430555,
+      "cold_p90_reduction_percent": 41.48204830585187
+    },
+    "CoHere": {
+      "staging_median_ms": 1089.294605,
+      "stream_output_median_ms": 836.738788,
+      "write_median_ms": 74.649559,
+      "decode_median_ms": 644.641241,
+      "head_read_median_ms": 90.998691,
+      "remote_open_median_ms": 1756.0200955,
+      "records_stream_median_ms": 592.638276,
+      "centroids_stream_median_ms": 193.234922,
+      "cold_p90_reduction_percent": 40.49200053307437
+    }
+  },
+  "cost": {
+    "compute_usd_estimate": 0.07368911111111111,
+    "elapsed_seconds": 1487,
+    "spot_quote_usd_per_hour": "0.178400",
+    "status": "estimate; excludes EBS/S3; not invoice or total lifecycle cost"
+  }
+}

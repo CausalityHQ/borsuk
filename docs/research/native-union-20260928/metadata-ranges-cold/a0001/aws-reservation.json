@@ -1,0 +1,147 @@
+{
+  "schema": "borsuk-native-metadata-ranges-cold-spot-v1",
+  "source_commit": "0525dcb826e740411c115e8ece4ffb82a9ee3394",
+  "source_archive_sha256": "924e396904fc1d1deae9dba45c77f21eec103c98b4c1d3f38951543944da5485",
+  "wall_seconds": 4200,
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1c",
+  "spot_price_observed_usd_per_hour": "0.178400",
+  "spot_quote_timestamp": "2026-09-30T00:00:00+00:00",
+  "spot_max_usd_per_hour": 0.3,
+  "compute_cap_usd": 0.35,
+  "ebs_s3_allowance_usd": 0.15,
+  "total_cost_measured": false,
+  "cost_scope": "4200s at capped Spot rate; boot/termination overhead and EBS/S3 allowance estimated",
+  "qualification": {
+    "config_sha256": "e1fed6a3648bba6dfb8307a24bee083476b8d69166f10b9b41ca679e91fc01da",
+    "code_sha256": {
+      "scripts/run_native_cold_first_query.py": "563a1a1923ba4294984ce278e4c79b7ae614c8d6d00e5012b9d4c158ef306881",
+      "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+      "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+      "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+      "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6",
+      "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+      "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+      "scripts/run_native_metadata_ranges_cold.py": "8a61093569f2e70c7bcd00988b3a350e19408cdcecbbecbd360f4b384bd805cb",
+      "scripts/check_native_metadata_ranges_stats.py": "4dfe0722756ceb46e54ee9f849e47724b5597976c7bbafa793c9add2852399e9",
+      "scripts/launch_native_metadata_ranges_cold_spot.py": "adca2868b44b9f471b1acfce7d0ebc674b4dc7bc90c3099c4bda279354fed0dd",
+      "scripts/check_native_metadata_ranges_build.py": "da48c53562220026c8024ba2400dca2ba897aa12d49c3e27c3c2fb40b9f0770e"
+    },
+    "frozen_native_qualification": {
+      "path": "docs/research/native-union-20260928/arm-sha-startup/a0001/verification.json",
+      "sha256": "b98e17328df1d83b583f06b4d1f0f36a77a159893bb41ff25c8accc6724a7e58",
+      "source_commit": "d32d472293d7300be77eb5f1e87cf69892cc504b",
+      "source_archive_sha256": "a37b33402a82bf9653ed6542b7a523fd46d64307d449ff3d575d4c572e751ace",
+      "terminal_sha256": "4e898e7a59a5a044112c805ae8c0ef8ca51d3183e8a6ad32330e3da580fcd6be"
+    },
+    "frozen_binary_artifacts": {
+      "binaries/two_bit_http": {
+        "bytes": 12561552,
+        "sha256": "3565d27ffbe7a88e2a4c6d0c982ef795072d944e1dab8f11720a9bf9b31556af"
+      },
+      "boundary-check.json": {
+        "bytes": 2524,
+        "sha256": "88bdfc6e81aef3bd1920ea9c867c57f1fbab7d6a9549caffdf24c8730a13658c"
+      },
+      "compiled-source.json": {
+        "bytes": 839,
+        "sha256": "f96c82a24dd0efc26a46dfa632b7861db288bec82224f4ab6d00a8ad282c19b1"
+      },
+      "source-qualification.json": {
+        "bytes": 6185,
+        "sha256": "3a2bc2f07e50e4b8dfb3994bc63fa6fe5254d5ae92c6036aae14fdd2006cd87b"
+      },
+      "rustc-version.txt": {
+        "bytes": 197,
+        "sha256": "ec378196e9fa222ab807fd49cb9dae156a9bd18069b9440fd4e0a6c57c6971cb"
+      },
+      "cargo-version.txt": {
+        "bytes": 36,
+        "sha256": "fb3f25aefd6d5441842d285f5a9b125b3f0f0b0bf2013d9a32677f9e99c6c854"
+      },
+      "cpuinfo.txt": {
+        "bytes": 2856,
+        "sha256": "91561b86cc166f6c939619e5bcb5b755b52e874a5284639f17179ec51278646d"
+      },
+      "arm-feature-tree.txt": {
+        "bytes": 47667,
+        "sha256": "39e9f2e067c7a74759b42c1a59e728b7149a892b9c0ea6994b3007319ca005a5"
+      },
+      "x86-feature-tree.txt": {
+        "bytes": 47591,
+        "sha256": "2e310f57ef44e75e9a79d4ac61d74354c3300130126627103db8895d03bfe8b2"
+      },
+      "run-closed.log": {
+        "bytes": 18254,
+        "sha256": "e84c8d29411242bace954fa0ddccfc5ba54f4d7bd38ee648e9432bee1244c8b8"
+      },
+      "compiled-source/crates/borsuk/examples/two_bit_http.rs": {
+        "bytes": 9731,
+        "sha256": "c8f2327561304a088b0bfd3a4509047a94c05210b8d5d44e008b90faea3cdc29"
+      },
+      "compiled-source/crates/borsuk/src/object_native_generation.rs": {
+        "bytes": 36148,
+        "sha256": "c235938f22b8cfaee18edd631ff26e64a16d4f73e179057ba1d3f1e0a9060920"
+      },
+      "compiled-source/crates/borsuk/src/two_bit_generation.rs": {
+        "bytes": 38553,
+        "sha256": "7a134fe3e03e735bad63c611ce2b78d865345c8617a6a4b1c5dd70ce1384cc45"
+      },
+      "compiled-source/crates/borsuk/tests/two_bit_generation.rs": {
+        "bytes": 32488,
+        "sha256": "da29358a0c797f2ad232a3efd033d7c8a7eb370dd43d44fbb37264885cbdf0f6"
+      },
+      "compiled-source/Cargo.toml": {
+        "bytes": 621,
+        "sha256": "1ec9ac514515662a0f3a371b1a65d72bf825d67f218dc3f6cc1e5fb0925547d6"
+      },
+      "compiled-source/Cargo.lock": {
+        "bytes": 90530,
+        "sha256": "92c0da6805ad13fa78a7d6cbffaccf7738e346d3605ed8c8ac763cf5079f2590"
+      },
+      "compiled-source/crates/borsuk/Cargo.toml": {
+        "bytes": 2640,
+        "sha256": "474efdef5bd398bef758009882c8bdd859553de8f0271230430469dd96bc4d71"
+      },
+      "compiled-source/crates/borsuk/tests/two_bit_source.rs": {
+        "bytes": 7871,
+        "sha256": "d341033f45c614da69b70c3f3c4b1ce86ebaf1f26ba59da03a54e926d00a98d3"
+      }
+    },
+    "source_identity_sha256": "1720c277b493c1097f68aa89ea44c8555bf5222bf0de69de28144f900fdee969",
+    "source_file_count": 395,
+    "compiled_native_sha256": {
+      "crates/borsuk/examples/two_bit_http.rs": "c8f2327561304a088b0bfd3a4509047a94c05210b8d5d44e008b90faea3cdc29",
+      "crates/borsuk/src/object_native_generation.rs": "14b2b51cf97449b4e23e343049c0896ec94f731408a45e5798b79f720631cef6",
+      "crates/borsuk/src/two_bit_generation.rs": "7a134fe3e03e735bad63c611ce2b78d865345c8617a6a4b1c5dd70ce1384cc45",
+      "crates/borsuk/tests/two_bit_generation.rs": "da29358a0c797f2ad232a3efd033d7c8a7eb370dd43d44fbb37264885cbdf0f6",
+      "Cargo.toml": "1ec9ac514515662a0f3a371b1a65d72bf825d67f218dc3f6cc1e5fb0925547d6",
+      "Cargo.lock": "92c0da6805ad13fa78a7d6cbffaccf7738e346d3605ed8c8ac763cf5079f2590",
+      "crates/borsuk/Cargo.toml": "474efdef5bd398bef758009882c8bdd859553de8f0271230430469dd96bc4d71",
+      "crates/borsuk/tests/two_bit_source.rs": "d341033f45c614da69b70c3f3c4b1ce86ebaf1f26ba59da03a54e926d00a98d3"
+    },
+    "reviewed_native_delta_sha256": {
+      "crates/borsuk/src/object_native_generation.rs": "14b2b51cf97449b4e23e343049c0896ec94f731408a45e5798b79f720631cef6"
+    },
+    "control_source_identity_sha256": "c2151132c6df9000f74181a0e52e0131d148f71653c450d2c4f752ac91f8580b",
+    "control_compiled_native_sha256": {
+      "crates/borsuk/examples/two_bit_http.rs": "c8f2327561304a088b0bfd3a4509047a94c05210b8d5d44e008b90faea3cdc29",
+      "crates/borsuk/src/object_native_generation.rs": "c235938f22b8cfaee18edd631ff26e64a16d4f73e179057ba1d3f1e0a9060920",
+      "crates/borsuk/src/two_bit_generation.rs": "7a134fe3e03e735bad63c611ce2b78d865345c8617a6a4b1c5dd70ce1384cc45",
+      "crates/borsuk/tests/two_bit_generation.rs": "da29358a0c797f2ad232a3efd033d7c8a7eb370dd43d44fbb37264885cbdf0f6",
+      "Cargo.toml": "1ec9ac514515662a0f3a371b1a65d72bf825d67f218dc3f6cc1e5fb0925547d6",
+      "Cargo.lock": "92c0da6805ad13fa78a7d6cbffaccf7738e346d3605ed8c8ac763cf5079f2590",
+      "crates/borsuk/Cargo.toml": "474efdef5bd398bef758009882c8bdd859553de8f0271230430469dd96bc4d71",
+      "crates/borsuk/tests/two_bit_source.rs": "d341033f45c614da69b70c3f3c4b1ce86ebaf1f26ba59da03a54e926d00a98d3"
+    },
+    "current_full_suite_pass_claim": false,
+    "native_rebuilt": true,
+    "control_source_commit": "d32d472293d7300be77eb5f1e87cf69892cc504b",
+    "artifact_roster_sha256": "4a98c384f73403d29695030eb5daa4bb1c456f4c699ba06835fbe7d394bd398a",
+    "config_path": "docs/research/native-union-20260928/metadata-ranges-config.json",
+    "campaign_schema": "borsuk-native-metadata-ranges-cold-spot-v1",
+    "historical_assurance_scope": "2696 prior tests only; changed dependency not fully requalified"
+  },
+  "config_sha256": "e1fed6a3648bba6dfb8307a24bee083476b8d69166f10b9b41ca679e91fc01da",
+  "interruption_policy": "Discard interrupted worker; no automatic replacement"
+}
