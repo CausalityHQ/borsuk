@@ -1,0 +1,35 @@
+{
+  "terminal_sha256": "bb027f633bce5293ba09b7568506b6f7d53cdb8a85480fcd98669644a8d7bbcd",
+  "inputs": [
+    {
+      "dataset": "relaion",
+      "root": {
+        "bytes": 33951,
+        "sha256": "577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b"
+      },
+      "centroids": {
+        "bytes": 4800032,
+        "sha256": "42bdea567bdc606333c9f09e07bc33742c1bec7cdcb69dd93b7489547ec3d2fb"
+      },
+      "unit_count": 3125,
+      "unit_rows": 32,
+      "page_rows": 256,
+      "source_scope": "historical FIRST100k; no fit or query quality measured"
+    },
+    {
+      "dataset": "cohere",
+      "root": {
+        "bytes": 33988,
+        "sha256": "9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521"
+      },
+      "centroids": {
+        "bytes": 4800032,
+        "sha256": "755fa712fc3d2c3a0e35f9eba95d429b269dc32968da58354d9c328d8d1405a7"
+      },
+      "unit_count": 3125,
+      "unit_rows": 32,
+      "page_rows": 256,
+      "source_scope": "historical FIRST100k; no fit or query quality measured"
+    }
+  ]
+}
