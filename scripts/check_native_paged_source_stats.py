@@ -1,5 +1,5 @@
 """Additional gates for new paged-source arms; historical protocols stay frozen."""
-from scripts.check_native_startup_stats import validate as validate_metadata
+from scripts.check_native_metadata_ranges_stats import validate as validate_transfer
 
 
 def validate_response(response):
@@ -20,7 +20,8 @@ def validate_startup(stats, expected_files, remote_open_wall_ns):
     assert type(stats['source_head_requests']) is int and stats['source_head_requests'] == 1
     assert type(stats['source_head_wall_ns']) is int and stats['source_head_wall_ns'] >= 0
     assert stats['staging_wall_ns'] + stats['decode_wall_ns'] + stats['source_head_wall_ns'] <= remote_open_wall_ns
-    result = validate_metadata(stats, expected_files, remote_open_wall_ns)
+    result = validate_transfer(dict(remote_open_stats=stats, remote_open_wall_ns=remote_open_wall_ns),
+                               expected_files, 'candidate', dict(range_bytes=4194304, parallel_gets=8))
     result.update(source_head_requests=1, source_head_ms=stats['source_head_wall_ns'] / 1e6)
     return result
 
@@ -33,7 +34,9 @@ def main():
     assert validate_response(response) == dict(query_gets=160, query_verified_bytes=83881984)
     expected = {str(index): 1 for index in range(9)}
     startup = dict(metadata=[dict(name=name, bytes=1, chunks=1, get_wall_ns=0,
-                   stream_wall_ns=0, write_wall_ns=0) for name in expected],
+                   stream_wall_ns=0, write_wall_ns=0, head_wall_ns=0,
+                   logical_head_requests=1, logical_get_requests=1,
+                   payload_buffer_bound_bytes=1) for name in expected],
                    staging_wall_ns=10, decode_wall_ns=20, source_head_wall_ns=5, source_head_requests=1)
     assert validate_startup(startup, expected, 35)['source_head_requests'] == 1
     for name in ('source_submitted_gets', 'source_verified_bytes', 'source_failed_gets',

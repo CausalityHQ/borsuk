@@ -10,6 +10,7 @@ from scripts import run_native_cold_first_query as old
 from scripts.check_native_paged_source_stats import validate_response, validate_startup
 
 CODE = (*old.CODE, 'scripts/check_native_paged_source_stats.py',
+        'scripts/check_native_metadata_ranges_stats.py',
         'scripts/run_native_paged_cold_first_query.py')
 SCHEMA = 'borsuk-native-paged-cold-first-query-v1'
 SOURCE_CAPS = dict(source_submitted_gets=128, source_verified_bytes=67108864,
@@ -59,6 +60,9 @@ def reduce_panel(records):
         result.update({'source_' + suffix: source, 'sq8_' + suffix: sq8,
                        'combined_' + suffix: source + sq8})
     result.update(source_head_requests=sum(record['metadata']['source_head_requests'] for record in records),
+        logical_metadata_head_requests=sum(record['metadata']['logical_metadata_head_requests'] for record in records),
+        logical_metadata_get_requests=sum(record['metadata']['logical_metadata_get_requests'] for record in records),
+        metadata_payload_buffer_bound_bytes=max(record['metadata']['payload_buffer_bound_bytes'] for record in records),
         source_head_wall_ns=sum(record['native_header']['remote_open_stats']['source_head_wall_ns'] for record in records),
         source_head_ms=sum(record['metadata']['source_head_ms'] for record in records),
         head_read_wall_ns=sum(record['native_header']['head_read_wall_ns'] for record in records))
@@ -69,7 +73,7 @@ def validate_config(config):
     assert config['schema'] == SCHEMA
     assert (config['count'], config['k']) == (64, 10)
     assert config['dataset_order'] == ['ReLAION', 'CoHere']
-    assert set(config['code_sha256']) == set(CODE) and len(CODE) == 9
+    assert set(config['code_sha256']) == set(CODE) and len(CODE) == 10
     for name, digest in config['code_sha256'].items():
         assert old.sha(name) == digest, name
     assert type(config['native_source_file_count']) is int and config['native_source_file_count'] == 395

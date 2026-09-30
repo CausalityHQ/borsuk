@@ -37,7 +37,9 @@ def header():
     return dict(phase='ready', listen='127.0.0.1:8080', authority=AUTHORITY,
         remote_open_wall_ns=35, head_read_wall_ns=7, remote_open_stats=dict(
             metadata=[dict(name=name, bytes=size, chunks=1, get_wall_ns=0,
-                           stream_wall_ns=0, write_wall_ns=0) for name, size in FILES.items()],
+                           stream_wall_ns=0, write_wall_ns=0, head_wall_ns=0,
+                           logical_head_requests=1, logical_get_requests=1,
+                           payload_buffer_bound_bytes=size) for name, size in FILES.items()],
             staging_wall_ns=10, decode_wall_ns=20, source_head_wall_ns=5, source_head_requests=1))
 
 
@@ -102,6 +104,8 @@ def reducer_check():
     assert result['source_head_wall_ns'] == 320 and result['head_read_wall_ns'] == 448
     assert abs(result['source_head_ms'] - .000320) < 1e-15
     assert result['metadata_objects'] == result['metadata_bytes'] == 576
+    assert result['logical_metadata_head_requests'] == result['logical_metadata_get_requests'] == 576
+    assert result['metadata_payload_buffer_bound_bytes'] == 1
     rejected(lambda: worker.reduce_panel(records[:-1]))
     mutations = [lambda row: row.update(query_ordinal=62),
         lambda row: row.update(http_status=500), lambda row: row.update(http_attempts=2),
