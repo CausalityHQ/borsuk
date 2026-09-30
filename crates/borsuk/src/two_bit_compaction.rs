@@ -440,6 +440,17 @@ async fn compact_owned(
         .checked_add(1)
         .ok_or(bad("compaction generation overflow"))?;
     let base_discovery = discovery_mode(store, &base).await?;
+    let job_dir = directory.join(base.root_sha256());
+    let job_path = job_dir.join("job.json");
+    let captured = if job_path.exists() {
+        Some(read_json::<Job>(&job_path)?.0.discovery)
+    } else {
+        None
+    };
+    let discovery = requested.or(captured).unwrap_or(base_discovery);
+    if discovery == DiscoveryMode::Semantic && base.dimensions() > 768 {
+        return Err(bad("semantic compaction dimensions"));
+    }
     let latest = read_two_bit_mutations(store, &base, base.dimensions(), options.mutations).await?;
     let Some(latest) = latest else {
         if requested.is_some_and(|mode| mode != base_discovery) {
@@ -449,17 +460,9 @@ async fn compact_owned(
     };
     let sealed = seal_two_bit_mutations(store, &base, Some(&latest), options.mutations).await?;
     drop(latest);
-    let job_dir = directory.join(base.root_sha256());
     fs::create_dir_all(&job_dir)?;
     let (authority, _) =
         crate::two_bit_mutations::require_sealed_two_bit_mutations(store, &base).await?;
-    let job_path = job_dir.join("job.json");
-    let captured = if job_path.exists() {
-        Some(read_json::<Job>(&job_path)?.0.discovery)
-    } else {
-        None
-    };
-    let discovery = requested.or(captured).unwrap_or(base_discovery);
     let job = Job {
         schema: "borsuk-two-bit-compaction-job-v3".into(),
         index_prefix: prefix.as_ref().into(),
@@ -472,19 +475,26 @@ async fn compact_owned(
         base_discovery,
         discovery,
     };
-    let job_path = job_dir.join("job.json");
+    let ready_path = job_dir.join("ready.json");
     let job_bytes = serde_json::to_vec(&job).map_err(|_| bad("compaction job"))?;
     if job_path.exists() {
         let (mut previous, bytes): (Job, _) = read_json(&job_path)?;
         if bytes != job_bytes {
             let old_epoch = previous.base_epoch;
             previous.base_epoch = job.base_epoch;
-            if old_epoch >= job.base_epoch
+            let replace_mode =
+                requested.is_some() && previous.discovery != job.discovery && !ready_path.exists();
+            if replace_mode {
+                previous.discovery = job.discovery;
+            }
+            if old_epoch > job.base_epoch
+                || (old_epoch == job.base_epoch && !replace_mode)
                 || serde_json::to_vec(&previous).map_err(|_| bad("compaction job"))? != job_bytes
             {
                 return Err(bad("compaction job changed"));
             }
-            // GC advanced the authority. Old prepared keys may have a pending DELETE.
+            // Discard owned scratch after GC or an explicit unready mode change.
+            // Rebuild claims a fresh namespace; fenced GC reclaims abandoned claims.
             fs::remove_dir_all(&job_dir)?;
             fs::create_dir_all(&job_dir)?;
             write_json(&job_path, &job)?;
@@ -494,7 +504,6 @@ async fn compact_owned(
     }
     let input_dir = job_dir.join("input");
     let generation_dir = job_dir.join("generation");
-    let ready_path = job_dir.join("ready.json");
     let recovered_ready = if ready_path.exists() {
         let (ready, _): (Ready, _) = read_json(&ready_path)?;
         if ready.schema != "borsuk-two-bit-compaction-ready-v1"

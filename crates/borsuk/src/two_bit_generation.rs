@@ -2601,6 +2601,44 @@ mod source_walk_tests {
         )
         .await
         .unwrap();
+        // A failed, unready semantic job can explicitly recover in graph mode.
+        let failed = compact_two_bit_index_with_discovery(
+            store.clone(),
+            &empty_prefix,
+            &directory,
+            TwoBitCompactionOptions {
+                source: crate::canonical_source::TwoBitCompactionLimits {
+                    max_disk_bytes: 262144,
+                    ..options.source
+                },
+                ..options
+            },
+            Some(DiscoveryMode::Semantic),
+        )
+        .await
+        .unwrap_err();
+        let job_dir = directory.join(empty.root_sha256());
+        assert!(!job_dir.join("ready.json").exists());
+        assert!(job_dir.join("input").exists(), "{failed:?}");
+        let job_path = job_dir.join("job.json");
+        let job_bytes = fs::read(&job_path).unwrap();
+        let mut job: serde_json::Value = serde_json::from_slice(&job_bytes).unwrap();
+        assert_eq!(job["discovery"], "semantic");
+        job["mutation_sha256"] = "0".repeat(64).into();
+        fs::write(&job_path, serde_json::to_vec(&job).unwrap()).unwrap();
+        assert!(
+            compact_two_bit_index_with_discovery(
+                store.clone(),
+                &empty_prefix,
+                &directory,
+                options,
+                Some(DiscoveryMode::Graph),
+            )
+            .await
+            .is_err()
+        );
+        assert!(job_dir.join("input").exists());
+        fs::write(job_path, job_bytes).unwrap();
         let graph = compact_two_bit_index_with_discovery(
             store.clone(),
             &empty_prefix,
@@ -2616,6 +2654,58 @@ mod source_walk_tests {
                 .unwrap(),
             DiscoveryMode::Graph
         );
+
+        // Reject unsupported dimensions before sealing or capturing a job.
+        let wide_prefix = ObjectPath::from("semantic/unsupported-dimensions");
+        let wide = crate::two_bit_store::publish_empty_with_mode(
+            store.as_ref(),
+            &wide_prefix,
+            769,
+            1,
+            None,
+            Some(DiscoveryMode::Graph),
+        )
+        .await
+        .unwrap();
+        let mutations = apply_two_bit_mutations(
+            store.as_ref(),
+            &wide,
+            769,
+            None,
+            &[TwoBitMutation {
+                id: 17,
+                vector: Some(vec![1.; 769]),
+            }],
+            mutation_limits,
+        )
+        .await
+        .unwrap();
+        let directory = temp.path().join("wide-maintenance");
+        assert!(
+            compact_two_bit_index_with_discovery(
+                store.clone(),
+                &wide_prefix,
+                &directory,
+                options,
+                Some(DiscoveryMode::Semantic),
+            )
+            .await
+            .is_err()
+        );
+        assert!(!directory.join(wide.root_sha256()).exists());
+        apply_two_bit_mutations(
+            store.as_ref(),
+            &wide,
+            769,
+            Some(&mutations),
+            &[TwoBitMutation {
+                id: 18,
+                vector: Some(vec![1.; 769]),
+            }],
+            mutation_limits,
+        )
+        .await
+        .expect("unsupported semantic request must leave mutations writable");
     }
 
     #[tokio::test]
