@@ -1,0 +1,107 @@
+{
+  "count": 64,
+  "dataset": "ReLAION",
+  "dimensions": 768,
+  "first": 0,
+  "inputs": {
+    "binding": {
+      "bytes": 17287,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/binding.json",
+      "sha256": "75d5e2d8ca9cfa5bc7192a05a561f1350e151289b9c04062c02c214c6f88a3fb"
+    },
+    "centroids": {
+      "bytes": 4800032,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/centroids.bin",
+      "sha256": "42bdea567bdc606333c9f09e07bc33742c1bec7cdcb69dd93b7489547ec3d2fb"
+    },
+    "control_plan": {
+      "bytes": 1582056,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/core-plan.jsonl",
+      "sha256": "c2eb6c85b7ccb89c27d727a77e897d844ebaede45645704072ce1c18274ec32d"
+    },
+    "control_returned": {
+      "bytes": 84548,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/live.jsonl",
+      "sha256": "cc4d46c4b375c1b075b51c67b0f8c9424ca9eb0d10e2ab23cb4616b8e694167e"
+    },
+    "diverse_graph": {
+      "bytes": 426398,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/diverse_graph.bin",
+      "sha256": "a72380d5ebc5e53386f16c09cb772003c509f0802c881d17813c0d867f0907df"
+    },
+    "graph": {
+      "bytes": 426398,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/graph.bin",
+      "sha256": "dddc0ad50c95c724f4d977578dbe893d73654a054661176f6d37d65feebce3b0"
+    },
+    "order": {
+      "bytes": 800000,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/order.u64",
+      "sha256": "22abeb087000ea2978c4fef8e85c2f7fda4e4b22c4e5126ba37a1c19816fab18"
+    },
+    "plane_manifest": {
+      "bytes": 548,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/plane-manifest.json",
+      "sha256": "16dd4cfabb6e2a079fd261c4f0626cafa4bcb4ec3e82aee303b066f08d2ae4fa"
+    },
+    "plane_mean": {
+      "bytes": 3072,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/plane-mean.bin",
+      "sha256": "197a8ead172a5a41e029c8f0c9d39b981150c69fc3b0367316fb89c920eb1beb"
+    },
+    "plane_records": {
+      "bytes": 20000000,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/plane-records.bin",
+      "sha256": "624e63de5905210bde24a4e7752573d6811d9fa5142e5b529ff0e9f65054ce83"
+    },
+    "requests": {
+      "bytes": 17714558,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/requests",
+      "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+    },
+    "root": {
+      "bytes": 33951,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/manifest.json",
+      "sha256": "577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b"
+    },
+    "router_leaves": {
+      "bytes": 4812500,
+      "path": "/tmp/borsuk-semantic-router-construction-relaion-a0001/router/leaves.bin",
+      "sha256": "e7f2ff4ce0ff44b68a8a23970e5b0452a6f3b7d145315d720274c87fe0ef8785"
+    },
+    "router_manifest": {
+      "bytes": 752232,
+      "path": "/tmp/borsuk-semantic-router-construction-relaion-a0001/router/manifest.json",
+      "sha256": "4f008f68f244ef6cca8f18262cff64b36d69be87a6d529c2e85a55f584ae0760"
+    },
+    "router_membership": {
+      "bytes": 12500,
+      "path": "/tmp/borsuk-semantic-router-construction-relaion-a0001/router/membership.bin",
+      "sha256": "185f51cc44130ff760e905377cb04234cf3464bec754d80c1d554b58424432d6"
+    },
+    "sq8": {
+      "bytes": 78000000,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/sq8.bin",
+      "sha256": "be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b"
+    },
+    "truth": {
+      "bytes": 400000,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/truth",
+      "sha256": "4bd3ac79fce3919f85359ce3e305491663991f6cc0890ab91682cda34247a24e"
+    }
+  },
+  "limits": {
+    "combined_bytes": 83881984,
+    "combined_gets": 160,
+    "router_leaf_bytes": 2097152,
+    "router_leaf_gets": 16,
+    "router_root_bytes": 1048576,
+    "source_bytes": 67108864,
+    "source_gets": 128,
+    "source_parallel": 16,
+    "sq8_bytes": 16773120,
+    "sq8_gets": 32
+  },
+  "rows": 100000,
+  "schema": "borsuk-semantic-router-scorer-config-v1"
+}
