@@ -20,8 +20,11 @@ BLOCKS = (('control', 0, 32), ('candidate', 0, 32),
           ('candidate', 32, 64), ('control', 32, 64))
 
 
-def reduce_blocks(blocks, inputs, items):
+def reduce_blocks(blocks, inputs, items, staging=None):
     assert len(blocks) == 4
+    if staging is not None:
+        assert staging == dict(control=dict(range_bytes=8388608, parallel_gets=4),
+                               candidate=dict(range_bytes=4194304, parallel_gets=8))
     records = {arm: {item['dataset']: [] for item in items} for arm in ('control', 'candidate')}
     previous = 0
     for block, (arm, begin, end) in enumerate(BLOCKS):
@@ -48,22 +51,24 @@ def reduce_blocks(blocks, inputs, items):
                 header = row['native_header']
                 stats = header['remote_open_stats']
                 accounting = dict(row['metadata'])
-                if arm == 'control':
+                if arm == 'control' and staging is None:
                     accounting.update(logical_metadata_head_requests=0,
                         logical_metadata_get_requests=9, payload_buffer_bound_bytes=None)
                     gets += 9
                 else:
+                    range_bytes = 8388608 if staging is None else staging[arm]['range_bytes']
+                    parallel_gets = 4 if staging is None else staging[arm]['parallel_gets']
                     nhead, nget, bounds = 0, 0, []
                     for entry in stats['metadata']:
                         for field in ('head_wall_ns', 'logical_head_requests', 'logical_get_requests', 'payload_buffer_bound_bytes'):
                             assert type(entry[field]) is int and entry[field] >= 0
                         assert entry['logical_head_requests'] == 1
                         size = entry['bytes']
-                        count = (size+8388607)//8388608
-                        bound = min(size, 33554432)
+                        count = (size+range_bytes-1)//range_bytes
+                        bound = min(size, range_bytes*parallel_gets)
                         assert entry['logical_get_requests'] == count
                         assert entry['payload_buffer_bound_bytes'] == bound
-                        if size > 8388608: assert entry['get_wall_ns'] == 0
+                        if size > range_bytes: assert entry['get_wall_ns'] == 0
                         nhead += 1; nget += count; bounds.append(bound)
                     assert sum(e['head_wall_ns']+e['get_wall_ns']+e['stream_wall_ns'] for e in stats['metadata']) <= stats['staging_wall_ns']
                     accounting.update(logical_metadata_head_requests=nhead,
@@ -147,7 +152,36 @@ def self_check():
         try: reduce_blocks(bad, inputs, config['items'])
         except AssertionError: pass
         else: raise AssertionError('invalid '+mutation+' accepted')
-    print('independent paired reducer PASS (synthetic256/order/arm/buffer/timing guards)')
+    staging = dict(control=dict(range_bytes=8388608, parallel_gets=4),
+                   candidate=dict(range_bytes=4194304, parallel_gets=8))
+    shaped = copy.deepcopy(blocks)
+    for rows in shaped:
+        for row in rows:
+            geometry = staging[row['arm']]
+            stats = row['native_header']['remote_open_stats']
+            for entry in stats['metadata']:
+                size = entry['bytes']
+                entry.update(head_wall_ns=1, logical_head_requests=1,
+                    logical_get_requests=(size+geometry['range_bytes']-1)//geometry['range_bytes'],
+                    payload_buffer_bound_bytes=min(size, geometry['range_bytes']*geometry['parallel_gets']))
+                if size > geometry['range_bytes']: entry['get_wall_ns'] = 0
+            item = next(item for item in config['items'] if item['dataset'] == row['dataset'])
+            row['metadata'] = validate(stats, item['metadata_files'], row['native_header']['remote_open_wall_ns'])
+            row['native_server_log'] = json.dumps(row['native_header'])+'\n'
+            row['transfer_accounting'] = dict(row['metadata'], logical_metadata_head_requests=9,
+                logical_metadata_get_requests=sum(e['logical_get_requests'] for e in stats['metadata']),
+                payload_buffer_bound_bytes=max(e['payload_buffer_bound_bytes'] for e in stats['metadata']))
+    fresh = reduce_blocks(shaped, inputs, config['items'], staging)
+    assert fresh['quality_gate_passed'] and fresh['diagnostic_gate_passed']
+    for dataset in ('ReLAION', 'CoHere'):
+        assert fresh['panels']['control'][dataset]['logical_metadata_get_requests'] == 64*37
+        assert fresh['panels']['candidate'][dataset]['logical_metadata_get_requests'] == 64*69
+    wrong = copy.deepcopy(shaped)
+    wrong[0][0]['native_header']['remote_open_stats']['metadata'][-1]['logical_get_requests'] += 1
+    try: reduce_blocks(wrong, inputs, config['items'], staging)
+    except AssertionError: pass
+    else: raise AssertionError('wrong fresh-control GET count accepted')
+    print('independent paired reducer PASS (legacy and fresh geometry/order/arm/buffer/timing guards)')
 
 
 def sha(body): return hashlib.sha256(body).hexdigest()

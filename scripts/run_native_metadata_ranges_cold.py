@@ -56,7 +56,8 @@ def run(config, binaries, output):
                         **cold.cold_call(binaries[arm], config, item, body, reference, truth,
                             failure_stream=stream))
                     try:
-                        row['transfer_accounting'] = validate_transfer(row['native_header'], item['metadata_files'], arm)
+                        row['transfer_accounting'] = validate_transfer(row['native_header'], item['metadata_files'], arm,
+                            config.get('staging', {}).get(arm))
                     except Exception as error:
                         row.update(outcome='invalid_transfer_accounting', error_type=type(error).__name__, error=str(error))
                         stream.write(json.dumps(row, sort_keys=True, allow_nan=False)+'\n')
@@ -77,7 +78,8 @@ def run(config, binaries, output):
             panels[arm][dataset].update(
                 logical_metadata_head_requests=sum(r['transfer_accounting']['logical_metadata_head_requests'] for r in rows),
                 logical_metadata_get_requests=sum(r['transfer_accounting']['logical_metadata_get_requests'] for r in rows),
-                payload_buffer_bound_bytes=max(r['transfer_accounting']['payload_buffer_bound_bytes'] for r in rows) if arm == 'candidate' else None)
+                payload_buffer_bound_bytes=max(r['transfer_accounting']['payload_buffer_bound_bytes'] for r in rows)
+                    if arm == 'candidate' or 'staging' in config else None)
     campaign_span = records['control']['CoHere'][-1]['completed_ns']-records['control']['ReLAION'][0]['started_ns']
     quality = all(p['quality_gate_passed'] for datasets in panels.values() for p in datasets.values())
     deltas = {dataset: panels['candidate'][dataset]['cold_start_to_first_http_response_ms']['p90']-
@@ -108,7 +110,11 @@ def main():
     config_path, digest, candidate, candidate_proof, control, control_proof, output = sys.argv[1:]
     assert cold.sha(config_path) == digest
     config = json.loads(Path(config_path).read_text())
-    assert config['schema'] == 'borsuk-native-metadata-ranges-cold-v1'
+    assert config['schema'] in ('borsuk-native-metadata-ranges-cold-v1', 'borsuk-native-metadata-geometry-v1')
+    geometry = config['schema'] == 'borsuk-native-metadata-geometry-v1'
+    if geometry:
+        assert config['staging'] == dict(control=dict(range_bytes=8388608, parallel_gets=4),
+                                        candidate=dict(range_bytes=4194304, parallel_gets=8))
     assert config['count'] == 64 and config['k'] == 10 and config['ann_queries'] == 256
     assert config['blocks'] == [dict(arm=a, begin=b, end=e) for a,b,e in BLOCKS]
     assert config['dataset_order'] == ['ReLAION', 'CoHere'] and sorted(os.sched_getaffinity(0)) == [4, 5]
@@ -119,7 +125,18 @@ def main():
         assert proof['qualified'] and proof['green_status'] == proof['release_status'] == 0
         assert cold.sha(binary) == proof['binary_sha256']
         assert cold.sha('crates/borsuk/examples/two_bit_http.rs') == proof['compiled_http_sha256']
-        if arm == 'candidate':
+        if geometry:
+            expected = dict(config['compiled_sha256'])
+            if arm == 'control':
+                expected['crates/borsuk/src/object_native_generation.rs'] = config['control_native']['stage_sha256']
+            assert proof['compiled_native_sha256'] == expected
+            assert proof['source_identity_sha256'] == config[arm+'_native']['source_identity_sha256']
+            assert proof['source_file_count'] == config[arm+'_native']['source_file_count'] == 395
+            assert proof['current_full_suite_pass_claim'] is False
+            assert Path(binary).stat().st_size == proof['binary_bytes']
+            if arm == 'candidate':
+                for name, expected_sha in expected.items(): assert cold.sha(name) == expected_sha
+        elif arm == 'candidate':
             for name, expected in proof['compiled_native_sha256'].items(): assert cold.sha(name) == expected
         else:
             assert proof['binary_sha256'] == config['control_binary']['sha256']
