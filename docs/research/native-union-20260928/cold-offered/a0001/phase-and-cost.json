@@ -1,0 +1,58 @@
+{
+  "phase_medians_ms": {
+    "rate0-relaion-records.jsonl": {
+      "staging_wall_ns": 1072.4522945,
+      "decode_wall_ns": 637.236936
+    },
+    "rate0-cohere-records.jsonl": {
+      "staging_wall_ns": 1074.297157,
+      "decode_wall_ns": 638.337356
+    },
+    "rate1-relaion-records.jsonl": {
+      "staging_wall_ns": 1072.3501225,
+      "decode_wall_ns": 639.1472285
+    },
+    "rate1-cohere-records.jsonl": {
+      "staging_wall_ns": 1075.564152,
+      "decode_wall_ns": 640.372749
+    },
+    "rate2-relaion-records.jsonl": {
+      "staging_wall_ns": 1073.8555755,
+      "decode_wall_ns": 650.2031025
+    },
+    "rate2-cohere-records.jsonl": {
+      "staging_wall_ns": 1078.025367,
+      "decode_wall_ns": 648.0633105
+    },
+    "rate3-relaion-records.jsonl": {
+      "staging_wall_ns": 1130.432889,
+      "decode_wall_ns": 676.856796
+    },
+    "rate3-cohere-records.jsonl": {
+      "staging_wall_ns": 1139.643644,
+      "decode_wall_ns": 673.851518
+    },
+    "rate4-relaion-records.jsonl": {
+      "staging_wall_ns": 1212.643075,
+      "decode_wall_ns": 689.90424
+    },
+    "rate4-cohere-records.jsonl": {
+      "staging_wall_ns": 1256.0993955,
+      "decode_wall_ns": 720.652723
+    },
+    "rate5-relaion-records.jsonl": {
+      "staging_wall_ns": 1217.234496,
+      "decode_wall_ns": 811.325184
+    },
+    "rate5-cohere-records.jsonl": {
+      "staging_wall_ns": 1220.4416195,
+      "decode_wall_ns": 769.849633
+    }
+  },
+  "cost": {
+    "compute_estimate_usd": 0.05495711111111111,
+    "elapsed_seconds": 1109,
+    "scope": "estimate; no EBS/S3 invoice or total lifecycle cost"
+  },
+  "status": "campaign terminal FAIL; independently authenticated complete records"
+}

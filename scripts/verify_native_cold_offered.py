@@ -97,7 +97,7 @@ def reduce_cell(rows,cell,requests,references,truth,item,index):
     return result,peak
 
 
-def main(attempt):
+def main(attempt, failed_closeout=False):
     from scripts import launch_native_cold_offered_spot as campaign
     directory = campaign.ROOT/campaign.NAME/attempt
     session = boto3.Session(profile_name='causality',region_name=campaign.peer.REGION)
@@ -111,7 +111,11 @@ def main(attempt):
     terminal_body = remote(prefix+'/terminal.json')
     assert terminal_body == (directory/'aws-terminal.json').read_bytes()
     terminal = json.loads(terminal_body)
-    assert terminal['status'] == terminal['phase'] == 'complete' and terminal['exit_code'] == 0
+    if failed_closeout:
+        assert terminal['source_commit'] == '9f1abe4ebd1b80dd8e216a3b37d824c813fb8d14'
+        assert terminal['status'] == 'failed' and terminal['phase'] == 'profile' and terminal['exit_code'] == 96
+    else:
+        assert terminal['status'] == terminal['phase'] == 'complete' and terminal['exit_code'] == 0
     assert terminal['schema'] == reservation['schema'] == campaign.SCHEMA
     assert terminal['instance_id'] == launch['instance_id']
     for key in ('source_commit','source_archive_sha256'): assert terminal[key] == reservation[key] == launch[key]
@@ -122,11 +126,18 @@ def main(attempt):
         assert len(value) == identity['bytes'] and sha(value) == identity['sha256']
         assert value == gzip.decompress((directory/(name+'.gz')).read_bytes())
         bodies[name] = value
+    if failed_closeout:
+        log=bodies['profile.log'].decode()
+        assert '"offered": 768' in log and '"errors": 0' in log
+        assert "assert int(counters['memory.max']) == 8 * 1024**3" in log
+        assert 'Service runtime:' in log and 'status=96' in log
     proof = json.loads(bodies['source-qualification.json'])
     assert proof == reservation['qualification'] and proof['native_rebuilt'] is False
     assert reservation['wall_seconds'] == campaign.WALL and reservation['compute_cap_usd'] == campaign.COMPUTE_CAP
     expected_userdata = campaign.user_data(launch['source_commit'],launch['source_archive_sha256'],
         'research/native-library-check/sources/'+launch['source_archive_sha256']+'.tar.gz',prefix,proof)
+    if failed_closeout:
+        expected_userdata=expected_userdata.replace('--cgroup "$1/profile-cgroup.json" 7516192768','--cgroup "$1/profile-cgroup.json"')
     assert (directory/'aws-user-data.sh').read_text() == expected_userdata
     assert b'aarch64' in bodies['cpu.txt'] and b'sha2' in bodies['cpu.txt']
     archive = remote('research/native-library-check/sources/'+launch['source_archive_sha256']+'.tar.gz')
@@ -205,7 +216,9 @@ def main(attempt):
     assert close['nodes'] == {'0':{'instance_id':launch['instance_id']}}
     assert instance['InstanceLifecycle'] == 'spot' and instance['InstanceType'] == 'c7g.2xlarge'
     assert instance['Placement']['AvailabilityZone'] == reservation['availability_zone']
-    report = dict(valid_measurement=True,state='terminated',instance_id=launch['instance_id'],
+    report = dict(valid_measurement=not failed_closeout,valid_closed_records=True,
+        campaign_terminal_passed=not failed_closeout,
+        closeout_failure='post-measurement helper expected8GiB instead of declared7GiB' if failed_closeout else None,state='terminated',instance_id=launch['instance_id'],
         source_commit=launch['source_commit'],source_archive_sha256=sha(archive),config_sha256=sha(config_body),
         terminal_sha256=sha(terminal_body),native_rebuilt=False,current_full_suite_pass_claim=False,
         matched_vendor_measured=False,total_cost_measured=False,cgroup_peak_bytes=int(group['memory.peak']),
@@ -273,4 +286,5 @@ def self_check():
 
 if __name__ == '__main__':
     if sys.argv[1:] == ['--self-check']: self_check()
+    elif len(sys.argv)==3 and sys.argv[1]=='--failed-closeout': main(sys.argv[2],failed_closeout=True)
     else: main(sys.argv[1] if len(sys.argv)==2 else 'a0001')

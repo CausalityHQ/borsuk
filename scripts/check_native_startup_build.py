@@ -182,7 +182,7 @@ def main(cargo, repo, out, arm_sha=False):
     print(json.dumps(report))
 
 
-def capture_cgroup(output):
+def capture_cgroup(output, expected_memory_bytes=None):
     group = Path('/sys/fs/cgroup') / Path('/proc/self/cgroup').read_text().strip().split('0::')[-1].lstrip('/')
     counters = {k: (group/k).read_text() for k in
         ['memory.max', 'memory.peak', 'memory.swap.max', 'memory.swap.peak',
@@ -192,17 +192,18 @@ def capture_cgroup(output):
     Path(output).write_text(json.dumps(counters, indent=2) + '\n')
     assert counters['cpu_affinity'] == [0, 1, 2, 3]
     assert int(counters['memory.swap.max']) == int(counters['memory.swap.peak']) == 0
-    if Path(output).name == 'profile-cgroup.json':
-        assert int(counters['memory.max']) == 8 * 1024**3
+    profile = Path(output).name == 'profile-cgroup.json'
+    expected = expected_memory_bytes if expected_memory_bytes is not None else (8 if profile else 10)*1024**3
+    assert type(expected) is int and expected > 0
+    assert int(counters['memory.max']) == expected
+    if profile:
         assert counters['rlimit_as_bytes'] == [4 * 1024**3, 4 * 1024**3]
-    else:
-        assert int(counters['memory.max']) == 10 * 1024**3
 
 
 
 if __name__ == '__main__':
     if sys.argv[1] == '--cgroup':
-        capture_cgroup(sys.argv[2])
+        capture_cgroup(sys.argv[2], int(sys.argv[3]) if len(sys.argv) == 4 else None)
     elif sys.argv[1] == '--arm-sha':
         main(*sys.argv[2:], arm_sha=True)
     else:
