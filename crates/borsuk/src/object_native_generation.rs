@@ -25,8 +25,8 @@ use crate::unit_centroid_graph::{UnitCentroidGraph, UnitCentroidGraphError};
 use crate::unit_centroid_pages::{UnitCentroidError, UnitCentroidPages};
 
 const MAX_MANIFEST: usize = 64 * 1024;
-const METADATA_RANGE_BYTES: u64 = 8 * 1024 * 1024;
-const METADATA_PARALLEL_GETS: u64 = 4;
+const METADATA_RANGE_BYTES: u64 = 4 * 1024 * 1024;
+const METADATA_PARALLEL_GETS: u64 = 8;
 const METADATA_FILES: [&str; 11] = [
     "manifest.json",
     "page_manifest.json",
@@ -1229,7 +1229,11 @@ mod tests {
             assert_eq!(store.active.load(Ordering::SeqCst), 0);
             assert_eq!(
                 store.peak.load(Ordering::SeqCst),
-                if ranged { gets.min(4) as usize } else { 0 }
+                if ranged {
+                    gets.min(METADATA_PARALLEL_GETS) as usize
+                } else {
+                    0
+                }
             );
             let requests = store.requests.lock().unwrap();
             assert_eq!(requests.len(), 3 + gets as usize);
@@ -1400,7 +1404,7 @@ mod tests {
                 tokio::select! {
                     result = &mut staging => panic!("pending range completed: {result:?}"),
                     _ = tokio::task::yield_now() => {
-                        if store.peak.load(Ordering::SeqCst) == 4 { break; }
+                        if store.peak.load(Ordering::SeqCst) == METADATA_PARALLEL_GETS as usize { break; }
                     }
                 }
             }
@@ -1408,13 +1412,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 1);
-        // No fifth request is admitted while the first batch is pending.
-        assert_eq!(store.requests.lock().unwrap().len(), 7);
+        // No new batch is admitted while the first batch is pending.
+        assert_eq!(store.requests.lock().unwrap().len(), 3 + METADATA_PARALLEL_GETS as usize);
         drop(staging);
         assert_eq!(store.active.load(Ordering::SeqCst), 0);
         assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
         tokio::task::yield_now().await;
-        assert_eq!(store.requests.lock().unwrap().len(), 7);
+        assert_eq!(store.requests.lock().unwrap().len(), 3 + METADATA_PARALLEL_GETS as usize);
         assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
     }
 }
