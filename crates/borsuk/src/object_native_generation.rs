@@ -187,7 +187,7 @@ pub struct MetadataReadStats {
     /// Logical payload GET calls; excludes SDK retries.
     pub logical_get_requests: u64,
     /// Conservative staging payload buffer bound, not measured RSS.
-    /// Excludes transport buffers; at most four 8 MiB range buffers.
+    /// Excludes transport buffers; at most 32 MiB of range buffers.
     pub payload_buffer_bound_bytes: u64,
     /// Small-object GET response-header wait; zero for ranged objects.
     /// Ranged response-header waits are included in stream_wall_ns.

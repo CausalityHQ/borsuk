@@ -197,9 +197,9 @@
     "stage_sha256": "14b2b51cf97449b4e23e343049c0896ec94f731408a45e5798b79f720631cef6"
   },
   "candidate_native": {
-    "source_identity_sha256": "c0ebeaace0e8a041210963fa1e83cf8d03939fe9e2c12e520e50c26d30daf6a9",
+    "source_identity_sha256": "4bbc6c332e78e5a068001913597cdc82d6c13bd147acd96e019149c190a39a1c",
     "source_file_count": 395,
-    "stage_sha256": "14c79f0f34ffec247f2bff7562ff5d1d02480bbd0450fae4a399dc4fdbdf41bd"
+    "stage_sha256": "36dc8f040f862b329164be2cb58151270518f5c659bfbb317f77f1e8855f579c"
   },
   "control_stage": {
     "path": "docs/research/native-union-20260928/metadata-geometry-control-stage.txt",
@@ -207,7 +207,7 @@
   },
   "compiled_sha256": {
     "crates/borsuk/examples/two_bit_http.rs": "c8f2327561304a088b0bfd3a4509047a94c05210b8d5d44e008b90faea3cdc29",
-    "crates/borsuk/src/object_native_generation.rs": "14c79f0f34ffec247f2bff7562ff5d1d02480bbd0450fae4a399dc4fdbdf41bd",
+    "crates/borsuk/src/object_native_generation.rs": "36dc8f040f862b329164be2cb58151270518f5c659bfbb317f77f1e8855f579c",
     "crates/borsuk/src/two_bit_generation.rs": "7a134fe3e03e735bad63c611ce2b78d865345c8617a6a4b1c5dd70ce1384cc45",
     "crates/borsuk/tests/two_bit_generation.rs": "da29358a0c797f2ad232a3efd033d7c8a7eb370dd43d44fbb37264885cbdf0f6",
     "Cargo.toml": "1ec9ac514515662a0f3a371b1a65d72bf825d67f218dc3f6cc1e5fb0925547d6",
