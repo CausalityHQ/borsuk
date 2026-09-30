@@ -110,3 +110,16 @@ cached throughput or tail numbers into BORSUK release gates.
 [SPFresh author page](https://ustc-mlsys.github.io/publications/spfresh-sosp-2023/)
 provides the incremental rebalancing reference. These sources motivate a test;
 neither proves the proposed BORSUK layout's recall or maintenance costs.
+
+## Prototype reuse constraint verified in source
+
+`fit_hierarchical_source_layout` checks every input row's squared norm against
+one within 2e-4. It cannot directly fit the existing unnormalized unit means.
+Normalizing those means would introduce a separate geometry change and repeat
+the norm-bias hypothesis already tested in the closed nomination arm. Reuse
+`train_logical_cell_centroids` with `VectorMetric::SquaredEuclidean` instead:
+its finite/dimension checks accept the original means without normalization.
+The prototype must preserve exact FP16 payload values and unit identities;
+new group assignments and router nominations still require returned-quality
+qualification. This is a source-level planning correction, not measured quality
+or performance evidence.
