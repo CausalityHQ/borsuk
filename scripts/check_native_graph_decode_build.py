@@ -80,11 +80,16 @@ def main(cargo, repo, out):
                 full_suite_command = [cargo, 'test', '--release', '--locked', '--workspace',
                     '--all-targets', '--manifest-path', str(repo / 'Cargo.toml'),
                     '--target-dir', str(target_dir), '--jobs', '4']
+                repaired_target_command = [cargo, 'test', *args, '--test', 'exact_sq8_mirror_direct']
                 with (out / 'full-suite.log').open('x') as log:
+                    subprocess.run(repaired_target_command, stdout=log,
+                                   stderr=subprocess.STDOUT, check=True)
+                    assert source_hashes(repo) == hashes
                     status = subprocess.run(full_suite_command, stdout=log,
                                             stderr=subprocess.STDOUT, check=False).returncode
                 (out / 'full-suite-status.json').write_text(json.dumps(dict(arm=arm,
                     status=status, command=full_suite_command, scope=FULL_SUITE_SCOPE,
+                    repaired_target_command=repaired_target_command, repaired_target_status=0,
                     runs=1, current_full_suite_pass_claim=status == 0), indent=2) + '\n')
                 assert status == 0, 'candidate full workspace suite failed'
                 assert source_hashes(repo) == hashes

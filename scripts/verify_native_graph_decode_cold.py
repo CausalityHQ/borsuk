@@ -143,6 +143,10 @@ def main(attempt):
             status = json.loads(artifacts['full-suite-status.json'])
             assert status['status'] == 0 and status['runs'] == 1 and status['arm'] == 'candidate'
             assert status['command'] == command and status['scope'] == boundary['full_suite_scope']
+            assert status['repaired_target_status'] == 0
+            assert status['repaired_target_command'] == [command[0], 'test', '--release', '--locked',
+                '--manifest-path', command[7], '--target-dir', command[9], '-p', 'borsuk',
+                '--jobs', '4', '--test', 'exact_sq8_mirror_direct']
             assert status['current_full_suite_pass_claim'] is True
             log = artifacts['full-suite.log'];assert b'0 failed;' in log and b'FAILED' not in log
     for name in ('rustc-version.txt','cargo-version.txt','cpuinfo.txt','arm-feature-tree.txt','x86-feature-tree.txt'):

@@ -18,9 +18,9 @@ from scripts.check_native_paged_source_build import CHECKS
 
 ROOT = Path('docs/research/source-paging-20260930/decode')
 CONFIG = ROOT / 'config.json'
-CONFIG_SHA = '0d1734b626f88dc80f491f5e424c3db28865630e943a8589bf444081e823a513'
+CONFIG_SHA = '2874c47ca751842eee38a1de7d322276aadeb2bc5b7270cc8101e974bef679d9'
 MANIFEST = ROOT / 'native-source-manifest.json'
-MANIFEST_SHA = 'dccf895e92da7b11eaa1afaf15e7915946e2ef7bd764a032cfc967d01f64627b'
+MANIFEST_SHA = '0e97343766bd46e1c4a13c617837c1faf46a2a28ec65a42a8dfb5009ff32baeb'
 SCHEMA = 'borsuk-native-graph-decode-spot-v1'
 PREFIX = 'research/source-paging/20260930/graph-decode-'
 NAME = 'cold'
@@ -29,8 +29,8 @@ TAG = 'borsuk-graph-decode-cold'
 SUBNET = 'subnet-034528fbd6977848f'
 WALL = 5400
 COMPUTE_CAP = .45
-CANDIDATE_IDENTITY = '42b66e80fc81cd6c368244eaa245ef6b59c8fa8fcce0eb104cc088c00c3e4f24'
-CONTROL_IDENTITY = '3f05bdfd2c399fb4f93ab5c73827c7b55d8fd31f73ed967e6ac235976a7d7f64'
+CANDIDATE_IDENTITY = 'b673a44ebdf280068a38450d31234ef6c6bcba062835aaed3e453737adb21cfb'
+CONTROL_IDENTITY = 'dbc276544b84730e8355214e2bc832963bb76ef44c8e7e8c3a5cfdb3c70b3eb2'
 GRAPH = STAGE = worker.GRAPH
 COMPILED = (*FOCUSED_ARM, *('crates/borsuk/src/' + name for name in (
     'sq8_s3_range.rs', 'sq8_page_authority.rs', 'two_bit_source.rs', 'two_bit_build.rs',
@@ -239,7 +239,7 @@ def build_self_check(repo, proof):
     original_source = uncompiled_source.read_bytes()
     for failure in ('success', 'control-test', 'candidate-clean', 'candidate-test',
                     'control-graph-count', 'candidate-graph-count', 'toolchain',
-                    'features', 'mutation', 'full-suite', 'stale-target', 'qualification'):
+                    'features', 'mutation', 'repaired-target', 'full-suite', 'stale-target', 'qualification'):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             bad = dict(proof, source_file_count=394) if failure == 'qualification' else proof
@@ -273,6 +273,8 @@ def build_self_check(repo, proof):
                 assert (repo / GRAPH).read_bytes() == (control_body if arm == 'control' else candidate_body)
                 if failure == arm + '-test':
                     raise subprocess.CalledProcessError(1, args)
+                if failure == 'repaired-target' and args[-2:] == ['--test', 'exact_sq8_mirror_direct']:
+                    raise subprocess.CalledProcessError(101, args)
                 if failure == 'mutation':
                     uncompiled_source.write_bytes(original_source + b'\n// unreviewed mutation\n')
                 if '--workspace' in args:
@@ -303,12 +305,17 @@ def build_self_check(repo, proof):
                 assert not (out / 'boundary-check.json').exists()
                 if failure == 'full-suite':
                     assert json.loads((out / 'full-suite-status.json').read_bytes())['status'] == 1
+                if failure == 'repaired-target':
+                    assert not (out / 'full-suite-status.json').exists()
+                    assert commands == ['test']*9 + ['build', 'clean'] + ['test']*10
             else:
                 assert failure == 'success', 'qualification failure swallowed'
-                assert commands == ['test']*9 + ['build', 'clean'] + ['test']*10 + ['build']
+                assert commands == ['test']*9 + ['build', 'clean'] + ['test']*11 + ['build']
                 status = json.loads((out / 'full-suite-status.json').read_bytes())
                 assert status['status'] == 0 and status['runs'] == 1 and status['arm'] == 'candidate'
                 assert status['scope'] == build.FULL_SUITE_SCOPE
+                assert status['repaired_target_status'] == 0
+                assert status['repaired_target_command'][-2:] == ['--test', 'exact_sq8_mirror_direct']
                 assert not (out / 'control/full-suite.log').exists()
                 for arm, destination in [('control', out / 'control'), ('candidate', out)]:
                     boundary = json.loads((destination / 'boundary-check.json').read_bytes())

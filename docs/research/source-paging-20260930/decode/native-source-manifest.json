@@ -1,7 +1,7 @@
 {
   "schema": "borsuk-graph-decode-source-v1",
-  "candidate_identity": "42b66e80fc81cd6c368244eaa245ef6b59c8fa8fcce0eb104cc088c00c3e4f24",
-  "control_identity": "3f05bdfd2c399fb4f93ab5c73827c7b55d8fd31f73ed967e6ac235976a7d7f64",
+  "candidate_identity": "b673a44ebdf280068a38450d31234ef6c6bcba062835aaed3e453737adb21cfb",
+  "control_identity": "dbc276544b84730e8355214e2bc832963bb76ef44c8e7e8c3a5cfdb3c70b3eb2",
   "source_file_count": 395,
   "candidate_graph_sha256": "08bf90c491f53bf8831374f67548c608ba891388528d037d0c5a207186758ea4",
   "control_graph": {
@@ -289,7 +289,7 @@
     "crates/borsuk/tests/cosine_pruning.rs": "4ffd7cefd18f6e93cf13a9fc8d04015fccd85479799af722559dcdda86f59979",
     "crates/borsuk/tests/crash_recovery.rs": "4654d71f9e8cd58306c5646c871f5d5014505bdbeeec1cbabbf3d738151e7deb",
     "crates/borsuk/tests/dataset_scaling.rs": "03bafb968b2908b8cebd4ff579eb2505cd769c2fef3c8c94e73900a7d03775e6",
-    "crates/borsuk/tests/exact_sq8_mirror_direct.rs": "7df94625b612389133dcc8a467e952904aab3e63a0214622b386ba9cd3c29903",
+    "crates/borsuk/tests/exact_sq8_mirror_direct.rs": "d5bc8c4363c444909fab93b6cae83becf73767b84cd6ba2db56895aae9a1c1c8",
     "crates/borsuk/tests/explain.rs": "208d2d3cdc13e9f4a958c5d31ebe3c5bc409f3d5692cb890a5d46be5bfd08d87",
     "crates/borsuk/tests/fault_injection.rs": "378a042775fdc39b8bf8299a01bbce45b8d4a4d767abb7aedbaf5a7e7a37a7d9",
     "crates/borsuk/tests/feature_matrix.rs": "d349cf499489844e364e627392469fd247db2a38e7b6d5128e1e2de8f22d0cb2",
