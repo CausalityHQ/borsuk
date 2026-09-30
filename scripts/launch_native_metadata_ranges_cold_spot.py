@@ -367,6 +367,7 @@ def self_check():
     if FROZEN.exists():
         original = json.loads((ROOT / 'cold-first-query-config.json').read_bytes())
         identities = source_hashes(Path('.'))
+        identities[STAGE] = json.loads(gzip.decompress((FROZEN/'compiled-source.json.gz').read_bytes()))[STAGE]
         assert source_identity(identities) == CONTROL_IDENTITY
         candidate = dict(identities, **{STAGE: '1'*64})
         config = dict(original, schema='borsuk-native-metadata-ranges-cold-v1',

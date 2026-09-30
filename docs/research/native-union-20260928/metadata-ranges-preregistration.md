@@ -1,8 +1,10 @@
 # Bounded metadata ranges / paired cold first response, 2026-09-30
 
-Preparation only: LAUNCH HOLD until the owned source slice, telemetry contract,
-configuration, ARM qualification helper, bounded worker/controller and independent
-verifier are complete and committed. No compute has been launched for this arm.
+Preparation authority closed: reviewed source/telemetry/configuration, bounded
+worker/controller, ARM qualification helper and independent verifier are complete.
+No compute has been launched for this arm at this checkpoint. The one campaign
+first qualifies the candidate ARM executable; a qualification failure prevents
+all query measurement. Local six-test evidence is not an ARM/full-suite claim.
 No new architecture, source fit, scorer, discovery graph or query caps.
 
 ## Causal change and frozen control
@@ -17,12 +19,19 @@ Candidate: fixed8MiB payload ranges, at most4 concurrent requests/buffers, seria
 object order. Authenticate manifest root before child payloads; admit exact object
 lengths and cumulative byte cap before payload. Retain exact decode/hash/schema,
 owned scratch lifetime, cancellation, error cleanup and query physical caps.
-No full object buffering, no detached work, no cache. HEAD/extra range requests
+No full object buffering, no detached work, no cache. Scratch output uses
+direct synchronous file writes to avoid Tokio's extra copied payload buffer and
+detached blocking writes; bounded local-I/O runtime stalls are part of the
+intervention. The immutable reused reducer's `awaited_writes_ms` evidence field
+contains total write/flush wall time for the candidate, despite its historical
+name; candidate writes are synchronous and this is not awaited-I/O attribution. HEAD/extra range requests
 are an explicit tradeoff. Logical submitted metadata request counts and maximum
 range payload budget are required; SDK physical retries/bytes remain unmeasured
 unless instrumentation explicitly proves them. No universal32GET limit on startup;
 32GET/16,773,120B query limits remain unchanged. Four8MiB buffers are32MiB,
-additional to admitted decoded metadata and bounded transport overhead.
+a staging-phase bound, separate from decoded metadata in the later open phase
+and from SDK transport overhead or old pinned generations. Measure process and
+cgroup RSS rather than claiming this buffer bound is total resident memory.
 
 Shared staging serves both two-bit and original object-native generation paths;
 focused affected tests must cover both callers, length/range/byte-cap/root rejection,
@@ -66,7 +75,10 @@ No matched vendor win from published-context comparison.
 ## Closure and remaining delivery
 
 Freeze exact worker/resource/time/cost envelopes in executable configuration
-before launch. Spot default; source/prereg/config authority, ACK-before-persistence
+before launch: Spotc7g.2xlarge,80GB encrypted gp3 delete-on-termination,
+max$0.30/hour,4200s hard shutdown;10GiB build cgroup/2400s command/2430s service;
+8GiB worker cgroup/4GiB address space/1500s command/1530s service, zero swap.
+Compute cap$0.35 plus$0.15 EBS/S3 allowance are estimates, not invoiced total cost. Spot default; source/prereg/config authority, ACK-before-persistence
 ownership, same-ID observation/terminal cleanup, collect only after termination,
 independent archive/input/binary/256record/resource/termination verification.
 No incomplete measurement inspection or duplicate cloud job. A scientific FAIL

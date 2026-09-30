@@ -1,0 +1,14 @@
+{
+  "instance_id": "cd74097c-6c34-4554-884d-549bd622bc0b",
+  "summary": "Completed verified one-file slice c70498a3de9bb5a1cb353765a4b4d4d8edd993d3, direct child of exact parent 1cc4eb7987b31d77ec6e66201149b1281a006259. Clean isolated tree; operator identity preserved, no attribution trailers; no push. Changed only crates/borsuk/src/object_native_generation.rs. HEAD admission precedes payload, serial object order/root authentication retained; <=8MiB objects stream, larger objects use exact 8MiB bounded get_opts ranges in <=4-future drain-before-next batches. Exact headers/size/body count/cumulative cap/MAX_MANIFEST/root hash and later child decoding retained; owned scratch cleanup on success/error/cancel. Direct std file output avoids Tokio copied payload buffers/detached write tasks. Added field contract: head_wall_ns:u128; logical_head_requests:u64=1/object; logical_get_requests:u64=1 small else ceil(bytes/8388608); payload_buffer_bound_bytes:u64=min(bytes,33554432), excludes SDK transport overhead, upper bound not measured RSS. Existing chunks counts stream transport chunks; ranged get_wall_ns=0; stream_wall_ns covers whole overlapping GET/header/body/output critical interval; write_wall_ns covers direct writes/flush inside stream; serial sum(head+get+stream)<=outer staging. Verification: CARGO_TARGET_DIR=/data/target/agents/borsuk-ranges-20260930 cargo test -p borsuk --lib object_native_generation::tests -- --nocapture: 5 passed; same target cargo test -p borsuk --test two_bit_generation pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_budget -- --exact --nocapture: 1 passed. rustfmt --check owned file and git diff --check pass. Covers range boundaries/order/tail/concurrency, short/long/body failure/wrong response metadata, wrong root digest before children, cumulative and manifest caps, scratch cancellation; existing both generation callers tested. Risks: synchronous scratch writes block a runtime worker; SDK transport residency/retries/physical bytes and cold benefit unmeasured. No AWS/release/full-workspace gate/review/consult launched. Parent owns checker/protocol/measurement updates and independent integration.",
+  "work": {
+    "base_known": true,
+    "branch": "devbox/bounded-metadata-ranges-20260930",
+    "commits": 1,
+    "deletions": 67,
+    "dirty": false,
+    "files": 1,
+    "head": "c70498a3 Bound metadata staging with parallel 8 MiB ranges",
+    "insertions": 548
+  }
+}

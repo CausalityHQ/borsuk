@@ -1,8 +1,21 @@
 {
   "synthetic_not_measurement": true,
-  "launch_authority_complete": false,
+  "launch_authority_complete": true,
+  "current_arm_binary_built": false,
+  "current_full_suite_pass_claim": false,
+  "source_files": 395,
+  "compiled_source_files": 8,
+  "qualified_code_files": 11,
+  "artifacts": 53,
+  "user_data_bytes": 12751,
+  "real_preflight_pass": true,
+  "controller_synthetic_ownership_cleanup_checks_pass": true,
   "paired_worker_256call_abba_pass": true,
-  "one_dataset_slowdown_rejected": true,
-  "failed_counter_record_preserved": true,
-  "range_stats_head_get_buffer_timing_negative_checks_pass": true
+  "independent_reducer_self_check_pass": true,
+  "range_stats_checks_pass": true,
+  "source_child_narrow_tests_reported_pass": 6,
+  "source_reviewed_commit": "c70498a3de9bb5a1cb353765a4b4d4d8edd993d3",
+  "controller_reviewed_commit": "d11875d740efabf36e681f49533c7de4aedd48fc",
+  "config_sha256": "e1fed6a3648bba6dfb8307a24bee083476b8d69166f10b9b41ca679e91fc01da",
+  "source_identity_sha256": "1720c277b493c1097f68aa89ea44c8555bf5222bf0de69de28144f900fdee969"
 }

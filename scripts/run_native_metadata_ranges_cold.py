@@ -109,7 +109,8 @@ def main():
     assert cold.sha(config_path) == digest
     config = json.loads(Path(config_path).read_text())
     assert config['schema'] == 'borsuk-native-metadata-ranges-cold-v1'
-    assert config['count'] == 64 and config['k'] == 10
+    assert config['count'] == 64 and config['k'] == 10 and config['ann_queries'] == 256
+    assert config['blocks'] == [dict(arm=a, begin=b, end=e) for a,b,e in BLOCKS]
     assert config['dataset_order'] == ['ReLAION', 'CoHere'] and sorted(os.sched_getaffinity(0)) == [4, 5]
     assert set(config['code_sha256']) == set(CODE)
     for name, expected in config['code_sha256'].items(): assert cold.sha(name) == expected
