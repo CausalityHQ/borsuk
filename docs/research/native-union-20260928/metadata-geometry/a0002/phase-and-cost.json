@@ -1,0 +1,414 @@
+{
+  "valid_measurement": true,
+  "decision": "GO",
+  "published_context": "FAIL",
+  "phases_median_ms": {
+    "control": {
+      "ReLAION": {
+        "head_read_wall_ms": 92.0564115,
+        "remote_open_wall_ms": 1676.3612185,
+        "objects": {
+          "manifest.json": {
+            "head_wall_ms": 8.7819265,
+            "get_wall_ms": 22.039142,
+            "stream_wall_ms": 1.0148655,
+            "write_wall_ms": 0.027508
+          },
+          "page_manifest.json": {
+            "head_wall_ms": 9.264661,
+            "get_wall_ms": 23.252117,
+            "stream_wall_ms": 0.015971,
+            "write_wall_ms": 0.0055925
+          },
+          "page_digests.bin": {
+            "head_wall_ms": 9.4363905,
+            "get_wall_ms": 23.804168,
+            "stream_wall_ms": 1.2913475,
+            "write_wall_ms": 0.057895
+          },
+          "centroids.bin": {
+            "head_wall_ms": 8.9322575,
+            "get_wall_ms": 0.0,
+            "stream_wall_ms": 192.409615,
+            "write_wall_ms": 13.1817725
+          },
+          "graph.bin": {
+            "head_wall_ms": 9.6622155,
+            "get_wall_ms": 22.092027,
+            "stream_wall_ms": 24.1282665,
+            "write_wall_ms": 1.5395065
+          },
+          "diverse_graph.bin": {
+            "head_wall_ms": 9.341983,
+            "get_wall_ms": 22.83261,
+            "stream_wall_ms": 23.5873265,
+            "write_wall_ms": 1.5161885
+          },
+          "plane/manifest.json": {
+            "head_wall_ms": 9.171191,
+            "get_wall_ms": 23.661244,
+            "stream_wall_ms": 0.0149515,
+            "write_wall_ms": 0.006832
+          },
+          "plane/mean.bin": {
+            "head_wall_ms": 9.854702,
+            "get_wall_ms": 23.7262645,
+            "stream_wall_ms": 0.013459,
+            "write_wall_ms": 0.005166
+          },
+          "plane/records.bin": {
+            "head_wall_ms": 9.118243,
+            "get_wall_ms": 0.0,
+            "stream_wall_ms": 588.5372115,
+            "write_wall_ms": 56.778532
+          }
+        },
+        "stream_wall_ms": 833.1089135,
+        "write_wall_ms": 73.2603885,
+        "staging_wall_ms": 1078.707467,
+        "decode_wall_ms": 575.8489945
+      },
+      "CoHere": {
+        "head_read_wall_ms": 91.986976,
+        "remote_open_wall_ms": 1675.4523675,
+        "objects": {
+          "manifest.json": {
+            "head_wall_ms": 8.78081,
+            "get_wall_ms": 22.6851115,
+            "stream_wall_ms": 1.0409695,
+            "write_wall_ms": 0.0275245
+          },
+          "page_manifest.json": {
+            "head_wall_ms": 8.7717395,
+            "get_wall_ms": 22.508904,
+            "stream_wall_ms": 0.02059,
+            "write_wall_ms": 0.0052015
+          },
+          "page_digests.bin": {
+            "head_wall_ms": 8.920331,
+            "get_wall_ms": 23.207742,
+            "stream_wall_ms": 1.2900655,
+            "write_wall_ms": 0.058111
+          },
+          "centroids.bin": {
+            "head_wall_ms": 8.6235545,
+            "get_wall_ms": 0.0,
+            "stream_wall_ms": 191.7294345,
+            "write_wall_ms": 13.218632
+          },
+          "graph.bin": {
+            "head_wall_ms": 9.5542465,
+            "get_wall_ms": 22.102199,
+            "stream_wall_ms": 23.020318,
+            "write_wall_ms": 1.5410145
+          },
+          "diverse_graph.bin": {
+            "head_wall_ms": 9.463338,
+            "get_wall_ms": 23.4333915,
+            "stream_wall_ms": 22.061601,
+            "write_wall_ms": 1.5312005
+          },
+          "plane/manifest.json": {
+            "head_wall_ms": 9.672786,
+            "get_wall_ms": 23.1895345,
+            "stream_wall_ms": 0.01457,
+            "write_wall_ms": 0.0067835
+          },
+          "plane/mean.bin": {
+            "head_wall_ms": 8.973734,
+            "get_wall_ms": 23.844091,
+            "stream_wall_ms": 0.0136095,
+            "write_wall_ms": 0.004956
+          },
+          "plane/records.bin": {
+            "head_wall_ms": 9.64838,
+            "get_wall_ms": 0.0,
+            "stream_wall_ms": 588.6615895,
+            "write_wall_ms": 56.8534485
+          }
+        },
+        "stream_wall_ms": 830.8429575,
+        "write_wall_ms": 73.481801,
+        "staging_wall_ms": 1076.453879,
+        "decode_wall_ms": 576.228504
+      }
+    },
+    "candidate": {
+      "ReLAION": {
+        "head_read_wall_ms": 91.4845415,
+        "remote_open_wall_ms": 1348.7250305,
+        "objects": {
+          "manifest.json": {
+            "head_wall_ms": 9.0199215,
+            "get_wall_ms": 22.030895,
+            "stream_wall_ms": 0.999346,
+            "write_wall_ms": 0.0269895
+          },
+          "page_manifest.json": {
+            "head_wall_ms": 9.160697,
+            "get_wall_ms": 23.040307,
+            "stream_wall_ms": 0.016904,
+            "write_wall_ms": 0.0056555
+          },
+          "page_digests.bin": {
+            "head_wall_ms": 8.8858385,
+            "get_wall_ms": 22.909928,
+            "stream_wall_ms": 1.328099,
+            "write_wall_ms": 0.0573535
+          },
+          "centroids.bin": {
+            "head_wall_ms": 8.866757,
+            "get_wall_ms": 0.0,
+            "stream_wall_ms": 117.71881,
+            "write_wall_ms": 12.914549
+          },
+          "graph.bin": {
+            "head_wall_ms": 9.175856,
+            "get_wall_ms": 0.0,
+            "stream_wall_ms": 45.3759795,
+            "write_wall_ms": 1.10682
+          },
+          "diverse_graph.bin": {
+            "head_wall_ms": 9.291364,
+            "get_wall_ms": 0.0,
+            "stream_wall_ms": 45.3736045,
+            "write_wall_ms": 1.1268645
+          },
+          "plane/manifest.json": {
+            "head_wall_ms": 9.1372,
+            "get_wall_ms": 23.502967,
+            "stream_wall_ms": 0.016178,
+            "write_wall_ms": 0.007095
+          },
+          "plane/mean.bin": {
+            "head_wall_ms": 9.574114,
+            "get_wall_ms": 23.5379885,
+            "stream_wall_ms": 0.0137265,
+            "write_wall_ms": 0.0055555
+          },
+          "plane/records.bin": {
+            "head_wall_ms": 9.479127,
+            "get_wall_ms": 0.0,
+            "stream_wall_ms": 340.882229,
+            "write_wall_ms": 56.999768
+          }
+        },
+        "stream_wall_ms": 556.775412,
+        "write_wall_ms": 72.3142425,
+        "staging_wall_ms": 752.676066,
+        "decode_wall_ms": 572.585405
+      },
+      "CoHere": {
+        "head_read_wall_ms": 91.3773545,
+        "remote_open_wall_ms": 1357.22947,
+        "objects": {
+          "manifest.json": {
+            "head_wall_ms": 8.5171275,
+            "get_wall_ms": 21.5298405,
+            "stream_wall_ms": 0.958489,
+            "write_wall_ms": 0.0273265
+          },
+          "page_manifest.json": {
+            "head_wall_ms": 8.5903255,
+            "get_wall_ms": 23.7824795,
+            "stream_wall_ms": 0.0170715,
+            "write_wall_ms": 0.0055295
+          },
+          "page_digests.bin": {
+            "head_wall_ms": 8.840176,
+            "get_wall_ms": 22.2338135,
+            "stream_wall_ms": 1.28659,
+            "write_wall_ms": 0.0571915
+          },
+          "centroids.bin": {
+            "head_wall_ms": 8.749766,
+            "get_wall_ms": 0.0,
+            "stream_wall_ms": 117.1596295,
+            "write_wall_ms": 13.0521545
+          },
+          "graph.bin": {
+            "head_wall_ms": 9.6971515,
+            "get_wall_ms": 0.0,
+            "stream_wall_ms": 45.469223,
+            "write_wall_ms": 1.0975385
+          },
+          "diverse_graph.bin": {
+            "head_wall_ms": 9.997496,
+            "get_wall_ms": 0.0,
+            "stream_wall_ms": 45.4010095,
+            "write_wall_ms": 1.1351095
+          },
+          "plane/manifest.json": {
+            "head_wall_ms": 9.9999555,
+            "get_wall_ms": 24.2611135,
+            "stream_wall_ms": 0.016503,
+            "write_wall_ms": 0.007116
+          },
+          "plane/mean.bin": {
+            "head_wall_ms": 9.5519275,
+            "get_wall_ms": 24.175083,
+            "stream_wall_ms": 0.0142035,
+            "write_wall_ms": 0.005754
+          },
+          "plane/records.bin": {
+            "head_wall_ms": 9.756436,
+            "get_wall_ms": 0.0,
+            "stream_wall_ms": 342.3755995,
+            "write_wall_ms": 56.7650455
+          }
+        },
+        "stream_wall_ms": 558.0899785,
+        "write_wall_ms": 72.083573,
+        "staging_wall_ms": 762.401794,
+        "decode_wall_ms": 571.9193475
+      }
+    }
+  },
+  "comparison": {
+    "ReLAION": {
+      "control": {
+        "count": 64,
+        "returned_hits": 636,
+        "recall_at_10": 0.99375,
+        "quality_gate_passed": true,
+        "published_context_gate_passed": false,
+        "cold_start_to_first_http_response_ms": {
+          "p50": 1957.22487,
+          "p90": 2339.8795544,
+          "p95": 2537.4896619999995,
+          "p99": 3098.38931078
+        },
+        "incoming_http_ms": {
+          "p50": 137.8637095,
+          "p90": 276.54612000000003,
+          "p95": 356.3068378999998,
+          "p99": 477.60450264999986
+        },
+        "query_submitted_gets": 1927,
+        "query_verified_bytes": 1073479680,
+        "query_failed_gets": 0,
+        "metadata_objects": 576,
+        "metadata_bytes": 16428441792,
+        "split": "fresh rank16 development0-63",
+        "logical_metadata_head_requests": 576,
+        "logical_metadata_get_requests": 2368,
+        "payload_buffer_bound_bytes": 33554432
+      },
+      "candidate": {
+        "count": 64,
+        "returned_hits": 636,
+        "recall_at_10": 0.99375,
+        "quality_gate_passed": true,
+        "published_context_gate_passed": false,
+        "cold_start_to_first_http_response_ms": {
+          "p50": 1614.76051,
+          "p90": 1763.1172217,
+          "p95": 1809.6849951499998,
+          "p99": 2462.588184909996
+        },
+        "incoming_http_ms": {
+          "p50": 129.611309,
+          "p90": 219.7639627000001,
+          "p95": 313.85127289999997,
+          "p99": 352.8391247499998
+        },
+        "query_submitted_gets": 1927,
+        "query_verified_bytes": 1073479680,
+        "query_failed_gets": 0,
+        "metadata_objects": 576,
+        "metadata_bytes": 16428441792,
+        "split": "fresh rank16 development0-63",
+        "logical_metadata_head_requests": 576,
+        "logical_metadata_get_requests": 4416,
+        "payload_buffer_bound_bytes": 33554432
+      },
+      "p90_change_percent": -24.64923169294906,
+      "quality_delta_pp": 0.0,
+      "paired_candidate_faster": 63,
+      "paired_candidate_slower": 1
+    },
+    "CoHere": {
+      "control": {
+        "count": 64,
+        "returned_hits": 620,
+        "recall_at_10": 0.96875,
+        "quality_gate_passed": true,
+        "published_context_gate_passed": false,
+        "cold_start_to_first_http_response_ms": {
+          "p50": 1924.2264930000001,
+          "p90": 1989.6495512,
+          "p95": 2123.7506291499994,
+          "p99": 3299.1363307199986
+        },
+        "incoming_http_ms": {
+          "p50": 116.21334200000001,
+          "p90": 165.1624492,
+          "p95": 175.63843285000002,
+          "p99": 273.1815425599997
+        },
+        "query_submitted_gets": 2035,
+        "query_verified_bytes": 1073479680,
+        "query_failed_gets": 0,
+        "metadata_objects": 576,
+        "metadata_bytes": 16428445184,
+        "split": "fresh CoHere development0-63",
+        "logical_metadata_head_requests": 576,
+        "logical_metadata_get_requests": 2368,
+        "payload_buffer_bound_bytes": 33554432
+      },
+      "candidate": {
+        "count": 64,
+        "returned_hits": 620,
+        "recall_at_10": 0.96875,
+        "quality_gate_passed": true,
+        "published_context_gate_passed": false,
+        "cold_start_to_first_http_response_ms": {
+          "p50": 1599.625803,
+          "p90": 1712.6173629000002,
+          "p95": 1778.7074380499998,
+          "p99": 2140.1251199299995
+        },
+        "incoming_http_ms": {
+          "p50": 111.93763100000001,
+          "p90": 147.65185980000004,
+          "p95": 188.46905094999997,
+          "p99": 451.99685183999844
+        },
+        "query_submitted_gets": 2035,
+        "query_verified_bytes": 1073479680,
+        "query_failed_gets": 0,
+        "metadata_objects": 576,
+        "metadata_bytes": 16428445184,
+        "split": "fresh CoHere development0-63",
+        "logical_metadata_head_requests": 576,
+        "logical_metadata_get_requests": 4416,
+        "payload_buffer_bound_bytes": 33554432
+      },
+      "p90_change_percent": -13.923667518881189,
+      "quality_delta_pp": 0.0,
+      "paired_candidate_faster": 61,
+      "paired_candidate_slower": 3
+    }
+  },
+  "build_peak_bytes": 7165911040,
+  "cgroup_peak_bytes": 681709568,
+  "native_peak_rss_bytes": {
+    "control": {
+      "ReLAION": 371933184,
+      "CoHere": 371892224
+    },
+    "candidate": {
+      "ReLAION": 393117696,
+      "CoHere": 393375744
+    }
+  },
+  "compute_observed_controller_seconds": 1669,
+  "compute_quote_usd_per_hour": 0.1784,
+  "compute_cost_estimate_usd": 0.08270822222222222,
+  "total_cost_measured": false,
+  "cost_scope": "Controller launch-to-owned-termination elapsed times observed Spot quote; excludes EBS/S3/public IPv4 and is not an invoice",
+  "metadata_get_scope": "logical API counts, not measured SDK wire retries; two additional startup control GETs per namespace are inferred from frozen source",
+  "component_medians_are_not_tail_sums": true,
+  "matched_vendor_measured": false,
+  "offered_or_saturation_qps_measured": false
+}
