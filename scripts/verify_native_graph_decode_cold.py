@@ -136,16 +136,16 @@ def main(attempt):
         if arm == 'candidate':
             assert boundary['full_suite_status'] == 0 and boundary['current_full_suite_pass_claim'] is True
             command = boundary['full_suite_command']
-            assert command[1:6] == ['test','--release','--locked','--workspace','--all-targets']
-            assert command[6] == '--manifest-path' and command[7].endswith('/repo/Cargo.toml')
-            assert command[8] == '--target-dir' and command[9].endswith('/target')
-            assert command[10:] == ['--jobs','4'] and boundary['full_suite_runs'] == 1
+            assert command[1:5] == ['test','--locked','--workspace','--all-targets']
+            assert command[5] == '--manifest-path' and command[6].endswith('/repo/Cargo.toml')
+            assert command[7] == '--target-dir' and command[8].endswith('/target')
+            assert command[9:] == ['--jobs','4'] and boundary['full_suite_runs'] == 1
             status = json.loads(artifacts['full-suite-status.json'])
             assert status['status'] == 0 and status['runs'] == 1 and status['arm'] == 'candidate'
             assert status['command'] == command and status['scope'] == boundary['full_suite_scope']
             assert status['repaired_target_status'] == 0
             assert status['repaired_target_command'] == [command[0], 'test', '--release', '--locked',
-                '--manifest-path', command[7], '--target-dir', command[9], '-p', 'borsuk',
+                '--manifest-path', command[6], '--target-dir', command[8], '-p', 'borsuk',
                 '--jobs', '4', '--test', 'exact_sq8_mirror_direct']
             assert status['current_full_suite_pass_claim'] is True
             log = artifacts['full-suite.log'];assert b'0 failed;' in log and b'FAILED' not in log

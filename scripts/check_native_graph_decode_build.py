@@ -9,7 +9,7 @@ from scripts.check_native_startup_build import (RUNTIME, SOURCE_TESTS, sha,
 
 from scripts.check_native_paged_source_build import CHECKS, SOURCE_WALK_TESTS
 
-FULL_SUITE_SCOPE = 'Changed candidate; locked release Rust workspace, all targets, once on this worker'
+FULL_SUITE_SCOPE = 'Changed candidate; locked Rust workspace, all targets, CI test profile, once on this worker'
 CONTROL_SUITE_SCOPE = 'Control focused checks only; historical full-suite evidence is not a current pass claim'
 
 
@@ -77,7 +77,7 @@ def main(cargo, repo, out):
                 assert source_hashes(repo) == hashes
             full_suite_command = None
             if arm == 'candidate':
-                full_suite_command = [cargo, 'test', '--release', '--locked', '--workspace',
+                full_suite_command = [cargo, 'test', '--locked', '--workspace',
                     '--all-targets', '--manifest-path', str(repo / 'Cargo.toml'),
                     '--target-dir', str(target_dir), '--jobs', '4']
                 repaired_target_command = [cargo, 'test', *args, '--test', 'exact_sq8_mirror_direct']

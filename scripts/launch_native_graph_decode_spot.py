@@ -268,7 +268,8 @@ def build_self_check(repo, proof):
                         raise subprocess.CalledProcessError(1, args)
                     binary.unlink()
                     return
-                assert '--locked' in args and '--release' in args
+                assert '--locked' in args
+                assert ('--release' in args) is ('--workspace' not in args)
                 assert args[args.index('--jobs') + 1] == '4'
                 assert (repo / GRAPH).read_bytes() == (control_body if arm == 'control' else candidate_body)
                 if failure == arm + '-test':

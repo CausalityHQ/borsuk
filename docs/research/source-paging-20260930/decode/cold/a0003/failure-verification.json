@@ -1,0 +1,156 @@
+{
+  "schema": "borsuk-native-graph-decode-engineering-failure-v1",
+  "verified": true,
+  "attempt": "a0003",
+  "status": "engineering-failure-before-measurement",
+  "phase": "binary-qualification",
+  "exit_code": 1,
+  "instance_id": "i-0c5a75c8e1aeea739",
+  "instance_state": "terminated",
+  "source_commit": "751decdb0ba7e188469eca5389168e3aed623fe8",
+  "source_archive_sha256": "c9184d5ee9b6492593ca276a932cfd726659f8aac5a798fe5ba0c04af1cef676",
+  "terminal_sha256": "7a4c75b97c0775ad5584d23e156dd187037a35c41a5698394f0ddad1a994b7a9",
+  "config_sha256": "9cd9cc8eb956d947002cfa5d14b2d0cb7ed7e89bdb455fd779bad7cdf6bfe6bb",
+  "manifest_sha256": "e1a283e57bf82a3606dc7ce36a4221f8f2c9054057799f6ce816cc3262e95f16",
+  "authenticated_artifact_count": 60,
+  "expected_complete_artifact_count": 92,
+  "missing_artifacts": [
+    "binaries/two_bit_http",
+    "boundary-cgroup.json",
+    "boundary-check.json",
+    "compiled-source.json",
+    "compiled-source/Cargo.lock",
+    "compiled-source/Cargo.toml",
+    "compiled-source/crates/borsuk/Cargo.toml",
+    "compiled-source/crates/borsuk/examples/two_bit_http.rs",
+    "compiled-source/crates/borsuk/src/bin/build_two_bit_graph_variant.rs",
+    "compiled-source/crates/borsuk/src/bin/two_bit_plan_demo.rs",
+    "compiled-source/crates/borsuk/src/bin/two_bit_union_nomination.rs",
+    "compiled-source/crates/borsuk/src/bin/two_bit_walk_nomination.rs",
+    "compiled-source/crates/borsuk/src/object_native_generation.rs",
+    "compiled-source/crates/borsuk/src/sq8_page_authority.rs",
+    "compiled-source/crates/borsuk/src/sq8_s3_range.rs",
+    "compiled-source/crates/borsuk/src/two_bit_build.rs",
+    "compiled-source/crates/borsuk/src/two_bit_generation.rs",
+    "compiled-source/crates/borsuk/src/two_bit_index.rs",
+    "compiled-source/crates/borsuk/src/two_bit_source.rs",
+    "compiled-source/crates/borsuk/src/unit_centroid_graph.rs",
+    "compiled-source/crates/borsuk/tests/two_bit_application_ids.rs",
+    "compiled-source/crates/borsuk/tests/two_bit_gc_delayed_delete.rs",
+    "compiled-source/crates/borsuk/tests/two_bit_generation.rs",
+    "compiled-source/crates/borsuk/tests/two_bit_source.rs",
+    "profile-cgroup.json",
+    "profile-resources.txt",
+    "profile.log",
+    "screen/block0-records.jsonl",
+    "screen/block1-records.jsonl",
+    "screen/block2-records.jsonl",
+    "screen/block3-records.jsonl",
+    "screen/summary.json"
+  ],
+  "focused_checks": {
+    "control": {
+      "source": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "source-walk": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1708 filtered out; finished in 0.92s"
+      ],
+      "sq8-transport": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1705 filtered out; finished in 0.20s"
+      ],
+      "object-native": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1708 filtered out; finished in 0.12s"
+      ],
+      "graph": [
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1706 filtered out; finished in 0.08s"
+      ],
+      "generation": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s"
+      ],
+      "application-ids": [
+        "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      ],
+      "gc": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "http": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    "candidate": {
+      "source": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "source-walk": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1709 filtered out; finished in 0.88s"
+      ],
+      "sq8-transport": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1706 filtered out; finished in 0.19s"
+      ],
+      "object-native": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1709 filtered out; finished in 0.11s"
+      ],
+      "graph": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1706 filtered out; finished in 0.07s"
+      ],
+      "generation": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s"
+      ],
+      "application-ids": [
+        "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      ],
+      "gc": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "http": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    }
+  },
+  "candidate_full_suite": {
+    "arm": "candidate",
+    "status": 101,
+    "command": [
+      "/mnt/native-graph-decode-cold/.cargo/bin/cargo",
+      "test",
+      "--release",
+      "--locked",
+      "--workspace",
+      "--all-targets",
+      "--manifest-path",
+      "/mnt/native-graph-decode-cold/repo/Cargo.toml",
+      "--target-dir",
+      "/mnt/native-graph-decode-cold/target",
+      "--jobs",
+      "4"
+    ],
+    "scope": "Changed candidate; locked release Rust workspace, all targets, once on this worker",
+    "repaired_target_command": [
+      "/mnt/native-graph-decode-cold/.cargo/bin/cargo",
+      "test",
+      "--release",
+      "--locked",
+      "--manifest-path",
+      "/mnt/native-graph-decode-cold/repo/Cargo.toml",
+      "--target-dir",
+      "/mnt/native-graph-decode-cold/target",
+      "-p",
+      "borsuk",
+      "--jobs",
+      "4",
+      "--test",
+      "exact_sq8_mirror_direct"
+    ],
+    "repaired_target_status": 0,
+    "runs": 1,
+    "current_full_suite_pass_claim": false
+  },
+  "root_cause": "assertion failed: p99_ns < 15_000_000 in legacy v26 Arrow timing test; observed69.901765ms versus15ms while full-suite tests run concurrently on bounded ARM worker",
+  "measurement_records": 0,
+  "quality_latency_throughput_measured": false,
+  "current_full_suite_pass_claim": false,
+  "compute_cost_estimate_usd": 0.11837927777777778,
+  "cost_scope": "EST controller elapsed at quoted Spot rate; excludes EBS/IP/S3/invoice",
+  "total_cost_measured": false
+}

@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0c5a75c8e1aeea739",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0c5a75c8e1aeea739"
+    }
+  },
+  "prefix": "research/source-paging/20260930/graph-decode-a0003",
+  "source_commit": "751decdb0ba7e188469eca5389168e3aed623fe8",
+  "source_archive_sha256": "c9184d5ee9b6492593ca276a932cfd726659f8aac5a798fe5ba0c04af1cef676"
+}
