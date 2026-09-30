@@ -1,0 +1,7 @@
+{
+  "schema": "borsuk-fp16-sticky-boundary-check-v1",
+  "cases": 190474,
+  "failed": 0,
+  "method": "stdlib direct half versus discarded-low32 sticky fold then truncated f64 direct half",
+  "native_qualification": false
+}
