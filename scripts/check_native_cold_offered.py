@@ -94,20 +94,24 @@ class Scenario:
             raise self.failures[q]
         return row
 
-    def measure(self, bad_transfer=False):
+    def measure(self, bad_transfer=False, geometry=None):
         with patch.object(worker, 'time', self), \
              patch.object(worker, 'threading', SimpleNamespace(Event=threading.Event, Thread=self.Thread)), \
              patch.object(worker.cold, 'cold_call', side_effect=self.cold), \
              patch.object(worker.ranges, 'validate_transfer', return_value=TRANSFER,
                           side_effect=AssertionError('bad transfer') if bad_transfer else None) as transfer:
-            rows, result = worker.measure('qualified-binary', CONFIG, ITEM, VALUES, 8)
+            config = dict(CONFIG, staging={'candidate':geometry}) if geometry is not None else CONFIG
+            rows, result = worker.measure('qualified-binary', config, ITEM, VALUES, 8)
         assert not self.active
-        if not bad_transfer: assert transfer.call_count == result['successful']
+        if not bad_transfer:
+            assert transfer.call_count == result['successful']
+            assert all(call.args[-1] == geometry for call in transfer.call_args_list)
         assert len({id(stream) for stream in self.streams}) == len(self.calls)
         return rows, result
 
 
 def scheduler_check():
+    Scenario().measure(geometry=dict(range_bytes=4194304, parallel_gets=8))
     scenario = Scenario()
     rows, result = scenario.measure()
     assert scenario.peak == 6
