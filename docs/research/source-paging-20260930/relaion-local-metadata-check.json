@@ -1,0 +1,15 @@
+{
+  "arm_qualified": false,
+  "binary_sha256": "649f14183d026941c6e7c3b464c810f48d730193495284119d2befc1efbbf4ba",
+  "dataset": "ReLAION",
+  "exit_code": 1,
+  "expected_rejection": "request roster size",
+  "metadata_open_proven_before_expected_request_rejection": true,
+  "native_source_commit": "2b0827369965ede5414a23e7be3abfefb92166b9",
+  "performance_measurement": false,
+  "query_or_truth_bodies_used": false,
+  "root_sha256": "b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b",
+  "schema": "borsuk-native-paged-source-local-metadata-check-v1",
+  "stderr": "Error: \"request roster size\"\n",
+  "stdout": ""
+}

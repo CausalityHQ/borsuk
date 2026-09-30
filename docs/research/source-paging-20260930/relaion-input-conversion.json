@@ -1,0 +1,74 @@
+{
+  "artifacts": {
+    "centroids.bin": {
+      "bytes": 48000032,
+      "sha256": "ab8964974527547f67d138383ab6e77076c897dccf5078f5211e6f2e13a4d4e3"
+    },
+    "diverse_graph.bin": {
+      "bytes": 4265768,
+      "sha256": "b9c9b23d28df4fd8fd40cc7213cece023a5c6b60584d78104899bc583e094e4a"
+    },
+    "graph.bin": {
+      "bytes": 4265768,
+      "sha256": "d7c4cb36ed1ca041755cbbf817f061cf03470d7bb3b07002474bf91aefcbe616"
+    },
+    "manifest.json": {
+      "bytes": 33910,
+      "sha256": "b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b"
+    },
+    "page_digests.bin": {
+      "bytes": 125024,
+      "sha256": "4a67b1287d4bb39110f07242212b32b060fea6ded1246f0a66c4b055792fe1ee"
+    },
+    "page_manifest.json": {
+      "bytes": 280,
+      "sha256": "dcd1331821591603e200a472be45bbe9b437aa8e7ca669bc7314f7d83103e660"
+    },
+    "plane/manifest.json": {
+      "bytes": 651,
+      "sha256": "e5f76ddafe4d6852d75155cab8da792d5a56ad43948eb88f70d26c1e14057bbe"
+    },
+    "plane/mean.bin": {
+      "bytes": 3072,
+      "sha256": "f89b58ff4bc60fae32a0ba86878f25dff926cf8e063f5328b4467c40e654788f"
+    },
+    "plane/page_digests.bin": {
+      "bytes": 1000000,
+      "sha256": "dcf2bf6d4dad21023b09328273ff7144f7a5d71a723906a897d1a8c3e4dc4a5c"
+    },
+    "plane/records.bin": {
+      "bytes": 200000000,
+      "sha256": "b0f993af75f8ce22ab393f98dc5778f629141099a8ad60035481b56a1a466944"
+    }
+  },
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "canonical_and_sq8_referenced_bodies_reused_not_requalified": true,
+  "converted_local_path": "/data/cache/borsuk-source-paging-20260930/relaion/converted",
+  "corpus": "FIRST1M",
+  "dataset": "ReLAION",
+  "dimensions": 768,
+  "metric": "cosine",
+  "native_qualified": false,
+  "native_source_commit": "2b0827369965ede5414a23e7be3abfefb92166b9",
+  "original_config_path": "docs/research/native-union-20260928/metadata-geometry-config.json",
+  "original_config_sha256": "410ce351d764bccccafcfe6e34697dcc961856288c67f8519c451fa4266143c3",
+  "original_root_sha256": "d8e7ccf090f322bbb39600f096e8d64b7dc15ed8f5d7dfd6344b1c076dc99cce",
+  "preparation_code_sha256": "befa193917eac879f70a438c3c74d00fc7851c07e1ae7bf5b8027329318fa95f",
+  "query_or_truth_used": false,
+  "region": "eu-central-1",
+  "remote_published": false,
+  "root_sha256": "b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b",
+  "rows": 1000000,
+  "schema": "borsuk-native-paged-source-conversion-v1",
+  "source_page_digest_sha256": "dcf2bf6d4dad21023b09328273ff7144f7a5d71a723906a897d1a8c3e4dc4a5c",
+  "source_prefix": "research/native-union/20260928/fresh-rank16-dev64-a0002/indexes/relaion/k10/generations/d8e7ccf090f322bbb39600f096e8d64b7dc15ed8f5d7dfd6344b1c076dc99cce",
+  "unchanged_files": {
+    "centroids.bin": "ab8964974527547f67d138383ab6e77076c897dccf5078f5211e6f2e13a4d4e3",
+    "diverse_graph.bin": "b9c9b23d28df4fd8fd40cc7213cece023a5c6b60584d78104899bc583e094e4a",
+    "graph.bin": "d7c4cb36ed1ca041755cbbf817f061cf03470d7bb3b07002474bf91aefcbe616",
+    "page_digests.bin": "4a67b1287d4bb39110f07242212b32b060fea6ded1246f0a66c4b055792fe1ee",
+    "page_manifest.json": "dcd1331821591603e200a472be45bbe9b437aa8e7ca669bc7314f7d83103e660",
+    "plane/mean.bin": "f89b58ff4bc60fae32a0ba86878f25dff926cf8e063f5328b4467c40e654788f",
+    "plane/records.bin": "b0f993af75f8ce22ab393f98dc5778f629141099a8ad60035481b56a1a466944"
+  }
+}

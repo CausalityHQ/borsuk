@@ -1,0 +1,15 @@
+{
+  "arm_qualified": false,
+  "binary_sha256": "649f14183d026941c6e7c3b464c810f48d730193495284119d2befc1efbbf4ba",
+  "dataset": "CoHere",
+  "exit_code": 1,
+  "expected_rejection": "request roster size",
+  "metadata_open_proven_before_expected_request_rejection": true,
+  "native_source_commit": "2b0827369965ede5414a23e7be3abfefb92166b9",
+  "performance_measurement": false,
+  "query_or_truth_bodies_used": false,
+  "root_sha256": "73610189db28eee8cacdec1867fab6ee18e197ddecbda9ba4cfa2cd0684a9ccf",
+  "schema": "borsuk-native-paged-source-local-metadata-check-v1",
+  "stderr": "Error: \"request roster size\"\n",
+  "stdout": ""
+}
