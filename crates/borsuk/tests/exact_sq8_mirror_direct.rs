@@ -1,13 +1,5 @@
-#[path = "../src/exact_sq8_mirror.rs"]
-mod exact_sq8_mirror;
-#[path = "../src/exact_sq8_nominee.rs"]
-mod exact_sq8_nominee;
-#[path = "../src/sq8_page_authority.rs"]
-mod sq8_page_authority;
-
-use borsuk::rotated_two_bit;
-use exact_sq8_mirror::{ExactSq8Mirror, MirrorManifest, Placement};
-use exact_sq8_nominee::Sq8Geometry;
+use borsuk::exact_sq8_mirror::{ExactSq8Mirror, MirrorManifest, Placement};
+use borsuk::exact_sq8_nominee::Sq8Geometry;
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
