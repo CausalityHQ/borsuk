@@ -951,21 +951,22 @@ mod tests {
                     failed_gets: 0
                 }
             );
-            let captured = requests.lock().unwrap();
-            assert_eq!(captured.len(), 2);
-            let source_request = captured[0].to_ascii_lowercase();
-            assert!(source_request.contains("/plane/records.bin "));
-            assert!(source_request.contains("range: bytes=0-17\r\n"));
-            assert!(source_request.contains(&format!(
-                "if-match: {}\r\n",
-                source_etag.to_ascii_lowercase()
-            )));
-            let request = captured[1].to_ascii_lowercase();
-            assert!(request.starts_with(&format!("get /fixture/{key} ")));
-            assert!(request.contains("range: bytes=0-27\r\n"));
-            assert!(request.contains(&format!("if-match: {}\r\n", etag.to_ascii_lowercase())));
-            assert!(request.contains("authorization: aws4-hmac-sha256 "));
-            drop(captured);
+            {
+                let captured = requests.lock().unwrap();
+                assert_eq!(captured.len(), 2);
+                let source_request = captured[0].to_ascii_lowercase();
+                assert!(source_request.contains("/plane/records.bin "));
+                assert!(source_request.contains("range: bytes=0-17\r\n"));
+                assert!(source_request.contains(&format!(
+                    "if-match: {}\r\n",
+                    source_etag.to_ascii_lowercase()
+                )));
+                let request = captured[1].to_ascii_lowercase();
+                assert!(request.starts_with(&format!("get /fixture/{key} ")));
+                assert!(request.contains("range: bytes=0-27\r\n"));
+                assert!(request.contains(&format!("if-match: {}\r\n", etag.to_ascii_lowercase())));
+                assert!(request.contains("authorization: aws4-hmac-sha256 "));
+            }
             let logical = crate::two_bit_index::TwoBitIndex::open_remote(
                 &store,
                 read_two_bit_head(&store, &prefix).await.unwrap().unwrap(),

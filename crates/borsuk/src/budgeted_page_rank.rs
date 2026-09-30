@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(bytes, 970);
         assert_eq!(
             cover_pages(&selected, 129, 10, 32, 1).unwrap(),
-            (vec![0..1290], 1290)
+            (std::iter::once(0..1290).collect::<Vec<_>>(), 1290)
         );
         assert!(cover_pages(&[5].into_iter().collect(), 129, 10, 32, 1).is_err());
         assert!(cover_pages(&selected, 129, 10, 0, 1).is_err());
