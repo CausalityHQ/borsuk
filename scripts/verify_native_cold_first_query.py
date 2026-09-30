@@ -27,56 +27,61 @@ def percentile(values,p):
     return values[low]+(values[high]-values[low])*(position-low)
 
 
+def validate_record(row,request,reference,truth,item,port=8080):
+    assert row['dataset']==item['dataset']
+    assert row['http_status']==200 and row['http_attempts']==row['valid_ann_requests']==1
+    for key in ('started_ns','successful_connect_attempt_ns','connected_ns','completed_ns',
+                'cold_start_to_first_http_response_ns','before_successful_connect_attempt_ns',
+                'successful_tcp_connect_ns','first_post_to_response_ns','incoming_http_wall_ns',
+                'connection_refused_attempts'):
+        assert type(row[key]) is int and row[key]>=0
+    start,attempt,connect,end=[row[key] for key in
+        ('started_ns','successful_connect_attempt_ns','connected_ns','completed_ns')]
+    assert start<=attempt<=connect<=end
+    assert row['cold_start_to_first_http_response_ns']==end-start
+    assert row['before_successful_connect_attempt_ns']==attempt-start
+    assert row['successful_tcp_connect_ns']==connect-attempt
+    assert row['first_post_to_response_ns']==end-connect
+    assert row['incoming_http_wall_ns']==end-attempt
+    body=json.dumps(dict(query=request['query'],k=10,**item['authority']),
+                    separators=(',',':'),allow_nan=False).encode()
+    assert row['request_sha256']==sha(body) and row['request_bytes']==len(body)
+    response=row['response']
+    assert response['authority']==item['authority']
+    for key in ('ids','ranges','planned_bytes','submitted_gets','verified_bytes','failed_gets'):
+        assert response[key]==reference[key]
+    assert len(response['ids'])==len(set(response['ids']))==10
+    assert all(type(v) is int and 0<=v<1000000 for v in response['ids'])
+    assert len(response['ranges'])==response['submitted_gets']<=32
+    assert response['planned_bytes']==response['verified_bytes']<=16773120
+    assert sum(end-begin for begin,end in response['ranges'])==response['planned_bytes']
+    assert response['failed_gets']==0
+    assert type(response['native_wall_ns']) is int and 0<=response['native_wall_ns']<=row['incoming_http_wall_ns']
+    assert row['returned_hits']==len(set(response['ids']) & set(truth[:10]))
+    headers=[json.loads(line) for line in row['native_server_log'].splitlines() if line.startswith('{')]
+    assert len(headers)==1 and headers[0]==row['native_header']
+    header=headers[0]
+    assert header['phase']=='ready' and header['listen']==f'127.0.0.1:{port}' and header['authority']==item['authority']
+    assert row['metadata']==validate(header['remote_open_stats'],item['metadata_files'],header['remote_open_wall_ns'])
+    assert end-start>=header['remote_open_wall_ns']+header['head_read_wall_ns']
+    assert row['native_close']['intentional_stop'] is True
+    assert row['native_close']['returncode'] in (124,143,-15)
+    metrics={line.strip().split(':',1)[0]:line.strip().split(':',1)[1].strip()
+             for line in row['native_time_log'].splitlines() if ':' in line}
+    peak=int(metrics['Maximum resident set size (kbytes)'])*1024
+    assert 0<peak<4*1024**3 and int(metrics['Swaps'])==0
+    return peak
+
+
 def reduce_records(records,requests,references,truth,item):
     assert len(records)==len(requests)==len(references)==len(truth)==64
     assert [r['query_ordinal'] for r in records]==list(range(64))
     previous=0
     native_peaks=[]
     for q,row in enumerate(records):
-        assert row['dataset']==item['dataset']
-        assert row['http_status']==200 and row['http_attempts']==row['valid_ann_requests']==1
-        for key in ('started_ns','successful_connect_attempt_ns','connected_ns','completed_ns',
-                    'cold_start_to_first_http_response_ns','before_successful_connect_attempt_ns',
-                    'successful_tcp_connect_ns','first_post_to_response_ns','incoming_http_wall_ns',
-                    'connection_refused_attempts'):
-            assert type(row[key]) is int and row[key]>=0
-        start,attempt,connect,end=[row[key] for key in
-            ('started_ns','successful_connect_attempt_ns','connected_ns','completed_ns')]
-        assert previous<=start<=attempt<=connect<=end
-        previous=end
-        assert row['cold_start_to_first_http_response_ns']==end-start
-        assert row['before_successful_connect_attempt_ns']==attempt-start
-        assert row['successful_tcp_connect_ns']==connect-attempt
-        assert row['first_post_to_response_ns']==end-connect
-        assert row['incoming_http_wall_ns']==end-attempt
-        body=json.dumps(dict(query=requests[q]['query'],k=10,**item['authority']),
-                        separators=(',',':'),allow_nan=False).encode()
-        assert row['request_sha256']==sha(body) and row['request_bytes']==len(body)
-        response=row['response']
-        assert response['authority']==item['authority']
-        for key in ('ids','ranges','planned_bytes','submitted_gets','verified_bytes','failed_gets'):
-            assert response[key]==references[q][key]
-        assert len(response['ids'])==len(set(response['ids']))==10
-        assert all(type(v) is int and 0<=v<1000000 for v in response['ids'])
-        assert len(response['ranges'])==response['submitted_gets']<=32
-        assert response['planned_bytes']==response['verified_bytes']<=16773120
-        assert sum(end-begin for begin,end in response['ranges'])==response['planned_bytes']
-        assert response['failed_gets']==0
-        assert type(response['native_wall_ns']) is int and 0<=response['native_wall_ns']<=row['incoming_http_wall_ns']
-        assert row['returned_hits']==len(set(response['ids']) & set(truth[q][:10]))
-        headers=[json.loads(line) for line in row['native_server_log'].splitlines() if line.startswith('{')]
-        assert len(headers)==1 and headers[0]==row['native_header']
-        header=headers[0]
-        assert header['phase']=='ready' and header['listen']=='127.0.0.1:8080' and header['authority']==item['authority']
-        assert row['metadata']==validate(header['remote_open_stats'],item['metadata_files'],header['remote_open_wall_ns'])
-        assert end-start>=header['remote_open_wall_ns']+header['head_read_wall_ns']
-        assert row['native_close']['intentional_stop'] is True
-        assert row['native_close']['returncode'] in (124,143,-15)
-        metrics={line.strip().split(':',1)[0]:line.strip().split(':',1)[1].strip()
-                 for line in row['native_time_log'].splitlines() if ':' in line}
-        peak=int(metrics['Maximum resident set size (kbytes)'])*1024
-        assert 0<peak<4*1024**3 and int(metrics['Swaps'])==0
-        native_peaks.append(peak)
+        assert previous<=row['started_ns']
+        native_peaks.append(validate_record(row,requests[q],references[q],truth[q],item))
+        previous=row['completed_ns']
     hits=sum(row['returned_hits'] for row in records)
     cold={name:percentile([r['cold_start_to_first_http_response_ns']/1e6 for r in records],p)
           for name,p in [('p50',.5),('p90',.9),('p95',.95),('p99',.99)]}

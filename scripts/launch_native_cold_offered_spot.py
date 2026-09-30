@@ -29,7 +29,7 @@ FROZEN_FILES = cold.FROZEN_FILES
 ARTIFACTS = ('source-qualification.json', 'boundary-check.json', 'compiled-source.json',
     'binaries/two_bit_http', 'cpu.txt', 'test.log', 'run-closed.log',
     'profile.log', 'profile-resources.txt', 'profile-cgroup.json', 'screen/summary.json',
-    *(f'screen/rate{rate}-{dataset}.jsonl' for rate in range(6) for dataset in ('ReLAION','CoHere')),
+    *(f'screen/rate{rate}-{dataset.lower()}-records.jsonl' for rate in range(6) for dataset in ('ReLAION','CoHere')),
     *('frozen/'+name for name in FROZEN_FILES))
 
 
@@ -38,7 +38,7 @@ def preflight(base=Path('.')):
     body = (base/CONFIG).read_bytes()
     config = json.loads(body)
     assert config['schema'] == 'borsuk-native-cold-offered-v1'
-    assert config['rates'] == [.25,.5,1,2,4,8] and config['workers'] == 6
+    assert config['offered_qps'] == [.25,.5,1,2,4,8] and config['workers'] == 6
     assert config['count'] == 64 and config['k'] == 10 and config['base_port'] == 18080
     assert config['dataset_order'] == ['ReLAION','CoHere']
     assert config['client_cpu_affinity'] == [4,5] and config['native_cpu_affinity'] == [0,1,2,3]
@@ -81,7 +81,9 @@ def preflight(base=Path('.')):
     for name,digest in compiled.items(): assert identities[name] == peer.sha(bodies['compiled-source/'+name]) == digest,name
     assert peer.sha(bodies['binaries/two_bit_http']) == boundary['binary_sha256'] == BINARY_SHA
     assert len(bodies['binaries/two_bit_http']) == 12471000
-    reference = json.loads((base/ROOT/'metadata-ranges-config.json').read_bytes())
+    reference_body = (base/ROOT/'metadata-ranges-config.json').read_bytes()
+    assert peer.sha(reference_body) == verified['config_sha256']
+    reference = json.loads(reference_body)
     assert config['items'] == reference['items']
     assert config['binary'] == terminal['artifacts']['binaries/two_bit_http']
     frozen = dict(path=str(FROZEN/'verification.json'),sha256=PROOF_SHA,
