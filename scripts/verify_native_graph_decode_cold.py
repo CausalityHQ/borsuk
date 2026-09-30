@@ -110,6 +110,7 @@ def main(attempt):
     assert proof['compiled_native_sha256'] == config['compiled_sha256']
     assert proof['control_compiled_native_sha256'] == {name:control[name] for name in campaign.COMPILED}
     assert proof['artifact_roster_sha256'] == sha(json.dumps(campaign.ARTIFACTS,separators=(',',':')).encode())
+    for key in ('config_sha256','manifest_sha256','artifact_roster_sha256'): assert terminal[key] == proof[key]
     assert reservation['wall_seconds'] == campaign.WALL and reservation['compute_cap_usd'] == campaign.COMPUTE_CAP
     for arm,ids,prefix in [('candidate',hashes,''),('control',control,'control/')]:
         boundary = json.loads(artifacts[prefix+'boundary-check.json'])
@@ -118,6 +119,11 @@ def main(attempt):
         assert boundary['source_identity_sha256'] == source_identity(ids) and boundary['source_file_count'] == 395
         assert boundary['qualified'] is True and boundary['green_status'] == boundary['release_status'] == 0
         assert boundary['arm'] == arm and boundary['same_worker_toolchain'] is True
+        assert boundary['native_rebuilt'] is True and boundary['no_corpus_query'] is True
+        assert boundary['focused_tests'] == [name for name,_ in campaign.CHECKS]
+        for key,name in [('rustc_sha256','rustc-version.txt'),('cargo_sha256','cargo-version.txt'),('cpuinfo_sha256','cpuinfo.txt')]:
+            assert boundary['sha_backend'][key] == sha(artifacts[prefix+name])
+        if arm == 'control': assert boundary['current_full_suite_pass_claim'] is False
         assert boundary['binary_sha256'] == sha(artifacts[prefix+'binaries/two_bit_http'])
         assert boundary['binary_bytes'] == len(artifacts[prefix+'binaries/two_bit_http'])
         for name,digest in compiled.items(): assert sha(artifacts[prefix+'compiled-source/'+name]) == digest
@@ -159,6 +165,8 @@ def main(attempt):
     assert summary['blocks'] == config['blocks'] and summary['source_caps'] == worker.paged.SOURCE_CAPS
     assert summary['client_cpu_affinity'] == [4,5] and summary['native_cpu_affinity'] == [0,1,2,3]
     assert summary['namespace_cold_start_included'] is True and summary['application_sq8_cache'] is False
+    assert summary['s3_service_cache'] == 'uncontrolled' and summary['transport'] == 'loopback plain HTTP'
+    assert summary['cold_call_boundary'] == 'preencoded request; process launch through first HTTP response; refused TCP connects included'
     assert summary['source_scorer_ordered_id_physical_parity'] is True
     assert summary['matched_vendor_measured'] is summary['serial_cold_qps_is_offered_or_saturation_qps'] is False
     instance = ec2.describe_instances(InstanceIds=[launch['instance_id']])['Reservations'][0]['Instances'][0]
