@@ -1,0 +1,26 @@
+{
+  "schema": "borsuk-semantic-router-coverage-implementation-check-v1",
+  "worker_commit": "5c7ae34ea9e6e00b6bc8c6edbd16aa85495fdcf2",
+  "integrated_commit": "bd9007a2",
+  "source_sha256": "221695c725d79dfbc7f0ac3c2a4bd4e46445fc32628a1fd989eb328270356ff3",
+  "runs": [
+    {
+      "command": "python3 scripts/check_semantic_router_coverage.py --self-check",
+      "exit": 0
+    },
+    {
+      "command": "python3 -m py_compile scripts/check_semantic_router_coverage.py",
+      "exit": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit": 0
+    }
+  ],
+  "log": {
+    "bytes": 43,
+    "sha256": "0fa8276c95473e7e73ad933906175809cec92036f2cf1c04633275cbc8d2865f"
+  },
+  "scope": "synthetic evaluator assurance only; no real coverage, returned quality, latency, RSS, QPS or vendor comparison",
+  "builder_final_assurance_pending": true
+}

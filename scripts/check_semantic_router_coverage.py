@@ -27,7 +27,7 @@ TRUTH_BYTES = 1000 * 100 * 4
 ALLOCATION_CAP = 128 * 1024 * 1024
 BUILDER_FORMAT_REFERENCE_COMMIT = "3b53af2cf1dbd9611212cf59dba212df8f23b6bb"
 PROTOCOL_HASHES = {
-    "semantic-router-falsifier.md": "d324cd2e8f3d677ae18a8159e5547d8e2a261b0bd228c73c765f107ec4cb78bd",
+    "semantic-router-falsifier.md": "746c689c95fbb28583eeb6b77e67c30007c865ebaae7726b6a02721270dda62a",
     "semantic-router-plan.md": "c33246f192b4af22f17fc3fdac3528d759fa0a21071ab5b469ea305eb40f174d",
     "semantic-router-input-authority.json": "80de68e4cf1e1558e45364b56c045f90bb56d34f1a01eb49c3428688b3ddb1c2",
     "semantic-router-row-identity.json": "d553f58d184b023c4d323399a69c5badb36910ce1c9675d1f95fd9e1b749bd4f",
