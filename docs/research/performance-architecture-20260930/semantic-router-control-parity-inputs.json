@@ -1,0 +1,43 @@
+{
+  "artifacts": {
+    "screen/relaion/candidate/diverse_graph.bin": {
+      "bytes": 426398,
+      "local_path": "/tmp/borsuk-semantic-router-inputs/relaion/diverse_graph.bin",
+      "sha256": "a72380d5ebc5e53386f16c09cb772003c509f0802c881d17813c0d867f0907df"
+    },
+    "screen/relaion/candidate/graph.bin": {
+      "bytes": 426398,
+      "local_path": "/tmp/borsuk-semantic-router-inputs/relaion/graph.bin",
+      "sha256": "dddc0ad50c95c724f4d977578dbe893d73654a054661176f6d37d65feebce3b0"
+    },
+    "screen/relaion/core-plan.jsonl": {
+      "bytes": 1582056,
+      "local_path": "/tmp/borsuk-semantic-router-inputs/relaion/core-plan.jsonl",
+      "sha256": "c2eb6c85b7ccb89c27d727a77e897d844ebaede45645704072ce1c18274ec32d"
+    },
+    "screen/relaion/native-candidate/live.jsonl": {
+      "bytes": 84548,
+      "local_path": "/tmp/borsuk-semantic-router-inputs/relaion/live.jsonl",
+      "sha256": "cc4d46c4b375c1b075b51c67b0f8c9424ca9eb0d10e2ab23cb4616b8e694167e"
+    }
+  },
+  "authentication_passed": true,
+  "core_plan_rows": 64,
+  "dataset": "ReLAION FIRST100k D768 cosine",
+  "future_parity_fields": [
+    "query_ordinal",
+    "ranges",
+    "planned_bytes",
+    "ranked_candidate_pages",
+    "selected_pages",
+    "primary_page",
+    "nomination_evaluated_units"
+  ],
+  "native_rows": 66,
+  "returned_id_reference": "screen/relaion/native-candidate/live.jsonl",
+  "schema": "borsuk-semantic-router-control-parity-inputs-v1",
+  "scope": "Authenticated historical inputs for exact scorer/planner parity; no new scorer execution, returned recall or latency measurement. Fresh control discovery must run unchanged graph, not silently use recorded walks as a matched control.",
+  "split": "consumed development query ordinals 0-63",
+  "terminal_path": "docs/research/native-union-20260928/source-completion-http/a0001/aws-terminal.json",
+  "terminal_sha256": "bb027f633bce5293ba09b7568506b6f7d53cdb8a85480fcd98669644a8d7bbcd"
+}
