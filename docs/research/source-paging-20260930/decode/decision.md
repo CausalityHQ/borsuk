@@ -49,3 +49,18 @@ Original90309 exited0 with2710 passes/0 failures/26 ignored across150 groups; Cl
 | Frozen decode candidate, SAME consumed development panels | Unmeasured | Unmeasured | Unmeasured | Next: original256-request contemporaneous ABBA GO/FAIL on BOTH datasets |
 
 Published444ms coldp90 context and8QPS remain unmet; no new warm/R100/10M/100M, matched vendor or total lifecycle cost evidence. Last historical offered compute estimate$0.062962 excludes EBS/IP/S3/setup/invoice; new campaign cost unmeasured. No operator decision is needed to execute the existing authorized bounded gate after authority checks.
+
+## a0004 verified paired GO
+
+[Closed verification](cold/a0004/verification.json) authenticates all92 artifacts, both compiled arm epochs/binaries, frozen local source assurance, inputs and all256 ABBA requests. Original controller25737 exited0; independent verifier25274 exited0. Owned Spot i-02fc73ca50b66fef2 is independently terminated. Both arms succeeded all64 queries per dataset with exact ordered resident-reference physical scorer parity, unchanged byte/GET caps and zero failed reads. The preregistered decode-p50 plus cold-p90 gate passes on BOTH datasets. This is development convergence evidence, not a matched vendor win or product completion.
+
+| Dataset / split (FIRST1M D768 cosine k10; consumed64 per arm) | Control → candidate mean R10 | Actual quality delta | Control → candidate cold p90 / p95 (ms) | Control → candidate decode p50 (ms) |
+| --- | --- | --- | --- | --- |
+| ReLAION, fresh rank16 development0–63 | 99.375% → 99.375% | 0 pp | 1420.906 / 1475.897 → 1242.809 / 1249.448 | 356.688 → 268.399 |
+| CoHere, fresh CoHere development0–63 | 96.875% → 96.875% | 0 pp | 1379.771 / 1422.172 → 1289.024 / 1329.250 | 356.781 → 268.539 |
+
+Cold p90 improves178.097ms on ReLAION and90.747ms on CoHere. CoHere p99 worsens1688.355→2115.916ms; report that observed tail honestly (only64 samples). The original GO gate specifies p50 decode and p90 cold, so the p99 observation neither disappears nor retroactively changes that gate. Candidate maximum native RSS173,965,312bytes. Serial all-arm campaign completion rate0.781374calls/s is measured, but offered/saturation QPS and matched total-dollar throughput remain unmeasured. Controller-time compute estimate$0.090472 at observed$0.2042/h for1595s; EBS/IP/S3/setup/invoice and total lifecycle cost remain unknown.
+
+Separate [closed phase quantiles](cold/a0004/phase-summary.json) show candidate staging p50=447.007/442.886ms (ReLAION/CoHere), decode p50=268.399/268.539ms, and incoming HTTP p50=355.524/352.827ms. Do not sum marginal quantiles. Each query stages nine metadata objects totaling about57.7MB, including48,000,032bytes of centroids, with22 logical metadata GETs and9 HEADs; source HEAD/query reads remain separate. The measured remaining latency spans staging, decode and the query; no unmeasured subdecoder is declared the root cause.
+
+Retain the candidate. The frozen444ms context, eight-QPS offered target, new representative holdout, warm track,10M/100M bounded-memory scale and matched BOTH-vendor latency/QPS/lifecycle cost remain gaps. Next decisive work must reduce the measured cold path or establish the candidate offered resource curve under authenticated bounded protocol; reuse the2710-pass native assurance for controller-only edits. No new architecture is selected from this receipt alone.
