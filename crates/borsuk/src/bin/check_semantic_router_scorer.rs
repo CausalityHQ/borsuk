@@ -4,6 +4,7 @@ use borsuk::{
     exact_sq8_nominee::Sq8Geometry,
     returned_sq8::{ReturnedRange, rank_returned_ranges},
     rotated_two_bit::RotatedTwoBitCodec,
+    semantic_unit_router::{SemanticUnitRouter, SourceIdentity, validate_publication},
     two_bit_generation::{
         TwoBitDiscoveryTrace, TwoBitPlanTrace, normalize_two_bit_diagnostic_query,
         plan_two_bit_source_cover, plan_two_bit_source_walks,
@@ -24,7 +25,9 @@ use std::{
     path::{Path, PathBuf},
     time::Instant,
 };
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
+#[cfg(test)]
+use borsuk::semantic_unit_router::{seed_walk, select_leaves};
 
 fn require(ok: bool, message: &str) -> Result<()> {
     if !ok {
@@ -34,52 +37,6 @@ fn require(ok: bool, message: &str) -> Result<()> {
 }
 fn hash(body: &[u8]) -> String {
     format!("{:x}", Sha256::digest(body))
-}
-fn select_leaves(query: &[f32], prototypes: &[Vec<f32>]) -> Result<Vec<usize>> {
-    require(
-        !query.is_empty() && query.iter().all(|x| x.is_finite()) && !prototypes.is_empty(),
-        "root query geometry",
-    )?;
-    let mut ranked = Vec::with_capacity(prototypes.len());
-    for (id, prototype) in prototypes.iter().enumerate() {
-        require(
-            prototype.len() == query.len() && prototype.iter().all(|x| x.is_finite()),
-            "root prototype geometry",
-        )?;
-        let mut distance = 0_f64;
-        for (&q, &p) in query.iter().zip(prototype) {
-            let delta = f64::from(q) - f64::from(p);
-            distance += delta * delta;
-        }
-        require(distance.is_finite(), "root distance")?;
-        ranked.push((distance, id));
-    }
-    ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-    let mut count = ranked.len().min(8);
-    if count == 8 {
-        let boundary = ranked[7].0;
-        for &(distance, _) in ranked.iter().take(16).skip(8) {
-            if distance > 1.15 * boundary {
-                break;
-            }
-            count += 1;
-        }
-    }
-    Ok(ranked[..count].iter().map(|&(_, id)| id).collect())
-}
-fn seed_walk(units: &BTreeSet<usize>, rows: usize) -> Result<(usize, Vec<usize>, Vec<usize>)> {
-    require(
-        rows > 0 && !units.is_empty() && units.last().is_some_and(|&u| u < rows.div_ceil(32)),
-        "semantic units",
-    )?;
-    let seed = units.first().ok_or("no semantic seed")? / 8;
-    let additions = (seed * 8..((seed + 1) * 8).min(rows.div_ceil(32)))
-        .filter(|u| !units.contains(u))
-        .collect::<Vec<_>>();
-    let mut walk = units.clone();
-    walk.extend(additions.iter().copied());
-    require(walk.len() <= 1272, "semantic walk unit cap")?;
-    Ok((seed, walk.into_iter().collect(), additions))
 }
 fn inverse_order(order: &[u64]) -> Result<Vec<usize>> {
     require(!order.is_empty(), "empty row order")?;
@@ -353,47 +310,6 @@ struct Precision {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct BodyIdentity {
-    bytes: usize,
-    sha256: String,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Leaf {
-    leaf_id: usize,
-    group_ordinal: usize,
-    chunk_ordinal: usize,
-    offset: usize,
-    bytes: usize,
-    unit_count: usize,
-    source_rows: usize,
-    sha256: String,
-    prototype: Vec<f32>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Router {
-    schema: String,
-    input_schema: String,
-    input_root_sha256: String,
-    input_centroids_sha256: String,
-    input_centroids_bytes: usize,
-    rows: usize,
-    dimensions: usize,
-    unit_rows: usize,
-    page_rows: usize,
-    unit_count: usize,
-    final_unit_rows: usize,
-    algorithm: Value,
-    modeled_peak_allocation_bytes: usize,
-    modeled_allocation_limit_bytes: usize,
-    allocation_model: String,
-    membership: BodyIdentity,
-    leaf_payload: BodyIdentity,
-    leaves: Vec<Leaf>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Request {
     query_ordinal: usize,
     query: Vec<f32>,
@@ -413,9 +329,7 @@ struct Context {
     codec: RotatedTwoBitCodec,
     centroids: UnitCentroidPages,
     graphs: Vec<UnitCentroidGraph>,
-    router: Router,
-    membership: Vec<usize>,
-    prototypes: Vec<Vec<f32>>,
+    router: SemanticUnitRouter,
     leaf_pages: Vec<usize>,
     leaves: File,
     records: File,
@@ -431,121 +345,6 @@ fn json_lines(body: &[u8]) -> Result<Vec<Value>> {
         .map(|line| Ok(serde_json::from_str(line)?))
         .collect()
 }
-fn validate_router(
-    c: &Config,
-    router: &Router,
-    membership: &[usize],
-    payload: &[u8],
-    blob: &[u8],
-    centroids: &UnitCentroidPages,
-) -> Result<Vec<usize>> {
-    require(
-        router.schema == "borsuk-semantic-unit-router-research-v1"
-            && router.input_schema == "borsuk-two-bit-generation-v4"
-            && router.input_root_sha256 == c.inputs.root.sha256
-            && router.input_centroids_sha256 == c.inputs.centroids.sha256
-            && (
-                router.input_centroids_bytes,
-                router.rows,
-                router.dimensions,
-                router.unit_rows,
-                router.page_rows,
-                router.unit_count,
-                router.final_unit_rows,
-            ) == (4800032, c.rows, c.dimensions, 32, 256, 3125, 32)
-            && router.membership.bytes == c.inputs.router_membership.bytes
-            && router.membership.sha256 == c.inputs.router_membership.sha256
-            && router.leaf_payload.bytes == payload.len()
-            && router.leaf_payload.sha256 == c.inputs.router_leaves.sha256
-            && membership.len() == 3125
-            && (1..=97).contains(&router.leaves.len())
-            && router.modeled_peak_allocation_bytes <= 128 << 20
-            && router.modeled_allocation_limit_bytes == 128 << 20
-            && router.allocation_model
-                == "conservative allocation capacities; not RSS or an enforced process limit",
-        "router authority/geometry",
-    )?;
-    let identical = (1..3125).all(|u| centroids.unit_centroid(u) == centroids.unit_centroid(0));
-    require(
-        router.algorithm
-            == json!({"trainer":"train_logical_cell_centroids","metric":"SquaredEuclidean",
-        "iterations":12,"requested_centers":49,"training_centers":if identical {1} else {49},"max_leaf_units":64,
-        "nearest_ties":"center ordinal","group_sort":"squared distance, original unit ID",
-        "root_prototype":"unweighted unit mean; f64 accumulation to finite f32","normalization":"none","payload":"original FP16 little endian"}),
-        "frozen construction algorithm",
-    )?;
-    let mut seen = vec![false; 3125];
-    let mut offset = 0_usize;
-    let mut previous: Option<&Leaf> = None;
-    let mut leaf_pages = Vec::new();
-    for (id, leaf) in router.leaves.iter().enumerate() {
-        let bytes = leaf
-            .unit_count
-            .checked_mul(1540)
-            .ok_or("leaf length overflow")?;
-        let end = offset.checked_add(bytes).ok_or("leaf offset overflow")?;
-        let ordered = previous.map_or(leaf.chunk_ordinal == 0, |p| {
-            if p.group_ordinal == leaf.group_ordinal {
-                leaf.chunk_ordinal == p.chunk_ordinal + 1 && p.unit_count == 64
-            } else {
-                leaf.group_ordinal > p.group_ordinal && leaf.chunk_ordinal == 0
-            }
-        });
-        require(
-            leaf.leaf_id == id
-                && (1..=64).contains(&leaf.unit_count)
-                && leaf.offset == offset
-                && leaf.bytes == bytes
-                && end <= payload.len()
-                && ordered
-                && leaf.group_ordinal < if identical { 1 } else { 49 }
-                && leaf.prototype.len() == 768
-                && hash(&payload[offset..end]) == leaf.sha256,
-            "leaf identity/shape/order",
-        )?;
-        let mut sums = vec![0_f64; 768];
-        let mut rows = 0;
-        let mut pages = BTreeSet::new();
-        for record in payload[offset..end].chunks_exact(1540) {
-            let unit = u32::from_le_bytes(record[..4].try_into()?) as usize;
-            require(
-                unit < 3125 && !seen[unit] && membership[unit] == id,
-                "leaf disjoint membership",
-            )?;
-            seen[unit] = true;
-            let original = 32 + unit * 1536;
-            require(
-                record[4..] == blob[original..original + 1536],
-                "original FP16 centroid identity",
-            )?;
-            for (sum, &value) in sums
-                .iter_mut()
-                .zip(centroids.unit_centroid(unit).ok_or("centroid unit")?)
-            {
-                *sum += f64::from(value);
-            }
-            rows += (c.rows - unit * 32).min(32);
-            pages.insert(unit / 8);
-        }
-        require(
-            leaf.source_rows == rows
-                && leaf.prototype.iter().zip(sums).all(|(&p, sum)| {
-                    p.is_finite()
-                        && p.to_bits() == ((sum / leaf.unit_count as f64) as f32).to_bits()
-                }),
-            "root prototype identity",
-        )?;
-        leaf_pages.push(pages.len());
-        previous = Some(leaf);
-        offset = end;
-    }
-    require(
-        offset == payload.len() && seen.iter().all(|&x| x),
-        "complete leaf partition",
-    )?;
-    Ok(leaf_pages)
-}
-
 fn load(c: &Config, stage: &mut String) -> Result<Context> {
     *stage = "authenticate root/plane/scorer identities".into();
     let i = &c.inputs;
@@ -622,20 +421,32 @@ fn load(c: &Config, stage: &mut String) -> Result<Context> {
     if i.graph.sha256 == i.diverse_graph.sha256 {
         graphs.truncate(1);
     }
-    let router: Router =
-        serde_json::from_slice(&checked(&i.router_manifest, c.limits.router_root_bytes)?)?;
-    let membership = checked(&i.router_membership, 12500)?
-        .chunks_exact(4)
-        .map(|word| u32::from_le_bytes(word.try_into().unwrap()) as usize)
-        .collect::<Vec<_>>();
+    let router_body = checked(&i.router_manifest, c.limits.router_root_bytes)?;
+    let membership = checked(&i.router_membership, 12500)?;
     let leaves = authenticate(&i.router_leaves, 4812500)?;
     let payload = read_at(&leaves, 0..i.router_leaves.bytes)?;
-    let leaf_pages = validate_router(c, &router, &membership, &payload, &blob, &centroids)?;
-    let prototypes = router
-        .leaves
-        .iter()
-        .map(|leaf| leaf.prototype.clone())
-        .collect();
+    let source = SourceIdentity {
+        schema: "borsuk-two-bit-generation-v4",
+        root_sha256: &i.root.sha256,
+        centroids_sha256: &i.centroids.sha256,
+        rows: c.rows,
+        dimensions: c.dimensions,
+    };
+    // Offline publication validation is separate from bounded selected-leaf reads.
+    validate_publication(&router_body, &membership, &payload, &source, &blob)?;
+    let router = SemanticUnitRouter::open(
+        &router_body,
+        &membership,
+        &i.router_manifest.sha256,
+        &source,
+        c.limits.router_root_bytes,
+    )?;
+    let mut pages = vec![BTreeSet::new(); router.manifest().leaves.len()];
+    for (unit, word) in membership.chunks_exact(4).enumerate() {
+        let leaf = u32::from_le_bytes(word.try_into().unwrap()) as usize;
+        pages[leaf].insert(unit / 8);
+    }
+    let leaf_pages = pages.iter().map(BTreeSet::len).collect();
     drop(payload);
     drop(blob);
     *stage = "authenticate physical order/source/SQ8".into();
@@ -722,8 +533,6 @@ fn load(c: &Config, stage: &mut String) -> Result<Context> {
         centroids,
         graphs,
         router,
-        membership,
-        prototypes,
         leaf_pages,
         leaves,
         records,
@@ -834,33 +643,29 @@ fn run_arm(
     let units;
     let walks;
     if candidate {
-        selected_leaves = select_leaves(&query, &context.prototypes)?;
+        selected_leaves = context.router.select_leaves(&query)?;
         leaf_bytes = selected_leaves
             .iter()
-            .map(|&id| context.router.leaves[id].bytes)
+            .map(|&id| context.router.manifest().leaves[id].bytes)
             .sum();
         require(
             selected_leaves.len() <= c.limits.router_leaf_gets
                 && leaf_bytes <= c.limits.router_leaf_bytes,
             "router selected-leaf budget",
         )?;
-        let mut nominated = BTreeSet::new();
+        let mut bodies = Vec::with_capacity(selected_leaves.len());
         for &id in &selected_leaves {
-            let leaf = &context.router.leaves[id];
-            let body = read_at(&context.leaves, leaf.offset..leaf.offset + leaf.bytes)?;
-            require(hash(&body) == leaf.sha256, "query selected-leaf identity")?;
-            for record in body.chunks_exact(1540) {
-                let unit = u32::from_le_bytes(record[..4].try_into()?) as usize;
-                require(
-                    context.membership.get(unit) == Some(&id) && nominated.insert(unit),
-                    "query leaf unit membership",
-                )?;
-            }
+            let leaf = &context.router.manifest().leaves[id];
+            bodies.push(read_at(
+                &context.leaves,
+                leaf.offset..leaf.offset + leaf.bytes,
+            )?);
         }
-        units = nominated;
-        let (seed, walked, additions) = seed_walk(&units, c.rows)?;
-        seed_additions = additions;
-        walks = vec![(seed, walked)];
+        let parts = bodies.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let nomination = context.router.validate_selected(&selected_leaves, &parts)?;
+        units = nomination.units;
+        seed_additions = nomination.seed_additions;
+        walks = vec![(nomination.seed_page, nomination.walk_units)];
     } else {
         walks = discover(context, &query, &mut trace)?;
         units = walks.iter().flat_map(|(_, u)| u.iter().copied()).collect();
@@ -1315,6 +1120,7 @@ fn execute() -> Result<bool> {
     }
     let header = json!({"schema":"borsuk-semantic-router-scorer-result-v1","command":args,
         "config_sha256":args[2],"source_sha256":hash(include_bytes!("check_semantic_router_scorer.rs")),
+        "router_source_sha256":hash(include_bytes!("../semantic_unit_router.rs")),
         "binary_path":executable,"binary_sha256":format!("{:x}",digest.finalize()),
         "physical_s3_measured":false,"serving_claim":false});
     // Append-only valid JSON on terminal success/failure; partial bytes survive external termination.

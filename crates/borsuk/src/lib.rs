@@ -101,6 +101,7 @@ mod row_bundle;
 mod scalar_decode;
 mod segment;
 mod segment_cache;
+pub mod semantic_unit_router;
 pub mod serving_generation;
 mod simd_control;
 pub mod source_order;
