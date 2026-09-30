@@ -1,0 +1,164 @@
+{
+  "base": "669047f168772171b46e443b2830253015731255",
+  "cwd": "/home/rb/worktrees/borsuk-semantic-compaction-recovery-20260930",
+  "source_sha256": {
+    "crates/borsuk/src/two_bit_compaction.rs": "d76537276fe039bfb1171e4980557105cc1754c168b8d0a68efcdeea4a0b8c02",
+    "crates/borsuk/src/two_bit_generation.rs": "e96799b04540b0e42c12c15b6966e94026bd42752cb1b3900a12506a0c4d15d4"
+  },
+  "environment": {
+    "CARGO_TARGET_DIR": "/data/target",
+    "CARGO_BUILD_JOBS": "2",
+    "BORSUK_TEST_BUILD_JOBS": "2",
+    "RUSTC_WRAPPER": ""
+  },
+  "steps": [
+    {
+      "name": "regression",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "semantic_object_store_parity"
+      ],
+      "log": "/tmp/semantic-compaction-recovery-regression.log",
+      "started_epoch": 1790808920.079512,
+      "status": "finished",
+      "exit_status": 0,
+      "finished_epoch": 1790809019.863743,
+      "log_sha256": "8d36d8af29bc7956625bf41440205b4e5a1be1b393ad5a5eda0ac6d1bc53aff9"
+    },
+    {
+      "name": "compaction",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "two_bit_compaction::tests"
+      ],
+      "log": "/tmp/semantic-compaction-recovery-compaction.log",
+      "started_epoch": 1790809019.8640535,
+      "status": "finished",
+      "exit_status": 0,
+      "finished_epoch": 1790809020.3956835,
+      "log_sha256": "cc203eec56edd7f53d947eadea20a079695a91cf8eebc61240417f89ced99668"
+    },
+    {
+      "name": "lifecycle",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--test",
+        "two_bit_generation",
+        "--test",
+        "two_bit_application_ids",
+        "--test",
+        "two_bit_gc_delayed_delete"
+      ],
+      "log": "/tmp/semantic-compaction-recovery-lifecycle.log",
+      "started_epoch": 1790809020.3959162,
+      "status": "finished",
+      "exit_status": 0,
+      "finished_epoch": 1790809123.9238014,
+      "log_sha256": "2a5c7d770335fcf13ab781368e4fce6422acd8d3c6f9ea0f0feec4d61efc0cef"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "log": "/tmp/semantic-compaction-recovery-clippy.log",
+      "started_epoch": 1790809123.9240477,
+      "status": "finished",
+      "exit_status": 0,
+      "finished_epoch": 1790809202.8519511,
+      "log_sha256": "3d405a0637c8dd5429ba267803d15212d66b6c2cb215491e5d757269716d5ea0"
+    },
+    {
+      "name": "test-build",
+      "command": [
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ],
+      "log": "/tmp/semantic-compaction-recovery-test-build.log",
+      "started_epoch": 1790809202.8525991,
+      "status": "finished",
+      "exit_status": 0,
+      "finished_epoch": 1790809462.5393813,
+      "log_sha256": "417bcbbe4be1d704e2080bba12d0385ec01fa86fc12f12435eff701eac163da0"
+    }
+  ],
+  "opening_base": "1230747c65710d12d78f1cb2a01688dc4c00b8fd",
+  "diff_sha256": "534e5c756b90b9411936e03476071886a96dc01e2da31f10aa30fd29cc9eb8e4",
+  "commit": "078db2d2acee7a337dc705266f969f625c85b7cf",
+  "tree": "c793964fc1c7914ccdff121e49956e439e9c873a",
+  "commit_identity": "Roman Bartusiak <riomus@gmail.com>\nRoman Bartusiak <riomus@gmail.com>",
+  "worktree_clean": true,
+  "tests_passed": 11,
+  "tests_ignored": [
+    "native_s3_conditional_fence_and_gc_smoke: requires owned AWS test prefix and instance-role credentials"
+  ],
+  "full_workspace_tests_executed": false,
+  "cargo_lane": "released; original runner session21587 terminal exit0",
+  "schema": "borsuk-semantic-compaction-recovery-assurance-v1",
+  "worker_commit": "078db2d2acee7a337dc705266f969f625c85b7cf",
+  "integrated_commit": "ca5029b52a252e9bd3f84076c22a5e956c8cd416",
+  "source_file_count": 398,
+  "source_identity_sha256": "d9169dc5bc60a7b9b1e8e8d93d011a67631b7693ddd1b2ad9adcf00da6e729f9",
+  "full_workspace_executed": false,
+  "cold_http_measured": false,
+  "logs": {
+    "regression": {
+      "path": "docs/research/performance-architecture-20260930/semantic-compaction-recovery-regression.log.gz",
+      "bytes": 60218,
+      "sha256": "8d36d8af29bc7956625bf41440205b4e5a1be1b393ad5a5eda0ac6d1bc53aff9",
+      "gzip_bytes": 7399,
+      "gzip_sha256": "0570441031eeec52dacb0b4706b570eaa7af91e010d2795ca7308c4fac7b5c66"
+    },
+    "compaction": {
+      "path": "docs/research/performance-architecture-20260930/semantic-compaction-recovery-compaction.log.gz",
+      "bytes": 59904,
+      "sha256": "cc203eec56edd7f53d947eadea20a079695a91cf8eebc61240417f89ced99668",
+      "gzip_bytes": 7332,
+      "gzip_sha256": "73a6ef81cebcb15530ab534b1674dfd08e2f6f0a7923303005bec678ac8c9c7a"
+    },
+    "lifecycle": {
+      "path": "docs/research/performance-architecture-20260930/semantic-compaction-recovery-lifecycle.log.gz",
+      "bytes": 67971,
+      "sha256": "2a5c7d770335fcf13ab781368e4fce6422acd8d3c6f9ea0f0feec4d61efc0cef",
+      "gzip_bytes": 8997,
+      "gzip_sha256": "2e85baf8546be8f1ff4ad599ebbdeaff2addbdd8d49b5603dcfba7676cf19451"
+    },
+    "clippy": {
+      "path": "docs/research/performance-architecture-20260930/semantic-compaction-recovery-clippy.log.gz",
+      "bytes": 278184,
+      "sha256": "3d405a0637c8dd5429ba267803d15212d66b6c2cb215491e5d757269716d5ea0",
+      "gzip_bytes": 26969,
+      "gzip_sha256": "0f25ea5a252eac35c13607b4d42bf576ec6387b34b0dd2efa74f5e3a6de11a7c"
+    },
+    "test-build": {
+      "path": "docs/research/performance-architecture-20260930/semantic-compaction-recovery-test-build.log.gz",
+      "bytes": 85908,
+      "sha256": "417bcbbe4be1d704e2080bba12d0385ec01fa86fc12f12435eff701eac163da0",
+      "gzip_bytes": 12936,
+      "gzip_sha256": "73f815204d12300a4b40976378882cea6d49669a138e7d757111de2ed5d726ae"
+    }
+  }
+}
