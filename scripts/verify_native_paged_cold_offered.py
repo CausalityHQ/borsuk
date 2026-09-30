@@ -72,6 +72,37 @@ def self_check():
     try: reduce_cell(bad, cell, [], [], [], item, 0)
     except AssertionError: pass
     else: raise AssertionError('changed schedule accepted')
+    # Replay a closed successful call under synthetic schedules; no performance claim.
+    import gzip, json
+    from pathlib import Path
+    config = json.loads(Path('docs/research/source-paging-20260930/offered-config.json').read_bytes())
+    item = config['items'][0]
+    original = json.loads(gzip.decompress(Path('docs/research/source-paging-20260930/cold/a0004/screen/relaion-records.jsonl.gz').read_bytes()).splitlines()[0])
+    requests = [dict(query=[1.]+[0.]*767) for _ in range(64)]
+    reference = original['response']
+    references = [reference for _ in range(64)]
+    truth = [reference['ids']+list(range(100)) for _ in range(64)]
+    rows = []
+    for q in range(64):
+        row = copy.deepcopy(original)
+        dispatched = epoch+q*4*10**9
+        delta = dispatched-row['started_ns']
+        for key in ('started_ns','successful_connect_attempt_ns','connected_ns','completed_ns'): row[key] += delta
+        row.update(query_ordinal=q,rate_index=1,offered_qps=.25,scheduled_ns=dispatched,
+            dispatched_ns=dispatched,terminal_ns=row['completed_ns']+1,port=18080,outcome='success',
+            returned_hits=10,truth_at_10=truth[q][:10])
+        body = json.dumps(dict(query=requests[q]['query'],k=10,**item['authority']),separators=(',',':')).encode()
+        row.update(request_sha256=cold.sha(body),request_bytes=len(body),transfer_accounting=row['metadata'])
+        row['native_header']['listen'] = '127.0.0.1:18080'
+        row['native_server_log'] = json.dumps(row['native_header'])+'\n'
+        rows.append(row)
+    result = worker.reduce_cell(rows,.25,epoch,rows[-1]['terminal_ns']+1,False)
+    cell = dict(result,rate_index=1,dataset=item['dataset'],split=item['query_split'],records_file='rate1-relaion-records.jsonl')
+    reduce_cell(rows,cell,requests,references,truth,item,1)
+    bad = copy.deepcopy(rows); bad[0]['response']['source_verified_bytes'] += 1
+    try: reduce_cell(bad,cell,requests,references,truth,item,1)
+    except AssertionError: pass
+    else: raise AssertionError('changed successful source charge accepted')
     from types import ModuleType
     campaign = ModuleType('scripts.launch_native_paged_cold_offered_spot')
     previous = base.RATES, base.reduce_cell, cold.validate
