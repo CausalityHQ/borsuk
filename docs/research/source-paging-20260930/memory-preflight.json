@@ -1,0 +1,27 @@
+{
+  "schema": "borsuk-paged-cold-memory-preflight-v1",
+  "panels": {
+    "ReLAION": {
+      "metadata_bytes": 57694505,
+      "source_query_memory_bytes": 536870912,
+      "sq8_query_memory_bytes": 229104128,
+      "modeled_bytes": 950761787,
+      "limit_bytes": 1073741824,
+      "headroom_bytes": 122980037
+    },
+    "CoHere": {
+      "metadata_bytes": 57694558,
+      "source_query_memory_bytes": 536870912,
+      "sq8_query_memory_bytes": 229104128,
+      "modeled_bytes": 950761946,
+      "limit_bytes": 1073741824,
+      "headroom_bytes": 122979878
+    }
+  },
+  "active_query_slots": 4,
+  "estimate_from_native_admission_formula": true,
+  "observed_rss": false,
+  "measured_memory": false,
+  "native_formula_sha256": "3ced573da33bc0c82a9562eb7973c6ae1821fb613dab8c3b79b04b5ff34b8e34",
+  "sq8_formula_sha256": "d2e815cf9034ea51cb4574268ad62fc66389ff39be116a7f3b6bf5259d05ffec"
+}
