@@ -10,6 +10,7 @@ import struct
 import sys
 from types import SimpleNamespace
 from unittest.mock import patch
+from unittest.mock import Mock
 
 from scripts import verify_native_cold_first_query as base
 from scripts.check_native_paged_source_stats import validate_response, validate_startup
@@ -240,6 +241,55 @@ def authentication_check():
     print('PASS build authority: binary, compiled snapshot and resolved config tamper rejection')
 
 
+def integration_check():
+    import boto3
+    from scripts import launch_native_paged_source_cold_spot as campaign
+    config = json.loads(campaign.CONFIG.read_bytes()); remote = {}; panels = {}
+    for item in config['items']:
+        requests = [dict(query_ordinal=q, query=[1.]+[0.]*767) for q in range(64)]
+        refs = [dict(item['authority'], top_k=10, declared_panel_count=64)]
+        refs += [dict(query_ordinal=q) for q in range(64)] + [dict(count=64)]
+        bodies = {'requests': '\n'.join(map(json.dumps, requests)).encode(),
+                  'reference-k10': '\n'.join(map(json.dumps, refs)).encode(),
+                  'truth': struct.pack('<100I', *range(100))*64}
+        item['inputs'] = {name: dict(key=item['dataset']+'/'+name, bytes=len(body), sha256=base.sha(body))
+                          for name, body in bodies.items()}
+        remote.update({item['inputs'][name]['key']: body for name, body in bodies.items()})
+        panels[item['dataset']] = dict(count=64, quality_gate_passed=True,
+                                      published_context_gate_passed=False, split=item['query_split'])
+    summary = dict(panels=panels, original_config_sha256=base.sha(b'{}'), ann_queries=128,
+        namespace_starts=128, k=10, client_cpu_affinity=[4,5], native_cpu_affinity=[0,1,2,3],
+        matched_vendor_measured=False, matched_control_latency_measured=False,
+        serial_cold_qps_is_offered_or_saturation_qps=False, application_sq8_cache=False,
+        namespace_cold_start_included=True, s3_service_cache='uncontrolled',
+        source_scorer_ordered_id_physical_parity=True, quality_gate_passed=True,
+        published_context_gate_passed=False)
+    artifacts = {'resolved-config.json': b'{}', 'screen/summary.json': json.dumps(summary).encode()}
+    for item in config['items']: artifacts['screen/'+item['dataset'].lower()+'-records.jsonl'] = b'{}\n'
+    launch = dict(instance_id='i-fixture', source_commit='fixture', source_archive_sha256='a'*64, prefix='fixture')
+    reservation = dict(config_sha256='b'*64, qualification={}, availability_zone='fixture-az')
+    terminal = dict(resolved_config_sha256=base.sha(b'{}'))
+    ec2, s3, session = Mock(), Mock(), Mock()
+    session.client.side_effect = [s3, ec2]
+    s3.get_object.side_effect = lambda Bucket, Key: {'Body': io.BytesIO(remote[Key])}
+    ec2.describe_instances.return_value = {'Reservations': [{'Instances': [dict(State={'Name':'terminated'},
+        InstanceLifecycle='spot', InstanceType='c7g.2xlarge', Placement={'AvailabilityZone':'fixture-az'})]}]}
+    with tempfile.TemporaryDirectory() as tmp, patch.object(campaign, 'ROOT', Path(tmp)), \
+            patch.object(campaign, 'user_data', return_value='fixture'), \
+            patch.object(boto3, 'Session', return_value=session), \
+            patch(__name__+'.authenticate_closed', return_value=(launch,reservation,terminal,artifacts,{},config)), \
+            patch(__name__+'.validate_build', return_value=config), \
+            patch(__name__+'.reduce_records', side_effect=lambda rows,req,ref,truth,item: (
+                {k:v for k,v in panels[item['dataset']].items() if k!='split'}, 1024)):
+        directory = Path(tmp)/campaign.NAME/'a0001'; directory.mkdir(parents=True)
+        (directory/'aws-user-data.sh').write_text('fixture')
+        (directory/'aws-terminal.json').write_text('{}')
+        (directory/'aws-closeout.json').write_text(json.dumps(dict(state='terminated', nodes={'0':{'instance_id':'i-fixture'}})))
+        main('a0001')
+        assert json.loads((directory/'verification.json').read_bytes())['valid_measurement'] is True
+    print('PASS verifier entry point wiring (mocked authority/reducer; no AWS/native execution)')
+
+
 def main(attempt):
     import boto3
     from scripts import launch_native_paged_source_cold_spot as campaign
@@ -305,7 +355,8 @@ def main(attempt):
 
 
 if __name__ == '__main__':
-    if sys.argv[1:] in ([], ['--self-check']): self_check()
+    if sys.argv[1:] in ([], ['--self-check']):
+        self_check(); integration_check()
     else:
         assert len(sys.argv) == 2
         main(sys.argv[1])
