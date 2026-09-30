@@ -77,3 +77,20 @@ and measure physical requests/bytes/retries plus cold end-to-end latency.
 Do not infer a 100M memory envelope from a flat 100k root or turn local CPU
 timings into projected serving latency. Historical stricter R100/tail misses
 remain visible; no retrospective pass of earlier failed arms.
+
+## Measured offline CPU components
+
+Derived from all 64 closed arm reports per dataset. Arithmetic means of
+process CPU, milliseconds; includes local reads, not network timing:
+
+| Component | ReLAION control/candidate | CoHere control/candidate |
+|---|---:|---:|
+| Discovery and router reads | 3.0611 / 0.9742 | 3.2473 / 0.9921 |
+| Source scoring and SQ8 admission | 16.2038 / 5.8602 | 11.4712 / 5.1826 |
+| Native SQ8 ranking | 18.0621 / 17.5433 | 17.7842 / 17.7781 |
+
+The source-selection CPU improves; final SQ8 ranking remains about 18 ms.
+This does not predict network cold latency. Measure the new leaf-fetch wave
+and removed startup hydration in the object-native gate before changing
+quantization or nomination. Exact derivation/input hashes and explicitly
+labelled arithmetic-median convention: semantic-router-stage-cpu.json.

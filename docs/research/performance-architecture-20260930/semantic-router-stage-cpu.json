@@ -1,0 +1,156 @@
+{
+  "scope": "derived from immutable terminal arm_frozen events; offline process CPU, NOT serving or physical I/O",
+  "rows": [
+    {
+      "dataset": "relaion",
+      "split": "FIRST100k consumed development0-63 D768 cosine",
+      "arm": "control",
+      "process_cpu": {
+        "discovery_router_read": {
+          "mean_ms": 3.06113103125,
+          "p50_ms": 3.081119
+        },
+        "prepare": {
+          "mean_ms": 0.1643859375,
+          "p50_ms": 0.16178900000000002
+        },
+        "source_admission_read": {
+          "mean_ms": 2.817244359375,
+          "p50_ms": 2.7687535
+        },
+        "source_selection_sq8_admission": {
+          "mean_ms": 16.20381546875,
+          "p50_ms": 16.0953735
+        },
+        "sq8_rank": {
+          "mean_ms": 18.06207478125,
+          "p50_ms": 17.884069
+        },
+        "sq8_read": {
+          "mean_ms": 3.180811046875,
+          "p50_ms": 3.0625595
+        },
+        "total": {
+          "mean_ms": 51.7873268125,
+          "p50_ms": 51.717143
+        }
+      }
+    },
+    {
+      "dataset": "relaion",
+      "split": "FIRST100k consumed development0-63 D768 cosine",
+      "arm": "candidate",
+      "process_cpu": {
+        "discovery_router_read": {
+          "mean_ms": 0.974216921875,
+          "p50_ms": 0.9959325
+        },
+        "prepare": {
+          "mean_ms": 0.16608684375,
+          "p50_ms": 0.162149
+        },
+        "source_admission_read": {
+          "mean_ms": 1.03813965625,
+          "p50_ms": 1.0088475
+        },
+        "source_selection_sq8_admission": {
+          "mean_ms": 5.860194234375,
+          "p50_ms": 6.003590000000001
+        },
+        "sq8_rank": {
+          "mean_ms": 17.543347109375,
+          "p50_ms": 17.7996665
+        },
+        "sq8_read": {
+          "mean_ms": 3.156913765625,
+          "p50_ms": 3.1314184999999997
+        },
+        "total": {
+          "mean_ms": 30.743215609375,
+          "p50_ms": 31.227793499999997
+        }
+      }
+    },
+    {
+      "dataset": "cohere",
+      "split": "FIRST100k consumed development0-63 D768 cosine",
+      "arm": "control",
+      "process_cpu": {
+        "discovery_router_read": {
+          "mean_ms": 3.247280046875,
+          "p50_ms": 3.2475810000000003
+        },
+        "prepare": {
+          "mean_ms": 0.16407371874999999,
+          "p50_ms": 0.1609775
+        },
+        "source_admission_read": {
+          "mean_ms": 2.059058796875,
+          "p50_ms": 1.7595200000000002
+        },
+        "source_selection_sq8_admission": {
+          "mean_ms": 11.47117221875,
+          "p50_ms": 13.0410655
+        },
+        "sq8_rank": {
+          "mean_ms": 17.7841718125,
+          "p50_ms": 17.667373
+        },
+        "sq8_read": {
+          "mean_ms": 2.743811265625,
+          "p50_ms": 2.660069
+        },
+        "total": {
+          "mean_ms": 44.921828375,
+          "p50_ms": 45.936846
+        }
+      }
+    },
+    {
+      "dataset": "cohere",
+      "split": "FIRST100k consumed development0-63 D768 cosine",
+      "arm": "candidate",
+      "process_cpu": {
+        "discovery_router_read": {
+          "mean_ms": 0.9921439375,
+          "p50_ms": 0.988675
+        },
+        "prepare": {
+          "mean_ms": 0.164221453125,
+          "p50_ms": 0.16016550000000002
+        },
+        "source_admission_read": {
+          "mean_ms": 0.87034115625,
+          "p50_ms": 0.7982175
+        },
+        "source_selection_sq8_admission": {
+          "mean_ms": 5.18255840625,
+          "p50_ms": 5.1895995
+        },
+        "sq8_rank": {
+          "mean_ms": 17.778084359375,
+          "p50_ms": 17.580529499999997
+        },
+        "sq8_read": {
+          "mean_ms": 2.806057515625,
+          "p50_ms": 2.681309
+        },
+        "total": {
+          "mean_ms": 29.761701453125,
+          "p50_ms": 29.447875
+        }
+      }
+    }
+  ],
+  "aggregation": "Arithmetic mean and median average of two middle values; median differs from scorer nearest-rank p50. Units milliseconds of process CPU.",
+  "inputs": {
+    "relaion": {
+      "path": "docs/research/performance-architecture-20260930/scorer/relaion-a0001/result.json.gz",
+      "gzip_sha256": "c8bd878c622e000b075250e18f6fcf2b22c18cd32fb05ec818d0077eb6ed38f2"
+    },
+    "cohere": {
+      "path": "docs/research/performance-architecture-20260930/scorer/cohere-a0001/result.json.gz",
+      "gzip_sha256": "a92050960a9b908874fbe6e1b3a5246a6583c27cfa6d179cda63fb766cbd1975"
+    }
+  }
+}
