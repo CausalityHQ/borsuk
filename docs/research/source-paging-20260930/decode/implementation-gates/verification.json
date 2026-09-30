@@ -411,8 +411,8 @@
   },
   "interrupted_cargo_test_status": 130,
   "interrupted_scope": "Canceled owned cache-blocked command before running authenticated already-built tests directly",
-  "full_workspace_test_execution_status": null,
-  "full_workspace_execution_pending": true,
+  "full_workspace_test_execution_status": 101,
+  "full_workspace_execution_pending": false,
   "platform": "x86_64 local devbox",
   "compiler_jobs": 2,
   "artifacts": {
@@ -435,7 +435,36 @@
     "interrupted-cache-test.log": {
       "bytes": 388,
       "sha256": "4dae60e9c59a47215eb5f0aa3afdd1d1e8e193c8a03ce8f4a51ac5a53d3f6d52"
+    },
+    "full-ci-tests.log": {
+      "bytes": 282266,
+      "sha256": "b67f0dbad572cefc21fbace073130c35eb47537613b7b0fb9c3b646ddd62fed6"
     }
   },
-  "benchmark_measurement": false
+  "benchmark_measurement": false,
+  "full_workspace_test_execution_command": [
+    "cargo",
+    "test",
+    "--locked",
+    "--workspace",
+    "--all-targets"
+  ],
+  "full_workspace_test_execution_env": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_TARGET_DIR": "/data/target",
+    "RUSTC_WRAPPER": ""
+  },
+  "full_workspace_test_execution_session": 85408,
+  "full_workspace_test_execution_failure": {
+    "test": "sparse_and_text_parquet_ranges_overlap_slow_object_reads",
+    "observed_ms": 354.004121,
+    "assertion_ms": 340,
+    "scope": "Default CI profile; not ANN benchmark quality/latency"
+  },
+  "completed_passing_group_counts": {
+    "groups": 91,
+    "passed": 2130,
+    "ignored": 18,
+    "full_workspace_complete": false
+  }
 }
