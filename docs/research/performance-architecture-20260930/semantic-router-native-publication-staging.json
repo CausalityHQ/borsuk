@@ -1,0 +1,67 @@
+{
+  "schema": "borsuk-semantic-native-publication-input-staging-v1",
+  "benchmark_measurement": false,
+  "queries_or_truth_opened": false,
+  "datasets": {
+    "relaion": {
+      "canonical": {
+        "key": "research/native-union/20260928/locality-source-layout-a0001/data/relaion/objects/c260b7fe0b6a54de98dfba3f2599d272242f724421064ed5ca18c0cd63e6283d",
+        "path": "/tmp/borsuk-semantic-native-publication-inputs/relaion/canonical.bin",
+        "bytes": 308000000,
+        "sha256": "c260b7fe0b6a54de98dfba3f2599d272242f724421064ed5ca18c0cd63e6283d",
+        "etag": "\"bef4eddc80334b1d2c36a863193637dc-37\"",
+        "reused": false
+      },
+      "page_manifest": {
+        "key": "research/native-union/20260928/walk-source-http-a0002/indexes/relaion/candidate/generations/577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b/page_manifest.json",
+        "path": "/tmp/borsuk-semantic-native-publication-inputs/relaion/page_manifest.json",
+        "bytes": 279,
+        "sha256": "e72f61f9fbf79326335f7f2150b6ce8140eb617a248457b5e2ccd157793c6311",
+        "etag": "\"0380f404d388f0ed3d88c0b7e683fb67-1\"",
+        "reused": false
+      },
+      "page_digests": {
+        "key": "research/native-union/20260928/walk-source-http-a0002/indexes/relaion/candidate/generations/577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b/page_digests.bin",
+        "path": "/tmp/borsuk-semantic-native-publication-inputs/relaion/page_digests.bin",
+        "bytes": 12512,
+        "sha256": "2195b3fac01c8ea529604934c5fe5fb761d16d21221fb84ce97524caf912dbeb",
+        "etag": "\"da4f7f0270b4e56dbaa6f0aed0e12096-1\"",
+        "reused": false
+      }
+    },
+    "cohere": {
+      "canonical": {
+        "key": "research/native-union/20260928/walk-source-http-a0001/data/cohere/objects/38304c3b448f2f62b32da8b443bbe52f20ccc63f5472d0e7885d5c268dd7a6df",
+        "path": "/tmp/borsuk-semantic-native-publication-inputs/cohere/canonical.bin",
+        "bytes": 308000000,
+        "sha256": "38304c3b448f2f62b32da8b443bbe52f20ccc63f5472d0e7885d5c268dd7a6df",
+        "etag": "\"8ec4bd86308d994b4d12f98e8926242d-37\"",
+        "reused": false
+      },
+      "page_manifest": {
+        "key": "research/native-union/20260928/walk-source-http-a0002/indexes/cohere/candidate/generations/9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521/page_manifest.json",
+        "path": "/tmp/borsuk-semantic-native-publication-inputs/cohere/page_manifest.json",
+        "bytes": 279,
+        "sha256": "9f6442a34dc6ba965f93c1e8875452f67eb2bbe8dde9513abe924d078d8192e0",
+        "etag": "\"a3f54b7ae3de322de4375660dd31f964-1\"",
+        "reused": false
+      },
+      "page_digests": {
+        "key": "research/native-union/20260928/walk-source-http-a0002/indexes/cohere/candidate/generations/9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521/page_digests.bin",
+        "path": "/tmp/borsuk-semantic-native-publication-inputs/cohere/page_digests.bin",
+        "bytes": 12512,
+        "sha256": "5bf185ca763e49d5c2c4bc811d10074ee84715b7c6520eb2720ab6499c686416",
+        "etag": "\"16e7e41d98036e829864ad0af4cf1f6b-1\"",
+        "reused": false
+      }
+    }
+  },
+  "source_revision": "5afc7f855b99063532e547778587351d83f420fe",
+  "import_authority_sha256": "e5b2a50a796e95c9c8ede7c9c9b076c5dab95d4167d26713f3d7cdd103274cc8",
+  "staging_script_sha256": "82abd28b4283c74b526dcf6d67dee601f0b4718a6c49b34a3f9a89cbbefa469e",
+  "aws_profile": "causality",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "region": "eu-central-1",
+  "native_import_qualified": false,
+  "payloads_transformed": false
+}
