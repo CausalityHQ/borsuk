@@ -35,3 +35,15 @@ Verification: missing transport API produced the expected compile failure; the
 new source-tail/admission/tamper accounting test then passed. All seven affected
 transport fixtures passed, including real HTTP range faults without hidden retries
 and publication/reload/search. The generation-builder unit check also passed.
+
+## Shared discovery/nomination seam
+
+Graph discovery and record-backed nomination now have separate internal entry
+points. Both retain the same shared rank_walked_source implementation and SQ8
+physical admission; the local record provider remains the reference path.
+Missing supplied records fail explicitly rather than panicking. This seam allows
+remote source ranges to be supplied without duplicating the nomination algorithm.
+
+Affected generation/application-ID integration checks: five passes, one AWS-only
+smoke test ignored. This does not yet verify local versus paged output parity:
+there is no paged generation runtime at this checkpoint.

@@ -6,6 +6,7 @@ use crate::{
         MetadataReadStats, ObjectNativeOpenError, ObjectNativeSearchResult,
         stage_generation_metadata,
     },
+    rotated_two_bit::PreparedTwoBit,
     sq8_page_authority::{PageAuthority, PageError},
     sq8_s3_range::{OneAttemptS3, RankedSq8Failure, Sq8ReadStats},
     two_bit_mutations::{TwoBitMutationHit, TwoBitMutationSnapshot},
@@ -591,7 +592,6 @@ impl TwoBitGeneration {
         query: &'a [f32],
         mut trace: Option<&mut TwoBitPlanTrace>,
     ) -> Result<(BudgetedPagePlan, Cow<'a, [f32]>)> {
-        let count = self.pages.rows().div_ceil(256).min(159);
         let trace_bytes = if trace.is_some() {
             TwoBitPlanTrace::scratch_bytes(self.pages.rows())
         } else {
@@ -610,6 +610,17 @@ impl TwoBitGeneration {
         // temporary preparation buffer is released, within the same scratch cap.
         let normalized =
             crate::sq8_source::cosine_vector(query).map_err(TwoBitGenerationError::Plane)?;
+        let walks = self.discover_walks(normalized.as_ref(), trace.as_deref_mut())?;
+        let plan = self.plan_walks(&walks, &prepared, |row| self.plane.record(row), trace)?;
+        Ok((plan, normalized))
+    }
+
+    fn discover_walks(
+        &self,
+        normalized: &[f32],
+        mut trace: Option<&mut TwoBitPlanTrace>,
+    ) -> Result<Vec<(usize, Vec<usize>)>> {
+        let count = self.pages.rows().div_ceil(256).min(159);
         let mut walks = Vec::with_capacity(2);
         let graph_count = if self.manifest.graph_sha256 == self.manifest.diverse_graph_sha256 {
             1
@@ -618,7 +629,7 @@ impl TwoBitGeneration {
         };
         for graph in &self.graphs[..graph_count] {
             let seed = graph
-                .search(&self.centroids, normalized.as_ref(), 1, 128)
+                .search(&self.centroids, normalized, 1, 128)
                 .map_err(TwoBitGenerationError::Graph)?;
             let seed_page = seed
                 .units
@@ -628,13 +639,7 @@ impl TwoBitGeneration {
                 / 8;
             let (evaluated, exhausted) = if count > 1 {
                 let found = graph
-                    .search_pages_seeded(
-                        &self.centroids,
-                        normalized.as_ref(),
-                        &[seed_page],
-                        count - 1,
-                        1272,
-                    )
+                    .search_pages_seeded(&self.centroids, normalized, &[seed_page], count - 1, 1272)
                     .map_err(TwoBitGenerationError::Graph)?;
                 (found.evaluated_units, found.work_exhausted)
             } else {
@@ -659,9 +664,19 @@ impl TwoBitGeneration {
             }
             walks.push((seed_page, evaluated));
         }
+        Ok(walks)
+    }
+
+    fn plan_walks<'a>(
+        &self,
+        walks: &[(usize, Vec<usize>)],
+        prepared: &PreparedTwoBit,
+        mut record: impl FnMut(usize) -> Option<&'a [u8]>,
+        trace: Option<&mut TwoBitPlanTrace>,
+    ) -> Result<BudgetedPagePlan> {
         let mut nomination_evaluated_units =
             Vec::with_capacity(if trace.is_some() { 2544 } else { 0 });
-        let ranked = rank_walked_source(self.pages.rows(), &walks, |unit| {
+        let ranked = rank_walked_source(self.pages.rows(), walks, |unit| {
             if trace.is_some() {
                 nomination_evaluated_units.push(unit);
             }
@@ -669,7 +684,10 @@ impl TwoBitGeneration {
             for row in unit * 32..((unit + 1) * 32).min(self.pages.rows()) {
                 maximum = maximum.max(
                     prepared
-                        .score(self.plane.record(row).unwrap())
+                        .score(
+                            record(row)
+                                .ok_or(TwoBitGenerationError::Invalid("missing source record"))?,
+                        )
                         .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?,
                 );
             }
@@ -695,7 +713,6 @@ impl TwoBitGeneration {
             self.limits.max_query_gets,
             self.limits.max_query_bytes,
         )
-        .map(|plan| (plan, normalized))
         .map_err(TwoBitGenerationError::Budget)
     }
     /// Offline physical plan and candidate pages in nomination order.
