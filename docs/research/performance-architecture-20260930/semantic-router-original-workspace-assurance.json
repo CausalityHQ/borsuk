@@ -1,0 +1,24 @@
+{
+  "schema": "borsuk-semantic-router-original-workspace-assurance-v1",
+  "session_id": 85980,
+  "exit": 0,
+  "compiled_source_commit": "3b53af2cf1dbd9611212cf59dba212df8f23b6bb",
+  "compiled_builder_sha256": "2a0a740dc32de5fd6459ab26bf54fad54c524abfd5f1261856f31d04b1250951",
+  "command": "cargo test --locked --workspace --all-targets",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_TARGET_DIR": "/data/target",
+    "RUSTC_WRAPPER": "",
+    "BORSUK_TEST_BUILD_COMMAND": "unset"
+  },
+  "groups": 151,
+  "passed": 2714,
+  "failed": 0,
+  "ignored": 26,
+  "log": {
+    "bytes": 341691,
+    "sha256": "773eadb43ac628d56266072d42569757eb46d920de8740c2f6409be698ded329"
+  },
+  "scope": "complete original compiled workspace; builder FIFO/recursive-test repairs were edited after compilation, not executed by this run; unaffected Rust sources and dependencies unchanged",
+  "repaired_builder_assurance_pending": true
+}
