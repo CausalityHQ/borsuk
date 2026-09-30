@@ -10,6 +10,7 @@ use std::{
     error::Error,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
+    os::unix::fs::OpenOptionsExt,
     path::Path,
 };
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -111,7 +112,11 @@ fn hash(bytes: &[u8]) -> String {
 }
 
 fn bounded(path: &Path, cap: usize) -> Result<Vec<u8>> {
-    let mut file = File::open(path)?;
+    // Nonblocking open lets descriptor metadata reject FIFOs before any read.
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+        .open(path)?;
     let metadata = file.metadata()?;
     let len = usize::try_from(metadata.len())?;
     if !metadata.is_file() || len > cap {
@@ -883,5 +888,117 @@ mod tests {
         )
         .unwrap();
         assert_eq!(groups, [vec![(0.0, 1), (1.0, 0), (1.0, 3)], vec![(0.0, 2)]]);
+    }
+
+    #[test]
+    fn fifo_is_rejected_without_waiting_for_a_writer() {
+        let temp = tempfile::tempdir().unwrap();
+        let fifo = temp.path().join("manifest.json");
+        rustix::fs::mkfifoat(
+            rustix::fs::CWD,
+            &fifo,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        )
+        .unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker =
+            std::thread::spawn(move || sender.send(bounded(&fifo, ROOT_CAP).is_err()).unwrap());
+        // A regression fails within one second instead of hanging the test process.
+        assert!(
+            receiver
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .expect("FIFO open blocked")
+        );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn recursive_trainer_partition_is_lossless_and_repeatable() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let values = (0..2049)
+            .map(|id| {
+                [
+                    f16::from_f32(id as f32).to_bits(),
+                    f16::from_f32(2.0).to_bits(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let (sha, blob) = fixture(&root, 65_537, &values);
+        let output = temp.path().join("router");
+        let repeat = temp.path().join("repeat");
+        let manifest_sha = build(&root, &sha, &output).unwrap();
+        assert_eq!(build(&root, &sha, &repeat).unwrap(), manifest_sha);
+        for name in ["manifest.json", "membership.bin", "leaves.bin"] {
+            assert_eq!(
+                fs::read(output.join(name)).unwrap(),
+                fs::read(repeat.join(name)).unwrap()
+            );
+        }
+        let body = fs::read(output.join("manifest.json")).unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(manifest["algorithm"]["requested_centers"], 33);
+        assert_eq!(manifest["algorithm"]["training_centers"], 33);
+        assert_eq!(manifest["final_unit_rows"], 1);
+        for leaf in manifest["leaves"].as_array().unwrap() {
+            assert!((1..=64).contains(&leaf["unit_count"].as_u64().unwrap()));
+        }
+        let payload = fs::read(output.join("leaves.bin")).unwrap();
+        let membership = fs::read(output.join("membership.bin")).unwrap();
+        assert_eq!(membership.len(), 2049 * 4);
+        assert_eq!(payload.len(), 2049 * 8);
+        let mut units = Vec::new();
+        for record in payload.as_chunks::<8>().0 {
+            let id = u32::from_le_bytes(record[..4].try_into().unwrap()) as usize;
+            assert!(id < 2049);
+            assert_eq!(&record[4..], &blob[32 + id * 4..36 + id * 4]);
+            units.push(id);
+        }
+        units.sort_unstable();
+        assert_eq!(units, (0..2049).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn forged_groups_and_short_leaf_continuations_are_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let values = (0..65)
+            .map(|id| [f16::from_f32(id as f32).to_bits(), 0])
+            .collect::<Vec<_>>();
+        let (sha, blob) = fixture(&root, 2049, &values);
+        let output = temp.path().join("router");
+        build(&root, &sha, &output).unwrap();
+        let body = fs::read(output.join("manifest.json")).unwrap();
+        let membership = fs::read(output.join("membership.bin")).unwrap();
+        let payload = fs::read(output.join("leaves.bin")).unwrap();
+        verify(&body, &membership, &payload, &sha, &blob).unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(manifest["algorithm"]["training_centers"], 2);
+        assert!(manifest["leaves"][0]["unit_count"].as_u64().unwrap() < 64);
+        let mut forged = manifest.clone();
+        forged["leaves"][0]["group_ordinal"] = 2.into();
+        assert!(
+            verify(
+                &serde_json::to_vec(&forged).unwrap(),
+                &membership,
+                &payload,
+                &sha,
+                &blob
+            )
+            .is_err()
+        );
+        forged = manifest;
+        forged["leaves"][1]["group_ordinal"] = 0.into();
+        forged["leaves"][1]["chunk_ordinal"] = 1.into();
+        assert!(
+            verify(
+                &serde_json::to_vec(&forged).unwrap(),
+                &membership,
+                &payload,
+                &sha,
+                &blob
+            )
+            .is_err()
+        );
     }
 }
