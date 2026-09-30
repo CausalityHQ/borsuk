@@ -39,3 +39,41 @@ nomination/scorer/budgets; only both survivors earn object-native cold HTTP.
 Exact source and binary qualification: semantic-router-scorer-assurance.json.
 Authenticated terminal/result/resources: scorer/relaion-a0001/verification.json
 and six immutable gzip bodies. No retry or cap expansion was used.
+
+## CoHere and combined decision
+
+CoHere FIRST100k D768 cosine, consumed ordinals 0–63: **PASS** on the
+same source, binary, policy and caps. All 64 pairs/parity/identities/budgets
+pass; 613/640 candidate R10 hits exceed 608.
+
+| Verified local result | Control | Semantic candidate |
+|---|---:|---:|
+| Mean returned recall@10 | 98.59375% | 95.78125% |
+| Mean returned recall@100 | 99.234375% | 95.84375% |
+| Recall@10 p05 | 90% | 80% |
+| Mean modeled query bytes including candidate router | 27,961,360 | 23,928,856.25 |
+| Mean modeled query GETs including candidate router | 49.875 | 48.53125 |
+| Offline total CPU p50 | 45.868994 ms | 29.445560 ms |
+
+R10 delta −2.8125 percentage points; R100 delta −3.390625 points.
+Discovery-unit coverage is 95.78125%, closure/source/SQ8 fetched coverage
+96.875%, returned 95.78125%. Selection caps added no coverage loss;
+nomination and final SQ8 ranking/quantization remain the quality bottlenecks.
+Exhaustive native SQ8 equals control mean R10/R100. Candidate R10 p05 80%
+remains weak and is reported without changing the mean gate.
+
+Whole evaluator 16.54 seconds, cgroup peak 169,324,544 bytes, maximum RSS
+154,980 KiB, zero swap/OOM. Terminal result and six authenticated bodies
+are in scorer/cohere-a0001. The ReLAION and CoHere measurements used the
+same qualified executable and unchanged policy; neither was retried.
+
+**Both survive to object-native cold HTTP.** This is permission to measure
+the existing mechanism in the library, not a vendor win or scale qualification.
+The small root and lower source bytes are useful; CoHere total modeled GETs
+barely improve because selected-leaf reads add another wave. The next
+implementation must retain full-leaf nomination/shared source scoring,
+generation authentication and bounded reads, expose every actual fetch wave,
+and measure physical requests/bytes/retries plus cold end-to-end latency.
+Do not infer a 100M memory envelope from a flat 100k root or turn local CPU
+timings into projected serving latency. Historical stricter R100/tail misses
+remain visible; no retrospective pass of earlier failed arms.
