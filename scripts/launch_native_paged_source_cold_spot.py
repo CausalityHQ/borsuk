@@ -27,6 +27,8 @@ PREFIX = 'research/source-paging/20260930/cold-'
 TOKEN_PREFIX = 'paged-source-cold-'
 TAG = 'borsuk-paged-source-cold'
 SUBNET = 'subnet-00243d923761c047c'
+REUSE_QUALIFIED = False
+FROZEN = ROOT / 'cold/a0002'
 WALL = 4200
 COMPUTE_CAP = .35
 CODE = (*worker.CODE, 'scripts/launch_native_paged_source_cold_spot.py',
@@ -104,7 +106,7 @@ def preflight(base=Path('.')):
             assert type(entry['bytes']) is int and entry['bytes'] > 0
             assert len(entry['sha256']) == 64 and int(entry['sha256'], 16) >= 0
             assert entry['key'] and not entry['key'].startswith('/')
-    return dict(config_sha256=peer.sha(body), config_path=str(CONFIG), campaign_schema=SCHEMA,
+    proof = dict(config_sha256=peer.sha(body), config_path=str(CONFIG), campaign_schema=SCHEMA,
         manifest_path=str(MANIFEST), manifest_sha256=MANIFEST_SHA, native_source_commit=NATIVE_COMMIT,
         source_identity_sha256=SOURCE_IDENTITY, source_file_count=395,
         compiled_native_sha256={name: identities[name] for name in COMPILED},
@@ -112,6 +114,65 @@ def preflight(base=Path('.')):
         artifact_roster_sha256=peer.sha(json.dumps(ARTIFACTS, separators=(',', ':')).encode()),
         native_rebuilt=True, current_full_suite_pass_claim=False,
         matched_control_latency_measured=False, matched_vendor_measured=False)
+    if REUSE_QUALIFIED:
+        terminal_body = (base/FROZEN/'aws-terminal.json').read_bytes()
+        terminal = json.loads(terminal_body)
+        boundary = json.loads(gzip.decompress((base/FROZEN/'boundary-check.json.gz').read_bytes()))
+        assert boundary['qualified'] is True and boundary['green_status'] == boundary['release_status'] == 0
+        assert boundary['source_identity_sha256'] == SOURCE_IDENTITY
+        assert boundary['compiled_native_sha256'] == proof['compiled_native_sha256']
+        assert boundary['original_config_sha256'] == proof['config_sha256']
+        names = tuple(name for name in ARTIFACTS if not name.startswith('screen/') and
+            name not in {'profile.log', 'profile-resources.txt', 'profile-cgroup.json',
+                         'run-closed.log', 'cpu.txt', 'source-qualification.json'})
+        for name in names:
+            raw = gzip.decompress((base/FROZEN/(name+'.gz')).read_bytes())
+            assert terminal['artifacts'][name] == dict(bytes=len(raw), sha256=peer.sha(raw)), name
+        proof.update(qualified_binary_reused=True, native_rebuilt=False,
+            frozen_build=dict(path=str(FROZEN), terminal_sha256=peer.sha(terminal_body),
+                              artifacts={name: terminal['artifacts'][name] for name in names}))
+    return proof
+
+
+def restore_qualified(repo, out):
+    repo, out = Path(repo), Path(out)
+    proof = json.loads((out/'source-qualification.json').read_bytes())
+    with patch.object(sys.modules[__name__], 'REUSE_QUALIFIED', True):
+        assert preflight(repo) == proof
+    frozen = proof['frozen_build']
+    for name, identity in frozen['artifacts'].items():
+        raw = gzip.decompress((repo/frozen['path']/(name+'.gz')).read_bytes())
+        assert identity == dict(bytes=len(raw), sha256=peer.sha(raw))
+        destination = out/name; destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(raw)
+    (out/'binaries/two_bit_http').chmod(0o755)
+    boundary = json.loads((out/'boundary-check.json').read_bytes())
+    resolution = {key: boundary[key] for key in ('original_config_sha256', 'resolved_config_sha256',
+                  'resolved_config_path', 'binary_sha256', 'binary_bytes')}
+    (out/'source-qualification.json').write_text(json.dumps(dict(proof, **resolution), indent=2)+'\n')
+
+
+def reuse_self_check():
+    import tempfile
+    if not FROZEN.exists(): return
+    with patch.object(sys.modules[__name__], 'REUSE_QUALIFIED', True):
+        proof = preflight()
+        body = user_data('0'*40, 'a'*64, 'fixture', 'fixture', proof)
+        assert 'systemd-run --unit=paged-source-build' not in body
+        assert '--restore-qualified' in body
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out/'source-qualification.json').write_text(json.dumps(proof))
+            restore_qualified(Path('.'), out)
+            config = json.loads((out/'resolved-config.json').read_bytes())
+            worker.validate_config(config)
+            worker.validate_runtime(config, out/'binaries/two_bit_http', out/'boundary-check.json')
+            bad = dict(proof, frozen_build=dict(proof['frozen_build'], terminal_sha256='0'*64))
+            (out/'source-qualification.json').write_text(json.dumps(bad))
+            try: restore_qualified(Path('.'), out)
+            except AssertionError: pass
+            else: raise AssertionError('tampered frozen authority accepted')
+    print('PASS qualified binary reuse, native/runtime parity, no build, tamper rejection')
 
 
 def poll(ec2, s3, prefix, instance_id, started):
@@ -185,6 +246,9 @@ systemd-run --unit=native-paged-source-cold --wait --pipe -p MemoryMax=8G -p Mem
  bash -c 'ulimit -v 4194304 || exit 96; taskset -c 4-5 python3.12 -m scripts.run_native_paged_cold_first_query "$1/resolved-config.json" "$2" "$1/binaries/two_bit_http" "$1/boundary-check.json" "$1/screen"; code=$?; taskset -c 0-3 python3.12 scripts/check_native_startup_build.py --cgroup "$1/profile-cgroup.json" || exit 96; exit "$code"' _ "$root" "$resolved_sha" >profile.log 2>&1
 '''
     command += '\n'.join('test -s "$root/' + name + '"' for name in ARTIFACTS if name.startswith('screen/')) + '\n'
+    if qualification.get('qualified_binary_reused'):
+        begin, finish = command.index('systemd-run --unit=paged-source-build'), command.index('test -s boundary-check.json')
+        command = command[:begin] + 'python3.12 "$root/repo/scripts/launch_native_paged_source_cold_spot.py" --restore-qualified "$root/repo" "$root"\n' + command[finish:]
     body = body[:start] + command + body[end:]
     subprocess.run(['bash', '-n'], input=body, text=True, check=True)
     assert len(body.encode()) < 16384
@@ -451,10 +515,17 @@ def self_check():
 
 
 if __name__ == '__main__':
-    if sys.argv[1:] == ['--self-check']:
+    if sys.argv[1:2] == ['--restore-qualified']:
+        assert len(sys.argv) == 4
+        restore_qualified(*sys.argv[2:])
+    elif sys.argv[1:] == ['--self-check']:
         self_check()
+        reuse_self_check()
     else:
-        assert len(sys.argv) == 2, 'usage: python3 -m scripts.launch_native_paged_source_cold_spot aNNNN'
+        if sys.argv[1:2] == ['--qualified']:
+            REUSE_QUALIFIED = True
+            sys.argv.pop(1)
+        assert len(sys.argv) == 2, 'usage: python3 -m scripts.launch_native_paged_source_cold_spot [--qualified] aNNNN'
         with open('/tmp/borsuk-native-paged-source-cold-launch.lock', 'a+') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             ranges.main(sys.argv[1], campaign=sys.modules[__name__])

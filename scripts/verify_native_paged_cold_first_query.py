@@ -350,6 +350,8 @@ def main(attempt):
         quality_gate_passed=quality, published_context_gate_passed=context, panels=panels,
         native_peak_rss_bytes=peaks, matched_vendor_measured=False, matched_control_latency_measured=False,
         offered_or_saturation_qps_measured=False, current_full_suite_pass_claim=False)
+    report['qualified_binary_reused'] = reservation['qualification'].get('qualified_binary_reused', False)
+    report['build_evidence_is_historical'] = report['qualified_binary_reused']
     (directory/'verification.json').write_text(json.dumps(report, indent=2)+'\n')
     print(json.dumps(report))
 
