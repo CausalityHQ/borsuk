@@ -1,0 +1,93 @@
+{
+  "additional_checks": [
+    {
+      "command": "git diff --check",
+      "status": 0
+    },
+    {
+      "command": "rustfmt --edition 2024 --check crates/borsuk/src/two_bit_generation.rs",
+      "status": 0
+    }
+  ],
+  "base_source_revision": "9ea2211c89c65bd0d49a552b3bd8823058af55f0",
+  "checks": [
+    {
+      "archive": {
+        "gzip_bytes": 7632,
+        "gzip_sha256": "4d3f7a3226855b409e06a0595a60236e7536f2d178aba47035650a45e2fcb7bd",
+        "path": "docs/research/performance-architecture-20260930/borsuk-semantic-source-final-unit-tests.log.gz",
+        "sha256": "304c54f506deface6f82309b74b1dbf0181d4b663cc31e7297e3f4659fee4f3f",
+        "uncompressed_bytes": 60457
+      },
+      "command": "cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests",
+      "log": "/tmp/borsuk-semantic-source-final-unit-tests.log",
+      "passed": 9,
+      "status": 0
+    },
+    {
+      "archive": {
+        "gzip_bytes": 8295,
+        "gzip_sha256": "c56e41a362584d9842657f69ec1aef12e210aae35f8d127fe5a1d55a692b0129",
+        "path": "docs/research/performance-architecture-20260930/borsuk-semantic-source-final-generation-tests.log.gz",
+        "sha256": "716115a6e56a4ae7dbf4eb5a09f1976a8ecb9e4dc08b6b312e90e176c7ebec3b",
+        "uncompressed_bytes": 64865
+      },
+      "command": "cargo test --locked -p borsuk --test two_bit_generation",
+      "log": "/tmp/borsuk-semantic-source-final-generation-tests.log",
+      "passed": 2,
+      "status": 0
+    },
+    {
+      "archive": {
+        "gzip_bytes": 21107,
+        "gzip_sha256": "19f31055ee78f5fd50ed1ad72cc5cc8ee0a0cde199940c93aad17aa2dcfac021",
+        "path": "docs/research/performance-architecture-20260930/borsuk-semantic-source-final-clippy.log.gz",
+        "sha256": "fde7757e0e7d6f2d72d306e5d7b9dab3d28a674466acc45b811135b6d36c7244",
+        "uncompressed_bytes": 183533
+      },
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "log": "/tmp/borsuk-semantic-source-final-clippy.log",
+      "status": 0
+    },
+    {
+      "archive": {
+        "gzip_bytes": 12776,
+        "gzip_sha256": "706bf411897997ad289a9fdd26562db5e0f024dfb24f2dc900c8226763eff6b0",
+        "path": "docs/research/performance-architecture-20260930/borsuk-semantic-source-final-test-build.log.gz",
+        "sha256": "f2fd33959bfda0a0495e08034b75359346757866bf9f3752237eee12433d8883",
+        "uncompressed_bytes": 84497
+      },
+      "command": "bash scripts/check_rust_test_build.sh",
+      "log": "/tmp/borsuk-semantic-source-final-test-build.log",
+      "status": 0
+    }
+  ],
+  "commits_in_order": [
+    "aef82f2bff0f1376ac0fd06403a5887c7887a60b",
+    "5c0a7560288393066d49f596b5f5aedaefe136c3"
+  ],
+  "current_full_workspace_execution_claim": false,
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_TARGET_DIR": "/data/target",
+    "RUSTC_WRAPPER": ""
+  },
+  "final_source_revision": "5c0a7560288393066d49f596b5f5aedaefe136c3",
+  "full_test_build": {
+    "elapsed_seconds": 231,
+    "execution_scope": "compile --workspace --all-targets --no-run; no full workspace test execution",
+    "finished_at": "2026-09-30T19:25:55Z",
+    "jobs": 2,
+    "started_at": "2026-09-30T19:22:04Z",
+    "status": 0
+  },
+  "integration_revision": "bed8aaa9a91688708fd1956c807a312839c28285",
+  "integration_rust_cargo_diff_from_tested_revision_empty": true,
+  "owned_file": "crates/borsuk/src/two_bit_generation.rs",
+  "production_review": "Default 159-page limit, ranking/completion/order and budget code retained. Diagnostic shorter limit explicit; source cover and normalization call existing functions. Final tests check default plan+trace parity, short diagnostic closure without production relaxation, range/byte/partial-tail guards and normalization.",
+  "required_correction_protocol_revision": "4635cc9f",
+  "required_corrections": "Explicit diagnostic nomination_page_limit accepts short closures while production retains min(totalpages,159), same private ranking body. Public normalization wrapper delegates exact cosine_vector; prepare_query(original) remains before normalization.",
+  "schema": "borsuk-semantic-source-planner-assurance-v1",
+  "scope": "Native Rust unit/integration verification using existing repository fixtures. No corpus evaluation, returned ANN quality claim, cloud, review, merge or push. Nonfatal compiler/Clippy warnings retained. Compiler slot free; worktree clean.",
+  "tested_file_sha256": "4866eace96512665f08b4198d697ece91989c1f6644223e9ae798486890c7d63"
+}
