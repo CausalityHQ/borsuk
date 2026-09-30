@@ -1,0 +1,230 @@
+{
+  "application_sq8_cache": false,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "client_cpu_affinity": [
+    4,
+    5
+  ],
+  "code_sha256": {
+    "scripts/run_native_cold_first_query.py": "9ced034924594c7443b5e5a435da22e8f2204151ba6ecc7869ff0ef5b87b0c42",
+    "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+    "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+    "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+    "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6",
+    "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+    "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+    "scripts/run_native_metadata_ranges_cold.py": "1322fe19b705caeab275bce69ea6b4a9f2ed84cb6505dcbfe01b25301fdb71b8",
+    "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
+    "scripts/check_native_paged_source_stats.py": "51219979f622c74e5521a68bff59982b1db03e18b77930034b3ea01fabaf6116",
+    "scripts/run_native_paged_cold_first_query.py": "e3a4c1c1674dda0c29c1ea28f01801452bb5d9fe6ba87ea8096fa4820263e795",
+    "scripts/run_native_centroid_bulk_cold.py": "75bc7cae1e5b3f53ecfe57403eb6b176a91e38cacd323f52ef0b133d614929b2"
+  },
+  "cold_boundary": "preencoded request; process launch through first HTTP response; refused TCP connects included",
+  "count": 64,
+  "dataset_order": [
+    "ReLAION",
+    "CoHere"
+  ],
+  "gates": {
+    "all_calls_success": true,
+    "cold_start_to_first_http_response_p90_ms_exclusive_maximum": 444,
+    "recall_at_10_minimum": 0.95,
+    "source_scorer_ordered_id_physical_parity": true
+  },
+  "items": [
+    {
+      "authority": {
+        "control_epoch": 1,
+        "generation": 1,
+        "root_sha256": "b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b"
+      },
+      "closed_dev_verification_path": "docs/research/native-union-20260928/fresh-rank16-dev64/a0002/verification.json",
+      "closed_dev_verification_sha256": "56e2421ce84f9ca3cf045a77f440aaaf02f766c06412631fbb200666c1bbbc3d",
+      "dataset": "ReLAION",
+      "dimensions": 768,
+      "indexes": {
+        "10": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10"
+      },
+      "inputs": {
+        "reference-k10": {
+          "bytes": 59352,
+          "key": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10/inputs/reference-k10.jsonl",
+          "sha256": "00e5c67b015e6b29c1e0254bb439ec38539d554ea392e7ba2d1766252d3d091a"
+        },
+        "requests": {
+          "bytes": 940145,
+          "key": "research/native-union/20260928/fresh-rank16-dev64-a0002/artifacts/screen/requests64.jsonl",
+          "sha256": "56fc916227c821270499e08fc026bd615bea53781d9c5d01b2c3d11431e9f02b"
+        },
+        "truth": {
+          "bytes": 400000,
+          "key": "research/native-union/20260928/fresh-rank16-seal-a0001/sealed/truth.u32",
+          "range_bytes": 25600,
+          "range_sha256": "90b97011cea9fcb9579f6fb2e16f7e33373d1ab05759387b75ced34e8e47a9f4",
+          "range_start": 0,
+          "sha256": "49eeef8097ec28471cc0cbf9156ccf52204d8694dcd966940d06e195ae1a9444"
+        }
+      },
+      "metadata_files": {
+        "centroids.bin": 48000032,
+        "diverse_graph.bin": 4265768,
+        "graph.bin": 4265768,
+        "manifest.json": 33910,
+        "page_digests.bin": 125024,
+        "page_manifest.json": 280,
+        "plane/manifest.json": 651,
+        "plane/mean.bin": 3072,
+        "plane/page_digests.bin": 1000000
+      },
+      "query_split": "fresh rank16 development0-63",
+      "rows": 1000000
+    },
+    {
+      "authority": {
+        "control_epoch": 1,
+        "generation": 1,
+        "root_sha256": "73610189db28eee8cacdec1867fab6ee18e197ddecbda9ba4cfa2cd0684a9ccf"
+      },
+      "closed_dev_verification_path": "docs/research/native-union-20260928/fresh-cohere-dev64/a0002/verification.json",
+      "closed_dev_verification_sha256": "fb2cf8d616618f0fb33a42340358c2704ed30751557fbb16c23fda0964dd7912",
+      "dataset": "CoHere",
+      "dimensions": 768,
+      "indexes": {
+        "10": "research/native-union/20260930/source-paging-v6/indexes/cohere/k10"
+      },
+      "inputs": {
+        "reference-k10": {
+          "bytes": 61785,
+          "key": "research/native-union/20260930/source-paging-v6/indexes/cohere/k10/inputs/reference-k10.jsonl",
+          "sha256": "9615ad1f209fb695a2c091ac86e46304e208d07c191bbdcac455cc9f4f21c55e"
+        },
+        "requests": {
+          "bytes": 983472,
+          "key": "research/native-union/20260929/fresh-cohere-dev64-a0002/artifacts/screen/requests64.jsonl",
+          "sha256": "304e135fcd03b4f89f0cee3d26262653704d6318a34e0677dd6b3f135b00644d"
+        },
+        "truth": {
+          "bytes": 400000,
+          "key": "research/native-union/20260929/fresh-cohere-seal-a0001/sealed/truth.u32",
+          "range_bytes": 25600,
+          "range_sha256": "918928f4c491ebcc0b8b697bf21533897108b3c51510b2fbe6d71095968e937f",
+          "range_start": 0,
+          "sha256": "b9dd2d8d6b12560108b55a70f339f2a097ee550df4b6e562aa91b76cbd9e4f41"
+        }
+      },
+      "metadata_files": {
+        "centroids.bin": 48000032,
+        "diverse_graph.bin": 4265768,
+        "graph.bin": 4265768,
+        "manifest.json": 33963,
+        "page_digests.bin": 125024,
+        "page_manifest.json": 280,
+        "plane/manifest.json": 651,
+        "plane/mean.bin": 3072,
+        "plane/page_digests.bin": 1000000
+      },
+      "query_split": "fresh CoHere development0-63",
+      "rows": 1000000
+    }
+  ],
+  "k": 10,
+  "machine_limit_seconds": 5400,
+  "matched_control_latency_measured": false,
+  "matched_vendor_measured": false,
+  "namespace_cold_start_included": true,
+  "namespace_connect_deadline_seconds": 45,
+  "native_cpu_affinity": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "native_process_limit_seconds": 60,
+  "offered_or_saturation_qps_measured": false,
+  "previous_observed_development_panel": true,
+  "query_payload_timeout_seconds": 5,
+  "region": "eu-central-1",
+  "s3_service_cache": "uncontrolled",
+  "schema": "borsuk-native-centroid-bulk-cold-v1",
+  "source_caps": {
+    "combined_failed_gets": 0,
+    "combined_submitted_gets": 160,
+    "combined_verified_bytes": 83881984,
+    "source_failed_gets": 0,
+    "source_submitted_gets": 128,
+    "source_verified_bytes": 67108864,
+    "sq8_failed_gets": 0,
+    "sq8_submitted_gets": 32,
+    "sq8_verified_bytes": 16773120
+  },
+  "transport": "loopback plain HTTP",
+  "worker_limit_seconds": 1500,
+  "ann_queries": 256,
+  "blocks": [
+    {
+      "arm": "control",
+      "begin": 0,
+      "end": 32
+    },
+    {
+      "arm": "candidate",
+      "begin": 0,
+      "end": 32
+    },
+    {
+      "arm": "candidate",
+      "begin": 32,
+      "end": 64
+    },
+    {
+      "arm": "control",
+      "begin": 32,
+      "end": 64
+    }
+  ],
+  "items_source": {
+    "path": "docs/research/source-paging-20260930/cold-config.json",
+    "sha256": "92a5e94ab57cced22405d42527bd4f1b54f0f0a839b8444722b7a111145100b9"
+  },
+  "native_manifest": {
+    "path": "docs/research/source-paging-20260930/centroid-bulk/native-source-manifest.json",
+    "sha256": "0dcb1b0342bc257edc772c6106b813648537ef7930f6d5a2e53b2dbc7b2505a2"
+  },
+  "compiled_sha256": {
+    "crates/borsuk/examples/two_bit_http.rs": "7d2d97b2a0579bfbaffd4ff8e5b35f13f7ecbd323d9b4f0b24598569129adfa7",
+    "crates/borsuk/src/object_native_generation.rs": "36dc8f040f862b329164be2cb58151270518f5c659bfbb317f77f1e8855f579c",
+    "crates/borsuk/src/two_bit_generation.rs": "3ced573da33bc0c82a9562eb7973c6ae1821fb613dab8c3b79b04b5ff34b8e34",
+    "crates/borsuk/tests/two_bit_generation.rs": "81ac7d2281269445b6ee2c8d7fd7267fa45c413d76f024ae4f4baddb903d403a",
+    "Cargo.toml": "1ec9ac514515662a0f3a371b1a65d72bf825d67f218dc3f6cc1e5fb0925547d6",
+    "Cargo.lock": "178c5f35a744ec2d11e21f040e72e74016e4502e532dbc2edfd8e2a5433b3b76",
+    "crates/borsuk/Cargo.toml": "76f88b2f0d8805f7727d1aef19469974fe8735aa24c0bd7f12175a3f88826c45",
+    "crates/borsuk/tests/two_bit_source.rs": "bb034601f3b2813d7dd6f22f2493c6005bb872c0ff39c03c6569ae408ab47f11",
+    "crates/borsuk/src/sq8_s3_range.rs": "5a7ccdcc38546d9f2acf7017f4c82342c01eee4c5b63830dd974d36a279eb573",
+    "crates/borsuk/src/sq8_page_authority.rs": "e4b34461509c78ca558f49a0ff11151dc1454589f472a5911913b5dbcea9af23",
+    "crates/borsuk/src/two_bit_source.rs": "11016833a444183e8f8a3cb1303d5244f7becb2684ff156d2dcbb8b9b5f4f93d",
+    "crates/borsuk/src/two_bit_build.rs": "fe5e18007b2db7b240ab792024b81be12e5dc3c35cbf82190f1159555876171f",
+    "crates/borsuk/src/two_bit_index.rs": "0d5588593477518d7620a976c11759ffaf8a0c286555ce9b8110049cc53eb640",
+    "crates/borsuk/src/unit_centroid_graph.rs": "08bf90c491f53bf8831374f67548c608ba891388528d037d0c5a207186758ea4",
+    "crates/borsuk/src/bin/build_two_bit_graph_variant.rs": "2278f5d0811c21c3252e287c87717dcb34e59570f9b4dccdebedcc963604a9a7",
+    "crates/borsuk/src/bin/two_bit_plan_demo.rs": "2a89f80da6ba650cb9b3c3de5650c43d9facdbfb0a6c5ce00c41522d37b0ef54",
+    "crates/borsuk/src/bin/two_bit_union_nomination.rs": "79ed545cdee7183e921295e2cb40fa9371bd1078b8a930c2db7a6cdbb68b03e9",
+    "crates/borsuk/src/bin/two_bit_walk_nomination.rs": "ba2383c638f1254a17dd08b45d4035070da897d991246029f5fa2cd8b442e437",
+    "crates/borsuk/tests/two_bit_application_ids.rs": "18bcf05e43f88ce95794279f48ae311325b023a06688577d656aaae532307531",
+    "crates/borsuk/tests/two_bit_gc_delayed_delete.rs": "197c64ec26bf6ece0a0a812b8e6d1de6c1197e26b8234424d3023d5d8b923341",
+    "crates/borsuk/src/unit_centroid_pages.rs": "40e499f996fda4ca56b3a00c468ec244bee7844f728e4e0fd902b1d03f277035"
+  },
+  "staging": {
+    "control": {
+      "range_bytes": 4194304,
+      "parallel_gets": 8
+    },
+    "candidate": {
+      "range_bytes": 4194304,
+      "parallel_gets": 8
+    }
+  },
+  "native_assurance": {
+    "path": "docs/research/source-paging-20260930/centroid-bulk/implementation-gates/verification.json",
+    "sha256": "5da56736fccc36e9532d742860c06f26c1d89e911ee25f82c5b68935cbefed67"
+  }
+}

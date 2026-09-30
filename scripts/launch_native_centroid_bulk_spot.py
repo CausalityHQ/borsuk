@@ -19,7 +19,7 @@ from scripts.check_native_centroid_bulk_build import CHECKS
 ROOT = Path('docs/research/source-paging-20260930/centroid-bulk')
 CONFIG = ROOT / 'config.json'
 # The parent freezes the config after integration and completed local assurance.
-CONFIG_SHA = None
+CONFIG_SHA = '5b789c61423c44ec8091e03c74f02f56ab508f8979338728c0d8bb9c8120fc9a'
 MANIFEST = ROOT / 'native-source-manifest.json'
 MANIFEST_SHA = '0dcb1b0342bc257edc772c6106b813648537ef7930f6d5a2e53b2dbc7b2505a2'
 SCHEMA = 'borsuk-native-centroid-bulk-spot-v1'

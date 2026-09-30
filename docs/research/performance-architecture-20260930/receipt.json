@@ -1,0 +1,15 @@
+{
+  "consultation_id": "72453a13276b4bba",
+  "status": "completed",
+  "provider": "fable",
+  "model": "claude-fable-5-1",
+  "source_commit": "dfd34208c54e89da1928dfd1061d2bbdf1d602c0",
+  "elapsed_seconds": 368,
+  "timeout_seconds": 1800,
+  "budget_cap_usd": 6,
+  "result_sha256": "76295740aaac62dc3e2445683e0b4d8544e561dfb72dcfe2cbc5540094d843e3",
+  "result_bytes": 9567,
+  "independent_reconciliation_pending": true,
+  "architecture_selected": false,
+  "performance_measurement": false
+}
