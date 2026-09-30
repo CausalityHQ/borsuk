@@ -262,6 +262,7 @@ def lifecycle_self_check():
             ec2.run_instances.assert_called_once()
             launch = ec2.run_instances.call_args.kwargs
             assert launch['ClientToken'].startswith(TOKEN_PREFIX)
+            assert len(launch['ClientToken']) <= 64
             assert launch['TagSpecifications'][0]['Tags'][0]['Value'] == TAG
             assert launch['InstanceType'] == 'c7g.2xlarge'
             ec2.terminate_instances.assert_called_once_with(InstanceIds=['i-geometry'])

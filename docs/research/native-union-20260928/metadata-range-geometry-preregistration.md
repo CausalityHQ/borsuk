@@ -92,3 +92,14 @@ reduction was checked synthetically; its full remote path awaits real receipts.
 An unchanged baseline repository-policy check fails because the package
 metadata test lacks its expected repository URL string. No full native suite
 was repeated or claimed, and that unrelated source was not modified.
+
+Attempt `a0001` / original controller 89043 closed with exit 1 before an
+instance ACK: EC2 rejected the client token because the campaign prefix plus
+the shared 48-character hash exceeded 64 characters. No scientific call or
+build ran. The original reservation, user data and empty-node closeout remain
+immutable; `launch-rejected.json` records the failure. A fresh EC2 active-state
+query returned no BORSUK instances. The shared launcher now bounds the hash
+suffix to the remaining token length, preserving the prior shorter tokens.
+Original mock rerun 69186 closed with exit 0, including the real longer-prefix
+token length and owned termination-before-collection checks. A new attempt is
+required; this rejection is not a measurement GO/KILL or an interrupted cell.

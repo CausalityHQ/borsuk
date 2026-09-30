@@ -1,0 +1,17 @@
+{
+  "status": "launch_rejected",
+  "controller_session": 89043,
+  "controller_exit_code": 1,
+  "ec2_error_code": "InvalidParameterValue",
+  "reason": "Client token exceeds 64 characters",
+  "instance_acknowledged": false,
+  "owned_instance_ids": [],
+  "source_commit": "a5c0cceef4f876c6cc987a311ae7e5c59ce4686c",
+  "source_archive_sha256": "8fed38f6d99c117255d5a52d661d338d705cf160e174d1c386866987628e58b0",
+  "config_sha256": "410ce351d764bccccafcfe6e34697dcc961856288c67f8519c451fa4266143c3",
+  "scientific_measurement_started": false,
+  "compute_cost_estimate_usd": 0,
+  "total_cost_measured": false,
+  "cost_scope": "No EC2 instance ACK; S3 upload/request cost unmeasured, not an invoice",
+  "historical_receipts_preserved": true
+}

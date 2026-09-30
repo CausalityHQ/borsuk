@@ -208,6 +208,8 @@ def collect(s3, prefix, out, instance_id, commit, digest):
 def main(attempt, campaign=None):
     campaign = sys.modules[__name__] if campaign is None else campaign
     assert len(attempt) == 5 and attempt[0] == 'a' and attempt[1:].isdigit()
+    token_prefix = getattr(campaign, 'TOKEN_PREFIX', 'metadata-ranges-')
+    assert token_prefix.isascii() and 0 < len(token_prefix) < 64
     assert not subprocess.check_output(['git', 'status', '--porcelain'], text=True).strip()
     proof = campaign.preflight()
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
@@ -246,7 +248,7 @@ def main(attempt, campaign=None):
     nodes = {}
     started = time.monotonic()
     try:
-        receipt = ec2.run_instances(ClientToken=getattr(campaign, 'TOKEN_PREFIX', 'metadata-ranges-') + peer.sha(prefix.encode())[:48], ImageId='ami-03748c04dc81412c6',
+        receipt = ec2.run_instances(ClientToken=token_prefix + peer.sha(prefix.encode())[:min(48, 64-len(token_prefix))], ImageId='ami-03748c04dc81412c6',
             InstanceType='c7g.2xlarge', MinCount=1, MaxCount=1, IamInstanceProfile={'Arn': peer.PROFILE_ARN},
             NetworkInterfaces=[{'AssociatePublicIpAddress': True, 'DeviceIndex': 0, 'Groups': [peer.SECURITY_GROUP], 'SubnetId': peer.SUBNET}],
             InstanceMarketOptions={'MarketType': 'spot', 'SpotOptions': {'InstanceInterruptionBehavior': 'terminate', 'SpotInstanceType': 'one-time', 'MaxPrice': '0.30'}},
