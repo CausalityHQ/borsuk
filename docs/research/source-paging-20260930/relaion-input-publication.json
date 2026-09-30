@@ -1,0 +1,69 @@
+{
+  "artifacts": {
+    "centroids.bin": {
+      "bytes": 48000032,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10/generations/b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b/centroids.bin",
+      "sha256": "ab8964974527547f67d138383ab6e77076c897dccf5078f5211e6f2e13a4d4e3"
+    },
+    "diverse_graph.bin": {
+      "bytes": 4265768,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10/generations/b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b/diverse_graph.bin",
+      "sha256": "b9c9b23d28df4fd8fd40cc7213cece023a5c6b60584d78104899bc583e094e4a"
+    },
+    "graph.bin": {
+      "bytes": 4265768,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10/generations/b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b/graph.bin",
+      "sha256": "d7c4cb36ed1ca041755cbbf817f061cf03470d7bb3b07002474bf91aefcbe616"
+    },
+    "manifest.json": {
+      "bytes": 33910,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10/generations/b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b/manifest.json",
+      "sha256": "b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b"
+    },
+    "page_digests.bin": {
+      "bytes": 125024,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10/generations/b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b/page_digests.bin",
+      "sha256": "4a67b1287d4bb39110f07242212b32b060fea6ded1246f0a66c4b055792fe1ee"
+    },
+    "page_manifest.json": {
+      "bytes": 280,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10/generations/b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b/page_manifest.json",
+      "sha256": "dcd1331821591603e200a472be45bbe9b437aa8e7ca669bc7314f7d83103e660"
+    },
+    "plane/manifest.json": {
+      "bytes": 651,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10/generations/b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b/plane/manifest.json",
+      "sha256": "e5f76ddafe4d6852d75155cab8da792d5a56ad43948eb88f70d26c1e14057bbe"
+    },
+    "plane/mean.bin": {
+      "bytes": 3072,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10/generations/b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b/plane/mean.bin",
+      "sha256": "f89b58ff4bc60fae32a0ba86878f25dff926cf8e063f5328b4467c40e654788f"
+    },
+    "plane/page_digests.bin": {
+      "bytes": 1000000,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10/generations/b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b/plane/page_digests.bin",
+      "sha256": "dcf2bf6d4dad21023b09328273ff7144f7a5d71a723906a897d1a8c3e4dc4a5c"
+    },
+    "plane/records.bin": {
+      "bytes": 200000000,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10/generations/b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b/plane/records.bin",
+      "sha256": "b0f993af75f8ce22ab393f98dc5778f629141099a8ad60035481b56a1a466944"
+    }
+  },
+  "borrowed_bodies_requalified": false,
+  "borrowed_canonical_and_sq8_head_checked": true,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "dataset": "ReLAION",
+  "head": {
+    "bytes": 171,
+    "key": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10/HEAD.json",
+    "sha256": "34a0f1082266c1c9584a7a629af6409d0406ff77fd0ef033ed49ba667106a6f3"
+  },
+  "performance_measured": false,
+  "prefix": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10",
+  "query_or_truth_used": false,
+  "remote_bodies_independently_hashed": true,
+  "root_sha256": "b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b",
+  "schema": "borsuk-paged-input-publication-v1"
+}

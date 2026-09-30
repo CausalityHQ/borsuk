@@ -1,0 +1,69 @@
+{
+  "artifacts": {
+    "centroids.bin": {
+      "bytes": 48000032,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/cohere/k10/generations/73610189db28eee8cacdec1867fab6ee18e197ddecbda9ba4cfa2cd0684a9ccf/centroids.bin",
+      "sha256": "ce87906d375937bd935dff901ef72e970113ec097e542a55837cfd26cb19814b"
+    },
+    "diverse_graph.bin": {
+      "bytes": 4265768,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/cohere/k10/generations/73610189db28eee8cacdec1867fab6ee18e197ddecbda9ba4cfa2cd0684a9ccf/diverse_graph.bin",
+      "sha256": "e5aa5c1370c4d638349171f179d5114142d2b1a3834755aeb6293de5acd94b03"
+    },
+    "graph.bin": {
+      "bytes": 4265768,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/cohere/k10/generations/73610189db28eee8cacdec1867fab6ee18e197ddecbda9ba4cfa2cd0684a9ccf/graph.bin",
+      "sha256": "fec7337384c1170d0a3887999b04742fe970aa1b58e173aab33b233259d5a4d6"
+    },
+    "manifest.json": {
+      "bytes": 33963,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/cohere/k10/generations/73610189db28eee8cacdec1867fab6ee18e197ddecbda9ba4cfa2cd0684a9ccf/manifest.json",
+      "sha256": "73610189db28eee8cacdec1867fab6ee18e197ddecbda9ba4cfa2cd0684a9ccf"
+    },
+    "page_digests.bin": {
+      "bytes": 125024,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/cohere/k10/generations/73610189db28eee8cacdec1867fab6ee18e197ddecbda9ba4cfa2cd0684a9ccf/page_digests.bin",
+      "sha256": "62af37707aa4107df5255288f5fbb325635244d5efc0d6767bf0e5387c825a1f"
+    },
+    "page_manifest.json": {
+      "bytes": 280,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/cohere/k10/generations/73610189db28eee8cacdec1867fab6ee18e197ddecbda9ba4cfa2cd0684a9ccf/page_manifest.json",
+      "sha256": "dd18a4538064cd717aaa1a8a9bb1cae9b14189b171dd60113bff413584fd9142"
+    },
+    "plane/manifest.json": {
+      "bytes": 651,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/cohere/k10/generations/73610189db28eee8cacdec1867fab6ee18e197ddecbda9ba4cfa2cd0684a9ccf/plane/manifest.json",
+      "sha256": "a5e17b38d9376ed9e6ee53bddf77eec90751f38fe37deab7bc6f29649f8b70de"
+    },
+    "plane/mean.bin": {
+      "bytes": 3072,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/cohere/k10/generations/73610189db28eee8cacdec1867fab6ee18e197ddecbda9ba4cfa2cd0684a9ccf/plane/mean.bin",
+      "sha256": "b3ab0923a6871b01dc49b7614375a0015406bbd732329201600136d0863cae47"
+    },
+    "plane/page_digests.bin": {
+      "bytes": 1000000,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/cohere/k10/generations/73610189db28eee8cacdec1867fab6ee18e197ddecbda9ba4cfa2cd0684a9ccf/plane/page_digests.bin",
+      "sha256": "ca95a0abe147087aa0195b514b5fb5ce6cb693bc7217d1400364af8648d7e8bc"
+    },
+    "plane/records.bin": {
+      "bytes": 200000000,
+      "key": "research/native-union/20260930/source-paging-v6/indexes/cohere/k10/generations/73610189db28eee8cacdec1867fab6ee18e197ddecbda9ba4cfa2cd0684a9ccf/plane/records.bin",
+      "sha256": "491888c5ce5887efb5aaf55106c707b6a3f98566eb0b602643dbec8abb1d4eaf"
+    }
+  },
+  "borrowed_bodies_requalified": false,
+  "borrowed_canonical_and_sq8_head_checked": true,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "dataset": "CoHere",
+  "head": {
+    "bytes": 171,
+    "key": "research/native-union/20260930/source-paging-v6/indexes/cohere/k10/HEAD.json",
+    "sha256": "2b6a0b5eb2634d2ea312e2a07173c202fcfa66cce20f6ee5da6ed4dbb091eccf"
+  },
+  "performance_measured": false,
+  "prefix": "research/native-union/20260930/source-paging-v6/indexes/cohere/k10",
+  "query_or_truth_used": false,
+  "remote_bodies_independently_hashed": true,
+  "root_sha256": "73610189db28eee8cacdec1867fab6ee18e197ddecbda9ba4cfa2cd0684a9ccf",
+  "schema": "borsuk-paged-input-publication-v1"
+}

@@ -1,0 +1,166 @@
+{
+  "application_sq8_cache": false,
+  "binary": null,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "client_cpu_affinity": [
+    4,
+    5
+  ],
+  "code_sha256": {
+    "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
+    "scripts/check_native_paged_source_stats.py": "51219979f622c74e5521a68bff59982b1db03e18b77930034b3ea01fabaf6116",
+    "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+    "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+    "scripts/run_native_cold_first_query.py": "9ced034924594c7443b5e5a435da22e8f2204151ba6ecc7869ff0ef5b87b0c42",
+    "scripts/run_native_paged_cold_first_query.py": "e3a4c1c1674dda0c29c1ea28f01801452bb5d9fe6ba87ea8096fa4820263e795",
+    "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+    "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+    "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+    "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6"
+  },
+  "cold_boundary": "preencoded request; process launch through first HTTP response; refused TCP connects included",
+  "count": 64,
+  "dataset_order": [
+    "ReLAION",
+    "CoHere"
+  ],
+  "gates": {
+    "all_calls_success": true,
+    "cold_start_to_first_http_response_p90_ms_exclusive_maximum": 444,
+    "recall_at_10_minimum": 0.95,
+    "source_scorer_ordered_id_physical_parity": true
+  },
+  "items": [
+    {
+      "authority": {
+        "control_epoch": 1,
+        "generation": 1,
+        "root_sha256": "b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b"
+      },
+      "closed_dev_verification_path": "docs/research/native-union-20260928/fresh-rank16-dev64/a0002/verification.json",
+      "closed_dev_verification_sha256": "56e2421ce84f9ca3cf045a77f440aaaf02f766c06412631fbb200666c1bbbc3d",
+      "dataset": "ReLAION",
+      "dimensions": 768,
+      "indexes": {
+        "10": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10"
+      },
+      "inputs": {
+        "reference-k10": {
+          "bytes": 59352,
+          "key": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10/inputs/reference-k10.jsonl",
+          "sha256": "00e5c67b015e6b29c1e0254bb439ec38539d554ea392e7ba2d1766252d3d091a"
+        },
+        "requests": {
+          "bytes": 940145,
+          "key": "research/native-union/20260928/fresh-rank16-dev64-a0002/artifacts/screen/requests64.jsonl",
+          "sha256": "56fc916227c821270499e08fc026bd615bea53781d9c5d01b2c3d11431e9f02b"
+        },
+        "truth": {
+          "bytes": 400000,
+          "key": "research/native-union/20260928/fresh-rank16-seal-a0001/sealed/truth.u32",
+          "range_bytes": 25600,
+          "range_sha256": "90b97011cea9fcb9579f6fb2e16f7e33373d1ab05759387b75ced34e8e47a9f4",
+          "range_start": 0,
+          "sha256": "49eeef8097ec28471cc0cbf9156ccf52204d8694dcd966940d06e195ae1a9444"
+        }
+      },
+      "metadata_files": {
+        "centroids.bin": 48000032,
+        "diverse_graph.bin": 4265768,
+        "graph.bin": 4265768,
+        "manifest.json": 33910,
+        "page_digests.bin": 125024,
+        "page_manifest.json": 280,
+        "plane/manifest.json": 651,
+        "plane/mean.bin": 3072,
+        "plane/page_digests.bin": 1000000
+      },
+      "query_split": "fresh rank16 development0-63",
+      "rows": 1000000
+    },
+    {
+      "authority": {
+        "control_epoch": 1,
+        "generation": 1,
+        "root_sha256": "73610189db28eee8cacdec1867fab6ee18e197ddecbda9ba4cfa2cd0684a9ccf"
+      },
+      "closed_dev_verification_path": "docs/research/native-union-20260928/fresh-cohere-dev64/a0002/verification.json",
+      "closed_dev_verification_sha256": "fb2cf8d616618f0fb33a42340358c2704ed30751557fbb16c23fda0964dd7912",
+      "dataset": "CoHere",
+      "dimensions": 768,
+      "indexes": {
+        "10": "research/native-union/20260930/source-paging-v6/indexes/cohere/k10"
+      },
+      "inputs": {
+        "reference-k10": {
+          "bytes": 61785,
+          "key": "research/native-union/20260930/source-paging-v6/indexes/cohere/k10/inputs/reference-k10.jsonl",
+          "sha256": "9615ad1f209fb695a2c091ac86e46304e208d07c191bbdcac455cc9f4f21c55e"
+        },
+        "requests": {
+          "bytes": 983472,
+          "key": "research/native-union/20260929/fresh-cohere-dev64-a0002/artifacts/screen/requests64.jsonl",
+          "sha256": "304e135fcd03b4f89f0cee3d26262653704d6318a34e0677dd6b3f135b00644d"
+        },
+        "truth": {
+          "bytes": 400000,
+          "key": "research/native-union/20260929/fresh-cohere-seal-a0001/sealed/truth.u32",
+          "range_bytes": 25600,
+          "range_sha256": "918928f4c491ebcc0b8b697bf21533897108b3c51510b2fbe6d71095968e937f",
+          "range_start": 0,
+          "sha256": "b9dd2d8d6b12560108b55a70f339f2a097ee550df4b6e562aa91b76cbd9e4f41"
+        }
+      },
+      "metadata_files": {
+        "centroids.bin": 48000032,
+        "diverse_graph.bin": 4265768,
+        "graph.bin": 4265768,
+        "manifest.json": 33963,
+        "page_digests.bin": 125024,
+        "page_manifest.json": 280,
+        "plane/manifest.json": 651,
+        "plane/mean.bin": 3072,
+        "plane/page_digests.bin": 1000000
+      },
+      "query_split": "fresh CoHere development0-63",
+      "rows": 1000000
+    }
+  ],
+  "k": 10,
+  "machine_limit_seconds": 4200,
+  "matched_vendor_measured": false,
+  "namespace_cold_start_included": true,
+  "namespace_connect_deadline_seconds": 45,
+  "native_cpu_affinity": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "native_process_limit_seconds": 60,
+  "native_source_file_count": 395,
+  "native_source_identity_sha256": "3f05bdfd2c399fb4f93ab5c73827c7b55d8fd31f73ed967e6ac235976a7d7f64",
+  "native_source_manifest": {
+    "path": "docs/research/source-paging-20260930/native-source-manifest.json",
+    "sha256": "e23787927669acf07cbf0d5e687e99ef5a09b24f27e42e76de4c2070991a744c"
+  },
+  "offered_or_saturation_qps_measured": false,
+  "previous_observed_development_panel": true,
+  "query_payload_timeout_seconds": 5,
+  "region": "eu-central-1",
+  "s3_service_cache": "uncontrolled",
+  "schema": "borsuk-native-paged-cold-first-query-v1",
+  "source_caps": {
+    "combined_failed_gets": 0,
+    "combined_submitted_gets": 160,
+    "combined_verified_bytes": 83881984,
+    "source_failed_gets": 0,
+    "source_submitted_gets": 128,
+    "source_verified_bytes": 67108864,
+    "sq8_failed_gets": 0,
+    "sq8_submitted_gets": 32,
+    "sq8_verified_bytes": 16773120
+  },
+  "transport": "loopback plain HTTP",
+  "worker_limit_seconds": 1500
+}

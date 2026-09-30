@@ -1,0 +1,11 @@
+{
+  "schema": "borsuk-reference-authority-rebind-v1",
+  "original_path": "docs/research/native-union-20260928/fresh-rank16-dev64/a0002/screen/reference-k10.jsonl.gz",
+  "original_sha256": "066605eea6253ff8976dd7e0df0d68cfebb9bd3273f7e83983b2fbdfc0c96832",
+  "new_sha256": "00e5c67b015e6b29c1e0254bb439ec38539d554ea392e7ba2d1766252d3d091a",
+  "original_root_sha256": "d8e7ccf090f322bbb39600f096e8d64b7dc15ed8f5d7dfd6344b1c076dc99cce",
+  "new_root_sha256": "b089766bb08cd0fc091162abf4353ca631595ef771aa27294d27f606d5f8fe8b",
+  "query_rows_and_terminal_byte_identical": true,
+  "reference_timing_fields_are_historical_not_candidate_measurements": true,
+  "new_ordered_hits_measured": false
+}
