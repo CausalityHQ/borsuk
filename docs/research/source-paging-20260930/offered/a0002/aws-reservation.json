@@ -1,0 +1,207 @@
+{
+  "schema": "borsuk-native-paged-cold-offered-spot-v1",
+  "source_commit": "fb4ec1f39cdc12195bd6cacb16bc9a1caa1f29e5",
+  "source_archive_sha256": "f0de9d4461369cfc5ac591947b5bff375871a44a75a63a62718156ed52ecb3ae",
+  "wall_seconds": 2700,
+  "instance_type": "c7g.2xlarge",
+  "availability_zone": "eu-central-1a",
+  "subnet_id": "subnet-034528fbd6977848f",
+  "spot_price_observed_usd_per_hour": "0.204200",
+  "spot_quote_timestamp": "2026-09-30T08:00:00+00:00",
+  "spot_max_usd_per_hour": 0.3,
+  "compute_cap_usd": 0.225,
+  "ebs_s3_allowance_usd": 0.15,
+  "total_cost_measured": false,
+  "cost_scope": "2700s at capped Spot rate; boot/termination overhead and EBS/S3 allowance estimated",
+  "qualification": {
+    "config_sha256": "422465367366c909b061e8d211a30386e10ad2f56c70032fe38aa954ca05534d",
+    "config_path": "docs/research/source-paging-20260930/offered-config.json",
+    "campaign_schema": "borsuk-native-paged-cold-offered-spot-v1",
+    "code_sha256": {
+      "scripts/run_native_cold_first_query.py": "9ced034924594c7443b5e5a435da22e8f2204151ba6ecc7869ff0ef5b87b0c42",
+      "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+      "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+      "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+      "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6",
+      "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+      "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+      "scripts/run_native_metadata_ranges_cold.py": "1322fe19b705caeab275bce69ea6b4a9f2ed84cb6505dcbfe01b25301fdb71b8",
+      "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
+      "scripts/run_native_cold_offered.py": "a20716290c4ed82c24553b5bc8f721ce2b692560e0ef4f82ecb9d1ea90989ba9",
+      "scripts/check_native_paged_source_stats.py": "51219979f622c74e5521a68bff59982b1db03e18b77930034b3ea01fabaf6116",
+      "scripts/run_native_paged_cold_first_query.py": "e3a4c1c1674dda0c29c1ea28f01801452bb5d9fe6ba87ea8096fa4820263e795",
+      "scripts/run_native_paged_cold_offered.py": "1547d3d80eef1e83265e5b702467b08bb424ea9816625a74f508410ed3534caf",
+      "scripts/launch_native_paged_cold_offered_spot.py": "fc4986cf28f9c91fb6ff53fa9cf3077d23a947e37e731ecac1635bb376724726",
+      "scripts/check_native_startup_build.py": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52",
+      "scripts/launch_native_metadata_ranges_cold_spot.py": "dcafc370d72fb2df6643a234ab4714ddebcaa484cf56bfa89c824382a2ba36b3",
+      "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
+      "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
+      "scripts/launch_v174_relaid_bind_compile_spot.py": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a",
+      "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b"
+    },
+    "manifest_path": "docs/research/source-paging-20260930/native-source-manifest.json",
+    "manifest_sha256": "e23787927669acf07cbf0d5e687e99ef5a09b24f27e42e76de4c2070991a744c",
+    "source_identity_sha256": "3f05bdfd2c399fb4f93ab5c73827c7b55d8fd31f73ed967e6ac235976a7d7f64",
+    "source_file_count": 395,
+    "compiled_native_sha256": {
+      "crates/borsuk/examples/two_bit_http.rs": "7d2d97b2a0579bfbaffd4ff8e5b35f13f7ecbd323d9b4f0b24598569129adfa7",
+      "crates/borsuk/src/object_native_generation.rs": "36dc8f040f862b329164be2cb58151270518f5c659bfbb317f77f1e8855f579c",
+      "crates/borsuk/src/two_bit_generation.rs": "3ced573da33bc0c82a9562eb7973c6ae1821fb613dab8c3b79b04b5ff34b8e34",
+      "crates/borsuk/tests/two_bit_generation.rs": "81ac7d2281269445b6ee2c8d7fd7267fa45c413d76f024ae4f4baddb903d403a",
+      "Cargo.toml": "1ec9ac514515662a0f3a371b1a65d72bf825d67f218dc3f6cc1e5fb0925547d6",
+      "Cargo.lock": "178c5f35a744ec2d11e21f040e72e74016e4502e532dbc2edfd8e2a5433b3b76",
+      "crates/borsuk/Cargo.toml": "76f88b2f0d8805f7727d1aef19469974fe8735aa24c0bd7f12175a3f88826c45",
+      "crates/borsuk/tests/two_bit_source.rs": "bb034601f3b2813d7dd6f22f2493c6005bb872c0ff39c03c6569ae408ab47f11",
+      "crates/borsuk/src/sq8_s3_range.rs": "80022b4b8669015b24dfc055dda162877f096fd20530fcb2811232d483e40c12",
+      "crates/borsuk/src/sq8_page_authority.rs": "e4b34461509c78ca558f49a0ff11151dc1454589f472a5911913b5dbcea9af23",
+      "crates/borsuk/src/two_bit_source.rs": "11016833a444183e8f8a3cb1303d5244f7becb2684ff156d2dcbb8b9b5f4f93d",
+      "crates/borsuk/src/two_bit_build.rs": "fe5e18007b2db7b240ab792024b81be12e5dc3c35cbf82190f1159555876171f",
+      "crates/borsuk/src/two_bit_index.rs": "0d5588593477518d7620a976c11759ffaf8a0c286555ce9b8110049cc53eb640",
+      "crates/borsuk/src/unit_centroid_graph.rs": "7a47654900e1ec2d5f96384ee2b67ea4c647c2eb05c00a0e4d5902636bcebc42",
+      "crates/borsuk/src/bin/build_two_bit_graph_variant.rs": "2278f5d0811c21c3252e287c87717dcb34e59570f9b4dccdebedcc963604a9a7",
+      "crates/borsuk/src/bin/two_bit_plan_demo.rs": "2a89f80da6ba650cb9b3c3de5650c43d9facdbfb0a6c5ce00c41522d37b0ef54",
+      "crates/borsuk/src/bin/two_bit_union_nomination.rs": "79ed545cdee7183e921295e2cb40fa9371bd1078b8a930c2db7a6cdbb68b03e9",
+      "crates/borsuk/src/bin/two_bit_walk_nomination.rs": "ba2383c638f1254a17dd08b45d4035070da897d991246029f5fa2cd8b442e437",
+      "crates/borsuk/tests/two_bit_application_ids.rs": "18bcf05e43f88ce95794279f48ae311325b023a06688577d656aaae532307531",
+      "crates/borsuk/tests/two_bit_gc_delayed_delete.rs": "197c64ec26bf6ece0a0a812b8e6d1de6c1197e26b8234424d3023d5d8b923341"
+    },
+    "native_source_commit": "2b0827369965ede5414a23e7be3abfefb92166b9",
+    "frozen_native_qualification": {
+      "path": "docs/research/source-paging-20260930/cold/a0004/verification.json",
+      "sha256": "6f7c10c0186045fb2aa0108a669c7535a188698e8420afbbc7d73e0994164dd4",
+      "source_commit": "24342b9e5a740049cdb7f02e859af04b8eb9fa32",
+      "source_archive_sha256": "3ea1f9903194747d7f741753fc66f48a21c89f22985e6bc9a4660b1f347abca9",
+      "terminal_sha256": "ce8ddf306f932908ce66fb69f6daeae204936d843f2cff324ee3e72deef00c05"
+    },
+    "frozen_binary_artifacts": {
+      "binaries/two_bit_http": {
+        "bytes": 12544008,
+        "sha256": "99cf800558a6cebc710a3da28f6f4afa5743680efc8839a0b7b849b60c11eace"
+      },
+      "boundary-check.json": {
+        "bytes": 3981,
+        "sha256": "870e160718fc989f54b66344db81e2ab09e24a34e358a6065adfd70c0b294403"
+      },
+      "compiled-source.json": {
+        "bytes": 2227,
+        "sha256": "f16483848a2b46fd22881b9e26592131204274c2b2d49cb4157a69cd185e0c98"
+      },
+      "source-qualification.json": {
+        "bytes": 12230,
+        "sha256": "09121b757dc9ea5e0181140f759fc22948ac5f02edc046c477020d438fdc0425"
+      },
+      "run-closed.log": {
+        "bytes": 18993,
+        "sha256": "cf1d6204b4a32e7d5625a94a134dee245d75eb1e6df41b4b13998287e8583056"
+      },
+      "rustc-version.txt": {
+        "bytes": 197,
+        "sha256": "ec378196e9fa222ab807fd49cb9dae156a9bd18069b9440fd4e0a6c57c6971cb"
+      },
+      "cargo-version.txt": {
+        "bytes": 36,
+        "sha256": "fb3f25aefd6d5441842d285f5a9b125b3f0f0b0bf2013d9a32677f9e99c6c854"
+      },
+      "cpuinfo.txt": {
+        "bytes": 2856,
+        "sha256": "91561b86cc166f6c939619e5bcb5b755b52e874a5284639f17179ec51278646d"
+      },
+      "arm-feature-tree.txt": {
+        "bytes": 47693,
+        "sha256": "036fe64b2c113c7250fa6adf22e917c3641645ec22b94add7cec8ed591e810ab"
+      },
+      "x86-feature-tree.txt": {
+        "bytes": 47617,
+        "sha256": "56dd1d5eb64294993fef507908f9f237dcd5de24c12a11d2ff11e24f1c72c5a0"
+      },
+      "compiled-source/crates/borsuk/examples/two_bit_http.rs": {
+        "bytes": 9837,
+        "sha256": "7d2d97b2a0579bfbaffd4ff8e5b35f13f7ecbd323d9b4f0b24598569129adfa7"
+      },
+      "compiled-source/crates/borsuk/src/object_native_generation.rs": {
+        "bytes": 54783,
+        "sha256": "36dc8f040f862b329164be2cb58151270518f5c659bfbb317f77f1e8855f579c"
+      },
+      "compiled-source/crates/borsuk/src/two_bit_generation.rs": {
+        "bytes": 59165,
+        "sha256": "3ced573da33bc0c82a9562eb7973c6ae1821fb613dab8c3b79b04b5ff34b8e34"
+      },
+      "compiled-source/crates/borsuk/tests/two_bit_generation.rs": {
+        "bytes": 33379,
+        "sha256": "81ac7d2281269445b6ee2c8d7fd7267fa45c413d76f024ae4f4baddb903d403a"
+      },
+      "compiled-source/Cargo.toml": {
+        "bytes": 621,
+        "sha256": "1ec9ac514515662a0f3a371b1a65d72bf825d67f218dc3f6cc1e5fb0925547d6"
+      },
+      "compiled-source/Cargo.lock": {
+        "bytes": 90542,
+        "sha256": "178c5f35a744ec2d11e21f040e72e74016e4502e532dbc2edfd8e2a5433b3b76"
+      },
+      "compiled-source/crates/borsuk/Cargo.toml": {
+        "bytes": 2697,
+        "sha256": "76f88b2f0d8805f7727d1aef19469974fe8735aa24c0bd7f12175a3f88826c45"
+      },
+      "compiled-source/crates/borsuk/tests/two_bit_source.rs": {
+        "bytes": 10845,
+        "sha256": "bb034601f3b2813d7dd6f22f2493c6005bb872c0ff39c03c6569ae408ab47f11"
+      },
+      "compiled-source/crates/borsuk/src/sq8_s3_range.rs": {
+        "bytes": 52293,
+        "sha256": "80022b4b8669015b24dfc055dda162877f096fd20530fcb2811232d483e40c12"
+      },
+      "compiled-source/crates/borsuk/src/sq8_page_authority.rs": {
+        "bytes": 14674,
+        "sha256": "e4b34461509c78ca558f49a0ff11151dc1454589f472a5911913b5dbcea9af23"
+      },
+      "compiled-source/crates/borsuk/src/two_bit_source.rs": {
+        "bytes": 20785,
+        "sha256": "11016833a444183e8f8a3cb1303d5244f7becb2684ff156d2dcbb8b9b5f4f93d"
+      },
+      "compiled-source/crates/borsuk/src/two_bit_build.rs": {
+        "bytes": 14981,
+        "sha256": "fe5e18007b2db7b240ab792024b81be12e5dc3c35cbf82190f1159555876171f"
+      },
+      "compiled-source/crates/borsuk/src/two_bit_index.rs": {
+        "bytes": 9544,
+        "sha256": "0d5588593477518d7620a976c11759ffaf8a0c286555ce9b8110049cc53eb640"
+      },
+      "compiled-source/crates/borsuk/src/unit_centroid_graph.rs": {
+        "bytes": 39417,
+        "sha256": "7a47654900e1ec2d5f96384ee2b67ea4c647c2eb05c00a0e4d5902636bcebc42"
+      },
+      "compiled-source/crates/borsuk/src/bin/build_two_bit_graph_variant.rs": {
+        "bytes": 8234,
+        "sha256": "2278f5d0811c21c3252e287c87717dcb34e59570f9b4dccdebedcc963604a9a7"
+      },
+      "compiled-source/crates/borsuk/src/bin/two_bit_plan_demo.rs": {
+        "bytes": 14204,
+        "sha256": "2a89f80da6ba650cb9b3c3de5650c43d9facdbfb0a6c5ce00c41522d37b0ef54"
+      },
+      "compiled-source/crates/borsuk/src/bin/two_bit_union_nomination.rs": {
+        "bytes": 9028,
+        "sha256": "79ed545cdee7183e921295e2cb40fa9371bd1078b8a930c2db7a6cdbb68b03e9"
+      },
+      "compiled-source/crates/borsuk/src/bin/two_bit_walk_nomination.rs": {
+        "bytes": 11398,
+        "sha256": "ba2383c638f1254a17dd08b45d4035070da897d991246029f5fa2cd8b442e437"
+      },
+      "compiled-source/crates/borsuk/tests/two_bit_application_ids.rs": {
+        "bytes": 69271,
+        "sha256": "18bcf05e43f88ce95794279f48ae311325b023a06688577d656aaae532307531"
+      },
+      "compiled-source/crates/borsuk/tests/two_bit_gc_delayed_delete.rs": {
+        "bytes": 11099,
+        "sha256": "197c64ec26bf6ece0a0a812b8e6d1de6c1197e26b8234424d3023d5d8b923341"
+      }
+    },
+    "artifact_roster_sha256": "6e335036cee7b76a855c2d40b4adf47a1b892d885b196dbca91b211fd18976e2",
+    "native_rebuilt": false,
+    "current_full_suite_pass_claim": false,
+    "build_evidence_is_historical": true,
+    "matched_control_latency_measured": false,
+    "matched_vendor_measured": false
+  },
+  "config_sha256": "422465367366c909b061e8d211a30386e10ad2f56c70032fe38aa954ca05534d",
+  "interruption_policy": "Discard interrupted worker; no automatic replacement"
+}
