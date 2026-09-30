@@ -167,6 +167,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "plane/manifest.json",
         "plane/mean.bin",
         "plane/records.bin",
+        "plane/page_digests.bin",
     ] {
         fs::write(
             staged.path().join(name),

@@ -7,6 +7,55 @@ fn hash(bytes: &[u8]) -> String {
 }
 
 #[test]
+fn authenticates_full_source_unit_and_partial_tail_on_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let raw = [1.0_f32, 2.0, -1.0, 0.5, 3.0]
+        .repeat(33)
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect::<Vec<_>>();
+    let sq8 = (0_i64..33)
+        .flat_map(|id| {
+            let mut bytes = id.to_le_bytes().to_vec();
+            bytes.extend_from_slice(&1.0_f32.to_le_bytes());
+            bytes.extend_from_slice(&[0; 5]);
+            bytes
+        })
+        .collect::<Vec<_>>();
+    let raw_path = directory.path().join("raw");
+    let sq8_path = directory.path().join("sq8");
+    fs::write(&raw_path, &raw).unwrap();
+    fs::write(&sq8_path, &sq8).unwrap();
+    let output = directory.path().join("plane");
+    TwoBitSource {
+        raw: &raw_path,
+        raw_sha256: &hash(&raw),
+        sq8: &sq8_path,
+        sq8_sha256: &hash(&sq8),
+        rows: 33,
+        dimensions: 5,
+    }
+    .build(&output, 1_000_000)
+    .unwrap();
+    let records = fs::read(output.join("records.bin")).unwrap();
+    let digests = fs::read(output.join("page_digests.bin")).unwrap();
+    assert_eq!(digests.len(), 64);
+    assert_eq!(&digests[..32], Sha256::digest(&records[..320]).as_slice());
+    assert_eq!(&digests[32..], Sha256::digest(&records[320..]).as_slice());
+    let body = fs::read(output.join("manifest.json")).unwrap();
+    assert!(TwoBitPlane::open(&output, &hash(&body), &hash(&sq8), 1_000_000).is_ok());
+    let mut wrong = digests;
+    wrong[32] ^= 1;
+    fs::write(output.join("page_digests.bin"), &wrong).unwrap();
+    assert!(TwoBitPlane::open(&output, &hash(&body), &hash(&sq8), 1_000_000).is_err());
+    let mut manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    manifest["page_digest_sha256"] = hash(&wrong).into();
+    let rebound = serde_json::to_vec(&manifest).unwrap();
+    fs::write(output.join("manifest.json"), &rebound).unwrap();
+    assert!(TwoBitPlane::open(&output, &hash(&rebound), &hash(&sq8), 1_000_000).is_err());
+}
+
+#[test]
 fn authentication_backend_matches_sha256_known_answers() {
     assert_eq!(
         hash(b"abc"),
@@ -74,10 +123,15 @@ fn streams_source_records_and_rejects_wrong_identity_order_budget_and_overwrite(
     }
     assert_eq!(receipt.mean_sha256, hash(&mean));
     assert_eq!(receipt.records_sha256, hash(&records));
+    let digests = fs::read(output.join("page_digests.bin")).unwrap();
+    assert_eq!(digests, Sha256::digest(&records).to_vec());
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(output.join("manifest.json")).unwrap()).unwrap();
     assert!(!output.join("manifest.pending").exists());
     assert_eq!(manifest["query_or_truth_used"], false);
+    assert_eq!(manifest["schema"], "borsuk-two-bit-plane-v3");
+    assert_eq!(manifest["page_rows"], 32);
+    assert_eq!(manifest["page_digest_sha256"], hash(&digests));
     assert_eq!(manifest["source_sha256"], raw_sha);
     assert!(input.build(&output, 1024 * 1024).is_err());
     let duplicate = directory.path().join("duplicate");

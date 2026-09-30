@@ -87,8 +87,8 @@ pub(crate) struct Manifest {
     pub(crate) low: Vec<f32>,
     pub(crate) step: Vec<f32>,
 }
-pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v4";
-pub(crate) const METADATA_FILES: [&str; 9] = [
+pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v5";
+pub(crate) const METADATA_FILES: [&str; 10] = [
     "manifest.json",
     "page_manifest.json",
     "page_digests.bin",
@@ -98,6 +98,7 @@ pub(crate) const METADATA_FILES: [&str; 9] = [
     "plane/manifest.json",
     "plane/mean.bin",
     "plane/records.bin",
+    "plane/page_digests.bin",
 ];
 /// Remote namespace startup accounting; query measurements remain separate.
 #[derive(Debug, serde::Serialize)]
@@ -409,6 +410,7 @@ impl TwoBitGeneration {
             "plane/manifest.json",
             "plane/mean.bin",
             "plane/records.bin",
+            "plane/page_digests.bin",
             "page_manifest.json",
             "page_digests.bin",
             "centroids.bin",
@@ -456,6 +458,12 @@ impl TwoBitGeneration {
             || geometry.rows != manifest.canonical.rows
             || admitted_size("plane/mean.bin")? != expected_mean
             || admitted_size("plane/records.bin")? != expected_records
+            || admitted_size("plane/page_digests.bin")?
+                != geometry
+                    .rows
+                    .div_ceil(32)
+                    .checked_mul(32)
+                    .ok_or(bad("source digest size"))?
         {
             return Err(bad("plane file geometry"));
         }

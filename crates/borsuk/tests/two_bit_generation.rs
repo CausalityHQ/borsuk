@@ -97,7 +97,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     fs::write(root.join("canonical.bin"), &canonical).unwrap();
     let canonical_descriptor = serde_json::json!({"rows":512,"dimensions":2,
         "bytes":canonical.len(),"sha256":hash(&canonical),"object_key":format!("tenant/g1/objects/{}",hash(&canonical))});
-    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v4",
+    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v5",
         "generation":1,"base_epoch":0,"plane_manifest_sha256":hash(&fs::read(root.join("plane/manifest.json")).unwrap()),
         "page_manifest_sha256":hash(&page_manifest),"centroids_sha256":hash(&centroid),
         "graph_sha256":hash(&graph),"graph_resident_bytes":graph_resident,
@@ -138,6 +138,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         "plane/manifest.json",
         "plane/mean.bin",
         "plane/records.bin",
+        "plane/page_digests.bin",
     ] {
         assert_eq!(
             fs::read(generated_root.join(name)).unwrap(),
@@ -381,6 +382,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         "plane/manifest.json",
         "plane/mean.bin",
         "plane/records.bin",
+        "plane/page_digests.bin",
     ] {
         let target = publication.path().join(name);
         fs::create_dir_all(target.parent().unwrap()).unwrap();
@@ -615,6 +617,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         "plane/manifest.json",
         "plane/mean.bin",
         "plane/records.bin",
+        "plane/page_digests.bin",
     ] {
         store
             .put(
@@ -630,7 +633,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
             .await
             .unwrap();
     let stats = remote.remote_open_stats().unwrap();
-    assert_eq!(stats.metadata.len(), 9);
+    assert_eq!(stats.metadata.len(), 10);
     for object in &stats.metadata {
         assert_eq!(
             object.bytes,
@@ -725,6 +728,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         "diverse_graph.bin",
         "page_digests.bin",
         "plane/records.bin",
+        "plane/page_digests.bin",
     ] {
         let original = fs::read(root.join(name)).unwrap();
         let mut bad = original.clone();
@@ -828,6 +832,7 @@ fn graph_variant_adapter_preserves_components_and_rejects_untrusted_roots() {
         "plane/manifest.json",
         "plane/mean.bin",
         "plane/records.bin",
+        "plane/page_digests.bin",
     ];
     let before = names.map(|name| fs::read(root.join(name)).unwrap());
     let candidate = temp.path().join("candidate");

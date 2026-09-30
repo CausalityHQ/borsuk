@@ -419,6 +419,7 @@ pub async fn publish_two_bit_generation(
         &manifest.plane_manifest_sha256,
         &plane.mean_sha256,
         &plane.records_sha256,
+        &plane.page_digest_sha256,
     ];
     let budget = usize::try_from(
         limits

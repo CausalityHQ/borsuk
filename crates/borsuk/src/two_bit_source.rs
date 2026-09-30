@@ -76,6 +76,10 @@ pub struct SourcePlaneReceipt {
     pub mean_sha256: String,
     /// Digest of Rust v1 `records.bin`.
     pub records_sha256: String,
+    /// Rows authenticated by each source digest, including the partial tail.
+    pub page_rows: usize,
+    /// Digest of the streamed 32-byte per-unit digest table.
+    pub page_digest_sha256: String,
     /// Always false: construction accepts no query or truth inputs.
     pub query_or_truth_used: bool,
 }
@@ -153,7 +157,7 @@ impl TwoBitSource<'_> {
                     .checked_mul(128)
                     .and_then(|d| n.checked_add(d))
             })
-            .and_then(|n| n.checked_add(256 * 1024))
+            .and_then(|n| n.checked_add(272 * 1024))
             .ok_or(bad("memory overflow"))?;
         if required > max_memory_bytes {
             return Err(bad("memory budget"));
@@ -264,8 +268,12 @@ impl TwoBitSource<'_> {
         let mut records =
             BufWriter::with_capacity(64 * 1024, new_file(&output.join("records.bin"))?);
         let mut record_digest = Sha256::new();
+        let mut pages =
+            BufWriter::with_capacity(16 * 1024, new_file(&output.join("page_digests.bin"))?);
+        let mut page_digest = Sha256::new();
+        let mut table_digest = Sha256::new();
         let mut row = vec![0.0_f32; self.dimensions];
-        for &id in physical_order.iter() {
+        for (position, &id) in physical_order.iter().enumerate() {
             let id = usize::try_from(id).map_err(|_| bad("source ordinal"))?;
             // ponytail: random raw-row seeks; use an externally reordered source stream if large builds become I/O-bound.
             raw_file.seek(SeekFrom::Start((id * raw_width) as u64))?;
@@ -275,12 +283,20 @@ impl TwoBitSource<'_> {
             }
             let encoded = codec.encode(&row)?;
             record_digest.update(&encoded);
+            page_digest.update(&encoded);
             records.write_all(&encoded)?;
+            if (position + 1) % 32 == 0 || position + 1 == self.rows {
+                let digest = page_digest.finalize_reset();
+                pages.write_all(&digest)?;
+                table_digest.update(digest);
+            }
         }
         records.flush()?;
         records.get_ref().sync_all()?;
+        pages.flush()?;
+        pages.get_ref().sync_all()?;
         let receipt = SourcePlaneReceipt {
-            schema: "borsuk-two-bit-plane-v2".into(),
+            schema: "borsuk-two-bit-plane-v3".into(),
             rows: self.rows,
             dimensions: self.dimensions,
             seed: 20260923,
@@ -290,6 +306,8 @@ impl TwoBitSource<'_> {
             source_order_sha256: format!("{:x}", order_digest.finalize()),
             mean_sha256: format!("{:x}", Sha256::digest(&mean_bytes)),
             records_sha256: format!("{:x}", record_digest.finalize()),
+            page_rows: 32,
+            page_digest_sha256: format!("{:x}", table_digest.finalize()),
             query_or_truth_used: false,
         };
         let mut manifest = new_file(&output.join("manifest.pending"))?;
@@ -365,7 +383,8 @@ impl TwoBitPlane {
         let body = read_authenticated(&manifest_path, size, trusted_manifest_sha256)?;
         let receipt: SourcePlaneReceipt =
             serde_json::from_slice(&body).map_err(|_| bad("manifest schema"))?;
-        if receipt.schema != "borsuk-two-bit-plane-v2"
+        if receipt.schema != "borsuk-two-bit-plane-v3"
+            || receipt.page_rows != 32
             || receipt.seed != 20260923
             || receipt.rows == 0
             || receipt.query_or_truth_used
@@ -376,6 +395,7 @@ impl TwoBitPlane {
                 &receipt.source_order_sha256,
                 &receipt.mean_sha256,
                 &receipt.records_sha256,
+                &receipt.page_digest_sha256,
             ]
             .iter()
             .any(|s| !valid_digest(s))
@@ -394,10 +414,16 @@ impl TwoBitPlane {
             .dimensions
             .checked_mul(4)
             .ok_or(bad("geometry overflow"))?;
+        let sidecar_size = receipt
+            .rows
+            .div_ceil(32)
+            .checked_mul(32)
+            .ok_or(bad("geometry overflow"))?;
         let required = padded
             .checked_mul(128)
             .and_then(|n| n.checked_add(record_size))
             .and_then(|n| n.checked_add(MANIFEST_CAP * 2))
+            .and_then(|n| sidecar_size.checked_mul(2).and_then(|s| n.checked_add(s)))
             .ok_or(bad("memory overflow"))?;
         if required > max_memory_bytes {
             return Err(bad("memory budget"));
@@ -414,6 +440,21 @@ impl TwoBitPlane {
             record_size,
             &receipt.records_sha256,
         )?;
+        let sidecar = read_authenticated(
+            &root.join("page_digests.bin"),
+            sidecar_size,
+            &receipt.page_digest_sha256,
+        )?;
+        let authority = crate::sq8_page_authority::PageAuthority::load_two_bit(
+            &body,
+            trusted_manifest_sha256,
+            1,
+            &sidecar,
+        )
+        .map_err(|_| bad("source page authority"))?;
+        authority
+            .verify_payload(0, receipt.rows.div_ceil(32) - 1, &records)
+            .map_err(|_| bad("source page digest"))?;
         // Scalars are checked by the shared scorer before any value is returned.
         Ok(Self {
             receipt,
