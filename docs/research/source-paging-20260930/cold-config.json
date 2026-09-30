@@ -128,6 +128,7 @@
   ],
   "k": 10,
   "machine_limit_seconds": 4200,
+  "matched_control_latency_measured": false,
   "matched_vendor_measured": false,
   "namespace_cold_start_included": true,
   "namespace_connect_deadline_seconds": 45,
