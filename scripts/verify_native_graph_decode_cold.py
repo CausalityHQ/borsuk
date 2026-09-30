@@ -129,7 +129,15 @@ def main(attempt):
         assert boundary['sha_backend']['x86_asm_selected'] is False
         if arm == 'candidate':
             assert boundary['full_suite_status'] == 0 and boundary['current_full_suite_pass_claim'] is True
-            assert boundary['full_suite_scope'] == 'cargo test --workspace --release --locked'
+            command = boundary['full_suite_command']
+            assert command[1:6] == ['test','--release','--locked','--workspace','--all-targets']
+            assert command[6] == '--manifest-path' and command[7].endswith('/repo/Cargo.toml')
+            assert command[8] == '--target-dir' and command[9].endswith('/target')
+            assert command[10:] == ['--jobs','4'] and boundary['full_suite_runs'] == 1
+            status = json.loads(artifacts['full-suite-status.json'])
+            assert status['status'] == 0 and status['runs'] == 1 and status['arm'] == 'candidate'
+            assert status['command'] == command and status['scope'] == boundary['full_suite_scope']
+            assert status['current_full_suite_pass_claim'] is True
             log = artifacts['full-suite.log'];assert b'0 failed;' in log and b'FAILED' not in log
     for name in ('rustc-version.txt','cargo-version.txt','cpuinfo.txt','arm-feature-tree.txt','x86-feature-tree.txt'):
         assert artifacts[name] == artifacts['control/'+name]

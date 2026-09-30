@@ -259,7 +259,7 @@ def main(attempt, campaign=None):
         for index, row in enumerate(receipt['Instances']):
             nodes[str(index)] = dict(instance_id=row['InstanceId'])
         node = next(iter(nodes.values()))
-        launch = dict(**node, prefix=prefix, source_commit=commit, source_archive_sha256=digest)
+        launch = dict(**node, nodes=nodes, prefix=prefix, source_commit=commit, source_archive_sha256=digest)
         with (out / 'aws-launch.json').open('x') as receipt_file:
             receipt_file.write(json.dumps(launch, indent=2) + '\n')
             receipt_file.flush()
@@ -283,7 +283,7 @@ def main(attempt, campaign=None):
     print(json.dumps(dict(complete=True, instance_id=node['instance_id'], state='terminated')), flush=True)
 
 
-def self_check():
+def self_check(lifecycle_only=False):
     """Mock AWS only: ACK ownership, transient observations, no replacement."""
     from unittest.mock import Mock, patch
     import tempfile
@@ -320,7 +320,7 @@ def self_check():
         startup.terminate_owned(ec2, owned)
     assert ec2.terminate_instances.call_count == 2
     ec2.get_waiter.return_value.wait.assert_called_once_with(InstanceIds=['i-original'])
-    for failure in ('fsync', 'launch-upload', 'poll', 'interruption', 'interrupt', 'success'):
+    for failure in ('fsync', 'launch-upload', 'poll', 'interruption', 'interrupt', 'success', 'multi-ack'):
         with tempfile.TemporaryDirectory() as tmp:
             ec2, s3, session = Mock(), Mock(), Mock()
             session.client.side_effect = [ec2, s3]
@@ -328,7 +328,9 @@ def self_check():
             ec2.describe_subnets.return_value = {'Subnets': [{'AvailabilityZone': 'mock-az'}]}
             ec2.describe_spot_price_history.return_value = {'SpotPriceHistory': [
                 {'SpotPrice': '0.1', 'Timestamp': datetime.now(timezone.utc)}]}
-            ec2.run_instances.return_value = {'Instances': [{'InstanceId': 'i-original'}]}
+            instance_ids = ['i-original','i-extra'] if failure == 'multi-ack' else ['i-original']
+            expected_owned = {str(i):dict(instance_id=node) for i,node in enumerate(instance_ids)}
+            ec2.run_instances.return_value = {'Instances': [{'InstanceId': node} for node in instance_ids]}
             writes = [None, None, OSError('upload')] if failure == 'launch-upload' else [None, None, None]
             error = {'interruption': RuntimeError('worker interrupted'), 'interrupt': KeyboardInterrupt(), 'success': None}.get(failure, ReadTimeoutError(endpoint_url='mock'))
             events = []
@@ -347,11 +349,16 @@ def self_check():
                 else:
                     assert failure == 'success', 'failure swallowed'
             ec2.run_instances.assert_called_once()
-            ec2.terminate_instances.assert_called_once_with(InstanceIds=['i-original'])
-            ec2.get_waiter.return_value.wait.assert_called_once_with(InstanceIds=['i-original'])
+            ec2.terminate_instances.assert_called_once_with(InstanceIds=instance_ids)
+            ec2.get_waiter.return_value.wait.assert_called_once_with(InstanceIds=instance_ids)
+            persisted = json.loads((Path(tmp)/'metadata-ranges-cold/a0001/aws-launch.json').read_bytes())
+            assert persisted['nodes'] == expected_owned
             close = json.loads((Path(tmp)/'metadata-ranges-cold/a0001/aws-closeout.json').read_text())
-            assert close['state'] == 'terminated' and close['nodes'] == owned
+            assert close['state'] == 'terminated' and close['nodes'] == expected_owned
             assert events == ['terminate', 'wait', 'collect']
+    if lifecycle_only:
+        print('PASS shared ACK persistence/fsync/multi-ACK/cleanup-before-collection')
+        return
     with tempfile.TemporaryDirectory() as tmp, patch.object(module, 'CONFIG', Path(tmp)/'config.json'):
         CONFIG.write_text('{}')
         proof = dict(config_sha256=peer.sha(CONFIG.read_bytes()), frozen_native_qualification={'path': str(FROZEN/'verification.json')})
