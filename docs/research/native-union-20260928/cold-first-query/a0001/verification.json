@@ -1,0 +1,76 @@
+{
+  "valid_measurement": true,
+  "state": "terminated",
+  "instance_id": "i-0c3a8d79a76f28234",
+  "source_commit": "2ea57d8f95d1808f3750a68b60561dc333773081",
+  "source_archive_sha256": "38267b760cd6bf165cda31d4df2881594df245bbec3096213f248a3ce7e1a4c2",
+  "config_sha256": "78ea8ea182432ad8dc38a5b879b97229796232cb6f21d30a40b204eec38c26a1",
+  "terminal_sha256": "e5c2e4b88157f90948ad1a331b945c5e295366cb206daed127ef2436ce922340",
+  "quality_gate_passed": true,
+  "published_context_gate_passed": false,
+  "panels": {
+    "ReLAION": {
+      "count": 64,
+      "returned_hits": 636,
+      "recall_at_10": 0.99375,
+      "quality_gate_passed": true,
+      "published_context_gate_passed": false,
+      "cold_start_to_first_http_response_ms": {
+        "p50": 3621.949549,
+        "p90": 3670.3828331,
+        "p95": 3736.77387325,
+        "p99": 4428.276572299999
+      },
+      "incoming_http_ms": {
+        "p50": 142.694092,
+        "p90": 184.99921500000002,
+        "p95": 240.0506821499997,
+        "p99": 291.20089723
+      },
+      "serial_cold_calls_per_second": 0.27168764807679785,
+      "serial_span_ns": 235564628915,
+      "query_submitted_gets": 1927,
+      "query_verified_bytes": 1073479680,
+      "query_failed_gets": 0,
+      "metadata_objects": 576,
+      "metadata_bytes": 16428441792,
+      "split": "fresh rank16 development0-63"
+    },
+    "CoHere": {
+      "count": 64,
+      "returned_hits": 620,
+      "recall_at_10": 0.96875,
+      "quality_gate_passed": true,
+      "published_context_gate_passed": false,
+      "cold_start_to_first_http_response_ms": {
+        "p50": 3613.2319275,
+        "p90": 3684.8720203,
+        "p95": 3720.37225235,
+        "p99": 3930.580767819999
+      },
+      "incoming_http_ms": {
+        "p50": 133.9929285,
+        "p90": 196.772612,
+        "p95": 234.3777103,
+        "p99": 268.92896213999995
+      },
+      "serial_cold_calls_per_second": 0.2728682181925894,
+      "serial_span_ns": 234545453567,
+      "query_submitted_gets": 2035,
+      "query_verified_bytes": 1073479680,
+      "query_failed_gets": 0,
+      "metadata_objects": 576,
+      "metadata_bytes": 16428445184,
+      "split": "fresh CoHere development0-63"
+    }
+  },
+  "native_peak_rss_bytes": {
+    "ReLAION": 371421184,
+    "CoHere": 371339264
+  },
+  "cgroup_peak_bytes": 651014144,
+  "swap_peak_bytes": 0,
+  "namespace_cold_start_included": true,
+  "matched_vendor_measured": false,
+  "offered_or_saturation_qps_measured": false
+}

@@ -1,0 +1,30 @@
+{
+  "source_commit": "2ea57d8f95d1808f3750a68b60561dc333773081",
+  "verification_sha256": "62158842b877961cddc0b48623b3ef305fb7415c9e49612c3ee1e088d4f5a946",
+  "phase_medians_ms": {
+    "ReLAION": {
+      "get_header_ms": 206.9969165,
+      "stream_and_output_ms": 2484.850161,
+      "awaited_writes_ms": 94.3027625,
+      "staging_ms": 2691.4873555,
+      "decode_ms": 637.8689905,
+      "head_read_ms": 90.901129,
+      "remote_open_ms": 3348.536939
+    },
+    "CoHere": {
+      "get_header_ms": 206.5196975,
+      "stream_and_output_ms": 2485.3080775,
+      "awaited_writes_ms": 95.07831300000001,
+      "staging_ms": 2693.9231,
+      "decode_ms": 638.916598,
+      "head_read_ms": 90.29709199999999,
+      "remote_open_ms": 3351.1346875
+    }
+  },
+  "compute_estimate_usd": 0.02710688888888889,
+  "compute_estimate_excludes": [
+    "EBS",
+    "S3"
+  ],
+  "invoiced_cost": false
+}

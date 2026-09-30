@@ -127,3 +127,13 @@ Baseline: instrumented sequential metadata staging, source217a33df. Candidate: n
 ## Matched ARM SHA startup convergence, 2026-09-29
 
 Baseline: verified software binary217a33df reused same host. Candidate: ARM SHA feature d32d4722, FIRST1M D768 ReLAION/CoHere, six starts per arm/dataset, no query split. Verified median readiness4715.099→3512.819ms/4715.383→3512.653ms; actual deltas−1202.280/−1202.730ms, load/decode1801.798→656.344ms/1801.151→656.166ms. Query quality delta/p90/p95/QPS unmeasured in this run. Compute$0.045791 estimated excludingEBS/S3. Remaining BOTH-vendor gap:3.51s namespace startup, stream~2.48s, truecoldfirstquery/matchedvendors/saturationtotalcost/10M100M/lifecycle. Next decisive test: runnable true namespace-cold first-query and fixed parity, then one causal streaming intervention. [Decision](arm-sha-startup-decision.md).
+
+## Verified namespace-cold first-query convergence, 2026-09-30
+
+| Baseline/context | Candidate/split | Actual quality delta | Cold tails/QPS/cost | Remaining BOTH-vendor gap | Next decisive test |
+|---|---|---|---|---|---|
+| Exact frozen native ID references; practical R10>=95%; TP1M D768 published coldp90=444ms context, no matched timing control | Qualified ARM binary3565d27f, source2ea57d8f; FIRST1M D768 cosine ReLAION/CoHere development0–63, k10 | Verified99.375%/96.875%,0pp each;128/128parity;R100 unmeasured | Verified process-launch-to-first-response p90=3670.383/3684.872ms,p95=3736.774/3720.372ms;serialcold0.271688/0.272868calls/s NOT offered/saturationQPS;compute$.027107EST excludesEBS/S3 | Fixed444ms contextFAIL both;stream~2485ms dominant;matchedvendors/saturationtotalcost/10M100M/lifecycle open | One bounded ranged metadata-transfer intervention, fixed authority/resource tests, matched ARM/cold comparison |
+
+[Closed decision](cold-first-query-decision.md). All jobs terminated; scientific
+quality/parity GO retains candidate while immutable published-context latency
+FAIL is preserved. Prior metadata-resident8QPS results belong to earlier epochs.
