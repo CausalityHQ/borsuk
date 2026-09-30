@@ -1,0 +1,23 @@
+{
+  "method": "stdlib explicit f32 multiply and add, f64 sum, half conversion",
+  "different_components": 0,
+  "first": [],
+  "recomputed_sha256": "42bdea567bdc606333c9f09e07bc33742c1bec7cdcb69dd93b7489547ec3d2fb",
+  "schema": "borsuk-centroid-portable-rounding-diagnostic-v1",
+  "dataset": "ReLAION FIRST100k D768",
+  "quality_or_latency_measurement": false,
+  "native_reconstruction_sha256": "f159f8bdc410f7d7092a4f122640e03c0849e61c4645cc26f57b8008e390d077",
+  "native_differing_components": 146,
+  "coefficient_f32_bit_differences": 0,
+  "header_equal": true,
+  "cause": "half 2.7.1 x86 F16C f64 conversion casts to f32 before FP16; frozen direct conversion differs at double-rounding boundaries",
+  "repair_status": "pending exact-source qualification",
+  "failure_log_sha256": "6908abd71b5907fc56b117f6c997dab5e3144c0917a16fd7ba0cd0ced0405fd8",
+  "first_boundary": {
+    "unit": 73,
+    "dimension": 303,
+    "f64_mean": 0.011753082508221269,
+    "direct_fp16": 0.01175689697265625,
+    "via_f32_fp16": 0.011749267578125
+  }
+}

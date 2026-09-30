@@ -1,0 +1,161 @@
+{
+  "schema": "borsuk-semantic-native-packaging-assurance-v1",
+  "base": "ca5029b52a252e9bd3f84076c22a5e956c8cd416",
+  "source_tree": "bb2bddb2ef73e45c9b9f3cb9898aaa5eaf51b253",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_TARGET_DIR": "/data/target",
+    "RUSTC_WRAPPER": "",
+    "BORSUK_TEST_BUILD_JOBS": "2"
+  },
+  "source_sha256": {
+    "Cargo.lock": "d479ad62c5c9441757f5f8b37be5ffa824a7cabd155b00b8bc08d8710fa4d7d3",
+    "Cargo.toml": "1ec9ac514515662a0f3a371b1a65d72bf825d67f218dc3f6cc1e5fb0925547d6",
+    "crates/borsuk/Cargo.toml": "454976b4bd92fc04a3085ef4d37e18f9a73d00045fc82ea1a476c113b4e887d3",
+    "scripts/package_semantic_native_generation.py": "cb6a540c810e3a75381d22339eb72f00382b0972a2d3ee687bbb1d97d5a1b594",
+    "crates/borsuk/src/bin/repackage_semantic_generation.rs": "32fa57472a14f18ea49f4985d76204b7c1bedebfc5bbbd7f906d4a669a0a58d6",
+    "crates/borsuk/src/two_bit_build.rs": "02ac0ebe67149d9672617e7b432fa774ff3380a8f1ecaf5940f420ed7362374e",
+    "crates/borsuk/src/two_bit_compaction.rs": "d76537276fe039bfb1171e4980557105cc1754c168b8d0a68efcdeea4a0b8c02",
+    "crates/borsuk/src/two_bit_generation.rs": "e96799b04540b0e42c12c15b6966e94026bd42752cb1b3900a12506a0c4d15d4",
+    "crates/borsuk/examples/two_bit_http.rs": "fdf2835835401a76432aee581a6c84d79a79332cfe78464a6cb10b86b8551317"
+  },
+  "gates": [
+    {
+      "name": "python-selfcheck",
+      "argv": [
+        "python3",
+        "scripts/package_semantic_native_generation.py",
+        "--self-check"
+      ],
+      "status": 0,
+      "elapsed_seconds": 0.0625162124633789,
+      "log": "/tmp/borsuk-semantic-native-packaging-gates-20260930/python-selfcheck.log",
+      "log_sha256": "88834db9b4aa73110328b58e88f6de727f4655829a62c906cb3d2d8ccde04223",
+      "archived_log": "docs/research/performance-architecture-20260930/semantic-native-packaging-python-selfcheck.log.gz",
+      "archived_log_sha256": "1b82641f64d89948c2a5d2df8ebbc948a6abf69cbadfdc95c5206a5439801e2b"
+    },
+    {
+      "name": "python-compile",
+      "argv": [
+        "python3",
+        "-m",
+        "py_compile",
+        "scripts/package_semantic_native_generation.py"
+      ],
+      "status": 0,
+      "elapsed_seconds": 0.047770023345947266,
+      "log": "/tmp/borsuk-semantic-native-packaging-gates-20260930/python-compile.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_log": "docs/research/performance-architecture-20260930/semantic-native-packaging-python-compile.log.gz",
+      "archived_log_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "name": "rustfmt",
+      "argv": [
+        "rustfmt",
+        "--edition",
+        "2024",
+        "--check",
+        "crates/borsuk/src/bin/repackage_semantic_generation.rs"
+      ],
+      "status": 0,
+      "elapsed_seconds": 0.020104169845581055,
+      "log": "/tmp/borsuk-semantic-native-packaging-gates-20260930/rustfmt.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "archived_log": "docs/research/performance-architecture-20260930/semantic-native-packaging-rustfmt.log.gz",
+      "archived_log_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+    },
+    {
+      "name": "cli-test",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "repackage_semantic_generation"
+      ],
+      "status": 0,
+      "elapsed_seconds": 101.08025860786438,
+      "log": "/tmp/borsuk-semantic-native-packaging-gates-20260930/cli-test.log",
+      "log_sha256": "9e534a484a3bb03a1731dd878a8669edad35fb40f8bda787c55f990063a3376d",
+      "archived_log": "docs/research/performance-architecture-20260930/semantic-native-packaging-cli-test.log.gz",
+      "archived_log_sha256": "29037b81313e4bae95af385ead9fd9de8021246e417df8d5c25ee6c86394a84e"
+    },
+    {
+      "name": "release",
+      "argv": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "borsuk",
+        "--bin",
+        "repackage_semantic_generation",
+        "--example",
+        "two_bit_http"
+      ],
+      "status": 0,
+      "elapsed_seconds": 307.3332486152649,
+      "log": "/tmp/borsuk-semantic-native-packaging-gates-20260930/release.log",
+      "log_sha256": "6ab22ea1b02d818da1d60d474ec171faa021b6e1b500a9734a5e34a15d521ef0",
+      "archived_log": "docs/research/performance-architecture-20260930/semantic-native-packaging-release.log.gz",
+      "archived_log_sha256": "cb33128dfcab10edf509badde9c6ac198cace68f5b130f3a8203931bb338a8aa"
+    },
+    {
+      "name": "workspace-clippy",
+      "argv": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "status": 0,
+      "elapsed_seconds": 85.8197078704834,
+      "log": "/tmp/borsuk-semantic-native-packaging-gates-20260930/workspace-clippy.log",
+      "log_sha256": "0eeb724db4131a829487fcdfa7361dedc68117d87d7ba69bad4a2d476fe299ea",
+      "archived_log": "docs/research/performance-architecture-20260930/semantic-native-packaging-workspace-clippy.log.gz",
+      "archived_log_sha256": "e8e0aee54bf972567fb4c9e00246cc2705f30e7f7e1f421c4db0aa5492281670"
+    },
+    {
+      "name": "workspace-test-build",
+      "argv": [
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ],
+      "status": 0,
+      "elapsed_seconds": 239.7742989063263,
+      "log": "/tmp/borsuk-semantic-native-packaging-gates-20260930/workspace-test-build.log",
+      "log_sha256": "0e85bc085650ec5f3f233ade84c98dcfd0ae7ab4bbb1b7b11ad5969255d635da",
+      "archived_log": "docs/research/performance-architecture-20260930/semantic-native-packaging-workspace-test-build.log.gz",
+      "archived_log_sha256": "d323b69c1920f35ea1d731e8717193ed8d8cb8d52a2afd248af53c496f654dba"
+    }
+  ],
+  "full_workspace_executed": false,
+  "datasets_packaged": false,
+  "binaries": {
+    "/data/target/release/repackage_semantic_generation": {
+      "sha256": "f6834ed2d726ce1224d477722b63f0895a9da9d5972d61868b883f49deb148eb",
+      "bytes": 4071176,
+      "qualified_copy": "/tmp/borsuk-semantic-native-packaging-gates-20260930/repackage_semantic_generation"
+    },
+    "/data/target/release/examples/two_bit_http": {
+      "sha256": "34696780caf6466030969b990c7defc7c77b89810272d4a7c4d8dc8cf9ec2a9f",
+      "bytes": 16180016,
+      "qualified_copy": "/tmp/borsuk-semantic-native-packaging-gates-20260930/two_bit_http"
+    }
+  },
+  "source_commit": "4cd3034430dc47772feed8ab6e565787f6a8351a",
+  "worker_commit": "4cd3034430dc47772feed8ab6e565787f6a8351a",
+  "integrated_commit": "ad61c282569b16b0b61061a9b3dc6171ebf05b74",
+  "full_workspace_execution_pass_claim": false,
+  "real_data_packaging_pass_claim": false
+}
