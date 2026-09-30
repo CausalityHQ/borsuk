@@ -183,9 +183,50 @@ def main(attempt):
     (directory/'verification.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report))
 
 
+def runtime_check():
+    import os
+    import tempfile
+    from unittest.mock import patch
+    path = Path('docs/research/source-paging-20260930/decode/config.json')
+    config = json.loads(path.read_bytes())
+    manifest = json.loads(Path(config['native_manifest']['path']).read_bytes())
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp); binary = root/'binary'; binary.write_bytes(b'synthetic fixture binary')
+        proofs = {}
+        for arm in ('candidate','control'):
+            compiled = dict(config['compiled_sha256'])
+            if arm == 'control': compiled[worker.GRAPH] = manifest['control_graph']['sha256']
+            proofs[arm] = dict(qualified=True,green_status=0,release_status=0,arm=arm,
+                same_worker_toolchain=True,source_identity_sha256=manifest[arm+'_identity'],
+                source_file_count=395,binary_sha256=sha(binary.read_bytes()),binary_bytes=binary.stat().st_size,
+                compiled_native_sha256=compiled,sha_backend=dict(arm_asm_selected=True,
+                    cpu_sha2_capable=True,x86_asm_selected=False))
+        for mutation in (None,'compiled','control','binary','backend','env'):
+            shaped = copy.deepcopy(proofs)
+            if mutation == 'compiled': shaped['candidate']['compiled_native_sha256'] = {}
+            elif mutation == 'control': shaped['control']['source_identity_sha256'] = '0'*64
+            elif mutation == 'binary': shaped['candidate']['binary_bytes'] += 1
+            elif mutation == 'backend': shaped['candidate']['sha_backend']['x86_asm_selected'] = True
+            for arm,proof in shaped.items(): (root/(arm+'.json')).write_text(json.dumps(proof))
+            argv = ['worker',str(path),sha(path.read_bytes()),str(binary),str(root/'candidate.json'),
+                str(binary),str(root/'control.json'),str(root/'screen')]
+            with patch.object(sys,'argv',argv),patch.object(worker.os,'sched_getaffinity',return_value={4,5}), \
+                 patch.dict(os.environ,TOKIO_WORKER_THREADS='8' if mutation == 'env' else '4',
+                    AWS_MAX_ATTEMPTS='1',BORSUK_NATIVE_MEMORY_BYTES='1073741824'),patch.object(worker,'run') as run:
+                if mutation is None:
+                    worker.main();run.assert_called_once()
+                else:
+                    try: worker.main()
+                    except AssertionError: pass
+                    else: raise AssertionError('invalid runtime proof accepted: '+mutation)
+                    run.assert_not_called()
+    print('PASS paired runtime proof/env boundary before profiling')
+
+
 def self_check():
     from unittest.mock import patch
     worker.self_check()
+    runtime_check()
     paged.authentication_check()  # Original manifest path remains unchanged.
     config = json.loads(Path('docs/research/source-paging-20260930/decode/config.json').read_bytes())
     manifest = json.loads(Path(config['native_manifest']['path']).read_bytes())
