@@ -1,13 +1,10 @@
 {
-  "schema": "borsuk-graph-decode-source-v1",
-  "candidate_identity": "07c2089c8c28ac64b4b4d4f3a48ce1ee20483441cf3039fccddb4174d931cf20",
-  "control_identity": "77e7aa0408949307430fd88b7c3eebc1a959dd808fb6cb72c6b9a81db422fb64",
+  "schema": "borsuk-implementation-compile-clippy-proof-v1",
+  "verified": true,
+  "worker_commit": "2cf487ecf6b54c71c2b67b218128d3abcb6f6430",
+  "integrated_commit": "5df84d59",
+  "source_identity_sha256": "07c2089c8c28ac64b4b4d4f3a48ce1ee20483441cf3039fccddb4174d931cf20",
   "source_file_count": 395,
-  "candidate_graph_sha256": "08bf90c491f53bf8831374f67548c608ba891388528d037d0c5a207186758ea4",
-  "control_graph": {
-    "path": "docs/research/source-paging-20260930/decode/control-unit-centroid-graph.txt",
-    "sha256": "7a47654900e1ec2d5f96384ee2b67ea4c647c2eb05c00a0e4d5902636bcebc42"
-  },
   "source_sha256": {
     "Cargo.lock": "178c5f35a744ec2d11e21f040e72e74016e4502e532dbc2edfd8e2a5433b3b76",
     "Cargo.toml": "1ec9ac514515662a0f3a371b1a65d72bf825d67f218dc3f6cc1e5fb0925547d6",
@@ -405,6 +402,40 @@
     "scripts/v114_score_rust/src/bin/v149_contiguous_hierarchy.rs": "ff161593426329020d09d95e7d3f68c00a33cdc4c42deadd35400a60a65700d5",
     "scripts/v114_score_rust/src/main.rs": "12332c46c04b1bf9a18fbbb2eef39ca4354cb401daf62cc3196b96f77e364124"
   },
-  "current_full_suite_pass_claim": false,
-  "native_qualification_pending": true
+  "clippy_status": 0,
+  "workspace_test_compilation_status": 0,
+  "workspace_test_compilation_elapsed_seconds": 377,
+  "affected_test_statuses": {
+    "source_unit_cover_preserves_all_units_and_clips_tail": 0,
+    "generation_publish_reload_and_http_search_fail_closed": 0
+  },
+  "interrupted_cargo_test_status": 130,
+  "interrupted_scope": "Canceled owned cache-blocked command before running authenticated already-built tests directly",
+  "full_workspace_test_execution_status": null,
+  "full_workspace_execution_pending": true,
+  "platform": "x86_64 local devbox",
+  "compiler_jobs": 2,
+  "artifacts": {
+    "clippy.log": {
+      "bytes": 183003,
+      "sha256": "afc2571fbc8ed69d8c84c9b6263e2a9855671661191b0a872cd15f58bb346f16"
+    },
+    "test-build.log": {
+      "bytes": 94110,
+      "sha256": "6dc4a2e73fcd4997235aa8df90370cdfd4d70e11f5b6521831911d32541fe42c"
+    },
+    "cover-test.log": {
+      "bytes": 440,
+      "sha256": "a0cc3a816d31650845422db07be4f8bff883492d1f2526be5fa402be5f83583c"
+    },
+    "http-test.log": {
+      "bytes": 430,
+      "sha256": "d634cc36e6c479f9d2b585af26e80e2b580a68a045c953c2ebd16160a99b399f"
+    },
+    "interrupted-cache-test.log": {
+      "bytes": 388,
+      "sha256": "4dae60e9c59a47215eb5f0aa3afdd1d1e8e193c8a03ce8f4a51ac5a53d3f6d52"
+    }
+  },
+  "benchmark_measurement": false
 }

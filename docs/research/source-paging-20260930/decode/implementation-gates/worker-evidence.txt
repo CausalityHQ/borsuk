@@ -1,0 +1,48 @@
+122569c9d0bf8ee1e0a93166a3602dcb6bb1e532
+19509a9dccdd5354fc9d6e8018491167bfc18145b9fe65b3c51df895a411ed36  crates/borsuk/src/budgeted_page_rank.rs
+5a7ccdcc38546d9f2acf7017f4c82342c01eee4c5b63830dd974d36a279eb573  crates/borsuk/src/sq8_s3_range.rs
+6e1d3261121cdff5855c0168d17f12f78d9db76e2a2b15a92dd18ff08f7fd023  -
+command=CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/data/target rtk proxy cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
+started_at=2026-09-30T12:01:12Z
+finished_at=2026-09-30T12:02:26Z
+exit_status=153
+command=CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/data/target rtk proxy cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
+started_at=2026-09-30T12:03:12Z
+finished_at=2026-09-30T12:03:19Z
+exit_status=0
+native_clippy_attempt1_session=9171 exit=153 (compiler-wide logging ulimit; repaired)
+native_clippy_pass_session=48548 exit=0
+native_testbuild_session=97828
+testbuild_actual_command=env -u BORSUK_TEST_BUILD_COMMAND CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/data/target BORSUK_TEST_BUILD_JOBS=2 rtk proxy bash scripts/check_rust_test_build.sh
+log_capture=tail -c 8388608 (8 MiB per log; compiler files unrestricted)
+command=CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/data/target BORSUK_TEST_BUILD_JOBS=2 rtk proxy bash scripts/check_rust_test_build.sh
+started_at=2026-09-30T12:03:37Z
+finished_at=2026-09-30T12:09:55Z
+exit_status=0
+command=CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/data/target rtk proxy cargo test --locked -p borsuk --lib budgeted_page_rank::tests::source_unit_cover_preserves_all_units_and_clips_tail -- --exact
+started_at=2026-09-30T12:10:38Z
+finished_at=2026-09-30T12:21:56Z
+exit_status=130
+native_cargo_narrow_tests_session=22952 exit=130 (SIGINT after 11m18s; sccache requests clap_builder and regex_automata pending without rustc; shared daemon untouched)
+cae00a3684ca76be196074f9013d3337cbd2b1b2fc77ef08fd2d83e4cf9ac578  /data/target/debug/deps/borsuk-44fdf2c398584d96
+test_binary=/data/target/debug/deps/borsuk-44fdf2c398584d96 modified_at=2026-09-30 12:08:37.351678757 +0000 size_bytes=240870272
+command=rtk proxy /data/target/debug/deps/borsuk-44fdf2c398584d96 --exact budgeted_page_rank::tests::source_unit_cover_preserves_all_units_and_clips_tail
+started_at=2026-09-30T12:22:42Z
+finished_at=2026-09-30T12:22:43Z
+exit_status=0
+command=rtk proxy /data/target/debug/deps/borsuk-44fdf2c398584d96 --exact sq8_s3_range::tests::generation_publish_reload_and_http_search_fail_closed
+started_at=2026-09-30T12:22:43Z
+finished_at=2026-09-30T12:22:45Z
+exit_status=0
+native_test_binary_session=26787 exit=0 (both exact tests passed: 1 each, 0 failures)
+native_commit_session=67014 exit=0
+source_binding=post-commit owned file and patch SHA-256 digests match pre-gate digests exactly
+working_tree=clean
+scope=owned two test blocks only; no production changes, removed assertions, lint suppression, parent edits, AWS, SSH, benchmarks, reviews, push, or operator contact
+2cf487ecf6b54c71c2b67b218128d3abcb6f6430
+122569c9d0bf8ee1e0a93166a3602dcb6bb1e532
+30cba3ed9cab433dde9fc69cd2ba4f70e39ff996
+afc2571fbc8ed69d8c84c9b6263e2a9855671661191b0a872cd15f58bb346f16  /tmp/borsuk-handoff-clippy-compile-clippy-handoff-fix-20260930.log
+6dc4a2e73fcd4997235aa8df90370cdfd4d70e11f5b6521831911d32541fe42c  /tmp/borsuk-handoff-testbuild-compile-clippy-handoff-fix-20260930.log
+a0cc3a816d31650845422db07be4f8bff883492d1f2526be5fa402be5f83583c  /tmp/borsuk-handoff-native-test-source_unit_cover_preserves_all_units_and_clips_tail-compile-clippy-handoff-fix-20260930.log
+d634cc36e6c479f9d2b585af26e80e2b580a68a045c953c2ebd16160a99b399f  /tmp/borsuk-handoff-native-test-generation_publish_reload_and_http_search_fail_closed-compile-clippy-handoff-fix-20260930.log

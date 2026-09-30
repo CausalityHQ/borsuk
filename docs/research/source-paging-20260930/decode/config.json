@@ -188,7 +188,7 @@
   },
   "native_manifest": {
     "path": "docs/research/source-paging-20260930/decode/native-source-manifest.json",
-    "sha256": "e1a283e57bf82a3606dc7ce36a4221f8f2c9054057799f6ce816cc3262e95f16"
+    "sha256": "1d98d257eb67f20afb982e2f2ea035d449d395dc58c862d949d041a0afdc7937"
   },
   "compiled_sha256": {
     "crates/borsuk/examples/two_bit_http.rs": "7d2d97b2a0579bfbaffd4ff8e5b35f13f7ecbd323d9b4f0b24598569129adfa7",
@@ -199,7 +199,7 @@
     "Cargo.lock": "178c5f35a744ec2d11e21f040e72e74016e4502e532dbc2edfd8e2a5433b3b76",
     "crates/borsuk/Cargo.toml": "76f88b2f0d8805f7727d1aef19469974fe8735aa24c0bd7f12175a3f88826c45",
     "crates/borsuk/tests/two_bit_source.rs": "bb034601f3b2813d7dd6f22f2493c6005bb872c0ff39c03c6569ae408ab47f11",
-    "crates/borsuk/src/sq8_s3_range.rs": "80022b4b8669015b24dfc055dda162877f096fd20530fcb2811232d483e40c12",
+    "crates/borsuk/src/sq8_s3_range.rs": "5a7ccdcc38546d9f2acf7017f4c82342c01eee4c5b63830dd974d36a279eb573",
     "crates/borsuk/src/sq8_page_authority.rs": "e4b34461509c78ca558f49a0ff11151dc1454589f472a5911913b5dbcea9af23",
     "crates/borsuk/src/two_bit_source.rs": "11016833a444183e8f8a3cb1303d5244f7becb2684ff156d2dcbb8b9b5f4f93d",
     "crates/borsuk/src/two_bit_build.rs": "fe5e18007b2db7b240ab792024b81be12e5dc3c35cbf82190f1159555876171f",

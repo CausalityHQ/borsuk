@@ -18,9 +18,9 @@ from scripts.check_native_paged_source_build import CHECKS
 
 ROOT = Path('docs/research/source-paging-20260930/decode')
 CONFIG = ROOT / 'config.json'
-CONFIG_SHA = '9cd9cc8eb956d947002cfa5d14b2d0cb7ed7e89bdb455fd779bad7cdf6bfe6bb'
+CONFIG_SHA = '62aadb815cfba3214b4fba4b7f954d8417a3714a50191a9f7f9889a403608e3d'
 MANIFEST = ROOT / 'native-source-manifest.json'
-MANIFEST_SHA = 'e1a283e57bf82a3606dc7ce36a4221f8f2c9054057799f6ce816cc3262e95f16'
+MANIFEST_SHA = '1d98d257eb67f20afb982e2f2ea035d449d395dc58c862d949d041a0afdc7937'
 SCHEMA = 'borsuk-native-graph-decode-spot-v1'
 PREFIX = 'research/source-paging/20260930/graph-decode-'
 NAME = 'cold'
@@ -29,8 +29,8 @@ TAG = 'borsuk-graph-decode-cold'
 SUBNET = 'subnet-034528fbd6977848f'
 WALL = 5400
 COMPUTE_CAP = .45
-CANDIDATE_IDENTITY = 'ff8df25d6f767b4fa1c497bba669dc73bdb4a4d8080f374a93f1ad1595f905bf'
-CONTROL_IDENTITY = '62a55b4cbb95f1a418b5b8af2ba4f68ae34bc87b8ae15df4ad421a66a2a5152f'
+CANDIDATE_IDENTITY = '07c2089c8c28ac64b4b4d4f3a48ce1ee20483441cf3039fccddb4174d931cf20'
+CONTROL_IDENTITY = '77e7aa0408949307430fd88b7c3eebc1a959dd808fb6cb72c6b9a81db422fb64'
 GRAPH = STAGE = worker.GRAPH
 COMPILED = (*FOCUSED_ARM, *('crates/borsuk/src/' + name for name in (
     'sq8_s3_range.rs', 'sq8_page_authority.rs', 'two_bit_source.rs', 'two_bit_build.rs',
