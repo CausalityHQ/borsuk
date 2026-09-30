@@ -1,0 +1,102 @@
+{
+  "schema": "borsuk-semantic-router-scorer-verification-v1",
+  "commit": "2b01f7b08dc768d77743a1bafcc5d7f583c8b50c",
+  "base": "a1e89f98e93c3a6a6eb209257811bef124e82095",
+  "owned_file": "/home/rb/worktrees/borsuk-semantic-router-scorer-20260930/crates/borsuk/src/bin/check_semantic_router_scorer.rs",
+  "source_sha256": "e43f20f3a35dc7a92d3f27a345ebefd4397b17a8a89a270d5f6b822fd635ffd4",
+  "binary_path": "/data/target/release/check_semantic_router_scorer",
+  "binary_sha256": "3a91d87d9aaf11c34013e3c36ecaabc835e7224e4b83fd7fa44c53ed4deb4506",
+  "environment": {
+    "CARGO_TARGET_DIR": "/data/target",
+    "CARGO_BUILD_JOBS": "2",
+    "RUSTC_WRAPPER": "",
+    "BORSUK_TEST_BUILD_JOBS": "2"
+  },
+  "commands": [
+    {
+      "command": "cargo test --locked -p borsuk --bin check_semantic_router_scorer",
+      "exit_status": 0,
+      "tests_passed": 6,
+      "log": "/tmp/borsuk-semantic-router-scorer-test.log"
+    },
+    {
+      "command": "cargo build --locked --release -p borsuk --bin check_semantic_router_scorer",
+      "exit_status": 0,
+      "log": "/tmp/borsuk-semantic-router-scorer-build-final.log"
+    },
+    {
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "exit_status": 0,
+      "log": "/tmp/borsuk-semantic-router-scorer-clippy.log"
+    },
+    {
+      "command": "bash scripts/check_rust_test_build.sh",
+      "exit_status": 0,
+      "elapsed_seconds": 255,
+      "log": "/tmp/borsuk-semantic-router-scorer-test-build.log"
+    },
+    {
+      "command": "rustfmt --edition 2024 --check crates/borsuk/src/bin/check_semantic_router_scorer.rs",
+      "exit_status": 0
+    },
+    {
+      "command": "git diff --cached --check",
+      "exit_status": 0
+    },
+    {
+      "command": "synthetic malformed-config CLI; repeated existing-output CLI",
+      "exit_status": 0,
+      "assertions": "FAIL JSON preserved, CLI exit2, source SHA matches, existing output unchanged; no corpus opened"
+    }
+  ],
+  "regression_red": {
+    "command": "cargo test --locked -p borsuk --bin check_semantic_router_scorer ignored_nomination_values_including_null_do_not_change_request_shape",
+    "exit_status": 101,
+    "log": "/tmp/borsuk-semantic-router-scorer-red-null.log"
+  },
+  "logs": {
+    "test": {
+      "path": "/tmp/borsuk-semantic-router-scorer-test.log",
+      "sha256": "d27d4e7534bafdd783356fabb6b75b1825eb057711345ed3311077e6259c79e0",
+      "archive_path": "docs/research/performance-architecture-20260930/semantic-router-scorer-test.log.gz",
+      "archive_bytes": 8249,
+      "archive_sha256": "a882b63faf3f05cb479c34fa1d0fe1e7d8b60d5fdbd4d37899d96dedeae8276f"
+    },
+    "build-final": {
+      "path": "/tmp/borsuk-semantic-router-scorer-build-final.log",
+      "sha256": "5d7c2969f98970e37d416e67345f0475f2c80cfa2818429f89dc3c12920c0b19",
+      "archive_path": "docs/research/performance-architecture-20260930/semantic-router-scorer-build-final.log.gz",
+      "archive_bytes": 7881,
+      "archive_sha256": "00000fea0ac0487dab3f6088bee927e1f330a1e6647f110529bbe077940ece71"
+    },
+    "clippy": {
+      "path": "/tmp/borsuk-semantic-router-scorer-clippy.log",
+      "sha256": "e445ab5e8f3848ff798ae96b4ce8c2c618a584448a6b1d00b9209537f5408df3",
+      "archive_path": "docs/research/performance-architecture-20260930/semantic-router-scorer-clippy.log.gz",
+      "archive_bytes": 21532,
+      "archive_sha256": "444b764d1b440b01018cba0b531dd8232073f4cd3891d6745bfa8988b24c6434"
+    },
+    "test-build": {
+      "path": "/tmp/borsuk-semantic-router-scorer-test-build.log",
+      "sha256": "4c46c645754ee1fed9a71466f125d5a3e1867c3e2268e592b433e8caaa27a50b",
+      "archive_path": "docs/research/performance-architecture-20260930/semantic-router-scorer-test-build.log.gz",
+      "archive_bytes": 12873,
+      "archive_sha256": "1cb5a86586117d7c439118a5db50094fbcb98c664d2b469f08540fb479604b9f"
+    },
+    "red-null": {
+      "path": "/tmp/borsuk-semantic-router-scorer-red-null.log",
+      "sha256": "84521e643f920ffd81ef923aa244d37ca59aad73c63645d5277f731b6e389451",
+      "archive_path": "docs/research/performance-architecture-20260930/semantic-router-scorer-red-null.log.gz",
+      "archive_bytes": 8277,
+      "archive_sha256": "5466d1230a32c260cad937937cf9798869cf15730630da504c1f30665fe5475f"
+    }
+  },
+  "corpus_execution": false,
+  "cloud_execution": false,
+  "workspace_tests_executed": false,
+  "merge_or_push": false,
+  "notes": "Existing library warnings remain. All final gates use the null-presence fix and explicit evidence/parity timing-overhead label. Candidate threshold hits>=608/640; control quality reported diagnostically.",
+  "integrated_commit": "4e955c49b25c7ddd48b3cfe4773897d439749e31",
+  "qualified_binary_copy": "/tmp/borsuk-semantic-router-scorer-qualified-2b01f7b",
+  "current_full_workspace_execution_claim": false
+}
