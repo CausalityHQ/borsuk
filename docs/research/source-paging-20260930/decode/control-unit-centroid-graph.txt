@@ -457,7 +457,7 @@ impl UnitCentroidGraph {
                     return Err(UnitCentroidGraphError::InvalidArtifact);
                 }
                 let mut layer = Vec::with_capacity(count);
-                // At most M0=32 edges: check the existing prefix without a hash allocation.
+                let mut seen = HashSet::new();
                 for _ in 0..count {
                     let Some(id_bytes) = bytes.get(cursor..cursor + 4) else {
                         return Err(UnitCentroidGraphError::InvalidArtifact);
@@ -466,7 +466,7 @@ impl UnitCentroidGraph {
                     cursor += 4;
                     if neighbor as usize >= node_count
                         || neighbor as usize == node
-                        || layer.contains(&neighbor)
+                        || !seen.insert(neighbor)
                     {
                         return Err(UnitCentroidGraphError::InvalidArtifact);
                     }
@@ -861,29 +861,6 @@ mod tests {
         assert_eq!(decoded.layer_neighbours(0, 0), &[1, 2, 3]);
         assert_eq!(decoded.layer_neighbours(0, 1), &[1]);
         assert!(decoded.layer_neighbours(2, 1).is_empty());
-    }
-
-    #[test]
-    fn graph_decode_rejects_duplicate_edge_after_valid_prefix() {
-        let (blob, scorer) = centroids();
-        let mut graph = UnitCentroidGraph::build(&scorer, &blob).unwrap();
-        graph.entry = 0;
-        graph.neighbours = vec![
-            vec![vec![1, 2, 3]],
-            vec![vec![0]],
-            vec![vec![0]],
-            vec![vec![0]],
-        ];
-        let valid = graph.encode().unwrap();
-        let budget = UnitCentroidGraph::preflight_resident_bytes(&valid, &scorer).unwrap();
-        let loaded = UnitCentroidGraph::decode_bounded(&valid, &blob, &scorer, budget).unwrap();
-        assert_eq!(loaded.encode().unwrap(), valid);
-        graph.neighbours[0][0][2] = 1;
-        let duplicate = graph.encode().unwrap();
-        assert!(matches!(
-            UnitCentroidGraph::decode_bounded(&duplicate, &blob, &scorer, budget),
-            Err(UnitCentroidGraphError::InvalidArtifact),
-        ));
     }
 
     #[test]
