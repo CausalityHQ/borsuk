@@ -1,0 +1,153 @@
+{
+  "source_tree": "5ea253164e3bbfa32cf08c0f839dd570040b3b9c",
+  "base": "1d8e918d370a8647c7557b27d4b85abb9e56a1ee",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_TARGET_DIR": "/data/target",
+    "RUSTC_WRAPPER": "",
+    "BORSUK_TEST_BUILD_JOBS": "2"
+  },
+  "gates": [
+    {
+      "name": "range-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "sq8_s3_range::tests",
+        "--",
+        "--nocapture"
+      ],
+      "status": 0,
+      "elapsed_seconds": 91.75341582298279,
+      "log": "/tmp/borsuk-transport-gates-20260930-v2/range-tests.log",
+      "log_sha256": "bd31cd87592bf70b6009e153e32877e72f3203073936365e5c0bf679c4a77512"
+    },
+    {
+      "name": "http-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--example",
+        "two_bit_http"
+      ],
+      "status": 0,
+      "elapsed_seconds": 69.13174605369568,
+      "log": "/tmp/borsuk-transport-gates-20260930-v2/http-tests.log",
+      "log_sha256": "9cf4a5c900e7a91cc1b502f9af5f1b30e2bac54d690349ccb040eca7bb1eaea7"
+    },
+    {
+      "name": "http-release",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "borsuk",
+        "--example",
+        "two_bit_http"
+      ],
+      "status": 0,
+      "elapsed_seconds": 281.52942633628845,
+      "log": "/tmp/borsuk-transport-gates-20260930-v2/http-release.log",
+      "log_sha256": "b1e448e4f6886b0f64afbd1ec5d8d9671af0ed0b27e087295b4a930cdeb969b4"
+    },
+    {
+      "name": "workspace-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "status": 0,
+      "elapsed_seconds": 73.16043066978455,
+      "log": "/tmp/borsuk-transport-gates-20260930-v2/workspace-clippy.log",
+      "log_sha256": "3a0ac99e6a0450d03f7bb5b4d5dfdf3541e3b5dde3a96fc9b7d9bb7568e2da76"
+    },
+    {
+      "name": "workspace-testcompile",
+      "command": [
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ],
+      "status": 0,
+      "elapsed_seconds": 212.9819586277008,
+      "log": "/tmp/borsuk-transport-gates-20260930-v2/workspace-testcompile.log",
+      "log_sha256": "c724dfc412d2f92c5dd09c769636c4937208a677bde7a598a2ecd109b0940e0f"
+    }
+  ],
+  "binary": {
+    "path": "/data/target/release/examples/two_bit_http",
+    "sha256": "bb3ae28e38f9dc299e0f9498e561e97a3de071888fb8b66f38525e3f88ad6282"
+  },
+  "source_commit": "315f147d6b1c0e624c41989fc6f7fd7a280785ee",
+  "qualified_binary_copy": {
+    "path": "/tmp/borsuk-semantic-native-transport-qualified-two-bit-http",
+    "bytes": 16180336,
+    "sha256": "bb3ae28e38f9dc299e0f9498e561e97a3de071888fb8b66f38525e3f88ad6282"
+  },
+  "schema": "borsuk-native-transport-assurance-v1",
+  "worker_commit": "315f147d6b1c0e624c41989fc6f7fd7a280785ee",
+  "integrated_commit": "669047f168772171b46e443b2830253015731255",
+  "source_file_count": 398,
+  "source_identity_sha256": "fc187e775c8bbdc12f7491c94804ebf06ebed904e4c835dede79636976d236bc",
+  "source_sha256": {
+    "Cargo.lock": "d479ad62c5c9441757f5f8b37be5ffa824a7cabd155b00b8bc08d8710fa4d7d3",
+    "crates/borsuk/Cargo.toml": "454976b4bd92fc04a3085ef4d37e18f9a73d00045fc82ea1a476c113b4e887d3",
+    "crates/borsuk/examples/two_bit_http.rs": "fdf2835835401a76432aee581a6c84d79a79332cfe78464a6cb10b86b8551317",
+    "crates/borsuk/src/sq8_s3_range.rs": "4bfb38b88b077ced33365cd6f698a6d1269ab50f537aea30996ee90ada2015cf"
+  },
+  "full_workspace_executed": false,
+  "cold_http_measured": false,
+  "logs": {
+    "range-tests": {
+      "path": "docs/research/performance-architecture-20260930/native-transport-range-tests.log.gz",
+      "bytes": 60591,
+      "sha256": "bd31cd87592bf70b6009e153e32877e72f3203073936365e5c0bf679c4a77512",
+      "gzip_bytes": 7565,
+      "gzip_sha256": "4ec651340ab360c9fab2024f9ec1c520a8711967cbc21e69957f0690eaaee5fc"
+    },
+    "http-tests": {
+      "path": "docs/research/performance-architecture-20260930/native-transport-http-tests.log.gz",
+      "bytes": 64855,
+      "sha256": "9cf4a5c900e7a91cc1b502f9af5f1b30e2bac54d690349ccb040eca7bb1eaea7",
+      "gzip_bytes": 8168,
+      "gzip_sha256": "615bcf24fb7da30484e7735b96d916a3823a306cf1d4c10739272915015b8ac6"
+    },
+    "http-release": {
+      "path": "docs/research/performance-architecture-20260930/native-transport-http-release.log.gz",
+      "bytes": 64456,
+      "sha256": "b1e448e4f6886b0f64afbd1ec5d8d9671af0ed0b27e087295b4a930cdeb969b4",
+      "gzip_bytes": 7937,
+      "gzip_sha256": "f9f0d4fc2dc5f96f901d6accbdfa617574186f6c72f98c20b82b1fe99ab1ce11"
+    },
+    "workspace-clippy": {
+      "path": "docs/research/performance-architecture-20260930/native-transport-workspace-clippy.log.gz",
+      "bytes": 277490,
+      "sha256": "3a0ac99e6a0450d03f7bb5b4d5dfdf3541e3b5dde3a96fc9b7d9bb7568e2da76",
+      "gzip_bytes": 26951,
+      "gzip_sha256": "6a53de906d8d9f2576108c5893f239febc37c12af58d8faff5bf19966cddb0a5"
+    },
+    "workspace-testcompile": {
+      "path": "docs/research/performance-architecture-20260930/native-transport-workspace-testcompile.log.gz",
+      "bytes": 85442,
+      "sha256": "c724dfc412d2f92c5dd09c769636c4937208a677bde7a598a2ecd109b0940e0f",
+      "gzip_bytes": 12897,
+      "gzip_sha256": "ef2c53c93ad3004577dce98581b9bf98320d98b17602b5f9946ce41b24e0e2b3"
+    }
+  }
+}
