@@ -1,0 +1,126 @@
+{
+  "schema": "borsuk-native-graph-decode-engineering-failure-v1",
+  "verified": true,
+  "attempt": "a0002",
+  "status": "engineering-failure-before-measurement",
+  "phase": "binary-qualification",
+  "exit_code": 1,
+  "instance_id": "i-0f292c491484ee877",
+  "instance_state": "terminated",
+  "source_commit": "169e610decfd5001c6dfb95771532ee64ffe7fc9",
+  "source_archive_sha256": "763bbaab1e988660a4a4086c783edeaf2e9b54080e4e4a3769d74bdb65ae4210",
+  "terminal_sha256": "32529c065e8a9cf70572c7df049b4467468bbd4e1fd205f6c57453acf549613f",
+  "config_sha256": "2874c47ca751842eee38a1de7d322276aadeb2bc5b7270cc8101e974bef679d9",
+  "manifest_sha256": "0e97343766bd46e1c4a13c617837c1faf46a2a28ec65a42a8dfb5009ff32baeb",
+  "authenticated_artifact_count": 59,
+  "expected_complete_artifact_count": 92,
+  "missing_artifacts": [
+    "binaries/two_bit_http",
+    "boundary-cgroup.json",
+    "boundary-check.json",
+    "compiled-source.json",
+    "compiled-source/Cargo.lock",
+    "compiled-source/Cargo.toml",
+    "compiled-source/crates/borsuk/Cargo.toml",
+    "compiled-source/crates/borsuk/examples/two_bit_http.rs",
+    "compiled-source/crates/borsuk/src/bin/build_two_bit_graph_variant.rs",
+    "compiled-source/crates/borsuk/src/bin/two_bit_plan_demo.rs",
+    "compiled-source/crates/borsuk/src/bin/two_bit_union_nomination.rs",
+    "compiled-source/crates/borsuk/src/bin/two_bit_walk_nomination.rs",
+    "compiled-source/crates/borsuk/src/object_native_generation.rs",
+    "compiled-source/crates/borsuk/src/sq8_page_authority.rs",
+    "compiled-source/crates/borsuk/src/sq8_s3_range.rs",
+    "compiled-source/crates/borsuk/src/two_bit_build.rs",
+    "compiled-source/crates/borsuk/src/two_bit_generation.rs",
+    "compiled-source/crates/borsuk/src/two_bit_index.rs",
+    "compiled-source/crates/borsuk/src/two_bit_source.rs",
+    "compiled-source/crates/borsuk/src/unit_centroid_graph.rs",
+    "compiled-source/crates/borsuk/tests/two_bit_application_ids.rs",
+    "compiled-source/crates/borsuk/tests/two_bit_gc_delayed_delete.rs",
+    "compiled-source/crates/borsuk/tests/two_bit_generation.rs",
+    "compiled-source/crates/borsuk/tests/two_bit_source.rs",
+    "full-suite-status.json",
+    "profile-cgroup.json",
+    "profile-resources.txt",
+    "profile.log",
+    "screen/block0-records.jsonl",
+    "screen/block1-records.jsonl",
+    "screen/block2-records.jsonl",
+    "screen/block3-records.jsonl",
+    "screen/summary.json"
+  ],
+  "focused_checks": {
+    "control": {
+      "source": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "source-walk": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1708 filtered out; finished in 0.92s"
+      ],
+      "sq8-transport": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1705 filtered out; finished in 0.19s"
+      ],
+      "object-native": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1708 filtered out; finished in 0.11s"
+      ],
+      "graph": [
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1706 filtered out; finished in 0.08s"
+      ],
+      "generation": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s"
+      ],
+      "application-ids": [
+        "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      ],
+      "gc": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "http": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    "candidate": {
+      "source": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "source-walk": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1709 filtered out; finished in 0.87s"
+      ],
+      "sq8-transport": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1706 filtered out; finished in 0.19s"
+      ],
+      "object-native": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1709 filtered out; finished in 0.11s"
+      ],
+      "graph": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1706 filtered out; finished in 0.07s"
+      ],
+      "generation": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s"
+      ],
+      "application-ids": [
+        "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      ],
+      "gc": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "http": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    }
+  },
+  "candidate_full_suite": {
+    "status": null,
+    "runs": 0,
+    "current_full_suite_pass_claim": false,
+    "repaired_target_status": 101,
+    "repaired_target": "exact_sq8_mirror_direct"
+  },
+  "root_cause": "associated function `padded_dimensions` is private in test exact_sq8_mirror_direct source inclusion; library pub(crate) method inaccessible across crate boundary",
+  "measurement_records": 0,
+  "quality_latency_throughput_measured": false,
+  "current_full_suite_pass_claim": false,
+  "compute_cost_estimate_usd": 0.07067588888888889,
+  "cost_scope": "EST controller elapsed at quoted Spot rate; excludes EBS/IP/S3/invoice",
+  "total_cost_measured": false
+}
