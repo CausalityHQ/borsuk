@@ -1,0 +1,213 @@
+{
+  "base": "c39be09f0504f6d9dc7eb461bb65b2e25640fa32",
+  "source_sha256": {
+    "crates/borsuk/src/bin/build_two_bit_graph_variant.rs": "b13e75cff53075a1393111f5031648db570fe869a1e8d3388777620b60bd0acc",
+    "crates/borsuk/src/object_native_generation.rs": "9da4b099f5b65a8c69e0c86718de6fd79ba32e5bb537cc8b8dc57a47ce527b0e",
+    "crates/borsuk/src/two_bit_build.rs": "02ac0ebe67149d9672617e7b432fa774ff3380a8f1ecaf5940f420ed7362374e",
+    "crates/borsuk/src/two_bit_compaction.rs": "f6ed46e9afd6d5160f6c8cbd94e7a933b08d6c790457d00a7d7f4317bc806914",
+    "crates/borsuk/src/two_bit_gc.rs": "43b9ffe08bcbb742e5cd3fbff04305b854ae64b548e883f56332e69940d14017",
+    "crates/borsuk/src/two_bit_generation.rs": "36a25597bb561c141abe930083c36026af8b984b25ec9c9d007e0ac19b8a5766",
+    "crates/borsuk/src/two_bit_index.rs": "1cc4b90d833bc9854100e457e86acecd634375b84969f71be5d6f80ab6908559",
+    "crates/borsuk/src/two_bit_store.rs": "4b57c3ea1c17ebaca6fdd3a2c1fecbdfdfc9d1b24cea2fa5912e7a3c6d854021",
+    "crates/borsuk/tests/two_bit_application_ids.rs": "a61157928ce61c7c405f8b3b0608717ad539aa9979b38e2af37c1460fe459fa6",
+    "crates/borsuk/tests/two_bit_generation.rs": "3629cf1c6bc1770f8fd6bf2849b00977314bd8b43052a3314842be85af56fe0b"
+  },
+  "environment": {
+    "CARGO_TARGET_DIR": "/data/target",
+    "CARGO_BUILD_JOBS": "2",
+    "BORSUK_TEST_BUILD_JOBS": "2",
+    "RUSTC_WRAPPER": ""
+  },
+  "steps": [
+    {
+      "name": "unit",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "two_bit_"
+      ],
+      "log": "/tmp/semantic-native-final-unit.log",
+      "started_epoch": 1790806785.553354,
+      "status": "finished",
+      "exit_status": 0,
+      "finished_epoch": 1790806886.0082366,
+      "log_sha256": "960addb53fd22a13021b1e5bf93e0ebb5a3fab595bbe0fad52304d65b7024273"
+    },
+    {
+      "name": "metadata",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "object_native_generation::tests"
+      ],
+      "log": "/tmp/semantic-native-final-metadata.log",
+      "started_epoch": 1790806886.0089304,
+      "status": "finished",
+      "exit_status": 0,
+      "finished_epoch": 1790806887.6909583,
+      "log_sha256": "c646a7042ad77eb0edf5257652a348ff869439738fdaf461c7b981c94e894801"
+    },
+    {
+      "name": "affected",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--test",
+        "two_bit_generation",
+        "--test",
+        "two_bit_application_ids",
+        "--test",
+        "two_bit_gc_delayed_delete",
+        "--test",
+        "paged_delete_compaction",
+        "--bin",
+        "build_two_bit_graph_variant",
+        "--bin",
+        "build_semantic_unit_router",
+        "--bin",
+        "check_semantic_router_scorer",
+        "--bin",
+        "build_two_bit_generation",
+        "--example",
+        "two_bit_http"
+      ],
+      "log": "/tmp/semantic-native-final-affected.log",
+      "started_epoch": 1790806887.6918833,
+      "status": "finished",
+      "exit_status": 0,
+      "finished_epoch": 1790806907.0389326,
+      "log_sha256": "533f24ece1f3132d8c6924065aef8d18bb3d4943f30d234b7db2ba6dbb012d5e"
+    },
+    {
+      "name": "release",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "borsuk",
+        "--example",
+        "two_bit_http"
+      ],
+      "log": "/tmp/semantic-native-final-release.log",
+      "started_epoch": 1790806907.039664,
+      "status": "finished",
+      "exit_status": 0,
+      "finished_epoch": 1790807321.1911972,
+      "log_sha256": "9b8d0c6244dc31af25feb1fd88a5ca4114c21eb65811f485afdd12f0af9f5b4d"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "log": "/tmp/semantic-native-final-clippy.log",
+      "started_epoch": 1790807321.1919143,
+      "status": "finished",
+      "exit_status": 0,
+      "finished_epoch": 1790807405.7505877,
+      "log_sha256": "3c682a2fe017667fc7b51ae9990bf909c121172a2e7ea3a3d95378b7877bac24"
+    },
+    {
+      "name": "test-build",
+      "command": [
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ],
+      "log": "/tmp/semantic-native-final-test-build.log",
+      "started_epoch": 1790807405.7517047,
+      "status": "finished",
+      "exit_status": 0,
+      "finished_epoch": 1790807653.0087442,
+      "log_sha256": "896a37f95fcfc44f8aaf8ec96a3a67bcff7e3e9fbd67b40ee5d3e8919608bdd7"
+    }
+  ],
+  "synthetic_only": true,
+  "full_workspace_tests_executed": false,
+  "binary_sha256": {
+    "/data/target/release/examples/two_bit_http": "788e070a272c8bd223053aa1c9c515b4f62c6c37c37b7e0ea38a9a320ca37a2f"
+  },
+  "commit": "b4bb7b6387d414dc95433c07f3a3aadd161fbe79",
+  "tree": "e0c171d9603134ef381338d0c5c0f4c21c2e7ad8",
+  "worktree_clean": true,
+  "cargo_lane": "released; runner24944 terminal exit0",
+  "tests_passed": 49,
+  "tests_ignored": 1,
+  "qualified_binary_copy": {
+    "path": "/tmp/borsuk-semantic-native-qualified-two-bit-http",
+    "bytes": 16135744,
+    "sha256": "788e070a272c8bd223053aa1c9c515b4f62c6c37c37b7e0ea38a9a320ca37a2f"
+  },
+  "worker_commit": "b4bb7b6387d414dc95433c07f3a3aadd161fbe79",
+  "integrated_commit": "1d8e918d370a8647c7557b27d4b85abb9e56a1ee",
+  "schema": "borsuk-semantic-native-assurance-v1",
+  "cold_http_measured": false,
+  "scale_qualified": false,
+  "logs": {
+    "unit": {
+      "path": "docs/research/performance-architecture-20260930/semantic-native-unit.log.gz",
+      "bytes": 60908,
+      "sha256": "960addb53fd22a13021b1e5bf93e0ebb5a3fab595bbe0fad52304d65b7024273",
+      "gzip_bytes": 7772,
+      "gzip_sha256": "e1f1db490cea003799b1505752ed46e1a1ecb6b42e5478c85bdd7309b7780c18"
+    },
+    "metadata": {
+      "path": "docs/research/performance-architecture-20260930/semantic-native-metadata.log.gz",
+      "bytes": 59796,
+      "sha256": "c646a7042ad77eb0edf5257652a348ff869439738fdaf461c7b981c94e894801",
+      "gzip_bytes": 7385,
+      "gzip_sha256": "6c2f188c5770b33e9582776e9b706bc1e0075929982e76cec5506b1003bc3a9f"
+    },
+    "affected": {
+      "path": "docs/research/performance-architecture-20260930/semantic-native-affected.log.gz",
+      "bytes": 70141,
+      "sha256": "533f24ece1f3132d8c6924065aef8d18bb3d4943f30d234b7db2ba6dbb012d5e",
+      "gzip_bytes": 9679,
+      "gzip_sha256": "ccc117a2ccfc97ff754ad5d64a33374bc422f962b043cc3037da9094c7ae9a94"
+    },
+    "release": {
+      "path": "docs/research/performance-architecture-20260930/semantic-native-release.log.gz",
+      "bytes": 65999,
+      "sha256": "9b8d0c6244dc31af25feb1fd88a5ca4114c21eb65811f485afdd12f0af9f5b4d",
+      "gzip_bytes": 8476,
+      "gzip_sha256": "eb478f5c063a84d99a23850c5309b8327994744a331e87b7018bff6ca6043959"
+    },
+    "clippy": {
+      "path": "docs/research/performance-architecture-20260930/semantic-native-clippy.log.gz",
+      "bytes": 277666,
+      "sha256": "3c682a2fe017667fc7b51ae9990bf909c121172a2e7ea3a3d95378b7877bac24",
+      "gzip_bytes": 27073,
+      "gzip_sha256": "359c5f8a6fd2d5d7de247ba7f5d3392e9338137e91c939c7e5ecad5db6353415"
+    },
+    "test-build": {
+      "path": "docs/research/performance-architecture-20260930/semantic-native-test-build.log.gz",
+      "bytes": 85358,
+      "sha256": "896a37f95fcfc44f8aaf8ec96a3a67bcff7e3e9fbd67b40ee5d3e8919608bdd7",
+      "gzip_bytes": 12883,
+      "gzip_sha256": "cd81eff1c7d3e1237e6b1e73fc075f4b99c531856450f85fff5dca9aecf890ba"
+    }
+  },
+  "source_file_count": 398,
+  "source_identity_sha256": "75834c9ad0e0088d45973ec3e52b7dd7eaca7906a68ae1f55ef110341308c4fe"
+}
