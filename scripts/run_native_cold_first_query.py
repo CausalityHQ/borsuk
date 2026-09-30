@@ -32,7 +32,9 @@ def checked_response(response, expected, truth, authority):
     return len(set(response['ids']) & set(truth[:10]))
 
 
-def cold_call(binary, config, item, body, expected, truth, failure_stream=None):
+def cold_call(binary, config, item, body, expected, truth, failure_stream=None, *, port=8080):
+    if type(port) is not int or not 1024 <= port <= 65535:
+        raise ValueError('port must be an integer in 1024..65535')
     authority = item['authority']
     with tempfile.TemporaryDirectory() as tmp:
         directory = Path(tmp)
@@ -41,18 +43,20 @@ def cold_call(binary, config, item, body, expected, truth, failure_stream=None):
             server = subprocess.Popen(['/usr/bin/time', '-v', '-o', str(directory/'server.time'),
                 'timeout', '--signal=TERM', '--kill-after=5', '60', 'taskset', '-c', '0-3', binary,
                 config['bucket'], config['region'], item['indexes']['10'], authority['root_sha256'],
-                str(authority['generation']), str(authority['control_epoch']), '127.0.0.1:8080'],
+                str(authority['generation']), str(authority['control_epoch']), f'127.0.0.1:{port}'],
                 stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             client = None
             refused = 0
             failure = None
             status, raw = None, b''
+            completed = None
+            http_attempts = 0
             try:
                 deadline = time.monotonic() + 45
                 while True:
                     if server.poll() is not None:
                         raise RuntimeError('namespace process closed before first connection')
-                    client = http.client.HTTPConnection('127.0.0.1', 8080, timeout=5)
+                    client = http.client.HTTPConnection('127.0.0.1', port, timeout=5)
                     attempted = time.monotonic_ns()
                     try:
                         client.connect()
@@ -64,6 +68,7 @@ def cold_call(binary, config, item, body, expected, truth, failure_stream=None):
                         if time.monotonic() >= deadline:
                             raise TimeoutError('namespace first connection')
                         time.sleep(.01)
+                http_attempts = 1
                 status, raw = post(client, body)
                 completed = time.monotonic_ns()  # Wire completion precedes JSON/parity work.
                 assert status == 200, 'first and only ANN request failed; no HTTP retry'
@@ -79,20 +84,33 @@ def cold_call(binary, config, item, body, expected, truth, failure_stream=None):
                 if failure is not None and failure_stream is not None:
                     failure_stream.write(json.dumps(dict(query_ordinal=expected['query_ordinal'],
                         dataset=item['dataset'],outcome='failed',error_type=type(failure).__name__,
-                        error=str(failure),started_ns=started,http_status=status,
+                        error=str(failure),started_ns=started,completed_ns=completed,
+                        http_status=status,http_attempts=http_attempts,
                         raw_response=raw.decode(errors='replace'),connection_refused_attempts=refused,
                         native_server_log=(directory/'server.log').read_text(),
                         native_time_log=(directory/'server.time').read_text(),native_close=close),
                         sort_keys=True,allow_nan=False)+'\n')
                     failure_stream.flush()
         raw_log = (directory/'server.log').read_text()
-        headers = [json.loads(line) for line in raw_log.splitlines() if line.startswith('{')]
-        assert len(headers) == 1
-        header = headers[0]
-        assert header['phase'] == 'ready' and header['authority'] == authority and header['listen'] == '127.0.0.1:8080'
-        assert close['intentional_stop'] is True
-        metadata = validate(header['remote_open_stats'], item['metadata_files'], header['remote_open_wall_ns'])
-        assert completed-started >= header['remote_open_wall_ns']+header['head_read_wall_ns']
+        try:
+            headers = [json.loads(line) for line in raw_log.splitlines() if line.startswith('{')]
+            assert len(headers) == 1
+            header = headers[0]
+            assert header['phase'] == 'ready' and header['authority'] == authority and header['listen'] == f'127.0.0.1:{port}'
+            assert close['intentional_stop'] is True
+            metadata = validate(header['remote_open_stats'], item['metadata_files'], header['remote_open_wall_ns'])
+            assert completed-started >= header['remote_open_wall_ns']+header['head_read_wall_ns']
+        except Exception as error:
+            if failure_stream is not None:
+                failure_stream.write(json.dumps(dict(query_ordinal=expected['query_ordinal'],
+                    dataset=item['dataset'], outcome='failed', error_type=type(error).__name__,
+                    error=str(error), started_ns=started, completed_ns=completed, http_status=status,
+                    http_attempts=http_attempts,
+                    raw_response=raw.decode(errors='replace'), connection_refused_attempts=refused,
+                    native_server_log=raw_log, native_time_log=(directory/'server.time').read_text(),
+                    native_close=close), sort_keys=True, allow_nan=False)+'\n')
+                failure_stream.flush()
+            raise
         return dict(started_ns=started, successful_connect_attempt_ns=attempted,
             connected_ns=connected, completed_ns=completed,
             cold_start_to_first_http_response_ns=completed-started,
