@@ -22,3 +22,16 @@ No full-workspace assurance, cold latency, throughput, scale or cost result is
 claimed for these changed sources. Closed historical binaries remain immutable.
 Next: authenticated source range transport and startup-only roster separation,
 with source caps selected from the independently authenticated closed-trace replay.
+
+## Bounded transport prerequisite
+
+The existing one-attempt conditional range transport now exposes bounded verified
+ranges for source records and remains the SQ8 ranker's shared implementation.
+Sorted/disjoint geometry, aggregate bytes, GET count and concurrency are admitted
+before I/O. All range futures finish inside the caller; failure preserves total
+submitted GETs, verified bytes and failed GETs. There is no retry or detached task.
+
+Verification: missing transport API produced the expected compile failure; the
+new source-tail/admission/tamper accounting test then passed. All seven affected
+transport fixtures passed, including real HTTP range faults without hidden retries
+and publication/reload/search. The generation-builder unit check also passed.

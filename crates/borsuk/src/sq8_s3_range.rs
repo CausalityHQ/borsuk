@@ -97,6 +97,33 @@ impl OneAttemptS3 {
         .await
     }
 
+    /// Fetch sorted, disjoint authenticated source or SQ8 ranges. Byte and GET
+    /// caps are admitted before I/O; caller retains at most max_bytes of payload.
+    /// No retries, detached tasks, scoring or application cache are added.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn fetch_verified_ranges(
+        &self,
+        location: &Path,
+        authority: &PageAuthority,
+        ranges: &[(usize, usize)],
+        etag: &str,
+        max_gets: usize,
+        max_bytes: usize,
+        max_parallel: usize,
+    ) -> Result<(Vec<VerifiedRange>, Sq8ReadStats), RankedSq8Failure> {
+        fetch_verified_ranges_inner(
+            &self.store,
+            location,
+            authority,
+            ranges,
+            etag,
+            max_gets,
+            max_bytes,
+            max_parallel,
+        )
+        .await
+    }
+
     /// Fetch only caller-selected pages from a separately authenticated
     /// generation. The total byte and GET caps are checked before any request.
     #[allow(clippy::too_many_arguments)]
@@ -219,6 +246,63 @@ async fn rank_verified_sq8_pages_inner(
     {
         return Err(fail(RangeFetchError::Score(Sq8ScoreError::InvalidQuery)));
     }
+    let (verified, stats) = fetch_verified_ranges_inner(
+        store,
+        location,
+        authority,
+        ranges,
+        etag,
+        max_gets,
+        max_bytes,
+        max_parallel,
+    )
+    .await?;
+    let returned = verified
+        .iter()
+        .map(|range| ReturnedRange {
+            start: range.start,
+            bytes: &range.bytes,
+        })
+        .collect::<Vec<_>>();
+    let candidates = rank_returned_ranges_excluding(
+        Sq8Geometry {
+            rows: authority.rows(),
+            dimensions: authority.dimensions(),
+        },
+        &returned,
+        query,
+        low,
+        step,
+        top_k,
+        max_bytes,
+        excluded_ids,
+    )
+    .map_err(|error| RankedSq8Failure {
+        error: RangeFetchError::Score(error),
+        stats,
+    })?;
+    Ok(RankedSq8 { candidates, stats })
+}
+
+/// Shared bounded range transport; all requests finish within this future.
+#[allow(clippy::too_many_arguments)]
+async fn fetch_verified_ranges_inner(
+    store: &dyn ObjectStore,
+    location: &Path,
+    authority: &PageAuthority,
+    ranges: &[(usize, usize)],
+    etag: &str,
+    max_gets: usize,
+    max_bytes: usize,
+    max_parallel: usize,
+) -> Result<(Vec<VerifiedRange>, Sq8ReadStats), RankedSq8Failure> {
+    let fail = |error| RankedSq8Failure {
+        error,
+        stats: Sq8ReadStats::default(),
+    };
+    if ranges.is_empty() || ranges.len() > max_gets || max_parallel == 0 || etag.is_empty() {
+        return Err(fail(RangeFetchError::UnexpectedMetadata));
+    }
     let mut planned_bytes = 0usize;
     let mut previous_last = None;
     for &(first, last) in ranges {
@@ -263,31 +347,7 @@ async fn rank_verified_sq8_pages_inner(
     if let Some(error) = first_error {
         return Err(RankedSq8Failure { error, stats });
     }
-    let returned = verified
-        .iter()
-        .map(|range| ReturnedRange {
-            start: range.start,
-            bytes: &range.bytes,
-        })
-        .collect::<Vec<_>>();
-    let candidates = rank_returned_ranges_excluding(
-        Sq8Geometry {
-            rows: authority.rows(),
-            dimensions: authority.dimensions(),
-        },
-        &returned,
-        query,
-        low,
-        step,
-        top_k,
-        max_bytes,
-        excluded_ids,
-    )
-    .map_err(|error| RankedSq8Failure {
-        error: RangeFetchError::Score(error),
-        stats,
-    })?;
-    Ok(RankedSq8 { candidates, stats })
+    Ok((verified, stats))
 }
 
 /// Fetch one inclusive S3 byte range through `object_store`'s HTTP client.
@@ -395,6 +455,29 @@ mod tests {
 
     #[tokio::test]
     async fn source_authority_is_rejected_before_sq8_get() {
+        let (authority, _) = source_tail_authority();
+        let failure = rank_verified_sq8_pages_inner(
+            &InMemory::new(),
+            &Path::from("absent.bin"),
+            &authority,
+            &[(1, 1)],
+            "etag",
+            &[1.0; 5],
+            &[0.0; 5],
+            &[1.0; 5],
+            1,
+            1,
+            10,
+            1,
+            &[],
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(failure.stats.submitted_gets, 0);
+        assert!(matches!(failure.error, RangeFetchError::UnexpectedMetadata));
+    }
+
+    fn source_tail_authority() -> (PageAuthority, Vec<u8>) {
         let object = vec![7u8; 33 * 10];
         let sidecar = object
             .chunks(320)
@@ -417,25 +500,73 @@ mod tests {
             &sidecar,
         )
         .unwrap();
-        let failure = rank_verified_sq8_pages_inner(
-            &InMemory::new(),
-            &Path::from("absent.bin"),
-            &authority,
-            &[(1, 1)],
-            "etag",
-            &[1.0; 5],
-            &[0.0; 5],
-            &[1.0; 5],
-            1,
-            1,
-            10,
-            1,
-            &[],
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(failure.stats.submitted_gets, 0);
-        assert!(matches!(failure.error, RangeFetchError::UnexpectedMetadata));
+        (authority, object)
+    }
+
+    #[tokio::test]
+    async fn bounded_source_ranges_authenticate_tail_and_charge_failures() {
+        let store = InMemory::new();
+        let location = Path::from("source.bin");
+        let (authority, object) = source_tail_authority();
+        store
+            .put(&location, PutPayload::from(object.clone()))
+            .await
+            .unwrap();
+        let etag = store.head(&location).await.unwrap().e_tag.unwrap();
+        let ranges = [(0, 0), (1, 1)];
+        let (verified, stats) =
+            fetch_verified_ranges_inner(&store, &location, &authority, &ranges, &etag, 2, 330, 2)
+                .await
+                .unwrap();
+        assert_eq!(
+            stats,
+            Sq8ReadStats {
+                submitted_gets: 2,
+                verified_bytes: 330,
+                failed_gets: 0
+            }
+        );
+        assert_eq!(verified[0].bytes.as_ref(), &object[..320]);
+        assert_eq!(verified[1].start, 320);
+        assert_eq!(verified[1].bytes.as_ref(), &object[320..]);
+        for (planned, gets, bytes, parallel) in [
+            (ranges.as_slice(), 1, 330, 2),
+            (ranges.as_slice(), 2, 329, 2),
+            (ranges.as_slice(), 2, 330, 0),
+            (&[(0, 1), (1, 1)], 2, 340, 2),
+        ] {
+            let failure = fetch_verified_ranges_inner(
+                &store, &location, &authority, planned, &etag, gets, bytes, parallel,
+            )
+            .await
+            .err()
+            .unwrap();
+            assert_eq!(failure.stats, Sq8ReadStats::default());
+        }
+        let mut changed = object;
+        changed[320] ^= 1;
+        store
+            .put(&location, PutPayload::from(changed))
+            .await
+            .unwrap();
+        let etag = store.head(&location).await.unwrap().e_tag.unwrap();
+        let failure =
+            fetch_verified_ranges_inner(&store, &location, &authority, &ranges, &etag, 2, 330, 2)
+                .await
+                .err()
+                .unwrap();
+        assert_eq!(
+            failure.stats,
+            Sq8ReadStats {
+                submitted_gets: 2,
+                verified_bytes: 320,
+                failed_gets: 1
+            }
+        );
+        assert!(matches!(
+            failure.error,
+            RangeFetchError::Page(PageError::HashMismatch)
+        ));
     }
 
     fn short_tail_authority() -> (PageAuthority, Vec<u8>) {
