@@ -26,6 +26,7 @@ SCHEMA = 'borsuk-native-paged-source-cold-spot-v1'
 PREFIX = 'research/source-paging/20260930/cold-'
 TOKEN_PREFIX = 'paged-source-cold-'
 TAG = 'borsuk-paged-source-cold'
+SUBNET = 'subnet-00243d923761c047c'
 WALL = 4200
 COMPUTE_CAP = .35
 CODE = (*worker.CODE, 'scripts/launch_native_paged_source_cold_spot.py',

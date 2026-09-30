@@ -224,7 +224,8 @@ def main(attempt, campaign=None):
     active = ec2.describe_instances(Filters=[{'Name': 'tag:Name', 'Values': ['borsuk-*']},
         {'Name': 'instance-state-name', 'Values': ['pending', 'running', 'stopping']}])
     assert not any(row['Instances'] for row in active['Reservations'])
-    az = ec2.describe_subnets(SubnetIds=[peer.SUBNET])['Subnets'][0]['AvailabilityZone']
+    subnet = getattr(campaign, 'SUBNET', peer.SUBNET)
+    az = ec2.describe_subnets(SubnetIds=[subnet])['Subnets'][0]['AvailabilityZone']
     quote = ec2.describe_spot_price_history(InstanceTypes=['c7g.2xlarge'], ProductDescriptions=['Linux/UNIX'],
         AvailabilityZone=az, MaxResults=1)['SpotPriceHistory'][0]
     assert float(quote['SpotPrice']) <= .30
@@ -233,7 +234,7 @@ def main(attempt, campaign=None):
     else:
         assert peer.sha(s3.get_object(Bucket=peer.BUCKET, Key=key)['Body'].read()) == digest
     reservation = dict(schema=campaign.SCHEMA, source_commit=commit, source_archive_sha256=digest,
-        wall_seconds=campaign.WALL, instance_type='c7g.2xlarge', availability_zone=az,
+        wall_seconds=campaign.WALL, instance_type='c7g.2xlarge', availability_zone=az, subnet_id=subnet,
         spot_price_observed_usd_per_hour=quote['SpotPrice'], spot_quote_timestamp=quote['Timestamp'].isoformat(),
         spot_max_usd_per_hour=.30, compute_cap_usd=getattr(campaign, 'COMPUTE_CAP', .35), ebs_s3_allowance_usd=.15,
         total_cost_measured=False,
@@ -250,7 +251,7 @@ def main(attempt, campaign=None):
     try:
         receipt = ec2.run_instances(ClientToken=token_prefix + peer.sha(prefix.encode())[:min(48, 64-len(token_prefix))], ImageId='ami-03748c04dc81412c6',
             InstanceType='c7g.2xlarge', MinCount=1, MaxCount=1, IamInstanceProfile={'Arn': peer.PROFILE_ARN},
-            NetworkInterfaces=[{'AssociatePublicIpAddress': True, 'DeviceIndex': 0, 'Groups': [peer.SECURITY_GROUP], 'SubnetId': peer.SUBNET}],
+            NetworkInterfaces=[{'AssociatePublicIpAddress': True, 'DeviceIndex': 0, 'Groups': [peer.SECURITY_GROUP], 'SubnetId': subnet}],
             InstanceMarketOptions={'MarketType': 'spot', 'SpotOptions': {'InstanceInterruptionBehavior': 'terminate', 'SpotInstanceType': 'one-time', 'MaxPrice': '0.30'}},
             InstanceInitiatedShutdownBehavior='terminate', BlockDeviceMappings=[{'DeviceName': '/dev/xvda', 'Ebs': {'DeleteOnTermination': True, 'Encrypted': True, 'VolumeSize': 80, 'VolumeType': 'gp3'}}],
             TagSpecifications=[{'ResourceType': 'instance', 'Tags': [{'Key': 'Name', 'Value': getattr(campaign, 'TAG', 'borsuk-metadata-ranges-cold')}]}], UserData=body)

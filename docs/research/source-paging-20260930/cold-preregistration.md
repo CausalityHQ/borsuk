@@ -24,4 +24,6 @@ One Spot c7g.2xlarge; machine limit 4200 s. Focused build: 10 GiB, no swap, four
 
 On Spot interruption discard the interrupted measurement arm, retain terminal evidence, and authorize any fresh repetition only after closure. Authenticate the owned instance identity, terminate and wait for termination before collecting terminal artifacts. Never inspect incomplete measurement records or retain idle compute.
 
+Attempt a0001 was rejected before instance creation for insufficient Spot capacity in eu-central-1c. Its empty owned-instance closeout is retained. The next distinct attempt uses the existing public subnet in eu-central-1b, in the same VPC with an active internet-gateway route. Region, machine type, resource bounds and protocol stay fixed; record the actual availability zone and subnet in its reservation. This is a capacity retry, not a measurement repetition.
+
 Independently authenticate and reduce closed records before accepting results. If correctness and quality survive, the next decisive test is 8 offered QPS and a saturation/cost curve from the same qualified binary. Warm, recall@100, disjoint publication panels, 10M/100M, incremental maintenance/recovery and matched vendor comparisons remain open.
