@@ -1,0 +1,42 @@
+{
+  "scope": "authenticated input staging only; no fit, query or quality measurement",
+  "terminal_sha256": "bb027f633bce5293ba09b7568506b6f7d53cdb8a85480fcd98669644a8d7bbcd",
+  "artifacts": [
+    {
+      "dataset": "relaion",
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/manifest.json",
+      "bytes": 33951,
+      "sha256": "577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b"
+    },
+    {
+      "dataset": "relaion",
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/centroids.bin",
+      "bytes": 4800032,
+      "sha256": "42bdea567bdc606333c9f09e07bc33742c1bec7cdcb69dd93b7489547ec3d2fb"
+    },
+    {
+      "dataset": "cohere",
+      "path": "/tmp/borsuk-semantic-router-inputs/cohere/manifest.json",
+      "bytes": 33988,
+      "sha256": "9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521"
+    },
+    {
+      "dataset": "cohere",
+      "path": "/tmp/borsuk-semantic-router-inputs/cohere/centroids.bin",
+      "bytes": 4800032,
+      "sha256": "755fa712fc3d2c3a0e35f9eba95d429b269dc32968da58354d9c328d8d1405a7"
+    },
+    {
+      "dataset": "synthetic-max",
+      "path": "/tmp/borsuk-semantic-router-inputs/synthetic-max/manifest.json",
+      "bytes": 172,
+      "sha256": "1575f5bf9885d8d96ad99ddeb1b94e6519558f3eca37653fc9f96ada0a5fde6b"
+    },
+    {
+      "dataset": "synthetic-max",
+      "path": "/tmp/borsuk-semantic-router-inputs/synthetic-max/centroids.bin",
+      "bytes": 4800032,
+      "sha256": "6ab19d152b42bc9a89e8365a26656c6e0819b8f735234334c9d5b1d24bb935ca"
+    }
+  ]
+}

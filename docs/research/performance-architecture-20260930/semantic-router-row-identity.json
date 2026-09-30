@@ -1,0 +1,23 @@
+{
+  "terminal_sha256": "bb027f633bce5293ba09b7568506b6f7d53cdb8a85480fcd98669644a8d7bbcd",
+  "inputs": [
+    {
+      "dataset": "relaion",
+      "root_sha256": "577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b",
+      "order_sha256": "22abeb087000ea2978c4fef8e85c2f7fda4e4b22c4e5126ba37a1c19816fab18",
+      "order_bytes": 800000,
+      "binding_sha256": "75d5e2d8ca9cfa5bc7192a05a561f1350e151289b9c04062c02c214c6f88a3fb",
+      "map_semantics": "LEu64 physical_position -> logical_id complete permutation",
+      "query_or_truth_used": false
+    },
+    {
+      "dataset": "cohere",
+      "root_sha256": "9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521",
+      "order_sha256": "e2314ca14f5aa6f08b02cc328b863c921e55b1461a413ad6d3d66e781ff42d50",
+      "order_bytes": 800000,
+      "binding_sha256": "35890ec9a8ce156959663bf7d5e56612ab352a51fc425536231b711c49cfb422",
+      "map_semantics": "LEu64 physical_position -> logical_id complete permutation",
+      "query_or_truth_used": false
+    }
+  ]
+}

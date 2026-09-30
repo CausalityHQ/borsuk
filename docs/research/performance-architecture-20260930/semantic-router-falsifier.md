@@ -88,3 +88,15 @@ A high closure coverage obtained by fetching most of the corpus is not a serving
 success. Root/leaf and later source/SQ8 limits still apply. The 100k JSON root
 format is intentionally bounded to this falsifier; 1M would require a separate
 scalable root layout and measured gate, not extrapolation from this artifact.
+
+## Logical/physical row identity binding
+
+Historical truth contains logical IDs. Unit IDs and page IDs refer to reordered
+physical positions. Authenticate each closed `order.u64` and `binding.json`,
+verify the order is a complete physical-position→logical-ID permutation, and
+verify the binding's candidate root and source-order SHA against the selected
+root. Invert this mapping before truth IDs are assigned to 32-row units or
+256-row physical pages. Charge mapping preload separately. A truth ID divided
+by 32 or 256 directly is invalid for these inputs. Reversed/permuted synthetic
+mappings must change the known coverage as expected; reject duplicate or
+out-of-range mapping entries. Exact authorities are in semantic-router-row-identity.json.
