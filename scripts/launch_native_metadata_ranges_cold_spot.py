@@ -205,16 +205,17 @@ def collect(s3, prefix, out, instance_id, commit, digest):
     return terminal
 
 
-def main(attempt):
+def main(attempt, campaign=None):
+    campaign = sys.modules[__name__] if campaign is None else campaign
     assert len(attempt) == 5 and attempt[0] == 'a' and attempt[1:].isdigit()
     assert not subprocess.check_output(['git', 'status', '--porcelain'], text=True).strip()
-    proof = preflight()
+    proof = campaign.preflight()
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     archive = gzip.compress(subprocess.check_output(['git', 'archive', '--format=tar', 'HEAD']), mtime=0)
     digest = peer.sha(archive)
     key = 'research/native-library-check/sources/' + digest + '.tar.gz'
-    prefix = 'research/native-union/20260930/metadata-ranges-cold-' + attempt
-    body = user_data(commit, digest, key, prefix, proof)
+    prefix = getattr(campaign, 'PREFIX', 'research/native-union/20260930/metadata-ranges-cold-') + attempt
+    body = campaign.user_data(commit, digest, key, prefix, proof)
     session = boto3.Session(profile_name='causality', region_name=peer.REGION)
     ec2, s3 = session.client('ec2'), session.client('s3')
     assert peer.missing(s3, prefix + '/reservation.json') and peer.missing(s3, prefix + '/terminal.json')
@@ -229,15 +230,15 @@ def main(attempt):
         peer.put_if_absent(key, archive)
     else:
         assert peer.sha(s3.get_object(Bucket=peer.BUCKET, Key=key)['Body'].read()) == digest
-    reservation = dict(schema=SCHEMA, source_commit=commit, source_archive_sha256=digest,
-        wall_seconds=WALL, instance_type='c7g.2xlarge', availability_zone=az,
+    reservation = dict(schema=campaign.SCHEMA, source_commit=commit, source_archive_sha256=digest,
+        wall_seconds=campaign.WALL, instance_type='c7g.2xlarge', availability_zone=az,
         spot_price_observed_usd_per_hour=quote['SpotPrice'], spot_quote_timestamp=quote['Timestamp'].isoformat(),
-        spot_max_usd_per_hour=.30, compute_cap_usd=.35, ebs_s3_allowance_usd=.15,
+        spot_max_usd_per_hour=.30, compute_cap_usd=getattr(campaign, 'COMPUTE_CAP', .35), ebs_s3_allowance_usd=.15,
         total_cost_measured=False,
-        cost_scope='4200s at capped Spot rate; boot/termination overhead and EBS/S3 allowance estimated',
+        cost_scope=f'{campaign.WALL}s at capped Spot rate; boot/termination overhead and EBS/S3 allowance estimated',
         qualification=proof, config_sha256=proof['config_sha256'],
         interruption_policy='Discard interrupted worker; no automatic replacement')
-    out = ROOT / 'metadata-ranges-cold' / attempt
+    out = campaign.ROOT / getattr(campaign, 'NAME', 'metadata-ranges-cold') / attempt
     out.mkdir(parents=True, exist_ok=False)
     (out / 'aws-reservation.json').write_text(json.dumps(reservation, indent=2) + '\n')
     (out / 'aws-user-data.sh').write_text(body)
@@ -245,12 +246,12 @@ def main(attempt):
     nodes = {}
     started = time.monotonic()
     try:
-        receipt = ec2.run_instances(ClientToken='metadata-ranges-' + peer.sha(prefix.encode())[:48], ImageId='ami-03748c04dc81412c6',
+        receipt = ec2.run_instances(ClientToken=getattr(campaign, 'TOKEN_PREFIX', 'metadata-ranges-') + peer.sha(prefix.encode())[:48], ImageId='ami-03748c04dc81412c6',
             InstanceType='c7g.2xlarge', MinCount=1, MaxCount=1, IamInstanceProfile={'Arn': peer.PROFILE_ARN},
             NetworkInterfaces=[{'AssociatePublicIpAddress': True, 'DeviceIndex': 0, 'Groups': [peer.SECURITY_GROUP], 'SubnetId': peer.SUBNET}],
             InstanceMarketOptions={'MarketType': 'spot', 'SpotOptions': {'InstanceInterruptionBehavior': 'terminate', 'SpotInstanceType': 'one-time', 'MaxPrice': '0.30'}},
             InstanceInitiatedShutdownBehavior='terminate', BlockDeviceMappings=[{'DeviceName': '/dev/xvda', 'Ebs': {'DeleteOnTermination': True, 'Encrypted': True, 'VolumeSize': 80, 'VolumeType': 'gp3'}}],
-            TagSpecifications=[{'ResourceType': 'instance', 'Tags': [{'Key': 'Name', 'Value': 'borsuk-metadata-ranges-cold'}]}], UserData=body)
+            TagSpecifications=[{'ResourceType': 'instance', 'Tags': [{'Key': 'Name', 'Value': getattr(campaign, 'TAG', 'borsuk-metadata-ranges-cold')}]}], UserData=body)
         # Record all ACKed IDs before receipt persistence can fail.
         for index, row in enumerate(receipt['Instances']):
             nodes[str(index)] = dict(instance_id=row['InstanceId'])
@@ -262,7 +263,7 @@ def main(attempt):
             os.fsync(receipt_file.fileno())
         peer.put_if_absent(prefix + '/launch.json', json.dumps(launch, sort_keys=True).encode())
         print(json.dumps(launch), flush=True)
-        poll(ec2, s3, prefix, node['instance_id'], started)
+        campaign.poll(ec2, s3, prefix, node['instance_id'], started)
     finally:
         failure = sys.exc_info()[0] is not None
         startup.terminate_owned(ec2, nodes)
@@ -270,12 +271,12 @@ def main(attempt):
         (out / 'aws-closeout.json').write_text(json.dumps(close, indent=2) + '\n')
         if failure and nodes:
             try:
-                collect(s3, prefix, out, node['instance_id'], commit, digest)
+                campaign.collect(s3, prefix, out, node['instance_id'], commit, digest)
             except Exception as error:
                 (out / 'collection-error.json').write_text(json.dumps(dict(error_type=type(error).__name__, error=str(error))) + '\n')
-    terminal = collect(s3, prefix, out, node['instance_id'], commit, digest)
+    terminal = campaign.collect(s3, prefix, out, node['instance_id'], commit, digest)
     assert terminal['status'] == terminal['phase'] == 'complete' and terminal['exit_code'] == 0
-    assert set(terminal['artifacts']) == set(ARTIFACTS)
+    assert set(terminal['artifacts']) == set(campaign.ARTIFACTS)
     print(json.dumps(dict(complete=True, instance_id=node['instance_id'], state='terminated')), flush=True)
 
 
