@@ -1,0 +1,8 @@
+{
+  "synthetic_not_measurement": true,
+  "launch_authority_complete": false,
+  "paired_worker_256call_abba_pass": true,
+  "one_dataset_slowdown_rejected": true,
+  "failed_counter_record_preserved": true,
+  "range_stats_head_get_buffer_timing_negative_checks_pass": true
+}
