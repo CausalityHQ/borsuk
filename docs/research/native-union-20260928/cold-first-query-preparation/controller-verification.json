@@ -1,0 +1,19 @@
+{
+  "controller_self_check_pass": true,
+  "independent_reducer_self_check_pass": true,
+  "checks_are_synthetic_not_measurements": true,
+  "frozen_native_extraction_pass": true,
+  "native_source_files": 395,
+  "compiled_source_files": 8,
+  "controller_code_files": 9,
+  "no_native_build": true,
+  "no_active_aws_benchmark_observed": true,
+  "historical_stopped_instances_excluded_from_active_guard": [
+    "i-0a50129f7f9076bfb",
+    "i-0641c0333f007a30f",
+    "i-0e73bacb470807838"
+  ],
+  "controller_sha256": "be3d4c85c88bef6396db5c0e47914c22741b4fcdbf465df03e9f30e71c131849",
+  "verifier_sha256": "a2da16fe41cf60d7f7904490fe5d12ed4f2107a5d4ecf97802feac3b76698a86",
+  "controller_log_sha256": "f082835be41deb58e91acc3fd7acf4b9c138a3e6ed12e58f21fcab65d7bb7c6c"
+}

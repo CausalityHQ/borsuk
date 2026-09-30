@@ -212,7 +212,7 @@ def main(attempt):
     ec2, s3 = session.client('ec2'), session.client('s3')
     assert peer.missing(s3, prefix + '/reservation.json') and peer.missing(s3, prefix + '/terminal.json')
     active = ec2.describe_instances(Filters=[{'Name': 'tag:Name', 'Values': ['borsuk-*']},
-        {'Name': 'instance-state-name', 'Values': ['pending', 'running', 'stopping', 'stopped']}])
+        {'Name': 'instance-state-name', 'Values': ['pending', 'running', 'stopping']}])
     assert not any(row['Instances'] for row in active['Reservations'])
     az = ec2.describe_subnets(SubnetIds=[peer.SUBNET])['Subnets'][0]['AvailabilityZone']
     quote = ec2.describe_spot_price_history(InstanceTypes=['c7g.2xlarge'], ProductDescriptions=['Linux/UNIX'],
