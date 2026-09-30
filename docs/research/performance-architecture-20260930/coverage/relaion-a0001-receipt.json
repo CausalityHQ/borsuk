@@ -1,0 +1,13 @@
+{
+  "dataset": "ReLAION",
+  "split": "FIRST100k D768 cosine consumed development ordinals0-63",
+  "unit": "borsuk-semantic-router-coverage-relaion-a0001.service",
+  "invocation_id": "e8e58a1c7f894faeb68c1495bff2974b",
+  "session_id": 45870,
+  "exit": 0,
+  "state": "inactive",
+  "output_sha256": "d2ddd456b762854da72e8c90b6e069b08a20ee6ee6cf3ac5dd7b889a58c50677",
+  "script_sha256": "221695c725d79dfbc7f0ac3c2a4bd4e46445fc32628a1fd989eb328270356ff3",
+  "quality": "coverage ceiling only; no returned recall/control latency/QPS/cost claim",
+  "construction_verification_sha256": "d5ffc050c8b1436081b5f3775422af824ce42e6c93af2a34a1d267d472948f4c"
+}
