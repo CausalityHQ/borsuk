@@ -37,3 +37,15 @@ Original session85408 exited101 after91 passing groups (2130 passed/18 ignored),
 ## Direct overlap assurance repair
 
 The unchanged isolated rerun67515 passed. The fixed340ms ceiling measures scheduling as well as overlap; replace that inference with the existing simultaneous-GET probe, reset after metadata preparation. Extend that shared probe to get_ranges as well as get_opts. Sparse and text each require peak>=2; existing read counts and combined cold cross-leg timing requirement remain. No production or ANN campaign quality/latency gate changes. All10 affected tests and workspace Clippy pass; controller selfcheck passes on refreshed395 source identity46e5ca162da947f3596b00291211ecd05e2059b721938047b8c1487189aedb6d. Final full CI execution90309 is live; its result is pending. Source-bound evidence: implementation-gates/overlap-repair/verification.json. No paid run launched.
+
+## Closed full CI assurance and next a0004
+
+Original90309 exited0 with2710 passes/0 failures/26 ignored across150 groups; Clippy and all-target compilation also passed on the same395 source bodies. Whole log and source-bound proof are frozen in implementation-gates/overlap-repair. Reuse that x86 CI evidence without claiming an ARM full-suite execution: ARM qualification retains both fresh focused/release builds and mirror checks. Integrated controller reuse1afdfcb7; artifact/proof/lifecycle selfchecks independently passed. No ANN measurement from this assurance.
+
+| Evidence / split | Mean R10 | Cold p90 | Throughput | Current comparison / next gate |
+| --- | --- | --- | --- | --- |
+| Verified historical paged offered a0002, ReLAION FIRST1M D768 cosine k10 development64, offered2 QPS | 99.375% | 1505.265 ms | 1.952615 successful full-span QPS; all64 succeeded | Exact resident scorer parity0 pp; historical binary, no matched candidate latency |
+| Verified historical paged offered a0002, CoHere FIRST1M D768 cosine k10 development64, offered2 QPS | 96.875% | 1401.952 ms | 1.953546 successful full-span QPS; all64 succeeded | Exact resident scorer parity0 pp; historical binary, no matched candidate latency |
+| Frozen decode candidate, SAME consumed development panels | Unmeasured | Unmeasured | Unmeasured | Next: original256-request contemporaneous ABBA GO/FAIL on BOTH datasets |
+
+Published444ms coldp90 context and8QPS remain unmet; no new warm/R100/10M/100M, matched vendor or total lifecycle cost evidence. Last historical offered compute estimate$0.062962 excludes EBS/IP/S3/setup/invoice; new campaign cost unmeasured. No operator decision is needed to execute the existing authorized bounded gate after authority checks.

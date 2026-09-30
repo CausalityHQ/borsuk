@@ -221,5 +221,9 @@
       "range_bytes": 4194304,
       "parallel_gets": 8
     }
+  },
+  "native_assurance": {
+    "path": "docs/research/source-paging-20260930/decode/implementation-gates/overlap-repair/verification.json",
+    "sha256": "9b2d19c03e4b1515a56bfa02fbfb6d56683a841cc5233aa3c98bb08bdab89f9b"
   }
 }

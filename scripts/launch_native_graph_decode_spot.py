@@ -18,7 +18,7 @@ from scripts.check_native_paged_source_build import CHECKS
 
 ROOT = Path('docs/research/source-paging-20260930/decode')
 CONFIG = ROOT / 'config.json'
-CONFIG_SHA = '4c5a6546e8b2a85c35a8e02d288f7b897b053546cd30cf3a01024c692ee5c536'
+CONFIG_SHA = 'b7dfcdf159b9c19f97279776ea97d06719d567a0c3d12787a91fb530d782dbef'
 MANIFEST = ROOT / 'native-source-manifest.json'
 MANIFEST_SHA = '5e7ae4ed3234910e3c31f662f157e6e58c7f01f1774190e250573dba16bd5ff8'
 SCHEMA = 'borsuk-native-graph-decode-spot-v1'
