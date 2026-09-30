@@ -266,10 +266,13 @@ impl TwoBitPlanTrace {
 /// Offline source nomination and SQ8 page admission using the production planner.
 /// The caller binds the prepared query and authenticated records to one source;
 /// discovery, source-read charges and retained trace memory remain caller-owned.
+/// The explicit nomination limit must be in 1..=min(total pages,159); production
+/// uses that maximum, while shorter diagnostic closures must opt in explicitly.
 #[doc(hidden)]
 pub fn plan_two_bit_source_walks<'a>(
     rows: usize,
     dimensions: usize,
+    nomination_page_limit: usize,
     walks: &[(usize, Vec<usize>)],
     prepared: &PreparedTwoBit,
     mut record: impl FnMut(usize) -> Option<&'a [u8]>,
@@ -282,7 +285,7 @@ pub fn plan_two_bit_source_walks<'a>(
     choose_budgeted_pages_sparse(&[], &[0], rows, dimensions, 1, 1, usize::MAX)
         .map_err(TwoBitGenerationError::Budget)?;
     let mut nomination_evaluated_units = Vec::with_capacity(if trace.is_some() { 2544 } else { 0 });
-    let ranked = rank_walked_source(rows, walks, |unit| {
+    let score = |unit: usize| {
         if trace.is_some() {
             nomination_evaluated_units.push(unit);
         }
@@ -298,7 +301,12 @@ pub fn plan_two_bit_source_walks<'a>(
             );
         }
         Ok(maximum)
-    })?;
+    };
+    let ranked = if nomination_page_limit == rows.div_ceil(256).min(159) {
+        rank_walked_source(rows, walks, score)
+    } else {
+        rank_walked_source_with_limit(rows, walks, nomination_page_limit, score)
+    }?;
     if let Some(trace) = trace {
         trace.primary_page = ranked[0].0;
         trace.nomination_evaluated_units = nomination_evaluated_units;
@@ -320,6 +328,13 @@ pub fn plan_two_bit_source_walks<'a>(
         max_query_bytes,
     )
     .map_err(TwoBitGenerationError::Budget)
+}
+
+/// Exact production query normalization for offline discovery and SQ8 scoring.
+/// Prepare two-bit source scoring from the original query before normalizing.
+#[doc(hidden)]
+pub fn normalize_two_bit_diagnostic_query(query: &[f32]) -> Result<Cow<'_, [f32]>> {
+    crate::sq8_source::cosine_vector(query).map_err(TwoBitGenerationError::Plane)
 }
 
 /// Offline source-page closure with the production cover and byte admission.
@@ -345,13 +360,27 @@ pub fn plan_two_bit_source_cover(
 fn rank_walked_source(
     rows: usize,
     walks: &[(usize, Vec<usize>)],
+    score: impl FnMut(usize) -> Result<f64>,
+) -> Result<Vec<(usize, f64)>> {
+    rank_walked_source_with_limit(rows, walks, rows.div_ceil(256).min(159), score)
+}
+
+fn rank_walked_source_with_limit(
+    rows: usize,
+    walks: &[(usize, Vec<usize>)],
+    page_limit: usize,
     mut score: impl FnMut(usize) -> Result<f64>,
 ) -> Result<Vec<(usize, f64)>> {
     let invalid = || TwoBitGenerationError::Invalid("walked source geometry");
-    if rows == 0 || walks.is_empty() || walks.len() > 2 {
+    if rows == 0
+        || walks.is_empty()
+        || walks.len() > 2
+        || page_limit == 0
+        || page_limit > rows.div_ceil(256).min(159)
+    {
         return Err(invalid());
     }
-    let count = rows.div_ceil(256).min(159);
+    let count = page_limit;
     let mut units = Vec::with_capacity(2 * 1272);
     for (seed, evaluated) in walks {
         if *seed >= rows.div_ceil(256) || evaluated.is_empty() || evaluated.len() > 1272 {
@@ -840,8 +869,7 @@ impl TwoBitGeneration {
             .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?;
         // The codec already validated finite, nonzero input. Normalize after its
         // temporary preparation buffer is released, within the same scratch cap.
-        let normalized =
-            crate::sq8_source::cosine_vector(query).map_err(TwoBitGenerationError::Plane)?;
+        let normalized = normalize_two_bit_diagnostic_query(query)?;
         let walks = self.discover_walks(normalized.as_ref(), trace.as_deref_mut())?;
         let plan = self.plan_walks(&walks, &prepared, |row| self.plane.record(row), trace)?;
         Ok((plan, normalized))
@@ -871,8 +899,7 @@ impl TwoBitGeneration {
             .plane
             .prepare_query(query, scratch)
             .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?;
-        let normalized =
-            crate::sq8_source::cosine_vector(query).map_err(TwoBitGenerationError::Plane)?;
+        let normalized = normalize_two_bit_diagnostic_query(query)?;
         let walks = self.discover_walks(normalized.as_ref(), trace.as_deref_mut())?;
         let closure = walks
             .iter()
@@ -990,6 +1017,7 @@ impl TwoBitGeneration {
         plan_two_bit_source_walks(
             self.pages.rows(),
             self.pages.dimensions(),
+            self.pages.rows().div_ceil(256).min(159),
             walks,
             prepared,
             record,
@@ -1386,6 +1414,7 @@ mod source_walk_tests {
                 let diagnostic = plan_two_bit_source_walks(
                     rows,
                     2,
+                    rows.div_ceil(256).min(159),
                     &walks,
                     &prepared,
                     |row| local.plane.record(row),
@@ -1412,6 +1441,7 @@ mod source_walk_tests {
                     plan_two_bit_source_walks(
                         rows,
                         2,
+                        rows.div_ceil(256).min(159),
                         &walks,
                         &prepared,
                         |row| local.plane.record(row),
@@ -1528,6 +1558,75 @@ mod source_walk_tests {
         assert!(error.read_stats().0.failed_gets > 0);
     }
     #[test]
+    fn diagnostic_page_limit_admits_short_closure_without_relaxing_control() {
+        let codec = crate::rotated_two_bit::RotatedTwoBitCodec::new(&[0.0; 2], 20260923).unwrap();
+        let prepared = codec.prepare_query(&[1.0, 0.0], 400_000).unwrap();
+        let record = codec.encode(&[1.0, 0.0]).unwrap();
+        let walks = [(2, vec![16])];
+        assert!(rank_walked_source(513, &walks, |_| Ok(1.0)).is_err());
+        let mut trace = TwoBitPlanTrace::default();
+        let plan = plan_two_bit_source_walks(
+            513,
+            2,
+            1,
+            &walks,
+            &prepared,
+            |_| Some(&record),
+            32,
+            513 * 14,
+            Some(&mut trace),
+        )
+        .unwrap();
+        assert_eq!(plan.selected_pages, vec![2]);
+        assert_eq!(plan.ranges, vec![7168..7182]);
+        assert_eq!(trace.primary_page, 2);
+        assert_eq!(trace.ranked_candidate_pages, vec![2]);
+        assert_eq!(trace.nomination_evaluated_units, vec![16]);
+        for limit in [0, 3, 4, 160] {
+            assert!(
+                plan_two_bit_source_walks(
+                    513,
+                    2,
+                    limit,
+                    &walks,
+                    &prepared,
+                    |_| Some(&record),
+                    32,
+                    513 * 14,
+                    None,
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn diagnostic_normalization_preserves_native_query_space_and_rejections() {
+        let unit = [1.0_f32, 0.0];
+        assert!(matches!(
+            normalize_two_bit_diagnostic_query(&unit).unwrap(),
+            Cow::Borrowed(_)
+        ));
+        assert_eq!(
+            normalize_two_bit_diagnostic_query(&[3.0, 4.0])
+                .unwrap()
+                .as_ref(),
+            &[0.6, 0.8]
+        );
+        for query in [
+            &[][..],
+            &[0.0, 0.0],
+            &[f32::NAN, 1.0],
+            &[f32::INFINITY, 1.0],
+        ] {
+            assert!(matches!(
+                normalize_two_bit_diagnostic_query(query),
+                Err(TwoBitGenerationError::Plane(_))
+            ));
+        }
+    }
+
+    #[test]
     fn diagnostic_source_cover_charges_bridges_and_partial_tail_before_scoring() {
         let closure = BTreeSet::from([0, 2]);
         assert_eq!(
@@ -1554,7 +1653,7 @@ mod source_walk_tests {
         let record = codec.encode(&[1.0, 0.0]).unwrap();
         let walks = [(0, (0..9).collect())];
         assert!(matches!(
-            plan_two_bit_source_walks(257, 2, &walks, &prepared, |_| None, 32, 257 * 14, None),
+            plan_two_bit_source_walks(257, 2, 2, &walks, &prepared, |_| None, 32, 257 * 14, None),
             Err(TwoBitGenerationError::Invalid("missing source record"))
         ));
         let mut nonfinite = record.clone();
@@ -1563,6 +1662,7 @@ mod source_walk_tests {
         assert!(matches!(
             plan_two_bit_source_walks(
                 257,
+                2,
                 2,
                 &walks,
                 &prepared,
@@ -1587,6 +1687,7 @@ mod source_walk_tests {
                 plan_two_bit_source_walks(
                     257,
                     2,
+                    2,
                     &invalid,
                     &prepared,
                     |_| panic!("invalid walk scored"),
@@ -1602,6 +1703,7 @@ mod source_walk_tests {
                 plan_two_bit_source_walks(
                     rows,
                     dimensions,
+                    rows.div_ceil(256).min(159),
                     &walks,
                     &prepared,
                     |_| panic!("invalid geometry scored"),
