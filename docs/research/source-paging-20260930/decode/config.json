@@ -188,7 +188,7 @@
   },
   "native_manifest": {
     "path": "docs/research/source-paging-20260930/decode/native-source-manifest.json",
-    "sha256": "1d98d257eb67f20afb982e2f2ea035d449d395dc58c862d949d041a0afdc7937"
+    "sha256": "5e7ae4ed3234910e3c31f662f157e6e58c7f01f1774190e250573dba16bd5ff8"
   },
   "compiled_sha256": {
     "crates/borsuk/examples/two_bit_http.rs": "7d2d97b2a0579bfbaffd4ff8e5b35f13f7ecbd323d9b4f0b24598569129adfa7",

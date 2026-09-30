@@ -1,9 +1,6 @@
 {
-  "schema": "borsuk-implementation-compile-clippy-proof-v1",
-  "verified": true,
-  "worker_commit": "2cf487ecf6b54c71c2b67b218128d3abcb6f6430",
-  "integrated_commit": "5df84d59",
-  "source_identity_sha256": "07c2089c8c28ac64b4b4d4f3a48ce1ee20483441cf3039fccddb4174d931cf20",
+  "schema": "borsuk-implementation-overlap-repair-proof-v1",
+  "source_identity_sha256": "46e5ca162da947f3596b00291211ecd05e2059b721938047b8c1487189aedb6d",
   "source_file_count": 395,
   "source_sha256": {
     "Cargo.lock": "178c5f35a744ec2d11e21f040e72e74016e4502e532dbc2edfd8e2a5433b3b76",
@@ -280,7 +277,7 @@
     "crates/borsuk/tests/build_config.rs": "99336d02927d9fcefde6e6745277b79e447352aaa6ec1dfdc421325588ccd52f",
     "crates/borsuk/tests/cell_wal.rs": "57ff303df9003d7b46fee69b17025f57515a507bb3744c8e47708125b4e6fee3",
     "crates/borsuk/tests/cold_quantizer.rs": "7729d5f10f96066009ae71efe6cb829f6a2b469a8308f10fc6640d235ce08f25",
-    "crates/borsuk/tests/common/mod.rs": "8c25991cbb2d7a7f5ee7184664164fd47103c75c6e50553f78f2f603d26b2da6",
+    "crates/borsuk/tests/common/mod.rs": "f6a83649975dc215546d00d36bb3cc77b7f8a24f152f8b17320ddfd9bb6a6127",
     "crates/borsuk/tests/concurrency_stress.rs": "d06a7a04755fbc14642d5598e10902f0eeb7c9768d3e8693b7fdc89845b37b58",
     "crates/borsuk/tests/consistency.rs": "75712c6e9df0c1428b9fbc1ac03cb718ebc7abfb82a2e0b58655b412aa089a05",
     "crates/borsuk/tests/cosine_pruning.rs": "4ffd7cefd18f6e93cf13a9fc8d04015fccd85479799af722559dcdda86f59979",
@@ -321,7 +318,7 @@
     "crates/borsuk/tests/s3_soak.rs": "e967aad20c406a0ffc0ff92c4f98c2f82fc5938c9acc5f8b794116ef5b5f6e0c",
     "crates/borsuk/tests/sparse_inverted_bench.rs": "d6c1a6078b78d03808bc314dc007f902ec204adb53b416243ce4c9213892ec08",
     "crates/borsuk/tests/sparse_named_shard.rs": "5194c13ce18b99f247b92ab4c711bea6e2485a1d6b8a8bc44f6b9d42bbc1ccfe",
-    "crates/borsuk/tests/sparse_named_vectors.rs": "6d33567acb4ac65f1501288a533527c094648debcd873691495ab36179946fbb",
+    "crates/borsuk/tests/sparse_named_vectors.rs": "1cff480aa8ec7ea36523c69254bfd13307bb4b543b9d580701cb7fa15524af23",
     "crates/borsuk/tests/storage_access_trace.rs": "8e2bac9eadec924ef0670277d1f57e875ba0e6d50157f57252cb10847b08f929",
     "crates/borsuk/tests/text_storage.rs": "f8629e5f5a90accf4fab701f8741820b654274df96c6bc5a60fe0920db03130b",
     "crates/borsuk/tests/tracing_smoke.rs": "37948298ef64ef335ee1d21c9f186fef487ff8c60eddb53fa03e453f83f24622",
@@ -402,80 +399,41 @@
     "scripts/v114_score_rust/src/bin/v149_contiguous_hierarchy.rs": "ff161593426329020d09d95e7d3f68c00a33cdc4c42deadd35400a60a65700d5",
     "scripts/v114_score_rust/src/main.rs": "12332c46c04b1bf9a18fbbb2eef39ca4354cb401daf62cc3196b96f77e364124"
   },
+  "affected_target_status": 0,
+  "affected_target_passed": 10,
   "clippy_status": 0,
-  "workspace_test_compilation_status": 0,
-  "workspace_test_compilation_elapsed_seconds": 377,
-  "affected_test_statuses": {
-    "source_unit_cover_preserves_all_units_and_clips_tail": 0,
-    "generation_publish_reload_and_http_search_fail_closed": 0
-  },
-  "interrupted_cargo_test_status": 130,
-  "interrupted_scope": "Canceled owned cache-blocked command before running authenticated already-built tests directly",
-  "full_workspace_test_execution_status": 101,
-  "full_workspace_execution_pending": false,
-  "platform": "x86_64 local devbox",
-  "compiler_jobs": 2,
+  "controller_selfcheck_status": 0,
+  "full_workspace_execution_pending": true,
+  "full_workspace_execution_session": 90309,
+  "full_workspace_execution_status": null,
   "artifacts": {
+    "affected-tests.log": {
+      "bytes": 64829,
+      "sha256": "4306910b09711191a4171b210f31b697283596c6249d8e89d9c989367df8ad0e"
+    },
     "clippy.log": {
-      "bytes": 183003,
-      "sha256": "afc2571fbc8ed69d8c84c9b6263e2a9855671661191b0a872cd15f58bb346f16"
+      "bytes": 182871,
+      "sha256": "c6738f6ecd12d33e64e1de7509b1c7a22adaf05671fa508c5903265c40eb578e"
     },
-    "test-build.log": {
-      "bytes": 94110,
-      "sha256": "6dc4a2e73fcd4997235aa8df90370cdfd4d70e11f5b6521831911d32541fe42c"
-    },
-    "cover-test.log": {
-      "bytes": 440,
-      "sha256": "a0cc3a816d31650845422db07be4f8bff883492d1f2526be5fa402be5f83583c"
-    },
-    "http-test.log": {
-      "bytes": 430,
-      "sha256": "d634cc36e6c479f9d2b585af26e80e2b580a68a045c953c2ebd16160a99b399f"
-    },
-    "interrupted-cache-test.log": {
-      "bytes": 388,
-      "sha256": "4dae60e9c59a47215eb5f0aa3afdd1d1e8e193c8a03ce8f4a51ac5a53d3f6d52"
-    },
-    "full-ci-tests.log": {
-      "bytes": 282266,
-      "sha256": "b67f0dbad572cefc21fbace073130c35eb47537613b7b0fb9c3b646ddd62fed6"
-    },
-    "sparse-overlap-focused.log": {
-      "bytes": 64742,
-      "sha256": "4c517113bdc83171ea5c40070e7d6360ecea2c2b0cc792bc8bddd2d2548b14a3"
+    "controller-selfcheck.log": {
+      "bytes": 265,
+      "sha256": "16c52f9f5846d04bc0182e9163125364e8123179b3c3a003a08d2b9005fa1b5b"
     }
   },
-  "benchmark_measurement": false,
-  "full_workspace_test_execution_command": [
+  "production_changed": false,
+  "historical_failure_superseded": false,
+  "workspace_test_compilation_status": 0,
+  "workspace_test_compilation_scope": "All targets compiled by cargo test --locked --workspace --all-targets before execution; original session90309 still live",
+  "workspace_command": [
     "cargo",
     "test",
     "--locked",
     "--workspace",
     "--all-targets"
   ],
-  "full_workspace_test_execution_env": {
+  "workspace_env": {
     "CARGO_BUILD_JOBS": "2",
     "CARGO_TARGET_DIR": "/data/target",
     "RUSTC_WRAPPER": ""
-  },
-  "full_workspace_test_execution_session": 85408,
-  "full_workspace_test_execution_failure": {
-    "test": "sparse_and_text_parquet_ranges_overlap_slow_object_reads",
-    "observed_ms": 354.004121,
-    "assertion_ms": 340,
-    "scope": "Default CI profile; not ANN benchmark quality/latency"
-  },
-  "completed_passing_group_counts": {
-    "groups": 91,
-    "passed": 2130,
-    "ignored": 18,
-    "full_workspace_complete": false
-  },
-  "sparse_overlap_isolated_rerun": {
-    "session": 67515,
-    "status": 0,
-    "test": "sparse_and_text_parquet_ranges_overlap_slow_object_reads",
-    "source_changed": false,
-    "does_not_supersede_full_failure": true
   }
 }

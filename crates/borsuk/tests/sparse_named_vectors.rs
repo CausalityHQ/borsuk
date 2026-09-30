@@ -415,16 +415,17 @@ fn sparse_and_text_parquet_ranges_overlap_slow_object_reads() {
     drop(writer);
 
     let open_slow = || {
-        let slow: Arc<dyn ObjectStore> = Arc::new(
-            common::FaultInjectingObjectStore::new(Arc::clone(&inner))
-                .with_latency(Duration::from_millis(40)),
-        );
+        let (slow, concurrency) = common::FaultInjectingObjectStore::new(Arc::clone(&inner))
+            .with_latency(Duration::from_millis(40))
+            .with_get_concurrency_probe(|operation, _| operation == common::StoreOperation::Get);
+        let slow: Arc<dyn ObjectStore> = Arc::new(slow);
         let index = BorsukIndex::open_with_object_store(slow, &uri).unwrap();
         index.prepare_serving_metadata().unwrap();
-        index
+        concurrency.reset();
+        (index, concurrency)
     };
 
-    let sparse_index = open_slow();
+    let (sparse_index, sparse_concurrency) = open_slow();
     let started = Instant::now();
     let sparse = sparse_index
         .search_hybrid(
@@ -440,24 +441,26 @@ fn sparse_and_text_parquet_ranges_overlap_slow_object_reads() {
     let sparse_elapsed = started.elapsed();
     assert!(sparse.backing_reads >= 8);
     assert!(
-        sparse_elapsed < Duration::from_millis(340),
-        "eight Parquet range plans over 40 ms GETs should overlap, took {sparse_elapsed:?}"
+        sparse_concurrency.peak() >= 2,
+        "eight Parquet range plans must overlap; peak={}",
+        sparse_concurrency.peak()
     );
 
-    let text_index = open_slow();
+    let (text_index, text_concurrency) = open_slow();
     let started = Instant::now();
     let text = text_index.search_text("needle", 2).unwrap();
     let text_elapsed = started.elapsed();
     assert!(text.backing_reads >= 8);
     assert!(
-        text_elapsed < Duration::from_millis(340),
-        "eight BM25 Parquet range plans over 40 ms GETs should overlap, took {text_elapsed:?}"
+        text_concurrency.peak() >= 2,
+        "eight BM25 Parquet range plans must overlap; peak={}",
+        text_concurrency.peak()
     );
 
     // Use a fresh handle so this is a cold-versus-cold comparison. Reusing the
     // individual handles would intentionally hit the bounded decoded lexical
     // caches and measure retention instead of cross-leg I/O overlap.
-    let combined_index = open_slow();
+    let (combined_index, _) = open_slow();
     let started = Instant::now();
     let combined = combined_index
         .search_hybrid(

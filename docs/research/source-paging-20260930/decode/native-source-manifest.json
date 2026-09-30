@@ -1,7 +1,7 @@
 {
   "schema": "borsuk-graph-decode-source-v1",
-  "candidate_identity": "07c2089c8c28ac64b4b4d4f3a48ce1ee20483441cf3039fccddb4174d931cf20",
-  "control_identity": "77e7aa0408949307430fd88b7c3eebc1a959dd808fb6cb72c6b9a81db422fb64",
+  "candidate_identity": "46e5ca162da947f3596b00291211ecd05e2059b721938047b8c1487189aedb6d",
+  "control_identity": "72f1f5d14dccf209dfb5fdc5bf6562d06322348144fd99bb5c356ef9fc9c8c97",
   "source_file_count": 395,
   "candidate_graph_sha256": "08bf90c491f53bf8831374f67548c608ba891388528d037d0c5a207186758ea4",
   "control_graph": {
@@ -283,7 +283,7 @@
     "crates/borsuk/tests/build_config.rs": "99336d02927d9fcefde6e6745277b79e447352aaa6ec1dfdc421325588ccd52f",
     "crates/borsuk/tests/cell_wal.rs": "57ff303df9003d7b46fee69b17025f57515a507bb3744c8e47708125b4e6fee3",
     "crates/borsuk/tests/cold_quantizer.rs": "7729d5f10f96066009ae71efe6cb829f6a2b469a8308f10fc6640d235ce08f25",
-    "crates/borsuk/tests/common/mod.rs": "8c25991cbb2d7a7f5ee7184664164fd47103c75c6e50553f78f2f603d26b2da6",
+    "crates/borsuk/tests/common/mod.rs": "f6a83649975dc215546d00d36bb3cc77b7f8a24f152f8b17320ddfd9bb6a6127",
     "crates/borsuk/tests/concurrency_stress.rs": "d06a7a04755fbc14642d5598e10902f0eeb7c9768d3e8693b7fdc89845b37b58",
     "crates/borsuk/tests/consistency.rs": "75712c6e9df0c1428b9fbc1ac03cb718ebc7abfb82a2e0b58655b412aa089a05",
     "crates/borsuk/tests/cosine_pruning.rs": "4ffd7cefd18f6e93cf13a9fc8d04015fccd85479799af722559dcdda86f59979",
@@ -324,7 +324,7 @@
     "crates/borsuk/tests/s3_soak.rs": "e967aad20c406a0ffc0ff92c4f98c2f82fc5938c9acc5f8b794116ef5b5f6e0c",
     "crates/borsuk/tests/sparse_inverted_bench.rs": "d6c1a6078b78d03808bc314dc007f902ec204adb53b416243ce4c9213892ec08",
     "crates/borsuk/tests/sparse_named_shard.rs": "5194c13ce18b99f247b92ab4c711bea6e2485a1d6b8a8bc44f6b9d42bbc1ccfe",
-    "crates/borsuk/tests/sparse_named_vectors.rs": "6d33567acb4ac65f1501288a533527c094648debcd873691495ab36179946fbb",
+    "crates/borsuk/tests/sparse_named_vectors.rs": "1cff480aa8ec7ea36523c69254bfd13307bb4b543b9d580701cb7fa15524af23",
     "crates/borsuk/tests/storage_access_trace.rs": "8e2bac9eadec924ef0670277d1f57e875ba0e6d50157f57252cb10847b08f929",
     "crates/borsuk/tests/text_storage.rs": "f8629e5f5a90accf4fab701f8741820b654274df96c6bc5a60fe0920db03130b",
     "crates/borsuk/tests/tracing_smoke.rs": "37948298ef64ef335ee1d21c9f186fef487ff8c60eddb53fa03e453f83f24622",

@@ -33,3 +33,7 @@ The original full CI-profile workspace execution is still live as local session8
 ## Local full CI execution: timing failure preserved
 
 Original session85408 exited101 after91 passing groups (2130 passed/18 ignored), then nine passes and one failure in sparse_named_vectors. sparse_and_text_parquet_ranges_overlap_slow_object_reads observed354.004121ms against its340ms overlap assertion. The source-bound full log/status is authenticated in implementation-gates; compilation/Clippy remain passed, full workspace execution is failed and incomplete. No ANN profile ran. An isolated rerun of only that exact test is pending as session67515; investigate overlap versus host contention before changing code or gates. No new paid campaign launched.
+
+## Direct overlap assurance repair
+
+The unchanged isolated rerun67515 passed. The fixed340ms ceiling measures scheduling as well as overlap; replace that inference with the existing simultaneous-GET probe, reset after metadata preparation. Extend that shared probe to get_ranges as well as get_opts. Sparse and text each require peak>=2; existing read counts and combined cold cross-leg timing requirement remain. No production or ANN campaign quality/latency gate changes. All10 affected tests and workspace Clippy pass; controller selfcheck passes on refreshed395 source identity46e5ca162da947f3596b00291211ecd05e2059b721938047b8c1487189aedb6d. Final full CI execution90309 is live; its result is pending. Source-bound evidence: implementation-gates/overlap-repair/verification.json. No paid run launched.

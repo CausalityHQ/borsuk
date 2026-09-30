@@ -681,6 +681,11 @@ impl ObjectStore for FaultInjectingObjectStore {
         Self: Sync + 'async_trait,
     {
         Box::pin(async move {
+            let _active_get = self
+                .get_concurrency
+                .as_ref()
+                .filter(|(_, predicate)| predicate(StoreOperation::Get, location))
+                .map(|(probe, _)| probe.enter());
             let _active_group_get = self
                 .get_group_concurrency
                 .as_deref()
