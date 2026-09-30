@@ -88,3 +88,19 @@ not an implicit fallback. The authoritative scientific cold experiment is
 semantic-router-cold-http-gate.md (ABBA blocks); the consultation's alternating
 order description does not replace that preregistration. Do not refit the
 two measured routers or re-evaluate the consumed panels during extraction.
+
+## Shared core delivered (2026-09-30)
+
+Integrated worker `67a0cb06` as `88102baf`: reusable construction, publication
+validation, authenticated root/membership open and bounded whole-leaf nomination.
+Both research CLIs reuse the module. The deterministic fixture preserves all
+three artifact digests; the oversized schema regression failed before its repair
+and passes with the 256-byte bound. All 16 affected tests, both release builds,
+workspace Clippy and complete workspace test compilation passed on exact source.
+See `semantic-router-library-assurance.json` and its authenticated gzip logs.
+Full workspace test execution and native serving qualification are not claimed.
+The module explicitly remains bounded to 100k rows/D768; no panel was rerun.
+
+Next: execute `semantic-router-native-contract.md` across generation startup,
+query admission, publication, compaction/restart, GC and native HTTP accounting.
+The preregistered cold HTTP gate remains pending this implementation and authority.

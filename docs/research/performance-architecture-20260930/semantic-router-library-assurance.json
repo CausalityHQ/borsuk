@@ -1,0 +1,218 @@
+{
+  "base": "ae7721383349a4a3d11d71abd64f8965d06359da",
+  "source_sha256": {
+    "crates/borsuk/src/semantic_unit_router.rs": "f64f1a81ee4fe7838e6e6126e966e5a1a629612ea1b4fad6117c6412a46b58a8",
+    "crates/borsuk/src/lib.rs": "57fa298d75e1799dfe080a5d5281c3afb97438af6607d1ac20ab9ce2896d7714",
+    "crates/borsuk/src/bin/build_semantic_unit_router.rs": "4675bbed5fecefdc16ee739fcb15eb82344c3f06610e4ce820fa7b54e6c35af6",
+    "crates/borsuk/src/bin/check_semantic_router_scorer.rs": "8ccc62ed5f56435fe99ef9779a6cb0940a27ef9e0ef3bc72012169e0082fe989"
+  },
+  "environment": {
+    "CARGO_TARGET_DIR": "/data/target",
+    "CARGO_BUILD_JOBS": "2",
+    "BORSUK_TEST_BUILD_JOBS": "2",
+    "RUSTC_WRAPPER": ""
+  },
+  "synthetic_only": true,
+  "steps": [
+    {
+      "name": "module",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "semantic_unit_router"
+      ],
+      "log": "/tmp/semantic-library-final-module.log",
+      "started_epoch": 1790802867.8857472,
+      "status": "finished",
+      "exit_status": 0,
+      "finished_epoch": 1790802956.534857,
+      "log_sha256": "b6f6d01c9297bae4ad880669d079978d5296defe8962fc50b6ad8c988cf02063"
+    },
+    {
+      "name": "bins",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "build_semantic_unit_router",
+        "--bin",
+        "check_semantic_router_scorer"
+      ],
+      "log": "/tmp/semantic-library-final-bins.log",
+      "started_epoch": 1790802956.5353029,
+      "status": "finished",
+      "exit_status": 0,
+      "finished_epoch": 1790803023.9190164,
+      "log_sha256": "1edf14307645c0c36b7dd7345ec4a8e37b6563e0200b06fdfc23280b63fe7c87"
+    },
+    {
+      "name": "release",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "borsuk",
+        "--bin",
+        "build_semantic_unit_router",
+        "--bin",
+        "check_semantic_router_scorer"
+      ],
+      "log": "/tmp/semantic-library-final-release.log",
+      "started_epoch": 1790803023.9194896,
+      "status": "finished",
+      "exit_status": 0,
+      "finished_epoch": 1790803311.9284208,
+      "log_sha256": "cc7a547a14b5d3ea5f1042c355afba5e2865775d1430a8963ff77b656c6c2189"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "log": "/tmp/semantic-library-final-clippy.log",
+      "started_epoch": 1790803311.928862,
+      "status": "finished",
+      "exit_status": 0,
+      "finished_epoch": 1790803406.018958,
+      "log_sha256": "7eac643824ce289b03a03c9192f577b28e9a7b025661c8f1c09d65afc76bd82c"
+    },
+    {
+      "name": "test-build",
+      "command": [
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ],
+      "log": "/tmp/semantic-library-final-test-build.log",
+      "started_epoch": 1790803406.019589,
+      "status": "finished",
+      "exit_status": 0,
+      "finished_epoch": 1790803677.7392988,
+      "log_sha256": "ee4005544bd9184c2145e648e83ffcd545c8e5e1e0c94067b52a9cdef700eea5"
+    }
+  ],
+  "binary_sha256": {
+    "/data/target/release/build_semantic_unit_router": "a22dbcf036d4e7f7d108895d6ba51aad7a2faa45070c6f8acf4a81504bb6cc96",
+    "/data/target/release/check_semantic_router_scorer": "53a2255a8880cbf0cde1d36f04910b89291501db0a2a2be4117fb2cf94a84ac7"
+  },
+  "commit": "67a0cb06e80f6b7fe6eaaf5072ee6c8a272dedab",
+  "git_identity": "Roman Bartusiak <riomus@gmail.com> | Roman Bartusiak <riomus@gmail.com>",
+  "commit_parent": "ae7721383349a4a3d11d71abd64f8965d06359da",
+  "git_status": "",
+  "baseline_receipt": {
+    "path": "/tmp/semantic-library-baseline-receipt.json",
+    "sha256": "d7ed0f96fa111835db0c9f82ccb566a2b9a34be946bf4b06cb45e4a3820e6ef8"
+  },
+  "executed_tests": {
+    "module": 3,
+    "builder": 7,
+    "scorer": 6
+  },
+  "qualification_scope": "Synthetic only; original 6 builder + 6 scorer preserved, 3 new library tests and 1 frozen byte golden test. No real corpus, GT, HTTP, cloud, consult, review launch, workspace test execution or push. Clippy completed required denies with nonblocking style warnings.",
+  "archived_logs": {
+    "/tmp/semantic-library-final-module.log": {
+      "path": "docs/research/performance-architecture-20260930/semantic-library-final-module.log.gz",
+      "raw_bytes": 59692,
+      "raw_sha256": "b6f6d01c9297bae4ad880669d079978d5296defe8962fc50b6ad8c988cf02063",
+      "gzip_bytes": 7431,
+      "gzip_sha256": "d506dbe08c5e29cab71d01660c01d7385991a4af26b9af64dc4cdabe6e22b865"
+    },
+    "/tmp/semantic-library-final-bins.log": {
+      "path": "docs/research/performance-architecture-20260930/semantic-library-final-bins.log.gz",
+      "raw_bytes": 65314,
+      "raw_sha256": "1edf14307645c0c36b7dd7345ec4a8e37b6563e0200b06fdfc23280b63fe7c87",
+      "gzip_bytes": 8466,
+      "gzip_sha256": "ab206a91461fcd4b9aea2596bed9251acfcd152a3822677bff52a9e77df6dcb3"
+    },
+    "/tmp/semantic-library-final-release.log": {
+      "path": "docs/research/performance-architecture-20260930/semantic-library-final-release.log.gz",
+      "raw_bytes": 64157,
+      "raw_sha256": "cc7a547a14b5d3ea5f1042c355afba5e2865775d1430a8963ff77b656c6c2189",
+      "gzip_bytes": 7909,
+      "gzip_sha256": "fb8869f7169b02101a090ba14091a86552f25c3442ab601bade84e6cd826b472"
+    },
+    "/tmp/semantic-library-final-clippy.log": {
+      "path": "docs/research/performance-architecture-20260930/semantic-library-final-clippy.log.gz",
+      "raw_bytes": 188359,
+      "raw_sha256": "7eac643824ce289b03a03c9192f577b28e9a7b025661c8f1c09d65afc76bd82c",
+      "gzip_bytes": 21504,
+      "gzip_sha256": "c430f20efb8af5b8663f416c33e06344ee9991209144c21d5ad88596b6fca74c"
+    },
+    "/tmp/semantic-library-final-test-build.log": {
+      "path": "docs/research/performance-architecture-20260930/semantic-library-final-test-build.log.gz",
+      "raw_bytes": 85378,
+      "raw_sha256": "ee4005544bd9184c2145e648e83ffcd545c8e5e1e0c94067b52a9cdef700eea5",
+      "gzip_bytes": 12860,
+      "gzip_sha256": "c32ec9d5b10d963d34d5a00cad6a92178cfaa4fd37c7bb26a483baf7bafb921c"
+    },
+    "/tmp/semantic-library-baseline.log": {
+      "path": "docs/research/performance-architecture-20260930/semantic-library-baseline.log.gz",
+      "raw_bytes": 65806,
+      "raw_sha256": "1ecd39380526865cae4c9bbd3f3f6a5afbd9edffd030ab9406210deb862de15b",
+      "gzip_bytes": 8682,
+      "gzip_sha256": "8960fc780149e507f5ab200a9b25ce2223c4fc9d46f9883110242ed866d296f6"
+    },
+    "/tmp/semantic-library-extraction.log": {
+      "path": "docs/research/performance-architecture-20260930/semantic-library-extraction.log.gz",
+      "raw_bytes": 65314,
+      "raw_sha256": "6c6cb463e5e2eac0640258524f91ecce637458a7221d68dd54907b83ad6753d0",
+      "gzip_bytes": 8469,
+      "gzip_sha256": "549dad80a5b7293aed4b00f7e32d133e11ccd756dda79c4e09c1bcfbc051bff3"
+    },
+    "/tmp/semantic-library-schema-red.log": {
+      "path": "docs/research/performance-architecture-20260930/semantic-library-schema-red.log.gz",
+      "raw_bytes": 60243,
+      "raw_sha256": "597b79b79f04d795892c4d3ca8ca8c2228c4baadc296c5f30e0c1d19f13fd246",
+      "gzip_bytes": 7643,
+      "gzip_sha256": "851858fb164e5b6063c62e5f2fc39897133213e18260bb8dbab18920429ccd3f"
+    }
+  },
+  "schema": "borsuk-semantic-router-library-assurance-v1",
+  "worker_commit": "67a0cb06e80f6b7fe6eaaf5072ee6c8a272dedab",
+  "integration_commit": "88102baf2be7d254f855cda83f7351ef85bc14c8",
+  "baseline": {
+    "base": "ae7721383349a4a3d11d71abd64f8965d06359da",
+    "baseline_original_source_sha256": {
+      "crates/borsuk/src/bin/build_semantic_unit_router.rs": "d36bae69fb4196d22983ce2d941434c955156f980d6d347f01a4b91420fb3423",
+      "crates/borsuk/src/bin/check_semantic_router_scorer.rs": "e43f20f3a35dc7a92d3f27a345ebefd4397b17a8a89a270d5f6b822fd635ffd4"
+    },
+    "baseline_test_command": "CARGO_TARGET_DIR=/data/target CARGO_BUILD_JOBS=2 RUSTC_WRAPPER= cargo test --locked -p borsuk --bin build_semantic_unit_router --bin check_semantic_router_scorer -- --nocapture",
+    "baseline_exit_status": 0,
+    "baseline_tests": "original builder 6 + deterministic golden capture 1; original scorer 6",
+    "baseline_capture_note": "Only added the small deterministic artifact fixture/printing before extraction; original builder/scorer production code unchanged. Captured digests became assertions after extraction.",
+    "logs": {
+      "/tmp/semantic-library-baseline.log": "1ecd39380526865cae4c9bbd3f3f6a5afbd9edffd030ab9406210deb862de15b",
+      "/tmp/semantic-library-extraction.log": "6c6cb463e5e2eac0640258524f91ecce637458a7221d68dd54907b83ad6753d0",
+      "/tmp/semantic-library-schema-red.log": "597b79b79f04d795892c4d3ca8ca8c2228c4baadc296c5f30e0c1d19f13fd246"
+    },
+    "preliminary_extraction_exit_status": 0,
+    "schema_regression_red_exit_status": 101,
+    "schema_regression_expected_failure": "schema_marker_is_bounded_before_construction; 2 other module tests passed",
+    "golden_sha256": {
+      "manifest.json": "99c4225f7f5ba542b6dc82fac94bb9624815689aa92733b479528b564af5a804",
+      "membership.bin": "919207b3fc34a3d945d3310331767bec4033cb7873859bad8d43f72a06f510b0",
+      "leaves.bin": "a308a30fec67ef28269b8c7826438dd8dbcff1fe0f692de7f0685c2a34ee8906"
+    }
+  },
+  "affected_tests_executed": 16,
+  "full_workspace_tests_executed": false,
+  "performance_remeasured": false,
+  "native_serving_qualified": false
+}
