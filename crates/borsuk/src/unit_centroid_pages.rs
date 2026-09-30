@@ -1,6 +1,7 @@
 //! Versioned f16 unit centroids for score-first physical page selection.
 
 use half::f16;
+use half::slice::{HalfBitsSliceExt, HalfFloatSliceExt};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Read;
@@ -159,10 +160,19 @@ impl UnitCentroidPages {
         if bytes.len() != HEADER_BYTES + payload_bytes {
             return Err(UnitCentroidError::InvalidPayload);
         }
-        let centers = bytes[HEADER_BYTES..]
-            .chunks_exact(2)
-            .map(|pair| f16::from_bits(u16::from_le_bytes(pair.try_into().unwrap())).to_f32())
-            .collect::<Vec<_>>();
+        let mut centers = vec![0.0; payload_bytes / 2];
+        let mut bits = [0u16; 1024];
+        for (input, output) in bytes[HEADER_BYTES..]
+            .chunks(bits.len() * 2)
+            .zip(centers.chunks_mut(bits.len()))
+        {
+            for (pair, value) in input.chunks_exact(2).zip(&mut bits) {
+                *value = u16::from_le_bytes(pair.try_into().unwrap());
+            }
+            bits[..output.len()]
+                .reinterpret_cast::<f16>()
+                .convert_to_f32_slice(output);
+        }
         if centers.iter().any(|value| !value.is_finite()) {
             return Err(UnitCentroidError::InvalidPayload);
         }
@@ -349,6 +359,47 @@ mod tests {
         let mut bytes = vec![0; 12];
         bytes.extend_from_slice(&code);
         bytes
+    }
+
+    #[test]
+    fn decoded_half_values_match_scalar_bits_and_reject_nonfinite() {
+        let finite = (0..=u16::MAX)
+            .filter(|bits| f16::from_bits(*bits).is_finite())
+            .collect::<Vec<_>>();
+        // Include a partial conversion block after exercising every finite encoding.
+        for count in [1, 1023, 1024, 1025, finite.len()] {
+            let mut blob = MAGIC.to_vec();
+            blob.extend_from_slice(&(count as u64).to_le_bytes());
+            for field in [1u32, 1, 1, 0] {
+                blob.extend_from_slice(&field.to_le_bytes());
+            }
+            for bits in &finite[..count] {
+                blob.extend_from_slice(&bits.to_le_bytes());
+            }
+            let decoded = UnitCentroidPages::decode(&blob).unwrap();
+            for (index, bits) in finite[..count].iter().enumerate() {
+                let expected = f16::from_bits(*bits).to_f32();
+                assert_eq!(decoded.centers[index].to_bits(), expected.to_bits());
+                assert_eq!(
+                    decoded.center_norms[index].to_bits(),
+                    (expected * expected).to_bits()
+                );
+            }
+            assert_eq!(decoded.blob_sha256, <[u8; 32]>::from(Sha256::digest(&blob)));
+        }
+        let mut blob = MAGIC.to_vec();
+        blob.extend_from_slice(&1u64.to_le_bytes());
+        for field in [1u32, 1, 1, 0] {
+            blob.extend_from_slice(&field.to_le_bytes());
+        }
+        blob.extend_from_slice(&[0; 2]);
+        for bits in (0..=u16::MAX).filter(|bits| !f16::from_bits(*bits).is_finite()) {
+            blob[HEADER_BYTES..].copy_from_slice(&bits.to_le_bytes());
+            assert!(matches!(
+                UnitCentroidPages::decode(&blob),
+                Err(UnitCentroidError::InvalidPayload)
+            ));
+        }
     }
 
     #[test]
