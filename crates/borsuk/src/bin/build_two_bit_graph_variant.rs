@@ -95,6 +95,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         max_query_bytes: 84 * 256 * 780,
         max_query_gets: 32,
         max_parallel_gets: 32,
+        max_source_bytes: 64 * 1024 * 1024,
+        max_source_gets: 128,
+        max_parallel_source_gets: 16,
         max_query_scratch_bytes: 400_000 + TwoBitPlanTrace::scratch_bytes(usize::MAX),
         already_pinned_bytes: 0,
     };

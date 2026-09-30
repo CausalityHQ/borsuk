@@ -8,6 +8,10 @@ use crate::{
 use bytes::{Bytes, BytesMut};
 use futures_util::{StreamExt, stream};
 use object_store::aws::{AmazonS3, AmazonS3Builder};
+use object_store::client::{
+    ClientConfigKey, ClientOptions, HttpClient, HttpConnector, HttpError, HttpErrorKind,
+    HttpRequest, HttpResponse, HttpResponseBody, HttpService,
+};
 use object_store::{GetOptions, GetResultPayload, ObjectStore, RetryConfig, path::Path};
 
 #[derive(Debug)]
@@ -55,13 +59,71 @@ pub struct OneAttemptS3 {
     store: AmazonS3,
 }
 
+#[derive(Debug)]
+struct NativeConnector(reqwest::Client);
+
+impl HttpConnector for NativeConnector {
+    fn connect(&self, options: &ClientOptions) -> object_store::Result<HttpClient> {
+        Ok(HttpClient::new(NativeHttp {
+            client: self.0.clone(),
+            allow_http: options
+                .get_config_value(&ClientConfigKey::AllowHttp)
+                .as_deref()
+                == Some("true"),
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct NativeHttp {
+    client: reqwest::Client,
+    allow_http: bool,
+}
+
+#[async_trait::async_trait]
+impl HttpService for NativeHttp {
+    async fn call(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        if request.uri().scheme_str() != Some("https")
+            && !(self.allow_http && request.uri().scheme_str() == Some("http"))
+        {
+            return Err(HttpError::new(
+                HttpErrorKind::Request,
+                std::io::Error::other("native transport requires HTTPS"),
+            ));
+        }
+        let mut response = HttpService::call(&self.client, request).await?;
+        // SDK error handling collects bodies before the range guard. Drop them
+        // at headers, retaining status and headers for its normal error mapping.
+        if !response.status().is_success() {
+            *response.body_mut() = HttpResponseBody::from(Bytes::new());
+        }
+        Ok(response)
+    }
+}
+
 fn one_attempt_builder(bucket: &str, region: &str) -> Result<AmazonS3Builder, RangeFetchError> {
     if bucket.is_empty() || region.is_empty() {
         return Err(RangeFetchError::UnexpectedMetadata);
     }
+    // Fixed native transport: SDK-default 30s request/5s connect, HTTP/1,
+    // verified system TLS, and no redirects or transport-level retries.
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .http1_only()
+        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|source| {
+            RangeFetchError::Store(object_store::Error::Generic {
+                store: "native S3 transport",
+                source: Box::new(source),
+            })
+        })?;
     Ok(AmazonS3Builder::new()
         .with_bucket_name(bucket)
         .with_region(region)
+        .with_http_connector(NativeConnector(client))
         .with_retry(RetryConfig {
             max_retries: 0,
             ..Default::default()
@@ -69,6 +131,10 @@ fn one_attempt_builder(bucket: &str, region: &str) -> Result<AmazonS3Builder, Ra
 }
 
 impl OneAttemptS3 {
+    /// Reuse the same bounded transport for metadata and HEAD admission.
+    pub fn store(&self) -> &dyn ObjectStore {
+        &self.store
+    }
     pub fn new(bucket: &str, region: &str) -> Result<Self, RangeFetchError> {
         let store = one_attempt_builder(bucket, region)?
             .build()
@@ -205,7 +271,7 @@ impl OneAttemptS3 {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn rank_verified_sq8_pages_inner(
+pub(crate) async fn rank_verified_sq8_pages_inner(
     store: &dyn ObjectStore,
     location: &Path,
     authority: &PageAuthority,
@@ -286,7 +352,7 @@ async fn rank_verified_sq8_pages_inner(
 
 /// Shared bounded range transport; all requests finish within this future.
 #[allow(clippy::too_many_arguments)]
-async fn fetch_verified_ranges_inner(
+pub(crate) async fn fetch_verified_ranges_inner(
     store: &dyn ObjectStore,
     location: &Path,
     authority: &PageAuthority,
@@ -618,6 +684,18 @@ mod tests {
         Arc<Mutex<Vec<String>>>,
         thread::JoinHandle<()>,
     ) {
+        http_fixture_responses(response, None)
+    }
+
+    fn http_fixture_responses(
+        response: Vec<u8>,
+        source_response: Option<Vec<u8>>,
+    ) -> (
+        OneAttemptS3,
+        Arc<AtomicBool>,
+        Arc<Mutex<Vec<String>>>,
+        thread::JoinHandle<()>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -643,11 +721,26 @@ mod tests {
                             raw.extend_from_slice(&buffer[..count]);
                             assert!(raw.len() < 64 * 1024);
                         }
-                        server_requests
-                            .lock()
+                        let request = String::from_utf8(raw).unwrap();
+                        let source = request
+                            .lines()
+                            .next()
                             .unwrap()
-                            .push(String::from_utf8(raw).unwrap());
-                        socket.write_all(&response).unwrap();
+                            .contains("/plane/records.bin ");
+                        server_requests.lock().unwrap().push(request);
+                        let body = if source {
+                            source_response.as_ref().unwrap_or(&response)
+                        } else {
+                            &response
+                        };
+                        socket.write_all(body).unwrap();
+                        let unfinished = b"Content-Length: 1073741824\r\n";
+                        if body.windows(unfinished.len()).any(|v| v == unfinished) {
+                            while !server_stop.load(Ordering::Relaxed) && Instant::now() < deadline
+                            {
+                                thread::sleep(Duration::from_millis(5));
+                            }
+                        }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
@@ -690,6 +783,28 @@ mod tests {
         server.join().unwrap();
         let captured = requests.lock().unwrap().clone();
         (result, captured)
+    }
+
+    #[tokio::test]
+    async fn redirects_and_unfinished_error_bodies_fail_after_one_request() {
+        let (authority, _) = short_tail_authority();
+        for response in [
+            b"HTTP/1.1 307 Temporary Redirect\r\nLocation: /redirected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            // A huge advertised body that never arrives must not be collected.
+            b"HTTP/1.1 412 Precondition Failed\r\nContent-Length: 1073741824\r\nConnection: close\r\n\r\n".to_vec(),
+        ] {
+            let (reader, stop, requests, server) = http_fixture(response);
+            let failure = tokio::time::timeout(Duration::from_secs(5),
+                fetch_verified_ranges_inner(reader.store(), &Path::from("sq8.bin"),
+                    &authority, &[(1, 1)], "\"frozen\"", 1, 17 * 13, 1))
+                .await.expect("error body must not be collected").err().unwrap();
+            stop.store(true, Ordering::Relaxed);
+            server.join().unwrap();
+            assert_eq!(failure.stats, Sq8ReadStats {
+                submitted_gets: 1, verified_bytes: 0, failed_gets: 1,
+            });
+            assert_eq!(requests.lock().unwrap().len(), 1);
+        }
     }
 
     #[tokio::test]
@@ -769,6 +884,9 @@ mod tests {
             max_query_bytes: 28,
             max_query_gets: 1,
             max_parallel_gets: 1,
+            max_source_bytes: 64 * 1024 * 1024,
+            max_source_gets: 128,
+            max_parallel_source_gets: 16,
             max_query_scratch_bytes: 8192,
             already_pinned_bytes: 0,
         };
@@ -778,6 +896,23 @@ mod tests {
             .unwrap();
         let head = read_two_bit_head(&store, &prefix).await.unwrap().unwrap();
         assert_eq!(head.root_sha256(), published.root_sha256());
+        let source_body = std::fs::read(root.join("plane/records.bin")).unwrap();
+        let source_etag = store
+            .head(&crate::object_native_generation::metadata_location(
+                &head.metadata_prefix(),
+                "plane/records.bin",
+            ))
+            .await
+            .unwrap()
+            .e_tag
+            .unwrap();
+        let source_response = http_response(
+            "206 Partial Content",
+            Some("bytes 0-17/18"),
+            &source_etag,
+            18,
+            &source_body,
+        );
         for query in [[2., 1.], [5e29, 2.5e29], [5e-31, 2.5e-31]] {
             let generation = TwoBitGeneration::open_remote(
                 &store,
@@ -795,7 +930,8 @@ mod tests {
                 28,
                 &sq8,
             );
-            let (reader, stop, requests, server) = http_fixture(response);
+            let (reader, stop, requests, server) =
+                http_fixture_responses(response, Some(source_response.clone()));
             let result = tokio::time::timeout(
                 Duration::from_secs(5),
                 generation.search(&reader, &query, 1),
@@ -816,8 +952,15 @@ mod tests {
                 }
             );
             let captured = requests.lock().unwrap();
-            assert_eq!(captured.len(), 1);
-            let request = captured[0].to_ascii_lowercase();
+            assert_eq!(captured.len(), 2);
+            let source_request = captured[0].to_ascii_lowercase();
+            assert!(source_request.contains("/plane/records.bin "));
+            assert!(source_request.contains("range: bytes=0-17\r\n"));
+            assert!(source_request.contains(&format!(
+                "if-match: {}\r\n",
+                source_etag.to_ascii_lowercase()
+            )));
+            let request = captured[1].to_ascii_lowercase();
             assert!(request.starts_with(&format!("get /fixture/{key} ")));
             assert!(request.contains("range: bytes=0-27\r\n"));
             assert!(request.contains(&format!("if-match: {}\r\n", etag.to_ascii_lowercase())));
@@ -831,13 +974,16 @@ mod tests {
             )
             .await
             .unwrap();
-            let (reader, stop, requests, server) = http_fixture(http_response(
-                "206 Partial Content",
-                Some("bytes 0-27/28"),
-                &etag,
-                28,
-                &sq8,
-            ));
+            let (reader, stop, requests, server) = http_fixture_responses(
+                http_response(
+                    "206 Partial Content",
+                    Some("bytes 0-27/28"),
+                    &etag,
+                    28,
+                    &sq8,
+                ),
+                Some(source_response.clone()),
+            );
             let logical = tokio::time::timeout(
                 Duration::from_secs(5),
                 logical.search(&reader, &query, usize::MAX, None),
@@ -851,7 +997,7 @@ mod tests {
             assert_eq!(logical.candidates[0].id, 1);
             assert_eq!(logical.stats.submitted_gets, 1);
             assert_eq!(logical.stats.verified_bytes, 28);
-            assert_eq!(requests.lock().unwrap().len(), 1);
+            assert_eq!(requests.lock().unwrap().len(), 2);
         }
         let generation = TwoBitGeneration::open_remote(
             &store,
@@ -943,7 +1089,8 @@ mod tests {
             28,
             &sq8,
         );
-        let (reader, stop, requests, server) = http_fixture(response);
+        let (reader, stop, requests, server) =
+            http_fixture_responses(response, Some(source_response.clone()));
         assert!(matches!(
             generation
                 .search_with_mutations(&reader, &[2., 1.], 3, &recovered)
@@ -1027,8 +1174,8 @@ mod tests {
         server.join().unwrap();
         assert_eq!(
             requests.lock().unwrap().len(),
-            3,
-            "one GET per query, none for admission failure"
+            6,
+            "one source and one SQ8 GET per query, none for admission failure"
         );
         let logical = crate::two_bit_index::TwoBitIndex::open_remote(
             &store,
@@ -1041,13 +1188,16 @@ mod tests {
         )
         .await
         .unwrap();
-        let (reader, stop, requests, server) = http_fixture(http_response(
-            "206 Partial Content",
-            Some("bytes 0-27/28"),
-            &etag,
-            28,
-            &sq8,
-        ));
+        let (reader, stop, requests, server) = http_fixture_responses(
+            http_response(
+                "206 Partial Content",
+                Some("bytes 0-27/28"),
+                &etag,
+                28,
+                &sq8,
+            ),
+            Some(source_response.clone()),
+        );
         let wrapped = logical
             .search(&reader, &[2., 1.], usize::MAX, Some(&recovered))
             .await
@@ -1056,7 +1206,7 @@ mod tests {
         server.join().unwrap();
         assert_eq!(wrapped.candidates, hits.candidates);
         assert_eq!(wrapped.stats.submitted_gets, 1);
-        assert_eq!(requests.lock().unwrap().len(), 1);
+        assert_eq!(requests.lock().unwrap().len(), 2);
         let mut corrupted = sq8.clone();
         corrupted[12] ^= 1;
         for response in [
@@ -1076,7 +1226,8 @@ mod tests {
             ),
             http_response("412 Precondition Failed", None, "changed", 0, &[]),
         ] {
-            let (reader, stop, requests, server) = http_fixture(response);
+            let (reader, stop, requests, server) =
+                http_fixture_responses(response, Some(source_response.clone()));
             let result = tokio::time::timeout(
                 Duration::from_secs(5),
                 generation.search(&reader, &[2., 1.], 1),
@@ -1085,7 +1236,11 @@ mod tests {
             .unwrap();
             stop.store(true, Ordering::Relaxed);
             server.join().unwrap();
-            let Err(TwoBitGenerationError::Read(failure)) = result else {
+            let Err(TwoBitGenerationError::PagedRead {
+                source,
+                sq8: failure,
+            }) = result
+            else {
                 panic!("bad data was not rejected with physical accounting");
             };
             assert_eq!(
@@ -1096,7 +1251,15 @@ mod tests {
                     failed_gets: 1
                 }
             );
-            assert_eq!(requests.lock().unwrap().len(), 1, "hidden retry");
+            assert_eq!(
+                source,
+                Sq8ReadStats {
+                    submitted_gets: 1,
+                    verified_bytes: 18,
+                    failed_gets: 0
+                }
+            );
+            assert_eq!(requests.lock().unwrap().len(), 2, "hidden retry");
         }
     }
 

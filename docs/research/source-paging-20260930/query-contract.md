@@ -25,6 +25,10 @@ latency, QPS, RSS or cost.
   source buffers, source authority and retired generation pins must be charged.
 - Reject source overflow before any query payload I/O; report source and SQ8
   counters separately, preserving source charges on later SQ8 failures.
+- On the new development panel, overflow, dropped offers, transport errors or
+  incomplete queries count as failures; success-only recall cannot qualify an
+  arm. Record every query's source ranges/bytes and separate combined charges.
+  Do not reinterpret closed historical protocols or receipts with these fields.
 - Local full-source reference and paged mode must return identical traces,
   physical SQ8 plans and ordered IDs on qualifying fixtures/panels. A digest,
   ETag, missing coverage or identity failure terminates the query; no retries.

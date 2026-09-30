@@ -1,22 +1,26 @@
 //! A single authenticated root for frozen two-bit nomination and on-demand SQ8.
 use crate::{
-    budgeted_page_rank::{BudgetedPageError, BudgetedPagePlan, choose_budgeted_pages_sparse},
+    budgeted_page_rank::{
+        BudgetedPageError, BudgetedPagePlan, choose_budgeted_pages_sparse, cover_pages,
+    },
     canonical_source::CanonicalSource,
     object_native_generation::{
-        MetadataReadStats, ObjectNativeOpenError, ObjectNativeSearchResult,
-        stage_generation_metadata,
+        MetadataReadStats, ObjectNativeOpenError, metadata_location, stage_generation_metadata,
     },
     rotated_two_bit::PreparedTwoBit,
     sq8_page_authority::{PageAuthority, PageError},
-    sq8_s3_range::{OneAttemptS3, RankedSq8Failure, Sq8ReadStats},
+    sq8_s3_range::{
+        OneAttemptS3, RankedSq8, RankedSq8Failure, Sq8ReadStats, fetch_verified_ranges_inner,
+        rank_verified_sq8_pages_inner,
+    },
     two_bit_mutations::{TwoBitMutationHit, TwoBitMutationSnapshot},
     two_bit_source::{SourceBuildError, SourcePlaneReceipt, TwoBitPlane, read_authenticated},
     unit_centroid_graph::{UnitCentroidGraph, UnitCentroidGraphError},
     unit_centroid_pages::{UnitCentroidError, UnitCentroidPages},
 };
-use object_store::{ObjectStore, path::Path as ObjectPath};
+use object_store::{ObjectStore, ObjectStoreExt, path::Path as ObjectPath};
 use serde::Deserialize;
-use std::{borrow::Cow, fs, path::Path};
+use std::{borrow::Cow, collections::BTreeSet, fs, path::Path};
 use tokio::sync::Semaphore;
 
 /// Generation identity, admission, planning or authenticated range-read failure.
@@ -40,6 +44,43 @@ pub enum TwoBitGenerationError {
     Budget(BudgetedPageError),
     /// Remote failure with physical request accounting.
     Read(RankedSq8Failure),
+    /// Source range failure, before SQ8 reads.
+    SourceRead(RankedSq8Failure),
+    /// SQ8 failure after successfully charged source reads.
+    PagedRead {
+        /// Source charges already incurred before SQ8 ranking.
+        source: Sq8ReadStats,
+        /// SQ8 error and its charges.
+        sq8: RankedSq8Failure,
+    },
+    /// Source nomination failed after authenticated payload was charged.
+    SourcePlanning {
+        /// Authenticated source charges before nomination failed.
+        stats: Sq8ReadStats,
+        /// Original nomination or physical-admission error.
+        error: Box<TwoBitGenerationError>,
+    },
+    /// Source HEAD transport failure during startup.
+    SourceHead(object_store::Error),
+}
+impl TwoBitGenerationError {
+    /// Source and SQ8 logical request/verified-byte charges for this failure.
+    pub fn read_stats(&self) -> (Sq8ReadStats, Sq8ReadStats) {
+        match self {
+            Self::Read(failure) => (Sq8ReadStats::default(), failure.stats),
+            Self::SourceRead(failure) => (failure.stats, Sq8ReadStats::default()),
+            Self::PagedRead { source, sq8 } => (*source, sq8.stats),
+            Self::SourcePlanning { stats, .. } => (*stats, Sq8ReadStats::default()),
+            _ => (Sq8ReadStats::default(), Sq8ReadStats::default()),
+        }
+    }
+    fn charged_read(source: Sq8ReadStats, sq8: RankedSq8Failure) -> Self {
+        if source.submitted_gets == 0 {
+            Self::Read(sq8)
+        } else {
+            Self::PagedRead { source, sq8 }
+        }
+    }
 }
 impl std::fmt::Display for TwoBitGenerationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -63,6 +104,12 @@ pub struct TwoBitGenerationLimits {
     pub max_query_gets: usize,
     /// Concurrent GETs per admitted query.
     pub max_parallel_gets: usize,
+    /// Maximum authenticated source bytes per query, separate from SQ8.
+    pub max_source_bytes: usize,
+    /// Maximum source range GETs per query.
+    pub max_source_gets: usize,
+    /// Concurrent source range GETs per query.
+    pub max_parallel_source_gets: usize,
     /// Codec lookup scratch per query.
     pub max_query_scratch_bytes: usize,
     /// Payload charged to other pinned generations and immutable mutation snapshots.
@@ -88,7 +135,7 @@ pub(crate) struct Manifest {
     pub(crate) low: Vec<f32>,
     pub(crate) step: Vec<f32>,
 }
-pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v5";
+pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v6";
 pub(crate) const METADATA_FILES: [&str; 10] = [
     "manifest.json",
     "page_manifest.json",
@@ -101,6 +148,32 @@ pub(crate) const METADATA_FILES: [&str; 10] = [
     "plane/records.bin",
     "plane/page_digests.bin",
 ];
+// Persistent publication/GC keeps records; startup only stages the authority.
+const STARTUP_FILES: [&str; 9] = [
+    "manifest.json",
+    "page_manifest.json",
+    "page_digests.bin",
+    "centroids.bin",
+    "graph.bin",
+    "diverse_graph.bin",
+    "plane/manifest.json",
+    "plane/mean.bin",
+    "plane/page_digests.bin",
+];
+struct RemoteSource {
+    authority: PageAuthority,
+    location: ObjectPath,
+    etag: String,
+}
+/// A bounded generation query with independently charged source and SQ8 reads.
+pub struct TwoBitSearchResult {
+    /// SQ8 physical admission after source nomination.
+    pub plan: BudgetedPagePlan,
+    /// Exact SQ8 candidates and read charges.
+    pub ranked: RankedSq8,
+    /// Source nomination reads; zero for the local resident reference.
+    pub source_stats: Sq8ReadStats,
+}
 /// Remote namespace startup accounting; query measurements remain separate.
 #[derive(Debug, serde::Serialize)]
 pub struct RemoteOpenStats {
@@ -110,6 +183,10 @@ pub struct RemoteOpenStats {
     pub staging_wall_ns: u128,
     /// Authenticated local decoding and admission after staging.
     pub decode_wall_ns: u128,
+    /// Logical source HEAD requests, separate from metadata-object staging.
+    pub source_head_requests: u64,
+    /// Source HEAD wall time, excluded from local decoding time.
+    pub source_head_wall_ns: u128,
 }
 
 /// Immutable metadata; SQ8 rows are fetched conditionally and never cached here.
@@ -124,6 +201,7 @@ pub struct TwoBitGeneration {
     limits: TwoBitGenerationLimits,
     slots: Semaphore,
     remote_open_stats: Option<RemoteOpenStats>,
+    source: Option<RemoteSource>,
 }
 
 /// One generation-pinned base fetch merged with a bounded immutable delta.
@@ -134,6 +212,8 @@ pub struct TwoBitMutationSearchResult {
     pub candidates: Vec<TwoBitMutationHit>,
     /// Base-query GETs/bytes/failures; earlier snapshot recovery is lifecycle I/O.
     pub stats: Sq8ReadStats,
+    /// Authenticated source reads before base SQ8 ranking.
+    pub source_stats: Sq8ReadStats,
     /// Latest-state rows visited, including tombstones.
     pub mutation_rows_scanned: usize,
     /// Normalized pending puts scored in this query.
@@ -332,18 +412,36 @@ impl TwoBitGeneration {
             limits
                 .max_memory_bytes
                 .saturating_sub(limits.already_pinned_bytes),
-            &METADATA_FILES,
+            &STARTUP_FILES,
             scratch_parent,
         )
         .await
         .map_err(TwoBitGenerationError::Stage)?;
         let staging_wall_ns = staging_started.elapsed().as_nanos();
+        let location = metadata_location(prefix, "plane/records.bin");
+        let head_started = std::time::Instant::now();
+        let head = store
+            .head(&location)
+            .await
+            .map_err(TwoBitGenerationError::SourceHead)?;
+        let source_head_wall_ns = head_started.elapsed().as_nanos();
+        let etag = head
+            .e_tag
+            .filter(|etag| !etag.is_empty() && !etag.starts_with("W/"))
+            .ok_or(TwoBitGenerationError::Invalid("source ETag"))?;
         let decode_started = std::time::Instant::now();
-        let mut generation = Self::open(scratch.path(), trusted_sha256, limits)?;
+        let mut generation = Self::open_inner(
+            scratch.path(),
+            trusted_sha256,
+            limits,
+            Some((location, etag, head.size)),
+        )?;
         generation.remote_open_stats = Some(RemoteOpenStats {
             metadata,
             staging_wall_ns,
             decode_wall_ns: decode_started.elapsed().as_nanos(),
+            source_head_requests: 1,
+            source_head_wall_ns,
         });
         Ok(generation)
     }
@@ -356,6 +454,15 @@ impl TwoBitGeneration {
     /// Open local metadata under a trusted root SHA. No PQ or SQ8 payload load.
     /// Artifact paths are fixed under `root`; caller supplies immutable metadata.
     pub fn open(root: &Path, trusted_sha256: &str, limits: TwoBitGenerationLimits) -> Result<Self> {
+        Self::open_inner(root, trusted_sha256, limits, None)
+    }
+    fn open_inner(
+        root: &Path,
+        trusted_sha256: &str,
+        limits: TwoBitGenerationLimits,
+        remote: Option<(ObjectPath, String, u64)>,
+    ) -> Result<Self> {
+        let paged = remote.is_some();
         let bad = TwoBitGenerationError::Invalid;
         let size = |name: &str| {
             fs::metadata(root.join(name))
@@ -371,6 +478,9 @@ impl TwoBitGeneration {
             || limits.max_query_gets == 0
             || limits.max_parallel_gets == 0
             || limits.max_query_scratch_bytes == 0
+            || limits.max_source_bytes == 0
+            || limits.max_source_gets == 0
+            || limits.max_parallel_source_gets == 0
         {
             return Err(bad("root or admission"));
         }
@@ -421,6 +531,9 @@ impl TwoBitGeneration {
         let mut disk = manifest_size;
         let mut sizes = Vec::with_capacity(files.len());
         for name in files {
+            if paged && name == "plane/records.bin" {
+                continue;
+            }
             let length = size(name)?;
             disk = disk.checked_add(length).ok_or(bad("metadata size"))?;
             sizes.push((name, length));
@@ -458,7 +571,7 @@ impl TwoBitGeneration {
             || geometry.dimensions != manifest.canonical.dimensions
             || geometry.rows != manifest.canonical.rows
             || admitted_size("plane/mean.bin")? != expected_mean
-            || admitted_size("plane/records.bin")? != expected_records
+            || (!paged && admitted_size("plane/records.bin")? != expected_records)
             || admitted_size("plane/page_digests.bin")?
                 != geometry
                     .rows
@@ -489,6 +602,16 @@ impl TwoBitGeneration {
         let codec_memory = (admitted_size("plane/mean.bin")? as u64)
             .checked_mul(64)
             .ok_or(bad("codec memory"))?;
+        let source_query_memory = if paged {
+            limits
+                .max_source_bytes
+                .min(expected_records)
+                .checked_mul(2)
+                .and_then(|n| n.checked_mul(limits.max_active_queries))
+                .ok_or(bad("source query memory"))? as u64
+        } else {
+            0
+        };
         let modeled = disk
             .checked_mul(3)
             .and_then(|n| n.checked_add(codec_memory))
@@ -496,18 +619,45 @@ impl TwoBitGeneration {
             .and_then(|n| n.checked_add(manifest.graph_resident_bytes as u64))
             .and_then(|n| n.checked_add(manifest.diverse_graph_resident_bytes as u64))
             .and_then(|n| n.checked_add(query_memory))
+            .and_then(|n| n.checked_add(source_query_memory))
             .and_then(|n| n.checked_add(limits.already_pinned_bytes))
             .ok_or(bad("memory overflow"))?;
         if modeled > limits.max_memory_bytes {
             return Err(bad("memory cap"));
         }
-        let plane = TwoBitPlane::open(
-            &root.join("plane"),
-            &manifest.plane_manifest_sha256,
-            &manifest.sq8_object_sha256,
-            usize::try_from(limits.max_memory_bytes).map_err(|_| bad("memory width"))?,
-        )
-        .map_err(TwoBitGenerationError::Plane)?;
+        let memory = usize::try_from(limits.max_memory_bytes).map_err(|_| bad("memory width"))?;
+        let (plane, source) = if let Some((location, etag, bytes)) = remote {
+            let (plane, authority) = TwoBitPlane::open_metadata(
+                &root.join("plane"),
+                &manifest.plane_manifest_sha256,
+                &manifest.sq8_object_sha256,
+                manifest.generation,
+                memory,
+            )
+            .map_err(TwoBitGenerationError::Plane)?;
+            if u64::try_from(authority.object_bytes()).map_err(|_| bad("source size"))? != bytes {
+                return Err(bad("source HEAD geometry"));
+            }
+            (
+                plane,
+                Some(RemoteSource {
+                    authority,
+                    location,
+                    etag,
+                }),
+            )
+        } else {
+            (
+                TwoBitPlane::open(
+                    &root.join("plane"),
+                    &manifest.plane_manifest_sha256,
+                    &manifest.sq8_object_sha256,
+                    memory,
+                )
+                .map_err(TwoBitGenerationError::Plane)?,
+                None,
+            )
+        };
         let read = |name: &str, digest: &str| -> Result<Vec<u8>> {
             let length = admitted_size(name)?;
             read_authenticated(&root.join(name), length, digest)
@@ -585,6 +735,7 @@ impl TwoBitGeneration {
             limits,
             slots: Semaphore::new(limits.max_active_queries),
             remote_open_stats: None,
+            source,
         })
     }
     fn plan_inner<'a>(
@@ -592,6 +743,9 @@ impl TwoBitGeneration {
         query: &'a [f32],
         mut trace: Option<&mut TwoBitPlanTrace>,
     ) -> Result<(BudgetedPagePlan, Cow<'a, [f32]>)> {
+        if self.source.is_some() {
+            return Err(TwoBitGenerationError::Invalid("paged plan requires reader"));
+        }
         let trace_bytes = if trace.is_some() {
             TwoBitPlanTrace::scratch_bytes(self.pages.rows())
         } else {
@@ -613,6 +767,93 @@ impl TwoBitGeneration {
         let walks = self.discover_walks(normalized.as_ref(), trace.as_deref_mut())?;
         let plan = self.plan_walks(&walks, &prepared, |row| self.plane.record(row), trace)?;
         Ok((plan, normalized))
+    }
+
+    async fn plan_paged<'a>(
+        &self,
+        store: &dyn ObjectStore,
+        query: &'a [f32],
+        mut trace: Option<&mut TwoBitPlanTrace>,
+    ) -> Result<(BudgetedPagePlan, Cow<'a, [f32]>, Sq8ReadStats)> {
+        let source = self
+            .source
+            .as_ref()
+            .ok_or(TwoBitGenerationError::Invalid("source binding"))?;
+        let trace_bytes = if trace.is_some() {
+            TwoBitPlanTrace::scratch_bytes(self.rows())
+        } else {
+            0
+        };
+        let scratch = self
+            .limits
+            .max_query_scratch_bytes
+            .checked_sub(trace_bytes)
+            .ok_or(TwoBitGenerationError::Invalid("diagnostic scratch"))?;
+        let prepared = self
+            .plane
+            .prepare_query(query, scratch)
+            .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?;
+        let normalized =
+            crate::sq8_source::cosine_vector(query).map_err(TwoBitGenerationError::Plane)?;
+        let walks = self.discover_walks(normalized.as_ref(), trace.as_deref_mut())?;
+        let closure = walks
+            .iter()
+            .flat_map(|(_, units)| units.iter().map(|unit| unit / 8))
+            .collect::<BTreeSet<_>>();
+        let width = self.plane.receipt().record_bytes;
+        let (cover, bytes) = cover_pages(
+            &closure,
+            self.rows(),
+            width,
+            256,
+            self.limits.max_source_gets,
+        )
+        .map_err(TwoBitGenerationError::Budget)?;
+        if bytes > self.limits.max_source_bytes {
+            return Err(TwoBitGenerationError::Budget(
+                BudgetedPageError::InsufficientBudget,
+            ));
+        }
+        let unit_bytes = width
+            .checked_mul(32)
+            .ok_or(TwoBitGenerationError::Invalid("source unit geometry"))?;
+        let ranges = cover
+            .iter()
+            .map(|r| (r.start / unit_bytes, (r.end - 1) / unit_bytes))
+            .collect::<Vec<_>>();
+        let (verified, stats) = fetch_verified_ranges_inner(
+            store,
+            &source.location,
+            &source.authority,
+            &ranges,
+            &source.etag,
+            self.limits.max_source_gets,
+            self.limits.max_source_bytes,
+            self.limits.max_parallel_source_gets,
+        )
+        .await
+        .map_err(TwoBitGenerationError::SourceRead)?;
+        let plan = self
+            .plan_walks(
+                &walks,
+                &prepared,
+                |row| {
+                    let offset = row.checked_mul(width)?;
+                    let index = verified
+                        .partition_point(|range| range.start <= offset)
+                        .checked_sub(1)?;
+                    let relative = offset.checked_sub(verified[index].start)?;
+                    verified[index]
+                        .bytes
+                        .get(relative..relative.checked_add(width)?)
+                },
+                trace,
+            )
+            .map_err(|error| TwoBitGenerationError::SourcePlanning {
+                stats,
+                error: Box::new(error),
+            })?;
+        Ok((plan, normalized, stats))
     }
 
     fn discover_walks(
@@ -732,6 +973,34 @@ impl TwoBitGeneration {
         let (plan, _) = self.plan_inner(query, Some(&mut trace))?;
         Ok((plan, trace))
     }
+
+    /// Diagnose an authenticated paged query with its source charges. The same
+    /// slot is held through discovery, source fetch and nomination; SQ8 is not read.
+    #[doc(hidden)]
+    pub async fn diagnostic_plan_with_reader(
+        &self,
+        reader: &OneAttemptS3,
+        query: &[f32],
+    ) -> Result<(BudgetedPagePlan, TwoBitPlanTrace, Sq8ReadStats)> {
+        let _permit = self
+            .slots
+            .acquire()
+            .await
+            .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
+        let mut trace = TwoBitPlanTrace::default();
+        let (plan, stats) = if self.source.is_some() {
+            let (plan, _, stats) = self
+                .plan_paged(reader.store(), query, Some(&mut trace))
+                .await?;
+            (plan, stats)
+        } else {
+            (
+                self.plan_inner(query, Some(&mut trace))?.0,
+                Sq8ReadStats::default(),
+            )
+        };
+        Ok((plan, trace, stats))
+    }
     /// Shared-source two-graph discovery union, nomination and physical admission.
     pub async fn plan(&self, query: &[f32]) -> Result<BudgetedPagePlan> {
         let _permit = self
@@ -741,6 +1010,27 @@ impl TwoBitGeneration {
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
         self.plan_inner(query, None).map(|(plan, _)| plan)
     }
+
+    /// Plan against a caller-owned blob transport, retaining source charges.
+    /// Counts are logical ObjectStore operations; the caller controls transport
+    /// retries. Native S3 search uses OneAttemptS3 with retries disabled.
+    pub async fn plan_with_store(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+    ) -> Result<(BudgetedPagePlan, Sq8ReadStats)> {
+        let _permit = self
+            .slots
+            .acquire()
+            .await
+            .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
+        if self.source.is_some() {
+            let (plan, _, stats) = self.plan_paged(store, query, None).await?;
+            Ok((plan, stats))
+        } else {
+            Ok((self.plan_inner(query, None)?.0, Sq8ReadStats::default()))
+        }
+    }
     /// Plan, fetch authenticated conditional ranges in one bounded wave, and rank.
     /// Reader errors retain physical request/byte/error accounting.
     pub async fn search(
@@ -748,7 +1038,7 @@ impl TwoBitGeneration {
         reader: &OneAttemptS3,
         query: &[f32],
         top_k: usize,
-    ) -> Result<ObjectNativeSearchResult> {
+    ) -> Result<TwoBitSearchResult> {
         self.search_inner(reader, query, top_k, None).await
     }
 
@@ -762,7 +1052,7 @@ impl TwoBitGeneration {
         query: &[f32],
         top_k: usize,
         excluded_ids: &[i64],
-    ) -> Result<ObjectNativeSearchResult> {
+    ) -> Result<TwoBitSearchResult> {
         if excluded_ids.windows(2).any(|ids| ids[0] >= ids[1])
             || excluded_ids
                 .len()
@@ -832,15 +1122,19 @@ impl TwoBitGeneration {
         let candidates = mutations
             .rank_with_base(&base.ranked.candidates, query, top_k)
             .map_err(|error| {
-                TwoBitGenerationError::Read(RankedSq8Failure {
-                    error: crate::sq8_s3_range::RangeFetchError::Score(error),
-                    stats: base.ranked.stats,
-                })
+                TwoBitGenerationError::charged_read(
+                    base.source_stats,
+                    RankedSq8Failure {
+                        error: crate::sq8_s3_range::RangeFetchError::Score(error),
+                        stats: base.ranked.stats,
+                    },
+                )
             })?;
         Ok(TwoBitMutationSearchResult {
             plan: base.plan,
             candidates,
             stats: base.ranked.stats,
+            source_stats: base.source_stats,
             mutation_rows_scanned: mutations.rows().len(),
             mutation_put_rows_scored: mutations.put_rows(),
             mutation_revision: mutations.revision(),
@@ -854,7 +1148,7 @@ impl TwoBitGeneration {
         query: &[f32],
         top_k: usize,
         excluded_ids: Option<&[i64]>,
-    ) -> Result<ObjectNativeSearchResult> {
+    ) -> Result<TwoBitSearchResult> {
         if top_k == 0 || top_k > self.pages.rows() {
             return Err(TwoBitGenerationError::Invalid("top k"));
         }
@@ -873,46 +1167,276 @@ impl TwoBitGeneration {
         query: &[f32],
         top_k: usize,
         excluded_ids: Option<&[i64]>,
-    ) -> Result<ObjectNativeSearchResult> {
-        let (plan, normalized) = self.plan_inner(query, None)?;
+    ) -> Result<TwoBitSearchResult> {
+        self.search_with_store(reader.store(), query, top_k, excluded_ids)
+            .await
+    }
+
+    async fn search_with_store(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+        top_k: usize,
+        excluded_ids: Option<&[i64]>,
+    ) -> Result<TwoBitSearchResult> {
+        let (plan, normalized, source_stats) = if self.source.is_some() {
+            self.plan_paged(store, query, None).await?
+        } else {
+            let (plan, normalized) = self.plan_inner(query, None)?;
+            (plan, normalized, Sq8ReadStats::default())
+        };
+
         let page_bytes = 256 * (self.pages.dimensions() + 12);
         let ranges = plan
             .ranges
             .iter()
             .map(|r| (r.start / page_bytes, (r.end - 1) / page_bytes))
             .collect::<Vec<_>>();
-        let ranked = reader
-            .rank_verified_sq8_pages_excluding(
-                &ObjectPath::from(self.manifest.sq8_object_key.clone()),
-                &self.pages,
-                &ranges,
-                &self.manifest.sq8_etag,
-                normalized.as_ref(),
-                &self.manifest.low,
-                &self.manifest.step,
-                top_k,
-                self.limits.max_query_gets,
-                self.limits.max_query_bytes,
-                self.limits.max_parallel_gets,
-                excluded_ids.unwrap_or(&[]),
-            )
-            .await
-            .map_err(TwoBitGenerationError::Read)?;
+        let ranked = rank_verified_sq8_pages_inner(
+            store,
+            &ObjectPath::from(self.manifest.sq8_object_key.clone()),
+            &self.pages,
+            &ranges,
+            &self.manifest.sq8_etag,
+            normalized.as_ref(),
+            &self.manifest.low,
+            &self.manifest.step,
+            top_k,
+            self.limits.max_query_gets,
+            self.limits.max_query_bytes,
+            self.limits.max_parallel_gets,
+            excluded_ids.unwrap_or(&[]),
+        )
+        .await
+        .map_err(|sq8| TwoBitGenerationError::charged_read(source_stats, sq8))?;
         if excluded_ids.is_none() && ranked.candidates.len() < top_k {
-            return Err(TwoBitGenerationError::Read(RankedSq8Failure {
-                error: crate::sq8_s3_range::RangeFetchError::Score(
-                    crate::exact_sq8_nominee::Sq8ScoreError::InvalidRoster,
-                ),
-                stats: ranked.stats,
-            }));
+            return Err(TwoBitGenerationError::charged_read(
+                source_stats,
+                RankedSq8Failure {
+                    error: crate::sq8_s3_range::RangeFetchError::Score(
+                        crate::exact_sq8_nominee::Sq8ScoreError::InvalidRoster,
+                    ),
+                    stats: ranked.stats,
+                },
+            ));
         }
-        Ok(ObjectNativeSearchResult { plan, ranked })
+        Ok(TwoBitSearchResult {
+            plan,
+            ranked,
+            source_stats,
+        })
     }
 }
 
 #[cfg(test)]
 mod source_walk_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn paged_source_matches_reference_and_preserves_failure_charges() {
+        assert_paged_source(513, false).await;
+    }
+
+    #[tokio::test]
+    async fn fragmented_paged_source_preserves_trace_and_rank_across_get_caps() {
+        assert_paged_source(262_145, true).await;
+    }
+
+    async fn assert_paged_source(rows: usize, fragmented: bool) {
+        use object_store::{PutPayload, memory::InMemory};
+        use sha2::{Digest, Sha256};
+        let hash = |body: &[u8]| format!("{:x}", Sha256::digest(body));
+        let temp = tempfile::tempdir().unwrap();
+        let raw = (0..rows)
+            .flat_map(|id| {
+                [
+                    1.0_f32 + (id % 7) as f32 * 0.2,
+                    0.1 + (id % 11) as f32 * 0.1,
+                ]
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+            })
+            .collect::<Vec<_>>();
+        let sq8 = (0..rows)
+            .flat_map(|id| {
+                let mut record = (id as i64).to_le_bytes().to_vec();
+                record.extend_from_slice(&5.0_f32.to_le_bytes());
+                record.extend_from_slice(&[1, 2]);
+                record
+            })
+            .collect::<Vec<_>>();
+        let raw_path = temp.path().join("raw");
+        let sq8_path = temp.path().join("sq8");
+        fs::write(&raw_path, &raw).unwrap();
+        fs::write(&sq8_path, &sq8).unwrap();
+        let store = InMemory::new();
+        let sq8_sha = hash(&sq8);
+        let key = ObjectPath::from(format!("tenant/objects/{sq8_sha}"));
+        store.put(&key, PutPayload::from(sq8)).await.unwrap();
+        let etag = store.head(&key).await.unwrap().e_tag.unwrap();
+        let root = temp.path().join("generation");
+        let root_sha = crate::two_bit_build::TwoBitGenerationBuilder {
+            source: crate::two_bit_source::TwoBitSource {
+                raw: &raw_path,
+                raw_sha256: &hash(&raw),
+                sq8: &sq8_path,
+                sq8_sha256: &sq8_sha,
+                rows,
+                dimensions: 2,
+            },
+            base_epoch: 0,
+            generation: 7,
+            low: &[0.0; 2],
+            step: &[1.0; 2],
+            sq8_object_key: key.as_ref(),
+            sq8_etag: &etag,
+        }
+        .build(&root, 256_000_000)
+        .unwrap();
+        let limits = TwoBitGenerationLimits {
+            max_memory_bytes: 256_000_000,
+            max_active_queries: 1,
+            max_query_bytes: rows * 14,
+            max_query_gets: 32,
+            max_parallel_gets: 2,
+            max_source_bytes: 64 * 1024 * 1024,
+            max_source_gets: 128,
+            max_parallel_source_gets: 2,
+            max_query_scratch_bytes: 400_000,
+            already_pinned_bytes: 0,
+        };
+        let local = TwoBitGeneration::open(&root, &root_sha, limits).unwrap();
+        let prefix = ObjectPath::from(format!("tenant/generations/{root_sha}"));
+        for name in METADATA_FILES {
+            store
+                .put(
+                    &metadata_location(&prefix, name),
+                    PutPayload::from(fs::read(root.join(name)).unwrap()),
+                )
+                .await
+                .unwrap();
+        }
+        let mut remote =
+            TwoBitGeneration::open_remote(&store, &prefix, &root_sha, limits, temp.path())
+                .await
+                .unwrap();
+        assert!(remote.plane.record(0).is_none());
+        let startup = remote.remote_open_stats().unwrap();
+        assert_eq!(startup.metadata.len(), 9);
+        assert_eq!(startup.source_head_requests, 1);
+        assert!(
+            !startup
+                .metadata
+                .iter()
+                .any(|entry| entry.name == "plane/records.bin")
+        );
+        let query = [0.5, 0.25];
+        let mut expected_trace = TwoBitPlanTrace::default();
+        let (expected_plan, _) = local.plan_inner(&query, Some(&mut expected_trace)).unwrap();
+        let mut actual_trace = TwoBitPlanTrace::default();
+        let (actual_plan, _, source_stats) = remote
+            .plan_paged(&store, &query, Some(&mut actual_trace))
+            .await
+            .unwrap();
+        assert_eq!(expected_plan, actual_plan);
+        assert_eq!(
+            serde_json::to_value(&expected_trace).unwrap(),
+            serde_json::to_value(actual_trace).unwrap()
+        );
+        if fragmented {
+            assert!(
+                source_stats.submitted_gets > 1,
+                "fixture must exercise fragmented reads"
+            );
+            assert!(
+                source_stats.verified_bytes < rows * 9,
+                "fixture must leave gaps"
+            );
+            let mut prior_bytes = rows * 9;
+            for cap in BTreeSet::from([
+                1,
+                2,
+                source_stats.submitted_gets - 1,
+                source_stats.submitted_gets,
+            ]) {
+                remote.limits.max_source_gets = cap;
+                let mut trace = TwoBitPlanTrace::default();
+                let (plan, _, stats) = remote
+                    .plan_paged(&store, &query, Some(&mut trace))
+                    .await
+                    .unwrap();
+                assert_eq!(plan, expected_plan);
+                assert_eq!(
+                    serde_json::to_value(&trace).unwrap(),
+                    serde_json::to_value(&expected_trace).unwrap()
+                );
+                assert!(stats.submitted_gets <= cap);
+                assert!(stats.verified_bytes <= prior_bytes);
+                prior_bytes = stats.verified_bytes;
+            }
+            remote.limits.max_source_gets = limits.max_source_gets;
+        } else {
+            assert_eq!(source_stats.verified_bytes, rows * 9);
+        }
+        let expected = local
+            .search_with_store(&store, &query, 10, None)
+            .await
+            .unwrap();
+        let actual = remote
+            .search_with_store(&store, &query, 10, None)
+            .await
+            .unwrap();
+        assert_eq!(expected.ranked.candidates, actual.ranked.candidates);
+        assert_eq!(expected.plan, actual.plan);
+        assert_eq!(expected.ranked.stats, actual.ranked.stats);
+        assert_eq!(expected.source_stats, Sq8ReadStats::default());
+        assert_eq!(actual.source_stats, source_stats);
+
+        if fragmented {
+            return;
+        }
+
+        remote.limits.max_source_bytes = 1;
+        assert!(matches!(
+            remote.plan_paged(&store, &query, None).await,
+            Err(TwoBitGenerationError::Budget(
+                BudgetedPageError::InsufficientBudget
+            ))
+        ));
+        remote.limits.max_source_bytes = limits.max_source_bytes;
+        store.delete(&key).await.unwrap();
+        let error = remote
+            .search_with_store(&store, &query, 10, None)
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(error, TwoBitGenerationError::PagedRead { .. }));
+        let (source, sq8) = error.read_stats();
+        assert_eq!(source, source_stats);
+        assert!(sq8.submitted_gets > 0 && sq8.failed_gets == sq8.submitted_gets);
+
+        let source_key = remote.source.as_ref().unwrap().location.clone();
+        let mut changed = fs::read(root.join("plane/records.bin")).unwrap();
+        *changed.last_mut().unwrap() ^= 1;
+        store
+            .put(&source_key, PutPayload::from(changed))
+            .await
+            .unwrap();
+        let error = remote.plan_paged(&store, &query, None).await.err().unwrap();
+        assert!(matches!(error, TwoBitGenerationError::SourceRead(_)));
+        assert_eq!(error.read_stats().1, Sq8ReadStats::default());
+        remote.source.as_mut().unwrap().etag =
+            store.head(&source_key).await.unwrap().e_tag.unwrap();
+        let error = remote.plan_paged(&store, &query, None).await.err().unwrap();
+        assert!(matches!(
+            error,
+            TwoBitGenerationError::SourceRead(RankedSq8Failure {
+                error: crate::sq8_s3_range::RangeFetchError::Page(PageError::HashMismatch),
+                ..
+            })
+        ));
+        assert!(error.read_stats().0.failed_gets > 0);
+    }
     #[test]
     fn bounded_completion_recovers_unvisited_rows_without_duplicate_or_extra_work() {
         let mut units = (0..1272).collect::<Vec<_>>();

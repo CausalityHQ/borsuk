@@ -97,7 +97,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     fs::write(root.join("canonical.bin"), &canonical).unwrap();
     let canonical_descriptor = serde_json::json!({"rows":512,"dimensions":2,
         "bytes":canonical.len(),"sha256":hash(&canonical),"object_key":format!("tenant/g1/objects/{}",hash(&canonical))});
-    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v5",
+    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v6",
         "generation":1,"base_epoch":0,"plane_manifest_sha256":hash(&fs::read(root.join("plane/manifest.json")).unwrap()),
         "page_manifest_sha256":hash(&page_manifest),"centroids_sha256":hash(&centroid),
         "graph_sha256":hash(&graph),"graph_resident_bytes":graph_resident,
@@ -153,6 +153,9 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         max_query_bytes: 16_384,
         max_query_gets: 2,
         max_parallel_gets: 2,
+        max_source_bytes: 64 * 1024 * 1024,
+        max_source_gets: 128,
+        max_parallel_source_gets: 16,
         max_query_scratch_bytes: 8192,
         already_pinned_bytes: 0,
     };
@@ -448,7 +451,14 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     )
     .await
     .unwrap();
-    assert_eq!(first.ranges, live.plan(&[0.5, 0.25]).await.unwrap().ranges);
+    assert_eq!(
+        first.ranges,
+        live.plan_with_store(&published_store, &[0.5, 0.25])
+            .await
+            .unwrap()
+            .0
+            .ranges
+    );
     let seal_limits = borsuk::two_bit_mutations::TwoBitMutationLimits {
         max_snapshot_bytes: 1024,
         max_memory_bytes: 32768,
@@ -551,7 +561,12 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     .unwrap();
     assert_eq!(
         first.ranges,
-        old_pinned.plan(&[0.5, 0.25]).await.unwrap().ranges
+        old_pinned
+            .plan_with_store(&published_store, &[0.5, 0.25])
+            .await
+            .unwrap()
+            .0
+            .ranges
     );
     assert_eq!(
         published_store
@@ -633,7 +648,13 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
             .await
             .unwrap();
     let stats = remote.remote_open_stats().unwrap();
-    assert_eq!(stats.metadata.len(), 10);
+    assert_eq!(stats.metadata.len(), 9);
+    assert!(
+        stats
+            .metadata
+            .iter()
+            .all(|object| object.name != "plane/records.bin")
+    );
     for object in &stats.metadata {
         assert_eq!(
             object.bytes,
@@ -650,10 +671,8 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
             .sum::<u128>()
             <= stats.staging_wall_ns
     );
-    assert_eq!(
-        first.ranges,
-        remote.plan(&[0.5, 0.25]).await.unwrap().ranges
-    );
+    assert!(remote.plan(&[0.5, 0.25]).await.is_err());
+    assert_eq!(stats.source_head_requests, 1);
     assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
     assert!(
         TwoBitGeneration::open_remote(&store, &prefix, &"0".repeat(64), limits, scratch.path())
@@ -681,8 +700,13 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
         )
         .await
         .unwrap();
-    assert!(
+    let corrupted_source =
         TwoBitGeneration::open_remote(&store, &prefix, &hash(&manifest), limits, scratch.path())
+            .await
+            .unwrap();
+    assert!(
+        corrupted_source
+            .plan_with_store(&store, &[0.5, 0.25])
             .await
             .is_err()
     );
@@ -900,6 +924,9 @@ fn graph_variant_adapter_preserves_components_and_rejects_untrusted_roots() {
             max_query_bytes: 1_048_576,
             max_query_gets: 32,
             max_parallel_gets: 32,
+            max_source_bytes: 64 * 1024 * 1024,
+            max_source_gets: 128,
+            max_parallel_source_gets: 16,
             max_query_scratch_bytes: 16_384,
             already_pinned_bytes: 0,
         },

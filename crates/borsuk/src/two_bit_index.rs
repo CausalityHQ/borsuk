@@ -198,6 +198,7 @@ impl TwoBitIndex {
                     })
                     .collect(),
                 stats: result.ranked.stats,
+                source_stats: result.source_stats,
                 mutation_rows_scanned: 0,
                 mutation_put_rows_scored: 0,
                 mutation_revision: 0,
@@ -223,6 +224,7 @@ impl TwoBitIndex {
             },
             candidates,
             stats: Sq8ReadStats::default(),
+            source_stats: Sq8ReadStats::default(),
             mutation_rows_scanned: mutations.map_or(0, |m| m.rows().len()),
             mutation_put_rows_scored: mutations.map_or(0, |m| m.put_rows()),
             mutation_revision: mutations.map_or(0, |m| m.revision()),

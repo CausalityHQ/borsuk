@@ -15,10 +15,10 @@ use axum::{
 };
 use borsuk::{
     sq8_s3_range::OneAttemptS3,
-    two_bit_generation::{TwoBitGeneration, TwoBitGenerationError, TwoBitGenerationLimits},
+    two_bit_generation::{TwoBitGeneration, TwoBitGenerationLimits},
     two_bit_store::read_two_bit_head,
 };
-use object_store::{RetryConfig, aws::AmazonS3Builder, path::Path as ObjectPath};
+use object_store::path::Path as ObjectPath;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -100,17 +100,17 @@ async fn search(
         .search(&state.reader, &request.query, request.k)
         .await
         .map_err(|error| {
-            let stats = match error {
-                TwoBitGenerationError::Read(failure) => Some(failure.stats),
-                _ => None,
-            };
+            let (source, stats) = error.read_stats();
             (
                 StatusCode::BAD_GATEWAY,
                 Json(json!({"error":"search_failed",
                 "authority":state.authority,
-                "submitted_gets":stats.map(|s|s.submitted_gets),
-                "verified_bytes":stats.map(|s|s.verified_bytes),
-                "failed_gets":stats.map(|s|s.failed_gets)})),
+                "submitted_gets":stats.submitted_gets,
+                "verified_bytes":stats.verified_bytes,
+                "failed_gets":stats.failed_gets,
+                "source_submitted_gets":source.submitted_gets,
+                "source_verified_bytes":source.verified_bytes,
+                "source_failed_gets":source.failed_gets})),
             )
         })?;
     let stats = result.ranked.stats;
@@ -119,7 +119,10 @@ async fn search(
         "ranges":result.plan.ranges.iter().map(|r|[r.start,r.end]).collect::<Vec<_>>(),
         "planned_bytes":result.plan.planned_bytes,"native_wall_ns":started.elapsed().as_nanos(),
         "submitted_gets":stats.submitted_gets,"verified_bytes":stats.verified_bytes,
-        "failed_gets":stats.failed_gets})))
+        "failed_gets":stats.failed_gets,
+        "source_submitted_gets":result.source_stats.submitted_gets,
+        "source_verified_bytes":result.source_stats.verified_bytes,
+        "source_failed_gets":result.source_stats.failed_gets})))
 }
 
 #[tokio::main]
@@ -139,16 +142,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         generation: args[5].parse()?,
         control_epoch: args[6].parse()?,
     };
-    let store = AmazonS3Builder::from_env()
-        .with_bucket_name(&args[1])
-        .with_region(&args[2])
-        .with_retry(RetryConfig {
-            max_retries: 0,
-            ..Default::default()
-        })
-        .build()?;
+    let reader =
+        OneAttemptS3::new(&args[1], &args[2]).map_err(|error| format!("reader: {error:?}"))?;
+    let store = reader.store();
     let started = Instant::now();
-    let head = read_two_bit_head(&store, &ObjectPath::from(args[3].as_str()))
+    let head = read_two_bit_head(store, &ObjectPath::from(args[3].as_str()))
         .await?
         .ok_or("head missing")?;
     if head.is_empty()
@@ -167,12 +165,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         max_query_bytes: 16_773_120,
         max_query_gets: 32,
         max_parallel_gets: 32,
+        max_source_bytes: 64 * 1024 * 1024,
+        max_source_gets: 128,
+        max_parallel_source_gets: 16,
         max_query_scratch_bytes: 400_000,
         already_pinned_bytes: 0,
     };
     let started = Instant::now();
     let generation = TwoBitGeneration::open_remote(
-        &store,
+        store,
         &head.metadata_prefix(),
         head.root_sha256(),
         limits,
@@ -182,8 +183,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let remote_open_wall_ns = started.elapsed().as_nanos();
     let state = Arc::new(AppState {
         generation,
-        reader: OneAttemptS3::new(&args[1], &args[2])
-            .map_err(|error| format!("reader: {error:?}"))?,
+        reader,
         authority,
         dimensions: head.dimensions(),
         permits: Arc::new(Semaphore::new(QUERY_SLOTS)),

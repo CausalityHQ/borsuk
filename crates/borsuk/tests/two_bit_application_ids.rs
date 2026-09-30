@@ -156,7 +156,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     let root_sha = builder.build_with_order(&order, &root, 4_000_000).unwrap();
     let generation_root: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(generation_root["schema"], "borsuk-two-bit-generation-v5");
+    assert_eq!(generation_root["schema"], "borsuk-two-bit-generation-v6");
     let canonical_body = std::fs::read(root.join("canonical.bin")).unwrap();
     assert_eq!(canonical_body.len(), 512 * 16);
     for (physical, &ordinal) in order.iter().enumerate() {
@@ -176,6 +176,9 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
         max_query_bytes: 16384,
         max_query_gets: 2,
         max_parallel_gets: 2,
+        max_source_bytes: 64 * 1024 * 1024,
+        max_source_gets: 128,
+        max_parallel_source_gets: 16,
         max_query_scratch_bytes: 8192,
         already_pinned_bytes: 0,
     };
@@ -707,7 +710,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     .unwrap();
     assert_eq!(
         metadata_ops.count_matching(|op, _| op == common::StoreOperation::Get),
-        10
+        9
     );
     assert_eq!(
         metadata_ops.count_matching(|op, path| op == common::StoreOperation::Get
@@ -719,7 +722,15 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
             && (path == canonical_key.as_ref() || path == key.as_ref())),
         0
     );
-    assert_eq!(remote.plan(&[1., 0.]).await.unwrap().ranges, plan.ranges);
+    assert!(remote.plan(&[1., 0.]).await.is_err());
+    assert_eq!(
+        remote
+            .plan_with_store(&metadata_store, &[1., 0.])
+            .await
+            .unwrap()
+            .0,
+        plan
+    );
     let ranges = plan
         .ranges
         .iter()
@@ -2052,6 +2063,9 @@ async fn native_s3_conditional_fence_and_gc_smoke() {
         max_query_bytes: 16384,
         max_query_gets: 2,
         max_parallel_gets: 2,
+        max_source_bytes: 64 * 1024 * 1024,
+        max_source_gets: 128,
+        max_parallel_source_gets: 16,
         max_query_scratch_bytes: 8192,
         already_pinned_bytes: 0,
     };

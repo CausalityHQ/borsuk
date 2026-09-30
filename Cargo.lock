@@ -393,6 +393,7 @@ dependencies = [
  "rand_core 0.9.5",
  "rayon",
  "regex",
+ "reqwest",
  "rustix",
  "serde",
  "serde_json",

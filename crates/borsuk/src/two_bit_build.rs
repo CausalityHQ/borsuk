@@ -288,7 +288,7 @@ mod tests {
         assert_eq!(hash(&body), root_sha);
         let mut manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(
-            manifest["schema"], "borsuk-two-bit-generation-v5",
+            manifest["schema"], "borsuk-two-bit-generation-v6",
             "two-graph root format missing"
         );
         let nearest = fs::read(output.join("graph.bin")).unwrap();
@@ -304,6 +304,9 @@ mod tests {
             max_query_bytes: 16384,
             max_query_gets: 2,
             max_parallel_gets: 2,
+            max_source_bytes: 64 * 1024 * 1024,
+            max_source_gets: 128,
+            max_parallel_source_gets: 16,
             max_query_scratch_bytes: 8192,
             already_pinned_bytes: 0,
         };

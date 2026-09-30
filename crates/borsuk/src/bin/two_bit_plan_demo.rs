@@ -45,6 +45,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         max_query_bytes: 84 * 256 * 780,
         max_query_gets: 32,
         max_parallel_gets: 32,
+        max_source_bytes: 64 * 1024 * 1024,
+        max_source_gets: 128,
+        max_parallel_source_gets: 16,
         max_query_scratch_bytes: 400_000
             + if trace {
                 TwoBitPlanTrace::scratch_bytes(usize::MAX)
@@ -177,19 +180,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let result = match generation.search(reader, &query, top_k).await {
                 Ok(result) => result,
                 Err(error) => {
-                    let stats = match &error {
-                        borsuk::two_bit_generation::TwoBitGenerationError::Read(failure) => {
-                            Some(failure.stats)
-                        }
-                        _ => None,
-                    };
+                    let (source_stats, stats) = error.read_stats();
                     writeln!(
                         output,
                         "{}",
                         serde_json::json!({"phase":"query-error","query_ordinal":ordinal,
                         "query_wall_ns":wall.elapsed().as_nanos(),"error":error.to_string(),
-                        "submitted_gets":stats.map(|s|s.submitted_gets),"verified_bytes":stats.map(|s|s.verified_bytes),
-                        "failed_gets":stats.map(|s|s.failed_gets)})
+                        "submitted_gets":stats.submitted_gets,"verified_bytes":stats.verified_bytes,
+                        "failed_gets":stats.failed_gets,"source_submitted_gets":source_stats.submitted_gets,
+                        "source_verified_bytes":source_stats.verified_bytes,"source_failed_gets":source_stats.failed_gets})
                     )?;
                     output.sync_all()?;
                     return Err(error.into());
@@ -205,7 +204,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 "ranges":result.plan.ranges.iter().map(|r|[r.start,r.end]).collect::<Vec<_>>(),
                 "planned_bytes":result.plan.planned_bytes,"ids":result.ranked.candidates.iter().map(|r|r.id).collect::<Vec<_>>(),
                 "query_wall_ns":query_wall_ns,"query_process_cpu_ns":query_cpu_ns,
-                "submitted_gets":stats.submitted_gets,"verified_bytes":stats.verified_bytes,"failed_gets":stats.failed_gets})
+                "submitted_gets":stats.submitted_gets,"verified_bytes":stats.verified_bytes,"failed_gets":stats.failed_gets,
+                "source_submitted_gets":result.source_stats.submitted_gets,
+                "source_verified_bytes":result.source_stats.verified_bytes,"source_failed_gets":result.source_stats.failed_gets})
             )?;
             continue;
         }
