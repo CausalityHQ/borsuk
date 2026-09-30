@@ -71,3 +71,20 @@ Only returned-quality survival earns process-cold and namespace-cold HTTP,
 A failure terminates this arm and names discovery, closure, selection or scoring
 as the bottleneck. Do not rerun merely to find favorable noise or silently expand
 caps. No 100M or incremental-maintenance qualification follows from this test.
+
+## Query-space binding before evaluation
+
+Independent review identified ambiguity in “original f32 query.” No corpus query
+has been evaluated for this arm. Use the existing `sq8_source::cosine_vector`
+semantics: cast coordinates to f32, sum their squares in f64 in coordinate order,
+reject a nonfinite or nonpositive sum; retain coordinates if |sum−1|<=1e-6,
+otherwise divide each by the f64 square root and cast back to f32. Widen these
+coordinates and the manifest prototypes (also rounded to f32 after JSON parsing)
+to f64 for root-distance arithmetic. Never normalize the unit means or the
+leaf prototypes. Record this query-space rule with the result.
+
+Report distinct original physical pages per leaf and selected page-union counts.
+A high closure coverage obtained by fetching most of the corpus is not a serving
+success. Root/leaf and later source/SQ8 limits still apply. The 100k JSON root
+format is intentionally bounded to this falsifier; 1M would require a separate
+scalable root layout and measured gate, not extrapolation from this artifact.

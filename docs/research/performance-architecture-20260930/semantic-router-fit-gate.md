@@ -28,3 +28,11 @@ Only qualified outputs reach the fixed coverage evaluator. Its first nomination
 failure ends the arm; no cloud expenditure or scoring run is earned by a
 construction success alone. No 1M/100M memory, quality, latency or maintenance
 claim follows from this 100k gate.
+
+Before corpus fitting, run one distinct synthetic 100k-row/D768 construction
+(3,125 units) under the same cgroup limits. Generate each FP16 coordinate from
+`((unit*31+dimension*17)%257-128)/4096`, replacing dimension zero with
+`unit/4096`; this is deterministic, finite and gives distinct units. Authenticate
+a synthetic v4 root and exact BORSUCP1 header/body. Record measured peak RSS,
+manifest size, leaf geometry, construction exit and identities. This tests the
+maximum geometry and recursive path; its quality has no dataset meaning.
