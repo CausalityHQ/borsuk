@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-paged-head-key-correction-v1",
+  "previous_publication_receipt": "docs/research/source-paging-20260930/relaion-input-publication.json",
+  "wrong_key": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10/HEAD.json",
+  "head": {
+    "key": "research/native-union/20260930/source-paging-v6/indexes/relaion/k10/head.json",
+    "bytes": 171,
+    "sha256": "34a0f1082266c1c9584a7a629af6409d0406ff77fd0ef033ed49ba667106a6f3"
+  },
+  "native_key_evidence": "crates/borsuk/src/two_bit_store.rs:180",
+  "generation_bodies_changed": false,
+  "performance_measured": false
+}

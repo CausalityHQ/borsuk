@@ -1,0 +1,24 @@
+{
+  "valid_closed_artifacts": true,
+  "qualified_build": true,
+  "performance_measured": false,
+  "recall_measured": false,
+  "state": "terminated",
+  "failure_class": "input_publication_key",
+  "root_cause": "HEAD.json published; native reader requires head.json",
+  "instance_id": "i-0aa838b4b1ebfa713",
+  "source_commit": "3345f0f6283fad463439947e7bafab1c816b3ced",
+  "source_archive_sha256": "e0d65e41b39f6f412f2842a6edfe62e56e1545e07148fd70cbe71353191c0334",
+  "terminal_sha256": "2ba5a4457384d4f3e8a42638fabbf77bf07c0bbfabdd9a0e89f24163da5db1b1",
+  "binary": {
+    "bytes": 12544008,
+    "sha256": "99cf800558a6cebc710a3da28f6f4afa5743680efc8839a0b7b849b60c11eace"
+  },
+  "resolved_config_sha256": "cc168b045ebb28b5413aa3d7101ae3a1c3cd0cc5cfae3fca4b18ff8affa7e559",
+  "authenticated_artifact_count": 49,
+  "missing_artifacts": [
+    "screen/cohere-records.jsonl",
+    "screen/summary.json"
+  ],
+  "current_full_suite_pass_claim": false
+}

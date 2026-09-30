@@ -1,0 +1,52 @@
+{
+  "instance_id": "i-0aa838b4b1ebfa713",
+  "instance_type": "c7g.2xlarge",
+  "lifecycle": "spot",
+  "availability_zone": "eu-central-1b",
+  "subnet_id": "subnet-00243d923761c047c",
+  "launch_time": "2026-09-30T08:43:01+00:00",
+  "public_ipv4_present": true,
+  "block_devices": [
+    {
+      "DeviceName": "/dev/xvda",
+      "Ebs": {
+        "AttachTime": "2026-09-30 08:43:02+00:00",
+        "DeleteOnTermination": true,
+        "Status": "attached",
+        "VolumeId": "vol-0738a037109c3ce7c"
+      }
+    }
+  ],
+  "volumes": [
+    {
+      "AvailabilityZoneId": "euc1-az3",
+      "Iops": 3000,
+      "VolumeType": "gp3",
+      "MultiAttachEnabled": false,
+      "Throughput": 125,
+      "Operator": {
+        "Managed": false
+      },
+      "VolumeId": "vol-0738a037109c3ce7c",
+      "Size": 80,
+      "SnapshotId": "snap-0c25206351d146f89",
+      "AvailabilityZone": "eu-central-1b",
+      "State": "in-use",
+      "CreateTime": "2026-09-30 08:43:02.264000+00:00",
+      "Attachments": [
+        {
+          "DeleteOnTermination": true,
+          "VolumeId": "vol-0738a037109c3ce7c",
+          "InstanceId": "i-0aa838b4b1ebfa713",
+          "Device": "/dev/xvda",
+          "State": "attached",
+          "AttachTime": "2026-09-30 08:43:02+00:00"
+        }
+      ],
+      "Encrypted": true,
+      "KmsKeyId": "arn:aws:kms:eu-central-1:453182569524:key/178b1b36-e23a-46f7-bbbc-ec94874c9924"
+    }
+  ],
+  "performance_measured": false,
+  "total_cost_measured": false
+}
