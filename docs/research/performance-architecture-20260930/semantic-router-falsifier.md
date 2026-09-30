@@ -100,3 +100,9 @@ root. Invert this mapping before truth IDs are assigned to 32-row units or
 by 32 or 256 directly is invalid for these inputs. Reversed/permuted synthetic
 mappings must change the known coverage as expected; reject duplicate or
 out-of-range mapping entries. Exact authorities are in semantic-router-row-identity.json.
+
+The pinned request files have two exact research shapes: CoHere contains
+`query_ordinal` and `query`; ReLAION additionally contains `nominees` and
+`primary_count`. Ignore those historical nomination fields entirely. They are
+not candidate inputs, and changing them must not change candidate coverage.
+Authenticate the original request bodies without rewriting their identities.
