@@ -1,0 +1,13 @@
+{
+  "config_sha256": "6200cc0d4b1b6a88a6498ec16a865c7436814605976658114c59ad3416ab4f44",
+  "artifact_count": 42,
+  "artifact_roster_sha256": "93f9b7033e48a2fba710efcc18dbba7b8ed15e997cdac9892a054300e3bb1c04",
+  "source_identity_sha256": "4bbc6c332e78e5a068001913597cdc82d6c13bd147acd96e019149c190a39a1c",
+  "compiled_native_file_count": 9,
+  "code_file_count": 15,
+  "user_data_bytes": 11838,
+  "native_rebuilt": false,
+  "current_full_suite_pass_claim": false,
+  "protocol": "six ports; rates .25,.5,1,2,4,8; 64 offers/dataset/rate",
+  "status": "prepared, not launched"
+}

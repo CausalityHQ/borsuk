@@ -58,3 +58,20 @@ candidate p90 1763.117ms ReLAION /1712.617ms CoHere, R10 99.375%/96.875%.
 Its 444ms context failed. Next after this curve: reduce substantive metadata
 loading/decode work under identity, quality and bounded-memory gates; measured
 median decode alone ~572ms exceeds444, so range tuning alone cannot close it.
+
+## Integrated launch prerequisites verified
+
+Owned child commit80e6fb13 integrated as730ec181. Original integrated check74202
+closed exit0. Actual config preflight passes: 60 immutable bodies authenticated,
+395 native files unchanged, nine compiled snapshots, 11 runtime files plus four
+controller/helper files, 19 frozen extraction bodies, 42 campaign artifacts.
+Config SHA6200cc0d4b1b6a88a6498ec16a865c7436814605976658114c59ad3416ab4f44.
+Real-config userdata11838 bytes, bash syntax valid and no Cargo/rustup.
+Synthetic authority mutations, real shared ownership/termination helper with
+multiple ACKs, unique tokens, persistence/upload/poll/interruption failures,
+termination before collection, artifact identity/body/length/roster rejection
+all pass. The shared independent reducer and bounded thread scheduler pass
+legacy/candidate geometry, schedule, port, GT, buffer, denominator, drop/error
+and raw failure checks. No native code or dependency changed since qualification.
+Preparation log/proof stored alongside this preregistration; no new performance
+measurement is claimed by these checks.
