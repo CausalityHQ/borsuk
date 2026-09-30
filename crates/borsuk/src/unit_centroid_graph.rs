@@ -404,7 +404,7 @@ impl UnitCentroidGraph {
     ) -> Result<Self, UnitCentroidGraphError> {
         if bytes.len() < HEADER_BYTES
             || &bytes[..8] != MAGIC
-            || bytes[48..80] != Sha256::digest(centroid_blob)[..]
+            || bytes[48..80] != scorer.blob_sha256()[..]
             || !matching_scorer_blob(scorer, centroid_blob)
         {
             return Err(UnitCentroidGraphError::InvalidArtifact);
