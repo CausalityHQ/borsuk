@@ -93,7 +93,7 @@ def measure(binary, config, item, values, offered_qps, workers=6, base_port=1808
             assert row['cold_start_to_first_http_response_ns'] == row['completed_ns']-row['started_ns']
             assert row['returned_hits'] == cold.checked_response(row['response'], reference, truth, item['authority'])
             stage = 'transfer_accounting'
-            row['transfer_accounting'] = ranges.validate_transfer(row['native_header'], item['metadata_files'], 'candidate')
+            row['transfer_accounting'] = ranges.validate_transfer(row['native_header'], item['metadata_files'], 'candidate', config.get('staging', {}).get('candidate'))
             row['outcome'] = 'success'
         except Exception as error:
             raw = failure_stream.getvalue()

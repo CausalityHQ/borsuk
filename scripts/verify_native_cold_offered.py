@@ -21,7 +21,7 @@ def tails(values):
             for name,p in [('p50',.5),('p90',.9),('p95',.95),('p99',.99)]}
 
 
-def reduce_cell(rows,cell,requests,references,truth,item,index):
+def reduce_cell(rows,cell,requests,references,truth,item,index,geometry=None):
     rate = RATES[index]
     assert len(rows) == 64 and [r['query_ordinal'] for r in rows] == list(range(64))
     assert cell['rate_index'] == index and cell['dataset'] == item['dataset']
@@ -56,7 +56,7 @@ def reduce_cell(rows,cell,requests,references,truth,item,index):
         if row['outcome'] == 'success':
             assert row['completed_ns'] <= terminal
             peak = max(peak,validate_record(row,requests[q],references[q],truth[q],item,port=port))
-            assert row['transfer_accounting'] == transfer(row['native_header'],item['metadata_files'],'candidate')
+            assert row['transfer_accounting'] == transfer(row['native_header'],item['metadata_files'],'candidate',geometry)
             success.append(row)
         else:
             assert row['outcome'] == 'transport_error'
@@ -97,8 +97,9 @@ def reduce_cell(rows,cell,requests,references,truth,item,index):
     return result,peak
 
 
-def main(attempt, failed_closeout=False):
-    from scripts import launch_native_cold_offered_spot as campaign
+def main(attempt, failed_closeout=False, campaign=None):
+    if campaign is None:
+        from scripts import launch_native_cold_offered_spot as campaign
     directory = campaign.ROOT/campaign.NAME/attempt
     session = boto3.Session(profile_name='causality',region_name=campaign.peer.REGION)
     s3,ec2 = session.client('s3'),session.client('ec2')
@@ -193,7 +194,7 @@ def main(attempt, failed_closeout=False):
                 cell = summary['cells'][len(cells)]
                 assert previous <= cell['epoch_ns'];previous = cell['terminal_ns']
                 rows = [json.loads(line) for line in bodies['screen/'+cell['records_file']].splitlines()]
-                result,peak = reduce_cell(rows,cell,*inputs[item['dataset']],item,index)
+                result,peak = reduce_cell(rows,cell,*inputs[item['dataset']],item,index,config.get('staging', {}).get('candidate'))
                 cells.append(result);peaks[cell['records_file']] = peak
         for key in ('offered','admitted','successful','accepted_completed','capacity_drops','errors'):
             assert summary[key] == sum(c[key] for c in cells)
@@ -257,6 +258,21 @@ def self_check():
         result=worker_reduce(values,.25,epoch,max(r['terminal_ns'] for r in values)+1,False)
         return dict(result,rate_index=0,dataset=item['dataset'],split=item['query_split'],records_file='rate0-relaion-records.jsonl')
     reduce_cell(rows,expected(rows),requests,references,truth,item,0)
+    geometry = dict(range_bytes=4194304, parallel_gets=8)
+    shaped = copy.deepcopy(rows)
+    for row in shaped:
+        for metadata in row['native_header']['remote_open_stats']['metadata']:
+            metadata['logical_get_requests'] = (metadata['bytes']+geometry['range_bytes']-1)//geometry['range_bytes']
+            if metadata['bytes'] > geometry['range_bytes']: metadata['get_wall_ns'] = 0
+        row['native_server_log'] = '\n'.join(json.dumps(row['native_header']) if line.startswith('{') else line
+            for line in row['native_server_log'].splitlines())+'\n'
+        row['transfer_accounting'] = transfer(row['native_header'],item['metadata_files'],'candidate',geometry)
+        row['metadata'] = {key:value for key,value in row['transfer_accounting'].items()
+            if key not in ('logical_metadata_head_requests', 'logical_metadata_get_requests', 'payload_buffer_bound_bytes')}
+    reduce_cell(shaped,expected(shaped),requests,references,truth,item,0,geometry)
+    try: reduce_cell(shaped,expected(shaped),requests,references,truth,item,0)
+    except AssertionError: pass
+    else: raise AssertionError('accepted new geometry under historical authority')
     for outcome in ('capacity_drop','transport_error'):
         subset=copy.deepcopy(rows)
         last=subset[-1]
