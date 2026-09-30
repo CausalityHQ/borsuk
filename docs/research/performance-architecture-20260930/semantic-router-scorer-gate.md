@@ -61,7 +61,15 @@ Recorded walks may diagnose a mismatch but cannot replace fresh discovery.
 Alternate control/candidate order by ordinal. Return top100 with the native
 kernel and report R10/R100, per-query tails, semantic discovery/closure,
 source-selection, fetched and returned losses. Truth enters only after plans
-and returned IDs exist. Mean returned R10 must be at least 95%, all 64 calls
+and returned IDs exist. In a separate offline reference phase, rank the full
+authenticated SQ8 object with that same kernel once per query, after both
+arms have frozen their plans and returned IDs. Report exhaustive SQ8 R10/R100
+against exact truth to expose quantization and kernel-rounding loss separately
+from routing/selection. This reference reads 78,000,000 bytes per query; its
+CPU/bytes are evaluator work, excluded from serving caps and timings, and its
+scores/IDs must never flow back into either arm. Bridge-range rows may improve
+fetched coverage beyond nominated pages; report that gain rather than assuming
+every stage is a nested subset. Mean returned R10 must be at least 95%, all 64 calls
 successful and all identity/budget gates satisfied. Preserve a failure and
 name its stage; do not silently expand caps or repeat to obtain a pass.
 Only ReLAION survival earns CoHere with the same adapter and fixed policy.
