@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 import tarfile
 import tempfile
+import struct
+import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -238,5 +240,72 @@ def authentication_check():
     print('PASS build authority: binary, compiled snapshot and resolved config tamper rejection')
 
 
+def main(attempt):
+    import boto3
+    from scripts import launch_native_paged_source_cold_spot as campaign
+    directory = campaign.ROOT/campaign.NAME/attempt
+    session = boto3.Session(profile_name='causality', region_name=base.REGION)
+    s3, ec2 = session.client('s3'), session.client('ec2')
+    def remote(key): return s3.get_object(Bucket=base.BUCKET, Key=key)['Body'].read()
+    launch, reservation, terminal, artifacts, archived, config = authenticate_closed(directory, campaign, remote)
+    resolved = validate_build(artifacts, archived, config, reservation, terminal, campaign)
+    expected = campaign.user_data(launch['source_commit'], launch['source_archive_sha256'],
+        'research/native-library-check/sources/'+launch['source_archive_sha256']+'.tar.gz',
+        launch['prefix'], reservation['qualification'])
+    assert expected == (directory/'aws-user-data.sh').read_text()
+    close = json.loads((directory/'aws-closeout.json').read_bytes())
+    assert close['nodes'] == {'0': {'instance_id': launch['instance_id']}}
+    instance = ec2.describe_instances(InstanceIds=[launch['instance_id']])['Reservations'][0]['Instances'][0]
+    assert instance['State']['Name'] == close['state'] == 'terminated'
+    assert instance['InstanceLifecycle'] == 'spot' and instance['InstanceType'] == 'c7g.2xlarge'
+    assert instance['Placement']['AvailabilityZone'] == reservation['availability_zone']
+    summary = json.loads(artifacts['screen/summary.json']); panels, peaks = {}, {}
+    assert summary['original_config_sha256'] == base.sha(artifacts['resolved-config.json'])
+    assert summary['ann_queries'] == summary['namespace_starts'] == 128 and summary['k'] == 10
+    assert summary['client_cpu_affinity'] == [4,5] and summary['native_cpu_affinity'] == [0,1,2,3]
+    for key in ('matched_vendor_measured', 'matched_control_latency_measured',
+                'serial_cold_qps_is_offered_or_saturation_qps', 'application_sq8_cache'):
+        assert summary[key] is False
+    assert summary['namespace_cold_start_included'] is True and summary['s3_service_cache'] == 'uncontrolled'
+    assert summary['source_scorer_ordered_id_physical_parity'] is True
+    for item in resolved['items']:
+        bodies = {}
+        for name in ('requests', 'reference-k10', 'truth'):
+            ident = item['inputs'][name]; body = remote(ident['key'])
+            assert len(body) == ident['bytes'] and base.sha(body) == ident['sha256']
+            if 'range_bytes' in ident:
+                body = body[ident['range_start']:ident['range_start']+ident['range_bytes']]
+                assert len(body) == ident['range_bytes'] and base.sha(body) == ident['range_sha256']
+            bodies[name] = body
+        requests = [json.loads(line) for line in bodies['requests'].splitlines()]
+        refs = [json.loads(line) for line in bodies['reference-k10'].splitlines()]
+        assert len(requests) == 64 and len(refs) == 66 and len(bodies['truth']) == 25600
+        assert refs[0]['top_k'] == 10 and refs[0]['declared_panel_count'] == refs[-1]['count'] == 64
+        for key, value in item['authority'].items(): assert refs[0][key] == value
+        assert [r['query_ordinal'] for r in requests] == [r['query_ordinal'] for r in refs[1:-1]] == list(range(64))
+        truth = [struct.unpack_from('<100I', bodies['truth'], q*400) for q in range(64)]
+        assert all(len(set(row)) == 100 and max(row) < 1000000 for row in truth)
+        records = [json.loads(line) for line in artifacts['screen/'+item['dataset'].lower()+'-records.jsonl'].splitlines()]
+        result, peak = reduce_records(records, requests, refs[1:-1], truth, item)
+        assert all(summary['panels'][item['dataset']][key] == value for key, value in result.items())
+        assert summary['panels'][item['dataset']]['split'] == item['query_split']
+        panels[item['dataset']] = dict(result, split=item['query_split']); peaks[item['dataset']] = peak
+    quality = all(p['quality_gate_passed'] for p in panels.values())
+    context = all(p['published_context_gate_passed'] for p in panels.values())
+    assert summary['quality_gate_passed'] == quality and summary['published_context_gate_passed'] == context
+    report = dict(valid_measurement=True, state='terminated', instance_id=launch['instance_id'],
+        source_commit=launch['source_commit'], source_archive_sha256=launch['source_archive_sha256'],
+        original_config_sha256=reservation['config_sha256'], resolved_config_sha256=terminal['resolved_config_sha256'],
+        terminal_sha256=base.sha((directory/'aws-terminal.json').read_bytes()),
+        quality_gate_passed=quality, published_context_gate_passed=context, panels=panels,
+        native_peak_rss_bytes=peaks, matched_vendor_measured=False, matched_control_latency_measured=False,
+        offered_or_saturation_qps_measured=False, current_full_suite_pass_claim=False)
+    (directory/'verification.json').write_text(json.dumps(report, indent=2)+'\n')
+    print(json.dumps(report))
+
+
 if __name__ == '__main__':
-    self_check()
+    if sys.argv[1:] in ([], ['--self-check']): self_check()
+    else:
+        assert len(sys.argv) == 2
+        main(sys.argv[1])
