@@ -10,5 +10,9 @@
   "aws_command_elf_glibc_requirement_max": "2.14",
   "local_host_glibc": "2.43",
   "scope": "authenticated installer executes locally; target Ubuntu2.39 and all bundled libraries still need actual remote bootstrap; no AWS calls/native queries",
-  "native_binary_rebuilt": false
+  "native_binary_rebuilt": false,
+  "bundled_elf_files_inspected": 65,
+  "bundled_glibc_requirement_max": "2.17",
+  "bundled_glibc_requirement_max_file": "liblzma.so.5",
+  "bundled_elf_check": "readelf --version-info --wide on every ELF body of signature-authenticated dist archive; Version needs only"
 }
