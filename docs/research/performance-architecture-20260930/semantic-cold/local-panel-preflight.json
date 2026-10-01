@@ -1,0 +1,59 @@
+{
+  "schema": "borsuk-semantic-cold-local-panel-preflight-v1",
+  "config_draft_sha256": "eb05768fdc19407400df32b15b0373958ec0bf7f39b27a0bca65baece4e8e633",
+  "authenticated_inputs": [
+    {
+      "bytes": 1132707,
+      "sha256": "1f94514c894b1acb31d16b98e5f8f13ae9c2fa53610d5b06a0d9598ca03940eb",
+      "path": "/tmp/borsuk-semantic-native-cold-inputs-a0001/relaion/requests"
+    },
+    {
+      "bytes": 25600,
+      "sha256": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c",
+      "path": "/tmp/borsuk-semantic-native-cold-inputs-a0001/relaion/truth"
+    },
+    {
+      "bytes": 56624,
+      "sha256": "32c53b26d137679c43ec85fcef76da196ef20494c264e548d331b8fbd8644d57",
+      "path": "/tmp/borsuk-semantic-native-reference-envelopes-a0001/relaion-control-reference-k10.jsonl"
+    },
+    {
+      "bytes": 46316,
+      "sha256": "719eb91456ca71a035d4690c32ba43b68badd29d9cdc34c9d9f174b5fda277db",
+      "path": "/tmp/borsuk-semantic-native-reference-envelopes-a0001/relaion-candidate-reference-k10.jsonl"
+    },
+    {
+      "bytes": 983616,
+      "sha256": "1de0122f73d1b72e54498640b9701ce6d156b513629596447580c85fac302ba4",
+      "path": "/tmp/borsuk-semantic-native-cold-inputs-a0001/cohere/requests"
+    },
+    {
+      "bytes": 25600,
+      "sha256": "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355",
+      "path": "/tmp/borsuk-semantic-native-cold-inputs-a0001/cohere/truth"
+    },
+    {
+      "bytes": 61919,
+      "sha256": "07c3cf65a8f7366ea4dc4982f6bd47be08a687bac98f2c81a1567bd399bae642",
+      "path": "/tmp/borsuk-semantic-native-reference-envelopes-a0001/cohere-control-reference-k10.jsonl"
+    },
+    {
+      "bytes": 49111,
+      "sha256": "c7d70f281bd217d95a40bd54b8078d0c6a7b6e101293bd154d13ba813497dae5",
+      "path": "/tmp/borsuk-semantic-native-reference-envelopes-a0001/cohere-candidate-reference-k10.jsonl"
+    }
+  ],
+  "datasets": [
+    "ReLAION",
+    "CoHere"
+  ],
+  "query_count_per_dataset": 64,
+  "dimensions": 768,
+  "truth_k": 100,
+  "reference_k": 10,
+  "source_and_reference_authority_pass": true,
+  "native_invocations": 0,
+  "sdk_calls": 0,
+  "launch_authority": false,
+  "full_execution_pending": true
+}
