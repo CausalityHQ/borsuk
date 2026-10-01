@@ -1,0 +1,26 @@
+{
+  "schema": "borsuk-workspace-controller-verification-v1",
+  "command": [
+    "bash",
+    "-c",
+    "ulimit -v 204800; python3 -m scripts.launch_native_workspace_execution_spot --self-check"
+  ],
+  "exit_status": 0,
+  "native_execution": false,
+  "cloud_execution": false,
+  "artifacts": {
+    "root-self-check.log": {
+      "bytes": 280,
+      "sha256": "fef7ef042c7c51eeb070f65233db99e496e632b49e4ea3e97b1f4983a073ee42",
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/remote-full/controller-gates/root-self-check.log.gz",
+      "archived_sha256": "d606cbc63cf07853403eba52982db85f8f4d30b8f92ab61cfa1dad46beb06d20"
+    },
+    "root-self-check.time": {
+      "bytes": 816,
+      "sha256": "7b2461720dc69f6036117624f2616ccdbd7b3052f463ce292c38e954dd257020",
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/remote-full/controller-gates/root-self-check.time.gz",
+      "archived_sha256": "7016a41ea2c57caf50659cb7b33ab67486962129f83df1f1d9d3b1a3f02524b6"
+    }
+  },
+  "scope": "Independent exact integrated controller self-check and actual frozen source/config qualification; no native/full test pass claim"
+}
