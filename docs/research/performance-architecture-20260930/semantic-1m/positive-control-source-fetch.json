@@ -1,0 +1,21 @@
+{
+  "bytes": 145121661,
+  "etag_observed": "\"8f8f4c766ff549b057abe4d96b90ad28-18\"",
+  "logical_get_calls": 1,
+  "native_or_quality_execution": false,
+  "path": "/data/orchestration/borsuk-semantic-positive-inputs-20261001/source-100k.parquet",
+  "query_or_truth_read": false,
+  "schema": "borsuk-positive-control-source-fetch-v1",
+  "sdk_total_max_attempts": 1,
+  "sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d",
+  "source": {
+    "bytes": 145121661,
+    "normalized_sha256": "4b9605bdebc2329339b153c15d1500a9d54467c410e3e8defcfeea365e669123",
+    "order_sha256": "fbeb4a14093c449ae4acf212155979a50fb16b50e864172dfc1dc1ddffbbc5d1",
+    "raw_sha256": "0d55a09756f41361c89f0ca355a3bc98da6799b4dc7ea39ab34a905844a758c2",
+    "rows": 100000,
+    "sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d",
+    "uri": "s3://borsuk-bench-453182569524-euc1/research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet"
+  },
+  "source_authority": "docs/research/source-fit-cost-20260928/config.json"
+}

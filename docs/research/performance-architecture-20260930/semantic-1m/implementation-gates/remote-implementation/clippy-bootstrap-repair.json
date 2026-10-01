@@ -1,0 +1,28 @@
+{
+  "artifacts": {
+    "clippy-bootstrap-self-check.log": {
+      "archived_sha256": "61f66738f799a411930575ddd3b6bb9b0f38d0eb97fbf338cc77b67233fb66c9",
+      "bytes": 354,
+      "sha256": "af96067239b0ce9cdb36699095377c428c62633c7e2f69df233a81c09ccb8d1e"
+    },
+    "clippy-bootstrap-self-check.time": {
+      "archived_sha256": "b43041453090a6f67f2ae0d9d718877d27e8c391bd7456c4c44643ac70b722b3",
+      "bytes": 860,
+      "sha256": "e1e408940a19b7451e7ac93d6a367f5aa69c0958c4957c0579af86f62eda509d"
+    }
+  },
+  "command": [
+    "python3",
+    "-m",
+    "scripts.launch_native_workspace_execution_spot",
+    "--semantic-1m-implementation",
+    "--self-check"
+  ],
+  "green_actual_shape_assertion_exit_status": 0,
+  "green_controller_self_check_exit_status": 0,
+  "mocked_aws_cargo_cgroups": true,
+  "native_clippy_pass_claim": false,
+  "native_source_changed": false,
+  "red_bootstrap_assertion_exit_status": 1,
+  "schema": "borsuk-clippy-bootstrap-repair-v1"
+}
