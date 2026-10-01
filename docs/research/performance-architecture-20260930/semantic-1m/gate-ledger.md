@@ -25,6 +25,8 @@ The unchanged production native source subsequently completed [actual remote ful
 | ReLAION FIRST100k D768 cosine, consumed development queries 0–63; local FileObjectStore | Frozen historical R@10 628/640; current v8 R@10 628/640 | R@10 98.125% (0 pp delta), R@100 6217/6400 = 97.140625%; all 64 completed. [Closed result](positive-control/v8-a0002/verification.json) | Fresh 1M quality, cold HTTP tails, saturation QPS and lifecycle dollar remain unmeasured | Fixed fresh 1M construction and admitted production scorer |
 | Metadata selection | Frozen 32-object deterministic continuation | Selector subprocess 0; original campaign FAIL from final strict peak assertion. [Exact panel input disposition](panel-tools/input-disposition.json) preserves that FAIL | IDs alone establish no vector uniqueness, oracle correctness or ANN quality | Authenticated vector/duplicate audit, exhaustive GT and sealed readback |
 
+| Fresh 1M fixed-panel construction a0001 | Same authenticated FIRST1M parquet/raw authority and 64 selected IDs | FAIL before vector decoding: indexed feature-ID Arrow type rejected. All 10 bodies authenticated; peak service 1,643,614,208 B, no OOM/swap/max events; owned instance terminated. [Closed evidence](panel-tools/remote-construction/a0001/verification.json) | No new queries/truth or ANN measurement | Establish source writer schema, repair only the admission bug with regression, then freeze a distinct construction attempt |
+
 The local quality run's 9.13 s wall and 51,872 KiB process RSS are diagnostic process measurements; neither is a cold S3 latency or total cache-memory result. Historical v7 cold measurements are not matched current-v8 controls. No vendor win is claimed.
 
 ## Thresholds and scope
