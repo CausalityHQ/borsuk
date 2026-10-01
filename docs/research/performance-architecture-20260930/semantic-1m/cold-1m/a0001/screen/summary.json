@@ -1,0 +1,1 @@
+{"closed":true,"error":"[Errno 2] No such file or directory: '/sys/fs/cgroup/system.slice/semantic-1m-cold.service/io.stat'","error_type":"FileNotFoundError","execution_gate_passed":false,"records":64,"schema":"borsuk-semantic-1m-cold-result-v1","status":"EXECUTION_FAILED"}
