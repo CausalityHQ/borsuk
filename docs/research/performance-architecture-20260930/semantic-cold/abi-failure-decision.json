@@ -1,0 +1,33 @@
+{
+  "schema": "borsuk-semantic-cold-abi-failure-v1",
+  "attempt": "a0001",
+  "owned_instance_id": "i-045a0888f1cae387d",
+  "owned_instance_terminated": true,
+  "original_controller_session_id": 34127,
+  "original_controller_exit_status": 1,
+  "source_commit": "64fd30e7d7ab240e9320083c0b67bc1904cc717a",
+  "phase": "publication",
+  "exit_code": 1,
+  "native_publication_invocations": 1,
+  "native_query_calls": 0,
+  "cold_http_calls": 0,
+  "quality_or_performance_result": false,
+  "cause": "qualified x86 executables require GLIBC_2.38; AL2023 loader lacks it; native executable never started",
+  "binary_requirements": {
+    "publisher": {
+      "maximum_required_glibc": "2.38",
+      "path": "/tmp/borsuk-semantic-native-publisher-a0001/two_bit_plan_demo"
+    },
+    "http": {
+      "maximum_required_glibc": "2.38",
+      "path": "/tmp/borsuk-centroid-portable-rounding-20260930/two_bit_http"
+    }
+  },
+  "repair": "same immutable qualified executables on Canonical Ubuntu 24.04 x86, with fail-closed ABI check before payload staging; preserve all scientific gates",
+  "proposed_image": {
+    "image_id": "ami-0b8a830d6339a9758",
+    "owner_id": "099720109477",
+    "name": "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260923",
+    "region": "eu-central-1"
+  }
+}
