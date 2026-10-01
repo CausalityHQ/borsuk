@@ -12,13 +12,42 @@ The existing parity/lifecycle test covers selected conditional leaf ranges, part
 
 | Baseline | Candidate | Quality evidence | Latency/QPS/cost | Remaining gap | Next decisive test |
 |---|---|---|---|---|---|
-| Frozen graph/source/SQ8 control | Same source/SQ8 with fitted semantic router | Consumed FIRST100k D768 cosine ordinals 0–63: ReLAION R10 98.125% vs 99.6875%; CoHere 95.78125% vs 98.59375%. These are prior closed offline scorer measurements, not a new native quality result. | New native cold HTTP, QPS and cost unknown | Transport accounting, current-envelope publication and paired cold HTTP; 1M/10M/100M and both vendor comparisons remain unqualified | Frozen 100k ABBA cold gate in `semantic-router-cold-http-gate.md`, after exact final HTTP/binary/publication authority |
+| Frozen graph/source/SQ8 control | Same source/SQ8 with fitted semantic router | Consumed FIRST100k D768 cosine ordinals 0–63: ReLAION R10 98.125% vs 99.6875% (−1.5625 pp), R100 97.140625% vs 99.515625% (−2.375 pp); CoHere R10 95.78125% vs 98.59375% (−2.8125 pp), R100 95.84375% vs 99.234375% (−3.390625 pp). These are prior closed offline scorer measurements, not a new native quality result. | New native cold HTTP, QPS and cost unknown | Actual current-envelope publication and paired cold HTTP; 1M/10M/100M and both vendor comparisons remain unqualified | Frozen 100k ABBA cold gate in `semantic-router-cold-http-gate.md`, after exact final HTTP/binary/publication authority |
 
 The library increment is bounded to 100k/D768 under the declared router admission. Flat root growth and three dependent leaf/source/SQ8 fetch stages remain explicit scale/performance limitations. No vendor win or latency improvement follows from synthetic correctness tests.
 
+## Current delivery checkpoint (2026-10-01)
+
+Transport accounting, the fixed independent review, non-reencoding BOTH-corpus
+packages, portable centroid rounding repair, current reference envelopes and
+publication/cold controller are integrated. The publication helper and controller
+pass their mocked identity, failure and cleanup checks. Both real 64-query panels
+and all eight input/reference bodies pass local authentication and envelope
+validation; this executes no native query and makes no SDK call.
+
+Full execution remains pending. Attempt a0003 failed because Criterion rejected
+a global libtest argument. Its narrow corrected target passed. Attempt a0004
+then hit the assurance cgroup's 256-task ceiling in CLI integration. A serial CLI
+check still reached that ceiling; the same compiled 30-test layer passed under a
+512-task cap, measured peak 314 tasks and no task denial. These immutable failures
+remain failures, with source unchanged. Final a0005 uses the same exact 399-file
+source, serial test execution and a bounded 512-task/8 GiB/zero-swap envelope.
+These are assurance resources, not relaxed scientific experiment limits.
+
+The actual asset tar and draft configuration are prepared. Publisher and HTTP
+full-execution proofs, final config and remote objects remain unqualified until
+a0005 exits zero and its bodies/source are authenticated. No cloud publication,
+cold HTTP measurement, new native quality result or vendor win has occurred.
+
 ## Next delivery steps
 
-1. Reconcile the one independent Opus/Astra implementation review.
-2. Integrate measured HTTP transport totals and router/stage serialization, with actual compile/Clippy/test compilation.
-3. Package unchanged authenticated historical payloads into current graph and semantic envelopes; freeze every changed envelope and publication identity.
-4. Run the preregistered paired cold HTTP test only after controller, source, binary, objects, resources and cleanup authority are established.
+1. Collect the existing a0005 gate; authenticate source, receipt and closed logs.
+2. Bind qualified publisher/HTTP binaries and completed assurance, then freeze
+   the actual config and fast-forward delivery to main.
+3. Upload authenticated immutable assets and run ONE preregistered Spot attempt:
+   four publications with consumed-panel parity validation, then 512 cold ABBA
+   HTTP calls; terminate and wait before closed-artifact collection.
+4. A correctness or quality failure ends the arm. A latency failure identifies
+   the measured critical path without erasing a 95% recall survivor. If both
+   datasets survive, measure offered 8 QPS separately, then fresh 1M and the
+   10M/100M scale and lifecycle-cost curve.
