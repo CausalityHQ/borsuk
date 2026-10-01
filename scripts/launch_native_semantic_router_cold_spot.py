@@ -7,6 +7,13 @@ native_source_manifest. This controller never qualifies or rebuilds native code.
 publication uses the preparation helper's contract unchanged; native_publisher
 is a separate {path,bytes,sha256,key} download pointer. The asset archive is the
 immutable declaration in publication-assets-preparation.json, never child input.
+
+--offered aNNNN uses offered-config.json and the unchanged shared Spot lifecycle.
+Runtime seam: main(five_args, on_cell_closed=callback); callback(summary, paths)
+receives records/summary Paths after fsync and all owned cleanup. Cell markers
+bind records={bytes,sha256}, config/binary/qualification SHA and exact
+rate_index/dataset/arm, with closed/process_cleanup/identity/bounded_memory gates.
+Execution success and scientific offered_gate_passed remain separate outcomes.
 """
 
 import fcntl
@@ -22,7 +29,9 @@ import subprocess
 import sys
 import tarfile
 from contextlib import contextmanager
+from functools import partial
 from shlex import quote
+from types import SimpleNamespace
 from unittest.mock import patch
 
 if not __debug__:
@@ -78,6 +87,17 @@ ARTIFACTS = ('source-qualification.json', 'runtime-abi.json', 'binaries/two_bit_
              'profile.log', 'profile-resources.txt', 'profile-cgroup.json',
              'screen/records.jsonl', 'screen/summary.json', 'screen/config.json', 'screen/qualification.json',
              *AUTHORITY_FILES, *('publication/' + name for name in PUBLICATION_FILES))
+OFFERED_CONFIG = ROOT / 'offered-config.json'
+OFFERED_SCHEMA = 'borsuk-native-semantic-router-cold-offered-spot-v1'
+OFFERED_RUNTIME_SCHEMA = 'borsuk-native-semantic-router-cold-offered-v1'
+OFFERED_PREFIX = 'research/semantic-router/20261001/offered-'
+CELL_STEMS = tuple(f'rate{i}-{dataset.lower()}-{arm}' for i in range(6)
+                   for dataset in ('ReLAION', 'CoHere') for arm in ('control', 'candidate'))
+OFFERED_INPUTS = tuple(f'screen/inputs/{dataset}/{name}' for dataset in ('ReLAION', 'CoHere')
+                       for name in ('requests', 'truth', 'control/reference-k10', 'candidate/reference-k10'))
+OFFERED_ARTIFACTS = (*(n for n in ARTIFACTS if n != 'screen/records.jsonl'),
+                    *(f'screen/{stem}-{suffix}' for stem in CELL_STEMS
+                      for suffix in ('records.jsonl', 'summary.json')), *OFFERED_INPUTS)
 TERMINAL_IDENTITIES = ('config_sha256', 'qualification_sha256', 'binary_sha256', 'binary_bytes',
     'native_source_commit', 'source_identity_sha256', 'source_file_count', 'artifact_roster_sha256',
     'native_source_archive_sha256', 'native_source_manifest_sha256', 'native_assurance_sha256',
@@ -194,9 +214,11 @@ def _runtime_abi(out):
     return report
 
 
-def _qualify(base, binary_override=None, publisher_override=None):
+def _qualify(base, binary_override=None, publisher_override=None, *, offered=False):
     base = Path(base).resolve()
-    body = (base / CONFIG).read_bytes()
+    config_path = OFFERED_CONFIG if offered else CONFIG
+    artifacts = OFFERED_ARTIFACTS if offered else ARTIFACTS
+    body = (base / config_path).read_bytes()
     config = json.loads(body)
     assert not config.get('authority_pending'), 'publication/cold authorities pending'
     expected = dict(schema='borsuk-native-semantic-router-cold-v1', architecture='x86_64',
@@ -208,6 +230,14 @@ def _qualify(base, binary_override=None, publisher_override=None):
         compute_cap_usd=COMPUTE_CAP, ebs_s3_allowance_usd=.15, profile_memory_bytes=8*1024**3,
         native_rlimit_as_bytes=4*1024**3, profile_swap_bytes=0, native_memory_bytes=536870912,
         credential_protocol='instance-imdsv2')
+    if offered:
+        del expected['blocks']
+        expected.update(schema=OFFERED_RUNTIME_SCHEMA, ann_queries=1536,
+            offered_qps=[.25, .5, 1, 2, 4, 8], workers=6, base_port=18080,
+            max_dispatch_lateness_ns=125000000, cleanup_reserve_seconds=90)
+        assert 'blocks' not in config, 'serial blocks in offered protocol'
+        assert all(set(item['arms'][arm]['inputs']) == {'reference-k10'}
+                   for item in config['items'] for arm in ('control', 'candidate')), 'eight consumed offered inputs'
     assert all(config[key] == value for key, value in expected.items()), 'fixed protocol/infrastructure'
     worker = _worker()
     with _cwd(base):
@@ -295,7 +325,8 @@ def _qualify(base, binary_override=None, publisher_override=None):
         Path(binary_override) if binary_override is not None else base/binary_pointer['path']),
         two_bit_plan_demo=_required_glibc(publisher))
     assert all(_version(v) <= _version(RUNTIME_GLIBC) for v in required_glibc.values()), 'target Ubuntu GLIBC too old'
-    qualification = dict(config_path=str(CONFIG), config_sha256=peer.sha(body), campaign_schema=SCHEMA,
+    qualification = dict(config_path=str(config_path), config_sha256=peer.sha(body),
+        campaign_schema=OFFERED_SCHEMA if offered else SCHEMA,
         native_source_commit=manifest['native_source_commit'], source_identity_sha256=identity,
         source_file_count=399, code_sha256=code, binary_sha256=BINARY_SHA, binary_bytes=BINARY_BYTES,
         qualification_sha256=config['qualification_sha256'], native_rebuilt=False,
@@ -310,19 +341,27 @@ def _qualify(base, binary_override=None, publisher_override=None):
         runtime_os=RUNTIME_OS, runtime_glibc=RUNTIME_GLIBC, required_glibc=required_glibc,
         awscli_version=AWSCLI_VERSION, awscli_sha256=AWSCLI_SHA256,
         native_binary=binary_pointer, authority_artifacts={n: _identity(b) for n, b in files.items()},
-        artifact_roster_sha256=peer.sha(json.dumps(ARTIFACTS, separators=(',', ':')).encode()))
+        artifact_roster_sha256=peer.sha(json.dumps(artifacts, separators=(',', ':')).encode()))
     return qualification, files
 
 
-def preflight(base=Path('.')):
-    return _qualify(base)[0]
+def preflight(base=Path('.'), offered=False):
+    return _qualify(base, offered=offered)[0]
+
+
+def _offered(qualification):
+    offered = qualification['campaign_schema'] == OFFERED_SCHEMA
+    assert qualification['campaign_schema'] in (SCHEMA, OFFERED_SCHEMA), 'campaign schema'
+    assert qualification['config_path'] == str(OFFERED_CONFIG if offered else CONFIG), 'qualified config path'
+    return offered
 
 
 def _stage(repo, out):
     repo, out = Path(repo).resolve(), Path(out).resolve()
     expected = json.loads((out/'source-qualification.json').read_bytes())
     (out/'binaries/two_bit_plan_demo').chmod(0o755)
-    actual, files = _qualify(repo, out/'binaries/two_bit_http', out/'binaries/two_bit_plan_demo')
+    actual, files = _qualify(repo, out/'binaries/two_bit_http', out/'binaries/two_bit_plan_demo',
+                             offered=_offered(expected))
     assert actual == expected, 'remote qualification differs from local authority'
     for name, body in files.items():
         path = out/name
@@ -386,12 +425,14 @@ def _publish(repo, out):
     repo, out = Path(repo).resolve(), Path(out).resolve()
     qualification = json.loads((out/'source-qualification.json').read_bytes())
     _validate_runtime_abi(qualification, json.loads((out/'runtime-abi.json').read_bytes()))
-    body = (repo/CONFIG).read_bytes()
+    _offered(qualification)
+    config_path = repo/qualification['config_path']
+    body = config_path.read_bytes()
     assert peer.sha(body) == qualification['config_sha256']
     config = json.loads(body)
     with _cwd(repo):
         try:
-            publication.run(repo/CONFIG, qualification['config_sha256'], out/'binaries/two_bit_plan_demo',
+            publication.run(config_path, qualification['config_sha256'], out/'binaries/two_bit_plan_demo',
                             out/'publication')
         except Exception as error:
             # Match the helper CLI: SDK exception text can contain credentials.
@@ -400,16 +441,154 @@ def _publish(repo, out):
     return _published(config, qualification['config_sha256'], bodies)
 
 
-def user_data(commit, archive_sha, archive_key, prefix, qualification):
+def _cell_bodies(summary, paths, config):
+    """The runtime calls this seam only after full cleanup and immutable closure."""
+    assert set(paths) == {'records', 'summary'}, 'closed cell paths'
+    records, marker = (Path(paths[n]) for n in ('records', 'summary'))
+    stem = records.name.removesuffix('-records.jsonl')
+    assert stem in CELL_STEMS and records.name == stem+'-records.jsonl', 'closed cell roster'
+    assert marker == records.with_name(stem+'-summary.json'), 'closed cell marker path'
+    record_body, summary_body = records.read_bytes(), marker.read_bytes()
+    assert json.loads(summary_body) == summary, 'closed summary body'
+    assert (summary['closed'] is summary['process_cleanup_complete'] is
+            summary['identity_gate_passed'] is summary['bounded_memory_gate_passed'] is True), 'cell not closed'
+    for key, expected in (('config_sha256', config['config_sha256']),
+                          ('binary_sha256', config['binary']['sha256']),
+                          ('qualification_sha256', config['qualification_sha256'])):
+        assert summary[key] == expected, 'closed cell '+key
+    assert summary['records'] == _identity(record_body), 'closed cell record identity'
+    rows = [json.loads(line) for line in record_body.splitlines()]
+    rate, dataset, arm = stem.split('-')
+    identity = dict(rate_index=int(rate[4:]), dataset={'relaion': 'ReLAION', 'cohere': 'CoHere'}[dataset], arm=arm)
+    assert type(summary['rate_index']) is int and all(summary[k] == v for k, v in identity.items()), 'closed cell identity'
+    assert (len(rows) == 64 and [r['query_ordinal'] for r in rows] == list(range(64))
+            and all(type(r['query_ordinal']) is type(r['rate_index']) is int and
+                    all(r[k] == v for k, v in identity.items()) for r in rows)), 'closed offer ledger'
+    return stem, record_body, summary_body
+
+
+def _run_offered(argv, prefix):
+    assert re.fullmatch(re.escape(OFFERED_PREFIX)+r'a[0-9]{4}', prefix), 'checkpoint prefix'
+    assert len(argv) == 5
+    body = Path(argv[0]).read_bytes()
+    assert peer.sha(body) == argv[1], 'checkpoint config identity'
+    config = json.loads(body)
+    assert config['schema'] == OFFERED_RUNTIME_SCHEMA and not config.get('authority_pending')
+    config = dict(config, config_sha256=argv[1])
+    output = Path(argv[4]).resolve()
+    # Existing one-attempt IMDS/S3 client; no SDK exception text reaches logs.
+    try:
+        client = publication.sdk_client(config['region'])
+    except Exception as error:
+        raise RuntimeError('closed cell client failed: '+type(error).__name__) from None
+    uploaded = set()
+    def closed(summary, paths):
+        assert all(Path(path).resolve().parent == output for path in paths.values()), 'checkpoint output path'
+        stem, records, marker = _cell_bodies(summary, paths, config)
+        assert stem not in uploaded, 'duplicate closed cell'
+        try:
+            client.put_object(Bucket=config['bucket'], Key=prefix+'/cells/'+stem+'-records.jsonl',
+                              Body=records, IfNoneMatch='*')
+            client.put_object(Bucket=config['bucket'], Key=prefix+'/cells/'+stem+'-summary.json',
+                              Body=marker, IfNoneMatch='*')
+        except Exception as error:
+            raise RuntimeError('closed cell upload failed: '+type(error).__name__) from None
+        uploaded.add(stem)
+    return _worker().main(argv, on_cell_closed=closed)
+
+
+def _profile_resources(report):
+    """Actual shared cgroup evidence; six admissions are not an aggregate peak."""
+    try:
+        events = dict(line.split() for line in report['memory.events'].splitlines())
+        return (int(report['memory.max']) == 8*1024**3
+            and 0 < int(report['memory.peak']) <= 8*1024**3
+            and int(report['memory.swap.max']) == int(report['memory.swap.peak']) == 0
+            and all(int(events[name]) == 0 for name in ('oom', 'oom_kill', 'oom_group_kill'))
+            and report['rlimit_as_bytes'] == [4*1024**3, 4*1024**3]
+            and report['cpu_affinity'] == [0, 1, 2, 3])
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _check_offered_closure(out):
+    out = Path(out)
+    body = (out/'screen/config.json').read_bytes()
+    config = json.loads(body)
+    assert config['schema'] == OFFERED_RUNTIME_SCHEMA
+    config = dict(config, config_sha256=peer.sha(body))
+    summary = json.loads((out/'screen/summary.json').read_bytes())
+    assert summary['closed'] is summary['process_cleanup_complete'] is summary['identity_gate_passed'] is True
+    for stem in CELL_STEMS:
+        paths = {n: out/'screen'/(stem+'-'+suffix) for n, suffix in
+                 (('records', 'records.jsonl'), ('summary', 'summary.json'))}
+        _cell_bodies(json.loads(paths['summary'].read_bytes()), paths, config)
+    return summary, _profile_resources(json.loads((out/'profile-cgroup.json').read_bytes()))
+
+
+def _closed_artifacts(out):
+    """Interrupted runs publish only fully closed cell bodies; partial cells stay invalid."""
+    out = Path(out)
+    cells = set()
+    try:
+        body = (out/'screen/config.json').read_bytes()
+        config = dict(json.loads(body), config_sha256=peer.sha(body))
+    except (OSError, ValueError):
+        config = None
+    if config is not None:
+        for stem in CELL_STEMS:
+            paths = {n: out/'screen'/(stem+'-'+suffix) for n, suffix in
+                     (('records', 'records.jsonl'), ('summary', 'summary.json'))}
+            try:
+                _cell_bodies(json.loads(paths['summary'].read_bytes()), paths, config)
+            except (OSError, ValueError, KeyError, TypeError, AssertionError):
+                continue
+            cells.update('screen/'+p.name for p in paths.values())
+    return tuple(n for n in OFFERED_ARTIFACTS if not n.startswith('screen/rate') or n in cells)
+
+
+def _collect_offered(out, files, qualification, terminal):
+    import tempfile
+    from scripts import check_native_semantic_router_stats as stats
+    # Replay only the authenticated bodies, including all eight consumed inputs.
+    with tempfile.TemporaryDirectory() as tmp:
+        replay = Path(tmp)
+        for name, body in files.items():
+            path = replay/name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(body)
+        summary, resources_passed = _check_offered_closure(replay)
+        verified = stats.check_saved(replay/'screen', qualification['config_sha256'], replay/'binaries/two_bit_http')
+        assert verified['offered_gate_passed'] == summary['offered_gate_passed'], 'saved offered decision'
+    passed = summary['offered_gate_passed'] is True and resources_passed
+    outcome = 'PASS' if passed else 'FAIL'
+    assert terminal['scientific_qualification'] == outcome, 'terminal scientific qualification'
+    assert not passed or terminal['exit_code'] == 0, 'qualified execution failed'
+    receipt = dict(schema='borsuk-native-semantic-router-cold-offered-collection-v1',
+        config_sha256=qualification['config_sha256'], authenticated_artifacts=len(files),
+        process_cleanup_complete=True, resource_gate_passed=resources_passed,
+        scientific_qualification=outcome, original_exit_code=terminal['original_exit_code'],
+        saved_verification=verified)
+    (Path(out)/'offered-verification.json').write_text(json.dumps(receipt, indent=2, allow_nan=False)+'\n')
+
+
+def user_data(commit, archive_sha, archive_key, prefix, qualification, offered=False):
     assert len(commit) == 40 and len(archive_sha) == 64
+    assert _offered(qualification) == offered, 'bootstrap campaign mode'
+    artifacts = OFFERED_ARTIFACTS if offered else ARTIFACTS
+    schema = OFFERED_SCHEMA if offered else SCHEMA
+    config_path = qualification['config_path']
+    if offered:
+        assert re.fullmatch(re.escape(OFFERED_PREFIX)+r'a[0-9]{4}', prefix), 'offered prefix'
     assert (qualification['awscli_version'], qualification['awscli_sha256']) == (AWSCLI_VERSION, AWSCLI_SHA256)
-    with patch.multiple(runner, WALL_SECONDS=WALL, SCHEMA=SCHEMA, ARTIFACTS=ARTIFACTS):
+    with patch.multiple(runner, WALL_SECONDS=WALL, SCHEMA=schema, ARTIFACTS=artifacts):
         body = runner.user_data(commit, archive_sha, archive_key, prefix)
     body = body.replace('v174-relaid-bind-compile', 'native-semantic-router-cold')
     # Share the exact roster across existence gates, uploads and terminal hashing.
-    body = body.replace('phase=bootstrap\n', 'phase=bootstrap\nexport ARTIFACT_NAMES='+quote(' '.join(ARTIFACTS))+'\n', 1)
+    body = body.replace('phase=bootstrap\n', 'phase=bootstrap\nexport ARTIFACT_NAMES='+
+                        quote('run-closed.log' if offered else ' '.join(artifacts))+'\n', 1)
     terminal = body.split("python3 - <<'PY' >terminal.json\n", 1)[1].split('\nPY\n', 1)[0]
-    terminal = terminal.replace(f'for name in {ARTIFACTS!r}:', "for name in os.environ['ARTIFACT_NAMES'].split():")
+    terminal = terminal.replace(f'for name in {artifacts!r}:', "for name in os.environ['ARTIFACT_NAMES'].split():")
     terminal = terminal.replace("'exit_code':code,", "'exit_code':code,'original_exit_code':int(os.environ['ORIGINAL_EXIT_CODE']),")
     finish = f'''finish() {{
   original_code=$?
@@ -447,6 +626,14 @@ PY
 }}
 '''
     start, end = body.index('finish() {\n'), body.index('trap finish EXIT\n')
+    if offered:
+        finish = finish.replace('  aws_ready=0\n', '''  if [ -d "$root/repo/scripts" ]; then
+    export PYTHONPATH="$root/repo"
+    ARTIFACT_NAMES=$(python3.12 -m scripts.launch_native_semantic_router_cold_spot --closed-artifacts "$root") || ARTIFACT_NAMES="run-closed.log profile.log profile-resources.txt profile-cgroup.json"
+    export ARTIFACT_NAMES
+  else ARTIFACT_NAMES="run-closed.log"; export ARTIFACT_NAMES; fi
+  aws_ready=0
+''')
     body = body[:start] + finish + body[end:]
     bootstrap = 'exec >run.log 2>&1\naws s3 cp '
     assert body.count(bootstrap) == 1, 'bootstrap early AWS hook changed'
@@ -474,6 +661,9 @@ aws s3 cp ''')
     encoded = base64.b64encode(gzip.compress(proof, mtime=0)).decode()
     binary_key = quote('s3://' + peer.BUCKET + '/' + qualification['native_binary']['key'])
     publisher_key = quote('s3://' + peer.BUCKET + '/' + qualification['native_publisher']['key'])
+    profile_command = ('scripts.launch_native_semantic_router_cold_spot --run-offered' if offered
+                       else 'scripts.run_native_semantic_router_cold')
+    checkpoint = ' ' + quote(prefix) if offered else ''
     command = f'''phase=install
 python3.12 -c 'import boto3'
 python3.12 -c 'import base64,gzip; from pathlib import Path; Path("source-qualification.json").write_bytes(gzip.decompress(base64.b64decode("{encoded}")))'
@@ -489,10 +679,20 @@ systemd-run --unit=native-semantic-publication --wait --pipe -p MemoryMax=8G -p 
  --setenv=PYTHONPATH="$root/repo" --setenv=TOKIO_WORKER_THREADS=4 --setenv=AWS_MAX_ATTEMPTS=1 --setenv=BORSUK_NATIVE_MEMORY_BYTES=536870912 \\
  bash -c 'ulimit -v 4194304 || exit 96; taskset -c 4-5 python3.12 -m scripts.launch_native_semantic_router_cold_spot --publish "$1/repo" "$1"' _ "$root"
 phase=profile
+{'set +e' if offered else ''}
 systemd-run --unit=native-semantic-router-cold --wait --pipe -p MemoryMax=8G -p MemorySwapMax=0 -p RuntimeMaxSec=3030 -p WorkingDirectory="$root/repo" \\
  --setenv=PYTHONPATH="$root/repo" --setenv=TOKIO_WORKER_THREADS=4 --setenv=AWS_MAX_ATTEMPTS=1 --setenv=BORSUK_NATIVE_MEMORY_BYTES=536870912 \\
  /usr/bin/time -v -o "$root/profile-resources.txt" timeout --signal=TERM --kill-after=30 3000 \\
- bash -c 'ulimit -v 4194304 || exit 96; taskset -c 4-5 python3.12 -m scripts.run_native_semantic_router_cold {CONFIG} {qualification['config_sha256']} "$1/binaries/two_bit_http" "$1/boundary-check.json" "$1/screen"; code=$?; taskset -c 0-3 python3.12 -m scripts.check_native_startup_build --cgroup "$1/profile-cgroup.json" 8589934592 || exit 96; exit "$code"' _ "$root" >profile.log 2>&1
+ bash -c 'ulimit -v 4194304 || exit 96; taskset -c 4-5 python3.12 -m {profile_command} {config_path} {qualification['config_sha256']} "$1/binaries/two_bit_http" "$1/boundary-check.json" "$1/screen"{checkpoint}; code=$?; taskset -c 0-3 python3.12 -m scripts.check_native_startup_build --cgroup "$1/profile-cgroup.json" 8589934592 || exit 96; exit "$code"' _ "$root" >profile.log 2>&1
+'''
+    if offered:
+        command = command.replace('phase=binary-qualification\n', '''export ARTIFACT_NAMES=$(PYTHONPATH="$root/repo" python3.12 -c "from scripts.launch_native_semantic_router_cold_spot import OFFERED_ARTIFACTS; print(' '.join(OFFERED_ARTIFACTS))")
+phase=binary-qualification
+''', 1)
+        command += '''profile_code=$?
+set -e
+test "$profile_code" -le 1
+PYTHONPATH="$root/repo" python3.12 -m scripts.launch_native_semantic_router_cold_spot --check-offered-closure "$root"
 '''
     command += '''for name in $ARTIFACT_NAMES; do
   case "$name" in
@@ -503,12 +703,19 @@ systemd-run --unit=native-semantic-router-cold --wait --pipe -p MemoryMax=8G -p 
 done
 '''
     body = body[:start] + command + body[end:]
+    if offered:
+        body = body.replace('phase=complete\n', 'phase=complete\nexit "$profile_code"\n', 1)
     # Terminal identities are emitted by the bootstrap alongside its byte roster.
     marker = "'source_archive_sha256':'" + archive_sha + "',"
     terminal_fields = {key: qualification[key] for key in TERMINAL_IDENTITIES}
     assert body.count(marker) == 1, 'bootstrap terminal identity hook changed'
     body = body.replace(marker, marker + repr(terminal_fields)[1:-1] +
                         ", 'runtime_abi_sha256':artifacts.get('runtime-abi.json',{}).get('sha256'),")
+    if offered:
+        # Scientific failure retains the runtime exit status after a complete closeout.
+        marker = "'original_exit_code':int(os.environ['ORIGINAL_EXIT_CODE']),"
+        scientific = "json.loads(Path('screen/summary.json').read_text())['offered_gate_passed'] is True and __import__('scripts.launch_native_semantic_router_cold_spot',fromlist=['_profile_resources'])._profile_resources(json.loads(Path('profile-cgroup.json').read_text()))"
+        body = body.replace(marker, marker + "'scientific_qualification':('PASS' if "+scientific+" else 'FAIL') if os.environ['PHASE']=='complete' else None,")
     subprocess.run(['bash', '-n'], input=body, text=True, check=True)
     assert len(body.encode()) < 16384
     return body
@@ -525,15 +732,21 @@ def collect(s3, prefix, out, instance_id, commit, digest):
     closed = json.loads((out/'aws-closeout.json').read_bytes())
     assert closed['state'] == 'terminated' and instance_id in {n['instance_id'] for n in closed['nodes'].values()}
     qualification = reservation['qualification']
+    offered = qualification.get('campaign_schema') == OFFERED_SCHEMA
+    schema = OFFERED_SCHEMA if offered else SCHEMA
+    artifacts = OFFERED_ARTIFACTS if offered else ARTIFACTS
+    if offered:
+        _offered(qualification)
+        assert qualification['artifact_roster_sha256'] == peer.sha(json.dumps(artifacts, separators=(',', ':')).encode())
     raw = s3.get_object(Bucket=peer.BUCKET, Key=prefix+'/terminal.json')['Body'].read()
     (out/'aws-terminal.json').write_bytes(raw)
     terminal = json.loads(raw)
-    assert terminal['schema'] == SCHEMA and terminal['instance_id'] == instance_id
+    assert terminal['schema'] == schema and terminal['instance_id'] == instance_id
     assert terminal['source_commit'] == reservation['source_commit'] == commit
     assert terminal['source_archive_sha256'] == reservation['source_archive_sha256'] == digest
     for key in TERMINAL_IDENTITIES:
         assert terminal[key] == qualification[key], key
-    assert set(terminal['artifacts']) <= set(ARTIFACTS)
+    assert set(terminal['artifacts']) <= set(artifacts)
     files = {}
     for name, identity in terminal['artifacts'].items():
         data = s3.get_object(Bucket=peer.BUCKET, Key=prefix+'/artifacts/'+name)['Body'].read()
@@ -544,8 +757,13 @@ def collect(s3, prefix, out, instance_id, commit, digest):
         files[name] = data
     assert terminal['runtime_abi_sha256'] == (peer.sha(files['runtime-abi.json'])
         if 'runtime-abi.json' in files else None), 'terminal ABI report identity'
-    if terminal['status'] == terminal['phase'] == 'complete' and terminal['exit_code'] == 0:
-        assert set(files) == set(ARTIFACTS), 'complete artifact roster'
+    complete = terminal['status'] == terminal['phase'] == 'complete' and terminal['exit_code'] == 0
+    if offered and terminal['phase'] == 'complete':
+        assert terminal['exit_code'] == terminal['original_exit_code'] in (0, 1), 'offered original status'
+        assert terminal['status'] == ('complete' if terminal['exit_code'] == 0 else 'failed'), 'offered terminal status'
+        complete = True
+    if complete:
+        assert set(files) == set(artifacts), 'complete artifact roster'
         assert json.loads(files['source-qualification.json']) == qualification
         _validate_runtime_abi(qualification, json.loads(files['runtime-abi.json']))
         for name, identity in qualification['authority_artifacts'].items():
@@ -564,20 +782,33 @@ def collect(s3, prefix, out, instance_id, commit, digest):
                                                          sha256=qualification['publisher_sha256'])
         assert config['publication']['assets'] == qualification['publication_assets']
         _published(config, qualification['config_sha256'], {n: files['publication/'+n] for n in PUBLICATION_FILES})
+        if offered:
+            _collect_offered(out, files, qualification, terminal)
     return terminal
 
 
-def main(attempt):
-    return shared.main(attempt, campaign=sys.modules[__name__])
+def main(attempt, offered=False):
+    campaign = sys.modules[__name__]
+    if offered:
+        # Shared lifecycle owns every ACK, fsync, terminate, wait and collection.
+        campaign = SimpleNamespace(ROOT=ROOT, NAME='offered', SCHEMA=OFFERED_SCHEMA,
+            PREFIX=OFFERED_PREFIX, TOKEN_PREFIX='semantic-router-offered-', TAG='borsuk-semantic-router-offered',
+            ARTIFACTS=OFFERED_ARTIFACTS, WALL=WALL, INSTANCE_TYPE=INSTANCE_TYPE, IMAGE_ID=IMAGE_ID,
+            ROOT_DEVICE_NAME=ROOT_DEVICE_NAME, SUBNET=SUBNET, SPOT_MAX_USD_PER_HOUR=SPOT_MAX_USD_PER_HOUR,
+            COMPUTE_CAP=COMPUTE_CAP, preflight=partial(preflight, offered=True),
+            user_data=partial(user_data, offered=True), poll=poll, collect=collect)
+    return shared.main(attempt, campaign=campaign)
 
 
-def lifecycle_self_check():
+def lifecycle_self_check(offered=False):
     """Exercise this campaign through the actual shared lifecycle, including wait."""
     from datetime import datetime, timezone
     import tempfile
     from unittest.mock import Mock
     from botocore.exceptions import ReadTimeoutError, EndpointConnectionError
     module = sys.modules[__name__]
+    artifacts = OFFERED_ARTIFACTS if offered else ARTIFACTS
+    token_prefix = 'semantic-router-offered-' if offered else TOKEN_PREFIX
     tokens = []
     for failure in ('success', 'fsync', 'upload', 'poll', 'interruption', 'interrupt', 'multi-ack', 'multi-ack-fsync'):
         with tempfile.TemporaryDirectory() as tmp:
@@ -595,7 +826,7 @@ def lifecycle_self_check():
             def collected(*args):
                 assert events == ['terminate', 'wait']
                 events.append('collect')
-                return dict(status='complete', phase='complete', exit_code=0, artifacts={n: {} for n in ARTIFACTS})
+                return dict(status='complete', phase='complete', exit_code=0, artifacts={n: {} for n in artifacts})
             error = {'poll': ReadTimeoutError(endpoint_url='synthetic'),
                      'interruption': RuntimeError('interrupted'), 'interrupt': KeyboardInterrupt()}.get(failure)
             writes = [None, None, OSError('upload')] if failure == 'upload' else [None]*3
@@ -607,7 +838,7 @@ def lifecycle_self_check():
                     patch.object(peer, 'missing', return_value=True), patch.object(peer, 'put_if_absent', side_effect=writes), \
                     patch.object(shared.os, 'fsync', side_effect=OSError('persist') if failure.endswith('fsync') else None) as fsync:
                 try:
-                    main(attempt)
+                    main(attempt, offered=offered)
                 except (OSError, RuntimeError, ReadTimeoutError, KeyboardInterrupt):
                     assert failure not in ('success', 'multi-ack'), 'unexpected lifecycle failure'
                 else:
@@ -626,9 +857,9 @@ def lifecycle_self_check():
             assert args['BlockDeviceMappings'][0]['DeviceName'] == ROOT_DEVICE_NAME == '/dev/sda1'
             assert args['NetworkInterfaces'][0]['AssociatePublicIpAddress'] is True
             assert args['IamInstanceProfile'] == {'Arn': peer.PROFILE_ARN}
-            assert args['ClientToken'].startswith(TOKEN_PREFIX) and len(args['ClientToken']) <= 64
+            assert args['ClientToken'].startswith(token_prefix) and len(args['ClientToken']) <= 64
             tokens.append(args['ClientToken'])
-            out = Path(tmp)/attempt
+            out = Path(tmp)/'offered'/attempt if offered else Path(tmp)/attempt
             for name in ('aws-launch.json', 'aws-closeout.json'):
                 assert json.loads((out/name).read_bytes())['nodes'] == {str(i): dict(instance_id=n) for i, n in enumerate(ids)}
             reservation = json.loads((out/'aws-reservation.json').read_bytes())
@@ -701,17 +932,187 @@ def _publication_fixture(config, manifest, manifest_body=None, config_body=None)
     return bodies
 
 
-def collection_self_check():
+def _offered_fixture(config):
+    config = dict(config, schema=OFFERED_RUNTIME_SCHEMA, ann_queries=1536,
+                  offered_qps=[.25, .5, 1, 2, 4, 8], workers=6, base_port=18080,
+                  max_dispatch_lateness_ns=125000000, cleanup_reserve_seconds=90)
+    config.pop('blocks', None)
+    return config
+
+
+def _resource_fixture():
+    return {'memory.max': str(8*1024**3), 'memory.peak': '1234', 'memory.swap.max': '0',
+            'memory.swap.peak': '0', 'memory.events': 'oom 0\noom_kill 0\noom_group_kill 0\n',
+            'rlimit_as_bytes': [4*1024**3, 4*1024**3], 'cpu_affinity': [0, 1, 2, 3]}
+
+
+def _cell_fixture(out, stem, config):
+    out.mkdir(parents=True, exist_ok=True)
+    paths = {n: out/(stem+'-'+suffix) for n, suffix in
+             (('records', 'records.jsonl'), ('summary', 'summary.json'))}
+    rate, dataset, arm = stem.split('-')
+    identity = dict(rate_index=int(rate[4:]), dataset={'relaion': 'ReLAION', 'cohere': 'CoHere'}[dataset], arm=arm)
+    paths['records'].write_text(''.join(json.dumps(dict(identity, query_ordinal=q))+'\n' for q in range(64)))
+    summary = dict(identity, closed=True, process_cleanup_complete=True, identity_gate_passed=True,
+        bounded_memory_gate_passed=True, records=_identity(paths['records'].read_bytes()),
+        config_sha256=config['config_sha256'], binary_sha256=config['binary']['sha256'],
+        qualification_sha256=config['qualification_sha256'])
+    paths['summary'].write_text(json.dumps(summary)+'\n')
+    return paths
+
+
+def _offered_self_check(base, config, stage):
+    """Controller-only fixtures; the independent runtime API is mocked until integration."""
+    from unittest.mock import Mock
+    from scripts import check_native_semantic_router_stats as stats
+    module = sys.modules[__name__]
+    offered = _offered_fixture(config)
+    config_path = base/OFFERED_CONFIG
+    config_path.write_text(json.dumps(offered))
+    qualified = preflight(base, offered=True)
+    assert qualified['config_path'] == str(OFFERED_CONFIG) and qualified['campaign_schema'] == OFFERED_SCHEMA
+    assert qualified['source_file_count'] == 399 and qualified['native_rebuilt'] is False
+    assert len(OFFERED_ARTIFACTS) == len(set(OFFERED_ARTIFACTS)) == 108
+    assert 'screen/records.jsonl' not in OFFERED_ARTIFACTS and len(OFFERED_INPUTS) == 8
+    def rejected(call):
+        try: call()
+        except (AssertionError, ValueError, KeyError, FileNotFoundError): pass
+        else: raise AssertionError('changed offered authority accepted')
+    for key, value in (('authority_pending', True), ('schema', config['schema']), ('ann_queries', 512),
+            ('offered_qps', [1, 2]), ('workers', 7), ('base_port', 8080), ('count', 63), ('k', 100),
+            ('max_dispatch_lateness_ns', 125000001), ('cleanup_reserve_seconds', 89),
+            ('blocks', ['control0']), ('worker_limit_seconds', 3001), ('profile_swap_bytes', 1),
+            ('controller_code_sha256', {}), ('code_sha256', {}), ('native_source_file_count', 398)):
+        config_path.write_text(json.dumps(dict(offered, **{key: value})))
+        rejected(lambda: preflight(base, offered=True))
+    config_path.write_text(json.dumps(offered))
+    for name in (next(iter(config['code_sha256'])), next(iter(config['controller_code_sha256'])),
+                 next(iter(source_hashes(base))), str(OFFERED_CONFIG)):
+        path = base/name
+        saved = path.read_bytes()
+        path.write_bytes(saved+b'changed')
+        rejected(lambda: preflight(base, offered=True))
+        path.write_bytes(saved)
+    (stage/'source-qualification.json').write_text(json.dumps(qualified))
+    _stage(base, stage)
+    bad = dict(qualified, artifact_roster_sha256='f'*64)
+    (stage/'source-qualification.json').write_text(json.dumps(bad))
+    rejected(lambda: _stage(base, stage))
+    (stage/'source-qualification.json').write_text(json.dumps(qualified))
+    bodies = _publication_fixture(offered, json.loads((base/ROOT/'publication-assets.json').read_bytes()),
+                                  (base/ROOT/'publication-assets.json').read_bytes(), config_path.read_bytes())
+    def publish(path, digest, binary, out):
+        assert path == config_path and digest == qualified['config_sha256']
+        out.mkdir(exist_ok=True)
+        for name, body in bodies.items():
+            target = out/name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(body)
+    with patch.object(publication, 'run', side_effect=publish):
+        _publish(base, stage)
+    body = user_data('0'*40, '1'*64, 'sources/synthetic', OFFERED_PREFIX+'a0001', qualified, offered=True)
+    assert len(body.encode()) < 16384 and '--run-offered' in body and str(OFFERED_CONFIG) in body
+    assert '--closed-artifacts' in body and 'exit "$profile_code"' in body and 'original_exit_code' in body
+    rejected(lambda: user_data('0'*40, '1'*64, 'sources/synthetic', OFFERED_PREFIX+'a0001', qualified))
+    checked_config = dict(offered, config_sha256=qualified['config_sha256'])
+    output = base/'checkpoint'
+    argv = [str(config_path), qualified['config_sha256'], str(stage/'binaries/two_bit_http'),
+            str(stage/'boundary-check.json'), str(output)]
+    client = Mock()
+    with patch.object(publication, 'sdk_client', side_effect=RuntimeError('synthetic-sensitive-sdk-text')), \
+            patch.object(module, '_worker') as worker:
+        try: _run_offered(argv, OFFERED_PREFIX+'a0001')
+        except RuntimeError as error: assert 'synthetic-sensitive-sdk-text' not in str(error)
+        else: raise AssertionError('SDK client failure swallowed')
+        worker.assert_not_called()
+    for failure in ('success', 'partial', 'identity', 'upload', 'interrupt'):
+        client.reset_mock(side_effect=True)
+        if failure == 'upload': client.put_object.side_effect = RuntimeError('synthetic-sensitive-sdk-text')
+        def runtime(args, *, on_cell_closed):
+            assert args == argv
+            paths = _cell_fixture(output, CELL_STEMS[0], checked_config)
+            marker = json.loads(paths['summary'].read_bytes())
+            if failure == 'partial': marker['closed'] = False
+            elif failure == 'identity': marker['identity_gate_passed'] = False
+            paths['summary'].write_text(json.dumps(marker))
+            on_cell_closed(marker, paths)
+            if failure == 'interrupt':
+                partial = _cell_fixture(output, CELL_STEMS[1], checked_config)
+                summary = json.loads(partial['summary'].read_bytes())
+                summary['closed'] = False
+                partial['summary'].write_text(json.dumps(summary))
+                (output/'config.json').write_bytes(config_path.read_bytes())
+                raise KeyboardInterrupt()
+            return 0
+        with patch.object(module, '_worker', return_value=SimpleNamespace(main=runtime)), \
+                patch.object(publication, 'sdk_client', return_value=client), patch.object(stats, 'check_saved') as reducer:
+            try: result = _run_offered(argv, OFFERED_PREFIX+'a0001')
+            except (AssertionError, RuntimeError, KeyboardInterrupt) as error:
+                assert failure != 'success'
+                assert 'synthetic-sensitive-sdk-text' not in str(error)
+            else: assert failure == 'success' and result == 0
+            reducer.assert_not_called()
+        assert client.put_object.call_count == (0 if failure in ('partial', 'identity') else 1 if failure == 'upload' else 2)
+        if failure in ('success', 'interrupt'):
+            assert [c.kwargs['Key'] for c in client.put_object.call_args_list] == [
+                OFFERED_PREFIX+'a0001/cells/'+CELL_STEMS[0]+'-'+s for s in ('records.jsonl', 'summary.json')]
+            assert all(c.kwargs['IfNoneMatch'] == '*' for c in client.put_object.call_args_list)
+        if failure == 'interrupt':
+            closed = _closed_artifacts(output.parent)  # The actual roster is rooted at screen/.
+            assert not any('rate0-' in n for n in closed)
+            (stage/'screen').mkdir(exist_ok=True)
+            (stage/'screen/config.json').write_bytes(config_path.read_bytes())
+            for stem in CELL_STEMS[:2]:
+                for suffix in ('records.jsonl', 'summary.json'):
+                    name = stem+'-'+suffix
+                    (stage/'screen'/name).write_bytes((output/name).read_bytes())
+            closed = _closed_artifacts(stage)
+            assert all('screen/'+CELL_STEMS[0]+'-'+s in closed for s in ('records.jsonl', 'summary.json'))
+            assert all('screen/'+CELL_STEMS[1]+'-'+s not in closed for s in ('records.jsonl', 'summary.json'))
+    assert _profile_resources(_resource_fixture())
+    for key, value in (('memory.max', 'max'), ('memory.peak', str(8*1024**3+1)), ('memory.swap.max', '1'),
+            ('memory.swap.peak', '1'), ('memory.events', 'oom 1\noom_kill 0\noom_group_kill 0'),
+            ('memory.events', 'oom 0\noom_kill 1\noom_group_kill 0'),
+            ('memory.events', 'oom 0\noom_kill 0\noom_group_kill 1')):
+        assert not _profile_resources(dict(_resource_fixture(), **{key: value}))
+    assert not _profile_resources({})
+    # Execute the generated terminal Python, preserving execution versus scientific outcome.
+    for name in OFFERED_ARTIFACTS:
+        path = stage/name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists(): path.write_bytes(b'synthetic artifact\n')
+    terminal_script = body.split("python3 - <<'PY' >terminal.json\n")[1].split('\nPY\n')[0]
+    for attained, code, resources in ((False, 0, True), (True, 0, True), (False, 1, True), (True, 1, False)):
+        (stage/'screen/summary.json').write_text(json.dumps({'offered_gate_passed': attained}))
+        report = _resource_fixture()
+        if not resources: report['memory.events'] = 'oom 1\noom_kill 0\noom_group_kill 0'
+        (stage/'profile-cgroup.json').write_text(json.dumps(report))
+        terminal = json.loads(subprocess.check_output([sys.executable, '-c', terminal_script], cwd=stage,
+            env=dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]),
+                ARTIFACT_NAMES=' '.join(OFFERED_ARTIFACTS), INSTANCE_ID='i-synthetic', EXIT_CODE=str(code),
+                ORIGINAL_EXIT_CODE=str(code), PHASE='complete')))
+        assert terminal['schema'] == OFFERED_SCHEMA and terminal['original_exit_code'] == code
+        assert terminal['scientific_qualification'] == ('PASS' if attained and resources else 'FAIL')
+        assert terminal['status'] == ('complete' if code == 0 else 'failed')
+        assert set(terminal['artifacts']) == set(OFFERED_ARTIFACTS)
+    print(f'offered controller fixture PASS; artifacts=108; bootstrap_bytes={len(body.encode())}; runtime/cloud/native MOCKED')
+
+
+def collection_self_check(offered=False):
     import tempfile
     from unittest.mock import Mock
+    artifacts = OFFERED_ARTIFACTS if offered else ARTIFACTS
+    schema = OFFERED_SCHEMA if offered else SCHEMA
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp)
-        files = {n: b'synthetic artifact\n' for n in ARTIFACTS}
+        files = {n: b'synthetic artifact\n' for n in artifacts}
         binary = files['binaries/two_bit_http']
         config = json.loads((Path(__file__).resolve().parents[1]/ROOT/'config-draft.json').read_bytes())
         manifest_body = (Path(__file__).resolve().parents[1]/ROOT/'publication-assets.json').read_bytes()
         manifest = json.loads(manifest_body)
         config['controller_code_sha256'] = {n: 'a'*64 for n in EXTRAS}
+        if offered:
+            config = _offered_fixture(config)
         config['publication']['publisher'] = _identity(files['binaries/two_bit_plan_demo'])
         config['publication']['qualification'] = dict(path='proof', **_identity(files['publisher-proof.json']))
         publication_bodies = _publication_fixture(config, manifest, manifest_body)
@@ -721,8 +1122,10 @@ def collection_self_check():
         proof = files['boundary-check.json']
         files['screen/qualification.json'] = proof
         qualification = dict(config_sha256=peer.sha(config_body), qualification_sha256=peer.sha(proof),
+            config_path=str(OFFERED_CONFIG if offered else CONFIG), campaign_schema=schema,
             binary_sha256=peer.sha(binary), binary_bytes=len(binary), native_source_commit='2'*40,
-            source_identity_sha256=config['native_source_identity_sha256'], source_file_count=399, artifact_roster_sha256='4'*64,
+            source_identity_sha256=config['native_source_identity_sha256'], source_file_count=399,
+            artifact_roster_sha256=peer.sha(json.dumps(artifacts, separators=(',', ':')).encode()),
             native_source_archive_sha256='5'*64, native_source_manifest_sha256='6'*64, native_assurance_sha256='7'*64,
             publisher_sha256=peer.sha(files['binaries/two_bit_plan_demo']),
             publisher_bytes=len(files['binaries/two_bit_plan_demo']),
@@ -741,8 +1144,16 @@ def collection_self_check():
             ldd={n: dict(returncode=0, stdout='libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6\n', stderr='')
                  for n in qualification['required_glibc']})
         files['runtime-abi.json'] = json.dumps(report).encode()
-        terminal = dict(schema=SCHEMA, instance_id='i-owned', source_commit='0'*40,
+        if offered:
+            files['screen/summary.json'] = json.dumps(dict(closed=True, process_cleanup_complete=True,
+                identity_gate_passed=True, offered_gate_passed=False)).encode()
+            files['profile-cgroup.json'] = json.dumps(_resource_fixture()).encode()
+            for stem in CELL_STEMS:
+                paths = _cell_fixture(out/'fixture', stem, dict(config, config_sha256=peer.sha(config_body)))
+                files.update({'screen/'+path.name: path.read_bytes() for path in paths.values()})
+        terminal = dict(schema=schema, instance_id='i-owned', source_commit='0'*40,
             source_archive_sha256='1'*64, status='complete', phase='complete', exit_code=0,
+            original_exit_code=0, scientific_qualification='FAIL' if offered else None,
             runtime_abi_sha256=peer.sha(files['runtime-abi.json']),
             artifacts={n: _identity(b) for n, b in files.items()}, **{k:v for k,v in qualification.items() if k != 'authority_artifacts'})
         (out/'aws-reservation.json').write_text(json.dumps(dict(source_commit='0'*40,
@@ -757,7 +1168,9 @@ def collection_self_check():
         for change in (None, 'source', 'config', 'proof', 'binary', 'roster', 'sha', 'bytes', 'unknown',
                        'awscli-version', 'awscli-hash',
                        'publisher', 'publication-roster', 'receipt', 'head', 'publication-config', 'closeout',
-                       'abi-missing', 'abi-sha', 'abi-os', 'abi-libc', 'abi-binary', 'abi-required', 'abi-unresolved'):
+                       'abi-missing', 'abi-sha', 'abi-os', 'abi-libc', 'abi-binary', 'abi-required', 'abi-unresolved',
+                       *(['cell-partial', 'cell-config', 'cell-record', 'cell-identity', 'cell-memory', 'inputs',
+                          'cell-ledger', 'scientific', 'original-exit', 'saved-reducer'] if offered else [])):
             current = json.loads(json.dumps(terminal))
             original_files = dict(files)
             if change in ('source', 'config', 'proof', 'binary', 'publisher'):
@@ -797,19 +1210,63 @@ def collection_self_check():
                     files[name] = b'{}'
                 current['artifacts'][name] = _identity(files[name])
             elif change == 'roster':
-                del current['artifacts']['screen/records.jsonl']
+                del current['artifacts']['screen/'+CELL_STEMS[0]+'-records.jsonl' if offered else 'screen/records.jsonl']
+            elif change == 'inputs': del current['artifacts'][OFFERED_INPUTS[0]]
+            elif change == 'scientific': current['scientific_qualification'] = 'PASS'
+            elif change == 'original-exit': current['original_exit_code'] = 1
+            elif change == 'cell-ledger':
+                name = 'screen/'+CELL_STEMS[0]+'-records.jsonl'
+                rows = [json.loads(line) for line in files[name].splitlines()]
+                rows[0]['dataset'] = 'CoHere'
+                files[name] = ''.join(json.dumps(r)+'\n' for r in rows).encode()
+                current['artifacts'][name] = _identity(files[name])
+                marker = 'screen/'+CELL_STEMS[0]+'-summary.json'
+                summary = json.loads(files[marker])
+                summary['records'] = _identity(files[name])
+                files[marker] = json.dumps(summary).encode()
+                current['artifacts'][marker] = _identity(files[marker])
+            elif change and change.startswith('cell-'):
+                name = 'screen/'+CELL_STEMS[0]+'-summary.json'
+                bad = json.loads(files[name])
+                key = {'cell-partial': 'closed', 'cell-config': 'config_sha256', 'cell-record': 'records',
+                       'cell-identity': 'identity_gate_passed', 'cell-memory': 'bounded_memory_gate_passed'}[change]
+                bad[key] = 'f'*64 if key == 'config_sha256' else {} if key == 'records' else False
+                files[name] = json.dumps(bad).encode()
+                current['artifacts'][name] = _identity(files[name])
             elif change in ('sha', 'bytes'):
                 current['artifacts']['screen/summary.json']['sha256' if change == 'sha' else 'bytes'] = 'f'*64 if change == 'sha' else 1
             elif change == 'unknown':
                 current['artifacts']['../escape'] = _identity(b'bad')
             try:
-                result = collect(s3, 'synthetic', out, 'i-owned', '0'*40, '1'*64)
-            except AssertionError:
+                from scripts import check_native_semantic_router_stats as stats
+                def saved(output, digest, binary):
+                    if change == 'saved-reducer': raise ValueError('synthetic offline reducer rejection')
+                    assert digest == qualification['config_sha256'] and binary.read_bytes() == files['binaries/two_bit_http']
+                    assert all((output/n.removeprefix('screen/')).read_bytes() == files[n] for n in OFFERED_INPUTS)
+                    return {'offered_gate_passed': False, 'records': 1536}
+                with patch.object(stats, 'check_saved', side_effect=saved) as reducer:
+                    result = collect(s3, 'synthetic', out, 'i-owned', '0'*40, '1'*64)
+                    assert reducer.call_count == int(offered)
+            except (AssertionError, ValueError):
                 assert change is not None
             else:
                 assert change is None and result == terminal, 'changed terminal accepted'
             files = original_files
             (out/'aws-closeout.json').write_text(json.dumps(dict(state='terminated', nodes={'0': dict(instance_id='i-owned')})))
+        if offered:
+            # Capacity/quality FAIL is collectable with execution zero; no OOM becomes a PASS.
+            for code, resource_ok in ((0, True), (1, True), (0, False), (1, False)):
+                report = _resource_fixture()
+                if not resource_ok: report['memory.events'] = 'oom 1\noom_kill 0\noom_group_kill 0'
+                files['profile-cgroup.json'] = json.dumps(report).encode()
+                current = dict(terminal, exit_code=code, original_exit_code=code,
+                    status='complete' if code == 0 else 'failed', scientific_qualification='FAIL',
+                    artifacts={n: _identity(b) for n, b in files.items()})
+                with patch.object(stats, 'check_saved', return_value={'offered_gate_passed': False, 'records': 1536}):
+                    assert collect(s3, 'synthetic', out, 'i-owned', '0'*40, '1'*64) == current
+                checked = json.loads((out/'offered-verification.json').read_bytes())
+                assert checked['scientific_qualification'] == 'FAIL' and checked['resource_gate_passed'] == resource_ok
+                assert checked['original_exit_code'] == code
         # A failed ABI gate still closes and authenticates its partial evidence.
         files = {'runtime-abi.json': json.dumps(dict(report, qualified=False)).encode()}
         current = dict(terminal, status='failed', phase='binary-qualification', exit_code=1,
@@ -975,7 +1432,7 @@ else: print('synthetic closed profile')
                 assert sum('/artifacts/' in c for c in calls) == len(ARTIFACTS)
 
 
-def self_check():
+def self_check(offered=False):
     """Only synthetic bodies and mocked AWS; no native or cloud execution."""
     import tempfile
     import copy
@@ -1333,8 +1790,13 @@ def self_check():
             assert terminal['qualification_sha256'] == qualification['qualification_sha256']
             assert terminal['required_glibc'] == qualification['required_glibc']
             assert terminal['runtime_abi_sha256'] == peer.sha((stage/'runtime-abi.json').read_bytes())
+            if offered:
+                _offered_self_check(base, config, stage)
     lifecycle_self_check()
     collection_self_check()
+    if offered:
+        lifecycle_self_check(offered=True)
+        collection_self_check(offered=True)
     # The closed authority has the real source/code/pointer shape, larger than the synthetic fixture.
     repo = Path(__file__).resolve().parents[1]
     closed = json.loads((repo/ROOT/'a0002/aws-reservation.json').read_bytes())
@@ -1346,18 +1808,34 @@ def self_check():
         AWSCLI_VERSION, AWSCLI_URL, AWSCLI_SHA256, AWSCLI_BYTES, 0)
     real_body = user_data(closed['source_commit'], closed['source_archive_sha256'],
         'research/native-library-check/sources/'+closed['source_archive_sha256']+'.tar.gz', PREFIX+'a0002', real)
+    if offered:
+        real.update(config_path=str(OFFERED_CONFIG), campaign_schema=OFFERED_SCHEMA,
+                    artifact_roster_sha256=peer.sha(json.dumps(OFFERED_ARTIFACTS, separators=(',', ':')).encode()))
+        real_body = user_data(closed['source_commit'], closed['source_archive_sha256'],
+            'research/native-library-check/sources/'+closed['source_archive_sha256']+'.tar.gz',
+            OFFERED_PREFIX+'a0002', real, offered=True)
+        print(f'offered real-shape bootstrap_bytes={len(real_body.encode())}; actual preflight UNRUN')
     print(f'semantic cold controller self-check PASS; bootstrap_bytes={len(body.encode())}; real_shape_bytes={len(real_body.encode())}; cloud/native UNRUN')
 
 
 if __name__ == '__main__':
     if sys.argv[1:] == ['--self-check']:
         self_check()
+    elif sys.argv[1:] == ['--offered-self-check']:
+        self_check(offered=True)
     elif len(sys.argv) == 4 and sys.argv[1] == '--stage':
         _stage(sys.argv[2], sys.argv[3])
     elif len(sys.argv) == 4 and sys.argv[1] == '--publish':
         _publish(sys.argv[2], sys.argv[3])
+    elif len(sys.argv) == 8 and sys.argv[1] == '--run-offered':
+        raise SystemExit(_run_offered(sys.argv[2:7], sys.argv[7]))
+    elif len(sys.argv) == 3 and sys.argv[1] == '--closed-artifacts':
+        print(' '.join(_closed_artifacts(sys.argv[2])))
+    elif len(sys.argv) == 3 and sys.argv[1] == '--check-offered-closure':
+        _check_offered_closure(sys.argv[2])
     else:
-        assert len(sys.argv) == 2, 'usage: python3 -m scripts.launch_native_semantic_router_cold_spot aNNNN'
+        offered = len(sys.argv) == 3 and sys.argv[1] == '--offered'
+        assert len(sys.argv) == 2 or offered, 'usage: python3 -m scripts.launch_native_semantic_router_cold_spot [--offered] aNNNN'
         with open('/tmp/borsuk-native-semantic-router-cold-launch.lock', 'a+') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            main(sys.argv[1])
+            main(sys.argv[2] if offered else sys.argv[1], offered=offered)
