@@ -242,7 +242,7 @@ def _qualify(base, binary_override=None, publisher_override=None, *, offered=Fal
     worker = _worker()
     with _cwd(base):
         worker.validate_config(config)
-    assert set(config['code_sha256']) == set(worker.CODE)
+    assert set(config['code_sha256']) == set(worker.OFFERED_CODE if offered else worker.CODE)
     assert set(config['controller_code_sha256']) == set(EXTRAS)
     code = dict(config['code_sha256'], **config['controller_code_sha256'])
     for name, digest in code.items():
@@ -1493,7 +1493,8 @@ def self_check(offered=False):
         proof = dict(qualified=True, green_status=0, release_status=0,
             binary_sha256=binary_sha, source_file_count=399, source_identity_sha256=source_sha,
             compiled_native_sha256=dict(list(identities.items())[:2]))
-        runtime = SimpleNamespace(CODE=('scripts/synthetic-runtime.py',), validate_config=lambda _: None)
+        runtime = SimpleNamespace(CODE=('scripts/synthetic-runtime.py',),
+                                  OFFERED_CODE=('scripts/synthetic-runtime.py',), validate_config=lambda _: None)
         real_run = subprocess.run
         abi_failure = None
         def abi_command(args, **kwargs):
