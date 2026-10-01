@@ -1,0 +1,10 @@
+{
+  "status": 0,
+  "response": {
+    "ETag": "\"c7ca0ce7ea609f34c15ff33b3d241bf5\"",
+    "ChecksumCRC64NVME": "iJ2aUw6X/hA=",
+    "ChecksumType": "FULL_OBJECT",
+    "ServerSideEncryption": "AES256"
+  },
+  "error": ""
+}

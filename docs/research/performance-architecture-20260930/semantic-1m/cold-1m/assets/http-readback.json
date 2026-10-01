@@ -1,0 +1,19 @@
+{
+  "bytes": 16153608,
+  "sha256": "f80d3616e868c05eaf012ced1bb22281c57f064f7ca29f3de9c3aa321ea3befe",
+  "key": "research/semantic-router/20261001/semantic-1m-implementation-a0002/artifacts/binaries/two_bit_http",
+  "etag": "\"b8a72a3db11e351abb02d2742ead0f67-2\"",
+  "conditional_get": true,
+  "status": 0,
+  "response": {
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-01T15:17:32+00:00",
+    "ContentLength": 16153608,
+    "ETag": "\"b8a72a3db11e351abb02d2742ead0f67-2\"",
+    "ChecksumCRC64NVME": "nY/XMBacLaY=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+  }
+}
