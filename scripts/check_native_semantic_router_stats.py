@@ -71,26 +71,51 @@ def validate_startup(stats, arm, wall_ns):
     rows = stats['metadata']
     require(len(rows) == len(files) and len({r['name'] for r in rows}) == len(rows)
             and {r['name']: r['bytes'] for r in rows} == files, 'startup roster/bytes')
+    order = ['manifest.json', 'page_manifest.json', 'page_digests.bin']
+    if arm['discovery'] == 'graph':
+        order += ['centroids.bin', 'graph.bin', 'diverse_graph.bin']
+    order += ['plane/manifest.json', 'plane/mean.bin', 'plane/page_digests.bin']
+    if arm['discovery'] == 'semantic':
+        order += ['router/manifest.json', 'router/membership.bin']
+    require([r['name'] for r in rows] == order, 'metadata roster order')
+    waves = []
     for row in rows:
-        for name in ('bytes', 'chunks', 'head_wall_ns', 'get_wall_ns', 'stream_wall_ns',
-                     'write_wall_ns', 'logical_head_requests', 'logical_get_requests',
-                     'payload_buffer_bound_bytes'):
-            integer(row[name], name)
-        require(row['chunks'] > 0, 'metadata chunks')
-        heads = int(row['name'] not in EXACT_LENGTH_FILES)
-        require(row['logical_head_requests'] == heads, 'metadata HEAD count')
-        if not heads:
-            require(row['head_wall_ns'] == 0, 'skipped metadata HEAD time')
-        require(row['logical_get_requests'] == (row['bytes'] + 4194303) // 4194304,
-                'metadata logical GETs')
-        require(row['payload_buffer_bound_bytes'] == min(row['bytes'], 8 * 4194304),
-                'metadata payload bound')
-        require(row['write_wall_ns'] <= row['stream_wall_ns'], 'nested write timing')
-        if row['bytes'] > 4194304:
-            require(row['get_wall_ns'] == 0, 'range headers already included in stream')
+        wave = integer(row['metadata_wave'], 'metadata wave')
+        integer(row['metadata_wave_wall_ns'], 'metadata wave wall', 1, 2**128 - 1)
+        if not waves or wave != waves[-1][0]['metadata_wave']:
+            require(wave == len(waves), 'metadata wave order')
+            waves.append([])
+        waves[-1].append(row)
+    require(len(waves[0]) == 1, 'metadata root wave')
+    for batch in waves:
+        require(len(batch) <= 4, 'metadata wave width')
+        wave_wall = batch[0]['metadata_wave_wall_ns']
+        for row in batch:
+            for name in ('bytes', 'chunks', 'logical_head_requests', 'logical_get_requests',
+                         'payload_buffer_bound_bytes'):
+                integer(row[name], name)
+            for name in ('head_wall_ns', 'get_wall_ns', 'stream_wall_ns', 'write_wall_ns'):
+                integer(row[name], name, maximum=2**128 - 1)
+            require(row['metadata_wave_wall_ns'] == wave_wall, 'metadata wave repeated wall')
+            require(row['chunks'] > 0, 'metadata chunks')
+            heads = int(row['name'] not in EXACT_LENGTH_FILES)
+            require(row['logical_head_requests'] == heads, 'metadata HEAD count')
+            if not heads:
+                require(row['head_wall_ns'] == 0, 'skipped metadata HEAD time')
+            require(row['logical_get_requests'] == (row['bytes'] + 4194303) // 4194304,
+                    'metadata logical GETs')
+            require(row['payload_buffer_bound_bytes'] == min(row['bytes'], (8 // len(batch)) * 4194304),
+                    'metadata payload bound')
+            require(row['write_wall_ns'] <= row['stream_wall_ns'], 'nested write timing')
+            require(row['head_wall_ns'] + row['get_wall_ns'] + row['stream_wall_ns'] <= wave_wall,
+                    'metadata object/wave timing')
+            if row['bytes'] > 4194304:
+                require(row['get_wall_ns'] == 0, 'range headers already included in stream')
+        require(sum(r['payload_buffer_bound_bytes'] for r in batch) <= 8 * 4194304,
+                'metadata wave payload bound')
     for name in ('staging_wall_ns', 'decode_wall_ns', 'source_head_wall_ns', 'router_head_wall_ns'):
         integer(stats[name], name, maximum=2**128 - 1)
-    require(sum(r['head_wall_ns'] + r['get_wall_ns'] + r['stream_wall_ns'] for r in rows)
+    require(sum(batch[0]['metadata_wave_wall_ns'] for batch in waves)
             <= stats['staging_wall_ns'], 'metadata staging timing')
     require(integer(stats['source_head_requests'], 'source HEAD') == 1, 'source HEAD count')
     router_heads = int(arm['discovery'] == 'semantic')
@@ -103,7 +128,7 @@ def validate_startup(stats, arm, wall_ns):
                 logical_metadata_get_requests=sum(r['logical_get_requests'] for r in rows),
                 logical_metadata_head_requests=sum(r['logical_head_requests'] for r in rows), source_head_requests=1,
                 router_head_requests=router_heads,
-                payload_buffer_bound_bytes=max(r['payload_buffer_bound_bytes'] for r in rows),
+                payload_buffer_bound_bytes=max(sum(r['payload_buffer_bound_bytes'] for r in batch) for batch in waves),
                 staged_selected_leaf_bytes=0)
 
 
@@ -278,6 +303,73 @@ def self_check():
     for name in ('planning', 'sq8'):
         partial[name] = dict(start_ns=0, end_ns=0)
     validate_stages(partial, 40, 'semantic', 8, False)
+    # Wave walls are critical intervals; per-object overlapping waits are not additive.
+    files = {'manifest.json': 5000, 'page_manifest.json': 1000, 'page_digests.bin': 12512,
+             'plane/manifest.json': 500, 'plane/mean.bin': 3072, 'plane/page_digests.bin': 100000,
+             'router/manifest.json': 80000, 'router/membership.bin': 12500}
+    arm = dict(discovery='semantic', metadata_files=files,
+               metadata_sha256={name: 'a' * 64 for name in files},
+               authority=dict(root_sha256='a' * 64), head_file=dict(bytes=200, sha256='a' * 64),
+               leaf_object=dict(bytes=4812500, sha256='a' * 64))
+    rows = [dict(name=name, bytes=size, chunks=1, head_wall_ns=int(name not in EXACT_LENGTH_FILES),
+                 get_wall_ns=3, stream_wall_ns=5, write_wall_ns=1,
+                 logical_head_requests=int(name not in EXACT_LENGTH_FILES), logical_get_requests=1,
+                 payload_buffer_bound_bytes=size, metadata_wave=0 if i == 0 else (i - 1) // 4 + 1,
+                 metadata_wave_wall_ns=10) for i, (name, size) in enumerate(files.items())]
+    startup = dict(metadata=rows, staging_wall_ns=30, decode_wall_ns=5,
+                   source_head_requests=1, source_head_wall_ns=2,
+                   router_head_requests=1, router_head_wall_ns=2)
+    assert sum(r['head_wall_ns'] + r['get_wall_ns'] + r['stream_wall_ns'] for r in rows) > 30
+    validate_startup(startup, arm, 40)
+    for mutation in ('missing_wave', 'missing_wall', 'root', 'gap', 'width', 'order',
+                     'boolean', 'negative', 'overflow', 'unequal_wall', 'sum_wall', 'object_wall', 'buffer'):
+        bad = copy.deepcopy(startup)
+        changed = bad['metadata']
+        if mutation == 'missing_wave': del changed[1]['metadata_wave']
+        elif mutation == 'missing_wall': del changed[1]['metadata_wave_wall_ns']
+        elif mutation == 'root': changed[1]['metadata_wave'] = 0
+        elif mutation == 'gap':
+            for row in changed[1:]: row['metadata_wave'] += 1
+        elif mutation == 'width':
+            for row in changed[1:]: row['metadata_wave'] = 1
+        elif mutation == 'order': changed[1], changed[2] = changed[2], changed[1]
+        elif mutation == 'boolean': changed[1]['metadata_wave'] = True
+        elif mutation == 'negative': changed[1]['metadata_wave'] = -1
+        elif mutation == 'overflow': changed[1]['metadata_wave_wall_ns'] = 2**128
+        elif mutation == 'unequal_wall': changed[1]['metadata_wave_wall_ns'] += 1
+        elif mutation == 'sum_wall': bad['staging_wall_ns'] = 29
+        elif mutation == 'object_wall': changed[1]['get_wall_ns'] = 20
+        else: changed[1]['payload_buffer_bound_bytes'] += 1
+        try:
+            validate_startup(bad, arm, 40)
+        except (ValueError, KeyError): pass
+        else: raise AssertionError('invalid metadata wave accepted: ' + mutation)
+    # Large graph objects exercise the divided range-buffer bound, not just small files.
+    graph = copy.deepcopy(arm)
+    graph['discovery'] = 'graph'
+    graph['metadata_files'] = {name: size for name, size in files.items() if not name.startswith('router/')}
+    graph['metadata_files'].update({name: 20 * 4194304 for name in ('centroids.bin', 'graph.bin', 'diverse_graph.bin')})
+    graph['metadata_sha256'] = {name: 'a' * 64 for name in graph['metadata_files']}
+    order = ['manifest.json', 'page_manifest.json', 'page_digests.bin', 'centroids.bin', 'graph.bin',
+             'diverse_graph.bin', 'plane/manifest.json', 'plane/mean.bin', 'plane/page_digests.bin']
+    large = copy.deepcopy(startup)
+    large['router_head_requests'] = large['router_head_wall_ns'] = 0
+    large['metadata'] = []
+    for i, name in enumerate(order):
+        size = graph['metadata_files'][name]
+        large['metadata'].append(dict(name=name, bytes=size, chunks=1,
+            head_wall_ns=int(name not in EXACT_LENGTH_FILES), logical_head_requests=int(name not in EXACT_LENGTH_FILES),
+            get_wall_ns=int(size <= 4194304), stream_wall_ns=5, write_wall_ns=1,
+            logical_get_requests=(size + 4194303) // 4194304,
+            payload_buffer_bound_bytes=min(size, (8 if i == 0 else 2) * 4194304),
+            metadata_wave=0 if i == 0 else (i - 1) // 4 + 1, metadata_wave_wall_ns=10))
+    bound = validate_startup(large, graph, 40)['payload_buffer_bound_bytes']
+    assert 2 * 2 * 4194304 <= bound <= 8 * 4194304
+    large['metadata'][3]['payload_buffer_bound_bytes'] = 8 * 4194304
+    try:
+        validate_startup(large, graph, 40)
+    except ValueError as error: assert str(error) == 'metadata payload bound'
+    else: raise AssertionError('undivided range buffer accepted')
     # Immutable closed a0003 evidence: posthoc accounting must not upgrade FAIL.
     import gzip
     import hashlib
@@ -305,13 +397,13 @@ def self_check():
     # remains tied to its frozen source and cannot be silently requalified.
     try:
         validate_ready(header, arm)
-    except ValueError as error:
-        assert str(error) == 'metadata HEAD count'
+    except KeyError as error:
+        assert error.args == ('metadata_wave',)
     else:
-        raise AssertionError('historical metadata HEAD roster accepted')
+        raise AssertionError('historical metadata wave telemetry accepted')
     validate_query(first['response'], arm, expected=first['reference_response'], truth=first['truth_at_10'])
     assert first['outcome'] == 'failed' and 'startup_accounting' not in first
-    print('PASS closed a0003 historical metadata HEAD roster rejected; saved FAIL preserved')
+    print('PASS closed a0003 historical metadata wave telemetry rejected; saved FAIL preserved')
     print('PASS semantic query stage bounds, missing telemetry and partial failure stages')
 
 

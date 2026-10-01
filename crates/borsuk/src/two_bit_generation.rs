@@ -1980,6 +1980,33 @@ impl TwoBitGeneration {
 mod source_walk_tests {
     use super::*;
 
+    fn assert_metadata_waves(startup: &RemoteOpenStats, names: &[&str]) {
+        assert_eq!(
+            startup
+                .metadata
+                .iter()
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>(),
+            names
+        );
+        let mut wall = startup.metadata[0].metadata_wave_wall_ns;
+        assert_eq!(startup.metadata[0].metadata_wave, 0);
+        for (i, batch) in startup.metadata[1..].chunks(4).enumerate() {
+            wall += batch[0].metadata_wave_wall_ns;
+            assert!(batch.iter().all(|r| r.metadata_wave == i as u64 + 1
+                && r.metadata_wave_wall_ns == batch[0].metadata_wave_wall_ns
+                && r.head_wall_ns + r.get_wall_ns + r.stream_wall_ns <= r.metadata_wave_wall_ns));
+            assert!(
+                batch
+                    .iter()
+                    .map(|r| r.payload_buffer_bound_bytes)
+                    .sum::<u64>()
+                    <= 32 * 1024 * 1024
+            );
+        }
+        assert!(wall <= startup.staging_wall_ns);
+    }
+
     #[derive(Debug, Default)]
     struct RecordedStore {
         inner: object_store::memory::InMemory,
@@ -2183,6 +2210,36 @@ mod source_walk_tests {
         for name in ["centroids.bin", "graph.bin", "diverse_graph.bin"] {
             assert!(store.head(&metadata_location(&prefix, name)).await.is_err());
         }
+        let root_key = metadata_location(&prefix, "manifest.json");
+        let root_body = fs::read(root.join("manifest.json")).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        for (body, trusted) in [
+            (b"{}".to_vec(), root_sha.clone()),
+            (b"{".to_vec(), hash(b"{")),
+            (b"{}".to_vec(), hash(b"{}")),
+        ] {
+            store.put(&root_key, body.into()).await.unwrap();
+            store.reads.lock().unwrap().clear();
+            assert!(
+                stage_two_bit_metadata(store.as_ref(), &prefix, &trusted, u64::MAX, scratch.path())
+                    .await
+                    .is_err()
+            );
+            let reads = store.reads.lock().unwrap().len();
+            assert_eq!(reads, 2);
+            assert!(
+                store
+                    .reads
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|r| r.0.ends_with("/manifest.json"))
+            );
+            tokio::task::yield_now().await;
+            assert_eq!(store.reads.lock().unwrap().len(), reads);
+            assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+        }
+        store.put(&root_key, root_body.into()).await.unwrap();
         store.reads.lock().unwrap().clear();
         let mut lazy =
             TwoBitGeneration::open_remote(store.as_ref(), &prefix, &root_sha, limits, temp.path())
@@ -2194,6 +2251,19 @@ mod source_walk_tests {
         assert_eq!(startup.router_head_requests, 1);
         assert!(startup.router_head_wall_ns > 0);
         assert_eq!(startup.metadata.len(), 8);
+        assert_metadata_waves(
+            startup,
+            &[
+                "manifest.json",
+                "page_manifest.json",
+                "page_digests.bin",
+                "plane/manifest.json",
+                "plane/mean.bin",
+                "plane/page_digests.bin",
+                "router/manifest.json",
+                "router/membership.bin",
+            ],
+        );
         assert_eq!(
             startup
                 .metadata
@@ -2296,6 +2366,13 @@ mod source_walk_tests {
             "diverse_graph_sha256": "c".repeat(64), "diverse_graph_resident_bytes": 1,
         });
         let graph_body = serde_json::to_vec(&graph_root).unwrap();
+        // Unknown graph lengths join admission before the aggregate budget is checked.
+        for name in ["centroids.bin", "graph.bin"] {
+            store
+                .put(&metadata_location(&prefix, name), vec![0].into())
+                .await
+                .unwrap();
+        }
         let cap = graph_body.len() as u64
             + fs::metadata(root.join("page_manifest.json")).unwrap().len()
             + fs::metadata(root.join("page_digests.bin")).unwrap().len()
@@ -2323,7 +2400,7 @@ mod source_walk_tests {
                 .lock()
                 .unwrap()
                 .iter()
-                .any(|(name, _, _, _)| name.ends_with("/page_digests.bin"))
+                .any(|(name, head, _, _)| !head && !name.ends_with("/manifest.json"))
         );
         assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
         store.put(&root_key, root_body.into()).await.unwrap();
@@ -2947,6 +3024,20 @@ mod source_walk_tests {
         assert!(remote.plane.record(0).is_none());
         let startup = remote.remote_open_stats().unwrap();
         assert_eq!(startup.metadata.len(), 9);
+        assert_metadata_waves(
+            startup,
+            &[
+                "manifest.json",
+                "page_manifest.json",
+                "page_digests.bin",
+                "centroids.bin",
+                "graph.bin",
+                "diverse_graph.bin",
+                "plane/manifest.json",
+                "plane/mean.bin",
+                "plane/page_digests.bin",
+            ],
+        );
         assert_eq!(startup.source_head_requests, 1);
         assert_eq!(
             startup

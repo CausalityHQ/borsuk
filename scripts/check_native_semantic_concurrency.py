@@ -22,10 +22,23 @@ def fixture(mode, port):
                head_file=dict(bytes=200, sha256=root), leaf_object=dict(bytes=4812500, sha256=root))
     known_lengths = {'page_digests.bin', 'plane/mean.bin', 'plane/page_digests.bin',
                      'router/manifest.json', 'router/membership.bin'}
-    rows = [dict(name=k, bytes=v, chunks=1, head_wall_ns=int(k not in known_lengths), get_wall_ns=int(v <= 4194304),
-                 stream_wall_ns=2, write_wall_ns=1, logical_head_requests=int(k not in known_lengths),
-                 logical_get_requests=(v + 4194303) // 4194304,
-                 payload_buffer_bound_bytes=min(v, 8 * 4194304)) for k, v in files.items()]
+    order = ['manifest.json', 'page_manifest.json', 'page_digests.bin']
+    if arm['discovery'] == 'graph':
+        order += ['centroids.bin', 'graph.bin', 'diverse_graph.bin']
+    order += ['plane/manifest.json', 'plane/mean.bin', 'plane/page_digests.bin']
+    if arm['discovery'] == 'semantic':
+        order += ['router/manifest.json', 'router/membership.bin']
+    rows = []
+    for i, name in enumerate(order):
+        size = arm['metadata_files'][name]
+        wave = 0 if i == 0 else (i - 1) // 4 + 1
+        width = 1 if wave == 0 else min(4, len(order) - 1 - (wave - 1) * 4)
+        heads = int(name not in known_lengths)
+        rows.append(dict(name=name, bytes=size, chunks=1, head_wall_ns=heads,
+                         get_wall_ns=int(size <= 4194304), stream_wall_ns=2, write_wall_ns=1,
+                         logical_head_requests=heads, logical_get_requests=(size + 4194303) // 4194304,
+                         payload_buffer_bound_bytes=min(size, (8 // width) * 4194304),
+                         metadata_wave=wave, metadata_wave_wall_ns=10))
     semantic = int(mode == 'semantic')
     gets, heads = sum(r['logical_get_requests'] for r in rows) + 4, sum(r['logical_head_requests'] for r in rows) + 1 + semantic
     payload = sum(files.values()) + 200 + 5000 + 37
