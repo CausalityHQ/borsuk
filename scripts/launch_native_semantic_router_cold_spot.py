@@ -4,6 +4,9 @@ Authority pointers use {path, bytes, sha256, key}; archived receipt/log pointers
 may also use archived_path/archived_sha256 for gzip transport. Root supplies the
 config, standalone native_proof, completed native_assurance and exact 399-file
 native_source_manifest. This controller never qualifies or rebuilds native code.
+publication uses the preparation helper's contract unchanged; native_publisher
+is a separate {path,bytes,sha256,key} download pointer. The asset archive is the
+immutable declaration in publication-assets-preparation.json, never child input.
 """
 
 import fcntl
@@ -29,6 +32,7 @@ from scripts import launch_native_metadata_ranges_cold_spot as shared
 from scripts import launch_native_peer_1m_spot as peer
 from scripts import launch_native_startup_profile_spot as startup
 from scripts import launch_v174_relaid_bind_compile_spot as runner
+from scripts import prepare_native_semantic_publication as publication
 from scripts.check_native_startup_build import source_hashes, source_identity
 
 ROOT = Path('docs/research/performance-architecture-20260930/semantic-cold')
@@ -46,18 +50,30 @@ SPOT_MAX_USD_PER_HOUR = COMPUTE_CAP = .50
 BINARY_SHA = 'c00b766f65f8f0ae0adb5fcca786cb33c0daf046ff4b8f9a8bbcab39e1263533'
 BINARY_BYTES = 16191384
 GATES = ('affected-final', 'release-final', 'clippy-final', 'test-build-final', 'full-workspace-final')
+ASSET_PREPARATION = ROOT / 'publication-assets-preparation.json'
+ASSET_PREPARATION_SHA = 'e13e18118b5313f4e8bf4427aab72eb00e7d1e16ae18113e91ce7fc5a0ecf6c1'
 EXTRAS = ('scripts/launch_native_semantic_router_cold_spot.py',
           'scripts/launch_native_metadata_ranges_cold_spot.py',
           'scripts/launch_native_startup_profile_spot.py', 'scripts/launch_native_peer_1m_spot.py',
           'scripts/launch_v174_relaid_bind_compile_spot.py', 'scripts/launch_v157_primary_feasibility_spot.py',
-          'scripts/check_native_startup_build.py')
+          'scripts/check_native_startup_build.py', 'scripts/prepare_native_semantic_publication.py',
+          'scripts/package_semantic_native_generation.py')
 AUTHORITY_FILES = ('native-assurance.json', 'boundary-check.json', 'native-source-manifest.json',
-                   'native-source.tar.gz', 'qualified-source.tar.gz',
+                   'native-source.tar.gz', 'qualified-source.tar.gz', 'publisher-proof.json', 'asset-manifest.json',
                    *(f'assurance/{gate}.{suffix}' for gate in GATES for suffix in ('json', 'log')))
-ARTIFACTS = ('source-qualification.json', 'binaries/two_bit_http', 'cpu.txt', 'run-closed.log',
+PUBLICATION_FILES = ('config.json', 'asset-manifest.json', 'publication-receipt.json',
+                     *(f'{dataset}/{arm}/{name}' for dataset in ('ReLAION', 'CoHere')
+                       for arm in ('control', 'candidate')
+                       for name in ('native.jsonl', 'stdout.log', 'stderr.log', 'resources.txt', 'head.json')))
+ARTIFACTS = ('source-qualification.json', 'binaries/two_bit_http', 'binaries/two_bit_plan_demo', 'cpu.txt', 'run-closed.log',
              'profile.log', 'profile-resources.txt', 'profile-cgroup.json',
              'screen/records.jsonl', 'screen/summary.json', 'screen/config.json', 'screen/qualification.json',
-             *AUTHORITY_FILES)
+             *AUTHORITY_FILES, *('publication/' + name for name in PUBLICATION_FILES))
+TERMINAL_IDENTITIES = ('config_sha256', 'qualification_sha256', 'binary_sha256', 'binary_bytes',
+    'native_source_commit', 'source_identity_sha256', 'source_file_count', 'artifact_roster_sha256',
+    'native_source_archive_sha256', 'native_source_manifest_sha256', 'native_assurance_sha256',
+    'publisher_sha256', 'publisher_bytes', 'publisher_qualification_sha256', 'asset_manifest_sha256',
+    'publication_assets', 'asset_preparation_sha256')
 
 
 def _worker():
@@ -106,10 +122,11 @@ def _archive_sources(body):
         return {m.name: peer.sha(archive.extractfile(m).read()) for m in members}
 
 
-def _qualify(base, binary_override=None):
+def _qualify(base, binary_override=None, publisher_override=None):
     base = Path(base).resolve()
     body = (base / CONFIG).read_bytes()
     config = json.loads(body)
+    assert not config.get('authority_pending'), 'publication/cold authorities pending'
     expected = dict(schema='borsuk-native-semantic-router-cold-v1', architecture='x86_64',
         region=peer.REGION, bucket=peer.BUCKET, count=64, k=10, ann_queries=512,
         dataset_order=['ReLAION', 'CoHere'], blocks=['control0', 'candidate1', 'candidate2', 'control3'],
@@ -178,6 +195,28 @@ def _qualify(base, binary_override=None):
             assert 'test' in receipt['command'] and '--workspace' in receipt['command']
             assert '--no-run' not in receipt['command'], 'compilation is not full-suite execution'
         files[f'assurance/{name}.json'], files[f'assurance/{name}.log'] = receipt_body, log
+    pub = config['publication']
+    publisher_pointer = config['native_publisher']
+    assert set(publisher_pointer) == {'path', 'bytes', 'sha256', 'key'}, 'publisher download pointer'
+    assert {k: publisher_pointer[k] for k in ('bytes', 'sha256')} == publication.identity(pub['publisher'])
+    publisher = Path(publisher_override) if publisher_override is not None else base / publisher_pointer['path']
+    assert publisher_pointer['key'] and '\n' not in publisher_pointer['key']
+    with _cwd(base):
+        publication.validate_publisher(config, publisher)
+        files['publisher-proof.json'], _ = publication.authenticated_json(pub['qualification'])
+        files['asset-manifest.json'], assets = publication.authenticated_json(pub['asset_manifest'])
+        preparation = publication.files.metadata(publication.PREPARATION, publication.PREPARATION_SHA,
+                                                 cap=publication.CAP)[1]
+        references = publication.files.metadata(publication.REFERENCES, publication.REFERENCES_SHA,
+                                                cap=publication.CAP)[1]
+        publication.validate_manifest(config, assets, preparation, references)
+    declared_body = (base / ASSET_PREPARATION).read_bytes()
+    assert peer.sha(declared_body) == ASSET_PREPARATION_SHA, 'immutable asset preparation authority'
+    declared = json.loads(declared_body)
+    assert declared['schema'] == 'borsuk-native-semantic-publication-assets-preparation-v1'
+    publication.object_identity(pub['assets'])
+    assert pub['assets'] == {k: declared['assets'][k] for k in ('key', 'bytes', 'sha256')}
+    assert pub['asset_manifest'] == declared['manifest'], 'declared asset manifest identity'
     assert set(files) == set(AUTHORITY_FILES)
     qualification = dict(config_path=str(CONFIG), config_sha256=peer.sha(body), campaign_schema=SCHEMA,
         native_source_commit=manifest['native_source_commit'], source_identity_sha256=identity,
@@ -187,6 +226,10 @@ def _qualify(base, binary_override=None):
         native_source_archive_sha256=manifest['native_source_archive']['sha256'],
         native_source_manifest_sha256=peer.sha(files['native-source-manifest.json']),
         native_assurance_sha256=peer.sha(files['native-assurance.json']),
+        native_publisher=publisher_pointer, publisher_sha256=pub['publisher']['sha256'],
+        publisher_bytes=pub['publisher']['bytes'], publisher_qualification_sha256=pub['qualification']['sha256'],
+        asset_manifest_sha256=pub['asset_manifest']['sha256'], publication_assets=pub['assets'],
+        asset_preparation_sha256=peer.sha(declared_body),
         native_binary=binary_pointer, authority_artifacts={n: _identity(b) for n, b in files.items()},
         artifact_roster_sha256=peer.sha(json.dumps(ARTIFACTS, separators=(',', ':')).encode()))
     return qualification, files
@@ -199,13 +242,81 @@ def preflight(base=Path('.')):
 def _stage(repo, out):
     repo, out = Path(repo).resolve(), Path(out).resolve()
     expected = json.loads((out/'source-qualification.json').read_bytes())
-    actual, files = _qualify(repo, out/'binaries/two_bit_http')
+    (out/'binaries/two_bit_plan_demo').chmod(0o755)
+    actual, files = _qualify(repo, out/'binaries/two_bit_http', out/'binaries/two_bit_plan_demo')
     assert actual == expected, 'remote qualification differs from local authority'
     for name, body in files.items():
         path = out/name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(body)
     (out/'binaries/two_bit_http').chmod(0o755)
+
+
+def _published(config, digest, bodies):
+    """Authenticate the closed helper receipt and every small publication body."""
+    assert set(bodies) == set(PUBLICATION_FILES), 'closed publication body roster'
+    assert peer.sha(bodies['config.json']) == digest
+    assert _identity(bodies['asset-manifest.json']) == {k: config['publication']['asset_manifest'][k]
+                                                      for k in ('bytes', 'sha256')}
+    manifest = json.loads(bodies['asset-manifest.json'])
+    receipt = json.loads(bodies['publication-receipt.json'])
+    assert receipt['schema'] == 'borsuk-native-semantic-publication-receipt-v1'
+    assert receipt['outcome'] == 'published-and-validated' and receipt['config_sha256'] == digest
+    assert receipt['publication'] == config['publication']
+    assert receipt['native_source_identity_sha256'] == config['native_source_identity_sha256']
+    assert type(receipt['native_source_file_count']) is int and receipt['native_source_file_count'] == 399
+    assert receipt['asset_files'] == manifest['files']
+    assert receipt['canonical_objects'] == {i['dataset']: i['canonical'] for i in manifest['items']}
+    assert receipt['source_identities'] == {i['dataset']: i['source_identity'] for i in config['items']}
+    assert receipt['preparation_sha256'] == publication.PREPARATION_SHA
+    assert receipt['reference_authority_sha256'] == publication.REFERENCES_SHA
+    assert set(receipt['adapter_code']) == {'scripts/prepare_native_semantic_publication.py',
+                                           'scripts/package_semantic_native_generation.py'}
+    for name, identity in receipt['adapter_code'].items():
+        assert identity['sha256'] == config['controller_code_sha256'][name]
+    assert receipt['cold_performance_measured'] is receipt['credential_values_recorded'] is False
+    arms = [(item, name) for item in config['items'] for name in ('control', 'candidate')]
+    assert len(receipt['arms']) == len(arms) == 4, 'four closed publication arms required'
+    for row, (item, name) in zip(receipt['arms'], arms):
+        arm = item['arms'][name]
+        assert (row['dataset'], row['arm'], row['prefix']) == (item['dataset'], name, arm['indexes']['10'])
+        assert row['authority'] == arm['authority']
+        assert row['outcome'] == 'published-and-validated'
+        assert type(row['native_invocations']) is type(row['returncode']) is int
+        assert row['native_invocations'] == 1 and row['returncode'] == 0
+        validation = row['validation']
+        assert type(validation['validated_queries']) is int and validation['validated_queries'] == 64
+        assert validation['validated_fields'] == list(publication.KNOWN_PARITY)
+        assert validation['unknown'] == list(publication.UNKNOWN_NATIVE)
+        assert {k: validation['startup'][k] for k in arm['authority']} == arm['authority']
+        assert 0 < row['resources']['max_rss_kib'] <= 524288
+        prefix = item['dataset'] + '/' + name + '/'
+        assert set(row['artifacts']) == {'native.jsonl', 'stdout.log', 'stderr.log', 'resources.txt', 'head.json'}
+        for path, identity in row['artifacts'].items():
+            assert _identity(bodies[prefix + path]) == identity, prefix + path
+        head = json.loads(bodies[prefix + 'head.json'])
+        assert head == row['head'] == dict(schema='borsuk-two-bit-head-v2',
+            epoch=arm['authority']['control_epoch'], generation=arm['authority']['generation'],
+            root_sha256=arm['authority']['root_sha256'], mutation=None, fence=None)
+        assert _identity(bodies[prefix + 'head.json']) == arm['head_file']
+    return receipt
+
+
+def _publish(repo, out):
+    repo, out = Path(repo).resolve(), Path(out).resolve()
+    qualification = json.loads((out/'source-qualification.json').read_bytes())
+    body = (repo/CONFIG).read_bytes()
+    assert peer.sha(body) == qualification['config_sha256']
+    config = json.loads(body)
+    with _cwd(repo):
+        try:
+            publication.run(repo/CONFIG, qualification['config_sha256'], out/'binaries/two_bit_plan_demo',
+                            out/'publication')
+        except Exception as error:
+            # Match the helper CLI: SDK exception text can contain credentials.
+            raise RuntimeError('publication failed: ' + type(error).__name__) from None
+    bodies = {n: (out/'publication'/n).read_bytes() for n in PUBLICATION_FILES}
+    return _published(config, qualification['config_sha256'], bodies)
 
 
 def user_data(commit, archive_sha, archive_key, prefix, qualification):
@@ -219,6 +330,7 @@ def user_data(commit, archive_sha, archive_key, prefix, qualification):
     import base64
     encoded = base64.b64encode(gzip.compress(proof, mtime=0)).decode()
     binary_key = quote('s3://' + peer.BUCKET + '/' + qualification['native_binary']['key'])
+    publisher_key = quote('s3://' + peer.BUCKET + '/' + qualification['native_publisher']['key'])
     command = f'''phase=install
 dnf install -y -q tar gzip time util-linux python3.12
 python3.12 -m ensurepip
@@ -229,21 +341,25 @@ lscpu >cpu.txt
 test "$(uname -m)" = x86_64
 mkdir binaries
 aws s3 cp {binary_key} binaries/two_bit_http --only-show-errors
+aws s3 cp {publisher_key} binaries/two_bit_plan_demo --only-show-errors
 PYTHONPATH="$root/repo" python3.12 -m scripts.launch_native_semantic_router_cold_spot --stage "$root/repo" "$root"
+phase=publication
+systemd-run --unit=native-semantic-publication --wait --pipe -p MemoryMax=8G -p MemorySwapMax=0 -p RuntimeMaxSec=3600 -p WorkingDirectory="$root/repo" \\
+ --setenv=PYTHONPATH="$root/repo" --setenv=TOKIO_WORKER_THREADS=4 --setenv=AWS_MAX_ATTEMPTS=1 --setenv=BORSUK_NATIVE_MEMORY_BYTES=536870912 \\
+ bash -c 'ulimit -v 4194304 || exit 96; taskset -c 4-5 python3.12 -m scripts.launch_native_semantic_router_cold_spot --publish "$1/repo" "$1"' _ "$root"
 phase=profile
 systemd-run --unit=native-semantic-router-cold --wait --pipe -p MemoryMax=8G -p MemorySwapMax=0 -p RuntimeMaxSec=3030 -p WorkingDirectory="$root/repo" \\
  --setenv=PYTHONPATH="$root/repo" --setenv=TOKIO_WORKER_THREADS=4 --setenv=AWS_MAX_ATTEMPTS=1 --setenv=BORSUK_NATIVE_MEMORY_BYTES=536870912 \\
  /usr/bin/time -v -o "$root/profile-resources.txt" timeout --signal=TERM --kill-after=30 3000 \\
  bash -c 'ulimit -v 4194304 || exit 96; taskset -c 4-5 python3.12 -m scripts.run_native_semantic_router_cold {CONFIG} {qualification['config_sha256']} "$1/binaries/two_bit_http" "$1/boundary-check.json" "$1/screen"; code=$?; taskset -c 0-3 python3.12 -m scripts.check_native_startup_build --cgroup "$1/profile-cgroup.json" 8589934592 || exit 96; exit "$code"' _ "$root" >profile.log 2>&1
 '''
-    command += '\n'.join('test -s "$root/' + name + '"' for name in ARTIFACTS) + '\n'
+    command += '\n'.join('test ' + ('-f' if name.startswith('publication/') and
+                          name.endswith(('/stdout.log', '/stderr.log')) else '-s') +
+                          ' "$root/' + name + '"' for name in ARTIFACTS) + '\n'
     body = body[:start] + command + body[end:]
     # Terminal identities are emitted by the bootstrap alongside its byte roster.
     marker = "'source_archive_sha256':'" + archive_sha + "',"
-    terminal_fields = {key: qualification[key] for key in ('config_sha256', 'qualification_sha256',
-        'binary_sha256', 'binary_bytes', 'native_source_commit', 'source_identity_sha256',
-        'source_file_count', 'artifact_roster_sha256', 'native_source_archive_sha256',
-        'native_source_manifest_sha256', 'native_assurance_sha256')}
+    terminal_fields = {key: qualification[key] for key in TERMINAL_IDENTITIES}
     assert body.count(marker) == 1, 'bootstrap terminal identity hook changed'
     body = body.replace(marker, marker + repr(terminal_fields)[1:-1] + ',')
     subprocess.run(['bash', '-n'], input=body, text=True, check=True)
@@ -268,9 +384,7 @@ def collect(s3, prefix, out, instance_id, commit, digest):
     assert terminal['schema'] == SCHEMA and terminal['instance_id'] == instance_id
     assert terminal['source_commit'] == reservation['source_commit'] == commit
     assert terminal['source_archive_sha256'] == reservation['source_archive_sha256'] == digest
-    for key in ('config_sha256', 'qualification_sha256', 'binary_sha256', 'binary_bytes',
-                'native_source_commit', 'source_identity_sha256', 'source_file_count', 'artifact_roster_sha256',
-                'native_source_archive_sha256', 'native_source_manifest_sha256', 'native_assurance_sha256'):
+    for key in TERMINAL_IDENTITIES:
         assert terminal[key] == qualification[key], key
     assert set(terminal['artifacts']) <= set(ARTIFACTS)
     files = {}
@@ -287,8 +401,19 @@ def collect(s3, prefix, out, instance_id, commit, digest):
         for name, identity in qualification['authority_artifacts'].items():
             assert _identity(files[name]) == identity, name
         assert _identity(files['binaries/two_bit_http']) == dict(bytes=qualification['binary_bytes'], sha256=qualification['binary_sha256'])
+        assert _identity(files['binaries/two_bit_plan_demo']) == dict(bytes=qualification['publisher_bytes'],
+                                                                   sha256=qualification['publisher_sha256'])
         assert peer.sha(files['screen/config.json']) == qualification['config_sha256']
         assert peer.sha(files['boundary-check.json']) == peer.sha(files['screen/qualification.json']) == qualification['qualification_sha256']
+        assert peer.sha(files['publisher-proof.json']) == qualification['publisher_qualification_sha256']
+        assert peer.sha(files['asset-manifest.json']) == qualification['asset_manifest_sha256']
+        config = json.loads(files['screen/config.json'])
+        assert config['native_source_identity_sha256'] == qualification['source_identity_sha256']
+        assert config['native_source_file_count'] == qualification['source_file_count']
+        assert config['publication']['publisher'] == dict(bytes=qualification['publisher_bytes'],
+                                                         sha256=qualification['publisher_sha256'])
+        assert config['publication']['assets'] == qualification['publication_assets']
+        _published(config, qualification['config_sha256'], {n: files['publication/'+n] for n in PUBLICATION_FILES})
     return terminal
 
 
@@ -387,6 +512,43 @@ def lifecycle_self_check():
             raise AssertionError('wall cap ignored')
 
 
+def _publication_fixture(config, manifest, manifest_body=None, config_body=None):
+    """Small closed helper outputs; no data transfer or native invocation."""
+    bodies = {'config.json': config_body or json.dumps(config).encode(),
+              'asset-manifest.json': json.dumps(manifest).encode()}
+    if manifest_body is not None:
+        bodies['asset-manifest.json'] = manifest_body
+    receipt = dict(schema='borsuk-native-semantic-publication-receipt-v1', outcome='published-and-validated',
+        config_sha256=peer.sha(bodies['config.json']), publication=config['publication'],
+        native_source_identity_sha256=config['native_source_identity_sha256'], native_source_file_count=399,
+        asset_files=manifest['files'], canonical_objects={i['dataset']: i['canonical'] for i in manifest['items']},
+        source_identities={i['dataset']: i['source_identity'] for i in config['items']},
+        preparation_sha256=publication.PREPARATION_SHA, reference_authority_sha256=publication.REFERENCES_SHA,
+        adapter_code={n: dict(bytes=42, sha256=config['controller_code_sha256'][n]) for n in
+            ('scripts/prepare_native_semantic_publication.py', 'scripts/package_semantic_native_generation.py')},
+        cold_performance_measured=False, credential_values_recorded=False, arms=[])
+    for item in config['items']:
+        for name in ('control', 'candidate'):
+            arm = item['arms'][name]
+            prefix = item['dataset']+'/'+name+'/'
+            head = dict(schema='borsuk-two-bit-head-v2', epoch=arm['authority']['control_epoch'],
+                        generation=arm['authority']['generation'], root_sha256=arm['authority']['root_sha256'],
+                        mutation=None, fence=None)
+            artifacts = {'native.jsonl': b'synthetic closed native output\n', 'stdout.log': b'',
+                         'stderr.log': b'', 'resources.txt': b'synthetic resources\n',
+                         'head.json': json.dumps(head, separators=(',', ':')).encode()}
+            bodies.update({prefix+n: body for n, body in artifacts.items()})
+            assert _identity(artifacts['head.json']) == arm['head_file']
+            receipt['arms'].append(dict(dataset=item['dataset'], arm=name, prefix=arm['indexes']['10'],
+                authority=arm['authority'], outcome='published-and-validated', native_invocations=1,
+                returncode=0, head=head, artifacts={n: _identity(b) for n, b in artifacts.items()},
+                resources={'max_rss_kib': 100}, validation=dict(validated_queries=64,
+                    validated_fields=list(publication.KNOWN_PARITY), unknown=list(publication.UNKNOWN_NATIVE),
+                    startup=arm['authority'])))
+    bodies['publication-receipt.json'] = json.dumps(receipt).encode()
+    return bodies
+
+
 def collection_self_check():
     import tempfile
     from unittest.mock import Mock
@@ -394,13 +556,27 @@ def collection_self_check():
         out = Path(tmp)
         files = {n: b'synthetic artifact\n' for n in ARTIFACTS}
         binary = files['binaries/two_bit_http']
-        config = files['screen/config.json']
+        config = json.loads((Path(__file__).resolve().parents[1]/ROOT/'config-draft.json').read_bytes())
+        manifest_body = (Path(__file__).resolve().parents[1]/ROOT/'publication-assets.json').read_bytes()
+        manifest = json.loads(manifest_body)
+        config['controller_code_sha256'] = {n: 'a'*64 for n in EXTRAS}
+        config['publication']['publisher'] = _identity(files['binaries/two_bit_plan_demo'])
+        config['publication']['qualification'] = dict(path='proof', **_identity(files['publisher-proof.json']))
+        publication_bodies = _publication_fixture(config, manifest, manifest_body)
+        files.update({'publication/'+n: b for n, b in publication_bodies.items()})
+        config_body = files['screen/config.json'] = publication_bodies['config.json']
+        files['asset-manifest.json'] = manifest_body
         proof = files['boundary-check.json']
         files['screen/qualification.json'] = proof
-        qualification = dict(config_sha256=peer.sha(config), qualification_sha256=peer.sha(proof),
+        qualification = dict(config_sha256=peer.sha(config_body), qualification_sha256=peer.sha(proof),
             binary_sha256=peer.sha(binary), binary_bytes=len(binary), native_source_commit='2'*40,
-            source_identity_sha256='3'*64, source_file_count=399, artifact_roster_sha256='4'*64,
+            source_identity_sha256=config['native_source_identity_sha256'], source_file_count=399, artifact_roster_sha256='4'*64,
             native_source_archive_sha256='5'*64, native_source_manifest_sha256='6'*64, native_assurance_sha256='7'*64,
+            publisher_sha256=peer.sha(files['binaries/two_bit_plan_demo']),
+            publisher_bytes=len(files['binaries/two_bit_plan_demo']),
+            publisher_qualification_sha256=peer.sha(files['publisher-proof.json']),
+            asset_manifest_sha256=peer.sha(manifest_body), publication_assets=config['publication']['assets'],
+            asset_preparation_sha256=ASSET_PREPARATION_SHA,
             authority_artifacts={n: _identity(files[n]) for n in AUTHORITY_FILES})
         files['source-qualification.json'] = json.dumps(qualification).encode()
         terminal = dict(schema=SCHEMA, instance_id='i-owned', source_commit='0'*40,
@@ -415,12 +591,29 @@ def collection_self_check():
                 else files[key.split('/artifacts/')[1]])}
         s3 = Mock()
         s3.get_object.side_effect = fetched
-        for change in (None, 'source', 'config', 'proof', 'binary', 'roster', 'sha', 'bytes', 'unknown'):
+        for change in (None, 'source', 'config', 'proof', 'binary', 'roster', 'sha', 'bytes', 'unknown',
+                       'publisher', 'publication-roster', 'receipt', 'head', 'publication-config', 'closeout'):
             current = json.loads(json.dumps(terminal))
-            if change in ('source', 'config', 'proof', 'binary'):
+            original_files = dict(files)
+            if change in ('source', 'config', 'proof', 'binary', 'publisher'):
                 key = {'source': 'source_identity_sha256', 'config': 'config_sha256',
-                       'proof': 'qualification_sha256', 'binary': 'binary_sha256'}[change]
+                       'proof': 'qualification_sha256', 'binary': 'binary_sha256', 'publisher': 'publisher_sha256'}[change]
                 current[key] = 'f'*64
+            elif change == 'closeout':
+                (out/'aws-closeout.json').write_text(json.dumps(dict(state='running', nodes={'0': dict(instance_id='i-owned')})))
+            elif change == 'publication-roster':
+                del current['artifacts']['publication/CoHere/candidate/head.json']
+            elif change in ('receipt', 'head', 'publication-config'):
+                name = {'receipt': 'publication/publication-receipt.json',
+                        'head': 'publication/ReLAION/control/head.json',
+                        'publication-config': 'publication/config.json'}[change]
+                if change == 'receipt':
+                    receipt = json.loads(files[name])
+                    receipt['arms'].pop()
+                    files[name] = json.dumps(receipt).encode()
+                else:
+                    files[name] = b'{}'
+                current['artifacts'][name] = _identity(files[name])
             elif change == 'roster':
                 del current['artifacts']['screen/records.jsonl']
             elif change in ('sha', 'bytes'):
@@ -433,11 +626,17 @@ def collection_self_check():
                 assert change is not None
             else:
                 assert change is None and result == terminal, 'changed terminal accepted'
+            files = original_files
+            (out/'aws-closeout.json').write_text(json.dumps(dict(state='terminated', nodes={'0': dict(instance_id='i-owned')})))
 
 
 def self_check():
     """Only synthetic bodies and mocked AWS; no native or cloud execution."""
     import tempfile
+    import copy
+    import shutil
+    import traceback
+    from contextlib import ExitStack
     from types import SimpleNamespace
     module = sys.modules[__name__]
     with tempfile.TemporaryDirectory() as tmp:
@@ -453,6 +652,7 @@ def self_check():
             aws.assert_not_called()
         binary = b'synthetic binary; never executable'
         binary_sha = peer.sha(binary)
+        publisher = b'synthetic publisher; never invoked'
         def put(name, body):
             if not isinstance(body, bytes):
                 body = json.dumps(body, sort_keys=True, separators=(',', ':')).encode()
@@ -513,13 +713,37 @@ def self_check():
             put(str(CONFIG), value)
         freeze(config)
         with patch.object(module, '_worker', return_value=runtime), \
-                patch.multiple(module, BINARY_SHA=binary_sha, BINARY_BYTES=len(binary)):
+                patch.multiple(module, BINARY_SHA=binary_sha, BINARY_BYTES=len(binary)), ExitStack() as overrides:
+            # Publication authority is mandatory even when cold assurance is green.
+            try:
+                preflight(base)
+            except (KeyError, AssertionError, ValueError, FileNotFoundError):
+                pass
+            else:
+                raise AssertionError('missing publication authority accepted')
+            config['items'] = json.loads((Path(__file__).resolve().parents[1]/ROOT/'config-draft.json').read_bytes())['items']
+            asset_body = (Path(__file__).resolve().parents[1]/ROOT/'publication-assets.json').read_bytes()
+            asset_pointer = put(str(ROOT/'publication-assets.json'), asset_body)
+            config['native_publisher'] = put('publisher', publisher)
+            (base/'publisher').chmod(0o755)
+            publisher_proof = dict(proof, binary_sha256=peer.sha(publisher), full_suite_status=0)
+            publisher_proof_pointer = put('publisher-proof.json', publisher_proof)
+            pub = config['publication'] = dict(publisher=_identity(publisher),
+                assets=dict(key='synthetic/assets.tar.gz', **_identity(b'synthetic assets')),
+                asset_manifest={k: asset_pointer[k] for k in ('path', 'bytes', 'sha256')},
+                qualification={k: publisher_proof_pointer[k] for k in ('path', 'bytes', 'sha256')})
+            declared = dict(schema='borsuk-native-semantic-publication-assets-preparation-v1',
+                assets=dict(pub['assets'], path='/tmp/root-owned-assets.tar.gz'), manifest=pub['asset_manifest'])
+            declared_pointer = put(str(ASSET_PREPARATION), declared)
+            freeze(config)
+            overrides.enter_context(patch.object(module, 'ASSET_PREPARATION_SHA', declared_pointer['sha256']))
             qualification = preflight(base)
             assert qualification['source_file_count'] == 399 and qualification['native_rebuilt'] is False
             assert qualification['current_full_suite_pass_claim'] is True
             stage = base/'stage'
             (stage/'binaries').mkdir(parents=True)
             (stage/'binaries/two_bit_http').write_bytes(binary)
+            (stage/'binaries/two_bit_plan_demo').write_bytes(publisher)
             (stage/'source-qualification.json').write_text(json.dumps(qualification))
             _stage(base, stage)
             assert all(_identity((stage/n).read_bytes()) == ident
@@ -536,16 +760,93 @@ def self_check():
                 raise AssertionError('bad gzip transport accepted')
             for key, value in [('architecture', 'aarch64'), ('ann_queries', 256),
                                ('worker_limit_seconds', 3001), ('native_memory_bytes', 1073741824),
-                               ('native_source_file_count', 398),
+                               ('native_source_file_count', 398), ('authority_pending', ['publisher']),
+                               ('native_publisher', dict(config['native_publisher'], sha256='f'*64)),
+                               ('publication', dict(pub, assets=dict(pub['assets'], key='wrong'))),
+                               ('publication', dict(pub, assets=dict(pub['assets'], sha256='f'*64))),
+                               ('publication', dict(pub, assets=dict(pub['assets'], bytes=1))),
                                ('qualification_sha256', 'f'*64), ('controller_code_sha256', {})]:
                 freeze(dict(config, **{key: value}))
                 try:
                     preflight(base)
-                except AssertionError:
+                except (AssertionError, ValueError):
                     pass
                 else:
                     raise AssertionError('changed authority accepted: ' + key)
             freeze(config)
+            original_proof = (base/'publisher-proof.json').read_bytes()
+            for change in ('pending', 'failed', 'boolean', 'qualified', 'compiled', 'source', 'hash', 'count'):
+                bad = copy.deepcopy(publisher_proof)
+                if change == 'pending': del bad['full_suite_status']
+                elif change == 'failed': bad['full_suite_status'] = 1
+                elif change == 'boolean': bad['full_suite_status'] = False
+                elif change == 'qualified': bad['qualified'] = False
+                elif change == 'compiled': bad['compiled_native_sha256'] = {}
+                elif change == 'source': bad['compiled_native_sha256'][next(iter(identities))] = 'f'*64
+                elif change == 'hash': bad['binary_sha256'] = 'f'*64
+                else: bad['source_file_count'] = 398
+                pointer = put('publisher-proof.json', bad)
+                freeze(dict(config, publication=dict(pub, qualification={k: pointer[k] for k in ('path', 'bytes', 'sha256')})))
+                try:
+                    preflight(base)
+                except (ValueError, KeyError):
+                    pass
+                else:
+                    raise AssertionError('bad publisher proof accepted: '+change)
+            put('publisher-proof.json', original_proof)
+            freeze(config)
+            for name in ('publisher', str(ROOT/'publication-assets.json'), str(ASSET_PREPARATION)):
+                path = base/name
+                original = path.read_bytes()
+                path.write_bytes(original+b'changed')
+                try:
+                    preflight(base)
+                except (ValueError, AssertionError):
+                    pass
+                else:
+                    raise AssertionError('changed publication body accepted: '+name)
+                path.write_bytes(original)
+            (base/'publisher').chmod(0o644)
+            try:
+                preflight(base)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('non-executable publisher accepted')
+            (base/'publisher').chmod(0o755)
+            bodies = _publication_fixture(config, json.loads(asset_body), asset_body, (base/CONFIG).read_bytes())
+            for change in (None, 'helper-fatal', 'missing', 'failed', 'partial', 'arm', 'head', 'body', 'config', 'manifest', 'source'):
+                changed = dict(bodies)
+                receipt = json.loads(changed['publication-receipt.json'])
+                if change == 'failed': receipt['outcome'] = 'failed'
+                elif change == 'partial': receipt['arms'].pop()
+                elif change == 'arm': receipt['arms'][0]['outcome'] = 'failed'
+                elif change == 'head': receipt['arms'][0]['head']['epoch'] = 2
+                elif change == 'source': receipt['native_source_identity_sha256'] = 'f'*64
+                elif change == 'body': changed['ReLAION/control/native.jsonl'] += b'changed'
+                elif change == 'config': changed['config.json'] += b'changed'
+                elif change == 'manifest': changed['asset-manifest.json'] += b'changed'
+                elif change == 'missing': del changed['CoHere/candidate/head.json']
+                changed['publication-receipt.json'] = json.dumps(receipt).encode()
+                def helper(config_path, digest, executable, output):
+                    assert (config_path, digest, executable) == (base/CONFIG, qualification['config_sha256'], stage/'binaries/two_bit_plan_demo')
+                    assert Path.cwd() == base
+                    if change == 'helper-fatal': raise RuntimeError('synthetic-secret')
+                    output.mkdir()
+                    for name, data in changed.items():
+                        path = output/name
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(data)
+                with patch.object(publication, 'run', side_effect=helper), patch.object(publication, 'sdk_client') as sdk:
+                    try:
+                        _publish(base, stage)
+                    except (RuntimeError, AssertionError, FileNotFoundError):
+                        assert change is not None
+                        if change == 'helper-fatal': assert 'synthetic-secret' not in traceback.format_exc()
+                    else:
+                        assert change is None, 'bad publication accepted: '+str(change)
+                    sdk.assert_not_called()
+                shutil.rmtree(stage/'publication', ignore_errors=True)
             original = (base/'assurance.json').read_bytes()
             for changed in (dict(assurance, full_workspace_test_execution=False),
                             dict(assurance, gates=dict(gates, **{'full-workspace-final': dict(gates['full-workspace-final'], exit_status=1)}))):
@@ -577,6 +878,40 @@ def self_check():
                            '--kill-after=30 3000'):
                 assert marker in body, marker
             assert 'rustup' not in body and 'cargo build' not in body
+            # Execute generated existence gates, including eight valid empty logs.
+            for name in ARTIFACTS:
+                path = stage/name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if name.startswith('publication/') and name.endswith(('/stdout.log', '/stderr.log')):
+                    path.write_bytes(b'')
+                elif not path.exists():
+                    path.write_bytes(b'synthetic artifact\n')
+            gates_script = '\n'.join(line for line in body.splitlines() if line.startswith('test -'))
+            subprocess.run(['bash', '-ec', gates_script], env=dict(os.environ, root=str(stage)), check=True)
+            missing = stage/'binaries/two_bit_plan_demo'
+            missing.unlink()
+            assert subprocess.run(['bash', '-ec', gates_script], env=dict(os.environ, root=str(stage))).returncode != 0
+            missing.write_bytes(publisher)
+            # Run generated sequencing with only the Python/native boundary stubbed.
+            commands = base/'stubs'
+            commands.mkdir()
+            for name, text in [('taskset', '#!/bin/bash\nshift 2\nexec "$@"\n'),
+                               ('python3.12', '#!/bin/bash\nprintf "%s\\n" "$*" >> "$EVENTS"\ncase "$*" in *--publish*) exit "$PUB_STATUS";; esac\nprintf "synthetic closed summary\\n"\n')]:
+                path = commands/name
+                path.write_text(text)
+                path.chmod(0o755)
+            wrapper = 'systemd-run() { while [[ "$1" != bash && "$1" != /usr/bin/time ]]; do shift; done; "$@"; };\n'
+            sequence = body[body.index('phase=publication\n'):body.index('phase=complete\n')]
+            for status in ('0', '23'):
+                events = base/('events-'+status)
+                result = subprocess.run(['bash', '-ec', wrapper+sequence], cwd=stage,
+                    env=dict(os.environ, root=str(stage), PATH=str(commands)+os.pathsep+os.environ['PATH'],
+                             EVENTS=str(events), PUB_STATUS=status), capture_output=True)
+                calls = events.read_text().splitlines()
+                assert '--publish' in calls[0]
+                assert (result.returncode == 0) == (status == '0'), (status, result.returncode, result.stderr,
+                                                                 calls, (stage/'profile.log').read_bytes())
+                assert any('scripts.run_native_semantic_router_cold ' in call for call in calls) == (status == '0')
             terminal_script = body.split("python3 - <<'PY' >terminal.json\n")[1].split('\nPY\n')[0]
             terminal = json.loads(subprocess.check_output([sys.executable, '-c', terminal_script],
                 cwd=stage, env=dict(os.environ, INSTANCE_ID='i-synthetic', EXIT_CODE='0', PHASE='complete')))
@@ -585,7 +920,7 @@ def self_check():
             assert terminal['qualification_sha256'] == qualification['qualification_sha256']
     lifecycle_self_check()
     collection_self_check()
-    print('semantic cold controller self-check PASS; cloud/native UNRUN')
+    print(f'semantic cold controller self-check PASS; bootstrap_bytes={len(body.encode())}; cloud/native UNRUN')
 
 
 if __name__ == '__main__':
@@ -593,6 +928,8 @@ if __name__ == '__main__':
         self_check()
     elif len(sys.argv) == 4 and sys.argv[1] == '--stage':
         _stage(sys.argv[2], sys.argv[3])
+    elif len(sys.argv) == 4 and sys.argv[1] == '--publish':
+        _publish(sys.argv[2], sys.argv[3])
     else:
         assert len(sys.argv) == 2, 'usage: python3 -m scripts.launch_native_semantic_router_cold_spot aNNNN'
         with open('/tmp/borsuk-native-semantic-router-cold-launch.lock', 'a+') as lock:
