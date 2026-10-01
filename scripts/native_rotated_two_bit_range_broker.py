@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import secrets
 import signal
 import socket
 import struct
@@ -119,15 +120,28 @@ class UnixRangeBroker:
                 pass
 
     def serve_forever(self) -> None:
-        if self.socket_path.exists():
+        if os.path.lexists(self.socket_path):
             raise ValueError("broker socket already exists")
+        if len(os.fsencode(self.socket_path)) >= 108:
+            raise ValueError("broker socket path too long")
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
+        private_name = ".b-" + secrets.token_hex(4)
+        parent_fd = os.open(self.socket_path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        identity = None
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
-                listener.bind(str(self.socket_path))
-                os.chmod(self.socket_path, 0o666)
+                # Linux's fd alias keeps the private bind short even in a long parent path.
+                listener.bind(f"/proc/self/fd/{parent_fd}/{private_name}")
+                node = os.stat(private_name, dir_fd=parent_fd, follow_symlinks=False)
+                identity = (node.st_dev, node.st_ino)
+                os.chmod(private_name, 0o666, dir_fd=parent_fd)
                 listener.listen(16)
                 listener.settimeout(0.5)
+                # A socket hard link publishes readiness atomically without replacing any owner.
+                os.link(
+                    private_name, self.socket_path.name,
+                    src_dir_fd=parent_fd, dst_dir_fd=parent_fd, follow_symlinks=False,
+                )
                 while not self.stopped:
                     try:
                         connection, _ = listener.accept()
@@ -146,10 +160,22 @@ class UnixRangeBroker:
                 "bytes": self.reader.bytes,
                 "nanoseconds": self.reader.nanoseconds,
             }
-            self.audit_path.write_text(
-                json.dumps(audit, sort_keys=True, separators=(",", ":")) + "\n"
-            )
-            self.socket_path.unlink(missing_ok=True)
+            try:
+                self.audit_path.write_text(
+                    json.dumps(audit, sort_keys=True, separators=(",", ":")) + "\n"
+                )
+            finally:
+                try:
+                    if identity is not None:
+                        for name in (private_name, self.socket_path.name):
+                            try:
+                                node = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                            except FileNotFoundError:
+                                continue
+                            if (node.st_dev, node.st_ino) == identity:
+                                os.unlink(name, dir_fd=parent_fd)
+                finally:
+                    os.close(parent_fd)
 
 
 def _sealed_authority(root: Path, prefix: str) -> tuple[str, int, str, dict[tuple[int, int], str]]:
