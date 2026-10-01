@@ -4,6 +4,7 @@ Config contract: FIXED plus controller_authority_pending=false,
 controller_code_sha256={every CODE path:SHA256}, native_source_manifest=
 {path,bytes,sha256}. No completed-assurance dependency. Optional leading
 --semantic-1m selects the new root and manifest-pinned native identity.
+--semantic-1m-test-build selects compile-only execution of the real test-build script.
 CLI aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT.
 """
 import contextlib
@@ -40,6 +41,8 @@ PREFIX = 'research/semantic-router/20261001/metadata-waves-workspace-'
 TOKEN_PREFIX = 'metadata-waves-workspace-'
 TAG = 'borsuk-metadata-waves-workspace'
 SEMANTIC_1M = False
+TEST_BUILD = False
+RECEIPT_SCHEMA = 'borsuk-native-workspace-execution-receipt-v1'
 WALL = 9000
 INSTANCE_TYPE, IMAGE_ID = 'c7i.2xlarge', semantic.IMAGE_ID
 ROOT_DEVICE_NAME, SUBNET = semantic.ROOT_DEVICE_NAME, 'subnet-034528fbd6977848f'
@@ -68,22 +71,50 @@ FIXED = dict(schema=CONFIG_SCHEMA, architecture='x86_64', region=peer.REGION, bu
     ebs_s3_allowance_usd=.15, memory_bytes=worker.MEMORY, swap_bytes=0, cpu_quota_percent=200,
     tasks_max=512, test_limit_seconds=worker.TEST_SECONDS, service_limit_seconds=worker.SERVICE_SECONDS,
     machine_limit_seconds=WALL, command=list(worker.COMMAND), environment=worker.ENVIRONMENT)
+FULL_CODE, FULL_FIXED = CODE, FIXED
 
 
 def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 
 
-def configure(semantic_1m=False):
+def configure(semantic_1m=False, *, test_build=False):
     """Select the protocol explicitly in every controller/worker process."""
-    global SEMANTIC_1M, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
-    assert type(semantic_1m) is bool
+    global SEMANTIC_1M, TEST_BUILD, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
+    global SCHEMA, CONFIG_SCHEMA, RECEIPT_SCHEMA, CODE, FIXED
+    assert type(semantic_1m) is type(test_build) is bool
+    assert not test_build or semantic_1m, 'test-build requires explicit semantic-1m mode'
     SEMANTIC_1M = semantic_1m
-    ROOT = (semantic.ROOT.parent/'semantic-1m' if semantic_1m else semantic.ROOT/'metadata-waves') / 'implementation-gates/remote-full'
+    TEST_BUILD = test_build
+    ROOT = (semantic.ROOT.parent/'semantic-1m' if semantic_1m else semantic.ROOT/'metadata-waves') / ('implementation-gates/remote-test-build' if test_build else 'implementation-gates/remote-full')
     CONFIG = ROOT/'config.json'
-    TOKEN_PREFIX = ('semantic-1m' if semantic_1m else 'metadata-waves') + '-workspace-'
+    TOKEN_PREFIX = ('semantic-1m-test-build-' if test_build else
+                    ('semantic-1m' if semantic_1m else 'metadata-waves') + '-workspace-')
     PREFIX = 'research/semantic-router/20261001/' + TOKEN_PREFIX
     TAG = 'borsuk-' + TOKEN_PREFIX.rstrip('-')
+    SCHEMA = 'borsuk-native-workspace-test-build-spot-v1' if test_build else 'borsuk-native-workspace-execution-spot-v1'
+    CONFIG_SCHEMA = 'borsuk-native-workspace-test-build-v1' if test_build else FULL_FIXED['schema']
+    RECEIPT_SCHEMA = 'borsuk-native-workspace-test-build-receipt-v1' if test_build else 'borsuk-native-workspace-execution-receipt-v1'
+    CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh') if test_build else FULL_CODE
+    FIXED = dict(FULL_FIXED, schema=CONFIG_SCHEMA)
+    if test_build:
+        FIXED.update(execution_kind='workspace-test-build', command=['bash', 'scripts/check_rust_test_build.sh'],
+            environment=dict(worker.ENVIRONMENT, BORSUK_TEST_BUILD_JOBS='1', BORSUK_TEST_BUILD_COMMAND=None))
+
+
+@contextlib.contextmanager
+def execution_mode(semantic_1m=False, *, test_build=False):
+    """Restore the caller's protocol after a worker or synthetic check."""
+    previous = SEMANTIC_1M, TEST_BUILD
+    configure(semantic_1m, test_build=test_build)
+    try:
+        yield
+    finally:
+        configure(previous[0], test_build=previous[1])
+
+
+def mode_flag():
+    return ' --semantic-1m-test-build' if TEST_BUILD else ' --semantic-1m' if SEMANTIC_1M else ''
 
 
 def qualify(base=Path('.')):
@@ -109,15 +140,18 @@ def qualify(base=Path('.')):
     assert identity == manifest['source_identity_sha256']
     assert SEMANTIC_1M or identity == SOURCE_IDENTITY, 'historical native source identity'
     assert re.fullmatch('[0-9a-f]{40}', manifest['native_source_commit'])
-    return dict(schema='borsuk-native-workspace-execution-qualification-v1',
+    proof = dict(schema='borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
         config_path=str(CONFIG), config_sha256=worker.sha(body), campaign_schema=SCHEMA,
         source_sha256=inventory, source_identity_sha256=identity, source_file_count=399,
         native_source_commit=manifest['native_source_commit'], native_source_manifest=pointer,
         native_source_manifest_sha256=pointer['sha256'], code_sha256=code,
         code_identity_sha256=worker.sha(encoded(code)), artifact_roster_sha256=worker.sha(encoded(ARTIFACTS)),
-        command=list(worker.COMMAND), environment=worker.ENVIRONMENT,
+        command=list(FIXED['command']), environment=dict(FIXED['environment']),
         actual_full_workspace_execution=False, awscli_version=semantic.AWSCLI_VERSION,
         awscli_sha256=semantic.AWSCLI_SHA256)
+    if TEST_BUILD:
+        proof.update(execution_kind=FIXED['execution_kind'], actual_workspace_test_build=False)
+    return proof
 
 
 def preflight(base=Path('.')):
@@ -142,14 +176,20 @@ def validate_receipt(out, proof):
     out = Path(out)
     assert proof['config_path'] == str(CONFIG) and proof['campaign_schema'] == SCHEMA, 'receipt mode'
     receipt = json.loads((out/'workspace-receipt.json').read_bytes())
-    assert receipt['schema'] == 'borsuk-native-workspace-execution-receipt-v1'
+    assert receipt['schema'] == RECEIPT_SCHEMA
     assert type(receipt['exit_status']) is int and receipt['exit_status'] == 0
     assert type(receipt['gate_status']) is int and receipt['gate_status'] == 0
     assert receipt['qualified'] is receipt['command_started'] is receipt['command_completed'] is True
     assert receipt['source_unchanged'] is True
-    assert receipt['command'][1:] == list(worker.COMMAND[1:]), 'exact full command'
+    assert proof['command'] == FIXED['command'] and proof['environment'] == FIXED['environment'], 'proof protocol'
+    if TEST_BUILD:
+        assert proof['execution_kind'] == receipt['execution_kind'] == FIXED['execution_kind']
+        assert receipt['actual_full_workspace_execution'] is False
+        assert receipt['command'] == FIXED['command'], 'exact test-build script command'
+    else:
+        assert receipt['command'][1:] == list(worker.COMMAND[1:]), 'exact full command'
     assert isinstance(receipt['command'][0], str) and receipt['command'][0]
-    assert receipt['environment'] == worker.ENVIRONMENT
+    assert receipt['environment'] == FIXED['environment']
     assert receipt['source_sha256'] == proof['source_sha256']
     assert receipt['source_identity_sha256'] == worker.source_identity(receipt['source_sha256']) == proof['source_identity_sha256']
     assert SEMANTIC_1M or proof['source_identity_sha256'] == SOURCE_IDENTITY
@@ -181,7 +221,7 @@ def user_data(commit, archive_sha, archive_key, prefix, qualification):
     with patch.multiple(semantic, WALL=WALL, SCHEMA=SCHEMA, ARTIFACTS=ARTIFACTS,
                         TERMINAL_IDENTITIES=TERMINAL_IDENTITIES), patch.object(semantic, '_offered', return_value=False):
         body = semantic.user_data(commit, archive_sha, archive_key, prefix, adapter)
-    flag = ' --semantic-1m' if SEMANTIC_1M else ''
+    flag = mode_flag()
     command = f'''phase=install
 test "$(uname -m)" = x86_64
 . /etc/os-release
@@ -259,8 +299,12 @@ def replay(out):
         assert terminal['original_exit_code'] == 0
         assert set(terminal['artifacts']) == set(ARTIFACTS), 'exact completed artifact roster'
         validate_receipt(out, proof)
-    return dict(qualified=complete, actual_full_workspace_execution=complete,
-                source_identity_sha256=proof['source_identity_sha256'], exit_status=terminal['original_exit_code'])
+    result = dict(qualified=complete, actual_full_workspace_execution=complete and not TEST_BUILD,
+                  source_identity_sha256=proof['source_identity_sha256'], exit_status=terminal['original_exit_code'])
+    if TEST_BUILD:
+        assert proof['execution_kind'] == FIXED['execution_kind']
+        result.update(execution_kind=FIXED['execution_kind'], actual_workspace_test_build=complete)
+    return result
 
 
 def collect(s3, prefix, out, instance_id, commit, digest):
@@ -327,10 +371,13 @@ def _worker_self_check(proof, config_body, manifest_body):
                 if args[0] != '/usr/bin/time':
                     return subprocess.CompletedProcess(args, 0, b'actual mocked compiler version\n')
                 calls.append(args)
-                assert args[args.index('fake-cargo'):] == ['fake-cargo', *worker.COMMAND[1:]]
+                expected_command = FIXED['command'] if TEST_BUILD else ['fake-cargo', *worker.COMMAND[1:]]
+                assert args[args.index('7200')+1:] == expected_command
                 assert args[args.index('--kill-after=30')+1] == '7200'
                 assert kw['cwd'] == repo.resolve()
-                assert all(kw['env'][k] == v for k,v in worker.ENVIRONMENT.items())
+                assert all(kw['env'].get(k) == v for k,v in FIXED['environment'].items())
+                if TEST_BUILD:
+                    assert 'BORSUK_TEST_BUILD_COMMAND' not in kw['env']
                 assert not Path(kw['env']['CARGO_TARGET_DIR']).is_relative_to(repo)
                 kw['stdout'].write(b'full mocked cargo log\n')
                 Path(args[args.index('-o')+1]).write_text('GNU time mocked resources\n')
@@ -344,7 +391,10 @@ def _worker_self_check(proof, config_body, manifest_body):
                     patch.object(worker, 'source_hashes', side_effect=[inventory, changed]), \
                     patch.object(worker, 'capture_cgroup', side_effect=[counters, after]), \
                     patch.object(worker.subprocess, 'run', side_effect=run), patch.object(os,'fsync',side_effect=fsync):
-                result = worker.main('fake-cargo', repo, out, semantic_1m=SEMANTIC_1M)
+                previous = authority.SEMANTIC_1M, authority.TEST_BUILD, authority.CONFIG, authority.CODE, authority.FIXED
+                result = worker.main('cargo' if TEST_BUILD else 'fake-cargo', repo, out,
+                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD)
+                assert previous == (authority.SEMANTIC_1M, authority.TEST_BUILD, authority.CONFIG, authority.CODE, authority.FIXED)
             assert len(calls) == 1, 'full test repeated'
             assert type(result['exit_status']) is int
             assert result['exit_status'] == {'exit17':17, 'timeout':124}.get(failure,0)
@@ -355,6 +405,15 @@ def _worker_self_check(proof, config_body, manifest_body):
                 validate_receipt(out, proof)
                 if failure == 'success':
                     saved = {name:(out/name).read_bytes() for name in ARTIFACTS if (out/name).is_file()}
+                    if TEST_BUILD:
+                        for changes in (dict(schema='borsuk-native-workspace-execution-receipt-v1'),
+                                        dict(exit_status=False), dict(gate_status=False),
+                                        dict(actual_full_workspace_execution=True),
+                                        dict(command=list(worker.COMMAND)),
+                                        dict(environment=dict(FIXED['environment'], BORSUK_TEST_BUILD_COMMAND='true'))):
+                            (out/'workspace-receipt.json').write_bytes(encoded(dict(result, **changes)))
+                            rejected(lambda: validate_receipt(out, proof))
+                        (out/'workspace-receipt.json').write_bytes(encoded(result))
                 (out/'test.log').write_bytes(b'tampered')
                 rejected(lambda: validate_receipt(out, proof))
             else:
@@ -440,7 +499,11 @@ def _collection_self_check(proof, files, body):
         s3 = Mock()
         s3.get_object.side_effect = lambda **kw: {'Body':io.BytesIO(store[kw['Key']])}
         collect(s3, PREFIX+'a0001', out, 'i-owned', '0'*40, '1'*64)
-        assert replay(out)['qualified'] is True
+        replayed = replay(out)
+        assert replayed['qualified'] is True
+        assert replayed['actual_full_workspace_execution'] is (not TEST_BUILD)
+        if TEST_BUILD:
+            assert replayed['actual_workspace_test_build'] is True
         for name,data in files.items():
             assert gzip.decompress((out/(name+'.gz')).read_bytes()) == data
         for changed in (dict(terminal,config_sha256='0'*64), dict(terminal,instance_id='i-other'),
@@ -457,8 +520,11 @@ def _collection_self_check(proof, files, body):
         failed = dict(terminal,exit_code=17,original_exit_code=17,status='failed',phase='execution')
         store[PREFIX+'a0001/terminal.json'] = encoded(failed)
         collect(s3,PREFIX+'a0001',out,'i-owned','0'*40,'1'*64)
-        assert replay(out) == dict(qualified=False,actual_full_workspace_execution=False,
-                                  source_identity_sha256=proof['source_identity_sha256'],exit_status=17)
+        expected = dict(qualified=False,actual_full_workspace_execution=False,
+                        source_identity_sha256=proof['source_identity_sha256'],exit_status=17)
+        if TEST_BUILD:
+            expected.update(execution_kind=FIXED['execution_kind'], actual_workspace_test_build=False)
+        assert replay(out) == expected
         assert (out/'test.log').read_bytes() == files['test.log'], 'failed logs lost'
 
 
@@ -484,23 +550,38 @@ def _remote_self_check():
             native_source_manifest=dict(path=str(manifest_path), **worker.artifact(repo/manifest_path)))
         (repo/CONFIG).write_bytes(encoded(config))
         cargo = root/'cargo'
+        cargo_args = ['test', '--locked', '--workspace', '--all-targets', '--no-run'] if TEST_BUILD else list(worker.COMMAND[1:])
         cargo.write_text(f'''#!{sys.executable}
 import os, sys
 from pathlib import Path
 if sys.argv[1:] == ['-V']:
     print('fake cargo version')
 else:
-    assert sys.argv[1:] == ['test', '--release', '--locked', '--workspace', '--all-targets']
+    assert sys.argv[1:] == {cargo_args!r}
     assert os.environ['CARGO_BUILD_JOBS'] == os.environ['RUST_TEST_THREADS'] == '1'
+    assert os.environ['RUSTC_WRAPPER'] == os.environ['RUSTC_WORKSPACE_WRAPPER'] == ''
+    if {TEST_BUILD!r}:
+        assert os.environ['BORSUK_TEST_BUILD_JOBS'] == '1'
+        assert 'BORSUK_TEST_BUILD_COMMAND' not in os.environ
     target = Path(os.environ['CARGO_TARGET_DIR'])
     assert target.is_dir() and not list(target.iterdir())
     (target.parent/'cargo-called').open('x').close()
     if os.environ.get('MUTATE'):
         with Path(os.environ['MUTATE']).open('ab') as out: out.write(b' ')
-    print('fake full workspace execution')
+    print('fake workspace cargo')
     sys.exit(int(os.environ.get('CARGO_EXIT', '0')))
 ''')
         cargo.chmod(0o755)
+        if TEST_BUILD:
+            # Fake Bash records the exact invocation, then executes the real script.
+            (root/'bash').write_text(f'''#!{sys.executable}
+import os, sys
+from pathlib import Path
+assert sys.argv[1:] == ['scripts/check_rust_test_build.sh']
+(Path(os.environ['CARGO_TARGET_DIR']).parent/'bash-called').open('x').close()
+os.execv('/bin/bash', ['/bin/bash', *sys.argv[1:]])
+''')
+            (root/'bash').chmod(0o755)
         (root/'rustc').write_text('#!/bin/sh\necho fake rustc version\n')
         (root/'rustc').chmod(0o755)
         # Execute the real worker CLI; only its kernel evidence is synthetic.
@@ -520,15 +601,22 @@ def read(path, *args, **kwargs):
 with patch.object(Path, 'read_text', read):
     runpy.run_module('scripts.check_native_workspace_execution', run_name='__main__')
 '''
-        env = dict(os.environ, PYTHONPATH=str(repo), MUTATE='', CARGO_EXIT='0')
-        cli = [sys.executable, '-m', MODULE, '--semantic-1m']
-        for failure, mutation in (('success',None), ('exit17',None), ('native','mock-0.rs'),
-                                  ('config',str(CONFIG)), ('code',CODE[0]), ('manifest',str(manifest_path))):
+        env = dict(os.environ, PYTHONPATH=str(repo), MUTATE='', CARGO_EXIT='0',
+                   CARGO_BUILD_JOBS='99', BORSUK_TEST_BUILD_JOBS='99',
+                   RUSTC_WRAPPER='forbidden-wrapper', RUSTC_WORKSPACE_WRAPPER='forbidden-wrapper')
+        env.pop('BORSUK_TEST_BUILD_COMMAND', None)
+        flag = mode_flag().strip()
+        cli = [sys.executable, '-m', MODULE, flag]
+        failures = [('success',None), ('exit17',None), ('native','mock-0.rs'),
+                    ('config',str(CONFIG)), ('code',CODE[0]), ('manifest',str(manifest_path))]
+        if TEST_BUILD:
+            failures.append(('script','scripts/check_rust_test_build.sh'))
+        for failure, mutation in failures:
             out = root/failure
             out.mkdir()
             subprocess.run([*cli,'--stage',str(repo),str(out)], cwd=root, env=env, check=True)
             before = (repo/mutation).read_bytes() if mutation else None
-            result = subprocess.run([sys.executable,'-c',runner,'--semantic-1m',str(cargo),str(repo),str(out)],
+            result = subprocess.run([sys.executable,'-c',runner,flag,str(cargo),str(repo),str(out)],
                 cwd=root, env=dict(env, MUTATE=str(repo/mutation) if mutation else '',
                                   CARGO_EXIT='17' if failure == 'exit17' else '0'), capture_output=True, text=True)
             assert result.returncode == (0 if failure == 'success' else 17 if failure == 'exit17' else 96), result.stderr
@@ -536,11 +624,41 @@ with patch.object(Path, 'read_text', read):
             assert receipt['exit_status'] == (17 if failure == 'exit17' else 0)
             assert receipt['qualified'] is (failure == 'success')
             assert receipt['source_file_count'] == 399 and (out/'cargo-called').exists()
-            assert (out/'test.log').read_text() == 'fake full workspace execution\n'
+            log = (out/'test.log').read_text()
+            assert log.startswith('fake workspace cargo\n')
+            if TEST_BUILD:
+                assert (out/'bash-called').exists()
+                assert f'rust-test-build status={receipt["exit_status"]}' in log and 'jobs=1' in log
             checked = subprocess.run([*cli,'--check-receipt',str(out)], cwd=root, env=env, capture_output=True)
             assert (checked.returncode == 0) is (failure == 'success'), checked.stderr
+            if failure == 'success':
+                proof = json.loads((out/'source-qualification.json').read_bytes())
+                body = user_data('0'*40, '1'*64, 'sources/mock', PREFIX+'a0001', proof)
+                terminal_script = body.split("python3 - <<'PY' >terminal.json\n",1)[1].split('\nPY\n',1)[0]
+                (out/'run-closed.log').write_text('closed synthetic CLI worker\n')
+                terminal = subprocess.check_output([sys.executable,'-c',terminal_script], cwd=out,
+                    env=dict(env, INSTANCE_ID='i-owned', EXIT_CODE='0', ORIGINAL_EXIT_CODE='0',
+                             PHASE='complete', ARTIFACT_NAMES=' '.join(ARTIFACTS)))
+                (out/'aws-terminal.json').write_bytes(terminal)
+                (out/'aws-reservation.json').write_bytes(encoded(dict(schema=SCHEMA, qualification=proof,
+                    source_commit='0'*40, source_archive_sha256='1'*64)))
+                (out/'aws-closeout.json').write_bytes(encoded(dict(state='terminated', nodes={'0':dict(instance_id='i-owned')})))
+                replayed = json.loads(subprocess.check_output([*cli,'--replay',str(out)], cwd=root, env=env))
+                assert replayed['qualified'] is True and replayed['actual_full_workspace_execution'] is (not TEST_BUILD)
+                if TEST_BUILD:
+                    assert replayed['actual_workspace_test_build'] is True
             if mutation:
                 (repo/mutation).write_bytes(before)
+        if TEST_BUILD:
+            # A true/false shim could report success without invoking Cargo.
+            for shim in ('true', 'false', 'arbitrary'):
+                out = root/('shim-'+shim)
+                out.mkdir()
+                subprocess.run([*cli,'--stage',str(repo),str(out)], cwd=root, env=env, check=True)
+                wrong = subprocess.run([sys.executable,'-c',runner,flag,str(cargo),str(repo),str(out)],
+                    cwd=root, env=dict(env, BORSUK_TEST_BUILD_COMMAND=shim), capture_output=True)
+                assert wrong.returncode != 0 and not (out/'target').exists()
+                assert not (out/'cargo-called').exists()
         # Missing mode must reject the semantic authority before creating a target.
         out = root/'wrong-mode'
         out.mkdir()
@@ -548,10 +666,38 @@ with patch.object(Path, 'read_text', read):
         wrong = subprocess.run([sys.executable,'-c',runner,str(cargo),str(repo),str(out)],
                                cwd=root, env=env, capture_output=True)
         assert wrong.returncode != 0 and not (out/'target').exists()
+        if TEST_BUILD:
+            wrong = subprocess.run([sys.executable,'-c',runner,'--semantic-1m',str(cargo),str(repo),str(out)],
+                                   cwd=root, env=env, capture_output=True)
+            assert wrong.returncode != 0 and not (out/'target').exists()
+            checked = subprocess.run([sys.executable,'-m',MODULE,'--semantic-1m','--check-receipt',str(root/'success')],
+                                     cwd=root, env=env, capture_output=True)
+            assert checked.returncode != 0, 'compile-only receipt accepted as full execution'
 
 
-def self_check(semantic_1m=False):
-    configure(semantic_1m)
+def _test_build_protocol_self_check():
+    configure(True, test_build=True)
+    assert str(ROOT).endswith('semantic-1m/implementation-gates/remote-test-build')
+    assert PREFIX == 'research/semantic-router/20261001/semantic-1m-test-build-'
+    assert FIXED['command'] == ['bash', 'scripts/check_rust_test_build.sh']
+    assert FIXED['environment']['BORSUK_TEST_BUILD_JOBS'] == '1'
+    assert FIXED['environment']['BORSUK_TEST_BUILD_COMMAND'] is None
+    assert FIXED['execution_kind'] == 'workspace-test-build'
+    assert 'scripts/check_rust_test_build.sh' in CODE and len(CODE) == 23
+    configure(True)
+    assert FIXED['command'] == list(worker.COMMAND) and len(CODE) == 22
+    assert 'execution_kind' not in FIXED
+    configure()
+    assert TOKEN_PREFIX == 'metadata-waves-workspace-'
+
+
+def self_check(semantic_1m=False, *, test_build=False):
+    with execution_mode(semantic_1m, test_build=test_build):
+        _self_check()
+
+
+def _self_check():
+    semantic_1m = SEMANTIC_1M
     module = sys.modules[__name__]
     base = Path(__file__).resolve().parents[1]
     manifest = json.loads((base/semantic.ROOT/'metadata-waves/native-source-manifest.json').read_bytes())
@@ -583,7 +729,7 @@ def self_check(semantic_1m=False):
             stage(repo,out)
             assert json.loads((out/'source-qualification.json').read_bytes()) == proof
             for key,value in (('controller_authority_pending',True), ('memory_bytes',worker.MEMORY+1),
-                              ('command',[*worker.COMMAND,'--no-run']), ('environment',dict(worker.ENVIRONMENT,CARGO_BUILD_JOBS='2')),
+                              ('command',[*FIXED['command'],'--no-run']), ('environment',dict(FIXED['environment'],CARGO_BUILD_JOBS='2')),
                               ('controller_code_sha256',dict(config['controller_code_sha256'],**{CODE[0]:'0'*64})),
                               ('native_source_manifest',dict(config['native_source_manifest'],sha256='0'*64))):
                 (repo/CONFIG).write_bytes(encoded(dict(config,**{key:value})))
@@ -613,39 +759,47 @@ def self_check(semantic_1m=False):
         with patch.object(subprocess,'check_output',side_effect=['','']):
             rejected(lambda:preflight(repo))
         body = user_data('0'*40,'1'*64,'sources/mock',PREFIX+'a0001',proof)
-        assert len(CODE) == len(set(CODE)) == 22 and len(ARTIFACTS) == len(set(ARTIFACTS)) == 13
+        assert len(CODE) == len(set(CODE)) == (23 if TEST_BUILD else 22)
+        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == 13
         assert '--on-active=9000s' in body and 'RuntimeMaxSec=7260' in body
         assert all(k in body for k in ('MemoryMax=8G','MemorySwapMax=0','CPUQuota=200%','TasksMax=512'))
         assert 'build-essential' in body and 'python3-dev' in body
         assert semantic.AWSCLI_URL in body and semantic.AWSCLI_SHA256 in body
         assert 'phase=publication' not in body and 'native-semantic-publication' not in body
-        flag = ' --semantic-1m' if semantic_1m else ''
+        flag = mode_flag()
         for invocation in (f'{MODULE}{flag} --stage', f'{MODULE}{flag} --check-receipt',
                            f'scripts.check_native_workspace_execution{flag} "$CARGO_HOME/bin/cargo"'):
             assert invocation in body, invocation
         files = _worker_self_check(proof,config_body,manifest_body)
         from scripts.launch_native_semantic_metadata_cold_spot import _full_receipt
-        _full_receipt(files['workspace-receipt.json'],files['test.log'],inventory,proof['source_identity_sha256'])
+        full_check = lambda: _full_receipt(files['workspace-receipt.json'],files['test.log'],inventory,proof['source_identity_sha256'])
+        if TEST_BUILD:
+            rejected(full_check)
+        else:
+            full_check()
         _collection_self_check(proof,files,body)
     _lifecycle_self_check()
     if semantic_1m:
         _remote_self_check()
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024
-    print(f'PASS workspace execution ({"semantic-1m" if semantic_1m else "metadata-waves"}): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; existing full receipt compatible; all-ACK/fsync/wait-before-collection; remote_cli={semantic_1m}; code=22 artifacts=13 userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
+    print(f'PASS workspace {"test-build" if TEST_BUILD else "execution"} ({"semantic-1m" if semantic_1m else "metadata-waves"}): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile authority checked; all-ACK/fsync/wait-before-collection; remote_cli={semantic_1m}; code={len(CODE)} artifacts=13 userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
 
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    semantic_1m = args[:1] == ['--semantic-1m']
+    test_build = args[:1] == ['--semantic-1m-test-build']
+    semantic_1m = test_build or args[:1] == ['--semantic-1m']
     if semantic_1m:
         args = args[1:]
-    configure(semantic_1m)
+    configure(semantic_1m, test_build=test_build)
     # ponytail: shared launch archives the repository in memory; stream it in
     # the shared launcher if root's launch resource gate proves insufficient.
     if args[:1] and args[0].startswith('--'):
         resource.setrlimit(resource.RLIMIT_AS, (200*1024**2,200*1024**2))
     if args == ['--self-check']:
-        self_check(semantic_1m)
+        with execution_mode():
+            _test_build_protocol_self_check()
+        self_check(semantic_1m, test_build=test_build)
     elif args[:1] == ['--stage']:
         assert len(args) == 3
         stage(*args[1:])
@@ -657,7 +811,7 @@ if __name__ == '__main__':
         assert len(args) == 2
         print(json.dumps(replay(args[1]),sort_keys=True))
     else:
-        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--semantic-1m] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
+        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--semantic-1m | --semantic-1m-test-build] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
         with open('/tmp/borsuk-native-workspace-execution-launch.lock','a+') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             main(args[0])
