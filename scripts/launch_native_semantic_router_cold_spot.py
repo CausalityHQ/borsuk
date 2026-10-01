@@ -360,9 +360,12 @@ def _offered(qualification):
 def _stage(repo, out):
     repo, out = Path(repo).resolve(), Path(out).resolve()
     expected = json.loads((out/'source-qualification.json').read_bytes())
+    offered = _offered(expected)
+    if offered:
+        _check_checkpoint_cli()  # Before publication or native execution.
     (out/'binaries/two_bit_plan_demo').chmod(0o755)
     actual, files = _qualify(repo, out/'binaries/two_bit_http', out/'binaries/two_bit_plan_demo',
-                             offered=_offered(expected))
+                             offered=offered)
     assert actual == expected, 'remote qualification differs from local authority'
     for name, body in files.items():
         path = out/name
@@ -468,6 +471,32 @@ def _cell_bodies(summary, paths, config):
     return stem, record_body, summary_body
 
 
+def _checkpoint_cli_call(command):
+    """One CLI attempt; reap on timeout/interruption and suppress SDK/CLI text."""
+    try:
+        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              env=dict(os.environ, AWS_MAX_ATTEMPTS='1')) as process:
+            try:
+                body, _ = process.communicate(timeout=45)
+            except BaseException:
+                process.kill()
+                process.wait()
+                raise
+    except Exception as error:
+        raise RuntimeError('checkpoint CLI failed: '+type(error).__name__) from None
+    if process.returncode != 0:
+        raise RuntimeError('checkpoint CLI failed: exit '+str(process.returncode))
+    return body
+
+
+def _check_checkpoint_cli():
+    version = _checkpoint_cli_call(['aws', '--version'])
+    assert version.startswith(('aws-cli/'+AWSCLI_VERSION+' ').encode()), 'checkpoint CLI version'
+    skeleton = _checkpoint_cli_call(['aws', 's3api', 'put-object', '--generate-cli-skeleton', 'input',
+                                     '--no-sign-request', '--no-cli-pager'])
+    assert 'IfNoneMatch' in json.loads(skeleton), 'checkpoint conditional PUT capability'
+
+
 def _run_offered(argv, prefix):
     assert re.fullmatch(re.escape(OFFERED_PREFIX)+r'a[0-9]{4}', prefix), 'checkpoint prefix'
     assert len(argv) == 5
@@ -477,23 +506,20 @@ def _run_offered(argv, prefix):
     assert config['schema'] == OFFERED_RUNTIME_SCHEMA and not config.get('authority_pending')
     config = dict(config, config_sha256=argv[1])
     output = Path(argv[4]).resolve()
-    # Existing one-attempt IMDS/S3 client; no SDK exception text reaches logs.
-    try:
-        client = publication.sdk_client(config['region'])
-    except Exception as error:
-        raise RuntimeError('closed cell client failed: '+type(error).__name__) from None
+    _check_checkpoint_cli()
     uploaded = set()
     def closed(summary, paths):
         assert all(Path(path).resolve().parent == output for path in paths.values()), 'checkpoint output path'
-        stem, records, marker = _cell_bodies(summary, paths, config)
+        assert all(stat.S_ISREG(Path(path).lstat().st_mode) for path in paths.values()), 'checkpoint regular files'
+        stem, _, _ = _cell_bodies(summary, paths, config)
         assert stem not in uploaded, 'duplicate closed cell'
-        try:
-            client.put_object(Bucket=config['bucket'], Key=prefix+'/cells/'+stem+'-records.jsonl',
-                              Body=records, IfNoneMatch='*')
-            client.put_object(Bucket=config['bucket'], Key=prefix+'/cells/'+stem+'-summary.json',
-                              Body=marker, IfNoneMatch='*')
-        except Exception as error:
-            raise RuntimeError('closed cell upload failed: '+type(error).__name__) from None
+        # Callback runs after cell closure; CLI wall/resource usage stays in the campaign envelope.
+        for name in ('records', 'summary'):
+            path = Path(paths[name]).resolve()
+            _checkpoint_cli_call(['aws', 's3api', 'put-object', '--if-none-match', '*',
+                '--bucket', config['bucket'], '--key', prefix+'/cells/'+path.name, '--body', str(path),
+                '--region', config['region'], '--cli-connect-timeout', '5', '--cli-read-timeout', '15',
+                '--no-cli-pager'])
         uploaded.add(stem)
     return _worker().main(argv, on_cell_closed=closed)
 
@@ -990,10 +1016,11 @@ def _offered_self_check(base, config, stage):
         rejected(lambda: preflight(base, offered=True))
         path.write_bytes(saved)
     (stage/'source-qualification.json').write_text(json.dumps(qualified))
-    _stage(base, stage)
-    bad = dict(qualified, artifact_roster_sha256='f'*64)
-    (stage/'source-qualification.json').write_text(json.dumps(bad))
-    rejected(lambda: _stage(base, stage))
+    with patch.object(module, '_check_checkpoint_cli'):
+        _stage(base, stage)
+        bad = dict(qualified, artifact_roster_sha256='f'*64)
+        (stage/'source-qualification.json').write_text(json.dumps(bad))
+        rejected(lambda: _stage(base, stage))
     (stage/'source-qualification.json').write_text(json.dumps(qualified))
     bodies = _publication_fixture(offered, json.loads((base/ROOT/'publication-assets.json').read_bytes()),
                                   (base/ROOT/'publication-assets.json').read_bytes(), config_path.read_bytes())
@@ -1014,16 +1041,16 @@ def _offered_self_check(base, config, stage):
     output = base/'checkpoint'
     argv = [str(config_path), qualified['config_sha256'], str(stage/'binaries/two_bit_http'),
             str(stage/'boundary-check.json'), str(output)]
-    client = Mock()
-    with patch.object(publication, 'sdk_client', side_effect=RuntimeError('synthetic-sensitive-sdk-text')), \
+    upload = Mock(return_value=b'{}')
+    with patch.object(module, '_check_checkpoint_cli', side_effect=RuntimeError('checkpoint capability missing')), \
             patch.object(module, '_worker') as worker:
         try: _run_offered(argv, OFFERED_PREFIX+'a0001')
-        except RuntimeError as error: assert 'synthetic-sensitive-sdk-text' not in str(error)
-        else: raise AssertionError('SDK client failure swallowed')
+        except RuntimeError: pass
+        else: raise AssertionError('CLI capability failure swallowed')
         worker.assert_not_called()
     for failure in ('success', 'partial', 'identity', 'resource', 'upload', 'interrupt'):
-        client.reset_mock(side_effect=True)
-        if failure == 'upload': client.put_object.side_effect = RuntimeError('synthetic-sensitive-sdk-text')
+        upload.reset_mock(side_effect=True)
+        if failure == 'upload': upload.side_effect = RuntimeError('checkpoint CLI failed: exit 1')
         def runtime(args, *, on_cell_closed):
             assert args == argv
             paths = _cell_fixture(output, CELL_STEMS[0], checked_config)
@@ -1042,18 +1069,19 @@ def _offered_self_check(base, config, stage):
                 raise KeyboardInterrupt()
             return 0
         with patch.object(module, '_worker', return_value=SimpleNamespace(main=runtime)), \
-                patch.object(publication, 'sdk_client', return_value=client), patch.object(stats, 'check_saved') as reducer:
+                patch.object(module, '_check_checkpoint_cli'), \
+                patch.object(module, '_checkpoint_cli_call', upload), patch.object(stats, 'check_saved') as reducer:
             try: result = _run_offered(argv, OFFERED_PREFIX+'a0001')
             except (AssertionError, RuntimeError, KeyboardInterrupt) as error:
                 assert failure != 'success'
-                assert 'synthetic-sensitive-sdk-text' not in str(error)
             else: assert failure == 'success' and result == 0
             reducer.assert_not_called()
-        assert client.put_object.call_count == (0 if failure in ('partial', 'identity', 'resource') else 1 if failure == 'upload' else 2)
+        assert upload.call_count == (0 if failure in ('partial', 'identity', 'resource') else 1 if failure == 'upload' else 2)
         if failure in ('success', 'interrupt'):
-            assert [c.kwargs['Key'] for c in client.put_object.call_args_list] == [
+            commands = [c.args[0] for c in upload.call_args_list]
+            assert [c[c.index('--key')+1] for c in commands] == [
                 OFFERED_PREFIX+'a0001/cells/'+CELL_STEMS[0]+'-'+s for s in ('records.jsonl', 'summary.json')]
-            assert all(c.kwargs['IfNoneMatch'] == '*' for c in client.put_object.call_args_list)
+            assert all(c[c.index('--if-none-match')+1] == '*' for c in commands)
         if failure == 'interrupt':
             closed = _closed_artifacts(output.parent)  # The actual roster is rooted at screen/.
             assert not any('rate0-' in n for n in closed)
