@@ -6,7 +6,7 @@ use borsuk::{
         TwoBitSearchResult,
     },
 };
-use object_store::{local::LocalFileSystem, path::Path as ObjectPath};
+use object_store::{chunked::ChunkedStore, local::LocalFileSystem, path::Path as ObjectPath};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -17,6 +17,7 @@ use std::{
     io::{Read, Write},
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Instant,
 };
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -222,8 +223,15 @@ fn diagnostic_scratch_bytes(rows: usize) -> Result<usize> {
         .checked_add(TwoBitPlanTrace::scratch_bytes(rows))
         .ok_or_else(|| "diagnostic scratch overflow".into())
 }
+fn scorer_store(root: &Path) -> object_store::Result<ChunkedStore> {
+    // Keep local range payloads bounded while using the production stream verifier.
+    Ok(ChunkedStore::new(
+        Arc::new(LocalFileSystem::new_with_prefix(root)?),
+        8192,
+    ))
+}
 async fn run(c: &Config, events: &mut File) -> Result<Value> {
-    let store = LocalFileSystem::new_with_prefix(&c.store_root)?;
+    let store = scorer_store(&c.store_root)?;
     let prefix = ObjectPath::from(c.generation_prefix.clone());
     let limits = TwoBitGenerationLimits {
         max_memory_bytes: c.max_memory_bytes,
@@ -448,6 +456,149 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn real_file_source_and_sq8_preserve_production_ranking_and_fail_closed() {
+        use borsuk::{
+            sq8_s3_range::Sq8ReadStats, two_bit_build::TwoBitGenerationBuilder,
+            two_bit_source::TwoBitSource, two_bit_store::publish_two_bit_generation,
+        };
+        use object_store::{GetResultPayload, ObjectStoreExt};
+        let rows = 257;
+        let dimensions = 768;
+        let temp = tempfile::tempdir().unwrap();
+        let store_root = temp.path().join("store");
+        std::fs::create_dir(&store_root).unwrap();
+        let direct = LocalFileSystem::new_with_prefix(&store_root).unwrap();
+        let store = scorer_store(&store_root).unwrap();
+        let mut raw = Vec::new();
+        let mut sq8 = Vec::new();
+        for row in 0..rows {
+            let value = (1 + row % 7) as u8;
+            for _ in 0..dimensions {
+                raw.extend_from_slice(&(value as f32).to_le_bytes());
+            }
+            sq8.extend_from_slice(&((rows - row + 1000) as i64).to_le_bytes());
+            sq8.extend_from_slice(&(dimensions as f32 * (value as f32).powi(2)).to_le_bytes());
+            sq8.extend(std::iter::repeat_n(value, dimensions));
+        }
+        let raw_path = temp.path().join("raw");
+        let sq8_path = temp.path().join("sq8");
+        std::fs::write(&raw_path, &raw).unwrap();
+        std::fs::write(&sq8_path, &sq8).unwrap();
+        let sq8_sha = hash(&sq8);
+        let key = ObjectPath::from(format!("semantic/objects/{sq8_sha}"));
+        direct.put(&key, sq8.into()).await.unwrap();
+        assert!(matches!(
+            direct.get(&key).await.unwrap().payload,
+            GetResultPayload::File(..)
+        ));
+        let etag = direct.head(&key).await.unwrap().e_tag.unwrap();
+        let root = temp.path().join("generation");
+        let order = (0..rows as u64).collect::<Vec<_>>();
+        let root_sha = TwoBitGenerationBuilder {
+            source: TwoBitSource {
+                raw: &raw_path,
+                raw_sha256: &hash(&raw),
+                sq8: &sq8_path,
+                sq8_sha256: &sq8_sha,
+                rows,
+                dimensions,
+            },
+            base_epoch: 0,
+            generation: 1,
+            low: &[0.; 768],
+            step: &[1.; 768],
+            sq8_object_key: key.as_ref(),
+            sq8_etag: &etag,
+        }
+        .build_with_discovery(Some(&order), DiscoveryMode::Semantic, &root, 128_000_000)
+        .unwrap();
+        let limits = TwoBitGenerationLimits {
+            max_memory_bytes: 512 * 1024 * 1024,
+            max_active_queries: 1,
+            max_query_bytes: 16_773_120,
+            max_query_gets: 32,
+            max_parallel_gets: 16,
+            max_source_bytes: 64 * 1024 * 1024,
+            max_source_gets: 128,
+            max_parallel_source_gets: 16,
+            max_query_scratch_bytes: diagnostic_scratch_bytes(rows).unwrap(),
+            already_pinned_bytes: EVALUATOR_CHARGE,
+        };
+        let head = publish_two_bit_generation(
+            &direct,
+            &ObjectPath::from("semantic/index"),
+            &root,
+            &root_sha,
+            limits,
+            None,
+        )
+        .await
+        .unwrap();
+        let prefix = head.metadata_prefix();
+        let generation =
+            TwoBitGeneration::open_remote(&store, &prefix, &root_sha, limits, temp.path())
+                .await
+                .unwrap();
+        let query = [1.; 768];
+        let error = generation
+            .diagnostic_search_with_store(&direct, &query, 100)
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            format!("{error:?}").contains("UnexpectedMetadata"),
+            "{error:?}"
+        );
+        assert!(error.router_stats().verified_bytes > 0);
+        assert!(error.read_stats().0.failed_gets > 0);
+        assert_eq!(error.read_stats().1, Sq8ReadStats::default());
+        let expected = generation
+            .search_with_store(&store, &query, 100, None)
+            .await
+            .unwrap();
+        let (actual, trace) = generation
+            .diagnostic_search_with_store(&store, &query, 100)
+            .await
+            .unwrap();
+        assert_eq!(actual.ranked.candidates.len(), 100);
+        assert_eq!(actual.ranked.candidates, expected.ranked.candidates);
+        assert_eq!(actual.plan, expected.plan);
+        assert_eq!(actual.source_stats, expected.source_stats);
+        assert_eq!(actual.router_stats, expected.router_stats);
+        assert_eq!(actual.ranked.stats, expected.ranked.stats);
+        assert!(actual.source_stats.verified_bytes > 8192);
+        assert!(actual.ranked.stats.verified_bytes > 8192);
+        assert!(!trace.nomination_evaluated_units.is_empty());
+        let source_key = ObjectPath::from(format!("{prefix}/plane/records.bin"));
+        let mut changed = std::fs::read(root.join("plane/records.bin")).unwrap();
+        changed[0] ^= 1;
+        // Replacing the file changes its ETag, so the already-open generation rejects it.
+        store.put(&source_key, changed.into()).await.unwrap();
+        let error = generation
+            .diagnostic_search_with_store(&store, &query, 100)
+            .await
+            .err()
+            .unwrap();
+        assert!(format!("{error:?}").contains("Precondition"), "{error:?}");
+        assert!(error.read_stats().0.failed_gets > 0);
+        assert_eq!(error.read_stats().0.verified_bytes, 0);
+        assert_eq!(error.read_stats().1, Sq8ReadStats::default());
+        // Refreshing HEAD accepts the new ETag, but the frozen page SHA still rejects it.
+        let reopened =
+            TwoBitGeneration::open_remote(&store, &prefix, &root_sha, limits, temp.path())
+                .await
+                .unwrap();
+        let error = reopened
+            .search_with_store(&store, &query, 100, None)
+            .await
+            .err()
+            .unwrap();
+        assert!(format!("{error:?}").contains("Page("), "{error:?}");
+        assert!(error.read_stats().0.failed_gets > 0);
+        assert_eq!(error.read_stats().0.verified_bytes, 0);
+        assert_eq!(error.read_stats().1, Sq8ReadStats::default());
+    }
     #[test]
     fn diagnostic_budget_admits_d768_without_spending_the_trace_charge() {
         use borsuk::rotated_two_bit::{RotatedTwoBitCodec, TwoBitError};
