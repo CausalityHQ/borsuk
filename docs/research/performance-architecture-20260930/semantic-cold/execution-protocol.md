@@ -93,3 +93,34 @@ actual ABI gates before the next paid launch. Reuse completed unchanged Rust
 assurance and immutable input assets; run only affected controller checks.
 
 Ubuntu root volume is explicitly `/dev/sda1`, encrypted 80 GiB gp3 with deletion on termination (AMI root-device authority checked). Shared historical ARM default stays `/dev/xvda`. a0002 config SHA `3c7fe631dd22f0ef017a5b96007ce1e50ccc2723c3783e0e776ab68a15917abd`; frozen a0001 config preserved in `config-a0001.json`. Native bins/source/full assurance unchanged; runtime ABI is an unexecuted remote gate.
+
+## Preregistered bootstrap repair for a0003 (2026-10-01)
+
+a0002 is closed with instance-initiated shutdown and missing terminal artifacts.
+Delayed console output confirms the cloud-init user script failed; its initiating
+command remains unknown because output was redirected to the local log. The
+current Ubuntu Noble package catalogue lacks APT awscli, a likely trigger
+([Ubuntu package catalogue](https://packages.ubuntu.com/awscli),
+[confirmed Ubuntu package bug](https://bugs.launchpad.net/ubuntu/+source/awscli/+bug/2066199)).
+
+Use the official AWS CLI 2.36.11 x86 installer instead of APT awscli. Root
+downloaded its exact versioned HTTPS body, verified the AWS signature with the
+published key, and pinned SHA256
+50fbb7a2f44a78eab4a210088040e8f0bc4b9937cac8043c2354269d58614df6
+and length 73,022,935 bytes. Installation instructions and signing authority:
+[AWS official installer](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html).
+The isolated local install and version command passed; all 65 bundled ELF bodies
+require at most GLIBC 2.17. Actual target installation remains an unexecuted gate.
+
+Preregister precise dependency/source phases and synchronous bounded serial
+failure diagnostics before cleanup network operations. Retain the original exit
+status separately from upload failure. Emit the terminal to serial before its
+S3 upload; console evidence alone cannot qualify a scientific result. The
+closure log must be created before its final artifact authentication. Never
+reclassify a0002 as a successful experiment or Spot eviction.
+
+Reuse unchanged native source, binaries, full assurance, corpus, fitted router,
+panels, immutable input assets, quality and resource limits. Freeze fresh a0003
+namespaces and actual Python code/config identities before ONE paired Spot
+attempt. No independent paid smoke or native workspace gate is required by this
+bootstrap-only change.
