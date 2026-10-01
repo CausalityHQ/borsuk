@@ -57,6 +57,10 @@ BINARY_BYTES = 16191384
 GATES = ('affected-final', 'release-final', 'clippy-final', 'test-build-final', 'full-workspace-final')
 ASSET_PREPARATION = ROOT / 'publication-assets-preparation.json'
 ASSET_PREPARATION_SHA = 'e13e18118b5313f4e8bf4427aab72eb00e7d1e16ae18113e91ce7fc5a0ecf6c1'
+AWSCLI_VERSION = '2.36.11'
+AWSCLI_URL = 'https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.36.11.zip'
+AWSCLI_SHA256 = '50fbb7a2f44a78eab4a210088040e8f0bc4b9937cac8043c2354269d58614df6'
+AWSCLI_BYTES = 73022935
 EXTRAS = ('scripts/launch_native_semantic_router_cold_spot.py',
           'scripts/launch_native_metadata_ranges_cold_spot.py',
           'scripts/launch_native_startup_profile_spot.py', 'scripts/launch_native_peer_1m_spot.py',
@@ -78,7 +82,8 @@ TERMINAL_IDENTITIES = ('config_sha256', 'qualification_sha256', 'binary_sha256',
     'native_source_commit', 'source_identity_sha256', 'source_file_count', 'artifact_roster_sha256',
     'native_source_archive_sha256', 'native_source_manifest_sha256', 'native_assurance_sha256',
     'publisher_sha256', 'publisher_bytes', 'publisher_qualification_sha256', 'asset_manifest_sha256',
-    'publication_assets', 'asset_preparation_sha256', 'runtime_os', 'runtime_glibc', 'required_glibc')
+    'publication_assets', 'asset_preparation_sha256', 'runtime_os', 'runtime_glibc', 'required_glibc',
+    'awscli_version', 'awscli_sha256')
 
 
 def _worker():
@@ -303,6 +308,7 @@ def _qualify(base, binary_override=None, publisher_override=None):
         asset_manifest_sha256=pub['asset_manifest']['sha256'], publication_assets=pub['assets'],
         asset_preparation_sha256=peer.sha(declared_body),
         runtime_os=RUNTIME_OS, runtime_glibc=RUNTIME_GLIBC, required_glibc=required_glibc,
+        awscli_version=AWSCLI_VERSION, awscli_sha256=AWSCLI_SHA256,
         native_binary=binary_pointer, authority_artifacts={n: _identity(b) for n, b in files.items()},
         artifact_roster_sha256=peer.sha(json.dumps(ARTIFACTS, separators=(',', ':')).encode()))
     return qualification, files
@@ -396,15 +402,70 @@ def _publish(repo, out):
 
 def user_data(commit, archive_sha, archive_key, prefix, qualification):
     assert len(commit) == 40 and len(archive_sha) == 64
+    assert (qualification['awscli_version'], qualification['awscli_sha256']) == (AWSCLI_VERSION, AWSCLI_SHA256)
     with patch.multiple(runner, WALL_SECONDS=WALL, SCHEMA=SCHEMA, ARTIFACTS=ARTIFACTS):
         body = runner.user_data(commit, archive_sha, archive_key, prefix)
     body = body.replace('v174-relaid-bind-compile', 'native-semantic-router-cold')
+    # Share the exact roster across existence gates, uploads and terminal hashing.
+    body = body.replace('phase=bootstrap\n', 'phase=bootstrap\nexport ARTIFACT_NAMES='+quote(' '.join(ARTIFACTS))+'\n', 1)
+    terminal = body.split("python3 - <<'PY' >terminal.json\n", 1)[1].split('\nPY\n', 1)[0]
+    terminal = terminal.replace(f'for name in {ARTIFACTS!r}:', "for name in os.environ['ARTIFACT_NAMES'].split():")
+    terminal = terminal.replace("'exit_code':code,", "'exit_code':code,'original_exit_code':int(os.environ['ORIGINAL_EXIT_CODE']),")
+    finish = f'''finish() {{
+  original_code=$?
+  code=$original_code
+  trap - EXIT TERM
+  set +e
+  cd "$root"
+  {{ printf 'BORSUK_BOOTSTRAP phase=%s original_exit_code=%s\\n' "$phase" "$original_code"; tail -c 4096 run.log; printf '\\n'; }} >/dev/ttyS0 2>/dev/null || true
+  cp run.log run-closed.log || code=96
+  token=$(curl -fsS --connect-timeout 2 --max-time 5 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token) || code=96
+  instance_id=$(curl -fsS --connect-timeout 2 --max-time 5 -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id) || code=96
+  aws_ready=0
+  if command -v aws >/dev/null; then
+    aws_ready=1
+    for name in $ARTIFACT_NAMES; do
+      if [ -f "$name" ]; then
+        timeout --kill-after=5 60 aws s3 cp "$name" "s3://{peer.BUCKET}/{prefix}/artifacts/$name" --only-show-errors || code=96
+      fi
+    done
+  else code=96; fi
+  write_terminal() {{
+    INSTANCE_ID="$instance_id" EXIT_CODE="$code" ORIGINAL_EXIT_CODE="$original_code" PHASE="$phase" python3 - <<'PY' >terminal.json
+{terminal}
+PY
+  }}
+  terminal_ready=0
+  if command -v python3 >/dev/null; then write_terminal && terminal_ready=1 || code=96; else code=96; fi
+  {{ if [ "$terminal_ready" = 1 ]; then printf 'BORSUK_TERMINAL '; cat terminal.json; else printf 'BORSUK_TERMINAL unavailable\\n'; fi; }} >>/dev/ttyS0 2>/dev/null || true
+  if [ "$aws_ready" = 1 ] && [ "$terminal_ready" = 1 ]; then
+    timeout --kill-after=5 60 aws s3 cp terminal.json "s3://{peer.BUCKET}/{prefix}/terminal.json" --only-show-errors || {{ code=96; write_terminal || terminal_ready=0; }}
+  fi
+  printf 'BORSUK_FINISH phase=%s original_exit_code=%s exit_code=%s\\n' "$phase" "$original_code" "$code" >>/dev/ttyS0 2>/dev/null || true
+  shutdown -h now || true
+  exit "$code"
+}}
+'''
+    start, end = body.index('finish() {\n'), body.index('trap finish EXIT\n')
+    body = body[:start] + finish + body[end:]
     bootstrap = 'exec >run.log 2>&1\naws s3 cp '
     assert body.count(bootstrap) == 1, 'bootstrap early AWS hook changed'
-    body = body.replace(bootstrap, '''exec >run.log 2>&1
-export DEBIAN_FRONTEND=noninteractive
+    body = body.replace(bootstrap, f'''exec >run.log 2>&1
+export DEBIAN_FRONTEND=noninteractive AWS_MAX_ATTEMPTS=1
+phase=apt-update
 timeout --kill-after=30 180 apt-get -qq -o DPkg::Lock::Timeout=120 update
-timeout --kill-after=30 300 apt-get -qq -y -o DPkg::Lock::Timeout=120 install awscli python3-boto3 python3.12 time tar gzip util-linux binutils
+phase=apt-install
+timeout --kill-after=30 300 apt-get -qq -y -o DPkg::Lock::Timeout=120 install curl unzip python3-boto3 python3.12 time tar gzip util-linux binutils
+phase=awscli-download
+curl -fsSL --connect-timeout 10 --max-time 180 --output awscliv2.zip {quote(AWSCLI_URL)}
+printf '%s  awscliv2.zip\\n' '{AWSCLI_SHA256}' | sha256sum -c -
+test "$(stat -c %s awscliv2.zip)" = {AWSCLI_BYTES}
+phase=awscli-install
+timeout --kill-after=30 120 unzip -q awscliv2.zip
+timeout --kill-after=30 120 ./aws/install
+cli_version=$(aws --version)
+[[ "$cli_version" == aws-cli/{AWSCLI_VERSION}\\ * ]]
+phase=source-download
 aws s3 cp ''')
     # The bootstrap creates the trap and authenticates the campaign archive.
     start, end = body.index('phase=install\n'), body.index('phase=complete\n')
@@ -433,9 +494,14 @@ systemd-run --unit=native-semantic-router-cold --wait --pipe -p MemoryMax=8G -p 
  /usr/bin/time -v -o "$root/profile-resources.txt" timeout --signal=TERM --kill-after=30 3000 \\
  bash -c 'ulimit -v 4194304 || exit 96; taskset -c 4-5 python3.12 -m scripts.run_native_semantic_router_cold {CONFIG} {qualification['config_sha256']} "$1/binaries/two_bit_http" "$1/boundary-check.json" "$1/screen"; code=$?; taskset -c 0-3 python3.12 -m scripts.check_native_startup_build --cgroup "$1/profile-cgroup.json" 8589934592 || exit 96; exit "$code"' _ "$root" >profile.log 2>&1
 '''
-    command += '\n'.join('test ' + ('-f' if name.startswith('publication/') and
-                          name.endswith(('/stdout.log', '/stderr.log')) else '-s') +
-                          ' "$root/' + name + '"' for name in ARTIFACTS) + '\n'
+    command += '''for name in $ARTIFACT_NAMES; do
+  case "$name" in
+    publication/*/stdout.log|publication/*/stderr.log) test -f "$root/$name";;
+    run-closed.log) test -s "$root/run.log";;
+    *) test -s "$root/$name";;
+  esac
+done
+'''
     body = body[:start] + command + body[end:]
     # Terminal identities are emitted by the bootstrap alongside its byte roster.
     marker = "'source_archive_sha256':'" + archive_sha + "',"
@@ -664,6 +730,7 @@ def collection_self_check():
             asset_manifest_sha256=peer.sha(manifest_body), publication_assets=config['publication']['assets'],
             asset_preparation_sha256=ASSET_PREPARATION_SHA,
             runtime_os=RUNTIME_OS, runtime_glibc=RUNTIME_GLIBC,
+            awscli_version=AWSCLI_VERSION, awscli_sha256=AWSCLI_SHA256,
             required_glibc=dict(two_bit_http='2.38', two_bit_plan_demo='2.38'),
             authority_artifacts={n: _identity(files[n]) for n in AUTHORITY_FILES})
         files['source-qualification.json'] = json.dumps(qualification).encode()
@@ -688,6 +755,7 @@ def collection_self_check():
         s3 = Mock()
         s3.get_object.side_effect = fetched
         for change in (None, 'source', 'config', 'proof', 'binary', 'roster', 'sha', 'bytes', 'unknown',
+                       'awscli-version', 'awscli-hash',
                        'publisher', 'publication-roster', 'receipt', 'head', 'publication-config', 'closeout',
                        'abi-missing', 'abi-sha', 'abi-os', 'abi-libc', 'abi-binary', 'abi-required', 'abi-unresolved'):
             current = json.loads(json.dumps(terminal))
@@ -696,6 +764,8 @@ def collection_self_check():
                 key = {'source': 'source_identity_sha256', 'config': 'config_sha256',
                        'proof': 'qualification_sha256', 'binary': 'binary_sha256', 'publisher': 'publisher_sha256'}[change]
                 current[key] = 'f'*64
+            elif change == 'awscli-version': current['awscli_version'] = '2.0.0'
+            elif change == 'awscli-hash': current['awscli_sha256'] = 'f'*64
             elif change == 'closeout':
                 (out/'aws-closeout.json').write_text(json.dumps(dict(state='running', nodes={'0': dict(instance_id='i-owned')})))
             elif change == 'publication-roster':
@@ -745,6 +815,164 @@ def collection_self_check():
         current = dict(terminal, status='failed', phase='binary-qualification', exit_code=1,
             artifacts={n: _identity(b) for n, b in files.items()}, runtime_abi_sha256=peer.sha(files['runtime-abi.json']))
         assert collect(s3, 'synthetic', out, 'i-owned', '0'*40, '1'*64) == current
+
+
+def bootstrap_self_check(qualification):
+    """Run whole generated user data with cloud, installer and native danger stubs."""
+    import shutil
+    import tempfile
+    module = sys.modules[__name__]
+    payload = b'synthetic pinned installer\n'
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        commands = base/'commands'
+        commands.mkdir()
+        for name in ('bash', 'timeout', 'mkdir', 'cp', 'tar', 'gzip', 'tail', 'stat', 'cat', 'uname'):
+            (commands/name).symlink_to(shutil.which(name))
+        def stub(name, text):
+            path = commands/name
+            path.write_text('#!/bin/bash\nset -eu\n'+text)
+            path.chmod(0o755)
+            return path
+        stub('shutdown', 'echo shutdown >> "$EVENTS"\n')
+        stub('lscpu', 'echo synthetic-cpu\n')
+        stub('taskset', 'shift 2; exec "$@"\n')
+        stub('time', 'test "$1" = -v; test "$2" = -o; echo synthetic-resources > "$3"; shift 3; exec "$@"\n')
+        stub('systemd-run', '''echo "systemd:$*" >> "$EVENTS"
+case "$*" in *--on-active=3600s*) exit 0;; esac
+while [[ "$1" != bash && "$1" != "$STUBS/time" ]]; do shift; done
+exec "$@"
+''')
+        stub('apt-get', '''test "$DEBIAN_FRONTEND" = noninteractive
+echo "apt:$*" >> "$EVENTS"
+case "$*" in *' install awscli '*) echo unsupported-apt-awscli; exit 100;; esac
+case "$FAIL:$*" in apt-update:*update) printf '%8192s\\n' ''; echo original-apt-update; exit 42;;
+apt-install:*install*|apt-install-no-python:*install*) echo original-apt-install; exit 100;; esac
+''')
+        curl_template = stub('curl-template', '''echo "curl:$*" >> "$EVENTS"
+[[ "$*" == *--connect-timeout* && "$*" == *--max-time* ]]
+case "$*" in *169.254.169.254*)
+  test -s "$SERIAL"
+  case "$FAIL" in apt-install|apt-install-no-python|imds) exit 28;; esac
+  case "$*" in */api/token*) echo synthetic-token;; *) echo i-synthetic;; esac;;
+*) test "$FAIL" != download || exit 22
+   while [[ "$1" != --output ]]; do shift; done
+   cp "$INSTALLER_ZIP" "$2"
+   test "$FAIL" != hash || echo corrupt >> "$2";; esac
+''')
+        stub('sha256sum', f'''echo hash >> "$EVENTS"
+exec {quote(shutil.which('sha256sum'))} "$@"
+''')
+        installer = stub('installer-template', '''echo installer >> "$EVENTS"
+test "$FAIL" != installer || exit 27
+cp "$AWS_TEMPLATE" "$STUBS/aws"
+''')
+        stub('unzip', '''echo unzip >> "$EVENTS"
+mkdir aws
+cp "$INSTALLER" aws/install
+''')
+        aws_template = stub('aws-template', '''echo "aws:$*" >> "$EVENTS"
+if [[ "$1" = --version ]]; then echo 'aws-cli/2.36.11 Python/synthetic'; exit; fi
+test "$1 $2" = 's3 cp'
+case "$4" in source.tar.gz) test "$FAIL" != source || exit 55; cp "$SOURCE_ARCHIVE" "$4";;
+binaries/*) echo synthetic-binary > "$4";;
+s3://*/artifacts/*) test "$FAIL" != upload || exit 55;;
+s3://*/terminal.json) [[ "$(cat "$SERIAL")" == *BORSUK_TERMINAL* ]]
+  test "$FAIL" != terminal-upload || exit 55;;
+*) exit 91;; esac
+''')
+        python_stub = commands/'python3.12'
+        python_stub.write_text(f'''#!{sys.executable}
+import os,sys
+from pathlib import Path
+args=sys.argv[1:]
+with open(os.environ['EVENTS'],'a') as log: log.write('python:'+str(args)+'\\n')
+if args[:1]==['-c']:
+    if args[1]!='import boto3': exec(args[1])
+elif '--stage' in args:
+    if os.environ['FAIL']=='abi': sys.exit(23)
+    root=Path(os.environ['WORKER_ROOT'])
+    assert not (root/'run-closed.log').exists(), 'test precreated closed log'
+    for name in os.environ['ARTIFACT_NAMES'].split():
+        if name in ('run-closed.log','source-qualification.json'): continue
+        path=root/name
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_bytes(b'' if name.endswith(('/stdout.log','/stderr.log')) else b'synthetic proof\\n')
+    if os.environ['FAIL']=='missing-log': (root/'publication/ReLAION/control/stdout.log').unlink()
+    if os.environ['FAIL']=='empty-proof': (root/'screen/summary.json').write_bytes(b'')
+elif '--publish' in args:
+    if os.environ['FAIL']=='publication': sys.exit(23)
+else: print('synthetic closed profile')
+''')
+        python_stub.chmod(0o755)
+        source = base/'source.tar.gz'
+        with tarfile.open(source, 'w:gz') as archive:
+            info = tarfile.TarInfo('synthetic-source')
+            info.size = 6
+            archive.addfile(info, io.BytesIO(b'source'))
+        zipped = base/'installer.zip'
+        zipped.write_bytes(payload)
+        with patch.multiple(module, AWSCLI_SHA256=peer.sha(payload), AWSCLI_BYTES=len(payload)):
+            proof = dict(qualification, awscli_version='2.36.11', awscli_sha256=peer.sha(payload))
+            body = user_data('0'*40, peer.sha(source.read_bytes()), 'sources/synthetic', PREFIX+'a0001', proof)
+        for failure, original, phase in (
+                ('apt-update', 42, 'apt-update'), ('apt-install', 100, 'apt-install'),
+                ('apt-install-no-python', 100, 'apt-install'), ('download', 22, 'awscli-download'),
+                ('hash', 1, 'awscli-download'), ('installer', 27, 'awscli-install'),
+                ('source', 55, 'source-download'), ('abi', 23, 'binary-qualification'),
+                ('publication', 23, 'publication'), ('missing-log', 1, 'profile'),
+                ('empty-proof', 1, 'profile'), ('upload', 0, 'complete'),
+                ('terminal-upload', 0, 'complete'), ('imds', 0, 'complete'), ('success', 0, 'complete')):
+            work = base/failure
+            work.mkdir()
+            events, serial = work/'events', work/'serial'
+            (commands/'aws').unlink(missing_ok=True)
+            (commands/'curl').unlink(missing_ok=True)
+            (commands/'python3').unlink(missing_ok=True)
+            if failure != 'apt-install-no-python':
+                (commands/'curl').symlink_to(curl_template)
+                (commands/'python3').symlink_to(sys.executable)
+            script = body.replace('/mnt/native-semantic-router-cold', str(work))
+            script = script.replace('/dev/ttyS0', str(serial)).replace('/usr/bin/time', str(commands/'time'))
+            env = dict(os.environ, PATH=str(commands), FAIL=failure, WORKER_ROOT=str(work),
+                EVENTS=str(events), SERIAL=str(serial), STUBS=str(commands), INSTALLER=str(installer),
+                INSTALLER_ZIP=str(zipped), AWS_TEMPLATE=str(aws_template), SOURCE_ARCHIVE=str(source))
+            result = subprocess.run(['/bin/bash', '-c', script], env=env, capture_output=True, timeout=20)
+            console = serial.read_text() if serial.exists() else ''
+            assert f'phase={phase} original_exit_code={original}' in console, (failure, result.returncode, result.stderr, console)
+            calls = events.read_text().splitlines()
+            assert calls.count('shutdown') == 1, (failure, calls)
+            assert len(console.split('BORSUK_TERMINAL', 1)[0].encode()) < 4300, failure
+            assert (result.returncode == 0) == (failure == 'success'), (failure, result.returncode, result.stderr, console)
+            assert (work/'run-closed.log').is_file(), failure
+            if failure.startswith('apt-'):
+                assert 'original-apt-' in console
+                assert not any(c.startswith('aws:') for c in calls), (failure, calls)
+                assert not any(c.startswith('curl:') and '169.254' not in c for c in calls)
+            if failure in ('download', 'hash'):
+                assert 'unzip' not in calls and 'installer' not in calls
+            if phase in ('apt-update', 'apt-install', 'awscli-download', 'awscli-install'):
+                assert not any(c.startswith('aws:s3 cp ') and ' source.tar.gz ' in c for c in calls)
+            if phase in ('apt-update', 'apt-install', 'awscli-download', 'awscli-install', 'source-download'):
+                assert not any(c.startswith('python:') for c in calls)
+            if failure == 'abi': assert not any('--publish' in c for c in calls)
+            if failure == 'publication': assert not any('scripts.run_native_semantic_router_cold' in c for c in calls)
+            if failure == 'apt-update': assert not any(' install ' in c for c in calls)
+            if failure == 'apt-install-no-python':
+                assert not (work/'terminal.json').exists() and 'unavailable' in console
+                continue
+            terminal = json.loads((work/'terminal.json').read_bytes())
+            assert terminal['original_exit_code'] == original and terminal['phase'] == phase, failure
+            assert terminal['status'] == ('complete' if failure == 'success' else 'failed'), (failure, terminal)
+            assert terminal['exit_code'] == result.returncode, (failure, terminal, result.returncode)
+            assert 'BORSUK_TERMINAL' in console and terminal['artifacts']['run-closed.log'] == _identity((work/'run-closed.log').read_bytes())
+            assert f'BORSUK_FINISH phase={phase} original_exit_code={original} exit_code={result.returncode}' in console
+            if failure == 'success':
+                assert set(terminal['artifacts']) == set(ARTIFACTS)
+                assert terminal['awscli_version'] == proof['awscli_version'] and terminal['awscli_sha256'] == proof['awscli_sha256']
+                assert calls.index('hash') < calls.index('unzip') < calls.index('installer')
+                assert calls.index('installer') < next(i for i,c in enumerate(calls) if c.startswith('aws:s3 cp '))
+                assert sum('/artifacts/' in c for c in calls) == len(ARTIFACTS)
 
 
 def self_check():
@@ -1066,6 +1294,7 @@ def self_check():
                 raise AssertionError('changed source accepted')
             path.write_bytes(original)
             body = user_data('0'*40, '1'*64, 'sources/synthetic', PREFIX+'a0001', qualification)
+            bootstrap_self_check(qualification)
             assert len(body.encode()) < 16384
             for marker in ('--on-active=3600s', 'MemoryMax=8G', 'MemorySwapMax=0',
                            'RuntimeMaxSec=3030', 'ulimit -v 4194304', 'taskset -c 4-5',
@@ -1077,7 +1306,8 @@ def self_check():
             early = body.split('exec >run.log 2>&1\n', 1)[1]
             assert early.index('apt-get') < early.index('aws s3 cp ')
             assert 'DEBIAN_FRONTEND=noninteractive' in early and early.count('DPkg::Lock::Timeout=120') == 2
-            assert 'install awscli python3-boto3 python3.12 time tar gzip util-linux binutils' in early
+            assert 'install curl unzip python3-boto3 python3.12 time tar gzip util-linux binutils' in early
+            assert all(value in early for value in (AWSCLI_URL, AWSCLI_SHA256, str(AWSCLI_BYTES)))
             assert body.index('--stage ') < body.index('phase=publication\n')
             # Execute generated existence gates, including eight valid empty logs.
             for name in ARTIFACTS:
@@ -1087,46 +1317,17 @@ def self_check():
                     path.write_bytes(b'')
                 elif not path.exists():
                     path.write_bytes(b'synthetic artifact\n')
-            gates_script = '\n'.join(line for line in body.splitlines() if line.startswith('test -'))
-            subprocess.run(['bash', '-ec', gates_script], env=dict(os.environ, root=str(stage)), check=True)
+            (stage/'run.log').write_bytes(b'synthetic run log\n')
+            gates_script = body[body.rindex('for name in $ARTIFACT_NAMES; do\n'):body.index('phase=complete\n')]
+            gates_env = dict(os.environ, root=str(stage), ARTIFACT_NAMES=' '.join(ARTIFACTS))
+            subprocess.run(['bash', '-ec', gates_script], env=gates_env, check=True)
             missing = stage/'binaries/two_bit_plan_demo'
             missing.unlink()
-            assert subprocess.run(['bash', '-ec', gates_script], env=dict(os.environ, root=str(stage))).returncode != 0
+            assert subprocess.run(['bash', '-ec', gates_script], env=gates_env).returncode != 0
             missing.write_bytes(publisher)
-            # Run generated sequencing with only the Python/native boundary stubbed.
-            commands = base/'stubs'
-            commands.mkdir()
-            for name, text in [('taskset', '#!/bin/bash\nshift 2\nexec "$@"\n'),
-                               ('apt-get', '#!/bin/bash\ntest "$DEBIAN_FRONTEND" = noninteractive || exit 91\nprintf "apt-get:%s\\n" "$*" >> "$EVENTS"\n'),
-                               ('aws', '#!/bin/bash\nprintf "aws:%s\\n" "$*" >> "$EVENTS"\n'),
-                               ('python3.12', '#!/bin/bash\nprintf "%s\\n" "$*" >> "$EVENTS"\ncase "$*" in *--stage*) exit "$ABI_STATUS";; *--publish*) exit "$PUB_STATUS";; esac\nprintf "synthetic closed summary\\n"\n')]:
-                path = commands/name
-                path.write_text(text)
-                path.chmod(0o755)
-            events = base/'bootstrap-events'
-            subprocess.run(['bash', '-ec', early[:early.index("printf '%s  source.tar.gz")]], cwd=stage,
-                env=dict(os.environ, PATH=str(commands)+os.pathsep+os.environ['PATH'], EVENTS=str(events)), check=True)
-            calls = events.read_text().splitlines()
-            assert len(calls) == 3 and calls[0].startswith('apt-get:') and calls[0].endswith(' update')
-            assert calls[1].startswith('apt-get:') and ' install awscli python3-boto3 python3.12 ' in calls[1]
-            assert calls[2].startswith('aws:s3 cp '), 'AWS ran before Ubuntu prerequisites'
-            wrapper = 'systemd-run() { while [[ "$1" != bash && "$1" != /usr/bin/time ]]; do shift; done; "$@"; };\n'
-            sequence = body[body.index('PYTHONPATH="$root/repo" python3.12 -m scripts.launch_native_semantic_router_cold_spot --stage '):body.index('phase=complete\n')]
-            for abi_status, status in (('0', '0'), ('23', '0'), ('0', '23')):
-                events = base/('events-'+abi_status+'-'+status)
-                result = subprocess.run(['bash', '-ec', wrapper+sequence], cwd=stage,
-                    env=dict(os.environ, root=str(stage), PATH=str(commands)+os.pathsep+os.environ['PATH'],
-                             EVENTS=str(events), ABI_STATUS=abi_status, PUB_STATUS=status), capture_output=True)
-                calls = events.read_text().splitlines()
-                assert '--stage' in calls[0]
-                assert any('--publish' in call for call in calls) == (abi_status == '0')
-                success = abi_status == status == '0'
-                assert (result.returncode == 0) == success, (abi_status, status, result.returncode, result.stderr,
-                                                                 calls, (stage/'profile.log').read_bytes())
-                assert any('scripts.run_native_semantic_router_cold ' in call for call in calls) == success
             terminal_script = body.split("python3 - <<'PY' >terminal.json\n")[1].split('\nPY\n')[0]
             terminal = json.loads(subprocess.check_output([sys.executable, '-c', terminal_script],
-                cwd=stage, env=dict(os.environ, INSTANCE_ID='i-synthetic', EXIT_CODE='0', PHASE='complete')))
+                cwd=stage, env=dict(gates_env, INSTANCE_ID='i-synthetic', EXIT_CODE='0', ORIGINAL_EXIT_CODE='0', PHASE='complete')))
             assert terminal['schema'] == SCHEMA and terminal['binary_sha256'] == binary_sha
             assert terminal['source_identity_sha256'] == source_sha
             assert terminal['qualification_sha256'] == qualification['qualification_sha256']
@@ -1136,14 +1337,13 @@ def self_check():
     collection_self_check()
     # The closed authority has the real source/code/pointer shape, larger than the synthetic fixture.
     repo = Path(__file__).resolve().parents[1]
-    real = json.loads(gzip.decompress((repo/ROOT/'a0001/source-qualification.json.gz').read_bytes()))
-    real.update(runtime_os=RUNTIME_OS, runtime_glibc=RUNTIME_GLIBC,
-                required_glibc=dict(two_bit_http='2.38', two_bit_plan_demo='2.38'),
-                config_sha256=peer.sha(b'fresh synthetic config'),
-                artifact_roster_sha256=peer.sha(json.dumps(ARTIFACTS, separators=(',', ':')).encode()))
+    closed = json.loads((repo/ROOT/'a0002/aws-reservation.json').read_bytes())
+    real = dict(closed['qualification'], awscli_version=AWSCLI_VERSION, awscli_sha256=AWSCLI_SHA256)
     for name in ('scripts/launch_native_semantic_router_cold_spot.py', 'scripts/launch_native_metadata_ranges_cold_spot.py'):
         real['code_sha256'][name] = peer.sha((repo/name).read_bytes())
-    closed = json.loads((repo/ROOT/'a0001/aws-reservation.json').read_bytes())
+    authority = json.loads((repo/ROOT/'bootstrap-repair/installer-authority.json').read_bytes())
+    assert (authority['version'], authority['url'], authority['sha256'], authority['bytes'], authority['signature_status']) == (
+        AWSCLI_VERSION, AWSCLI_URL, AWSCLI_SHA256, AWSCLI_BYTES, 0)
     real_body = user_data(closed['source_commit'], closed['source_archive_sha256'],
         'research/native-library-check/sources/'+closed['source_archive_sha256']+'.tar.gz', PREFIX+'a0002', real)
     print(f'semantic cold controller self-check PASS; bootstrap_bytes={len(body.encode())}; real_shape_bytes={len(real_body.encode())}; cloud/native UNRUN')
