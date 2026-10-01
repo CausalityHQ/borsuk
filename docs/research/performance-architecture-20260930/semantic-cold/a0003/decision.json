@@ -1,0 +1,115 @@
+{
+  "schema": "borsuk-semantic-cold-a0003-decision-v1",
+  "status": "FAIL preserved",
+  "controller_exit_status": 1,
+  "terminal_phase": "profile",
+  "terminal_exit_code": 1,
+  "owned_instance_id": "i-02f1f6c8c04fb1a11",
+  "closeout": "terminated and waited",
+  "closed_artifacts_authenticated": 53,
+  "runtime_abi": "actual Ubuntu24.04/x86_64/glibc2.39 qualified",
+  "native_publication_quality": {
+    "ReLAION": {
+      "control": {
+        "query_split": "FIRST100k D768 cosine consumed development ordinals0..63",
+        "rows": 100000,
+        "dimensions": 768,
+        "metric": "cosine",
+        "queries": 64,
+        "k": 10,
+        "returned_hits": 638,
+        "possible_hits": 640,
+        "mean_recall_at_10_percent": 99.6875,
+        "measurement": "actual native publication validation panel; CLI sequential existing process, not cold HTTP",
+        "recall_at_100": "not executed"
+      },
+      "candidate": {
+        "query_split": "FIRST100k D768 cosine consumed development ordinals0..63",
+        "rows": 100000,
+        "dimensions": 768,
+        "metric": "cosine",
+        "queries": 64,
+        "k": 10,
+        "returned_hits": 628,
+        "possible_hits": 640,
+        "mean_recall_at_10_percent": 98.125,
+        "measurement": "actual native publication validation panel; CLI sequential existing process, not cold HTTP",
+        "recall_at_100": "not executed"
+      }
+    },
+    "CoHere": {
+      "control": {
+        "query_split": "FIRST100k D768 cosine consumed development ordinals0..63",
+        "rows": 100000,
+        "dimensions": 768,
+        "metric": "cosine",
+        "queries": 64,
+        "k": 10,
+        "returned_hits": 631,
+        "possible_hits": 640,
+        "mean_recall_at_10_percent": 98.59375,
+        "measurement": "actual native publication validation panel; CLI sequential existing process, not cold HTTP",
+        "recall_at_100": "not executed"
+      },
+      "candidate": {
+        "query_split": "FIRST100k D768 cosine consumed development ordinals0..63",
+        "rows": 100000,
+        "dimensions": 768,
+        "metric": "cosine",
+        "queries": 64,
+        "k": 10,
+        "returned_hits": 613,
+        "possible_hits": 640,
+        "mean_recall_at_10_percent": 95.78125,
+        "measurement": "actual native publication validation panel; CLI sequential existing process, not cold HTTP",
+        "recall_at_100": "not executed"
+      }
+    }
+  },
+  "cold_HTTP": {
+    "positions": 512,
+    "attempted": 1,
+    "HTTP_200": 1,
+    "gate_failed": 1,
+    "aborted": 511,
+    "error": "startup S3/IMDS attempts / no hidden retries",
+    "candidate_calls": 0,
+    "tail_latency_QPS_cost": "UNMEASURED",
+    "diagnostic_control_point": {
+      "dataset": "ReLAION",
+      "query_ordinal": 0,
+      "whole_cold_ms": 649.081478,
+      "native_query_ms": 178.517913,
+      "ordered_ids_match_truth_at_10": true,
+      "native_RSS_bytes": 53604352,
+      "qualified_performance_baseline": false
+    }
+  },
+  "root_cause": {
+    "type": "Python verifier startup decomposition omitted authenticated generation root GET in read_two_bit_head/head_from_control before open_remote stages it again",
+    "native_source": "crates/borsuk/src/two_bit_store.rs:241 head_from_control reads/authenticates manifest.json",
+    "actual_method_counts": [
+      14,
+      10,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "metadata_GETs": 10,
+    "metadata_HEADs": 9,
+    "authority_head_JSON_GETs": 1,
+    "authority_generation_root_GETs": 1,
+    "source_HEADs": 1,
+    "credential_protocol": "PUT token + GET role + GET credentials unchanged",
+    "authority_root_bytes": 33980,
+    "credential_inferred_payload_bytes_after_complete_S3_subtraction": 1671,
+    "no_transport_or_stream_failures": true
+  },
+  "decision": "Preserve FAIL; fix exact accounting contract and negative fixtures with unchanged Rust/source/scorer/gates; fresh a0004 frozen panel, no retroactive PASS",
+  "native_rebuild_required": false
+}
