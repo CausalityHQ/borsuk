@@ -1,0 +1,14 @@
+{
+  "schema": "borsuk-controller-exact-source-path-fix-v1",
+  "original_session_id": 57023,
+  "self_check_exit_status": 0,
+  "py_compile_exit_status": 0,
+  "diff_check_exit_status": 0,
+  "controller_sha256": "7283d42979df59dc40ce04ec44c8c8f5329020a7e56c128ac95c1673abae3877",
+  "log_bytes": 1858,
+  "log_sha256": "cf9d0feb1c71478bfa0b2b0cc48339c604f9f15af2f02b0e3af174f91140c05a",
+  "archived_log_sha256": "d97d9d62795b4bf436c321cabf0d83fa7e033896f870a402a245c8db761cb8cb",
+  "regression": "exact Cargo.lock receipt path wins over a different nested Cargo.lock basename; full399 source authority unchanged",
+  "actual_preflight_pass": true,
+  "native_or_cloud_invocations": 0
+}

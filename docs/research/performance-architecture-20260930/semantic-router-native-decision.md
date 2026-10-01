@@ -25,29 +25,28 @@ pass their mocked identity, failure and cleanup checks. Both real 64-query panel
 and all eight input/reference bodies pass local authentication and envelope
 validation; this executes no native query and makes no SDK call.
 
-Full execution remains pending. Attempt a0003 failed because Criterion rejected
+Full execution passed on the final exact source. Attempt a0003 failed because Criterion rejected
 a global libtest argument. Its narrow corrected target passed. Attempt a0004
 then hit the assurance cgroup's 256-task ceiling in CLI integration. A serial CLI
 check still reached that ceiling; the same compiled 30-test layer passed under a
 512-task cap, measured peak 314 tasks and no task denial. These immutable failures
 remain failures, with source unchanged. Final a0005 uses the same exact 399-file
 source, serial test execution and a bounded 512-task/8 GiB/zero-swap envelope.
-These are assurance resources, not relaxed scientific experiment limits.
+Final a0005 exited zero with the complete 399-file source unchanged, measured peak 1,477,390,336 bytes and 311 tasks, and no cgroup task denial. Its closed receipt/log bodies are authenticated in `semantic-cold/native-assurance.json`. These are assurance resources, not relaxed scientific experiment limits.
 
 The actual asset tar and draft configuration are prepared. Publisher and HTTP
-full-execution proofs, final config and remote objects remain unqualified until
-a0005 exits zero and its bodies/source are authenticated. No cloud publication,
+full-execution proofs and the actual config now pass local preflight. The real
+bootstrap is 15,539 bytes, within EC2 user-data admission. Remote assets remain
+unuploaded; no instance has been launched. No cloud publication,
 cold HTTP measurement, new native quality result or vendor win has occurred.
 
 ## Next delivery steps
 
-1. Collect the existing a0005 gate; authenticate source, receipt and closed logs.
-2. Bind qualified publisher/HTTP binaries and completed assurance, then freeze
-   the actual config and fast-forward delivery to main.
-3. Upload authenticated immutable assets and run ONE preregistered Spot attempt:
+1. Fast-forward the verified source, closed receipts and frozen actual config to main.
+2. Upload authenticated immutable assets and run ONE preregistered Spot attempt:
    four publications with consumed-panel parity validation, then 512 cold ABBA
    HTTP calls; terminate and wait before closed-artifact collection.
-4. A correctness or quality failure ends the arm. A latency failure identifies
+3. A correctness or quality failure ends the arm. A latency failure identifies
    the measured critical path without erasing a 95% recall survivor. If both
    datasets survive, measure offered 8 QPS separately, then fresh 1M and the
    10M/100M scale and lifecycle-cost curve.

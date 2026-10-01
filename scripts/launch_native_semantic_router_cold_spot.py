@@ -187,7 +187,8 @@ def _qualify(base, binary_override=None, publisher_override=None):
         else:
             assert receipt['log_sha256'] == peer.sha(log)
         for path, digest in receipt['source_sha256'].items():
-            matches = [d for n, d in identities.items() if n == path or Path(n).name == path]
+            matches = ([identities[path]] if path in identities else
+                       [d for n, d in identities.items() if Path(n).name == path])
             assert matches == [digest], 'receipt source identity: ' + path
         if name == 'full-workspace-final':
             assert receipt['source_sha256'] == identities
@@ -661,7 +662,8 @@ def self_check():
             path.write_bytes(body)
             return dict(path=name, bytes=len(body), sha256=peer.sha(body), key='synthetic/' + name)
         for n in range(399):
-            put(f'crates/test{n}.rs', f'// synthetic {n}\n'.encode())
+            put(('Cargo.lock' if n == 0 else 'crates/nested/Cargo.lock' if n == 1
+                 else f'crates/test{n}.rs'), f'// synthetic {n}\n'.encode())
         identities = source_hashes(base)
         source_sha = source_identity(identities)
         archive = io.BytesIO()

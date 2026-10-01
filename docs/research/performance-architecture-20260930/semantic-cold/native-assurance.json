@@ -1,0 +1,319 @@
+{
+  "base": "ad61c282569b16b0b61061a9b3dc6171ebf05b74",
+  "commit": "a1bdcdfec1f73aa6da1b29202a68fe4723723fa8",
+  "tree": "f56109da2a8409736127811ac731944b748989c5",
+  "commit_identity": "commit a1bdcdfec1f73aa6da1b29202a68fe4723723fa8\nAuthor:     Roman Bartusiak <riomus@gmail.com>\nAuthorDate: Thu Oct 1 00:12:55 2026 +0000\nCommit:     Roman Bartusiak <riomus@gmail.com>\nCommitDate: Thu Oct 1 00:12:55 2026 +0000\n\n    Fix portable centroid rounding and imported coefficient identity\n",
+  "source_archive": {
+    "path": "/tmp/borsuk-centroid-portable-rounding-20260930/source.tar.gz",
+    "sha256": "c235e52cb48eb9529f1314a7aa15dfc07edb8296c1ce72d6e1f483b3724af247",
+    "bytes": 3259676,
+    "included_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "crates",
+      "scripts/check_rust_test_build.sh",
+      "AGENTS.md"
+    ],
+    "archived_path": "docs/research/performance-architecture-20260930/centroid-portable-source.tar.gz"
+  },
+  "owned_sources": {
+    "unit_centroid_pages.rs": {
+      "path": "/tmp/borsuk-centroid-portable-rounding-20260930/release-final-unit_centroid_pages.rs",
+      "sha256": "116e79911f83ec5631c1b392f5a6b54f54c1ce33255d9c0340a106c7397eb307",
+      "bytes": 23599
+    },
+    "two_bit_build.rs": {
+      "path": "/tmp/borsuk-centroid-portable-rounding-20260930/release-final-two_bit_build.rs",
+      "sha256": "02c8632df914c9c5dcc6c8e6ba3094d9b2fbe9eb3d165d760a4dbe090eb4b280",
+      "bytes": 38929
+    }
+  },
+  "patch": {
+    "path": "/tmp/borsuk-centroid-portable-rounding-20260930/final.patch",
+    "sha256": "75908cb4a97e7aedc32212ed7aebd965287e3711a5d6bfced6552e6d10ceb028",
+    "bytes": 10028
+  },
+  "binaries": {
+    "repackage_semantic_generation": {
+      "path": "/tmp/borsuk-centroid-portable-rounding-20260930/repackage_semantic_generation",
+      "sha256": "78a515460eb44517346b1ad86da422000b7df16dc59edc0df79bbefd78810719",
+      "bytes": 4062768
+    },
+    "two_bit_http": {
+      "path": "/tmp/borsuk-centroid-portable-rounding-20260930/two_bit_http",
+      "sha256": "c00b766f65f8f0ae0adb5fcca786cb33c0daf046ff4b8f9a8bbcab39e1263533",
+      "bytes": 16191384
+    }
+  },
+  "gates": {
+    "red": {
+      "receipt": {
+        "path": "/tmp/borsuk-centroid-portable-rounding-20260930/red.json",
+        "sha256": "aa8eca7f98424eb5b1a54341d54cd421edaa102ab4ed2f44654cbf373e741db7",
+        "bytes": 566,
+        "archived_path": "docs/research/performance-architecture-20260930/centroid-portable-red.json.gz",
+        "archived_sha256": "bc312012ee6f8898f8424f2808b730953fc9c1a17ba709731ed022ab6fecd3d4"
+      },
+      "log": {
+        "path": "/tmp/borsuk-centroid-portable-rounding-20260930/red.log",
+        "sha256": "4939282edc08b28801f31a71ece3b494e18b14c972a91fad6aa5979002a1bd5a",
+        "bytes": 60854,
+        "archived_path": "docs/research/performance-architecture-20260930/centroid-portable-red.log.gz",
+        "archived_sha256": "d321ea17af1e7a25ebb8c7b13e5c921f5e1db63bd1608bcb1affbbd084ed5a67"
+      },
+      "exit_status": 101,
+      "elapsed_seconds": 95.76533007621765,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "unit_centroid_pages::tests::streamed_sq8_centroids_round_f64_means_directly_to_half",
+        "--",
+        "--exact"
+      ]
+    },
+    "const": {
+      "receipt": {
+        "path": "/tmp/borsuk-centroid-portable-rounding-20260930/const.json",
+        "sha256": "f37f29089a16cc839f6430b1f8f9466ae4e1e2cee1fc22445efc0c9776ea5a46",
+        "bytes": 566,
+        "archived_path": "docs/research/performance-architecture-20260930/centroid-portable-const.json.gz",
+        "archived_sha256": "3c270007857c1b9875da3c97ecc2a5a3efccc926faebe4e79881da837199eb83"
+      },
+      "log": {
+        "path": "/tmp/borsuk-centroid-portable-rounding-20260930/const.log",
+        "sha256": "f9699d5aac027dcf50f28ba0e19f6f0e6fce87e3774611fed35d932d8cab6e94",
+        "bytes": 60628,
+        "archived_path": "docs/research/performance-architecture-20260930/centroid-portable-const.log.gz",
+        "archived_sha256": "3ee5d81edb4ab5e6086e107c3b32fd3d135e6ce77fb79e3044eef2b09ed14b59"
+      },
+      "exit_status": 101,
+      "elapsed_seconds": 92.78159070014954,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "unit_centroid_pages::tests::streamed_sq8_centroids_round_f64_means_directly_to_half",
+        "--",
+        "--exact"
+      ]
+    },
+    "import-red": {
+      "receipt": {
+        "path": "/tmp/borsuk-centroid-portable-rounding-20260930/import-red.json",
+        "sha256": "d62451fea441b07ddcd0ad12e80abdaaf1c555cf190471c0cb1c19e5e173d2bf",
+        "bytes": 847,
+        "archived_path": "docs/research/performance-architecture-20260930/centroid-portable-import-red.json.gz",
+        "archived_sha256": "5148d436a192df54ac179fc501649ab811bd183f4c0dcdf0d72294a25b7393fa"
+      },
+      "log": {
+        "path": "/tmp/borsuk-centroid-portable-rounding-20260930/import-red.log",
+        "sha256": "5a9fd6f2806b380c7e056ed6b0c63080f9bc88a97c2c9b5aaa7b245f5b5430cf",
+        "bytes": 60548,
+        "archived_path": "docs/research/performance-architecture-20260930/centroid-portable-import-red.log.gz",
+        "archived_sha256": "a4cd0caee57c85863ccabbed654db6f63f65cecdcc2e8c254cd0cd40ed4c0ff0"
+      },
+      "exit_status": 101,
+      "elapsed_seconds": 86.86084961891174,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "two_bit_build::tests::imported_router_requires_original_source_authority",
+        "--",
+        "--exact"
+      ]
+    },
+    "green-module": {
+      "receipt": {
+        "path": "/tmp/borsuk-centroid-portable-rounding-20260930/green-module.json",
+        "sha256": "2e9c7e612b0bd1fbb79911fd6d7090688f305a1b59315488a974b7af901a1b26",
+        "bytes": 510,
+        "archived_path": "docs/research/performance-architecture-20260930/centroid-portable-green-module.json.gz",
+        "archived_sha256": "92b918b026e2d824a36ed06995c4a894307dd064f8f37e0fc567c5a637889306"
+      },
+      "log": {
+        "path": "/tmp/borsuk-centroid-portable-rounding-20260930/green-module.log",
+        "sha256": "5726f17ca19121de3d0437a86fa9da21abf306b8e43abb56b40e70582833440d",
+        "bytes": 60379,
+        "archived_path": "docs/research/performance-architecture-20260930/centroid-portable-green-module.log.gz",
+        "archived_sha256": "f56bb8ba571e1ec3c942ac4e6a2e97311c5aacb43b4a8a7c35b7599fc244f5d0"
+      },
+      "exit_status": 0,
+      "elapsed_seconds": 87.66716647148132,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "unit_centroid_pages::tests"
+      ]
+    },
+    "affected-final": {
+      "receipt": {
+        "path": "/tmp/borsuk-centroid-portable-rounding-20260930/affected-final.json",
+        "sha256": "088aae90dee34247df11db510d203e429e485bad360e130b1c70066b63147086",
+        "bytes": 811,
+        "archived_path": "docs/research/performance-architecture-20260930/centroid-portable-affected-final.json.gz",
+        "archived_sha256": "b18f4933f63f2117fa55f84779f584e8bcfba95c3c565559c5c782b69a4d8b36"
+      },
+      "log": {
+        "path": "/tmp/borsuk-centroid-portable-rounding-20260930/affected-final.log",
+        "sha256": "f93eaeb6f3bce1e8f4e6006b6170b9331ae145c8b49a178246a13f1377f10618",
+        "bytes": 60544,
+        "archived_path": "docs/research/performance-architecture-20260930/centroid-portable-affected-final.log.gz",
+        "archived_sha256": "5b2ac5c0b134558770edc5540d90bc67dedec75f5ba2e44e81a62034b6ad86fd"
+      },
+      "exit_status": 0,
+      "elapsed_seconds": 88.7647032737732,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "--",
+        "unit_centroid_pages::tests",
+        "two_bit_build::tests"
+      ]
+    },
+    "clippy-final": {
+      "receipt": {
+        "path": "/tmp/borsuk-centroid-portable-rounding-20260930/clippy-final.json",
+        "sha256": "937114429bfc88428e031f33be7c7779fe8074c97511c5627f72b72d2239347a",
+        "bytes": 827,
+        "archived_path": "docs/research/performance-architecture-20260930/centroid-portable-clippy-final.json.gz",
+        "archived_sha256": "9626b667a36735d058742a03bd39bdc2aa79077651174c76f58191e1d2579ab9"
+      },
+      "log": {
+        "path": "/tmp/borsuk-centroid-portable-rounding-20260930/clippy-final.log",
+        "sha256": "b3a9030240fadafcbfae522c2c49e9da1ce080eba47785fa0f929a5f713c5ede",
+        "bytes": 278132,
+        "archived_path": "docs/research/performance-architecture-20260930/centroid-portable-clippy-final.log.gz",
+        "archived_sha256": "3df64afafaa15988883eb0bbcc9f72924c191f5c368631fb5b91fbcd73f61c6e"
+      },
+      "exit_status": 0,
+      "elapsed_seconds": 80.60731339454651,
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ]
+    },
+    "test-build-final": {
+      "receipt": {
+        "path": "/tmp/borsuk-centroid-portable-rounding-20260930/test-build-final.json",
+        "sha256": "654e5ca4ddc2b181ca1d16cafbc6e328c622c93ce182054ec58cd593f6bbce19",
+        "bytes": 713,
+        "archived_path": "docs/research/performance-architecture-20260930/centroid-portable-test-build-final.json.gz",
+        "archived_sha256": "75cb35a7e252fde8069dcc5069ec49cbeffba3e8c866c3c5e2e5228c49f9a17a"
+      },
+      "log": {
+        "path": "/tmp/borsuk-centroid-portable-rounding-20260930/test-build-final.log",
+        "sha256": "a20189d6f7e496a24001e3e1d332d2e2fc459974cbc230af71ff8fac6f39b7d0",
+        "bytes": 86025,
+        "archived_path": "docs/research/performance-architecture-20260930/centroid-portable-test-build-final.log.gz",
+        "archived_sha256": "f88640e127c529052b60a18d8ac56db14f3973068089883e18502b14424fc073"
+      },
+      "exit_status": 0,
+      "elapsed_seconds": 257.9627034664154,
+      "command": [
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ]
+    },
+    "release-final": {
+      "receipt": {
+        "path": "/tmp/borsuk-centroid-portable-rounding-20260930/release-final.json",
+        "sha256": "ecb00290415867122a6abce2ec92154cbf2ac4b5136299830f060cd192a1c7ed",
+        "bytes": 833,
+        "archived_path": "docs/research/performance-architecture-20260930/centroid-portable-release-final.json.gz",
+        "archived_sha256": "976e01db7709ec40a7555d20fb53f85edf412e455bca2c8ce5fba355653feab5"
+      },
+      "log": {
+        "path": "/tmp/borsuk-centroid-portable-rounding-20260930/release-final.log",
+        "sha256": "5a8326523232fc7b8bc15b96b6ebcbb299de4366339d6ada02a7185466db10bf",
+        "bytes": 64681,
+        "archived_path": "docs/research/performance-architecture-20260930/centroid-portable-release-final.log.gz",
+        "archived_sha256": "c2abd2ebb7514726b814ac120fcfff303d2de61b3473ee15a2b04f4c14278272"
+      },
+      "exit_status": 0,
+      "elapsed_seconds": 276.92905163764954,
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "borsuk",
+        "--bin",
+        "repackage_semantic_generation",
+        "--example",
+        "two_bit_http"
+      ]
+    },
+    "full-workspace-final": {
+      "receipt": {
+        "path": "/tmp/borsuk-semantic-native-full-a0005/receipt.json",
+        "bytes": 48159,
+        "sha256": "1016ca697364fabf93bdf66d5b8447ea70553e05e4a6a3511a28ba70e11b8e33",
+        "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/full-a0005-receipt.json.gz",
+        "archived_sha256": "7571ab9cd59a71710bb633faa0aa743323bd9f4ae911d5399c0b2a461a26d541"
+      },
+      "log": {
+        "path": "/tmp/borsuk-semantic-native-full-a0005/test.log",
+        "bytes": 343828,
+        "sha256": "d40c2a16965775d45612f9fe6561388dd2887f877ff5206da63bfa224e7e2585",
+        "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/full-a0005-test.log.gz",
+        "archived_sha256": "ca82c99e8d798f5a4c7a6ff7ccab11878a38bc0052831e2adb4efd6b781eec93"
+      },
+      "exit_status": 0,
+      "command": [
+        "/data/cache/rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo",
+        "test",
+        "--release",
+        "--locked",
+        "--workspace",
+        "--all-targets"
+      ],
+      "source_file_count": 399,
+      "source_identity_sha256": "92085e6e40ac9324ea7a4fc8daab58995dc84680a5c2391eb426dd430230e520"
+    }
+  },
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_TARGET_DIR": "/data/target",
+    "RUSTC_WRAPPER": "",
+    "RUSTFLAGS": null
+  },
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+  "affected_tests_passed": 7,
+  "signed_half_midpoint_neighbor_cases": 190458,
+  "full_workspace_test_execution": true,
+  "corpus_packaging_execution": false,
+  "cargo_lane": "released; every Cargo process terminal",
+  "worktree_clean": true,
+  "schema": "borsuk-centroid-portable-rounding-assurance-v1",
+  "integrated_commit": "46c21da2",
+  "integrated_native_source_file_count": 399
+}
