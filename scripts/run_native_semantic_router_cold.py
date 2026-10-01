@@ -3,6 +3,15 @@
 
 CLI: python3 -m scripts.run_native_semantic_router_cold CONFIG CONFIG_SHA BINARY PROOF NEW_OUTPUT
      python3 -m scripts.run_native_semantic_router_cold --self-check
+     python3 -m scripts.run_native_semantic_router_cold --offered-self-check
+
+The offered schema uses 24 rate-major dataset/arm cells, 64 offers each, six
+cleanup-owned ports, no queue or retry. main(..., on_cell_closed=callback)
+passes (cell_summary, {'records': Path, 'summary': Path}) only after drain,
+immutable file fsync and valid identity/resource/cleanup proof. The controller
+owns uploads. execution_gate_passed records valid experimental closeout;
+offered_gate_passed requires BOTH candidate 8-QPS cells to qualify. Matched
+latency comparisons additionally require complete valid control cells.
 
 Config contract (all SHA256 values are lowercase hexadecimal):
   schema=borsuk-native-semantic-router-cold-v1; count=64; k=10;
@@ -55,6 +64,7 @@ import json
 import math
 import os
 import struct
+import time
 
 if not __debug__:
     raise RuntimeError('the reused cold-call harness requires Python assertions enabled')
@@ -67,6 +77,11 @@ from scripts import check_native_semantic_router_stats as stats
 CODE = (*old.CODE, 'scripts/check_native_semantic_router_stats.py',
         'scripts/run_native_semantic_router_cold.py')
 SCHEMA = 'borsuk-native-semantic-router-cold-v1'
+OFFERED_SCHEMA = 'borsuk-native-semantic-router-cold-offered-v1'
+OFFERED_RESULT_SCHEMA = 'borsuk-native-semantic-router-cold-offered-result-v1'
+OFFERED_CODE = (*CODE, 'scripts/run_native_metadata_ranges_cold.py',
+                'scripts/check_native_metadata_ranges_stats.py', 'scripts/run_native_cold_offered.py')
+RATES = [.25, .5, 1, 2, 4, 8]
 DATASETS = ('ReLAION', 'CoHere')
 BLOCKS = ('control0', 'candidate1', 'candidate2', 'control3')
 SOURCE_IDENTITIES = {'source_sha256', 'source_order_sha256', 'mean_sha256', 'records_sha256',
@@ -104,11 +119,15 @@ def native_inventory():
 
 
 def validate_config(config):
-    stats.require(config['schema'] == SCHEMA, 'config schema')
+    stats.require(config['schema'] in (SCHEMA, OFFERED_SCHEMA), 'config schema')
+    offered = config['schema'] == OFFERED_SCHEMA
+    stats.require(config.get('authority_pending', False) is False, 'config authority pending')
+    if offered:
+        validate_offered_config(config)
     stats.require(config.get('credential_protocol') == stats.CREDENTIAL_PROTOCOL, 'unsupported credential protocol')
     stats.require(type(config['count']) is type(config['k']) is int
                   and (config['count'], config['k']) == (64, 10), 'fixed 64/k10 panel')
-    stats.require(config['dataset_order'] == list(DATASETS) and config['blocks'] == list(BLOCKS),
+    stats.require(config['dataset_order'] == list(DATASETS) and (offered or config['blocks'] == list(BLOCKS)),
                   'fixed dataset/ABBA order; old 32-request blocks are incompatible')
     stats.require(config['client_cpu_affinity'] == [4, 5]
                   and config['native_cpu_affinity'] == [0, 1, 2, 3], 'cold-call CPU contract')
@@ -118,7 +137,7 @@ def validate_config(config):
     stats.digest(config['qualification_sha256'])
     stats.digest(config['native_source_identity_sha256'])
     stats.integer(config['native_source_file_count'], 'source roster count', 1)
-    stats.require(set(config['code_sha256']) == set(CODE), 'complete runtime code closure')
+    stats.require(set(config['code_sha256']) == set(OFFERED_CODE if offered else CODE), 'complete runtime code closure')
     for name, digest in config['code_sha256'].items():
         stats.require(old.sha(name) == stats.digest(digest), 'runtime code identity: ' + name)
     stats.require(all(type(config[k]) is str and config[k] for k in ('bucket', 'region')), 'store location')
@@ -145,6 +164,8 @@ def validate_config(config):
                           and bool(arm['indexes']['10']), 'pinned k10 index')
             stats.validate_roster(arm)
             stats.require(set(arm['inputs']) in ({'reference-k10'}, {'reference-k10', 'actual-k100'}), 'arm references')
+            if offered:
+                stats.require(set(arm['inputs']) == {'reference-k10'}, 'eight offered input bodies')
             for reference in arm['inputs'].values():
                 input_sha(reference)
             stats.require(arm['metadata_sha256']['plane/mean.bin'] == identity['mean_sha256'], 'mean identity')
@@ -204,6 +225,9 @@ def prepare(config, output, *, fetch=None):
     """Reusable envelope preparation; does not start a native process or query."""
     if fetch is None:
         def fetch(bucket, identity, path):
+            if config.get('schema') == OFFERED_SCHEMA:
+                stats.require(os.environ.get('AWS_MAX_ATTEMPTS') == '1', 'offered fetch retry environment')
+                return old.fetch(bucket, identity, path)
             saved = os.environ.get('AWS_MAX_ATTEMPTS')
             try:
                 os.environ['AWS_MAX_ATTEMPTS'] = '1'
@@ -304,7 +328,8 @@ def measured_call(binary, config, arm, body, expected, truth, *, port=8080):
 
     environment = dict(os.environ, BORSUK_NATIVE_MEMORY_BYTES=str(config['native_memory_bytes']),
                        AWS_MAX_ATTEMPTS='1', TOKIO_WORKER_THREADS='4')
-    before = cgroup_snapshot()
+    snapshot = offered_cgroup_snapshot if config.get('schema') == OFFERED_SCHEMA else cgroup_snapshot
+    before = snapshot()
     try:
         record = _cold_call(binary, config, arm, body, expected, truth, failures, port=port,
                             response_check=checked, startup_check=startup, post_call=post, spawn=popen, env=environment)
@@ -341,7 +366,7 @@ def measured_call(binary, config, arm, body, expected, truth, *, port=8080):
         except (ValueError, KeyError, TypeError) as telemetry_error:
             telemetry_errors.append(str(telemetry_error))
         record['telemetry_validation_errors'] = telemetry_errors
-    record.update(cgroup_before=before, cgroup_after=cgroup_snapshot(), temporary_directory_cleanup=True,
+    record.update(cgroup_before=before, cgroup_after=snapshot(), temporary_directory_cleanup=True,
                   expected_authority=arm['authority'], reference_response={k: expected[k] for k in stats.PARITY},
                   truth_at_10=list(truth[:10]), http_retry=False,
                   request_sha256=hashlib.sha256(body).hexdigest(), request_bytes=len(body),
@@ -584,7 +609,409 @@ def run(config, binary, panels, output):
     return reduce_run(records, panels, config)
 
 
-def main(argv=None):
+def validate_offered_config(config):
+    from scripts import run_native_cold_offered as offered
+    stats.require(set(OFFERED_CODE) == set(CODE) | set(offered.CODE), 'scheduler dependency closure')
+    fixed = dict(offered_qps=RATES, workers=6, base_port=18080, max_dispatch_lateness_ns=125000000,
+                 cleanup_reserve_seconds=90, worker_limit_seconds=3000, machine_limit_seconds=3600,
+                 native_memory_bytes=536870912, profile_memory_bytes=8589934592, profile_swap_bytes=0,
+                 native_rlimit_as_bytes=4294967296, namespace_connect_deadline_seconds=45,
+                 native_process_limit_seconds=60, query_payload_timeout_seconds=5, ann_queries=1536,
+                 native_source_file_count=399)
+    for name, value in fixed.items():
+        stats.require(config[name] == value and (type(config[name]) is int if type(value) is int else
+                      type(config[name]) is list), 'fixed offered contract: ' + name)
+    stats.require(all(type(v) in (int, float) for v in config['offered_qps']), 'offered rate types')
+    stats.require(config['native_source_identity_sha256'] ==
+                  '92085e6e40ac9324ea7a4fc8daab58995dc84680a5c2391eb426dd430230e520', '399-source identity')
+    stats.require(config['binary'] == dict(bytes=16191384, sha256=
+                  'c00b766f65f8f0ae0adb5fcca786cb33c0daf046ff4b8f9a8bbcab39e1263533'), 'qualified offered binary')
+    stats.require(config['qualification_sha256'] ==
+                  '335b9f0776a50c0a92afd37f4e6cff8a6fb402e8068d835073e1526bf300e107', 'qualified offered proof')
+
+
+def offered_order():
+    for index, rate in enumerate(RATES):
+        for dataset in DATASETS:
+            for arm in ('control', 'candidate'):
+                yield index, rate, dataset, arm
+
+
+def offered_name(index, dataset, arm):
+    return f'rate{index}-{dataset.lower()}-{arm}-records.jsonl'
+
+
+def offered_cgroup_snapshot():
+    snapshot = cgroup_snapshot()
+    if not isinstance(snapshot, dict):
+        return snapshot
+    try:
+        directory = Path(snapshot['path'])
+        snapshot['files'].update({name: (directory / name).read_text().strip() for name in
+                                ('memory.max', 'memory.swap.max', 'memory.swap.peak')})
+        snapshot['observed_ns'] = time.monotonic_ns()
+        return snapshot
+    except OSError:
+        return 'UNMEASURED'
+
+
+def offered_resources(before, after, records, config, *, cell_before=None):
+    """Missing proof is a failed gate, retained for offline closeout."""
+    try:
+        snapshots = [before, *([cell_before] if cell_before is not None else []), *(s for r in records if r['port'] is not None
+                               for s in (r.get('cgroup_before'), r.get('cgroup_after'))), after]
+        baseline = None
+        peak = 0
+        for snapshot in snapshots:
+            stats.require(isinstance(snapshot, dict) and snapshot['path'] == before['path'], 'shared cgroup proof')
+            files = snapshot['files']
+            stats.require(int(files['memory.max']) == config['profile_memory_bytes']
+                          and int(files['memory.swap.max']) == config['profile_swap_bytes'] == 0, 'shared cgroup limits')
+            memory = [int(files[k]) for k in ('memory.current', 'memory.peak')]
+            swap = [int(files[k]) for k in ('memory.swap.current', 'memory.swap.peak')]
+            stats.require(0 <= memory[0] <= memory[1] <= config['profile_memory_bytes']
+                          and swap == [0, 0], 'shared memory/swap peak')
+            events = dict(line.split() for line in files['memory.events'].splitlines())
+            counters = [stats.integer(int(events[k]), k) for k in ('oom', 'oom_kill', 'oom_group_kill')]
+            if baseline is None: baseline = counters
+            stats.require(counters == baseline, 'shared OOM increments')
+            peak = max(peak, memory[1])
+        native = [r for r in records if r.get('native_process_started')]
+        stats.require(all(isinstance(r.get('resources'), dict) and r['resources'] ==
+                          resources(r['native_time_log'], config['native_memory_bytes']) for r in native), 'per-native resource proof')
+        return dict(passed=True, shared_peak_bytes=peak, shared_swap_peak_bytes=0, oom_event_increments=[0, 0, 0])
+    except (ValueError, KeyError, TypeError, ArithmeticError) as error:
+        return dict(passed=False, error=str(error), shared_peak_bytes='UNMEASURED',
+                    shared_swap_peak_bytes='UNMEASURED', oom_event_increments='UNMEASURED')
+
+
+def cleanup_confirmed(record):
+    return (record.get('temporary_directory_cleanup') is True and
+            (record.get('namespace_start_attempted') is False or
+             isinstance(record.get('native_close'), dict) and
+             type(record['native_close'].get('intentional_stop')) is bool and
+             type(record['native_close'].get('returncode')) is int))
+
+
+def transport_failure(record):
+    return (record.get('error_type') in ('TimeoutError', 'ConnectionResetError', 'ConnectionAbortedError',
+                 'ConnectionRefusedError', 'BrokenPipeError', 'RemoteDisconnected', 'IncompleteRead') or
+                 record.get('error') == 'namespace process closed before first connection')
+
+
+def offered_call(binary, config, panel, arm, q, port, *, campaign_cgroup_before=None):
+    record = measured_call(binary, config, arm['arm'], arm['bodies'][q], arm['references'][q], panel['truths'][q], port=port)
+    record['cleanup_confirmed'] = cleanup_confirmed(record)
+    transport = transport_failure(record)
+    record['failure_kind'] = ('transport' if transport else 'native') if record['outcome'] == 'failed' else None
+    record['abort_admissions'] = (record['outcome'] == 'failed' and not transport or not record['cleanup_confirmed'])
+    if not record['cleanup_confirmed'] and record['outcome'] == 'success':
+        record.update(outcome='failed', failure_kind='native', error_type='ValueError', error='native cleanup unconfirmed')
+    before = record['cgroup_before'] if campaign_cgroup_before is None else campaign_cgroup_before
+    if not offered_resources(before, record['cgroup_after'], [dict(record, port=port)], config)['passed']:
+        record['abort_admissions'] = True
+        if record['outcome'] == 'success':
+            record.update(outcome='failed', failure_kind='native', error_type='ValueError', error='shared resource gate')
+    if record['outcome'] == 'failed':
+        try:
+            stats.require(record['native_header']['listen'] == f'127.0.0.1:{port}', 'failed ready port')
+        except (ValueError, KeyError, TypeError) as error:
+            record.setdefault('telemetry_validation_errors', []).append(str(error))
+    return record
+
+
+def all_offer_tails(records):
+    finite = sorted((r['completed_ns'] - r['scheduled_ns']) / 1e6 for r in records if r['outcome'] == 'success')
+    # Same interpolation as the serial quantile; its upper endpoint must be finite.
+    result = {}
+    for name, p in (('p50', .5), ('p90', .9), ('p95', .95), ('p99', .99)):
+        position = (len(records) - 1) * p
+        lo, hi = math.floor(position), math.ceil(position)
+        result[name] = (finite[lo] + (finite[hi] - finite[lo]) * (position - lo)
+                        if hi < len(finite) else 'UNBOUNDED')
+    return result
+
+
+def reduce_offered_cell(records, panel, config):
+    stats.require(len(records) == 64 and [r['query_ordinal'] for r in records] == list(range(64)), '64 offered ordinals')
+    receipt = records[0]['cell_receipt']
+    epoch, terminal, deadline = (stats.integer(receipt[k], k, maximum=2**128 - 1)
+                                 for k in ('epoch_ns', 'terminal_ns', 'admission_deadline_ns'))
+    stats.integer(receipt['worker_started_ns'], 'worker start', maximum=2**128 - 1)
+    stats.require(type(receipt['cell_started']) is bool, 'cell start receipt')
+    stats.require(terminal > epoch and deadline == receipt['worker_started_ns'] +
+                  (config['worker_limit_seconds'] - config['cleanup_reserve_seconds']) * 10**9, 'offered clock/deadline')
+    index, rate, dataset, arm_name = (records[0][k] for k in ('rate_index', 'offered_qps', 'dataset', 'arm'))
+    arm = panel['arms'][arm_name]
+    intervals, delays = [], []
+    for q, record in enumerate(records):
+        stats.integer(record['query_ordinal'], 'offered ordinal', maximum=63)
+        stats.integer(record['rate_index'], 'rate index', maximum=5)
+        stats.integer(record['scheduled_ns'], 'scheduled time', maximum=2**128 - 1)
+        stats.require(type(record['offered_qps']) in (int, float) and record['offered_qps'] == RATES[record['rate_index']], 'fixed offered rate')
+        stats.require((record['rate_index'], record['offered_qps'], record['dataset'], record['arm']) ==
+                      (index, rate, dataset, arm_name), 'cell identity')
+        stats.require(record['scheduled_ns'] == epoch + round(q * 1e9 / rate), 'absolute offer schedule')
+        stats.integer(record['terminal_ns'], 'offer terminal', maximum=2**128 - 1)
+        stats.require(epoch <= record['terminal_ns'] <= terminal, 'offer cleanup clock')
+        stats.integer(record['http_attempts'], 'one HTTP attempt', maximum=1)
+        stats.integer(record['valid_ann_requests'], 'valid ANN requests', maximum=1)
+        stats.require(type(record['namespace_start_attempted']) is type(record['native_process_started']) is bool
+                      and (not record['native_process_started'] or record['namespace_start_attempted']), 'observed process attempts')
+        outcome, port = record['outcome'], record['port']
+        stats.require(outcome in ('success', 'failed', 'capacity_drop', 'aborted'), 'offered outcome')
+        if record['dispatched_ns'] is not None:
+            stats.integer(record['dispatched_ns'], 'dispatch time', maximum=2**128 - 1)
+            stats.require(record['scheduled_ns'] <= record['dispatched_ns'] <= record['terminal_ns']
+                          and record['dispatched_ns'] < deadline, 'dispatch order/admission deadline')
+            delays.append((record['dispatched_ns'] - record['scheduled_ns']) / 1e6)
+        if port is None:
+            stats.require(outcome in ('capacity_drop', 'aborted') and record['http_attempts'] == 0
+                          and record['valid_ann_requests'] == 0
+                          and not record['namespace_start_attempted'] and not record['native_process_started']
+                          and record['started_ns'] is record['completed_ns'] is None, 'unattempted offer')
+            stats.require(not any(k in record for k in ('native_header', 'native_close', 'response',
+                          'accounting', 'startup_accounting', 'resources', 'raw_response_base64')), 'telemetry on unattempted offer')
+            if outcome == 'capacity_drop':
+                stats.require(record['dispatched_ns'] is not None and record['terminal_ns'] == record['dispatched_ns'], 'immediate drop')
+            else:
+                stats.require(record['dispatched_ns'] is None and record['abort_after'] == receipt['abort_after']
+                              and isinstance(receipt['abort_after'], dict), 'explicit abort receipt')
+        else:
+            stats.integer(port, 'owned port', 18080, 18085)
+            stats.require(outcome in ('success', 'failed') and record['dispatched_ns'] is not None, 'admitted offer')
+            intervals.append((record['dispatched_ns'], record['terminal_ns'], port, record))
+            if receipt['abort_after'] is not None:
+                stats.require(record['dispatched_ns'] <= receipt['abort_after']['observed_ns'], 'admission after abort')
+            stats.require(record['cleanup_confirmed'] == cleanup_confirmed(record), 'cleanup receipt')
+            if record.get('started_ns') is not None:
+                stats.require(record['dispatched_ns'] <= record['started_ns'] <= record['terminal_ns'], 'launch clock')
+            if record.get('completed_ns') is not None:
+                stats.require(record['started_ns'] <= record['completed_ns'] <= record['terminal_ns'], 'response clock')
+            if outcome == 'success':
+                stats.require(record['abort_admissions'] is False and record['failure_kind'] is None, 'successful admission flags')
+                validate_record(record, config, arm['arm'], arm['bodies'][q], arm['references'][q], panel['truths'][q], port=port)
+            else:
+                stats.require(record['failure_kind'] == ('transport' if transport_failure(record) else 'native'), 'failure classification')
+                expected_abort = (not transport_failure(record) or not record['cleanup_confirmed'] or
+                    not offered_resources(receipt['campaign_cgroup_before'], record.get('cgroup_after'), [record], config)['passed'])
+                stats.require(record['abort_admissions'] is expected_abort, 'fatal failure admission flag')
+                stats.validate_failed_record(record, config, arm['arm'], arm['bodies'][q], arm['references'][q], panel['truths'][q], port=port)
+            if record['abort_admissions']:
+                stats.require(receipt['abort_after'] is not None, 'missing fatal abort receipt')
+    if receipt['abort_after'] is not None and receipt['cell_started']:
+        abort = receipt['abort_after']
+        q = stats.integer(abort['query_ordinal'], 'abort ordinal', maximum=63)
+        stats.integer(abort['observed_ns'], 'abort clock', maximum=2**128 - 1)
+        stats.require(epoch <= abort['observed_ns'] <= terminal, 'abort observation clock')
+        if abort['reason'] == 'admission deadline':
+            stats.require(abort['observed_ns'] >= deadline and records[q]['outcome'] == 'aborted', 'deadline abort')
+        else:
+            stats.require(abort['reason'] in ('fatal call failure', 'cleanup unconfirmed')
+                          and records[q].get('abort_admissions') is True
+                          and abort['observed_ns'] == records[q]['terminal_ns'], 'fatal abort origin')
+    peak = 0
+    active = []
+    for start, end, port, record in sorted(intervals, key=lambda value: value[0]):
+        stats.require(all(port != p or stop <= start and cleanup for _, stop, p, cleanup in active), 'early/poisoned port reuse')
+        active = [value for value in active if value[1] > start or not value[3]]
+        active.append((start, end, port, record['cleanup_confirmed']))
+        peak = max(peak, len(active))
+        stats.require(peak <= config['workers'], 'ownership over six')
+    for record in records:
+        if record['outcome'] == 'capacity_drop':
+            at = record['dispatched_ns']
+            stats.require(sum(start <= at < end for start, end, _, _ in intervals) == config['workers'], 'drop without six owners')
+    reduced = reduce_calls(records)
+    admitted = len(intervals)
+    successes = reduced['successes']
+    resource = offered_resources(receipt['campaign_cgroup_before'], receipt['cgroup_after'], records, config,
+                                 cell_before=receipt['cgroup_before'])
+    cleanup = all(r['cleanup_confirmed'] for _, _, _, r in intervals)
+    timing = all(delay <= config['max_dispatch_lateness_ns'] / 1e6 for delay in delays)
+    complete = successes == 64
+    quality = complete and reduced['returned_hits'] >= 608
+    span = terminal - epoch
+    name = offered_name(index, dataset, arm_name)
+    body = ''.join(encoded(r) + '\n' for r in records).encode()
+    identity = (not any(r.get('failure_kind') == 'native' for r in records) and
+                (receipt['abort_after'] is None or receipt['abort_after']['reason'] not in
+                 ('fatal call failure', 'cleanup unconfirmed', 'shared resource gate')))
+    return dict(reduced, rate_index=index, offered_qps=rate, dataset=dataset, arm=arm_name, records_file=name,
+                records_sha256=hashlib.sha256(body).hexdigest(), records_bytes=len(body),
+                offered=64, admitted=admitted, admitted_completed=sum(r['cleanup_confirmed'] for _, _, _, r in intervals),
+                capacity_drops=sum(r['outcome'] == 'capacity_drop' for r in records), aborted_offers=reduced['aborted'],
+                success_fraction=successes / 64, all_offer_recall_at_10=reduced['returned_hits'] / 640,
+                epoch_ns=epoch, terminal_ns=terminal, full_span_ns=span, planned_offer_window_ns=round(64e9 / rate),
+                last_scheduled_offset_ns=round(63e9 / rate), successful_full_span_qps=successes * 1e9 / span,
+                admitted_completed_full_span_qps=sum(r['cleanup_confirmed'] for _, _, _, r in intervals) * 1e9 / span,
+                scheduled_to_response_ms=tails([(r['completed_ns'] - r['scheduled_ns']) / 1e6 for r in records if r['outcome'] == 'success']),
+                all_offer_scheduled_to_valid_response_ms=all_offer_tails(records), dispatch_delay_ms=tails(delays),
+                dispatch_timing_gate_passed=timing, quality_gate_passed=quality, all_offers_successful=complete,
+                resource_gate=resource, process_cleanup_complete=cleanup, peak_port_ownership=peak,
+                identity_gate_passed=identity,
+                abort_after=receipt['abort_after'], cell_started=receipt['cell_started'],
+                qualification_gate_passed=quality and timing and cleanup and resource['passed'])
+
+
+def reduce_offered(records, panels, config):
+    roster = [(i, d, a, q) for i, _, d, a in offered_order() for q in range(64)]
+    stats.require([(r['rate_index'], r['dataset'], r['arm'], r['query_ordinal']) for r in records] == roster,
+                  'exact rate-major 24-cell/1536-position roster')
+    cells = [reduce_offered_cell(records[i:i + 64], panels[records[i]['dataset']], config) for i in range(0, 1536, 64)]
+    campaign_stop, escalation_stops, previous, worker_start = None, {}, 0, None
+    campaign_cgroup_before = records[0]['cell_receipt']['campaign_cgroup_before']
+    for index, cell in enumerate(cells):
+        rows = records[index * 64:(index + 1) * 64]
+        receipt = rows[0]['cell_receipt']
+        stats.require(receipt['campaign_cgroup_before'] == campaign_cgroup_before, 'campaign resource baseline')
+        if worker_start is None: worker_start = receipt['worker_started_ns']
+        stats.require(receipt['worker_started_ns'] == worker_start and cell['epoch_ns'] >= previous, 'drained cell order')
+        previous = cell['terminal_ns']
+        key = cell['dataset'] + '/' + cell['arm']
+        escalation_stop = escalation_stops.get(key)
+        stop = campaign_stop or (escalation_stop if escalation_stop and cell['rate_index'] > escalation_stop['rate_index'] else None)
+        if stop is not None:
+            stats.require(not cell['cell_started'] and all(r['outcome'] == 'aborted' and r['abort_after'] == stop for r in rows), 'remaining cells explicitly aborted')
+        else:
+            stats.require(cell['cell_started'] is True, 'unexplained unstarted cell')
+            if cell['abort_after'] is not None:
+                campaign_stop = cell['abort_after']
+            elif not cell['resource_gate']['passed']:
+                campaign_stop = dict(rate_index=cell['rate_index'], dataset=cell['dataset'], arm=cell['arm'],
+                                     reason='shared resource gate', observed_ns=cell['terminal_ns'])
+            elif not cell['qualification_gate_passed'] and escalation_stop is None:
+                escalation_stops[key] = dict(rate_index=cell['rate_index'], dataset=cell['dataset'], arm=cell['arm'],
+                                            reason='arm rate qualification failed', observed_ns=cell['terminal_ns'])
+    passing = {dataset: {arm: max([0] + [c['offered_qps'] for c in cells if c['dataset'] == dataset and c['arm'] == arm
+                                       and c['qualification_gate_passed']]) for arm in ('control', 'candidate')} for dataset in DATASETS}
+    comparisons = []
+    for index, rate in enumerate(RATES):
+        for dataset in DATASETS:
+            control, candidate = [next(c for c in cells if (c['rate_index'], c['dataset'], c['arm']) == (index, dataset, arm))
+                                  for arm in ('control', 'candidate')]
+            valid = all(c['qualification_gate_passed'] for c in (control, candidate))
+            comparisons.append(dict(rate_index=index, offered_qps=rate, dataset=dataset, valid_matched_cells=valid,
+                candidate_minus_control_ms={boundary: {tail: candidate[boundary][tail] - control[boundary][tail] for tail in ('p90', 'p95')}
+                    for boundary in ('scheduled_to_response_ms', 'all_offer_scheduled_to_valid_response_ms')} if valid else 'UNMEASURED',
+                candidate_minus_control_cold_ms={tail: candidate['latency_ms']['whole_cold'][tail] - control['latency_ms']['whole_cold'][tail]
+                                                for tail in ('p90', 'p95')} if valid else 'UNMEASURED'))
+    return dict(schema=OFFERED_RESULT_SCHEMA, cells=cells, fixed_positions=1536, planned_offers=1536, offered=1536,
+                workers=6, base_port=18080, offered_qps=RATES, k=10,
+                epoch_ns=cells[0]['epoch_ns'], terminal_ns=cells[-1]['terminal_ns'],
+                full_span_ns=cells[-1]['terminal_ns'] - cells[0]['epoch_ns'],
+                successful_full_span_qps=sum(c['successes'] for c in cells) * 1e9 / (cells[-1]['terminal_ns'] - cells[0]['epoch_ns']),
+                admitted_completed_full_span_qps=sum(c['admitted_completed'] for c in cells) * 1e9 / (cells[-1]['terminal_ns'] - cells[0]['epoch_ns']),
+                planned_offer_window_ns=sum(c['planned_offer_window_ns'] for c in cells),
+                admitted=sum(c['admitted'] for c in cells), admitted_completed=sum(c['admitted_completed'] for c in cells),
+                namespace_starts_attempted=sum(r['namespace_start_attempted'] for r in records),
+                namespace_processes_started=sum(r['native_process_started'] for r in records),
+                ann_calls_attempted=sum(r['http_attempts'] for r in records), ann_calls_successful=sum(c['successes'] for c in cells),
+                failed_calls=sum(c['failures'] for c in cells), dropped_calls=sum(c['capacity_drops'] for c in cells),
+                aborted_calls=sum(c['aborted_offers'] for c in cells), all_calls_successful=all(c['all_offers_successful'] for c in cells),
+                quality_gate_passed=all(c['quality_gate_passed'] for c in cells), qualification_gate_passed=all(c['qualification_gate_passed'] for c in cells),
+                bounded_memory_gate_passed=all(c['resource_gate']['passed'] for c in cells),
+                process_cleanup_complete=all(c['process_cleanup_complete'] for c in cells),
+                dispatch_timing_gate_passed=all(c['dispatch_timing_gate_passed'] for c in cells),
+                execution_gate_passed=(campaign_stop is None and all(c['process_cleanup_complete'] and c['resource_gate']['passed'] for c in cells)),
+                identity_gate_passed=all(c['identity_gate_passed'] for c in cells),
+                largest_passing_tested_offered_qps=passing, matched_comparisons=comparisons,
+                eight_qps_attained=all(c['qualification_gate_passed'] for c in cells if c['offered_qps'] == 8 and c['arm'] == 'candidate'),
+                offered_gate_passed=all(c['qualification_gate_passed'] for c in cells if c['offered_qps'] == 8 and c['arm'] == 'candidate'),
+                abort_after=campaign_stop, escalation_stopped_after=escalation_stops,
+                latency_improvement=all(c['valid_matched_cells'] and all(v < 0 for v in c['candidate_minus_control_cold_ms'].values())
+                                        for c in comparisons),
+                full_span_boundary='first scheduled offer through all admitted calls, validation and cleanup',
+                success_conditioned_tails=True, all_offer_tail_unsuccessful_completion='UNBOUNDED',
+                process_and_store_client_cold=True, application_cache=False, s3_service_cache='uncontrolled',
+                transport='one loopback HTTP ANN request per fresh namespace; native object transport uses TLS',
+                population='FIRST100k D768 cosine development ordinals 0..63', matched_vendor_measured=False,
+                sustainable_qps='UNMEASURED', cost='UNMEASURED', launch_authority=False, offered_load_measured=True)
+
+
+def closed_cell_summary(cell, config, config_sha):
+    return dict(cell, schema='borsuk-native-semantic-router-cold-offered-cell-v1',
+                config_sha256=config_sha, binary_sha256=config['binary']['sha256'],
+                qualification_sha256=config['qualification_sha256'], code_sha256=config['code_sha256'],
+                native_source_file_count=config['native_source_file_count'],
+                native_source_identity_sha256=config['native_source_identity_sha256'],
+                closed=cell['process_cleanup_complete'],
+                bounded_memory_gate_passed=(cell['resource_gate']['passed'] and
+                    (cell['abort_after'] is None or cell['abort_after']['reason'] != 'shared resource gate')),
+                records=dict(bytes=cell['records_bytes'], sha256=cell['records_sha256']))
+
+
+def run_offered(config, binary, panels, output, *, worker_started_ns=None, on_cell_closed=None, config_sha=None,
+                proof_path=None, campaign_cgroup_before=None):
+    from scripts import run_native_cold_offered as offered
+    worker_started_ns = time.monotonic_ns() if worker_started_ns is None else worker_started_ns
+    config_sha = hashlib.sha256((encoded(config) + '\n').encode()).hexdigest() if config_sha is None else config_sha
+    if campaign_cgroup_before is None: campaign_cgroup_before = offered_cgroup_snapshot()
+    deadline = worker_started_ns + (config['worker_limit_seconds'] - config['cleanup_reserve_seconds']) * 10**9
+    records, campaign_stop, escalation_stops = [], None, {}
+    for index, rate, dataset, arm_name in offered_order():
+        key = dataset + '/' + arm_name
+        escalation_stop = escalation_stops.get(key)
+        stop = campaign_stop or (escalation_stop if escalation_stop and index > escalation_stop['rate_index'] else None)
+        before = offered_cgroup_snapshot()
+        if stop is None:
+            panel, arm = panels[dataset], panels[dataset]['arms'][arm_name]
+            rows, epoch, terminal, abort = offered.schedule_offers(
+                lambda q, port: offered_call(binary, config, panel, arm, q, port, campaign_cgroup_before=campaign_cgroup_before), rate,
+                workers=config['workers'], base_port=config['base_port'], deadline_ns=deadline)
+        else:
+            epoch = time.monotonic_ns()
+            rows = [dict(query_ordinal=q, offered_qps=rate, scheduled_ns=epoch + round(q * 1e9 / rate),
+                         dispatched_ns=None, started_ns=None, completed_ns=None, port=None, outcome='aborted',
+                         namespace_start_attempted=False, native_process_started=False, http_attempts=0, valid_ann_requests=0,
+                         abort_after=stop, terminal_ns=time.monotonic_ns()) for q in range(64)]
+            terminal, abort = time.monotonic_ns(), stop
+        for row in rows:
+            row.update(rate_index=index, dataset=dataset, arm=arm_name)
+            if row.get('failure_stage') == 'thread_start':
+                q = row['query_ordinal']
+                body, reference = arm['bodies'][q], arm['references'][q]
+                row.update(temporary_directory_cleanup=True, expected_authority=arm['arm']['authority'],
+                           reference_response={k: reference[k] for k in stats.PARITY}, truth_at_10=panel['truths'][q][:10],
+                           request_bytes=len(body), request_sha256=hashlib.sha256(body).hexdigest(),
+                           raw_response_complete=False, http_retry=False, failure_kind='native',
+                           cgroup_before=before, cgroup_after=offered_cgroup_snapshot(),
+                           telemetry_validation_errors=['thread creation failed before native start'])
+        rows[0]['cell_receipt'] = dict(epoch_ns=epoch, terminal_ns=terminal, abort_after=abort,
+                                      cgroup_before=before, cgroup_after=offered_cgroup_snapshot(),
+                                      campaign_cgroup_before=campaign_cgroup_before,
+                                      worker_started_ns=worker_started_ns, admission_deadline_ns=deadline, cell_started=stop is None)
+        cell = reduce_offered_cell(rows, panels[dataset], config)
+        validate_config(config)
+        stats.require(proof_path is not None, 'offered qualification proof path')
+        validate_runtime(config, binary, proof_path)
+        path = Path(output) / cell['records_file']
+        with path.open('x') as stream:
+            stream.write(''.join(encoded(r) + '\n' for r in rows))
+            stream.flush()
+            os.fsync(stream.fileno())
+        records.extend(rows)
+        if stop is None:
+            if abort is not None:
+                campaign_stop = abort
+            elif not cell['resource_gate']['passed']:
+                campaign_stop = dict(rate_index=index, dataset=dataset, arm=arm_name, reason='shared resource gate', observed_ns=terminal)
+            elif not cell['qualification_gate_passed'] and escalation_stop is None:
+                escalation_stops[key] = dict(rate_index=index, dataset=dataset, arm=arm_name,
+                                            reason='arm rate qualification failed', observed_ns=terminal)
+        summary_path = path.with_name(path.name.replace('-records.jsonl', '-summary.json'))
+        marker = closed_cell_summary(cell, config, config_sha)
+        with summary_path.open('x') as stream:
+            stream.write(encoded(marker) + '\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        if on_cell_closed is not None and marker['closed'] and marker['identity_gate_passed'] and marker['bounded_memory_gate_passed']:
+            on_cell_closed(marker, dict(records=path, summary=summary_path))
+    return reduce_offered(records, panels, config)
+
+
+def main(argv=None, *, on_cell_closed=None):
+    worker_started_ns = time.monotonic_ns()
     args = sys.argv[1:] if argv is None else argv
     stats.require(len(args) == 5, 'usage: CONFIG CONFIG_SHA BINARY PROOF NEW_OUTPUT')
     config_path, digest, binary, proof_path, output = args
@@ -598,8 +1025,12 @@ def main(argv=None):
     (out / 'config.json').write_text(Path(config_path).read_text())
     (out / 'qualification.json').write_bytes(Path(proof_path).read_bytes())
     try:
+        campaign_cgroup_before = offered_cgroup_snapshot() if config['schema'] == OFFERED_SCHEMA else None
         panels = prepare(config, out)
-        summary = run(config, binary, panels, out)
+        summary = (run_offered(config, binary, panels, out, worker_started_ns=worker_started_ns,
+                               on_cell_closed=on_cell_closed, config_sha=digest, proof_path=proof_path,
+                               campaign_cgroup_before=campaign_cgroup_before)
+                   if config['schema'] == OFFERED_SCHEMA else run(config, binary, panels, out))
         # Recheck every input and execution identity; no refetch or query retry.
         for panel in panels.values():
             inputs = [*panel['inputs'].values(), *(i for arm in panel['arms'].values() for i in arm['inputs'].values())]
@@ -614,14 +1045,355 @@ def main(argv=None):
                        native_source_identity_sha256=config['native_source_identity_sha256'],
                        native_source_file_count=config['native_source_file_count'], code_sha256=config['code_sha256'],
                        inputs={d: dict(common=p['inputs'], arms={a: v['inputs'] for a, v in p['arms'].items()})
-                               for d, p in panels.items()}, identity_gate_passed=True, closed=summary['process_cleanup_complete'])
+                               for d, p in panels.items()}, identity_gate_passed=summary.get('identity_gate_passed', True),
+                       closed=summary['process_cleanup_complete'])
     except Exception as error:
-        summary = locals().get('summary', dict(schema='borsuk-native-semantic-router-cold-result-v1'))
+        summary = locals().get('summary', dict(schema=(OFFERED_RESULT_SCHEMA if config['schema'] == OFFERED_SCHEMA
+                                                      else 'borsuk-native-semantic-router-cold-result-v1')))
         summary.update(closed=summary.get('process_cleanup_complete', False), terminal_error=dict(type=type(error).__name__, message=str(error)),
                        identity_gate_passed=False, all_calls_successful=False, latency_improvement=False)
     (out / 'summary.json').write_text(json.dumps(summary, indent=2, allow_nan=False) + '\n')
     print(encoded({k: summary.get(k, False) for k in ('closed', 'all_calls_successful', 'quality_gate_passed', 'latency_improvement')}))
+    if config['schema'] == OFFERED_SCHEMA:
+        return 0 if summary.get('execution_gate_passed') and summary.get('identity_gate_passed') and summary.get('closed') else 1
     return 0 if summary['all_calls_successful'] and summary.get('identity_gate_passed') and summary.get('quality_gate_passed') else 1
+
+
+def offered_self_check():
+    import copy
+    import tempfile
+    import threading
+    from contextlib import ExitStack
+    from unittest.mock import Mock, patch
+    from scripts import run_native_cold_offered as offered
+    from scripts.check_native_semantic_concurrency import fixture
+
+    def rejected(call):
+        try:
+            call()
+        except (ValueError, KeyError, TypeError, AssertionError):
+            return
+        raise AssertionError('invalid offered evidence accepted')
+
+    config = json.loads((Path(__file__).resolve().parents[1] /
+                        'docs/research/performance-architecture-20260930/semantic-cold/config.json').read_text())
+    config.update(schema=OFFERED_SCHEMA, offered_qps=RATES, workers=6, base_port=18080,
+                  max_dispatch_lateness_ns=125000000, cleanup_reserve_seconds=90,
+                  worker_limit_seconds=3000, machine_limit_seconds=3600, native_memory_bytes=536870912,
+                  profile_memory_bytes=8589934592, profile_swap_bytes=0, native_rlimit_as_bytes=4294967296,
+                  namespace_connect_deadline_seconds=45, native_process_limit_seconds=60,
+                  query_payload_timeout_seconds=5, ann_queries=1536, authority_pending=False,
+                  code_sha256={name: old.sha(name) for name in OFFERED_CODE})
+    bodies, fixtures = {}, {}
+
+    def bind(key, body):
+        bodies[key] = body
+        return dict(key=key, bytes=len(body), sha256=hashlib.sha256(body).hexdigest())
+
+    requests = b''.join((encoded(dict(query_ordinal=q, query=[q + 1.] + [0.] * 767)) + '\n').encode() for q in range(64))
+    truth = struct.pack('<100I', *range(100)) * 64
+    for item in config['items']:
+        dataset = item['dataset']
+        item['inputs'] = dict(requests=bind(dataset + '/requests', requests), truth=bind(dataset + '/truth', truth))
+        item['source_identity'].update(queries_sha256=hashlib.sha256(requests).hexdigest(), truth_sha256=hashlib.sha256(truth).hexdigest(),
+                                       mean_sha256=hashlib.sha256(b'plane/mean.bin').hexdigest())
+        for name, mode in (('control', 'graph'), ('candidate', 'semantic')):
+            call = fixture(mode, 18080)
+            arm = call['arm']
+            arm.update(dataset=dataset, indexes={'10': dataset + '/' + name})
+            arm['metadata_sha256'] = {k: hashlib.sha256(k.encode()).hexdigest() for k in arm['metadata_files']}
+            arm['metadata_sha256']['manifest.json'] = arm['authority']['root_sha256']
+            call['response']['ids'] = list(range(10))
+            call['expected'].update({k: copy.deepcopy(call['response'][k]) for k in stats.PARITY})
+            call['truth'] = list(range(100))
+            header = dict(top_k=10, declared_panel_count=64, rows=100000, dimensions=768, metric='cosine',
+                          discovery=mode, authority=arm['authority'], query_split=item['query_split'], source_identity=item['source_identity'])
+            reference = [header, *[dict(query_ordinal=q, **{k: call['response'][k] for k in stats.PARITY}) for q in range(64)], dict(count=64)]
+            arm['inputs'] = {'reference-k10': bind(dataset + '/' + name + '/reference',
+                                                ''.join(encoded(r) + '\n' for r in reference).encode())}
+            item['arms'][name] = arm
+            fixtures[arm['indexes']['10']] = call
+    validate_config(config)
+    for mutation in ('pending', 'dependency', 'rate', 'port', 'deadline', 'source', 'binary'):
+        bad = copy.deepcopy(config)
+        if mutation == 'pending': bad['authority_pending'] = True
+        elif mutation == 'dependency': bad['code_sha256'].pop('scripts/check_native_metadata_ranges_stats.py')
+        elif mutation == 'rate': bad['offered_qps'] = [8]
+        elif mutation == 'port': bad['base_port'] = 8080
+        elif mutation == 'deadline': bad['cleanup_reserve_seconds'] = 0
+        elif mutation == 'source': bad['native_source_file_count'] = 395
+        else: bad['binary']['sha256'] = '0' * 64
+        rejected(lambda: validate_config(bad))
+
+    cgroup = dict(path='/synthetic-cgroup', files={'memory.max': '8589934592', 'memory.current': '1048576',
+        'memory.peak': '2097152', 'memory.swap.max': '0', 'memory.swap.current': '0', 'memory.swap.peak': '0',
+        'memory.events': 'oom 0\noom_kill 0\noom_group_kill 0', 'cpu.stat': 'usage_usec 1', 'io.stat': ''})
+
+    def fetch(bucket, identity, path):
+        body = bodies[identity['key']]
+        assert identity['bytes'] == len(body) and identity['sha256'] == hashlib.sha256(body).hexdigest()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
+        return dict(path=str(path), bytes=len(body), sha256=identity['sha256'])
+
+    with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
+        directory = Path(temporary)
+        panels = prepare(config, directory / 'prepared', fetch=fetch)
+        active, calls, paths, state = set(), {}, [], dict(fault=None, overlap=False, spawned=0, peak=0)
+        lock, barrier = threading.Lock(), threading.Barrier(6, timeout=2)
+        environment, argv = dict(os.environ), sys.argv
+        saved = {k: getattr(old, k) for k in ('checked_response', 'validate', 'post')}
+
+        def spawn(command, **kwargs):
+            port = int(command[-1].split(':')[-1])
+            with lock:
+                assert port not in active, 'native port reused before cleanup'
+                active.add(port)
+                state['peak'] = max(state['peak'], len(active))
+                call = copy.deepcopy(fixtures[command[14]])
+                call.update(port=port, initial=state['spawned'] < 6, fault=state['fault'])
+                state['spawned'] += 1
+                calls[port] = call
+            assert kwargs['env'] == dict(environment, BORSUK_NATIVE_MEMORY_BYTES='536870912', AWS_MAX_ATTEMPTS='1', TOKIO_WORKER_THREADS='4')
+            header = call['header']
+            header['listen'] = f'127.0.0.1:{port}'
+            if call['fault'] == 'port': header['listen'] = '127.0.0.1:8080'
+            if call['fault'] == 'authority': header['authority'] = dict(header['authority'], generation=2)
+            kwargs['stdout'].write(encoded(header) + '\n')
+            kwargs['stdout'].flush()
+            rss = 524289 if call['fault'] == 'RSS' else 1
+            Path(command[3]).write_text(f'Maximum resident set size (kbytes): {rss}\nUser time (seconds): 0.01\nSystem time (seconds): 0.00\n')
+            paths.append(Path(command[3]).parent)
+            process = Mock(port=port)
+            process.poll.return_value = None
+            return process
+
+        class Connection:
+            def __init__(self, host, port, timeout):
+                assert host == '127.0.0.1' and timeout == 5
+                self.call = calls[port]
+
+            def connect(self):
+                if state['overlap'] and self.call['initial']: barrier.wait()
+
+            def request(self, method, path, body, headers):
+                assert method == 'POST' and path == '/search'
+                self.call['body'] = body
+
+            def getresponse(self):
+                response = copy.deepcopy(self.call['response'])
+                if self.call['fault'] == 'extraGET':
+                    totals = response['transport']['totals']
+                    totals['attempts'] += 1
+                    totals['method_counts'][0] += 1
+                    totals['status_counts'][0][1] += 1
+                return Mock(status=200, read=lambda: encoded(response).encode())
+
+            def close(self): pass
+
+        def stop(process):
+            if state['overlap'] and calls[process.port]['initial']: time.sleep(.025)
+            with lock: active.remove(process.port)
+            return dict(intentional_stop=calls[process.port]['fault'] != 'cleanup',
+                        returncode=None if calls[process.port]['fault'] == 'cleanup' else 143)
+
+        stack.enter_context(patch.object(old.subprocess, 'Popen', side_effect=spawn))
+        stack.enter_context(patch.object(old.http.client, 'HTTPConnection', Connection))
+        stack.enter_context(patch.object(old, 'stop', side_effect=stop))
+        stack.enter_context(patch.object(sys.modules[__name__], 'offered_cgroup_snapshot', side_effect=lambda: copy.deepcopy(cgroup)))
+        state.update(overlap=True, spawned=0)
+        panel = panels['ReLAION']
+        real, epoch, terminal, abort = offered.schedule_offers(
+            lambda q, port: offered_call('unused', config, panel, panel['arms']['candidate' if q % 2 else 'control'], q, port), 1000)
+        assert abort is None and real[6]['outcome'] == 'capacity_drop' and state['peak'] == 6
+        assert len(real) == 64 and not active and max(r['started_ns'] for r in real[:6]) < min(r['completed_ns'] for r in real[:6])
+        assert terminal >= max(r['terminal_ns'] for r in real) > max(r['completed_ns'] for r in real if r['port'] is not None)
+        for port in range(18080, 18086):
+            owned = [r for r in real if r['port'] == port]
+            assert all(a['terminal_ns'] <= b['dispatched_ns'] for a, b in zip(owned, owned[1:]))
+        assert all(getattr(old, k) is v for k, v in saved.items()) and dict(os.environ) == environment and sys.argv is argv
+        state['overlap'] = False
+        arm = panel['arms']['candidate']
+        for fault in ('authority', 'port', 'extraGET', 'RSS', 'cleanup'):
+            state['fault'] = fault
+            failed, _, _, after = offered.schedule_offers(
+                lambda q, port: offered_call('unused', config, panel, arm, q, port), 1000)
+            assert after is not None and failed[0]['outcome'] == 'failed'
+            assert any(r['outcome'] == 'aborted' for r in failed)
+            assert sum(r['http_attempts'] for r in failed) <= 6
+            assert not active
+        state['fault'] = None
+        expired, _, _, after = offered.schedule_offers(lambda q, port: (_ for _ in ()).throw(AssertionError('late call')), 1000, deadline_ns=0)
+        assert after['reason'] == 'admission deadline' and all(r['outcome'] == 'aborted' for r in expired)
+        templates = {}
+        for dataset in DATASETS:
+            for name in ('control', 'candidate'):
+                panel = panels[dataset]
+                templates[dataset, name] = offered_call('unused', config, panel, panel['arms'][name], 0, 18080)
+                assert templates[dataset, name]['outcome'] == 'success'
+        fault_templates = {}
+        for mode, fault in (('native', 'authority'), ('cleanup', 'cleanup')):
+            state['fault'] = fault
+            panel = panels['ReLAION']
+            fault_templates[mode] = offered_call('unused', config, panel, panel['arms']['control'], 0, 18080)
+            assert fault_templates[mode]['outcome'] == 'failed'
+        state['fault'] = None
+        assert all(not path.exists() for path in paths)
+
+        clock, mode = [1000000000], [None]
+        def fake_schedule(call_one, rate, **kwargs):
+            # Synthetic remaining cells exercise real preparation, reducer, files and auditor.
+            closure = dict(zip(call_one.__code__.co_freevars, (cell.cell_contents for cell in call_one.__closure__)))
+            dataset = closure['panel']['item']['dataset']
+            name = 'control' if closure['arm']['arm']['discovery'] == 'graph' else 'candidate'
+            index = RATES.index(rate) * 4 + DATASETS.index(dataset) * 2 + int(name == 'candidate')
+            epoch = clock[0]
+            rows = []
+            for q in range(64):
+                row = copy.deepcopy(templates[dataset, name])
+                dispatch = epoch + round(q * 1e9 / rate) + 1000000
+                start, attempt, connected, end = dispatch + 1000000, dispatch + 2000000, dispatch + 3000000, dispatch + 5000000
+                row.update(query_ordinal=q, offered_qps=rate, scheduled_ns=epoch + round(q * 1e9 / rate), dispatched_ns=dispatch,
+                    port=18080, started_ns=start, successful_connect_attempt_ns=attempt, connected_ns=connected, completed_ns=end,
+                    terminal_ns=end + 20000000, cold_start_to_first_http_response_ns=end-start,
+                    before_successful_connect_attempt_ns=attempt-start, successful_tcp_connect_ns=connected-attempt,
+                    first_post_to_response_ns=end-connected, incoming_http_wall_ns=end-attempt)
+                body = panels[dataset]['arms'][name]['bodies'][q]
+                row.update(request_bytes=len(body), request_sha256=hashlib.sha256(body).hexdigest())
+                rows.append(row)
+            if mode[0] == 'timing' and index == 4:
+                for key in ('dispatched_ns', 'started_ns', 'successful_connect_attempt_ns', 'connected_ns', 'completed_ns', 'terminal_ns'):
+                    rows[0][key] += 125000001
+            if mode[0] == 'resource' and index == 4:
+                rows[0]['cgroup_after'] = 'UNMEASURED'
+            if mode[0] == 'deadline' and index == 4:
+                epoch = kwargs['deadline_ns']
+                abort = dict(query_ordinal=0, reason='admission deadline', observed_ns=epoch)
+                rows = [dict(query_ordinal=q, offered_qps=rate, scheduled_ns=epoch + round(q * 1e9 / rate),
+                         dispatched_ns=None, started_ns=None, completed_ns=None, port=None, outcome='aborted',
+                         namespace_start_attempted=False, native_process_started=False, http_attempts=0, valid_ann_requests=0,
+                         abort_after=abort, terminal_ns=epoch) for q in range(64)]
+                clock[0] = epoch + 1
+                return rows, epoch, epoch + 1, abort
+            if mode[0] == 'drop' and index == 4:
+                for q in range(6):
+                    rows[q]['port'] = 18080 + q
+                    rows[q]['native_header']['listen'] = f'127.0.0.1:{18080 + q}'
+                    rows[q]['native_server_log'] = encoded(rows[q]['native_header']) + '\n'
+                    rows[q]['terminal_ns'] = epoch + 14000000000
+                rows[6] = dict(query_ordinal=6, offered_qps=rate, scheduled_ns=epoch + round(6e9 / rate),
+                               dispatched_ns=epoch + round(6e9 / rate) + 1000000,
+                               terminal_ns=epoch + round(6e9 / rate) + 1000000, port=None, started_ns=None,
+                               completed_ns=None, outcome='capacity_drop', http_attempts=0, valid_ann_requests=0,
+                               namespace_start_attempted=False, native_process_started=False)
+            if mode[0] == 'transport' and index == 4:
+                row = rows[0]
+                row.update(outcome='failed', error_type='TimeoutError', error='wire timeout', failure_kind='transport',
+                           abort_admissions=False, completed_ns=None, http_status=None, raw_response_complete=False,
+                           telemetry_validation_errors=['missing response telemetry'])
+                for key in ('accounting', 'response', 'raw_response', 'raw_response_base64'): row.pop(key, None)
+            abort = None
+            if mode[0] in ('native', 'cleanup') and index == 4:
+                failure = copy.deepcopy(fault_templates[mode[0]])
+                failure.update(query_ordinal=0, offered_qps=rate, scheduled_ns=epoch, dispatched_ns=epoch + 1000000,
+                               started_ns=epoch + 2000000, completed_ns=epoch + 5000000,
+                               terminal_ns=epoch + 25000000, port=18080, valid_ann_requests=failure.get('valid_ann_requests', 0))
+                abort = dict(query_ordinal=0, reason='cleanup unconfirmed' if mode[0] == 'cleanup' else 'fatal call failure',
+                             observed_ns=failure['terminal_ns'])
+                rows = [failure, *[dict(query_ordinal=q, offered_qps=rate, scheduled_ns=epoch + round(q * 1e9 / rate),
+                         dispatched_ns=None, started_ns=None, completed_ns=None, port=None, outcome='aborted',
+                         namespace_start_attempted=False, native_process_started=False, http_attempts=0, valid_ann_requests=0,
+                         abort_after=abort, terminal_ns=failure['terminal_ns']) for q in range(1, 64)]]
+            terminal = max(r['terminal_ns'] for r in rows) + 1000000
+            clock[0] = terminal + 1000000
+            return rows, epoch, terminal, abort
+
+        checkpoints = []
+        def checkpoint(cell, paths):
+            assert cell == json.loads(paths['summary'].read_text())
+            assert cell['records'] == dict(bytes=paths['records'].stat().st_size, sha256=old.sha(paths['records']))
+            assert cell['closed'] and cell['identity_gate_passed'] and cell['bounded_memory_gate_passed']
+            checkpoints.append((cell, paths))
+
+        cfg, proof = directory / 'config.json', directory / 'proof.json'
+        cfg.write_text(encoded(config) + '\n')
+        proof.write_text('{}\n')
+        stack.enter_context(patch.object(offered, 'schedule_offers', side_effect=fake_schedule))
+        def tick():
+            clock[0] += 1
+            return clock[0]
+        stack.enter_context(patch.object(time, 'monotonic_ns', side_effect=tick))
+        stack.enter_context(patch.object(sys.modules[__name__], 'validate_runtime', return_value={}))
+        from scripts import run_native_semantic_router_cold as audit_runtime
+        if audit_runtime is not sys.modules[__name__]:
+            stack.enter_context(patch.object(audit_runtime, 'validate_runtime', return_value={}))
+        stack.enter_context(patch.object(old, 'fetch', side_effect=fetch))
+        stack.enter_context(patch.object(os, 'sched_getaffinity', return_value={4, 5}))
+        stack.enter_context(patch.dict(os.environ, AWS_MAX_ATTEMPTS='1'))
+        out = directory / 'complete'
+        assert main([str(cfg), old.sha(cfg), 'unused', str(proof), str(out)], on_cell_closed=checkpoint) == 0
+        summary = json.loads((out / 'summary.json').read_text())
+        assert len(checkpoints) == 24 and summary['ann_calls_successful'] == summary['offered'] == 1536
+        assert summary['eight_qps_attained'] and summary['execution_gate_passed']
+        assert stats.check_saved(out, old.sha(cfg), 'unused')['records'] == 1536
+        changed_summary = copy.deepcopy(summary)
+        changed_summary['offered_gate_passed'] = False
+        (out / 'summary.json').write_text(encoded(changed_summary))
+        rejected(lambda: stats.check_saved(out, old.sha(cfg), 'unused'))
+        (out / 'summary.json').write_text(encoded(summary))
+        all_rows = [json.loads(line) for _, paths in checkpoints for line in paths['records'].read_text().splitlines()]
+        for mutation in ('authority', 'port', 'extraGET', 'RSS', 'cleanup', 'schedule', 'reuse', 'deadline', 'summary'):
+            bad = copy.deepcopy(all_rows[:64])
+            row = bad[0]
+            if mutation == 'authority': row['expected_authority']['generation'] += 1
+            elif mutation == 'port': row['port'] = 18081
+            elif mutation == 'extraGET': row['accounting']['final_process_transport']['attempts'] += 1
+            elif mutation == 'RSS': row['native_time_log'] = row['native_time_log'].replace('kbytes): 1', 'kbytes): 524289')
+            elif mutation == 'cleanup': row['native_close']['returncode'] = None
+            elif mutation == 'schedule': row['scheduled_ns'] += 1
+            elif mutation == 'reuse': bad[1]['dispatched_ns'] = row['dispatched_ns']
+            elif mutation == 'deadline': row['cell_receipt']['admission_deadline_ns'] = row['dispatched_ns']
+            else: row['cell_receipt']['terminal_ns'] -= 1000000000000
+            rejected(lambda: reduce_offered_cell(bad, panels['ReLAION'], config))
+        boundary_panel, boundary = copy.deepcopy(panels['ReLAION']), copy.deepcopy(all_rows[:64])
+        for q in range(32, 64):
+            boundary_panel['truths'][q][9] = 100
+            boundary[q]['truth_at_10'][9] = 100
+            boundary[q]['returned_hits'] = 9
+        cell = reduce_offered_cell(boundary, boundary_panel, config)
+        assert cell['returned_hits'] == 608 and cell['quality_gate_passed']
+        boundary_panel['truths'][31][9] = boundary[31]['truth_at_10'][9] = 100
+        boundary[31]['returned_hits'] = 9
+        assert not reduce_offered_cell(boundary, boundary_panel, config)['quality_gate_passed']
+        for keep in (0, 32, 63):
+            population = copy.deepcopy(all_rows[:64])
+            for row in population[keep:]: row['outcome'] = 'capacity_drop'
+            assert all_offer_tails(population)['p99'] == 'UNBOUNDED'
+        for mutation in ('missing', 'limit', 'swap', 'oom'):
+            bad = copy.deepcopy(cgroup)
+            if mutation == 'missing': del bad['files']['memory.swap.peak']
+            elif mutation == 'limit': bad['files']['memory.max'] = 'max'
+            elif mutation == 'swap': bad['files']['memory.swap.peak'] = '1'
+            else: bad['files']['memory.events'] = 'oom 1\noom_kill 0\noom_group_kill 0'
+            assert not offered_resources(cgroup, bad, [], config)['passed']
+        for campaign_mode, status in (('timing', 0), ('drop', 0), ('transport', 0), ('deadline', 1), ('resource', 1), ('native', 1), ('cleanup', 1)):
+            mode[0] = campaign_mode
+            checkpoints.clear()
+            failed_out = directory / campaign_mode
+            actual_status = main([str(cfg), old.sha(cfg), 'unused', str(proof), str(failed_out)], on_cell_closed=checkpoint)
+            assert actual_status == status, json.loads((failed_out / 'summary.json').read_text())
+            result = json.loads((failed_out / 'summary.json').read_text())
+            assert not result['qualification_gate_passed'] and result['aborted_calls'] > 0
+            assert result['largest_passing_tested_offered_qps']['ReLAION']['control'] == .25
+            assert len(list(failed_out.glob('rate*-records.jsonl'))) == len(list(failed_out.glob('rate*-summary.json'))) == 24
+            assert len(checkpoints) == (24 if status == 0 or campaign_mode == 'deadline' else 4)
+            if campaign_mode in ('drop', 'transport'):
+                assert result['execution_gate_passed'] and result['offered_gate_passed']
+                assert result['cells'][4]['all_offer_scheduled_to_valid_response_ms']['p99'] == 'UNBOUNDED'
+                assert not result['matched_comparisons'][2]['valid_matched_cells']
+            assert stats.check_saved(failed_out, old.sha(cfg), 'unused')['records'] == 1536
+        assert not active
+    print('PASS offered: six-call barrier/seventh drop/cleanup ownership; 24 cells/1536 positions; raw authority/port/GET/RSS/cleanup faults; 608/607, dispatch/deadline/resources/all-offer tails; immutable markers/offline replay; native UNRUN')
 
 
 def self_check():
@@ -1025,7 +1797,9 @@ def self_check():
 
 
 if __name__ == '__main__':
-    if sys.argv[1:] == ['--self-check']:
+    if sys.argv[1:] == ['--offered-self-check']:
+        offered_self_check()
+    elif sys.argv[1:] == ['--self-check']:
         self_check()
     else:
         raise SystemExit(main())

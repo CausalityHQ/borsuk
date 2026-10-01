@@ -322,6 +322,41 @@ def self_check():
     print('PASS semantic query stage bounds, missing telemetry and partial failure stages')
 
 
+def validate_failed_record(record, config, arm, body, expected, truth, *, port=8080):
+    import base64
+    import hashlib
+    import json
+    require(record['outcome'] == 'failed' and bool(record['error_type']) and type(record['error']) is str, 'raw failure receipt')
+    integer(record['http_attempts'], 'failed HTTP attempts', maximum=1)
+    require(record['expected_authority'] == arm['authority']
+            and record['reference_response'] == {k: expected[k] for k in PARITY}
+            and record['truth_at_10'] == truth[:10]
+            and record['request_bytes'] == len(body)
+            and record['request_sha256'] == hashlib.sha256(body).hexdigest()
+            and record['http_retry'] is False, 'failed input binding')
+    if record['raw_response_complete']:
+        raw = base64.b64decode(record['raw_response_base64'], validate=True)
+        require(record['raw_response'] == raw.decode(errors='replace'), 'raw failure byte identity')
+        if 'response' in record:
+            require(record['response'] == json.loads(raw), 'failed response/raw identity')
+    if 'native_header' in record:
+        headers = [json.loads(line) for line in record['native_server_log'].splitlines() if line.startswith('{')]
+        require(headers == [record['native_header']], 'failed raw ready identity')
+    if 'startup_accounting' in record:
+        require(record['startup_accounting'] == validate_ready(record['native_header'], arm), 'failed startup receipt')
+    if 'accounting' in record:
+        require(record['accounting'] == validate_outcome(record['native_header'], record['response'], arm, False), 'failed accounting receipt')
+    # A failed record remains failed even if its available telemetry is coherent.
+    # Missing/invalid telemetry must be explicitly reported, never silently totaled.
+    try:
+        header = record['native_header']
+        require(header['phase'] == 'ready' and header['authority'] == arm['authority']
+                and header['listen'] == f'127.0.0.1:{port}', 'failed ready authority/port')
+        validate_outcome(header, record['response'], arm, False)
+    except (ValueError, KeyError, TypeError):
+        require(bool(record['telemetry_validation_errors']), 'unreported failed telemetry')
+
+
 def check_saved(output, config_sha, binary):
     import base64
     import json
@@ -340,6 +375,31 @@ def check_saved(output, config_sha, binary):
         return dict(path=str(path), bytes=size, sha256=sha)
 
     panels = runtime.prepare(config, out, fetch=saved_input)
+    if config['schema'] == runtime.OFFERED_SCHEMA:
+        records, saved_cells = [], []
+        for index, rate, dataset, arm in runtime.offered_order():
+            path = out / runtime.offered_name(index, dataset, arm)
+            rows = [json.loads(line) for line in path.read_text().splitlines()]
+            require(path.read_bytes() == ''.join(runtime.encoded(r) + '\n' for r in rows).encode(), 'canonical immutable cell ledger')
+            records.extend(rows)
+            saved_cells.append(json.loads(path.with_name(path.name.replace('-records.jsonl', '-summary.json')).read_text()))
+        actual = runtime.reduce_offered(records, panels, config)
+        for cell, saved in zip(actual['cells'], saved_cells):
+            require(saved == runtime.closed_cell_summary(cell, config, config_sha), 'closed cell marker identity/parity')
+        summary = json.loads((out / 'summary.json').read_text())
+        require(summary['config_sha256'] == config_sha, 'offered summary config identity')
+        require(all(summary.get(name) == value for name, value in actual.items()), 'saved offered summary/gates/tails')
+        require(summary['binary_sha256'] == config['binary']['sha256']
+                and summary['qualification_sha256'] == config['qualification_sha256']
+                and summary['native_source_identity_sha256'] == config['native_source_identity_sha256']
+                and summary['native_source_file_count'] == config['native_source_file_count']
+                and summary['code_sha256'] == config['code_sha256'], 'offered terminal execution identities')
+        require(summary['closed'] == actual['process_cleanup_complete'], 'offered terminal cleanup')
+        expected_inputs = {d: dict(common=p['inputs'], arms={a: v['inputs'] for a, v in p['arms'].items()}) for d, p in panels.items()}
+        require(summary['inputs'] == expected_inputs, 'offered consumed input receipts')
+        return dict(all_calls_successful=actual['all_calls_successful'], quality_gate_passed=actual['quality_gate_passed'],
+                    qualification_gate_passed=actual['qualification_gate_passed'], execution_gate_passed=actual['execution_gate_passed'],
+                    latency_improvement=actual['latency_improvement'], records=len(records))
     records = [json.loads(line) for line in (out / 'records.jsonl').read_text().splitlines()]
     for record in records:
         if record['outcome'] == 'failed':
@@ -383,6 +443,6 @@ if __name__ == '__main__':
         import json
         result = check_saved(*sys.argv[1:])
         print(json.dumps(result, sort_keys=True))
-        raise SystemExit(0 if result['all_calls_successful'] and result['quality_gate_passed'] else 1)
+        raise SystemExit(0 if result.get('execution_gate_passed', result['all_calls_successful'] and result['quality_gate_passed']) else 1)
     else:
         raise SystemExit('usage: OUTPUT CONFIG_SHA BINARY | --self-check')

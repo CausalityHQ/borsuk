@@ -61,35 +61,102 @@ def reduce_cell(records, offered_qps, epoch, terminal, arm_failed):
         logical_metadata_get_requests=sum(r['transfer_accounting']['logical_metadata_get_requests'] for r in successful))
 
 
-def measure(binary, config, item, values, offered_qps, workers=6, base_port=18080):
+def schedule_offers(call_one, offered_qps, *, workers=6, base_port=18080, deadline_ns=None):
+    """Absolute offers; a slot stays owned through callback validation and cleanup."""
     if type(workers) is not int or not 1 <= workers <= 6:
         raise ValueError('workers must be in 1..6')
     if type(base_port) is not int or not 1024 <= base_port <= 65536-workers:
         raise ValueError('worker ports must be in 1024..65535')
-    if not math.isfinite(offered_qps) or offered_qps <= 0:
+    if type(offered_qps) not in (int, float) or not math.isfinite(offered_qps) or offered_qps <= 0:
         raise ValueError('offered_qps must be finite and positive')
-    assert len(values) == 64 and [v[1]['query_ordinal'] for v in values] == list(range(64))
+    if deadline_ns is not None and (type(deadline_ns) is not int or deadline_ns < 0):
+        raise ValueError('deadline_ns must be an absolute nonnegative integer')
     offsets = scheduled_offsets_ns(offered_qps, 64/offered_qps)
     assert len(offsets) == 64
     ports = queue.Queue()
     for port in range(base_port, base_port+workers): ports.put(port)
-    failed = threading.Event()
-    records = [None]*64
-    threads = []
+    records, threads, abort_after = [None]*64, [], None
+    # Only reservation and abort publication share a lock; calls and waits never do.
+    from threading import Lock
+    admission = Lock()
     epoch = time.monotonic_ns()
 
     def call(q, row):
+        nonlocal abort_after
+        try:
+            row.update(call_one(q, row['port']))
+        except Exception as error:
+            row.update(outcome='failed', error_type=type(error).__name__, error=str(error),
+                       failure_stage='callback', cleanup_confirmed=False, abort_admissions=True)
+        finally:
+            with admission:
+                row['terminal_ns'] = time.monotonic_ns()
+                if row.get('abort_admissions', row['outcome'] in ('failed', 'invalid_ann')) or not row.get('cleanup_confirmed'):
+                    if abort_after is None:
+                        abort_after = dict(query_ordinal=q, reason='cleanup unconfirmed' if not row.get('cleanup_confirmed')
+                                           else 'fatal call failure', observed_ns=row['terminal_ns'])
+                records[q] = row
+                if row.get('cleanup_confirmed'):
+                    ports.put(row['port'])
+
+    for q, offset in enumerate(offsets):
+        scheduled = epoch+offset
+        row = dict(query_ordinal=q, offered_qps=offered_qps, scheduled_ns=scheduled,
+                   dispatched_ns=None, started_ns=None, completed_ns=None, port=None,
+                   namespace_start_attempted=False, native_process_started=False,
+                   http_attempts=0, valid_ann_requests=0)
+        if abort_after is None:
+            target = min(scheduled, deadline_ns) if deadline_ns is not None else scheduled
+            delay = (target-time.monotonic_ns())/1e9
+            if delay > 0: time.sleep(delay)
+        with admission:
+            now = time.monotonic_ns()
+            if abort_after is None and deadline_ns is not None and now >= deadline_ns:
+                abort_after = dict(query_ordinal=q, reason='admission deadline', observed_ns=now)
+            if abort_after is not None:
+                row.update(outcome='aborted', abort_after=dict(abort_after), terminal_ns=now)
+                records[q] = row
+                continue
+            row['dispatched_ns'] = now
+            try:
+                row['port'] = ports.get_nowait()
+            except queue.Empty:
+                row.update(outcome='capacity_drop', terminal_ns=now)
+                records[q] = row
+                continue
+        try:
+            thread = threading.Thread(target=call, args=(q, row))
+            thread.start()
+        except Exception as error:
+            row.update(outcome='failed', error_type=type(error).__name__, error=str(error),
+                       failure_stage='thread_start', terminal_ns=time.monotonic_ns(), cleanup_confirmed=True,
+                       abort_admissions=True)
+            with admission:
+                records[q] = row
+                ports.put(row['port'])
+                if abort_after is None:
+                    abort_after = dict(query_ordinal=q, reason='fatal call failure', observed_ns=row['terminal_ns'])
+        else:
+            threads.append(thread)
+    for thread in threads: thread.join()
+    return records, epoch, time.monotonic_ns(), abort_after
+
+
+def measure(binary, config, item, values, offered_qps, workers=6, base_port=18080):
+    assert len(values) == 64 and [v[1]['query_ordinal'] for v in values] == list(range(64))
+
+    def call_one(q, port):
+        row = dict(dataset=item['dataset'], port=port)
         body, reference, truth = values[q]
         failure_stream = io.StringIO()
         stage = 'cold_call'
         try:
             row.update(cold.cold_call(binary, config, item, body, reference, truth,
-                                     failure_stream=failure_stream, port=row['port']))
+                                     failure_stream=failure_stream, port=port))
             stage = 'ann_identity'
             assert row['http_status'] == 200 and row['http_attempts'] == row['valid_ann_requests'] == 1
             assert row['native_close']['intentional_stop'] is True
             assert row['native_header']['listen'] == f"127.0.0.1:{row['port']}"
-            assert row['scheduled_ns'] <= row['dispatched_ns'] <= row['started_ns'] <= row['completed_ns']
             assert row['cold_start_to_first_http_response_ns'] == row['completed_ns']-row['started_ns']
             assert row['returned_hits'] == cold.checked_response(row['response'], reference, truth, item['authority'])
             stage = 'transfer_accounting'
@@ -108,49 +175,15 @@ def measure(binary, config, item, values, offered_qps, workers=6, base_port=1808
                 isinstance(error, RuntimeError) and str(error) == 'namespace process closed before first connection' or
                 isinstance(error, AssertionError) and str(error) == 'first and only ANN request failed; no HTTP retry')
             row['outcome'] = 'transport_error' if transport else 'invalid_ann'
-            if not transport: failed.set()
-        finally:
-            # cold_call returns/raises only after owned process cleanup.
-            row['terminal_ns'] = time.monotonic_ns()
-            records[q] = row
-            ports.put(row['port'])
+            row['abort_admissions'] = not transport
+        row['cleanup_confirmed'] = True
+        return row
 
-    for q, offset in enumerate(offsets):
-        scheduled = epoch+offset
-        row = dict(dataset=item['dataset'], query_ordinal=q, offered_qps=offered_qps,
-                   scheduled_ns=scheduled, dispatched_ns=None, started_ns=None,
-                   completed_ns=None, port=None)
-        if not failed.is_set():
-            delay = (scheduled-time.monotonic_ns())/1e9
-            if delay > 0: time.sleep(delay)
-        if failed.is_set():
-            row.update(outcome='arm_aborted', terminal_ns=time.monotonic_ns(),
-                       http_attempts=0, valid_ann_requests=0)
-            records[q] = row
-            continue
-        row['dispatched_ns'] = time.monotonic_ns()
-        try:
-            row['port'] = ports.get_nowait()
-        except queue.Empty:
-            row.update(outcome='capacity_drop', terminal_ns=time.monotonic_ns(),
-                       http_attempts=0, valid_ann_requests=0)
-            records[q] = row
-            continue
-        # A thread is created only after owning a port; there is no executor/client queue.
-        thread = threading.Thread(target=call, args=(q, row))
-        try:
-            thread.start()
-        except Exception as error:
-            row.update(outcome='invalid_ann', error_type=type(error).__name__, error=str(error),
-                       failure_stage='thread_start', terminal_ns=time.monotonic_ns())
-            records[q] = row
-            ports.put(row['port'])
-            failed.set()
-        else:
-            threads.append(thread)
-    for thread in threads: thread.join()
-    terminal = time.monotonic_ns()
-    return records, reduce_cell(records, offered_qps, epoch, terminal, failed.is_set())
+    records, epoch, terminal, abort = schedule_offers(call_one, offered_qps, workers=workers, base_port=base_port)
+    for row in records:
+        row['dataset'] = item['dataset']
+        if row['outcome'] == 'aborted': row['outcome'] = 'arm_aborted'
+    return records, reduce_cell(records, offered_qps, epoch, terminal, abort is not None)
 
 
 def run(config, binary, output):
