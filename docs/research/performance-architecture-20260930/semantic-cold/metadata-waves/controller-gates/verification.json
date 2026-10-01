@@ -1,0 +1,28 @@
+{
+  "base_commit": "f8e58a36846cb2b1e8c77003fd47c058bfa313bc",
+  "cloud_native_mocked": true,
+  "commands": [
+    {
+      "command": "python3 -m py_compile scripts/launch_native_semantic_metadata_cold_spot.py",
+      "exit_status": 0
+    },
+    {
+      "command": "ulimit -v 262144; /usr/bin/time -v python3 -m scripts.launch_native_semantic_metadata_cold_spot --self-check",
+      "exit_status": 0
+    }
+  ],
+  "elapsed_seconds": 74.3,
+  "log": {
+    "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/controller-gates/selfcheck.log.gz",
+    "sha256": "e4e8ea70f75a4083e77b2c1b648f273c3595e8ee05fd7112351d77ae92567add",
+    "uncompressed_bytes": 901
+  },
+  "maximum_rss_bytes": 196554752,
+  "paid_launch_authority": false,
+  "qualified_head_assurance_in_control_role": true,
+  "schema": "borsuk-metadata-waves-controller-reuse-check-v1",
+  "source": {
+    "path": "scripts/launch_native_semantic_metadata_cold_spot.py",
+    "sha256": "83bd004d58801163c0dfbf09f63ecbdf4258aeef49cf71529cfce392a1d6b677"
+  }
+}

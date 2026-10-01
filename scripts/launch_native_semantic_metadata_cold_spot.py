@@ -113,7 +113,7 @@ def _assurance(base, role, config, evidence, proof):
     archive = _read(base, evidence['manifests'][role]['native_source_archive'])
     assert semantic._archive_sources(archive) == inventory, 'full qualified native archive'
     files['native-source.tar.gz'] = archive
-    if role == 'control':
+    if assurance['schema'] == 'borsuk-centroid-portable-rounding-assurance-v1':
         assert {k: assurance['binaries']['two_bit_http'][k] for k in ('bytes', 'sha256')} == runtime.BINARY_IDS[role]
         archive = _read(base, assurance['source_archive'])
         sources = semantic._archive_sources(archive)
@@ -138,6 +138,7 @@ def _assurance(base, role, config, evidence, proof):
                     assert matches == [digest], 'historical gate source binding'
             files[f'assurance/{name}.json'], files[f'assurance/{name}.log'] = receipt_body, log
     else:
+        assert assurance['schema'] == 'borsuk-semantic-metadata-native-assurance-v1', 'unsupported native assurance schema'
         assert assurance['qualified'] is True and assurance['source_sha256'] == inventory
         assert assurance['source_identity_sha256'] == identity and assurance['source_file_count'] == 399
         _zero(assurance['full_suite_status'])
@@ -717,6 +718,18 @@ def self_check():
         assert set(qualification['code_sha256']) == set(CODE) and len(CODE) == 23
         assert len(ARTIFACTS) == len(set(ARTIFACTS)) == 61
         assert set(authorities) == set(BOUND_FILES) | set(AUTHORITY_FILES)
+        # The qualified HEAD winner becomes control in the next paired arm.
+        # Authority format follows its authenticated schema, not its role name.
+        head_control = copy.deepcopy(config)
+        head_control['native_assurances']['control'] = head_control['native_assurances']['candidate']
+        head_evidence = runtime.authenticate(config)
+        head_evidence['manifests']['control'] = head_evidence['manifests']['candidate']
+        head_proof = json.loads(_read(Path('.'), config['native_arms']['candidate']['proof']))
+        with patch.object(runtime, 'SOURCE_IDS', dict(runtime.SOURCE_IDS, control=runtime.SOURCE_IDS['candidate'])), \
+                patch.object(runtime, 'BINARY_IDS', dict(runtime.BINARY_IDS, control=runtime.BINARY_IDS['candidate'])):
+            head_files = _assurance(Path('.'), 'control', head_control, head_evidence, head_proof)
+        assert head_files['control/native-assurance.json'] == _read(Path('.'), config['native_assurances']['candidate'])
+        assert 'control/assurance/full-workspace-final.log' in head_files
         for role in runtime.ROLES:
             assert qualification['role_bindings'][role]['native_source_identity_sha256'] == runtime.SOURCE_IDS[role]
         for field, value in (('authority_pending', True), ('controller_authority_pending', True),
