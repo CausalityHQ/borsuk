@@ -1,0 +1,28 @@
+{
+  "source_commit": "81fe52e898f8eb40c45aa288802b53b6cb55e164",
+  "worker_commit": "0e371e13367bc5ffc0b92c06215b285a96ec1cd7",
+  "source_sha256": {
+    "scripts/run_native_cold_first_query.py": "fbab85ff0f14ff0c9443493ac406a3ee115c1891626217c735e38f65b9e528b1",
+    "scripts/run_native_semantic_router_cold.py": "8ddd8906f3bf83bd97715f4269e443a68c6a8df6c59646540f7481599751221a",
+    "scripts/check_native_semantic_concurrency.py": "8e75090a61ae558d7a827abe44400a921c07e885b4942c99fbb22fd9711937fd"
+  },
+  "worker_receipt_sha256": "c26bb0edab95c3026c1ee0427b227f249ffa1caef083f7a5582b82323e1c7672",
+  "root_commands": [
+    {
+      "command": "python3 -m scripts.check_native_semantic_concurrency",
+      "exit_status": 0
+    },
+    {
+      "command": "python3 -m scripts.run_native_semantic_router_cold --self-check",
+      "exit_status": 0,
+      "log_sha256": "932b74f69e17a28302be7cdd61bdd962f9591fe2b9becbba6458f92265de2747"
+    }
+  ],
+  "native_source_identity_sha256": "92085e6e40ac9324ea7a4fc8daab58995dc84680a5c2391eb426dd430230e520",
+  "native_source_file_count": 399,
+  "native_rebuilt": false,
+  "native_assurance_reused": "semantic-cold/native-assurance.json",
+  "historical_paged_full_check": "PREEXISTING FAIL at395-file fixture on pristine baseline and changed tree; targeted shared-call gates PASS",
+  "native_queries_executed": 0,
+  "cloud_launches": 0
+}

@@ -1,0 +1,171 @@
+{
+  "base_revision": "b79597d7c5daf11affbac554f2557bc1d5d54386",
+  "cwd": "/home/rb/worktrees/borsuk-semantic-cold-concurrency-seam-20261001",
+  "source_revision_before_commit": "b79597d7c5daf11affbac554f2557bc1d5d54386",
+  "source_sha256": {
+    "scripts/run_native_cold_first_query.py": "fbab85ff0f14ff0c9443493ac406a3ee115c1891626217c735e38f65b9e528b1",
+    "scripts/run_native_semantic_router_cold.py": "8ddd8906f3bf83bd97715f4269e443a68c6a8df6c59646540f7481599751221a",
+    "scripts/check_native_semantic_concurrency.py": "8e75090a61ae558d7a827abe44400a921c07e885b4942c99fbb22fd9711937fd"
+  },
+  "native_source_file_count": 399,
+  "native_source_unchanged": true,
+  "commands": [
+    {
+      "name": "cold-first",
+      "argv": [
+        "python3",
+        "-m",
+        "scripts.check_native_cold_first_query"
+      ],
+      "command": "python3 -m scripts.check_native_cold_first_query",
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "duration_seconds": 0.13755098200635985,
+      "log": "/tmp/borsuk-semantic-concurrency-seam-20261001/cold-first.log",
+      "log_sha256": "cf70ddfbe5b17aa1ee91a7c07f745d02e73b5596366d0d4e7d74b4f7f6e4a3d6",
+      "classification": "PASS",
+      "verified_revision": "0e371e13367bc5ffc0b92c06215b285a96ec1cd7"
+    },
+    {
+      "name": "cold-offered",
+      "argv": [
+        "python3",
+        "-m",
+        "scripts.check_native_cold_offered"
+      ],
+      "command": "python3 -m scripts.check_native_cold_offered",
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "duration_seconds": 0.3974883939954452,
+      "log": "/tmp/borsuk-semantic-concurrency-seam-20261001/cold-offered.log",
+      "log_sha256": "91e3d00f1f91d42d2fb0994ddd8c7e92c2b2e632f1553fc60e03ebced1dfd417",
+      "classification": "PASS",
+      "verified_revision": "0e371e13367bc5ffc0b92c06215b285a96ec1cd7"
+    },
+    {
+      "name": "historical-paged",
+      "argv": [
+        "python3",
+        "-m",
+        "scripts.run_native_paged_cold_first_query_selfcheck"
+      ],
+      "command": "python3 -m scripts.run_native_paged_cold_first_query_selfcheck",
+      "exit_status": 1,
+      "expected_exit_status": 1,
+      "duration_seconds": 0.26627694600028917,
+      "log": "/tmp/borsuk-semantic-concurrency-seam-20261001/historical-paged.log",
+      "log_sha256": "ce075bb495437b0460644d9e5a7861e06f8b32a99b6997daad70db1f8e8b062e",
+      "classification": "PREEXISTING BASELINE FAIL; not current assurance PASS",
+      "verified_revision": "0e371e13367bc5ffc0b92c06215b285a96ec1cd7"
+    },
+    {
+      "name": "paged-shared-path",
+      "argv": [
+        "python3",
+        "-c",
+        "from scripts import run_native_paged_cold_first_query_selfcheck as c; c.gates_check(); c.reducer_check(); c.restoration_check(); c.cleanup_check()"
+      ],
+      "command": "python3 -c 'from scripts import run_native_paged_cold_first_query_selfcheck as c; c.gates_check(); c.reducer_check(); c.restoration_check(); c.cleanup_check()'",
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "duration_seconds": 0.16713946900563315,
+      "log": "/tmp/borsuk-semantic-concurrency-seam-20261001/paged-shared-path.log",
+      "log_sha256": "ed6aade7c6d7b5abedd97e5f4446ea82ebcb3b1814ff3d204fda2b1da369ab33",
+      "classification": "PASS",
+      "verified_revision": "0e371e13367bc5ffc0b92c06215b285a96ec1cd7"
+    },
+    {
+      "name": "semantic-serial",
+      "argv": [
+        "python3",
+        "-m",
+        "scripts.run_native_semantic_router_cold",
+        "--self-check"
+      ],
+      "command": "python3 -m scripts.run_native_semantic_router_cold --self-check",
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "duration_seconds": 4.9730658089974895,
+      "log": "/tmp/borsuk-semantic-concurrency-seam-20261001/semantic-serial.log",
+      "log_sha256": "932b74f69e17a28302be7cdd61bdd962f9591fe2b9becbba6458f92265de2747",
+      "classification": "PASS",
+      "verified_revision": "0e371e13367bc5ffc0b92c06215b285a96ec1cd7"
+    },
+    {
+      "name": "semantic-concurrency",
+      "argv": [
+        "python3",
+        "-m",
+        "scripts.check_native_semantic_concurrency"
+      ],
+      "command": "python3 -m scripts.check_native_semantic_concurrency",
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "duration_seconds": 0.12674440600676462,
+      "log": "/tmp/borsuk-semantic-concurrency-seam-20261001/semantic-concurrency.log",
+      "log_sha256": "1ce424cf3f9b9bcde416e0beb442c2aca3747f98ff85ee4dc59de121abde9eb6",
+      "classification": "PASS",
+      "verified_revision": "0e371e13367bc5ffc0b92c06215b285a96ec1cd7"
+    },
+    {
+      "name": "py-compile",
+      "argv": [
+        "python3",
+        "-m",
+        "py_compile",
+        "scripts/run_native_cold_first_query.py",
+        "scripts/run_native_semantic_router_cold.py",
+        "scripts/check_native_semantic_concurrency.py"
+      ],
+      "command": "python3 -m py_compile scripts/run_native_cold_first_query.py scripts/run_native_semantic_router_cold.py scripts/check_native_semantic_concurrency.py",
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "duration_seconds": 0.06803948699962348,
+      "log": "/tmp/borsuk-semantic-concurrency-seam-20261001/py-compile.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "classification": "PASS",
+      "verified_revision": "0e371e13367bc5ffc0b92c06215b285a96ec1cd7"
+    },
+    {
+      "name": "diff-check",
+      "argv": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "command": "git diff --check",
+      "exit_status": 0,
+      "expected_exit_status": 0,
+      "duration_seconds": 0.010259478993248194,
+      "log": "/tmp/borsuk-semantic-concurrency-seam-20261001/diff-check.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "classification": "PASS",
+      "verified_revision": "0e371e13367bc5ffc0b92c06215b285a96ec1cd7"
+    }
+  ],
+  "baseline_paged": {
+    "revision": "b79597d7c5daf11affbac554f2557bc1d5d54386",
+    "command": [
+      "python3",
+      "-m",
+      "scripts.run_native_paged_cold_first_query_selfcheck"
+    ],
+    "execution": "pristine git archive exported to temporary directory",
+    "exit_status": 1,
+    "log": "/tmp/borsuk-semantic-concurrency-baseline-paged.log",
+    "log_sha256": "54d57e5645d7cadf32922b25b5fc1d0bdb04ce44b55504e066581721a8359262",
+    "reason": "historical fixture expects395; exact base inventory399"
+  },
+  "paged_exception": "Root acknowledged baseline failure; historical identity/main fixture excluded from targeted checks; files untouched",
+  "exclusions": [
+    "No Rust/Cargo/build/native queries/cloud/S3/paid review/push",
+    "No scheduler/controller/protocol/config/assets changes"
+  ],
+  "verified_revision": "0e371e13367bc5ffc0b92c06215b285a96ec1cd7",
+  "verified_commit_matches_tested_sources": true,
+  "working_tree_clean": true,
+  "git_status": "",
+  "git_identity": "Roman Bartusiak <riomus@gmail.com> | Roman Bartusiak <riomus@gmail.com>",
+  "commit_message": "Pass semantic cold-call hooks and environment per invocation",
+  "integrated_or_pushed": false
+}
