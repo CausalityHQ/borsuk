@@ -1,0 +1,59 @@
+{
+  "binary": {
+    "bytes": 16259024,
+    "path": "/tmp/borsuk-semantic-metadata-waves-20261001/two_bit_http",
+    "sha256": "e3516453797add1f8e76daddcc97a8fb5e4c1c3467749ae9cb732934b3bc2c0e"
+  },
+  "exit_status": 0,
+  "files": {
+    "active.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt2/active.json.gz",
+      "bytes": 198,
+      "sha256": "26ed68fb29a3925bcf59afdf544090ecd8af08e4fd3e737ce83650466a772475"
+    },
+    "authorization.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt2/authorization.json.gz",
+      "bytes": 388,
+      "sha256": "7db9b2b4cd3804e56af280d8ad7df6fa9bf81f4e0854b5e8ba5fc41746f55204"
+    },
+    "http-release-receipt.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt2/http-release-receipt.json.gz",
+      "bytes": 1484,
+      "sha256": "56dfc58944522a844fcd2e4ec914f430c3618cd0df606fa83c7c8746af155448"
+    },
+    "http-release.log": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt2/http-release.log.gz",
+      "bytes": 64457,
+      "sha256": "066eb829fc7286d8e2143ba8640c7ab54deed9b5c4199f55881af94afced451b"
+    },
+    "resources.jsonl": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt2/resources.jsonl.gz",
+      "bytes": 4338,
+      "sha256": "e5b95843263dc3f6ada479c10393bc7bb7ff798165fedff8fe2ae480777e464d"
+    },
+    "runner.py": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt2/runner.py.gz",
+      "bytes": 3112,
+      "sha256": "fb5f4365f747f7a57697ad15235a9dd1274c4043a99f75042e9aa6655c8ce9de"
+    },
+    "source.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt2/source.json.gz",
+      "bytes": 47003,
+      "sha256": "9109c840fb8086fe1567ec41dba6b6b6e83d168845262b2096f87f20c35982e9"
+    },
+    "terminal-receipt.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt2/terminal-receipt.json.gz",
+      "bytes": 2097,
+      "sha256": "f842ca1c652b9553b581584d0c2302fc0ea47ecab4d6d4732d75e4cc2730d429"
+    }
+  },
+  "original_session": 99371,
+  "qualified": false,
+  "remaining_gates": [
+    "clippy",
+    "workspace-test-build",
+    "actual-full-workspace-execution"
+  ],
+  "schema": "borsuk-metadata-waves-http-build-verification-v1",
+  "source_identity_sha256": "714794a10c2d886f7a53a9926a4bb63e093cec16858676268e31833aeead2681"
+}
