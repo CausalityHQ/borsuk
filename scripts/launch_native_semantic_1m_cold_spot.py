@@ -51,7 +51,7 @@ def user_data(commit,archive_sha,archive_key,prefix,qualification):
     with patch.multiple(shared_quality,CONFIG=CONFIG,SCHEMA=SCHEMA,PREFIX=PREFIX,
         ARTIFACTS=ARTIFACTS,TERMINAL_IDENTITIES=TERMINAL_IDENTITIES):
         body=shared_quality.user_data(commit,archive_sha,archive_key,prefix,qualification)
-    body=body.replace('MemoryMax=1G','MemoryMax=8G')
+    body=body.replace('MemoryMax=1G','MemoryMax=8G -p IOAccounting=yes')
     body=body.replace('BORSUK_QUALITY_','BORSUK_COLD_')
     body=body.replace('semantic-1m-quality','semantic-1m-cold')
     body=body.replace('scripts.run_native_semantic_1m_quality','scripts.run_native_semantic_1m_cold')
@@ -396,6 +396,27 @@ def self_check():
             'memory.stat':'anon 40\nfile 60\n','io.stat':'synthetic','memory.swap.max':'0','memory.swap.peak':'0',
             'memory.events':'max 1\noom 0\noom_kill 0\n','memory.swap.events':'max 0\n',
             'cpu.max':'200000 100000','cpu.stat':'usage_usec 1','pids.max':'512','pids.current':'1','pids.events':'max 0\n'}
+        # IO observation may be absent; required resource safety counters still fail closed.
+        group=tmp/'cgroup'; group.mkdir()
+        for name in ('memory.current','memory.stat'): (group/name).write_text(counters[name])
+        captured={k:v for k,v in counters.items() if k not in ('memory.current','memory.stat','io.stat')}
+        captured['cgroup']=str(group)
+        with patch.object(worker.ids,'capture_cgroup',side_effect=lambda:dict(captured)):
+            missing=worker.capture()
+            assert missing['io.stat']=='UNMEASURED'
+            assert missing['io.stat_unavailable']==dict(type='FileNotFoundError',errno=2)
+            worker.validate_cgroup(dict(before=missing,after=missing,closed=True))
+            (group/'io.stat').write_text('259:0 rbytes=123 wbytes=456 rios=1 wios=2\n')
+            present=worker.capture()
+            assert present['io.stat']=='259:0 rbytes=123 wbytes=456 rios=1 wios=2\n'
+            assert 'io.stat_unavailable' not in present
+            for name in ('memory.current','memory.stat'):
+                (group/name).unlink()
+                rejects(worker.capture)
+                (group/name).write_text(counters[name])
+        for name in ('memory.max','cpu.stat','memory.events'):
+            unsafe=dict(missing); del unsafe[name]
+            rejects(lambda:worker.validate_cgroup(dict(before=missing,after=unsafe,closed=True)))
         # Fake only the huge raw/leaf lengths; all retained small bodies authenticate normally.
         original_artifact=worker.artifact
         def runtime_artifact(path):
@@ -575,6 +596,7 @@ def self_check():
             command=body.split('systemd-run --unit=semantic-1m-cold',1)[1].split('\nfor name',1)[0]
             shell='systemd-run() { printf "%s\\n" "$@"; }; root=/synthetic; systemd-run --unit=semantic-1m-cold'+command
             argv=subprocess.check_output(['bash','-c',shell],text=True).splitlines()
+            assert 'IOAccounting=yes' in argv
             assert '--setenv=PYTHONPATH=/synthetic/repo' in argv
             assert all('--setenv='+n+'=2' in argv for n in worker.THREAD_ENV)
             assert argv[-7:][1:3]==['-m','scripts.run_native_semantic_1m_cold'],argv

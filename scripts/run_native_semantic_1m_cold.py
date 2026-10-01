@@ -153,8 +153,13 @@ def validate_cgroup(report):
 def capture():
     snapshot = ids.capture_cgroup()
     group = Path(snapshot['cgroup'])
-    for name in ('memory.current','memory.stat','io.stat'):
+    for name in ('memory.current','memory.stat'):
         snapshot[name]=(group/name).read_text()
+    try:
+        snapshot['io.stat']=(group/'io.stat').read_text()
+    except FileNotFoundError as error:
+        snapshot['io.stat']='UNMEASURED'
+        snapshot['io.stat_unavailable']=dict(type=type(error).__name__,errno=error.errno)
     return snapshot
 
 
