@@ -238,6 +238,7 @@ def main(attempt, campaign=None):
         peer.put_if_absent(key, archive)
     else:
         assert peer.sha(s3.get_object(Bucket=peer.BUCKET, Key=key)['Body'].read()) == digest
+    del archive
     reservation = dict(schema=campaign.SCHEMA, source_commit=commit, source_archive_sha256=digest,
         wall_seconds=campaign.WALL, instance_type=instance_type, image_id=image_id, root_device_name=root_device_name, availability_zone=az, subnet_id=subnet,
         spot_price_observed_usd_per_hour=quote['SpotPrice'], spot_quote_timestamp=quote['Timestamp'].isoformat(),
