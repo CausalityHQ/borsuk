@@ -1,0 +1,15 @@
+[
+    {
+        "State": {
+            "Code": 48,
+            "Name": "terminated"
+        },
+        "Reason": {
+            "Code": "Client.InstanceInitiatedShutdown",
+            "Message": "Client.InstanceInitiatedShutdown: Instance initiated shutdown"
+        },
+        "Transition": "User initiated",
+        "LaunchTime": "2026-10-01T02:23:59+00:00",
+        "Spot": "sir-bk4fq54g"
+    }
+]

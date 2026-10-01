@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-semantic-cold-no-terminal-decision-v1",
+  "attempt": "a0002",
+  "instance_id": "i-0035715c2330c2f65",
+  "controller_exit_status": 1,
+  "observed_elapsed_seconds": 58,
+  "owned_cleanup": "terminated and waited",
+  "aws_state_reason": "Client.InstanceInitiatedShutdown",
+  "spot_eviction_verified": false,
+  "terminal_present": false,
+  "scientific_artifacts_present": false,
+  "native_execution_count": "unknown without remote logs",
+  "scientific_result": "unavailable; no quality/latency/QPS/cost claim",
+  "console_output": "empty in initial/latest repeated AWS responses",
+  "root_cause": "unknown: early worker termination with missing terminal",
+  "next_gate": "read-only bootstrap audit, recover diagnostic evidence before another paid attempt",
+  "native_source_changed": false,
+  "native_assurance_reused": true
+}

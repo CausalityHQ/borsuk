@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0035715c2330c2f65",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0035715c2330c2f65"
+    }
+  },
+  "prefix": "research/semantic-router/20261001/cold-a0002",
+  "source_commit": "6facef790036392b2f4f2c58b9c5e764545de779",
+  "source_archive_sha256": "4f0ae3503509544a594a3c94c6e10e912807df46e54fe468344dd88c5aac8f3c"
+}

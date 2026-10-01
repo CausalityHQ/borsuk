@@ -1,0 +1,21 @@
+{"instance_id": "i-0035715c2330c2f65", "nodes": {"0": {"instance_id": "i-0035715c2330c2f65"}}, "prefix": "research/semantic-router/20261001/cold-a0002", "source_commit": "6facef790036392b2f4f2c58b9c5e764545de779", "source_archive_sha256": "4f0ae3503509544a594a3c94c6e10e912807df46e54fe468344dd88c5aac8f3c"}
+{"instance_id": "i-0035715c2330c2f65", "state": "pending"}
+{"instance_id": "i-0035715c2330c2f65", "state": "running"}
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/rb/worktrees/borsuk-prod-ready-v9/scripts/launch_native_semantic_router_cold_spot.py", line 1163, in <module>
+    main(sys.argv[1])
+    ~~~~^^^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-prod-ready-v9/scripts/launch_native_semantic_router_cold_spot.py", line 505, in main
+    return shared.main(attempt, campaign=sys.modules[__name__])
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-prod-ready-v9/scripts/launch_native_metadata_ranges_cold_spot.py", line 274, in main
+    campaign.poll(ec2, s3, prefix, node['instance_id'], started)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-prod-ready-v9/scripts/launch_native_semantic_router_cold_spot.py", line 453, in poll
+    return startup.poll(ec2, s3, prefix, instance_id, started)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-prod-ready-v9/scripts/launch_native_startup_profile_spot.py", line 269, in poll
+    raise RuntimeError('worker interrupted without terminal; no replacement')
+RuntimeError: worker interrupted without terminal; no replacement
