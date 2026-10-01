@@ -12,11 +12,11 @@ The existing parity/lifecycle test covers selected conditional leaf ranges, part
 
 | Baseline | Candidate | Quality evidence | Latency/QPS/cost | Remaining gap | Next decisive test |
 |---|---|---|---|---|---|
-| Frozen graph/source/SQ8 control | Same source/SQ8 with fitted semantic router | Verified native S3 publication validation, consumed FIRST100k D768 cosine ordinals 0–63, 64 queries per arm: ReLAION R10 98.125% vs 99.6875% (−1.5625 pp); CoHere R10 95.78125% vs 98.59375% (−2.8125 pp). Actual CLI validation, not cold HTTP. R100 remains prior offline evidence: ReLAION 97.140625% vs 99.515625%; CoHere 95.84375% vs 99.234375%. | Cold panel tails, QPS and cost unmeasured. First control diagnostic only: 649.081478 ms whole cold, 178.517913 ms native query; rejected accounting gate, not a qualified baseline. | Fresh paired cold HTTP; 1M/10M/100M and both vendor comparisons remain unqualified | Correct exact startup accounting, then fresh frozen a0004 ABBA gate; preserve a0003 FAIL |
+| Frozen graph/source/SQ8 control | Same source/SQ8 with fitted semantic router | Verified a0004 cold HTTP, FIRST100k D768 cosine development ordinals0–63, k10, 128 observations/arm: ReLAION 98.125% vs99.6875% (−1.5625pp); CoHere95.78125% vs98.59375% (−2.8125pp). R100 unmeasured in this run; prior offline evidence remains separate. | Whole cold p90/p95 ms candidate vscontrol: ReLAION591.231/603.049 vs681.962/691.768; CoHere579.886/588.723 vs675.040/687.253. QPS/total cost unmeasured. | Offered-load/saturation/cost, fresh1M/10M/100M and both vendor comparisons remain unqualified. | Bounded offered-load .25–8QPS on BOTH arms, exact accounting and all-offer outcomes; protocol draft in semantic-router-offered-http-gate.md. |
 
 The library increment is bounded to 100k/D768 under the declared router admission. Flat root growth and three dependent leaf/source/SQ8 fetch stages remain explicit scale/performance limitations. No vendor win or latency improvement follows from synthetic correctness tests.
 
-## Current delivery checkpoint (2026-10-01)
+## Earlier assurance and closed failure checkpoints (2026-10-01)
 
 Transport accounting, the fixed independent review, non-reencoding BOTH-corpus
 packages, portable centroid rounding repair, current reference envelopes and
@@ -44,7 +44,7 @@ the correct 80 GiB root device and an ABI guard before data staging. The instanc
 then shut itself down after 58 seconds, with no terminal or remote logs. Owned
 termination and wait are verified. AWS reports instance-initiated shutdown,
 not a verified Spot eviction; native execution count is unknown without logs.
-No cold HTTP measurement, new native quality result or vendor win is available.
+At the a0002 checkpoint no cold HTTP measurement or new native quality result was available; no vendor win was established.
 
 The bootstrap audit verified that pre-install failures cannot be reported when
 the AWS CLI is absent. Ubuntu Noble's APT catalogue lacks `awscli`, a likely
@@ -68,16 +68,12 @@ again. The additional request and 33,980 root bytes must be charged separately
 from the unchanged three IMDS credential calls. This is an exact accounting
 correction with unchanged native code and strict request/byte/quality gates.
 
-## Next delivery steps
+## Current delivery checkpoint and next steps
 
-1. Qualify exact head/root/metadata/IMDS startup accounting and its failure tests;
-   freeze fresh a0004 namespaces and updated Python code/config identities,
-   reusing unchanged Rust assurance and completed bootstrap qualification.
-2. Fast-forward the closed failure and verified runtime repair to main, then run
-   ONE preregistered fresh Spot attempt:
-   four publications with consumed-panel parity validation, then 512 cold ABBA
-   HTTP calls; terminate and wait before closed-artifact collection.
-3. A correctness or quality failure ends the arm. A latency failure identifies
-   the measured critical path without erasing a 95% recall survivor. If both
-   datasets survive, measure offered 8 QPS separately, then fresh 1M and the
-   10M/100M scale and lifecycle-cost curve.
+Fresh a0004 completed all512/512 calls with zero drops/errors/aborts. Both candidate blocks per dataset meet>=608/640 hits; both pooled p90 and p95 improve over contemporaneous graph control. All53 terminal artifact bodies authenticated, every record independently revalidated with exact saved-summary parity, all4 publication receipts revalidated. Native512MiB admission/RSS and cleanup gates pass. Owned Spot terminated/waited; original controller exit0 collected. See semantic-cold/a0004/decision.md and independent-verification.json. Previous a0001–a0003 remain immutable FAIL.
+
+Candidate median metadata staging~273–278ms remains the largest startup interval; native query median~161–171ms. These are measured100k development values, not1M extrapolations or a matched-vendor win. Application cache off/freshprocess-client-TLS; provider S3 service cache uncontrolled and publication validation precedes measurement.
+
+1. Reuse the existing absolute-time offered scheduler, remove shared mutable per-call state races and validate unique ports before launch. One bounded read-only consultation covers this implementation seam; no architecture/reviewer restart.
+2. Freeze executable protocol/config/source identities after targeted Python checks and lifecycle/cleanup qualification. Reuse unchanged qualified native399-source binary and full assurance. Root alone launches one paired offered-load Spot gate; all offers/outcomes/cleanup and full-span throughput must be recorded.
+3. Retain valid candidate/lower-rate evidence; failures identify the actual bottleneck. Then measure saturation/cost and fresh1M root/leaf growth before10M/100M, preserving reasonable external comparison targets and honest mismatches.
