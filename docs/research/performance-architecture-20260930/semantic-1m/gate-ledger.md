@@ -27,6 +27,8 @@ The unchanged production native source subsequently completed [actual remote ful
 
 | Fresh 1M fixed-panel construction a0001 | Same authenticated FIRST1M parquet/raw authority and 64 selected IDs | FAIL before vector decoding: indexed feature-ID Arrow type rejected. All 10 bodies authenticated; peak service 1,643,614,208 B, no OOM/swap/max events; owned instance terminated. [Closed evidence](panel-tools/remote-construction/a0001/verification.json) | No new queries/truth or ANN measurement | Establish source writer schema, repair only the admission bug with regression, then freeze a distinct construction attempt |
 
+| Fresh 1M fixed-panel construction a0002 | Same source and IDs as failed a0001; only exact indexed UInt64 admission repaired | GO: 64 fixed queries, duplicate audit against indexed 1M + consumed 1000, exhaustive k100 truth + remote replay, sealed readback; all 20 bodies authenticate. [Closed evidence](panel-tools/remote-construction/a0002/verification.json) | No fresh 1M ANN recall/latency/QPS/cost measurement | Admit complete SQ8/id/order and run the frozen current-v8 Fresh1m builder/scorer |
+
 The local quality run's 9.13 s wall and 51,872 KiB process RSS are diagnostic process measurements; neither is a cold S3 latency or total cache-memory result. Historical v7 cold measurements are not matched current-v8 controls. No vendor win is claimed.
 
 ## Thresholds and scope
