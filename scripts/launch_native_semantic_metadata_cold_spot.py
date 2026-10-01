@@ -44,8 +44,8 @@ PREFIX = 'research/semantic-router/20261001/metadata-waves-'
 TOKEN_PREFIX = 'semantic-metadata-waves-cold-'
 TAG = 'borsuk-semantic-metadata-waves-cold'
 WALL = 3600
-INSTANCE_TYPE, IMAGE_ID = semantic.INSTANCE_TYPE, semantic.IMAGE_ID
-ROOT_DEVICE_NAME, SUBNET = semantic.ROOT_DEVICE_NAME, semantic.SUBNET
+INSTANCE_TYPE, IMAGE_ID = 'c7i.2xlarge', semantic.IMAGE_ID
+ROOT_DEVICE_NAME, SUBNET = semantic.ROOT_DEVICE_NAME, 'subnet-034528fbd6977848f'
 SPOT_MAX_USD_PER_HOUR = COMPUTE_CAP = .50
 MODULE = 'scripts.launch_native_semantic_metadata_cold_spot'
 CODE = tuple(sorted(set((*runtime.CODE, *semantic.EXTRAS,

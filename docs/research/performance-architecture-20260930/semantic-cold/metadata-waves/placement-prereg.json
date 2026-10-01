@@ -1,0 +1,53 @@
+{
+  "schema": "borsuk-metadata-waves-placement-prereg-v1",
+  "prior_placement": {
+    "instance_type": "m7i.2xlarge",
+    "subnet_id": "subnet-0a12dbed0ca6fac25"
+  },
+  "placement": {
+    "instance_type": "c7i.2xlarge",
+    "subnet_id": "subnet-034528fbd6977848f",
+    "availability_zone": "eu-central-1a",
+    "image_id": "ami-0b8a830d6339a9758",
+    "architecture": "x86_64",
+    "root_device": "/dev/sda1",
+    "vcpus": 8,
+    "memory_mib": 16384,
+    "spot_supported": true,
+    "public_default_subnet": true,
+    "vpc_main_default_route_active_igw": true
+  },
+  "basis": {
+    "zero_ack_capacity_failure": "metadata-waves/implementation-gates/remote-full/a0001",
+    "successful_ack_instance": "i-09bc168cd1b303b1d",
+    "successful_ack_campaign": "metadata-waves/implementation-gates/remote-full/a0002",
+    "performance_measured": false
+  },
+  "protocol": "Both control and candidate rerun fresh on ONE identical c7i instance in eu-central-1a. Previous m7i observations are historical only; no matched latency comparison across instance classes. Region, fixed panel, scorer, index, affinity, native/shared memory limits, deadlines, one S3 attempt, ABBA and quality/latency decision stay unchanged.",
+  "launch_authority_pending": true,
+  "automatic_retry_or_replacement": false,
+  "on_demand_fallback": false,
+  "root_owned_reason": "Frozen placement and matched experimental protocol are root-owned; this is a two-constant integration edit.",
+  "changed_controller_sha256": "060361403cb1fd05045510a10e7443c8a4f4c9e96ca7551c7a89ac3c305173fa",
+  "placement_lifecycle_exit_status": 0,
+  "placement_lifecycle_command": [
+    "python3",
+    "-c",
+    "from scripts.launch_native_semantic_metadata_cold_spot import _lifecycle_self_check; _lifecycle_self_check()"
+  ],
+  "placement_lifecycle_scope": "Mocked shared lifecycle after two constant changes; no native/cloud operation. Full adapter checks are immutable prior evidence.",
+  "placement_lifecycle_artifacts": {
+    "log": {
+      "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/paired-adapter-gates/placement.log.gz",
+      "bytes": 3376,
+      "sha256": "821f2e7f30685552f6d058709ff44134980889dcd072613ad7580ae00b1700b9",
+      "archived_sha256": "27d495dae69313f29c4fac78d7dad5c46385190b5915f719831f313e12dfef5a"
+    },
+    "time": {
+      "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/paired-adapter-gates/placement.time.gz",
+      "bytes": 917,
+      "sha256": "dc22ccc7214e33cef6a383c811f6a3f822fc2275bbf531ac7df831dd424b66b2",
+      "archived_sha256": "cd077fc24ed97ddaaff770fe043872b510255de26128039a8ce0ceee32480d98"
+    }
+  }
+}

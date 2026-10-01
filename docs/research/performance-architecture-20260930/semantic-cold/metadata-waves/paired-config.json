@@ -42,7 +42,7 @@
     "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
     "scripts/launch_native_metadata_ranges_cold_spot.py": "e6a74599258cd219abb16ca2c793baa30cffe00e60e85925691c86c75f5686ad",
     "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
-    "scripts/launch_native_semantic_metadata_cold_spot.py": "f603dd7ca3c4e1341891b80126016705808ba5a3314ac52e7020332e3c2a2f82",
+    "scripts/launch_native_semantic_metadata_cold_spot.py": "060361403cb1fd05045510a10e7443c8a4f4c9e96ca7551c7a89ac3c305173fa",
     "scripts/launch_native_semantic_router_cold_spot.py": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180",
     "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
     "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b",
@@ -67,7 +67,7 @@
   ],
   "ebs_s3_allowance_usd": 0.15,
   "image_id": "ami-0b8a830d6339a9758",
-  "instance_type": "m7i.2xlarge",
+  "instance_type": "c7i.2xlarge",
   "items": [
     {
       "arms": {
@@ -389,7 +389,7 @@
   "s3_service_cache": "uncontrolled",
   "schema": "borsuk-native-semantic-metadata-waves-cold-v1",
   "spot_max_usd_per_hour": 0.5,
-  "subnet_id": "subnet-0a12dbed0ca6fac25",
+  "subnet_id": "subnet-034528fbd6977848f",
   "transport": "loopback plain HTTP",
   "worker_limit_seconds": 3000
 }

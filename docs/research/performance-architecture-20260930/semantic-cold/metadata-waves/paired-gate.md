@@ -8,7 +8,7 @@ Control is the fully qualified metadata-HEAD binary `82c02967f3b2de8c7bf1f2dcfc0
 
 Both roles use identical immutable semantic generations, request/truth/reference bodies and namespace heads from the preceding paired campaign. Each dataset is FIRST100k, D768, cosine, k10, consumed development ordinals0–63. ReLAION then CoHere; serial ABBA control/candidate/candidate/control, 64 queries per block: 512 fresh-process calls. This panel evaluates the scheduling intervention; it is not a fresh quality generalization panel.
 
-Keep the existing declared region, affinity, 512 MiB native memory cap, 8 GiB shared/no-swap profile cap, deadlines, credential/TLS setup, application cache off and one S3 attempt. Service-side S3 cache is uncontrolled. Whole cold time includes process startup, credentials/connect, metadata admission/fetch/decode, query and cleanup as declared by the existing runner. Do not call serial reciprocal latency sustainable QPS.
+Use c7i.2xlarge Spot in eu-central-1a for BOTH fresh arms, following the successful assurance placement after the m7i/eu-central-1c zero-ACK capacity failure. Historical m7i latency is reference only. Keep the existing declared region, affinity, 512 MiB native memory cap, 8 GiB shared/no-swap profile cap, deadlines, credential/TLS setup, application cache off and one S3 attempt. Service-side S3 cache is uncontrolled. Whole cold time includes process startup, credentials/connect, metadata admission/fetch/decode, query and cleanup as declared by the existing runner. Do not call serial reciprocal latency sustainable QPS.
 
 ## Fixed decision
 
