@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-semantic-cold-delayed-console-v1",
+  "instance_id": "i-0035715c2330c2f65",
+  "response_bytes": 74262,
+  "response_sha256": "087e778c109b8b8d7fe455e01f9b5920b57afb5f3146f51eaf2ec538afcea080",
+  "console_bytes": 65535,
+  "console_limit_or_truncation_possible": true,
+  "diagnostic_lines": [
+    "[   12.184762] cloud-init[1180]: Running timer as unit: native-semantic-router-cold-stop.timer",
+    "[   12.186251] cloud-init[1180]: Will run service as unit: native-semantic-router-cold-stop.service",
+    "ip-172-31-7-48 login: [   19.882840] cloud-init[1180]: 2026-10-01 02:24:23,751 - cc_scripts_user.py[WARNING]: Failed to run module scripts_user (scripts in /var/lib/cloud/instance/scripts)",
+    "[   19.882963] cloud-init[1180]: 2026-10-01 02:24:23,751 - log_util.py[WARNING]: Running module scripts_user (<module 'cloudinit.config.cc_scripts_user' from '/usr/lib/python3/dist-packages/cloudinit/config/cc_scripts_user.py'>) failed",
+    "Received signal 15 resulting in exit. Cause:",
+    "[   19.995475] cloud-init[1180]: Received signal 15 resulting in exit. Cause:",
+    "[   27.676095] reboot: Power down"
+  ],
+  "verified": "cloud-init ran campaign timer then user script failed at uptime19.88s and shutdown followed; no initiating command visible",
+  "native_execution_count": "unknown without run.log; no scientific artifacts",
+  "new_scientific_measurements": false
+}
