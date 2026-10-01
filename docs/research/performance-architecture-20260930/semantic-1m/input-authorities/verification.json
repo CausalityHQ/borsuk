@@ -1,0 +1,63 @@
+{
+  "coefficient_f32_bits_compared": true,
+  "consultation_id": "dd17d718b51a4e86",
+  "fresh1m_ann_quality_measured": false,
+  "independent_metadata_body_hashes_verified": true,
+  "local_store_etag_policy": "diagnostic LFS uses actual local HEAD ETag; cold S3 publication uses actual S3 HEAD identity; never transplant archived S3 ETag into LocalFileSystem",
+  "metadata": {
+    "binding.json": {
+      "archived_path": "docs/research/native-union-20260928/walk-source-1m/a0002/screen/relaion/binding.json.gz",
+      "bytes": 171360,
+      "key": "research/native-union/20260928/walk-source-1m-a0002/artifacts/screen/relaion/binding.json",
+      "sha256": "4a5c11834b00badc1ea17383ee2f3287abbd144be7f26a43117f5609d7d3ea43"
+    },
+    "builder.json": {
+      "archived_path": "docs/research/native-union-20260928/walk-source-1m/a0002/screen/relaion/builder.json.gz",
+      "bytes": 41025,
+      "key": "research/native-union/20260928/walk-source-1m-a0002/artifacts/screen/relaion/builder.json",
+      "sha256": "301891ffee291c7e9036ebcc1a26b72b3091ba1ec487d05d90a5e760799af7b3"
+    },
+    "order.u64": {
+      "archived_path": "docs/research/native-union-20260928/walk-source-1m/a0002/screen/relaion/order.u64.gz",
+      "bytes": 8000000,
+      "key": "research/native-union/20260928/walk-source-1m-a0002/artifacts/screen/relaion/order.u64",
+      "sha256": "1df0b8b13d1a11b524d6da7573a0a3e105aa39ad5d4449700856644ee5219d7d"
+    },
+    "sq8.log": {
+      "archived_path": "docs/research/native-union-20260928/walk-source-1m/a0002/screen/relaion/sq8.log.gz",
+      "bytes": 32867,
+      "key": "research/native-union/20260928/walk-source-1m-a0002/artifacts/screen/relaion/sq8.log",
+      "sha256": "011e09473ce6cd49a6ec009a1338815e61f29782ad2fcb9a43cc5a63ac5024be"
+    }
+  },
+  "order_complete_bijection_verified": true,
+  "raw": {
+    "bytes": 3072000000,
+    "materialization": "existing construction helper authenticated source.parquet extraction",
+    "sha256": "a3eac4dedae5006843ea2ad243ec590440fe5b983ca8cd969dbc92b3e3406c33"
+  },
+  "repackage_supported": false,
+  "required_before_build": "authenticate full SQ8 body and require every packed record id[p] equals order[p] remotely; freeze current serving key/observed ETag under declared protocol",
+  "required_builder_profile": "fresh1m",
+  "schema": "borsuk-semantic-fresh1m-input-authorities-v1",
+  "sq8": {
+    "archived_etag": "\"ba9ecc78626580852ef419d2190cb655\"",
+    "bytes": 780000000,
+    "fresh_head": {
+      "bytes": 780000000,
+      "etag": "\"ba9ecc78626580852ef419d2190cb655\"",
+      "metadata_sha256": "726535191e129c520cdf69e692fddc5777c0495f8bdfa10cb4378ba6934276e0"
+    },
+    "key": "research/native-union/20260928/walk-source-1m-a0002/data/relaion/objects/726535191e129c520cdf69e692fddc5777c0495f8bdfa10cb4378ba6934276e0",
+    "sha256": "726535191e129c520cdf69e692fddc5777c0495f8bdfa10cb4378ba6934276e0"
+  },
+  "sq8_body_freshly_downloaded_or_id_mapping_checked": false,
+  "terminal": {
+    "original_exit_status": 1,
+    "path": "docs/research/native-union-20260928/walk-source-1m/a0002/aws-terminal.json",
+    "sha256": "ce455c3c717d223118462a78010d9296aac7152a51ea4e3e2a36854bde8bb1de",
+    "source_archive_sha256": "91ef85db170dcb7a6966435f3ae60233b5a9ff09117c1c31c0ffaa2159d73c4f",
+    "source_base_commit": "eb6fe27556b46436d972e75236debd002896ea5e",
+    "source_dirty": true
+  }
+}
