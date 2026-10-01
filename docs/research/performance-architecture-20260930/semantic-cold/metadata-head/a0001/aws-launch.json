@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-00154b051034ed025",
+  "nodes": {
+    "0": {
+      "instance_id": "i-00154b051034ed025"
+    }
+  },
+  "prefix": "research/semantic-router/20261001/metadata-head-a0001",
+  "source_commit": "3d897cb0f3d2959637d741757f300670594845c7",
+  "source_archive_sha256": "531a12f0d5ece9f574197a0e5861d41a404ec8b4608bfeb04f476cbd209f4840"
+}

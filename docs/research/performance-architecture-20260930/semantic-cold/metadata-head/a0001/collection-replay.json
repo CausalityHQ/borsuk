@@ -1,0 +1,1 @@
+{"result":{"all_calls_successful":true,"execution_gate_passed":true,"process_cleanup_complete":true,"quality_gate_passed":true,"records":512,"resource_gate":{"oom_event_increments":[0,0,0],"passed":true,"shared_peak_bytes":103010304,"shared_swap_peak_bytes":0}},"terminal_sha256":"d287f1b5bbb2904e71dfa7a75eff49d14448b04b4ff7ed5ac00d671b68968e22"}

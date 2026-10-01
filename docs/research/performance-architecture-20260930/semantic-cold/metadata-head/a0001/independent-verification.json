@@ -1,0 +1,77 @@
+{
+  "GET_and_payload_parity": true,
+  "GET_and_payload_parity_scope": "metadata plus authenticated router/source/SQ8 payload and query reference; excludes credentials and unknown wire bytes",
+  "authenticated_artifacts": 61,
+  "closed_replayed_calls": 512,
+  "datasets": {
+    "CoHere": {
+      "candidate_RSS_peak_bytes": 37363712,
+      "candidate_cold_ms": {
+        "p50": 509.572142,
+        "p90": 542.6703399,
+        "p95": 550.6685612499999,
+        "p99": 579.8078440500001
+      },
+      "control_RSS_peak_bytes": 36560896,
+      "control_cold_ms": {
+        "p50": 560.7758435000001,
+        "p90": 596.3483722999999,
+        "p95": 616.6066846499999,
+        "p99": 706.22251314
+      },
+      "gate_passed": true,
+      "p90_delta_ms": -53.67803239999989,
+      "p90_improvement_percent": 9.001119964991966,
+      "per_arm_observations": 128,
+      "quality_delta_pp": 0,
+      "recall_at_10": 0.9578125,
+      "unique_queries": 64
+    },
+    "ReLAION": {
+      "candidate_RSS_peak_bytes": 36999168,
+      "candidate_cold_ms": {
+        "p50": 517.2425205,
+        "p90": 560.6812778999999,
+        "p95": 578.27269495,
+        "p99": 684.58815279
+      },
+      "control_RSS_peak_bytes": 37023744,
+      "control_cold_ms": {
+        "p50": 561.1551455,
+        "p90": 600.2710882,
+        "p95": 616.6287938499999,
+        "p99": 784.3945509200006
+      },
+      "gate_passed": true,
+      "p90_delta_ms": -39.58981030000007,
+      "p90_improvement_percent": 6.595321860114211,
+      "per_arm_observations": 128,
+      "quality_delta_pp": 0,
+      "recall_at_10": 0.98125,
+      "unique_queries": 64
+    }
+  },
+  "decision": "GO",
+  "instance_id": "i-00154b051034ed025",
+  "matched_vendor_measured": false,
+  "metadata_HEADs": {
+    "candidate": 3,
+    "control": 8
+  },
+  "original_controller_exit_status": 0,
+  "request_measurement_scope": "submitted native HttpService calls; confirmed wire/S3 requests UNKNOWN",
+  "resource_gate": {
+    "oom_event_increments": [
+      0,
+      0,
+      0
+    ],
+    "passed": true,
+    "shared_peak_bytes": 103010304,
+    "shared_swap_peak_bytes": 0
+  },
+  "schema": "borsuk-semantic-metadata-head-decision-v1",
+  "state": "terminated",
+  "sustainable_QPS": "UNKNOWN",
+  "total_billed_lifecycle_cost": "UNKNOWN"
+}
