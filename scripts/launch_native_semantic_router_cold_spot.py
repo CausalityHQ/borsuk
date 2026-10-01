@@ -16,6 +16,8 @@ import importlib
 import json
 import os
 from pathlib import Path
+import platform
+import re
 import subprocess
 import sys
 import tarfile
@@ -44,7 +46,10 @@ TOKEN_PREFIX = 'semantic-router-cold-'
 TAG = 'borsuk-semantic-router-cold'
 WALL = 3600
 INSTANCE_TYPE = 'm7i.2xlarge'
-IMAGE_ID = 'ami-06121aa3085b6f918'
+IMAGE_ID = 'ami-0b8a830d6339a9758'
+ROOT_DEVICE_NAME = '/dev/sda1'
+RUNTIME_OS = dict(ID='ubuntu', VERSION_ID='24.04')
+RUNTIME_GLIBC = '2.39'
 SUBNET = peer.SUBNET
 SPOT_MAX_USD_PER_HOUR = COMPUTE_CAP = .50
 BINARY_SHA = 'c00b766f65f8f0ae0adb5fcca786cb33c0daf046ff4b8f9a8bbcab39e1263533'
@@ -65,7 +70,7 @@ PUBLICATION_FILES = ('config.json', 'asset-manifest.json', 'publication-receipt.
                      *(f'{dataset}/{arm}/{name}' for dataset in ('ReLAION', 'CoHere')
                        for arm in ('control', 'candidate')
                        for name in ('native.jsonl', 'stdout.log', 'stderr.log', 'resources.txt', 'head.json')))
-ARTIFACTS = ('source-qualification.json', 'binaries/two_bit_http', 'binaries/two_bit_plan_demo', 'cpu.txt', 'run-closed.log',
+ARTIFACTS = ('source-qualification.json', 'runtime-abi.json', 'binaries/two_bit_http', 'binaries/two_bit_plan_demo', 'cpu.txt', 'run-closed.log',
              'profile.log', 'profile-resources.txt', 'profile-cgroup.json',
              'screen/records.jsonl', 'screen/summary.json', 'screen/config.json', 'screen/qualification.json',
              *AUTHORITY_FILES, *('publication/' + name for name in PUBLICATION_FILES))
@@ -73,7 +78,7 @@ TERMINAL_IDENTITIES = ('config_sha256', 'qualification_sha256', 'binary_sha256',
     'native_source_commit', 'source_identity_sha256', 'source_file_count', 'artifact_roster_sha256',
     'native_source_archive_sha256', 'native_source_manifest_sha256', 'native_assurance_sha256',
     'publisher_sha256', 'publisher_bytes', 'publisher_qualification_sha256', 'asset_manifest_sha256',
-    'publication_assets', 'asset_preparation_sha256')
+    'publication_assets', 'asset_preparation_sha256', 'runtime_os', 'runtime_glibc', 'required_glibc')
 
 
 def _worker():
@@ -120,6 +125,68 @@ def _archive_sources(body):
         assert len(members) == len({m.name for m in members}), 'duplicate source archive entries'
         assert all(not Path(m.name).is_absolute() and '..' not in Path(m.name).parts for m in members)
         return {m.name: peer.sha(archive.extractfile(m).read()) for m in members}
+
+
+def _version(value):
+    assert re.fullmatch(r'[0-9]+(?:\.[0-9]+)+', value), 'invalid GLIBC version'
+    return tuple(map(int, value.split('.')))
+
+
+def _required_glibc(path):
+    # Only version needs, never exported definitions or a binary invocation.
+    result = subprocess.run(['readelf', '--version-info', '--wide', str(path)],
+        capture_output=True, text=True, check=True, timeout=15, env=dict(os.environ, LC_ALL='C'))
+    needs = result.stdout.split('Version needs section', 1)
+    assert len(needs) == 2, 'missing ELF version needs'
+    versions = re.findall(r'\bName: GLIBC_(\S+)', needs[1])
+    assert versions, 'missing GLIBC requirements'
+    return max(versions, key=_version)
+
+
+def _validate_runtime_abi(qualification, report):
+    assert report['schema'] == 'borsuk-native-semantic-runtime-abi-v1' and report['qualified'] is True
+    assert report['os_release'] == qualification['runtime_os'] == RUNTIME_OS, 'runtime OS'
+    assert report['architecture'] == 'x86_64', 'runtime architecture'
+    assert report['libc'] == 'glibc' and qualification['runtime_glibc'] == RUNTIME_GLIBC, 'runtime libc'
+    assert report['required_glibc'] == qualification['required_glibc'], 'runtime binary GLIBC requirements'
+    assert report['binaries'] == {
+        'two_bit_http': dict(bytes=qualification['binary_bytes'], sha256=qualification['binary_sha256']),
+        'two_bit_plan_demo': dict(bytes=qualification['publisher_bytes'], sha256=qualification['publisher_sha256'])}, 'runtime binary identities'
+    assert set(report['ldd']) == set(report['binaries']) == set(report['required_glibc'])
+    for name, result in report['ldd'].items():
+        assert _version(report['required_glibc'][name]) <= _version(report['glibc_version']), 'incompatible GLIBC'
+        assert type(result['returncode']) is int and result['returncode'] == 0, 'ldd failed'
+        output = (result['stdout'] + result['stderr']).lower()
+        assert output.strip() and not any(s in output for s in ('not found', 'undefined symbol', 'unresolved')), 'unresolved runtime dependency'
+
+
+def _runtime_abi(out):
+    out = Path(out)
+    qualification = json.loads((out/'source-qualification.json').read_bytes())
+    report = dict(schema='borsuk-native-semantic-runtime-abi-v1', qualified=False)
+    try:
+        release = platform.freedesktop_os_release()
+        libc, version = os.confstr('CS_GNU_LIBC_VERSION').split()
+        report.update(os_release={k: release[k] for k in RUNTIME_OS}, architecture=platform.machine(),
+                      libc=libc, glibc_version=version, binaries={}, required_glibc={}, ldd={})
+        for name in ('two_bit_http', 'two_bit_plan_demo'):
+            path = out/'binaries'/name
+            report['binaries'][name] = _identity(path.read_bytes())
+            assert report['binaries'][name] == dict(
+                bytes=qualification['binary_bytes' if name == 'two_bit_http' else 'publisher_bytes'],
+                sha256=qualification['binary_sha256' if name == 'two_bit_http' else 'publisher_sha256']), 'ABI binary authentication'
+            report['required_glibc'][name] = _required_glibc(path)
+            result = subprocess.run(['ldd', '-r', str(path)], capture_output=True, text=True,
+                                    timeout=15, env=dict(os.environ, LC_ALL='C'))
+            report['ldd'][name] = dict(returncode=result.returncode, stdout=result.stdout, stderr=result.stderr)
+        report['qualified'] = True
+        _validate_runtime_abi(qualification, report)
+    except BaseException:
+        report['qualified'] = False
+        raise
+    finally:
+        (out/'runtime-abi.json').write_text(json.dumps(report, sort_keys=True, separators=(',', ':')) + '\n')
+    return report
 
 
 def _qualify(base, binary_override=None, publisher_override=None):
@@ -219,6 +286,10 @@ def _qualify(base, binary_override=None, publisher_override=None):
     assert pub['assets'] == {k: declared['assets'][k] for k in ('key', 'bytes', 'sha256')}
     assert pub['asset_manifest'] == declared['manifest'], 'declared asset manifest identity'
     assert set(files) == set(AUTHORITY_FILES)
+    required_glibc = dict(two_bit_http=_required_glibc(
+        Path(binary_override) if binary_override is not None else base/binary_pointer['path']),
+        two_bit_plan_demo=_required_glibc(publisher))
+    assert all(_version(v) <= _version(RUNTIME_GLIBC) for v in required_glibc.values()), 'target Ubuntu GLIBC too old'
     qualification = dict(config_path=str(CONFIG), config_sha256=peer.sha(body), campaign_schema=SCHEMA,
         native_source_commit=manifest['native_source_commit'], source_identity_sha256=identity,
         source_file_count=399, code_sha256=code, binary_sha256=BINARY_SHA, binary_bytes=BINARY_BYTES,
@@ -231,6 +302,7 @@ def _qualify(base, binary_override=None, publisher_override=None):
         publisher_bytes=pub['publisher']['bytes'], publisher_qualification_sha256=pub['qualification']['sha256'],
         asset_manifest_sha256=pub['asset_manifest']['sha256'], publication_assets=pub['assets'],
         asset_preparation_sha256=peer.sha(declared_body),
+        runtime_os=RUNTIME_OS, runtime_glibc=RUNTIME_GLIBC, required_glibc=required_glibc,
         native_binary=binary_pointer, authority_artifacts={n: _identity(b) for n, b in files.items()},
         artifact_roster_sha256=peer.sha(json.dumps(ARTIFACTS, separators=(',', ':')).encode()))
     return qualification, files
@@ -251,6 +323,7 @@ def _stage(repo, out):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(body)
     (out/'binaries/two_bit_http').chmod(0o755)
+    _runtime_abi(out)
 
 
 def _published(config, digest, bodies):
@@ -306,6 +379,7 @@ def _published(config, digest, bodies):
 def _publish(repo, out):
     repo, out = Path(repo).resolve(), Path(out).resolve()
     qualification = json.loads((out/'source-qualification.json').read_bytes())
+    _validate_runtime_abi(qualification, json.loads((out/'runtime-abi.json').read_bytes()))
     body = (repo/CONFIG).read_bytes()
     assert peer.sha(body) == qualification['config_sha256']
     config = json.loads(body)
@@ -325,6 +399,13 @@ def user_data(commit, archive_sha, archive_key, prefix, qualification):
     with patch.multiple(runner, WALL_SECONDS=WALL, SCHEMA=SCHEMA, ARTIFACTS=ARTIFACTS):
         body = runner.user_data(commit, archive_sha, archive_key, prefix)
     body = body.replace('v174-relaid-bind-compile', 'native-semantic-router-cold')
+    bootstrap = 'exec >run.log 2>&1\naws s3 cp '
+    assert body.count(bootstrap) == 1, 'bootstrap early AWS hook changed'
+    body = body.replace(bootstrap, '''exec >run.log 2>&1
+export DEBIAN_FRONTEND=noninteractive
+timeout --kill-after=30 180 apt-get -qq -o DPkg::Lock::Timeout=120 update
+timeout --kill-after=30 300 apt-get -qq -y -o DPkg::Lock::Timeout=120 install awscli python3-boto3 python3.12 time tar gzip util-linux binutils
+aws s3 cp ''')
     # The bootstrap creates the trap and authenticates the campaign archive.
     start, end = body.index('phase=install\n'), body.index('phase=complete\n')
     proof = json.dumps(qualification, sort_keys=True, separators=(',', ':')).encode()
@@ -333,9 +414,7 @@ def user_data(commit, archive_sha, archive_key, prefix, qualification):
     binary_key = quote('s3://' + peer.BUCKET + '/' + qualification['native_binary']['key'])
     publisher_key = quote('s3://' + peer.BUCKET + '/' + qualification['native_publisher']['key'])
     command = f'''phase=install
-dnf install -y -q tar gzip time util-linux python3.12
-python3.12 -m ensurepip
-python3.12 -m pip install -q boto3
+python3.12 -c 'import boto3'
 python3.12 -c 'import base64,gzip; from pathlib import Path; Path("source-qualification.json").write_bytes(gzip.decompress(base64.b64decode("{encoded}")))'
 phase=binary-qualification
 lscpu >cpu.txt
@@ -362,7 +441,8 @@ systemd-run --unit=native-semantic-router-cold --wait --pipe -p MemoryMax=8G -p 
     marker = "'source_archive_sha256':'" + archive_sha + "',"
     terminal_fields = {key: qualification[key] for key in TERMINAL_IDENTITIES}
     assert body.count(marker) == 1, 'bootstrap terminal identity hook changed'
-    body = body.replace(marker, marker + repr(terminal_fields)[1:-1] + ',')
+    body = body.replace(marker, marker + repr(terminal_fields)[1:-1] +
+                        ", 'runtime_abi_sha256':artifacts.get('runtime-abi.json',{}).get('sha256'),")
     subprocess.run(['bash', '-n'], input=body, text=True, check=True)
     assert len(body.encode()) < 16384
     return body
@@ -396,9 +476,12 @@ def collect(s3, prefix, out, instance_id, commit, digest):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(gzip.compress(data, mtime=0))
         files[name] = data
+    assert terminal['runtime_abi_sha256'] == (peer.sha(files['runtime-abi.json'])
+        if 'runtime-abi.json' in files else None), 'terminal ABI report identity'
     if terminal['status'] == terminal['phase'] == 'complete' and terminal['exit_code'] == 0:
         assert set(files) == set(ARTIFACTS), 'complete artifact roster'
         assert json.loads(files['source-qualification.json']) == qualification
+        _validate_runtime_abi(qualification, json.loads(files['runtime-abi.json']))
         for name, identity in qualification['authority_artifacts'].items():
             assert _identity(files[name]) == identity, name
         assert _identity(files['binaries/two_bit_http']) == dict(bytes=qualification['binary_bytes'], sha256=qualification['binary_sha256'])
@@ -474,6 +557,7 @@ def lifecycle_self_check():
             assert args['InstanceMarketOptions'] == {'MarketType': 'spot', 'SpotOptions': {
                 'InstanceInterruptionBehavior': 'terminate', 'SpotInstanceType': 'one-time', 'MaxPrice': '0.50'}}
             assert args['BlockDeviceMappings'][0]['Ebs'] == dict(DeleteOnTermination=True, Encrypted=True, VolumeSize=80, VolumeType='gp3')
+            assert args['BlockDeviceMappings'][0]['DeviceName'] == ROOT_DEVICE_NAME == '/dev/sda1'
             assert args['NetworkInterfaces'][0]['AssociatePublicIpAddress'] is True
             assert args['IamInstanceProfile'] == {'Arn': peer.PROFILE_ARN}
             assert args['ClientToken'].startswith(TOKEN_PREFIX) and len(args['ClientToken']) <= 64
@@ -483,6 +567,7 @@ def lifecycle_self_check():
                 assert json.loads((out/name).read_bytes())['nodes'] == {str(i): dict(instance_id=n) for i, n in enumerate(ids)}
             reservation = json.loads((out/'aws-reservation.json').read_bytes())
             assert reservation['instance_type'] == INSTANCE_TYPE and reservation['image_id'] == IMAGE_ID
+            assert reservation['root_device_name'] == ROOT_DEVICE_NAME == '/dev/sda1'
             assert reservation['compute_cap_usd'] == .50 and reservation['wall_seconds'] == WALL
             assert reservation['ebs_s3_allowance_usd'] == .15 and reservation['total_cost_measured'] is False
     assert len(tokens) == len(set(tokens))
@@ -578,10 +663,20 @@ def collection_self_check():
             publisher_qualification_sha256=peer.sha(files['publisher-proof.json']),
             asset_manifest_sha256=peer.sha(manifest_body), publication_assets=config['publication']['assets'],
             asset_preparation_sha256=ASSET_PREPARATION_SHA,
+            runtime_os=RUNTIME_OS, runtime_glibc=RUNTIME_GLIBC,
+            required_glibc=dict(two_bit_http='2.38', two_bit_plan_demo='2.38'),
             authority_artifacts={n: _identity(files[n]) for n in AUTHORITY_FILES})
         files['source-qualification.json'] = json.dumps(qualification).encode()
+        report = dict(schema='borsuk-native-semantic-runtime-abi-v1', qualified=True,
+            os_release=RUNTIME_OS, architecture='x86_64', libc='glibc', glibc_version=RUNTIME_GLIBC,
+            required_glibc=qualification['required_glibc'],
+            binaries={n: _identity(files['binaries/'+n]) for n in qualification['required_glibc']},
+            ldd={n: dict(returncode=0, stdout='libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6\n', stderr='')
+                 for n in qualification['required_glibc']})
+        files['runtime-abi.json'] = json.dumps(report).encode()
         terminal = dict(schema=SCHEMA, instance_id='i-owned', source_commit='0'*40,
             source_archive_sha256='1'*64, status='complete', phase='complete', exit_code=0,
+            runtime_abi_sha256=peer.sha(files['runtime-abi.json']),
             artifacts={n: _identity(b) for n, b in files.items()}, **{k:v for k,v in qualification.items() if k != 'authority_artifacts'})
         (out/'aws-reservation.json').write_text(json.dumps(dict(source_commit='0'*40,
             source_archive_sha256='1'*64, qualification=qualification)))
@@ -593,7 +688,8 @@ def collection_self_check():
         s3 = Mock()
         s3.get_object.side_effect = fetched
         for change in (None, 'source', 'config', 'proof', 'binary', 'roster', 'sha', 'bytes', 'unknown',
-                       'publisher', 'publication-roster', 'receipt', 'head', 'publication-config', 'closeout'):
+                       'publisher', 'publication-roster', 'receipt', 'head', 'publication-config', 'closeout',
+                       'abi-missing', 'abi-sha', 'abi-os', 'abi-libc', 'abi-binary', 'abi-required', 'abi-unresolved'):
             current = json.loads(json.dumps(terminal))
             original_files = dict(files)
             if change in ('source', 'config', 'proof', 'binary', 'publisher'):
@@ -604,6 +700,21 @@ def collection_self_check():
                 (out/'aws-closeout.json').write_text(json.dumps(dict(state='running', nodes={'0': dict(instance_id='i-owned')})))
             elif change == 'publication-roster':
                 del current['artifacts']['publication/CoHere/candidate/head.json']
+            elif change == 'abi-missing':
+                del current['artifacts']['runtime-abi.json']
+                current['runtime_abi_sha256'] = None
+            elif change == 'abi-sha':
+                current['runtime_abi_sha256'] = 'f'*64
+            elif change and change.startswith('abi-'):
+                bad = json.loads(files['runtime-abi.json'])
+                if change == 'abi-os': bad['os_release']['ID'] = 'amzn'
+                elif change == 'abi-libc': bad['glibc_version'] = '2.34'
+                elif change == 'abi-binary': bad['binaries']['two_bit_plan_demo']['sha256'] = 'f'*64
+                elif change == 'abi-required': bad['required_glibc']['two_bit_http'] = '2.34'
+                else: bad['ldd']['two_bit_plan_demo']['stdout'] = 'libgcc_s.so.1 => not found'
+                files['runtime-abi.json'] = json.dumps(bad).encode()
+                current['artifacts']['runtime-abi.json'] = _identity(files['runtime-abi.json'])
+                current['runtime_abi_sha256'] = peer.sha(files['runtime-abi.json'])
             elif change in ('receipt', 'head', 'publication-config'):
                 name = {'receipt': 'publication/publication-receipt.json',
                         'head': 'publication/ReLAION/control/head.json',
@@ -629,6 +740,11 @@ def collection_self_check():
                 assert change is None and result == terminal, 'changed terminal accepted'
             files = original_files
             (out/'aws-closeout.json').write_text(json.dumps(dict(state='terminated', nodes={'0': dict(instance_id='i-owned')})))
+        # A failed ABI gate still closes and authenticates its partial evidence.
+        files = {'runtime-abi.json': json.dumps(dict(report, qualified=False)).encode()}
+        current = dict(terminal, status='failed', phase='binary-qualification', exit_code=1,
+            artifacts={n: _identity(b) for n, b in files.items()}, runtime_abi_sha256=peer.sha(files['runtime-abi.json']))
+        assert collect(s3, 'synthetic', out, 'i-owned', '0'*40, '1'*64) == current
 
 
 def self_check():
@@ -693,6 +809,25 @@ def self_check():
             binary_sha256=binary_sha, source_file_count=399, source_identity_sha256=source_sha,
             compiled_native_sha256=dict(list(identities.items())[:2]))
         runtime = SimpleNamespace(CODE=('scripts/synthetic-runtime.py',), validate_config=lambda _: None)
+        real_run = subprocess.run
+        abi_failure = None
+        def abi_command(args, **kwargs):
+            if args[0] not in ('readelf', 'ldd'):
+                return real_run(args, **kwargs)
+            assert Path(args[-1]).read_bytes() in (binary, publisher), 'only synthetic ELF inspections'
+            assert kwargs['timeout'] == 15 and kwargs['env']['LC_ALL'] == 'C'
+            if abi_failure == 'missing-tool': raise FileNotFoundError('synthetic ABI tool')
+            if args[0] == 'readelf':
+                assert kwargs['check'] is True
+                if abi_failure == 'readelf-exit': raise subprocess.CalledProcessError(1, args)
+                version = '2.40' if abi_failure == 'required-newer' else '2.38'
+                return SimpleNamespace(stdout=('Version needs section .gnu.version_r\nName: GLIBC_'+version+
+                    '\nName: GLIBC_2.9\n') if abi_failure != 'missing-needs' else '', stderr='', returncode=0)
+            assert args[1] == '-r'
+            output = {'notfound': 'libgcc_s.so.1 => not found', 'unresolved': 'unresolved symbol: synthetic',
+                      'undefined': 'undefined symbol: synthetic'}.get(abi_failure, 'libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6\n')
+            return SimpleNamespace(stdout=output, stderr='version GLIBC_2.38 not found' if abi_failure == 'stderr' else '',
+                                   returncode=1 if abi_failure == 'ldd-exit' else 0)
         for name in (*runtime.CODE, *EXTRAS):
             put(name, b'# synthetic controller/runtime closure\n')
         config = dict(schema='borsuk-native-semantic-router-cold-v1', architecture='x86_64',
@@ -716,6 +851,10 @@ def self_check():
         freeze(config)
         with patch.object(module, '_worker', return_value=runtime), \
                 patch.multiple(module, BINARY_SHA=binary_sha, BINARY_BYTES=len(binary)), ExitStack() as overrides:
+            overrides.enter_context(patch.object(subprocess, 'run', side_effect=abi_command))
+            overrides.enter_context(patch.object(platform, 'freedesktop_os_release', return_value=RUNTIME_OS))
+            overrides.enter_context(patch.object(platform, 'machine', return_value='x86_64'))
+            overrides.enter_context(patch.object(os, 'confstr', return_value='glibc 2.39'))
             # Publication authority is mandatory even when cold assurance is green.
             try:
                 preflight(base)
@@ -740,6 +879,10 @@ def self_check():
             freeze(config)
             overrides.enter_context(patch.object(module, 'ASSET_PREPARATION_SHA', declared_pointer['sha256']))
             qualification = preflight(base)
+            assert qualification['required_glibc'] == dict(two_bit_http='2.38', two_bit_plan_demo='2.38')
+            with patch.object(platform, 'freedesktop_os_release', side_effect=AssertionError('local OS inspected')), \
+                    patch.object(os, 'confstr', side_effect=AssertionError('local libc inspected')):
+                assert preflight(base) == qualification
             assert qualification['source_file_count'] == 399 and qualification['native_rebuilt'] is False
             assert qualification['current_full_suite_pass_claim'] is True
             stage = base/'stage'
@@ -748,6 +891,56 @@ def self_check():
             (stage/'binaries/two_bit_plan_demo').write_bytes(publisher)
             (stage/'source-qualification.json').write_text(json.dumps(qualification))
             _stage(base, stage)
+            assert (stage/'runtime-abi.json').is_file(), 'runtime ABI gate/report missing before publication'
+            good_abi = (stage/'runtime-abi.json').read_bytes()
+            assert json.loads(good_abi)['qualified'] is True
+            for failure in ('libc', 'os', 'architecture', 'missing-binary', 'changed-binary', 'missing-tool',
+                            'missing-needs', 'required-newer', 'readelf-exit', 'ldd-exit', 'notfound', 'stderr', 'unresolved', 'undefined'):
+                abi_failure = failure
+                path = stage/'binaries/two_bit_plan_demo'
+                if failure == 'missing-binary': path.unlink()
+                elif failure == 'changed-binary': path.write_bytes(publisher+b'changed')
+                with patch.object(platform, 'freedesktop_os_release', return_value=dict(RUNTIME_OS, ID='amzn') if failure == 'os' else RUNTIME_OS), \
+                        patch.object(platform, 'machine', return_value='aarch64' if failure == 'architecture' else 'x86_64'), \
+                        patch.object(os, 'confstr', return_value='glibc 2.34' if failure == 'libc' else 'glibc 2.39'), \
+                        patch.object(publication, 'run') as helper, patch.object(publication, 'sdk_client') as sdk:
+                    try:
+                        _runtime_abi(stage)
+                        _publish(base, stage)
+                    except (AssertionError, FileNotFoundError, subprocess.CalledProcessError):
+                        assert json.loads((stage/'runtime-abi.json').read_bytes())['qualified'] is False
+                    else:
+                        raise AssertionError('ABI failure reached publication: '+failure)
+                    helper.assert_not_called()
+                    sdk.assert_not_called()
+                path.write_bytes(publisher)
+                path.chmod(0o755)
+            abi_failure = 'required-newer'
+            try:
+                preflight(base)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError('local target ABI ceiling ignored')
+            abi_failure = None
+            _stage(base, stage)
+            assert (stage/'runtime-abi.json').read_bytes() == good_abi
+            with patch.object(os, 'confstr', return_value='glibc 2.43'):
+                assert _runtime_abi(stage)['glibc_version'] == '2.43'
+            (stage/'runtime-abi.json').write_bytes(good_abi)
+            for failure in ('missing-report', 'incompatible-report'):
+                if failure == 'missing-report': (stage/'runtime-abi.json').unlink()
+                else: (stage/'runtime-abi.json').write_text(json.dumps(dict(json.loads(good_abi), glibc_version='2.34')))
+                with patch.object(publication, 'run') as helper, patch.object(publication, 'sdk_client') as sdk:
+                    try:
+                        _publish(base, stage)
+                    except (AssertionError, FileNotFoundError):
+                        pass
+                    else:
+                        raise AssertionError('publication accepted '+failure)
+                    helper.assert_not_called()
+                    sdk.assert_not_called()
+            (stage/'runtime-abi.json').write_bytes(good_abi)
             assert all(_identity((stage/n).read_bytes()) == ident
                        for n, ident in qualification['authority_artifacts'].items())
             raw = b'synthetic archived log\n'
@@ -880,6 +1073,12 @@ def self_check():
                            '--kill-after=30 3000'):
                 assert marker in body, marker
             assert 'rustup' not in body and 'cargo build' not in body
+            assert all(word not in body for word in ('dnf ', 'ensurepip', '-m pip '))
+            early = body.split('exec >run.log 2>&1\n', 1)[1]
+            assert early.index('apt-get') < early.index('aws s3 cp ')
+            assert 'DEBIAN_FRONTEND=noninteractive' in early and early.count('DPkg::Lock::Timeout=120') == 2
+            assert 'install awscli python3-boto3 python3.12 time tar gzip util-linux binutils' in early
+            assert body.index('--stage ') < body.index('phase=publication\n')
             # Execute generated existence gates, including eight valid empty logs.
             for name in ARTIFACTS:
                 path = stage/name
@@ -898,31 +1097,56 @@ def self_check():
             commands = base/'stubs'
             commands.mkdir()
             for name, text in [('taskset', '#!/bin/bash\nshift 2\nexec "$@"\n'),
-                               ('python3.12', '#!/bin/bash\nprintf "%s\\n" "$*" >> "$EVENTS"\ncase "$*" in *--publish*) exit "$PUB_STATUS";; esac\nprintf "synthetic closed summary\\n"\n')]:
+                               ('apt-get', '#!/bin/bash\ntest "$DEBIAN_FRONTEND" = noninteractive || exit 91\nprintf "apt-get:%s\\n" "$*" >> "$EVENTS"\n'),
+                               ('aws', '#!/bin/bash\nprintf "aws:%s\\n" "$*" >> "$EVENTS"\n'),
+                               ('python3.12', '#!/bin/bash\nprintf "%s\\n" "$*" >> "$EVENTS"\ncase "$*" in *--stage*) exit "$ABI_STATUS";; *--publish*) exit "$PUB_STATUS";; esac\nprintf "synthetic closed summary\\n"\n')]:
                 path = commands/name
                 path.write_text(text)
                 path.chmod(0o755)
+            events = base/'bootstrap-events'
+            subprocess.run(['bash', '-ec', early[:early.index("printf '%s  source.tar.gz")]], cwd=stage,
+                env=dict(os.environ, PATH=str(commands)+os.pathsep+os.environ['PATH'], EVENTS=str(events)), check=True)
+            calls = events.read_text().splitlines()
+            assert len(calls) == 3 and calls[0].startswith('apt-get:') and calls[0].endswith(' update')
+            assert calls[1].startswith('apt-get:') and ' install awscli python3-boto3 python3.12 ' in calls[1]
+            assert calls[2].startswith('aws:s3 cp '), 'AWS ran before Ubuntu prerequisites'
             wrapper = 'systemd-run() { while [[ "$1" != bash && "$1" != /usr/bin/time ]]; do shift; done; "$@"; };\n'
-            sequence = body[body.index('phase=publication\n'):body.index('phase=complete\n')]
-            for status in ('0', '23'):
-                events = base/('events-'+status)
+            sequence = body[body.index('PYTHONPATH="$root/repo" python3.12 -m scripts.launch_native_semantic_router_cold_spot --stage '):body.index('phase=complete\n')]
+            for abi_status, status in (('0', '0'), ('23', '0'), ('0', '23')):
+                events = base/('events-'+abi_status+'-'+status)
                 result = subprocess.run(['bash', '-ec', wrapper+sequence], cwd=stage,
                     env=dict(os.environ, root=str(stage), PATH=str(commands)+os.pathsep+os.environ['PATH'],
-                             EVENTS=str(events), PUB_STATUS=status), capture_output=True)
+                             EVENTS=str(events), ABI_STATUS=abi_status, PUB_STATUS=status), capture_output=True)
                 calls = events.read_text().splitlines()
-                assert '--publish' in calls[0]
-                assert (result.returncode == 0) == (status == '0'), (status, result.returncode, result.stderr,
+                assert '--stage' in calls[0]
+                assert any('--publish' in call for call in calls) == (abi_status == '0')
+                success = abi_status == status == '0'
+                assert (result.returncode == 0) == success, (abi_status, status, result.returncode, result.stderr,
                                                                  calls, (stage/'profile.log').read_bytes())
-                assert any('scripts.run_native_semantic_router_cold ' in call for call in calls) == (status == '0')
+                assert any('scripts.run_native_semantic_router_cold ' in call for call in calls) == success
             terminal_script = body.split("python3 - <<'PY' >terminal.json\n")[1].split('\nPY\n')[0]
             terminal = json.loads(subprocess.check_output([sys.executable, '-c', terminal_script],
                 cwd=stage, env=dict(os.environ, INSTANCE_ID='i-synthetic', EXIT_CODE='0', PHASE='complete')))
             assert terminal['schema'] == SCHEMA and terminal['binary_sha256'] == binary_sha
             assert terminal['source_identity_sha256'] == source_sha
             assert terminal['qualification_sha256'] == qualification['qualification_sha256']
+            assert terminal['required_glibc'] == qualification['required_glibc']
+            assert terminal['runtime_abi_sha256'] == peer.sha((stage/'runtime-abi.json').read_bytes())
     lifecycle_self_check()
     collection_self_check()
-    print(f'semantic cold controller self-check PASS; bootstrap_bytes={len(body.encode())}; cloud/native UNRUN')
+    # The closed authority has the real source/code/pointer shape, larger than the synthetic fixture.
+    repo = Path(__file__).resolve().parents[1]
+    real = json.loads(gzip.decompress((repo/ROOT/'a0001/source-qualification.json.gz').read_bytes()))
+    real.update(runtime_os=RUNTIME_OS, runtime_glibc=RUNTIME_GLIBC,
+                required_glibc=dict(two_bit_http='2.38', two_bit_plan_demo='2.38'),
+                config_sha256=peer.sha(b'fresh synthetic config'),
+                artifact_roster_sha256=peer.sha(json.dumps(ARTIFACTS, separators=(',', ':')).encode()))
+    for name in ('scripts/launch_native_semantic_router_cold_spot.py', 'scripts/launch_native_metadata_ranges_cold_spot.py'):
+        real['code_sha256'][name] = peer.sha((repo/name).read_bytes())
+    closed = json.loads((repo/ROOT/'a0001/aws-reservation.json').read_bytes())
+    real_body = user_data(closed['source_commit'], closed['source_archive_sha256'],
+        'research/native-library-check/sources/'+closed['source_archive_sha256']+'.tar.gz', PREFIX+'a0002', real)
+    print(f'semantic cold controller self-check PASS; bootstrap_bytes={len(body.encode())}; real_shape_bytes={len(real_body.encode())}; cloud/native UNRUN')
 
 
 if __name__ == '__main__':
