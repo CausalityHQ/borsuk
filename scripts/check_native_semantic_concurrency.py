@@ -20,12 +20,14 @@ def fixture(mode, port):
     arm = dict(dataset=mode, discovery=mode, authority=dict(root_sha256=root, generation=1, control_epoch=1),
                indexes={'10': mode}, metadata_files=files, metadata_sha256={k: root for k in files},
                head_file=dict(bytes=200, sha256=root), leaf_object=dict(bytes=4812500, sha256=root))
-    rows = [dict(name=k, bytes=v, chunks=1, head_wall_ns=1, get_wall_ns=int(v <= 4194304),
-                 stream_wall_ns=2, write_wall_ns=1, logical_head_requests=1,
+    known_lengths = {'page_digests.bin', 'plane/mean.bin', 'plane/page_digests.bin',
+                     'router/manifest.json', 'router/membership.bin'}
+    rows = [dict(name=k, bytes=v, chunks=1, head_wall_ns=int(k not in known_lengths), get_wall_ns=int(v <= 4194304),
+                 stream_wall_ns=2, write_wall_ns=1, logical_head_requests=int(k not in known_lengths),
                  logical_get_requests=(v + 4194303) // 4194304,
                  payload_buffer_bound_bytes=min(v, 8 * 4194304)) for k, v in files.items()]
     semantic = int(mode == 'semantic')
-    gets, heads = sum(r['logical_get_requests'] for r in rows) + 4, len(rows) + 1 + semantic
+    gets, heads = sum(r['logical_get_requests'] for r in rows) + 4, sum(r['logical_head_requests'] for r in rows) + 1 + semantic
     payload = sum(files.values()) + 200 + 5000 + 37
 
     def transport(gets, payload):
