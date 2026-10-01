@@ -60,7 +60,7 @@
             "control_epoch": 1
           },
           "indexes": {
-            "10": "research/semantic-router/20261001/offered-a0003/indexes/relaion/control/k10"
+            "10": "research/semantic-router/20261001/offered-a0002/indexes/relaion/control/k10"
           },
           "head_file": {
             "bytes": 170,
@@ -104,7 +104,7 @@
             "control_epoch": 1
           },
           "indexes": {
-            "10": "research/semantic-router/20261001/offered-a0003/indexes/relaion/candidate/k10"
+            "10": "research/semantic-router/20261001/offered-a0002/indexes/relaion/candidate/k10"
           },
           "head_file": {
             "bytes": 170,
@@ -181,7 +181,7 @@
             "control_epoch": 1
           },
           "indexes": {
-            "10": "research/semantic-router/20261001/offered-a0003/indexes/cohere/control/k10"
+            "10": "research/semantic-router/20261001/offered-a0002/indexes/cohere/control/k10"
           },
           "head_file": {
             "bytes": 170,
@@ -225,7 +225,7 @@
             "control_epoch": 1
           },
           "indexes": {
-            "10": "research/semantic-router/20261001/offered-a0003/indexes/cohere/candidate/k10"
+            "10": "research/semantic-router/20261001/offered-a0002/indexes/cohere/candidate/k10"
           },
           "head_file": {
             "bytes": 170,
@@ -340,7 +340,7 @@
     "scripts/run_native_cold_offered.py": "d7cdf4e32bf8ca3f0d9adcb441034a5f531112e35482e893234bc68ab17c7634"
   },
   "controller_code_sha256": {
-    "scripts/launch_native_semantic_router_cold_spot.py": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180",
+    "scripts/launch_native_semantic_router_cold_spot.py": "3769de93f19e1bbbd304d6ff967291239ac1167411d625ffc38d6215da8af5f5",
     "scripts/launch_native_metadata_ranges_cold_spot.py": "e6a74599258cd219abb16ca2c793baa30cffe00e60e85925691c86c75f5686ad",
     "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
     "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",

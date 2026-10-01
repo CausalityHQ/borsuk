@@ -1,0 +1,140 @@
+{
+  "schema": "borsuk-semantic-checkpoint-cli-local-verification-v1",
+  "base_commit": "af862dc8ef693d0616442abc62ab59b56d5b8dea",
+  "commit": "b269683105b5c16227d6bbb5428c7af45cc55a75",
+  "branch": "devbox/semantic-offered-cli-upload-20261001",
+  "clean": true,
+  "commit_identity": [
+    "Roman Bartusiak <riomus@gmail.com>",
+    "Roman Bartusiak <riomus@gmail.com>"
+  ],
+  "changed_files": [
+    "scripts/check_native_semantic_checkpoint_cli.py",
+    "scripts/launch_native_semantic_router_cold_spot.py"
+  ],
+  "code_sha256": {
+    "scripts/check_native_semantic_checkpoint_cli.py": "8fdfb77623f96bd6d9ffdf5a8d7a8334728dd9d484e1e6cdb186f2a82d82dffb",
+    "scripts/launch_native_semantic_router_cold_spot.py": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180"
+  },
+  "commands": [
+    "rtk proxy python3 -m scripts.check_native_semantic_checkpoint_cli (RED before controller change; final GREEN)",
+    "rtk proxy bash -c 'ulimit -v 204800; exec /usr/bin/time -v python3 -m scripts.check_native_semantic_checkpoint_cli'",
+    "rtk proxy python3 -m scripts.launch_native_semantic_router_cold_spot --self-check",
+    "rtk proxy python3 -m scripts.launch_native_semantic_router_cold_spot --offered-self-check",
+    "rtk proxy python3 -m py_compile scripts/launch_native_semantic_router_cold_spot.py scripts/check_native_semantic_checkpoint_cli.py",
+    "rtk proxy git diff --check",
+    "rtk proxy /tmp/borsuk-awscli-bootstrap-20261001/bin/aws --version",
+    "rtk proxy /tmp/borsuk-awscli-bootstrap-20261001/bin/aws s3api put-object --generate-cli-skeleton input",
+    "controller._check_checkpoint_cli() with PATH=/tmp/borsuk-awscli-bootstrap-20261001/bin:$PATH; AWS_EC2_METADATA_DISABLED=true; commands recorded in capability log",
+    "botocore.model.ServiceModel(json.load(open('/tmp/borsuk-botocore-1.34.46-s3-service.json'))).operation_model('PutObject').input_shape; botocore.validate.validate_parameters(dict(Bucket='owned', Key='owned/cells/records', Body=b'record', IfNoneMatch='*'), shape) -> expected ParamValidationError"
+  ],
+  "logs": {
+    "red": {
+      "path": "/tmp/borsuk-semantic-cli-upload-red.log",
+      "bytes": 1300,
+      "sha256": "18c06b07534bf44b184ca4d0076b691ec60ea21372c207ab8662f346cdba2c4c",
+      "exit_status": 1,
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/offered/cli-upload-gates/red.log.gz"
+    },
+    "sdk-red": {
+      "path": "/tmp/borsuk-semantic-cli-upload-sdk-red.log",
+      "bytes": 685,
+      "sha256": "e409cb62c59dbf052c29ce90822db37e3cb014c4bddfe665a9335a4898537188",
+      "exit_status": 0,
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/offered/cli-upload-gates/sdk-red.log.gz"
+    },
+    "green": {
+      "path": "/tmp/borsuk-semantic-cli-upload-green.log",
+      "bytes": 55,
+      "sha256": "8980cf678cc96c1e87a0a233739aeb7ff3f300996bd9f5cd8c829e25dc6ac2dd",
+      "exit_status": 0,
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/offered/cli-upload-gates/green.log.gz"
+    },
+    "bounded": {
+      "path": "/tmp/borsuk-semantic-cli-upload-bounded.log",
+      "bytes": 832,
+      "sha256": "13ec8a26ac1719afc8369a72470cb722085d16cf821544d12abbfa3ca67b75af",
+      "exit_status": 0,
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/offered/cli-upload-gates/bounded.log.gz"
+    },
+    "serial": {
+      "path": "/tmp/borsuk-semantic-cli-upload-serial.log",
+      "bytes": 1882,
+      "sha256": "c9253d7e718eeb91bcdf70868a15df94ac7060261e64f8aeae9c14a75ed3804a",
+      "exit_status": 0,
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/offered/cli-upload-gates/serial.log.gz"
+    },
+    "offered": {
+      "path": "/tmp/borsuk-semantic-cli-upload-offered.log",
+      "bytes": 3835,
+      "sha256": "22e5e3365d23e5997ddfdc10c255c5cfbf8279d943c8aa08291fba519821414d",
+      "exit_status": 0,
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/offered/cli-upload-gates/offered.log.gz"
+    },
+    "capability": {
+      "path": "/tmp/borsuk-semantic-cli-upload-capability.log",
+      "bytes": 320,
+      "sha256": "ddc3b01f149332e560f4ddac60d4fe92b60993de9dbbb161a67f30defc7ea6a7",
+      "exit_status": 0,
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/offered/cli-upload-gates/capability.log.gz"
+    },
+    "pycompile": {
+      "path": "/tmp/borsuk-semantic-cli-upload-pycompile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "exit_status": 0,
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/offered/cli-upload-gates/pycompile.log.gz"
+    },
+    "diffcheck": {
+      "path": "/tmp/borsuk-semantic-cli-upload-diffcheck.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "exit_status": 0,
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/offered/cli-upload-gates/diffcheck.log.gz"
+    }
+  },
+  "pinned_cli": {
+    "version": "2.36.11",
+    "path": "/tmp/borsuk-awscli-bootstrap-20261001/bin/aws",
+    "zip_sha256": "50fbb7a2f44a78eab4a210088040e8f0bc4b9937cac8043c2354269d58614df6",
+    "signature_log": "/tmp/borsuk-awscli-bootstrap-20261001/verify.log",
+    "actual_no_network_no_signing_capability_passed": true
+  },
+  "old_sdk_model": {
+    "path": "/tmp/borsuk-botocore-1.34.46-s3-service.json",
+    "sha256": "0e0760c9ae10e9f8af267b0d9708fefabbaec023370f0044bbecc51565f05699",
+    "actual_remote_sdk_version": "UNKNOWN",
+    "expected_IfNoneMatch_rejection_reproduced": true
+  },
+  "resource_check": {
+    "virtual_memory_limit_kib": 204800,
+    "max_rss_kib": 53092,
+    "elapsed_seconds": 0.98
+  },
+  "native_source_file_count": 399,
+  "native_source_identity_sha256": "92085e6e40ac9324ea7a4fc8daab58995dc84680a5c2391eb426dd430230e520",
+  "artifact_rosters": {
+    "serial": 53,
+    "offered": 108
+  },
+  "userdata_bytes": {
+    "serial_real_shape": 14049,
+    "offered_real_shape": 13636,
+    "limit": 16384
+  },
+  "all_local_checks_passed": true,
+  "assurance_reused": true,
+  "limitations": [
+    "real AWS/native/build UNRUN",
+    "actual-authority preflight/refreeze and new paid prefix owned by root",
+    "frozen runtime/timers/schema/gates unchanged; synchronous uploads remain in existing between-cell callback and outer profile wall/cgroup envelope"
+  ],
+  "cloud_launches": 0,
+  "native_queries": 0,
+  "reviews": 0,
+  "dependencies_installed": 0,
+  "push": false,
+  "merged": false,
+  "integrated_commit": "5496f463",
+  "root_check": "python3 -m scripts.check_native_semantic_checkpoint_cli exit0"
+}
