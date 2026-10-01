@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-096179beb27de9700",
+  "nodes": {
+    "0": {
+      "instance_id": "i-096179beb27de9700"
+    }
+  },
+  "prefix": "research/semantic-router/20261001/offered-a0003",
+  "source_commit": "c2e74dfab9f7704c45748a41cb28fb1d400afd79",
+  "source_archive_sha256": "2fcb1ac172843279f43b0038b222f2e2c5899b48e9e90499581eedea4afd01d0"
+}

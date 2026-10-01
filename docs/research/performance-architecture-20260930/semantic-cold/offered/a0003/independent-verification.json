@@ -1,0 +1,5396 @@
+{
+  "schema": "borsuk-native-semantic-offered-a3-independent-replay-v1",
+  "source_commit": "c2e74dfab9f7704c45748a41cb28fb1d400afd79",
+  "source_archive_sha256": "2fcb1ac172843279f43b0038b222f2e2c5899b48e9e90499581eedea4afd01d0",
+  "config_sha256": "cdfcb3c9b02a2d530a3ca4a8975190a426f01b250a86e762b2a581a1f4044582",
+  "terminal_sha256": "87651caf95de29b4011046c181db8a827ea36febaa217852623d921641c9d834",
+  "authenticated_artifacts": 108,
+  "records": 1536,
+  "saved_all_cells_and_summary_parity": true,
+  "input_bodies_authenticated": true,
+  "input_paths": "operational remote paths preserved; byte/hash identities compared to independently authenticated local copies",
+  "execution_status": "FAIL preserved",
+  "original_exit_status": 1,
+  "scientific_qualification": "FAIL; global fatal under frozen classifier",
+  "failed_call": {
+    "dataset": "CoHere",
+    "arm": "candidate",
+    "rate_index": 3,
+    "offered_qps": 2,
+    "query_ordinal": 44,
+    "http_status": 502,
+    "failure_kind": "native",
+    "error_type": "AssertionError",
+    "error": "first and only ANN request failed; no HTTP retry",
+    "cleanup_confirmed": true,
+    "telemetry_validation_errors": []
+  },
+  "failed_response": {
+    "authority": {
+      "control_epoch": 1,
+      "generation": 1,
+      "root_sha256": "4e9ec30b0bb1ec464454d2331f5d8bd83e7513dd2d6290964c012497e7a85ae9"
+    },
+    "error": "search_failed",
+    "failed_gets": 0,
+    "native_wall_ns": 38685270,
+    "query_stages": {
+      "discovery": {
+        "end_ns": 38683032,
+        "start_ns": 86
+      },
+      "leaf_peak_inflight": 16,
+      "planning": {
+        "end_ns": 0,
+        "start_ns": 0
+      },
+      "source": {
+        "end_ns": 0,
+        "start_ns": 0
+      },
+      "sq8": {
+        "end_ns": 0,
+        "start_ns": 0
+      }
+    },
+    "router_failed_gets": 1,
+    "router_submitted_gets": 16,
+    "router_verified_bytes": 1127280,
+    "source_failed_gets": 0,
+    "source_submitted_gets": 0,
+    "source_verified_bytes": 0,
+    "submitted_gets": 0,
+    "transport": {
+      "attempt_measurement": "submitted HttpService calls, not confirmed wire or S3 requests",
+      "dropped_error_body_consumed_bytes": 0,
+      "method_order": [
+        "GET",
+        "HEAD",
+        "PUT",
+        "DELETE",
+        "POST",
+        "PATCH",
+        "OPTIONS",
+        "CONNECT",
+        "TRACE",
+        "other"
+      ],
+      "payload_measurement": "consumed response data frames, including unauthenticated payload",
+      "per_query_delta": false,
+      "schema": "borsuk-native-transport-v1",
+      "scope": "process_all_native_s3_readers",
+      "status_counts_format": "[http_status,count] nonzero entries",
+      "totals": {
+        "attempts": 39,
+        "consumed_payload_bytes": 2037261,
+        "dropped_error_bodies": 1,
+        "method_counts": [
+          28,
+          10,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "status_counts": [
+          [
+            200,
+            23
+          ],
+          [
+            206,
+            15
+          ],
+          [
+            503,
+            1
+          ]
+        ],
+        "stream_failures": 0,
+        "transport_failures": 0
+      },
+      "unknown": [
+        "unread_response_payload_bytes",
+        "response_header_bytes",
+        "request_wire_bytes",
+        "kernel_tls_wire_bytes"
+      ]
+    },
+    "verified_bytes": 0
+  },
+  "summary": {
+    "schema": "borsuk-native-semantic-router-cold-offered-result-v1",
+    "cells": [
+      {
+        "count": 64,
+        "successes": 64,
+        "failures": 0,
+        "aborted": 0,
+        "failed_calls": 0,
+        "returned_hits": 638,
+        "recall_at_10": 0.996875,
+        "success_conditioned_recall_at_10": 0.996875,
+        "per_query_recall_at_10_p05": 1.0,
+        "success_conditioned_latency": false,
+        "latency_ms": {
+          "whole_cold": {
+            "p50": 659.0497310000001,
+            "p90": 728.4322564,
+            "p95": 767.3925971,
+            "p99": 910.7261361199996
+          },
+          "http_first_query": {
+            "p50": 181.68204350000002,
+            "p90": 235.79343110000002,
+            "p95": 250.47392484999997,
+            "p99": 305.2796261799999
+          },
+          "incoming_http": {
+            "p50": 181.7542995,
+            "p90": 235.868421,
+            "p95": 250.54839564999997,
+            "p99": 305.35434912999995
+          },
+          "cold_open": {
+            "p50": 378.163179,
+            "p90": 430.0146409000001,
+            "p95": 452.94827575,
+            "p99": 521.3211514999998
+          },
+          "head_read": {
+            "p50": 81.37310049999999,
+            "p90": 86.8451303,
+            "p95": 91.45131115000001,
+            "p99": 100.66967831999997
+          },
+          "metadata_staging": {
+            "p50": 346.35247649999997,
+            "p90": 398.4461643000001,
+            "p95": 421.45137034999993,
+            "p99": 489.1901910399997
+          },
+          "metadata_decode": {
+            "p50": 21.5044,
+            "p90": 21.8032677,
+            "p95": 21.889362900000002,
+            "p99": 23.58279034999999
+          },
+          "metadata_HEAD": {
+            "p50": 83.2417305,
+            "p90": 93.2547446,
+            "p95": 97.4563457,
+            "p99": 119.1140884399999
+          },
+          "metadata_GET_headers": {
+            "p50": 189.4312755,
+            "p90": 205.2436862,
+            "p95": 208.09813245,
+            "p99": 273.8171007999999
+          },
+          "metadata_stream_and_output": {
+            "p50": 74.1924595,
+            "p90": 101.3885941,
+            "p95": 114.91777554999999,
+            "p99": 142.63959764999998
+          },
+          "metadata_awaited_writes": {
+            "p50": 2.2662385,
+            "p90": 2.4098851,
+            "p95": 2.45281085,
+            "p99": 2.4695858399999997
+          },
+          "source_head": {
+            "p50": 9.3445885,
+            "p90": 10.6240119,
+            "p95": 11.252786799999997,
+            "p99": 14.213172029999988
+          },
+          "router_head": {
+            "p50": 0.0,
+            "p90": 0.0,
+            "p95": 0.0,
+            "p99": 0.0
+          },
+          "native_query": {
+            "p50": 180.8310835,
+            "p90": 234.95578760000004,
+            "p95": 249.71968434999997,
+            "p99": 304.43099878999993
+          },
+          "discovery": {
+            "p50": 2.1397155000000003,
+            "p90": 2.2388186,
+            "p95": 2.2673931,
+            "p99": 2.4209614
+          },
+          "source": {
+            "p50": 103.305147,
+            "p90": 133.88060529999998,
+            "p95": 154.62463799999992,
+            "p99": 230.45142972999994
+          },
+          "planning": {
+            "p50": 9.537188,
+            "p90": 10.2343251,
+            "p95": 10.38827175,
+            "p99": 10.64156485
+          },
+          "sq8": {
+            "p50": 62.14916,
+            "p90": 84.98363970000001,
+            "p95": 98.8907267,
+            "p99": 123.62260058
+          }
+        },
+        "accounting_observations": 64,
+        "accounting_complete": true,
+        "startup_accounting_observations": 64,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 2610,
+          "source_verified_bytes": 933740800,
+          "source_failed_gets": 0,
+          "submitted_gets": 1712,
+          "verified_bytes": 1073105280,
+          "failed_gets": 0,
+          "router_submitted_gets": 0,
+          "router_verified_bytes": 0,
+          "router_failed_gets": 0,
+          "metadata_GETs": 640,
+          "metadata_HEADs": 576,
+          "metadata_bytes": 371412544,
+          "authority_head_JSON_GETs": 64,
+          "authority_head_JSON_bytes": 10880,
+          "authority_generation_root_GETs": 64,
+          "authority_generation_root_bytes": 2174720,
+          "source_HEADs": 64,
+          "router_HEADs": 0
+        },
+        "known_process_transport_totals": {
+          "attempts": 5922,
+          "consumed_payload_bytes": 2380551168,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            5218,
+            640,
+            64,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 192,
+          "inferred_credential_consumed_bytes": 106944,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 64,
+        "native_peak_RSS_bytes": 55619584,
+        "native_CPU_seconds": {
+          "user": "8.63",
+          "system": "3.65"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 0,
+        "offered_qps": 0.25,
+        "dataset": "ReLAION",
+        "arm": "control",
+        "records_file": "rate0-relaion-control-records.jsonl",
+        "records_sha256": "b36a60aba4a8b39bd0365decc0d4ad7a67127860cae820e421dcf74c7fdf0000",
+        "records_bytes": 1354546,
+        "offered": 64,
+        "admitted": 64,
+        "admitted_completed": 64,
+        "capacity_drops": 0,
+        "aborted_offers": 0,
+        "success_fraction": 1.0,
+        "all_offer_recall_at_10": 0.996875,
+        "epoch_ns": 128811074372,
+        "terminal_ns": 381456252988,
+        "full_span_ns": 252645178616,
+        "planned_offer_window_ns": 256000000000,
+        "last_scheduled_offset_ns": 252000000000,
+        "successful_full_span_qps": 0.2533196966219362,
+        "admitted_completed_full_span_qps": 0.2533196966219362,
+        "scheduled_to_response_ms": {
+          "p50": 660.2352935,
+          "p90": 729.5621289,
+          "p95": 768.5181089499999,
+          "p99": 911.9061454799996
+        },
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": 660.2352935,
+          "p90": 729.5621289,
+          "p95": 768.5181089499999,
+          "p99": 911.9061454799996
+        },
+        "dispatch_delay_ms": {
+          "p50": 0.1054255,
+          "p90": 0.1684458,
+          "p95": 0.1802916,
+          "p99": 0.20247637999999996
+        },
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": true,
+        "all_offers_successful": true,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 109056000,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 1,
+        "identity_gate_passed": true,
+        "abort_after": null,
+        "cell_started": true,
+        "qualification_gate_passed": true
+      },
+      {
+        "count": 64,
+        "successes": 64,
+        "failures": 0,
+        "aborted": 0,
+        "failed_calls": 0,
+        "returned_hits": 628,
+        "recall_at_10": 0.98125,
+        "success_conditioned_recall_at_10": 0.98125,
+        "per_query_recall_at_10_p05": 0.9,
+        "success_conditioned_latency": false,
+        "latency_ms": {
+          "whole_cold": {
+            "p50": 562.501703,
+            "p90": 603.6952726,
+            "p95": 622.6706902999999,
+            "p99": 752.9504966599993
+          },
+          "http_first_query": {
+            "p50": 171.23293999999999,
+            "p90": 207.38503210000002,
+            "p95": 222.88861299999994,
+            "p99": 272.8950435299999
+          },
+          "incoming_http": {
+            "p50": 171.30425400000001,
+            "p90": 207.4585979,
+            "p95": 222.95858799999993,
+            "p99": 272.9755673399999
+          },
+          "cold_open": {
+            "p50": 299.5839085,
+            "p90": 313.8119538,
+            "p95": 321.66118859999995,
+            "p99": 434.29597141999966
+          },
+          "head_read": {
+            "p50": 79.446,
+            "p90": 84.82474810000001,
+            "p95": 87.79654774999999,
+            "p99": 105.30212469999998
+          },
+          "metadata_staging": {
+            "p50": 277.343687,
+            "p90": 290.51670160000003,
+            "p95": 296.00258239999994,
+            "p99": 407.7727899599997
+          },
+          "metadata_decode": {
+            "p50": 3.259659,
+            "p90": 3.3065908,
+            "p95": 3.3123473999999997,
+            "p99": 3.3583285299999996
+          },
+          "metadata_HEAD": {
+            "p50": 72.9770615,
+            "p90": 81.9976376,
+            "p95": 85.01528149999999,
+            "p99": 122.59907794999992
+          },
+          "metadata_GET_headers": {
+            "p50": 186.5660755,
+            "p90": 196.3806041,
+            "p95": 201.82275185,
+            "p99": 264.41322974999986
+          },
+          "metadata_stream_and_output": {
+            "p50": 15.839278499999999,
+            "p90": 21.543894400000003,
+            "p95": 22.8641638,
+            "p99": 27.917085759999978
+          },
+          "metadata_awaited_writes": {
+            "p50": 0.9036655,
+            "p90": 1.1030573000000001,
+            "p95": 1.1330947999999998,
+            "p99": 1.14926851
+          },
+          "source_head": {
+            "p50": 8.764581499999998,
+            "p90": 11.387956300000003,
+            "p95": 17.55539584999998,
+            "p99": 27.221381009999998
+          },
+          "router_head": {
+            "p50": 9.009662,
+            "p90": 10.32684,
+            "p95": 11.23863415,
+            "p99": 16.06728441999997
+          },
+          "native_query": {
+            "p50": 170.507943,
+            "p90": 206.5353346,
+            "p95": 222.00067174999995,
+            "p99": 272.2107204099999
+          },
+          "discovery": {
+            "p50": 39.282562,
+            "p90": 62.834974,
+            "p95": 66.92098685,
+            "p99": 98.57377017
+          },
+          "source": {
+            "p50": 44.900497,
+            "p90": 62.8112775,
+            "p95": 69.73663194999999,
+            "p99": 116.92890296999983
+          },
+          "planning": {
+            "p50": 3.575355,
+            "p90": 4.0881439,
+            "p95": 4.2523884999999995,
+            "p99": 4.749051229999999
+          },
+          "sq8": {
+            "p50": 79.5859685,
+            "p90": 94.11207460000001,
+            "p95": 105.15198275,
+            "p99": 115.41816242999995
+          }
+        },
+        "accounting_observations": 64,
+        "accounting_complete": true,
+        "startup_accounting_observations": 64,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 969,
+          "source_verified_bytes": 349785600,
+          "source_failed_gets": 0,
+          "submitted_gets": 1170,
+          "verified_bytes": 1049068800,
+          "failed_gets": 0,
+          "router_submitted_gets": 986,
+          "router_verified_bytes": 68941180,
+          "router_failed_gets": 0,
+          "metadata_GETs": 512,
+          "metadata_HEADs": 512,
+          "metadata_bytes": 57764736,
+          "authority_head_JSON_GETs": 64,
+          "authority_head_JSON_bytes": 10880,
+          "authority_generation_root_GETs": 64,
+          "authority_generation_root_bytes": 1365056,
+          "source_HEADs": 64,
+          "router_HEADs": 64
+        },
+        "known_process_transport_totals": {
+          "attempts": 4597,
+          "consumed_payload_bytes": 1527043196,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            3893,
+            640,
+            64,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 192,
+          "inferred_credential_consumed_bytes": 106944,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 64,
+        "native_peak_RSS_bytes": 37072896,
+        "native_CPU_seconds": {
+          "user": "5.63",
+          "system": "2.02"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 0,
+        "offered_qps": 0.25,
+        "dataset": "ReLAION",
+        "arm": "candidate",
+        "records_file": "rate0-relaion-candidate-records.jsonl",
+        "records_sha256": "206e95074134e1ffb3286f4d5b19b6533293c4f00b0c9ada7d34c17789a2e2c7",
+        "records_bytes": 1278102,
+        "offered": 64,
+        "admitted": 64,
+        "admitted_completed": 64,
+        "capacity_drops": 0,
+        "aborted_offers": 0,
+        "success_fraction": 1.0,
+        "all_offer_recall_at_10": 0.98125,
+        "epoch_ns": 382647541175,
+        "terminal_ns": 635218529298,
+        "full_span_ns": 252570988123,
+        "planned_offer_window_ns": 256000000000,
+        "last_scheduled_offset_ns": 252000000000,
+        "successful_full_span_qps": 0.2533941070414331,
+        "admitted_completed_full_span_qps": 0.2533941070414331,
+        "scheduled_to_response_ms": {
+          "p50": 563.7403589999999,
+          "p90": 604.8618052,
+          "p95": 623.9798985,
+          "p99": 753.9480030699993
+        },
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": 563.7403589999999,
+          "p90": 604.8618052,
+          "p95": 623.9798985,
+          "p99": 753.9480030699993
+        },
+        "dispatch_delay_ms": {
+          "p50": 0.10642499999999999,
+          "p90": 0.12289900000000001,
+          "p95": 0.14969415,
+          "p99": 0.16793470999999993
+        },
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": true,
+        "all_offers_successful": true,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 132960256,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 1,
+        "identity_gate_passed": true,
+        "abort_after": null,
+        "cell_started": true,
+        "qualification_gate_passed": true
+      },
+      {
+        "count": 64,
+        "successes": 64,
+        "failures": 0,
+        "aborted": 0,
+        "failed_calls": 0,
+        "returned_hits": 631,
+        "recall_at_10": 0.9859375,
+        "success_conditioned_recall_at_10": 0.9859375,
+        "per_query_recall_at_10_p05": 0.9,
+        "success_conditioned_latency": false,
+        "latency_ms": {
+          "whole_cold": {
+            "p50": 640.7558019999999,
+            "p90": 722.1000856,
+            "p95": 740.67856595,
+            "p99": 770.53687226
+          },
+          "http_first_query": {
+            "p50": 172.475356,
+            "p90": 206.6771963,
+            "p95": 213.25242279999998,
+            "p99": 239.73499332999992
+          },
+          "incoming_http": {
+            "p50": 172.548424,
+            "p90": 206.7508658,
+            "p95": 213.32587429999998,
+            "p99": 239.80620384999992
+          },
+          "cold_open": {
+            "p50": 369.4272595,
+            "p90": 441.3644847,
+            "p95": 457.7328450999999,
+            "p99": 480.02297722
+          },
+          "head_read": {
+            "p50": 80.8918635,
+            "p90": 86.9028251,
+            "p95": 100.84664324999999,
+            "p99": 106.34581996999998
+          },
+          "metadata_staging": {
+            "p50": 338.865535,
+            "p90": 410.65990130000006,
+            "p95": 424.5171504499999,
+            "p99": 449.46532656999995
+          },
+          "metadata_decode": {
+            "p50": 21.445700000000002,
+            "p90": 21.659620099999998,
+            "p95": 21.7631308,
+            "p99": 25.18189113
+          },
+          "metadata_HEAD": {
+            "p50": 81.6937725,
+            "p90": 91.9118213,
+            "p95": 108.37184299999994,
+            "p99": 136.80076778999998
+          },
+          "metadata_GET_headers": {
+            "p50": 187.4820285,
+            "p90": 204.8763853,
+            "p95": 214.30113154999998,
+            "p99": 218.49893325999997
+          },
+          "metadata_stream_and_output": {
+            "p50": 68.661407,
+            "p90": 100.6485488,
+            "p95": 123.84603624999991,
+            "p99": 150.03067072999985
+          },
+          "metadata_awaited_writes": {
+            "p50": 2.2070455,
+            "p90": 2.3716563,
+            "p95": 2.39051905,
+            "p99": 2.40287676
+          },
+          "source_head": {
+            "p50": 8.560833500000001,
+            "p90": 10.257542800000001,
+            "p95": 11.041651899999998,
+            "p99": 12.953214029999998
+          },
+          "router_head": {
+            "p50": 0.0,
+            "p90": 0.0,
+            "p95": 0.0,
+            "p99": 0.0
+          },
+          "native_query": {
+            "p50": 171.6001745,
+            "p90": 205.8461597,
+            "p95": 212.50365255,
+            "p99": 239.11990073999993
+          },
+          "discovery": {
+            "p50": 2.269564,
+            "p90": 2.4311369000000003,
+            "p95": 2.46612215,
+            "p99": 2.58156718
+          },
+          "source": {
+            "p50": 97.75258149999999,
+            "p90": 131.7877935,
+            "p95": 133.93674149999998,
+            "p99": 146.01024944999995
+          },
+          "planning": {
+            "p50": 8.060688,
+            "p90": 8.3215629,
+            "p95": 8.394329350000001,
+            "p99": 8.4152621
+          },
+          "sq8": {
+            "p50": 62.084255,
+            "p90": 79.53862400000001,
+            "p95": 92.58628629999995,
+            "p99": 124.98079054999994
+          }
+        },
+        "accounting_observations": 64,
+        "accounting_complete": true,
+        "startup_accounting_observations": 64,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 1209,
+          "source_verified_bytes": 716646400,
+          "source_failed_gets": 0,
+          "submitted_gets": 1983,
+          "verified_bytes": 1072880640,
+          "failed_gets": 0,
+          "router_submitted_gets": 0,
+          "router_verified_bytes": 0,
+          "router_failed_gets": 0,
+          "metadata_GETs": 640,
+          "metadata_HEADs": 576,
+          "metadata_bytes": 371414912,
+          "authority_head_JSON_GETs": 64,
+          "authority_head_JSON_bytes": 10880,
+          "authority_generation_root_GETs": 64,
+          "authority_generation_root_bytes": 2177088,
+          "source_HEADs": 64,
+          "router_HEADs": 0
+        },
+        "known_process_transport_totals": {
+          "attempts": 4792,
+          "consumed_payload_bytes": 2163236864,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            4088,
+            640,
+            64,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 192,
+          "inferred_credential_consumed_bytes": 106944,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 64,
+        "native_peak_RSS_bytes": 56143872,
+        "native_CPU_seconds": {
+          "user": "8.19",
+          "system": "3.55"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 0,
+        "offered_qps": 0.25,
+        "dataset": "CoHere",
+        "arm": "control",
+        "records_file": "rate0-cohere-control-records.jsonl",
+        "records_sha256": "7c2be29042e1c8fcd389f65eecce9f2295ea4ede668a2dede883a434217332ce",
+        "records_bytes": 1377229,
+        "offered": 64,
+        "admitted": 64,
+        "admitted_completed": 64,
+        "capacity_drops": 0,
+        "aborted_offers": 0,
+        "success_fraction": 1.0,
+        "all_offer_recall_at_10": 0.9859375,
+        "epoch_ns": 636392871765,
+        "terminal_ns": 889016068281,
+        "full_span_ns": 252623196516,
+        "planned_offer_window_ns": 256000000000,
+        "last_scheduled_offset_ns": 252000000000,
+        "successful_full_span_qps": 0.2533417393281481,
+        "admitted_completed_full_span_qps": 0.2533417393281481,
+        "scheduled_to_response_ms": {
+          "p50": 641.907503,
+          "p90": 723.1735417000001,
+          "p95": 741.4769856,
+          "p99": 771.85550443
+        },
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": 641.907503,
+          "p90": 723.1735417000001,
+          "p95": 741.4769856,
+          "p99": 771.85550443
+        },
+        "dispatch_delay_ms": {
+          "p50": 0.104173,
+          "p90": 0.1151589,
+          "p95": 0.15269495,
+          "p99": 0.17316479999999998
+        },
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": true,
+        "all_offers_successful": true,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 138600448,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 1,
+        "identity_gate_passed": true,
+        "abort_after": null,
+        "cell_started": true,
+        "qualification_gate_passed": true
+      },
+      {
+        "count": 64,
+        "successes": 64,
+        "failures": 0,
+        "aborted": 0,
+        "failed_calls": 0,
+        "returned_hits": 613,
+        "recall_at_10": 0.9578125,
+        "success_conditioned_recall_at_10": 0.9578125,
+        "per_query_recall_at_10_p05": 0.8,
+        "success_conditioned_latency": false,
+        "latency_ms": {
+          "whole_cold": {
+            "p50": 555.141537,
+            "p90": 596.7943274,
+            "p95": 600.7041422499999,
+            "p99": 696.7609779399999
+          },
+          "http_first_query": {
+            "p50": 161.0298515,
+            "p90": 187.8487212,
+            "p95": 197.2084746,
+            "p99": 302.84954287999983
+          },
+          "incoming_http": {
+            "p50": 161.1034755,
+            "p90": 187.92278830000004,
+            "p95": 197.28154254999998,
+            "p99": 302.9215843499999
+          },
+          "cold_open": {
+            "p50": 298.9896615,
+            "p90": 324.2413508,
+            "p95": 342.77207044999994,
+            "p99": 368.58434289999985
+          },
+          "head_read": {
+            "p50": 79.200628,
+            "p90": 83.7236827,
+            "p95": 84.8319261,
+            "p99": 87.83225327999999
+          },
+          "metadata_staging": {
+            "p50": 277.51119300000005,
+            "p90": 299.8598299,
+            "p95": 324.17177129999993,
+            "p99": 343.8907018599999
+          },
+          "metadata_decode": {
+            "p50": 3.1369805,
+            "p90": 3.1812022,
+            "p95": 3.19015955,
+            "p99": 3.23175965
+          },
+          "metadata_HEAD": {
+            "p50": 71.39737149999999,
+            "p90": 79.8358049,
+            "p95": 88.71582565,
+            "p99": 118.62859729999983
+          },
+          "metadata_GET_headers": {
+            "p50": 189.70814000000001,
+            "p90": 201.90159110000002,
+            "p95": 206.1040376,
+            "p99": 244.29507704999995
+          },
+          "metadata_stream_and_output": {
+            "p50": 14.1631325,
+            "p90": 21.7255006,
+            "p95": 22.7353967,
+            "p99": 26.313566809999998
+          },
+          "metadata_awaited_writes": {
+            "p50": 0.863063,
+            "p90": 1.0491816,
+            "p95": 1.10536155,
+            "p99": 1.17369707
+          },
+          "source_head": {
+            "p50": 8.863306,
+            "p90": 10.883992300000001,
+            "p95": 11.590767149999998,
+            "p99": 14.613377149999986
+          },
+          "router_head": {
+            "p50": 8.709295000000001,
+            "p90": 10.1357975,
+            "p95": 10.993136899999998,
+            "p99": 13.580719609999996
+          },
+          "native_query": {
+            "p50": 160.3581335,
+            "p90": 187.2041432,
+            "p95": 196.57714284999997,
+            "p99": 302.1337435899999
+          },
+          "discovery": {
+            "p50": 38.280553999999995,
+            "p90": 54.33278430000001,
+            "p95": 59.08891514999999,
+            "p99": 64.41867056
+          },
+          "source": {
+            "p50": 35.6146435,
+            "p90": 45.263601900000005,
+            "p95": 52.888003449999985,
+            "p99": 78.77331617999987
+          },
+          "planning": {
+            "p50": 3.3956090000000003,
+            "p90": 3.6707549999999998,
+            "p95": 3.76731395,
+            "p99": 3.91559396
+          },
+          "sq8": {
+            "p50": 79.9995365,
+            "p90": 99.27971360000001,
+            "p95": 105.42504099999998,
+            "p99": 168.97914129999998
+          }
+        },
+        "accounting_observations": 64,
+        "accounting_complete": true,
+        "startup_accounting_observations": 64,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 710,
+          "source_verified_bytes": 340710400,
+          "source_failed_gets": 0,
+          "submitted_gets": 1308,
+          "verified_bytes": 1071832320,
+          "failed_gets": 0,
+          "router_submitted_gets": 1024,
+          "router_verified_bytes": 71782480,
+          "router_failed_gets": 0,
+          "metadata_GETs": 512,
+          "metadata_HEADs": 512,
+          "metadata_bytes": 56749696,
+          "authority_head_JSON_GETs": 64,
+          "authority_head_JSON_bytes": 10880,
+          "authority_generation_root_GETs": 64,
+          "authority_generation_root_bytes": 1371264,
+          "source_HEADs": 64,
+          "router_HEADs": 64
+        },
+        "known_process_transport_totals": {
+          "attempts": 4514,
+          "consumed_payload_bytes": 1542563984,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            3810,
+            640,
+            64,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 192,
+          "inferred_credential_consumed_bytes": 106944,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 64,
+        "native_peak_RSS_bytes": 36392960,
+        "native_CPU_seconds": {
+          "user": "5.65",
+          "system": "2.07"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 0,
+        "offered_qps": 0.25,
+        "dataset": "CoHere",
+        "arm": "candidate",
+        "records_file": "rate0-cohere-candidate-records.jsonl",
+        "records_sha256": "5f8981ddae494966cb393342df28d9a00269661abd9f0cc80254ef78658d2602",
+        "records_bytes": 1290369,
+        "offered": 64,
+        "admitted": 64,
+        "admitted_completed": 64,
+        "capacity_drops": 0,
+        "aborted_offers": 0,
+        "success_fraction": 1.0,
+        "all_offer_recall_at_10": 0.9578125,
+        "epoch_ns": 890198138054,
+        "terminal_ns": 1142802831758,
+        "full_span_ns": 252604693704,
+        "planned_offer_window_ns": 256000000000,
+        "last_scheduled_offset_ns": 252000000000,
+        "successful_full_span_qps": 0.25336029612733424,
+        "admitted_completed_full_span_qps": 0.25336029612733424,
+        "scheduled_to_response_ms": {
+          "p50": 556.2842525,
+          "p90": 598.022916,
+          "p95": 601.8505931999999,
+          "p99": 698.0756976799998
+        },
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": 556.2842525,
+          "p90": 598.022916,
+          "p95": 601.8505931999999,
+          "p99": 698.0756976799998
+        },
+        "dispatch_delay_ms": {
+          "p50": 0.102371,
+          "p90": 0.1048318,
+          "p95": 0.12906204999999993,
+          "p99": 0.15811855999999988
+        },
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": true,
+        "all_offers_successful": true,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 144179200,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 1,
+        "identity_gate_passed": true,
+        "abort_after": null,
+        "cell_started": true,
+        "qualification_gate_passed": true
+      },
+      {
+        "count": 64,
+        "successes": 64,
+        "failures": 0,
+        "aborted": 0,
+        "failed_calls": 0,
+        "returned_hits": 638,
+        "recall_at_10": 0.996875,
+        "success_conditioned_recall_at_10": 0.996875,
+        "per_query_recall_at_10_p05": 1.0,
+        "success_conditioned_latency": false,
+        "latency_ms": {
+          "whole_cold": {
+            "p50": 646.3845715,
+            "p90": 694.8886162,
+            "p95": 708.7791956499999,
+            "p99": 730.29203498
+          },
+          "http_first_query": {
+            "p50": 182.094931,
+            "p90": 209.46145190000001,
+            "p95": 223.86094934999997,
+            "p99": 237.70692809
+          },
+          "incoming_http": {
+            "p50": 182.1686565,
+            "p90": 209.53408050000002,
+            "p95": 223.9501805,
+            "p99": 237.77906339999998
+          },
+          "cold_open": {
+            "p50": 371.8397245,
+            "p90": 408.3119554,
+            "p95": 421.87158445,
+            "p99": 433.96616658999994
+          },
+          "head_read": {
+            "p50": 79.48844199999999,
+            "p90": 84.01556289999999,
+            "p95": 86.0955417,
+            "p99": 116.2505679399999
+          },
+          "metadata_staging": {
+            "p50": 340.15439349999997,
+            "p90": 376.227346,
+            "p95": 390.45352219999995,
+            "p99": 400.93779171
+          },
+          "metadata_decode": {
+            "p50": 21.508493,
+            "p90": 21.7335185,
+            "p95": 21.77610255,
+            "p99": 21.914186609999998
+          },
+          "metadata_HEAD": {
+            "p50": 82.124202,
+            "p90": 92.5276509,
+            "p95": 99.45555059999997,
+            "p99": 109.81870747999997
+          },
+          "metadata_GET_headers": {
+            "p50": 185.284542,
+            "p90": 197.14535659999999,
+            "p95": 199.86403004999997,
+            "p99": 209.58452548
+          },
+          "metadata_stream_and_output": {
+            "p50": 66.86868150000001,
+            "p90": 100.0937355,
+            "p95": 105.76843244999998,
+            "p99": 129.86813609999996
+          },
+          "metadata_awaited_writes": {
+            "p50": 2.207019,
+            "p90": 2.3703294,
+            "p95": 2.427828,
+            "p99": 2.9855024999999964
+          },
+          "source_head": {
+            "p50": 9.4640425,
+            "p90": 10.975843800000002,
+            "p95": 11.377797249999999,
+            "p99": 13.922284119999993
+          },
+          "router_head": {
+            "p50": 0.0,
+            "p90": 0.0,
+            "p95": 0.0,
+            "p99": 0.0
+          },
+          "native_query": {
+            "p50": 181.3216155,
+            "p90": 208.6811151,
+            "p95": 223.33518834999998,
+            "p99": 237.02764506
+          },
+          "discovery": {
+            "p50": 2.125615,
+            "p90": 2.2438455999999998,
+            "p95": 2.26226375,
+            "p99": 2.47958067
+          },
+          "source": {
+            "p50": 105.3967835,
+            "p90": 125.9273948,
+            "p95": 138.55299284999998,
+            "p99": 156.24112508999997
+          },
+          "planning": {
+            "p50": 9.553506500000001,
+            "p90": 10.2156902,
+            "p95": 10.3674808,
+            "p99": 10.63292965
+          },
+          "sq8": {
+            "p50": 60.488287,
+            "p90": 79.36970269999999,
+            "p95": 81.19981499999999,
+            "p99": 100.51699612999991
+          }
+        },
+        "accounting_observations": 64,
+        "accounting_complete": true,
+        "startup_accounting_observations": 64,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 2610,
+          "source_verified_bytes": 933740800,
+          "source_failed_gets": 0,
+          "submitted_gets": 1712,
+          "verified_bytes": 1073105280,
+          "failed_gets": 0,
+          "router_submitted_gets": 0,
+          "router_verified_bytes": 0,
+          "router_failed_gets": 0,
+          "metadata_GETs": 640,
+          "metadata_HEADs": 576,
+          "metadata_bytes": 371412544,
+          "authority_head_JSON_GETs": 64,
+          "authority_head_JSON_bytes": 10880,
+          "authority_generation_root_GETs": 64,
+          "authority_generation_root_bytes": 2174720,
+          "source_HEADs": 64,
+          "router_HEADs": 0
+        },
+        "known_process_transport_totals": {
+          "attempts": 5922,
+          "consumed_payload_bytes": 2380551168,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            5218,
+            640,
+            64,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 192,
+          "inferred_credential_consumed_bytes": 106944,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 64,
+        "native_peak_RSS_bytes": 56156160,
+        "native_CPU_seconds": {
+          "user": "8.67",
+          "system": "3.59"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 1,
+        "offered_qps": 0.5,
+        "dataset": "ReLAION",
+        "arm": "control",
+        "records_file": "rate1-relaion-control-records.jsonl",
+        "records_sha256": "dec13c43cf40914ce6fb007c59c92d17001cbadbcb1b59e831df6d89df780a56",
+        "records_bytes": 1355249,
+        "offered": 64,
+        "admitted": 64,
+        "admitted_completed": 64,
+        "capacity_drops": 0,
+        "aborted_offers": 0,
+        "success_fraction": 1.0,
+        "all_offer_recall_at_10": 0.996875,
+        "epoch_ns": 1143971900949,
+        "terminal_ns": 1270621696905,
+        "full_span_ns": 126649795956,
+        "planned_offer_window_ns": 128000000000,
+        "last_scheduled_offset_ns": 126000000000,
+        "successful_full_span_qps": 0.5053304627686455,
+        "admitted_completed_full_span_qps": 0.5053304627686455,
+        "scheduled_to_response_ms": {
+          "p50": 647.5378734999999,
+          "p90": 696.1213311,
+          "p95": 709.9756881999999,
+          "p99": 731.6731208799999
+        },
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": 647.5378734999999,
+          "p90": 696.1213311,
+          "p95": 709.9756881999999,
+          "p99": 731.6731208799999
+        },
+        "dispatch_delay_ms": {
+          "p50": 0.12627300000000002,
+          "p90": 0.1410661,
+          "p95": 0.14187429999999998,
+          "p99": 0.14774468999999998
+        },
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": true,
+        "all_offers_successful": true,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 147529728,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 1,
+        "identity_gate_passed": true,
+        "abort_after": null,
+        "cell_started": true,
+        "qualification_gate_passed": true
+      },
+      {
+        "count": 64,
+        "successes": 64,
+        "failures": 0,
+        "aborted": 0,
+        "failed_calls": 0,
+        "returned_hits": 628,
+        "recall_at_10": 0.98125,
+        "success_conditioned_recall_at_10": 0.98125,
+        "per_query_recall_at_10_p05": 0.9,
+        "success_conditioned_latency": false,
+        "latency_ms": {
+          "whole_cold": {
+            "p50": 552.76432,
+            "p90": 610.0590084,
+            "p95": 621.2769,
+            "p99": 673.1420131399999
+          },
+          "http_first_query": {
+            "p50": 168.08076,
+            "p90": 206.4214803,
+            "p95": 213.6716552,
+            "p99": 288.21630704999984
+          },
+          "incoming_http": {
+            "p50": 168.15346499999998,
+            "p90": 206.492655,
+            "p95": 213.74539625,
+            "p99": 288.28770613999984
+          },
+          "cold_open": {
+            "p50": 296.51584,
+            "p90": 317.83167100000003,
+            "p95": 321.843311,
+            "p99": 331.04750927000003
+          },
+          "head_read": {
+            "p50": 78.707809,
+            "p90": 82.6970702,
+            "p95": 84.16114284999999,
+            "p99": 88.15776346999998
+          },
+          "metadata_staging": {
+            "p50": 274.180969,
+            "p90": 296.4531621,
+            "p95": 300.40589494999995,
+            "p99": 308.26393949
+          },
+          "metadata_decode": {
+            "p50": 3.2778735,
+            "p90": 3.3134595,
+            "p95": 3.32893705,
+            "p99": 3.34377432
+          },
+          "metadata_HEAD": {
+            "p50": 72.6182585,
+            "p90": 83.2055212,
+            "p95": 85.54312579999998,
+            "p99": 100.62717088999996
+          },
+          "metadata_GET_headers": {
+            "p50": 188.592844,
+            "p90": 200.8699666,
+            "p95": 204.70897459999998,
+            "p99": 206.56524382
+          },
+          "metadata_stream_and_output": {
+            "p50": 13.608138499999999,
+            "p90": 20.9554823,
+            "p95": 21.959952949999995,
+            "p99": 23.11181699
+          },
+          "metadata_awaited_writes": {
+            "p50": 0.8701485,
+            "p90": 1.1062847999999998,
+            "p95": 1.14121535,
+            "p99": 1.4349482399999982
+          },
+          "source_head": {
+            "p50": 8.933803999999999,
+            "p90": 9.925045899999999,
+            "p95": 10.079176149999999,
+            "p99": 11.018047509999999
+          },
+          "router_head": {
+            "p50": 9.234309,
+            "p90": 10.540328500000001,
+            "p95": 10.83934285,
+            "p99": 21.818515469999937
+          },
+          "native_query": {
+            "p50": 167.352472,
+            "p90": 205.760444,
+            "p95": 212.96727445,
+            "p99": 287.4745373499999
+          },
+          "discovery": {
+            "p50": 38.5499155,
+            "p90": 52.5087932,
+            "p95": 59.860985449999994,
+            "p99": 70.59937391999996
+          },
+          "source": {
+            "p50": 39.612417,
+            "p90": 60.5249483,
+            "p95": 62.761996999999994,
+            "p99": 70.15840742999998
+          },
+          "planning": {
+            "p50": 3.5859065,
+            "p90": 4.0991996,
+            "p95": 4.20230605,
+            "p99": 4.789490379999998
+          },
+          "sq8": {
+            "p50": 80.697048,
+            "p90": 98.27853660000001,
+            "p95": 112.48208539999997,
+            "p99": 157.22536546999987
+          }
+        },
+        "accounting_observations": 64,
+        "accounting_complete": true,
+        "startup_accounting_observations": 64,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 969,
+          "source_verified_bytes": 349785600,
+          "source_failed_gets": 0,
+          "submitted_gets": 1170,
+          "verified_bytes": 1049068800,
+          "failed_gets": 0,
+          "router_submitted_gets": 986,
+          "router_verified_bytes": 68941180,
+          "router_failed_gets": 0,
+          "metadata_GETs": 512,
+          "metadata_HEADs": 512,
+          "metadata_bytes": 57764736,
+          "authority_head_JSON_GETs": 64,
+          "authority_head_JSON_bytes": 10880,
+          "authority_generation_root_GETs": 64,
+          "authority_generation_root_bytes": 1365056,
+          "source_HEADs": 64,
+          "router_HEADs": 64
+        },
+        "known_process_transport_totals": {
+          "attempts": 4597,
+          "consumed_payload_bytes": 1527043196,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            3893,
+            640,
+            64,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 192,
+          "inferred_credential_consumed_bytes": 106944,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 64,
+        "native_peak_RSS_bytes": 37568512,
+        "native_CPU_seconds": {
+          "user": "5.61",
+          "system": "2.05"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 1,
+        "offered_qps": 0.5,
+        "dataset": "ReLAION",
+        "arm": "candidate",
+        "records_file": "rate1-relaion-candidate-records.jsonl",
+        "records_sha256": "24f166677ee133523395b1f0eda36211eb66ca71d0107545fc52e551adaa4e6d",
+        "records_bytes": 1278667,
+        "offered": 64,
+        "admitted": 64,
+        "admitted_completed": 64,
+        "capacity_drops": 0,
+        "aborted_offers": 0,
+        "success_fraction": 1.0,
+        "all_offer_recall_at_10": 0.98125,
+        "epoch_ns": 1271823479526,
+        "terminal_ns": 1398448896042,
+        "full_span_ns": 126625416516,
+        "planned_offer_window_ns": 128000000000,
+        "last_scheduled_offset_ns": 126000000000,
+        "successful_full_span_qps": 0.5054277550345759,
+        "admitted_completed_full_span_qps": 0.5054277550345759,
+        "scheduled_to_response_ms": {
+          "p50": 553.7271065,
+          "p90": 611.2991982000001,
+          "p95": 622.4139851,
+          "p99": 674.4724348499999
+        },
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": 553.7271065,
+          "p90": 611.2991982000001,
+          "p95": 622.4139851,
+          "p99": 674.4724348499999
+        },
+        "dispatch_delay_ms": {
+          "p50": 0.10893900000000001,
+          "p90": 0.1382897,
+          "p95": 0.15315134999999996,
+          "p99": 0.18903361999999996
+        },
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": true,
+        "all_offers_successful": true,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 153026560,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 1,
+        "identity_gate_passed": true,
+        "abort_after": null,
+        "cell_started": true,
+        "qualification_gate_passed": true
+      },
+      {
+        "count": 64,
+        "successes": 64,
+        "failures": 0,
+        "aborted": 0,
+        "failed_calls": 0,
+        "returned_hits": 631,
+        "recall_at_10": 0.9859375,
+        "success_conditioned_recall_at_10": 0.9859375,
+        "per_query_recall_at_10_p05": 0.9,
+        "success_conditioned_latency": false,
+        "latency_ms": {
+          "whole_cold": {
+            "p50": 637.2597949999999,
+            "p90": 669.9871844,
+            "p95": 681.91063485,
+            "p99": 703.9791071799999
+          },
+          "http_first_query": {
+            "p50": 168.9519985,
+            "p90": 197.7121559,
+            "p95": 203.90064564999997,
+            "p99": 215.37452602
+          },
+          "incoming_http": {
+            "p50": 169.01566400000002,
+            "p90": 197.78054269999998,
+            "p95": 203.97146719999998,
+            "p99": 215.44439748
+          },
+          "cold_open": {
+            "p50": 367.61773400000004,
+            "p90": 399.4342908,
+            "p95": 414.75612765,
+            "p99": 421.75867031999996
+          },
+          "head_read": {
+            "p50": 78.7760095,
+            "p90": 84.5008859,
+            "p95": 85.53604815,
+            "p99": 99.45055095999996
+          },
+          "metadata_staging": {
+            "p50": 337.0346385,
+            "p90": 368.6229924,
+            "p95": 380.36966249999995,
+            "p99": 391.78902323999995
+          },
+          "metadata_decode": {
+            "p50": 21.362934,
+            "p90": 21.607669299999998,
+            "p95": 21.6365409,
+            "p99": 22.88193782999999
+          },
+          "metadata_HEAD": {
+            "p50": 82.9963235,
+            "p90": 93.1112008,
+            "p95": 94.75953515,
+            "p99": 97.37594855999998
+          },
+          "metadata_GET_headers": {
+            "p50": 185.5749075,
+            "p90": 196.1297866,
+            "p95": 199.58074109999998,
+            "p99": 203.02120148
+          },
+          "metadata_stream_and_output": {
+            "p50": 66.86833999999999,
+            "p90": 92.3641688,
+            "p95": 99.01462014999998,
+            "p99": 115.89612634999995
+          },
+          "metadata_awaited_writes": {
+            "p50": 2.1980825,
+            "p90": 2.308225,
+            "p95": 2.32948535,
+            "p99": 2.4417420499999998
+          },
+          "source_head": {
+            "p50": 8.8153185,
+            "p90": 10.252237500000001,
+            "p95": 10.741102499999998,
+            "p99": 13.003634359999996
+          },
+          "router_head": {
+            "p50": 0.0,
+            "p90": 0.0,
+            "p95": 0.0,
+            "p99": 0.0
+          },
+          "native_query": {
+            "p50": 168.25829499999998,
+            "p90": 196.9345515,
+            "p95": 203.28431475,
+            "p99": 214.61629961
+          },
+          "discovery": {
+            "p50": 2.2624915,
+            "p90": 2.4065145,
+            "p95": 2.42315755,
+            "p99": 2.4572522
+          },
+          "source": {
+            "p50": 98.386763,
+            "p90": 126.59597450000001,
+            "p95": 131.77601810000002,
+            "p99": 135.88969544
+          },
+          "planning": {
+            "p50": 8.0427795,
+            "p90": 8.3456904,
+            "p95": 8.3679593,
+            "p99": 8.46007753
+          },
+          "sq8": {
+            "p50": 61.168639,
+            "p90": 69.6543231,
+            "p95": 79.30391079999997,
+            "p99": 81.60371839
+          }
+        },
+        "accounting_observations": 64,
+        "accounting_complete": true,
+        "startup_accounting_observations": 64,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 1209,
+          "source_verified_bytes": 716646400,
+          "source_failed_gets": 0,
+          "submitted_gets": 1983,
+          "verified_bytes": 1072880640,
+          "failed_gets": 0,
+          "router_submitted_gets": 0,
+          "router_verified_bytes": 0,
+          "router_failed_gets": 0,
+          "metadata_GETs": 640,
+          "metadata_HEADs": 576,
+          "metadata_bytes": 371414912,
+          "authority_head_JSON_GETs": 64,
+          "authority_head_JSON_bytes": 10880,
+          "authority_generation_root_GETs": 64,
+          "authority_generation_root_bytes": 2177088,
+          "source_HEADs": 64,
+          "router_HEADs": 0
+        },
+        "known_process_transport_totals": {
+          "attempts": 4792,
+          "consumed_payload_bytes": 2163236864,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            4088,
+            640,
+            64,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 192,
+          "inferred_credential_consumed_bytes": 106944,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 64,
+        "native_peak_RSS_bytes": 54751232,
+        "native_CPU_seconds": {
+          "user": "8.07",
+          "system": "3.60"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 1,
+        "offered_qps": 0.5,
+        "dataset": "CoHere",
+        "arm": "control",
+        "records_file": "rate1-cohere-control-records.jsonl",
+        "records_sha256": "dc02be9bd487e05030d2fc7b4ac6ab513ec1a524e88b75650d94d003ad2688e6",
+        "records_bytes": 1377817,
+        "offered": 64,
+        "admitted": 64,
+        "admitted_completed": 64,
+        "capacity_drops": 0,
+        "aborted_offers": 0,
+        "success_fraction": 1.0,
+        "all_offer_recall_at_10": 0.9859375,
+        "epoch_ns": 1399642222787,
+        "terminal_ns": 1526315410978,
+        "full_span_ns": 126673188191,
+        "planned_offer_window_ns": 128000000000,
+        "last_scheduled_offset_ns": 126000000000,
+        "successful_full_span_qps": 0.5052371453973331,
+        "admitted_completed_full_span_qps": 0.5052371453973331,
+        "scheduled_to_response_ms": {
+          "p50": 638.2851455,
+          "p90": 671.21511,
+          "p95": 683.07797575,
+          "p99": 705.2467054499999
+        },
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": 638.2851455,
+          "p90": 671.21511,
+          "p95": 683.07797575,
+          "p99": 705.2467054499999
+        },
+        "dispatch_delay_ms": {
+          "p50": 0.103553,
+          "p90": 0.12995210000000001,
+          "p95": 0.13943144999999998,
+          "p99": 0.16360381999999987
+        },
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": true,
+        "all_offers_successful": true,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 156631040,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 1,
+        "identity_gate_passed": true,
+        "abort_after": null,
+        "cell_started": true,
+        "qualification_gate_passed": true
+      },
+      {
+        "count": 64,
+        "successes": 64,
+        "failures": 0,
+        "aborted": 0,
+        "failed_calls": 0,
+        "returned_hits": 613,
+        "recall_at_10": 0.9578125,
+        "success_conditioned_recall_at_10": 0.9578125,
+        "per_query_recall_at_10_p05": 0.8,
+        "success_conditioned_latency": false,
+        "latency_ms": {
+          "whole_cold": {
+            "p50": 551.155125,
+            "p90": 593.8950144,
+            "p95": 620.8559596,
+            "p99": 715.3342340399998
+          },
+          "http_first_query": {
+            "p50": 161.86820699999998,
+            "p90": 193.78156230000002,
+            "p95": 206.27244695000002,
+            "p99": 276.16837823999987
+          },
+          "incoming_http": {
+            "p50": 161.937386,
+            "p90": 193.85161250000002,
+            "p95": 206.34253055000002,
+            "p99": 276.2382269199999
+          },
+          "cold_open": {
+            "p50": 296.0093505,
+            "p90": 316.5969552,
+            "p95": 320.5711083,
+            "p99": 363.17654326999985
+          },
+          "head_read": {
+            "p50": 78.80060399999999,
+            "p90": 84.9519842,
+            "p95": 87.20513774999999,
+            "p99": 93.30313323999997
+          },
+          "metadata_staging": {
+            "p50": 274.599481,
+            "p90": 295.5369638,
+            "p95": 296.82302655,
+            "p99": 337.2773471099999
+          },
+          "metadata_decode": {
+            "p50": 3.1443265,
+            "p90": 3.1882877,
+            "p95": 3.19589105,
+            "p99": 3.20550411
+          },
+          "metadata_HEAD": {
+            "p50": 71.81018399999999,
+            "p90": 83.1022112,
+            "p95": 85.0325249,
+            "p99": 109.96038575999998
+          },
+          "metadata_GET_headers": {
+            "p50": 187.97704,
+            "p90": 199.15649820000002,
+            "p95": 201.3961368,
+            "p99": 206.48040951
+          },
+          "metadata_stream_and_output": {
+            "p50": 14.135152000000001,
+            "p90": 21.2491489,
+            "p95": 21.697349999999997,
+            "p99": 28.712229629999968
+          },
+          "metadata_awaited_writes": {
+            "p50": 0.86966,
+            "p90": 1.0495768,
+            "p95": 1.1047055499999998,
+            "p99": 1.12249746
+          },
+          "source_head": {
+            "p50": 8.679388,
+            "p90": 10.7763705,
+            "p95": 11.334707599999998,
+            "p99": 18.77618874999997
+          },
+          "router_head": {
+            "p50": 8.8444125,
+            "p90": 9.9627356,
+            "p95": 10.705145449999998,
+            "p99": 14.54278117
+          },
+          "native_query": {
+            "p50": 161.16691400000002,
+            "p90": 193.03492070000001,
+            "p95": 205.42853195,
+            "p99": 275.3863955499999
+          },
+          "discovery": {
+            "p50": 38.8921105,
+            "p90": 60.882091400000014,
+            "p95": 65.1964135,
+            "p99": 76.88558235999999
+          },
+          "source": {
+            "p50": 36.3999585,
+            "p90": 51.7743856,
+            "p95": 55.09235525,
+            "p99": 66.78204325999998
+          },
+          "planning": {
+            "p50": 3.3914465,
+            "p90": 3.6607478,
+            "p95": 3.6915977499999997,
+            "p99": 3.89480611
+          },
+          "sq8": {
+            "p50": 79.6809695,
+            "p90": 102.2162624,
+            "p95": 109.45781135,
+            "p99": 146.44153364999997
+          }
+        },
+        "accounting_observations": 64,
+        "accounting_complete": true,
+        "startup_accounting_observations": 64,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 710,
+          "source_verified_bytes": 340710400,
+          "source_failed_gets": 0,
+          "submitted_gets": 1308,
+          "verified_bytes": 1071832320,
+          "failed_gets": 0,
+          "router_submitted_gets": 1024,
+          "router_verified_bytes": 71782480,
+          "router_failed_gets": 0,
+          "metadata_GETs": 512,
+          "metadata_HEADs": 512,
+          "metadata_bytes": 56749696,
+          "authority_head_JSON_GETs": 64,
+          "authority_head_JSON_bytes": 10880,
+          "authority_generation_root_GETs": 64,
+          "authority_generation_root_bytes": 1371264,
+          "source_HEADs": 64,
+          "router_HEADs": 64
+        },
+        "known_process_transport_totals": {
+          "attempts": 4514,
+          "consumed_payload_bytes": 1542563984,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            3810,
+            640,
+            64,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 192,
+          "inferred_credential_consumed_bytes": 106944,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 64,
+        "native_peak_RSS_bytes": 36089856,
+        "native_CPU_seconds": {
+          "user": "5.69",
+          "system": "1.99"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 1,
+        "offered_qps": 0.5,
+        "dataset": "CoHere",
+        "arm": "candidate",
+        "records_file": "rate1-cohere-candidate-records.jsonl",
+        "records_sha256": "cd7b848cdcb571d9dac30ca566f1f61ab6a576f5bdd14df4bc45fe5d9f743e59",
+        "records_bytes": 1290588,
+        "offered": 64,
+        "admitted": 64,
+        "admitted_completed": 64,
+        "capacity_drops": 0,
+        "aborted_offers": 0,
+        "success_fraction": 1.0,
+        "all_offer_recall_at_10": 0.9578125,
+        "epoch_ns": 1527516082213,
+        "terminal_ns": 1654059685674,
+        "full_span_ns": 126543603461,
+        "planned_offer_window_ns": 128000000000,
+        "last_scheduled_offset_ns": 126000000000,
+        "successful_full_span_qps": 0.505754524524224,
+        "admitted_completed_full_span_qps": 0.505754524524224,
+        "scheduled_to_response_ms": {
+          "p50": 552.389943,
+          "p90": 595.0458695,
+          "p95": 621.9054347999999,
+          "p99": 716.6281099199998
+        },
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": 552.389943,
+          "p90": 595.0458695,
+          "p95": 621.9054347999999,
+          "p99": 716.6281099199998
+        },
+        "dispatch_delay_ms": {
+          "p50": 0.09467300000000001,
+          "p90": 0.1012639,
+          "p95": 0.10413589999999999,
+          "p99": 0.10718023
+        },
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": true,
+        "all_offers_successful": true,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 162201600,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 1,
+        "identity_gate_passed": true,
+        "abort_after": null,
+        "cell_started": true,
+        "qualification_gate_passed": true
+      },
+      {
+        "count": 64,
+        "successes": 64,
+        "failures": 0,
+        "aborted": 0,
+        "failed_calls": 0,
+        "returned_hits": 638,
+        "recall_at_10": 0.996875,
+        "success_conditioned_recall_at_10": 0.996875,
+        "per_query_recall_at_10_p05": 1.0,
+        "success_conditioned_latency": false,
+        "latency_ms": {
+          "whole_cold": {
+            "p50": 641.5024485,
+            "p90": 701.8078389000001,
+            "p95": 712.3442807,
+            "p99": 726.72244841
+          },
+          "http_first_query": {
+            "p50": 176.788407,
+            "p90": 207.7265161,
+            "p95": 219.29949649999995,
+            "p99": 238.28108824999998
+          },
+          "incoming_http": {
+            "p50": 176.8617815,
+            "p90": 207.7978795,
+            "p95": 219.37109069999994,
+            "p99": 238.35254207999998
+          },
+          "cold_open": {
+            "p50": 375.44189,
+            "p90": 414.1693614,
+            "p95": 426.0229039999999,
+            "p99": 442.5626991
+          },
+          "head_read": {
+            "p50": 78.8385275,
+            "p90": 83.0906912,
+            "p95": 84.62557735,
+            "p99": 85.25965769
+          },
+          "metadata_staging": {
+            "p50": 345.3172905,
+            "p90": 383.1952516,
+            "p95": 396.01883814999997,
+            "p99": 410.44359083999996
+          },
+          "metadata_decode": {
+            "p50": 20.981257,
+            "p90": 21.3705423,
+            "p95": 21.447089000000002,
+            "p99": 21.51514322
+          },
+          "metadata_HEAD": {
+            "p50": 81.1425585,
+            "p90": 93.1418849,
+            "p95": 96.87740765,
+            "p99": 114.87942504999998
+          },
+          "metadata_GET_headers": {
+            "p50": 187.29384,
+            "p90": 196.8202352,
+            "p95": 201.137492,
+            "p99": 216.71952596999998
+          },
+          "metadata_stream_and_output": {
+            "p50": 72.27043499999999,
+            "p90": 109.11924650000003,
+            "p95": 117.07314709999999,
+            "p99": 136.51336474999997
+          },
+          "metadata_awaited_writes": {
+            "p50": 2.1856405,
+            "p90": 2.3286537000000003,
+            "p95": 2.35641935,
+            "p99": 2.39553656
+          },
+          "source_head": {
+            "p50": 8.9162125,
+            "p90": 10.9716737,
+            "p95": 11.845942649999996,
+            "p99": 19.03817967999997
+          },
+          "router_head": {
+            "p50": 0.0,
+            "p90": 0.0,
+            "p95": 0.0,
+            "p99": 0.0
+          },
+          "native_query": {
+            "p50": 176.319306,
+            "p90": 207.0423039,
+            "p95": 218.58890499999993,
+            "p99": 237.58242639999997
+          },
+          "discovery": {
+            "p50": 2.0967785,
+            "p90": 2.1860028000000002,
+            "p95": 2.1947094,
+            "p99": 2.23939902
+          },
+          "source": {
+            "p50": 99.08675600000001,
+            "p90": 118.7133098,
+            "p95": 129.2466745,
+            "p99": 154.49486557999998
+          },
+          "planning": {
+            "p50": 9.5132045,
+            "p90": 10.2266719,
+            "p95": 10.4427658,
+            "p99": 10.55696325
+          },
+          "sq8": {
+            "p50": 60.948156,
+            "p90": 80.23222820000001,
+            "p95": 81.04452380000001,
+            "p99": 100.6438593799999
+          }
+        },
+        "accounting_observations": 64,
+        "accounting_complete": true,
+        "startup_accounting_observations": 64,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 2610,
+          "source_verified_bytes": 933740800,
+          "source_failed_gets": 0,
+          "submitted_gets": 1712,
+          "verified_bytes": 1073105280,
+          "failed_gets": 0,
+          "router_submitted_gets": 0,
+          "router_verified_bytes": 0,
+          "router_failed_gets": 0,
+          "metadata_GETs": 640,
+          "metadata_HEADs": 576,
+          "metadata_bytes": 371412544,
+          "authority_head_JSON_GETs": 64,
+          "authority_head_JSON_bytes": 10880,
+          "authority_generation_root_GETs": 64,
+          "authority_generation_root_bytes": 2174720,
+          "source_HEADs": 64,
+          "router_HEADs": 0
+        },
+        "known_process_transport_totals": {
+          "attempts": 5922,
+          "consumed_payload_bytes": 2380551168,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            5218,
+            640,
+            64,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 192,
+          "inferred_credential_consumed_bytes": 106944,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 64,
+        "native_peak_RSS_bytes": 57339904,
+        "native_CPU_seconds": {
+          "user": "8.59",
+          "system": "3.53"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 2,
+        "offered_qps": 1,
+        "dataset": "ReLAION",
+        "arm": "control",
+        "records_file": "rate2-relaion-control-records.jsonl",
+        "records_sha256": "3eb2ddba0a8178c22ffa8a5a6148706c1aaf0f2eb9a26e15cffc0adf9790f2a8",
+        "records_bytes": 1355133,
+        "offered": 64,
+        "admitted": 64,
+        "admitted_completed": 64,
+        "capacity_drops": 0,
+        "aborted_offers": 0,
+        "success_fraction": 1.0,
+        "all_offer_recall_at_10": 0.996875,
+        "epoch_ns": 1655259363201,
+        "terminal_ns": 1718870344999,
+        "full_span_ns": 63610981798,
+        "planned_offer_window_ns": 64000000000,
+        "last_scheduled_offset_ns": 63000000000,
+        "successful_full_span_qps": 1.0061155824199561,
+        "admitted_completed_full_span_qps": 1.0061155824199561,
+        "scheduled_to_response_ms": {
+          "p50": 642.3575880000001,
+          "p90": 702.7567825,
+          "p95": 713.2723062,
+          "p99": 727.6713079199999
+        },
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": 642.3575880000001,
+          "p90": 702.7567825,
+          "p95": 713.2723062,
+          "p99": 727.6713079199999
+        },
+        "dispatch_delay_ms": {
+          "p50": 0.09061649999999999,
+          "p90": 0.11369170000000003,
+          "p95": 0.14999314999999985,
+          "p99": 0.16975498999999997
+        },
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": true,
+        "all_offers_successful": true,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 165756928,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 1,
+        "identity_gate_passed": true,
+        "abort_after": null,
+        "cell_started": true,
+        "qualification_gate_passed": true
+      },
+      {
+        "count": 64,
+        "successes": 64,
+        "failures": 0,
+        "aborted": 0,
+        "failed_calls": 0,
+        "returned_hits": 628,
+        "recall_at_10": 0.98125,
+        "success_conditioned_recall_at_10": 0.98125,
+        "per_query_recall_at_10_p05": 0.9,
+        "success_conditioned_latency": false,
+        "latency_ms": {
+          "whole_cold": {
+            "p50": 564.7328924999999,
+            "p90": 600.5604998,
+            "p95": 613.1879588,
+            "p99": 697.9097605499996
+          },
+          "http_first_query": {
+            "p50": 169.682166,
+            "p90": 200.35431240000003,
+            "p95": 211.11929365,
+            "p99": 233.08716111999993
+          },
+          "incoming_http": {
+            "p50": 169.7506315,
+            "p90": 200.42692300000002,
+            "p95": 211.18761464999997,
+            "p99": 233.15595048999995
+          },
+          "cold_open": {
+            "p50": 301.566417,
+            "p90": 323.391979,
+            "p95": 326.735285,
+            "p99": 381.2568781699998
+          },
+          "head_read": {
+            "p50": 79.730992,
+            "p90": 83.7861028,
+            "p95": 84.5865725,
+            "p99": 105.24288041999986
+          },
+          "metadata_staging": {
+            "p50": 278.332833,
+            "p90": 301.0551042,
+            "p95": 303.90028959999995,
+            "p99": 354.03819317999984
+          },
+          "metadata_decode": {
+            "p50": 3.222436,
+            "p90": 3.2689384,
+            "p95": 3.27136565,
+            "p99": 3.2904223
+          },
+          "metadata_HEAD": {
+            "p50": 73.4799385,
+            "p90": 81.835042,
+            "p95": 85.5015245,
+            "p99": 113.81325846999997
+          },
+          "metadata_GET_headers": {
+            "p50": 188.220473,
+            "p90": 200.77163570000002,
+            "p95": 202.29499395,
+            "p99": 238.73650866999998
+          },
+          "metadata_stream_and_output": {
+            "p50": 17.034830499999998,
+            "p90": 22.34391,
+            "p95": 23.446505999999996,
+            "p99": 24.94209925
+          },
+          "metadata_awaited_writes": {
+            "p50": 0.9324605,
+            "p90": 1.0871816,
+            "p95": 1.1122468,
+            "p99": 1.1779940499999997
+          },
+          "source_head": {
+            "p50": 9.1812055,
+            "p90": 10.7203454,
+            "p95": 11.3630064,
+            "p99": 12.862504119999992
+          },
+          "router_head": {
+            "p50": 9.1138185,
+            "p90": 11.0640324,
+            "p95": 11.678944149999998,
+            "p99": 15.060665529999984
+          },
+          "native_query": {
+            "p50": 168.945106,
+            "p90": 199.61810340000002,
+            "p95": 210.35858979999998,
+            "p99": 232.32369871999992
+          },
+          "discovery": {
+            "p50": 38.1521025,
+            "p90": 53.3310107,
+            "p95": 58.6359845,
+            "p99": 61.06267021999999
+          },
+          "source": {
+            "p50": 40.5489115,
+            "p90": 61.206759000000005,
+            "p95": 63.45392019999999,
+            "p99": 74.38193969999992
+          },
+          "planning": {
+            "p50": 3.5877365,
+            "p90": 4.040318,
+            "p95": 4.191141,
+            "p99": 4.7392982199999985
+          },
+          "sq8": {
+            "p50": 80.198177,
+            "p90": 100.3529786,
+            "p95": 104.3793955,
+            "p99": 118.48727097999993
+          }
+        },
+        "accounting_observations": 64,
+        "accounting_complete": true,
+        "startup_accounting_observations": 64,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 969,
+          "source_verified_bytes": 349785600,
+          "source_failed_gets": 0,
+          "submitted_gets": 1170,
+          "verified_bytes": 1049068800,
+          "failed_gets": 0,
+          "router_submitted_gets": 986,
+          "router_verified_bytes": 68941180,
+          "router_failed_gets": 0,
+          "metadata_GETs": 512,
+          "metadata_HEADs": 512,
+          "metadata_bytes": 57764736,
+          "authority_head_JSON_GETs": 64,
+          "authority_head_JSON_bytes": 10880,
+          "authority_generation_root_GETs": 64,
+          "authority_generation_root_bytes": 1365056,
+          "source_HEADs": 64,
+          "router_HEADs": 64
+        },
+        "known_process_transport_totals": {
+          "attempts": 4597,
+          "consumed_payload_bytes": 1527043196,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            3893,
+            640,
+            64,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 192,
+          "inferred_credential_consumed_bytes": 106944,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 64,
+        "native_peak_RSS_bytes": 36515840,
+        "native_CPU_seconds": {
+          "user": "5.65",
+          "system": "1.99"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 2,
+        "offered_qps": 1,
+        "dataset": "ReLAION",
+        "arm": "candidate",
+        "records_file": "rate2-relaion-candidate-records.jsonl",
+        "records_sha256": "6217515cdf1fe55d5e3bc02f1360cabb6066063d7f2cb7a074c402b00255e154",
+        "records_bytes": 1278778,
+        "offered": 64,
+        "admitted": 64,
+        "admitted_completed": 64,
+        "capacity_drops": 0,
+        "aborted_offers": 0,
+        "success_fraction": 1.0,
+        "all_offer_recall_at_10": 0.98125,
+        "epoch_ns": 1720060933011,
+        "terminal_ns": 1783639448213,
+        "full_span_ns": 63578515202,
+        "planned_offer_window_ns": 64000000000,
+        "last_scheduled_offset_ns": 63000000000,
+        "successful_full_span_qps": 1.006629358937699,
+        "admitted_completed_full_span_qps": 1.006629358937699,
+        "scheduled_to_response_ms": {
+          "p50": 565.618158,
+          "p90": 601.4376054,
+          "p95": 614.18351805,
+          "p99": 698.7317693999996
+        },
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": 565.618158,
+          "p90": 601.4376054,
+          "p95": 614.18351805,
+          "p99": 698.7317693999996
+        },
+        "dispatch_delay_ms": {
+          "p50": 0.094954,
+          "p90": 0.11051860000000001,
+          "p95": 0.12093744999999999,
+          "p99": 0.14097455999999992
+        },
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": true,
+        "all_offers_successful": true,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 168886272,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 1,
+        "identity_gate_passed": true,
+        "abort_after": null,
+        "cell_started": true,
+        "qualification_gate_passed": true
+      },
+      {
+        "count": 64,
+        "successes": 64,
+        "failures": 0,
+        "aborted": 0,
+        "failed_calls": 0,
+        "returned_hits": 631,
+        "recall_at_10": 0.9859375,
+        "success_conditioned_recall_at_10": 0.9859375,
+        "per_query_recall_at_10_p05": 0.9,
+        "success_conditioned_latency": false,
+        "latency_ms": {
+          "whole_cold": {
+            "p50": 638.7082815,
+            "p90": 679.056976,
+            "p95": 693.60194685,
+            "p99": 828.61276842
+          },
+          "http_first_query": {
+            "p50": 171.0606575,
+            "p90": 200.393344,
+            "p95": 218.84523349999995,
+            "p99": 283.37037132999956
+          },
+          "incoming_http": {
+            "p50": 171.14144499999998,
+            "p90": 200.4666291,
+            "p95": 218.93420194999996,
+            "p99": 283.4538877799996
+          },
+          "cold_open": {
+            "p50": 374.869568,
+            "p90": 398.6741879,
+            "p95": 407.39519605,
+            "p99": 507.6222778399998
+          },
+          "head_read": {
+            "p50": 79.85553100000001,
+            "p90": 85.0113961,
+            "p95": 87.17740265,
+            "p99": 96.87695855
+          },
+          "metadata_staging": {
+            "p50": 344.2765065,
+            "p90": 366.12678800000003,
+            "p95": 377.5606171499999,
+            "p99": 474.2188963899998
+          },
+          "metadata_decode": {
+            "p50": 21.18689,
+            "p90": 21.5662762,
+            "p95": 21.63451485,
+            "p99": 21.79255203
+          },
+          "metadata_HEAD": {
+            "p50": 83.0161415,
+            "p90": 93.3523432,
+            "p95": 99.1097847,
+            "p99": 163.70310011999996
+          },
+          "metadata_GET_headers": {
+            "p50": 184.47324450000002,
+            "p90": 196.7959062,
+            "p95": 200.2390585,
+            "p99": 220.80551972999996
+          },
+          "metadata_stream_and_output": {
+            "p50": 68.276791,
+            "p90": 102.62520660000001,
+            "p95": 109.79190614999999,
+            "p99": 121.25197582999995
+          },
+          "metadata_awaited_writes": {
+            "p50": 2.1453860000000002,
+            "p90": 2.3462655000000003,
+            "p95": 2.3676914,
+            "p99": 2.41791558
+          },
+          "source_head": {
+            "p50": 8.732875,
+            "p90": 11.0780457,
+            "p95": 11.893075149999998,
+            "p99": 15.15920436999999
+          },
+          "router_head": {
+            "p50": 0.0,
+            "p90": 0.0,
+            "p95": 0.0,
+            "p99": 0.0
+          },
+          "native_query": {
+            "p50": 170.2443395,
+            "p90": 199.7693223,
+            "p95": 218.03895179999995,
+            "p99": 282.5980544699996
+          },
+          "discovery": {
+            "p50": 2.2475435,
+            "p90": 2.3989282000000003,
+            "p95": 2.4179678,
+            "p99": 2.4842447
+          },
+          "source": {
+            "p50": 98.498076,
+            "p90": 128.3270785,
+            "p95": 134.37370359999997,
+            "p99": 143.2084615
+          },
+          "planning": {
+            "p50": 8.0849865,
+            "p90": 8.3247408,
+            "p95": 8.356209549999999,
+            "p99": 8.42002355
+          },
+          "sq8": {
+            "p50": 61.4507075,
+            "p90": 75.36770010000001,
+            "p95": 77.46869385,
+            "p99": 142.23131514999966
+          }
+        },
+        "accounting_observations": 64,
+        "accounting_complete": true,
+        "startup_accounting_observations": 64,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 1209,
+          "source_verified_bytes": 716646400,
+          "source_failed_gets": 0,
+          "submitted_gets": 1983,
+          "verified_bytes": 1072880640,
+          "failed_gets": 0,
+          "router_submitted_gets": 0,
+          "router_verified_bytes": 0,
+          "router_failed_gets": 0,
+          "metadata_GETs": 640,
+          "metadata_HEADs": 576,
+          "metadata_bytes": 371414912,
+          "authority_head_JSON_GETs": 64,
+          "authority_head_JSON_bytes": 10880,
+          "authority_generation_root_GETs": 64,
+          "authority_generation_root_bytes": 2177088,
+          "source_HEADs": 64,
+          "router_HEADs": 0
+        },
+        "known_process_transport_totals": {
+          "attempts": 4792,
+          "consumed_payload_bytes": 2163236864,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            4088,
+            640,
+            64,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 192,
+          "inferred_credential_consumed_bytes": 106944,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 64,
+        "native_peak_RSS_bytes": 53448704,
+        "native_CPU_seconds": {
+          "user": "8.14",
+          "system": "3.48"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 2,
+        "offered_qps": 1,
+        "dataset": "CoHere",
+        "arm": "control",
+        "records_file": "rate2-cohere-control-records.jsonl",
+        "records_sha256": "e3b80455287b198e448238596de8f4e93d7b908ff38bbea08ff03d8cfeb28c2d",
+        "records_bytes": 1377925,
+        "offered": 64,
+        "admitted": 64,
+        "admitted_completed": 64,
+        "capacity_drops": 0,
+        "aborted_offers": 0,
+        "success_fraction": 1.0,
+        "all_offer_recall_at_10": 0.9859375,
+        "epoch_ns": 1784816545564,
+        "terminal_ns": 1848429451874,
+        "full_span_ns": 63612906310,
+        "planned_offer_window_ns": 64000000000,
+        "last_scheduled_offset_ns": 63000000000,
+        "successful_full_span_qps": 1.0060851439189653,
+        "admitted_completed_full_span_qps": 1.0060851439189653,
+        "scheduled_to_response_ms": {
+          "p50": 639.6830355,
+          "p90": 680.1307118,
+          "p95": 694.5352329499999,
+          "p99": 829.5672559999999
+        },
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": 639.6830355,
+          "p90": 680.1307118,
+          "p95": 694.5352329499999,
+          "p99": 829.5672559999999
+        },
+        "dispatch_delay_ms": {
+          "p50": 0.129721,
+          "p90": 0.17394779999999999,
+          "p95": 0.1797267,
+          "p99": 0.18668279
+        },
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": true,
+        "all_offers_successful": true,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 174698496,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 1,
+        "identity_gate_passed": true,
+        "abort_after": null,
+        "cell_started": true,
+        "qualification_gate_passed": true
+      },
+      {
+        "count": 64,
+        "successes": 64,
+        "failures": 0,
+        "aborted": 0,
+        "failed_calls": 0,
+        "returned_hits": 613,
+        "recall_at_10": 0.9578125,
+        "success_conditioned_recall_at_10": 0.9578125,
+        "per_query_recall_at_10_p05": 0.8,
+        "success_conditioned_latency": false,
+        "latency_ms": {
+          "whole_cold": {
+            "p50": 552.285081,
+            "p90": 602.0112273,
+            "p95": 611.69994635,
+            "p99": 679.6463625599998
+          },
+          "http_first_query": {
+            "p50": 164.33028000000002,
+            "p90": 189.3476379,
+            "p95": 215.22666864999988,
+            "p99": 279.3466808299997
+          },
+          "incoming_http": {
+            "p50": 164.3987795,
+            "p90": 189.43419490000002,
+            "p95": 215.2963633999999,
+            "p99": 279.4170003699997
+          },
+          "cold_open": {
+            "p50": 299.318136,
+            "p90": 323.9268386,
+            "p95": 328.0714109,
+            "p99": 350.3492414499999
+          },
+          "head_read": {
+            "p50": 79.3024975,
+            "p90": 83.0731863,
+            "p95": 83.4102711,
+            "p99": 83.87039903
+          },
+          "metadata_staging": {
+            "p50": 277.95750799999996,
+            "p90": 300.8059656,
+            "p95": 306.2571645,
+            "p99": 323.6574099399999
+          },
+          "metadata_decode": {
+            "p50": 3.1662675,
+            "p90": 3.2097145,
+            "p95": 3.22597235,
+            "p99": 3.24885156
+          },
+          "metadata_HEAD": {
+            "p50": 73.15357750000001,
+            "p90": 81.3817387,
+            "p95": 85.22690719999999,
+            "p99": 94.07897684
+          },
+          "metadata_GET_headers": {
+            "p50": 187.32511,
+            "p90": 198.65574560000002,
+            "p95": 207.36110235,
+            "p99": 220.13178702
+          },
+          "metadata_stream_and_output": {
+            "p50": 15.162454,
+            "p90": 21.5999081,
+            "p95": 22.75284395,
+            "p99": 29.045513709999973
+          },
+          "metadata_awaited_writes": {
+            "p50": 0.8774465,
+            "p90": 1.0878112,
+            "p95": 1.1307014499999999,
+            "p99": 1.2073260599999998
+          },
+          "source_head": {
+            "p50": 9.068527,
+            "p90": 10.8284724,
+            "p95": 11.625469549999995,
+            "p99": 13.178822929999992
+          },
+          "router_head": {
+            "p50": 8.687746,
+            "p90": 10.2745267,
+            "p95": 10.914695499999999,
+            "p99": 13.866297959999988
+          },
+          "native_query": {
+            "p50": 163.6959165,
+            "p90": 188.6136587,
+            "p95": 214.48915069999987,
+            "p99": 278.5925043799997
+          },
+          "discovery": {
+            "p50": 38.023700000000005,
+            "p90": 54.13963570000002,
+            "p95": 69.80129909999997,
+            "p99": 93.98453077999997
+          },
+          "source": {
+            "p50": 35.758052500000005,
+            "p90": 50.5596346,
+            "p95": 54.673107449999996,
+            "p99": 121.86969391999958
+          },
+          "planning": {
+            "p50": 3.378842,
+            "p90": 3.6628836,
+            "p95": 3.817968449999999,
+            "p99": 3.94239334
+          },
+          "sq8": {
+            "p50": 79.759323,
+            "p90": 98.6774776,
+            "p95": 106.29416664999998,
+            "p99": 113.07256584
+          }
+        },
+        "accounting_observations": 64,
+        "accounting_complete": true,
+        "startup_accounting_observations": 64,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 710,
+          "source_verified_bytes": 340710400,
+          "source_failed_gets": 0,
+          "submitted_gets": 1308,
+          "verified_bytes": 1071832320,
+          "failed_gets": 0,
+          "router_submitted_gets": 1024,
+          "router_verified_bytes": 71782480,
+          "router_failed_gets": 0,
+          "metadata_GETs": 512,
+          "metadata_HEADs": 512,
+          "metadata_bytes": 56749696,
+          "authority_head_JSON_GETs": 64,
+          "authority_head_JSON_bytes": 10880,
+          "authority_generation_root_GETs": 64,
+          "authority_generation_root_bytes": 1371264,
+          "source_HEADs": 64,
+          "router_HEADs": 64
+        },
+        "known_process_transport_totals": {
+          "attempts": 4514,
+          "consumed_payload_bytes": 1542563984,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            3810,
+            640,
+            64,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 192,
+          "inferred_credential_consumed_bytes": 106944,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 64,
+        "native_peak_RSS_bytes": 37392384,
+        "native_CPU_seconds": {
+          "user": "5.68",
+          "system": "2.06"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 2,
+        "offered_qps": 1,
+        "dataset": "CoHere",
+        "arm": "candidate",
+        "records_file": "rate2-cohere-candidate-records.jsonl",
+        "records_sha256": "72ff756f53d810c3de169bc5443e6b5ccf2a70d3ce1e727bcc21822a1d128be4",
+        "records_bytes": 1290863,
+        "offered": 64,
+        "admitted": 64,
+        "admitted_completed": 64,
+        "capacity_drops": 0,
+        "aborted_offers": 0,
+        "success_fraction": 1.0,
+        "all_offer_recall_at_10": 0.9578125,
+        "epoch_ns": 1849623170321,
+        "terminal_ns": 1913221148258,
+        "full_span_ns": 63597977937,
+        "planned_offer_window_ns": 64000000000,
+        "last_scheduled_offset_ns": 63000000000,
+        "successful_full_span_qps": 1.0063213025954731,
+        "admitted_completed_full_span_qps": 1.0063213025954731,
+        "scheduled_to_response_ms": {
+          "p50": 553.30206,
+          "p90": 602.9760889,
+          "p95": 612.97823755,
+          "p99": 680.8245358799999
+        },
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": 553.30206,
+          "p90": 602.9760889,
+          "p95": 612.97823755,
+          "p99": 680.8245358799999
+        },
+        "dispatch_delay_ms": {
+          "p50": 0.1074465,
+          "p90": 0.1441217,
+          "p95": 0.16158884999999998,
+          "p99": 0.18827271999999995
+        },
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": true,
+        "all_offers_successful": true,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 179974144,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 1,
+        "identity_gate_passed": true,
+        "abort_after": null,
+        "cell_started": true,
+        "qualification_gate_passed": true
+      },
+      {
+        "count": 64,
+        "successes": 64,
+        "failures": 0,
+        "aborted": 0,
+        "failed_calls": 0,
+        "returned_hits": 638,
+        "recall_at_10": 0.996875,
+        "success_conditioned_recall_at_10": 0.996875,
+        "per_query_recall_at_10_p05": 1.0,
+        "success_conditioned_latency": false,
+        "latency_ms": {
+          "whole_cold": {
+            "p50": 647.7881755000001,
+            "p90": 688.318582,
+            "p95": 708.64404505,
+            "p99": 835.6193911999994
+          },
+          "http_first_query": {
+            "p50": 179.0406275,
+            "p90": 204.512616,
+            "p95": 219.9129921,
+            "p99": 345.7244337799995
+          },
+          "incoming_http": {
+            "p50": 179.11234050000002,
+            "p90": 204.581736,
+            "p95": 219.98328374999997,
+            "p99": 345.79652804999955
+          },
+          "cold_open": {
+            "p50": 373.301519,
+            "p90": 419.3303407,
+            "p95": 432.0504971,
+            "p99": 443.59385942
+          },
+          "head_read": {
+            "p50": 79.12790050000001,
+            "p90": 82.62291880000001,
+            "p95": 84.3422236,
+            "p99": 87.72405305999999
+          },
+          "metadata_staging": {
+            "p50": 341.97247849999997,
+            "p90": 384.3733813,
+            "p95": 400.56379549999997,
+            "p99": 413.61040659
+          },
+          "metadata_decode": {
+            "p50": 21.296643500000002,
+            "p90": 21.613266,
+            "p95": 21.66515385,
+            "p99": 21.886709399999997
+          },
+          "metadata_HEAD": {
+            "p50": 84.041715,
+            "p90": 97.0765523,
+            "p95": 100.27196149999997,
+            "p99": 114.47047396999999
+          },
+          "metadata_GET_headers": {
+            "p50": 187.7330625,
+            "p90": 200.762348,
+            "p95": 225.4357742,
+            "p99": 236.51964586
+          },
+          "metadata_stream_and_output": {
+            "p50": 66.68492599999999,
+            "p90": 92.94358220000002,
+            "p95": 111.41406689999995,
+            "p99": 137.34689864999999
+          },
+          "metadata_awaited_writes": {
+            "p50": 2.1861119999999996,
+            "p90": 2.3344529,
+            "p95": 2.3731855499999996,
+            "p99": 2.4687688499999996
+          },
+          "source_head": {
+            "p50": 9.1435835,
+            "p90": 10.694329000000002,
+            "p95": 11.371564149999998,
+            "p99": 13.105243599999993
+          },
+          "router_head": {
+            "p50": 0.0,
+            "p90": 0.0,
+            "p95": 0.0,
+            "p99": 0.0
+          },
+          "native_query": {
+            "p50": 178.357082,
+            "p90": 204.04941100000002,
+            "p95": 219.32252234999999,
+            "p99": 344.98141838999953
+          },
+          "discovery": {
+            "p50": 2.1335605,
+            "p90": 2.248743,
+            "p95": 2.3844374999999998,
+            "p99": 2.51745221
+          },
+          "source": {
+            "p50": 101.0559985,
+            "p90": 121.6144492,
+            "p95": 124.58942459999999,
+            "p99": 147.22978449999985
+          },
+          "planning": {
+            "p50": 9.605451,
+            "p90": 10.248489,
+            "p95": 10.3747817,
+            "p99": 10.77471441
+          },
+          "sq8": {
+            "p50": 60.5933695,
+            "p90": 81.3082437,
+            "p95": 87.74320064999998,
+            "p99": 202.92289549999947
+          }
+        },
+        "accounting_observations": 64,
+        "accounting_complete": true,
+        "startup_accounting_observations": 64,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 2610,
+          "source_verified_bytes": 933740800,
+          "source_failed_gets": 0,
+          "submitted_gets": 1712,
+          "verified_bytes": 1073105280,
+          "failed_gets": 0,
+          "router_submitted_gets": 0,
+          "router_verified_bytes": 0,
+          "router_failed_gets": 0,
+          "metadata_GETs": 640,
+          "metadata_HEADs": 576,
+          "metadata_bytes": 371412544,
+          "authority_head_JSON_GETs": 64,
+          "authority_head_JSON_bytes": 10880,
+          "authority_generation_root_GETs": 64,
+          "authority_generation_root_bytes": 2174720,
+          "source_HEADs": 64,
+          "router_HEADs": 0
+        },
+        "known_process_transport_totals": {
+          "attempts": 5922,
+          "consumed_payload_bytes": 2380551168,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            5218,
+            640,
+            64,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 192,
+          "inferred_credential_consumed_bytes": 106944,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 64,
+        "native_peak_RSS_bytes": 55922688,
+        "native_CPU_seconds": {
+          "user": "8.73",
+          "system": "3.49"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 3,
+        "offered_qps": 2,
+        "dataset": "ReLAION",
+        "arm": "control",
+        "records_file": "rate3-relaion-control-records.jsonl",
+        "records_sha256": "81abb7370f7497a3e91d77304f6e648c89985763bdb5c996d33d9455443ed2f8",
+        "records_bytes": 1355336,
+        "offered": 64,
+        "admitted": 64,
+        "admitted_completed": 64,
+        "capacity_drops": 0,
+        "aborted_offers": 0,
+        "success_fraction": 1.0,
+        "all_offer_recall_at_10": 0.996875,
+        "epoch_ns": 1914405594469,
+        "terminal_ns": 1946892603217,
+        "full_span_ns": 32487008748,
+        "planned_offer_window_ns": 32000000000,
+        "last_scheduled_offset_ns": 31500000000,
+        "successful_full_span_qps": 1.9700182462609777,
+        "admitted_completed_full_span_qps": 1.9700182462609777,
+        "scheduled_to_response_ms": {
+          "p50": 648.680607,
+          "p90": 689.3729966,
+          "p95": 709.67066475,
+          "p99": 836.5859517899994
+        },
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": 648.680607,
+          "p90": 689.3729966,
+          "p95": 709.67066475,
+          "p99": 836.5859517899994
+        },
+        "dispatch_delay_ms": {
+          "p50": 0.086613,
+          "p90": 0.10531439999999999,
+          "p95": 0.1374536499999999,
+          "p99": 0.16687292
+        },
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": true,
+        "all_offers_successful": true,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 183758848,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 2,
+        "identity_gate_passed": true,
+        "abort_after": null,
+        "cell_started": true,
+        "qualification_gate_passed": true
+      },
+      {
+        "count": 64,
+        "successes": 64,
+        "failures": 0,
+        "aborted": 0,
+        "failed_calls": 0,
+        "returned_hits": 628,
+        "recall_at_10": 0.98125,
+        "success_conditioned_recall_at_10": 0.98125,
+        "per_query_recall_at_10_p05": 0.9,
+        "success_conditioned_latency": false,
+        "latency_ms": {
+          "whole_cold": {
+            "p50": 565.97852,
+            "p90": 606.2292474999999,
+            "p95": 647.1233243499997,
+            "p99": 758.6550396499995
+          },
+          "http_first_query": {
+            "p50": 170.538678,
+            "p90": 212.2990139,
+            "p95": 247.30748184999982,
+            "p99": 318.9210055999999
+          },
+          "incoming_http": {
+            "p50": 170.608563,
+            "p90": 212.3653031,
+            "p95": 247.3812040499998,
+            "p99": 318.9889509299999
+          },
+          "cold_open": {
+            "p50": 300.6411755,
+            "p90": 315.9997229,
+            "p95": 329.62705314999994,
+            "p99": 400.5955274099998
+          },
+          "head_read": {
+            "p50": 78.7530105,
+            "p90": 84.5838418,
+            "p95": 87.69806455,
+            "p99": 98.99691679999997
+          },
+          "metadata_staging": {
+            "p50": 279.67737150000005,
+            "p90": 293.3503021,
+            "p95": 309.5965045499999,
+            "p99": 370.5599486499998
+          },
+          "metadata_decode": {
+            "p50": 3.2462035,
+            "p90": 3.2860591,
+            "p95": 3.2933589,
+            "p99": 3.32056904
+          },
+          "metadata_HEAD": {
+            "p50": 75.193814,
+            "p90": 83.9441411,
+            "p95": 89.36071024999998,
+            "p99": 97.91329094
+          },
+          "metadata_GET_headers": {
+            "p50": 187.0317655,
+            "p90": 200.5318206,
+            "p95": 201.56228835000002,
+            "p99": 259.45406122999975
+          },
+          "metadata_stream_and_output": {
+            "p50": 15.763914,
+            "p90": 21.259680000000003,
+            "p95": 22.08151105,
+            "p99": 25.31489062
+          },
+          "metadata_awaited_writes": {
+            "p50": 0.893447,
+            "p90": 1.090077,
+            "p95": 1.1116544499999998,
+            "p99": 1.13622396
+          },
+          "source_head": {
+            "p50": 8.517087,
+            "p90": 10.346191,
+            "p95": 10.5859823,
+            "p99": 17.842605409999976
+          },
+          "router_head": {
+            "p50": 8.785624,
+            "p90": 10.851360000000001,
+            "p95": 11.54920965,
+            "p99": 15.350969749999997
+          },
+          "native_query": {
+            "p50": 169.805232,
+            "p90": 211.3919538,
+            "p95": 246.68805964999981,
+            "p99": 318.29228068999987
+          },
+          "discovery": {
+            "p50": 38.2538675,
+            "p90": 49.56521260000001,
+            "p95": 81.58265129999987,
+            "p99": 92.50682205999999
+          },
+          "source": {
+            "p50": 40.893986,
+            "p90": 69.4916916,
+            "p95": 82.4742199,
+            "p99": 95.84183846999998
+          },
+          "planning": {
+            "p50": 3.6146395,
+            "p90": 4.1185842,
+            "p95": 4.264327199999999,
+            "p99": 4.935111099999999
+          },
+          "sq8": {
+            "p50": 78.46835200000001,
+            "p90": 104.55287280000002,
+            "p95": 110.25240485,
+            "p99": 193.24929704999974
+          }
+        },
+        "accounting_observations": 64,
+        "accounting_complete": true,
+        "startup_accounting_observations": 64,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 969,
+          "source_verified_bytes": 349785600,
+          "source_failed_gets": 0,
+          "submitted_gets": 1170,
+          "verified_bytes": 1049068800,
+          "failed_gets": 0,
+          "router_submitted_gets": 986,
+          "router_verified_bytes": 68941180,
+          "router_failed_gets": 0,
+          "metadata_GETs": 512,
+          "metadata_HEADs": 512,
+          "metadata_bytes": 57764736,
+          "authority_head_JSON_GETs": 64,
+          "authority_head_JSON_bytes": 10880,
+          "authority_generation_root_GETs": 64,
+          "authority_generation_root_bytes": 1365056,
+          "source_HEADs": 64,
+          "router_HEADs": 64
+        },
+        "known_process_transport_totals": {
+          "attempts": 4597,
+          "consumed_payload_bytes": 1527043196,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            3893,
+            640,
+            64,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 192,
+          "inferred_credential_consumed_bytes": 106944,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 64,
+        "native_peak_RSS_bytes": 36970496,
+        "native_CPU_seconds": {
+          "user": "5.73",
+          "system": "1.99"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 3,
+        "offered_qps": 2,
+        "dataset": "ReLAION",
+        "arm": "candidate",
+        "records_file": "rate3-relaion-candidate-records.jsonl",
+        "records_sha256": "c91ffb98e0fdfe77ae16cebd5b2597d57de3e45d8f1f8602b3c153a0110575ba",
+        "records_bytes": 1278943,
+        "offered": 64,
+        "admitted": 64,
+        "admitted_completed": 64,
+        "capacity_drops": 0,
+        "aborted_offers": 0,
+        "success_fraction": 1.0,
+        "all_offer_recall_at_10": 0.98125,
+        "epoch_ns": 1948086269684,
+        "terminal_ns": 1980181085130,
+        "full_span_ns": 32094815446,
+        "planned_offer_window_ns": 32000000000,
+        "last_scheduled_offset_ns": 31500000000,
+        "successful_full_span_qps": 1.9940915412858797,
+        "admitted_completed_full_span_qps": 1.9940915412858797,
+        "scheduled_to_response_ms": {
+          "p50": 566.8360425000001,
+          "p90": 607.1603369000001,
+          "p95": 648.0487241999998,
+          "p99": 759.5738501299995
+        },
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": 566.8360425000001,
+          "p90": 607.1603369000001,
+          "p95": 648.0487241999998,
+          "p99": 759.5738501299995
+        },
+        "dispatch_delay_ms": {
+          "p50": 0.08787,
+          "p90": 0.1012326,
+          "p95": 0.1256390499999999,
+          "p99": 0.14205084999999995
+        },
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": true,
+        "all_offers_successful": true,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 188448768,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 2,
+        "identity_gate_passed": true,
+        "abort_after": null,
+        "cell_started": true,
+        "qualification_gate_passed": true
+      },
+      {
+        "count": 64,
+        "successes": 64,
+        "failures": 0,
+        "aborted": 0,
+        "failed_calls": 0,
+        "returned_hits": 631,
+        "recall_at_10": 0.9859375,
+        "success_conditioned_recall_at_10": 0.9859375,
+        "per_query_recall_at_10_p05": 0.9,
+        "success_conditioned_latency": false,
+        "latency_ms": {
+          "whole_cold": {
+            "p50": 646.2924535,
+            "p90": 713.6446459,
+            "p95": 740.1422589,
+            "p99": 947.6397410399995
+          },
+          "http_first_query": {
+            "p50": 180.286726,
+            "p90": 239.9132275,
+            "p95": 263.11889365,
+            "p99": 314.1332959099998
+          },
+          "incoming_http": {
+            "p50": 180.3589795,
+            "p90": 239.98645700000003,
+            "p95": 263.19227789999997,
+            "p99": 314.2072295699998
+          },
+          "cold_open": {
+            "p50": 373.379098,
+            "p90": 404.2166377,
+            "p95": 424.0234892,
+            "p99": 555.2232561599999
+          },
+          "head_read": {
+            "p50": 79.53134449999999,
+            "p90": 82.3299766,
+            "p95": 83.69478825,
+            "p99": 91.71293388
+          },
+          "metadata_staging": {
+            "p50": 343.62071000000003,
+            "p90": 372.7818474,
+            "p95": 394.14513349999993,
+            "p99": 515.3671938999998
+          },
+          "metadata_decode": {
+            "p50": 20.9432215,
+            "p90": 21.343569600000002,
+            "p95": 21.461348349999998,
+            "p99": 21.55410166
+          },
+          "metadata_HEAD": {
+            "p50": 85.45123799999999,
+            "p90": 97.66475080000001,
+            "p95": 103.73675999999998,
+            "p99": 169.18805747999997
+          },
+          "metadata_GET_headers": {
+            "p50": 188.238107,
+            "p90": 198.4309206,
+            "p95": 202.30562485,
+            "p99": 228.06736232999995
+          },
+          "metadata_stream_and_output": {
+            "p50": 67.088984,
+            "p90": 96.73617190000002,
+            "p95": 109.58189719999999,
+            "p99": 138.83912934999995
+          },
+          "metadata_awaited_writes": {
+            "p50": 2.1424269999999996,
+            "p90": 2.3163587,
+            "p95": 2.3421510999999997,
+            "p99": 2.3649482799999997
+          },
+          "source_head": {
+            "p50": 9.0665195,
+            "p90": 11.2045383,
+            "p95": 12.094751949999997,
+            "p99": 18.44195767999998
+          },
+          "router_head": {
+            "p50": 0.0,
+            "p90": 0.0,
+            "p95": 0.0,
+            "p99": 0.0
+          },
+          "native_query": {
+            "p50": 179.63120750000002,
+            "p90": 239.38106810000002,
+            "p95": 262.39147855,
+            "p99": 313.51791684999984
+          },
+          "discovery": {
+            "p50": 2.2702435,
+            "p90": 2.4263328,
+            "p95": 2.43428165,
+            "p99": 2.6691055599999998
+          },
+          "source": {
+            "p50": 99.939549,
+            "p90": 132.8169332,
+            "p95": 149.87407034999993,
+            "p99": 178.44161289
+          },
+          "planning": {
+            "p50": 8.058536499999999,
+            "p90": 8.3845089,
+            "p95": 8.43964645,
+            "p99": 8.51054168
+          },
+          "sq8": {
+            "p50": 63.84755,
+            "p90": 100.50238530000001,
+            "p95": 132.11735009999992,
+            "p99": 178.28844695999973
+          }
+        },
+        "accounting_observations": 64,
+        "accounting_complete": true,
+        "startup_accounting_observations": 64,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 1209,
+          "source_verified_bytes": 716646400,
+          "source_failed_gets": 0,
+          "submitted_gets": 1983,
+          "verified_bytes": 1072880640,
+          "failed_gets": 0,
+          "router_submitted_gets": 0,
+          "router_verified_bytes": 0,
+          "router_failed_gets": 0,
+          "metadata_GETs": 640,
+          "metadata_HEADs": 576,
+          "metadata_bytes": 371414912,
+          "authority_head_JSON_GETs": 64,
+          "authority_head_JSON_bytes": 10880,
+          "authority_generation_root_GETs": 64,
+          "authority_generation_root_bytes": 2177088,
+          "source_HEADs": 64,
+          "router_HEADs": 0
+        },
+        "known_process_transport_totals": {
+          "attempts": 4792,
+          "consumed_payload_bytes": 2163236864,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            4088,
+            640,
+            64,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 192,
+          "inferred_credential_consumed_bytes": 106944,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 64,
+        "native_peak_RSS_bytes": 54812672,
+        "native_CPU_seconds": {
+          "user": "8.26",
+          "system": "3.53"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 3,
+        "offered_qps": 2,
+        "dataset": "CoHere",
+        "arm": "control",
+        "records_file": "rate3-cohere-control-records.jsonl",
+        "records_sha256": "5ec6be2563281e1c738cbd53e8ed3a22ac4b24c15c8a4f72a2608d0add258521",
+        "records_bytes": 1378157,
+        "offered": 64,
+        "admitted": 64,
+        "admitted_completed": 64,
+        "capacity_drops": 0,
+        "aborted_offers": 0,
+        "success_fraction": 1.0,
+        "all_offer_recall_at_10": 0.9859375,
+        "epoch_ns": 1981365101122,
+        "terminal_ns": 2013561323935,
+        "full_span_ns": 32196222813,
+        "planned_offer_window_ns": 32000000000,
+        "last_scheduled_offset_ns": 31500000000,
+        "successful_full_span_qps": 1.9878108178006042,
+        "admitted_completed_full_span_qps": 1.9878108178006042,
+        "scheduled_to_response_ms": {
+          "p50": 647.211275,
+          "p90": 714.5060517000001,
+          "p95": 741.01505735,
+          "p99": 948.5388889199995
+        },
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": 647.211275,
+          "p90": 714.5060517000001,
+          "p95": 741.01505735,
+          "p99": 948.5388889199995
+        },
+        "dispatch_delay_ms": {
+          "p50": 0.087788,
+          "p90": 0.11614210000000001,
+          "p95": 0.1341629,
+          "p99": 0.15447434999999995
+        },
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": true,
+        "all_offers_successful": true,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 199380992,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 3,
+        "identity_gate_passed": true,
+        "abort_after": null,
+        "cell_started": true,
+        "qualification_gate_passed": true
+      },
+      {
+        "count": 64,
+        "successes": 44,
+        "failures": 1,
+        "aborted": 19,
+        "failed_calls": 1,
+        "returned_hits": 421,
+        "recall_at_10": "UNMEASURED",
+        "success_conditioned_recall_at_10": 0.9568181818181818,
+        "per_query_recall_at_10_p05": 0.715,
+        "success_conditioned_latency": true,
+        "latency_ms": {
+          "whole_cold": {
+            "p50": 556.7690825,
+            "p90": 628.4784046999999,
+            "p95": 643.1044281,
+            "p99": 773.8755767700001
+          },
+          "http_first_query": {
+            "p50": 161.41188499999998,
+            "p90": 217.5117797,
+            "p95": 258.15358765,
+            "p99": 387.1699827300001
+          },
+          "incoming_http": {
+            "p50": 161.48087049999998,
+            "p90": 217.5803064,
+            "p95": 258.2215704,
+            "p99": 387.2393837000001
+          },
+          "cold_open": {
+            "p50": 301.699527,
+            "p90": 323.5904844,
+            "p95": 328.4616035,
+            "p99": 351.40740421000004
+          },
+          "head_read": {
+            "p50": 78.95737399999999,
+            "p90": 83.8313316,
+            "p95": 85.2858452,
+            "p99": 98.0226382
+          },
+          "metadata_staging": {
+            "p50": 280.78168500000004,
+            "p90": 300.74942369999997,
+            "p95": 304.99328585,
+            "p99": 328.76854255
+          },
+          "metadata_decode": {
+            "p50": 3.097684,
+            "p90": 3.1242487000000003,
+            "p95": 3.13901785,
+            "p99": 3.18032199
+          },
+          "metadata_HEAD": {
+            "p50": 74.3693805,
+            "p90": 82.9804432,
+            "p95": 84.16926945,
+            "p99": 89.15535236
+          },
+          "metadata_GET_headers": {
+            "p50": 191.6229735,
+            "p90": 204.8456993,
+            "p95": 209.9846238,
+            "p99": 240.78551349
+          },
+          "metadata_stream_and_output": {
+            "p50": 14.912611,
+            "p90": 21.874448400000002,
+            "p95": 22.45353705,
+            "p99": 25.04979653
+          },
+          "metadata_awaited_writes": {
+            "p50": 0.8384135,
+            "p90": 1.0232358,
+            "p95": 1.07359305,
+            "p99": 1.15845112
+          },
+          "source_head": {
+            "p50": 9.189003,
+            "p90": 10.896278000000002,
+            "p95": 12.23383925,
+            "p99": 21.988756860000002
+          },
+          "router_head": {
+            "p50": 8.5663755,
+            "p90": 10.856014300000002,
+            "p95": 11.2000025,
+            "p99": 13.705416200000002
+          },
+          "native_query": {
+            "p50": 160.6711025,
+            "p90": 216.83828400000002,
+            "p95": 257.5708911000001,
+            "p99": 386.73093460000007
+          },
+          "discovery": {
+            "p50": 39.392025000000004,
+            "p90": 65.9182156,
+            "p95": 68.74243349999999,
+            "p99": 134.35525305000002
+          },
+          "source": {
+            "p50": 35.044405499999996,
+            "p90": 57.66674450000001,
+            "p95": 82.18668835000003,
+            "p99": 90.15507883
+          },
+          "planning": {
+            "p50": 3.345444,
+            "p90": 3.7039952,
+            "p95": 3.76888135,
+            "p99": 3.90922044
+          },
+          "sq8": {
+            "p50": 79.37949800000001,
+            "p90": 107.2638282,
+            "p95": 114.1274688,
+            "p99": 181.48387134000004
+          }
+        },
+        "accounting_observations": 45,
+        "accounting_complete": false,
+        "startup_accounting_observations": 45,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 496,
+          "source_verified_bytes": 235385600,
+          "source_failed_gets": 0,
+          "submitted_gets": 917,
+          "verified_bytes": 736968960,
+          "failed_gets": 0,
+          "router_submitted_gets": 720,
+          "router_verified_bytes": 50613640,
+          "router_failed_gets": 1,
+          "metadata_GETs": 360,
+          "metadata_HEADs": 360,
+          "metadata_bytes": 39902130,
+          "authority_head_JSON_GETs": 45,
+          "authority_head_JSON_bytes": 7650,
+          "authority_generation_root_GETs": 45,
+          "authority_generation_root_bytes": 964170,
+          "source_HEADs": 45,
+          "router_HEADs": 45
+        },
+        "known_process_transport_totals": {
+          "attempts": 3168,
+          "consumed_payload_bytes": 1063917345,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 1,
+          "method_counts": [
+            2673,
+            450,
+            45,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 135,
+          "inferred_credential_consumed_bytes": 75195,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 45,
+        "native_peak_RSS_bytes": 37490688,
+        "native_CPU_seconds": {
+          "user": "3.94",
+          "system": "1.32"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 3,
+        "offered_qps": 2,
+        "dataset": "CoHere",
+        "arm": "candidate",
+        "records_file": "rate3-cohere-candidate-records.jsonl",
+        "records_sha256": "6b2fde69872749fc27a288285f024c839c722e26fa6b2535ac518f0171673157",
+        "records_bytes": 916080,
+        "offered": 64,
+        "admitted": 45,
+        "admitted_completed": 45,
+        "capacity_drops": 0,
+        "aborted_offers": 19,
+        "success_fraction": 0.6875,
+        "all_offer_recall_at_10": 0.6578125,
+        "epoch_ns": 2014769081724,
+        "terminal_ns": 2037269296888,
+        "full_span_ns": 22500215164,
+        "planned_offer_window_ns": 32000000000,
+        "last_scheduled_offset_ns": 31500000000,
+        "successful_full_span_qps": 1.9555368550608052,
+        "admitted_completed_full_span_qps": 1.9999808744940053,
+        "scheduled_to_response_ms": {
+          "p50": 558.1530255,
+          "p90": 629.4210565000001,
+          "p95": 644.1356812,
+          "p99": 774.7839573800001
+        },
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": 579.89653,
+          "p90": "UNBOUNDED",
+          "p95": "UNBOUNDED",
+          "p99": "UNBOUNDED"
+        },
+        "dispatch_delay_ms": {
+          "p50": 0.081248,
+          "p90": 0.0925318,
+          "p95": 0.10177619999999997,
+          "p99": 0.13031448
+        },
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": false,
+        "all_offers_successful": false,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 199380992,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 2,
+        "identity_gate_passed": false,
+        "abort_after": {
+          "observed_ns": 2037190421256,
+          "query_ordinal": 44,
+          "reason": "fatal call failure"
+        },
+        "cell_started": true,
+        "qualification_gate_passed": false
+      },
+      {
+        "count": 64,
+        "successes": 0,
+        "failures": 0,
+        "aborted": 64,
+        "failed_calls": 0,
+        "returned_hits": 0,
+        "recall_at_10": "UNMEASURED",
+        "success_conditioned_recall_at_10": "UNMEASURED",
+        "per_query_recall_at_10_p05": "UNMEASURED",
+        "success_conditioned_latency": true,
+        "latency_ms": {
+          "whole_cold": "UNMEASURED",
+          "http_first_query": "UNMEASURED",
+          "incoming_http": "UNMEASURED",
+          "cold_open": "UNMEASURED",
+          "head_read": "UNMEASURED",
+          "metadata_staging": "UNMEASURED",
+          "metadata_decode": "UNMEASURED",
+          "metadata_HEAD": "UNMEASURED",
+          "metadata_GET_headers": "UNMEASURED",
+          "metadata_stream_and_output": "UNMEASURED",
+          "metadata_awaited_writes": "UNMEASURED",
+          "source_head": "UNMEASURED",
+          "router_head": "UNMEASURED",
+          "native_query": "UNMEASURED",
+          "discovery": "UNMEASURED",
+          "source": "UNMEASURED",
+          "planning": "UNMEASURED",
+          "sq8": "UNMEASURED"
+        },
+        "accounting_observations": 0,
+        "accounting_complete": false,
+        "startup_accounting_observations": 0,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 0,
+          "source_verified_bytes": 0,
+          "source_failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0,
+          "failed_gets": 0,
+          "router_submitted_gets": 0,
+          "router_verified_bytes": 0,
+          "router_failed_gets": 0,
+          "metadata_GETs": 0,
+          "metadata_HEADs": 0,
+          "metadata_bytes": 0,
+          "authority_head_JSON_GETs": 0,
+          "authority_head_JSON_bytes": 0,
+          "authority_generation_root_GETs": 0,
+          "authority_generation_root_bytes": 0,
+          "source_HEADs": 0,
+          "router_HEADs": 0
+        },
+        "known_process_transport_totals": {
+          "attempts": 0,
+          "consumed_payload_bytes": 0,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 0,
+          "inferred_credential_consumed_bytes": 0,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 0,
+        "native_peak_RSS_bytes": "UNMEASURED",
+        "native_CPU_seconds": {
+          "user": "0",
+          "system": "0"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 4,
+        "offered_qps": 4,
+        "dataset": "ReLAION",
+        "arm": "control",
+        "records_file": "rate4-relaion-control-records.jsonl",
+        "records_sha256": "df2cb421b2a4be3b1e9512e41779be8ae9b83a461d285a84464877082b32561a",
+        "records_bytes": 29988,
+        "offered": 64,
+        "admitted": 0,
+        "admitted_completed": 0,
+        "capacity_drops": 0,
+        "aborted_offers": 64,
+        "success_fraction": 0.0,
+        "all_offer_recall_at_10": 0.0,
+        "epoch_ns": 2037384692936,
+        "terminal_ns": 2037384733917,
+        "full_span_ns": 40981,
+        "planned_offer_window_ns": 16000000000,
+        "last_scheduled_offset_ns": 15750000000,
+        "successful_full_span_qps": 0.0,
+        "admitted_completed_full_span_qps": 0.0,
+        "scheduled_to_response_ms": "UNMEASURED",
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": "UNBOUNDED",
+          "p90": "UNBOUNDED",
+          "p95": "UNBOUNDED",
+          "p99": "UNBOUNDED"
+        },
+        "dispatch_delay_ms": "UNMEASURED",
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": false,
+        "all_offers_successful": false,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 199380992,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 0,
+        "identity_gate_passed": false,
+        "abort_after": {
+          "observed_ns": 2037190421256,
+          "query_ordinal": 44,
+          "reason": "fatal call failure"
+        },
+        "cell_started": false,
+        "qualification_gate_passed": false
+      },
+      {
+        "count": 64,
+        "successes": 0,
+        "failures": 0,
+        "aborted": 64,
+        "failed_calls": 0,
+        "returned_hits": 0,
+        "recall_at_10": "UNMEASURED",
+        "success_conditioned_recall_at_10": "UNMEASURED",
+        "per_query_recall_at_10_p05": "UNMEASURED",
+        "success_conditioned_latency": true,
+        "latency_ms": {
+          "whole_cold": "UNMEASURED",
+          "http_first_query": "UNMEASURED",
+          "incoming_http": "UNMEASURED",
+          "cold_open": "UNMEASURED",
+          "head_read": "UNMEASURED",
+          "metadata_staging": "UNMEASURED",
+          "metadata_decode": "UNMEASURED",
+          "metadata_HEAD": "UNMEASURED",
+          "metadata_GET_headers": "UNMEASURED",
+          "metadata_stream_and_output": "UNMEASURED",
+          "metadata_awaited_writes": "UNMEASURED",
+          "source_head": "UNMEASURED",
+          "router_head": "UNMEASURED",
+          "native_query": "UNMEASURED",
+          "discovery": "UNMEASURED",
+          "source": "UNMEASURED",
+          "planning": "UNMEASURED",
+          "sq8": "UNMEASURED"
+        },
+        "accounting_observations": 0,
+        "accounting_complete": false,
+        "startup_accounting_observations": 0,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 0,
+          "source_verified_bytes": 0,
+          "source_failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0,
+          "failed_gets": 0,
+          "router_submitted_gets": 0,
+          "router_verified_bytes": 0,
+          "router_failed_gets": 0,
+          "metadata_GETs": 0,
+          "metadata_HEADs": 0,
+          "metadata_bytes": 0,
+          "authority_head_JSON_GETs": 0,
+          "authority_head_JSON_bytes": 0,
+          "authority_generation_root_GETs": 0,
+          "authority_generation_root_bytes": 0,
+          "source_HEADs": 0,
+          "router_HEADs": 0
+        },
+        "known_process_transport_totals": {
+          "attempts": 0,
+          "consumed_payload_bytes": 0,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 0,
+          "inferred_credential_consumed_bytes": 0,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 0,
+        "native_peak_RSS_bytes": "UNMEASURED",
+        "native_CPU_seconds": {
+          "user": "0",
+          "system": "0"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 4,
+        "offered_qps": 4,
+        "dataset": "ReLAION",
+        "arm": "candidate",
+        "records_file": "rate4-relaion-candidate-records.jsonl",
+        "records_sha256": "3a80f88286484a7095116403b274f430a8560873003aa571d29e1a88c45041e6",
+        "records_bytes": 30116,
+        "offered": 64,
+        "admitted": 0,
+        "admitted_completed": 0,
+        "capacity_drops": 0,
+        "aborted_offers": 64,
+        "success_fraction": 0.0,
+        "all_offer_recall_at_10": 0.0,
+        "epoch_ns": 2037472973581,
+        "terminal_ns": 2037473031819,
+        "full_span_ns": 58238,
+        "planned_offer_window_ns": 16000000000,
+        "last_scheduled_offset_ns": 15750000000,
+        "successful_full_span_qps": 0.0,
+        "admitted_completed_full_span_qps": 0.0,
+        "scheduled_to_response_ms": "UNMEASURED",
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": "UNBOUNDED",
+          "p90": "UNBOUNDED",
+          "p95": "UNBOUNDED",
+          "p99": "UNBOUNDED"
+        },
+        "dispatch_delay_ms": "UNMEASURED",
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": false,
+        "all_offers_successful": false,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 199380992,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 0,
+        "identity_gate_passed": false,
+        "abort_after": {
+          "observed_ns": 2037190421256,
+          "query_ordinal": 44,
+          "reason": "fatal call failure"
+        },
+        "cell_started": false,
+        "qualification_gate_passed": false
+      },
+      {
+        "count": 64,
+        "successes": 0,
+        "failures": 0,
+        "aborted": 64,
+        "failed_calls": 0,
+        "returned_hits": 0,
+        "recall_at_10": "UNMEASURED",
+        "success_conditioned_recall_at_10": "UNMEASURED",
+        "per_query_recall_at_10_p05": "UNMEASURED",
+        "success_conditioned_latency": true,
+        "latency_ms": {
+          "whole_cold": "UNMEASURED",
+          "http_first_query": "UNMEASURED",
+          "incoming_http": "UNMEASURED",
+          "cold_open": "UNMEASURED",
+          "head_read": "UNMEASURED",
+          "metadata_staging": "UNMEASURED",
+          "metadata_decode": "UNMEASURED",
+          "metadata_HEAD": "UNMEASURED",
+          "metadata_GET_headers": "UNMEASURED",
+          "metadata_stream_and_output": "UNMEASURED",
+          "metadata_awaited_writes": "UNMEASURED",
+          "source_head": "UNMEASURED",
+          "router_head": "UNMEASURED",
+          "native_query": "UNMEASURED",
+          "discovery": "UNMEASURED",
+          "source": "UNMEASURED",
+          "planning": "UNMEASURED",
+          "sq8": "UNMEASURED"
+        },
+        "accounting_observations": 0,
+        "accounting_complete": false,
+        "startup_accounting_observations": 0,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 0,
+          "source_verified_bytes": 0,
+          "source_failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0,
+          "failed_gets": 0,
+          "router_submitted_gets": 0,
+          "router_verified_bytes": 0,
+          "router_failed_gets": 0,
+          "metadata_GETs": 0,
+          "metadata_HEADs": 0,
+          "metadata_bytes": 0,
+          "authority_head_JSON_GETs": 0,
+          "authority_head_JSON_bytes": 0,
+          "authority_generation_root_GETs": 0,
+          "authority_generation_root_bytes": 0,
+          "source_HEADs": 0,
+          "router_HEADs": 0
+        },
+        "known_process_transport_totals": {
+          "attempts": 0,
+          "consumed_payload_bytes": 0,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 0,
+          "inferred_credential_consumed_bytes": 0,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 0,
+        "native_peak_RSS_bytes": "UNMEASURED",
+        "native_CPU_seconds": {
+          "user": "0",
+          "system": "0"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 4,
+        "offered_qps": 4,
+        "dataset": "CoHere",
+        "arm": "control",
+        "records_file": "rate4-cohere-control-records.jsonl",
+        "records_sha256": "b7e4700881d71c39a9b640be0da586643a891efc15d90bcef4ba6076b29fdd92",
+        "records_bytes": 29924,
+        "offered": 64,
+        "admitted": 0,
+        "admitted_completed": 0,
+        "capacity_drops": 0,
+        "aborted_offers": 64,
+        "success_fraction": 0.0,
+        "all_offer_recall_at_10": 0.0,
+        "epoch_ns": 2037560663647,
+        "terminal_ns": 2037560699665,
+        "full_span_ns": 36018,
+        "planned_offer_window_ns": 16000000000,
+        "last_scheduled_offset_ns": 15750000000,
+        "successful_full_span_qps": 0.0,
+        "admitted_completed_full_span_qps": 0.0,
+        "scheduled_to_response_ms": "UNMEASURED",
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": "UNBOUNDED",
+          "p90": "UNBOUNDED",
+          "p95": "UNBOUNDED",
+          "p99": "UNBOUNDED"
+        },
+        "dispatch_delay_ms": "UNMEASURED",
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": false,
+        "all_offers_successful": false,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 199380992,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 0,
+        "identity_gate_passed": false,
+        "abort_after": {
+          "observed_ns": 2037190421256,
+          "query_ordinal": 44,
+          "reason": "fatal call failure"
+        },
+        "cell_started": false,
+        "qualification_gate_passed": false
+      },
+      {
+        "count": 64,
+        "successes": 0,
+        "failures": 0,
+        "aborted": 64,
+        "failed_calls": 0,
+        "returned_hits": 0,
+        "recall_at_10": "UNMEASURED",
+        "success_conditioned_recall_at_10": "UNMEASURED",
+        "per_query_recall_at_10_p05": "UNMEASURED",
+        "success_conditioned_latency": true,
+        "latency_ms": {
+          "whole_cold": "UNMEASURED",
+          "http_first_query": "UNMEASURED",
+          "incoming_http": "UNMEASURED",
+          "cold_open": "UNMEASURED",
+          "head_read": "UNMEASURED",
+          "metadata_staging": "UNMEASURED",
+          "metadata_decode": "UNMEASURED",
+          "metadata_HEAD": "UNMEASURED",
+          "metadata_GET_headers": "UNMEASURED",
+          "metadata_stream_and_output": "UNMEASURED",
+          "metadata_awaited_writes": "UNMEASURED",
+          "source_head": "UNMEASURED",
+          "router_head": "UNMEASURED",
+          "native_query": "UNMEASURED",
+          "discovery": "UNMEASURED",
+          "source": "UNMEASURED",
+          "planning": "UNMEASURED",
+          "sq8": "UNMEASURED"
+        },
+        "accounting_observations": 0,
+        "accounting_complete": false,
+        "startup_accounting_observations": 0,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 0,
+          "source_verified_bytes": 0,
+          "source_failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0,
+          "failed_gets": 0,
+          "router_submitted_gets": 0,
+          "router_verified_bytes": 0,
+          "router_failed_gets": 0,
+          "metadata_GETs": 0,
+          "metadata_HEADs": 0,
+          "metadata_bytes": 0,
+          "authority_head_JSON_GETs": 0,
+          "authority_head_JSON_bytes": 0,
+          "authority_generation_root_GETs": 0,
+          "authority_generation_root_bytes": 0,
+          "source_HEADs": 0,
+          "router_HEADs": 0
+        },
+        "known_process_transport_totals": {
+          "attempts": 0,
+          "consumed_payload_bytes": 0,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 0,
+          "inferred_credential_consumed_bytes": 0,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 0,
+        "native_peak_RSS_bytes": "UNMEASURED",
+        "native_CPU_seconds": {
+          "user": "0",
+          "system": "0"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 4,
+        "offered_qps": 4,
+        "dataset": "CoHere",
+        "arm": "candidate",
+        "records_file": "rate4-cohere-candidate-records.jsonl",
+        "records_sha256": "71ea8014396e7081af20eb5e57e5f4157ca7bc65d2b20271cf3dd9912f5c422a",
+        "records_bytes": 30052,
+        "offered": 64,
+        "admitted": 0,
+        "admitted_completed": 0,
+        "capacity_drops": 0,
+        "aborted_offers": 64,
+        "success_fraction": 0.0,
+        "all_offer_recall_at_10": 0.0,
+        "epoch_ns": 2037646659681,
+        "terminal_ns": 2037646694340,
+        "full_span_ns": 34659,
+        "planned_offer_window_ns": 16000000000,
+        "last_scheduled_offset_ns": 15750000000,
+        "successful_full_span_qps": 0.0,
+        "admitted_completed_full_span_qps": 0.0,
+        "scheduled_to_response_ms": "UNMEASURED",
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": "UNBOUNDED",
+          "p90": "UNBOUNDED",
+          "p95": "UNBOUNDED",
+          "p99": "UNBOUNDED"
+        },
+        "dispatch_delay_ms": "UNMEASURED",
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": false,
+        "all_offers_successful": false,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 199380992,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 0,
+        "identity_gate_passed": false,
+        "abort_after": {
+          "observed_ns": 2037190421256,
+          "query_ordinal": 44,
+          "reason": "fatal call failure"
+        },
+        "cell_started": false,
+        "qualification_gate_passed": false
+      },
+      {
+        "count": 64,
+        "successes": 0,
+        "failures": 0,
+        "aborted": 64,
+        "failed_calls": 0,
+        "returned_hits": 0,
+        "recall_at_10": "UNMEASURED",
+        "success_conditioned_recall_at_10": "UNMEASURED",
+        "per_query_recall_at_10_p05": "UNMEASURED",
+        "success_conditioned_latency": true,
+        "latency_ms": {
+          "whole_cold": "UNMEASURED",
+          "http_first_query": "UNMEASURED",
+          "incoming_http": "UNMEASURED",
+          "cold_open": "UNMEASURED",
+          "head_read": "UNMEASURED",
+          "metadata_staging": "UNMEASURED",
+          "metadata_decode": "UNMEASURED",
+          "metadata_HEAD": "UNMEASURED",
+          "metadata_GET_headers": "UNMEASURED",
+          "metadata_stream_and_output": "UNMEASURED",
+          "metadata_awaited_writes": "UNMEASURED",
+          "source_head": "UNMEASURED",
+          "router_head": "UNMEASURED",
+          "native_query": "UNMEASURED",
+          "discovery": "UNMEASURED",
+          "source": "UNMEASURED",
+          "planning": "UNMEASURED",
+          "sq8": "UNMEASURED"
+        },
+        "accounting_observations": 0,
+        "accounting_complete": false,
+        "startup_accounting_observations": 0,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 0,
+          "source_verified_bytes": 0,
+          "source_failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0,
+          "failed_gets": 0,
+          "router_submitted_gets": 0,
+          "router_verified_bytes": 0,
+          "router_failed_gets": 0,
+          "metadata_GETs": 0,
+          "metadata_HEADs": 0,
+          "metadata_bytes": 0,
+          "authority_head_JSON_GETs": 0,
+          "authority_head_JSON_bytes": 0,
+          "authority_generation_root_GETs": 0,
+          "authority_generation_root_bytes": 0,
+          "source_HEADs": 0,
+          "router_HEADs": 0
+        },
+        "known_process_transport_totals": {
+          "attempts": 0,
+          "consumed_payload_bytes": 0,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 0,
+          "inferred_credential_consumed_bytes": 0,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 0,
+        "native_peak_RSS_bytes": "UNMEASURED",
+        "native_CPU_seconds": {
+          "user": "0",
+          "system": "0"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 5,
+        "offered_qps": 8,
+        "dataset": "ReLAION",
+        "arm": "control",
+        "records_file": "rate5-relaion-control-records.jsonl",
+        "records_sha256": "62508d2c9327238733e620b663d6bda618a6cef54411a02020e10453c832985d",
+        "records_bytes": 29988,
+        "offered": 64,
+        "admitted": 0,
+        "admitted_completed": 0,
+        "capacity_drops": 0,
+        "aborted_offers": 64,
+        "success_fraction": 0.0,
+        "all_offer_recall_at_10": 0.0,
+        "epoch_ns": 2037732136004,
+        "terminal_ns": 2037732171006,
+        "full_span_ns": 35002,
+        "planned_offer_window_ns": 8000000000,
+        "last_scheduled_offset_ns": 7875000000,
+        "successful_full_span_qps": 0.0,
+        "admitted_completed_full_span_qps": 0.0,
+        "scheduled_to_response_ms": "UNMEASURED",
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": "UNBOUNDED",
+          "p90": "UNBOUNDED",
+          "p95": "UNBOUNDED",
+          "p99": "UNBOUNDED"
+        },
+        "dispatch_delay_ms": "UNMEASURED",
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": false,
+        "all_offers_successful": false,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 199380992,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 0,
+        "identity_gate_passed": false,
+        "abort_after": {
+          "observed_ns": 2037190421256,
+          "query_ordinal": 44,
+          "reason": "fatal call failure"
+        },
+        "cell_started": false,
+        "qualification_gate_passed": false
+      },
+      {
+        "count": 64,
+        "successes": 0,
+        "failures": 0,
+        "aborted": 64,
+        "failed_calls": 0,
+        "returned_hits": 0,
+        "recall_at_10": "UNMEASURED",
+        "success_conditioned_recall_at_10": "UNMEASURED",
+        "per_query_recall_at_10_p05": "UNMEASURED",
+        "success_conditioned_latency": true,
+        "latency_ms": {
+          "whole_cold": "UNMEASURED",
+          "http_first_query": "UNMEASURED",
+          "incoming_http": "UNMEASURED",
+          "cold_open": "UNMEASURED",
+          "head_read": "UNMEASURED",
+          "metadata_staging": "UNMEASURED",
+          "metadata_decode": "UNMEASURED",
+          "metadata_HEAD": "UNMEASURED",
+          "metadata_GET_headers": "UNMEASURED",
+          "metadata_stream_and_output": "UNMEASURED",
+          "metadata_awaited_writes": "UNMEASURED",
+          "source_head": "UNMEASURED",
+          "router_head": "UNMEASURED",
+          "native_query": "UNMEASURED",
+          "discovery": "UNMEASURED",
+          "source": "UNMEASURED",
+          "planning": "UNMEASURED",
+          "sq8": "UNMEASURED"
+        },
+        "accounting_observations": 0,
+        "accounting_complete": false,
+        "startup_accounting_observations": 0,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 0,
+          "source_verified_bytes": 0,
+          "source_failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0,
+          "failed_gets": 0,
+          "router_submitted_gets": 0,
+          "router_verified_bytes": 0,
+          "router_failed_gets": 0,
+          "metadata_GETs": 0,
+          "metadata_HEADs": 0,
+          "metadata_bytes": 0,
+          "authority_head_JSON_GETs": 0,
+          "authority_head_JSON_bytes": 0,
+          "authority_generation_root_GETs": 0,
+          "authority_generation_root_bytes": 0,
+          "source_HEADs": 0,
+          "router_HEADs": 0
+        },
+        "known_process_transport_totals": {
+          "attempts": 0,
+          "consumed_payload_bytes": 0,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 0,
+          "inferred_credential_consumed_bytes": 0,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 0,
+        "native_peak_RSS_bytes": "UNMEASURED",
+        "native_CPU_seconds": {
+          "user": "0",
+          "system": "0"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 5,
+        "offered_qps": 8,
+        "dataset": "ReLAION",
+        "arm": "candidate",
+        "records_file": "rate5-relaion-candidate-records.jsonl",
+        "records_sha256": "ca32540c31760784930e8fd02e23509e10bfa7c4cf4eedd1fa3e679e4cbabfa4",
+        "records_bytes": 30116,
+        "offered": 64,
+        "admitted": 0,
+        "admitted_completed": 0,
+        "capacity_drops": 0,
+        "aborted_offers": 64,
+        "success_fraction": 0.0,
+        "all_offer_recall_at_10": 0.0,
+        "epoch_ns": 2037817878004,
+        "terminal_ns": 2037817914238,
+        "full_span_ns": 36234,
+        "planned_offer_window_ns": 8000000000,
+        "last_scheduled_offset_ns": 7875000000,
+        "successful_full_span_qps": 0.0,
+        "admitted_completed_full_span_qps": 0.0,
+        "scheduled_to_response_ms": "UNMEASURED",
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": "UNBOUNDED",
+          "p90": "UNBOUNDED",
+          "p95": "UNBOUNDED",
+          "p99": "UNBOUNDED"
+        },
+        "dispatch_delay_ms": "UNMEASURED",
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": false,
+        "all_offers_successful": false,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 199380992,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 0,
+        "identity_gate_passed": false,
+        "abort_after": {
+          "observed_ns": 2037190421256,
+          "query_ordinal": 44,
+          "reason": "fatal call failure"
+        },
+        "cell_started": false,
+        "qualification_gate_passed": false
+      },
+      {
+        "count": 64,
+        "successes": 0,
+        "failures": 0,
+        "aborted": 64,
+        "failed_calls": 0,
+        "returned_hits": 0,
+        "recall_at_10": "UNMEASURED",
+        "success_conditioned_recall_at_10": "UNMEASURED",
+        "per_query_recall_at_10_p05": "UNMEASURED",
+        "success_conditioned_latency": true,
+        "latency_ms": {
+          "whole_cold": "UNMEASURED",
+          "http_first_query": "UNMEASURED",
+          "incoming_http": "UNMEASURED",
+          "cold_open": "UNMEASURED",
+          "head_read": "UNMEASURED",
+          "metadata_staging": "UNMEASURED",
+          "metadata_decode": "UNMEASURED",
+          "metadata_HEAD": "UNMEASURED",
+          "metadata_GET_headers": "UNMEASURED",
+          "metadata_stream_and_output": "UNMEASURED",
+          "metadata_awaited_writes": "UNMEASURED",
+          "source_head": "UNMEASURED",
+          "router_head": "UNMEASURED",
+          "native_query": "UNMEASURED",
+          "discovery": "UNMEASURED",
+          "source": "UNMEASURED",
+          "planning": "UNMEASURED",
+          "sq8": "UNMEASURED"
+        },
+        "accounting_observations": 0,
+        "accounting_complete": false,
+        "startup_accounting_observations": 0,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 0,
+          "source_verified_bytes": 0,
+          "source_failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0,
+          "failed_gets": 0,
+          "router_submitted_gets": 0,
+          "router_verified_bytes": 0,
+          "router_failed_gets": 0,
+          "metadata_GETs": 0,
+          "metadata_HEADs": 0,
+          "metadata_bytes": 0,
+          "authority_head_JSON_GETs": 0,
+          "authority_head_JSON_bytes": 0,
+          "authority_generation_root_GETs": 0,
+          "authority_generation_root_bytes": 0,
+          "source_HEADs": 0,
+          "router_HEADs": 0
+        },
+        "known_process_transport_totals": {
+          "attempts": 0,
+          "consumed_payload_bytes": 0,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 0,
+          "inferred_credential_consumed_bytes": 0,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 0,
+        "native_peak_RSS_bytes": "UNMEASURED",
+        "native_CPU_seconds": {
+          "user": "0",
+          "system": "0"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 5,
+        "offered_qps": 8,
+        "dataset": "CoHere",
+        "arm": "control",
+        "records_file": "rate5-cohere-control-records.jsonl",
+        "records_sha256": "df51c5ffc8962f8ecbfb90e0317e31212743a98abcdeb7519b809b4000c825b3",
+        "records_bytes": 29924,
+        "offered": 64,
+        "admitted": 0,
+        "admitted_completed": 0,
+        "capacity_drops": 0,
+        "aborted_offers": 64,
+        "success_fraction": 0.0,
+        "all_offer_recall_at_10": 0.0,
+        "epoch_ns": 2037903266177,
+        "terminal_ns": 2037903302736,
+        "full_span_ns": 36559,
+        "planned_offer_window_ns": 8000000000,
+        "last_scheduled_offset_ns": 7875000000,
+        "successful_full_span_qps": 0.0,
+        "admitted_completed_full_span_qps": 0.0,
+        "scheduled_to_response_ms": "UNMEASURED",
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": "UNBOUNDED",
+          "p90": "UNBOUNDED",
+          "p95": "UNBOUNDED",
+          "p99": "UNBOUNDED"
+        },
+        "dispatch_delay_ms": "UNMEASURED",
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": false,
+        "all_offers_successful": false,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 199380992,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 0,
+        "identity_gate_passed": false,
+        "abort_after": {
+          "observed_ns": 2037190421256,
+          "query_ordinal": 44,
+          "reason": "fatal call failure"
+        },
+        "cell_started": false,
+        "qualification_gate_passed": false
+      },
+      {
+        "count": 64,
+        "successes": 0,
+        "failures": 0,
+        "aborted": 64,
+        "failed_calls": 0,
+        "returned_hits": 0,
+        "recall_at_10": "UNMEASURED",
+        "success_conditioned_recall_at_10": "UNMEASURED",
+        "per_query_recall_at_10_p05": "UNMEASURED",
+        "success_conditioned_latency": true,
+        "latency_ms": {
+          "whole_cold": "UNMEASURED",
+          "http_first_query": "UNMEASURED",
+          "incoming_http": "UNMEASURED",
+          "cold_open": "UNMEASURED",
+          "head_read": "UNMEASURED",
+          "metadata_staging": "UNMEASURED",
+          "metadata_decode": "UNMEASURED",
+          "metadata_HEAD": "UNMEASURED",
+          "metadata_GET_headers": "UNMEASURED",
+          "metadata_stream_and_output": "UNMEASURED",
+          "metadata_awaited_writes": "UNMEASURED",
+          "source_head": "UNMEASURED",
+          "router_head": "UNMEASURED",
+          "native_query": "UNMEASURED",
+          "discovery": "UNMEASURED",
+          "source": "UNMEASURED",
+          "planning": "UNMEASURED",
+          "sq8": "UNMEASURED"
+        },
+        "accounting_observations": 0,
+        "accounting_complete": false,
+        "startup_accounting_observations": 0,
+        "transport_totals_scope": "sum latest validated process snapshot; incomplete final snapshots are lower bounds",
+        "known_logical_charge_totals": {
+          "source_submitted_gets": 0,
+          "source_verified_bytes": 0,
+          "source_failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0,
+          "failed_gets": 0,
+          "router_submitted_gets": 0,
+          "router_verified_bytes": 0,
+          "router_failed_gets": 0,
+          "metadata_GETs": 0,
+          "metadata_HEADs": 0,
+          "metadata_bytes": 0,
+          "authority_head_JSON_GETs": 0,
+          "authority_head_JSON_bytes": 0,
+          "authority_generation_root_GETs": 0,
+          "authority_generation_root_bytes": 0,
+          "source_HEADs": 0,
+          "router_HEADs": 0
+        },
+        "known_process_transport_totals": {
+          "attempts": 0,
+          "consumed_payload_bytes": 0,
+          "transport_failures": 0,
+          "stream_failures": 0,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "credential_transport_totals": {
+          "protocol": "instance-imdsv2",
+          "declared_credential_submissions": 0,
+          "inferred_credential_consumed_bytes": 0,
+          "payload_attribution": "inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read"
+        },
+        "native_resource_observations": 0,
+        "native_peak_RSS_bytes": "UNMEASURED",
+        "native_CPU_seconds": {
+          "user": "0",
+          "system": "0"
+        },
+        "cgroup_peak_scope": "shared runtime cgroup cumulative snapshots in raw records",
+        "temporary_storage_peak_bytes": "UNMEASURED",
+        "fetch_decode_substages": "UNMEASURED beyond the exposed native stage intervals",
+        "fetch_waves": "UNMEASURED",
+        "confirmed_wire_requests": "UNMEASURED",
+        "rate_index": 5,
+        "offered_qps": 8,
+        "dataset": "CoHere",
+        "arm": "candidate",
+        "records_file": "rate5-cohere-candidate-records.jsonl",
+        "records_sha256": "c0ef79771be76b38b689b214ca22ecb29d0506a4af8a245c12092f20e466c8a3",
+        "records_bytes": 30052,
+        "offered": 64,
+        "admitted": 0,
+        "admitted_completed": 0,
+        "capacity_drops": 0,
+        "aborted_offers": 64,
+        "success_fraction": 0.0,
+        "all_offer_recall_at_10": 0.0,
+        "epoch_ns": 2037988329150,
+        "terminal_ns": 2037988365391,
+        "full_span_ns": 36241,
+        "planned_offer_window_ns": 8000000000,
+        "last_scheduled_offset_ns": 7875000000,
+        "successful_full_span_qps": 0.0,
+        "admitted_completed_full_span_qps": 0.0,
+        "scheduled_to_response_ms": "UNMEASURED",
+        "all_offer_scheduled_to_valid_response_ms": {
+          "p50": "UNBOUNDED",
+          "p90": "UNBOUNDED",
+          "p95": "UNBOUNDED",
+          "p99": "UNBOUNDED"
+        },
+        "dispatch_delay_ms": "UNMEASURED",
+        "dispatch_timing_gate_passed": true,
+        "quality_gate_passed": false,
+        "all_offers_successful": false,
+        "resource_gate": {
+          "passed": true,
+          "shared_peak_bytes": 199380992,
+          "shared_swap_peak_bytes": 0,
+          "oom_event_increments": [
+            0,
+            0,
+            0
+          ]
+        },
+        "process_cleanup_complete": true,
+        "peak_port_ownership": 0,
+        "identity_gate_passed": false,
+        "abort_after": {
+          "observed_ns": 2037190421256,
+          "query_ordinal": 44,
+          "reason": "fatal call failure"
+        },
+        "cell_started": false,
+        "qualification_gate_passed": false
+      }
+    ],
+    "fixed_positions": 1536,
+    "planned_offers": 1536,
+    "offered": 1536,
+    "workers": 6,
+    "base_port": 18080,
+    "offered_qps": [
+      0.25,
+      0.5,
+      1,
+      2,
+      4,
+      8
+    ],
+    "k": 10,
+    "epoch_ns": 128811074372,
+    "terminal_ns": 2037988365391,
+    "full_span_ns": 1909177291019,
+    "successful_full_span_qps": 0.5258809670128264,
+    "admitted_completed_full_span_qps": 0.5264047528365443,
+    "planned_offer_window_ns": 2016000000000,
+    "admitted": 1005,
+    "admitted_completed": 1005,
+    "namespace_starts_attempted": 1005,
+    "namespace_processes_started": 1005,
+    "ann_calls_attempted": 1005,
+    "ann_calls_successful": 1004,
+    "failed_calls": 1,
+    "dropped_calls": 0,
+    "aborted_calls": 531,
+    "all_calls_successful": false,
+    "quality_gate_passed": false,
+    "qualification_gate_passed": false,
+    "bounded_memory_gate_passed": true,
+    "process_cleanup_complete": true,
+    "dispatch_timing_gate_passed": true,
+    "execution_gate_passed": false,
+    "identity_gate_passed": false,
+    "largest_passing_tested_offered_qps": {
+      "ReLAION": {
+        "control": 2,
+        "candidate": 2
+      },
+      "CoHere": {
+        "control": 2,
+        "candidate": 1
+      }
+    },
+    "matched_comparisons": [
+      {
+        "rate_index": 0,
+        "offered_qps": 0.25,
+        "dataset": "ReLAION",
+        "valid_matched_cells": true,
+        "candidate_minus_control_ms": {
+          "scheduled_to_response_ms": {
+            "p90": -124.7003236999999,
+            "p95": -144.53821044999995
+          },
+          "all_offer_scheduled_to_valid_response_ms": {
+            "p90": -124.7003236999999,
+            "p95": -144.53821044999995
+          }
+        },
+        "candidate_minus_control_cold_ms": {
+          "p90": -124.73698380000008,
+          "p95": -144.72190680000006
+        }
+      },
+      {
+        "rate_index": 0,
+        "offered_qps": 0.25,
+        "dataset": "CoHere",
+        "valid_matched_cells": true,
+        "candidate_minus_control_ms": {
+          "scheduled_to_response_ms": {
+            "p90": -125.15062570000009,
+            "p95": -139.6263924000001
+          },
+          "all_offer_scheduled_to_valid_response_ms": {
+            "p90": -125.15062570000009,
+            "p95": -139.6263924000001
+          }
+        },
+        "candidate_minus_control_cold_ms": {
+          "p90": -125.30575820000001,
+          "p95": -139.9744237000001
+        }
+      },
+      {
+        "rate_index": 1,
+        "offered_qps": 0.5,
+        "dataset": "ReLAION",
+        "valid_matched_cells": true,
+        "candidate_minus_control_ms": {
+          "scheduled_to_response_ms": {
+            "p90": -84.82213289999993,
+            "p95": -87.56170309999993
+          },
+          "all_offer_scheduled_to_valid_response_ms": {
+            "p90": -84.82213289999993,
+            "p95": -87.56170309999993
+          }
+        },
+        "candidate_minus_control_cold_ms": {
+          "p90": -84.82960779999996,
+          "p95": -87.50229564999995
+        }
+      },
+      {
+        "rate_index": 1,
+        "offered_qps": 0.5,
+        "dataset": "CoHere",
+        "valid_matched_cells": true,
+        "candidate_minus_control_ms": {
+          "scheduled_to_response_ms": {
+            "p90": -76.1692405,
+            "p95": -61.1725409500001
+          },
+          "all_offer_scheduled_to_valid_response_ms": {
+            "p90": -76.1692405,
+            "p95": -61.1725409500001
+          }
+        },
+        "candidate_minus_control_cold_ms": {
+          "p90": -76.09217000000001,
+          "p95": -61.054675249999946
+        }
+      },
+      {
+        "rate_index": 2,
+        "offered_qps": 1,
+        "dataset": "ReLAION",
+        "valid_matched_cells": true,
+        "candidate_minus_control_ms": {
+          "scheduled_to_response_ms": {
+            "p90": -101.31917709999993,
+            "p95": -99.08878815000003
+          },
+          "all_offer_scheduled_to_valid_response_ms": {
+            "p90": -101.31917709999993,
+            "p95": -99.08878815000003
+          }
+        },
+        "candidate_minus_control_cold_ms": {
+          "p90": -101.24733910000009,
+          "p95": -99.15632189999997
+        }
+      },
+      {
+        "rate_index": 2,
+        "offered_qps": 1,
+        "dataset": "CoHere",
+        "valid_matched_cells": true,
+        "candidate_minus_control_ms": {
+          "scheduled_to_response_ms": {
+            "p90": -77.15462289999994,
+            "p95": -81.55699539999989
+          },
+          "all_offer_scheduled_to_valid_response_ms": {
+            "p90": -77.15462289999994,
+            "p95": -81.55699539999989
+          }
+        },
+        "candidate_minus_control_cold_ms": {
+          "p90": -77.04574869999999,
+          "p95": -81.90200049999999
+        }
+      },
+      {
+        "rate_index": 3,
+        "offered_qps": 2,
+        "dataset": "ReLAION",
+        "valid_matched_cells": true,
+        "candidate_minus_control_ms": {
+          "scheduled_to_response_ms": {
+            "p90": -82.2126596999999,
+            "p95": -61.621940550000204
+          },
+          "all_offer_scheduled_to_valid_response_ms": {
+            "p90": -82.2126596999999,
+            "p95": -61.621940550000204
+          }
+        },
+        "candidate_minus_control_cold_ms": {
+          "p90": -82.08933450000006,
+          "p95": -61.52072070000031
+        }
+      },
+      {
+        "rate_index": 3,
+        "offered_qps": 2,
+        "dataset": "CoHere",
+        "valid_matched_cells": false,
+        "candidate_minus_control_ms": "UNMEASURED",
+        "candidate_minus_control_cold_ms": "UNMEASURED"
+      },
+      {
+        "rate_index": 4,
+        "offered_qps": 4,
+        "dataset": "ReLAION",
+        "valid_matched_cells": false,
+        "candidate_minus_control_ms": "UNMEASURED",
+        "candidate_minus_control_cold_ms": "UNMEASURED"
+      },
+      {
+        "rate_index": 4,
+        "offered_qps": 4,
+        "dataset": "CoHere",
+        "valid_matched_cells": false,
+        "candidate_minus_control_ms": "UNMEASURED",
+        "candidate_minus_control_cold_ms": "UNMEASURED"
+      },
+      {
+        "rate_index": 5,
+        "offered_qps": 8,
+        "dataset": "ReLAION",
+        "valid_matched_cells": false,
+        "candidate_minus_control_ms": "UNMEASURED",
+        "candidate_minus_control_cold_ms": "UNMEASURED"
+      },
+      {
+        "rate_index": 5,
+        "offered_qps": 8,
+        "dataset": "CoHere",
+        "valid_matched_cells": false,
+        "candidate_minus_control_ms": "UNMEASURED",
+        "candidate_minus_control_cold_ms": "UNMEASURED"
+      }
+    ],
+    "eight_qps_attained": false,
+    "offered_gate_passed": false,
+    "abort_after": {
+      "observed_ns": 2037190421256,
+      "query_ordinal": 44,
+      "reason": "fatal call failure"
+    },
+    "escalation_stopped_after": {},
+    "latency_improvement": false,
+    "full_span_boundary": "first scheduled offer through all admitted calls, validation and cleanup",
+    "success_conditioned_tails": true,
+    "all_offer_tail_unsuccessful_completion": "UNBOUNDED",
+    "process_and_store_client_cold": true,
+    "application_cache": false,
+    "s3_service_cache": "uncontrolled",
+    "transport": "one loopback HTTP ANN request per fresh namespace; native object transport uses TLS",
+    "population": "FIRST100k D768 cosine development ordinals 0..63",
+    "matched_vendor_measured": false,
+    "sustainable_qps": "UNMEASURED",
+    "cost": "UNMEASURED",
+    "launch_authority": false,
+    "offered_load_measured": true
+  },
+  "profile_cgroup": {
+    "memory.max": "8589934592\n",
+    "memory.peak": "199380992\n",
+    "memory.swap.max": "0\n",
+    "memory.swap.peak": "0\n",
+    "memory.swap.events": "high 0\nmax 0\nfail 0\n",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n",
+    "cpu.stat": "usage_usec 196026545\nuser_usec 141050641\nsystem_usec 54975904\nnice_usec 0\ncore_sched.force_idle_usec 0\n",
+    "rlimit_as_bytes": [
+      4294967296,
+      4294967296
+    ],
+    "cpu_affinity": [
+      0,
+      1,
+      2,
+      3
+    ]
+  }
+}
