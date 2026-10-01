@@ -1,0 +1,14 @@
+{
+  "schema": "borsuk-official-awscli-local-install-check-v1",
+  "installer_sha256": "50fbb7a2f44a78eab4a210088040e8f0bc4b9937cac8043c2354269d58614df6",
+  "installer_bytes": 73022935,
+  "version": "2.36.11",
+  "signature_verified": true,
+  "unzip_status": 0,
+  "official_install_status": 0,
+  "aws_version_status": 0,
+  "aws_command_elf_glibc_requirement_max": "2.14",
+  "local_host_glibc": "2.43",
+  "scope": "authenticated installer executes locally; target Ubuntu2.39 and all bundled libraries still need actual remote bootstrap; no AWS calls/native queries",
+  "native_binary_rebuilt": false
+}

@@ -4,7 +4,7 @@ The v7 graph/semantic discovery envelope and semantic publication, reads, mutati
 
 ## Verified implementation evidence
 
-`semantic-router-native-assurance.json` authenticates the exact source, six executed gate commands, immutable compressed logs and the HTTP executable. Unit and metadata tests, affected integration tests, HTTP release build, workspace Clippy and complete workspace test compilation all exited zero. Full workspace test execution has not been performed for this slice.
+`semantic-router-native-assurance.json` authenticates the original implementation slice. The final 399-file source, affected tests, qualified binaries, workspace Clippy, complete test compilation and full workspace test execution are authenticated by `semantic-cold/native-assurance.json`; the final full command exited zero.
 
 The existing parity/lifecycle test covers selected conditional leaf ranges, partial units, reversed logical IDs, native ordered results, charges on failures, admission, mutation visibility, durable restart, compaction and GC. Repackaging validates original fitted-router provenance and copies current source/canonical/page authorities without refitting or reencoding; the byte-identity regression passes. Invalid empty geometry is rejected before remote I/O.
 
@@ -34,20 +34,30 @@ remain failures, with source unchanged. Final a0005 uses the same exact 399-file
 source, serial test execution and a bounded 512-task/8 GiB/zero-swap envelope.
 Final a0005 exited zero with the complete 399-file source unchanged, measured peak 1,477,390,336 bytes and 311 tasks, and no cgroup task denial. Its closed receipt/log bodies are authenticated in `semantic-cold/native-assurance.json`. These are assurance resources, not relaxed scientific experiment limits.
 
-The actual asset tar and draft configuration are prepared. Publisher and HTTP
-full-execution proofs and the actual config now pass local preflight. The real
-bootstrap is 15,539 bytes, within EC2 user-data admission. All 15 immutable remote assets were uploaded and their bodies authenticated.
+The actual asset tar, publisher and HTTP full-execution proofs and configuration
+passed local preflight. All 15 immutable remote assets were uploaded and their bodies authenticated.
 Attempt a0001 then failed before native execution because AL2023 lacks the
 binaries’ required GLIBC_2.38. Its owned instance is terminated; no cold call
 occurred. `semantic-cold/abi-failure-decision.json` preserves the closed evidence.
-The preregistered a0002 repair uses the same binaries on verified Canonical
-Ubuntu 24.04 with an ABI guard before data staging. No cloud publication,
-cold HTTP measurement, new native quality result or vendor win has occurred.
+The a0002 Ubuntu repair passed local preflight with a 16,108-byte bootstrap,
+the correct 80 GiB root device and an ABI guard before data staging. The instance
+then shut itself down after 58 seconds, with no terminal or remote logs. Owned
+termination and wait are verified. AWS reports instance-initiated shutdown,
+not a verified Spot eviction; native execution count is unknown without logs.
+No cold HTTP measurement, new native quality result or vendor win is available.
+
+The bootstrap audit verified that pre-install failures cannot be reported when
+the AWS CLI is absent. Ubuntu Noble's APT catalogue lacks `awscli`, a likely
+trigger that cannot be confirmed for this instance. The next repair uses an
+official, version-pinned AWS CLI installer with root-verified signature and
+SHA256 authority in `semantic-cold/bootstrap-repair/installer-authority.json`.
+It also fixes the premature check for `run-closed.log`, which the exit handler
+creates, and adds dependency-independent serial failure reporting.
 
 ## Next delivery steps
 
-1. Qualify the runtime-only Ubuntu bootstrap and early ABI guard; freeze fresh
-   a0002 namespaces and updated config/code identities, reusing unchanged Rust assurance.
+1. Qualify the bootstrap prerequisite and failure-reporting repair; freeze fresh
+   a0003 namespaces and updated config/code identities, reusing unchanged Rust assurance.
 2. Fast-forward the closed failure and verified runtime repair to main, then run
    ONE preregistered fresh Spot attempt:
    four publications with consumed-panel parity validation, then 512 cold ABBA
