@@ -1,0 +1,12 @@
+[GNUPG:] NEWSIG
+gpg: Signature made Wed Jul 29 18:17:52 2026 UTC
+gpg:                using RSA key FB5DB77FD5C118B80511ADA8A6310ACC4672475C
+[GNUPG:] KEY_CONSIDERED FB5DB77FD5C118B80511ADA8A6310ACC4672475C 0
+[GNUPG:] SIG_ID ucwDXQdXoSfqzVEYZVAjsi7laIE 2026-07-29 1785349072
+[GNUPG:] GOODSIG A6310ACC4672475C AWS CLI Team <aws-cli@amazon.com>
+gpg: Good signature from "AWS CLI Team <aws-cli@amazon.com>" [unknown]
+[GNUPG:] VALIDSIG FB5DB77FD5C118B80511ADA8A6310ACC4672475C 2026-07-29 1785349072 0 4 0 1 10 00 FB5DB77FD5C118B80511ADA8A6310ACC4672475C
+[GNUPG:] TRUST_UNDEFINED 0 pgp
+gpg: WARNING: This key is not certified with a trusted signature!
+gpg:          There is no indication that the signature belongs to the owner.
+Primary key fingerprint: FB5D B77F D5C1 18B8 0511  ADA8 A631 0ACC 4672 475C

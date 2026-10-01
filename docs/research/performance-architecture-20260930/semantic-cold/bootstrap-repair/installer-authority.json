@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-semantic-bootstrap-installer-authority-v1",
+  "version": "2.36.11",
+  "url": "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.36.11.zip",
+  "bytes": 73022935,
+  "sha256": "50fbb7a2f44a78eab4a210088040e8f0bc4b9937cac8043c2354269d58614df6",
+  "signature_url": "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.36.11.zip.sig",
+  "signature_fingerprint": "FB5DB77FD5C118B80511ADA8A6310ACC4672475C",
+  "signature_status": 0,
+  "root_native_source_unchanged": true,
+  "remote_bootstrap_measured": false,
+  "ubuntu_awscli_absence_sources": [
+    "https://packages.ubuntu.com/awscli",
+    "https://bugs.launchpad.net/ubuntu/+source/awscli/+bug/2066199"
+  ],
+  "official_install_source": "https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html",
+  "a0002_trigger": "unverified due missing logs; absent package is likely",
+  "other_verified_bootstrap_issue": "final pre-exit tests require run-closed.log before EXIT handler creates it; must check it in finalizer/terminal, not before generation"
+}
