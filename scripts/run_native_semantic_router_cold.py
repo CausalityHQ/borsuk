@@ -47,7 +47,6 @@ during staging; both reads are charged. Credential values are never read here.
 """
 from pathlib import Path
 import sys
-from contextlib import contextmanager
 from decimal import Decimal
 import base64
 import hashlib
@@ -56,7 +55,6 @@ import json
 import math
 import os
 import struct
-from types import SimpleNamespace
 
 if not __debug__:
     raise RuntimeError('the reused cold-call harness requires Python assertions enabled')
@@ -246,51 +244,6 @@ def prepare(config, output, *, fetch=None):
     return panels
 
 
-@contextmanager
-def scoped_runner(config, arm, observed):
-    spawn = old.subprocess.Popen
-
-    def popen(*args, **kwargs):
-        observed['namespace_start_attempted'] = True
-        process = spawn(*args, **kwargs)
-        observed['native_process_started'] = True
-        return process
-
-    def checked(response, expected, truth, authority):
-        stats.require(authority == arm['authority'], 'scoped authority')
-        return stats.validate_query(response, arm, expected=expected, truth=truth)['returned_hits']
-
-    def startup(value, files, wall):
-        stats.require(files == arm['metadata_files'], 'scoped metadata roster')
-        return stats.validate_startup(value, arm, wall)
-
-    def post(client, body):
-        observed['http_attempts'] = 1
-        status, raw = _post(client, body)
-        # Retain the bytes without JSON/UTF-8 work before old.cold_call marks wire completion.
-        observed.update(http_status=status, raw_response=raw)
-        return status, raw
-
-    replacements = dict(checked_response=checked, validate=startup, post=post,
-                        subprocess=SimpleNamespace(Popen=popen, STDOUT=old.subprocess.STDOUT))
-    saved = {name: getattr(old, name) for name in replacements}
-    environment = {'BORSUK_NATIVE_MEMORY_BYTES': str(config['native_memory_bytes']), 'AWS_MAX_ATTEMPTS': '1'}
-    saved_environment = {name: os.environ.get(name) for name in environment}
-    try:
-        for name, value in replacements.items():
-            setattr(old, name, value)
-        os.environ.update(environment)
-        yield
-    finally:
-        for name, value in saved.items():
-            setattr(old, name, value)
-        for name, value in saved_environment.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
-
-
 def resources(log, limit):
     fields = {}
     for line in log.splitlines():
@@ -324,12 +277,37 @@ def cgroup_snapshot():
         return 'UNMEASURED'
 
 
-def measured_call(binary, config, arm, body, expected, truth):
+def measured_call(binary, config, arm, body, expected, truth, *, port=8080):
     failures, observed, record = io.StringIO(), dict(namespace_start_attempted=False, native_process_started=False, http_attempts=0), None
+    spawn = old.subprocess.Popen
+
+    def popen(*args, **kwargs):
+        observed['namespace_start_attempted'] = True
+        process = spawn(*args, **kwargs)
+        observed['native_process_started'] = True
+        return process
+
+    def checked(response, expected, truth, authority):
+        stats.require(authority == arm['authority'], 'call authority')
+        return stats.validate_query(response, arm, expected=expected, truth=truth)['returned_hits']
+
+    def startup(value, files, wall):
+        stats.require(files == arm['metadata_files'], 'call metadata roster')
+        return stats.validate_startup(value, arm, wall)
+
+    def post(client, body):
+        observed['http_attempts'] = 1
+        status, raw = _post(client, body)
+        # Retain bytes before the shared cold call marks wire completion.
+        observed.update(http_status=status, raw_response=raw)
+        return status, raw
+
+    environment = dict(os.environ, BORSUK_NATIVE_MEMORY_BYTES=str(config['native_memory_bytes']),
+                       AWS_MAX_ATTEMPTS='1', TOKIO_WORKER_THREADS='4')
     before = cgroup_snapshot()
     try:
-        with scoped_runner(config, arm, observed):
-            record = _cold_call(binary, config, arm, body, expected, truth, failures)
+        record = _cold_call(binary, config, arm, body, expected, truth, failures, port=port,
+                            response_check=checked, startup_check=startup, post_call=post, spawn=popen, env=environment)
         observed['raw_response_base64'] = base64.b64encode(observed['raw_response']).decode('ascii')
         observed['raw_response'] = observed['raw_response'].decode(errors='replace')
         record.update(outcome='success', **observed)
@@ -376,7 +354,7 @@ def measured_call(binary, config, arm, body, expected, truth):
             record['resource_validation_error'] = str(error)
     if record['outcome'] == 'success':
         try:
-            validate_record(record, config, arm, body, expected, truth)
+            validate_record(record, config, arm, body, expected, truth, port=port)
         except (ValueError, KeyError, TypeError) as error:
             record.update(outcome='failed', error_type=type(error).__name__, error=str(error),
                           telemetry_validation_errors=[str(error)])
@@ -458,7 +436,8 @@ def reduce_calls(records):
                 fetch_waves='UNMEASURED', confirmed_wire_requests='UNMEASURED')
 
 
-def validate_record(record, config, arm, body, expected, truth):
+def validate_record(record, config, arm, body, expected, truth, *, port=8080):
+    stats.require(type(port) is int and 1024 <= port <= 65535, 'port must be an integer in 1024..65535')
     stats.require(record['http_status'] == 200 and record['http_attempts'] == record['valid_ann_requests'] == 1,
                   'one successful HTTP query')
     stats.require(record['native_close']['intentional_stop'] is True
@@ -474,7 +453,7 @@ def validate_record(record, config, arm, body, expected, truth):
     stats.require(record['raw_response'] == raw.decode(errors='replace')
                   and record['response'] == json.loads(raw), 'raw query outcome')
     headers = [json.loads(line) for line in record['native_server_log'].splitlines() if line.startswith('{')]
-    stats.require(headers == [record['native_header']] and headers[0]['listen'] == '127.0.0.1:8080', 'raw ready outcome')
+    stats.require(headers == [record['native_header']] and headers[0]['listen'] == f'127.0.0.1:{port}', 'raw ready outcome')
     accounting = stats.validate_outcome(headers[0], record['response'], arm, True)
     stats.require(record['accounting'] == accounting and record['metadata'] == accounting['metadata'], 'accounting receipt')
     stats.require(record['startup_accounting'] == stats.validate_ready(headers[0], arm), 'startup accounting receipt')
@@ -833,8 +812,9 @@ def self_check():
 
         def spawn(command, **kwargs):
             assert command[4:11] == ['timeout', '--signal=TERM', '--kill-after=5', '60', 'taskset', '-c', '0-3']
-            assert os.environ['BORSUK_NATIVE_MEMORY_BYTES'] == str(config['native_memory_bytes'])
-            assert os.environ['AWS_MAX_ATTEMPTS'] == '1'
+            assert kwargs['env']['BORSUK_NATIVE_MEMORY_BYTES'] == str(config['native_memory_bytes'])
+            assert kwargs['env']['AWS_MAX_ATTEMPTS'] == '1'
+            assert kwargs['env']['TOKIO_WORKER_THREADS'] == '4'
             state['arm'] = by_index[command[14]]
             server.poll.return_value = 123 if state['fault'] == 'startup' else None
             assert command[11] == str(binary) and command[15] == state['arm']['authority']['root_sha256']

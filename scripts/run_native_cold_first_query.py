@@ -32,19 +32,24 @@ def checked_response(response, expected, truth, authority):
     return len(set(response['ids']) & set(truth[:10]))
 
 
-def cold_call(binary, config, item, body, expected, truth, failure_stream=None, *, port=8080):
+def cold_call(binary, config, item, body, expected, truth, failure_stream=None, *, port=8080,
+              response_check=None, startup_check=None, post_call=None, spawn=None, env=None):
     if type(port) is not int or not 1024 <= port <= 65535:
         raise ValueError('port must be an integer in 1024..65535')
+    response_check = checked_response if response_check is None else response_check
+    startup_check = validate if startup_check is None else startup_check
+    post_call = post if post_call is None else post_call
+    spawn = subprocess.Popen if spawn is None else spawn
     authority = item['authority']
     with tempfile.TemporaryDirectory() as tmp:
         directory = Path(tmp)
         with (directory/'server.log').open('x') as log:
             started = time.monotonic_ns()
-            server = subprocess.Popen(['/usr/bin/time', '-v', '-o', str(directory/'server.time'),
+            server = spawn(['/usr/bin/time', '-v', '-o', str(directory/'server.time'),
                 'timeout', '--signal=TERM', '--kill-after=5', '60', 'taskset', '-c', '0-3', binary,
                 config['bucket'], config['region'], item['indexes']['10'], authority['root_sha256'],
                 str(authority['generation']), str(authority['control_epoch']), f'127.0.0.1:{port}'],
-                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                stdout=log, stderr=subprocess.STDOUT, start_new_session=True, env=env)
             client = None
             refused = 0
             failure = None
@@ -69,11 +74,11 @@ def cold_call(binary, config, item, body, expected, truth, failure_stream=None, 
                             raise TimeoutError('namespace first connection')
                         time.sleep(.01)
                 http_attempts = 1
-                status, raw = post(client, body)
+                status, raw = post_call(client, body)
                 completed = time.monotonic_ns()  # Wire completion precedes JSON/parity work.
                 assert status == 200, 'first and only ANN request failed; no HTTP retry'
                 response = json.loads(raw)
-                hits = checked_response(response, expected, truth, authority)
+                hits = response_check(response, expected, truth, authority)
                 assert server.poll() is None, 'namespace ended before completed measurement'
             except Exception as error:
                 failure = error
@@ -98,7 +103,7 @@ def cold_call(binary, config, item, body, expected, truth, failure_stream=None, 
             header = headers[0]
             assert header['phase'] == 'ready' and header['authority'] == authority and header['listen'] == f'127.0.0.1:{port}'
             assert close['intentional_stop'] is True
-            metadata = validate(header['remote_open_stats'], item['metadata_files'], header['remote_open_wall_ns'])
+            metadata = startup_check(header['remote_open_stats'], item['metadata_files'], header['remote_open_wall_ns'])
             assert completed-started >= header['remote_open_wall_ns']+header['head_read_wall_ns']
         except Exception as error:
             if failure_stream is not None:
