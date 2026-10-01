@@ -41,7 +41,7 @@
     "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
     "scripts/launch_native_metadata_ranges_cold_spot.py": "e6a74599258cd219abb16ca2c793baa30cffe00e60e85925691c86c75f5686ad",
     "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
-    "scripts/launch_native_semantic_metadata_cold_spot.py": "d04e297e98c9fee5945b60eb496072d1b4716bf1c0a8c537a28759d6f9a845fc",
+    "scripts/launch_native_semantic_metadata_cold_spot.py": "f87b5f61af16e422f052bf7ef1265c5b5e637d4819f2cdce7875b6a13d4fddf7",
     "scripts/launch_native_semantic_router_cold_spot.py": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180",
     "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
     "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b",

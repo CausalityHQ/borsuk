@@ -98,7 +98,7 @@ def encoded(value):
 
 @contextmanager
 def offered_mode():
-    with patch.multiple(sys.modules[__name__], CONFIG=OFFERED_CONFIG, SCHEMA=OFFERED_SCHEMA,
+    with patch.multiple(sys.modules[__name__], CONFIG=OFFERED_CONFIG, SCHEMA=OFFERED_SCHEMA, NAME='offered',
             PREFIX=OFFERED_PREFIX, TOKEN_PREFIX=TOKEN_PREFIX+'offered-', TAG=TAG+'-offered',
             CODE=OFFERED_CODE, ARTIFACTS=OFFERED_ARTIFACTS):
         yield
@@ -547,7 +547,7 @@ def _lifecycle_self_check():
                 DeleteOnTermination=True, Encrypted=True, VolumeSize=80, VolumeType='gp3'))]
             assert args['ClientToken'].startswith(TOKEN_PREFIX)
             for name in ('aws-launch.json', 'aws-closeout.json'):
-                assert json.loads((Path(tmp)/'a0001'/name).read_bytes())['nodes'] == {
+                assert json.loads((Path(tmp)/NAME/'a0001'/name).read_bytes())['nodes'] == {
                     str(i): dict(instance_id=n) for i, n in enumerate(ids)}
     shared.self_check(lifecycle_only=True)  # Includes transient reads and bounded termination retries.
 
