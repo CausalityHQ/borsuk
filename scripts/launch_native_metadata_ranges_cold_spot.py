@@ -227,6 +227,7 @@ def main(attempt, campaign=None):
     subnet = getattr(campaign, 'SUBNET', peer.SUBNET)
     instance_type = getattr(campaign, 'INSTANCE_TYPE', 'c7g.2xlarge')
     image_id = getattr(campaign, 'IMAGE_ID', 'ami-03748c04dc81412c6')
+    root_device_name = getattr(campaign, 'ROOT_DEVICE_NAME', '/dev/xvda')
     spot_max = getattr(campaign, 'SPOT_MAX_USD_PER_HOUR', .30)
     assert isinstance(spot_max, (int, float)) and 0 < spot_max <= 1
     az = ec2.describe_subnets(SubnetIds=[subnet])['Subnets'][0]['AvailabilityZone']
@@ -238,7 +239,7 @@ def main(attempt, campaign=None):
     else:
         assert peer.sha(s3.get_object(Bucket=peer.BUCKET, Key=key)['Body'].read()) == digest
     reservation = dict(schema=campaign.SCHEMA, source_commit=commit, source_archive_sha256=digest,
-        wall_seconds=campaign.WALL, instance_type=instance_type, image_id=image_id, availability_zone=az, subnet_id=subnet,
+        wall_seconds=campaign.WALL, instance_type=instance_type, image_id=image_id, root_device_name=root_device_name, availability_zone=az, subnet_id=subnet,
         spot_price_observed_usd_per_hour=quote['SpotPrice'], spot_quote_timestamp=quote['Timestamp'].isoformat(),
         spot_max_usd_per_hour=spot_max, compute_cap_usd=getattr(campaign, 'COMPUTE_CAP', .35), ebs_s3_allowance_usd=.15,
         total_cost_measured=False,
@@ -257,7 +258,7 @@ def main(attempt, campaign=None):
             InstanceType=instance_type, MinCount=1, MaxCount=1, IamInstanceProfile={'Arn': peer.PROFILE_ARN},
             NetworkInterfaces=[{'AssociatePublicIpAddress': True, 'DeviceIndex': 0, 'Groups': [peer.SECURITY_GROUP], 'SubnetId': subnet}],
             InstanceMarketOptions={'MarketType': 'spot', 'SpotOptions': {'InstanceInterruptionBehavior': 'terminate', 'SpotInstanceType': 'one-time', 'MaxPrice': f'{spot_max:.2f}'}},
-            InstanceInitiatedShutdownBehavior='terminate', BlockDeviceMappings=[{'DeviceName': '/dev/xvda', 'Ebs': {'DeleteOnTermination': True, 'Encrypted': True, 'VolumeSize': 80, 'VolumeType': 'gp3'}}],
+            InstanceInitiatedShutdownBehavior='terminate', BlockDeviceMappings=[{'DeviceName': root_device_name, 'Ebs': {'DeleteOnTermination': True, 'Encrypted': True, 'VolumeSize': 80, 'VolumeType': 'gp3'}}],
             TagSpecifications=[{'ResourceType': 'instance', 'Tags': [{'Key': 'Name', 'Value': getattr(campaign, 'TAG', 'borsuk-metadata-ranges-cold')}]}], UserData=body)
         # Record all ACKed IDs before receipt persistence can fail.
         for index, row in enumerate(receipt['Instances']):
@@ -353,6 +354,8 @@ def self_check(lifecycle_only=False):
                 else:
                     assert failure == 'success', 'failure swallowed'
             ec2.run_instances.assert_called_once()
+            assert ec2.run_instances.call_args.kwargs['BlockDeviceMappings'] == [{'DeviceName': '/dev/xvda', 'Ebs': {'DeleteOnTermination': True, 'Encrypted': True, 'VolumeSize': 80, 'VolumeType': 'gp3'}}]
+            assert json.loads((Path(tmp)/'metadata-ranges-cold/a0001/aws-reservation.json').read_text())['root_device_name'] == '/dev/xvda'
             ec2.terminate_instances.assert_called_once_with(InstanceIds=instance_ids)
             ec2.get_waiter.return_value.wait.assert_called_once_with(InstanceIds=instance_ids)
             persisted = json.loads((Path(tmp)/'metadata-ranges-cold/a0001/aws-launch.json').read_bytes())
