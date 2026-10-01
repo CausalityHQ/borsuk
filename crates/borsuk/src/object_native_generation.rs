@@ -182,7 +182,7 @@ pub struct MetadataReadStats {
     pub chunks: u64,
     /// HEAD admission wait, in nanoseconds.
     pub head_wall_ns: u128,
-    /// Logical HEAD calls; excludes SDK retries (one per admitted object).
+    /// Logical HEAD calls; excludes SDK retries (zero for authenticated lengths).
     pub logical_head_requests: u64,
     /// Logical payload GET calls; excludes SDK retries.
     pub logical_get_requests: u64,
@@ -299,12 +299,6 @@ async fn stage_metadata(
         let name = names[index];
         index += 1;
         let location = metadata_location(prefix, name);
-        let head_started = std::time::Instant::now();
-        let head = store
-            .head(&location)
-            .await
-            .map_err(ObjectNativeOpenError::Store)?;
-        let head_wall_ns = head_started.elapsed().as_nanos();
         let limit = max_bytes
             .saturating_sub(total)
             .min(if name.ends_with(".json") {
@@ -316,14 +310,16 @@ async fn stage_metadata(
             } else {
                 u64::MAX
             });
-        let expected = head.size;
-        if let Some(root) = &authenticated {
+        let exact = if let Some(root) = &authenticated {
             let rows = root.canonical.rows;
             let dimensions = root.canonical.dimensions;
-            let exact = match name {
-                "plane/mean.bin" => dimensions.checked_mul(4),
-                "plane/page_digests.bin" => rows.div_ceil(32).checked_mul(32),
-                "page_digests.bin" => rows.div_ceil(256).checked_mul(32),
+            let overflow = ObjectNativeOpenError::Invalid("descriptor metadata length");
+            match name {
+                "plane/mean.bin" => Some(dimensions.checked_mul(4).ok_or(overflow)?),
+                "plane/page_digests.bin" => {
+                    Some(rows.div_ceil(32).checked_mul(32).ok_or(overflow)?)
+                }
+                "page_digests.bin" => Some(rows.div_ceil(256).checked_mul(32).ok_or(overflow)?),
                 "router/manifest.json" => match &root.discovery {
                     crate::two_bit_generation::Discovery::Semantic { root_bytes, .. } => {
                         Some(*root_bytes)
@@ -337,11 +333,21 @@ async fn stage_metadata(
                     _ => None,
                 },
                 _ => None,
-            };
-            if exact.is_some_and(|n| n as u64 != expected) {
-                return Err(ObjectNativeOpenError::Invalid("descriptor metadata length"));
             }
-        }
+        } else {
+            None
+        };
+        let (expected, logical_head_requests, head_wall_ns) = match exact {
+            Some(length) => (length as u64, 0, 0),
+            None => {
+                let head_started = std::time::Instant::now();
+                let head = store
+                    .head(&location)
+                    .await
+                    .map_err(ObjectNativeOpenError::Store)?;
+                (head.size, 1, head_started.elapsed().as_nanos())
+            }
+        };
         if expected == 0 || expected > limit {
             return Err(ObjectNativeOpenError::Invalid("remote metadata length"));
         }
@@ -440,7 +446,7 @@ async fn stage_metadata(
             bytes: count,
             chunks,
             head_wall_ns,
-            logical_head_requests: 1,
+            logical_head_requests,
             logical_get_requests: if ranged {
                 expected.div_ceil(METADATA_RANGE_BYTES)
             } else {

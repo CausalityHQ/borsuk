@@ -1986,6 +1986,7 @@ mod source_walk_tests {
         reads: std::sync::Mutex<Vec<(String, bool, std::ops::Range<u64>, Option<String>)>>,
         writes: std::sync::Mutex<Vec<String>>,
         fail_head: std::sync::atomic::AtomicUsize,
+        metadata_fault: std::sync::Mutex<Option<&'static str>>,
     }
     impl std::fmt::Display for RecordedStore {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -2001,11 +2002,40 @@ mod source_walk_tests {
         ) -> object_store::Result<object_store::GetResult> {
             let head = options.head;
             let etag = options.if_match.clone();
-            let result = self.inner.get_opts(path, options).await?;
+            let mut result = self.inner.get_opts(path, options).await?;
             self.reads
                 .lock()
                 .unwrap()
                 .push((path.to_string(), head, result.range.clone(), etag));
+            let fault = *self.metadata_fault.lock().unwrap();
+            if !head && path.as_ref().ends_with("/plane/mean.bin") {
+                match fault {
+                    Some("size") => result.meta.size += 1,
+                    Some("range") => result.range.start += 1,
+                    Some(fault @ ("short" | "long" | "corrupt")) => {
+                        let original = result.payload;
+                        result.payload = object_store::GetResultPayload::Stream(
+                            stream::once(async move {
+                                let object_store::GetResultPayload::Stream(mut body) = original
+                                else {
+                                    unreachable!()
+                                };
+                                let mut bytes = body.next().await.unwrap()?.to_vec();
+                                match fault {
+                                    "short" => {
+                                        bytes.pop();
+                                    }
+                                    "long" => bytes.push(0),
+                                    _ => bytes[0] ^= 1,
+                                }
+                                Ok(bytes::Bytes::from(bytes))
+                            })
+                            .boxed(),
+                        );
+                    }
+                    _ => {}
+                }
+            }
             tokio::task::yield_now().await;
             Ok(result)
         }
@@ -2164,6 +2194,35 @@ mod source_walk_tests {
         assert_eq!(startup.router_head_requests, 1);
         assert!(startup.router_head_wall_ns > 0);
         assert_eq!(startup.metadata.len(), 8);
+        assert_eq!(
+            startup
+                .metadata
+                .iter()
+                .map(|r| r.logical_get_requests)
+                .sum::<u64>(),
+            8
+        );
+        assert_eq!(
+            startup
+                .metadata
+                .iter()
+                .map(|r| r.logical_head_requests)
+                .sum::<u64>(),
+            3
+        );
+        for entry in &startup.metadata {
+            let retained = ["manifest.json", "page_manifest.json", "plane/manifest.json"]
+                .contains(&entry.name.as_str());
+            assert_eq!(entry.logical_head_requests, u64::from(retained));
+            if !retained {
+                assert_eq!(entry.head_wall_ns, 0);
+            }
+        }
+        {
+            let reads = store.reads.lock().unwrap();
+            assert_eq!(reads.iter().filter(|(_, head, _, _)| !head).count(), 8);
+            assert_eq!(reads.iter().filter(|(_, head, _, _)| *head).count(), 5);
+        }
         assert!(
             store
                 .reads
@@ -2181,6 +2240,93 @@ mod source_walk_tests {
                     .iter()
                     .any(|suffix| name.ends_with(suffix)))
         );
+        let scratch = tempfile::tempdir().unwrap();
+        for fault in ["size", "range", "short", "long", "corrupt"] {
+            *store.metadata_fault.lock().unwrap() = Some(fault);
+            store.reads.lock().unwrap().clear();
+            let error = TwoBitGeneration::open_remote(
+                store.as_ref(),
+                &prefix,
+                &root_sha,
+                limits,
+                scratch.path(),
+            )
+            .await
+            .err()
+            .unwrap();
+            if fault == "corrupt" {
+                assert!(
+                    matches!(error, TwoBitGenerationError::Plane(_)),
+                    "{error:?}"
+                );
+            } else {
+                assert!(
+                    matches!(
+                        error,
+                        TwoBitGenerationError::Stage(ObjectNativeOpenError::Invalid(
+                            "remote metadata length"
+                        ))
+                    ),
+                    "{error:?}"
+                );
+            }
+            let reads = store.reads.lock().unwrap();
+            assert_eq!(
+                reads
+                    .iter()
+                    .filter(|(name, head, _, _)| !head && name.ends_with("/plane/mean.bin"))
+                    .count(),
+                1
+            );
+            assert!(
+                !reads
+                    .iter()
+                    .any(|(name, head, _, _)| *head && name.ends_with("/plane/mean.bin"))
+            );
+            assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+        }
+        *store.metadata_fault.lock().unwrap() = None;
+        // Use the same authenticated source/page fixture with a graph descriptor:
+        // semantic decoded-memory admission would reject this small cap earlier.
+        let root_body = fs::read(root.join("manifest.json")).unwrap();
+        let mut graph_root: serde_json::Value = serde_json::from_slice(&root_body).unwrap();
+        graph_root["discovery"] = serde_json::json!({
+            "mode": "graph", "centroids_sha256": "a".repeat(64),
+            "graph_sha256": "b".repeat(64), "graph_resident_bytes": 1,
+            "diverse_graph_sha256": "c".repeat(64), "diverse_graph_resident_bytes": 1,
+        });
+        let graph_body = serde_json::to_vec(&graph_root).unwrap();
+        let cap = graph_body.len() as u64
+            + fs::metadata(root.join("page_manifest.json")).unwrap().len()
+            + fs::metadata(root.join("page_digests.bin")).unwrap().len()
+            - 1;
+        let root_key = metadata_location(&prefix, "manifest.json");
+        store
+            .put(&root_key, graph_body.clone().into())
+            .await
+            .unwrap();
+        store.reads.lock().unwrap().clear();
+        assert!(matches!(
+            stage_two_bit_metadata(
+                store.as_ref(),
+                &prefix,
+                &hash(&graph_body),
+                cap,
+                scratch.path()
+            )
+            .await,
+            Err(ObjectNativeOpenError::Invalid("remote metadata length"))
+        ));
+        assert!(
+            !store
+                .reads
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(name, _, _, _)| name.ends_with("/page_digests.bin"))
+        );
+        assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+        store.put(&root_key, root_body.into()).await.unwrap();
         let eager = TwoBitGeneration::open(&root, &root_sha, limits).unwrap();
         let LoadedDiscovery::Semantic { router, .. } = &eager.discovery else {
             panic!("semantic lost")
@@ -2235,6 +2381,8 @@ mod source_walk_tests {
             .unwrap();
         assert_eq!(expected.ranked.candidates, actual.ranked.candidates);
         assert_eq!(expected.plan, actual.plan);
+        assert_eq!(expected.ranked.stats, actual.ranked.stats);
+        assert_eq!(actual.source_stats, source);
         assert_eq!(actual.router_stats, leaves);
         assert!(actual.stages.discovery.end_ns <= actual.stages.source.start_ns);
         assert!(actual.stages.source.end_ns <= actual.stages.planning.start_ns);
@@ -2800,6 +2948,26 @@ mod source_walk_tests {
         let startup = remote.remote_open_stats().unwrap();
         assert_eq!(startup.metadata.len(), 9);
         assert_eq!(startup.source_head_requests, 1);
+        assert_eq!(
+            startup
+                .metadata
+                .iter()
+                .map(|r| r.logical_head_requests)
+                .sum::<u64>(),
+            6
+        );
+        for entry in &startup.metadata {
+            if [
+                "page_digests.bin",
+                "plane/mean.bin",
+                "plane/page_digests.bin",
+            ]
+            .contains(&entry.name.as_str())
+            {
+                assert_eq!(entry.logical_head_requests, 0);
+                assert_eq!(entry.head_wall_ns, 0);
+            }
+        }
         assert!(
             !startup
                 .metadata

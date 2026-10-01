@@ -1114,6 +1114,17 @@ def offered_self_check():
                                        mean_sha256=hashlib.sha256(b'plane/mean.bin').hexdigest())
         for name, mode in (('control', 'graph'), ('candidate', 'semantic')):
             call = fixture(mode, 18080)
+            rows = call['header']['remote_open_stats']['metadata']
+            skipped = 0
+            for row in rows:
+                if row['name'] in stats.EXACT_LENGTH_FILES:
+                    skipped += row['logical_head_requests']
+                    row['logical_head_requests'] = row['head_wall_ns'] = 0
+            for report in (call['header'], call['response']):
+                totals = report['transport']['totals']
+                totals['attempts'] -= skipped
+                totals['method_counts'][1] -= skipped
+                totals['status_counts'] = [[200, totals['attempts']]]
             arm = call['arm']
             arm.update(dataset=dataset, indexes={'10': dataset + '/' + name})
             arm['metadata_sha256'] = {k: hashlib.sha256(k.encode()).hexdigest() for k in arm['metadata_files']}
@@ -1465,8 +1476,11 @@ def self_check():
                 consumed_payload_bytes=payload, dropped_error_bodies=0))
 
     def ready(arm):
-        rows = [dict(name=name, bytes=size, chunks=1, head_wall_ns=1, get_wall_ns=0 if size > 4194304 else 1,
-                     stream_wall_ns=2, write_wall_ns=1, logical_head_requests=1,
+        headless = {'page_digests.bin', 'plane/mean.bin', 'plane/page_digests.bin',
+                    'router/manifest.json', 'router/membership.bin'}
+        rows = [dict(name=name, bytes=size, chunks=1, head_wall_ns=int(name not in headless),
+                     get_wall_ns=0 if size > 4194304 else 1,
+                     stream_wall_ns=2, write_wall_ns=1, logical_head_requests=int(name not in headless),
                      logical_get_requests=(size + 4194303) // 4194304,
                      payload_buffer_bound_bytes=min(size, 8 * 4194304)) for name, size in arm['metadata_files'].items()]
         router_head = int(arm['discovery'] == 'semantic')
@@ -1476,7 +1490,8 @@ def self_check():
                                   source_head_requests=1, source_head_wall_ns=5,
                                   router_head_requests=router_head, router_head_wall_ns=5 * router_head))
         header['transport'] = transport(sum(r['logical_get_requests'] for r in rows) + 4,
-                                        len(rows) + 1 + router_head, sum(arm['metadata_files'].values())
+                                        sum(r['logical_head_requests'] for r in rows) + 1 + router_head,
+                                        sum(arm['metadata_files'].values())
                                         + arm['head_file']['bytes'] + arm['metadata_files']['manifest.json'] + 37)
         return header
 
@@ -1539,6 +1554,16 @@ def self_check():
                 assert startup['authority_head_JSON_GETs'] == startup['authority_generation_root_GETs'] == 1
                 assert startup['authority_head_JSON_bytes'] == 200
                 assert startup['authority_generation_root_bytes'] == 5000
+                assert startup['metadata']['logical_metadata_head_requests'] == (3 if arm['discovery'] == 'semantic' else 6)
+                for row in header['remote_open_stats']['metadata']:
+                    bad = copy.deepcopy(header)
+                    changed = next(r for r in bad['remote_open_stats']['metadata'] if r['name'] == row['name'])
+                    changed['logical_head_requests'] = 1 - row['logical_head_requests']
+                    rejected(lambda: stats.validate_ready(bad, arm))
+                    if row['logical_head_requests'] == 0:
+                        changed['logical_head_requests'] = 0
+                        changed['head_wall_ns'] = 1
+                        rejected(lambda: stats.validate_ready(bad, arm))
                 for mutation in ('missing_GET', 'missing_HEAD', 'missing_PUT', 'extra_GET', 'extra_HEAD', 'extra_PUT', 'DELETE',
                                  'status', 'transport_failure', 'stream_failure', 'zero_payload', 'short_payload', 'saturated'):
                     bad = copy.deepcopy(header)

@@ -14,6 +14,8 @@ PARITY = ('ids', 'ranges', 'planned_bytes', *COUNTERS,
           *('router_' + name for name in COUNTERS))
 COMMON_FILES = {'manifest.json', 'page_manifest.json', 'page_digests.bin',
                 'plane/manifest.json', 'plane/mean.bin', 'plane/page_digests.bin'}
+EXACT_LENGTH_FILES = {'page_digests.bin', 'plane/mean.bin', 'plane/page_digests.bin',
+                      'router/manifest.json', 'router/membership.bin'}
 METHODS = ['GET', 'HEAD', 'PUT', 'DELETE', 'POST', 'PATCH', 'OPTIONS', 'CONNECT', 'TRACE', 'other']
 CREDENTIAL_PROTOCOL = 'instance-imdsv2'
 CREDENTIAL_PAYLOAD_ATTRIBUTION = 'inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read'
@@ -74,7 +76,11 @@ def validate_startup(stats, arm, wall_ns):
                      'write_wall_ns', 'logical_head_requests', 'logical_get_requests',
                      'payload_buffer_bound_bytes'):
             integer(row[name], name)
-        require(row['chunks'] > 0 and row['logical_head_requests'] == 1, 'metadata HEAD/chunks')
+        require(row['chunks'] > 0, 'metadata chunks')
+        heads = int(row['name'] not in EXACT_LENGTH_FILES)
+        require(row['logical_head_requests'] == heads, 'metadata HEAD count')
+        if not heads:
+            require(row['head_wall_ns'] == 0, 'skipped metadata HEAD time')
         require(row['logical_get_requests'] == (row['bytes'] + 4194303) // 4194304,
                 'metadata logical GETs')
         require(row['payload_buffer_bound_bytes'] == min(row['bytes'], 8 * 4194304),
@@ -95,7 +101,7 @@ def validate_startup(stats, arm, wall_ns):
                                  'router_head_wall_ns')) <= wall_ns, 'startup stage bounds')
     return dict(metadata_objects=len(rows), metadata_bytes=sum(files.values()),
                 logical_metadata_get_requests=sum(r['logical_get_requests'] for r in rows),
-                logical_metadata_head_requests=len(rows), source_head_requests=1,
+                logical_metadata_head_requests=sum(r['logical_head_requests'] for r in rows), source_head_requests=1,
                 router_head_requests=router_heads,
                 payload_buffer_bound_bytes=max(r['payload_buffer_bound_bytes'] for r in rows),
                 staged_selected_leaf_bytes=0)
@@ -277,7 +283,6 @@ def self_check():
     import hashlib
     import json
     from pathlib import Path
-    from scripts import run_native_semantic_router_cold as runtime
     evidence = Path(__file__).resolve().parents[1] / 'docs/research/performance-architecture-20260930/semantic-cold/a0003/screen'
     bodies = {}
     for name, expected in (
@@ -295,30 +300,18 @@ def self_check():
     totals = header['transport']['totals']
     # The old head-only accounting expected 13 GETs and rejected this 14-GET ready header.
     assert totals['method_counts'] != [13, 10, 1] + [0] * 7
-    startup = validate_ready(header, arm)
     assert totals['method_counts'] == [14, 10, 1] + [0] * 7 and totals['attempts'] == 25
-    assert startup['metadata']['metadata_bytes'] == 5803321
-    assert startup['authority_head_JSON_GETs'] == startup['authority_generation_root_GETs'] == 1
-    assert startup['authority_head_JSON_bytes'] == 170
-    assert startup['authority_generation_root_bytes'] == 33980
-    assert startup['inferred_credential_consumed_bytes'] == 1671
-    assert startup['declared_credential_submissions'] == 3 and totals['consumed_payload_bytes'] == 5839142
+    # This checker qualifies the new HEAD roster only. Historical telemetry
+    # remains tied to its frozen source and cannot be silently requalified.
+    try:
+        validate_ready(header, arm)
+    except ValueError as error:
+        assert str(error) == 'metadata HEAD count'
+    else:
+        raise AssertionError('historical metadata HEAD roster accepted')
     validate_query(first['response'], arm, expected=first['reference_response'], truth=first['truth_at_10'])
-    accounting = validate_outcome(header, first['response'], arm, True)
-    assert accounting['query_transport_submissions'] == 57
-    assert accounting['query_consumed_payload_bytes'] == 30833920
-    diagnostic = copy.deepcopy(first)
-    diagnostic.update(startup_accounting=startup, accounting=accounting)
-    reduced = runtime.reduce_calls([diagnostic])
-    charges = reduced['known_logical_charge_totals']
-    assert charges['authority_head_JSON_GETs'] == charges['authority_generation_root_GETs'] == 1
-    assert charges['authority_generation_root_bytes'] == 33980 and charges['authority_head_JSON_bytes'] == 170
-    assert reduced['known_process_transport_totals']['attempts'] == 82
-    assert reduced['credential_transport_totals']['inferred_credential_consumed_bytes'] == 1671
-    assert reduced['successes'] == 0 and reduced['failures'] == 1
-    assert reduced['latency_ms']['whole_cold'] == 'UNMEASURED'
     assert first['outcome'] == 'failed' and 'startup_accounting' not in first
-    print('PASS closed a0003 first-header diagnostic: old accounting rejects; exact 25 startup submissions, 1671 inferred credential bytes; saved FAIL preserved')
+    print('PASS closed a0003 historical metadata HEAD roster rejected; saved FAIL preserved')
     print('PASS semantic query stage bounds, missing telemetry and partial failure stages')
 
 
