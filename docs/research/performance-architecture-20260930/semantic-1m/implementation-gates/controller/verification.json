@@ -1,0 +1,27 @@
+{
+  "schema": "borsuk-semantic-1m-workspace-controller-integration-v1",
+  "implementation_commit": "5cebabf7cd1a0208b1b562b0c2f1f1a87e8d9a7d",
+  "root_check_command": "timeout 120s prlimit --as=209715200 python3 -m scripts.launch_native_workspace_execution_spot --semantic-1m --self-check",
+  "exit_status": 0,
+  "artifacts": {
+    "log": {
+      "bytes": 311,
+      "sha256": "605fd636074b5dedbf453358449bb1015419c63914040cf41d98414b4a884fa2",
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-1m/implementation-gates/controller/root-self-check.log.gz",
+      "archived_sha256": "a34ca6d4a6bbbdb922d2d390e52e3a5f5970dc98146e302c78bfd7ba54d528e8"
+    },
+    "time": {
+      "bytes": 845,
+      "sha256": "03acc4401a24f05f1cfda1ab5cfccbde6f74737cfa96832938df778f648d431d",
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-1m/implementation-gates/controller/root-self-check.time.gz",
+      "archived_sha256": "39bcab59259c488a9cfe17b85682e2a881be4637f5bb83590de7ae93ed27b811"
+    }
+  },
+  "code_paths": 22,
+  "terminal_artifacts": 13,
+  "user_data_bytes": 6669,
+  "aws_cargo_cgroup_mocked": true,
+  "native_full_workspace_execution": false,
+  "final_source_config_authority_pending": true,
+  "decision": "controller usable; actual native qualification pending"
+}
