@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-019742e7cdfc562d6",
+  "nodes": {
+    "0": {
+      "instance_id": "i-019742e7cdfc562d6"
+    }
+  },
+  "prefix": "research/semantic-router/20261001/fresh-panel-a0001",
+  "source_commit": "88c25ab72026722e401eab4a1fde91125377b2a8",
+  "source_archive_sha256": "f928ac4a27a8c5dace84dc41782ae8aa44629cad7615c36c904e6b41a40fcd50"
+}

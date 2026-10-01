@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/mnt/native-semantic-fresh-panel/repo/scripts/prepare_semantic_1m_fresh_panel.py", line 571, in <module>
+    prepare(Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3]), Path(sys.argv[4]), sys.argv[5])
+  File "/mnt/native-semantic-fresh-panel/repo/scripts/prepare_semantic_1m_fresh_panel.py", line 349, in prepare
+    seal.source_raw(out / "source.parquet", out / "source.raw", config["source_raw_sha256"])
+  File "/mnt/native-semantic-fresh-panel/repo/scripts/seal_v36_rank16_fresh_1m.py", line 107, in source_raw
+    raise ValueError("indexed source feature ID type differs")
+ValueError: indexed source feature ID type differs
