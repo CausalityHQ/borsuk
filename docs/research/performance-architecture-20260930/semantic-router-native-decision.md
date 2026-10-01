@@ -36,14 +36,20 @@ Final a0005 exited zero with the complete 399-file source unchanged, measured pe
 
 The actual asset tar and draft configuration are prepared. Publisher and HTTP
 full-execution proofs and the actual config now pass local preflight. The real
-bootstrap is 15,539 bytes, within EC2 user-data admission. Remote assets remain
-unuploaded; no instance has been launched. No cloud publication,
+bootstrap is 15,539 bytes, within EC2 user-data admission. All 15 immutable remote assets were uploaded and their bodies authenticated.
+Attempt a0001 then failed before native execution because AL2023 lacks the
+binaries’ required GLIBC_2.38. Its owned instance is terminated; no cold call
+occurred. `semantic-cold/abi-failure-decision.json` preserves the closed evidence.
+The preregistered a0002 repair uses the same binaries on verified Canonical
+Ubuntu 24.04 with an ABI guard before data staging. No cloud publication,
 cold HTTP measurement, new native quality result or vendor win has occurred.
 
 ## Next delivery steps
 
-1. Fast-forward the verified source, closed receipts and frozen actual config to main.
-2. Upload authenticated immutable assets and run ONE preregistered Spot attempt:
+1. Qualify the runtime-only Ubuntu bootstrap and early ABI guard; freeze fresh
+   a0002 namespaces and updated config/code identities, reusing unchanged Rust assurance.
+2. Fast-forward the closed failure and verified runtime repair to main, then run
+   ONE preregistered fresh Spot attempt:
    four publications with consumed-panel parity validation, then 512 cold ABBA
    HTTP calls; terminate and wait before closed-artifact collection.
 3. A correctness or quality failure ends the arm. A latency failure identifies

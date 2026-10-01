@@ -63,3 +63,31 @@ from process totals minus authenticated S3 startup payload is labelled inferred.
 Query deltas remain GET-only, with no hidden retries. Report logical object
 requests, submitted HTTP calls and consumed bytes separately; confirmed wire
 requests, wire bytes and unread response bytes remain unknown unless measured.
+
+
+## Preregistered runtime repair for a0002 (2026-10-01)
+
+Attempt a0001 failed in the dynamic loader before the publisher could execute:
+`GLIBC_2.38` was unavailable on the selected AL2023 image. The first native
+invocation did not reach Rust or issue a native query; cold calls = 0. The
+original failed terminal and all available bodies remain immutable. Its only
+owned instance was terminated and waited before artifact authentication.
+
+Both unchanged, qualified executables require at most GLIBC_2.38, independently
+inspected with `readelf --version-info`. Use Canonical Ubuntu 24.04 x86 AMI
+`ami-0b8a830d6339a9758`, available in eu-central-1, dated 2026-09-23. The AWS
+DescribeImages response verifies owner `099720109477`; Canonical documents that
+owner as its official account ([Canonical image guidance](https://documentation.ubuntu.com/aws/aws-how-to/instances/launch-ubuntu-ec2-instance/)).
+Ubuntu 24.04 provides libc6 2.39 ([Ubuntu package authority](https://packages.ubuntu.com/noble/libc6)),
+which is a compatible minimum ABI inference; the actual worker must prove all
+required libraries and symbols resolve before payload staging or publication.
+This does not assert identical libc to the local assurance host.
+
+The runtime-only controller repair installs Ubuntu prerequisites before the
+first AWS CLI transfer and records an authenticated runtime ABI report for both
+frozen binaries. No Rust rebuild, source/scorer change, policy change, quality
+gate change, memory increase or relaxed scientific gate is authorized by this
+repair. The same instance, time, compute, concurrency, GET/byte and cleanup caps
+remain. Freeze fresh a0002 namespaces, changed OS/bootstrap code identities and
+actual ABI gates before the next paid launch. Reuse completed unchanged Rust
+assurance and immutable input assets; run only affected controller checks.
