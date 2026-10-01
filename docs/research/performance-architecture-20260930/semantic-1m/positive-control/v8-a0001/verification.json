@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-semantic-v8-positive-control-v1",
+  "dataset": "ReLAION",
+  "split": "FIRST100k D768 cosine consumed development0-63",
+  "k": 100,
+  "native_source_identity_sha256": "c9ecb3ac7138978b45efde523c8e96a88811d559e50906c178fd4cb602fb9ff5",
+  "full_workspace_execution_verified": true,
+  "builder_exit_status": 0,
+  "builder_wall_seconds": 19.03,
+  "builder_peak_rss_kib": 37280,
+  "builder_observed_cgroup_bytes": 404439040,
+  "builder_swap_bytes": 0,
+  "generation_root_sha256": "4fb73ff8568706f167de67649fc8e68ab0066819415934984d13d2699243e0b7",
+  "scorer_exit_status": 2,
+  "complete": false,
+  "returned_recall_measured": false,
+  "physical_s3_measured": false,
+  "backend": "LocalFileSystem on tmpfs; metadata/canonical copied, SQ8 same-inode hardlink; quality-only harness, no cloud publication qualification",
+  "failure_class": "local payload adapter mismatch",
+  "root_cause": "LocalFileSystem returns GetResultPayload::File; unchanged production authenticated range reader requires Stream and explicitly rejects File. Scorer uses LocalFileSystem directly.",
+  "next": "Use existing object_store ChunkedStore at scorer boundary; preserve production range/hash/ETag checks and prove with real-file regression."
+}
