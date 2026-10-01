@@ -1,0 +1,76 @@
+{
+  "exit_status": 143,
+  "files": {
+    "active.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt1/active.json.gz",
+      "bytes": 198,
+      "sha256": "921b28867e7a650aa70e4dbc4896fd247db538583b5ab11f1d2bded349a1d5df"
+    },
+    "generation-receipt.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt1/generation-receipt.json.gz",
+      "bytes": 1491,
+      "sha256": "6bea31b45b4f14e763260041e445bfda0a310f75d9bd57daf96e8128dacd928e"
+    },
+    "generation.log": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt1/generation.log.gz",
+      "bytes": 60966,
+      "sha256": "5b0e0c5dd6f3fb79b82a4c8305b5e4ffe9852349e641915dcca4268dd188abbd"
+    },
+    "http-release.log": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt1/http-release.log.gz",
+      "bytes": 1754,
+      "sha256": "771ba67494e280743c09cb3fa9a1a0fb28e32e87893e50dd3c0611f2054eecbb"
+    },
+    "interrupted-resources.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt1/interrupted-resources.json.gz",
+      "bytes": 821,
+      "sha256": "f901a62bcd7c1233e87f39fb110efc98b9270cb5b3b4f90941954a56495254fb"
+    },
+    "interrupted-scope-properties.txt": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt1/interrupted-scope-properties.txt.gz",
+      "bytes": 254,
+      "sha256": "df2ccbf171ab7a76bb3f12053401cb49eb7c70d389ed076dc0df57e368a19843"
+    },
+    "interruption-receipt.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt1/interruption-receipt.json.gz",
+      "bytes": 1605,
+      "sha256": "e518ccf80680894e6a16e31e5fa6e9df24d46f60c1e10ee36a39467130595525"
+    },
+    "object-native-receipt.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt1/object-native-receipt.json.gz",
+      "bytes": 1508,
+      "sha256": "43233625574c82a0f5989252031185f4782732f0736b9f3cb0d5bada77d5b90f"
+    },
+    "object-native.log": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt1/object-native.log.gz",
+      "bytes": 61081,
+      "sha256": "376baad16281a9a7fa809d15988240f1133b23e63eddaeaa9fe978314ecedcda"
+    },
+    "runner.py": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt1/runner.py.gz",
+      "bytes": 3112,
+      "sha256": "fb5f4365f747f7a57697ad15235a9dd1274c4043a99f75042e9aa6655c8ce9de"
+    },
+    "source.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/attempt1/source.json.gz",
+      "bytes": 47003,
+      "sha256": "9109c840fb8086fe1567ec41dba6b6b6e83d168845262b2096f87f20c35982e9"
+    }
+  },
+  "native_source_identity_sha256": "714794a10c2d886f7a53a9926a4bb63e093cec16858676268e31833aeead2681",
+  "no_owned_processes_remaining_verified": true,
+  "original_session": 69458,
+  "passed_tests": {
+    "generation": 10,
+    "object_native": 9
+  },
+  "qualified": false,
+  "reason": "sustained host memory pressure; owned scope stopped by worker",
+  "remaining_gates": [
+    "http-release",
+    "clippy",
+    "workspace-test-build",
+    "actual-full-workspace-execution"
+  ],
+  "schema": "borsuk-metadata-waves-interrupted-qualification-v1"
+}
