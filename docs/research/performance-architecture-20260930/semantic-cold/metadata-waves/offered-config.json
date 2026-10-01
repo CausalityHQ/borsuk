@@ -356,7 +356,7 @@
   "query_payload_timeout_seconds": 5,
   "region": "eu-central-1",
   "s3_service_cache": "uncontrolled",
-  "schema": "borsuk-native-semantic-metadata-waves-offered-v1",
+  "schema": "borsuk-native-semantic-metadata-waves-cold-offered-v1",
   "spot_max_usd_per_hour": 0.5,
   "subnet_id": "subnet-034528fbd6977848f",
   "transport": "loopback plain HTTP",
