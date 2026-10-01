@@ -1,0 +1,24 @@
+{
+  "schema": "borsuk-semantic-1m-plan-arithmetic-v1",
+  "source_commit": "09c62f23781720939c66b2280f8b2f035ba01a36",
+  "consultation_id": "43828fb5c8d741a0",
+  "consultation_exit_status": 0,
+  "root_verified_code_claims": [
+    "quota child decreases by at least31 for leaves>32",
+    "assignment threads borrow geometry and join",
+    "scorer/sample/centers/groups explicitly dropped before publication"
+  ],
+  "units": 31250,
+  "dimensions": 768,
+  "requested_centers": 489,
+  "max_leaves": 977,
+  "nonterminal_frame_bound": 16,
+  "binary_root_max_bytes": 3064384,
+  "training_payload_bound_bytes": 391631304,
+  "outer_build_bound_bytes": 8685152,
+  "generation_build_payload_bound_bytes": 400316456,
+  "observed_rss": "UNMEASURED",
+  "fresh_1m_quality": "UNMEASURED",
+  "native_admission_changed": false,
+  "implementation_pending": true
+}
