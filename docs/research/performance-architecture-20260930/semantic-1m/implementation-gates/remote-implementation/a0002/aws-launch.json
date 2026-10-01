@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0eb5cf1f01958668c",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0eb5cf1f01958668c"
+    }
+  },
+  "prefix": "research/semantic-router/20261001/semantic-1m-implementation-a0002",
+  "source_commit": "a2bd7e3a86e404aeb4615bd99589cccb21624cf0",
+  "source_archive_sha256": "e9fab9e53501e3703abcaf314d2c00b1dde08ef15b314ab620683aa2e4813005"
+}
