@@ -85,7 +85,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("root identity".into());
     }
     let manifest: serde_json::Value = serde_json::from_slice(&body)?;
-    if manifest["schema"] != "borsuk-two-bit-generation-v7"
+    if manifest["schema"] != "borsuk-two-bit-generation-v8"
         || manifest["discovery"]["mode"] != "graph"
     {
         return Err("current graph generation required".into());

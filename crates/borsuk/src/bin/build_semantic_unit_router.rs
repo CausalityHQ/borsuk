@@ -3,7 +3,7 @@
 //! Membership is one LE u32 leaf ID per original unit. Each leaf record is a LE
 //! u32 original unit ID followed by its unchanged D LE FP16 coefficients.
 //! Source-row counts are derived from the original rows and 32-row unit geometry.
-use borsuk::semantic_unit_router::{self, ALLOCATION_CAP, SourceIdentity};
+use borsuk::semantic_unit_router::{self, ALLOCATION_CAP, SemanticProfile, SourceIdentity};
 #[cfg(test)]
 use borsuk::semantic_unit_router::{Geometry, admit, assign_groups, preflight};
 use serde::Deserialize;
@@ -70,17 +70,26 @@ fn verify(
     if body.len() > MANIFEST_CAP {
         return Err("research manifest cap".into());
     }
-    let manifest: semantic_unit_router::Manifest = serde_json::from_slice(body)?;
+    if blob.len() < 32 {
+        return Err("centroid header".into());
+    }
+    let geometry = semantic_unit_router::preflight(
+        blob,
+        u64::from_le_bytes(blob[8..16].try_into()?) as usize,
+        u32::from_le_bytes(blob[16..20].try_into()?) as usize,
+        SemanticProfile::Native100k,
+    )?;
     semantic_unit_router::validate_publication(
         body,
         membership,
         payload,
         &SourceIdentity {
+            profile: SemanticProfile::Native100k,
             schema: INPUT_SCHEMA,
             root_sha256: root_sha,
             centroids_sha256: &hash(blob),
-            rows: manifest.rows,
-            dimensions: manifest.dimensions,
+            rows: geometry.rows,
+            dimensions: geometry.dimensions,
         },
         blob,
     )
@@ -112,6 +121,7 @@ fn build(root: &Path, root_sha: &str, output: &Path) -> Result<String> {
     let artifacts = semantic_unit_router::build(
         &blob,
         &SourceIdentity {
+            profile: SemanticProfile::Native100k,
             schema: &input.schema,
             root_sha256: root_sha,
             centroids_sha256: &input.centroids_sha256,
@@ -129,13 +139,13 @@ fn build(root: &Path, root_sha: &str, output: &Path) -> Result<String> {
         .unwrap_or(Path::new("."));
     let staging = tempfile::tempdir_in(parent)?;
     for (name, bytes) in [
-        ("manifest.json", body.as_slice()),
+        ("root.bin", body.as_slice()),
         ("membership.bin", &membership),
         ("leaves.bin", &payload),
     ] {
         write_new(&staging.path().join(name), bytes)?;
     }
-    let staged_body = bounded(&staging.path().join("manifest.json"), MANIFEST_CAP)?;
+    let staged_body = bounded(&staging.path().join("root.bin"), MANIFEST_CAP)?;
     let staged_membership = bounded(&staging.path().join("membership.bin"), membership.len())?;
     let staged_payload = bounded(&staging.path().join("leaves.bin"), payload.len())?;
     if staged_body != body {
@@ -206,6 +216,37 @@ mod tests {
         (digest(&body), blob)
     }
 
+    fn root_sha_or_sha(root: &Path) -> String {
+        digest(&fs::read(root.join("manifest.json")).unwrap())
+    }
+    fn manifest_value(output: &Path, sha: &str, blob: &[u8]) -> serde_json::Value {
+        let body = fs::read(output.join("root.bin")).unwrap();
+        let membership = fs::read(output.join("membership.bin")).unwrap();
+        let input = SourceIdentity {
+            profile: SemanticProfile::Native100k,
+            schema: INPUT_SCHEMA,
+            root_sha256: sha,
+            centroids_sha256: &hash(blob),
+            rows: u64::from_le_bytes(blob[8..16].try_into().unwrap()) as usize,
+            dimensions: u32::from_le_bytes(blob[16..20].try_into().unwrap()) as usize,
+        };
+        let router = semantic_unit_router::SemanticUnitRouter::open(
+            &body,
+            &membership,
+            &hash(&body),
+            &input,
+            1 << 20,
+        )
+        .unwrap();
+        serde_json::to_value(router.manifest()).unwrap()
+    }
+    fn encode_value(value: &serde_json::Value) -> Vec<u8> {
+        serde_json::from_value::<semantic_unit_router::Manifest>(value.clone())
+            .unwrap()
+            .encode()
+            .unwrap()
+    }
+
     #[test]
     fn frozen_small_artifact_bytes() {
         let temp = tempfile::tempdir().unwrap();
@@ -223,10 +264,6 @@ mod tests {
         build(&root, &sha, &output).unwrap();
         // Captured from the pre-extraction implementation at ae772138.
         for (name, expected) in [
-            (
-                "manifest.json",
-                "99c4225f7f5ba542b6dc82fac94bb9624815689aa92733b479528b564af5a804",
-            ),
             (
                 "membership.bin",
                 "919207b3fc34a3d945d3310331767bec4033cb7873859bad8d43f72a06f510b0",
@@ -255,9 +292,13 @@ mod tests {
         let (root_sha, blob) = fixture(&root, 4097, &values);
         let output = temp.path().join("router");
         let manifest_sha = build(&root, &root_sha, &output).unwrap();
-        let body = fs::read(output.join("manifest.json")).unwrap();
+        let body = fs::read(output.join("root.bin")).unwrap();
         assert_eq!(digest(&body), manifest_sha);
-        let manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let manifest = manifest_value(
+            &output,
+            &root_sha_or_sha(&root),
+            &fs::read(root.join("centroids.bin")).unwrap(),
+        );
         assert_eq!(manifest["unit_count"], 129);
         assert_eq!(manifest["final_unit_rows"], 1);
         assert_eq!(manifest["algorithm"]["training_centers"], 1);
@@ -287,7 +328,7 @@ mod tests {
         }
         let repeat = temp.path().join("repeat");
         assert_eq!(build(&root, &root_sha, &repeat).unwrap(), manifest_sha);
-        for name in ["manifest.json", "membership.bin", "leaves.bin"] {
+        for name in ["root.bin", "membership.bin", "leaves.bin"] {
             assert_eq!(
                 fs::read(output.join(name)).unwrap(),
                 fs::read(repeat.join(name)).unwrap()
@@ -334,9 +375,11 @@ mod tests {
         let (sha, _) = fixture(&cancellation_root, 97, &cancellation);
         let cancellation_output = temp.path().join("cancellation-router");
         build(&cancellation_root, &sha, &cancellation_output).unwrap();
-        let cancellation_manifest: serde_json::Value =
-            serde_json::from_slice(&fs::read(cancellation_output.join("manifest.json")).unwrap())
-                .unwrap();
+        let cancellation_manifest = manifest_value(
+            &cancellation_output,
+            &sha,
+            &fs::read(cancellation_root.join("centroids.bin")).unwrap(),
+        );
         assert_eq!(
             cancellation_manifest["leaves"][0]["prototype"],
             serde_json::json!([0.00048828125, 2.0])
@@ -350,7 +393,7 @@ mod tests {
         forged["leaves"][0]["sha256"] = digest(&altered[..512]).into();
         assert!(
             verify(
-                &serde_json::to_vec(&forged).unwrap(),
+                &encode_value(&forged),
                 &membership,
                 &altered,
                 &root_sha,
@@ -364,7 +407,7 @@ mod tests {
         forged["leaves"][0]["sha256"] = digest(&altered[..512]).into();
         assert!(
             verify(
-                &serde_json::to_vec(&forged).unwrap(),
+                &encode_value(&forged),
                 &membership,
                 &altered,
                 &root_sha,
@@ -378,7 +421,7 @@ mod tests {
         forged["membership"]["sha256"] = digest(&wrong_membership).into();
         assert!(
             verify(
-                &serde_json::to_vec(&forged).unwrap(),
+                &encode_value(&forged),
                 &wrong_membership,
                 &payload,
                 &root_sha,
@@ -390,7 +433,7 @@ mod tests {
         forged["leaves"][0]["sha256"] = "0".repeat(64).into();
         assert!(
             verify(
-                &serde_json::to_vec(&forged).unwrap(),
+                &encode_value(&forged),
                 &membership,
                 &payload,
                 &root_sha,
@@ -402,7 +445,7 @@ mod tests {
         forged["leaves"][0]["prototype"][0] = 1.into();
         assert!(
             verify(
-                &serde_json::to_vec(&forged).unwrap(),
+                &encode_value(&forged),
                 &membership,
                 &payload,
                 &root_sha,
@@ -483,32 +526,44 @@ mod tests {
     fn header_and_admission_precede_decode() {
         let temp = tempfile::tempdir().unwrap();
         let (_, blob) = fixture(&temp.path().join("root"), 1, &[[0, 0]]);
-        let geometry = preflight(&blob, 1, 2).unwrap();
-        let admitted = admit(geometry, ALLOCATION_CAP).unwrap();
-        assert_eq!(admit(geometry, admitted).unwrap(), admitted);
-        assert!(admit(geometry, admitted - 1).is_err());
+        let geometry = preflight(&blob, 1, 2, SemanticProfile::Native100k).unwrap();
+        let admitted = admit(geometry, ALLOCATION_CAP, SemanticProfile::Native100k).unwrap();
+        assert_eq!(
+            admit(geometry, admitted, SemanticProfile::Native100k).unwrap(),
+            admitted
+        );
+        assert!(admit(geometry, admitted - 1, SemanticProfile::Native100k).is_err());
         let maximal = Geometry {
             rows: 100_000,
             dimensions: 768,
             units: 3125,
             blob_bytes: 4_800_032,
         };
-        assert!(admit(maximal, ALLOCATION_CAP).is_ok());
+        assert!(admit(maximal, ALLOCATION_CAP, SemanticProfile::Native100k).is_ok());
         assert!(
             admit(
                 Geometry {
                     units: usize::MAX,
                     ..geometry
                 },
-                ALLOCATION_CAP
+                ALLOCATION_CAP,
+                SemanticProfile::Native100k
             )
             .is_err()
         );
-        assert!(preflight(&blob[..31], 1, 2).is_err());
-        assert!(preflight(&blob[..blob.len() - 1], 1, 2).is_err());
-        assert!(preflight(&[blob.as_slice(), &[0]].concat(), 1, 2).is_err());
-        assert!(preflight(&blob, 2, 2).is_err());
-        assert!(preflight(&blob, 1, 3).is_err());
+        assert!(preflight(&blob[..31], 1, 2, SemanticProfile::Native100k).is_err());
+        assert!(preflight(&blob[..blob.len() - 1], 1, 2, SemanticProfile::Native100k).is_err());
+        assert!(
+            preflight(
+                &[blob.as_slice(), &[0]].concat(),
+                1,
+                2,
+                SemanticProfile::Native100k
+            )
+            .is_err()
+        );
+        assert!(preflight(&blob, 2, 2, SemanticProfile::Native100k).is_err());
+        assert!(preflight(&blob, 1, 3, SemanticProfile::Native100k).is_err());
         for (offset, word) in [
             (16, 0_u32),
             (16, 769),
@@ -520,16 +575,16 @@ mod tests {
         ] {
             let mut invalid = blob.clone();
             invalid[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
-            assert!(preflight(&invalid, 1, 2).is_err());
+            assert!(preflight(&invalid, 1, 2, SemanticProfile::Native100k).is_err());
         }
         for rows in [0_u64, 100_001, u64::MAX] {
             let mut invalid = blob.clone();
             invalid[8..16].copy_from_slice(&rows.to_le_bytes());
-            assert!(preflight(&invalid, 1, 2).is_err());
+            assert!(preflight(&invalid, 1, 2, SemanticProfile::Native100k).is_err());
         }
         let mut invalid = blob.clone();
         invalid[0] ^= 1;
-        assert!(preflight(&invalid, 1, 2).is_err());
+        assert!(preflight(&invalid, 1, 2, SemanticProfile::Native100k).is_err());
     }
 
     #[test]
@@ -581,14 +636,18 @@ mod tests {
         let repeat = temp.path().join("repeat");
         let manifest_sha = build(&root, &sha, &output).unwrap();
         assert_eq!(build(&root, &sha, &repeat).unwrap(), manifest_sha);
-        for name in ["manifest.json", "membership.bin", "leaves.bin"] {
+        for name in ["root.bin", "membership.bin", "leaves.bin"] {
             assert_eq!(
                 fs::read(output.join(name)).unwrap(),
                 fs::read(repeat.join(name)).unwrap()
             );
         }
-        let body = fs::read(output.join("manifest.json")).unwrap();
-        let manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let body = fs::read(output.join("root.bin")).unwrap();
+        let manifest = manifest_value(
+            &output,
+            &root_sha_or_sha(&root),
+            &fs::read(root.join("centroids.bin")).unwrap(),
+        );
         assert_eq!(manifest["algorithm"]["requested_centers"], 33);
         assert_eq!(manifest["algorithm"]["training_centers"], 33);
         assert_eq!(manifest["final_unit_rows"], 1);
@@ -620,37 +679,23 @@ mod tests {
         let (sha, blob) = fixture(&root, 2049, &values);
         let output = temp.path().join("router");
         build(&root, &sha, &output).unwrap();
-        let body = fs::read(output.join("manifest.json")).unwrap();
+        let body = fs::read(output.join("root.bin")).unwrap();
         let membership = fs::read(output.join("membership.bin")).unwrap();
         let payload = fs::read(output.join("leaves.bin")).unwrap();
         verify(&body, &membership, &payload, &sha, &blob).unwrap();
-        let manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let manifest = manifest_value(
+            &output,
+            &root_sha_or_sha(&root),
+            &fs::read(root.join("centroids.bin")).unwrap(),
+        );
         assert_eq!(manifest["algorithm"]["training_centers"], 2);
         assert!(manifest["leaves"][0]["unit_count"].as_u64().unwrap() < 64);
         let mut forged = manifest.clone();
         forged["leaves"][0]["group_ordinal"] = 2.into();
-        assert!(
-            verify(
-                &serde_json::to_vec(&forged).unwrap(),
-                &membership,
-                &payload,
-                &sha,
-                &blob
-            )
-            .is_err()
-        );
+        assert!(verify(&encode_value(&forged), &membership, &payload, &sha, &blob).is_err());
         forged = manifest;
         forged["leaves"][1]["group_ordinal"] = 0.into();
         forged["leaves"][1]["chunk_ordinal"] = 1.into();
-        assert!(
-            verify(
-                &serde_json::to_vec(&forged).unwrap(),
-                &membership,
-                &payload,
-                &sha,
-                &blob
-            )
-            .is_err()
-        );
+        assert!(verify(&encode_value(&forged), &membership, &payload, &sha, &blob).is_err());
     }
 }

@@ -1,6 +1,6 @@
 //! Offline publication adapter; preserves the fitted router and calls the shared validator.
 use borsuk::{
-    semantic_unit_router::{RouterArtifacts, SourceIdentity},
+    semantic_unit_router::{RouterArtifacts, SemanticProfile, SourceIdentity},
     two_bit_build::{SemanticRouterImport, repackage_semantic_router},
     two_bit_generation::TwoBitGenerationLimits,
 };
@@ -73,7 +73,7 @@ fn main() -> Result<()> {
     let (rows, dimensions) = (rows as usize, dimensions as usize);
     let units = rows.div_ceil(32);
     let artifacts = RouterArtifacts {
-        manifest: bounded(&proof.join("router/manifest.json"), 1024 * 1024)?,
+        manifest: bounded(&proof.join("router/root.bin"), 1024 * 1024)?,
         membership: bounded(&proof.join("router/membership.bin"), units * 4)?,
         leaves: bounded(
             &proof.join("router/leaves.bin"),
@@ -90,6 +90,7 @@ fn main() -> Result<()> {
     let import = SemanticRouterImport {
         artifacts: &artifacts,
         input: SourceIdentity {
+            profile: SemanticProfile::Native100k,
             schema: "borsuk-two-bit-generation-v4",
             root_sha256: &args[5],
             centroids_sha256: &centroid_sha,

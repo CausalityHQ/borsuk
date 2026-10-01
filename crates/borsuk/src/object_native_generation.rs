@@ -438,12 +438,15 @@ async fn stage_metadata(
         let root = authenticated.as_ref();
         let admitted = try_join_all(names[index..end].iter().map(|&name| async move {
             let location = metadata_location(prefix, name);
-            let limit = if name.ends_with(".json") {
-                if two_bit && name == "router/manifest.json" {
-                    crate::two_bit_generation::ROUTER_ROOT_CAP as u64
-                } else {
-                    MAX_MANIFEST as u64
+            let limit = if two_bit && name == "router/root.bin" {
+                match root.map(|root| &root.discovery) {
+                    Some(crate::two_bit_generation::Discovery::Semantic { profile, .. }) => {
+                        profile.root_cap() as u64
+                    }
+                    _ => return Err(ObjectNativeOpenError::Invalid("router profile descriptor")),
                 }
+            } else if name.ends_with(".json") {
+                MAX_MANIFEST as u64
             } else {
                 u64::MAX
             };
@@ -457,7 +460,7 @@ async fn stage_metadata(
                         Some(rows.div_ceil(32).checked_mul(32).ok_or(overflow)?)
                     }
                     "page_digests.bin" => Some(rows.div_ceil(256).checked_mul(32).ok_or(overflow)?),
-                    "router/manifest.json" => match &root.discovery {
+                    "router/root.bin" => match &root.discovery {
                         crate::two_bit_generation::Discovery::Semantic { root_bytes, .. } => {
                             Some(*root_bytes)
                         }

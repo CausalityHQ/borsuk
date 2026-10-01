@@ -285,10 +285,13 @@ async fn head_from_control(
         version,
     })
 }
-pub(crate) async fn discovery_mode(
+pub(crate) async fn discovery_profile(
     store: &dyn ObjectStore,
     head: &TwoBitHead,
-) -> Result<DiscoveryMode> {
+) -> Result<(
+    DiscoveryMode,
+    Option<crate::semantic_unit_router::SemanticProfile>,
+)> {
     let (body, _) =
         small_object(store, &head.metadata_prefix().join("manifest.json"), 65536).await?;
     use sha2::{Digest, Sha256};
@@ -299,7 +302,7 @@ pub(crate) async fn discovery_mode(
         serde_json::from_slice(&body).map_err(|_| TwoBitStoreError::Invalid("discovery schema"))?;
     match root {
         Root::Empty(root) if root.valid() && root.generation == head.generation => {
-            Ok(root.discovery)
+            Ok((root.discovery, None))
         }
         Root::Populated(root)
             if root.schema == crate::two_bit_generation::SCHEMA
@@ -308,10 +311,20 @@ pub(crate) async fn discovery_mode(
                     .discovery
                     .valid(root.canonical.rows, root.canonical.dimensions) =>
         {
-            Ok(root.discovery.mode())
+            let profile = match &root.discovery {
+                Discovery::Semantic { profile, .. } => Some(*profile),
+                _ => None,
+            };
+            Ok((root.discovery.mode(), profile))
         }
         _ => Err(TwoBitStoreError::Invalid("discovery authority")),
     }
+}
+pub(crate) async fn discovery_mode(
+    store: &dyn ObjectStore,
+    head: &TwoBitHead,
+) -> Result<DiscoveryMode> {
+    Ok(discovery_profile(store, head).await?.0)
 }
 // Maintenance keys include the owning epoch in their physical namespace. A claim
 // cannot relabel an old key after GC: the key itself must match the captured epoch.
@@ -471,6 +484,7 @@ pub async fn publish_two_bit_generation(
             ]);
         }
         Discovery::Semantic {
+            profile,
             root_sha256,
             root_bytes,
             membership_sha256,
@@ -492,13 +506,13 @@ pub async fn publish_two_bit_generation(
                     .saturating_sub(limits.already_pinned_bytes),
             )
             .map_err(|_| TwoBitStoreError::Invalid("publication memory"))?;
-            crate::semantic_unit_router::admit(geometry, cap)
+            crate::semantic_unit_router::admit(geometry, cap, *profile)
                 .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
             let read = |name: &str, size, sha: &str| {
                 read_authenticated(&local.join(name), size, sha)
                     .map_err(TwoBitGenerationError::Plane)
             };
-            let root = read("router/manifest.json", *root_bytes, root_sha256)?;
+            let root = read("router/root.bin", *root_bytes, root_sha256)?;
             let membership = read(
                 "router/membership.bin",
                 *membership_bytes,
@@ -515,7 +529,7 @@ pub async fn publish_two_bit_generation(
             )
             .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
             roster.extend([
-                ("router/manifest.json", root_sha256.as_str()),
+                ("router/root.bin", root_sha256.as_str()),
                 ("router/membership.bin", membership_sha256.as_str()),
                 ("router/leaves.bin", leaves_sha256.as_str()),
             ]);
@@ -648,6 +662,13 @@ pub(crate) async fn publish_empty_with_mode(
         })
     {
         return Err(bad("empty generation namespace/order/dimensions"));
+    }
+    if let Some(previous) = expected {
+        if discovery_profile(store, previous).await?.1
+            == Some(crate::semantic_unit_router::SemanticProfile::Fresh1m)
+        {
+            return Err(bad("Fresh1m maintenance is unsupported"));
+        }
     }
     if mode.is_none()
         && let Some(previous) = expected

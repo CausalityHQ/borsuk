@@ -13,7 +13,7 @@ use crate::{
     two_bit_mutations::{TwoBitMutationLimits, read_two_bit_mutations, seal_two_bit_mutations},
     two_bit_source::{SourceBuildError, TwoBitSource, read_authenticated},
     two_bit_store::{
-        EmptyRoot, TwoBitHead, TwoBitStoreError, discovery_mode, publish_empty_with_mode,
+        EmptyRoot, TwoBitHead, TwoBitStoreError, discovery_profile, publish_empty_with_mode,
         publish_two_bit_generation, read_two_bit_head,
     },
 };
@@ -351,6 +351,10 @@ pub async fn compact_two_bit_index_with_discovery(
     options: TwoBitCompactionOptions,
     requested: Option<DiscoveryMode>,
 ) -> Result<TwoBitHead> {
+    let base = read_two_bit_head(store.as_ref(), prefix)
+        .await?
+        .ok_or(bad("compaction index absent"))?;
+    reject_unsupported_profile(discovery_profile(store.as_ref(), &base).await?.1)?;
     let prefix = prefix.clone();
     let directory = maintenance_directory.to_path_buf();
     tokio::task::spawn_blocking(move || {
@@ -382,6 +386,15 @@ pub async fn compact_two_bit_index_with_discovery(
     .map_err(|_| bad("compaction worker failed"))?
 }
 
+fn reject_unsupported_profile(
+    profile: Option<crate::semantic_unit_router::SemanticProfile>,
+) -> Result<()> {
+    if profile == Some(crate::semantic_unit_router::SemanticProfile::Fresh1m) {
+        return Err(bad("Fresh1m maintenance is unsupported"));
+    }
+    Ok(())
+}
+
 async fn compact_owned(
     store: &dyn ObjectStore,
     prefix: &ObjectPath,
@@ -405,6 +418,8 @@ async fn compact_owned(
     let base = read_two_bit_head(store, prefix)
         .await?
         .ok_or(bad("compaction index absent"))?;
+    let (base_discovery, profile) = discovery_profile(store, &base).await?;
+    reject_unsupported_profile(profile)?;
     // Local generations are not query caches. Discard only recognized obsolete
     // jobs, under the directory lock; never touch caller/unrecognized files.
     for entry in fs::read_dir(directory)? {
@@ -439,7 +454,6 @@ async fn compact_owned(
         .generation()
         .checked_add(1)
         .ok_or(bad("compaction generation overflow"))?;
-    let base_discovery = discovery_mode(store, &base).await?;
     let job_dir = directory.join(base.root_sha256());
     let job_path = job_dir.join("job.json");
     let captured = if job_path.exists() {
@@ -774,6 +788,115 @@ async fn compact_owned(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn fresh_profile_rejects_compaction_and_empty_replacement_before_side_effects() {
+        use crate::two_bit_generation::SCHEMA;
+        use futures_util::TryStreamExt;
+        use object_store::{PutPayload, memory::InMemory};
+        let store = Arc::new(InMemory::new());
+        let prefix = ObjectPath::from("fresh-test");
+        let sha = "1".repeat(64);
+        let root = serde_json::json!({"schema":SCHEMA,"generation":1,"base_epoch":0,"plane_manifest_sha256":sha,"page_manifest_sha256":sha,
+            "sq8_object_sha256":sha,"sq8_object_key":format!("fresh-test/objects/{sha}"),"sq8_etag":"etag","low":vec![0.;768],"step":vec![1.;768],
+            "canonical":{"rows":1000000,"dimensions":768,"bytes":3080000000_u64,"sha256":sha,"object_key":format!("fresh-test/objects/{sha}")},
+            "discovery":{"mode":"semantic","profile":"fresh1m","root_sha256":sha,"root_bytes":512+489*3136,"membership_sha256":sha,"membership_bytes":125000,
+                "leaves_sha256":sha,"leaves_bytes":48125000,"input_schema":"test","input_root_sha256":sha,"centroids_sha256":sha,
+                "source_sha256":sha,"source_order_sha256":sha,"mean_sha256":sha,"records_sha256":sha,"sq8_sha256":sha}});
+        let body = serde_json::to_vec(&root).unwrap();
+        let digest = hash(&body);
+        store
+            .put(
+                &prefix
+                    .clone()
+                    .join("generations")
+                    .join(digest.as_str())
+                    .join("manifest.json"),
+                PutPayload::from(body),
+            )
+            .await
+            .unwrap();
+        let control = serde_json::json!({"schema":"borsuk-two-bit-head-v2","epoch":1,"generation":1,"root_sha256":digest,"mutation":null,"fence":null});
+        store
+            .put(
+                &prefix.clone().join("head.json"),
+                PutPayload::from(serde_json::to_vec(&control).unwrap()),
+            )
+            .await
+            .unwrap();
+        let options = TwoBitCompactionOptions {
+            mutations: TwoBitMutationLimits {
+                max_memory_bytes: 1000000,
+                max_snapshot_bytes: 100000,
+            },
+            source: TwoBitCompactionLimits {
+                max_memory_bytes: 1000000,
+                max_disk_bytes: 1000000,
+                max_source_chunk_bytes: 65536,
+            },
+            generation: TwoBitGenerationLimits {
+                max_memory_bytes: 1000000,
+                max_active_queries: 1,
+                max_query_bytes: 100000,
+                max_query_gets: 32,
+                max_parallel_gets: 16,
+                max_source_bytes: 100000,
+                max_source_gets: 128,
+                max_parallel_source_gets: 16,
+                max_query_scratch_bytes: 400000,
+                already_pinned_bytes: 0,
+            },
+        };
+        let scratch = tempfile::tempdir().unwrap();
+        let maintenance = scratch.path().join("absent");
+        for requested in [
+            None,
+            Some(DiscoveryMode::Graph),
+            Some(DiscoveryMode::Semantic),
+        ] {
+            let error = compact_two_bit_index_with_discovery(
+                store.clone(),
+                &prefix,
+                &maintenance,
+                options,
+                requested,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                TwoBitStoreError::Invalid("Fresh1m maintenance is unsupported")
+            ));
+            assert!(!maintenance.exists());
+        }
+        let head = read_two_bit_head(store.as_ref(), &prefix)
+            .await
+            .unwrap()
+            .unwrap();
+        let error = publish_empty_with_mode(
+            store.as_ref(),
+            &prefix,
+            768,
+            2,
+            Some(&head),
+            Some(DiscoveryMode::Graph),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            TwoBitStoreError::Invalid("Fresh1m maintenance is unsupported")
+        ));
+        assert_eq!(
+            store
+                .list(Some(&prefix))
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+    }
 
     #[test]
     fn prepared_target_binds_logical_ids_even_with_identical_raw_source() {

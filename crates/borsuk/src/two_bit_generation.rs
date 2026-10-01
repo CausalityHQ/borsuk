@@ -1,5 +1,5 @@
 //! A single authenticated root for frozen two-bit nomination and on-demand SQ8.
-use crate::semantic_unit_router::{SemanticUnitRouter, SourceIdentity};
+use crate::semantic_unit_router::{SemanticProfile, SemanticUnitRouter, SourceIdentity};
 use crate::{
     budgeted_page_rank::{
         BudgetedPageError, BudgetedPagePlan, choose_budgeted_pages_sparse, cover_pages,
@@ -177,7 +177,7 @@ pub(crate) struct Manifest {
     pub(crate) low: Vec<f32>,
     pub(crate) step: Vec<f32>,
 }
-pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v7";
+pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v8";
 pub(crate) const METADATA_FILES: [&str; 10] = [
     "manifest.json",
     "page_manifest.json",
@@ -191,11 +191,11 @@ pub(crate) const METADATA_FILES: [&str; 10] = [
     "plane/page_digests.bin",
 ];
 pub(crate) const ROUTER_FILES: [&str; 3] = [
-    "router/manifest.json",
+    "router/root.bin",
     "router/membership.bin",
     "router/leaves.bin",
 ];
-pub(crate) const ROUTER_ROOT_CAP: usize = 1024 * 1024;
+pub(crate) const ROUTER_ROOT_CAP: usize = 4 * 1024 * 1024;
 const LEAF_BYTES: usize = 2 * 1024 * 1024;
 
 /// Concrete discovery policy. Compaction inherits it unless explicitly changed.
@@ -218,6 +218,7 @@ pub(crate) enum Discovery {
         diverse_graph_resident_bytes: usize,
     },
     Semantic {
+        profile: SemanticProfile,
         root_sha256: String,
         root_bytes: usize,
         membership_sha256: String,
@@ -259,6 +260,7 @@ impl Discovery {
                     && *diverse_graph_resident_bytes > 0
             }
             Self::Semantic {
+                profile,
                 root_sha256,
                 root_bytes,
                 membership_sha256,
@@ -274,9 +276,11 @@ impl Discovery {
                 records_sha256,
                 sq8_sha256,
             } => {
-                (1..=100_000).contains(&rows)
-                    && (1..=768).contains(&dimensions)
-                    && (1..=ROUTER_ROOT_CAP).contains(root_bytes)
+                profile.valid_geometry(rows, dimensions)
+                    && (512..=profile.root_cap()).contains(root_bytes)
+                    && (*root_bytes - 512) % (64 + 4 * dimensions) == 0
+                    && (1..=2 * rows.div_ceil(32).div_ceil(64) - 1)
+                        .contains(&((*root_bytes - 512) / (64 + 4 * dimensions)))
                     && (1..=256).contains(&input_schema.len())
                     && *membership_bytes == rows.div_ceil(32) * 4
                     && *leaves_bytes == rows.div_ceil(32) * (4 + dimensions * 2)
@@ -327,6 +331,7 @@ impl Discovery {
     }
     pub(crate) fn input<'a>(&'a self, plane: &SourcePlaneReceipt) -> Result<SourceIdentity<'a>> {
         let Self::Semantic {
+            profile,
             input_schema,
             input_root_sha256,
             centroids_sha256,
@@ -349,6 +354,7 @@ impl Discovery {
             return Err(TwoBitGenerationError::Invalid("router source binding"));
         }
         Ok(SourceIdentity {
+            profile: *profile,
             schema: input_schema,
             root_sha256: input_root_sha256,
             centroids_sha256,
@@ -743,6 +749,13 @@ impl TwoBitGeneration {
     pub fn rows(&self) -> usize {
         self.pages.rows()
     }
+    /// Explicit semantic profile, absent for graph discovery.
+    pub fn semantic_profile(&self) -> Option<SemanticProfile> {
+        match &self.manifest.discovery {
+            Discovery::Semantic { profile, .. } => Some(*profile),
+            _ => None,
+        }
+    }
     pub(crate) fn modeled_memory_bytes(&self) -> u64 {
         self.modeled_memory_bytes
     }
@@ -1015,9 +1028,9 @@ impl TwoBitGeneration {
             .and_then(|n| n.checked_add(manifest.discovery.graph_memory()?))
             .and_then(|n| {
                 n.checked_add(if manifest.discovery.mode() == DiscoveryMode::Semantic {
-                    // JSON decoding/prototype allocations plus root/membership encoded copies;
+                    // Conservative binary decoding/prototype and root/membership copies;
                     // leaf buffers/validated units for every concurrent query, no cache.
-                    let root = admitted_size("router/manifest.json").ok()? as u64;
+                    let root = admitted_size("router/root.bin").ok()? as u64;
                     root.checked_mul(32)?.checked_add(
                         (LEAF_BYTES as u64 * 2 + 1024 * 1024)
                             .checked_mul(limits.max_active_queries as u64)?,
@@ -1147,14 +1160,14 @@ impl TwoBitGeneration {
                 leaves_bytes,
                 ..
             } => {
-                if admitted_size("router/manifest.json")? != *root_bytes
+                if admitted_size("router/root.bin")? != *root_bytes
                     || admitted_size("router/membership.bin")? != *membership_bytes
                 {
                     return Err(bad("router metadata length"));
                 }
                 let input = manifest.discovery.input(plane.receipt())?;
                 let router = SemanticUnitRouter::open(
-                    &read("router/manifest.json", root_sha256)?,
+                    &read("router/root.bin", root_sha256)?,
                     &read("router/membership.bin", membership_sha256)?,
                     root_sha256,
                     &input,
@@ -1781,6 +1794,7 @@ impl TwoBitGeneration {
                 query,
                 top_k.min(self.pages.rows()),
                 Some(mutations.excluded_ids()),
+                None,
             )
             .await?;
         let candidates = mutations
@@ -1835,7 +1849,7 @@ impl TwoBitGeneration {
         top_k: usize,
         excluded_ids: Option<&[i64]>,
     ) -> Result<TwoBitSearchResult> {
-        self.search_store_unadmitted(reader.store(), query, top_k, excluded_ids)
+        self.search_store_unadmitted(reader.store(), query, top_k, excluded_ids, None)
             .await
     }
 
@@ -1865,8 +1879,31 @@ impl TwoBitGeneration {
             .acquire()
             .await
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
-        self.search_store_unadmitted(store, query, top_k, excluded_ids)
+        self.search_store_unadmitted(store, query, top_k, excluded_ids, None)
             .await
+    }
+
+    /// One production search with a charged diagnostic trace; no repeated discovery/read pass.
+    #[doc(hidden)]
+    pub async fn diagnostic_search_with_store(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+        top_k: usize,
+    ) -> Result<(TwoBitSearchResult, TwoBitPlanTrace)> {
+        if top_k == 0 || top_k > self.rows() {
+            return Err(TwoBitGenerationError::Invalid("search admission"));
+        }
+        let _permit = self
+            .slots
+            .acquire()
+            .await
+            .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
+        let mut trace = TwoBitPlanTrace::default();
+        let result = self
+            .search_store_unadmitted(store, query, top_k, None, Some(&mut trace))
+            .await?;
+        Ok((result, trace))
     }
 
     async fn search_store_unadmitted(
@@ -1875,11 +1912,20 @@ impl TwoBitGeneration {
         query: &[f32],
         top_k: usize,
         excluded_ids: Option<&[i64]>,
+        trace: Option<&mut TwoBitPlanTrace>,
     ) -> Result<TwoBitSearchResult> {
         let started = std::time::Instant::now();
         let mut stages = QueryStages::default();
         let result = self
-            .search_store_measured(store, query, top_k, excluded_ids, &mut stages, started)
+            .search_store_measured(
+                store,
+                query,
+                top_k,
+                excluded_ids,
+                trace,
+                &mut stages,
+                started,
+            )
             .await;
         for stage in [
             &mut stages.discovery,
@@ -1908,15 +1954,16 @@ impl TwoBitGeneration {
         query: &[f32],
         top_k: usize,
         excluded_ids: Option<&[i64]>,
+        trace: Option<&mut TwoBitPlanTrace>,
         stages: &mut QueryStages,
         started: std::time::Instant,
     ) -> Result<TwoBitSearchResult> {
         let (plan, normalized, source_stats, router_stats) = if self.source.is_some() {
-            self.plan_paged_measured(store, query, None, stages, started)
+            self.plan_paged_measured(store, query, trace, stages, started)
                 .await?
         } else {
             stages.discovery.start_ns = started.elapsed().as_nanos().max(1);
-            let result = self.plan_inner(query, None);
+            let result = self.plan_inner(query, trace);
             stages.discovery.end_ns = started.elapsed().as_nanos();
             let (plan, normalized) = result?;
             (
@@ -2260,7 +2307,7 @@ mod source_walk_tests {
                 "plane/manifest.json",
                 "plane/mean.bin",
                 "plane/page_digests.bin",
-                "router/manifest.json",
+                "router/root.bin",
                 "router/membership.bin",
             ],
         );
@@ -2461,6 +2508,30 @@ mod source_walk_tests {
         assert_eq!(expected.ranked.stats, actual.ranked.stats);
         assert_eq!(actual.source_stats, source);
         assert_eq!(actual.router_stats, leaves);
+        store.reads.lock().unwrap().clear();
+        let (diagnosed, diagnosed_trace) = lazy
+            .diagnostic_search_with_store(store.as_ref(), &query, 100)
+            .await
+            .unwrap();
+        assert_eq!(diagnosed.ranked.candidates, actual.ranked.candidates);
+        assert_eq!(diagnosed.plan, actual.plan);
+        assert_eq!(diagnosed.source_stats, source);
+        assert_eq!(diagnosed.router_stats, leaves);
+        assert_eq!(
+            serde_json::to_value(&diagnosed_trace).unwrap(),
+            serde_json::to_value(&actual_trace).unwrap()
+        );
+        assert_eq!(
+            store
+                .reads
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(name, head, _, _)| !head && name.ends_with("router/leaves.bin"))
+                .count(),
+            leaves.submitted_gets
+        );
+
         assert!(actual.stages.discovery.end_ns <= actual.stages.source.start_ns);
         assert!(actual.stages.source.end_ns <= actual.stages.planning.start_ns);
         assert!(actual.stages.planning.end_ns <= actual.stages.sq8.start_ns);
