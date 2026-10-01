@@ -1,0 +1,15 @@
+{
+  "schema": "borsuk-offered-receipt-path-fix-v1",
+  "failed_controller_session": 76042,
+  "failed_controller_exit_status": 1,
+  "failed_source_commit": "c71942b7",
+  "failure": "serial a0001 exists; shared mkdir before run_instances",
+  "owned_instance_ids": [],
+  "new_output": "metadata-waves/offered/a0001",
+  "lifecycle_self_check_exit_status": 0,
+  "actual_final_preflight_exit_status": 0,
+  "controller_sha256": "f87b5f61af16e422f052bf7ef1265c5b5e637d4819f2cdce7875b6a13d4fddf7",
+  "config_sha256": "8e26545e9c23c738227a478a46403632fb0f3996be6feb093b5c31c101d672da",
+  "userdata_syntax_bytes": 14457,
+  "native_rebuilt": false
+}
