@@ -1,0 +1,31 @@
+{
+  "actual_full_workspace_execution": false,
+  "artifact_count": 18,
+  "artifacts": {
+    "root-controller-self-check.log": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-1m/implementation-gates/remote-implementation/root-controller-self-check.log.gz",
+      "archived_sha256": "385a3c1c0a257ffa1aa9bf5b1a19371c48ca79c1f4da194d0d5fc8c379fb8aec",
+      "bytes": 354,
+      "sha256": "5c6ff341fcdb4122f6cbf0f8fac7e048e4e089ac66e6f472ffa0146381e79fdf"
+    },
+    "root-controller-self-check.time": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-1m/implementation-gates/remote-implementation/root-controller-self-check.time.gz",
+      "archived_sha256": "ad5ba4cc1ca73dc06947fc1b9690dbeb79eda4ae61186e8457a404371b2e502e",
+      "bytes": 862,
+      "sha256": "42bec79d1959c9a1cebb537e04aa6b282ccbabbc06c174e777e4ff0ec5ec493f"
+    }
+  },
+  "aws_cargo_cgroup_mocked": true,
+  "code_count": 24,
+  "command": [
+    "python3",
+    "-m",
+    "scripts.launch_native_workspace_execution_spot",
+    "--semantic-1m-implementation",
+    "--self-check"
+  ],
+  "controller_commit": "f78eeed7b209218a19025cbc92b4d416d0204f85",
+  "exit_status": 0,
+  "native_compilation_verified": false,
+  "schema": "borsuk-semantic-1m-implementation-controller-verification-v1"
+}
