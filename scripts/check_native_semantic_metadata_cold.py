@@ -30,14 +30,28 @@ def check_saved(output, config_sha, control_binary, candidate_binary):
         return dict(path=str(path), bytes=size, sha256=digest)
 
     panels = runtime.prepare(config, out, evidence, fetch=saved_input)
-    raw = (out / 'records.jsonl').read_bytes()
-    records = [json.loads(line) for line in raw.splitlines()]
-    stats.require(raw == ''.join(worker.encoded(r) + '\n' for r in records).encode(), 'canonical exact raw ledger')
+    offered = config['schema'] == runtime.OFFERED_SCHEMA
+    records, markers = [], []
+    paths = ([out / worker.offered_name(i, d, a) for i, _, d, a in worker.offered_order()]
+             if offered else [out / 'records.jsonl'])
+    for path in paths:
+        raw = path.read_bytes()
+        rows = [json.loads(line) for line in raw.splitlines()]
+        stats.require(raw == ''.join(worker.encoded(r) + '\n' for r in rows).encode(), 'canonical exact raw ledger')
+        records.extend(rows)
+        if offered:
+            markers.append(json.loads(path.with_name(path.name.replace('-records.jsonl', '-summary.json')).read_bytes()))
     saved = json.loads((out / 'summary.json').read_text())
-    actual = runtime.reduce_run(records, panels, config, config_sha, evidence,
+    actual = (runtime.reduce_offered if offered else runtime.reduce_run)(records, panels, config, config_sha, evidence,
                                 saved['campaign_cgroup_before'], saved['campaign_cgroup_after'])
-    actual.update(inputs=runtime.input_receipts(panels), identity_gate_passed=True,
+    actual.update(inputs=runtime.input_receipts(panels), identity_gate_passed=actual.get('identity_gate_passed', True),
                   closed=actual['process_cleanup_complete'])
+    if offered:
+        for cell, marker in zip(actual['cells'], markers):
+            stats.require(marker == runtime.closed_cell_summary(cell, config, config_sha, evidence), 'cell marker parity')
+        stats.require(saved == actual, 'saved offered summary/gates/tails/identities parity')
+        return {k: actual[k] for k in ('execution_gate_passed', 'offered_gate_passed', 'identity_gate_passed',
+            'process_cleanup_complete', 'bounded_memory_gate_passed', 'quality_gate_passed', 'all_calls_successful')} | dict(records=len(records))
     stats.require(saved == actual, 'saved summary/gates/tails/identities parity')
     return dict(records=len(records), execution_gate_passed=actual['execution_gate_passed'],
                 paired_gate_passed=actual['paired_gate_passed'], latency_gate_passed=actual['latency_gate_passed'],
@@ -45,7 +59,7 @@ def check_saved(output, config_sha, control_binary, candidate_binary):
                 process_cleanup_complete=actual['process_cleanup_complete'], resource_gate=actual['resource_gate'])
 
 
-def self_check():
+def self_check(offered=False):
     from scripts import run_native_semantic_metadata_cold as runtime
     assert callable(getattr(runtime, 'run', None)), 'serial paired adapter missing'
     import base64
@@ -342,6 +356,15 @@ def self_check():
             ledger = out / 'records.jsonl'
             original_ledger = ledger.read_bytes()
             rows = [json.loads(line) for line in original_ledger.splitlines()]
+            if offered:
+                templates = [next(r for r in rows if r['dataset'] == d and r['arm'] == a)
+                             for d in worker.DATASETS for a in runtime.ROLES]
+                del rows, original_ledger
+                offered_environment = dict(os.environ)
+                offered_self_check(runtime, config, binaries, proofs, evidence, templates, directory, rejected)
+                assert not running and all(not p.exists() for p in paths)
+                assert dict(os.environ) == offered_environment
+                return
             panels = runtime.prepare(config, out, evidence, fetch=fetch)
             # The exact decision admits equal p95, but never equal p90 or a loss on either dataset.
             for failure in (None, 'equal-p90', 'p95-regression', 'CoHere-slower'):
@@ -450,12 +473,183 @@ def self_check():
     print('paired metadata waves self-check PASS: 512 serial calls, both 3 HEADs, wave overlap/bounds, p90/p95 decision, fail/abort/cleanup and offline tamper replay; native/cloud UNRUN')
 
 
+def offered_self_check(runtime, config, binaries, proofs, evidence, serial_rows, directory, rejected):
+    """Real scheduler/role dispatch; virtual-time campaigns retain real reducers."""
+    import base64
+    import copy
+    import gzip
+    import io
+    import threading
+    import time
+    from contextlib import redirect_stdout
+    from unittest.mock import patch
+    from scripts import run_native_cold_offered as scheduler
+    from scripts import launch_native_semantic_metadata_cold_spot as controller
+    worker, old = runtime.worker, runtime.old
+    config = dict(config, **runtime.OFFERED_FIXED)
+    config.pop('blocks')
+    config.update(schema=runtime.OFFERED_SCHEMA, code_sha256={n: old.sha(runtime.ROOT/n) for n in runtime.OFFERED_CODE})
+    cfg = directory/'offered-config.json'
+    cfg.write_text(worker.encoded(config)+'\n')
+    digest = old.sha(cfg)
+    for field in runtime.OFFERED_FIXED:
+        bad = copy.deepcopy(config)
+        bad[field] = None
+        rejected(lambda: runtime.validate_config(bad))
+    templates = {(d, r): next(row for row in serial_rows if row['dataset'] == d and row['arm'] == r)
+                 for d in worker.DATASETS for r in runtime.ROLES}
+    panels = runtime.prepare(config, directory/'prepared-offered', evidence)
+    mode, clock = [None], [10**9]
+    historical = runtime.ROOT/'docs/research/performance-architecture-20260930/semantic-cold/offered/a0003/screen/rate3-cohere-candidate-records.jsonl.gz'
+    historical_body = gzip.decompress(historical.read_bytes())
+    terminal = json.loads((historical.parent.parent/'aws-terminal.json').read_bytes())
+    assert terminal['artifacts']['screen/rate3-cohere-candidate-records.jsonl'] == dict(
+        bytes=len(historical_body), sha256=runtime.sha_body(historical_body))
+    prior = next(json.loads(line) for line in historical_body.splitlines()
+                 if json.loads(line)['outcome'] == 'failed')
+    assert dict(prior['response']['transport']['totals']['status_counts'])[503] == 1
+
+    def mock_measured(binary, cfg, arm, body, expected, truth, *, port):
+        role = arm['native_role']
+        assert binary == binaries[role]
+        dataset = arm['indexes']['10'].split('/')[0]
+        row = copy.deepcopy(templates[dataset, role])
+        row['native_header']['listen'] = f'127.0.0.1:{port}'
+        row.update(native_server_log=worker.encoded(row['native_header'])+'\n',
+                   request_bytes=len(body), request_sha256=runtime.sha_body(body))
+        # Exercise checker selection inside the actual measured-call thread.
+        worker.stats.validate_ready(row['native_header'], arm)
+        if mode[0] in ('503', 'forged503', 'corrupt503') and dataset == 'CoHere' and role == 'candidate':
+            response = row['response']
+            for name in ('ids', 'ranges', 'planned_bytes'):
+                response.pop(name)
+            response.update(error=prior['response']['error'], router_failed_gets=1)
+            final = response['transport']['totals']
+            final['status_counts'][0][1] -= 1
+            final['status_counts'].append([503, 1])
+            final['dropped_error_bodies'] = 1
+            row.update(outcome='failed', error_type='AssertionError', error=prior['error'], http_status=502,
+                       valid_ann_requests=0, telemetry_validation_errors=[])
+            row['accounting'] = worker.stats.validate_outcome(row['native_header'], response, arm, False)
+            row['raw_response'] = worker.encoded(response)
+            row['raw_response_base64'] = base64.b64encode(row['raw_response'].encode()).decode()
+            if mode[0] == 'forged503': row['accounting']['final_process_transport']['status_counts'][-1][1] += 1
+            if mode[0] == 'corrupt503': row['raw_response_base64'] = base64.b64encode(b'{}').decode()
+        if mode[0] == 'cleanup' and dataset == 'CoHere' and role == 'candidate':
+            row['native_close']['returncode'] = None
+        if mode[0] == 'resource' and dataset == 'CoHere' and role == 'candidate':
+            row['cgroup_after']['files']['memory.swap.peak'] = '1'
+        return row
+
+    def fake_schedule(call_one, rate, **kwargs):
+        epoch = clock[0]
+        rows, abort = [], None
+        for q in range(64):
+            dispatch = epoch + round(q*1e9/rate) + 1000000
+            if abort is not None:
+                rows.append(dict(query_ordinal=q, offered_qps=rate, scheduled_ns=epoch+round(q*1e9/rate),
+                    dispatched_ns=None, started_ns=None, completed_ns=None, port=None, outcome='aborted',
+                    namespace_start_attempted=False, native_process_started=False, http_attempts=0,
+                    valid_ann_requests=0, abort_after=abort, terminal_ns=clock[0]))
+                continue
+            row = call_one(q, 18080)
+            row.update(query_ordinal=q, offered_qps=rate, scheduled_ns=epoch+round(q*1e9/rate),
+                dispatched_ns=dispatch, port=18080, started_ns=dispatch+1000000,
+                successful_connect_attempt_ns=dispatch+2000000, connected_ns=dispatch+3000000,
+                completed_ns=dispatch+5000000, terminal_ns=dispatch+25000000,
+                cold_start_to_first_http_response_ns=4000000, before_successful_connect_attempt_ns=1000000,
+                successful_tcp_connect_ns=1000000, first_post_to_response_ns=2000000, incoming_http_wall_ns=3000000)
+            clock[0] = row['terminal_ns']
+            if mode[0] == 'timing' and row['native_role'] == 'candidate' and row['response'].get('ids'):
+                # Same valid response; an excessive dispatch delay fails capacity qualification.
+                for key in ('dispatched_ns', 'started_ns', 'successful_connect_attempt_ns', 'connected_ns', 'completed_ns', 'terminal_ns'):
+                    row[key] += 125000001
+                clock[0] = row['terminal_ns']
+            if row['abort_admissions']:
+                abort = dict(query_ordinal=q, reason='cleanup unconfirmed' if not row['cleanup_confirmed']
+                             else 'fatal call failure', observed_ns=row['terminal_ns'])
+            rows.append(row)
+        clock[0] += 1000000
+        return rows, epoch, clock[0], abort
+
+    def tick():
+        clock[0] += 1000
+        return clock[0]
+
+    with patch.object(worker, 'measured_call', side_effect=mock_measured), \
+            patch.object(old.time, 'monotonic_ns', side_effect=tick):
+        # Six concurrent calls alternate frozen checker roles without global mutation.
+        barrier = threading.Barrier(6, timeout=3)
+        errors, owned = [], []
+        def overlap(q, port):
+            role = runtime.ROLES[q % 2]
+            try:
+                arm = panels['ReLAION']['arms'][role]
+                row = worker.offered_call(None, config, panels['ReLAION'], arm, q, port)
+                owned.append(port)
+                if q < 6:
+                    barrier.wait()
+                    threading.Event().wait(.025)
+                return row
+            except Exception as error:
+                errors.append(error)
+                raise
+        with runtime.offered_hooks(config, digest, evidence, binaries, proofs):
+            # Compress only schedule offsets for this ownership stress check.
+            previous_stack = threading.stack_size(256*1024)
+            try:
+                with patch.object(scheduler, 'scheduled_offsets_ns', return_value=list(range(64))), patch.object(scheduler.time, 'sleep'):
+                    concurrent, _, _, _ = scheduler.schedule_offers(overlap, 1000)
+            finally:
+                threading.stack_size(previous_stack)
+        assert not errors and len(set(owned[:6])) == 6 and any(r['outcome'] == 'capacity_drop' for r in concurrent)
+        assert all(r['cleanup_confirmed'] for r in concurrent if r['port'] is not None)
+        for failure in (None, 'timing', '503', 'cleanup', 'resource', 'forged503', 'corrupt503', 'callback'):
+            mode[0], clock[0] = failure, 10**9
+            out = directory/('offered-'+str(failure))
+            markers = []
+            def closed(marker, paths):
+                if failure == 'callback': raise RuntimeError('conditional PUT failed')
+                assert paths['records'].parent == out
+                controller._cell_bodies(marker, paths, dict(config, config_sha256=digest))
+                markers.append(marker)
+            with patch.object(scheduler, 'schedule_offers', side_effect=fake_schedule), redirect_stdout(io.StringIO()):
+                status = runtime.main([str(cfg), digest, binaries['control'], proofs['control'],
+                                       binaries['candidate'], proofs['candidate'], str(out)], on_cell_closed=closed)
+            if failure in ('callback', 'forged503', 'corrupt503'):
+                assert status == 1
+                continue
+            assert status == (1 if failure in ('cleanup', 'resource') else 0), (failure, json.loads((out/'summary.json').read_bytes()))
+            result = check_saved(out, digest, *[binaries[r] for r in runtime.ROLES])
+            summary = json.loads((out/'summary.json').read_bytes())
+            assert status == (1 if failure in ('cleanup', 'resource') else 0), (failure, summary.get('terminal_error'))
+            assert result['records'] == 1536 and result['offered_gate_passed'] == (failure is None)
+            if failure == '503':
+                assert summary['execution_gate_passed'] and summary['failed_calls'] == 64
+                assert summary['largest_passing_tested_offered_qps']['ReLAION']['candidate'] == 8
+                assert summary['largest_passing_tested_offered_qps']['CoHere']['control'] == 8
+                assert summary['aborted_calls'] == 5*64 and len(markers) == 24
+            first = summary['cells'][0]
+            assert first['successful_full_span_qps'] == first['successes']*1e9/first['full_span_ns']
+            assert first['full_span_ns'] > 63e9/.25 and first['response_tail_boundary'].endswith('cleanup')
+            ledger = out/first['records_file']
+            original = ledger.read_bytes()
+            changed = [json.loads(line) for line in original.splitlines()]
+            changed[0]['proof_sha256'] = '0'*64
+            ledger.write_text(''.join(worker.encoded(r)+'\n' for r in changed))
+            rejected(lambda: check_saved(out, digest, *[binaries[r] for r in runtime.ROLES]))
+            ledger.write_bytes(original)
+    print('offered metadata PASS: both frozen roles, six-slot ownership, 24 cells/1536 records, full-span cleanup QPS, valid503 arm stop, forged/corrupt fatal, callback/offline parity; native/cloud UNRUN')
+
+
 if __name__ == '__main__':
     if sys.argv[1:] == ['--self-check']:
         self_check()
+    elif sys.argv[1:] == ['--offered-self-check']:
+        self_check(offered=True)
     elif len(sys.argv) == 5:
         result = check_saved(*sys.argv[1:])
         print(json.dumps(result, sort_keys=True))
-        raise SystemExit(0 if result['paired_gate_passed'] else 1)
+        raise SystemExit(0 if result.get('offered_gate_passed', result.get('paired_gate_passed')) else 1)
     else:
         raise SystemExit('usage: OUTPUT CONFIG_SHA CONTROL_BINARY CANDIDATE_BINARY | --self-check')
