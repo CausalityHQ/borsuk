@@ -1,0 +1,28 @@
+{
+  "schema": "borsuk-semantic-authority-accounting-a0004-preflight-v1",
+  "child_commit": "4b20db53db42a767d2ebd7d0f201cb12ea437327",
+  "integration_commit": "937bda2b",
+  "config_sha256": "361f82d84e3a08a1efb5f31b516f20aa0d8735a264052ebfef2e921620564304",
+  "native_source_identity_sha256": "92085e6e40ac9324ea7a4fc8daab58995dc84680a5c2391eb426dd430230e520",
+  "native_source_file_count": 399,
+  "native_rebuilt": false,
+  "native_assurance_reused": true,
+  "root_combined_runtime_controller_check_exit_status": 0,
+  "root_pass_logs": {
+    "runtime": {
+      "bytes": 1029,
+      "sha256": "932b74f69e17a28302be7cdd61bdd962f9591fe2b9becbba6458f92265de2747"
+    },
+    "controller": {
+      "bytes": 1882,
+      "sha256": "8126d4c40052ed026244cc2e118839189d5170d82a88c42b25256a3db5d7c153"
+    }
+  },
+  "py_compile_status": 0,
+  "bash_n_status": 0,
+  "diff_check_status": 0,
+  "bootstrap_bytes": 14044,
+  "accounting_correction": "head JSON + authenticated authority root + staged metadata + exact PUT/2GET credential protocol",
+  "prior_a0003_status": "FAIL preserved; old rejected sample used only as SHA-bound diagnostic fixture",
+  "remote_a0004_executed": false
+}

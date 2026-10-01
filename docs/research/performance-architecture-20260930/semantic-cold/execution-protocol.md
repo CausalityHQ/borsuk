@@ -124,3 +124,24 @@ panels, immutable input assets, quality and resource limits. Freeze fresh a0003
 namespaces and actual Python code/config identities before ONE paired Spot
 attempt. No independent paid smoke or native workspace gate is required by this
 bootstrap-only change.
+
+## Preregistered exact startup-accounting correction for a0004 (2026-10-01)
+
+a0003 passed Ubuntu ABI, all four native publications and all 256 consumed-panel
+validation calls. Its first cold control query returned HTTP 200 and correct
+ordered IDs, then the Python startup-accounting gate failed; a0003 remains FAIL
+with 511 aborted positions and no qualified cold distribution.
+
+The unchanged native startup path authenticates head.json and then the
+generation manifest in read_two_bit_head/head_from_control. open_remote later
+stages that manifest again. Charge both authority GETs and both manifest bodies,
+separately from staged metadata and the unchanged three IMDS calls. Subtract
+head JSON, authority manifest and staged payload from process consumed bytes
+before reporting inferred credential bytes. Continue rejecting every unexpected
+GET/HEAD/PUT, failed read, retry, payload mismatch and altered receipt.
+
+Correct the Python accounting contract and fixtures; retain all source/scorer,
+quality, memory, time, concurrency and policy gates. Reuse unchanged native
+source, binaries, assurance and verified bootstrap. Freeze four fresh a0004
+namespaces and Python/config identities before ONE paired Spot run. The old
+failed sample is diagnostic evidence only, never a retroactive PASS.

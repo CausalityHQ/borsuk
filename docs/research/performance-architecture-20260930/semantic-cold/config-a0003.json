@@ -66,7 +66,7 @@
             "control_epoch": 1
           },
           "indexes": {
-            "10": "research/semantic-router/20261001/cold-a0004/indexes/relaion/control/k10"
+            "10": "research/semantic-router/20261001/cold-a0003/indexes/relaion/control/k10"
           },
           "head_file": {
             "bytes": 170,
@@ -110,7 +110,7 @@
             "control_epoch": 1
           },
           "indexes": {
-            "10": "research/semantic-router/20261001/cold-a0004/indexes/relaion/candidate/k10"
+            "10": "research/semantic-router/20261001/cold-a0003/indexes/relaion/candidate/k10"
           },
           "head_file": {
             "bytes": 170,
@@ -187,7 +187,7 @@
             "control_epoch": 1
           },
           "indexes": {
-            "10": "research/semantic-router/20261001/cold-a0004/indexes/cohere/control/k10"
+            "10": "research/semantic-router/20261001/cold-a0003/indexes/cohere/control/k10"
           },
           "head_file": {
             "bytes": 170,
@@ -231,7 +231,7 @@
             "control_epoch": 1
           },
           "indexes": {
-            "10": "research/semantic-router/20261001/cold-a0004/indexes/cohere/candidate/k10"
+            "10": "research/semantic-router/20261001/cold-a0003/indexes/cohere/candidate/k10"
           },
           "head_file": {
             "bytes": 170,
@@ -339,8 +339,8 @@
     "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6",
     "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
     "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
-    "scripts/check_native_semantic_router_stats.py": "70239f91d5dfca1d3cf699df730746867aa2d5ed7193801e507268905be48bb1",
-    "scripts/run_native_semantic_router_cold.py": "5e8c02ba02e4081e4149aab5512c1b76f61d237d7e142deed6e05d72daa35722"
+    "scripts/check_native_semantic_router_stats.py": "1e0daa1354d98f8cb1433a805993833a4196ed4a5a9fb791c3b32315a73aca6f",
+    "scripts/run_native_semantic_router_cold.py": "71891fe17ff8c250ab2e2184f37b8e961d3f7ac88908649c196b98d810ea754b"
   },
   "controller_code_sha256": {
     "scripts/launch_native_semantic_router_cold_spot.py": "a6f5761e6166818fde176393051bc7436edbc2d53ee5b19687ab6474034882ae",
