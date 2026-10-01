@@ -12,7 +12,7 @@ The existing parity/lifecycle test covers selected conditional leaf ranges, part
 
 | Baseline | Candidate | Quality evidence | Latency/QPS/cost | Remaining gap | Next decisive test |
 |---|---|---|---|---|---|
-| Frozen graph/source/SQ8 control | Same source/SQ8 with fitted semantic router | Consumed FIRST100k D768 cosine ordinals 0–63: ReLAION R10 98.125% vs 99.6875% (−1.5625 pp), R100 97.140625% vs 99.515625% (−2.375 pp); CoHere R10 95.78125% vs 98.59375% (−2.8125 pp), R100 95.84375% vs 99.234375% (−3.390625 pp). These are prior closed offline scorer measurements, not a new native quality result. | New native cold HTTP, QPS and cost unknown | Actual current-envelope publication and paired cold HTTP; 1M/10M/100M and both vendor comparisons remain unqualified | Frozen 100k ABBA cold gate in `semantic-router-cold-http-gate.md`, after exact final HTTP/binary/publication authority |
+| Frozen graph/source/SQ8 control | Same source/SQ8 with fitted semantic router | Verified native S3 publication validation, consumed FIRST100k D768 cosine ordinals 0–63, 64 queries per arm: ReLAION R10 98.125% vs 99.6875% (−1.5625 pp); CoHere R10 95.78125% vs 98.59375% (−2.8125 pp). Actual CLI validation, not cold HTTP. R100 remains prior offline evidence: ReLAION 97.140625% vs 99.515625%; CoHere 95.84375% vs 99.234375%. | Cold panel tails, QPS and cost unmeasured. First control diagnostic only: 649.081478 ms whole cold, 178.517913 ms native query; rejected accounting gate, not a qualified baseline. | Fresh paired cold HTTP; 1M/10M/100M and both vendor comparisons remain unqualified | Correct exact startup accounting, then fresh frozen a0004 ABBA gate; preserve a0003 FAIL |
 
 The library increment is bounded to 100k/D768 under the declared router admission. Flat root growth and three dependent leaf/source/SQ8 fetch stages remain explicit scale/performance limitations. No vendor win or latency improvement follows from synthetic correctness tests.
 
@@ -52,12 +52,27 @@ trigger that cannot be confirmed for this instance. The next repair uses an
 official, version-pinned AWS CLI installer with root-verified signature and
 SHA256 authority in `semantic-cold/bootstrap-repair/installer-authority.json`.
 It also fixes the premature check for `run-closed.log`, which the exit handler
-creates, and adds dependency-independent serial failure reporting.
+creates, and adds dependency-independent serial failure reporting. That repair
+passed locally and on a0003's actual Ubuntu 24.04/glibc 2.39 worker.
+
+All four a0003 native publications and their 256 validation calls passed, with
+authenticated heads, ordered source/scorer parity and bounded resources. The
+first cold ReLAION control call returned HTTP 200 and all ten truth IDs, but its
+startup accounting gate failed; 511 remaining positions were aborted. All 53
+closed artifact bodies authenticate after owned termination and wait. a0003
+remains FAIL, with no qualified cold distribution or throughput result.
+
+The Python verifier omitted a generation-root GET from `read_two_bit_head`:
+`head_from_control` authenticates `manifest.json` before `open_remote` stages it
+again. The additional request and 33,980 root bytes must be charged separately
+from the unchanged three IMDS credential calls. This is an exact accounting
+correction with unchanged native code and strict request/byte/quality gates.
 
 ## Next delivery steps
 
-1. Qualify the bootstrap prerequisite and failure-reporting repair; freeze fresh
-   a0003 namespaces and updated config/code identities, reusing unchanged Rust assurance.
+1. Qualify exact head/root/metadata/IMDS startup accounting and its failure tests;
+   freeze fresh a0004 namespaces and updated Python code/config identities,
+   reusing unchanged Rust assurance and completed bootstrap qualification.
 2. Fast-forward the closed failure and verified runtime repair to main, then run
    ONE preregistered fresh Spot attempt:
    four publications with consumed-panel parity validation, then 512 cold ABBA
