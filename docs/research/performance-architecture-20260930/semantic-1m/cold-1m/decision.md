@@ -11,3 +11,9 @@ Require all64 valid calls, exact source/scorer ordered-ID and plan parity, >=608
 One fresh owned Spot campaign; no automatic replacement. Monitor terminal markers and infrastructure only while running. Fsync every acknowledged instance, terminate and wait for all owned IDs before artifact collection. Authenticate every terminal body, replay offline and independently recount sealed-truth hits before deciding. Retain publication authority for the next offered-load measurement; clean local bulk scratch.
 
 Next: valid cold result → offered throughput/cost; valid latency miss → one intervention chosen from measured startup/router/SOURCE/SQ8 critical path. CoHere1M, 10M/100M scale, Fresh1m maintenance and matched vendor comparisons remain open.
+
+## Attempt a0002
+
+a0001 closed with execution failure before preparation: Ubuntu's service cgroup lacked `io.stat`. All seven terminal bodies and gzip copies authenticate; all64 rows are aborted, with zero builds, publications, process starts or HTTP attempts. The instance is terminated. Its original config and launch authority are retained alongside the immutable failure evidence.
+
+The sole repair requests `IOAccounting=yes` and reports absent IO observations as `UNMEASURED`, with the missing-file reason. Required memory/CPU/OOM/cleanup checks remain mandatory. Root self-check original37377 passed. a0002 uses a fresh namespace and refreshed code pins; algorithm, panel, quality gates, resource bounds and query timing are unchanged. This is a telemetry prerequisite repair, not a scientific retune.
