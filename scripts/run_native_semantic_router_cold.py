@@ -41,7 +41,9 @@ remaining fixed position. records.jsonl still contains the exact 512-position
 roster; attempted HTTP/process counts are actual, including zero-HTTP failures.
 Process transport includes the shared SDK connector's PUT token and two GET
 credential calls. Credential payload bytes are inferred by subtracting verified
-S3 startup bytes from the ready total; credential values are never read here.
+S3 startup bytes from the ready total: head.json, the generation manifest read
+to authenticate authority, and all staged metadata. The manifest is fetched again
+during staging; both reads are charged. Credential values are never read here.
 """
 from pathlib import Path
 import sys
@@ -423,7 +425,11 @@ def reduce_calls(records):
     logical.update(metadata_GETs=sum(r['startup_accounting']['metadata']['logical_metadata_get_requests'] for r in opened),
         metadata_HEADs=sum(r['startup_accounting']['metadata']['logical_metadata_head_requests'] for r in opened),
         metadata_bytes=sum(r['startup_accounting']['metadata']['metadata_bytes'] for r in opened),
-        authority_head_JSON_GETs=len(opened), source_HEADs=len(opened),
+        authority_head_JSON_GETs=sum(r['startup_accounting']['authority_head_JSON_GETs'] for r in opened),
+        authority_head_JSON_bytes=sum(r['startup_accounting']['authority_head_JSON_bytes'] for r in opened),
+        authority_generation_root_GETs=sum(r['startup_accounting']['authority_generation_root_GETs'] for r in opened),
+        authority_generation_root_bytes=sum(r['startup_accounting']['authority_generation_root_bytes'] for r in opened),
+        source_HEADs=len(opened),
         router_HEADs=sum(r['startup_accounting']['metadata']['router_head_requests'] for r in opened))
     return dict(count=len(records), successes=len(successful), failures=sum(r['outcome'] == 'failed' for r in records),
                 aborted=sum(r['outcome'] == 'aborted' for r in records),
@@ -697,8 +703,9 @@ def self_check():
             remote_open_stats=dict(metadata=rows, staging_wall_ns=100, decode_wall_ns=20,
                                   source_head_requests=1, source_head_wall_ns=5,
                                   router_head_requests=router_head, router_head_wall_ns=5 * router_head))
-        header['transport'] = transport(sum(r['logical_get_requests'] for r in rows) + 3,
-                                        len(rows) + 1 + router_head, sum(arm['metadata_files'].values()) + 200 + 37)
+        header['transport'] = transport(sum(r['logical_get_requests'] for r in rows) + 4,
+                                        len(rows) + 1 + router_head, sum(arm['metadata_files'].values())
+                                        + arm['head_file']['bytes'] + arm['metadata_files']['manifest.json'] + 37)
         return header
 
     with tempfile.TemporaryDirectory() as temporary:
@@ -757,21 +764,37 @@ def self_check():
                 assert startup['credential_protocol'] == 'instance-imdsv2'
                 assert startup['declared_credential_submissions'] == 3
                 assert startup['inferred_credential_consumed_bytes'] == 37
-                for mutation in ('missing_GET', 'missing_PUT', 'extra_GET', 'extra_PUT', 'DELETE',
-                                 'status', 'zero_payload', 'short_payload', 'saturated'):
+                assert startup['authority_head_JSON_GETs'] == startup['authority_generation_root_GETs'] == 1
+                assert startup['authority_head_JSON_bytes'] == 200
+                assert startup['authority_generation_root_bytes'] == 5000
+                for mutation in ('missing_GET', 'missing_HEAD', 'missing_PUT', 'extra_GET', 'extra_HEAD', 'extra_PUT', 'DELETE',
+                                 'status', 'transport_failure', 'stream_failure', 'zero_payload', 'short_payload', 'saturated'):
                     bad = copy.deepcopy(header)
                     totals = bad['transport']['totals']
-                    if mutation in ('missing_GET', 'missing_PUT', 'extra_GET', 'extra_PUT', 'DELETE'):
-                        method = 0 if mutation.endswith('GET') else 3 if mutation == 'DELETE' else 2
+                    if mutation.startswith(('missing_', 'extra_')) or mutation == 'DELETE':
+                        method = stats.METHODS.index(mutation.split('_')[-1])
                         change = -1 if mutation.startswith('missing') else 1
                         totals['method_counts'][method] += change
                         totals['attempts'] += change
                         totals['status_counts'][0][1] += change
                     elif mutation == 'status': totals['status_counts'][0][0] = 403
+                    elif mutation == 'transport_failure':
+                        totals['transport_failures'] = 1
+                        totals['status_counts'][0][1] -= 1
+                    elif mutation == 'stream_failure': totals['stream_failures'] = 1
                     elif mutation in ('zero_payload', 'short_payload'):
                         totals['consumed_payload_bytes'] -= 37 + int(mutation == 'short_payload')
                     else: totals['consumed_payload_bytes'] = 2**64 - 1
                     rejected(lambda: stats.validate_ready(bad, arm))
+                bad_arm = copy.deepcopy(arm)
+                bad_arm['metadata_files']['manifest.json'] += 1
+                rejected(lambda: stats.validate_ready(header, bad_arm))
+                for prefix in ('', 'source_', 'router_'):
+                    if prefix == 'router_' and arm['discovery'] == 'graph':
+                        continue
+                    bad_query = query_response(arm)
+                    bad_query[prefix + 'failed_gets'] = 1
+                    rejected(lambda: stats.validate_query(bad_query, arm))
         cfg.write_text(encoded(config) + '\n')
         validate_config(config)
         validate_runtime(config, binary, qualification)
@@ -886,6 +909,10 @@ def self_check():
                     assert credentials['declared_credential_submissions'] == 3 * 128
                     assert credentials['inferred_credential_consumed_bytes'] == 37 * 128
                     assert pooled['known_process_transport_totals']['method_counts'][2] == 128
+                    charges = pooled['known_logical_charge_totals']
+                    assert charges['authority_head_JSON_GETs'] == charges['authority_generation_root_GETs'] == 128
+                    assert charges['authority_head_JSON_bytes'] == 200 * 128
+                    assert charges['authority_generation_root_bytes'] == 5000 * 128
             assert all(not path.exists() for path in temporary_paths)
             audited = stats.check_saved(output, old.sha(cfg), str(binary))
             assert audited == dict(all_calls_successful=True, quality_gate_passed=True, latency_improvement=True, records=512)
@@ -895,6 +922,11 @@ def self_check():
             rejected(lambda: stats.check_saved(output, old.sha(cfg), str(binary)))
             (output / 'summary.json').write_text(encoded(result))
             panels = prepare(config, directory / 'prepared')
+            for field in ('authority_generation_root_GETs', 'authority_generation_root_bytes',
+                          'inferred_credential_consumed_bytes'):
+                bad_records = copy.deepcopy(records)
+                bad_records[0]['startup_accounting'][field] += 1
+                rejected(lambda: reduce_run(bad_records, panels, config))
             for fault in ('parity', 'telemetry', 'stage', 'ready', 'wire', 'retry', 'credential_refresh',
                           'nonmonotonic', 'http', 'binarybody', 'reject'):
                 state['fault'] = fault
@@ -1009,7 +1041,7 @@ def self_check():
         assert sys.argv is argv and all(getattr(old, name) is value for name, value in saved.items())
         assert all(os.environ.get(name) == value for name, value in environment.items())
     stats.self_check()
-    print('PASS 512 fixed ABBA calls; exact IMDSv2 startup and GET-only query delta; fail-fast/511 aborted and zero-HTTP startup failure; 608/607 block gates; raw failures, cleanup and restoration; native UNRUN')
+    print('PASS 512 fixed ABBA calls; exact head/root/metadata/IMDSv2 startup and GET-only query delta; extra/missing GET/HEAD/PUT, root/credential receipts and failed GETs rejected; fail-fast/511 aborted and zero-HTTP startup failure; 608/607 block gates; raw failures, cleanup and restoration; native UNRUN')
 
 
 if __name__ == '__main__':

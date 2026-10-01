@@ -205,13 +205,18 @@ def validate_ready(header, arm):
     integer(header['head_read_wall_ns'], 'head read wall', maximum=2**128 - 1)
     ready = validate_transport(header['transport'], True)
     heads = metadata['logical_metadata_head_requests'] + 1 + metadata['router_head_requests']
-    gets = metadata['logical_metadata_get_requests'] + 1  # Authenticated head.json is a separate GET.
+    # read_two_bit_head authenticates head.json and its generation manifest;
+    # open_remote then stages that same manifest as part of the metadata roster.
+    root_bytes = arm['metadata_files']['manifest.json']
+    gets = metadata['logical_metadata_get_requests'] + 2
     # object_store 0.14.1 shares NativeConnector with its instance provider:
     # PUT token, GET role, GET credentials, before the first authenticated S3 call.
     require(ready['method_counts'] == [gets + 2, heads, 1] + [0] * 7, 'startup S3/IMDS attempts / no hidden retries')
-    credential_bytes = ready['consumed_payload_bytes'] - metadata['metadata_bytes'] - arm['head_file']['bytes']
+    credential_bytes = ready['consumed_payload_bytes'] - metadata['metadata_bytes'] - arm['head_file']['bytes'] - root_bytes
     integer(credential_bytes, 'inferred credential payload', 1, 2**64 - 2)
     return dict(metadata=metadata, startup_transport=ready, credential_protocol=CREDENTIAL_PROTOCOL,
+                authority_head_JSON_GETs=1, authority_head_JSON_bytes=arm['head_file']['bytes'],
+                authority_generation_root_GETs=1, authority_generation_root_bytes=root_bytes,
                 declared_credential_submissions=3, inferred_credential_consumed_bytes=credential_bytes,
                 credential_payload_attribution=CREDENTIAL_PAYLOAD_ATTRIBUTION)
 
@@ -267,6 +272,53 @@ def self_check():
     for name in ('planning', 'sq8'):
         partial[name] = dict(start_ns=0, end_ns=0)
     validate_stages(partial, 40, 'semantic', 8, False)
+    # Immutable closed a0003 evidence: posthoc accounting must not upgrade FAIL.
+    import gzip
+    import hashlib
+    import json
+    from pathlib import Path
+    from scripts import run_native_semantic_router_cold as runtime
+    evidence = Path(__file__).resolve().parents[1] / 'docs/research/performance-architecture-20260930/semantic-cold/a0003/screen'
+    bodies = {}
+    for name, expected in (
+            ('config.json.gz', 'a02532d2e00111d137afe1afb712cd3f51de015883aa617299a6a219ad4c4e4f'),
+            ('records.jsonl.gz', '16a382104ec7bb6a9bd1388f9875f1e53f72b463ca475082da9c150cd0cd9b5f')):
+        bodies[name] = (evidence / name).read_bytes()
+        assert hashlib.sha256(bodies[name]).hexdigest() == expected
+    config = json.loads(gzip.decompress(bodies['config.json.gz']))
+    records = [json.loads(line) for line in gzip.decompress(bodies['records.jsonl.gz']).splitlines()]
+    first, arm = records[0], config['items'][0]['arms']['control']
+    header = first['native_header']
+    assert first['outcome'] == 'failed' and first['http_status'] == 200 and first['returned_hits'] == 10
+    assert first['error'] == 'startup S3/IMDS attempts / no hidden retries'
+    assert all(r['outcome'] == 'aborted' for r in records[1:]) and len(records) == 512
+    totals = header['transport']['totals']
+    # The old head-only accounting expected 13 GETs and rejected this 14-GET ready header.
+    assert totals['method_counts'] != [13, 10, 1] + [0] * 7
+    startup = validate_ready(header, arm)
+    assert totals['method_counts'] == [14, 10, 1] + [0] * 7 and totals['attempts'] == 25
+    assert startup['metadata']['metadata_bytes'] == 5803321
+    assert startup['authority_head_JSON_GETs'] == startup['authority_generation_root_GETs'] == 1
+    assert startup['authority_head_JSON_bytes'] == 170
+    assert startup['authority_generation_root_bytes'] == 33980
+    assert startup['inferred_credential_consumed_bytes'] == 1671
+    assert startup['declared_credential_submissions'] == 3 and totals['consumed_payload_bytes'] == 5839142
+    validate_query(first['response'], arm, expected=first['reference_response'], truth=first['truth_at_10'])
+    accounting = validate_outcome(header, first['response'], arm, True)
+    assert accounting['query_transport_submissions'] == 57
+    assert accounting['query_consumed_payload_bytes'] == 30833920
+    diagnostic = copy.deepcopy(first)
+    diagnostic.update(startup_accounting=startup, accounting=accounting)
+    reduced = runtime.reduce_calls([diagnostic])
+    charges = reduced['known_logical_charge_totals']
+    assert charges['authority_head_JSON_GETs'] == charges['authority_generation_root_GETs'] == 1
+    assert charges['authority_generation_root_bytes'] == 33980 and charges['authority_head_JSON_bytes'] == 170
+    assert reduced['known_process_transport_totals']['attempts'] == 82
+    assert reduced['credential_transport_totals']['inferred_credential_consumed_bytes'] == 1671
+    assert reduced['successes'] == 0 and reduced['failures'] == 1
+    assert reduced['latency_ms']['whole_cold'] == 'UNMEASURED'
+    assert first['outcome'] == 'failed' and 'startup_accounting' not in first
+    print('PASS closed a0003 first-header diagnostic: old accounting rejects; exact 25 startup submissions, 1671 inferred credential bytes; saved FAIL preserved')
     print('PASS semantic query stage bounds, missing telemetry and partial failure stages')
 
 
