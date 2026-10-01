@@ -1,0 +1,29 @@
+{
+  "schema": "borsuk-semantic-bootstrap-a0003-preflight-v1",
+  "config_sha256": "6fb475bec06314e1c6cb86bb77ae19a188278eeb6182fb69a4ce095b61144312",
+  "child_commit": "6c30a95a45ba846b1082fe27bed3bbf965ddb405",
+  "integration_commit": "9bd8e3db",
+  "commands": {
+    "python3 -m scripts.launch_native_semantic_router_cold_spot --self-check": 0,
+    "bash -n /tmp/borsuk-semantic-bootstrap-a0003-userdata.sh": 0,
+    "python3 -m py_compile scripts/launch_native_semantic_router_cold_spot.py": 0,
+    "git diff --check": 0
+  },
+  "self_check_log": {
+    "bytes": 1882,
+    "sha256": "307ad91df715634271ef2eb178dba174819f2416f5b0339ea5b60132e0ba3f53"
+  },
+  "bootstrap_bytes": 14044,
+  "native_source_identity_sha256": "92085e6e40ac9324ea7a4fc8daab58995dc84680a5c2391eb426dd430230e520",
+  "native_source_file_count": 399,
+  "native_rebuilt": false,
+  "native_assurance_reused": true,
+  "awscli_version": "2.36.11",
+  "awscli_sha256": "50fbb7a2f44a78eab4a210088040e8f0bc4b9937cac8043c2354269d58614df6",
+  "image_id": "ami-0b8a830d6339a9758",
+  "root_device_name": "/dev/sda1",
+  "remote_execution_verified": false,
+  "scientific_measurements": false,
+  "attempt": "a0003",
+  "prior_failure": "a0002 remains closed failure without terminal; original initiating command unknown"
+}
