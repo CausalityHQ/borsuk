@@ -1,0 +1,43 @@
+{
+  "architecture": "x86_64",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "command": [
+    "cargo",
+    "test",
+    "--release",
+    "--locked",
+    "--workspace",
+    "--all-targets"
+  ],
+  "compute_cap_usd": 1.25,
+  "controller_authority_pending": true,
+  "controller_code_sha256": {},
+  "cpu_quota_percent": 200,
+  "ebs_s3_allowance_usd": 0.15,
+  "environment": {
+    "CARGO_BUILD_JOBS": "1",
+    "RAYON_NUM_THREADS": "2",
+    "RUSTC_WORKSPACE_WRAPPER": "",
+    "RUSTC_WRAPPER": "",
+    "RUST_TEST_THREADS": "1",
+    "TOKIO_WORKER_THREADS": "2"
+  },
+  "image_id": "ami-0b8a830d6339a9758",
+  "instance_type": "m7i.2xlarge",
+  "machine_limit_seconds": 9000,
+  "memory_bytes": 8589934592,
+  "native_source_manifest": {
+    "bytes": 46945,
+    "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/native-source-manifest.json",
+    "sha256": "b389a7d5c40017c7afc2d5a7b7cbb37ec53a10f611cf94fe8ff79d8bdaf1e613"
+  },
+  "region": "eu-central-1",
+  "root_device_name": "/dev/sda1",
+  "schema": "borsuk-native-workspace-execution-v1",
+  "service_limit_seconds": 7260,
+  "spot_max_usd_per_hour": 0.5,
+  "subnet_id": "subnet-0a12dbed0ca6fac25",
+  "swap_bytes": 0,
+  "tasks_max": 512,
+  "test_limit_seconds": 7200
+}
