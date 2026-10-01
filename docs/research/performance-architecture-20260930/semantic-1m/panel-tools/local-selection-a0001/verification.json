@@ -1,0 +1,23 @@
+{
+  "schema": "borsuk-semantic-panel-selection-resource-stop-v1",
+  "execution_exit_status": 143,
+  "scientific_quality_measured": false,
+  "panel_created": false,
+  "source_commit": "c334f930",
+  "selector_sha256": "6388e274ba128d770bbadd8b02833af4f685214bc1f78c9796fd778471d30399",
+  "original_exec_session": 45952,
+  "unit": "borsuk-semantic-fresh-ids-20261001.scope",
+  "invocation": "c23a0cdb1ead4a7089b8e4e69c7a7e35",
+  "memory_max_bytes": 2147483648,
+  "observed_cgroup_peak_bytes": 2146467840,
+  "observed_swap_bytes": 0,
+  "host_psi_at_stop": {
+    "some_avg10": 8.18,
+    "full_avg10": 5.83
+  },
+  "stop_command": "systemctl --user stop borsuk-semantic-fresh-ids-20261001.scope",
+  "stop_exit_status": 0,
+  "cached_object_count": 32,
+  "cached_encoded_bytes": 10968608516,
+  "next": "No local retry or cap increase; use bounded remote selection after native assurance and positive-control gate. This resource failure does not reject the ANN architecture."
+}
