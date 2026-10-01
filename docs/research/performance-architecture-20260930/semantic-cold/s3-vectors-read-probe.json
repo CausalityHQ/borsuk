@@ -1,0 +1,30 @@
+{
+  "command": [
+    "/usr/local/bin/aws",
+    "s3vectors",
+    "list-vector-buckets",
+    "--profile",
+    "causality",
+    "--region",
+    "eu-central-1",
+    "--max-results",
+    "10",
+    "--no-cli-pager",
+    "--output",
+    "json"
+  ],
+  "competitor_quality_latency_qps_cost_measured": false,
+  "completed_utc": "2026-10-01T08:12:33.888889+00:00",
+  "environment": {
+    "AWS_MAX_ATTEMPTS": "1"
+  },
+  "exit_status": 0,
+  "indexes_or_vectors_created": false,
+  "next_gate": "Freeze matched corpus/query/metric/k/cache/concurrency/cost protocol before any provider index creation.",
+  "response": {
+    "vectorBuckets": []
+  },
+  "schema": "borsuk-s3vectors-read-access-probe-v1",
+  "scope": "read-only eu-central-1 list-vector-buckets accessible; no vector buckets returned",
+  "write_permissions_verified": false
+}
