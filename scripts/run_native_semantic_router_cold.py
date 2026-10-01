@@ -287,18 +287,29 @@ def resources(log, limit):
     return dict(fields, native_memory_admission_bytes=limit, temporary_storage_peak_bytes='UNMEASURED')
 
 
-def cgroup_snapshot():
+def cgroup_snapshot(extra_files=()):
     # Process-group totals can overlap the client; these are not per-query deltas.
+    snapshot = dict(path='UNMEASURED', scope='shared runtime cgroup cumulative snapshot', files={}, diagnostics={})
+    field = '/proc/self/cgroup'
     try:
         entry = next(line[3:] for line in Path('/proc/self/cgroup').read_text().splitlines() if line.startswith('0::'))
+        field = 'cgroup path'
         root = Path('/sys/fs/cgroup').resolve()
         directory = (root / entry.lstrip('/')).resolve()
         stats.require(directory.is_relative_to(root), 'cgroup path')
-        files = {name: (directory / name).read_text().strip() for name in
-                 ('memory.current', 'memory.peak', 'memory.events', 'memory.swap.current', 'cpu.stat', 'io.stat')}
-        return dict(path=str(directory), scope='shared runtime cgroup cumulative snapshot', files=files)
-    except (OSError, StopIteration, ValueError):
-        return 'UNMEASURED'
+        snapshot['path'] = str(directory)
+    except (OSError, StopIteration, ValueError) as error:
+        snapshot['diagnostics'][field] = dict(type=type(error).__name__)
+        if isinstance(error, OSError): snapshot['diagnostics'][field]['errno'] = error.errno
+        return snapshot
+    for name in ('memory.current', 'memory.peak', 'memory.events', 'memory.swap.current', 'cpu.stat', *extra_files, 'io.stat'):
+        try:
+            snapshot['files'][name] = (directory / name).read_text().strip()
+        except (OSError, ValueError) as error:
+            snapshot['files'][name] = 'UNMEASURED'
+            snapshot['diagnostics'][name] = dict(type=type(error).__name__)
+            if isinstance(error, OSError): snapshot['diagnostics'][name]['errno'] = error.errno
+    return snapshot
 
 
 def measured_call(binary, config, arm, body, expected, truth, *, port=8080):
@@ -642,17 +653,9 @@ def offered_name(index, dataset, arm):
 
 
 def offered_cgroup_snapshot():
-    snapshot = cgroup_snapshot()
-    if not isinstance(snapshot, dict):
-        return snapshot
-    try:
-        directory = Path(snapshot['path'])
-        snapshot['files'].update({name: (directory / name).read_text().strip() for name in
-                                ('memory.max', 'memory.swap.max', 'memory.swap.peak')})
-        snapshot['observed_ns'] = time.monotonic_ns()
-        return snapshot
-    except OSError:
-        return 'UNMEASURED'
+    snapshot = cgroup_snapshot(('memory.max', 'memory.swap.max', 'memory.swap.peak'))
+    snapshot['observed_ns'] = time.monotonic_ns()
+    return snapshot
 
 
 def offered_resources(before, after, records, config, *, cell_before=None):
@@ -663,8 +666,12 @@ def offered_resources(before, after, records, config, *, cell_before=None):
         baseline = None
         peak = 0
         for snapshot in snapshots:
-            stats.require(isinstance(snapshot, dict) and snapshot['path'] == before['path'], 'shared cgroup proof')
+            stats.require(isinstance(snapshot, dict), 'shared cgroup proof')
+            missing = {k: v for k, v in snapshot.get('diagnostics', {}).items() if k != 'io.stat'}
+            stats.require(not missing, 'shared cgroup mandatory fields: ' + encoded(missing))
+            stats.require(snapshot['path'] != 'UNMEASURED' and snapshot['path'] == before['path'], 'shared cgroup path')
             files = snapshot['files']
+            stats.require(files.get('cpu.stat', 'UNMEASURED') != 'UNMEASURED', 'shared cgroup cpu.stat')
             stats.require(int(files['memory.max']) == config['profile_memory_bytes']
                           and int(files['memory.swap.max']) == config['profile_swap_bytes'] == 0, 'shared cgroup limits')
             memory = [int(files[k]) for k in ('memory.current', 'memory.peak')]
@@ -673,6 +680,7 @@ def offered_resources(before, after, records, config, *, cell_before=None):
                           and swap == [0, 0], 'shared memory/swap peak')
             events = dict(line.split() for line in files['memory.events'].splitlines())
             counters = [stats.integer(int(events[k]), k) for k in ('oom', 'oom_kill', 'oom_group_kill')]
+            stats.require(counters == [0, 0, 0], 'shared OOM events')
             if baseline is None: baseline = counters
             stats.require(counters == baseline, 'shared OOM increments')
             peak = max(peak, memory[1])
@@ -1024,8 +1032,12 @@ def main(argv=None, *, on_cell_closed=None):
     out.mkdir(exist_ok=False)
     (out / 'config.json').write_text(Path(config_path).read_text())
     (out / 'qualification.json').write_bytes(Path(proof_path).read_bytes())
+    campaign_cgroup_before = None
     try:
         campaign_cgroup_before = offered_cgroup_snapshot() if config['schema'] == OFFERED_SCHEMA else None
+        if config['schema'] == OFFERED_SCHEMA:
+            pre_admission_resource_gate = offered_resources(campaign_cgroup_before, campaign_cgroup_before, [], config)
+            stats.require(pre_admission_resource_gate['passed'], 'pre-admission resource proof: ' + pre_admission_resource_gate.get('error', ''))
         panels = prepare(config, out)
         summary = (run_offered(config, binary, panels, out, worker_started_ns=worker_started_ns,
                                on_cell_closed=on_cell_closed, config_sha=digest, proof_path=proof_path,
@@ -1052,6 +1064,9 @@ def main(argv=None, *, on_cell_closed=None):
                                                       else 'borsuk-native-semantic-router-cold-result-v1')))
         summary.update(closed=summary.get('process_cleanup_complete', False), terminal_error=dict(type=type(error).__name__, message=str(error)),
                        identity_gate_passed=False, all_calls_successful=False, latency_improvement=False)
+        if config['schema'] == OFFERED_SCHEMA:
+            summary.update(campaign_cgroup_before=campaign_cgroup_before,
+                           pre_admission_resource_gate=locals().get('pre_admission_resource_gate', 'UNMEASURED'))
     (out / 'summary.json').write_text(json.dumps(summary, indent=2, allow_nan=False) + '\n')
     print(encoded({k: summary.get(k, False) for k in ('closed', 'all_calls_successful', 'quality_gate_passed', 'latency_improvement')}))
     if config['schema'] == OFFERED_SCHEMA:
@@ -1265,7 +1280,9 @@ def offered_self_check():
                 for key in ('dispatched_ns', 'started_ns', 'successful_connect_attempt_ns', 'connected_ns', 'completed_ns', 'terminal_ns'):
                     rows[0][key] += 125000001
             if mode[0] == 'resource' and index == 4:
-                rows[0]['cgroup_after'] = 'UNMEASURED'
+                rows[0]['cgroup_after'] = copy.deepcopy(cgroup)
+                rows[0]['cgroup_after']['files']['memory.peak'] = 'UNMEASURED'
+                rows[0]['cgroup_after']['diagnostics'] = {'memory.peak': dict(type='FileNotFoundError', errno=2)}
             if mode[0] == 'deadline' and index == 4:
                 epoch = kwargs['deadline_ns']
                 abort = dict(query_ordinal=0, reason='admission deadline', observed_ns=epoch)
@@ -1387,6 +1404,10 @@ def offered_self_check():
             assert result['largest_passing_tested_offered_qps']['ReLAION']['control'] == .25
             assert len(list(failed_out.glob('rate*-records.jsonl'))) == len(list(failed_out.glob('rate*-summary.json'))) == 24
             assert len(checkpoints) == (24 if status == 0 or campaign_mode == 'deadline' else 4)
+            if campaign_mode == 'resource':
+                assert 'memory.peak' in result['cells'][4]['resource_gate']['error']
+                failed_row = json.loads((failed_out / 'rate1-relaion-control-records.jsonl').read_text().splitlines()[0])
+                assert failed_row['raw_response_base64'] and failed_row['cgroup_after']['diagnostics']['memory.peak']['errno'] == 2
             if campaign_mode in ('drop', 'transport'):
                 assert result['execution_gate_passed'] and result['offered_gate_passed']
                 assert result['cells'][4]['all_offer_scheduled_to_valid_response_ms']['p99'] == 'UNBOUNDED'

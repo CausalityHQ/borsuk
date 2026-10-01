@@ -25,6 +25,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import stat
 import subprocess
 import sys
 import tarfile
@@ -527,23 +528,18 @@ def _check_offered_closure(out):
 
 
 def _closed_artifacts(out):
-    """Interrupted runs publish only fully closed cell bodies; partial cells stay invalid."""
-    out = Path(out)
+    """Retain deterministic owned cell files for forensics, without checkpoint authority."""
+    out = Path(out).resolve()
     cells = set()
-    try:
-        body = (out/'screen/config.json').read_bytes()
-        config = dict(json.loads(body), config_sha256=peer.sha(body))
-    except (OSError, ValueError):
-        config = None
-    if config is not None:
-        for stem in CELL_STEMS:
-            paths = {n: out/'screen'/(stem+'-'+suffix) for n, suffix in
-                     (('records', 'records.jsonl'), ('summary', 'summary.json'))}
-            try:
-                _cell_bodies(json.loads(paths['summary'].read_bytes()), paths, config)
-            except (OSError, ValueError, KeyError, TypeError, AssertionError):
-                continue
-            cells.update('screen/'+p.name for p in paths.values())
+    for name in OFFERED_ARTIFACTS:
+        if not name.startswith('screen/rate'): continue
+        path = out/name
+        try:
+            info = path.lstat()
+            if stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and path.resolve().parent == out/'screen':
+                cells.add(name)
+        except OSError:
+            continue
     return tuple(n for n in OFFERED_ARTIFACTS if not n.startswith('screen/rate') or n in cells)
 
 
@@ -1025,7 +1021,7 @@ def _offered_self_check(base, config, stage):
         except RuntimeError as error: assert 'synthetic-sensitive-sdk-text' not in str(error)
         else: raise AssertionError('SDK client failure swallowed')
         worker.assert_not_called()
-    for failure in ('success', 'partial', 'identity', 'upload', 'interrupt'):
+    for failure in ('success', 'partial', 'identity', 'resource', 'upload', 'interrupt'):
         client.reset_mock(side_effect=True)
         if failure == 'upload': client.put_object.side_effect = RuntimeError('synthetic-sensitive-sdk-text')
         def runtime(args, *, on_cell_closed):
@@ -1034,6 +1030,7 @@ def _offered_self_check(base, config, stage):
             marker = json.loads(paths['summary'].read_bytes())
             if failure == 'partial': marker['closed'] = False
             elif failure == 'identity': marker['identity_gate_passed'] = False
+            elif failure == 'resource': marker['bounded_memory_gate_passed'] = False
             paths['summary'].write_text(json.dumps(marker))
             on_cell_closed(marker, paths)
             if failure == 'interrupt':
@@ -1052,7 +1049,7 @@ def _offered_self_check(base, config, stage):
                 assert 'synthetic-sensitive-sdk-text' not in str(error)
             else: assert failure == 'success' and result == 0
             reducer.assert_not_called()
-        assert client.put_object.call_count == (0 if failure in ('partial', 'identity') else 1 if failure == 'upload' else 2)
+        assert client.put_object.call_count == (0 if failure in ('partial', 'identity', 'resource') else 1 if failure == 'upload' else 2)
         if failure in ('success', 'interrupt'):
             assert [c.kwargs['Key'] for c in client.put_object.call_args_list] == [
                 OFFERED_PREFIX+'a0001/cells/'+CELL_STEMS[0]+'-'+s for s in ('records.jsonl', 'summary.json')]
@@ -1068,7 +1065,7 @@ def _offered_self_check(base, config, stage):
                     (stage/'screen'/name).write_bytes((output/name).read_bytes())
             closed = _closed_artifacts(stage)
             assert all('screen/'+CELL_STEMS[0]+'-'+s in closed for s in ('records.jsonl', 'summary.json'))
-            assert all('screen/'+CELL_STEMS[1]+'-'+s not in closed for s in ('records.jsonl', 'summary.json'))
+            assert all('screen/'+CELL_STEMS[1]+'-'+s in closed for s in ('records.jsonl', 'summary.json'))
     assert _profile_resources(_resource_fixture())
     for key, value in (('memory.max', 'max'), ('memory.peak', str(8*1024**3+1)), ('memory.swap.max', '1'),
             ('memory.swap.peak', '1'), ('memory.events', 'oom 1\noom_kill 0\noom_group_kill 0'),
@@ -1272,6 +1269,15 @@ def collection_self_check(offered=False):
         current = dict(terminal, status='failed', phase='binary-qualification', exit_code=1,
             artifacts={n: _identity(b) for n, b in files.items()}, runtime_abi_sha256=peer.sha(files['runtime-abi.json']))
         assert collect(s3, 'synthetic', out, 'i-owned', '0'*40, '1'*64) == current
+        if offered:
+            record_name, marker_name = ('screen/'+CELL_STEMS[0]+'-'+s for s in ('records.jsonl', 'summary.json'))
+            files.update({record_name: b'{"raw_response_base64":"/wBmYWlsZWQ=","cgroup_after":{"diagnostics":{"memory.peak":{"type":"FileNotFoundError","errno":2}}}}\n',
+                          marker_name: b'{"closed":true,"identity_gate_passed":false,"bounded_memory_gate_passed":false}\n'})
+            current = dict(current, phase='profile', original_exit_code=1,
+                           artifacts={n: _identity(b) for n, b in files.items()})
+            assert collect(s3, 'synthetic', out, 'i-owned', '0'*40, '1'*64) == current
+            for name in (record_name, marker_name):
+                assert gzip.decompress((out/(name+'.gz')).read_bytes()) == files[name], 'failed forensic body changed'
 
 
 def bootstrap_self_check(qualification):
