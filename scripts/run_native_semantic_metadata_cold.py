@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Serial paired metadata HEAD research adapter; no launch authority.
+"""Serial paired metadata wave research adapter; no launch authority.
 
 CLI: CONFIG CONFIG_SHA CONTROL_BINARY CONTROL_PROOF CANDIDATE_BINARY
      CANDIDATE_PROOF NEW_OUTPUT | --self-check
 
-Config schema borsuk-native-semantic-metadata-cold-v1 uses the existing fixed
+Config schema borsuk-native-semantic-metadata-waves-cold-v1 uses the existing fixed
 64/k10 FIRST100k semantic panel envelopes. Both item.arms MUST be identical,
 including index, head, generation, metadata, leaf and reference identities.
 native_arms.{control,candidate} each contains source_manifest, binary and proof
@@ -15,6 +15,9 @@ affected/release/Clippy/test-compilation/full-workspace gates; pending is fatal.
 
 All consumed manifests, proofs, frozen checkers and panel bodies are saved for
 independent offline replay. No concurrency, retry, publication or native build.
+execution_gate_passed covers execution/quality/resources/cleanup; paired_gate_passed
+also requires candidate p90 < control and p95 <= control on BOTH datasets.
+CLI exit 0 requires the paired gate and authenticated closed output.
 """
 from contextlib import contextmanager
 import gzip
@@ -32,16 +35,16 @@ from scripts import run_native_semantic_router_cold as worker
 
 stats, old = worker.stats, worker.old
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = 'borsuk-native-semantic-metadata-cold-v1'
-RESULT_SCHEMA = 'borsuk-native-semantic-metadata-cold-result-v1'
+SCHEMA = 'borsuk-native-semantic-metadata-waves-cold-v1'
+RESULT_SCHEMA = 'borsuk-native-semantic-metadata-waves-cold-result-v1'
 ROLES = ('control', 'candidate')
 CODE = (*worker.CODE, 'scripts/run_native_semantic_metadata_cold.py',
         'scripts/check_native_semantic_metadata_cold.py')
-AUTHORITY_SHA = 'a1edd5e6947ca4b1f5b5cb0669a7a60d7db9c2079c9976b1dba9a8206f1b3df3'
-SOURCE_IDS = dict(control='92085e6e40ac9324ea7a4fc8daab58995dc84680a5c2391eb426dd430230e520',
-                  candidate='b095ba7d738a65a31faefa0d705ce34e12cb83aeaa153c25079564c53b129c70')
-BINARY_IDS = dict(control=dict(bytes=16191384, sha256='c00b766f65f8f0ae0adb5fcca786cb33c0daf046ff4b8f9a8bbcab39e1263533'),
-                  candidate=dict(bytes=16189792, sha256='82c02967f3b2de8c7bf1f2dcfc0e94496882ba6e749b7195f1fca824ab2b7ec1'))
+AUTHORITY_SHA = 'c90ecbee9443ea46b75ede73b034040fdfcfcb61e0329e2d060235bb0b61a0b0'
+SOURCE_IDS = dict(control='b095ba7d738a65a31faefa0d705ce34e12cb83aeaa153c25079564c53b129c70',
+                  candidate='714794a10c2d886f7a53a9926a4bb63e093cec16858676268e31833aeead2681')
+BINARY_IDS = dict(control=dict(bytes=16189792, sha256='82c02967f3b2de8c7bf1f2dcfc0e94496882ba6e749b7195f1fca824ab2b7ec1'),
+                  candidate=dict(bytes=16259024, sha256='e3516453797add1f8e76daddcc97a8fb5e4c1c3467749ae9cb732934b3bc2c0e'))
 NATIVE_DELTA = {'crates/borsuk/src/object_native_generation.rs', 'crates/borsuk/src/two_bit_generation.rs'}
 FIXED = dict(count=64, k=10, ann_queries=512, native_memory_bytes=536870912,
              profile_memory_bytes=8589934592, profile_swap_bytes=0, native_rlimit_as_bytes=4294967296,
@@ -239,7 +242,7 @@ def reduce_run(records, panels, config, config_sha, evidence, before, after):
     with scoped(validate_record=checked):
         summary = worker.reduce_run(records, panels, config)
     resource_gate = worker.offered_resources(before, after, [r for r in records if r['outcome'] != 'aborted'], config)
-    summary.update(schema=RESULT_SCHEMA, control='qualified historical semantic binary on the identical immutable semantic generation',
+    summary.update(schema=RESULT_SCHEMA, control='fresh matched qualified metadata-HEAD binary on the identical immutable semantic generation',
                    checker_authority_sha256=AUTHORITY_SHA, config_sha256=config_sha,
                    native_arms={role: binding(config, config_sha, role, evidence) for role in ROLES},
                    code_sha256=config['code_sha256'], resource_gate=resource_gate,
@@ -249,10 +252,31 @@ def reduce_run(records, panels, config, config_sha, evidence, before, after):
                    paired_metadata_only=True, historical_matched_control=False,
                    speedup_claim=False, sustainable_qps='UNKNOWN', cost='UNKNOWN', vendor_comparison='UNKNOWN')
     summary.pop('latency_improvement')
-    for value in summary['datasets'].values():
+    for dataset, value in summary['datasets'].items():
         value.pop('latency_improvement')
+        value['quality_delta_percentage_points'] = (100 * value['quality_delta_at_10']
+            if value['all_256_calls_successful'] else 'UNMEASURED')
+        control, candidate = (value['pooled'][r]['latency_ms']['whole_cold'] for r in ROLES)
+        value['latency_gate_passed'] = (value['all_256_calls_successful']
+            and candidate['p90'] < control['p90'] and candidate['p95'] <= control['p95'])
+        for group, aggregates in (('blocks', value['blocks']), ('pooled', value['pooled'])):
+            for name, aggregate in aggregates.items():
+                role = 'candidate' if name.startswith('candidate') else 'control'
+                rows = [r for r in records if r['dataset'] == dataset and r['arm'] == role
+                        and (group == 'pooled' or worker.BLOCKS[r['block']] == name) and r['outcome'] == 'success']
+                # Per-object waits overlap within waves; never label their sum critical latency.
+                aggregate['metadata_object_wait_sum_ms'] = {k: aggregate['latency_ms'].pop(k) for k in
+                    ('metadata_HEAD', 'metadata_GET_headers', 'metadata_stream_and_output', 'metadata_awaited_writes')}
+                aggregate['latency_ms']['metadata_wave_critical'] = (worker.tails([
+                    sum({m['metadata_wave']: m['metadata_wave_wall_ns'] for m in
+                         r['native_header']['remote_open_stats']['metadata']}.values()) / 1e6 for r in rows])
+                    if role == 'candidate' else 'UNMEASURED')
+                aggregate['metadata_payload_buffer_bound_bytes'] = max(
+                    (r['startup_accounting']['metadata']['payload_buffer_bound_bytes'] for r in rows), default='UNMEASURED')
+    summary['latency_gate_passed'] = all(v['latency_gate_passed'] for v in summary['datasets'].values())
     summary['execution_gate_passed'] = (summary['all_calls_successful'] and summary['quality_gate_passed']
                                         and summary['process_cleanup_complete'] and resource_gate['passed'])
+    summary['paired_gate_passed'] = summary['execution_gate_passed'] and summary['latency_gate_passed']
     return summary
 
 
@@ -316,7 +340,8 @@ def main(argv=None):
         (out / name).write_bytes(body)
     for role in ROLES:
         (out / (role + '-proof.json')).write_bytes(read_bound(config['native_arms'][role]['proof'], proofs[role]))
-    summary = dict(schema=RESULT_SCHEMA, config_sha256=digest, identity_gate_passed=False, execution_gate_passed=False, closed=False)
+    summary = dict(schema=RESULT_SCHEMA, config_sha256=digest, identity_gate_passed=False,
+                   execution_gate_passed=False, paired_gate_passed=False, closed=False)
     try:
         before = worker.offered_cgroup_snapshot()
         gate = worker.offered_resources(before, before, [], config)
@@ -334,10 +359,10 @@ def main(argv=None):
         summary.update(inputs=input_receipts(panels), identity_gate_passed=True, closed=summary['process_cleanup_complete'])
     except Exception as error:
         summary.update(terminal_error=dict(type=type(error).__name__, message=str(error)),
-                       identity_gate_passed=False, execution_gate_passed=False)
+                       identity_gate_passed=False, execution_gate_passed=False, paired_gate_passed=False)
     (out / 'summary.json').write_text(json.dumps(summary, indent=2, allow_nan=False) + '\n')
-    print(worker.encoded({k: summary.get(k, False) for k in ('closed', 'execution_gate_passed', 'identity_gate_passed')}))
-    return 0 if summary.get('execution_gate_passed') and summary.get('identity_gate_passed') and summary.get('closed') else 1
+    print(worker.encoded({k: summary.get(k, False) for k in ('closed', 'execution_gate_passed', 'paired_gate_passed', 'identity_gate_passed')}))
+    return 0 if summary.get('paired_gate_passed') and summary.get('identity_gate_passed') and summary.get('closed') else 1
 
 
 if __name__ == '__main__':

@@ -1,6 +1,6 @@
 """Frozen paired semantic metadata Spot controller; never builds or publishes.
 
-Root supplies metadata-head/paired-config.json with the runtime's exact contract,
+Root supplies metadata-waves/paired-config.json with the runtime's exact contract,
 native_arms binary pointers additionally carrying immutable S3 keys, and
 native_assurances.{control,candidate} {path,bytes,sha256} pointers. The exact
 controller_code_sha256 roster is CODE (including runtime and transitive launch
@@ -36,13 +36,13 @@ from scripts import run_native_semantic_metadata_cold as runtime
 from scripts import check_native_semantic_metadata_cold as checker
 
 shared, peer, startup = semantic.shared, semantic.peer, semantic.startup
-ROOT = semantic.ROOT / 'metadata-head'
+ROOT = semantic.ROOT / 'metadata-waves'
 CONFIG = ROOT / 'paired-config.json'
 NAME = ''
-SCHEMA = 'borsuk-native-semantic-metadata-cold-spot-v1'
-PREFIX = 'research/semantic-router/20261001/metadata-head-'
-TOKEN_PREFIX = 'semantic-metadata-cold-'
-TAG = 'borsuk-semantic-metadata-cold'
+SCHEMA = 'borsuk-native-semantic-metadata-waves-cold-spot-v1'
+PREFIX = 'research/semantic-router/20261001/metadata-waves-'
+TOKEN_PREFIX = 'semantic-metadata-waves-cold-'
+TAG = 'borsuk-semantic-metadata-waves-cold'
 WALL = 3600
 INSTANCE_TYPE, IMAGE_ID = semantic.INSTANCE_TYPE, semantic.IMAGE_ID
 ROOT_DEVICE_NAME, SUBNET = semantic.ROOT_DEVICE_NAME, semantic.SUBNET
@@ -53,15 +53,18 @@ CODE = tuple(sorted(set((*runtime.CODE, *semantic.EXTRAS,
     'scripts/launch_native_semantic_metadata_cold_spot.py'))))
 BASELINE = semantic.ROOT / 'config.json'
 BASELINE_SHA = '361f82d84e3a08a1efb5f31b516f20aa0d8735a264052ebfef2e921620564304'
-PROOF_SHA = dict(control='335b9f0776a50c0a92afd37f4e6cff8a6fb402e8068d835073e1526bf300e107',
-    candidate='528591dd8e6d88c850b445ef17234a700638e5fae939378318fa9cc7d299abbe')
+# Candidate proof is bound by the root's final config, after actual full execution.
+PROOF_SHA = dict(control='528591dd8e6d88c850b445ef17234a700638e5fae939378318fa9cc7d299abbe')
 GATES = semantic.GATES
+CANDIDATE_GATES = ('object-native', 'generation', 'http-release', 'clippy', 'workspace-test-build', 'full-workspace-final')
+IMPLEMENTATION_SHA = '8d56760e8f9063d02bfc3421ebf4079facc473d8697433c0f5d2f7dfb9f65cb2'
 BOUND_FILES = ('checker-authority.json', *(f'{r}-{n}' for r in runtime.ROLES
     for n in ('source.json', 'checker.py.gz', 'proof.json')))
-AUTHORITY_FILES = ('panel-authority.json', *(f'{r}/{n}' for r in runtime.ROLES
-    for n in ('native-assurance.json', 'native-source.tar.gz',
-              *(f'assurance/{g}.{s}' for g in GATES for s in ('json', 'log')))),
-    'control/qualified-source.tar.gz', 'candidate/worker-verification.json')
+AUTHORITY_FILES = ('panel-authority.json', *(f'{r}/{n}' for r, gates, verification in (
+    ('control', GATES, 'worker-verification.json'),
+    ('candidate', CANDIDATE_GATES, 'implementation-verification.json'))
+    for n in ('native-assurance.json', 'native-source.tar.gz', verification,
+              *(f'assurance/{g}.{s}' for g in gates for s in ('json', 'log')))))
 ARTIFACTS = ('source-qualification.json', 'runtime-abi.json', 'cpu.txt', 'run-closed.log',
     'profile.log', 'profile-resources.txt', 'profile-cgroup.json',
     *(f'binaries/{r}/two_bit_http' for r in runtime.ROLES), *BOUND_FILES, *AUTHORITY_FILES,
@@ -102,7 +105,7 @@ def _full_receipt(body, log, inventory, identity):
 
 
 def _assurance(base, role, config, evidence, proof):
-    """Read the two existing receipt formats without manufacturing qualification."""
+    """Authenticate completed HEAD/wave receipts without manufacturing qualification."""
     body = _read(base, config['native_assurances'][role])
     assert peer.sha(body) == proof['assurance_sha256'], 'proof/assurance binding'
     assurance = json.loads(body)
@@ -113,35 +116,11 @@ def _assurance(base, role, config, evidence, proof):
     archive = _read(base, evidence['manifests'][role]['native_source_archive'])
     assert semantic._archive_sources(archive) == inventory, 'full qualified native archive'
     files['native-source.tar.gz'] = archive
-    if assurance['schema'] == 'borsuk-centroid-portable-rounding-assurance-v1':
-        assert {k: assurance['binaries']['two_bit_http'][k] for k in ('bytes', 'sha256')} == runtime.BINARY_IDS[role]
-        archive = _read(base, assurance['source_archive'])
-        sources = semantic._archive_sources(archive)
-        assert sources and all(inventory.get(n) == h for n, h in sources.items())
-        files['qualified-source.tar.gz'] = archive
-        for name in GATES:
-            gate = assurance['gates'][name]
-            _zero(gate['exit_status'])
-            receipt_body, log = _read(base, gate['receipt']), _read(base, gate['log'])
-            receipt = json.loads(receipt_body)
-            _zero(receipt['exit_status'])
-            assert receipt['source_unchanged'] is True and receipt['command'] == gate['command']
-            if name == 'full-workspace-final':
-                _full_receipt(receipt_body, log, inventory, identity)
-                assert _read(base, proof['full_workspace_receipt']) == receipt_body
-            else:
-                assert receipt['log_sha256'] == peer.sha(log)
-                assert receipt['source_sha256']
-                for path, digest in receipt['source_sha256'].items():
-                    matches = ([inventory[path]] if path in inventory else
-                               [d for n, d in inventory.items() if Path(n).name == path])
-                    assert matches == [digest], 'historical gate source binding'
-            files[f'assurance/{name}.json'], files[f'assurance/{name}.log'] = receipt_body, log
-    else:
-        assert assurance['schema'] == 'borsuk-semantic-metadata-native-assurance-v1', 'unsupported native assurance schema'
-        assert assurance['qualified'] is True and assurance['source_sha256'] == inventory
-        assert assurance['source_identity_sha256'] == identity and assurance['source_file_count'] == 399
-        _zero(assurance['full_suite_status'])
+    assert assurance['schema'] == 'borsuk-semantic-metadata-native-assurance-v1'
+    assert assurance['qualified'] is True and assurance['source_sha256'] == inventory
+    assert assurance['source_identity_sha256'] == identity and assurance['source_file_count'] == 399
+    _zero(assurance['full_suite_status'])
+    if role == 'control':
         verification_body = _read(base, assurance['worker_verification'])
         verification = json.loads(verification_body)
         assert verification['native_source_identity_sha256'] == identity and verification['native_source_file_count'] == 399
@@ -150,19 +129,35 @@ def _assurance(base, role, config, evidence, proof):
         files['worker-verification.json'] = verification_body
         for name in GATES[:-1]:
             gate = assurance['gates'][name]
-            assert gate == verification['gates'][name], 'candidate gate/worker binding'
+            assert gate == verification['gates'][name], 'control gate/worker binding'
             _zero(gate['exit_status'])
             log = gzip.decompress((base / _repo_path(gate['archived_log']['path'])).read_bytes())
             assert semantic._identity(log) == dict(bytes=gate['archived_log']['uncompressed_bytes'], sha256=gate['archived_log']['sha256'])
             assert peer.sha(log) == gate['log_sha256']
             files[f'assurance/{name}.json'], files[f'assurance/{name}.log'] = encoded(gate), log
-        receipt_archive = _read(base, assurance['full_workspace_receipt'])
-        assert receipt_archive == _read(base, proof['full_workspace_receipt'])
-        receipt_body = gzip.decompress(receipt_archive)
-        log = gzip.decompress(_read(base, assurance['full_workspace_log']))
-        _full_receipt(receipt_body, log, inventory, identity)
-        files['assurance/full-workspace-final.json'] = receipt_body
-        files['assurance/full-workspace-final.log'] = log
+    else:
+        verification_body = _read(base, assurance['implementation_gate_verification'])
+        assert peer.sha(verification_body) == IMPLEMENTATION_SHA, 'frozen final-slice verification'
+        verification = json.loads(verification_body)
+        assert verification['schema'] == 'borsuk-metadata-waves-slice-verification-v1'
+        assert verification['source_identity_sha256'] == identity and verification['source_file_count'] == 399
+        assert [g['name'] for g in verification['checks']] == list(CANDIDATE_GATES[:-1]), 'exact five implementation checks'
+        files['implementation-verification.json'] = verification_body
+        for gate in verification['checks']:
+            _zero(gate['exit_status'])
+            archive = (base / _repo_path(gate['archived_log'])).read_bytes()
+            assert peer.sha(archive) == gate['archived_sha256'], 'implementation archived log'
+            log = gzip.decompress(archive)
+            assert semantic._identity(log) == dict(bytes=gate['log_bytes'], sha256=gate['log_sha256'])
+            name = gate['name']
+            files[f'assurance/{name}.json'], files[f'assurance/{name}.log'] = encoded(gate), log
+    receipt_archive = _read(base, assurance['full_workspace_receipt'])
+    assert receipt_archive == _read(base, proof['full_workspace_receipt'])
+    receipt_body = gzip.decompress(receipt_archive)
+    log = gzip.decompress(_read(base, assurance['full_workspace_log']))
+    _full_receipt(receipt_body, log, inventory, identity)
+    files['assurance/full-workspace-final.json'] = receipt_body
+    files['assurance/full-workspace-final.log'] = log
     return {role + '/' + name: value for name, value in files.items()}
 
 
@@ -172,7 +167,7 @@ def _qualify(base=Path('.'), binaries=None):
     config = json.loads(config_body)
     assert config.get('controller_authority_pending') is False, 'controller authority pending'
     _repo_path(config['checker_authority']['path'])
-    assert all(config['native_arms'][r]['proof']['sha256'] == PROOF_SHA[r] for r in runtime.ROLES), 'frozen completed role proofs'
+    assert all(config['native_arms'][r]['proof']['sha256'] == h for r, h in PROOF_SHA.items()), 'frozen completed control proof'
     with semantic._cwd(base), patch.object(runtime, 'ROOT', base):
         runtime.validate_config(config)
         evidence = runtime.authenticate(config)
@@ -230,7 +225,7 @@ def preflight(base=Path('.')):
 
 
 def _validate_runtime_abi(qualification, report):
-    assert report['schema'] == 'borsuk-native-semantic-metadata-runtime-abi-v1' and report['qualified'] is True
+    assert report['schema'] == 'borsuk-native-semantic-metadata-waves-runtime-abi-v1' and report['qualified'] is True
     assert report['os_release'] == qualification['runtime_os'] == semantic.RUNTIME_OS
     assert report['architecture'] == 'x86_64' and report['libc'] == 'glibc'
     assert qualification['runtime_glibc'] == semantic.RUNTIME_GLIBC
@@ -247,7 +242,7 @@ def _validate_runtime_abi(qualification, report):
 def _runtime_abi(out):
     out = Path(out)
     qualification = json.loads((out/'source-qualification.json').read_bytes())
-    report = dict(schema='borsuk-native-semantic-metadata-runtime-abi-v1', qualified=False)
+    report = dict(schema='borsuk-native-semantic-metadata-waves-runtime-abi-v1', qualified=False)
     try:
         release = platform.freedesktop_os_release()
         libc, version = os.confstr('CS_GNU_LIBC_VERSION').split()
@@ -322,7 +317,7 @@ mkdir -p binaries/control binaries/candidate
 PYTHONPATH="$root/repo" python3.12 -m {MODULE} --stage "$root/repo" "$root"
 phase=profile
 set +e
-systemd-run --unit=native-semantic-metadata-cold --wait --pipe -p MemoryMax=8G -p MemorySwapMax=0 -p RuntimeMaxSec=3030 -p WorkingDirectory="$root/repo" \\
+systemd-run --unit=native-semantic-metadata-waves-cold --wait --pipe -p MemoryMax=8G -p MemorySwapMax=0 -p RuntimeMaxSec=3030 -p WorkingDirectory="$root/repo" \\
  --setenv=PYTHONPATH="$root/repo" --setenv=TOKIO_WORKER_THREADS=4 --setenv=AWS_MAX_ATTEMPTS=1 --setenv=BORSUK_NATIVE_MEMORY_BYTES=536870912 \\
  /usr/bin/time -v -o "$root/profile-resources.txt" timeout --signal=TERM --kill-after=30 3000 \\
  bash -c 'ulimit -v 4194304 || exit 96; taskset -c 4-5 python3.12 -m scripts.run_native_semantic_metadata_cold {config_path} {qualification['config_sha256']} "$1/binaries/control/two_bit_http" "$1/control-proof.json" "$1/binaries/candidate/two_bit_http" "$1/candidate-proof.json" "$1/screen"; code=$?; taskset -c 0-3 python3.12 -m scripts.check_native_startup_build --cgroup "$1/profile-cgroup.json" 8589934592; resources=$?; if [ "$code" = 0 ] && [ "$resources" != 0 ]; then code=96; fi; exit "$code"' _ "$root" >profile.log 2>&1
@@ -340,7 +335,7 @@ done
     start, end = body.index('phase=install\n'), body.index('phase=complete\n')
     body = body[:start] + command + body[end:]
     body = body.replace('phase=complete\n', 'phase=complete\nexit "$profile_code"\n', 1)
-    body = body.replace('/mnt/native-semantic-router-cold', '/mnt/native-semantic-metadata-cold')
+    body = body.replace('/mnt/native-semantic-router-cold', '/mnt/native-semantic-metadata-waves-cold')
     marker = "'original_exit_code':int(os.environ['ORIGINAL_EXIT_CODE']),"
     body = body.replace(marker, marker + "'source_qualification_sha256':artifacts.get('source-qualification.json',{}).get('sha256'),")
     subprocess.run(['bash', '-n'], input=body, text=True, check=True)
@@ -387,14 +382,14 @@ def _authenticate_collected(out, terminal, qualification):
         config = json.loads(files['screen/config.json'])
         assert config.get('controller_authority_pending') is False
         assert config['controller_code_sha256'] == qualification['code_sha256']
-        assert all(config['native_arms'][r]['proof']['sha256'] == PROOF_SHA[r] for r in runtime.ROLES)
+        assert all(config['native_arms'][r]['proof']['sha256'] == h for r, h in PROOF_SHA.items())
     assert type(terminal['exit_code']) is type(terminal['original_exit_code']) is int
     assert terminal['status'] == ('complete' if terminal['exit_code'] == 0 and terminal['phase'] == 'complete' else 'failed')
     if terminal['phase'] == 'complete':
         assert terminal['exit_code'] == terminal['original_exit_code'] in (0, 1), 'original runtime status'
         assert set(files) == set(ARTIFACTS), 'exact terminal artifact roster'
         result = _check_closed(out)
-        assert (terminal['exit_code'] == 0) == result['execution_gate_passed'], 'raw scientific outcome/status'
+        assert (terminal['exit_code'] == 0) == result['paired_gate_passed'], 'raw scientific outcome/status'
         return result
     return None
 
@@ -521,7 +516,7 @@ def _collection_self_check(qualification, authorities, abi, config, rejected):
             name = kw['Key'].split('/artifacts/', 1)
             return dict(Body=io.BytesIO(files[name[1]] if len(name) == 2 else encoded(terminal)))
         s3.get_object.side_effect = get_object
-        result = dict(records=512, process_cleanup_complete=True, execution_gate_passed=True)
+        result = dict(records=512, process_cleanup_complete=True, execution_gate_passed=True, paired_gate_passed=True)
         with patch.object(checker, 'check_saved', return_value=result) as checked:
             assert collect(s3, PREFIX+'a0001', out, 'i-owned', '0'*40, '1'*64) == terminal
             checked.assert_called_once()
@@ -546,7 +541,7 @@ def _collection_self_check(qualification, authorities, abi, config, rejected):
             # Preserve a complete scientific FAIL, and replay it instead of
             # rewriting it as a successful measurement.
             terminal.update(status='failed', exit_code=1, original_exit_code=1)
-            result['execution_gate_passed'] = False
+            result['paired_gate_passed'] = False
             assert collect(s3, PREFIX+'a0001', out, 'i-owned', '0'*40, '1'*64)['exit_code'] == 1
             with patch.object(checker, 'check_saved', side_effect=ValueError('raw replay failed')):
                 rejected(lambda: replay(out))
@@ -650,7 +645,7 @@ else:
             if failure != 'no-python':
                 (commands/'curl').symlink_to(curl)
                 (commands/'python3').symlink_to(sys.executable)
-            script = body.replace('/mnt/native-semantic-metadata-cold', str(work))
+            script = body.replace('/mnt/native-semantic-metadata-waves-cold', str(work))
             script = script.replace('/dev/ttyS0', str(serial)).replace('/usr/bin/time', str(commands/'time'))
             # The test process itself has a stricter hard limit than the worker.
             script = script.replace('ulimit -v 4194304', 'ulimit -v 204800')
@@ -677,8 +672,8 @@ else:
 
 
 def self_check():
-    """Actual source/proof authority; mocked cloud/native/ELF, no launches."""
-    from contextlib import redirect_stdout
+    """Actual pending refusal; synthetic full completion only in temporary mocks."""
+    from contextlib import ExitStack, redirect_stdout
     import io
     import resource
     module = sys.modules[__name__]
@@ -693,43 +688,80 @@ def self_check():
     def ptr(path):
         return dict(path=str(path), bytes=Path(path).stat().st_size, sha256=runtime.old.sha(path))
 
-    config = json.loads(BASELINE.read_bytes())
-    config.update(schema=runtime.SCHEMA, controller_authority_pending=False, native_arms={}, native_assurances={},
-        checker_authority=ptr(ROOT/'checker-authority.json'),
+    config = json.loads(CONFIG.read_bytes())
+    # Test actual committed pending evidence separately from synthetic positives.
+    # After root freeze the same check also works against completed authority.
+    pending = json.loads(runtime.read_bound(config['native_arms']['candidate']['proof']))['full_workspace_execution_pending']
+    if pending:
+        rejected(preflight)
+        rejected(lambda: runtime.validate_config(config))
+    evidence = runtime.authenticate(config)
+    binaries = {r: config['native_arms'][r]['binary']['path'] for r in runtime.ROLES}
+    proofs = {r: config['native_arms'][r]['proof']['path'] for r in runtime.ROLES}
+    try:
+        runtime.validate_runtime(config, binaries, proofs, evidence)
+    except ValueError as error:
+        assert pending and str(error) == 'completed qualified role proof', str(error)
+    else:
+        assert not pending, 'actual pending root proof accepted'
+    config.update(schema=runtime.SCHEMA, authority_pending=False, controller_authority_pending=False,
         code_sha256={n: runtime.old.sha(n) for n in runtime.CODE},
         controller_code_sha256={n: runtime.old.sha(n) for n in CODE})
-    for item in config['items']:
-        item['arms'] = {r: copy.deepcopy(item['arms']['candidate']) for r in runtime.ROLES}
-    for role, directory in (('control', semantic.ROOT), ('candidate', ROOT)):
-        assurance = json.loads((directory/'native-assurance.json').read_bytes())
-        binaries = (assurance if role == 'control' else
-                    json.loads((Path(assurance['worker_verification']['path'])).read_bytes()))['binaries']
-        binary = binaries['two_bit_http']
-        # Read saved bodies only: no executable is ever invoked by this test.
-        assert Path(binary['path']).exists(), 'self-check requires original qualified binary body: ' + binary['path']
-        config['native_arms'][role] = dict(source_manifest=ptr(directory/'native-source-manifest.json'),
-            proof=ptr(directory/'boundary-check.json'),
-            binary=dict(binary, key='research/native/'+binary['sha256']+'/two_bit_http'))
-        config['native_assurances'][role] = ptr(directory/'native-assurance.json')
     with tempfile.TemporaryDirectory() as tmp, patch.object(module, 'CONFIG', Path(tmp)/'paired-config.json'), \
-            patch.object(semantic, '_required_glibc', return_value='2.38'):
+            patch.object(semantic, '_required_glibc', return_value='2.38'), ExitStack() as mocks:
+        def mock_body(name, body):
+            path = Path(tmp)/'mock-authority'/name
+            path.parent.mkdir(exist_ok=True)
+            path.write_bytes(body)
+            return dict(ptr(path), path='mock-authority/'+name)
+
+        # Mock only the missing full execution, never overwrite root authority.
+        full_log = b'SYNTHETIC full execution: never a qualification claim\n'
+        full_receipt = dict(exit_status=0, source_unchanged=True,
+            source_sha256=evidence['manifests']['candidate']['source_sha256'],
+            source_identity_sha256=runtime.SOURCE_IDS['candidate'], source_file_count=399,
+            command=['cargo', 'test', '--workspace', '--all-targets', '--locked'],
+            artifacts={'test.log': semantic._identity(full_log)})
+        receipt_ptr = mock_body('full-receipt.json.gz', gzip.compress(encoded(full_receipt), mtime=0))
+        assurance = json.loads(runtime.read_bound(config['native_assurances']['candidate']))
+        assurance.update(qualified=True, full_workspace_test_execution=True, full_suite_status=0,
+            full_workspace_receipt=receipt_ptr,
+            full_workspace_log=mock_body('full-test.log.gz', gzip.compress(full_log, mtime=0)))
+        config['native_assurances']['candidate'] = mock_body('native-assurance.json', encoded(assurance))
+        proof = json.loads(runtime.read_bound(config['native_arms']['candidate']['proof']))
+        proof.update(qualified=True, full_workspace_execution_pending=False, current_full_suite_pass_claim=True,
+            full_suite_status=0, full_workspace_receipt=receipt_ptr,
+            assurance_sha256=config['native_assurances']['candidate']['sha256'])
+        config['native_arms']['candidate']['proof'] = mock_body('proof.json', encoded(proof))
+        read, bound = semantic._read, runtime.read_bound
+
+        def mock_read(base, pointer):
+            return read(Path(tmp) if pointer['path'].startswith('mock-authority/') else base, pointer)
+
+        def mock_bound(pointer, path=None):
+            return bound(pointer, Path(tmp)/pointer['path'] if pointer['path'].startswith('mock-authority/') else path)
+
+        # Temporary body routing still executes the production digest checks.
+        mocks.enter_context(patch.object(semantic, '_read', side_effect=mock_read))
+        mocks.enter_context(patch.object(runtime, 'read_bound', side_effect=mock_bound))
         CONFIG.write_bytes(encoded(config))
         qualification, authorities = _qualify()
         assert set(qualification['code_sha256']) == set(CODE) and len(CODE) == 23
-        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == 61
+        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == 63
         assert set(authorities) == set(BOUND_FILES) | set(AUTHORITY_FILES)
-        # The qualified HEAD winner becomes control in the next paired arm.
-        # Authority format follows its authenticated schema, not its role name.
-        head_control = copy.deepcopy(config)
-        head_control['native_assurances']['control'] = head_control['native_assurances']['candidate']
-        head_evidence = runtime.authenticate(config)
-        head_evidence['manifests']['control'] = head_evidence['manifests']['candidate']
-        head_proof = json.loads(_read(Path('.'), config['native_arms']['candidate']['proof']))
-        with patch.object(runtime, 'SOURCE_IDS', dict(runtime.SOURCE_IDS, control=runtime.SOURCE_IDS['candidate'])), \
-                patch.object(runtime, 'BINARY_IDS', dict(runtime.BINARY_IDS, control=runtime.BINARY_IDS['candidate'])):
-            head_files = _assurance(Path('.'), 'control', head_control, head_evidence, head_proof)
-        assert head_files['control/native-assurance.json'] == _read(Path('.'), config['native_assurances']['candidate'])
-        assert 'control/assurance/full-workspace-final.log' in head_files
+        for field, value in (('exit_status', False), ('exit_status', None), ('source_unchanged', False),
+                ('source_sha256', {}), ('source_identity_sha256', '0'*64), ('source_file_count', 398),
+                ('artifacts', {'test.log': semantic._identity(b'wrong log')}),
+                ('command', full_receipt['command'] + ['--no-run'])):
+            bad_receipt = dict(full_receipt, **{field: value})
+            rejected(lambda: _full_receipt(encoded(bad_receipt), full_log,
+                evidence['manifests']['candidate']['source_sha256'], runtime.SOURCE_IDS['candidate']))
+        original_read = semantic._read
+        def bad_verification(base, pointer):
+            body = original_read(base, pointer)
+            return body + b' ' if pointer['path'].endswith('final-slice/verification.json') else body
+        with patch.object(semantic, '_read', side_effect=bad_verification):
+            rejected(preflight)
         for role in runtime.ROLES:
             assert qualification['role_bindings'][role]['native_source_identity_sha256'] == runtime.SOURCE_IDS[role]
         for field, value in (('authority_pending', True), ('controller_authority_pending', True),
@@ -782,14 +814,14 @@ def self_check():
                     {r: config['native_arms'][r]['binary']['path'] for r in runtime.ROLES},
                     {r: bad['native_arms'][r]['proof']['path'] for r in runtime.ROLES}, evidence))
         body = user_data('0'*40, '1'*64, 'sources/mock', PREFIX+'a0001', qualification)
-        assert body.count('aws s3 cp s3://'+peer.BUCKET+'/research/native/') == 2
+        assert body.count('aws s3 cp s3://'+peer.BUCKET+'/research/semantic-router/20261001/native/') == 2
         assert 'phase=publication' not in body and 'rustup' not in body and 'cargo ' not in body
         assert 'scripts.run_native_semantic_metadata_cold' in body and 'RuntimeMaxSec=3030' in body
         assert 'MemoryMax=8G' in body and 'MemorySwapMax=0' in body and 'ulimit -v 4194304' in body
         assert 'original_exit_code' in body and 'BORSUK_TERMINAL' in body
         assert body.index('--stage') < body.index('phase=profile')
         # Both original binaries, OS and dependency checks are independently bound.
-        abi = dict(schema='borsuk-native-semantic-metadata-runtime-abi-v1', qualified=True,
+        abi = dict(schema='borsuk-native-semantic-metadata-waves-runtime-abi-v1', qualified=True,
             os_release=semantic.RUNTIME_OS, architecture='x86_64', libc='glibc', glibc_version='2.39',
             binaries=runtime.BINARY_IDS, required_glibc=qualification['required_glibc'],
             ldd={r: dict(returncode=0, stdout='resolved', stderr='') for r in runtime.ROLES})
@@ -828,13 +860,11 @@ def self_check():
             assert json.loads((stage/'runtime-abi.json').read_bytes())['qualified'] is False
         _collection_self_check(qualification, authorities, abi, config, rejected)
         _bootstrap_self_check(qualification)
-        userdata_bytes = len(body.encode())
     with redirect_stdout(io.StringIO()):
         _lifecycle_self_check()
-        checker.self_check()  # Actual raw-failure/abort-ledger and relocated replay tests.
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
     assert peak <= 200*1024**2, 'self-check RAM cap'
-    print(f'paired controller PASS: code={len(CODE)} artifacts={len(ARTIFACTS)} userdata={userdata_bytes} peak_bytes={peak}; AWS/native MOCKED')
+    print(f'paired waves controller PASS: code={len(CODE)} artifacts={len(ARTIFACTS)} peak_bytes={peak}; actual_pending_proof_rejected={pending}, full completion/AWS/native MOCKED')
 
 
 if __name__ == '__main__':
@@ -848,6 +878,6 @@ if __name__ == '__main__':
         print(json.dumps(result, sort_keys=True))
     else:
         assert len(args) == 1, 'usage: aNNNN | --self-check | --stage REPO OUT | --runtime-abi OUT | --replay OUT'
-        with open('/tmp/borsuk-native-semantic-metadata-cold-launch.lock', 'a+') as lock:
+        with open('/tmp/borsuk-native-semantic-metadata-waves-cold-launch.lock', 'a+') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             main(args[0])

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline paired metadata HEAD audit; no native/cloud calls.
+"""Offline paired metadata wave audit; no native/cloud calls.
 
 CLI: OUTPUT CONFIG_SHA CONTROL_BINARY CANDIDATE_BINARY | --self-check
 Uses the retained per-role manifests, frozen checkers, completed proofs and
@@ -40,6 +40,7 @@ def check_saved(output, config_sha, control_binary, candidate_binary):
                   closed=actual['process_cleanup_complete'])
     stats.require(saved == actual, 'saved summary/gates/tails/identities parity')
     return dict(records=len(records), execution_gate_passed=actual['execution_gate_passed'],
+                paired_gate_passed=actual['paired_gate_passed'], latency_gate_passed=actual['latency_gate_passed'],
                 all_calls_successful=actual['all_calls_successful'], quality_gate_passed=actual['quality_gate_passed'],
                 process_cleanup_complete=actual['process_cleanup_complete'], resource_gate=actual['resource_gate'])
 
@@ -80,11 +81,11 @@ def self_check():
         directory = Path(temporary)
         config = dict(runtime.FIXED, schema=runtime.SCHEMA, credential_protocol=stats.CREDENTIAL_PROTOCOL,
                       bucket='synthetic-never-fetched', region='synthetic', items=[], native_arms={},
-                      checker_authority=ptr(root / 'metadata-head/checker-authority.json'),
+                      checker_authority=ptr(root / 'metadata-waves/checker-authority.json'),
                       code_sha256={name: old.sha(runtime.ROOT / name) for name in runtime.CODE})
         binaries, proofs, mock_binary_ids = {}, {}, {}
-        for role, source in (('control', root / 'native-source-manifest.json'),
-                             ('candidate', root / 'metadata-head/native-source-manifest.json')):
+        for role, source in (('control', root / 'metadata-head/native-source-manifest.json'),
+                             ('candidate', root / 'metadata-waves/native-source-manifest.json')):
             binary, proof_path = directory / (role + '-binary'), directory / (role + '-proof.json')
             binary.write_bytes(('synthetic ' + role + ' binary NEVER EXECUTED').encode())
             manifest = json.loads(source.read_text())
@@ -107,16 +108,7 @@ def self_check():
             return dict(key=key, bytes=len(body), sha256=runtime.sha_body(body))
 
         call_fixture = fixture('semantic', 8080)
-        # This paired fixture starts with the frozen control's eight metadata HEADs.
-        rows = call_fixture['header']['remote_open_stats']['metadata']
-        added_heads = sum(1 - row['logical_head_requests'] for row in rows)
-        for row in rows:
-            row.update(logical_head_requests=1, head_wall_ns=1)
-        for report in (call_fixture['header']['transport'], call_fixture['response']['transport']):
-            totals = report['totals']
-            totals['method_counts'][1] += added_heads
-            totals['attempts'] += added_heads
-            totals['status_counts'][0][1] += added_heads
+        # Both roles have three metadata HEADs. Only the candidate emits waves.
         requests = ''.join(worker.encoded(dict(query_ordinal=q, query=[q + 1] + [0.] * 767)) + '\n' for q in range(64)).encode()
         truth = struct.pack('<100I', *range(10, 110)) * 64
         for dataset in worker.DATASETS:
@@ -154,6 +146,13 @@ def self_check():
         calls, paths, running, stopped, clients_closed = [], [], [], [], []
         fault = None
         campaign_calls = 0
+        clock = 0
+
+        def tick():
+            nonlocal clock
+            step = 100000 if running and running[0].role == 'candidate' else 200000
+            clock += 300000 if fault == 'latency' else step
+            return clock
 
         def sample():
             value = copy.deepcopy(snapshot)
@@ -163,16 +162,16 @@ def self_check():
 
         def profile(role):
             value = copy.deepcopy(call_fixture)
-            if role == 'candidate' and fault != 'old-heads':
-                exact = evidence['checkers']['candidate'].EXACT_LENGTH_FILES
-                for row in value['header']['remote_open_stats']['metadata']:
-                    if row['name'] in exact:
-                        row.update(logical_head_requests=0, head_wall_ns=0)
-                for report in (value['header']['transport'], value['response']['transport']):
-                    totals = report['totals']
-                    totals['method_counts'][1] -= 5
-                    totals['attempts'] -= 5
-                    totals['status_counts'][0][1] -= 5
+            metadata = value['header']['remote_open_stats']
+            if role == 'control' or fault == 'missing-waves':
+                for row in metadata['metadata']:
+                    del row['metadata_wave'], row['metadata_wave_wall_ns']
+            else:
+                # Real overlapping waits exceed staging when added per object.
+                metadata['staging_wall_ns'] = 30
+                value['header']['remote_open_wall_ns'] = 60
+                for row in metadata['metadata']:
+                    row['stream_wall_ns'] = 8
             return value
 
         def spawn(command, **kwargs):
@@ -226,6 +225,7 @@ def self_check():
             stack.enter_context(patch.object(old.subprocess, 'Popen', side_effect=spawn))
             stack.enter_context(patch.object(old.http.client, 'HTTPConnection', Connection))
             stack.enter_context(patch.object(old, 'stop', side_effect=stop))
+            stack.enter_context(patch.object(old.time, 'monotonic_ns', side_effect=tick))
             stack.enter_context(patch.object(worker, 'offered_cgroup_snapshot', side_effect=sample))
             stack.enter_context(patch.object(runtime.os, 'sched_getaffinity', return_value={4, 5}))
             stack.enter_context(patch.object(runtime.resource, 'getrlimit', return_value=(4294967296,) * 2))
@@ -237,14 +237,18 @@ def self_check():
                 header = profile(role)['header']
                 arm = config['items'][0]['arms'][role]
                 ready = evidence['checkers'][role].validate_ready(header, arm)
-                assert ready['metadata']['logical_metadata_head_requests'] == (8 if role == 'control' else 3)
+                assert ready['metadata']['logical_metadata_head_requests'] == 3
                 rejected(lambda: evidence['checkers']['candidate' if role == 'control' else 'control'].validate_ready(header, arm))
-            # The parent has not integrated the native slice at this worker base.
-            # Whatever its default profile, the adapter must leave it untouched.
-            default_role = 'candidate' if hasattr(stats, 'EXACT_LENGTH_FILES') else 'control'
-            stats.validate_ready(profile(default_role)['header'], config['items'][0]['arms'][default_role])
-            rejected(lambda: stats.validate_ready(profile('control' if default_role == 'candidate' else 'candidate')['header'],
-                                                 config['items'][0]['arms'][default_role]))
+            stats.validate_ready(profile('candidate')['header'], config['items'][0]['arms']['candidate'])
+            rejected(lambda: stats.validate_ready(profile('control')['header'], config['items'][0]['arms']['control']))
+            for mutation in ('wave', 'wall', 'buffer', 'gets', 'heads'):
+                header = profile('candidate')['header']
+                row = header['remote_open_stats']['metadata'][1]
+                field = dict(wave='metadata_wave', wall='metadata_wave_wall_ns',
+                             buffer='payload_buffer_bound_bytes', gets='logical_get_requests',
+                             heads='logical_head_requests')[mutation]
+                row[field] += 1
+                rejected(lambda: evidence['checkers']['candidate'].validate_ready(header, config['items'][0]['arms']['candidate']))
             for field in runtime.FIXED:
                 bad = copy.deepcopy(config)
                 bad[field] = None
@@ -318,7 +322,7 @@ def self_check():
             assert not running and all(not p.exists() for p in paths), 'native/client/temp cleanup'
             assert all(getattr(worker, n) is v for n, v in originals.items()), 'worker hooks leaked'
             result = check_saved(out, digest, *[binaries[r] for r in runtime.ROLES])
-            assert result['execution_gate_passed'] and result['records'] == 512
+            assert result['paired_gate_passed'] and result['records'] == 512
             relocated = directory / 'relocated-offline-copy'
             shutil.copytree(out, relocated)
             assert check_saved(relocated, digest, *[binaries[r] for r in runtime.ROLES])['execution_gate_passed']
@@ -326,13 +330,38 @@ def self_check():
             assert summary['speedup_claim'] is False and 'latency_improvement' not in summary
             for dataset in worker.DATASETS:
                 pooled = summary['datasets'][dataset]['pooled']
-                assert pooled['control']['known_logical_charge_totals']['metadata_HEADs'] == 128 * 8
+                assert pooled['control']['known_logical_charge_totals']['metadata_HEADs'] == 128 * 3
                 assert pooled['candidate']['known_logical_charge_totals']['metadata_HEADs'] == 128 * 3
                 assert summary['datasets'][dataset]['quality_delta_at_10'] == 0
+                assert summary['datasets'][dataset]['quality_delta_percentage_points'] == 0
+                assert pooled['candidate']['latency_ms']['metadata_wave_critical']['p90'] == 30 / 1e6
+                assert pooled['control']['latency_ms']['metadata_wave_critical'] == 'UNMEASURED'
+                assert 'metadata_stream_and_output' not in pooled['candidate']['latency_ms']
+                assert pooled['candidate']['metadata_object_wait_sum_ms']['metadata_stream_and_output']['p90'] == 64 / 1e6
 
             ledger = out / 'records.jsonl'
             original_ledger = ledger.read_bytes()
             rows = [json.loads(line) for line in original_ledger.splitlines()]
+            panels = runtime.prepare(config, out, evidence, fetch=fetch)
+            # The exact decision admits equal p95, but never equal p90 or a loss on either dataset.
+            for failure in (None, 'equal-p90', 'p95-regression', 'CoHere-slower'):
+                timed = copy.deepcopy(rows)
+                for i, row in enumerate(timed):
+                    duration = 600000
+                    if row['arm'] == 'candidate':
+                        duration = 600000 if row['query_ordinal'] >= 59 else 300000
+                        if failure == 'equal-p90': duration = 600000
+                        if failure == 'p95-regression' and row['query_ordinal'] >= 59: duration = 900000
+                        if failure == 'CoHere-slower' and row['dataset'] == 'CoHere': duration = 900000
+                    start = (i + 1) * 10**9
+                    row.update(started_ns=start, successful_connect_attempt_ns=start + 1000,
+                        connected_ns=start + 2000, completed_ns=start + duration,
+                        cold_start_to_first_http_response_ns=duration, before_successful_connect_attempt_ns=1000,
+                        successful_tcp_connect_ns=1000, first_post_to_response_ns=duration - 2000,
+                        incoming_http_wall_ns=duration - 1000)
+                reduced = runtime.reduce_run(timed, panels, config, digest, evidence, snapshot, snapshot)
+                assert reduced['execution_gate_passed'] and reduced['paired_gate_passed'] == (failure is None)
+            del timed, panels
             for mutation in ('role', 'checker', 'proof', 'source', 'raw-ready', 'raw-query', 'cap', 'resource', 'cleanup', 'order',
                              'bool-ordinal', 'bool-block'):
                 bad = copy.deepcopy(rows)
@@ -363,8 +392,9 @@ def self_check():
             rejected(lambda: check_saved(out, digest, *[binaries[r] for r in runtime.ROLES]))
             (out / 'summary.json').write_bytes(saved_summary)
             assert check_saved(out, digest, *[binaries[r] for r in runtime.ROLES])['execution_gate_passed']
+            del rows, bad, original_ledger
 
-            for failure in ('raw', 'old-heads', 'cleanup', 'resource-after', 'resource'):
+            for failure in ('raw', 'missing-waves', 'cleanup', 'resource-after', 'resource'):
                 fault = failure
                 if failure == 'resource': snapshot['files']['memory.swap.peak'] = '1'
                 offset = len(calls)
@@ -375,7 +405,7 @@ def self_check():
                     snapshot['files']['memory.swap.peak'] = '0'
                     continue
                 failed_rows = [json.loads(line) for line in (failed / 'records.jsonl').read_text().splitlines()]
-                n = 65 if failure == 'old-heads' else 1
+                n = 65 if failure == 'missing-waves' else 1
                 assert len(calls) - offset == n and len(failed_rows) == 512
                 assert failed_rows[n - 1]['outcome'] == 'failed'
                 assert all(r['outcome'] == 'aborted' and r['http_attempts'] == 0 for r in failed_rows[n:])
@@ -384,6 +414,10 @@ def self_check():
                 result = check_saved(failed, digest, *[binaries[r] for r in runtime.ROLES])
                 assert not result['execution_gate_passed']
                 assert all(getattr(worker, n) is v for n, v in originals.items())
+            fault = 'latency'
+            slow, status = launch('latency-fail')
+            result = check_saved(slow, digest, *[binaries[r] for r in runtime.ROLES])
+            assert status == 1 and result['execution_gate_passed'] and not result['paired_gate_passed']
             fault = None
             # Quality failure is an explicit abort at the end of the first candidate block.
             bad = copy.deepcopy(config)
@@ -413,7 +447,7 @@ def self_check():
             assert not running and len(stopped) == len(clients_closed) == len(calls)
             assert all(not p.exists() for p in paths)
     assert dict(os.environ) == parent_environment
-    print('paired metadata self-check PASS: 512 serial calls, frozen role checkers, fail/abort/cleanup and offline tamper replay; native/cloud UNRUN')
+    print('paired metadata waves self-check PASS: 512 serial calls, both 3 HEADs, wave overlap/bounds, p90/p95 decision, fail/abort/cleanup and offline tamper replay; native/cloud UNRUN')
 
 
 if __name__ == '__main__':
@@ -422,6 +456,6 @@ if __name__ == '__main__':
     elif len(sys.argv) == 5:
         result = check_saved(*sys.argv[1:])
         print(json.dumps(result, sort_keys=True))
-        raise SystemExit(0 if result['execution_gate_passed'] else 1)
+        raise SystemExit(0 if result['paired_gate_passed'] else 1)
     else:
         raise SystemExit('usage: OUTPUT CONFIG_SHA CONTROL_BINARY CANDIDATE_BINARY | --self-check')
