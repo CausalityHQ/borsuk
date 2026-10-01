@@ -1,0 +1,359 @@
+{
+  "base": "ace63b7dcba2dd4e6bf1e7d6ac4d13d0099bb91b",
+  "native_source_file_count": 399,
+  "native_source_identity_sha256": "b095ba7d738a65a31faefa0d705ce34e12cb83aeaa153c25079564c53b129c70",
+  "owned_files": [
+    "crates/borsuk/src/object_native_generation.rs",
+    "crates/borsuk/src/two_bit_generation.rs",
+    "scripts/check_native_semantic_router_stats.py",
+    "scripts/run_native_semantic_router_cold.py"
+  ],
+  "gates": {
+    "red": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "two_bit_generation::source_walk_tests::semantic_object_store_parity",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "exit_status": 101,
+      "source_identity_sha256": "33a1cc0416045cbf487959f7aaa7fe1bee61f4b574f3465e8157fd47ce91cc0f",
+      "patch_sha256": "1b02ae90d6f0a90a017685ae12d9373426057540cc25fdb6f07a5f352be9ef2f",
+      "log": "/tmp/borsuk-semantic-metadata-known-lengths-20261001/red.log",
+      "log_sha256": "553fabc46a956bb0842a95132e3328cba723efd6eed56f0280bf87488bc722ac",
+      "environment": {
+        "RUSTUP_TOOLCHAIN": "stable",
+        "CARGO_TARGET_DIR": "/data/target",
+        "RUSTC_WRAPPER": "",
+        "CARGO_BUILD_JOBS": "2",
+        "BORSUK_TEST_BUILD_JOBS": "2",
+        "RUST_TEST_THREADS": "1",
+        "RUSTFLAGS": null
+      },
+      "started": 1790830826.6417172,
+      "finished": 1790830945.0259252,
+      "archived_log": {
+        "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-head/implementation-gates/red.log.gz",
+        "uncompressed_bytes": 60746,
+        "sha256": "553fabc46a956bb0842a95132e3328cba723efd6eed56f0280bf87488bc722ac"
+      }
+    },
+    "python-red": {
+      "command": [
+        "python3",
+        "-m",
+        "scripts.run_native_semantic_router_cold",
+        "--self-check"
+      ],
+      "exit_status": 1,
+      "source_identity_sha256": "af21d78bb3a50477f8b8928b35b2c831777217c18a265f7f31739a9fc1f73f6a",
+      "patch_sha256": "99480d978b0e269be2595b9b3a60df2025d0cd19efe7fb4d3b8899a213a74493",
+      "log": "/tmp/borsuk-semantic-metadata-known-lengths-20261001/python-red.log",
+      "log_sha256": "31ea123f8702bb7aa3d65a58ec9ba6f0580e504408a5ef7b4d7f2dc46830c226",
+      "environment": {
+        "RUSTUP_TOOLCHAIN": "stable",
+        "CARGO_TARGET_DIR": "/data/target",
+        "RUSTC_WRAPPER": "",
+        "CARGO_BUILD_JOBS": "2",
+        "BORSUK_TEST_BUILD_JOBS": "2",
+        "RUST_TEST_THREADS": "1",
+        "RUSTFLAGS": null
+      },
+      "started": 1790831088.772821,
+      "finished": 1790831089.2038772,
+      "archived_log": {
+        "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-head/implementation-gates/python-red.log.gz",
+        "uncompressed_bytes": 1302,
+        "sha256": "31ea123f8702bb7aa3d65a58ec9ba6f0580e504408a5ef7b4d7f2dc46830c226"
+      }
+    },
+    "green": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "two_bit_generation::source_walk_tests::semantic_object_store_parity",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "exit_status": 0,
+      "source_identity_sha256": "70395b77e3655c4cebfec63e5337823932fd32b9fadbbcf0af746c975b41c46f",
+      "patch_sha256": "da63debdc5a77f39fb668a7ed88a4c150edd5684e6b49a9d0b951a1739c64a8a",
+      "log": "/tmp/borsuk-semantic-metadata-known-lengths-20261001/green.log",
+      "log_sha256": "a5c38846732d112e67f11ed79cac5978aaa11931cd4666b6cb11d4c0b41df4cf",
+      "environment": {
+        "RUSTUP_TOOLCHAIN": "stable",
+        "CARGO_TARGET_DIR": "/data/target",
+        "RUSTC_WRAPPER": "",
+        "CARGO_BUILD_JOBS": "2",
+        "BORSUK_TEST_BUILD_JOBS": "2",
+        "RUST_TEST_THREADS": "1",
+        "RUSTFLAGS": null
+      },
+      "started": 1790831122.304039,
+      "finished": 1790831211.2640107,
+      "archived_log": {
+        "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-head/implementation-gates/green.log.gz",
+        "uncompressed_bytes": 59991,
+        "sha256": "a5c38846732d112e67f11ed79cac5978aaa11931cd4666b6cb11d4c0b41df4cf"
+      }
+    },
+    "affected-final": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "--",
+        "--test-threads=1",
+        "two_bit_generation::source_walk_tests",
+        "object_native_generation::tests"
+      ],
+      "exit_status": 0,
+      "source_identity_sha256": "bf224b0e65b1f1f5c09da14f23586631671bdfc4a6752e66e445036db036e482",
+      "patch_sha256": "d715e717522568de6264703244512553dce0d589b5655c1a11e027f58ea870e9",
+      "log": "/tmp/borsuk-semantic-metadata-known-lengths-20261001/affected-final.log",
+      "log_sha256": "04e7dd648e476e6ccbb32ed3a4b4b35faebe9841408f3cf7f1cd800c520b716f",
+      "environment": {
+        "RUSTUP_TOOLCHAIN": "stable",
+        "CARGO_TARGET_DIR": "/data/target",
+        "RUSTC_WRAPPER": "",
+        "CARGO_BUILD_JOBS": "2",
+        "BORSUK_TEST_BUILD_JOBS": "2",
+        "RUST_TEST_THREADS": "1",
+        "RUSTFLAGS": null
+      },
+      "started": 1790831237.858907,
+      "finished": 1790831338.892951,
+      "archived_log": {
+        "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-head/implementation-gates/affected-final.log.gz",
+        "uncompressed_bytes": 61597,
+        "sha256": "04e7dd648e476e6ccbb32ed3a4b4b35faebe9841408f3cf7f1cd800c520b716f"
+      }
+    },
+    "python-serial-final": {
+      "command": [
+        "python3",
+        "-m",
+        "scripts.run_native_semantic_router_cold",
+        "--self-check"
+      ],
+      "exit_status": 0,
+      "source_identity_sha256": "bf224b0e65b1f1f5c09da14f23586631671bdfc4a6752e66e445036db036e482",
+      "patch_sha256": "d715e717522568de6264703244512553dce0d589b5655c1a11e027f58ea870e9",
+      "log": "/tmp/borsuk-semantic-metadata-known-lengths-20261001/python-serial-final.log",
+      "log_sha256": "6147fbeb21d43681ed8f01a5ee798a6bf1d2d29e0b5a302cbb974e6cd8c7a2c1",
+      "environment": {
+        "RUSTUP_TOOLCHAIN": "stable",
+        "CARGO_TARGET_DIR": "/data/target",
+        "RUSTC_WRAPPER": "",
+        "CARGO_BUILD_JOBS": "2",
+        "BORSUK_TEST_BUILD_JOBS": "2",
+        "RUST_TEST_THREADS": "1",
+        "RUSTFLAGS": null
+      },
+      "started": 1790831266.0237777,
+      "finished": 1790831271.0354273,
+      "archived_log": {
+        "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-head/implementation-gates/python-serial-final.log.gz",
+        "uncompressed_bytes": 960,
+        "sha256": "6147fbeb21d43681ed8f01a5ee798a6bf1d2d29e0b5a302cbb974e6cd8c7a2c1"
+      }
+    },
+    "python-offered": {
+      "command": [
+        "python3",
+        "-m",
+        "scripts.run_native_semantic_router_cold",
+        "--offered-self-check"
+      ],
+      "exit_status": 1,
+      "source_identity_sha256": "70395b77e3655c4cebfec63e5337823932fd32b9fadbbcf0af746c975b41c46f",
+      "patch_sha256": "da63debdc5a77f39fb668a7ed88a4c150edd5684e6b49a9d0b951a1739c64a8a",
+      "log": "/tmp/borsuk-semantic-metadata-known-lengths-20261001/python-offered.log",
+      "log_sha256": "ce80a79195df979b2d41cf774cca99c487b8bad836445124a8d7ef72ebef4dd2",
+      "environment": {
+        "RUSTUP_TOOLCHAIN": "stable",
+        "CARGO_TARGET_DIR": "/data/target",
+        "RUSTC_WRAPPER": "",
+        "CARGO_BUILD_JOBS": "2",
+        "BORSUK_TEST_BUILD_JOBS": "2",
+        "RUST_TEST_THREADS": "1",
+        "RUSTFLAGS": null
+      },
+      "started": 1790831163.965185,
+      "finished": 1790831164.2464762,
+      "archived_log": {
+        "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-head/implementation-gates/python-offered.log.gz",
+        "uncompressed_bytes": 681,
+        "sha256": "ce80a79195df979b2d41cf774cca99c487b8bad836445124a8d7ef72ebef4dd2"
+      }
+    },
+    "python-offered-final": {
+      "command": [
+        "python3",
+        "-m",
+        "scripts.run_native_semantic_router_cold",
+        "--offered-self-check"
+      ],
+      "exit_status": 0,
+      "source_identity_sha256": "bf224b0e65b1f1f5c09da14f23586631671bdfc4a6752e66e445036db036e482",
+      "patch_sha256": "d715e717522568de6264703244512553dce0d589b5655c1a11e027f58ea870e9",
+      "log": "/tmp/borsuk-semantic-metadata-known-lengths-20261001/python-offered-final.log",
+      "log_sha256": "3f6b9e33550cb5d4a604edaad83717b92fd82dacc400c100aa6beb906836fcf0",
+      "environment": {
+        "RUSTUP_TOOLCHAIN": "stable",
+        "CARGO_TARGET_DIR": "/data/target",
+        "RUSTC_WRAPPER": "",
+        "CARGO_BUILD_JOBS": "2",
+        "BORSUK_TEST_BUILD_JOBS": "2",
+        "RUST_TEST_THREADS": "1",
+        "RUSTFLAGS": null
+      },
+      "started": 1790831288.5689025,
+      "finished": 1790831303.3022149,
+      "archived_log": {
+        "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-head/implementation-gates/python-offered-final.log.gz",
+        "uncompressed_bytes": 1039,
+        "sha256": "3f6b9e33550cb5d4a604edaad83717b92fd82dacc400c100aa6beb906836fcf0"
+      }
+    },
+    "clippy-final": {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "exit_status": 0,
+      "source_identity_sha256": "bf224b0e65b1f1f5c09da14f23586631671bdfc4a6752e66e445036db036e482",
+      "patch_sha256": "d715e717522568de6264703244512553dce0d589b5655c1a11e027f58ea870e9",
+      "log": "/tmp/borsuk-semantic-metadata-known-lengths-20261001/clippy-final.log",
+      "log_sha256": "a00136bb8cb2226ba668704c8e6639e4e36bf0a6e074636c3a6fd6a19bd08f59",
+      "environment": {
+        "RUSTUP_TOOLCHAIN": "stable",
+        "CARGO_TARGET_DIR": "/data/target",
+        "RUSTC_WRAPPER": "",
+        "CARGO_BUILD_JOBS": "2",
+        "BORSUK_TEST_BUILD_JOBS": "2",
+        "RUST_TEST_THREADS": "1",
+        "RUSTFLAGS": null
+      },
+      "started": 1790831347.2929826,
+      "finished": 1790831447.3587823,
+      "archived_log": {
+        "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-head/implementation-gates/clippy-final.log.gz",
+        "uncompressed_bytes": 278198,
+        "sha256": "a00136bb8cb2226ba668704c8e6639e4e36bf0a6e074636c3a6fd6a19bd08f59"
+      }
+    },
+    "test-build-final": {
+      "command": [
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ],
+      "exit_status": 0,
+      "source_identity_sha256": "bf224b0e65b1f1f5c09da14f23586631671bdfc4a6752e66e445036db036e482",
+      "patch_sha256": "d715e717522568de6264703244512553dce0d589b5655c1a11e027f58ea870e9",
+      "log": "/tmp/borsuk-semantic-metadata-known-lengths-20261001/test-build-final.log",
+      "log_sha256": "ceeb28937e6f2a7857ec375add95a8c3656ae288410f102fc5a278e63702a0d3",
+      "environment": {
+        "RUSTUP_TOOLCHAIN": "stable",
+        "CARGO_TARGET_DIR": "/data/target",
+        "RUSTC_WRAPPER": "",
+        "CARGO_BUILD_JOBS": "2",
+        "BORSUK_TEST_BUILD_JOBS": "2",
+        "RUST_TEST_THREADS": "1",
+        "RUSTFLAGS": null
+      },
+      "started": 1790831455.584366,
+      "finished": 1790831721.5066893,
+      "archived_log": {
+        "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-head/implementation-gates/test-build-final.log.gz",
+        "uncompressed_bytes": 86075,
+        "sha256": "ceeb28937e6f2a7857ec375add95a8c3656ae288410f102fc5a278e63702a0d3"
+      }
+    },
+    "release-final": {
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "borsuk",
+        "--example",
+        "two_bit_http",
+        "--bin",
+        "two_bit_plan_demo"
+      ],
+      "exit_status": 0,
+      "source_identity_sha256": "bf224b0e65b1f1f5c09da14f23586631671bdfc4a6752e66e445036db036e482",
+      "patch_sha256": "d715e717522568de6264703244512553dce0d589b5655c1a11e027f58ea870e9",
+      "log": "/tmp/borsuk-semantic-metadata-known-lengths-20261001/release-final.log",
+      "log_sha256": "1fefa219d8880ce7e8c3c2e27911f0970d348ddfc9b7d9472d2187d5f687caa0",
+      "environment": {
+        "RUSTUP_TOOLCHAIN": "stable",
+        "CARGO_TARGET_DIR": "/data/target",
+        "RUSTC_WRAPPER": "",
+        "CARGO_BUILD_JOBS": "2",
+        "BORSUK_TEST_BUILD_JOBS": "2",
+        "RUST_TEST_THREADS": "1",
+        "RUSTFLAGS": null
+      },
+      "started": 1790831858.8694417,
+      "finished": 1790832860.4860175,
+      "archived_log": {
+        "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-head/implementation-gates/release-final.log.gz",
+        "uncompressed_bytes": 64697,
+        "sha256": "1fefa219d8880ce7e8c3c2e27911f0970d348ddfc9b7d9472d2187d5f687caa0"
+      }
+    }
+  },
+  "binaries": {
+    "two_bit_http": {
+      "path": "/tmp/borsuk-semantic-metadata-known-lengths-20261001/two_bit_http",
+      "sha256": "82c02967f3b2de8c7bf1f2dcfc0e94496882ba6e749b7195f1fca824ab2b7ec1",
+      "bytes": 16189792
+    },
+    "two_bit_plan_demo": {
+      "path": "/tmp/borsuk-semantic-metadata-known-lengths-20261001/two_bit_plan_demo",
+      "sha256": "8c9b06bbc7a72ca2bedd47161fb349d9900965e2ee3fb517be44c85a07821c61",
+      "bytes": 15585112
+    }
+  },
+  "cargo_lane": "released; original terminal collected exit0; no replacement process",
+  "full_workspace_test_execution": false,
+  "cloud_or_native_benchmark_execution": false,
+  "performance_claim": false,
+  "resource_action": "Parent-only targeted 3G inactive-cache reclaim; unchanged memory caps; original job paused/resumed",
+  "known_scope_note": "Standalone scripts/check_native_semantic_concurrency.py still creates historical HEAD telemetry; offered-self-check adapts only its local synthetic copy within owned runner scope.",
+  "owned_sources": {
+    "crates/borsuk/src/object_native_generation.rs": "604ca170419304ce11e4625f7e1f04663e8339beee35f92caaa6808de86865ba",
+    "crates/borsuk/src/two_bit_generation.rs": "74b8dd0bc9a512349cfbb7b18abd3153493dafa331bb22f89f4b160eea0ccb43",
+    "scripts/check_native_semantic_router_stats.py": "93db7c38b40aa9480f70076d359f35754850d46c2e853a1d9107621ba9bc07d8",
+    "scripts/run_native_semantic_router_cold.py": "1071d62af244309b8371fe17251a2ff7fd95963be509ed76f44771e7c3e5120b"
+  },
+  "commit": "520f2bc47a4c042e7d5db5cdad164a55b53115b8",
+  "tree": "4c240142dbc5f7bb21efe1fa5575dc120de80e95",
+  "commit_identity": "commit 520f2bc47a4c042e7d5db5cdad164a55b53115b8\nAuthor:     Roman Bartusiak <riomus@gmail.com>\nAuthorDate: Thu Oct 1 05:36:30 2026 +0000\nCommit:     Roman Bartusiak <riomus@gmail.com>\nCommitDate: Thu Oct 1 05:36:30 2026 +0000\n\n    Skip authenticated metadata HEADs during generation startup\n",
+  "worktree_clean": true
+}

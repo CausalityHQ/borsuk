@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-semantic-metadata-paired-checker-authority-v1",
+  "control_native_identity": "92085e6e40ac9324ea7a4fc8daab58995dc84680a5c2391eb426dd430230e520",
+  "candidate_native_identity": "b095ba7d738a65a31faefa0d705ce34e12cb83aeaa153c25079564c53b129c70",
+  "files": {
+    "control": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-head/control-checker.py.gz",
+      "archived_sha256": "b10ed0aac0607fd3931fc49d9c899baedd5f2f85b86486ad6a14d34755fdfd64",
+      "bytes": 27704,
+      "sha256": "3815ee3cf166c659d7e9a31c2109730fb100bb301c3afe50cc3396e3a58399b6"
+    },
+    "candidate": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-head/candidate-checker.py.gz",
+      "archived_sha256": "41d9f149e9efeeea44f5a496d6bb7abe7f57311546cb52ba4f0c9f10523eb180",
+      "bytes": 26913,
+      "sha256": "93db7c38b40aa9480f70076d359f35754850d46c2e853a1d9107621ba9bc07d8"
+    }
+  },
+  "scope": "explicit frozen historical control and candidate startup validators for paired research only; no production compatibility reader"
+}
