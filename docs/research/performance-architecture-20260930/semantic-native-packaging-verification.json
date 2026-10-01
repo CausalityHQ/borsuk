@@ -1,0 +1,41 @@
+{
+  "schema": "borsuk-semantic-native-packaging-verification-v1",
+  "qualified_worker_commit": "a1bdcdfec1f73aa6da1b29202a68fe4723723fa8",
+  "integrated_commit": "46c21da2",
+  "repackager_sha256": "78a515460eb44517346b1ad86da422000b7df16dc59edc0df79bbefd78810719",
+  "benchmark_measurement": false,
+  "datasets": {
+    "relaion": {
+      "attempt": "a0002",
+      "path": "/tmp/borsuk-semantic-native-paired-relaion-a0002",
+      "files_verified": 32,
+      "receipt_path": "docs/research/performance-architecture-20260930/semantic-native-packaging-relaion-a0002.json",
+      "receipt_sha256": "c60e7aac2dd598cb84357e8d6e6eecb43c4e6853e4ddf7ed54c26738dbcd60ef",
+      "log_path": "docs/research/performance-architecture-20260930/semantic-native-packaging-relaion-a0002.log.gz",
+      "log_sha256": "0616638572ce4a75e3624fc64061969b35378b78cb2aa58518e8d2c883ecf6d7",
+      "graph_root_sha256": "49de32e57db9e1f7692462d508d34ea1ba8e91c0e5a88dc7687278206d55340c",
+      "semantic_root_sha256": "ef0b07a836a265e91184469906ff353469089e160893487a4921bc9a823a6e8d",
+      "original_router_source_identity": {
+        "input_schema": "borsuk-two-bit-generation-v4",
+        "input_root_sha256": "577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b",
+        "input_centroids_sha256": "42bdea567bdc606333c9f09e07bc33742c1bec7cdcb69dd93b7489547ec3d2fb"
+      }
+    },
+    "cohere": {
+      "attempt": "a0001",
+      "path": "/tmp/borsuk-semantic-native-paired-cohere-a0001",
+      "files_verified": 32,
+      "receipt_path": "docs/research/performance-architecture-20260930/semantic-native-packaging-cohere-a0001.json",
+      "receipt_sha256": "eabcadb572690e478cab05f3def6a52da4870c70c7ad9fb1a3c0cb7632cd6525",
+      "log_path": "docs/research/performance-architecture-20260930/semantic-native-packaging-cohere-a0001.log.gz",
+      "log_sha256": "89fd50448f0bed7d4b7a91e7dbf65cb52658b8e94bba0dfcc7d1fab6417eb4e8",
+      "graph_root_sha256": "668f019b1c44a8e09b7d0ebe7dc4ef8e00649ba456744fb73c113b9fb93e2368",
+      "semantic_root_sha256": "4e9ec30b0bb1ec464454d2331f5d8bd83e7513dd2d6290964c012497e7a85ae9",
+      "original_router_source_identity": {
+        "input_schema": "borsuk-two-bit-generation-v4",
+        "input_root_sha256": "9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521",
+        "input_centroids_sha256": "755fa712fc3d2c3a0e35f9eba95d429b269dc32968da58354d9c328d8d1405a7"
+      }
+    }
+  }
+}
