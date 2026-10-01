@@ -1,0 +1,24 @@
+{
+  "schema": "borsuk-semantic-source-id-repair-authority-v1",
+  "passed": true,
+  "config_sha256": "28bfd892423b51d1ffe3b06bf2a0c6a21e1cb6604096ce70960b3740f863c8fc",
+  "construction_config_sha256": "23397d03a87de42099ac446195aae0d0db562a76158c3872b98f73e0dc29e30e",
+  "changed_controller_code": [
+    "scripts/launch_native_semantic_fresh_panel_spot.py"
+  ],
+  "changed_helper_code": [
+    "scripts/prepare_semantic_1m_fresh_panel.py",
+    "scripts/seal_v36_rank16_fresh_1m.py"
+  ],
+  "helper_inputs_unchanged": true,
+  "fixed_protocol_unchanged": true,
+  "authenticated_helper_refs": 7,
+  "controller_code_count": 27,
+  "helper_code_count": 20,
+  "bash_valid_userdata_bytes": 6891,
+  "actual_writer_revision": "31445a91ee1cd68ff17010b1bf5205a47e8237bf",
+  "isolated_helper_inputs_check_exit_status": 0,
+  "checker_corrections": "Combined controller/helper imports caused spurious closure failure; isolated helper passes. Controller roster pins only controller closure; helper separately pins its closure. No guards changed.",
+  "ann_quality_measured": false,
+  "rust_changed": false
+}
