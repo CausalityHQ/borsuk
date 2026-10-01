@@ -1,0 +1,51 @@
+{
+  "actual_authority_preflight_exit_status": 0,
+  "artifact_count": 110,
+  "controller_code_count": 24,
+  "files": {
+    "borsuk-waves-offered-preflight.log": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/offered-adapter-gates/borsuk-waves-offered-preflight.log.gz",
+      "archived_sha256": "cf57dcb9d6a3bbba3c25cc714f7d745278f4eb5f31c35505b30e6f5003bf1864",
+      "bytes": 101,
+      "sha256": "ba3a3e6b33b75aeb44f811c8e3cc78c01c976c5d221f0038c04c9c6a9d51e70a"
+    },
+    "borsuk-waves-offered-preflight.time": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/offered-adapter-gates/borsuk-waves-offered-preflight.time.gz",
+      "archived_sha256": "c8f209b0e4218457c79cc2ccc0f600dc3816e2430b0cba6387a104540ac1d4ef",
+      "bytes": 742,
+      "sha256": "b378c77c299cefb244da06b50b564850019e13bf97b229f65547fdee11ac2242"
+    },
+    "borsuk-waves-offered-qualified-userdata.sh": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/offered-adapter-gates/borsuk-waves-offered-qualified-userdata.sh.gz",
+      "archived_sha256": "8f73efa5116b8e7f4458a39c242b0c047a2674a667db0bc03b17fcf96550585d",
+      "bytes": 14457,
+      "sha256": "2ef31a201950e9e7dd02028a46e451ef1ff590f7cd367dc37757edaf3412fbdf"
+    },
+    "borsuk-waves-offered-qualified.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/offered-adapter-gates/borsuk-waves-offered-qualified.json.gz",
+      "archived_sha256": "d490b3b98ec02f3a06a60ed2dc8b41ce50a09e6a322f3006d9348ddb382d3a22",
+      "bytes": 11599,
+      "sha256": "8e4b96a4dfc49983f62a67e4addd4a02fb735639b1921792a188c1a61bbc815f"
+    },
+    "borsuk-waves-offered-root.log": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/offered-adapter-gates/borsuk-waves-offered-root.log.gz",
+      "archived_sha256": "da1a64c7c2f2ae05dc4b9f32d387c9e29ae2e26af1d6cdcf0c7ad4dc0735ca37",
+      "bytes": 193,
+      "sha256": "1e51865441e63dcc7620cac10f41a30848d5184fcff737915d31538add77c2ec"
+    },
+    "borsuk-waves-offered-root.time": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/offered-adapter-gates/borsuk-waves-offered-root.time.gz",
+      "archived_sha256": "20b0a2e4ec28df06173c590f4d515e1afd3893245a70032d5f90620bc4a6cce8",
+      "bytes": 809,
+      "sha256": "69804baf0d7db623e2018c94605c81f4f1093c8d5aba2b4ee8b8d1c75265ec6b"
+    }
+  },
+  "integration_commit": "52b14ff0",
+  "native_rebuilt": false,
+  "root_offered_runtime_self_check_exit_status": 0,
+  "runtime_code_count": 14,
+  "schema": "borsuk-offered-adapter-root-verification-v1",
+  "syntax_userdata_archive_sha": "placeholder only; actual launch recreates from immutable pushed archive",
+  "unchanged_native_full_suite_reused": true,
+  "worker_commit": "8986d3bd8fc464901c1e16ae33b7a1d7a1830d94"
+}
