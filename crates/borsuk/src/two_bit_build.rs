@@ -69,12 +69,25 @@ impl SemanticRouterImport<'_> {
             serde_json::from_slice(self.original_root).map_err(|_| bad("router import root"))?;
         let plane: serde_json::Value =
             serde_json::from_slice(self.original_plane).map_err(|_| bad("router import plane"))?;
+        // The source coefficients are f32; historical JSON may spell the same
+        // f32 value with different f64 precision. Authenticate the actual bits.
+        let same_coefficients = |value: &serde_json::Value, expected: &[f32]| {
+            value.as_array().is_some_and(|values| {
+                values.len() == expected.len()
+                    && values.iter().zip(expected).all(|(value, expected)| {
+                        value.as_f64().is_some_and(|value| {
+                            let value = value as f32;
+                            value.is_finite() && value.to_bits() == expected.to_bits()
+                        })
+                    })
+            })
+        };
         if root["schema"].as_str() != Some(self.input.schema)
             || root["plane_manifest_sha256"].as_str() != Some(&hash(self.original_plane))
             || root["centroids_sha256"].as_str() != Some(centroid_sha)
             || root["sq8_object_sha256"].as_str() != Some(&current.sq8_sha256)
-            || root["low"] != serde_json::json!(low)
-            || root["step"] != serde_json::json!(step)
+            || !same_coefficients(&root["low"], low)
+            || !same_coefficients(&root["step"], step)
         {
             return Err(bad("router import authority"));
         }
@@ -678,7 +691,9 @@ mod tests {
             .unwrap()
             .remove("page_digest_sha256");
         let old_plane = serde_json::to_vec(&original_plane).unwrap();
-        let old_root = serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v4", "centroids_sha256":centroid_sha, "plane_manifest_sha256":hash(&old_plane), "sq8_object_sha256":plane.sq8_sha256, "low":[0.,0.],"step":[1.,1.]})).unwrap();
+        let old_root = serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v4", "centroids_sha256":centroid_sha, "plane_manifest_sha256":hash(&old_plane), "sq8_object_sha256":plane.sq8_sha256, "low":[-0.1_f64,0.2_f64],"step":[0.1_f64,0.2_f64]})).unwrap();
+        let low = [-0.1_f32, 0.2];
+        let step = [0.1_f32, 0.2];
         let artifacts = crate::semantic_unit_router::RouterArtifacts {
             manifest: Vec::new(),
             membership: Vec::new(),
@@ -697,25 +712,45 @@ mod tests {
             original_root: &old_root,
             original_plane: &old_plane,
         };
-        import
-            .validate(&plane, &centroid_sha, &[0.; 2], &[1.; 2])
-            .unwrap();
+        import.validate(&plane, &centroid_sha, &low, &step).unwrap();
         assert_ne!(input_root, hash(&serde_json::to_vec(&plane).unwrap()));
         assert!(
             import
-                .validate(&plane, &"8".repeat(64), &[0.; 2], &[1.; 2])
+                .validate(&plane, &"8".repeat(64), &low, &step)
                 .is_err()
         );
         assert!(
             import
-                .validate(&plane, &centroid_sha, &[0.; 2], &[2.; 2])
+                .validate(&plane, &centroid_sha, &low, &[2.; 2])
+                .is_err()
+        );
+        for (changed_low, changed_step) in [
+            ([f32::from_bits(low[0].to_bits() ^ 1), low[1]], step),
+            (low, [f32::from_bits(step[0].to_bits() ^ 1), step[1]]),
+            ([f32::NAN, low[1]], step),
+            (low, [f32::INFINITY, step[1]]),
+        ] {
+            assert!(
+                import
+                    .validate(&plane, &centroid_sha, &changed_low, &changed_step)
+                    .is_err()
+            );
+        }
+        assert!(
+            import
+                .validate(&plane, &centroid_sha, &low[..1], &step)
+                .is_err()
+        );
+        assert!(
+            import
+                .validate(&plane, &centroid_sha, &low, &step[..1])
                 .is_err()
         );
         let mut changed = plane;
         changed.source_order_sha256 = "9".repeat(64);
         assert!(
             import
-                .validate(&changed, &centroid_sha, &[0.; 2], &[1.; 2])
+                .validate(&changed, &centroid_sha, &low, &step)
                 .is_err()
         );
     }

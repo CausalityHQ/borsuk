@@ -9,6 +9,14 @@ use std::io::Read;
 const MAGIC: &[u8; 8] = b"BORSUCP1";
 const HEADER_BYTES: usize = 32;
 
+fn centroid_half(value: f64) -> f16 {
+    // half 2.7's portable converter discards the low 32 mantissa bits. Retain
+    // their sticky bit so values just beyond a tie still round correctly.
+    let bits = value.to_bits();
+    let sticky = u64::from(bits as u32 != 0) << 32;
+    f16::from_f64_const(f64::from_bits(bits | sticky))
+}
+
 #[derive(Debug)]
 pub enum UnitCentroidError {
     InvalidGeometry,
@@ -131,7 +139,7 @@ impl UnitCentroidPages {
                 }
             }
             for &sum in &sums {
-                let half = f16::from_f64(sum / count as f64);
+                let half = centroid_half(sum / count as f64);
                 if !half.is_finite() {
                     return Err(UnitCentroidError::InvalidCoefficients);
                 }
@@ -359,6 +367,113 @@ mod tests {
         let mut bytes = vec![0; 12];
         bytes.extend_from_slice(&code);
         bytes
+    }
+
+    #[test]
+    fn streamed_sq8_centroids_round_f64_means_directly_to_half() {
+        // Adjacent half values are exact f64 values; their midpoint chooses the
+        // even encoding. Its immediate f64 neighbors choose the nearer value.
+        for lower in 0..0x7bffu16 {
+            let midpoint =
+                (f16::from_bits(lower).to_f64() + f16::from_bits(lower + 1).to_f64()) / 2.0;
+            for (value, expected) in [
+                (midpoint.next_down(), lower),
+                (midpoint, lower + (lower & 1)),
+                (midpoint.next_up(), lower + 1),
+            ] {
+                for sign in [0, 0x8000] {
+                    let signed = if sign == 0 { value } else { -value };
+                    assert_eq!(centroid_half(signed).to_bits(), expected | sign);
+                }
+            }
+        }
+        for (value, expected) in [
+            (0.0, 0),
+            (f64::MIN_POSITIVE, 0),
+            (f16::from_bits(1).to_f64(), 1),
+            (f16::from_bits(0x0400).to_f64(), 0x0400),
+            (0.011753082508221269, 0x2205),
+            (65504.0, 0x7bff),
+            (65520.0f64.next_down(), 0x7bff),
+            (65520.0, 0x7c00),
+            (65520.0f64.next_up(), 0x7c00),
+            (f64::MAX, 0x7c00),
+            (f64::INFINITY, 0x7c00),
+        ] {
+            assert_eq!(centroid_half(value).to_bits(), expected);
+            assert_eq!(centroid_half(-value).to_bits(), expected | 0x8000);
+        }
+        assert!(centroid_half(f64::NAN).is_nan());
+
+        let step = f32::EPSILON;
+        // One of 32 rows moves the mean just below/above a half tie. An f32
+        // intermediate loses that offset; exercise both tie parities and signs.
+        for (midpoint_bits, expected) in [
+            (0x3f801000, [0x3c00u16, 0x3c00, 0x3c01]),
+            (0x3f803000, [0x3c01u16, 0x3c02, 0x3c02]),
+        ] {
+            let midpoint = f32::from_bits(midpoint_bits);
+            for (code, bits) in expected.into_iter().enumerate() {
+                let mut sq8 = row([code as u8, 2 - code as u8]);
+                for _ in 1..32 {
+                    sq8.extend(row([1, 1]));
+                }
+                let blob = UnitCentroidPages::build_from_sq8_reader(
+                    &mut Cursor::new(sq8),
+                    32,
+                    2,
+                    32,
+                    256,
+                    &[midpoint - step, -midpoint - step],
+                    &[step, step],
+                )
+                .unwrap();
+                assert_eq!(
+                    &blob[HEADER_BYTES..],
+                    [bits.to_le_bytes(), (bits | 0x8000).to_le_bytes()].concat(),
+                    "midpoint={midpoint_bits:#x}, code={code}"
+                );
+            }
+        }
+        // Reproduce the reported mean exactly: eight of 32 restored values
+        // are one f32 ULP above the half tie, for each sign.
+        let sq8 = (0..32)
+            .flat_map(|index| row(if index < 8 { [1, 0] } else { [0, 1] }))
+            .collect::<Vec<_>>();
+        let midpoint = f32::from_bits(0x3c409000);
+        let step = f32::from_bits(0x30800000);
+        let blob = UnitCentroidPages::build_from_sq8_reader(
+            &mut Cursor::new(sq8),
+            32,
+            2,
+            32,
+            256,
+            &[midpoint, -midpoint - step],
+            &[step, step],
+        )
+        .unwrap();
+        assert_eq!(&blob[HEADER_BYTES..], &[0x05, 0x22, 0x05, 0xa2]);
+
+        for low in [
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            65520.0,
+            -65520.0,
+        ] {
+            assert!(matches!(
+                UnitCentroidPages::build_from_sq8_reader(
+                    &mut Cursor::new(row([0, 0])),
+                    1,
+                    2,
+                    32,
+                    256,
+                    &[low, 0.0],
+                    &[1.0, 1.0],
+                ),
+                Err(UnitCentroidError::InvalidCoefficients)
+            ));
+        }
     }
 
     #[test]
