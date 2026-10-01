@@ -1,0 +1,18 @@
+{
+  "config_sha256": "741422dc5a6a6f3587d365dd2aec7731401eb54bdc0715c0afa4a8bf27bb2e32",
+  "exit_status": 143,
+  "interpretation": "200MiB synthetic test ceiling insufficient for actual Arrow decoding; no serving-memory or quality inference",
+  "memory_peak_bytes": 209715200,
+  "native_or_quality_executed": false,
+  "output_partial": {
+    "bytes": 30638080,
+    "path": "/data/orchestration/borsuk-positive-input-preparation-a0001/raw.f32",
+    "sha256": "53f70d88a28a391212da5659759efdb2b9ae2b0f0b2d564fe2914c56a3a0426b"
+  },
+  "preparation_receipt_sealed": false,
+  "schema": "borsuk-positive-preparation-failure-v1",
+  "scope_result": "oom-kill",
+  "stage": "streaming raw parquet extraction",
+  "swap_peak_bytes": 0,
+  "synthetic_self_check_passed": true
+}

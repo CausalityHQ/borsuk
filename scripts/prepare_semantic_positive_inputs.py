@@ -145,6 +145,9 @@ def output_file(path, identities):
         def write(body):
             nonlocal size
             require(stream.write(body) == len(body), "short output write")
+            # Keep dirty output pages reclaimable under the actual cgroup cap.
+            stream.flush()
+            os.fdatasync(stream.fileno())
             hasher.update(body)
             size += len(body)
 
@@ -159,7 +162,7 @@ def raw_blocks(stream, rows, dimensions):
     import numpy as np
     import pyarrow as pa
     import pyarrow.parquet as pq
-    parquet = pq.ParquetFile(stream)
+    parquet = pq.ParquetFile(stream, buffer_size=65536)
     schema = parquet.schema_arrow
     require(schema.names.count('embedding') == 1, "source embedding column")
     field = schema.field('embedding').type

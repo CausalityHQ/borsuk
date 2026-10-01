@@ -1,0 +1,15 @@
+{
+  "verified": true,
+  "exit_status": 0,
+  "self_check_exit_status": 0,
+  "self_check_peak_rss_kib": 77508,
+  "actual_elapsed_seconds": 47.11,
+  "actual_peak_rss_kib": 83012,
+  "memory_max_bytes": 209715200,
+  "swap_max_bytes": 0,
+  "outputs_authenticated": 3,
+  "query_f32_bits_equal": true,
+  "truth_zero_extension_exact": true,
+  "native_quality_measured": false,
+  "adapter_sha256": "99599d83c091c68661b5347ce568a92145695e420d8c9a3d61e7e0d6b84e884f"
+}
