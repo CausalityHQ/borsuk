@@ -1,0 +1,96 @@
+{
+  "schema": "borsuk-semantic-cold-input-derivation-v1",
+  "panel": "original consumed FIRST100k D768 cosine ordinals0..63",
+  "new_measurement": false,
+  "native_parity_verified": false,
+  "datasets": {
+    "relaion": {
+      "scorer_verification_sha256": "8cbbcbeea7ea482b5e9260d439bbb2ab6e5ee52b8b7a7ad98d3d1121a0cb6b88",
+      "scorer_result_sha256": "fd9ceec51064a8a3ff41bda048beb82d6b97ac27fcbf3b61267dd8d2ee8b4f7e",
+      "files": {
+        "requests": {
+          "path": "/tmp/borsuk-semantic-native-cold-inputs-a0001/relaion/requests",
+          "bytes": 1132707,
+          "sha256": "1f94514c894b1acb31d16b98e5f8f13ae9c2fa53610d5b06a0d9598ca03940eb",
+          "parent": {
+            "bytes": 17714558,
+            "path": "/tmp/borsuk-semantic-router-inputs/relaion/requests",
+            "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+          },
+          "derivation": "first64 rows of fixed consumed panel"
+        },
+        "truth": {
+          "path": "/tmp/borsuk-semantic-native-cold-inputs-a0001/relaion/truth",
+          "bytes": 25600,
+          "sha256": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c",
+          "parent": {
+            "bytes": 400000,
+            "path": "/tmp/borsuk-semantic-router-inputs/relaion/truth",
+            "sha256": "4bd3ac79fce3919f85359ce3e305491663991f6cc0890ab91682cda34247a24e"
+          },
+          "derivation": "first64 rows of fixed consumed panel"
+        },
+        "control-reference-records": {
+          "path": "/tmp/borsuk-semantic-native-cold-inputs-a0001/relaion/control-reference-records.jsonl",
+          "bytes": 55606,
+          "sha256": "87ac57317dd13e6ed590bd5b5fafb160cddab07408eb94d1c9b7de0195926b8e",
+          "parent_result_sha256": "fd9ceec51064a8a3ff41bda048beb82d6b97ac27fcbf3b61267dd8d2ee8b4f7e",
+          "authority_envelope_pending": true,
+          "logical_api_and_verified_bytes_parity_only": true
+        },
+        "candidate-reference-records": {
+          "path": "/tmp/borsuk-semantic-native-cold-inputs-a0001/relaion/candidate-reference-records.jsonl",
+          "bytes": 45295,
+          "sha256": "738aba5b50010b8b75df471ad4a29a7ab3abe6ca1ca98889f54ea57edb1f5b3c",
+          "parent_result_sha256": "fd9ceec51064a8a3ff41bda048beb82d6b97ac27fcbf3b61267dd8d2ee8b4f7e",
+          "authority_envelope_pending": true,
+          "logical_api_and_verified_bytes_parity_only": true
+        }
+      }
+    },
+    "cohere": {
+      "scorer_verification_sha256": "491620c80e46fac5132bd520955afb39d9f98262a8a8c0ec8b07996d93b2a39c",
+      "scorer_result_sha256": "e118d05593672c11913664489976af11299e8214d511039c7ac78a3896b2a30d",
+      "files": {
+        "requests": {
+          "path": "/tmp/borsuk-semantic-native-cold-inputs-a0001/cohere/requests",
+          "bytes": 983616,
+          "sha256": "1de0122f73d1b72e54498640b9701ce6d156b513629596447580c85fac302ba4",
+          "parent": {
+            "bytes": 15369495,
+            "path": "/tmp/borsuk-semantic-router-inputs/cohere/requests",
+            "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+          },
+          "derivation": "first64 rows of fixed consumed panel"
+        },
+        "truth": {
+          "path": "/tmp/borsuk-semantic-native-cold-inputs-a0001/cohere/truth",
+          "bytes": 25600,
+          "sha256": "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355",
+          "parent": {
+            "bytes": 400000,
+            "path": "/tmp/borsuk-semantic-router-inputs/cohere/truth",
+            "sha256": "06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8"
+          },
+          "derivation": "first64 rows of fixed consumed panel"
+        },
+        "control-reference-records": {
+          "path": "/tmp/borsuk-semantic-native-cold-inputs-a0001/cohere/control-reference-records.jsonl",
+          "bytes": 60901,
+          "sha256": "06dc4f9fbe1fd1be9dc9ca547fa470d863cf43f941061a7cac11257803edb813",
+          "parent_result_sha256": "e118d05593672c11913664489976af11299e8214d511039c7ac78a3896b2a30d",
+          "authority_envelope_pending": true,
+          "logical_api_and_verified_bytes_parity_only": true
+        },
+        "candidate-reference-records": {
+          "path": "/tmp/borsuk-semantic-native-cold-inputs-a0001/cohere/candidate-reference-records.jsonl",
+          "bytes": 48090,
+          "sha256": "750186026e97c0478e5d4f38534aff927d98be53c1f9c1b9761a249d5d784d7c",
+          "parent_result_sha256": "e118d05593672c11913664489976af11299e8214d511039c7ac78a3896b2a30d",
+          "authority_envelope_pending": true,
+          "logical_api_and_verified_bytes_parity_only": true
+        }
+      }
+    }
+  }
+}
