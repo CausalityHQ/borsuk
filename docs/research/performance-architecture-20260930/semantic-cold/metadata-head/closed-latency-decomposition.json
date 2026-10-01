@@ -1,0 +1,49 @@
+{
+  "cells": {
+    "cohere": {
+      "authority_head_read_mean_ms": 79.2543576875,
+      "estimated_speedup_ms": "UNMEASURED",
+      "five_known_HEAD_observed_mean_ms": 45.385398015625,
+      "input_sha256": "72ff756f53d810c3de169bc5443e6b5ccf2a70d3ce1e727bcc21822a1d128be4",
+      "metadata_GET_header_mean_ms": 189.1210465,
+      "metadata_HEAD_mean_ms": 73.110782453125,
+      "metadata_decode_mean_ms": 3.166376390625,
+      "metadata_stream_output_mean_ms": 15.350383765625,
+      "native_query_mean_ms": 169.31503040625,
+      "query_mean": {
+        "router_submitted_gets": 16,
+        "router_verified_bytes": 1121601.25,
+        "source_submitted_gets": 11.09375,
+        "source_verified_bytes": 5323600,
+        "submitted_gets": 20.4375,
+        "verified_bytes": 16747380
+      },
+      "remote_open_mean_ms": 299.490548046875,
+      "whole_cold_mean_ms": 560.94679346875
+    },
+    "relaion": {
+      "authority_head_read_mean_ms": 80.580988328125,
+      "estimated_speedup_ms": "UNMEASURED",
+      "five_known_HEAD_observed_mean_ms": 47.308037421875,
+      "input_sha256": "6217515cdf1fe55d5e3bc02f1360cabb6066063d7f2cb7a074c402b00255e154",
+      "metadata_GET_header_mean_ms": 190.300878234375,
+      "metadata_HEAD_mean_ms": 74.824903078125,
+      "metadata_decode_mean_ms": 3.222174671875,
+      "metadata_stream_output_mean_ms": 16.509140640625,
+      "native_query_mean_ms": 170.4767346875,
+      "query_mean": {
+        "router_submitted_gets": 15.40625,
+        "router_verified_bytes": 1077205.9375,
+        "source_submitted_gets": 15.140625,
+        "source_verified_bytes": 5465400,
+        "submitted_gets": 18.28125,
+        "verified_bytes": 16391700
+      },
+      "remote_open_mean_ms": 303.975520234375,
+      "whole_cold_mean_ms": 567.214834765625
+    }
+  },
+  "note": "Observed interval means; nested intervals overlap. Do not add percentiles. Removed HEAD waits do not establish candidate speedup.",
+  "population": "FIRST100k D768 cosine development0..63 k10, semantic, 1 offered QPS",
+  "schema": "borsuk-closed-cold-timing-decomposition-v1"
+}

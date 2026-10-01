@@ -11,3 +11,11 @@ Implement as a thin SERIAL research adapter over existing prepare/measured_call/
 ## Authority freeze preparation
 
 paired-config.json now passes actual runtime/both binaries/proofs/full399/checker authority admission. controller_authority_pending=true means no paid launch is authorized yet. Both roles use the same already published cold-a0004 semantic index/head and identical frozen reference/panel bytes. No publication, refit or encoding runs are required. The controller must explicitly reject pending launch authority, authenticate both completed assurance dossiers/full-suite receipt+log bodies, pin its transitive code closure, and verify the runtime ABI before timing. Root uploads only the new qualified binary if absent; historical control binary is reused.
+
+## Closed-trace performance priority
+
+The authenticated complete offered-a3 1QPS semantic cells give mean wholecold 567.215ms ReLAION /560.947ms CoHere. Remote open means are303.976/299.491ms; the serial metadata GET-header waits sum to190.301/189.121ms, metadata HEAD waits74.825/73.111ms, metadata payload/output16.509/15.350ms and decode3.222/3.166ms. These are measured interval means, with nested scopes; do not add their percentiles or infer a speedup. The exact five removed HEADs had47.308/45.385ms mean wait in these historical records. This is observed removable work, not measurement of the new binary.
+
+The current stager awaits each object in order after authenticated root admission. If the paired HEAD test qualifies, bounded parallel staging of independent child metadata is the next larger causal latency candidate. Preserve the root-first authentication boundary, aggregate byte/RAM/GET admission, cancellation with no detached work, exact object-body/hash checks and honest overlapping timing. No implementation or performance claim for that change exists yet. Fresh1M recall/coverage, compact router admission and bounded training remain separate mandatory scale gates; the100k timing result cannot qualify them or prove a vendor win.
+
+Reproduce the closed inputs and timing/request/byte means using closed-latency-decomposition.py. It authenticates complete64-position1QPS cells against their immutable terminal body roster before reading measurements.
