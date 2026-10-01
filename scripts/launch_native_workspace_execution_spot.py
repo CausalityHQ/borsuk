@@ -267,6 +267,8 @@ done
 '''
     start, end = body.index('phase=install\n'), body.index('phase=complete\n')
     body = body[:start]+command+body[end:]
+    if IMPLEMENTATION:
+        body = body.replace('phase=source-qualification\n', 'rustup component add clippy --toolchain 1.98.0\nphase=source-qualification\n', 1)
     body = body.replace('/mnt/native-semantic-router-cold', '/mnt/native-workspace-execution')
     body = body.replace('python3.12 time tar gzip util-linux binutils',
                         'python3.12 python3-dev time tar gzip util-linux binutils build-essential pkg-config libssl-dev cmake')
@@ -950,6 +952,11 @@ def _self_check():
         assert '--on-active=9000s' in body and 'RuntimeMaxSec=7260' in body
         assert all(k in body for k in ('MemoryMax=8G','MemorySwapMax=0','CPUQuota=200%','TasksMax=512'))
         assert 'build-essential' in body and 'python3-dev' in body
+        clippy_install = 'rustup component add clippy --toolchain 1.98.0'
+        if IMPLEMENTATION:
+            assert body.index(clippy_install) < body.index('phase=source-qualification'), 'Clippy installed before execution'
+        else:
+            assert clippy_install not in body, 'unchanged full/test-build bootstrap'
         assert semantic.AWSCLI_URL in body and semantic.AWSCLI_SHA256 in body
         assert 'phase=publication' not in body and 'native-semantic-publication' not in body
         flag = mode_flag()

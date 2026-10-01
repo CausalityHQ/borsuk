@@ -1,0 +1,5 @@
+# Implementation gate failed: missing remote Clippy component
+
+Original controller 89519 exited1; owned instance i-0db1beb6c12b04610 is terminated. All13 returned artifact bodies and gzip copies authenticate, with exact399 source parity before/after. Native generation11 and scorer3 tests passed; all five release targets compiled. Clippy could not start because the minimal Rust profile omitted its component. Workspace test compilation was not run, and compiled binaries were not retained by the failed campaign. Peak cgroup memory6,656,409,600 bytes; swap/OOM0. No quality or latency measurement.
+
+The implementation bootstrap now installs Clippy for the exact1.98.0 toolchain before source qualification; actual-shape red/green and bounded controller self-check pass. Native code is unchanged. Preserve this FAIL. One final corrected-bootstrap implementation gate is needed to complete Clippy/test-build and retain authenticated binaries; no full workspace execution claim until its separate gate.

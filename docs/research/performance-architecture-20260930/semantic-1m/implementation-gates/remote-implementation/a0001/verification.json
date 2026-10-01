@@ -1,0 +1,103 @@
+{
+  "artifacts_authenticated": 13,
+  "aws_state_independently_verified": "terminated",
+  "clippy_passed": false,
+  "controller_exit_status": 1,
+  "failure_cause": "minimal rustup profile omitted clippy component",
+  "full_workspace_executed": false,
+  "instance_id": "i-0db1beb6c12b04610",
+  "memory_peak_bytes": 6656409600,
+  "native_generation_tests_passed": 11,
+  "native_scorer_tests_passed": 3,
+  "oom_events": 0,
+  "qualified": false,
+  "release_binaries_retained": false,
+  "release_stage_passed": true,
+  "schema": "borsuk-semantic-implementation-failure-closeout-v1",
+  "source_identity_sha256": "c9ecb3ac7138978b45efde523c8e96a88811d559e50906c178fd4cb602fb9ff5",
+  "source_unchanged": true,
+  "stages": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "two_bit_generation::",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-01T14:23:04Z",
+      "schema": "borsuk-semantic-1m-implementation-stage-v1",
+      "stage": "generation-tests",
+      "started_at": "2026-10-01T14:18:53Z"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "check_semantic_router_scorer",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-01T14:24:06Z",
+      "schema": "borsuk-semantic-1m-implementation-stage-v1",
+      "stage": "scorer-tests",
+      "started_at": "2026-10-01T14:23:04Z"
+    },
+    {
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--example",
+        "two_bit_http",
+        "--bin",
+        "build_two_bit_generation",
+        "--bin",
+        "build_semantic_unit_router",
+        "--bin",
+        "repackage_semantic_generation",
+        "--bin",
+        "check_semantic_router_scorer"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-01T14:37:34Z",
+      "schema": "borsuk-semantic-1m-implementation-stage-v1",
+      "stage": "release",
+      "started_at": "2026-10-01T14:24:06Z"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "exit_status": 1,
+      "finished_at": "2026-10-01T14:37:34Z",
+      "schema": "borsuk-semantic-1m-implementation-stage-v1",
+      "stage": "clippy",
+      "started_at": "2026-10-01T14:37:34Z"
+    }
+  ],
+  "swap_peak_bytes": 0,
+  "workspace_test_build_executed": false
+}
