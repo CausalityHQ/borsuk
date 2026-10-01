@@ -1,0 +1,20 @@
+{
+  "candidate_native_identity": "714794a10c2d886f7a53a9926a4bb63e093cec16858676268e31833aeead2681",
+  "control_native_identity": "b095ba7d738a65a31faefa0d705ce34e12cb83aeaa153c25079564c53b129c70",
+  "files": {
+    "candidate": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/candidate-checker.py.gz",
+      "archived_sha256": "2ba229ebaba0f81491b739a874ab4316fbb2f0a0dcf0fe435ea1dbecb1c8d564",
+      "bytes": 33088,
+      "sha256": "d1fb970c0ab6ec98ec5311204a54277180631116d48a29a564ed3bbd68e5c5c2"
+    },
+    "control": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/control-checker.py.gz",
+      "archived_sha256": "41d9f149e9efeeea44f5a496d6bb7abe7f57311546cb52ba4f0c9f10523eb180",
+      "bytes": 26913,
+      "sha256": "93db7c38b40aa9480f70076d359f35754850d46c2e853a1d9107621ba9bc07d8"
+    }
+  },
+  "schema": "borsuk-semantic-metadata-paired-checker-authority-v1",
+  "scope": "Frozen qualified metadata-HEAD control and pending metadata-wave candidate validators; same source/scorer/panel. No historical measurement promoted to matched control."
+}
