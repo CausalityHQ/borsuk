@@ -1,0 +1,90 @@
+{
+  "schema": "borsuk-semantic-panel-ids-spot-v1",
+  "source_commit": "21e3ced70c2a974a62262118862ed07eaa6b9dfa",
+  "source_archive_sha256": "b8214d662adc14aea6202ef70a056cede417702dab7cffe39dea9c09ce9c9d55",
+  "wall_seconds": 4500,
+  "instance_type": "c7i.2xlarge",
+  "image_id": "ami-0b8a830d6339a9758",
+  "root_device_name": "/dev/sda1",
+  "availability_zone": "eu-central-1a",
+  "subnet_id": "subnet-034528fbd6977848f",
+  "spot_price_observed_usd_per_hour": "0.214600",
+  "spot_quote_timestamp": "2026-10-01T19:00:00+00:00",
+  "spot_max_usd_per_hour": 0.5,
+  "compute_cap_usd": 0.75,
+  "ebs_s3_allowance_usd": 0.15,
+  "total_cost_measured": false,
+  "cost_scope": "4500s at capped Spot rate; boot/termination overhead and EBS/S3 allowance estimated",
+  "qualification": {
+    "config_path": "docs/research/performance-architecture-20260930/semantic-1m/panel-tools/remote-selection/config.json",
+    "config_sha256": "e4d4e2f7ac1906084a2608e8eee232ddd70bb842f9d33b2afffe45dfec44b9f6",
+    "campaign_schema": "borsuk-semantic-panel-ids-spot-v1",
+    "code_sha256": {
+      "scripts/audit_v36_ranked_physical_ids.py": "67af40bf3d505d45979f269218f4bfd426aaaa5f1e6705b6947bd32831d8bb2b",
+      "scripts/check_native_metadata_ranges_build.py": "da48c53562220026c8024ba2400dca2ba897aa12d49c3e27c3c2fb40b9f0770e",
+      "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
+      "scripts/check_native_semantic_concurrency.py": "9cb0f018689496f6c2bea48d993a99e64f3f3c9b3850a899ef2c927b75ba83e5",
+      "scripts/check_native_semantic_router_stats.py": "d1fb970c0ab6ec98ec5311204a54277180631116d48a29a564ed3bbd68e5c5c2",
+      "scripts/check_native_startup_build.py": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52",
+      "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+      "scripts/launch_native_metadata_ranges_cold_spot.py": "e746c30f61335c707d9c9398e1cd11778994fc5e02c5d84022a47ee7e40221f4",
+      "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
+      "scripts/launch_native_semantic_panel_ids_spot.py": "e232d6433b9a8e4efd233bf45206b15dcffc87c96a75d2b4e85997ecced7b387",
+      "scripts/launch_native_semantic_router_cold_spot.py": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180",
+      "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
+      "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b",
+      "scripts/launch_v174_relaid_bind_compile_spot.py": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a",
+      "scripts/package_semantic_native_generation.py": "cb6a540c810e3a75381d22339eb72f00382b0972a2d3ee687bbb1d97d5a1b594",
+      "scripts/prepare_native_semantic_publication.py": "2d3a9270f5ad847981d9d89fea8ead9e9295f742369fa1b9fd9cf3e7c7e2c7e4",
+      "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+      "scripts/run_native_cold_first_query.py": "fbab85ff0f14ff0c9443493ac406a3ee115c1891626217c735e38f65b9e528b1",
+      "scripts/run_native_cold_offered.py": "d7cdf4e32bf8ca3f0d9adcb441034a5f531112e35482e893234bc68ab17c7634",
+      "scripts/run_native_metadata_ranges_cold.py": "1322fe19b705caeab275bce69ea6b4a9f2ed84cb6505dcbfe01b25301fdb71b8",
+      "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+      "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+      "scripts/run_native_semantic_router_cold.py": "9fe9e968d99a926bdfc15fae0fc0fadd15d44ed1242b6d4fa2e391c1a3b95f88",
+      "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+      "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6",
+      "scripts/select_v36_rank16_fresh_ids.py": "6388e274ba128d770bbadd8b02833af4f685214bc1f78c9796fd778471d30399"
+    },
+    "code_identity_sha256": "338e6648cb5c0820195685cdcd6ea8364a8b2952dc4fb9d5defbc684ab142ca6",
+    "runtime_code_sha256": {
+      "scripts/audit_v36_ranked_physical_ids.py": "67af40bf3d505d45979f269218f4bfd426aaaa5f1e6705b6947bd32831d8bb2b",
+      "scripts/select_v36_rank16_fresh_ids.py": "6388e274ba128d770bbadd8b02833af4f685214bc1f78c9796fd778471d30399",
+      "scripts/launch_native_semantic_panel_ids_spot.py": "e232d6433b9a8e4efd233bf45206b15dcffc87c96a75d2b4e85997ecced7b387"
+    },
+    "runtime_code_identity_sha256": "b190805c0f1640cdeda79eb0c84f3991bf0ff56b9986cbc9c5ed031eda39f34f",
+    "refs": {
+      "registry": {
+        "path": "docs/research/v36-prefix-source-registry.json",
+        "bytes": 726170,
+        "sha256": "b9a19e2f142fd54983ed1db9f09862f2c5623b6b2105d66e538664f8adda9180"
+      },
+      "population": {
+        "path": "docs/research/native-union-20260928/fresh-identity-authorities/population-authority.json",
+        "bytes": 9839,
+        "sha256": "be6abb86e2930b38da572cb7daec3fc0e1a7adb93a53ce974ab038f1efa42fbe"
+      },
+      "overlap": {
+        "path": "docs/research/native-union-20260928/fresh-relaion-physical-id-overlap.json",
+        "bytes": 9422,
+        "sha256": "888748ef1125416bfa47c6dc791280e8be1885eb7ea68f3145872985fe5801c6"
+      },
+      "old_panel": {
+        "path": "docs/research/native-union-20260928/fresh-rank16-provisional-ids.json",
+        "bytes": 227817,
+        "sha256": "a8bd97d6e6468e715c4b26d9df8c400f649e5428b2a85f151307f20cb030230c"
+      }
+    },
+    "refs_identity_sha256": "21ceb7834552b28b16682861087d61f173c12fee93b619eb8e8e674e9c231938",
+    "artifact_roster_sha256": "2f4e93cf6a1154e841c5b283fa6d52332e8341fa5b8b22be65f220231c6154e9",
+    "metadata_only": true,
+    "quality_peek_allowed": false,
+    "complete_historical_coverage": false,
+    "native_qualification_claim": false,
+    "awscli_version": "2.36.11",
+    "awscli_sha256": "50fbb7a2f44a78eab4a210088040e8f0bc4b9937cac8043c2354269d58614df6"
+  },
+  "config_sha256": "e4d4e2f7ac1906084a2608e8eee232ddd70bb842f9d33b2afffe45dfec44b9f6",
+  "interruption_policy": "Discard interrupted worker; no automatic replacement"
+}

@@ -1,0 +1,69 @@
+{
+  "binary_sha256": "347784477ec1fe8c502a05705d4874b111d547d214dba406141858143dacff59",
+  "cold_http_measured": false,
+  "dataset": "ReLAION",
+  "decomposition": {
+    "nominated_units": {
+      "hits10": 625,
+      "hits100": 6124
+    },
+    "page_closure": {
+      "hits10": 630,
+      "hits100": 6230
+    },
+    "source_ranked_pages": {
+      "hits10": 630,
+      "hits100": 6230
+    },
+    "source_scored_units": {
+      "hits10": 630,
+      "hits100": 6230
+    },
+    "sq8_admitted_ranges": {
+      "hits10": 630,
+      "hits100": 6230
+    }
+  },
+  "execution_exit": 0,
+  "fresh_panel": false,
+  "historical_reference_matched_current_latency": false,
+  "historical_reference_recall_at_10": 0.98125,
+  "independent_returned_id_hit_recount": true,
+  "k": 100,
+  "logical_reads": {
+    "leaf_bytes": {
+      "max": 1359820,
+      "mean": 1077205.9375
+    },
+    "leaf_gets": {
+      "max": 16,
+      "mean": 15.40625
+    },
+    "source_bytes": {
+      "max": 7865600,
+      "mean": 5465400.0
+    },
+    "source_gets": {
+      "max": 25,
+      "mean": 15.140625
+    },
+    "sq8_bytes": {
+      "max": 16773120,
+      "mean": 16391700.0
+    },
+    "sq8_gets": {
+      "max": 31,
+      "mean": 18.28125
+    }
+  },
+  "physical_s3_measured": false,
+  "process_peak_bytes": 53116928,
+  "queries": 64,
+  "recall_at_10": 0.98125,
+  "recall_at_100": 0.97140625,
+  "schema": "borsuk-semantic-v8-positive-control-v1",
+  "scope": "local FileObjectStore diagnostic quality only",
+  "scorer_source_sha256": "02d4e305a7d545846f364292c5dd2230c9387c1dbf727e2cccc03035f02fbe1e",
+  "split": "FIRST100k D768 cosine consumed development query ordinals0-63",
+  "wall_seconds": 9.13
+}

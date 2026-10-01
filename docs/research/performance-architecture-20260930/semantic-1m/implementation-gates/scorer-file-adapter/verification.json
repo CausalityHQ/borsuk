@@ -1,0 +1,74 @@
+{
+  "base_revision": "4feeac4e494ff17e9ed47e971a0329afaf06b669",
+  "commit": "a0bdeb16e8352e4dc322e3941513ca11889438c6",
+  "committed_blob_matches_verified_source": true,
+  "full_workspace_execution_rerun": false,
+  "gates": [
+    {
+      "log_sha256": "a3ae403b1d7de18afab24c4ceec03038abc8bb2790602c7570454347a3b84ce8",
+      "name": "red-a2",
+      "observed_memory_peak_bytes": 447811584,
+      "observed_swap_peak_bytes": 0,
+      "source_unchanged": true,
+      "status": 101,
+      "stop_reason": null
+    },
+    {
+      "log_sha256": "3b3eea4a8171c66bd9d4c0725ec797a5b51bb364e2dbdbc98a631033042f2f31",
+      "name": "green",
+      "observed_memory_peak_bytes": 108068864,
+      "observed_swap_peak_bytes": 0,
+      "source_unchanged": true,
+      "status": 0,
+      "stop_reason": null
+    },
+    {
+      "log_sha256": "d67297375c37c84f72870de26753801392eef056d58a0156629f4168dd3c2657",
+      "name": "release",
+      "observed_memory_peak_bytes": 4249436160,
+      "observed_swap_peak_bytes": 0,
+      "source_unchanged": true,
+      "status": 0,
+      "stop_reason": null
+    },
+    {
+      "log_sha256": "0cf749ff0a95c82819c70d0c66a58e2780900a07bcdf53861ee7bec533e28cf8",
+      "name": "clippy",
+      "observed_memory_peak_bytes": 4517052416,
+      "observed_swap_peak_bytes": 0,
+      "source_unchanged": true,
+      "status": 0,
+      "stop_reason": null
+    },
+    {
+      "log_sha256": "3f9fa60b451ff671e5d396636264997e378f9b3fe27d5218f08c5d9df7d69783",
+      "name": "workspace-test-build",
+      "observed_memory_peak_bytes": 8589148160,
+      "observed_swap_peak_bytes": 0,
+      "source_unchanged": true,
+      "status": 0,
+      "stop_reason": null
+    }
+  ],
+  "green_tests_passed": 4,
+  "native_source_identity_sha256": "295a79de9a499cc388db14b4b78ac9fcd4f1eb8673ceb5c1222dfc7f119e9ae4",
+  "owned_files": [
+    "crates/borsuk/src/bin/check_semantic_router_scorer.rs"
+  ],
+  "production_library_changed": false,
+  "real_corpus_or_query_or_truth_rerun": false,
+  "red_expected_runtime_failure": true,
+  "release_binary": {
+    "binary_bytes": 6151912,
+    "binary_path": "/data/orchestration/borsuk-semantic-scorer-file-adapter-20261001-qualification/check_semantic_router_scorer",
+    "binary_sha256": "347784477ec1fe8c502a05705d4874b111d547d214dba406141858143dacff59",
+    "scorer_source_sha256": "02d4e305a7d545846f364292c5dd2230c9387c1dbf727e2cccc03035f02fbe1e",
+    "smoke_status": 2,
+    "smoke_stderr": "usage: check_semantic_router_scorer CONFIG CONFIG_SHA NEW_RESULT_JSONL\n",
+    "smoke_stdout": ""
+  },
+  "schema": "borsuk-scorer-file-adapter-qualification-v1",
+  "scorer_source_sha256": "02d4e305a7d545846f364292c5dd2230c9387c1dbf727e2cccc03035f02fbe1e",
+  "status": "VERIFIED",
+  "worktree_clean": true
+}

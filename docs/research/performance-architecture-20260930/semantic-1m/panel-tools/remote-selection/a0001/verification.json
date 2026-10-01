@@ -1,0 +1,16 @@
+{
+  "ann_quality_measured": false,
+  "authenticated_terminal_bodies": 14,
+  "instance_terminated": true,
+  "memory_max_bytes": 8589934592,
+  "memory_peak_bytes": 8590635008,
+  "memory_peak_excess_bytes": 700416,
+  "original_campaign_passed": false,
+  "panel_reuse_disposition": "pending independent evidence audit",
+  "panel_sha256": "2e2c0507b9bb61468b39aa718d4f5799900ad66724da6ba711fe1f8ec9340530",
+  "panel_validation_passed": true,
+  "raw_and_gzip_body_parity": true,
+  "schema": "borsuk-panel-selection-closed-audit-v1",
+  "selector_exit_status": 0,
+  "terminal_exit_status": 1
+}

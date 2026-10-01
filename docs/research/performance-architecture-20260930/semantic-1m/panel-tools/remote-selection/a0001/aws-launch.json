@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0a6302aee5b55e3c3",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0a6302aee5b55e3c3"
+    }
+  },
+  "prefix": "research/semantic-router/20261001/panel-ids-a0001",
+  "source_commit": "21e3ced70c2a974a62262118862ed07eaa6b9dfa",
+  "source_archive_sha256": "b8214d662adc14aea6202ef70a056cede417702dab7cffe39dea9c09ce9c9d55"
+}
