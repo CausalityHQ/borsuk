@@ -16,6 +16,17 @@ test compilation remotely. Full workspace **execution**, new 1M ANN quality,
 cold latency, throughput and corpus-build RSS remain unknown. Compiler memory
 evidence does not qualify serving or corpus-build RSS.
 
+## Latest delivered evidence
+
+The unchanged production native source subsequently completed [actual remote full workspace execution](implementation-gates/remote-full/a0001/verification.json): 2746 passed, 25 ignored, zero failures. The one-file diagnostic scorer repair separately passed affected tests, release, Clippy and real test compilation ([source-bound evidence](implementation-gates/scorer-file-adapter/verification.json)). No full-workspace execution claim is made for the changed whole-tree digest.
+
+| Current gate | Baseline / candidate | Actual result | Remaining product gap | Next decisive test |
+| --- | --- | --- | --- | --- |
+| ReLAION FIRST100k D768 cosine, consumed development queries 0–63; local FileObjectStore | Frozen historical R@10 628/640; current v8 R@10 628/640 | R@10 98.125% (0 pp delta), R@100 6217/6400 = 97.140625%; all 64 completed. [Closed result](positive-control/v8-a0002/verification.json) | Fresh 1M quality, cold HTTP tails, saturation QPS and lifecycle dollar remain unmeasured | Fixed fresh 1M construction and admitted production scorer |
+| Metadata selection | Frozen 32-object deterministic continuation | Selector subprocess 0; original campaign FAIL from final strict peak assertion. [Exact panel input disposition](panel-tools/input-disposition.json) preserves that FAIL | IDs alone establish no vector uniqueness, oracle correctness or ANN quality | Authenticated vector/duplicate audit, exhaustive GT and sealed readback |
+
+The local quality run's 9.13 s wall and 51,872 KiB process RSS are diagnostic process measurements; neither is a cold S3 latency or total cache-memory result. Historical v7 cold measurements are not matched current-v8 controls. No vendor win is claimed.
+
 ## Thresholds and scope
 
 “Frozen experiment” includes format/admission contracts and proposed envelopes
