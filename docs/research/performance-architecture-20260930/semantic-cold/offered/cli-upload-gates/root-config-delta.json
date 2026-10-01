@@ -1,0 +1,31 @@
+{
+  "config_deltas": [
+    {
+      "path": "/items/0/arms/control/indexes/10",
+      "old": "research/semantic-router/20261001/offered-a0002/indexes/relaion/control/k10",
+      "new": "research/semantic-router/20261001/offered-a0003/indexes/relaion/control/k10"
+    },
+    {
+      "path": "/items/0/arms/candidate/indexes/10",
+      "old": "research/semantic-router/20261001/offered-a0002/indexes/relaion/candidate/k10",
+      "new": "research/semantic-router/20261001/offered-a0003/indexes/relaion/candidate/k10"
+    },
+    {
+      "path": "/items/1/arms/control/indexes/10",
+      "old": "research/semantic-router/20261001/offered-a0002/indexes/cohere/control/k10",
+      "new": "research/semantic-router/20261001/offered-a0003/indexes/cohere/control/k10"
+    },
+    {
+      "path": "/items/1/arms/candidate/indexes/10",
+      "old": "research/semantic-router/20261001/offered-a0002/indexes/cohere/candidate/k10",
+      "new": "research/semantic-router/20261001/offered-a0003/indexes/cohere/candidate/k10"
+    },
+    {
+      "path": "/controller_code_sha256/scripts/launch_native_semantic_router_cold_spot.py",
+      "old": "3769de93f19e1bbbd304d6ff967291239ac1167411d625ffc38d6215da8af5f5",
+      "new": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180"
+    }
+  ],
+  "native_binary_and_assurance_unchanged": true,
+  "only_four_fresh_namespaces_and_launcher_hash_changed": true
+}

@@ -1,0 +1,54 @@
+{
+  "schema": "borsuk-semantic-scale-admission-arithmetic-v1",
+  "source_commit": "c2e74dfab9f7704c45748a41cb28fb1d400afd79",
+  "source_sha256": "f64f1a81ee4fe7838e6e6126e966e5a1a629612ea1b4fad6117c6412a46b58a8",
+  "dimensions": 768,
+  "evidence": "checked layout/formula arithmetic; NOT measured RAM/RSS/latency/quality/build cost",
+  "vec_header_bytes_assumed": 24,
+  "rows": [
+    {
+      "rows": 100000,
+      "units": 3125,
+      "requested_centers": 49,
+      "max_leaf_count": 97,
+      "original_centroids_bytes": 4800032,
+      "membership_bytes": 12500,
+      "flat_prototype_f32_bytes_min": 150528,
+      "flat_prototype_f32_bytes_max": 297984,
+      "construction_admission_modeled_bytes": 107916540
+    },
+    {
+      "rows": 1000000,
+      "units": 31250,
+      "requested_centers": 489,
+      "max_leaf_count": 977,
+      "original_centroids_bytes": 48000032,
+      "membership_bytes": 125000,
+      "flat_prototype_f32_bytes_min": 1502208,
+      "flat_prototype_f32_bytes_max": 3001344,
+      "construction_admission_modeled_bytes": 1655665240
+    },
+    {
+      "rows": 10000000,
+      "units": 312500,
+      "requested_centers": 4883,
+      "max_leaf_count": 9765,
+      "original_centroids_bytes": 480000032,
+      "membership_bytes": 1250000,
+      "flat_prototype_f32_bytes_min": 15000576,
+      "flat_prototype_f32_bytes_max": 29998080,
+      "construction_admission_modeled_bytes": 104130629360
+    },
+    {
+      "rows": 100000000,
+      "units": 3125000,
+      "requested_centers": 48829,
+      "max_leaf_count": 97657,
+      "original_centroids_bytes": 4800000032,
+      "membership_bytes": 12500000,
+      "flat_prototype_f32_bytes_min": 150002688,
+      "flat_prototype_f32_bytes_max": 300002304,
+      "construction_admission_modeled_bytes": 9830202793440
+    }
+  ]
+}
