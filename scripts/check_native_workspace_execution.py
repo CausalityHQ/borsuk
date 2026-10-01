@@ -1,9 +1,10 @@
-"""One actual full-workspace execution; no Git, retry, filter, or cached target."""
+"""One explicit workspace execution, test build or gate pipeline; no retry or cached target."""
 import json
 import hashlib
 import os
 from pathlib import Path
 import resource
+import shutil
 import subprocess
 import sys
 
@@ -73,30 +74,47 @@ def _write(path, value):
         os.fsync(output.fileno())
 
 
-def main(cargo, repo, out, *, semantic_1m=False):
+def main(cargo, repo, out, *, semantic_1m=False, test_build=False, implementation=False):
     from scripts import launch_native_workspace_execution_spot as controller
-    controller.configure(semantic_1m)
+    with controller.execution_mode(semantic_1m, test_build=test_build, implementation=implementation):
+        return _execute(cargo, repo, out, controller)
+
+
+def _execute(cargo, repo, out, controller):
     repo, out = Path(repo).resolve(), Path(out).resolve()
     assert not out.is_relative_to(repo), 'output/target must be outside source'
     proof = json.loads((out/'source-qualification.json').read_bytes())
     assert controller.qualify(repo) == proof, 'worker authority drift'
     assert artifact(out/'config.json') == artifact(repo/controller.CONFIG)
     assert artifact(out/'native-source-manifest.json') == artifact(repo/proof['native_source_manifest']['path'])
+    environment = controller.FIXED['environment']
+    if controller.TEST_BUILD or controller.IMPLEMENTATION:
+        assert not os.environ.get('BORSUK_TEST_BUILD_COMMAND'), 'test-only build shim forbidden'
+        assert Path(cargo).name == 'cargo', 'gate Cargo executable'
     target = out/'target'
     target.mkdir(exist_ok=False)  # Never reuse even an empty previous target.
-    command = [str(cargo), *COMMAND[1:]]
-    env = dict(os.environ, **ENVIRONMENT, CARGO_TARGET_DIR=str(target))
+    command = list(controller.FIXED['command']) if controller.TEST_BUILD or controller.IMPLEMENTATION else [str(cargo), *COMMAND[1:]]
+    env = dict(os.environ, CARGO_TARGET_DIR=str(target))
+    for key, value in environment.items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
+    if controller.TEST_BUILD or controller.IMPLEMENTATION:
+        env['PATH'] = str(Path(cargo).absolute().parent) + os.pathsep + env.get('PATH', '')
     before = source_hashes(repo)
     _write(out/'source-before.json', before)
     assert before == proof['source_sha256'], 'source before execution'
-    report = dict(schema='borsuk-native-workspace-execution-receipt-v1', qualified=False,
+    report = dict(schema=controller.RECEIPT_SCHEMA, qualified=False,
         exit_status=None, gate_status=96, command=command, command_started=False,
         command_completed=False, source_unchanged=False, source_sha256=before,
         source_file_count=len(before), source_identity_sha256=source_identity(before),
         config_sha256=proof['config_sha256'], code_identity_sha256=proof['code_identity_sha256'],
         campaign_schema=proof['campaign_schema'], artifact_roster_sha256=proof['artifact_roster_sha256'],
         qualification_sha256=artifact(out/'source-qualification.json')['sha256'],
-        environment=ENVIRONMENT, fresh_target=str(target), artifacts={})
+        environment=environment, fresh_target=str(target), artifacts={})
+    if controller.TEST_BUILD or controller.IMPLEMENTATION:
+        report.update(execution_kind=controller.FIXED['execution_kind'], actual_full_workspace_execution=False)
     # Bound the Python orchestrator, while restoring Cargo's original address space limit.
     original_limit = resource.getrlimit(resource.RLIMIT_AS)
     resource.setrlimit(resource.RLIMIT_AS, (min(200*1024**2, original_limit[0])
@@ -122,6 +140,20 @@ def main(cargo, repo, out, *, semantic_1m=False):
             report['command_completed'] = resources['closed'] = True
             log.flush(); os.fsync(log.fileno())
         report['gate_status'] = report['exit_status']
+        if controller.IMPLEMENTATION and report['exit_status'] == 0:
+            (out/'binaries').mkdir(exist_ok=False)
+            for name in controller.RELEASE_ARTIFACTS:
+                source = target/'release'/('examples' if name.endswith('/two_bit_http') else '')/Path(name).name
+                assert source.is_file() and not source.is_symlink(), 'regular release binary: '+name
+                identity = artifact(source)
+                assert identity['bytes'] > 4, 'empty release binary: '+name
+                with source.open('rb') as binary, (out/name).open('xb') as output:
+                    assert binary.read(4) == b'\x7fELF', 'ELF release binary: '+name
+                    binary.seek(0)
+                    shutil.copyfileobj(binary, output, length=1024*1024)
+                    os.fchmod(output.fileno(), 0o755)
+                    output.flush(); os.fsync(output.fileno())
+                assert artifact(out/name) == identity == artifact(source), 'release copy identity: '+name
     except BaseException as error:
         report['error'] = dict(type=type(error).__name__, message=str(error))
         report['gate_status'] = 97 if isinstance(error, KeyboardInterrupt) else 96
@@ -150,10 +182,12 @@ def main(cargo, repo, out, *, semantic_1m=False):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    semantic_1m = args[:1] == ['--semantic-1m']
+    implementation = args[:1] == ['--semantic-1m-implementation']
+    test_build = args[:1] == ['--semantic-1m-test-build']
+    semantic_1m = implementation or test_build or args[:1] == ['--semantic-1m']
     if semantic_1m:
         args = args[1:]
-    assert len(args) == 3, 'usage: check_native_workspace_execution.py [--semantic-1m] CARGO REPO OUTPUT'
-    result = main(*args, semantic_1m=semantic_1m)
+    assert len(args) == 3, 'usage: check_native_workspace_execution.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation] CARGO REPO OUTPUT'
+    result = main(*args, semantic_1m=semantic_1m, test_build=test_build, implementation=implementation)
     print(json.dumps(result, sort_keys=True))
     sys.exit(result['gate_status'] if result['gate_status'] >= 0 else 128-result['gate_status'])

@@ -1,0 +1,31 @@
+{
+  "schema": "borsuk-semantic-1m-test-build-controller-root-check-v1",
+  "child_commit": "abcb4679e5e801312ad797230e2a45f3236d3a04",
+  "integrated_commit": "33df72cd",
+  "command": "timeout 120s prlimit --as=209715200 python3 -m scripts.launch_native_workspace_execution_spot --semantic-1m-test-build --self-check",
+  "exit_status": 0,
+  "wall_seconds": 10.52,
+  "max_rss_kib": 63152,
+  "code_files": 23,
+  "terminal_artifacts": 13,
+  "userdata_bytes": 6706,
+  "mocked": [
+    "AWS",
+    "Cargo",
+    "cgroup"
+  ],
+  "actual_workspace_test_build": false,
+  "actual_full_workspace_execution": false,
+  "logs": {
+    "root-self-check.log": {
+      "bytes": 310,
+      "sha256": "7f9529ae77c79966e0a9b930aadf751de5569c914c2abcfd9bfb18dc9fec109b",
+      "gzip_sha256": "c37d215ef101ff1164eb4ec03c43afcd978c1fec9640082d483541e09daf1166"
+    },
+    "root-self-check.time": {
+      "bytes": 854,
+      "sha256": "df956e86cc0bac9ae2e95d17d6d3dde26684294094c559d55053cf1794ed6326",
+      "gzip_sha256": "e1192e3decce1fdd59b5f10c08f6f90153068966bc9e31fbc0d01d1c8cb5db84"
+    }
+  }
+}

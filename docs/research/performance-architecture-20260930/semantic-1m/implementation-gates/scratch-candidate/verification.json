@@ -1,0 +1,26 @@
+{
+  "schema": "borsuk-semantic-diagnostic-scratch-source-candidate-v1",
+  "commit": "5075366d91b0ec0224d9c1768b15ea2bd45a9289",
+  "source_identity_sha256": "c9ecb3ac7138978b45efde523c8e96a88811d559e50906c178fd4cb602fb9ff5",
+  "integrated_into_main": false,
+  "compiled": false,
+  "clippy_passed": false,
+  "tests_executed": false,
+  "patch_sha256": "834849cee70f48ca9d17845d220cfc030cd049b7f45a5769efad43399a27ab37",
+  "production_query_preparation_allowance_bytes": 400000,
+  "diagnostic_trace_payload_bytes": {
+    "100000": 54544,
+    "1000000": 59608
+  },
+  "diagnostic_scratch_budget_bytes": {
+    "100000": 454544,
+    "1000000": 459608
+  },
+  "extra_payload_admitted_separately": true,
+  "read_caps_or_nomination_changed": false,
+  "new_tests": [
+    "semantic_d768_diagnostic_scratch_preserves_production_search",
+    "diagnostic_budget_admits_d768_without_spending_the_trace_charge"
+  ],
+  "next_gate": "One exact-source external affected/release/Clippy/test-build gate; actual full workspace execution separately once"
+}

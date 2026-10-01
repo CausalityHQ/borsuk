@@ -1,0 +1,32 @@
+{
+  "schema": "borsuk-semantic-1m-source-critique-v1",
+  "id": "bded98ca935f4ac8",
+  "native_candidate_commit": "98ff6e5e492b42f7b4875e838a872dd5d7deeab6",
+  "status": "completed",
+  "prompt_sha256": "869a3fa0ddcc7bc2863508deab4359add87830f4f70e7ab1df010592e5198280",
+  "reviewers": [
+    {
+      "role": "research_critic",
+      "id": "7feeb0520baf4b93",
+      "model": "claude-opus-5-5",
+      "effort": "",
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_seconds": 474,
+      "result_file": "research_critic.md",
+      "read_only": true
+    },
+    {
+      "role": "engineering_critic",
+      "id": "f0620d71c6a747b6",
+      "model": "gpt-6-astra",
+      "effort": "",
+      "status": "completed",
+      "exit_code": 0,
+      "elapsed_seconds": 324,
+      "result_file": "engineering_critic.md",
+      "read_only": true
+    }
+  ],
+  "root_decision": "BLOCK fresh1M evaluation until diagnostic scratch correction and external exact-source gates"
+}
