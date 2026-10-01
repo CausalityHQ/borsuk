@@ -1,6 +1,6 @@
 # Same-index metadata HEAD causal gate
 
-Status: launch authority pending controller integration. Native binaries and completed exact-source proofs are frozen; no rebuild or republish is permitted inside the campaign.
+Status: controller integrated and actual final authority preflight passed; ONE attempt a0001 is authorized after the frozen revision is pushed. Native binaries and completed exact-source proofs are frozen; no rebuild or republish is permitted inside the campaign.
 
 - Control: qualified historical semantic binary c00b766f..., native399 identity92085e6e.... Candidate: qualified binary82c02967..., native399 identityb095ba7d.... Exact native delta is the shared stager and its generation fixture. Both full workspace executions are completed0.
 - ReLAION and CoHere FIRST100k D768 cosine, consumed development ordinals0..63, k10. These are reused development panels, not held-out or fresh1M qualification. BOTH roles use the same immutable semantic generation/head/index, identical requests/truth/ordered scorer reference. Historical graph arm is not the control in this gate.
@@ -11,4 +11,4 @@ Status: launch authority pending controller integration. Native binaries and com
 - If performance fails, preserve FAIL and report the measured bottleneck. Retain a correct HEAD removal as a library optimization; do not infer an architecture quality KILL. The next distinct latency candidate is bounded parallel staging of independently authenticated metadata, subject to fresh source assurance and its own causal freeze.
 - The published Turbopuffer1M D768 coldp90=444ms context does not match this100k reused panel. No vendor win, fresh1M/10M/100M attainment, saturation or total-dollar claim is authorized by this gate. No unsupported scale extrapolation.
 
-Configuration SHA, source archive SHA, controller/runtime code closure and exact artifact roster will be bound after the controller is verified. Until then controller_authority_pending remains true.
+Final config SHA51b1bfcde9812c2605c81f0a44d25721fafa2310ff0ea0c2a95cfc5d45b8cc43. Controller/runtime closure23 files, exact61 artifacts, real ELF requirements bothGLIBC2.38<=Ubuntu2.39; template userdata15810<16384 bytes. controller_authority_pending=false. The launched source commit/archive SHA and every instance ACK will be saved in the original reservation/launch receipts. No native rebuild was run for controller-only integration.
