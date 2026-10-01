@@ -1,0 +1,1 @@
+{"all_calls_successful": true, "execution_gate_passed": true, "latency_gate_passed": true, "paired_gate_passed": true, "process_cleanup_complete": true, "quality_gate_passed": true, "records": 512, "resource_gate": {"oom_event_increments": [0, 0, 0], "passed": true, "shared_peak_bytes": 90259456, "shared_swap_peak_bytes": 0}}

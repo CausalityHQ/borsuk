@@ -1,0 +1,82 @@
+{
+  "schema": "borsuk-metadata-waves-development-decision-v1",
+  "coded_frozen_gate": "GO",
+  "original_controller_session": 15712,
+  "controller_exit_status": 0,
+  "root_replay_exit_status": 0,
+  "closed_instance_id": "i-048a2be010548300f",
+  "instance_terminated_verified": true,
+  "artifact_bodies_authenticated": 63,
+  "calls": 512,
+  "all_calls_successful": true,
+  "paired_gate_passed": true,
+  "source_ordered_ID_and_physical_parity": true,
+  "resource_gate": {
+    "oom_event_increments": [
+      0,
+      0,
+      0
+    ],
+    "passed": true,
+    "shared_peak_bytes": 90259456,
+    "shared_swap_peak_bytes": 0
+  },
+  "rows": [
+    {
+      "dataset": "ReLAION",
+      "split": "FIRST100k D768 cosine k10; consumed development ordinals0-63;128 observations per role",
+      "baseline": "fresh matched qualified metadata-HEAD control82c02967",
+      "candidate": "metadata waves e3516453",
+      "recall_at_10_percent": 98.125,
+      "quality_delta_percentage_points": 0.0,
+      "baseline_cold_start_to_response_ms": {
+        "p50": 527.4592035000001,
+        "p90": 566.1785933,
+        "p95": 585.0406530999999,
+        "p99": 669.6367146200001
+      },
+      "candidate_cold_start_to_response_ms": {
+        "p50": 414.2369815,
+        "p90": 452.6176681,
+        "p95": 464.95731490000003,
+        "p99": 479.62253626
+      },
+      "p90_change_percent": -20.057438861844723,
+      "candidate_peak_RSS_bytes": 37625856,
+      "GET_HEAD_verified_byte_charge_parity": true,
+      "measurement_status": "verified closed artifacts and independent replay"
+    },
+    {
+      "dataset": "CoHere",
+      "split": "FIRST100k D768 cosine k10; consumed development ordinals0-63;128 observations per role",
+      "baseline": "fresh matched qualified metadata-HEAD control82c02967",
+      "candidate": "metadata waves e3516453",
+      "recall_at_10_percent": 95.78125,
+      "quality_delta_percentage_points": 0.0,
+      "baseline_cold_start_to_response_ms": {
+        "p50": 526.846802,
+        "p90": 572.0762674,
+        "p95": 593.39780495,
+        "p99": 629.4390272200001
+      },
+      "candidate_cold_start_to_response_ms": {
+        "p50": 411.0059565,
+        "p90": 436.0598202,
+        "p95": 444.80649194999995,
+        "p99": 478.88827599000007
+      },
+      "p90_change_percent": -23.775929006489672,
+      "candidate_peak_RSS_bytes": 37052416,
+      "GET_HEAD_verified_byte_charge_parity": true,
+      "measurement_status": "verified closed artifacts and independent replay"
+    }
+  ],
+  "protocol_note": "Frozen cold_start_to_first_http_response_ns ends at response wire completion, before JSON/parity work and process cleanup. Preregistration prose overstated cleanup inclusion; this report uses the actual frozen timer and does not claim cleanup-inclusive latency. Cleanup is independently validated; full-span throughput remains unmeasured.",
+  "cleanup_inclusive_latency_measured": false,
+  "QPS_or_saturation_measured": false,
+  "total_dollar_cost_measured": false,
+  "matched_vendor_measured": false,
+  "fresh_1M_10M_100M_measured": false,
+  "remaining_gap_to_both_vendors": "No matched vendor measurements; 100k consumed-panel result cannot establish published1M/10M target attainment.1M admission/compact root/trainer, offered saturation/cost,100M lifecycle remain open.",
+  "next_decisive_gate": "Fresh offered-load capacity validation on this frozen qualified winner with full-span completion QPS, then existing1M admission/quality gates; reuse unchanged native assurance."
+}

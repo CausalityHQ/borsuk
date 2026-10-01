@@ -1,0 +1,10 @@
+{
+  "all_artifact_bodies_authenticated": true,
+  "artifact_count": 63,
+  "original_controller_exit_status": 0,
+  "root_replay_exit_status": 0,
+  "instance_id": "i-048a2be010548300f",
+  "instance_terminated_verified": true,
+  "materialized_scratch": "/data/orchestration/borsuk-metadata-waves-a0001-materialized",
+  "compressed_bodies_preserved": true
+}
