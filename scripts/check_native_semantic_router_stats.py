@@ -15,6 +15,8 @@ PARITY = ('ids', 'ranges', 'planned_bytes', *COUNTERS,
 COMMON_FILES = {'manifest.json', 'page_manifest.json', 'page_digests.bin',
                 'plane/manifest.json', 'plane/mean.bin', 'plane/page_digests.bin'}
 METHODS = ['GET', 'HEAD', 'PUT', 'DELETE', 'POST', 'PATCH', 'OPTIONS', 'CONNECT', 'TRACE', 'other']
+CREDENTIAL_PROTOCOL = 'instance-imdsv2'
+CREDENTIAL_PAYLOAD_ATTRIBUTION = 'inferred: ready consumed payload minus authenticated S3 startup bytes; no credential values read'
 UNKNOWN = ['unread_response_payload_bytes', 'response_header_bytes',
            'request_wire_bytes', 'kernel_tls_wire_bytes']
 
@@ -180,7 +182,7 @@ def validate_transport(report, success):
     require(len(methods) == 10, 'method count shape')
     for value in methods:
         integer(value, 'method count', maximum=2**64 - 2)
-    require(sum(methods) == totals['attempts'] and not any(methods[2:]), 'native read method totals')
+    require(sum(methods) == totals['attempts'] and not any(methods[3:]), 'native read/IMDS method totals')
     statuses = totals['status_counts']
     require(len({pair[0] for pair in statuses}) == len(statuses), 'duplicate HTTP status')
     for status, count in statuses:
@@ -204,15 +206,19 @@ def validate_ready(header, arm):
     ready = validate_transport(header['transport'], True)
     heads = metadata['logical_metadata_head_requests'] + 1 + metadata['router_head_requests']
     gets = metadata['logical_metadata_get_requests'] + 1  # Authenticated head.json is a separate GET.
-    require(ready['method_counts'] == [gets, heads] + [0] * 8, 'startup attempts / no hidden retries')
-    require(ready['consumed_payload_bytes'] == metadata['metadata_bytes'] + arm['head_file']['bytes'],
-            'startup payload including authority')
-    return dict(metadata=metadata, startup_transport=ready)
+    # object_store 0.14.1 shares NativeConnector with its instance provider:
+    # PUT token, GET role, GET credentials, before the first authenticated S3 call.
+    require(ready['method_counts'] == [gets + 2, heads, 1] + [0] * 7, 'startup S3/IMDS attempts / no hidden retries')
+    credential_bytes = ready['consumed_payload_bytes'] - metadata['metadata_bytes'] - arm['head_file']['bytes']
+    integer(credential_bytes, 'inferred credential payload', 1, 2**64 - 2)
+    return dict(metadata=metadata, startup_transport=ready, credential_protocol=CREDENTIAL_PROTOCOL,
+                declared_credential_submissions=3, inferred_credential_consumed_bytes=credential_bytes,
+                credential_payload_attribution=CREDENTIAL_PAYLOAD_ATTRIBUTION)
 
 
 def validate_outcome(header, response, arm, success):
     startup = validate_ready(header, arm)
-    metadata, ready = startup['metadata'], startup['startup_transport']
+    ready = startup['startup_transport']
     final = validate_transport(response['transport'], success)
     for name in ('attempts', 'transport_failures', 'stream_failures', 'consumed_payload_bytes', 'dropped_error_bodies'):
         require(final[name] >= ready[name], 'nonmonotonic process transport')
@@ -230,7 +236,7 @@ def validate_outcome(header, response, arm, success):
     require(delta_methods == [query_gets, 0] + [0] * 8, 'query submissions / no hidden retries')
     payload = final['consumed_payload_bytes'] - ready['consumed_payload_bytes']
     require(payload >= verified and (not success or payload == verified), 'consumed vs verified payload')
-    return dict(metadata=metadata, startup_transport=ready, final_process_transport=final,
+    return dict(**startup, final_process_transport=final,
                 query_transport_submissions=query_gets, query_consumed_payload_bytes=payload,
                 unknown=UNKNOWN, confirmed_wire_requests='UNMEASURED', fetch_waves='UNMEASURED')
 

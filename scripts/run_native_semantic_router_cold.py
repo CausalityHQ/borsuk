@@ -7,7 +7,8 @@ CLI: python3 -m scripts.run_native_semantic_router_cold CONFIG CONFIG_SHA BINARY
 Config contract (all SHA256 values are lowercase hexadecimal):
   schema=borsuk-native-semantic-router-cold-v1; count=64; k=10;
   dataset_order=[ReLAION,CoHere]; blocks=[control0,candidate1,candidate2,control3];
-  bucket, region, native_memory_bytes; client_cpu_affinity=[4,5];
+  bucket, region, native_memory_bytes; credential_protocol=instance-imdsv2;
+  client_cpu_affinity=[4,5];
   native_cpu_affinity=[0,1,2,3]; binary={bytes,sha256}; qualification_sha256;
   code_sha256={every CODE path:SHA}; native_source_file_count;
   native_source_identity_sha256 (SHA of sorted compact JSON native_inventory()).
@@ -38,6 +39,9 @@ controller, qualification build, retry, cap expansion or offered-load estimate.
 The first failed call or complete candidate block below 608/640 aborts every
 remaining fixed position. records.jsonl still contains the exact 512-position
 roster; attempted HTTP/process counts are actual, including zero-HTTP failures.
+Process transport includes the shared SDK connector's PUT token and two GET
+credential calls. Credential payload bytes are inferred by subtracting verified
+S3 startup bytes from the ready total; credential values are never read here.
 """
 from pathlib import Path
 import sys
@@ -101,6 +105,7 @@ def native_inventory():
 
 def validate_config(config):
     stats.require(config['schema'] == SCHEMA, 'config schema')
+    stats.require(config.get('credential_protocol') == stats.CREDENTIAL_PROTOCOL, 'unsupported credential protocol')
     stats.require(type(config['count']) is type(config['k']) is int
                   and (config['count'], config['k']) == (64, 10), 'fixed 64/k10 panel')
     stats.require(config['dataset_order'] == list(DATASETS) and config['blocks'] == list(BLOCKS),
@@ -433,6 +438,10 @@ def reduce_calls(records):
                 startup_accounting_observations=len(opened),
                 transport_totals_scope='sum latest validated process snapshot; incomplete final snapshots are lower bounds',
                 known_logical_charge_totals=logical, known_process_transport_totals=known_totals,
+                credential_transport_totals=dict(protocol=stats.CREDENTIAL_PROTOCOL,
+                    declared_credential_submissions=sum(r['startup_accounting']['declared_credential_submissions'] for r in opened),
+                    inferred_credential_consumed_bytes=sum(r['startup_accounting']['inferred_credential_consumed_bytes'] for r in opened),
+                    payload_attribution=stats.CREDENTIAL_PAYLOAD_ATTRIBUTION),
                 native_resource_observations=len(native_resources),
                 native_peak_RSS_bytes=max((r['rss_peak_bytes'] for r in native_resources), default='UNMEASURED'),
                 native_CPU_seconds={name: str(sum((Decimal(r['cpu_' + name + '_seconds']) for r in native_resources), Decimal(0)))
@@ -667,14 +676,14 @@ def self_check():
             router_submitted_gets=8 if semantic else 0, router_verified_bytes=6400 if semantic else 0,
             router_failed_gets=0, query_stages=stages, native_wall_ns=40)
 
-    def transport(gets, heads, payload):
+    def transport(gets, heads, payload, puts=1):
         return dict(schema='borsuk-native-transport-v1', scope='process_all_native_s3_readers', per_query_delta=False,
             attempt_measurement='submitted HttpService calls, not confirmed wire or S3 requests',
             method_order=stats.METHODS, status_counts_format='[http_status,count] nonzero entries',
             payload_measurement='consumed response data frames, including unauthenticated payload',
             dropped_error_body_consumed_bytes=0, unknown=stats.UNKNOWN,
-            totals=dict(attempts=gets + heads, method_counts=[gets, heads] + [0] * 8,
-                status_counts=[[200, gets + heads]], transport_failures=0, stream_failures=0,
+            totals=dict(attempts=gets + heads + puts, method_counts=[gets, heads, puts] + [0] * 7,
+                status_counts=[[200, gets + heads + puts]], transport_failures=0, stream_failures=0,
                 consumed_payload_bytes=payload, dropped_error_bodies=0))
 
     def ready(arm):
@@ -688,8 +697,8 @@ def self_check():
             remote_open_stats=dict(metadata=rows, staging_wall_ns=100, decode_wall_ns=20,
                                   source_head_requests=1, source_head_wall_ns=5,
                                   router_head_requests=router_head, router_head_wall_ns=5 * router_head))
-        header['transport'] = transport(sum(r['logical_get_requests'] for r in rows) + 1,
-                                        len(rows) + 1 + router_head, sum(arm['metadata_files'].values()) + 200)
+        header['transport'] = transport(sum(r['logical_get_requests'] for r in rows) + 3,
+                                        len(rows) + 1 + router_head, sum(arm['metadata_files'].values()) + 200 + 37)
         return header
 
     with tempfile.TemporaryDirectory() as temporary:
@@ -703,6 +712,7 @@ def self_check():
         qualification.write_text(encoded(proof) + '\n')
         config = dict(schema=SCHEMA, count=64, k=10, dataset_order=list(DATASETS), blocks=list(BLOCKS),
             bucket='synthetic', region='synthetic', native_memory_bytes=1073741824,
+            credential_protocol='instance-imdsv2',
             client_cpu_affinity=[4, 5], native_cpu_affinity=[0, 1, 2, 3],
             binary=dict(bytes=binary.stat().st_size, sha256=old.sha(binary)), qualification_sha256=old.sha(qualification),
             native_source_file_count=len(inventory), native_source_identity_sha256=source_digest,
@@ -740,10 +750,33 @@ def self_check():
                 item['arms'][name] = arm
                 by_index[arm['indexes']['10']] = dict(arm, dataset=dataset)
             config['items'].append(item)
+        for item in config['items']:
+            for arm in item['arms'].values():
+                header = ready(arm)
+                startup = stats.validate_ready(header, arm)
+                assert startup['credential_protocol'] == 'instance-imdsv2'
+                assert startup['declared_credential_submissions'] == 3
+                assert startup['inferred_credential_consumed_bytes'] == 37
+                for mutation in ('missing_GET', 'missing_PUT', 'extra_GET', 'extra_PUT', 'DELETE',
+                                 'status', 'zero_payload', 'short_payload', 'saturated'):
+                    bad = copy.deepcopy(header)
+                    totals = bad['transport']['totals']
+                    if mutation in ('missing_GET', 'missing_PUT', 'extra_GET', 'extra_PUT', 'DELETE'):
+                        method = 0 if mutation.endswith('GET') else 3 if mutation == 'DELETE' else 2
+                        change = -1 if mutation.startswith('missing') else 1
+                        totals['method_counts'][method] += change
+                        totals['attempts'] += change
+                        totals['status_counts'][0][1] += change
+                    elif mutation == 'status': totals['status_counts'][0][0] = 403
+                    elif mutation in ('zero_payload', 'short_payload'):
+                        totals['consumed_payload_bytes'] -= 37 + int(mutation == 'short_payload')
+                    else: totals['consumed_payload_bytes'] = 2**64 - 1
+                    rejected(lambda: stats.validate_ready(bad, arm))
         cfg.write_text(encoded(config) + '\n')
         validate_config(config)
         validate_runtime(config, binary, qualification)
-        for mutation in ('blocks', 'count', 'roster', 'identity', 'code', 'rootcap', 'membership', 'leafstaging'):
+        for mutation in ('blocks', 'count', 'roster', 'identity', 'code', 'rootcap', 'membership', 'leafstaging',
+                         'credential_protocol', 'missing_protocol'):
             bad = copy.deepcopy(config)
             if mutation == 'blocks': bad['blocks'] = ['control0', 'candidate1', 'candidate2', 'control3-32']
             elif mutation == 'count': bad['count'] = 32
@@ -752,7 +785,9 @@ def self_check():
             elif mutation == 'code': bad['code_sha256'].pop(CODE[-1])
             elif mutation == 'rootcap': bad['items'][0]['arms']['candidate']['metadata_files']['manifest.json'] = 65537
             elif mutation == 'membership': bad['items'][0]['arms']['candidate']['metadata_files']['router/membership.bin'] += 1
-            else: bad['items'][0]['arms']['candidate']['metadata_files']['router/leaves.bin'] = 4812500
+            elif mutation == 'leafstaging': bad['items'][0]['arms']['candidate']['metadata_files']['router/leaves.bin'] = 4812500
+            elif mutation == 'credential_protocol': bad['credential_protocol'] = 'static'
+            else: del bad['credential_protocol']
             rejected(lambda: validate_config(bad))
         bad = dict(config, native_source_file_count=len(inventory) + 1)
         rejected(lambda: validate_runtime(bad, binary, qualification))
@@ -804,10 +839,12 @@ def self_check():
             elif fault == 'telemetry': del response['transport']
             elif fault == 'stage': response['query_stages']['source']['end_ns'] = 41
             elif fault == 'wire': response['transport']['unknown'] = []
-            elif fault == 'retry':
+            elif fault in ('retry', 'credential_refresh'):
                 response['transport']['totals']['attempts'] += 1
-                response['transport']['totals']['method_counts'][0] += 1
+                response['transport']['totals']['method_counts'][0 if fault == 'retry' else 2] += 1
                 response['transport']['totals']['status_counts'][0][1] += 1
+            elif fault == 'nonmonotonic':
+                response['transport']['totals']['consumed_payload_bytes'] = ready_totals['consumed_payload_bytes'] - 1
             elif fault == 'reject': return 400, encoded(dict(error='invalid_request', transport=ready(arm)['transport'])).encode()
             elif fault == 'http':
                 response.pop('ids'); response.pop('ranges'); response.pop('planned_bytes')
@@ -842,6 +879,13 @@ def self_check():
             assert result['all_calls_successful'] and result['quality_gate_passed'] and result['latency_improvement']
             assert all(d['pooled']['candidate']['count'] == d['pooled']['control']['count'] == 128
                        and d['R100'] == {'control': 'UNMEASURED', 'candidate': 'UNMEASURED'} for d in result['datasets'].values())
+            for dataset in result['datasets'].values():
+                for pooled in dataset['pooled'].values():
+                    credentials = pooled['credential_transport_totals']
+                    assert credentials['protocol'] == 'instance-imdsv2'
+                    assert credentials['declared_credential_submissions'] == 3 * 128
+                    assert credentials['inferred_credential_consumed_bytes'] == 37 * 128
+                    assert pooled['known_process_transport_totals']['method_counts'][2] == 128
             assert all(not path.exists() for path in temporary_paths)
             audited = stats.check_saved(output, old.sha(cfg), str(binary))
             assert audited == dict(all_calls_successful=True, quality_gate_passed=True, latency_improvement=True, records=512)
@@ -851,7 +895,8 @@ def self_check():
             rejected(lambda: stats.check_saved(output, old.sha(cfg), str(binary)))
             (output / 'summary.json').write_text(encoded(result))
             panels = prepare(config, directory / 'prepared')
-            for fault in ('parity', 'telemetry', 'stage', 'ready', 'wire', 'retry', 'http', 'binarybody', 'reject'):
+            for fault in ('parity', 'telemetry', 'stage', 'ready', 'wire', 'retry', 'credential_refresh',
+                          'nonmonotonic', 'http', 'binarybody', 'reject'):
                 state['fault'] = fault
                 arm = panels['ReLAION']['arms']['candidate']
                 before_calls = posted.call_count, stopped.call_count
@@ -865,7 +910,7 @@ def self_check():
                 assert sys.argv is argv and all(getattr(old, name) is value for name, value in saved.items())
                 assert all(os.environ.get(name) == value for name, value in environment.items())
             state['fault'] = None
-            for fault, http_calls in (('telemetry', 1), ('startup', 0), ('reject', 1)):
+            for fault, http_calls in (('telemetry', 1), ('startup', 0), ('reject', 1), ('credential_refresh', 1)):
                 state['fault'] = fault
                 before_calls = len(commands), posted.call_count, stopped.call_count
                 failed_output = directory / ('fail-fast-' + fault)
@@ -964,7 +1009,7 @@ def self_check():
         assert sys.argv is argv and all(getattr(old, name) is value for name, value in saved.items())
         assert all(os.environ.get(name) == value for name, value in environment.items())
     stats.self_check()
-    print('PASS 512 fixed ABBA calls; fail-fast/511 aborted and zero-HTTP startup failure; 608/607 block gates; raw failures, cleanup and restoration; native UNRUN')
+    print('PASS 512 fixed ABBA calls; exact IMDSv2 startup and GET-only query delta; fail-fast/511 aborted and zero-HTTP startup failure; 608/607 block gates; raw failures, cleanup and restoration; native UNRUN')
 
 
 if __name__ == '__main__':
