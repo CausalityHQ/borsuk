@@ -1,0 +1,118 @@
+{
+  "schema": "borsuk-semantic-frozen-assets-upload-v1",
+  "config_sha256": "72cd42fde1b52f08f90bd0d6d55e17fdbc5a208b28656911a74f2ef37e2686fb",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "region": "eu-central-1",
+  "started_epoch": 1790819876.701494,
+  "objects": [
+    {
+      "key": "research/semantic-router/20261001/native/c00b766f65f8f0ae0adb5fcca786cb33c0daf046ff4b8f9a8bbcab39e1263533/two_bit_http",
+      "bytes": 16191384,
+      "sha256": "c00b766f65f8f0ae0adb5fcca786cb33c0daf046ff4b8f9a8bbcab39e1263533",
+      "action": "created",
+      "remote_body_authenticated": true
+    },
+    {
+      "key": "research/semantic-router/20261001/native/6647839e08bcd5d50beb7badc313274028e0e5a36d2c354454fcfc0e325d1813/two_bit_plan_demo",
+      "bytes": 15578880,
+      "sha256": "6647839e08bcd5d50beb7badc313274028e0e5a36d2c354454fcfc0e325d1813",
+      "action": "created",
+      "remote_body_authenticated": true
+    },
+    {
+      "key": "research/semantic-router/20261001/native/98b1bf6f091842470391635af1307380c8e4870176b0b8fa38006985303b4e35/native-assurance.json",
+      "bytes": 13447,
+      "sha256": "98b1bf6f091842470391635af1307380c8e4870176b0b8fa38006985303b4e35",
+      "action": "created",
+      "remote_body_authenticated": true
+    },
+    {
+      "key": "research/semantic-router/20261001/native/335b9f0776a50c0a92afd37f4e6cff8a6fb402e8068d835073e1526bf300e107/boundary-check.json",
+      "bytes": 31497,
+      "sha256": "335b9f0776a50c0a92afd37f4e6cff8a6fb402e8068d835073e1526bf300e107",
+      "action": "created",
+      "remote_body_authenticated": true
+    },
+    {
+      "key": "research/semantic-router/20261001/native/21b769e5d54a85251f128aee6f1653673457227724d33c2801cde93795de4ccf/native-source-manifest.json",
+      "bytes": 44535,
+      "sha256": "21b769e5d54a85251f128aee6f1653673457227724d33c2801cde93795de4ccf",
+      "action": "created",
+      "remote_body_authenticated": true
+    },
+    {
+      "key": "research/semantic-router/20261001/sources/033d196e982bca44c4adfe39b00a9353698f7e2d93494fbe94130e236430287a.tar.gz",
+      "bytes": 3216908,
+      "sha256": "033d196e982bca44c4adfe39b00a9353698f7e2d93494fbe94130e236430287a",
+      "action": "created",
+      "remote_body_authenticated": true
+    },
+    {
+      "key": "research/semantic-router/20261001/publication-assets/1d30e5a5dbfaa8c7ce054a121b55ebda8de751ba37bd27274ec33bb7cd5ff973.tar.gz",
+      "bytes": 105632412,
+      "sha256": "1d30e5a5dbfaa8c7ce054a121b55ebda8de751ba37bd27274ec33bb7cd5ff973",
+      "action": "created",
+      "remote_body_authenticated": true
+    },
+    {
+      "key": "research/semantic-router/20261001/cold-a0001/inputs/relaion/requests",
+      "bytes": 1132707,
+      "sha256": "1f94514c894b1acb31d16b98e5f8f13ae9c2fa53610d5b06a0d9598ca03940eb",
+      "action": "created",
+      "remote_body_authenticated": true
+    },
+    {
+      "key": "research/semantic-router/20261001/cold-a0001/inputs/relaion/truth",
+      "bytes": 25600,
+      "sha256": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c",
+      "action": "created",
+      "remote_body_authenticated": true
+    },
+    {
+      "key": "research/semantic-router/20261001/cold-a0001/inputs/relaion/control-reference-k10",
+      "bytes": 56624,
+      "sha256": "32c53b26d137679c43ec85fcef76da196ef20494c264e548d331b8fbd8644d57",
+      "action": "created",
+      "remote_body_authenticated": true
+    },
+    {
+      "key": "research/semantic-router/20261001/cold-a0001/inputs/relaion/candidate-reference-k10",
+      "bytes": 46316,
+      "sha256": "719eb91456ca71a035d4690c32ba43b68badd29d9cdc34c9d9f174b5fda277db",
+      "action": "created",
+      "remote_body_authenticated": true
+    },
+    {
+      "key": "research/semantic-router/20261001/cold-a0001/inputs/cohere/requests",
+      "bytes": 983616,
+      "sha256": "1de0122f73d1b72e54498640b9701ce6d156b513629596447580c85fac302ba4",
+      "action": "created",
+      "remote_body_authenticated": true
+    },
+    {
+      "key": "research/semantic-router/20261001/cold-a0001/inputs/cohere/truth",
+      "bytes": 25600,
+      "sha256": "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355",
+      "action": "created",
+      "remote_body_authenticated": true
+    },
+    {
+      "key": "research/semantic-router/20261001/cold-a0001/inputs/cohere/control-reference-k10",
+      "bytes": 61919,
+      "sha256": "07c3cf65a8f7366ea4dc4982f6bd47be08a687bac98f2c81a1567bd399bae642",
+      "action": "created",
+      "remote_body_authenticated": true
+    },
+    {
+      "key": "research/semantic-router/20261001/cold-a0001/inputs/cohere/candidate-reference-k10",
+      "bytes": 49111,
+      "sha256": "c7d70f281bd217d95a40bd54b8078d0c6a7b6e101293bd154d13ba813497dae5",
+      "action": "created",
+      "remote_body_authenticated": true
+    }
+  ],
+  "native_invocations": 0,
+  "instance_launches": 0,
+  "status": "complete",
+  "finished_epoch": 1790819880.4745762
+}
