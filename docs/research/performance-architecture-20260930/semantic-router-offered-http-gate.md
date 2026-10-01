@@ -1,6 +1,6 @@
-# Semantic offered-load development gate — frozen a0001 protocol
+# Semantic offered-load development gate — frozen a0002 protocol
 
-2026-10-01. Authority: closed a0004 independent-verification.json and decision.md. BOTH candidate quality/latency survivors earned this gate. Frozen a0001 config: semantic-cold/offered-config.json. Root preflight authenticates the qualified binary and full 399-source assurance, 21 Python runtime/controller files and 108 terminal artifacts. Generated actual-authority user data is 13,798 bytes. Launch remains contingent on integrated checks and fast-forward delivery.
+2026-10-01. Authority: closed a0004 independent-verification.json and decision.md. BOTH candidate quality/latency survivors earned this gate. Frozen a0002 config: semantic-cold/offered-config.json. Root preflight authenticates the qualified binary and full 399-source assurance, 21 Python runtime/controller files and 108 terminal artifacts. Generated actual-authority user data is 13,798 bytes. Launch remains contingent on integrated checks and fast-forward delivery.
 
 ## Fixed experiment
 
@@ -25,3 +25,7 @@ The existing five positional runtime arguments remain; optional pure `on_cell_cl
 Final deterministic artifact roster is108: shared53 minus serial records plus24 offered records,24 cell summaries and eight consumed inputs/reference bodies. Complete scientific failure (capacity, quality or dispatch attainment) can close execution successfully with explicit scientific FAIL fields; native identity, resource, cleanup or ledger failure returns nonzero. This distinction preserves valid overload/lower-rate measurements without calling them passed product gates. Unstarted cells remain explicitly aborted and unmeasured.
 
 Canonical ledger ordinal is `query_ordinal`, with exact0–63 per cell and explicit `rate_index`, dataset and arm. `offered_gate_passed` means BOTH candidate8QPS cells achieve64 successful offers, >=608 hits, dispatch validity and native/shared resource/cleanup gates. Control failures remain separately visible; matched latency comparisons require both actual cells valid. Execution success never substitutes for this attainment gate.
+
+## a0002 resource-sampler repair
+
+Historical a0001 remains FAIL. a0002 uses fresh namespaces and a new Python source/config identity; native399 source, binaries, inputs, scorer, timing/quality/dispatch/resource caps remain unchanged. Required memory/CPU fields fail closed with field-specific diagnostics; optional io.stat may be UNMEASURED. Validate baseline before preparation/native admission. Local transient systemd8GiB/zero-swap check passed with io.stat absent, peak19689472B and zero OOM; it is sampler evidence, not ANN performance. Failed deterministic cell raw bodies are authenticated in final forensic artifacts, never uploaded as valid cell checkpoints. Same108 complete roster/independent replay/owned-ID termination remains required. See offered/cgroup-repair-gates/verification.json.
