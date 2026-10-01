@@ -1,0 +1,7 @@
+# Offered a0001 — FAIL (resource sampler)
+
+Original controller91341 exit1; owned i-02256d0218f531ffd terminated/waited after199s. All60 available terminal artifacts independently authenticate. Bootstrap/ABI/publication succeeded. One ReLAION graph-control native HTTP call was attempted;0 calls qualified and1535 positions aborted. No candidate query, qualified throughput or new quality/latency result. Prior a0004 measurements remain current.
+
+First cell fails `shared cgroup proof`; required snapshots are not available. Earlier serial a0004 snapshots were also UNMEASURED. Final profile resource capture independently reports memory.max8GiB, peak120152064B, zero swap and zero OOM counters. This is a sampler/assurance failure, not evidence of native memory-cap exhaustion or architecture quality failure. The exact missing remote sampler field is unknown because its read exception was discarded.
+
+The exit handler excluded invalid cell records from final artifacts as well as valid-cell checkpoints. This loses forensic per-call raw evidence. Repair sampling at its source with mandatory memory fields separated from optional io.stat, explicit failed-field diagnostics, pre-admission resource validation and bounded failure-body collection that never publishes an invalid cell as a valid checkpoint. Reproduce locally before any fresh paid attempt. Keep native399 source/binaries, scientific gates, resources and timing unchanged. Preserve this FAIL; next attempt must have a new source/config/prefix and repeat the panel.

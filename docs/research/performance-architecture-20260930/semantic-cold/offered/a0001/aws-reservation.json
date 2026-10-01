@@ -1,0 +1,164 @@
+{
+  "schema": "borsuk-native-semantic-router-cold-offered-spot-v1",
+  "source_commit": "e1c9b4456baf0cb80c94808b30d23aa2af9ac0f6",
+  "source_archive_sha256": "e05cc0e2fe9b7e5469345ada3c146127487623807662447b08ea913c4570a46b",
+  "wall_seconds": 3600,
+  "instance_type": "m7i.2xlarge",
+  "image_id": "ami-0b8a830d6339a9758",
+  "root_device_name": "/dev/sda1",
+  "availability_zone": "eu-central-1c",
+  "subnet_id": "subnet-0a12dbed0ca6fac25",
+  "spot_price_observed_usd_per_hour": "0.227100",
+  "spot_quote_timestamp": "2026-09-30T21:00:00+00:00",
+  "spot_max_usd_per_hour": 0.5,
+  "compute_cap_usd": 0.5,
+  "ebs_s3_allowance_usd": 0.15,
+  "total_cost_measured": false,
+  "cost_scope": "3600s at capped Spot rate; boot/termination overhead and EBS/S3 allowance estimated",
+  "qualification": {
+    "config_path": "docs/research/performance-architecture-20260930/semantic-cold/offered-config.json",
+    "config_sha256": "3e987b9256913cc738b954213f1a6c7701ff131f6206ee4e6e828acf11ebf92d",
+    "campaign_schema": "borsuk-native-semantic-router-cold-offered-spot-v1",
+    "native_source_commit": "eeaafae3cd5d374b982b22914e1634dfce117dd7",
+    "source_identity_sha256": "92085e6e40ac9324ea7a4fc8daab58995dc84680a5c2391eb426dd430230e520",
+    "source_file_count": 399,
+    "code_sha256": {
+      "scripts/run_native_cold_first_query.py": "fbab85ff0f14ff0c9443493ac406a3ee115c1891626217c735e38f65b9e528b1",
+      "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+      "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+      "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+      "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6",
+      "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+      "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+      "scripts/check_native_semantic_router_stats.py": "3815ee3cf166c659d7e9a31c2109730fb100bb301c3afe50cc3396e3a58399b6",
+      "scripts/run_native_semantic_router_cold.py": "4eea72015017894aff5f24098dee22180d8c94f41d136683e452184113f5d7a4",
+      "scripts/run_native_metadata_ranges_cold.py": "1322fe19b705caeab275bce69ea6b4a9f2ed84cb6505dcbfe01b25301fdb71b8",
+      "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
+      "scripts/run_native_cold_offered.py": "d7cdf4e32bf8ca3f0d9adcb441034a5f531112e35482e893234bc68ab17c7634",
+      "scripts/launch_native_semantic_router_cold_spot.py": "58e93102b0495428ca684fa60c34d47ce5dad1a179417113825d6799f55a9f19",
+      "scripts/launch_native_metadata_ranges_cold_spot.py": "e6a74599258cd219abb16ca2c793baa30cffe00e60e85925691c86c75f5686ad",
+      "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
+      "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
+      "scripts/launch_v174_relaid_bind_compile_spot.py": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a",
+      "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b",
+      "scripts/check_native_startup_build.py": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52",
+      "scripts/prepare_native_semantic_publication.py": "2d3a9270f5ad847981d9d89fea8ead9e9295f742369fa1b9fd9cf3e7c7e2c7e4",
+      "scripts/package_semantic_native_generation.py": "cb6a540c810e3a75381d22339eb72f00382b0972a2d3ee687bbb1d97d5a1b594"
+    },
+    "binary_sha256": "c00b766f65f8f0ae0adb5fcca786cb33c0daf046ff4b8f9a8bbcab39e1263533",
+    "binary_bytes": 16191384,
+    "qualification_sha256": "335b9f0776a50c0a92afd37f4e6cff8a6fb402e8068d835073e1526bf300e107",
+    "native_rebuilt": false,
+    "current_full_suite_pass_claim": true,
+    "full_workspace_test_execution": true,
+    "native_source_archive_sha256": "033d196e982bca44c4adfe39b00a9353698f7e2d93494fbe94130e236430287a",
+    "native_source_manifest_sha256": "21b769e5d54a85251f128aee6f1653673457227724d33c2801cde93795de4ccf",
+    "native_assurance_sha256": "98b1bf6f091842470391635af1307380c8e4870176b0b8fa38006985303b4e35",
+    "native_publisher": {
+      "path": "/tmp/borsuk-semantic-native-publisher-a0001/two_bit_plan_demo",
+      "bytes": 15578880,
+      "sha256": "6647839e08bcd5d50beb7badc313274028e0e5a36d2c354454fcfc0e325d1813",
+      "key": "research/semantic-router/20261001/native/6647839e08bcd5d50beb7badc313274028e0e5a36d2c354454fcfc0e325d1813/two_bit_plan_demo"
+    },
+    "publisher_sha256": "6647839e08bcd5d50beb7badc313274028e0e5a36d2c354454fcfc0e325d1813",
+    "publisher_bytes": 15578880,
+    "publisher_qualification_sha256": "d6cc84a5f87d087d2dc4c2826effa3d9d9fbecf77cabd054e4d9c57215fbcdcf",
+    "asset_manifest_sha256": "e87e21b333d360005f325634588e351196503f2fb10290b54d7f0768a73be338",
+    "publication_assets": {
+      "key": "research/semantic-router/20261001/publication-assets/1d30e5a5dbfaa8c7ce054a121b55ebda8de751ba37bd27274ec33bb7cd5ff973.tar.gz",
+      "bytes": 105632412,
+      "sha256": "1d30e5a5dbfaa8c7ce054a121b55ebda8de751ba37bd27274ec33bb7cd5ff973"
+    },
+    "asset_preparation_sha256": "e13e18118b5313f4e8bf4427aab72eb00e7d1e16ae18113e91ce7fc5a0ecf6c1",
+    "runtime_os": {
+      "ID": "ubuntu",
+      "VERSION_ID": "24.04"
+    },
+    "runtime_glibc": "2.39",
+    "required_glibc": {
+      "two_bit_http": "2.38",
+      "two_bit_plan_demo": "2.38"
+    },
+    "awscli_version": "2.36.11",
+    "awscli_sha256": "50fbb7a2f44a78eab4a210088040e8f0bc4b9937cac8043c2354269d58614df6",
+    "native_binary": {
+      "path": "/tmp/borsuk-centroid-portable-rounding-20260930/two_bit_http",
+      "bytes": 16191384,
+      "sha256": "c00b766f65f8f0ae0adb5fcca786cb33c0daf046ff4b8f9a8bbcab39e1263533",
+      "key": "research/semantic-router/20261001/native/c00b766f65f8f0ae0adb5fcca786cb33c0daf046ff4b8f9a8bbcab39e1263533/two_bit_http"
+    },
+    "authority_artifacts": {
+      "native-assurance.json": {
+        "bytes": 13447,
+        "sha256": "98b1bf6f091842470391635af1307380c8e4870176b0b8fa38006985303b4e35"
+      },
+      "boundary-check.json": {
+        "bytes": 31497,
+        "sha256": "335b9f0776a50c0a92afd37f4e6cff8a6fb402e8068d835073e1526bf300e107"
+      },
+      "native-source-manifest.json": {
+        "bytes": 44535,
+        "sha256": "21b769e5d54a85251f128aee6f1653673457227724d33c2801cde93795de4ccf"
+      },
+      "native-source.tar.gz": {
+        "bytes": 3216908,
+        "sha256": "033d196e982bca44c4adfe39b00a9353698f7e2d93494fbe94130e236430287a"
+      },
+      "qualified-source.tar.gz": {
+        "bytes": 3259676,
+        "sha256": "c235e52cb48eb9529f1314a7aa15dfc07edb8296c1ce72d6e1f483b3724af247"
+      },
+      "assurance/affected-final.json": {
+        "bytes": 811,
+        "sha256": "088aae90dee34247df11db510d203e429e485bad360e130b1c70066b63147086"
+      },
+      "assurance/affected-final.log": {
+        "bytes": 60544,
+        "sha256": "f93eaeb6f3bce1e8f4e6006b6170b9331ae145c8b49a178246a13f1377f10618"
+      },
+      "assurance/release-final.json": {
+        "bytes": 833,
+        "sha256": "ecb00290415867122a6abce2ec92154cbf2ac4b5136299830f060cd192a1c7ed"
+      },
+      "assurance/release-final.log": {
+        "bytes": 64681,
+        "sha256": "5a8326523232fc7b8bc15b96b6ebcbb299de4366339d6ada02a7185466db10bf"
+      },
+      "assurance/clippy-final.json": {
+        "bytes": 827,
+        "sha256": "937114429bfc88428e031f33be7c7779fe8074c97511c5627f72b72d2239347a"
+      },
+      "assurance/clippy-final.log": {
+        "bytes": 278132,
+        "sha256": "b3a9030240fadafcbfae522c2c49e9da1ce080eba47785fa0f929a5f713c5ede"
+      },
+      "assurance/test-build-final.json": {
+        "bytes": 713,
+        "sha256": "654e5ca4ddc2b181ca1d16cafbc6e328c622c93ce182054ec58cd593f6bbce19"
+      },
+      "assurance/test-build-final.log": {
+        "bytes": 86025,
+        "sha256": "a20189d6f7e496a24001e3e1d332d2e2fc459974cbc230af71ff8fac6f39b7d0"
+      },
+      "assurance/full-workspace-final.json": {
+        "bytes": 48159,
+        "sha256": "1016ca697364fabf93bdf66d5b8447ea70553e05e4a6a3511a28ba70e11b8e33"
+      },
+      "assurance/full-workspace-final.log": {
+        "bytes": 343828,
+        "sha256": "d40c2a16965775d45612f9fe6561388dd2887f877ff5206da63bfa224e7e2585"
+      },
+      "publisher-proof.json": {
+        "bytes": 31469,
+        "sha256": "d6cc84a5f87d087d2dc4c2826effa3d9d9fbecf77cabd054e4d9c57215fbcdcf"
+      },
+      "asset-manifest.json": {
+        "bytes": 7162,
+        "sha256": "e87e21b333d360005f325634588e351196503f2fb10290b54d7f0768a73be338"
+      }
+    },
+    "artifact_roster_sha256": "b7d82ec23cf45003bf53f353937020e1fa75368eb608eb74a0bb8c8cab98b955"
+  },
+  "config_sha256": "3e987b9256913cc738b954213f1a6c7701ff131f6206ee4e6e828acf11ebf92d",
+  "interruption_policy": "Discard interrupted worker; no automatic replacement"
+}
