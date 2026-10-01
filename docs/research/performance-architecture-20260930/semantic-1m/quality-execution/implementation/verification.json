@@ -1,0 +1,21 @@
+{
+  "schema": "borsuk-fresh1m-quality-adapter-root-verification-v1",
+  "passed": true,
+  "implementation_commit": "c1298d6e84c8a5fdfa74b8b27aba681c06c52bf7",
+  "config_sha256": "d513a25d24739167ab8d7392b594e4e4373db65e7cc3de3fe5e01668fa1de8ee",
+  "source_identity_sha256": "295a79de9a499cc388db14b4b78ac9fcd4f1eb8673ceb5c1222dfc7f119e9ae4",
+  "source_file_count": 399,
+  "original_full_workspace_execution_reused": true,
+  "current_whole_tree_full_execution": false,
+  "binary_sha256": {
+    "builder": "54071f8e7daf70589a416a2d9b8b4eefe42456a566bad767a77872b55c6e6c3f",
+    "scorer": "347784477ec1fe8c502a05705d4874b111d547d214dba406141858143dacff59"
+  },
+  "actual_authority_validation": true,
+  "controller_self_check_exit_status": 0,
+  "exact_code_count": 46,
+  "artifact_count": 21,
+  "bash_valid_userdata_bytes": 7104,
+  "native_built_or_scored_here": false,
+  "ann_quality_measured": false
+}
