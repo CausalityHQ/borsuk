@@ -55,9 +55,9 @@
       "sha256": "888748ef1125416bfa47c6dc791280e8be1885eb7ea68f3145872985fe5801c6"
     },
     "panel": {
-      "bytes": 17578,
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/panel-tools/selected-panel.json",
-      "sha256": "2e2c0507b9bb61468b39aa718d4f5799900ad66724da6ba711fe1f8ec9340530"
+      "bytes": null,
+      "path": null,
+      "sha256": null
     },
     "population": {
       "bytes": 9839,

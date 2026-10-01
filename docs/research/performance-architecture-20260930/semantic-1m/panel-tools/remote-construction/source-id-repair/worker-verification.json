@@ -1,0 +1,74 @@
+{
+  "base": "ec9f9d12",
+  "change": "Require exact pa.uint64 for materialized indexed-source IDs; retain pa.int64 for registered query candidate shards.",
+  "changed_source_receipts": {
+    "scripts/prepare_semantic_1m_fresh_panel.py": {
+      "bytes": 34348,
+      "sha256": "bf747e3e250a73c7d4e9d7545666d7b7b7f6fcf61d293e16efcc863196b0c1d6"
+    },
+    "scripts/seal_v36_rank16_fresh_1m.py": {
+      "bytes": 10878,
+      "sha256": "78246ff37132f7ecb6036c0cdddcb264d6c9d762f8e02a71f98fa7855b30b0dc"
+    }
+  },
+  "checks": {
+    "diff": {
+      "command": "git diff --check",
+      "exit": 0
+    },
+    "green": {
+      "exit": 0,
+      "output": "self-check PASS",
+      "same_command": true
+    },
+    "red": {
+      "command": "OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 /home/rb/.cache/borsuk-cohere-1m-v4/analysis-venv/bin/python -m scripts.prepare_semantic_1m_fresh_panel --self-check",
+      "exit": 1,
+      "failure": "source_raw indexed source feature ID type differs on uint64 synthetic indexed parquet"
+    },
+    "syntax": {
+      "command": "compile(path.read_bytes(), name, exec) for both owned scripts",
+      "exit": 0
+    }
+  },
+  "commit": "46c16f8984ac85b5a1237e5a001715084769852b",
+  "coverage": [
+    "uint64 indexed source preserves original vector row order and exact raw hash",
+    "duplicate/null uint64 IDs rejected",
+    "int64 positive/negative, uint32, float64, string, bool ID schemas rejected",
+    "wrong raw SHA rejected",
+    "existing candidate/source binding and oracle selfchecks passed"
+  ],
+  "historical_receipts": {
+    "docs/research/native-union-20260928/fresh-identity-authorities/ATTEMPT_COMPLETE.json": {
+      "bytes": 4719,
+      "sha256": "e08ac93eecd9dda22aa4611884bf3f072fcee7ea5918966607d271630bc0f385"
+    },
+    "docs/research/native-union-20260928/fresh-identity-authorities/freeze-receipt.json": {
+      "bytes": 14421,
+      "sha256": "47a29c338af6c3366aaa02af3205e6f7c7c1ac4a95462a87e1e6d4b387a71173"
+    }
+  },
+  "historical_source_archive_sha256": "722f48d5e71ac5269482dd28a318f4277021908afb9c84fefb7167b741becafd",
+  "identity": "Roman Bartusiak <riomus@gmail.com>",
+  "parent_uplink": "agent_send rejected because parent has 20 queued instructions; result written here and will be archived by agent_complete",
+  "prohibited_actions_run": false,
+  "root_followup": "Integrate commit, re-freeze construction code/config pins, then decide whether to launch a new campaign; historical a0001 remains immutable.",
+  "source_parquet": {
+    "bytes": 1458450077,
+    "key": "research/v36-prefix-screen/runs/v36-prefix-screen-20260908T174540Z-31445a91/attempt-0000/source.parquet",
+    "sha256": "2796b579f37afe99ca4aff57e282335a6a79ad30596645957d26326a0560cf86"
+  },
+  "source_raw_sha256": "a3eac4dedae5006843ea2ad243ec590440fe5b983ca8cd969dbc92b3e3406c33",
+  "status": "complete",
+  "worktree": "/home/rb/worktrees/borsuk-panel-source-id-type",
+  "writer_evidence": {
+    "indexed_writer_call_line": 9529,
+    "materialized_batch_line": 9173,
+    "path": "crates/borsuk/src/v36_prefix_dataset.rs",
+    "revision": "31445a91ee1cd68ff17010b1bf5205a47e8237bf",
+    "source_schema": "feature_row_id UInt64; materialized_batch builds UInt64Array; source role index0 is passed query=false",
+    "source_schema_line": 8985,
+    "write_spooled_output_counted_line": 9250
+  }
+}

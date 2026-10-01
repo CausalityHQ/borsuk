@@ -11,3 +11,7 @@ Spot bid ceiling $0.50/hour gives a maximum 9000-second compute bound of $1.25, 
 Root collection authenticates exactly 20 small terminal bodies and the completed remote replay receipt. Multi-GB inputs remain on the disposable host; their exact identities are recorded remotely. Do not rerun the oracle locally. Stop/terminate owned compute before collection. A failed duplicate/oracle/seal/resource/identity gate does not qualify a panel.
 
 Verified before launch: wrapper mocked self-check, actual helper20/code27/ref7 authority preflight, whitespace check, Bash/PYTHONPATH user-data generation (6881 bytes for root proof). Actual construction, oracle and resource attainment remain unmeasured until the original terminal closes.
+
+## a0002 prospective source admission repair
+
+The original a0001 failed before vector decoding because the shared raw reader required signed IDs, whereas the frozen V36 writer emits UInt64. Require the exact unsigned schema; preserve all source/hash/row/order/ID uniqueness/vector guards and fixed panel. Same resources, seeds, versions, duplicate audit, exhaustive oracle and sealed replay. Freeze new source/config/archive identities before launching a0002; preserve original a0001 FAIL and original draft authority. No change to ANN or quality gates; no replacement queries.

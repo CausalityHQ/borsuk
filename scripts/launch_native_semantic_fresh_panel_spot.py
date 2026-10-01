@@ -59,8 +59,8 @@ REGION, BUCKET = ids.REGION, ids.BUCKET
 SPOT_MAX_USD_PER_HOUR, COMPUTE_CAP = .50, 1.25
 AWSCLI_VERSION, AWSCLI_SHA256 = ids.AWSCLI_VERSION, ids.AWSCLI_SHA256
 THREAD_ENV = ('OPENBLAS_NUM_THREADS','OMP_NUM_THREADS','MKL_NUM_THREADS','BLIS_NUM_THREADS','NUMEXPR_NUM_THREADS')
-AUTHORITY = ROOT.parent / 'construction-config.draft.json'
-AUTHORITY_SHA = '53c0cf95b9d4a990c7166ffbea7435c38fd6275f2068588e4da95b2c76c387ba'
+AUTHORITY = ROOT.parent / 'construction-config.source-id-v2.draft.json'
+AUTHORITY_SHA = '88f5136c1c33b7a3ddd74a82b0543297b84ee4525fef82fc837cc4f3111cdbd5'
 CODE = tuple(sorted((*ids.CODE, 'scripts/launch_native_semantic_fresh_panel_spot.py')))
 OUTPUTS = ('queries.raw', 'requests.jsonl', 'truth.u32', 'truth.i64', 'panel.json',
            'duplicate-audit.json', 'oracle.json', 'resources.json')
