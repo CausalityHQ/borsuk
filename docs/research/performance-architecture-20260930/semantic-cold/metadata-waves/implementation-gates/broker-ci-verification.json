@@ -1,0 +1,194 @@
+{
+  "schema": "borsuk-post-broker-ci-verification-v1",
+  "observed_at": "2026-10-01T10:09:23.472312+00:00",
+  "head_sha": "ee876b181c86dfcffaccc946761cb0b0bc0d6966",
+  "run_id": 36846167731,
+  "url": "https://github.com/CausalityHQ/borsuk/actions/runs/36846167731",
+  "jobs": [
+    {
+      "name": "Rust graph release candidate",
+      "id": 110317220154,
+      "status": "completed",
+      "conclusion": "failure",
+      "html_url": "https://github.com/CausalityHQ/borsuk/actions/runs/36846167731/job/110317220154",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@v5",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@stable",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Format",
+          "status": "completed",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Package and verify clean source bundle",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run actions/upload-artifact@v4",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Run actions/checkout@v5",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "name": "Methodology and artifact contracts",
+      "id": 110317220191,
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/CausalityHQ/borsuk/actions/runs/36846167731/job/110317220191",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@v5",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/setup-python@v6",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install pinned format-contract environment",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run all script and evidence tests",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/setup-python@v6",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/checkout@v5",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "name": "Rust",
+      "id": 110317220407,
+      "status": "completed",
+      "conclusion": "failure",
+      "html_url": "https://github.com/CausalityHQ/borsuk/actions/runs/36846167731/job/110317220407",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@v5",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Repo policy",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Repo policy tests",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run dtolnay/rust-toolchain@stable",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "RustSec dependency audit",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Format",
+          "status": "completed",
+          "conclusion": "failure"
+        },
+        {
+          "name": "Clippy",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Build test binaries with bounded compiler concurrency",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Test",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run Rust local example",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Run Rust docs ladder example",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Build benches",
+          "status": "completed",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Post Run actions/checkout@v5",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    }
+  ],
+  "native_source_changed": false,
+  "actual_remote_workspace_execution": "pending",
+  "note": "Methodology job passed after broker readiness fix. Rust jobs fail formatting before full execution; no full CI pass claimed. Frozen native formatting repairs remain deferred until current arm closes."
+}
