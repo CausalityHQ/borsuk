@@ -216,6 +216,12 @@ fn coverage(gold: &[i64], inverse: &[usize], includes: impl Fn(usize) -> bool) -
         .count();
     json!({"hits10":hits10,"hits100":hits100})
 }
+fn diagnostic_scratch_bytes(rows: usize) -> Result<usize> {
+    // Keep the production codec allowance; admission also charges the trace.
+    400_000_usize
+        .checked_add(TwoBitPlanTrace::scratch_bytes(rows))
+        .ok_or_else(|| "diagnostic scratch overflow".into())
+}
 async fn run(c: &Config, events: &mut File) -> Result<Value> {
     let store = LocalFileSystem::new_with_prefix(&c.store_root)?;
     let prefix = ObjectPath::from(c.generation_prefix.clone());
@@ -228,7 +234,7 @@ async fn run(c: &Config, events: &mut File) -> Result<Value> {
         max_source_bytes: 64 * 1024 * 1024,
         max_source_gets: 128,
         max_parallel_source_gets: 16,
-        max_query_scratch_bytes: 400000,
+        max_query_scratch_bytes: diagnostic_scratch_bytes(c.rows)?,
         already_pinned_bytes: EVALUATOR_CHARGE,
     };
     let generation = TwoBitGeneration::open_remote(
@@ -371,6 +377,7 @@ async fn run(c: &Config, events: &mut File) -> Result<Value> {
             .iter()
             .map(|r| r.id)
             .collect::<Vec<_>>();
+        require(ids.len() >= 10, "fewer than ten returned IDs")?;
         let h10 = ids[..10]
             .iter()
             .filter(|id| gold[..10].contains(id))
@@ -441,6 +448,21 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn diagnostic_budget_admits_d768_without_spending_the_trace_charge() {
+        use borsuk::rotated_two_bit::{RotatedTwoBitCodec, TwoBitError};
+        let codec = RotatedTwoBitCodec::new(&[0.; 768], 0).unwrap();
+        for rows in [100_000, 1_000_000] {
+            let trace_bytes = TwoBitPlanTrace::scratch_bytes(rows);
+            assert!(matches!(
+                codec.prepare_query(&[1.; 768], 400_000 - trace_bytes),
+                Err(TwoBitError::MemoryBudget)
+            ));
+            let scratch = diagnostic_scratch_bytes(rows).unwrap() - trace_bytes;
+            assert_eq!(scratch, 400_000);
+            codec.prepare_query(&[1.; 768], scratch).unwrap();
+        }
+    }
     #[test]
     fn inverse_requires_an_exact_permutation_and_maps_physical_coverage() {
         let order = [2_u64, 0, 1]

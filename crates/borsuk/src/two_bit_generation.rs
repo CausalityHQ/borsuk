@@ -490,7 +490,7 @@ pub struct TwoBitDiscoveryTrace {
 #[doc(hidden)]
 #[derive(Debug, Default, serde::Serialize)]
 pub struct TwoBitPlanTrace {
-    /// Source two-bit max-row nomination order of up to318 union pages.
+    /// Source nomination order: up to318 graph pages or1024 semantic closure pages.
     pub ranked_candidate_pages: Vec<usize>,
     /// Globally distinct32-row units source-scored, including bounded completion.
     pub nomination_evaluated_units: Vec<usize>,
@@ -509,11 +509,19 @@ impl TwoBitPlanTrace {
     /// Conservative retained ID/record payload excluding allocator overhead.
     pub fn scratch_bytes(rows: usize) -> usize {
         let units = rows.div_ceil(32);
-        std::mem::size_of::<Self>()
-            + 2 * std::mem::size_of::<TwoBitDiscoveryTrace>()
-            + 2 * (rows.div_ceil(256).min(159) + units.min(128) + units.min(1272))
-                * std::mem::size_of::<usize>()
-            + units.min(2544) * std::mem::size_of::<usize>()
+        // Retain the graph allowance, cover the full semantic page closure and
+        // charge semantic IDs too. Nomination reserves up to2544 slots; seed
+        // completion retains at most8 slots (at most7 additions).
+        let ids = (2 * rows.div_ceil(256).min(159)).max(rows.div_ceil(256).min(1024))
+            + 2 * (units.min(128) + units.min(1272))
+            + units.min(2544)
+            + 16
+            + units.min(1024)
+            + 8;
+        ids.checked_mul(std::mem::size_of::<usize>())
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
+            .and_then(|bytes| bytes.checked_add(2 * std::mem::size_of::<TwoBitDiscoveryTrace>()))
+            .expect("bounded trace geometry")
     }
 }
 /// Offline source nomination and SQ8 page admission using the production planner.
@@ -537,7 +545,11 @@ pub fn plan_two_bit_source_walks<'a>(
     // arithmetic. Actual query budgets are applied after nomination as before.
     choose_budgeted_pages_sparse(&[], &[0], rows, dimensions, 1, 1, usize::MAX)
         .map_err(TwoBitGenerationError::Budget)?;
-    let mut nomination_evaluated_units = Vec::with_capacity(if trace.is_some() { 2544 } else { 0 });
+    let mut nomination_evaluated_units = Vec::with_capacity(if trace.is_some() {
+        rows.div_ceil(32).min(2544)
+    } else {
+        0
+    });
     let score = |unit: usize| {
         if trace.is_some() {
             nomination_evaluated_units.push(unit);
@@ -2173,6 +2185,158 @@ mod source_walk_tests {
         ) -> object_store::Result<()> {
             self.inner.copy_opts(from, to, options).await
         }
+    }
+
+    #[tokio::test]
+    async fn semantic_d768_diagnostic_scratch_preserves_production_search() {
+        use crate::two_bit_build::TwoBitGenerationBuilder;
+        use crate::two_bit_source::TwoBitSource;
+        use sha2::{Digest, Sha256};
+        let hash = |body: &[u8]| format!("{:x}", Sha256::digest(body));
+        let rows = 257;
+        let dimensions = 768;
+        let temp = tempfile::tempdir().unwrap();
+        let mut raw = Vec::new();
+        let mut sq8 = Vec::new();
+        for row in 0..rows {
+            let value = (1 + row % 7) as u8;
+            for _ in 0..dimensions {
+                raw.extend_from_slice(&(value as f32).to_le_bytes());
+            }
+            sq8.extend_from_slice(&((rows - row + 1000) as i64).to_le_bytes());
+            sq8.extend_from_slice(&(dimensions as f32 * (value as f32).powi(2)).to_le_bytes());
+            sq8.extend(std::iter::repeat_n(value, dimensions));
+        }
+        let raw_path = temp.path().join("raw");
+        let sq8_path = temp.path().join("sq8");
+        fs::write(&raw_path, &raw).unwrap();
+        fs::write(&sq8_path, &sq8).unwrap();
+        let store = RecordedStore::default();
+        let sq8_sha = hash(&sq8);
+        let key = ObjectPath::from(format!("semantic/objects/{sq8_sha}"));
+        store.put(&key, sq8.into()).await.unwrap();
+        let etag = store.head(&key).await.unwrap().e_tag.unwrap();
+        let root = temp.path().join("generation");
+        let order = (0..rows as u64).collect::<Vec<_>>();
+        let root_sha = TwoBitGenerationBuilder {
+            source: TwoBitSource {
+                raw: &raw_path,
+                raw_sha256: &hash(&raw),
+                sq8: &sq8_path,
+                sq8_sha256: &sq8_sha,
+                rows,
+                dimensions,
+            },
+            base_epoch: 0,
+            generation: 1,
+            low: &[0.; 768],
+            step: &[1.; 768],
+            sq8_object_key: key.as_ref(),
+            sq8_etag: &etag,
+        }
+        .build_with_discovery(Some(&order), DiscoveryMode::Semantic, &root, 128_000_000)
+        .unwrap();
+        let mut limits = TwoBitGenerationLimits {
+            max_memory_bytes: 512 * 1024 * 1024,
+            max_active_queries: 1,
+            max_query_bytes: 16_773_120,
+            max_query_gets: 32,
+            max_parallel_gets: 16,
+            max_source_bytes: 64 * 1024 * 1024,
+            max_source_gets: 128,
+            max_parallel_source_gets: 16,
+            max_query_scratch_bytes: 400_000,
+            already_pinned_bytes: 32 * 1024 * 1024,
+        };
+        let head = crate::two_bit_store::publish_two_bit_generation(
+            &store,
+            &ObjectPath::from("semantic/index"),
+            &root,
+            &root_sha,
+            limits,
+            None,
+        )
+        .await
+        .unwrap();
+        let production = TwoBitGeneration::open_remote(
+            &store,
+            &head.metadata_prefix(),
+            &root_sha,
+            limits,
+            temp.path(),
+        )
+        .await
+        .unwrap();
+        let query = [1.; 768];
+        store.reads.lock().unwrap().clear();
+        let expected = production
+            .search_with_store(&store, &query, 100, None)
+            .await
+            .unwrap();
+        let expected_reads = store.reads.lock().unwrap().clone();
+        assert_eq!(expected.ranked.candidates.len(), 100);
+        store.reads.lock().unwrap().clear();
+        assert!(
+            production
+                .diagnostic_search_with_store(&store, &query, 100)
+                .await
+                .is_err()
+        );
+        assert!(store.reads.lock().unwrap().is_empty());
+        let trace_bytes = TwoBitPlanTrace::scratch_bytes(rows);
+        limits.max_query_scratch_bytes = 400_000_usize.checked_add(trace_bytes).unwrap();
+        let mut diagnostic = TwoBitGeneration::open_remote(
+            &store,
+            &head.metadata_prefix(),
+            &root_sha,
+            limits,
+            temp.path(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            diagnostic.modeled_memory_bytes - production.modeled_memory_bytes,
+            trace_bytes as u64
+        );
+        store.reads.lock().unwrap().clear();
+        let (actual, trace) = diagnostic
+            .diagnostic_search_with_store(&store, &query, 100)
+            .await
+            .unwrap();
+        assert_eq!(actual.ranked.candidates, expected.ranked.candidates);
+        assert_eq!(actual.plan, expected.plan);
+        assert_eq!(actual.ranked.stats, expected.ranked.stats);
+        assert_eq!(actual.source_stats, expected.source_stats);
+        assert_eq!(actual.router_stats, expected.router_stats);
+        assert_eq!(*store.reads.lock().unwrap(), expected_reads);
+        let retained = std::mem::size_of::<TwoBitPlanTrace>()
+            + [
+                trace.ranked_candidate_pages.capacity(),
+                trace.nomination_evaluated_units.capacity(),
+                trace.semantic_leaves.capacity(),
+                trace.semantic_units.capacity(),
+                trace.semantic_seed_additions.capacity(),
+            ]
+            .into_iter()
+            .sum::<usize>()
+                * std::mem::size_of::<usize>();
+        assert!(trace.discoveries.is_empty());
+        assert!(retained <= trace_bytes);
+        // D768 preparation needs 399,360 bytes, in addition to the retained trace.
+        diagnostic.limits.max_query_scratch_bytes = trace_bytes + 399_359;
+        store.reads.lock().unwrap().clear();
+        assert!(
+            diagnostic
+                .diagnostic_search_with_store(&store, &query, 100)
+                .await
+                .is_err()
+        );
+        assert!(store.reads.lock().unwrap().is_empty());
+        diagnostic.limits.max_query_scratch_bytes += 1;
+        diagnostic
+            .diagnostic_search_with_store(&store, &query, 100)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
