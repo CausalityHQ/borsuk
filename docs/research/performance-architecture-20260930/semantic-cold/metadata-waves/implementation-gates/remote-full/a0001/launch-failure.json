@@ -1,0 +1,23 @@
+{
+  "schema": "borsuk-workspace-launch-failure-v1",
+  "original_session": 67999,
+  "controller_exit_status": 1,
+  "aws_error": "InsufficientInstanceCapacity",
+  "acknowledged_instance_ids": [],
+  "actual_full_workspace_execution": false,
+  "scientific_result": null,
+  "qualified": false,
+  "artifacts": {
+    "controller.log": {
+      "bytes": 1969,
+      "sha256": "8316c7a25ed516b0aa466fb46fddd41b7a19c3222fec43c1d9fb316f92e1c064",
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/remote-full/a0001/controller.log.gz"
+    },
+    "controller.time": {
+      "bytes": 831,
+      "sha256": "a18ce522bbd73f18b1504fbfb1b2d4e07ec474df8be9c1b47c8821447b56a2dc",
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/remote-full/a0001/controller.time.gz"
+    }
+  },
+  "no_automatic_replacement": true
+}
