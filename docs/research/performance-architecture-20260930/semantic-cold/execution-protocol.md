@@ -28,7 +28,9 @@ A restarted interrupted cell requires a distinct declared attempt.
 
 ## Publication and authority
 
-Reuse the library publisher through existing two_bit_plan_demo --live-s3.
+Reuse the library publisher through existing two_bit_plan_demo --live-s3 on
+the same owned Spot worker, before the cold profile phase. Its validation
+reader requires instance credentials; no local credential shim is introduced.
 Authenticate local packages and all 399 native source files before publication.
 Publish each arm in a distinct fresh namespace, HEAD last, and read back the
 actual root/generation/control epoch. Expected initial epoch is 1; a local
@@ -38,12 +40,17 @@ bytes even when a matching application-owned key already exists; charge these
 uploads and disclose them rather than assuming zero publication traffic.
 
 The publisher's validation calls use the consumed development panel and are
-not cold latency measurements. The cold gate still starts 512 separate native
+not cold latency measurements. This validation can warm opaque S3 service
+caches; that state is uncontrolled and common to both arms. The cold gate
+still starts 512 separate native
 processes under the fixed ABBA protocol. No source or SQ8 re-encoding/refit.
 Require completed exact-source workspace execution, release, Clippy and test
 compilation authorities, standalone binary proof, authenticated source archive,
-actual publication receipts, exact runtime/controller hashes, and final config.
-Pending authority must reject launch. No claim of a vendor win follows this
+the authenticated publication executable/assets, exact runtime/controller
+hashes, and final config. Native assurance must be complete before launch.
+The worker must finish publication and verify actual HEADs and development
+parity before starting any cold measurement. A publication failure ends the
+attempt; all publication receipts are retained with the closed cold artifacts. No claim of a vendor win follows this
 100k comparison.
 
 ## Credential and transport boundary
