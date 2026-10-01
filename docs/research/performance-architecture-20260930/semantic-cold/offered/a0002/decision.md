@@ -1,0 +1,7 @@
+# Offered a0002 — FAIL (closed-cell upload)
+
+Original90148 exit1; owned i-01cc63adaa61b90a1 terminated/waited461s. All62 available terminal artifact bodies authenticate. Sampler repair works on actual AWS: first ReLAION graph-control cell64/64 valid calls, recall@10=99.6875%, at.25QPS offers; actual full-span successfulQPS0.2533471755, wholecold p50/p90/p95/p99=643.706/729.932/761.354/897.997ms. FIRST100kD768cosine development64uniquequeries,k10. Independent offline source/scorer/raw transport/schedule/resource/summary replay passes. Sharedpeak119820288B, swap0/noOOM.
+
+The record-first cell upload then failed ParamValidationError; no candidate or later cell ran, campaign incomplete. No candidate throughput, paired latency delta, new candidate quality or vendor win. These are valid partial graph-cell observations only.
+
+The same PUT call against official botocore1.34.46 S3model reproduces Unknown parameter IfNoneMatch. Actual remote SDK version was not captured, so that exact version is not claimed. Use already qualified AWSCLI2.36.11 conditional put-object rather than inventing SDK header hooks or installing another dependency. Require atomic If-None-Match*, no retries, scoped keys, bounded process/connect/read deadlines, record before marker, failure status and no invalid marker. Validate the pinned CLI capability before worker calls/publication if feasible. Preserve a0002 FAIL and frozen artifacts; qualify locally before a fresh paid prefix.

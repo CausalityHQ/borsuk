@@ -1,0 +1,52 @@
+{
+  "schema": "borsuk-semantic-offered-a0002-failure-verification-v1",
+  "passed": false,
+  "original_controller_session": 90148,
+  "original_exit_status": 1,
+  "instance_id": "i-01cc63adaa61b90a1",
+  "closeout": {
+    "nodes": {
+      "0": {
+        "instance_id": "i-01cc63adaa61b90a1"
+      }
+    },
+    "state": "terminated",
+    "observed_elapsed_s": 461
+  },
+  "authenticated_artifacts": 62,
+  "independent_closed_cell_replay_passed": true,
+  "closed_cell": {
+    "dataset": "ReLAION",
+    "arm": "graph control",
+    "population": "FIRST100k D768 cosine development ordinals0..63",
+    "k": 10,
+    "offered_qps": 0.25,
+    "count": 64,
+    "successes": 64,
+    "recall_at_10": 0.996875,
+    "successful_full_span_qps": 0.25334717550486924,
+    "whole_cold_ms": {
+      "p50": 643.706447,
+      "p90": 729.9322422,
+      "p95": 761.3543879499999,
+      "p99": 897.99741674
+    },
+    "resources": {
+      "passed": true,
+      "shared_peak_bytes": 119820288,
+      "shared_swap_peak_bytes": 0,
+      "oom_event_increments": [
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "candidate_measurements": 0,
+  "complete_campaign": false,
+  "root_cause": "closed cell upload ParamValidationError; same call reproduced with old botocore1.34.46 S3model rejecting IfNoneMatch. Actual remote SDK version not captured.",
+  "new_candidate_quality": "UNMEASURED",
+  "paired_latency_delta": "UNMEASURED",
+  "sustainable_qps": "UNMEASURED",
+  "total_cost": "UNMEASURED"
+}

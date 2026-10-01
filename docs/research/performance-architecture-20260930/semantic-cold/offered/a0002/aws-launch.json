@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-01cc63adaa61b90a1",
+  "nodes": {
+    "0": {
+      "instance_id": "i-01cc63adaa61b90a1"
+    }
+  },
+  "prefix": "research/semantic-router/20261001/offered-a0002",
+  "source_commit": "ace63b7dcba2dd4e6bf1e7d6ac4d13d0099bb91b",
+  "source_archive_sha256": "b8338396bbe5ffd96e9b846e42e1063d6e49cd47889871d20909b37ca503a64a"
+}
