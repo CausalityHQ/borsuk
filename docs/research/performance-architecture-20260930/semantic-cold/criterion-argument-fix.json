@@ -1,0 +1,30 @@
+{
+  "schema": "borsuk-criterion-argument-fix-v1",
+  "exit_status": 0,
+  "original_session_id": 9467,
+  "command": [
+    "cargo",
+    "test",
+    "--release",
+    "--locked",
+    "-p",
+    "borsuk",
+    "--bench",
+    "local_search"
+  ],
+  "environment": {
+    "RUST_TEST_THREADS": "2",
+    "CARGO_BUILD_JOBS": "1",
+    "RUSTC_WRAPPER": ""
+  },
+  "source_file_count": 399,
+  "source_identity_sha256": "92085e6e40ac9324ea7a4fc8daab58995dc84680a5c2391eb426dd430230e520",
+  "log": {
+    "bytes": 65218,
+    "sha256": "14e5b69bc3d52da23567851c49914e607f4103923672c1992387ad5ea628bccc",
+    "archived_path": "docs/research/performance-architecture-20260930/semantic-cold/criterion-argument-fix.log.gz",
+    "archived_sha256": "15f132d654a24db1174855276dc67c2cebb74a6171866c313dd480ac6ebc5043"
+  },
+  "full_workspace_pass_claim": false,
+  "performance_measurement_claim": false
+}
