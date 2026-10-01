@@ -1,0 +1,18 @@
+{
+  "compiler": "rustc1.98.1 (48a229cea 2026-09-01)",
+  "elf_compiler_linker_comment_equal": true,
+  "entire_build_environment_parity_asserted": false,
+  "linker": "LLD22.1.8",
+  "roles": {
+    "candidate": {
+      "binary_sha256": "82c02967f3b2de8c7bf1f2dcfc0e94496882ba6e749b7195f1fca824ab2b7ec1",
+      "elf_comment": "\nString dump of section '.comment':\n  [     0]  Linker: LLD 22.1.8 (/checkout/src/llvm-project/llvm 52ed14fcd56afc30f9cccd8ca8ce237c2eef7e04)\n  [    5e]  rustc version 1.98.1 (48a229cea 2026-09-01)\n  [    8b]  GCC: (Ubuntu 15.2.0-16ubuntu1) 15.2.0\n\n"
+    },
+    "control": {
+      "binary_sha256": "c00b766f65f8f0ae0adb5fcca786cb33c0daf046ff4b8f9a8bbcab39e1263533",
+      "elf_comment": "\nString dump of section '.comment':\n  [     0]  Linker: LLD 22.1.8 (/checkout/src/llvm-project/llvm 52ed14fcd56afc30f9cccd8ca8ce237c2eef7e04)\n  [    5e]  rustc version 1.98.1 (48a229cea 2026-09-01)\n  [    8b]  GCC: (Ubuntu 15.2.0-16ubuntu1) 15.2.0\n\n"
+    }
+  },
+  "schema": "borsuk-metadata-head-elf-toolchain-evidence-v1",
+  "scope": "Authenticated binary ELF metadata; same reported compiler/linker versions. Gate commands/environment remain in independent native assurances."
+}
