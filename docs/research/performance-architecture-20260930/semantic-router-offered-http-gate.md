@@ -1,0 +1,19 @@
+# Semantic offered-load development gate — protocol draft
+
+2026-10-01. Authority: closed a0004 independent-verification.json and decision.md. BOTH candidate quality/latency survivors earned this gate. This document does not authorize launch; executable identity-bound config/controller qualification and root freeze are pending.
+
+## Fixed experiment
+
+Reuse exact FIRST100k D768 cosine development ordinals0–63, k10, graph/semantic publication and original source/SQ8 scoring, qualified399-source binary and complete assurance. No native rebuild or full suite repeat for Python-only scheduling. Publication validation is outside timing and disclosed; S3 service cache uncontrolled. Every admitted offer creates a fresh process/store/TLS client with no application cache and one ANN HTTP request, no HTTP retry.
+
+Rates .25,.5,1,2,4,8 QPS; each rate, dataset ReLAION then CoHere, control then candidate;64 absolute-time offers per cell =24 cells/1536 offers. One cell at a time, cap6 concurrently admitted cold namespaces, unique ports18080–18085, no admission queue. Missed capacity is a recorded drop, never delayed until capacity frees. Dispatch delay, scheduled-to-response, cold-process-to-response and cleanup completion remain separate. No shared mutable runner globals across concurrent calls; isolate them or pass explicit per-call state. Wrapper work belongs to dispatch/full-span accounting and cannot be hidden as service speed.
+
+Reuse current Spot m7i.2xlarge Ubuntu24.04 eu-central-1, CPU native0–3/client4–5, native512MiB each, shared8GiB0swap/AS4GiB, encrypted80GiBgp3 /dev/sda1. Profile wall3000/machine3600s and maximum spot.50USD/hour plus.15 storage/request estimate allowance. Sum nominal scheduled windows2016s; this is an estimate, not measured duration. Before launch, verify wrapper/RSS/time feasibility and cancellation kills/waits its owned native child. Root may revise this draft BEFORE freezing if bounded implementation cannot meet it; never silently change a frozen run.
+
+## Success and failure
+
+Every offer gets exactly one record: success, capacity_drop, error or explicitly aborted. Cell rate qualifies only with64/64 successful calls and >=608/640 returned truth hits on each candidate dataset, strict ordered-ID/source/SQ8/router/transport/startup authority accounting and resource gates. Graph quality is reported separately and no candidate delta is hidden. Any native identity/correctness/telemetry/resource failure stops this arm; retain its raw bytes and all outstanding cleanup, mark later offers/cells unattempted. Capacity drops or transport failures make that rate FAIL and stop rate escalation; preserve qualified lower rates. No benchmark retries or replacement calls. Spot interruption invalidates incomplete cell and requires separately authorized recovery after syncing terminal evidence/owned cleanup.
+
+Report offered/admitted/completed/successful/drop/error/abort counts, success fraction, full span through all cleanup and successful/accepted-completed full-span QPS. Latency percentiles p50/p90/p95/p99 are success-conditioned; expose unsuccessful population rather than assigning it a fictitious latency. Counters are coherent process totals and logical read charges; unread/wire bytes and provider hidden physical retries remain unknown unless instrumentation establishes them. Report aggregate cgroup/RSS/CPU and actual request/payload charges, quote-based cost estimate separately from measured total cost.
+
+8QPS attainment requires all offers successful at >=95% candidate meanR10 on BOTH fixed splits; report resulting latency, no invented universal444ms cap on100k and no matched-vendor claim. Saturation/cost curve, fresh1M/10M/100M and matched competitors remain subsequent gates. Warm is separate. Root alone launches, freezes identities/protocol and integrates; every acknowledged instanceID fsynced and terminated/waited before closed artifact authentication.
