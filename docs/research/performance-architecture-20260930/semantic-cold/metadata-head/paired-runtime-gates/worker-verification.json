@@ -1,0 +1,194 @@
+{
+  "schema": "borsuk-semantic-metadata-paired-runtime-worker-verification-v1",
+  "base": "efaa8238ff9224d8ed7e4b0add4671ec97aff038",
+  "owned_files": [
+    "scripts/run_native_semantic_metadata_cold.py",
+    "scripts/check_native_semantic_metadata_cold.py"
+  ],
+  "source_sha256": {
+    "scripts/run_native_cold_first_query.py": "fbab85ff0f14ff0c9443493ac406a3ee115c1891626217c735e38f65b9e528b1",
+    "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+    "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+    "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+    "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6",
+    "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+    "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+    "scripts/check_native_semantic_router_stats.py": "3815ee3cf166c659d7e9a31c2109730fb100bb301c3afe50cc3396e3a58399b6",
+    "scripts/run_native_semantic_router_cold.py": "059e6c62eaf8aeeb7e1c24d66533f00a7b81e714956332344802339f6ee41691",
+    "scripts/run_native_semantic_metadata_cold.py": "90b681cfaa1dc5e0897031f3a67c62b11abb1351c8dd757ffe36bcd484f40969",
+    "scripts/check_native_semantic_metadata_cold.py": "b91e04a01924c58fe81fb5c0b8eae5f67b49424f673f64e3723e355e66e00a50"
+  },
+  "gates": {
+    "runtime-final": {
+      "command": [
+        "prlimit",
+        "--as=208666624",
+        "--",
+        "/usr/bin/time",
+        "-v",
+        "python3",
+        "-m",
+        "scripts.run_native_semantic_metadata_cold",
+        "--self-check"
+      ],
+      "exit_status": 0,
+      "started": 1790835174.0513608,
+      "finished": 1790835183.198891,
+      "log": "/tmp/borsuk-semantic-metadata-paired-runtime-20261001/runtime-final.log",
+      "log_sha256": "d2d627b29b60518718c10d0fa0ac907a96a61a880eb62f46eb3cc5e6c7c01e78",
+      "peak_rss_bytes": 155496448,
+      "environment": {
+        "MALLOC_ARENA_MAX": "1",
+        "PYTHONPYCACHEPREFIX": "/tmp/borsuk-semantic-metadata-paired-runtime-20261001/pycache"
+      }
+    },
+    "pycompile": {
+      "command": [
+        "prlimit",
+        "--as=208666624",
+        "--",
+        "python3",
+        "-m",
+        "py_compile",
+        "scripts/run_native_semantic_metadata_cold.py",
+        "scripts/check_native_semantic_metadata_cold.py"
+      ],
+      "exit_status": 0,
+      "started": 1790835183.1989973,
+      "finished": 1790835183.2553406,
+      "log": "/tmp/borsuk-semantic-metadata-paired-runtime-20261001/pycompile.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "peak_rss_bytes": null,
+      "environment": {
+        "MALLOC_ARENA_MAX": "1",
+        "PYTHONPYCACHEPREFIX": "/tmp/borsuk-semantic-metadata-paired-runtime-20261001/pycache"
+      }
+    },
+    "diffcheck": {
+      "command": [
+        "git",
+        "diff",
+        "--cached",
+        "--check"
+      ],
+      "exit_status": 0,
+      "started": 1790835183.2554448,
+      "finished": 1790835183.2601137,
+      "log": "/tmp/borsuk-semantic-metadata-paired-runtime-20261001/diffcheck.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "peak_rss_bytes": null,
+      "environment": {
+        "MALLOC_ARENA_MAX": "1",
+        "PYTHONPYCACHEPREFIX": "/tmp/borsuk-semantic-metadata-paired-runtime-20261001/pycache"
+      }
+    },
+    "checker-final": {
+      "command": [
+        "prlimit",
+        "--as=208666624",
+        "--",
+        "/usr/bin/time",
+        "-v",
+        "python3",
+        "-m",
+        "scripts.check_native_semantic_metadata_cold",
+        "--self-check"
+      ],
+      "exit_status": 0,
+      "log": "/tmp/borsuk-semantic-metadata-paired-runtime-20261001/final-self-check.log",
+      "log_sha256": "d071a602ca5398835aa7e663db8134459409cd89c7c97fd31456863f30cab902",
+      "peak_rss_bytes": 153337856,
+      "environment": {}
+    },
+    "serial-regression": {
+      "command": [
+        "prlimit",
+        "--as=208666624",
+        "--",
+        "/usr/bin/time",
+        "-v",
+        "python3",
+        "-m",
+        "scripts.run_native_semantic_router_cold",
+        "--self-check"
+      ],
+      "exit_status": 0,
+      "log": "/tmp/borsuk-semantic-metadata-paired-runtime-20261001/serial-regression.log",
+      "log_sha256": "623a7fc4f73594b3477888598338048b9142c5bfe08afbd8234195f8871ae5af",
+      "peak_rss_bytes": 122109952,
+      "environment": {}
+    },
+    "offered-regression-bounded": {
+      "command": [
+        "prlimit",
+        "--as=208666624",
+        "--",
+        "/usr/bin/time",
+        "-v",
+        "python3",
+        "-m",
+        "scripts.run_native_semantic_router_cold",
+        "--offered-self-check"
+      ],
+      "exit_status": 0,
+      "log": "/tmp/borsuk-semantic-metadata-paired-runtime-20261001/offered-regression-bounded.log",
+      "log_sha256": "c18cb54dc955f136a78668c07d7bbc2bcecf9a6ed05ed754f66f49bf79f69a4c",
+      "peak_rss_bytes": 161705984,
+      "environment": {
+        "MALLOC_ARENA_MAX": "1"
+      }
+    }
+  },
+  "red": {
+    "red": {
+      "log": "/tmp/borsuk-semantic-metadata-paired-runtime-20261001/red.log",
+      "log_sha256": "4302c06fde66deedb26941fed36723b9513272eb0cc2561202600dafe7888931",
+      "exit_status": 1
+    },
+    "typed-ledger-red": {
+      "log": "/tmp/borsuk-semantic-metadata-paired-runtime-20261001/typed-ledger-red.log",
+      "log_sha256": "21bd4b714fada8cd551e1fd95b160342aecf478c861b16168ccbff64f39c3a08",
+      "exit_status": 1
+    },
+    "development-split-red": {
+      "log": "/tmp/borsuk-semantic-metadata-paired-runtime-20261001/development-split-red.log",
+      "log_sha256": "d4865caeda4e1a39fee61e3bf6cf2a81d77da1ac97a65a8a4e3b0f6a40fb77cc",
+      "exit_status": 1
+    },
+    "relocated-replay-red": {
+      "log": "/tmp/borsuk-semantic-metadata-paired-runtime-20261001/relocated-replay-red.log",
+      "log_sha256": "624aa7ee224bcb8b1aa257a29d14dbde7bc9b7f8eb17fa13d2657b22362b6631",
+      "exit_status": 1
+    }
+  },
+  "python_address_space_cap_bytes": 208666624,
+  "cloud_execution": false,
+  "native_execution": false,
+  "cargo_execution": false,
+  "push": false,
+  "default_validator_changed": false,
+  "review": "author inspection; consultations/workers prohibited by brief",
+  "known_closed_test_failure": {
+    "log": "/tmp/borsuk-semantic-metadata-paired-runtime-20261001/offered-diagnostic.log",
+    "log_sha256": "70d2a077f21abd45dd9da5e2d0773f1a25234815488756a75bf8b1b4e16276e5",
+    "reason": "under address-space cap glibc per-thread arenas prevented thread creation; unchanged offered check passed with MALLOC_ARENA_MAX=1 under same cap"
+  },
+  "candidate_real_qualification": "root-owned pending; synthetic typed completed proofs used only by mocked tests",
+  "scope_note": "Native slice is not integrated at efaa8238; default checker is left unchanged. Frozen historical/candidate bodies explicitly selected for serial measurements and replay.",
+  "commit": "f0313ad762063ec963d226bf8cb7346b87d48aa2",
+  "commit_identity": "commit f0313ad762063ec963d226bf8cb7346b87d48aa2\nAuthor:     Roman Bartusiak <riomus@gmail.com>\nAuthorDate: Thu Oct 1 06:13:39 2026 +0000\nCommit:     Roman Bartusiak <riomus@gmail.com>\nCommitDate: Thu Oct 1 06:13:39 2026 +0000\n\n    Add serial paired semantic metadata HEAD research runner\n",
+  "worktree_clean": true,
+  "patch_sha256": "085e55043da8caa8e7fdad61d9f1e63704a57beb7ad02f27e04c0874d1adaee3",
+  "committed_diffcheck": {
+    "command": [
+      "git",
+      "diff",
+      "efaa8238ff9224d8ed7e4b0add4671ec97aff038",
+      "f0313ad762063ec963d226bf8cb7346b87d48aa2",
+      "--check"
+    ],
+    "exit_status": 0,
+    "log": "/tmp/borsuk-semantic-metadata-paired-runtime-20261001/committed-diffcheck.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

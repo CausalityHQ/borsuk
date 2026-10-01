@@ -107,6 +107,16 @@ def self_check():
             return dict(key=key, bytes=len(body), sha256=runtime.sha_body(body))
 
         call_fixture = fixture('semantic', 8080)
+        # This paired fixture starts with the frozen control's eight metadata HEADs.
+        rows = call_fixture['header']['remote_open_stats']['metadata']
+        added_heads = sum(1 - row['logical_head_requests'] for row in rows)
+        for row in rows:
+            row.update(logical_head_requests=1, head_wall_ns=1)
+        for report in (call_fixture['header']['transport'], call_fixture['response']['transport']):
+            totals = report['totals']
+            totals['method_counts'][1] += added_heads
+            totals['attempts'] += added_heads
+            totals['status_counts'][0][1] += added_heads
         requests = ''.join(worker.encoded(dict(query_ordinal=q, query=[q + 1] + [0.] * 767)) + '\n' for q in range(64)).encode()
         truth = struct.pack('<100I', *range(10, 110)) * 64
         for dataset in worker.DATASETS:
