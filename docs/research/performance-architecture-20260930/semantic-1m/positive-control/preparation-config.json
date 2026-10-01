@@ -1,0 +1,53 @@
+{
+  "count": 64,
+  "dataset": "relaion",
+  "dimensions": 768,
+  "inputs": {
+    "binding": {
+      "bytes": 17287,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/binding.json",
+      "sha256": "75d5e2d8ca9cfa5bc7192a05a561f1350e151289b9c04062c02c214c6f88a3fb"
+    },
+    "coefficient_manifest": {
+      "bytes": 33951,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/manifest.json",
+      "sha256": "577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b"
+    },
+    "order": {
+      "bytes": 800000,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/order.u64",
+      "sha256": "22abeb087000ea2978c4fef8e85c2f7fda4e4b22c4e5126ba37a1c19816fab18"
+    },
+    "requests": {
+      "bytes": 1132707,
+      "path": "/tmp/borsuk-semantic-native-cold-inputs-a0001/relaion/requests",
+      "sha256": "1f94514c894b1acb31d16b98e5f8f13ae9c2fa53610d5b06a0d9598ca03940eb"
+    },
+    "source_parquet": {
+      "bytes": 145121661,
+      "path": "/data/orchestration/borsuk-semantic-positive-inputs-20261001/source-100k.parquet",
+      "sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d"
+    },
+    "sq8": {
+      "bytes": 78000000,
+      "path": "/tmp/borsuk-semantic-router-inputs/relaion/sq8.bin",
+      "sha256": "be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b"
+    },
+    "truth_u32": {
+      "bytes": 25600,
+      "path": "/tmp/borsuk-semantic-native-cold-inputs-a0001/relaion/truth",
+      "sha256": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c"
+    }
+  },
+  "k": 100,
+  "raw": {
+    "bytes": 307200000,
+    "sha256": "0d55a09756f41361c89f0ca355a3bc98da6799b4dc7ea39ab34a905844a758c2"
+  },
+  "rows": 100000,
+  "schema": "borsuk-semantic-positive-inputs-v1",
+  "versions": {
+    "numpy": "2.3.3",
+    "pyarrow": "24.0.0"
+  }
+}

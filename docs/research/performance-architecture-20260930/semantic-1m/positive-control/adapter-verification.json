@@ -1,0 +1,33 @@
+{
+  "actual_preparation_executed": false,
+  "adapter": {
+    "bytes": 27377,
+    "path": "scripts/prepare_semantic_positive_inputs.py",
+    "sha256": "1cca42d61185d0c7ac1f76fc929078df849f31c49872df75a496332c692d4662"
+  },
+  "artifacts": {
+    "log": {
+      "bytes": 839,
+      "gzip_sha256": "fd9f1bba2496c69aa5a798137654863c0334b55b28e0745e20e163bad18665a7",
+      "sha256": "7ff7823c31d93d1cb025aa51ec34f0e02ba7d0c340343cf952a35d7f519105e6"
+    },
+    "time": {
+      "bytes": 850,
+      "gzip_sha256": "d7c9596f4fdca402a5520c7c7e019f2287f4781e7f9f47810078cd9ca9b19a4b",
+      "sha256": "aec2e8ed36f60a17b2c5c2c95c7ed112035f452dd5631915003f9759207cd3a9"
+    }
+  },
+  "child_commit": "bfd774f4584796ef0523648cb44a26eb40342c2a",
+  "config": {
+    "bytes": 1819,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/positive-control/preparation-config.json",
+    "sha256": "741422dc5a6a6f3587d365dd2aec7731401eb54bdc0715c0afa4a8bf27bb2e32"
+  },
+  "integrated_commit": "226732d8",
+  "memory_max_bytes": 209715200,
+  "native_or_quality_executed": false,
+  "schema": "borsuk-semantic-positive-input-root-verification-v1",
+  "self_check_exit_status": 0,
+  "self_check_synthetic": true,
+  "swap_max_bytes": 0
+}
