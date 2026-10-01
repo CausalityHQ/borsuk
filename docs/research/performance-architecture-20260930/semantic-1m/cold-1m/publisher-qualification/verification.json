@@ -1,0 +1,337 @@
+{
+  "additional_receipts": [
+    {
+      "bytes": 523,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/scope-invocation.json",
+      "sha256": "9028897bfb505fddab698d17332ed0c7da67af8cc1749638866b6d963fcfb96d"
+    },
+    {
+      "bytes": 49,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/scope-terminal.json",
+      "sha256": "3f81802664ff7621f4ae99fbc3096e148d47b684fd35b61d28638ae426791f55"
+    },
+    {
+      "bytes": 881,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/scope.log",
+      "sha256": "38376268445013477e29677b78cf3ccdf340b99791b52a1fa6e818988e5c5522"
+    },
+    {
+      "bytes": 213,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/active.json",
+      "sha256": "c316cfb4b447bfe276a96920d0a8f6436b8b22b0d00e12962240f18b071ce418"
+    },
+    {
+      "bytes": 2087,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/invocation.json",
+      "sha256": "fc5ac67d3b6fa7515c0bf095cf254c3eb21fbe69a5b1cde2d937852b4fb19f00"
+    },
+    {
+      "bytes": 7502,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/release-receipt.json",
+      "sha256": "3dc50d020510ebcdfc234963b872f48d2d1701d82edcaa379e1ba74c1c0d0724"
+    },
+    {
+      "bytes": 2056,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/smoke-receipt.json",
+      "sha256": "a210cd7afa9cd00a0ef2dda6fab81acfacc3befdff6a4baf877bd2ee9d3b4113"
+    },
+    {
+      "bytes": 2539,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/resources-before.json",
+      "sha256": "68c3ea468940aada1863ff9eb8c2a924bbdca4970e3cd6e76917d540dd3e8290"
+    },
+    {
+      "bytes": 2559,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/resources-after.json",
+      "sha256": "118c7fdba134d5f7b5132986028bc225beed30131cb634596e5226ba678ba414"
+    },
+    {
+      "bytes": 2559,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/resources-after-smoke.json",
+      "sha256": "60d7924a1b2c07ea8c71dc6662de09a340d751b3eec73f26ffb3a3d2975fe98e"
+    },
+    {
+      "bytes": 29604,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/resources.jsonl",
+      "sha256": "45d1890ba8875d89c55de81c95fa1a32a773e02d4a2d15940f6a865f8acc68e3"
+    },
+    {
+      "bytes": 156,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/prior-target.json",
+      "sha256": "6474fb92ccefff1aaad14fa11c2acae2d52fedb6daf077578c7c11d8c28dcd37"
+    },
+    {
+      "bytes": 419,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/binary.json",
+      "sha256": "047198a0b2ee01b32344c98df699a9d168062543cf23d95b318272a2289854c1"
+    },
+    {
+      "bytes": 7034,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/runner.py",
+      "sha256": "eefcfe7e04744e30563bb55c428a1884b9a30c754e79e4440a85503fc316bc75"
+    },
+    {
+      "bytes": 1076,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/launch.py",
+      "sha256": "4ede2b6f3e5e606e7d5667ab8e32a6e67de8d18463ebc3086270f6963b4f01a5"
+    },
+    {
+      "bytes": 395,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/lane-release.json",
+      "sha256": "498d16fd2f443a11f1ba126340f3b4b6abf8843441a125c17f11eb954441b783"
+    }
+  ],
+  "base_revision": "a855c14c877fb35ab1eb98ca93546aac6d6d174b",
+  "build": {
+    "cgroup": "/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service/app.slice/borsuk-semantic-v8-publisher-20261001.scope",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "-p",
+      "borsuk",
+      "--bin",
+      "two_bit_plan_demo"
+    ],
+    "cwd": "/home/rb/worktrees/borsuk-semantic-v8-publisher-20261001",
+    "end_ns": 1790896458342427145,
+    "environment": {
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_HOME": "/data/cache/cargo",
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_TARGET_DIR": "/data/target",
+      "HOME": "/home/rb",
+      "LANG": "C.UTF-8",
+      "LOGNAME": "rb",
+      "MKL_NUM_THREADS": "2",
+      "OMP_NUM_THREADS": "2",
+      "OPENBLAS_NUM_THREADS": "2",
+      "PATH": "/home/rb/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/rb/.local/bin:/data/cache/cargo/bin:/home/rb/.local/bin:/home/rb/.npm-global/bin:/home/rb/.pulumi/bin:/run/user/1001/fnm_multishells/246231_1790895692149/bin:/home/rb/.local/share/fnm:/home/rb/.codex/tmp/arg0/codex-arg0Wz4g4r:/home/rb/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/rb/.local/bin:/data/cache/cargo/bin:/home/rb/.local/bin:/home/rb/.npm-global/bin:/home/rb/.pulumi/bin:/run/user/1001/fnm_multishells/234543_1790895684351/bin:/home/rb/.local/share/fnm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin",
+      "RAYON_NUM_THREADS": "2",
+      "RUSTC_WORKSPACE_WRAPPER": "",
+      "RUSTC_WRAPPER": "",
+      "RUSTUP_HOME": "/data/cache/rustup",
+      "TOKIO_WORKER_THREADS": "2",
+      "USER": "rb"
+    },
+    "log": {
+      "bytes": 64671,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/release.log",
+      "sha256": "30c1a9de5a21926bff2cf061fd030c5a3b99dacc3adbdab1dea642137ab52f0a"
+    },
+    "native_source_identity_after": "295a79de9a499cc388db14b4b78ac9fcd4f1eb8673ceb5c1222dfc7f119e9ae4",
+    "native_source_identity_before": "295a79de9a499cc388db14b4b78ac9fcd4f1eb8673ceb5c1222dfc7f119e9ae4",
+    "resources_after": {
+      "cgroup.procs": "553852",
+      "cpu.max": "200000 100000",
+      "cpu.stat": "usage_usec 444577377\nuser_usec 434632747\nsystem_usec 9944629\nnice_usec 434839572\ncore_sched.force_idle_usec 0\nnr_periods 4664\nnr_throttled 1\nthrottled_usec 7109\nnr_bursts 0\nburst_usec 0",
+      "host_meminfo": "MemTotal:       24021692 kB\nMemFree:         4657624 kB\nMemAvailable:   19339168 kB\nBuffers:          373312 kB\nCached:         14161352 kB\nSwapCached:       141480 kB\nActive:          5960260 kB\nInactive:       10874968 kB\nActive(anon):    1754828 kB\nInactive(anon):  1618800 kB\nActive(file):    4205432 kB\nInactive(file):  9256168 kB\nUnevictable:        7676 kB\nMlocked:            6736 kB\nSwapTotal:       8388604 kB\nSwapFree:        7526588 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:            109828 kB\nWriteback:             0 kB\nAnonPages:       2274820 kB\nMapped:           753828 kB\nShmem:           1068856 kB\nKReclaimable:    1841476 kB\nSlab:            2275060 kB\nSReclaimable:    1841476 kB\nSUnreclaim:       433584 kB\nKernelStack:       11688 kB\nPageTables:        32364 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:    20399448 kB\nCommitted_AS:    6353476 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       34680 kB\nVmallocChunk:          0 kB\nPercpu:             8096 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:   1312768 kB\nFilePmdMapped:         0 kB\nCmaTotal:              0 kB\nCmaFree:          343112 kB\nUnaccepted:            0 kB\nBalloon:               0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      276332 kB\nDirectMap2M:     8570880 kB\nDirectMap1G:    16777216 kB\n",
+      "host_memory_pressure": "some avg10=0.00 avg60=0.00 avg300=0.00 total=236390419\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=197739029\n",
+      "memory.current": "925564928",
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+      "memory.max": "8589934592",
+      "memory.peak": "4260438016",
+      "memory.swap.current": "0",
+      "memory.swap.events": "high 0\nmax 0\nfail 0",
+      "memory.swap.max": "0",
+      "memory.swap.peak": "0",
+      "pids.current": "1",
+      "pids.events": "max 0",
+      "pids.max": "512",
+      "pids.peak": "20",
+      "time_ns": 1790896458342335507
+    },
+    "resources_before": {
+      "cgroup.procs": "553852",
+      "cpu.max": "200000 100000",
+      "cpu.stat": "usage_usec 208983\nuser_usec 123412\nsystem_usec 85571\nnice_usec 124000\ncore_sched.force_idle_usec 0\nnr_periods 2\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+      "host_meminfo": "MemTotal:       24021692 kB\nMemFree:         1442636 kB\nMemAvailable:   19699800 kB\nBuffers:          452692 kB\nCached:         17676140 kB\nSwapCached:       141464 kB\nActive:          6720720 kB\nInactive:       13373532 kB\nActive(anon):    1557744 kB\nInactive(anon):  1480544 kB\nActive(file):    5162976 kB\nInactive(file): 11892988 kB\nUnevictable:        7676 kB\nMlocked:            6736 kB\nSwapTotal:       8388604 kB\nSwapFree:        7526592 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              2052 kB\nWriteback:             0 kB\nAnonPages:       1939788 kB\nMapped:           757212 kB\nShmem:           1068644 kB\nKReclaimable:    1822732 kB\nSlab:            2252712 kB\nSReclaimable:    1822732 kB\nSUnreclaim:       429980 kB\nKernelStack:       10196 kB\nPageTables:        27120 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:    20399448 kB\nCommitted_AS:    5473348 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       32936 kB\nVmallocChunk:          0 kB\nPercpu:             8096 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:   1411072 kB\nFilePmdMapped:         0 kB\nCmaTotal:              0 kB\nCmaFree:            8588 kB\nUnaccepted:            0 kB\nBalloon:               0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      276332 kB\nDirectMap2M:     8570880 kB\nDirectMap1G:    16777216 kB\n",
+      "host_memory_pressure": "some avg10=0.00 avg60=0.00 avg300=0.00 total=236200045\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=197556364\n",
+      "memory.current": "20398080",
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+      "memory.max": "8589934592",
+      "memory.peak": "21561344",
+      "memory.swap.current": "0",
+      "memory.swap.events": "high 0\nmax 0\nfail 0",
+      "memory.swap.max": "0",
+      "memory.swap.peak": "0",
+      "pids.current": "1",
+      "pids.events": "max 0",
+      "pids.max": "512",
+      "pids.peak": "20",
+      "time_ns": 1790895983880303974
+    },
+    "sampled_memory_peak_bytes": 4232650752,
+    "sampled_swap_peak_bytes": 0,
+    "source_unchanged": true,
+    "start_ns": 1790895984073849922,
+    "status": 0,
+    "stop_reason": null
+  },
+  "current_whole_tree_full_execution": false,
+  "host_psi_guard": {
+    "maximum_observed_full_avg10": 0.0,
+    "maximum_observed_sustained_seconds": 0,
+    "metric": "memory full avg10",
+    "sample_interval_seconds": 2,
+    "samples": 237,
+    "sustained_seconds": 30,
+    "threshold": 1,
+    "triggered": false
+  },
+  "lane_grant_message": "immediate-1790895878001321182-306868",
+  "lane_release_message": "immediate-1790896516604231105-306868",
+  "lane_release_ready": true,
+  "lane_released": true,
+  "logs": {
+    "release.log": {
+      "bytes": 7955,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cold-1m/publisher-qualification/release.log.gz",
+      "raw_bytes": 64671,
+      "raw_sha256": "30c1a9de5a21926bff2cf061fd030c5a3b99dacc3adbdab1dea642137ab52f0a",
+      "sha256": "d83e5686430330c37488b6762f5cecd5c94cb8bc7ca3ec6b8d62f4ec474b59d3"
+    },
+    "smoke.log": {
+      "bytes": 171,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cold-1m/publisher-qualification/smoke.log.gz",
+      "raw_bytes": 196,
+      "raw_sha256": "7568e13a178c87553954a15ff50d5d9a8965d41549d5df03affe7309ce73f1c0",
+      "sha256": "33db43e59ed2f15a1e3fd6bfcede6bd42a927dce3d574c30da59da757bd27611"
+    }
+  },
+  "native_source_file_count": 399,
+  "native_source_identity_sha256": "295a79de9a499cc388db14b4b78ac9fcd4f1eb8673ceb5c1222dfc7f119e9ae4",
+  "original_exec_session_id": 62202,
+  "original_scope_collected": true,
+  "prior_target": {
+    "bytes": 15580184,
+    "path": "/data/target/release/two_bit_plan_demo",
+    "sha256": "0f5bff1ea66bc03dc3a5c0b37c4079bea7b981954d76b666331d622211682baf"
+  },
+  "production_source_changes": false,
+  "qualification_scope": "One standalone release build and no-argument usage smoke; reuses historical full production/publisher execution and current-source Clippy/test compilation. No scientific, cloud, query, oracle, cold-S3, or current whole-tree full execution performed.",
+  "release_binary": {
+    "bytes": 15399624,
+    "copy_policy": "exclusive-create content-addressed read-only copy",
+    "mode": "0555",
+    "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/two_bit_plan_demo-4b3332f30c9fba54c9ce858afa146ab8c6f61f22413b771883f1c76f277357cd",
+    "sha256": "4b3332f30c9fba54c9ce858afa146ab8c6f61f22413b771883f1c76f277357cd",
+    "target_path": "/data/target/release/two_bit_plan_demo"
+  },
+  "reused_current_clippy_exit_status": 0,
+  "reused_current_workspace_test_compile_exit_status": 0,
+  "reused_historical_publisher_specific_tests_passed": 2,
+  "reused_historical_publisher_tests_passed": 3,
+  "reused_historical_tests_passed": 2746,
+  "schema": "borsuk-v8-publisher-artifact-qualification-v1",
+  "scope_cgroup_absent_after_terminal": true,
+  "scope_invocation": {
+    "command": [
+      "systemd-run",
+      "--user",
+      "--scope",
+      "--unit=borsuk-semantic-v8-publisher-20261001",
+      "-p",
+      "MemoryMax=8G",
+      "-p",
+      "MemorySwapMax=0",
+      "-p",
+      "CPUQuota=200%",
+      "-p",
+      "TasksMax=512",
+      "/usr/bin/python3",
+      "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/runner.py"
+    ],
+    "lane_grant_message": "immediate-1790895878001321182-306868",
+    "lane_request_message": "immediate-1790895822197551689-306868",
+    "start_ns": 1790895983671328353
+  },
+  "scope_terminal": {
+    "end_ns": 1790896458519347266,
+    "exit_status": 0
+  },
+  "smoke": {
+    "command": [
+      "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/two_bit_plan_demo-4b3332f30c9fba54c9ce858afa146ab8c6f61f22413b771883f1c76f277357cd"
+    ],
+    "end_ns": 1790896458391156807,
+    "environment": {
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_HOME": "/data/cache/cargo",
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_TARGET_DIR": "/data/target",
+      "HOME": "/home/rb",
+      "LANG": "C.UTF-8",
+      "LOGNAME": "rb",
+      "MKL_NUM_THREADS": "2",
+      "OMP_NUM_THREADS": "2",
+      "OPENBLAS_NUM_THREADS": "2",
+      "PATH": "/home/rb/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/rb/.local/bin:/data/cache/cargo/bin:/home/rb/.local/bin:/home/rb/.npm-global/bin:/home/rb/.pulumi/bin:/run/user/1001/fnm_multishells/246231_1790895692149/bin:/home/rb/.local/share/fnm:/home/rb/.codex/tmp/arg0/codex-arg0Wz4g4r:/home/rb/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/rb/.local/bin:/data/cache/cargo/bin:/home/rb/.local/bin:/home/rb/.npm-global/bin:/home/rb/.pulumi/bin:/run/user/1001/fnm_multishells/234543_1790895684351/bin:/home/rb/.local/share/fnm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin",
+      "RAYON_NUM_THREADS": "2",
+      "RUSTC_WORKSPACE_WRAPPER": "",
+      "RUSTC_WRAPPER": "",
+      "RUSTUP_HOME": "/data/cache/rustup",
+      "TOKIO_WORKER_THREADS": "2",
+      "USER": "rb"
+    },
+    "log": {
+      "bytes": 196,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/smoke.log",
+      "sha256": "7568e13a178c87553954a15ff50d5d9a8965d41549d5df03affe7309ce73f1c0"
+    },
+    "scientific_validation": false,
+    "start_ns": 1790896458389109653,
+    "status": 1,
+    "stderr": "Error: \"usage: two_bit_plan_demo ROOT ROOT_SHA REQUESTS REQUESTS_SHA OUTPUT [FIRST COUNT [--trace [--paired ROOT ROOT_SHA] | --live-s3 BUCKET REGION PREFIX]] [--panel-count COUNT --top-k 10|100]\"\n",
+    "stdout": ""
+  },
+  "source": {
+    "bytes": 75123,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/cold-1m/publisher-qualification/source.json",
+    "sha256": "bfb32255707d2de5d04439f89d83ef328f781f2255e0be846c30493de9594fa2"
+  },
+  "source_unchanged": true,
+  "status": "PASS",
+  "systemd_invocation_id": "d79d04ecb0b343ae88f260c66ea4153b",
+  "toolchain_and_environment": {
+    "cgroup": "/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service/app.slice/borsuk-semantic-v8-publisher-20261001.scope",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "-p",
+      "borsuk",
+      "--bin",
+      "two_bit_plan_demo"
+    ],
+    "cwd": "/home/rb/worktrees/borsuk-semantic-v8-publisher-20261001",
+    "environment": {
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_HOME": "/data/cache/cargo",
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_TARGET_DIR": "/data/target",
+      "HOME": "/home/rb",
+      "LANG": "C.UTF-8",
+      "LOGNAME": "rb",
+      "MKL_NUM_THREADS": "2",
+      "OMP_NUM_THREADS": "2",
+      "OPENBLAS_NUM_THREADS": "2",
+      "PATH": "/home/rb/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/rb/.local/bin:/data/cache/cargo/bin:/home/rb/.local/bin:/home/rb/.npm-global/bin:/home/rb/.pulumi/bin:/run/user/1001/fnm_multishells/246231_1790895692149/bin:/home/rb/.local/share/fnm:/home/rb/.codex/tmp/arg0/codex-arg0Wz4g4r:/home/rb/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/rb/.local/bin:/data/cache/cargo/bin:/home/rb/.local/bin:/home/rb/.npm-global/bin:/home/rb/.pulumi/bin:/run/user/1001/fnm_multishells/234543_1790895684351/bin:/home/rb/.local/share/fnm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin",
+      "RAYON_NUM_THREADS": "2",
+      "RUSTC_WORKSPACE_WRAPPER": "",
+      "RUSTC_WRAPPER": "",
+      "RUSTUP_HOME": "/data/cache/rustup",
+      "TOKIO_WORKER_THREADS": "2",
+      "USER": "rb"
+    },
+    "runner": {
+      "bytes": 7034,
+      "path": "/data/orchestration/borsuk-semantic-v8-publisher-20261001-qualification/runner.py",
+      "sha256": "eefcfe7e04744e30563bb55c428a1884b9a30c754e79e4440a85503fc316bc75"
+    },
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n"
+  },
+  "verified_at_ns": 1790896489513673699
+}
