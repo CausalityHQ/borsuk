@@ -1,0 +1,385 @@
+{
+  "after": {
+    "memory.current": "3932618752",
+    "memory.pressure": "some avg10=0.36 avg60=0.06 avg300=0.01 total=34267960\nfull avg10=0.36 avg60=0.06 avg300=0.01 total=34131038",
+    "memory.stat": "anon 269766656\nfile 3540180992\nkernel 114925568\nkernel_stack 1277952\npagetables 5025792\nsec_pagetables 0\npercpu 1920\nsock 0\nvmalloc 0\nshmem 1232318464\nzswap 0\nzswapped 0\nfile_mapped 14245888\nfile_dirty 1513910272\nfile_writeback 0\nswapcached 24817664\nanon_thp 0\nfile_thp 79691776\nshmem_thp 0\ninactive_anon 1222971392\nactive_anon 286081024\ninactive_file 222724096\nactive_file 2085154816\nunevictable 0\nslab_reclaimable 87108544\nslab_unreclaimable 21241704\nslab 108350248\nhugetlb 0\nworkingset_refault_anon 56407\nworkingset_refault_file 44720\nworkingset_activate_anon 2765\nworkingset_activate_file 25686\nworkingset_restore_anon 22509\nworkingset_restore_file 2180\nworkingset_nodereclaim 0\npgdemote_kswapd 0\npgdemote_direct 0\npgdemote_khugepaged 0\npgdemote_proactive 0\npgpromote_success 0\npgscan 813588\npgsteal 603107\npswpin 56353\npswpout 203402\npgscan_kswapd 801296\npgscan_direct 12292\npgscan_khugepaged 0\npgscan_proactive 0\npgsteal_kswapd 592599\npgsteal_direct 10508\npgsteal_khugepaged 0\npgsteal_proactive 0\npgfault 45070714\npgmajfault 9182\npgrefill 1116727\npgactivate 9357\npgdeactivate 0\npglazyfree 558\npglazyfreed 0\nswpin_zero 70\nswpout_zero 1133\nzswpin 0\nzswpout 0\nzswpwb 0\nthp_fault_alloc 0\nthp_collapse_alloc 0\nthp_swpout 0\nthp_swpout_fallback 0\nnuma_pages_migrated 0\nnuma_pte_updates 0\nnuma_hint_faults 0",
+    "memory.swap.current": "635224064"
+  },
+  "before": {
+    "memory.current": "3895865344",
+    "memory.pressure": "some avg10=0.00 avg60=0.00 avg300=0.00 total=34224339\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=34087417",
+    "memory.stat": "anon 270856192\nfile 3540439040\nkernel 76656640\nkernel_stack 1196032\npagetables 5017600\nsec_pagetables 0\npercpu 1920\nsock 0\nvmalloc 0\nshmem 2745937920\nzswap 0\nzswapped 0\nfile_mapped 14245888\nfile_dirty 569344\nfile_writeback 0\nswapcached 24817664\nanon_thp 0\nfile_thp 79691776\nshmem_thp 0\ninactive_anon 2687541248\nactive_anon 336207872\ninactive_file 684032\nactive_file 793829376\nunevictable 0\nslab_reclaimable 48927584\nslab_unreclaimable 21243432\nslab 70171016\nhugetlb 0\nworkingset_refault_anon 56407\nworkingset_refault_file 44720\nworkingset_activate_anon 2765\nworkingset_activate_file 25686\nworkingset_restore_anon 22509\nworkingset_restore_file 2180\nworkingset_nodereclaim 0\npgdemote_kswapd 0\npgdemote_direct 0\npgdemote_khugepaged 0\npgdemote_proactive 0\npgpromote_success 0\npgscan 813052\npgsteal 603020\npswpin 56353\npswpout 203402\npgscan_kswapd 800760\npgscan_direct 12292\npgscan_khugepaged 0\npgscan_proactive 0\npgsteal_kswapd 592512\npgsteal_direct 10508\npgsteal_khugepaged 0\npgsteal_proactive 0\npgfault 45067631\npgmajfault 9181\npgrefill 769144\npgactivate 9356\npgdeactivate 0\npglazyfree 558\npglazyfreed 0\nswpin_zero 70\nswpout_zero 1133\nzswpin 0\nzswpout 0\nzswpwb 0\nthp_fault_alloc 0\nthp_collapse_alloc 0\nthp_swpout 0\nthp_swpout_fallback 0\nnuma_pages_migrated 0\nnuma_pte_updates 0\nnuma_hint_faults 0",
+    "memory.swap.current": "635224064"
+  },
+  "directories": [
+    {
+      "all_body_hashes_equal": true,
+      "disk_path": "/data/cache/borsuk-prod-ready-v9-closed-native/borsuk-semantic-native-paired-relaion-a0002",
+      "files": {
+        "graph/canonical.bin": {
+          "bytes": 308000000,
+          "sha256": "c260b7fe0b6a54de98dfba3f2599d272242f724421064ed5ca18c0cd63e6283d",
+          "symlink": null
+        },
+        "graph/centroids.bin": {
+          "bytes": 4800032,
+          "sha256": "42bdea567bdc606333c9f09e07bc33742c1bec7cdcb69dd93b7489547ec3d2fb",
+          "symlink": null
+        },
+        "graph/diverse_graph.bin": {
+          "bytes": 426398,
+          "sha256": "a72380d5ebc5e53386f16c09cb772003c509f0802c881d17813c0d867f0907df",
+          "symlink": null
+        },
+        "graph/graph.bin": {
+          "bytes": 426398,
+          "sha256": "dddc0ad50c95c724f4d977578dbe893d73654a054661176f6d37d65feebce3b0",
+          "symlink": null
+        },
+        "graph/manifest.json": {
+          "bytes": 33980,
+          "sha256": "49de32e57db9e1f7692462d508d34ea1ba8e91c0e5a88dc7687278206d55340c",
+          "symlink": null
+        },
+        "graph/page_digests.bin": {
+          "bytes": 12512,
+          "sha256": "2195b3fac01c8ea529604934c5fe5fb761d16d21221fb84ce97524caf912dbeb",
+          "symlink": null
+        },
+        "graph/page_manifest.json": {
+          "bytes": 279,
+          "sha256": "e72f61f9fbf79326335f7f2150b6ce8140eb617a248457b5e2ccd157793c6311",
+          "symlink": null
+        },
+        "graph/plane/manifest.json": {
+          "bytes": 650,
+          "sha256": "c45d46ddc73502379402ec3a207ba2a500f5411a2bea0e71ff6d61d2f7dbe3ee",
+          "symlink": null
+        },
+        "graph/plane/mean.bin": {
+          "bytes": 3072,
+          "sha256": "197a8ead172a5a41e029c8f0c9d39b981150c69fc3b0367316fb89c920eb1beb",
+          "symlink": null
+        },
+        "graph/plane/page_digests.bin": {
+          "bytes": 100000,
+          "sha256": "afa60c15233830817c97e4d7a23e019d88b9f4d139b2b84ec234488db7eb3de6",
+          "symlink": null
+        },
+        "graph/plane/records.bin": {
+          "bytes": 20000000,
+          "sha256": "624e63de5905210bde24a4e7752573d6811d9fa5142e5b529ff0e9f65054ce83",
+          "symlink": null
+        },
+        "order.u64": {
+          "bytes": 800000,
+          "sha256": "22abeb087000ea2978c4fef8e85c2f7fda4e4b22c4e5126ba37a1c19816fab18",
+          "symlink": null
+        },
+        "provenance/import-authority.json": {
+          "bytes": 7798,
+          "sha256": "e5b2a50a796e95c9c8ede7c9c9b076c5dab95d4167d26713f3d7cdd103274cc8",
+          "symlink": null
+        },
+        "provenance/original-plane.json": {
+          "bytes": 548,
+          "sha256": "16dd4cfabb6e2a079fd261c4f0626cafa4bcb4ec3e82aee303b066f08d2ae4fa",
+          "symlink": null
+        },
+        "provenance/original-root.json": {
+          "bytes": 33951,
+          "sha256": "577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b",
+          "symlink": null
+        },
+        "provenance/router/leaves.bin": {
+          "bytes": 4812500,
+          "sha256": "e7f2ff4ce0ff44b68a8a23970e5b0452a6f3b7d145315d720274c87fe0ef8785",
+          "symlink": null
+        },
+        "provenance/router/manifest.json": {
+          "bytes": 752232,
+          "sha256": "4f008f68f244ef6cca8f18262cff64b36d69be87a6d529c2e85a55f584ae0760",
+          "symlink": null
+        },
+        "provenance/router/membership.bin": {
+          "bytes": 12500,
+          "sha256": "185f51cc44130ff760e905377cb04234cf3464bec754d80c1d554b58424432d6",
+          "symlink": null
+        },
+        "provenance/staging-authority.json": {
+          "bytes": 3619,
+          "sha256": "d73af65e7ef650433dca4c38d6117df07dc3d5fbb6bda9940c1a0b4608a2d068",
+          "symlink": null
+        },
+        "receipt.json": {
+          "bytes": 5950,
+          "sha256": "c60e7aac2dd598cb84357e8d6e6eecb43c4e6853e4ddf7ed54c26738dbcd60ef",
+          "symlink": null
+        },
+        "repackager.stderr.log": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "symlink": null
+        },
+        "repackager.stdout.json": {
+          "bytes": 374,
+          "sha256": "d620b2485b28096cb69ac5190337643085e801462da5e195027068386888ad9d",
+          "symlink": null
+        },
+        "semantic/canonical.bin": {
+          "bytes": 308000000,
+          "sha256": "c260b7fe0b6a54de98dfba3f2599d272242f724421064ed5ca18c0cd63e6283d",
+          "symlink": null
+        },
+        "semantic/centroids.bin": {
+          "bytes": 4800032,
+          "sha256": "42bdea567bdc606333c9f09e07bc33742c1bec7cdcb69dd93b7489547ec3d2fb",
+          "symlink": null
+        },
+        "semantic/manifest.json": {
+          "bytes": 21329,
+          "sha256": "ef0b07a836a265e91184469906ff353469089e160893487a4921bc9a823a6e8d",
+          "symlink": null
+        },
+        "semantic/page_digests.bin": {
+          "bytes": 12512,
+          "sha256": "2195b3fac01c8ea529604934c5fe5fb761d16d21221fb84ce97524caf912dbeb",
+          "symlink": null
+        },
+        "semantic/page_manifest.json": {
+          "bytes": 279,
+          "sha256": "e72f61f9fbf79326335f7f2150b6ce8140eb617a248457b5e2ccd157793c6311",
+          "symlink": null
+        },
+        "semantic/plane/manifest.json": {
+          "bytes": 650,
+          "sha256": "c45d46ddc73502379402ec3a207ba2a500f5411a2bea0e71ff6d61d2f7dbe3ee",
+          "symlink": null
+        },
+        "semantic/plane/mean.bin": {
+          "bytes": 3072,
+          "sha256": "197a8ead172a5a41e029c8f0c9d39b981150c69fc3b0367316fb89c920eb1beb",
+          "symlink": null
+        },
+        "semantic/plane/page_digests.bin": {
+          "bytes": 100000,
+          "sha256": "afa60c15233830817c97e4d7a23e019d88b9f4d139b2b84ec234488db7eb3de6",
+          "symlink": null
+        },
+        "semantic/plane/records.bin": {
+          "bytes": 20000000,
+          "sha256": "624e63de5905210bde24a4e7752573d6811d9fa5142e5b529ff0e9f65054ce83",
+          "symlink": null
+        },
+        "semantic/router/leaves.bin": {
+          "bytes": 4812500,
+          "sha256": "e7f2ff4ce0ff44b68a8a23970e5b0452a6f3b7d145315d720274c87fe0ef8785",
+          "symlink": null
+        },
+        "semantic/router/manifest.json": {
+          "bytes": 752232,
+          "sha256": "4f008f68f244ef6cca8f18262cff64b36d69be87a6d529c2e85a55f584ae0760",
+          "symlink": null
+        },
+        "semantic/router/membership.bin": {
+          "bytes": 12500,
+          "sha256": "185f51cc44130ff760e905377cb04234cf3464bec754d80c1d554b58424432d6",
+          "symlink": null
+        },
+        "sq8.bin": {
+          "bytes": 78000000,
+          "sha256": "be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b",
+          "symlink": null
+        }
+      },
+      "old_path": "/tmp/borsuk-semantic-native-paired-relaion-a0002",
+      "preserved_paths": true
+    },
+    {
+      "all_body_hashes_equal": true,
+      "disk_path": "/data/cache/borsuk-prod-ready-v9-closed-native/borsuk-semantic-native-paired-cohere-a0001",
+      "files": {
+        "graph/canonical.bin": {
+          "bytes": 308000000,
+          "sha256": "38304c3b448f2f62b32da8b443bbe52f20ccc63f5472d0e7885d5c268dd7a6df",
+          "symlink": null
+        },
+        "graph/centroids.bin": {
+          "bytes": 4800032,
+          "sha256": "755fa712fc3d2c3a0e35f9eba95d429b269dc32968da58354d9c328d8d1405a7",
+          "symlink": null
+        },
+        "graph/diverse_graph.bin": {
+          "bytes": 426398,
+          "sha256": "98f7bee1606c96299e78a00d477ec6256cc8be4cced38b05a7984071cab4ff5d",
+          "symlink": null
+        },
+        "graph/graph.bin": {
+          "bytes": 426398,
+          "sha256": "e68e0ae2dc9314083792de5b555f10885178daa0a63b901e35869b57903b227f",
+          "symlink": null
+        },
+        "graph/manifest.json": {
+          "bytes": 34017,
+          "sha256": "668f019b1c44a8e09b7d0ebe7dc4ef8e00649ba456744fb73c113b9fb93e2368",
+          "symlink": null
+        },
+        "graph/page_digests.bin": {
+          "bytes": 12512,
+          "sha256": "5bf185ca763e49d5c2c4bc811d10074ee84715b7c6520eb2720ab6499c686416",
+          "symlink": null
+        },
+        "graph/page_manifest.json": {
+          "bytes": 279,
+          "sha256": "9f6442a34dc6ba965f93c1e8875452f67eb2bbe8dde9513abe924d078d8192e0",
+          "symlink": null
+        },
+        "graph/plane/manifest.json": {
+          "bytes": 650,
+          "sha256": "42ee18026f15183d7ec96a46f77abf2f1e2dd92db97e6cabd36f6a79ef7d13c1",
+          "symlink": null
+        },
+        "graph/plane/mean.bin": {
+          "bytes": 3072,
+          "sha256": "b50ffae3e16cc5e155ceee3adffcac0dc04d6812b0a1bb8fc01cbd259b58440a",
+          "symlink": null
+        },
+        "graph/plane/page_digests.bin": {
+          "bytes": 100000,
+          "sha256": "e96db1f18f3effbfc63596cd6b57bd4243b992031cfb30d80065a8453b969979",
+          "symlink": null
+        },
+        "graph/plane/records.bin": {
+          "bytes": 20000000,
+          "sha256": "f47e344a6a959bfe1e9fe301785410b06667cf07d2bc0386892f510c7f5c6cf8",
+          "symlink": null
+        },
+        "order.u64": {
+          "bytes": 800000,
+          "sha256": "e2314ca14f5aa6f08b02cc328b863c921e55b1461a413ad6d3d66e781ff42d50",
+          "symlink": null
+        },
+        "provenance/import-authority.json": {
+          "bytes": 7798,
+          "sha256": "e5b2a50a796e95c9c8ede7c9c9b076c5dab95d4167d26713f3d7cdd103274cc8",
+          "symlink": null
+        },
+        "provenance/original-plane.json": {
+          "bytes": 548,
+          "sha256": "5b945745af8709927f078e19e0fe7b14466675c9ec21b9227ac21ef1d04be31f",
+          "symlink": null
+        },
+        "provenance/original-root.json": {
+          "bytes": 33988,
+          "sha256": "9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521",
+          "symlink": null
+        },
+        "provenance/router/leaves.bin": {
+          "bytes": 4812500,
+          "sha256": "add8f77ba14ecb438a5674fb58b02f8ef4fefaaddaa7fbb7f67b83f4e1f1199d",
+          "symlink": null
+        },
+        "provenance/router/manifest.json": {
+          "bytes": 736275,
+          "sha256": "c489beec0f555e402036a6bcba4268c67868a63f256943d2272f8f16bd4b531a",
+          "symlink": null
+        },
+        "provenance/router/membership.bin": {
+          "bytes": 12500,
+          "sha256": "12416365085dddecc150cc82a0cfdc4efb8981e9aa5ab75b26d4f9c3bd13dda1",
+          "symlink": null
+        },
+        "provenance/staging-authority.json": {
+          "bytes": 3619,
+          "sha256": "d73af65e7ef650433dca4c38d6117df07dc3d5fbb6bda9940c1a0b4608a2d068",
+          "symlink": null
+        },
+        "receipt.json": {
+          "bytes": 5945,
+          "sha256": "eabcadb572690e478cab05f3def6a52da4870c70c7ad9fb1a3c0cb7632cd6525",
+          "symlink": null
+        },
+        "repackager.stderr.log": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "symlink": null
+        },
+        "repackager.stdout.json": {
+          "bytes": 374,
+          "sha256": "c7e60c25e1ed02b67416083c9042acf897e8d5a11ac048970c766a8d64c5dc2b",
+          "symlink": null
+        },
+        "semantic/canonical.bin": {
+          "bytes": 308000000,
+          "sha256": "38304c3b448f2f62b32da8b443bbe52f20ccc63f5472d0e7885d5c268dd7a6df",
+          "symlink": null
+        },
+        "semantic/centroids.bin": {
+          "bytes": 4800032,
+          "sha256": "755fa712fc3d2c3a0e35f9eba95d429b269dc32968da58354d9c328d8d1405a7",
+          "symlink": null
+        },
+        "semantic/manifest.json": {
+          "bytes": 21426,
+          "sha256": "4e9ec30b0bb1ec464454d2331f5d8bd83e7513dd2d6290964c012497e7a85ae9",
+          "symlink": null
+        },
+        "semantic/page_digests.bin": {
+          "bytes": 12512,
+          "sha256": "5bf185ca763e49d5c2c4bc811d10074ee84715b7c6520eb2720ab6499c686416",
+          "symlink": null
+        },
+        "semantic/page_manifest.json": {
+          "bytes": 279,
+          "sha256": "9f6442a34dc6ba965f93c1e8875452f67eb2bbe8dde9513abe924d078d8192e0",
+          "symlink": null
+        },
+        "semantic/plane/manifest.json": {
+          "bytes": 650,
+          "sha256": "42ee18026f15183d7ec96a46f77abf2f1e2dd92db97e6cabd36f6a79ef7d13c1",
+          "symlink": null
+        },
+        "semantic/plane/mean.bin": {
+          "bytes": 3072,
+          "sha256": "b50ffae3e16cc5e155ceee3adffcac0dc04d6812b0a1bb8fc01cbd259b58440a",
+          "symlink": null
+        },
+        "semantic/plane/page_digests.bin": {
+          "bytes": 100000,
+          "sha256": "e96db1f18f3effbfc63596cd6b57bd4243b992031cfb30d80065a8453b969979",
+          "symlink": null
+        },
+        "semantic/plane/records.bin": {
+          "bytes": 20000000,
+          "sha256": "f47e344a6a959bfe1e9fe301785410b06667cf07d2bc0386892f510c7f5c6cf8",
+          "symlink": null
+        },
+        "semantic/router/leaves.bin": {
+          "bytes": 4812500,
+          "sha256": "add8f77ba14ecb438a5674fb58b02f8ef4fefaaddaa7fbb7f67b83f4e1f1199d",
+          "symlink": null
+        },
+        "semantic/router/manifest.json": {
+          "bytes": 736275,
+          "sha256": "c489beec0f555e402036a6bcba4268c67868a63f256943d2272f8f16bd4b531a",
+          "symlink": null
+        },
+        "semantic/router/membership.bin": {
+          "bytes": 12500,
+          "sha256": "12416365085dddecc150cc82a0cfdc4efb8981e9aa5ab75b26d4f9c3bd13dda1",
+          "symlink": null
+        },
+        "sq8.bin": {
+          "bytes": 78000000,
+          "sha256": "c16929252705c831c6846022eec46481fc004f521f0c0814a53d49fece8771e0",
+          "symlink": null
+        }
+      },
+      "old_path": "/tmp/borsuk-semantic-native-paired-cohere-a0001",
+      "preserved_paths": true
+    }
+  ],
+  "finished_ns": 1790843398096876124,
+  "schema": "borsuk-closed-tmpfs-cache-relocation-v1",
+  "started_ns": 1790843393716375116
+}

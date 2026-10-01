@@ -1,0 +1,19 @@
+{
+  "closed_staging_only": true,
+  "rows": [
+    {
+      "old_path": "/tmp/borsuk-awscli-bootstrap-20261001",
+      "new_path": "/data/cache/borsuk-prod-ready-v9-closed-native/borsuk-awscli-bootstrap-20261001",
+      "files": 15095,
+      "inventory_sha256": "5b0000be366ed7dcfd9a1df59ffc2b9da9eca8362437b09bb7b1df8fd4c61dd1",
+      "verified": true
+    },
+    {
+      "old_path": "/tmp/borsuk-semantic-native-publication-inputs",
+      "new_path": "/data/cache/borsuk-prod-ready-v9-closed-native/borsuk-semantic-native-publication-inputs",
+      "files": 7,
+      "inventory_sha256": "73b73eaf6db6e3cd849125f0556f51ad23c9f8bb8a330db6a67b5d79b74e49c8",
+      "verified": true
+    }
+  ]
+}
