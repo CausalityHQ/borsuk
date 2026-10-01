@@ -1,0 +1,60 @@
+{
+  "authenticated_artifacts": 21,
+  "decomposition": {
+    "nominated_units": {
+      "hits10": 624,
+      "hits100": 5961
+    },
+    "page_closure": {
+      "hits10": 629,
+      "hits100": 6085
+    },
+    "source_ranked_pages": {
+      "hits10": 629,
+      "hits100": 6085
+    },
+    "source_scored_units": {
+      "hits10": 629,
+      "hits100": 6085
+    },
+    "sq8_admitted_ranges": {
+      "hits10": 629,
+      "hits100": 6086
+    }
+  },
+  "independent_hits": {
+    "10": 624,
+    "100": 6077
+  },
+  "logical_io": {
+    "leaf_bytes": {
+      "max": 1386000,
+      "mean": 1106754.6875
+    },
+    "leaf_gets": {
+      "max": 16,
+      "mean": 15.5
+    },
+    "source_bytes": {
+      "max": 8499200,
+      "mean": 6538000
+    },
+    "source_gets": {
+      "max": 59,
+      "mean": 33.03125
+    },
+    "sq8_bytes": {
+      "max": 16773120,
+      "mean": 16624920
+    },
+    "sq8_gets": {
+      "max": 32,
+      "mean": 24.328125
+    }
+  },
+  "physical_s3_measured": false,
+  "queries": 64,
+  "recall_at_10": 0.975,
+  "recall_at_100": 0.94953125,
+  "truth_sha256": "273eb6878c4e701efad4c14d74d9a3ce5067f9a692828cc69f729015af8d4bb3"
+}

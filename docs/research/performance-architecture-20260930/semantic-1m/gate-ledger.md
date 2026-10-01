@@ -102,3 +102,7 @@ Neither the old 100M model nor the new 1M model sets a universal RAM floor.
 Product selection therefore requires fresh matched recall, cold latency,
 completion/saturation QPS and lifecycle dollar on the chosen frozen revision.
 This ledger changes no experiment's outcome and selects no new production default.
+
+## Fresh 1M quality survivor
+
+[Closed a0001](quality-execution/a0001/decision.md): ReLAION FIRST1M D768 cosine, fixed fresh64; R10 624/640=97.5%, R100 6077/6400=94.953125%. GO against prospective 95% R10 gate, not the historical 98% R100 arm. All21 bodies authenticate and independent truth recount agrees. Build1353.076s under1GiB service with substantial reclaim; no cold HTTP/QPS/cost claim. Next: unchanged-source object-native cold measurement with explicit build/serving envelopes.

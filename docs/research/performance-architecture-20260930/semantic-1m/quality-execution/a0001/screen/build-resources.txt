@@ -1,0 +1,23 @@
+	Command being timed: "/mnt/native-semantic-1m-quality/screen/scratch/binaries/builder /mnt/native-semantic-1m-quality/screen/builder-config.json 4a5a776d2e84bab169e38e69b026f8034156559a769b0f28283d457b68ee2d8f 536870912 /mnt/native-semantic-1m-quality/screen/scratch/store/quality/index"
+	User time (seconds): 66.97
+	System time (seconds): 42.70
+	Percent of CPU this job got: 8%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 22:33.03
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 344356
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 87479
+	Voluntary context switches: 1789471
+	Involuntary context switches: 18719
+	Swaps: 0
+	File system inputs: 43420968
+	File system outputs: 6602040
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
