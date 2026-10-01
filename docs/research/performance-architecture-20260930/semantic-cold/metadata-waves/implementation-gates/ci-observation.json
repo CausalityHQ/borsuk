@@ -1,0 +1,41 @@
+{
+  "schema": "borsuk-ci-observation-v1",
+  "run_id": 36834894527,
+  "head_sha": "24064d1ddb20c6f883c1ad468e94f207cfbf4017",
+  "status": "completed",
+  "conclusion": "failure",
+  "full_workspace_pass_claim": false,
+  "job_failures": [
+    {
+      "name": "Rust",
+      "id": 110280302456,
+      "failed_steps": [
+        "Format"
+      ]
+    },
+    {
+      "name": "Rust graph release candidate",
+      "id": 110280302563,
+      "failed_steps": [
+        "Format"
+      ]
+    },
+    {
+      "name": "Methodology and artifact contracts",
+      "id": 110280302605,
+      "failed_steps": [
+        "Run all script and evidence tests"
+      ]
+    }
+  ],
+  "local_format_check": {
+    "exit_status": 1,
+    "files": [
+      "crates/borsuk/src/bin/v282_local_falsifier.rs",
+      "crates/borsuk/src/resident_graph_store.rs"
+    ],
+    "source_edited": false
+  },
+  "job_log_api_status": 403,
+  "scope": "Public API job status plus actual local formatting check; methodology traceback unavailable, root cause not asserted. Frozen native candidate unchanged."
+}
