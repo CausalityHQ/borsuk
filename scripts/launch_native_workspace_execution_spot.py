@@ -64,6 +64,10 @@ ARTIFACTS = ('source-qualification.json', 'config.json', 'native-source-manifest
     'source-before.json', 'source-after.json', 'workspace-receipt.json', 'test.log',
     'test-resources.txt', 'workspace-cgroup.json', 'cpu.txt', 'rustc-version.txt',
     'cargo-version.txt', 'run-closed.log')
+FULL_ARTIFACTS = ARTIFACTS
+RELEASE_ARTIFACTS = tuple('binaries/'+name for name in (
+    'two_bit_http', 'build_two_bit_generation', 'build_semantic_unit_router',
+    'repackage_semantic_generation', 'check_semantic_router_scorer'))
 TERMINAL_IDENTITIES = ('config_sha256', 'code_identity_sha256', 'campaign_schema',
     'source_identity_sha256', 'source_file_count', 'native_source_manifest_sha256',
     'native_source_commit', 'artifact_roster_sha256', 'awscli_version', 'awscli_sha256')
@@ -83,13 +87,14 @@ def encoded(value):
 def configure(semantic_1m=False, *, test_build=False, implementation=False):
     """Select the protocol explicitly in every controller/worker process."""
     global SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
-    global SCHEMA, CONFIG_SCHEMA, RECEIPT_SCHEMA, CODE, FIXED
+    global SCHEMA, CONFIG_SCHEMA, RECEIPT_SCHEMA, CODE, FIXED, ARTIFACTS
     assert type(semantic_1m) is type(test_build) is type(implementation) is bool
     assert not (test_build and implementation), 'mutually exclusive execution modes'
     assert not (test_build or implementation) or semantic_1m, 'script requires explicit semantic-1m mode'
     SEMANTIC_1M = semantic_1m
     TEST_BUILD = test_build
     IMPLEMENTATION = implementation
+    ARTIFACTS = (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS) if implementation else FULL_ARTIFACTS
     ROOT = (semantic.ROOT.parent/'semantic-1m' if semantic_1m else semantic.ROOT/'metadata-waves') / ('implementation-gates/remote-implementation' if implementation else 'implementation-gates/remote-test-build' if test_build else 'implementation-gates/remote-full')
     CONFIG = ROOT/'config.json'
     TOKEN_PREFIX = ('semantic-1m-implementation-' if implementation else 'semantic-1m-test-build-' if test_build else
@@ -215,6 +220,12 @@ def validate_receipt(out, proof):
     for name, identity in receipt['artifacts'].items():
         assert worker.artifact(out/name) == identity, 'receipt artifact: ' + name
         assert type(identity['bytes']) is int and identity['bytes'] > 0
+    if IMPLEMENTATION:
+        for name in RELEASE_ARTIFACTS:
+            path = out/name
+            assert path.is_file() and not path.is_symlink(), 'regular release binary: '+name
+            with path.open('rb') as binary:
+                assert binary.read(4) == b'\x7fELF', 'ELF release binary: '+name
     assert worker.artifact(out/'config.json')['sha256'] == proof['config_sha256']
     assert worker.artifact(out/'native-source-manifest.json')['sha256'] == proof['native_source_manifest_sha256']
     for name in ('source-before.json','source-after.json'):
@@ -335,10 +346,13 @@ def collect(s3, prefix, out, instance_id, commit, digest):
     assert set(terminal['artifacts']) <= set(ARTIFACTS), 'unexpected artifact'
     for name, identity in terminal['artifacts'].items():
         source = s3.get_object(Bucket=peer.BUCKET, Key=prefix+'/artifacts/'+name)['Body']
+        (out/name).parent.mkdir(parents=True, exist_ok=True)
         with (out/name).open('wb') as output, gzip.GzipFile(filename=str(out/(name+'.gz')), mode='wb', mtime=0) as archived:
             for chunk in iter(lambda:source.read(1024*1024), b''):
                 output.write(chunk); archived.write(chunk)
         assert worker.artifact(out/name) == identity, 'downloaded artifact: ' + name
+        if IMPLEMENTATION and name in RELEASE_ARTIFACTS:
+            (out/name).chmod(0o755)
     result = replay(out)
     (out/'collection-replay.json').write_bytes(encoded(dict(terminal_sha256=worker.sha(raw),result=result))+b'\n')
     return terminal
@@ -359,7 +373,10 @@ def _worker_self_check(proof, config_body, manifest_body):
         'pids.max': '512', 'pids.current': '1', 'pids_peak': '4', 'pids.events': 'max 0\n',
         'observer_pid': 42, 'process_ids': [42]}
     saved = None
-    for failure in ('success', 'exit17', 'timeout', 'source-drift', 'reclaim', 'oom', 'peak', 'orphan', 'log-fsync'):
+    failures = ('success', 'exit17', 'timeout', 'source-drift', 'reclaim', 'oom', 'peak', 'orphan', 'log-fsync')
+    if IMPLEMENTATION:
+        failures += ('missing-binary', 'bad-binary', 'symlink-binary', 'copy-failure')
+    for failure in failures:
         with tempfile.TemporaryDirectory() as tmp:
             repo, out = Path(tmp)/'repo', Path(tmp)/'out'
             repo.mkdir(); out.mkdir()
@@ -397,6 +414,17 @@ def _worker_self_check(proof, config_body, manifest_body):
                 assert not Path(kw['env']['CARGO_TARGET_DIR']).is_relative_to(repo)
                 kw['stdout'].write(b'full mocked cargo log\n')
                 Path(args[args.index('-o')+1]).write_text('GNU time mocked resources\n')
+                if IMPLEMENTATION:
+                    for name in RELEASE_ARTIFACTS:
+                        source = Path(kw['env']['CARGO_TARGET_DIR'])/'release'/('examples' if name.endswith('/two_bit_http') else '')/Path(name).name
+                        source.parent.mkdir(parents=True, exist_ok=True)
+                        if failure == 'missing-binary' and name == RELEASE_ARTIFACTS[-1]:
+                            continue
+                        if failure == 'symlink-binary' and name == RELEASE_ARTIFACTS[-1]:
+                            source.symlink_to(source.with_name('build_two_bit_generation'))
+                        else:
+                            source.write_bytes(b'bad binary' if failure == 'bad-binary' else b'\x7fELF mocked release '+name.encode())
+                            source.chmod(0o755)
                 persist_failure[0] = failure == 'log-fsync'
                 return subprocess.CompletedProcess(args, {'exit17':17, 'timeout':124}.get(failure,0))
             def fsync(fd):
@@ -406,7 +434,10 @@ def _worker_self_check(proof, config_body, manifest_body):
             with patch.object(authority, 'qualify', return_value=proof), \
                     patch.object(worker, 'source_hashes', side_effect=[inventory, changed]), \
                     patch.object(worker, 'capture_cgroup', side_effect=[counters, after]), \
-                    patch.object(worker.subprocess, 'run', side_effect=run), patch.object(os,'fsync',side_effect=fsync):
+                    patch.object(worker.subprocess, 'run', side_effect=run), patch.object(os,'fsync',side_effect=fsync), \
+                    contextlib.ExitStack() as patches:
+                if failure == 'copy-failure':
+                    patches.enter_context(patch.object(worker.shutil, 'copyfileobj', side_effect=OSError('binary copy failed')))
                 previous = authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.CONFIG, authority.CODE, authority.FIXED
                 result = worker.main('cargo' if TEST_BUILD or IMPLEMENTATION else 'fake-cargo', repo, out,
                                      semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION)
@@ -416,6 +447,8 @@ def _worker_self_check(proof, config_body, manifest_body):
             assert result['exit_status'] == {'exit17':17, 'timeout':124}.get(failure,0)
             assert result['qualified'] == (failure in ('success','reclaim')), failure
             assert result['source_unchanged'] == (failure != 'source-drift')
+            if IMPLEMENTATION and failure in ('exit17','timeout','log-fsync'):
+                assert not (out/'binaries').exists(), 'copied binaries after failed pipeline'
             assert json.loads((out/'workspace-receipt.json').read_bytes()) == result
             if failure in ('success','reclaim'):
                 validate_receipt(out, proof)
@@ -431,6 +464,21 @@ def _worker_self_check(proof, config_body, manifest_body):
                             (out/'workspace-receipt.json').write_bytes(encoded(dict(result, **changes)))
                             rejected(lambda: validate_receipt(out, proof))
                         (out/'workspace-receipt.json').write_bytes(encoded(result))
+                    if IMPLEMENTATION:
+                        assert set(result['artifacts']) & set(RELEASE_ARTIFACTS) == set(RELEASE_ARTIFACTS)
+                        for name in RELEASE_ARTIFACTS:
+                            data = (out/name).read_bytes()
+                            source = out/'target/release'/('examples' if name.endswith('/two_bit_http') else '')/Path(name).name
+                            assert worker.artifact(out/name) == worker.artifact(source)
+                            assert (out/name).stat().st_mode & 0o111
+                            (out/name).write_bytes(b'tampered binary')
+                            rejected(lambda: validate_receipt(out, proof))
+                            (out/name).write_bytes(data)
+                            altered = copy.deepcopy(result)
+                            del altered['artifacts'][name]
+                            (out/'workspace-receipt.json').write_bytes(encoded(altered))
+                            rejected(lambda: validate_receipt(out, proof))
+                            (out/'workspace-receipt.json').write_bytes(encoded(result))
                 (out/'test.log').write_bytes(b'tampered')
                 rejected(lambda: validate_receipt(out, proof))
             else:
@@ -503,6 +551,7 @@ def _collection_self_check(proof, files, body):
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp)
         for name,data in files.items():
+            (out/name).parent.mkdir(parents=True, exist_ok=True)
             (out/name).write_bytes(data)
         env = dict(os.environ, INSTANCE_ID='i-owned', EXIT_CODE='0', ORIGINAL_EXIT_CODE='0',
                    PHASE='complete', ARTIFACT_NAMES=' '.join(ARTIFACTS))
@@ -523,9 +572,25 @@ def _collection_self_check(proof, files, body):
             assert replayed['actual_workspace_test_build'] is True
         for name,data in files.items():
             assert gzip.decompress((out/(name+'.gz')).read_bytes()) == data
-        for changed in (dict(terminal,config_sha256='0'*64), dict(terminal,instance_id='i-other'),
-                        dict(terminal,source_archive_sha256='2'*64), dict(terminal,exit_code=False),
-                        dict(terminal,artifacts={n:v for n,v in terminal['artifacts'].items() if n != 'test.log'})):
+        mutations = [dict(terminal,config_sha256='0'*64), dict(terminal,instance_id='i-other'),
+                     dict(terminal,source_archive_sha256='2'*64), dict(terminal,exit_code=False),
+                     dict(terminal,artifacts={n:v for n,v in terminal['artifacts'].items() if n != 'test.log'})]
+        if IMPLEMENTATION:
+            downloaded = out/'downloaded'
+            downloaded.mkdir()
+            for name in ('aws-reservation.json','aws-closeout.json'):
+                (downloaded/name).write_bytes((out/name).read_bytes())
+            collect(s3,PREFIX+'a0001',downloaded,'i-owned','0'*40,'1'*64)
+            assert replay(downloaded)['qualified'] is True
+            for name in RELEASE_ARTIFACTS:
+                assert (downloaded/name).read_bytes() == gzip.decompress((downloaded/(name+'.gz')).read_bytes()) == files[name]
+                assert (downloaded/name).stat().st_mode & 0o111
+            name = RELEASE_ARTIFACTS[0]
+            mutations.append(dict(terminal,artifacts={n:v for n,v in terminal['artifacts'].items() if n != name}))
+            store[PREFIX+'a0001/artifacts/'+name] = b'tampered binary download'
+            rejected(lambda:collect(s3,PREFIX+'a0001',downloaded,'i-owned','0'*40,'1'*64))
+            store[PREFIX+'a0001/artifacts/'+name] = files[name]
+        for changed in mutations:
             (out/'aws-terminal.json').write_bytes(encoded(changed))
             rejected(lambda:replay(out))
         (out/'aws-terminal.json').write_bytes(encoded(terminal))
@@ -545,6 +610,15 @@ def _collection_self_check(proof, files, body):
             expected.update(execution_kind=FIXED['execution_kind'])
         assert replay(out) == expected
         assert (out/'test.log').read_bytes() == files['test.log'], 'failed logs lost'
+        if IMPLEMENTATION:
+            partial = out/'failed-subset'
+            partial.mkdir()
+            for name in ('aws-reservation.json','aws-closeout.json'):
+                (partial/name).write_bytes((out/name).read_bytes())
+            failed['artifacts'] = {n:v for n,v in terminal['artifacts'].items() if n not in RELEASE_ARTIFACTS}
+            store[PREFIX+'a0001/terminal.json'] = encoded(failed)
+            collect(s3,PREFIX+'a0001',partial,'i-owned','0'*40,'1'*64)
+            assert replay(partial) == expected and not (partial/'binaries').exists()
 
 
 def _remote_self_check():
@@ -592,8 +666,16 @@ else:
     if {TEST_BUILD or IMPLEMENTATION!r}:
         assert os.environ['BORSUK_TEST_BUILD_JOBS'] == '1'
         assert 'BORSUK_TEST_BUILD_COMMAND' not in os.environ
-    assert target.is_dir() and not list(target.iterdir())
+    assert target.is_dir()
+    if not previous: assert not list(target.iterdir())
     with calls.open('a') as out: out.write(json.dumps(sys.argv[1:])+'\\n')
+    if {IMPLEMENTATION!r} and len(previous) == 2:
+        for name in {('two_bit_http','build_two_bit_generation','build_semantic_unit_router','repackage_semantic_generation','check_semantic_router_scorer')!r}:
+            if name == os.environ.get('MISSING_BINARY'): continue
+            output = target/'release'/('examples' if name == 'two_bit_http' else '')/name
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b'\\x7fELF mocked release '+name.encode())
+            output.chmod(0o755)
     if os.environ.get('MUTATE'):
         with Path(os.environ['MUTATE']).open('ab') as out: out.write(b' ')
     print('fake workspace cargo')
@@ -630,7 +712,7 @@ def read(path, *args, **kwargs):
 with patch.object(Path, 'read_text', read):
     runpy.run_module('scripts.check_native_workspace_execution', run_name='__main__')
 '''
-        env = dict(os.environ, PYTHONPATH=str(repo), MUTATE='', CARGO_EXIT='0', CARGO_FAIL_STAGE='1',
+        env = dict(os.environ, PYTHONPATH=str(repo), MUTATE='', CARGO_EXIT='0', CARGO_FAIL_STAGE='1', MISSING_BINARY='',
                    CARGO_BUILD_JOBS='99', BORSUK_TEST_BUILD_JOBS='99',
                    RUSTC_WRAPPER='forbidden-wrapper', RUSTC_WORKSPACE_WRAPPER='forbidden-wrapper')
         env.pop('BORSUK_TEST_BUILD_COMMAND', None)
@@ -642,6 +724,7 @@ with patch.object(Path, 'read_text', read):
             failures.append(('script','scripts/check_rust_test_build.sh'))
         if IMPLEMENTATION:
             failures.append(('pipeline','scripts/check_semantic_1m_implementation.sh'))
+            failures.append(('missing-binary',None))
             failures.extend((f'fail-stage-{stage}',None) for stage in range(2,6))
         for failure, mutation in failures:
             out = root/failure
@@ -652,7 +735,8 @@ with patch.object(Path, 'read_text', read):
             cargo_failed = failure == 'exit17' or failure.startswith('fail-stage-')
             result = subprocess.run([sys.executable,'-c',runner,flag,str(cargo),str(repo),str(out)],
                 cwd=root, env=dict(env, MUTATE=str(repo/mutation) if mutation else '',
-                                  CARGO_EXIT='17' if cargo_failed else '0', CARGO_FAIL_STAGE=str(failing_stage)), capture_output=True, text=True)
+                                  CARGO_EXIT='17' if cargo_failed else '0', CARGO_FAIL_STAGE=str(failing_stage),
+                                  MISSING_BINARY='check_semantic_router_scorer' if failure == 'missing-binary' else ''), capture_output=True, text=True)
             assert result.returncode == (0 if failure == 'success' else 17 if cargo_failed else 96), result.stderr
             receipt = json.loads((out/'workspace-receipt.json').read_bytes())
             assert receipt['exit_status'] == (17 if cargo_failed else 0)
@@ -680,6 +764,14 @@ with patch.object(Path, 'read_text', read):
                 bash_called = (out/'bash-called').read_text().splitlines()
                 assert bash_called == ['scripts/check_semantic_1m_implementation.sh'] + (['scripts/check_rust_test_build.sh'] if count == 5 else [])
                 assert receipt['execution_kind'] == 'implementation-gates' and receipt['actual_full_workspace_execution'] is False
+                if cargo_failed:
+                    assert not (out/'binaries').exists(), 'failed pipeline copied release outputs'
+                elif failure == 'success':
+                    assert set(receipt['artifacts']) & set(RELEASE_ARTIFACTS) == set(RELEASE_ARTIFACTS)
+                    for name in RELEASE_ARTIFACTS:
+                        source = out/'target/release'/('examples' if name.endswith('/two_bit_http') else '')/Path(name).name
+                        assert worker.artifact(out/name) == worker.artifact(source)
+                        assert (out/name).stat().st_mode & 0o111
             else:
                 assert log.startswith('fake workspace cargo\n')
             if TEST_BUILD or (IMPLEMENTATION and count == 5):
@@ -705,6 +797,13 @@ with patch.object(Path, 'read_text', read):
                     assert replayed['actual_workspace_test_build'] is True
                 if IMPLEMENTATION:
                     assert replayed['execution_kind'] == 'implementation-gates' and 'actual_workspace_test_build' not in replayed
+                    name = RELEASE_ARTIFACTS[0]
+                    binary = (out/name).read_bytes()
+                    (out/name).write_bytes(b'tampered release copy')
+                    for action in ('--check-receipt','--replay'):
+                        tampered = subprocess.run([*cli,action,str(out)],cwd=root,env=env,capture_output=True)
+                        assert tampered.returncode != 0, 'tampered release copy accepted'
+                    (out/name).write_bytes(binary)
             if mutation:
                 (repo/mutation).write_bytes(before)
         if TEST_BUILD or IMPLEMENTATION:
@@ -753,7 +852,10 @@ def _test_build_protocol_self_check():
     assert FIXED['environment']['BORSUK_TEST_BUILD_COMMAND'] is None
     assert FIXED['execution_kind'] == 'workspace-test-build'
     assert 'scripts/check_rust_test_build.sh' in CODE and len(CODE) == 23
+    assert ARTIFACTS == FULL_ARTIFACTS and len(ARTIFACTS) == 13
     configure(True, implementation=True)
+    assert len(ARTIFACTS) == 18
+    assert ARTIFACTS == (*FULL_ARTIFACTS,*RELEASE_ARTIFACTS)
     assert str(ROOT).endswith('semantic-1m/implementation-gates/remote-implementation')
     assert PREFIX == 'research/semantic-router/20261001/semantic-1m-implementation-'
     assert FIXED['command'] == ['bash', 'scripts/check_semantic_1m_implementation.sh']
@@ -768,6 +870,7 @@ def _test_build_protocol_self_check():
     for arguments in (dict(implementation=True), dict(test_build=True), dict(semantic_1m=True,test_build=True,implementation=True)):
         rejected(lambda:configure(**arguments))
     configure(True)
+    assert len(ARTIFACTS) == 13
     assert FIXED['command'] == list(worker.COMMAND) and len(CODE) == 22
     assert 'execution_kind' not in FIXED
     configure()
@@ -843,7 +946,7 @@ def _self_check():
             rejected(lambda:preflight(repo))
         body = user_data('0'*40,'1'*64,'sources/mock',PREFIX+'a0001',proof)
         assert len(CODE) == len(set(CODE)) == (24 if IMPLEMENTATION else 23 if TEST_BUILD else 22)
-        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == 13
+        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == (18 if IMPLEMENTATION else 13)
         assert '--on-active=9000s' in body and 'RuntimeMaxSec=7260' in body
         assert all(k in body for k in ('MemoryMax=8G','MemorySwapMax=0','CPUQuota=200%','TasksMax=512'))
         assert 'build-essential' in body and 'python3-dev' in body
@@ -865,7 +968,7 @@ def _self_check():
     if semantic_1m:
         _remote_self_check()
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024
-    print(f'PASS workspace {"implementation-gates" if IMPLEMENTATION else "test-build" if TEST_BUILD else "execution"} ({"semantic-1m" if semantic_1m else "metadata-waves"}): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli={semantic_1m}; code={len(CODE)} artifacts=13 userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
+    print(f'PASS workspace {"implementation-gates" if IMPLEMENTATION else "test-build" if TEST_BUILD else "execution"} ({"semantic-1m" if semantic_1m else "metadata-waves"}): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli={semantic_1m}; code={len(CODE)} artifacts={len(ARTIFACTS)} release_copy={IMPLEMENTATION}; userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
 
 
 if __name__ == '__main__':

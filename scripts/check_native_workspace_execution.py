@@ -4,6 +4,7 @@ import hashlib
 import os
 from pathlib import Path
 import resource
+import shutil
 import subprocess
 import sys
 
@@ -139,6 +140,20 @@ def _execute(cargo, repo, out, controller):
             report['command_completed'] = resources['closed'] = True
             log.flush(); os.fsync(log.fileno())
         report['gate_status'] = report['exit_status']
+        if controller.IMPLEMENTATION and report['exit_status'] == 0:
+            (out/'binaries').mkdir(exist_ok=False)
+            for name in controller.RELEASE_ARTIFACTS:
+                source = target/'release'/('examples' if name.endswith('/two_bit_http') else '')/Path(name).name
+                assert source.is_file() and not source.is_symlink(), 'regular release binary: '+name
+                identity = artifact(source)
+                assert identity['bytes'] > 4, 'empty release binary: '+name
+                with source.open('rb') as binary, (out/name).open('xb') as output:
+                    assert binary.read(4) == b'\x7fELF', 'ELF release binary: '+name
+                    binary.seek(0)
+                    shutil.copyfileobj(binary, output, length=1024*1024)
+                    os.fchmod(output.fileno(), 0o755)
+                    output.flush(); os.fsync(output.fileno())
+                assert artifact(out/name) == identity == artifact(source), 'release copy identity: '+name
     except BaseException as error:
         report['error'] = dict(type=type(error).__name__, message=str(error))
         report['gate_status'] = 97 if isinstance(error, KeyboardInterrupt) else 96
