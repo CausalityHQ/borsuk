@@ -91,3 +91,5 @@ repair. The same instance, time, compute, concurrency, GET/byte and cleanup caps
 remain. Freeze fresh a0002 namespaces, changed OS/bootstrap code identities and
 actual ABI gates before the next paid launch. Reuse completed unchanged Rust
 assurance and immutable input assets; run only affected controller checks.
+
+Ubuntu root volume is explicitly `/dev/sda1`, encrypted 80 GiB gp3 with deletion on termination (AMI root-device authority checked). Shared historical ARM default stays `/dev/xvda`. a0002 config SHA `3c7fe631dd22f0ef017a5b96007ce1e50ccc2723c3783e0e776ab68a15917abd`; frozen a0001 config preserved in `config-a0001.json`. Native bins/source/full assurance unchanged; runtime ABI is an unexecuted remote gate.

@@ -1,0 +1,29 @@
+{
+  "schema": "borsuk-semantic-cold-runtime-repair-preflight-v1",
+  "config_sha256": "3c7fe631dd22f0ef017a5b96007ce1e50ccc2723c3783e0e776ab68a15917abd",
+  "controller_commit": "eb007db5",
+  "shared_commit": "be60d284",
+  "native_source_identity_sha256": "92085e6e40ac9324ea7a4fc8daab58995dc84680a5c2391eb426dd430230e520",
+  "native_source_file_count": 399,
+  "image_id": "ami-0b8a830d6339a9758",
+  "root_device_name": "/dev/sda1",
+  "runtime_os": {
+    "ID": "ubuntu",
+    "VERSION_ID": "24.04"
+  },
+  "runtime_glibc_expected": "2.39",
+  "required_glibc": {
+    "two_bit_http": "2.38",
+    "two_bit_plan_demo": "2.38"
+  },
+  "bootstrap_bytes": 16108,
+  "preflight_status": 0,
+  "controller_self_check_status": 0,
+  "shell_syntax_status": 0,
+  "python_compile_status": 0,
+  "diff_check_status": 0,
+  "native_rebuilt": false,
+  "remote_runtime_verified": false,
+  "scientific_measurements": false,
+  "prior_attempt": "a0001 remains failed; instance terminated; zero native query calls"
+}
