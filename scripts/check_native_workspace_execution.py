@@ -73,8 +73,9 @@ def _write(path, value):
         os.fsync(output.fileno())
 
 
-def main(cargo, repo, out):
+def main(cargo, repo, out, *, semantic_1m=False):
     from scripts import launch_native_workspace_execution_spot as controller
+    controller.configure(semantic_1m)
     repo, out = Path(repo).resolve(), Path(out).resolve()
     assert not out.is_relative_to(repo), 'output/target must be outside source'
     proof = json.loads((out/'source-qualification.json').read_bytes())
@@ -148,7 +149,11 @@ def main(cargo, repo, out):
 
 
 if __name__ == '__main__':
-    assert len(sys.argv) == 4, 'usage: check_native_workspace_execution.py CARGO REPO OUTPUT'
-    result = main(*sys.argv[1:])
+    args = sys.argv[1:]
+    semantic_1m = args[:1] == ['--semantic-1m']
+    if semantic_1m:
+        args = args[1:]
+    assert len(args) == 3, 'usage: check_native_workspace_execution.py [--semantic-1m] CARGO REPO OUTPUT'
+    result = main(*args, semantic_1m=semantic_1m)
     print(json.dumps(result, sort_keys=True))
     sys.exit(result['gate_status'] if result['gate_status'] >= 0 else 128-result['gate_status'])

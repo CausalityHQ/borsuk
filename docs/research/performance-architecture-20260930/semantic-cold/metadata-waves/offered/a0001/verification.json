@@ -1,0 +1,110 @@
+{
+  "schema": "borsuk-metadata-waves-offered-root-verification-v1",
+  "valid_measurement": true,
+  "decision": "GO frozen offered development gate; not saturation or vendor qualification",
+  "instance_id": "i-0dabc6c640e186e42",
+  "state": "terminated",
+  "artifact_count": 110,
+  "terminal_sha256": "3bab0674c59a90a9447c3f20655aafcae402e3b32089c83dd61b3914e5d9b450",
+  "root_replay_exit_status": 0,
+  "root_replay_log_sha256": "7c35d77ceca745727db1e170c48974892f4345ab524839b46d57df5b3ca2266c",
+  "source_commit": "09c62f23781720939c66b2280f8b2f035ba01a36",
+  "source_archive_sha256": "a7f178ad12fda56c8af2331151500297a292c31c35d86962d8129e104ce66909",
+  "split": "FIRST100k D768 cosine k10 consumed development ordinals0-63",
+  "calls": 1536,
+  "successful_calls": 1536,
+  "offered_gate_passed": true,
+  "eight_qps_cells": [
+    {
+      "dataset": "ReLAION",
+      "arm": "control",
+      "offered_qps": 8,
+      "successes": 64,
+      "recall_at_10": 0.98125,
+      "successful_full_span_qps": 7.62559515385688,
+      "native_peak_RSS_bytes": 36691968,
+      "cold_ms": {
+        "p50": 512.9929775,
+        "p90": 550.0973383,
+        "p95": 570.2435307499999,
+        "p99": 582.3054100100001
+      },
+      "scheduled_to_response_ms": {
+        "p50": 513.9265775,
+        "p90": 550.9678541999999,
+        "p95": 571.3411261,
+        "p99": 583.05317199
+      }
+    },
+    {
+      "dataset": "ReLAION",
+      "arm": "candidate",
+      "offered_qps": 8,
+      "successes": 64,
+      "recall_at_10": 0.98125,
+      "successful_full_span_qps": 7.700730763649363,
+      "native_peak_RSS_bytes": 36720640,
+      "cold_ms": {
+        "p50": 410.406055,
+        "p90": 453.7867228,
+        "p95": 464.77940705,
+        "p99": 514.04802506
+      },
+      "scheduled_to_response_ms": {
+        "p50": 411.245588,
+        "p90": 454.7923237,
+        "p95": 465.67702065,
+        "p99": 514.91087989
+      }
+    },
+    {
+      "dataset": "CoHere",
+      "arm": "control",
+      "offered_qps": 8,
+      "successes": 64,
+      "recall_at_10": 0.9578125,
+      "successful_full_span_qps": 7.62234709626838,
+      "native_peak_RSS_bytes": 37130240,
+      "cold_ms": {
+        "p50": 508.769221,
+        "p90": 544.6640467999999,
+        "p95": 552.44537665,
+        "p99": 624.8496143199999
+      },
+      "scheduled_to_response_ms": {
+        "p50": 509.5016395,
+        "p90": 545.6329425,
+        "p95": 553.19996905,
+        "p99": 625.8337789699998
+      }
+    },
+    {
+      "dataset": "CoHere",
+      "arm": "candidate",
+      "offered_qps": 8,
+      "successes": 64,
+      "recall_at_10": 0.9578125,
+      "successful_full_span_qps": 7.746196300385566,
+      "native_peak_RSS_bytes": 36237312,
+      "cold_ms": {
+        "p50": 406.9540035,
+        "p90": 462.5149771,
+        "p95": 496.1546986999999,
+        "p99": 676.1322523099993
+      },
+      "scheduled_to_response_ms": {
+        "p50": 407.772305,
+        "p90": 463.5204275,
+        "p95": 497.0759742499999,
+        "p99": 677.0474892099993
+      }
+    }
+  ],
+  "shared_peak_bytes": 240787456,
+  "swap_peak_bytes": 0,
+  "matched_vendor_measured": false,
+  "saturation_measured": false,
+  "total_dollar_measured": false,
+  "confirmed_wire_requests_measured": false,
+  "raw_materialized_path": "/data/orchestration/borsuk-waves-offered-a0001-materialized"
+}

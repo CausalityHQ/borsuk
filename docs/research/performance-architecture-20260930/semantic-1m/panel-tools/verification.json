@@ -1,0 +1,39 @@
+{
+  "schema": "borsuk-semantic-1m-panel-tools-root-verification-v1",
+  "implementation_commit": "bcfa91030ec6db75f4c006371c01a0bc7dc90124",
+  "root_check": {
+    "command": "systemd-run --user --scope --quiet --unit=borsuk-panel-root-check-20261001 -p MemoryMax=209715200 -p MemorySwapMax=0 -p CPUQuota=100% -p TasksMax=64 env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 /usr/bin/time -v -o /tmp/borsuk-fresh-panel-root-cgroup-check.time timeout 120s /home/rb/.cache/borsuk-cohere-1m-v4/analysis-venv/bin/python -m scripts.prepare_semantic_1m_fresh_panel --self-check",
+    "exit_status": 0,
+    "max_rss_kib": 83992,
+    "wall_seconds": 0.5
+  },
+  "prior_address_space_cap_check": {
+    "exit_status": 1,
+    "reason": "PyArrow import MemoryError under 200MiB RLIMIT_AS; replaced with actual200MiB cgroup bound"
+  },
+  "real_panel_selected": false,
+  "queries_or_truth_generated": false,
+  "ann_quality_measured": false,
+  "logs": {
+    "selfcheck.gz": {
+      "bytes": 16,
+      "sha256": "22429c1ec483c16edb1f252fba08bbb320be3894fbc4b81f11448683bbe43e72",
+      "gzip_sha256": "33782d5a96673a859862abf5152432cb2b36389b00792c26e5c5464c42808e4d"
+    },
+    "selfcheck.time.gz": {
+      "bytes": 851,
+      "sha256": "dca8592cca2cddf71e8cd498dc45744f89702e4ec979dc3bc44c31d93352685d",
+      "gzip_sha256": "d44263df55ea7f9c0e70ffacb02bd2280c3c4918f2063f112b81b2287fb34dac"
+    },
+    "as-limit-failure.gz": {
+      "bytes": 471,
+      "sha256": "6da7eb33af02339b75bc271288d58a494b2bd07e2b10a020dd68f34507ec63f7",
+      "gzip_sha256": "52365697a7bf5d2d8c3af263fa2a905a4d20707a9f17d08ed214a09649630177"
+    },
+    "as-limit-failure.time.gz": {
+      "bytes": 914,
+      "sha256": "bd0aa47ad7cb8ead8398da8017900c4414e93f1967dd7588307c056d8e4b2dcb",
+      "gzip_sha256": "2c53bcf5e3e593f3d939affa35293001b1bce1ee6fb4e595c134de303e2b5333"
+    }
+  }
+}
