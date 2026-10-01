@@ -1,0 +1,94 @@
+{
+  "schema": "borsuk-metadata-waves-paired-adapter-integration-v1",
+  "child_commit": "6322b9f181844892f980f78363d4a45142130b08",
+  "root_integrated_commit": "7aa9e83c",
+  "native_source_unchanged": true,
+  "native_source_identity_sha256": "714794a10c2d886f7a53a9926a4bb63e093cec16858676268e31833aeead2681",
+  "native_source_file_count": 399,
+  "root_controller_exit_status": 0,
+  "root_controller_command": [
+    "python3",
+    "-m",
+    "scripts.launch_native_semantic_metadata_cold_spot",
+    "--self-check"
+  ],
+  "resource_limits": {
+    "address_space_bytes": 209715200,
+    "timeout_seconds": 120
+  },
+  "actual_native_full_execution": "pending",
+  "new_performance_measured": false,
+  "archives": {
+    "verification.json": {
+      "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/paired-adapter-gates/verification.json.gz",
+      "bytes": 1614,
+      "sha256": "a1aa679b3fb3585d50a7e5d6929065eb6cc12296ab6065eb20aab484af55e63c",
+      "uncompressed_bytes": 4402,
+      "uncompressed_sha256": "840bc7a63b262d4662255ecbbe119bf6c3b636d79463534befdd56f9652b6468"
+    },
+    "contract.json": {
+      "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/paired-adapter-gates/contract.json.gz",
+      "bytes": 38652,
+      "sha256": "4489cc602c90153ed178f6f64b8982e4d261f1e49944f6608236633b327166a3",
+      "uncompressed_bytes": 100389,
+      "uncompressed_sha256": "1ea533bd99678fb7d407b8f48a5d07fc0ac71e45ff8fcb24d4adfa9d5fc56c91"
+    },
+    "pending.json": {
+      "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/paired-adapter-gates/pending.json.gz",
+      "bytes": 473,
+      "sha256": "5ff70569519a2cf16a3e0fa1bc28b29840834c0ec5c91dfc95ea58f9a4224515",
+      "uncompressed_bytes": 1030,
+      "uncompressed_sha256": "eb872fc612c0dbb269c28a6d9c6b7aed71589d7850f1eae218ae9b78f066d2b3"
+    },
+    "pending.log": {
+      "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/paired-adapter-gates/pending.log.gz",
+      "bytes": 445,
+      "sha256": "d1ba772a5d66ea705086ff159892bdf7b7911d8c66c26d901f30f9c98e2c5ae3",
+      "uncompressed_bytes": 878,
+      "uncompressed_sha256": "e83a14aaec353c17b396ae1f7a0f92d024b51ff7352fc00d53d0f6ea780b72fe"
+    },
+    "checker.log": {
+      "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/paired-adapter-gates/checker.log.gz",
+      "bytes": 164,
+      "sha256": "07519d1330ec824f5db7db4d9a6b1fe42806c1f8b395a354598fbb7f7b1dc9fc",
+      "uncompressed_bytes": 175,
+      "uncompressed_sha256": "fe409f49c2298cba1c552e987ffc837fa19d5b62e35e47315a78c99d0ea37b8c"
+    },
+    "checker.time": {
+      "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/paired-adapter-gates/checker.time.gz",
+      "bytes": 434,
+      "sha256": "1e414fcdcbfaff6f9c48450cb089c818c47b0389456495a48e6538235ff38e7c",
+      "uncompressed_bytes": 804,
+      "uncompressed_sha256": "69fbabc643a1ef0547242207648a07a2815f91c43f31dd3796275ab8b0af872f"
+    },
+    "controller.log": {
+      "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/paired-adapter-gates/controller.log.gz",
+      "bytes": 151,
+      "sha256": "063185dfe4f02ccba721632e7776a0a5855a70b1211738e6ae137a65051fa34a",
+      "uncompressed_bytes": 143,
+      "uncompressed_sha256": "aade8614eea07f91c12c203203abdb6fc46eb272d8a85a046eba927577fce272"
+    },
+    "controller.time": {
+      "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/paired-adapter-gates/controller.time.gz",
+      "bytes": 440,
+      "sha256": "3f884074d31df6babe059c100528bf94368fb01df3c53decb0f17fe0da912701",
+      "uncompressed_bytes": 811,
+      "uncompressed_sha256": "f393af9b0c07261ecf25c5520dad6f247b10146d3aa4cc9e420a542f59a6b6be"
+    },
+    "root-controller.log": {
+      "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/paired-adapter-gates/root-controller.log.gz",
+      "bytes": 151,
+      "sha256": "5bc1d0b2cbf7babc6d682a962d255196cc2dc39e94f66a5b82b12aedf8a9c04a",
+      "uncompressed_bytes": 143,
+      "uncompressed_sha256": "99afa37d85a81bd17b04ec9bd989776d599ee82740b8e3a513891fa69493757a"
+    },
+    "root-controller.time": {
+      "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/paired-adapter-gates/root-controller.time.gz",
+      "bytes": 444,
+      "sha256": "bf2c64ff9dbed4761d57d1df47f791236beb31bb6da035e214b7a73203ae1e8f",
+      "uncompressed_bytes": 813,
+      "uncompressed_sha256": "af4f30fde9954ef09db148e99708c2d19ee313b125ca05802d73109f0babff0e"
+    }
+  },
+  "root_owned_reason": "Final verification, integration and frozen campaign authority remain root-owned."
+}
