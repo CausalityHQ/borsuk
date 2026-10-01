@@ -476,10 +476,25 @@ def self_check():
         rejects(lambda: seal.acquire_owned(dict(shard, sha256="0"*64), scratch, cache))
         assert source.exists() and list(scratch.iterdir()) == []
         source_bytes = np.asarray([vector, other], dtype="<f4").tobytes()
+        # The V36 freezer materializes uint64 IDs; registered candidate shards use int64.
+        indexed = root / "indexed.parquet"
+        pq.write_table(body.set_column(0, "feature_row_id",
+                                      pa.array([43, 42], type=pa.uint64())), indexed)
         raw_copy = root / "source-copy.raw"
-        seal.source_raw(source, raw_copy, hashlib.sha256(source_bytes).hexdigest(), rows=2)
+        seal.source_raw(indexed, raw_copy, hashlib.sha256(source_bytes).hexdigest(), rows=2)
         assert raw_copy.read_bytes() == source_bytes
-        rejects(lambda: seal.source_raw(source, root / "bad-copy.raw", "0"*64, rows=2))
+        rejects(lambda: seal.source_raw(indexed, root / "bad-copy.raw", "0"*64, rows=2))
+        for ordinal, invalid_ids in enumerate((pa.array([42, 42], type=pa.uint64()),
+                                              pa.array([42, None], type=pa.uint64()),
+                                              pa.array([42, 43], type=pa.int64()),
+                                              pa.array([42, -1], type=pa.int64()),
+                                              pa.array([42, 43], type=pa.uint32()),
+                                              pa.array([42., 43.], type=pa.float64()),
+                                              pa.array(["42", "43"]), pa.array([True, False]))):
+            invalid_source = root / f"invalid-ids-{ordinal}.parquet"
+            pq.write_table(body.set_column(0, "feature_row_id", invalid_ids), invalid_source)
+            rejects(lambda: seal.source_raw(invalid_source, root / f"invalid-ids-{ordinal}.raw",
+                                             hashlib.sha256(source_bytes).hexdigest(), rows=2))
         for duplicate in (new.copy(), new * 2):
             duplicate[1] = duplicate[0]
             rejects(lambda: audit_duplicates(duplicate, raw, consumed, 1, 1))

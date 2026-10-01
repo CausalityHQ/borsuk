@@ -103,7 +103,8 @@ def source_raw(parquet_path, output, expected_sha, rows=1_000_000):
     if parquet.metadata.num_rows != rows:
         raise ValueError("indexed source row count differs")
     ids = set()
-    if parquet.schema_arrow.field("feature_row_id").type != pa.int64():
+    # Materialized V36 source uses v36_prefix_source_schema (UInt64).
+    if parquet.schema_arrow.field("feature_row_id").type != pa.uint64():
         raise ValueError("indexed source feature ID type differs")
     with output.open("xb") as target:
         for batch in parquet.iter_batches(columns=["feature_row_id", "embedding"], batch_size=8192):
