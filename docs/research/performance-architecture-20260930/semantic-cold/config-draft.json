@@ -294,5 +294,18 @@
   },
   "namespace_connect_deadline_seconds": 45,
   "native_process_limit_seconds": 60,
-  "query_payload_timeout_seconds": 5
+  "query_payload_timeout_seconds": 5,
+  "architecture": "x86_64",
+  "ann_queries": 512,
+  "worker_limit_seconds": 3000,
+  "machine_limit_seconds": 3600,
+  "instance_type": "m7i.2xlarge",
+  "image_id": "ami-06121aa3085b6f918",
+  "subnet_id": "subnet-0a12dbed0ca6fac25",
+  "spot_max_usd_per_hour": 0.5,
+  "compute_cap_usd": 0.5,
+  "ebs_s3_allowance_usd": 0.15,
+  "profile_memory_bytes": 8589934592,
+  "native_rlimit_as_bytes": 4294967296,
+  "profile_swap_bytes": 0
 }
