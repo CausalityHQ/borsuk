@@ -2,7 +2,7 @@
   "ann_queries": 512,
   "application_sq8_cache": false,
   "architecture": "x86_64",
-  "authority_pending": true,
+  "authority_pending": false,
   "blocks": [
     "control0",
     "candidate1",
@@ -33,7 +33,7 @@
     "scripts/check_native_semantic_metadata_cold.py": "5a8643756f2a7c2b642ce4af166be1051bb4e250728faff4cadd878d0d2f3fae"
   },
   "compute_cap_usd": 0.5,
-  "controller_authority_pending": true,
+  "controller_authority_pending": false,
   "controller_code_sha256": {
     "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
     "scripts/check_native_semantic_metadata_cold.py": "5a8643756f2a7c2b642ce4af166be1051bb4e250728faff4cadd878d0d2f3fae",
@@ -330,14 +330,14 @@
         "sha256": "e3516453797add1f8e76daddcc97a8fb5e4c1c3467749ae9cb732934b3bc2c0e"
       },
       "proof": {
-        "bytes": 32594,
         "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/boundary-check.json",
-        "sha256": "3ccb6b3982caea932b10df671a6f12a6fc340ee2feaec2bceae74435d27472a0"
+        "bytes": 33053,
+        "sha256": "2a3104109738822581167161db9d535602fa03666c2bbd4ef5865da9ba3a873d"
       },
       "source_manifest": {
-        "bytes": 46945,
-        "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/native-source-manifest.json",
-        "sha256": "b389a7d5c40017c7afc2d5a7b7cbb37ec53a10f611cf94fe8ff79d8bdaf1e613"
+        "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/qualified-native-source-manifest.json",
+        "bytes": 47547,
+        "sha256": "38a19170e8974de3259d90e7a1137c66b9eccf93c1978f90f4cba42a43d45894"
       }
     },
     "control": {
@@ -361,9 +361,9 @@
   },
   "native_assurances": {
     "candidate": {
-      "bytes": 46742,
       "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/native-assurance.json",
-      "sha256": "dba84b92e195d8df61505ca1d4213d9bac97bd0e99b3f205416c69cf89a75c5b"
+      "bytes": 47512,
+      "sha256": "672d0222bebd9d98f09119041f610d705893dbb8340e7cd478e002a46e8a11bf"
     },
     "control": {
       "bytes": 48690,

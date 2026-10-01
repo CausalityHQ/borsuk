@@ -1,0 +1,35 @@
+{
+  "schema": "borsuk-metadata-waves-final-authority-verification-v1",
+  "preflight_exit_status": 0,
+  "current_full_suite_pass_claim": true,
+  "actual_full_workspace_test_execution": true,
+  "code_files": 23,
+  "artifacts": 63,
+  "user_data_bytes": 16035,
+  "config_sha256": "13e9193efdb50161b452755de5587e6b943ab3fa5b54f0a73850bb658b987317",
+  "authority_roster_sha256": "b1f84f60d45a6337f9838abae5a76870b85161c9c7588a786f905d7071edc80d",
+  "native_rebuilt_for_benchmark": false,
+  "fresh_matched_control_required": true,
+  "performance_measured": false,
+  "toolchain_parity_asserted": false,
+  "verification_artifacts": {
+    "preflight.json": {
+      "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/paired-adapter-gates/final-preflight.json.gz",
+      "bytes": 10324,
+      "sha256": "7afffa293cbf2a70cebe3949cbdceea18cbde6badb66ee9c3e698a9c62b497d0",
+      "archived_sha256": "ff6af9cf46905fab4217b8ddf11ec362e05d011da6c66922865e2ad3421e6062"
+    },
+    "preflight.time": {
+      "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/paired-adapter-gates/final-preflight.time.gz",
+      "bytes": 872,
+      "sha256": "7f2de3f6949a54327e122db6074db9029e6a567c5ba1d6ec98c506180fef5cf5",
+      "archived_sha256": "7548733d21a5553b8b3c78535a7af9466be2301945dc7130cb4ed691cd30b265"
+    },
+    "user-data.sh": {
+      "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/paired-adapter-gates/final-user-data.sh.gz",
+      "bytes": 16035,
+      "sha256": "da03c5791a14f9f55c8aa60ec687873a51c1e8c04c57c01d5e02e41986f27a79",
+      "archived_sha256": "53df86dc4673fa83eba8d2dd01a3b1646ebdbc7192665fad9e7895c6483b32b7"
+    }
+  }
+}

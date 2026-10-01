@@ -1,0 +1,11 @@
+{
+  "schema": "borsuk-native-binary-s3-verification-v1",
+  "observed_at": "2026-10-01T10:45:01.347759+00:00",
+  "key": "research/semantic-router/20261001/native/e3516453797add1f8e76daddcc97a8fb5e4c1c3467749ae9cb732934b3bc2c0e/two_bit_http",
+  "bytes": 16259024,
+  "sha256": "e3516453797add1f8e76daddcc97a8fb5e4c1c3467749ae9cb732934b3bc2c0e",
+  "conditional_create_performed": true,
+  "complete_get_readback_authenticated": true,
+  "candidate_full_workspace_qualified": true,
+  "performance_measured": false
+}

@@ -1,13 +1,17 @@
 {
   "full_suite_status": 0,
   "full_workspace_test_execution": true,
-  "implementation_gate_verification": {
-    "bytes": 3396,
-    "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/implementation-gates/final-slice/verification.json",
-    "sha256": "8d56760e8f9063d02bfc3421ebf4079facc473d8697433c0f5d2f7dfb9f65cb2"
+  "native_integrated": true,
+  "native_source_archive": {
+    "bytes": 3221164,
+    "key": "research/semantic-router/20261001/sources/59ebc331f1bb4cd562e10746f36b326cb7e9e894881741df3dd96662a43f6074.tar.gz",
+    "path": "docs/research/performance-architecture-20260930/semantic-cold/metadata-waves/native-source.tar.gz",
+    "sha256": "59ebc331f1bb4cd562e10746f36b326cb7e9e894881741df3dd96662a43f6074"
   },
-  "qualified": true,
-  "schema": "borsuk-semantic-metadata-native-assurance-v1",
+  "native_source_commit": "5dbdb44d0dbb8bec1f02b6e8c64f9e6bc1e14287",
+  "qualified_worker_commit": "1a285de68a5d380c123bcea15e0b348867fcd021",
+  "remote_asset_uploaded": false,
+  "schema": "borsuk-native-semantic-router-source-manifest-v1",
   "source_file_count": 399,
   "source_identity_sha256": "714794a10c2d886f7a53a9926a4bb63e093cec16858676268e31833aeead2681",
   "source_sha256": {
@@ -421,6 +425,5 @@
     "bytes": 71982,
     "sha256": "678a47aa64ca377d6fdac6c61d18d7ade626cfeec0d99da8853b4a2cceebcaae"
   },
-  "qualification_scope": "Five exact-source implementation checks plus actual remote release full-workspace execution; benchmark binary built with local Rust 1.98.1, full source executed with remote Rust 1.98.0; toolchain parity not asserted",
   "toolchain_parity_asserted": false
 }

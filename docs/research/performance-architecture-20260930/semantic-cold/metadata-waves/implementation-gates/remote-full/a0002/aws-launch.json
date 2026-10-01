@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-09bc168cd1b303b1d",
+  "nodes": {
+    "0": {
+      "instance_id": "i-09bc168cd1b303b1d"
+    }
+  },
+  "prefix": "research/semantic-router/20261001/metadata-waves-workspace-a0002",
+  "source_commit": "95c87b18ecc7a74dd599ee38b4a33fe6837a3d81",
+  "source_archive_sha256": "3d1fcca347de9afe65e84069953f4b37e7bb56c0ed99b20f94fe68d53a0ec426"
+}
