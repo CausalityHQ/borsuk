@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 
 import numpy as np
@@ -22,52 +23,88 @@ def checked_s3(bucket, ident, path):
         raise ValueError(f"source identity differs: {path}")
 
 
-def selected_vectors(panel, registry, scratch):
+def acquire_owned(shard, scratch, cache=None):
+    """Acquire only in caller-owned fresh scratch; cached bytes stay read-only."""
+    path = scratch / Path(shard["path"]).name
+    if path.exists() or path.is_symlink():
+        raise ValueError("owned acquisition target already exists")
+    cached = None if cache is None else cache / path.name
+    if cached is not None and cached.exists():
+        if digest(cached) != (shard["encoded_bytes"], shard["sha256"]):
+            raise ValueError("cached registered shard identity differs")
+        path.symlink_to(cached.resolve())
+        return path
+    return acquire(shard, scratch)
+
+
+def selected_vectors(panel, registry, scratch, count=1000, shard_cache=None):
     ranked = sorted(registry, key=lambda shard: (
         hashlib.sha256(b"borsuk-v36-screen-object-v1" + shard["path"].encode()
                        + shard["encoded_bytes"].to_bytes(8, "little")).digest(),
         shard["path"].encode()))
     assert len(ranked) == 2298
+    selected = panel["selected"]
+    if (len(selected) != count
+            or [row["query_ordinal"] for row in selected] != list(range(count))
+            or len({row["feature_row_id"] for row in selected}) != count):
+        raise ValueError("selected query roster differs")
     wanted = {}
     for row in panel["selected"]:
         assert row["source_rank"] in range(16, 32)
-        wanted.setdefault(row["source_rank"], {})[row["source_row_offset"]] = row
-    vectors = np.empty((1000, 768), dtype="<f4")
+        offsets = wanted.setdefault(row["source_rank"], {})
+        if (type(row["source_row_offset"]) is not int or row["source_row_offset"] < 0
+                or row["source_row_offset"] in offsets):
+            raise ValueError("selected query locator repeats or differs")
+        offsets[row["source_row_offset"]] = row
+    vectors = np.empty((count, 768), dtype="<f4")
     found = set()
     sources = []
     for rank, offsets in sorted(wanted.items()):
         shard = ranked[rank]
-        path = acquire(shard, scratch)
-        sources.append({"rank": rank, "path": shard["path"],
-                        "bytes": shard["encoded_bytes"], "sha256": shard["sha256"]})
-        parquet = pq.ParquetFile(path)
-        if parquet.schema_arrow.field("feature_row_id").type != pa.int64():
-            raise ValueError("candidate feature ID type differs")
-        start = 0
-        for batch in parquet.iter_batches(columns=["feature_row_id", "embedding"], batch_size=8192):
-            for offset in sorted(k for k in offsets if start <= k < start + len(batch)):
-                row = offsets[offset]
-                if batch.column(0)[offset - start].as_py() != row["feature_row_id"]:
-                    raise ValueError("selected feature ID/locator differs")
-                vector = np.asarray(batch.column(1)[offset - start].as_py(), dtype="<f4")
-                if vector.shape != (768,) or not np.isfinite(vector).all() or not vector.any():
-                    raise ValueError("selected query geometry differs")
-                vectors[row["query_ordinal"]] = vector
-                found.add(row["query_ordinal"])
-            start += len(batch)
-        if start != parquet.metadata.num_rows or max(offsets) >= start:
-            raise ValueError("selected source row coverage differs")
-        path.unlink()
-    if found != set(range(1000)):
+        # Cleanup removes owned downloads/symlinks, never cached bytes.
+        with tempfile.TemporaryDirectory(dir=scratch, prefix="selected-") as owned:
+            path = acquire_owned(shard, Path(owned), shard_cache)
+            sources.append({"rank": rank, "path": shard["path"],
+                            "bytes": shard["encoded_bytes"], "sha256": shard["sha256"]})
+            parquet = pq.ParquetFile(path)
+            if parquet.schema_arrow.field("feature_row_id").type != pa.int64():
+                raise ValueError("candidate feature ID type differs")
+            embedding = parquet.schema_arrow.field("embedding").type
+            if (not pa.types.is_fixed_size_list(embedding) or embedding.list_size != 768
+                    or embedding.value_type != pa.float32()):
+                raise ValueError("candidate embedding schema differs")
+            start = 0
+            for batch in parquet.iter_batches(columns=["feature_row_id", "embedding"], batch_size=8192):
+                column = batch.column(1)
+                for offset in sorted(k for k in offsets if start <= k < start + len(batch)):
+                    row = offsets[offset]
+                    if batch.column(0)[offset - start].as_py() != row["feature_row_id"]:
+                        raise ValueError("selected feature ID/locator differs")
+                    value = column[offset - start].as_py()
+                    if value is None or any(v is None for v in value):
+                        raise ValueError("selected query contains null values")
+                    vector = np.asarray(value, dtype="<f4")
+                    if vector.shape != (768,) or not np.isfinite(vector).all() or not vector.any():
+                        raise ValueError("selected query geometry differs")
+                    vectors[row["query_ordinal"]] = vector
+                    found.add(row["query_ordinal"])
+                start += len(batch)
+            if start != parquet.metadata.num_rows or max(offsets) >= start:
+                raise ValueError("selected source row coverage differs")
+            if digest(path) != (shard["encoded_bytes"], shard["sha256"]):
+                raise ValueError("selected source mutated during decoding")
+    if found != set(range(count)):
         raise ValueError("selected query roster differs")
     return vectors, sources
 
 
-def source_raw(parquet_path, output, expected_sha):
+def source_raw(parquet_path, output, expected_sha, rows=1_000_000):
     parquet = pq.ParquetFile(parquet_path)
-    if parquet.metadata.num_rows != 1_000_000:
+    if parquet.metadata.num_rows != rows:
         raise ValueError("indexed source row count differs")
     ids = set()
+    if parquet.schema_arrow.field("feature_row_id").type != pa.int64():
+        raise ValueError("indexed source feature ID type differs")
     with output.open("xb") as target:
         for batch in parquet.iter_batches(columns=["feature_row_id", "embedding"], batch_size=8192):
             values = batch.column(0).to_pylist()
@@ -79,12 +116,12 @@ def source_raw(parquet_path, output, expected_sha):
                     or column.type.value_type != pa.float32() or column.null_count
                     or column.values.null_count):
                 raise ValueError("indexed source vector schema differs")
-            data = np.asarray(column.values.to_numpy(zero_copy_only=False),
+            data = np.asarray(column.values.slice(column.offset * 768, len(column) * 768).to_numpy(zero_copy_only=False),
                               dtype="<f4").reshape(len(batch), 768)
             if not np.isfinite(data).all() or not (data != 0).any(axis=1).all():
                 raise ValueError("indexed source vector differs")
             target.write(data.tobytes())
-    if len(ids) != 1_000_000 or digest(output) != (3_072_000_000, expected_sha):
+    if len(ids) != rows or digest(output) != (rows * 768 * 4, expected_sha):
         raise ValueError("indexed source raw parity differs")
 
 
