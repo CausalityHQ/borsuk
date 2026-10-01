@@ -225,18 +225,22 @@ def main(attempt, campaign=None):
         {'Name': 'instance-state-name', 'Values': ['pending', 'running', 'stopping']}])
     assert not any(row['Instances'] for row in active['Reservations'])
     subnet = getattr(campaign, 'SUBNET', peer.SUBNET)
+    instance_type = getattr(campaign, 'INSTANCE_TYPE', 'c7g.2xlarge')
+    image_id = getattr(campaign, 'IMAGE_ID', 'ami-03748c04dc81412c6')
+    spot_max = getattr(campaign, 'SPOT_MAX_USD_PER_HOUR', .30)
+    assert isinstance(spot_max, (int, float)) and 0 < spot_max <= 1
     az = ec2.describe_subnets(SubnetIds=[subnet])['Subnets'][0]['AvailabilityZone']
-    quote = ec2.describe_spot_price_history(InstanceTypes=['c7g.2xlarge'], ProductDescriptions=['Linux/UNIX'],
+    quote = ec2.describe_spot_price_history(InstanceTypes=[instance_type], ProductDescriptions=['Linux/UNIX'],
         AvailabilityZone=az, MaxResults=1)['SpotPriceHistory'][0]
-    assert float(quote['SpotPrice']) <= .30
+    assert float(quote['SpotPrice']) <= spot_max
     if peer.missing(s3, key):
         peer.put_if_absent(key, archive)
     else:
         assert peer.sha(s3.get_object(Bucket=peer.BUCKET, Key=key)['Body'].read()) == digest
     reservation = dict(schema=campaign.SCHEMA, source_commit=commit, source_archive_sha256=digest,
-        wall_seconds=campaign.WALL, instance_type='c7g.2xlarge', availability_zone=az, subnet_id=subnet,
+        wall_seconds=campaign.WALL, instance_type=instance_type, image_id=image_id, availability_zone=az, subnet_id=subnet,
         spot_price_observed_usd_per_hour=quote['SpotPrice'], spot_quote_timestamp=quote['Timestamp'].isoformat(),
-        spot_max_usd_per_hour=.30, compute_cap_usd=getattr(campaign, 'COMPUTE_CAP', .35), ebs_s3_allowance_usd=.15,
+        spot_max_usd_per_hour=spot_max, compute_cap_usd=getattr(campaign, 'COMPUTE_CAP', .35), ebs_s3_allowance_usd=.15,
         total_cost_measured=False,
         cost_scope=f'{campaign.WALL}s at capped Spot rate; boot/termination overhead and EBS/S3 allowance estimated',
         qualification=proof, config_sha256=proof['config_sha256'],
@@ -249,10 +253,10 @@ def main(attempt, campaign=None):
     nodes = {}
     started = time.monotonic()
     try:
-        receipt = ec2.run_instances(ClientToken=token_prefix + peer.sha(prefix.encode())[:min(48, 64-len(token_prefix))], ImageId='ami-03748c04dc81412c6',
-            InstanceType='c7g.2xlarge', MinCount=1, MaxCount=1, IamInstanceProfile={'Arn': peer.PROFILE_ARN},
+        receipt = ec2.run_instances(ClientToken=token_prefix + peer.sha(prefix.encode())[:min(48, 64-len(token_prefix))], ImageId=image_id,
+            InstanceType=instance_type, MinCount=1, MaxCount=1, IamInstanceProfile={'Arn': peer.PROFILE_ARN},
             NetworkInterfaces=[{'AssociatePublicIpAddress': True, 'DeviceIndex': 0, 'Groups': [peer.SECURITY_GROUP], 'SubnetId': subnet}],
-            InstanceMarketOptions={'MarketType': 'spot', 'SpotOptions': {'InstanceInterruptionBehavior': 'terminate', 'SpotInstanceType': 'one-time', 'MaxPrice': '0.30'}},
+            InstanceMarketOptions={'MarketType': 'spot', 'SpotOptions': {'InstanceInterruptionBehavior': 'terminate', 'SpotInstanceType': 'one-time', 'MaxPrice': f'{spot_max:.2f}'}},
             InstanceInitiatedShutdownBehavior='terminate', BlockDeviceMappings=[{'DeviceName': '/dev/xvda', 'Ebs': {'DeleteOnTermination': True, 'Encrypted': True, 'VolumeSize': 80, 'VolumeType': 'gp3'}}],
             TagSpecifications=[{'ResourceType': 'instance', 'Tags': [{'Key': 'Name', 'Value': getattr(campaign, 'TAG', 'borsuk-metadata-ranges-cold')}]}], UserData=body)
         # Record all ACKed IDs before receipt persistence can fail.
