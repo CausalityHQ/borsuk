@@ -2,8 +2,9 @@
 
 Config contract: FIXED plus controller_authority_pending=false,
 controller_code_sha256={every CODE path:SHA256}, native_source_manifest=
-{path,bytes,sha256}. No completed-assurance dependency. CLI aNNNN | --self-check
-| --stage REPO OUT | --replay OUT. Worker CLI: CARGO REPO OUTPUT.
+{path,bytes,sha256}. No completed-assurance dependency. Optional leading
+--semantic-1m selects the new root and manifest-pinned native identity.
+CLI aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT.
 """
 import contextlib
 import copy
@@ -38,6 +39,7 @@ CONFIG_SCHEMA = 'borsuk-native-workspace-execution-v1'
 PREFIX = 'research/semantic-router/20261001/metadata-waves-workspace-'
 TOKEN_PREFIX = 'metadata-waves-workspace-'
 TAG = 'borsuk-metadata-waves-workspace'
+SEMANTIC_1M = False
 WALL = 9000
 INSTANCE_TYPE, IMAGE_ID = 'c7i.2xlarge', semantic.IMAGE_ID
 ROOT_DEVICE_NAME, SUBNET = semantic.ROOT_DEVICE_NAME, 'subnet-034528fbd6977848f'
@@ -72,6 +74,18 @@ def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 
 
+def configure(semantic_1m=False):
+    """Select the protocol explicitly in every controller/worker process."""
+    global SEMANTIC_1M, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
+    assert type(semantic_1m) is bool
+    SEMANTIC_1M = semantic_1m
+    ROOT = (semantic.ROOT.parent/'semantic-1m' if semantic_1m else semantic.ROOT/'metadata-waves') / 'implementation-gates/remote-full'
+    CONFIG = ROOT/'config.json'
+    TOKEN_PREFIX = ('semantic-1m' if semantic_1m else 'metadata-waves') + '-workspace-'
+    PREFIX = 'research/semantic-router/20261001/' + TOKEN_PREFIX
+    TAG = 'borsuk-' + TOKEN_PREFIX.rstrip('-')
+
+
 def qualify(base=Path('.')):
     """Portable source/config/code qualification, without Git or completed assurance."""
     base = Path(base).resolve()
@@ -91,11 +105,13 @@ def qualify(base=Path('.')):
     inventory = worker.source_hashes(base)
     assert type(manifest['source_file_count']) is int and manifest['source_file_count'] == len(inventory) == 399
     assert manifest['source_sha256'] == inventory, 'full native source drift'
-    assert worker.source_identity(inventory) == manifest['source_identity_sha256'] == SOURCE_IDENTITY
+    identity = worker.source_identity(inventory)
+    assert identity == manifest['source_identity_sha256']
+    assert SEMANTIC_1M or identity == SOURCE_IDENTITY, 'historical native source identity'
     assert re.fullmatch('[0-9a-f]{40}', manifest['native_source_commit'])
     return dict(schema='borsuk-native-workspace-execution-qualification-v1',
         config_path=str(CONFIG), config_sha256=worker.sha(body), campaign_schema=SCHEMA,
-        source_sha256=inventory, source_identity_sha256=SOURCE_IDENTITY, source_file_count=399,
+        source_sha256=inventory, source_identity_sha256=identity, source_file_count=399,
         native_source_commit=manifest['native_source_commit'], native_source_manifest=pointer,
         native_source_manifest_sha256=pointer['sha256'], code_sha256=code,
         code_identity_sha256=worker.sha(encoded(code)), artifact_roster_sha256=worker.sha(encoded(ARTIFACTS)),
@@ -124,6 +140,7 @@ def stage(repo, out):
 
 def validate_receipt(out, proof):
     out = Path(out)
+    assert proof['config_path'] == str(CONFIG) and proof['campaign_schema'] == SCHEMA, 'receipt mode'
     receipt = json.loads((out/'workspace-receipt.json').read_bytes())
     assert receipt['schema'] == 'borsuk-native-workspace-execution-receipt-v1'
     assert type(receipt['exit_status']) is int and receipt['exit_status'] == 0
@@ -134,7 +151,8 @@ def validate_receipt(out, proof):
     assert isinstance(receipt['command'][0], str) and receipt['command'][0]
     assert receipt['environment'] == worker.ENVIRONMENT
     assert receipt['source_sha256'] == proof['source_sha256']
-    assert receipt['source_identity_sha256'] == worker.source_identity(receipt['source_sha256']) == SOURCE_IDENTITY
+    assert receipt['source_identity_sha256'] == worker.source_identity(receipt['source_sha256']) == proof['source_identity_sha256']
+    assert SEMANTIC_1M or proof['source_identity_sha256'] == SOURCE_IDENTITY
     assert type(receipt['source_file_count']) is int and receipt['source_file_count'] == 399
     for key in ('config_sha256','code_identity_sha256','campaign_schema','artifact_roster_sha256'):
         assert receipt[key] == proof[key], 'receipt ' + key
@@ -163,6 +181,7 @@ def user_data(commit, archive_sha, archive_key, prefix, qualification):
     with patch.multiple(semantic, WALL=WALL, SCHEMA=SCHEMA, ARTIFACTS=ARTIFACTS,
                         TERMINAL_IDENTITIES=TERMINAL_IDENTITIES), patch.object(semantic, '_offered', return_value=False):
         body = semantic.user_data(commit, archive_sha, archive_key, prefix, adapter)
+    flag = ' --semantic-1m' if SEMANTIC_1M else ''
     command = f'''phase=install
 test "$(uname -m)" = x86_64
 . /etc/os-release
@@ -171,13 +190,13 @@ export RUSTUP_HOME="$root/.rustup" CARGO_HOME="$root/.cargo"
 export PATH="$CARGO_HOME/bin:$PATH"
 curl -fsSL --connect-timeout 10 --max-time 180 https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.98.0
 phase=source-qualification
-PYTHONPATH="$root/repo" python3.12 -m {MODULE} --stage "$root/repo" "$root"
+PYTHONPATH="$root/repo" python3.12 -m {MODULE}{flag} --stage "$root/repo" "$root"
 phase=execution
 systemd-run --unit=native-workspace-execution --wait --pipe -p MemoryMax=8G -p MemorySwapMax=0 -p CPUQuota=200% -p TasksMax=512 -p RuntimeMaxSec=7260 -p WorkingDirectory="$root/repo" \\
  --setenv=PYTHONPATH="$root/repo" --setenv=RUSTUP_HOME="$RUSTUP_HOME" --setenv=CARGO_HOME="$CARGO_HOME" --setenv=PATH="$PATH" \\
- python3.12 -m scripts.check_native_workspace_execution "$CARGO_HOME/bin/cargo" "$root/repo" "$root"
+ python3.12 -m scripts.check_native_workspace_execution{flag} "$CARGO_HOME/bin/cargo" "$root/repo" "$root"
 phase=receipt-qualification
-PYTHONPATH="$root/repo" python3.12 -m {MODULE} --check-receipt "$root"
+PYTHONPATH="$root/repo" python3.12 -m {MODULE}{flag} --check-receipt "$root"
 for name in $ARTIFACT_NAMES; do
  if [ "$name" = run-closed.log ]; then test -s run.log; else test -s "$name"; fi
 done
@@ -208,6 +227,7 @@ def replay(out):
     closed = json.loads((out/'aws-closeout.json').read_bytes())
     terminal = json.loads((out/'aws-terminal.json').read_bytes())
     proof = reservation['qualification']
+    assert proof['config_path'] == str(CONFIG) and proof['campaign_schema'] == SCHEMA, 'replay mode'
     assert closed['state'] == 'terminated'
     assert terminal['instance_id'] in {n['instance_id'] for n in closed['nodes'].values()}
     assert terminal['schema'] == reservation['schema'] == SCHEMA
@@ -217,10 +237,12 @@ def replay(out):
         assert terminal[key] == proof[key], 'terminal ' + key
     assert set(proof['code_sha256']) == set(CODE)
     assert proof['code_identity_sha256'] == worker.sha(encoded(proof['code_sha256']))
-    assert all(worker.artifact(name)['sha256'] == digest for name,digest in proof['code_sha256'].items())
+    base = Path(__file__).resolve().parents[1]
+    assert all(worker.artifact(base/name)['sha256'] == digest for name,digest in proof['code_sha256'].items())
     assert proof['artifact_roster_sha256'] == worker.sha(encoded(ARTIFACTS))
     assert len(proof['source_sha256']) == proof['source_file_count'] == 399
-    assert worker.source_identity(proof['source_sha256']) == proof['source_identity_sha256'] == SOURCE_IDENTITY
+    assert worker.source_identity(proof['source_sha256']) == proof['source_identity_sha256']
+    assert SEMANTIC_1M or proof['source_identity_sha256'] == SOURCE_IDENTITY
     assert set(terminal['artifacts']) <= set(ARTIFACTS), 'unexpected artifact'
     for name, identity in terminal['artifacts'].items():
         assert worker.artifact(out/name) == identity, 'terminal artifact: ' + name
@@ -238,7 +260,7 @@ def replay(out):
         assert set(terminal['artifacts']) == set(ARTIFACTS), 'exact completed artifact roster'
         validate_receipt(out, proof)
     return dict(qualified=complete, actual_full_workspace_execution=complete,
-                source_identity_sha256=SOURCE_IDENTITY, exit_status=terminal['original_exit_code'])
+                source_identity_sha256=proof['source_identity_sha256'], exit_status=terminal['original_exit_code'])
 
 
 def collect(s3, prefix, out, instance_id, commit, digest):
@@ -322,7 +344,7 @@ def _worker_self_check(proof, config_body, manifest_body):
                     patch.object(worker, 'source_hashes', side_effect=[inventory, changed]), \
                     patch.object(worker, 'capture_cgroup', side_effect=[counters, after]), \
                     patch.object(worker.subprocess, 'run', side_effect=run), patch.object(os,'fsync',side_effect=fsync):
-                result = worker.main('fake-cargo', repo, out)
+                result = worker.main('fake-cargo', repo, out, semantic_1m=SEMANTIC_1M)
             assert len(calls) == 1, 'full test repeated'
             assert type(result['exit_status']) is int
             assert result['exit_status'] == {'exit17':17, 'timeout':124}.get(failure,0)
@@ -436,20 +458,113 @@ def _collection_self_check(proof, files, body):
         store[PREFIX+'a0001/terminal.json'] = encoded(failed)
         collect(s3,PREFIX+'a0001',out,'i-owned','0'*40,'1'*64)
         assert replay(out) == dict(qualified=False,actual_full_workspace_execution=False,
-                                  source_identity_sha256=SOURCE_IDENTITY,exit_status=17)
+                                  source_identity_sha256=proof['source_identity_sha256'],exit_status=17)
         assert (out/'test.log').read_bytes() == files['test.log'], 'failed logs lost'
 
 
-def self_check():
+def _remote_self_check():
+    """Run both CLIs away from the repo, faking only Cargo and cgroup files."""
+    import shutil
+    base = Path(__file__).resolve().parents[1]
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root/'repo'
+        for name in CODE:
+            (repo/name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(base/name, repo/name)
+        for index in range(399):
+            (repo/f'mock-{index}.rs').write_text('// mock native source\n')
+        inventory = worker.source_hashes(repo)
+        manifest_path = ROOT/'native-source-manifest.json'
+        (repo/manifest_path).parent.mkdir(parents=True)
+        (repo/manifest_path).write_bytes(encoded(dict(source_sha256=inventory, source_file_count=399,
+            source_identity_sha256=worker.source_identity(inventory), native_source_commit='1'*40)))
+        config = dict(FIXED, controller_authority_pending=False,
+            controller_code_sha256={n:worker.artifact(repo/n)['sha256'] for n in CODE},
+            native_source_manifest=dict(path=str(manifest_path), **worker.artifact(repo/manifest_path)))
+        (repo/CONFIG).write_bytes(encoded(config))
+        cargo = root/'cargo'
+        cargo.write_text(f'''#!{sys.executable}
+import os, sys
+from pathlib import Path
+if sys.argv[1:] == ['-V']:
+    print('fake cargo version')
+else:
+    assert sys.argv[1:] == ['test', '--release', '--locked', '--workspace', '--all-targets']
+    assert os.environ['CARGO_BUILD_JOBS'] == os.environ['RUST_TEST_THREADS'] == '1'
+    target = Path(os.environ['CARGO_TARGET_DIR'])
+    assert target.is_dir() and not list(target.iterdir())
+    (target.parent/'cargo-called').open('x').close()
+    if os.environ.get('MUTATE'):
+        with Path(os.environ['MUTATE']).open('ab') as out: out.write(b' ')
+    print('fake full workspace execution')
+    sys.exit(int(os.environ.get('CARGO_EXIT', '0')))
+''')
+        cargo.chmod(0o755)
+        (root/'rustc').write_text('#!/bin/sh\necho fake rustc version\n')
+        (root/'rustc').chmod(0o755)
+        # Execute the real worker CLI; only its kernel evidence is synthetic.
+        runner = '''import os, runpy
+from pathlib import Path
+from unittest.mock import patch
+original = Path.read_text
+counters = {'memory.max':'8589934592', 'memory.peak':'10000', 'memory.swap.max':'0',
+ 'memory.swap.peak':'0', 'memory.swap.events':'max 0\\nfail 0\\n',
+ 'memory.events':'low 0\\nhigh 0\\nmax 0\\noom 0\\noom_kill 0\\noom_group_kill 0\\n',
+ 'cpu.max':'200000 100000', 'cpu.stat':'usage_usec 42\\n', 'pids.max':'512',
+ 'pids.current':'1', 'pids.events':'max 0\\n', 'cgroup.procs':str(os.getpid())}
+def read(path, *args, **kwargs):
+    if str(path) == '/proc/self/cgroup': return '0::/workspace-mock\\n'
+    if str(path.parent) == '/sys/fs/cgroup/workspace-mock': return counters[path.name]
+    return original(path, *args, **kwargs)
+with patch.object(Path, 'read_text', read):
+    runpy.run_module('scripts.check_native_workspace_execution', run_name='__main__')
+'''
+        env = dict(os.environ, PYTHONPATH=str(repo), MUTATE='', CARGO_EXIT='0')
+        cli = [sys.executable, '-m', MODULE, '--semantic-1m']
+        for failure, mutation in (('success',None), ('exit17',None), ('native','mock-0.rs'),
+                                  ('config',str(CONFIG)), ('code',CODE[0]), ('manifest',str(manifest_path))):
+            out = root/failure
+            out.mkdir()
+            subprocess.run([*cli,'--stage',str(repo),str(out)], cwd=root, env=env, check=True)
+            before = (repo/mutation).read_bytes() if mutation else None
+            result = subprocess.run([sys.executable,'-c',runner,'--semantic-1m',str(cargo),str(repo),str(out)],
+                cwd=root, env=dict(env, MUTATE=str(repo/mutation) if mutation else '',
+                                  CARGO_EXIT='17' if failure == 'exit17' else '0'), capture_output=True, text=True)
+            assert result.returncode == (0 if failure == 'success' else 17 if failure == 'exit17' else 96), result.stderr
+            receipt = json.loads((out/'workspace-receipt.json').read_bytes())
+            assert receipt['exit_status'] == (17 if failure == 'exit17' else 0)
+            assert receipt['qualified'] is (failure == 'success')
+            assert receipt['source_file_count'] == 399 and (out/'cargo-called').exists()
+            assert (out/'test.log').read_text() == 'fake full workspace execution\n'
+            checked = subprocess.run([*cli,'--check-receipt',str(out)], cwd=root, env=env, capture_output=True)
+            assert (checked.returncode == 0) is (failure == 'success'), checked.stderr
+            if mutation:
+                (repo/mutation).write_bytes(before)
+        # Missing mode must reject the semantic authority before creating a target.
+        out = root/'wrong-mode'
+        out.mkdir()
+        subprocess.run([*cli,'--stage',str(repo),str(out)], cwd=root, env=env, check=True)
+        wrong = subprocess.run([sys.executable,'-c',runner,str(cargo),str(repo),str(out)],
+                               cwd=root, env=env, capture_output=True)
+        assert wrong.returncode != 0 and not (out/'target').exists()
+
+
+def self_check(semantic_1m=False):
+    configure(semantic_1m)
     module = sys.modules[__name__]
-    base = Path.cwd()
-    inventory = worker.source_hashes(base)
-    assert len(inventory) == 399 and worker.source_identity(inventory) == SOURCE_IDENTITY
-    manifest_path = semantic.ROOT/'metadata-waves/native-source-manifest.json'
-    manifest_body = (base/manifest_path).read_bytes()
+    base = Path(__file__).resolve().parents[1]
+    manifest = json.loads((base/semantic.ROOT/'metadata-waves/native-source-manifest.json').read_bytes())
+    inventory = manifest['source_sha256']
+    if semantic_1m:
+        inventory = dict(inventory, **{'Cargo.toml':'1'*64})
+        manifest.update(source_sha256=inventory, source_identity_sha256=worker.source_identity(inventory))
+        assert manifest['source_identity_sha256'] != SOURCE_IDENTITY
+    manifest_path = ROOT/'native-source-manifest.json'
+    manifest_body = encoded(manifest)
     config = dict(FIXED, controller_authority_pending=False,
         controller_code_sha256={n:worker.artifact(base/n)['sha256'] for n in CODE},
-        native_source_manifest=dict(path=str(manifest_path),**worker.artifact(base/manifest_path)))
+        native_source_manifest=dict(path=str(manifest_path),bytes=len(manifest_body),sha256=worker.sha(manifest_body)))
     with tempfile.TemporaryDirectory() as tmp:
         repo, out = Path(tmp)/'repo', Path(tmp)/'out'
         repo.mkdir(); out.mkdir()
@@ -463,6 +578,8 @@ def self_check():
         (repo/CONFIG).write_bytes(config_body)
         with patch.object(worker,'source_hashes',return_value=inventory):
             proof = qualify(repo)
+            assert proof['source_identity_sha256'] == manifest['source_identity_sha256']
+            assert proof['actual_full_workspace_execution'] is False
             stage(repo,out)
             assert json.loads((out/'source-qualification.json').read_bytes()) == proof
             for key,value in (('controller_authority_pending',True), ('memory_bytes',worker.MEMORY+1),
@@ -471,6 +588,23 @@ def self_check():
                               ('native_source_manifest',dict(config['native_source_manifest'],sha256='0'*64))):
                 (repo/CONFIG).write_bytes(encoded(dict(config,**{key:value})))
                 rejected(lambda:qualify(repo))
+            for key,value in (('source_identity_sha256','0'*64), ('source_file_count',398),
+                              ('native_source_commit','not-a-commit')):
+                (repo/manifest_path).write_bytes(encoded(dict(manifest,**{key:value})))
+                pointer = dict(path=str(manifest_path),**worker.artifact(repo/manifest_path))
+                (repo/CONFIG).write_bytes(encoded(dict(config,native_source_manifest=pointer)))
+                rejected(lambda:qualify(repo))
+            (repo/manifest_path).write_bytes(manifest_body)
+            (repo/CONFIG).write_bytes(config_body)
+        if not semantic_1m:
+            changed = dict(inventory,**{'Cargo.toml':'1'*64})
+            (repo/manifest_path).write_bytes(encoded(dict(manifest,source_sha256=changed,
+                source_identity_sha256=worker.source_identity(changed))))
+            pointer = dict(path=str(manifest_path),**worker.artifact(repo/manifest_path))
+            (repo/CONFIG).write_bytes(encoded(dict(config,native_source_manifest=pointer)))
+            with patch.object(worker,'source_hashes',return_value=changed):
+                rejected(lambda:qualify(repo))  # Default cannot repin historical native code.
+            (repo/manifest_path).write_bytes(manifest_body)
             (repo/CONFIG).write_bytes(config_body)
         with patch.object(worker,'source_hashes',return_value=dict(inventory,**{'Cargo.toml':'0'*64})):
             rejected(lambda:qualify(repo))
@@ -485,34 +619,45 @@ def self_check():
         assert 'build-essential' in body and 'python3-dev' in body
         assert semantic.AWSCLI_URL in body and semantic.AWSCLI_SHA256 in body
         assert 'phase=publication' not in body and 'native-semantic-publication' not in body
+        flag = ' --semantic-1m' if semantic_1m else ''
+        for invocation in (f'{MODULE}{flag} --stage', f'{MODULE}{flag} --check-receipt',
+                           f'scripts.check_native_workspace_execution{flag} "$CARGO_HOME/bin/cargo"'):
+            assert invocation in body, invocation
         files = _worker_self_check(proof,config_body,manifest_body)
         from scripts.launch_native_semantic_metadata_cold_spot import _full_receipt
-        _full_receipt(files['workspace-receipt.json'],files['test.log'],inventory,SOURCE_IDENTITY)
+        _full_receipt(files['workspace-receipt.json'],files['test.log'],inventory,proof['source_identity_sha256'])
         _collection_self_check(proof,files,body)
     _lifecycle_self_check()
+    if semantic_1m:
+        _remote_self_check()
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024
-    print(f'PASS workspace execution: command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; existing full receipt compatible; all-ACK/fsync/wait-before-collection; code=22 artifacts=13 userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
+    print(f'PASS workspace execution ({"semantic-1m" if semantic_1m else "metadata-waves"}): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; existing full receipt compatible; all-ACK/fsync/wait-before-collection; remote_cli={semantic_1m}; code=22 artifacts=13 userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
 
 
 if __name__ == '__main__':
+    args = sys.argv[1:]
+    semantic_1m = args[:1] == ['--semantic-1m']
+    if semantic_1m:
+        args = args[1:]
+    configure(semantic_1m)
     # ponytail: shared launch archives the repository in memory; stream it in
     # the shared launcher if root's launch resource gate proves insufficient.
-    if sys.argv[1:2] and sys.argv[1].startswith('--'):
+    if args[:1] and args[0].startswith('--'):
         resource.setrlimit(resource.RLIMIT_AS, (200*1024**2,200*1024**2))
-    if sys.argv[1:] == ['--self-check']:
-        self_check()
-    elif sys.argv[1:2] == ['--stage']:
-        assert len(sys.argv) == 4
-        stage(*sys.argv[2:])
-    elif sys.argv[1:2] == ['--check-receipt']:
-        assert len(sys.argv) == 3
-        out = Path(sys.argv[2])
+    if args == ['--self-check']:
+        self_check(semantic_1m)
+    elif args[:1] == ['--stage']:
+        assert len(args) == 3
+        stage(*args[1:])
+    elif args[:1] == ['--check-receipt']:
+        assert len(args) == 2
+        out = Path(args[1])
         validate_receipt(out,json.loads((out/'source-qualification.json').read_bytes()))
-    elif sys.argv[1:2] == ['--replay']:
-        assert len(sys.argv) == 3
-        print(json.dumps(replay(sys.argv[2]),sort_keys=True))
+    elif args[:1] == ['--replay']:
+        assert len(args) == 2
+        print(json.dumps(replay(args[1]),sort_keys=True))
     else:
-        assert len(sys.argv) == 2, 'usage: launch_native_workspace_execution_spot.py aNNNN | --self-check | --stage REPO OUT | --replay OUT'
+        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--semantic-1m] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
         with open('/tmp/borsuk-native-workspace-execution-launch.lock','a+') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-            main(sys.argv[1])
+            main(args[0])
