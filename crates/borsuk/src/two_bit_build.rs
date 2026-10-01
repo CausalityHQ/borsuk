@@ -1,11 +1,12 @@
 //! Assemble a generation and canonical source from immutable source/SQ8 snapshots.
+use crate::semantic_unit_router::SemanticProfile;
 use crate::{
     canonical_source::write_canonical_source,
     object_native_generation::valid_object_key,
     resident_vector_graph::HashingReader,
     two_bit_generation::{
-        Discovery, DiscoveryMode, Manifest, ROUTER_ROOT_CAP, SCHEMA, TwoBitGeneration,
-        TwoBitGenerationError, TwoBitGenerationLimits,
+        Discovery, DiscoveryMode, Manifest, SCHEMA, TwoBitGeneration, TwoBitGenerationError,
+        TwoBitGenerationLimits,
     },
     two_bit_source::TwoBitSource,
     unit_centroid_graph::UnitCentroidGraph,
@@ -148,7 +149,7 @@ fn write_semantic_router(
     plane: &crate::two_bit_source::SourcePlaneReceipt,
     centroid: &[u8],
 ) -> Result<Discovery> {
-    if artifacts.manifest.len() > ROUTER_ROOT_CAP {
+    if artifacts.manifest.len() > input.profile.root_cap() {
         return Err(TwoBitGenerationError::Invalid("router root cap"));
     }
     crate::semantic_unit_router::validate_publication(
@@ -161,7 +162,7 @@ fn write_semantic_router(
     .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
     fs::create_dir(output.join("router")).map_err(TwoBitGenerationError::Io)?;
     for (name, bytes) in [
-        ("manifest.json", &artifacts.manifest),
+        ("root.bin", &artifacts.manifest),
         ("membership.bin", &artifacts.membership),
         ("leaves.bin", &artifacts.leaves),
     ] {
@@ -170,6 +171,7 @@ fn write_semantic_router(
     // Publication-only proof; never uploaded or staged by serving.
     write_new(&output.join("centroids.bin"), centroid)?;
     Ok(Discovery::Semantic {
+        profile: input.profile,
         root_sha256: hash(&artifacts.manifest),
         root_bytes: artifacts.manifest.len(),
         membership_sha256: hash(&artifacts.membership),
@@ -201,7 +203,7 @@ pub fn repackage_semantic_router(
 ) -> Result<String> {
     use crate::two_bit_source::{SourcePlaneReceipt, read_authenticated};
     let bad = TwoBitGenerationError::Invalid;
-    if output.exists() || import.artifacts.manifest.len() > ROUTER_ROOT_CAP {
+    if output.exists() || import.artifacts.manifest.len() > import.input.profile.root_cap() {
         return Err(bad("repackage output/router cap"));
     }
     let imported_bytes = import
@@ -233,6 +235,7 @@ pub fn repackage_semantic_router(
     let mut root: Manifest =
         serde_json::from_slice(&root_body).map_err(|_| bad("repackage schema"))?;
     if root.schema != SCHEMA
+        || import.input.profile != SemanticProfile::Native100k
         || root.discovery.mode() != DiscoveryMode::Graph
         || !root.canonical.valid()
         || !(1..=100_000).contains(&root.canonical.rows)
@@ -251,6 +254,7 @@ pub fn repackage_semantic_router(
     crate::semantic_unit_router::admit(
         geometry,
         usize::try_from(available).map_err(|_| bad("repackage memory"))?,
+        import.input.profile,
     )
     .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
     // Authenticate the full current source/graph under its ordinary admission,
@@ -375,6 +379,7 @@ impl TwoBitGenerationBuilder<'_> {
         self.build_inner(
             None,
             DiscoveryMode::Graph,
+            SemanticProfile::Native100k,
             None,
             output,
             max_build_payload_bytes,
@@ -392,6 +397,7 @@ impl TwoBitGenerationBuilder<'_> {
         self.build_inner(
             Some(order),
             DiscoveryMode::Graph,
+            SemanticProfile::Native100k,
             None,
             output,
             max_build_payload_bytes,
@@ -406,7 +412,32 @@ impl TwoBitGenerationBuilder<'_> {
         output: &Path,
         max_build_payload_bytes: usize,
     ) -> Result<String> {
-        self.build_inner(order, mode, None, output, max_build_payload_bytes)
+        self.build_inner(
+            order,
+            mode,
+            SemanticProfile::Native100k,
+            None,
+            output,
+            max_build_payload_bytes,
+        )
+    }
+
+    /// Source-only semantic construction under an explicit authenticated profile.
+    pub fn build_with_semantic_profile(
+        &self,
+        order: Option<&[u64]>,
+        profile: SemanticProfile,
+        output: &Path,
+        max_build_payload_bytes: usize,
+    ) -> Result<String> {
+        self.build_inner(
+            order,
+            DiscoveryMode::Semantic,
+            profile,
+            None,
+            output,
+            max_build_payload_bytes,
+        )
     }
 
     /// Import a previously fitted router, authenticating its original root/plane
@@ -421,6 +452,7 @@ impl TwoBitGenerationBuilder<'_> {
         self.build_inner(
             order,
             DiscoveryMode::Semantic,
+            import.input.profile,
             Some(import),
             output,
             max_build_payload_bytes,
@@ -431,6 +463,7 @@ impl TwoBitGenerationBuilder<'_> {
         &self,
         order: Option<&[u64]>,
         mode: DiscoveryMode,
+        profile: SemanticProfile,
         import: Option<&SemanticRouterImport<'_>>,
         output: &Path,
         max_build_payload_bytes: usize,
@@ -448,7 +481,7 @@ impl TwoBitGenerationBuilder<'_> {
         }
         if rows == 0
             || dimensions == 0
-            || (mode == DiscoveryMode::Semantic && (rows > 100_000 || dimensions > 768))
+            || (mode == DiscoveryMode::Semantic && !profile.valid_geometry(rows, dimensions))
             || order.is_some_and(|order| order.len() != rows)
             || self.generation == 0
             || output.exists()
@@ -506,7 +539,8 @@ impl TwoBitGenerationBuilder<'_> {
             };
             crate::semantic_unit_router::admit(
                 geometry,
-                max_build_payload_bytes.min(crate::semantic_unit_router::ALLOCATION_CAP),
+                max_build_payload_bytes.min(profile.allocation_cap()),
+                profile,
             )
             .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?
         } else {
@@ -516,8 +550,7 @@ impl TwoBitGenerationBuilder<'_> {
             .checked_add(semantic_memory)
             .is_none_or(|n| n > max_build_payload_bytes)
             || units > u32::MAX as usize
-            || (mode == DiscoveryMode::Semantic
-                && (!(1..=100_000).contains(&rows) || dimensions > 768))
+            || (mode == DiscoveryMode::Semantic && !profile.valid_geometry(rows, dimensions))
         {
             return Err(bad("build memory budget"));
         }
@@ -597,6 +630,7 @@ impl TwoBitGenerationBuilder<'_> {
             let input = if let Some(import) = import {
                 import.validate(&plane, &centroid_sha, self.low, self.step)?;
                 crate::semantic_unit_router::SourceIdentity {
+                    profile,
                     schema: import.input.schema,
                     root_sha256: import.input.root_sha256,
                     centroids_sha256: &centroid_sha,
@@ -605,6 +639,7 @@ impl TwoBitGenerationBuilder<'_> {
                 }
             } else {
                 crate::semantic_unit_router::SourceIdentity {
+                    profile,
                     schema: &plane.schema,
                     root_sha256: &receipt_sha,
                     centroids_sha256: &centroid_sha,
@@ -703,6 +738,7 @@ mod tests {
         let import = SemanticRouterImport {
             artifacts: &artifacts,
             input: crate::semantic_unit_router::SourceIdentity {
+                profile: SemanticProfile::Native100k,
                 schema: "borsuk-two-bit-generation-v4",
                 root_sha256: &input_root,
                 centroids_sha256: &centroid_sha,
@@ -798,7 +834,7 @@ mod tests {
         assert_eq!(hash(&body), root_sha);
         let mut manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(
-            manifest["schema"], "borsuk-two-bit-generation-v7",
+            manifest["schema"], "borsuk-two-bit-generation-v8",
             "two-graph root format missing"
         );
         let nearest = fs::read(output.join("graph.bin")).unwrap();
@@ -854,6 +890,7 @@ mod tests {
         let centroid = fs::read(output.join("centroids.bin")).unwrap();
         let centroid_sha = hash(&centroid);
         let input = crate::semantic_unit_router::SourceIdentity {
+            profile: SemanticProfile::Native100k,
             schema: "borsuk-two-bit-generation-v4",
             root_sha256: &original_sha,
             centroids_sha256: &centroid_sha,
@@ -897,7 +934,7 @@ mod tests {
             );
         }
         assert_eq!(
-            fs::read(repacked.join("router/manifest.json")).unwrap(),
+            fs::read(repacked.join("router/root.bin")).unwrap(),
             artifacts.manifest
         );
         assert_eq!(

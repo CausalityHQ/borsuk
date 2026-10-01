@@ -156,7 +156,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     let root_sha = builder.build_with_order(&order, &root, 4_000_000).unwrap();
     let generation_root: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(generation_root["schema"], "borsuk-two-bit-generation-v7");
+    assert_eq!(generation_root["schema"], "borsuk-two-bit-generation-v8");
     let canonical_body = std::fs::read(root.join("canonical.bin")).unwrap();
     assert_eq!(canonical_body.len(), 512 * 16);
     for (physical, &ordinal) in order.iter().enumerate() {

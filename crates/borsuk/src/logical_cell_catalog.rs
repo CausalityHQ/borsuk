@@ -183,7 +183,28 @@ fn train_centroid_partition(
         &mut assignments,
         &mut nearest,
     );
-    let mut groups = vec![Vec::new(); k];
+    let groups = counted_training_groups(indices, &assignments, k)?;
+    let quotas = proportional_leaf_quotas(&groups, leaves)?;
+    for (group, quota) in groups.into_iter().zip(quotas) {
+        train_centroid_partition(geometry, group, quota, max_iterations, normalize, output)?;
+    }
+    Ok(())
+}
+
+fn counted_training_groups(
+    indices: Vec<usize>,
+    assignments: &[usize],
+    k: usize,
+) -> Result<Vec<Vec<usize>>> {
+    let mut counts = vec![0_usize; k];
+    for &cluster in assignments {
+        counts[cluster] += 1;
+    }
+    // Empty partitions receive one donor row; reserve it before repair.
+    let mut groups = counts
+        .into_iter()
+        .map(|n| Vec::with_capacity(n.max(1)))
+        .collect::<Vec<_>>();
     for (local, index) in indices.into_iter().enumerate() {
         groups[assignments[local]].push(index);
     }
@@ -204,11 +225,7 @@ fn train_centroid_partition(
             groups[empty].push(moved);
         }
     }
-    let quotas = proportional_leaf_quotas(&groups, leaves)?;
-    for (group, quota) in groups.into_iter().zip(quotas) {
-        train_centroid_partition(geometry, group, quota, max_iterations, normalize, output)?;
-    }
-    Ok(())
+    Ok(groups)
 }
 
 fn assign_training_rows(
@@ -734,6 +751,33 @@ fn validate_stored_centroid(ordinal: u32, centroid: &[f32], metric: &VectorMetri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_repair_uses_reserved_capacity_and_quota_depth_is_bounded() {
+        let groups = counted_training_groups((0..100).collect(), &vec![0; 100], 32).unwrap();
+        assert_eq!(groups[0].len(), 69);
+        assert_eq!(groups[0].capacity(), 100);
+        for group in &groups[1..] {
+            assert_eq!(group.len(), 1);
+            assert_eq!(group.capacity(), 1);
+        }
+        // The most skewed admissible quota is leaves31 smaller per frame.
+        let mut leaves = 489;
+        let mut frames = 0;
+        while leaves > 1 {
+            frames += 1;
+            let fanout = leaves.min(32);
+            let mut groups = vec![vec![0]; fanout];
+            groups[0] = vec![0; 31250];
+            let quotas = proportional_leaf_quotas(&groups, leaves).unwrap();
+            assert_eq!(quotas.iter().sum::<usize>(), leaves);
+            assert!(quotas.iter().all(|&q| q >= 1));
+            let largest = *quotas.iter().max().unwrap();
+            assert!(largest <= if leaves > 32 { leaves - 31 } else { 1 });
+            leaves = largest;
+        }
+        assert!(frames <= 16);
+    }
 
     #[test]
     fn hierarchical_trainer_is_exact_deterministic_and_spherical() {

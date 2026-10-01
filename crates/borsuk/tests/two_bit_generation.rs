@@ -97,7 +97,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     fs::write(root.join("canonical.bin"), &canonical).unwrap();
     let canonical_descriptor = serde_json::json!({"rows":512,"dimensions":2,
         "bytes":canonical.len(),"sha256":hash(&canonical),"object_key":format!("tenant/g1/objects/{}",hash(&canonical))});
-    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v7",
+    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v8",
         "generation":1,"base_epoch":0,"plane_manifest_sha256":hash(&fs::read(root.join("plane/manifest.json")).unwrap()),
         "page_manifest_sha256":hash(&page_manifest),"discovery":{"mode":"graph","centroids_sha256":hash(&centroid),
         "graph_sha256":hash(&graph),"graph_resident_bytes":graph_resident,

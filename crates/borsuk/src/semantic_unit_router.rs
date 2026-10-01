@@ -4,7 +4,7 @@
 //! Serving opens only an authenticated root and membership, then validates selected
 //! whole leaves. The caller owns generation binding, I/O admission and publication;
 //! no generation input schema is hard-coded here. Current geometry is deliberately
-//! limited to 100k rows/D768 pending separate scale qualification.
+//! admitted through explicit native and fresh-scale profiles.
 use crate::{VectorMetric, train_logical_cell_centroids, unit_centroid_pages::UnitCentroidPages};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,13 +15,60 @@ pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
 const ROOT_CAP: usize = 64 * 1024;
 const BLOB_CAP: usize = 8 * 1024 * 1024;
-const MANIFEST_CAP: usize = 4 * 1024 * 1024;
+const BINARY_HEADER: usize = 512;
+const DIRECTORY_BYTES: usize = 64;
 /// Maximum admitted construction payload, not an RSS limit.
 pub const ALLOCATION_CAP: usize = 128 * 1024 * 1024;
 const HEADER_BYTES: usize = 32;
 const LEAF_UNITS: usize = 64;
 const ITERATIONS: usize = 12;
-const SCHEMA: &str = "borsuk-semantic-unit-router-research-v1";
+const SCHEMA: &str = "BORSUSR2";
+
+/// Explicit geometry and payload admission; persisted profiles have no default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticProfile {
+    /// Existing 1–100,000 rows, 1–768 coordinates.
+    Native100k,
+    /// Fresh research arm: exactly one million rows and 768 coordinates.
+    Fresh1m,
+}
+impl SemanticProfile {
+    /// Construction payload ceiling, independently of measured process RSS.
+    pub const fn allocation_cap(self) -> usize {
+        match self {
+            Self::Native100k => ALLOCATION_CAP,
+            Self::Fresh1m => 512 * 1024 * 1024,
+        }
+    }
+    /// Maximum encoded root length.
+    pub const fn root_cap(self) -> usize {
+        match self {
+            Self::Native100k => 1024 * 1024,
+            Self::Fresh1m => 4 * 1024 * 1024,
+        }
+    }
+    /// Whether the supplied source geometry belongs to this profile.
+    pub fn valid_geometry(self, rows: usize, dimensions: usize) -> bool {
+        match self {
+            Self::Native100k => (1..=100_000).contains(&rows) && (1..=768).contains(&dimensions),
+            Self::Fresh1m => rows == 1_000_000 && dimensions == 768,
+        }
+    }
+    fn code(self) -> u32 {
+        match self {
+            Self::Native100k => 1,
+            Self::Fresh1m => 2,
+        }
+    }
+    fn from_code(code: u32) -> Result<Self> {
+        match code {
+            1 => Ok(Self::Native100k),
+            2 => Ok(Self::Fresh1m),
+            _ => Err("unknown semantic profile".into()),
+        }
+    }
+}
 #[allow(missing_docs)]
 #[derive(Clone, Copy)]
 pub struct Geometry {
@@ -32,7 +79,7 @@ pub struct Geometry {
 }
 
 #[allow(missing_docs)]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Artifact {
     pub bytes: usize,
@@ -40,7 +87,7 @@ pub struct Artifact {
 }
 
 #[allow(missing_docs)]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Algorithm {
     pub trainer: String,
@@ -57,7 +104,7 @@ pub struct Algorithm {
 }
 
 #[allow(missing_docs)]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Leaf {
     pub leaf_id: usize,
@@ -72,9 +119,10 @@ pub struct Leaf {
 }
 
 #[allow(missing_docs)]
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
+    pub profile: SemanticProfile,
     pub schema: String,
     pub input_schema: String,
     pub input_root_sha256: String,
@@ -98,6 +146,8 @@ pub struct Manifest {
 /// Authenticated source binding supplied by the enclosing generation or research CLI.
 /// `root_sha256` is an input identity, never the output router's own digest.
 pub struct SourceIdentity<'a> {
+    /// Explicit admission profile authenticated by the enclosing generation.
+    pub profile: SemanticProfile,
     /// Nonempty source format (at most 256 bytes); caller validates its meaning.
     pub schema: &'a str,
     /// Authenticated input root or source descriptor digest.
@@ -110,9 +160,9 @@ pub struct SourceIdentity<'a> {
     pub dimensions: usize,
 }
 
-/// Complete encoded publication, retaining the frozen research byte encoding.
+/// Complete binary publication with unchanged membership and FP16 leaf encoding.
 pub struct RouterArtifacts {
-    /// JSON root with exact leaf ranges and identities.
+    /// BORSUSR2 root with exact leaf ranges, identities and f32 bits.
     pub manifest: Vec<u8>,
     /// One little-endian u32 leaf ID per original unit.
     pub membership: Vec<u8>,
@@ -152,7 +202,12 @@ fn sum(values: &[usize]) -> Result<usize> {
 }
 
 /// Check native centroid geometry and exact encoded size before decoding.
-pub fn preflight(blob: &[u8], rows: usize, dimensions: usize) -> Result<Geometry> {
+pub fn preflight(
+    blob: &[u8],
+    rows: usize,
+    dimensions: usize,
+    profile: SemanticProfile,
+) -> Result<Geometry> {
     if blob.len() < HEADER_BYTES || &blob[..8] != b"BORSUCP1" || blob[28..32] != [0; 4] {
         return Err("centroid header".into());
     }
@@ -160,8 +215,7 @@ pub fn preflight(blob: &[u8], rows: usize, dimensions: usize) -> Result<Geometry
     let header_dimensions = u32::from_le_bytes(blob[16..20].try_into()?) as usize;
     let unit_rows = u32::from_le_bytes(blob[20..24].try_into()?);
     let page_rows = u32::from_le_bytes(blob[24..28].try_into()?);
-    if !(1..=100_000).contains(&header_rows)
-        || !(1..=768).contains(&header_dimensions)
+    if !profile.valid_geometry(header_rows, header_dimensions)
         || unit_rows != 32
         || page_rows != 256
         || header_rows != rows
@@ -171,7 +225,8 @@ pub fn preflight(blob: &[u8], rows: usize, dimensions: usize) -> Result<Geometry
     }
     let units = sum(&[rows, 31])? / 32;
     let blob_bytes = sum(&[HEADER_BYTES, product(&[units, dimensions, 2])?])?;
-    if units > 3125 || blob_bytes != blob.len() || blob_bytes > BLOB_CAP {
+    if blob_bytes != blob.len() || (profile == SemanticProfile::Native100k && blob_bytes > BLOB_CAP)
+    {
         return Err("centroid exact payload length or unit cap".into());
     }
     Ok(Geometry {
@@ -182,47 +237,81 @@ pub fn preflight(blob: &[u8], rows: usize, dimensions: usize) -> Result<Geometry
     })
 }
 
-/// Charge the existing conservative construction model before allocation.
-pub fn admit(geometry: Geometry, cap: usize) -> Result<usize> {
+/// Conservative maximum of phases whose allocations do not coexist; not RSS.
+pub fn admit(geometry: Geometry, cap: usize, profile: SemanticProfile) -> Result<usize> {
     let Geometry {
+        rows,
         dimensions: d,
         units: u,
-        ..
+        blob_bytes: b,
     } = geometry;
-    let centers = sum(&[u, LEAF_UNITS - 1])? / LEAF_UNITS;
-    let leaves = sum(&[centers, centers])?
+    require(
+        size_of::<usize>() == 8
+            && profile.valid_geometry(rows, d)
+            && u == rows.div_ceil(32)
+            && b == sum(&[HEADER_BYTES, product(&[u, d, 2])?])?,
+        "allocation geometry",
+    )?;
+    let c = u.div_ceil(LEAF_UNITS);
+    let l = product(&[2, c])?
         .checked_sub(1)
         .ok_or("allocation geometry")?;
-    let decoded = sum(&[product(&[u, d, 4])?, product(&[u, 4])?])?;
-    let vectors = sum(&[
+    let f = sum(&[product(&[u, d, 4])?, product(&[u, 4])?])?;
+    let v = sum(&[
         product(&[u, d, 4])?,
         product(&[u, size_of::<Vec<f32>>() + 64])?,
     ])?;
-    // The trainer's fanout is <=32. Depth <= requested centers is a deliberately
-    // loose bound: charge every level a full sample's indices/groups/assignment
-    // scratch plus four center/sum/temporary planes and vector overhead.
-    let recursive = product(&[
-        centers,
+    let i = product(&[c, sum(&[product(&[d, 4])?, 128])?])?;
+    // Every nonterminal child loses >=31 quotas above fanout32; at <=32
+    // all children are terminal. 489 centers therefore need <=16 frames.
+    let h = (c - 1).div_ceil(31);
+    let r = product(&[
+        h,
         sum(&[product(&[32, d, 16])?, product(&[u, 64])?, 32 * 128])?,
     ])?;
-    let identities = product(&[centers, sum(&[product(&[d, 4])?, 128])?])?;
-    let outputs = product(&[3, u, sum(&[product(&[d, 2])?, 8])?])?;
-    let prototypes = product(&[3, leaves, sum(&[product(&[d, 4])?, 256])?])?;
-    let estimate = sum(&[
+    let p = product(&[u, sum(&[product(&[d, 2])?, 4])?])?;
+    let w = sum(&[
+        BINARY_HEADER,
+        product(&[l, sum(&[DIRECTORY_BYTES, product(&[d, 4])?])?])?,
+    ])?;
+    let prototypes = product(&[3, l, sum(&[product(&[d, 4])?, 256])?])?;
+    let training = sum(&[
         2 * ROOT_CAP,
-        BLOB_CAP,
-        decoded,
-        product(&[2, vectors])?,
-        recursive,
-        identities,
-        outputs,
-        prototypes,
-        4 * MANIFEST_CAP,
+        b,
+        f,
+        product(&[2, v])?,
+        r,
+        product(&[2, i])?,
         8 * 1024 * 1024,
     ])?;
-    if estimate > cap {
-        return Err(format!("modeled allocation admission: {estimate} bytes exceeds {cap}").into());
-    }
+    let emit = sum(&[
+        2 * ROOT_CAP,
+        b,
+        f,
+        v,
+        i,
+        product(&[64, u])?,
+        p,
+        product(&[4, u])?,
+        prototypes,
+        4 * 1024 * 1024,
+        8 * 1024 * 1024,
+    ])?;
+    let validate = sum(&[
+        2 * ROOT_CAP,
+        b,
+        f,
+        product(&[2, p])?,
+        product(&[16, u])?,
+        product(&[3, w])?,
+        prototypes,
+        8 * 1024 * 1024,
+    ])?;
+    let estimate = training.max(emit).max(validate);
+    require(
+        estimate <= cap,
+        &format!("modeled allocation admission: {estimate} bytes exceeds {cap}"),
+    )?;
     Ok(estimate)
 }
 
@@ -247,7 +336,8 @@ pub fn assign_groups(sample: &[Vec<f32>], centers: &[Vec<f32>]) -> Result<Vec<Ve
     {
         return Err("trainer returned invalid centers".into());
     }
-    let mut groups = vec![Vec::new(); centers.len()];
+    let mut assignments = Vec::with_capacity(sample.len());
+    let mut counts = vec![0_usize; centers.len()];
     for (unit, vector) in sample.iter().enumerate() {
         let mut best = 0;
         let mut distance = squared_distance(vector, &centers[0]);
@@ -261,6 +351,14 @@ pub fn assign_groups(sample: &[Vec<f32>], centers: &[Vec<f32>]) -> Result<Vec<Ve
         if !distance.is_finite() {
             return Err("nonfinite assignment distance".into());
         }
+        counts[best] += 1;
+        assignments.push((best, distance, unit));
+    }
+    let mut groups = counts
+        .into_iter()
+        .map(Vec::with_capacity)
+        .collect::<Vec<_>>();
+    for (best, distance, unit) in assignments {
         groups[best].push((distance, unit));
     }
     for group in &mut groups {
@@ -299,11 +397,11 @@ pub fn build(
     allocation_limit: usize,
 ) -> Result<RouterArtifacts> {
     require(
-        allocation_limit <= ALLOCATION_CAP,
+        allocation_limit <= input.profile.allocation_cap(),
         "construction allocation limit",
     )?;
-    let geometry = preflight(blob, input.rows, input.dimensions)?;
-    let estimate = admit(geometry, allocation_limit)?;
+    let geometry = preflight(blob, input.rows, input.dimensions, input.profile)?;
+    let estimate = admit(geometry, allocation_limit, input.profile)?;
     require(
         (1..=256).contains(&input.schema.len())
             && valid_sha(input.root_sha256)
@@ -359,6 +457,7 @@ pub fn build(
     }
     drop((scorer, sample, centers, groups));
     let manifest = Manifest {
+        profile: input.profile,
         schema: SCHEMA.into(),
         input_schema: input.schema.into(),
         input_root_sha256: input.root_sha256.into(),
@@ -370,19 +469,7 @@ pub fn build(
         page_rows: 256,
         unit_count: geometry.units,
         final_unit_rows: unit_row_count(geometry, geometry.units - 1),
-        algorithm: Algorithm {
-            trainer: "train_logical_cell_centroids".into(),
-            metric: "SquaredEuclidean".into(),
-            iterations: ITERATIONS,
-            requested_centers: requested,
-            training_centers,
-            max_leaf_units: LEAF_UNITS,
-            nearest_ties: "center ordinal".into(),
-            group_sort: "squared distance, original unit ID".into(),
-            root_prototype: "unweighted unit mean; f64 accumulation to finite f32".into(),
-            normalization: "none".into(),
-            payload: "original FP16 little endian".into(),
-        },
+        algorithm: fixed_algorithm(requested, training_centers),
         modeled_peak_allocation_bytes: estimate,
         modeled_allocation_limit_bytes: allocation_limit,
         allocation_model:
@@ -397,12 +484,292 @@ pub fn build(
         },
         leaves,
     };
-    let body = serde_json::to_vec(&manifest)?;
+    let body = manifest.encode()?;
     validate_publication(&body, &membership, &payload, input, blob)?;
     Ok(RouterArtifacts {
         manifest: body,
         membership,
         leaves: payload,
+    })
+}
+
+fn fixed_algorithm(requested: usize, training: usize) -> Algorithm {
+    Algorithm {
+        trainer: "train_logical_cell_centroids".into(),
+        metric: "SquaredEuclidean".into(),
+        iterations: ITERATIONS,
+        requested_centers: requested,
+        training_centers: training,
+        max_leaf_units: LEAF_UNITS,
+        nearest_ties: "center ordinal".into(),
+        group_sort: "squared distance, original unit ID".into(),
+        root_prototype: "unweighted unit mean; f64 accumulation to finite f32".into(),
+        normalization: "none".into(),
+        payload: "original FP16 little endian".into(),
+    }
+}
+fn word32(body: &[u8], offset: usize) -> usize {
+    u32::from_le_bytes(body[offset..offset + 4].try_into().unwrap()) as usize
+}
+fn word64(body: &[u8], offset: usize) -> Result<usize> {
+    Ok(usize::try_from(u64::from_le_bytes(
+        body[offset..offset + 8].try_into()?,
+    ))?)
+}
+fn put32(body: &mut [u8], offset: usize, value: usize) -> Result<()> {
+    body[offset..offset + 4].copy_from_slice(&u32::try_from(value)?.to_le_bytes());
+    Ok(())
+}
+fn put64(body: &mut [u8], offset: usize, value: usize) -> Result<()> {
+    body[offset..offset + 8].copy_from_slice(&u64::try_from(value)?.to_le_bytes());
+    Ok(())
+}
+fn put_digest(body: &mut [u8], offset: usize, digest: &str) -> Result<()> {
+    require(valid_sha(digest), "binary digest")?;
+    for (slot, pair) in body[offset..offset + 32]
+        .iter_mut()
+        .zip(digest.as_bytes().chunks_exact(2))
+    {
+        *slot = u8::from_str_radix(std::str::from_utf8(pair)?, 16)?;
+    }
+    Ok(())
+}
+fn digest_text(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut text = String::with_capacity(64);
+    for byte in bytes {
+        write!(&mut text, "{byte:02x}").unwrap();
+    }
+    text
+}
+impl Manifest {
+    /// Encode the fixed BORSUSR2 header, directory and exact little-endian f32 bits.
+    /// Publication/open still validate geometry, identities and the full partition.
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        require(
+            (1..=256).contains(&self.input_schema.len()),
+            "source schema length",
+        )?;
+        let plane = product(&[self.leaves.len(), self.dimensions, 4])?;
+        let directory = product(&[self.leaves.len(), DIRECTORY_BYTES])?;
+        let length = sum(&[BINARY_HEADER, directory, plane])?;
+        require(length <= self.profile.root_cap(), "binary root cap")?;
+        let mut body = vec![0; length];
+        body[..8].copy_from_slice(b"BORSUSR2");
+        put32(&mut body, 8, BINARY_HEADER)?;
+        put32(&mut body, 12, self.profile.code() as usize)?;
+        put64(&mut body, 16, self.rows)?;
+        for (offset, value) in [
+            (24, self.dimensions),
+            (28, self.unit_count),
+            (32, self.leaves.len()),
+            (36, self.algorithm.requested_centers),
+            (40, self.algorithm.training_centers),
+            (44, self.input_schema.len()),
+        ] {
+            put32(&mut body, offset, value)?;
+        }
+        for (offset, value) in [
+            (48, self.input_centroids_bytes),
+            (56, self.membership.bytes),
+            (64, self.leaf_payload.bytes),
+            (72, self.modeled_peak_allocation_bytes),
+            (80, self.modeled_allocation_limit_bytes),
+        ] {
+            put64(&mut body, offset, value)?;
+        }
+        for (offset, digest) in [
+            (128, &self.input_root_sha256),
+            (160, &self.input_centroids_sha256),
+            (192, &self.membership.sha256),
+            (224, &self.leaf_payload.sha256),
+        ] {
+            put_digest(&mut body, offset, digest)?;
+        }
+        body[256..256 + self.input_schema.len()].copy_from_slice(self.input_schema.as_bytes());
+        for (id, leaf) in self.leaves.iter().enumerate() {
+            require(
+                leaf.prototype.len() == self.dimensions,
+                "prototype encoding geometry",
+            )?;
+            let start = BINARY_HEADER + id * DIRECTORY_BYTES;
+            for (offset, value) in [
+                (0, leaf.group_ordinal),
+                (4, leaf.chunk_ordinal),
+                (16, leaf.bytes),
+                (20, leaf.unit_count),
+                (24, leaf.source_rows),
+            ] {
+                put32(&mut body, start + offset, value)?;
+            }
+            put64(&mut body, start + 8, leaf.offset)?;
+            put_digest(&mut body, start + 32, &leaf.sha256)?;
+            let start = BINARY_HEADER + directory + id * self.dimensions * 4;
+            for (word, value) in body[start..start + self.dimensions * 4]
+                .chunks_exact_mut(4)
+                .zip(&leaf.prototype)
+            {
+                word.copy_from_slice(&value.to_bits().to_le_bytes());
+            }
+        }
+        Ok(body)
+    }
+}
+// Called only after the enclosing root SHA and profile byte cap are checked.
+fn decode_root(body: &[u8], input: &SourceIdentity<'_>) -> Result<Manifest> {
+    require(
+        body.len() >= BINARY_HEADER && &body[..8] == b"BORSUSR2",
+        "binary root version/header",
+    )?;
+    let profile = SemanticProfile::from_code(word32(body, 12) as u32)?;
+    let rows = word64(body, 16)?;
+    let d = word32(body, 24);
+    let u = word32(body, 28);
+    let l = word32(body, 32);
+    let requested = word32(body, 36);
+    let training = word32(body, 40);
+    let schema_len = word32(body, 44);
+    require(
+        word32(body, 8) == BINARY_HEADER
+            && profile == input.profile
+            && profile.valid_geometry(rows, d)
+            && rows == input.rows
+            && d == input.dimensions
+            && u == rows.div_ceil(32)
+            && requested == u.div_ceil(LEAF_UNITS)
+            && [1, requested].contains(&training)
+            && (1..=2 * requested - 1).contains(&l)
+            && (1..=256).contains(&schema_len)
+            && body[88..128].iter().all(|&b| b == 0)
+            && body[256 + schema_len..BINARY_HEADER]
+                .iter()
+                .all(|&b| b == 0),
+        "binary header geometry/reserved",
+    )?;
+    let schema = std::str::from_utf8(&body[256..256 + schema_len])?;
+    require(schema == input.schema, "binary source schema")?;
+    let b = sum(&[HEADER_BYTES, product(&[u, d, 2])?])?;
+    let payload = product(&[u, sum(&[4, product(&[d, 2])?])?])?;
+    let limit = word64(body, 80)?;
+    require(
+        limit <= profile.allocation_cap(),
+        "binary construction limit",
+    )?;
+    let estimate = admit(
+        Geometry {
+            rows,
+            dimensions: d,
+            units: u,
+            blob_bytes: b,
+        },
+        limit,
+        profile,
+    )?;
+    let directory = product(&[l, DIRECTORY_BYTES])?;
+    let plane_start = sum(&[BINARY_HEADER, directory])?;
+    require(
+        body.len() == sum(&[plane_start, product(&[l, d, 4])?])?
+            && word64(body, 48)? == b
+            && word64(body, 56)? == product(&[u, 4])?
+            && word64(body, 64)? == payload
+            && word64(body, 72)? == estimate,
+        "binary exact lengths/accounting",
+    )?;
+    // Validate every directory and coefficient before allocating leaf/prototype vectors.
+    let mut end = 0;
+    let mut total_units = 0;
+    let mut total_rows = 0;
+    let mut previous: Option<(usize, usize, usize)> = None;
+    for id in 0..l {
+        let start = BINARY_HEADER + id * DIRECTORY_BYTES;
+        let group = word32(body, start);
+        let chunk = word32(body, start + 4);
+        let bytes = word32(body, start + 16);
+        let units = word32(body, start + 20);
+        let source_rows = word32(body, start + 24);
+        let ordered = match previous {
+            None => chunk == 0,
+            Some((g, c, n)) if g == group => chunk == c + 1 && n == LEAF_UNITS,
+            Some((g, _, _)) => group > g && chunk == 0,
+        };
+        require(
+            group < training
+                && ordered
+                && (1..=LEAF_UNITS).contains(&units)
+                && word64(body, start + 8)? == end
+                && bytes == units * (4 + d * 2)
+                && (1..=units * 32).contains(&source_rows)
+                && body[start + 28..start + 32] == [0; 4],
+            "binary leaf geometry/reserved",
+        )?;
+        end = sum(&[end, bytes])?;
+        total_units = sum(&[total_units, units])?;
+        total_rows = sum(&[total_rows, source_rows])?;
+        previous = Some((group, chunk, units));
+    }
+    require(
+        end == payload && total_units == u && total_rows == rows,
+        "binary complete directory",
+    )?;
+    for word in body[plane_start..].chunks_exact(4) {
+        require(
+            f32::from_bits(u32::from_le_bytes(word.try_into()?)).is_finite(),
+            "binary nonfinite prototype",
+        )?;
+    }
+    // Hash strings and nested vectors are allocated only after the complete scan.
+    let input_root_sha256 = digest_text(&body[128..160]);
+    let input_centroids_sha256 = digest_text(&body[160..192]);
+    require(
+        input_root_sha256 == input.root_sha256 && input_centroids_sha256 == input.centroids_sha256,
+        "binary source digests",
+    )?;
+    let mut leaves = Vec::with_capacity(l);
+    for id in 0..l {
+        let start = BINARY_HEADER + id * DIRECTORY_BYTES;
+        let prototype_start = plane_start + id * d * 4;
+        leaves.push(Leaf {
+            leaf_id: id,
+            group_ordinal: word32(body, start),
+            chunk_ordinal: word32(body, start + 4),
+            offset: word64(body, start + 8)?,
+            bytes: word32(body, start + 16),
+            unit_count: word32(body, start + 20),
+            source_rows: word32(body, start + 24),
+            sha256: digest_text(&body[start + 32..start + 64]),
+            prototype: body[prototype_start..prototype_start + d * 4]
+                .chunks_exact(4)
+                .map(|word| f32::from_bits(u32::from_le_bytes(word.try_into().unwrap())))
+                .collect(),
+        });
+    }
+    Ok(Manifest {
+        profile,
+        schema: SCHEMA.into(),
+        input_schema: schema.into(),
+        input_root_sha256,
+        input_centroids_sha256,
+        input_centroids_bytes: b,
+        rows,
+        dimensions: d,
+        unit_rows: 32,
+        page_rows: 256,
+        unit_count: u,
+        final_unit_rows: (rows - 32 * (u - 1)).min(32),
+        algorithm: fixed_algorithm(requested, training),
+        modeled_peak_allocation_bytes: estimate,
+        modeled_allocation_limit_bytes: limit,
+        allocation_model:
+            "conservative allocation capacities; not RSS or an enforced process limit".into(),
+        membership: Artifact {
+            bytes: u * 4,
+            sha256: digest_text(&body[192..224]),
+        },
+        leaf_payload: Artifact {
+            bytes: payload,
+            sha256: digest_text(&body[224..256]),
+        },
+        leaves,
     })
 }
 
@@ -424,20 +791,19 @@ impl SemanticUnitRouter {
         root_byte_cap: usize,
     ) -> Result<Self> {
         require(
-            body.len() <= root_byte_cap.min(MANIFEST_CAP)
+            body.len() <= root_byte_cap.min(input.profile.root_cap())
                 && valid_sha(root_sha256)
                 && hash(body) == root_sha256,
             "router root size or identity",
         )?;
         require(
-            (1..=100_000).contains(&input.rows)
-                && (1..=768).contains(&input.dimensions)
+            input.profile.valid_geometry(input.rows, input.dimensions)
                 && (1..=256).contains(&input.schema.len())
                 && valid_sha(input.root_sha256)
                 && valid_sha(input.centroids_sha256),
             "source identity or geometry",
         )?;
-        let manifest: Manifest = serde_json::from_slice(body)?;
+        let manifest = decode_root(body, input)?;
         let geometry = Geometry {
             rows: input.rows,
             dimensions: input.dimensions,
@@ -448,10 +814,14 @@ impl SemanticUnitRouter {
         let algorithm = &manifest.algorithm;
         let estimate = admit(
             geometry,
-            manifest.modeled_allocation_limit_bytes.min(ALLOCATION_CAP),
+            manifest
+                .modeled_allocation_limit_bytes
+                .min(input.profile.allocation_cap()),
+            input.profile,
         )?;
         require(
-            manifest.schema == SCHEMA
+            manifest.profile == input.profile
+                && manifest.schema == SCHEMA
                 && manifest.input_schema == input.schema
                 && manifest.input_root_sha256 == input.root_sha256
                 && manifest.input_centroids_sha256 == input.centroids_sha256
@@ -463,7 +833,7 @@ impl SemanticUnitRouter {
                 && manifest.unit_count == geometry.units
                 && manifest.final_unit_rows == unit_row_count(geometry, geometry.units - 1)
                 && manifest.modeled_peak_allocation_bytes == estimate
-                && manifest.modeled_allocation_limit_bytes <= ALLOCATION_CAP
+                && manifest.modeled_allocation_limit_bytes <= input.profile.allocation_cap()
                 && manifest.allocation_model
                     == "conservative allocation capacities; not RSS or an enforced process limit"
                 && algorithm.trainer == "train_logical_cell_centroids"
@@ -613,7 +983,8 @@ impl SemanticUnitRouter {
                 require(units.insert(unit), "disjoint selected units")?;
             }
         }
-        let (seed_page, walk_units, seed_additions) = seed_walk(&units, self.manifest.rows)?;
+        let (seed_page, walk_units, seed_additions) =
+            seed_walk(&units, self.manifest.rows, self.manifest.profile)?;
         let page_closure = units.iter().map(|u| u / 8).collect();
         Ok(Nomination {
             leaf_ids: leaf_ids.to_vec(),
@@ -651,13 +1022,19 @@ pub fn validate_publication(
     input: &SourceIdentity<'_>,
     blob: &[u8],
 ) -> Result<()> {
-    let geometry = preflight(blob, input.rows, input.dimensions)?;
-    admit(geometry, ALLOCATION_CAP)?;
+    let geometry = preflight(blob, input.rows, input.dimensions, input.profile)?;
+    admit(geometry, input.profile.allocation_cap(), input.profile)?;
     require(
         hash(blob) == input.centroids_sha256,
         "original centroid identity",
     )?;
-    let router = SemanticUnitRouter::open(body, membership, &hash(body), input, MANIFEST_CAP)?;
+    let router = SemanticUnitRouter::open(
+        body,
+        membership,
+        &hash(body),
+        input,
+        input.profile.root_cap(),
+    )?;
     let manifest = router.manifest();
     require(
         payload.len() == manifest.leaf_payload.bytes
@@ -745,10 +1122,16 @@ fn rank_leaves<'a>(
 }
 
 /// Complete only the lowest nominated physical page, preserving the page closure.
-pub fn seed_walk(units: &BTreeSet<usize>, rows: usize) -> Result<(usize, Vec<usize>, Vec<usize>)> {
+pub fn seed_walk(
+    units: &BTreeSet<usize>,
+    rows: usize,
+    profile: SemanticProfile,
+) -> Result<(usize, Vec<usize>, Vec<usize>)> {
     require(
-        (1..=100_000).contains(&rows)
-            && !units.is_empty()
+        match profile {
+            SemanticProfile::Native100k => (1..=100_000).contains(&rows),
+            SemanticProfile::Fresh1m => rows == 1_000_000,
+        } && !units.is_empty()
             && units.last().is_some_and(|&u| u < rows.div_ceil(32)),
         "semantic units",
     )?;
@@ -758,14 +1141,13 @@ pub fn seed_walk(units: &BTreeSet<usize>, rows: usize) -> Result<(usize, Vec<usi
         .collect::<Vec<_>>();
     let mut walk = units.clone();
     walk.extend(additions.iter().copied());
-    require(walk.len() <= 1272, "semantic walk unit cap")?;
+    require(walk.len() <= 1031, "semantic walk unit cap")?;
     Ok((seed, walk.into_iter().collect(), additions))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{Value, json};
 
     fn blob(rows: usize) -> Vec<u8> {
         let mut bytes = b"BORSUCP1".to_vec();
@@ -778,6 +1160,7 @@ mod tests {
     }
     fn source(blob: &[u8]) -> SourceIdentity<'static> {
         SourceIdentity {
+            profile: SemanticProfile::Native100k,
             schema: "native-generation-test",
             root_sha256: "1111111111111111111111111111111111111111111111111111111111111111",
             centroids_sha256: "",
@@ -802,6 +1185,274 @@ mod tests {
                 &payload[leaf.offset..leaf.offset + leaf.bytes]
             })
             .collect()
+    }
+
+    #[test]
+    fn profile_geometry_phase_caps_and_maximum_binary_size() {
+        let geometry = Geometry {
+            rows: 1_000_000,
+            dimensions: 768,
+            units: 31250,
+            blob_bytes: 48000032,
+        };
+        let cap = SemanticProfile::Fresh1m.allocation_cap();
+        let peak = admit(geometry, cap, SemanticProfile::Fresh1m).unwrap();
+        assert_eq!(peak, 391631304);
+        assert_eq!(
+            peak + 128 * 768
+                + 32 * 1_000_000_usize.div_ceil(256)
+                + 256 * (768 + 12)
+                + 262144
+                + 8_000_000,
+            400316456
+        );
+        assert_eq!(
+            admit(geometry, peak, SemanticProfile::Fresh1m).unwrap(),
+            peak
+        );
+        assert!(admit(geometry, peak - 1, SemanticProfile::Fresh1m).is_err());
+        assert!(admit(geometry, cap, SemanticProfile::Native100k).is_err());
+        for bad in [
+            Geometry {
+                rows: 999999,
+                ..geometry
+            },
+            Geometry {
+                dimensions: 767,
+                ..geometry
+            },
+            Geometry {
+                units: usize::MAX,
+                ..geometry
+            },
+            Geometry {
+                blob_bytes: usize::MAX,
+                ..geometry
+            },
+        ] {
+            assert!(admit(bad, cap, SemanticProfile::Fresh1m).is_err());
+        }
+        let tiny = blob(1);
+        let digest = hash(&tiny);
+        let source = SourceIdentity {
+            centroids_sha256: &digest,
+            ..source(&tiny)
+        };
+        let artifacts = build(&tiny, &source, ALLOCATION_CAP).unwrap();
+        let mut manifest = open(&artifacts, &source).manifest().clone();
+        manifest.leaves[0].prototype[0] = -0.0;
+        let signed = manifest.encode().unwrap();
+        let signed_router = SemanticUnitRouter::open(
+            &signed,
+            &artifacts.membership,
+            &hash(&signed),
+            &source,
+            1 << 20,
+        )
+        .unwrap();
+        assert_eq!(
+            signed_router.manifest().leaves[0].prototype[0].to_bits(),
+            (-0.0_f32).to_bits()
+        );
+
+        manifest.profile = SemanticProfile::Fresh1m;
+        manifest.dimensions = 768;
+        let mut leaf = manifest.leaves[0].clone();
+        leaf.prototype = vec![0.; 768];
+        manifest.leaves = vec![leaf; 977];
+        assert_eq!(manifest.encode().unwrap().len(), 3064384);
+        // f32 encoding is bit-exact, including negative zero.
+        manifest.leaves[0].prototype[0] = -0.0;
+        let body = manifest.encode().unwrap();
+        assert_eq!(
+            &body[512 + 977 * 64..512 + 977 * 64 + 4],
+            &(-0.0_f32).to_bits().to_le_bytes()
+        );
+    }
+
+    #[test]
+    fn frozen_native100k_membership_leaves_and_nomination() {
+        let mut blob = blob(4097);
+        for unit in 0..129 {
+            for (d, value) in [unit as f32, 2.].into_iter().enumerate() {
+                blob[32 + unit * 4 + d * 2..34 + unit * 4 + d * 2]
+                    .copy_from_slice(&half::f16::from_f32(value).to_bits().to_le_bytes());
+            }
+        }
+        let digest = hash(&blob);
+        let source = SourceIdentity {
+            centroids_sha256: &digest,
+            ..source(&blob)
+        };
+        let artifacts = build(&blob, &source, ALLOCATION_CAP).unwrap();
+        assert_eq!(
+            hash(&artifacts.membership),
+            "919207b3fc34a3d945d3310331767bec4033cb7873859bad8d43f72a06f510b0"
+        );
+        assert_eq!(
+            hash(&artifacts.leaves),
+            "a308a30fec67ef28269b8c7826438dd8dbcff1fe0f692de7f0685c2a34ee8906"
+        );
+        let router = open(&artifacts, &source);
+        let legacy_prototypes = router
+            .manifest()
+            .leaves
+            .iter()
+            .map(|leaf| leaf.prototype.clone())
+            .collect::<Vec<_>>();
+        for query in [[0., 1.], [1., 0.], [-1., 0.]] {
+            assert_eq!(
+                router.select_leaves(&query).unwrap(),
+                select_leaves(&query, &legacy_prototypes).unwrap()
+            );
+        }
+        let whole = self::blob(100000);
+        let digest = hash(&whole);
+        let input = SourceIdentity {
+            centroids_sha256: &digest,
+            ..self::source(&whole)
+        };
+        let a = build(&whole, &input, ALLOCATION_CAP).unwrap();
+        let r = open(&a, &input);
+        assert_eq!(r.nominate(&[1., 0.]).unwrap(), (0..16).collect::<Vec<_>>());
+        assert_eq!(r.manifest().leaves.len(), 49);
+    }
+
+    #[test]
+    fn fresh_seed_completion_keeps_a_scattered_1024_page_closure() {
+        let units = (0..1024).map(|page| page * 8 + 1).collect::<BTreeSet<_>>();
+        let (seed, walk, additions) =
+            seed_walk(&units, 1_000_000, SemanticProfile::Fresh1m).unwrap();
+        assert_eq!(seed, 0);
+        assert_eq!(walk.len(), 1031);
+        assert_eq!(additions, [0, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(
+            walk.iter().map(|u| u / 8).collect::<BTreeSet<_>>(),
+            (0..1024).collect()
+        );
+        assert!(seed_walk(&units, 1_000_000, SemanticProfile::Native100k).is_err());
+    }
+
+    #[test]
+    fn fresh_binary_root_selected_leaves_and_scattered_closure_without_training() {
+        let geometry = Geometry {
+            rows: 1_000_000,
+            dimensions: 768,
+            units: 31250,
+            blob_bytes: 48000032,
+        };
+        let profile = SemanticProfile::Fresh1m;
+        let peak = admit(geometry, profile.allocation_cap(), profile).unwrap();
+        let input = SourceIdentity {
+            profile,
+            schema: "synthetic-scale",
+            root_sha256: &"1".repeat(64),
+            centroids_sha256: &"2".repeat(64),
+            rows: geometry.rows,
+            dimensions: geometry.dimensions,
+        };
+        let selected_units = (0..1024).map(|page| page * 8 + 1).collect::<BTreeSet<_>>();
+        let order = selected_units
+            .iter()
+            .copied()
+            .chain((0..geometry.units).filter(|u| !selected_units.contains(u)))
+            .collect::<Vec<_>>();
+        let mut membership = vec![0; geometry.units * 4];
+        let mut leaves = Vec::new();
+        let mut bodies = Vec::new();
+        let mut offset = 0;
+        for (id, units) in order.chunks(64).enumerate() {
+            let mut body = Vec::new();
+            for &unit in units {
+                membership[unit * 4..unit * 4 + 4].copy_from_slice(&(id as u32).to_le_bytes());
+                if id < 16 {
+                    body.extend_from_slice(&(unit as u32).to_le_bytes());
+                    body.resize(body.len() + 1536, 0);
+                }
+            }
+            let bytes = units.len() * 1540;
+            leaves.push(Leaf {
+                leaf_id: id,
+                group_ordinal: id,
+                chunk_ordinal: 0,
+                offset,
+                bytes,
+                unit_count: units.len(),
+                source_rows: units.len() * 32,
+                sha256: if id < 16 { hash(&body) } else { "3".repeat(64) },
+                prototype: vec![0.; 768],
+            });
+            offset += bytes;
+            if id < 16 {
+                bodies.push(body);
+            }
+        }
+        let manifest = Manifest {
+            profile,
+            schema: SCHEMA.into(),
+            input_schema: input.schema.into(),
+            input_root_sha256: input.root_sha256.into(),
+            input_centroids_sha256: input.centroids_sha256.into(),
+            input_centroids_bytes: geometry.blob_bytes,
+            rows: geometry.rows,
+            dimensions: geometry.dimensions,
+            unit_rows: 32,
+            page_rows: 256,
+            unit_count: geometry.units,
+            final_unit_rows: 32,
+            algorithm: fixed_algorithm(489, 489),
+            modeled_peak_allocation_bytes: peak,
+            modeled_allocation_limit_bytes: profile.allocation_cap(),
+            allocation_model:
+                "conservative allocation capacities; not RSS or an enforced process limit".into(),
+            membership: Artifact {
+                bytes: membership.len(),
+                sha256: hash(&membership),
+            },
+            leaf_payload: Artifact {
+                bytes: offset,
+                sha256: "4".repeat(64),
+            },
+            leaves,
+        };
+        let root = manifest.encode().unwrap();
+        let router =
+            SemanticUnitRouter::open(&root, &membership, &hash(&root), &input, profile.root_cap())
+                .unwrap();
+        let ids = router.nominate(&[1.; 768]).unwrap();
+        assert_eq!(ids, (0..16).collect::<Vec<_>>());
+        let nomination = router
+            .validate_selected(&ids, &bodies.iter().map(Vec::as_slice).collect::<Vec<_>>())
+            .unwrap();
+        assert_eq!(nomination.units, selected_units);
+        assert_eq!(nomination.walk_units.len(), 1031);
+        assert_eq!(nomination.page_closure.len(), 1024);
+        let mut overflow = root.clone();
+        overflow[64..72].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(
+            SemanticUnitRouter::open(
+                &overflow,
+                &membership,
+                &hash(&overflow),
+                &input,
+                profile.root_cap()
+            )
+            .is_err()
+        );
+        let native = SourceIdentity {
+            profile: SemanticProfile::Native100k,
+            ..input
+        };
+        assert!(
+            SemanticUnitRouter::open(
+                &root,
+                &membership,
+                &hash(&root),
+                &native,
+                profile.root_cap()
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -951,19 +1602,22 @@ mod tests {
             ..source(&blob)
         };
         let artifacts = build(&blob, &source, ALLOCATION_CAP).unwrap();
-        let manifest: Value = serde_json::from_slice(&artifacts.manifest).unwrap();
-        for (field, value) in [
-            ("leaf_id", json!(1)),
-            ("unit_count", json!(63)),
-            ("offset", json!(1)),
-            ("source_rows", json!(1)),
-            ("group_ordinal", json!(1)),
-            ("chunk_ordinal", json!(1)),
-            ("prototype", json!([null, 0.])),
+        let manifest = open(&artifacts, &source).manifest().clone();
+        for (offset, value) in [
+            (12, 99_u32),
+            (8, 511),
+            (24, 769),
+            (28, u32::MAX),
+            (32, u32::MAX),
+            (512, 1),
+            (516, 1),
+            (528, 1),
+            (532, 63),
+            (536, 1),
+            (540, 1),
         ] {
-            let mut bad = manifest.clone();
-            bad["leaves"][0][field] = value;
-            let body = serde_json::to_vec(&bad).unwrap();
+            let mut body = artifacts.manifest.clone();
+            body[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
             assert!(
                 SemanticUnitRouter::open(
                     &body,
@@ -973,13 +1627,52 @@ mod tests {
                     1 << 20
                 )
                 .is_err(),
-                "{field}"
+                "{offset}"
             );
         }
-        for field in ["algorithm", "membership", "rows", "leaves"] {
+        for offset in [0, 88, 127, 511] {
+            let mut body = artifacts.manifest.clone();
+            body[offset] ^= 1;
+            assert!(
+                SemanticUnitRouter::open(
+                    &body,
+                    &artifacts.membership,
+                    &hash(&body),
+                    &source,
+                    1 << 20
+                )
+                .is_err()
+            );
+        }
+        for length in [0, 7, 511, artifacts.manifest.len() - 1] {
+            let body = &artifacts.manifest[..length];
+            assert!(
+                SemanticUnitRouter::open(
+                    body,
+                    &artifacts.membership,
+                    &hash(body),
+                    &source,
+                    1 << 20
+                )
+                .is_err()
+            );
+        }
+        let mut trailing = artifacts.manifest.clone();
+        trailing.push(0);
+        assert!(
+            SemanticUnitRouter::open(
+                &trailing,
+                &artifacts.membership,
+                &hash(&trailing),
+                &source,
+                1 << 20
+            )
+            .is_err()
+        );
+        for value in [f32::INFINITY, f32::NAN] {
             let mut bad = manifest.clone();
-            bad[field] = Value::Null;
-            let body = serde_json::to_vec(&bad).unwrap();
+            bad.leaves[0].prototype[0] = value;
+            let body = bad.encode().unwrap();
             assert!(
                 SemanticUnitRouter::open(
                     &body,
@@ -995,14 +1688,14 @@ mod tests {
             let mut membership = artifacts.membership.clone();
             membership[..4].copy_from_slice(&id.to_le_bytes());
             let mut bad = manifest.clone();
-            bad["membership"]["sha256"] = hash(&membership).into();
-            let body = serde_json::to_vec(&bad).unwrap();
+            bad.membership.sha256 = hash(&membership);
+            let body = bad.encode().unwrap();
             assert!(
                 SemanticUnitRouter::open(&body, &membership, &hash(&body), &source, 1 << 20)
                     .is_err()
             );
         }
-        let first_bytes = manifest["leaves"][0]["bytes"].as_u64().unwrap() as usize;
+        let first_bytes = manifest.leaves[0].bytes;
         for (offset, bytes) in [
             (0, 1_u32.to_le_bytes().to_vec()),
             (0, 64_u32.to_le_bytes().to_vec()),
@@ -1011,9 +1704,9 @@ mod tests {
             let mut payload = artifacts.leaves.clone();
             payload[offset..offset + bytes.len()].copy_from_slice(&bytes);
             let mut bad = manifest.clone();
-            bad["leaves"][0]["sha256"] = hash(&payload[..first_bytes]).into();
-            bad["leaf_payload"]["sha256"] = hash(&payload).into();
-            let body = serde_json::to_vec(&bad).unwrap();
+            bad.leaves[0].sha256 = hash(&payload[..first_bytes]);
+            bad.leaf_payload.sha256 = hash(&payload);
+            let body = bad.encode().unwrap();
             let router = SemanticUnitRouter::open(
                 &body,
                 &artifacts.membership,
@@ -1039,9 +1732,9 @@ mod tests {
         let mut payload = artifacts.leaves.clone();
         payload[5] = 0x80;
         let mut bad = manifest.clone();
-        bad["leaves"][0]["sha256"] = hash(&payload[..first_bytes]).into();
-        bad["leaf_payload"]["sha256"] = hash(&payload).into();
-        let body = serde_json::to_vec(&bad).unwrap();
+        bad.leaves[0].sha256 = hash(&payload[..first_bytes]);
+        bad.leaf_payload.sha256 = hash(&payload);
+        let body = bad.encode().unwrap();
         let router =
             SemanticUnitRouter::open(&body, &artifacts.membership, &hash(&body), &source, 1 << 20)
                 .unwrap();
