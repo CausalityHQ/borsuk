@@ -1,0 +1,22 @@
+{
+  "ann_quality_measured": false,
+  "code_files_authenticated": 24,
+  "complete_historical_coverage": false,
+  "config_bytes": 15208,
+  "config_sha256": "21804f730d1044e5798e391949d62abd588efab2a09b5883d258adf4cc175dff",
+  "fixed_queries": 64,
+  "implementation_commit": "2621ffa1d0e1ea8712ebba55b8e9fc08e755a5aa",
+  "integrated_commit": "7add7472",
+  "metadata_authorities_authenticated": 18,
+  "paid_launch_authority": false,
+  "real_vectors_opened": false,
+  "schema": "borsuk-cohere-preparation-root-verification-v1",
+  "synthetic_self_check": {
+    "command": "/usr/bin/time -v timeout 55s env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 /home/rb/.cache/borsuk-cohere-1m-v4/analysis-venv/bin/python scripts/prepare_cohere_semantic_1m_panel.py --self-check",
+    "elapsed_seconds": 1.0,
+    "exit_status": 0,
+    "max_rss_kib": 190356,
+    "swaps": 0
+  },
+  "truth_opened": false
+}
