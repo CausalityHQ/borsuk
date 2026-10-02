@@ -1,0 +1,30 @@
+{
+  "controller_repair_verified": true,
+  "execution_decision": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0002-execution-decision.md",
+  "files": {
+    "asset-manifest.json": {
+      "bytes": 13203,
+      "sha256": "ce4b1356fe069d66b547ffa3b0a5bfed53aa2988f1949deb7e4eba6e60228fef"
+    },
+    "config.json": {
+      "bytes": 15771,
+      "sha256": "7f8fb284f156b5c8a30f31fbb6cbc5e7bbbd3cfce867214d697d83bcb9738b7a"
+    },
+    "controller-config.json": {
+      "bytes": 9921,
+      "sha256": "0cea51bef1d1c905b0a329135494edaf2d9c41dc77100b867111988aa7fcf23e"
+    }
+  },
+  "instance_started_by_freeze": false,
+  "native_changed": false,
+  "native_full_workspace_execution": false,
+  "native_source_identity_sha256": "addf62bce23ceee034f22e4d1dfc0b318564d924c6e0fcee34b9336d1532813e",
+  "new_cloud_measurement": false,
+  "original_a0001_preserved": "FAIL/INVALID",
+  "original_runtime_failure_cause": "UNKNOWN",
+  "schema": "borsuk-fixed48-cold-a0002-freeze-v1",
+  "source": {
+    "archive_sha256": "ee21a665947f6da625184b0d9595fd246a0b3ed634a21e3bdb0d1a841de9580a",
+    "commit": "c37d64a6e3fc0874bdf8c7f02132954d775b4cd0"
+  }
+}
