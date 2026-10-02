@@ -46,8 +46,8 @@ SEMANTIC_1M = False
 TEST_BUILD = False
 IMPLEMENTATION = False
 STARTUP_WAVE8 = False
-STARTUP_WAVE8_COMMIT = '660fd425a8a45dda17cbf6f44915bd36615ce87a'
-STARTUP_WAVE8_IDENTITY = '58535ffeb5bb74a09fba9da489d64b6c9b21495c6be53f320a3f8efc2d47756b'
+STARTUP_WAVE8_COMMIT = '1e4ed13777a59e7acdd34acc9510b9d156aa17bf'
+STARTUP_WAVE8_IDENTITY = '7e4fabf96284e4ccd080cf14b8bfbfd0f3ff41271e920c8e39d5d1fa252cd830'
 STARTUP_WAVE8_DELTA = ('crates/borsuk/src/object_native_generation.rs',
                       'crates/borsuk/src/two_bit_generation.rs')
 RECEIPT_SCHEMA = 'borsuk-native-workspace-execution-receipt-v1'

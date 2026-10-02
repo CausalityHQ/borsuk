@@ -1,0 +1,66 @@
+{
+  "status": "UNVERIFIED_SOURCE_CANDIDATE",
+  "base_commit": "660fd425a8a45dda17cbf6f44915bd36615ce87a",
+  "candidate_commit": "1e4ed13777a59e7acdd34acc9510b9d156aa17bf",
+  "candidate_git_tree": "d281202fa3c3fa0faed1b86acdc3a11ceab11987",
+  "worktree": "/home/rb/worktrees/borsuk-startup-wave8-fixture-repair",
+  "git_status": "clean",
+  "author": "Roman Bartusiak <riomus@gmail.com>",
+  "scope": "Only semantic_object_store_parity in crates/borsuk/src/two_bit_generation.rs; production unchanged",
+  "source_sha256": {
+    "crates/borsuk/src/two_bit_generation.rs": "4c6f866a463c8116562987e25c58562304e21991e84166f76d79316739ed9f6d",
+    "crates/borsuk/src/object_native_generation.rs": "62864fa9bf5bcf77f501f66c1d11c7a9af58924c95c9629166023561d3e89b27"
+  },
+  "patch": "diff --git a/crates/borsuk/src/two_bit_generation.rs b/crates/borsuk/src/two_bit_generation.rs\nindex 96116186..cb2457bf 100644\n--- a/crates/borsuk/src/two_bit_generation.rs\n+++ b/crates/borsuk/src/two_bit_generation.rs\n@@ -2578,7 +2578,7 @@ mod source_walk_tests {\n         });\n         let graph_body = serde_json::to_vec(&graph_root).unwrap();\n         // Unknown graph lengths join admission before the aggregate budget is checked.\n-        for name in [\"centroids.bin\", \"graph.bin\"] {\n+        for name in [\"centroids.bin\", \"graph.bin\", \"diverse_graph.bin\"] {\n             store\n                 .put(&metadata_location(&prefix, name), vec![0].into())\n                 .await\n@@ -2593,27 +2593,53 @@ mod source_walk_tests {\n             .put(&root_key, graph_body.clone().into())\n             .await\n             .unwrap();\n-        store.reads.lock().unwrap().clear();\n-        assert!(matches!(\n-            stage_two_bit_metadata(\n+        let diverse_key = metadata_location(&prefix, \"diverse_graph.bin\");\n+        for diverse_present in [true, false] {\n+            if !diverse_present {\n+                store.delete(&diverse_key).await.unwrap();\n+            }\n+            store.reads.lock().unwrap().clear();\n+            let error = stage_two_bit_metadata(\n                 store.as_ref(),\n                 &prefix,\n                 &hash(&graph_body),\n                 cap,\n-                scratch.path()\n+                scratch.path(),\n             )\n-            .await,\n-            Err(ObjectNativeOpenError::Invalid(\"remote metadata length\"))\n-        ));\n-        assert!(\n-            !store\n-                .reads\n-                .lock()\n-                .unwrap()\n-                .iter()\n-                .any(|(name, head, _, _)| !head && !name.ends_with(\"/manifest.json\"))\n-        );\n-        assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);\n+            .await\n+            .err()\n+            .unwrap();\n+            if diverse_present {\n+                assert!(\n+                    matches!(\n+                        error,\n+                        ObjectNativeOpenError::Invalid(\"remote metadata length\")\n+                    ),\n+                    \"{error:?}\"\n+                );\n+            } else {\n+                assert!(\n+                    matches!(\n+                        &error,\n+                        ObjectNativeOpenError::Store(object_store::Error::NotFound { path, .. })\n+                            if path.as_str() == diverse_key.as_ref()\n+                    ),\n+                    \"{error:?}\"\n+                );\n+            }\n+            assert_eq!(\n+                store\n+                    .reads\n+                    .lock()\n+                    .unwrap()\n+                    .iter()\n+                    .filter(|(_, head, _, _)| !head)\n+                    .map(|(name, _, _, _)| name.as_str())\n+                    .collect::<Vec<_>>(),\n+                [root_key.as_ref()]\n+            );\n+            assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);\n+        }\n         store.put(&root_key, root_body.into()).await.unwrap();\n         let eager = TwoBitGeneration::open(&root, &root_sha, limits).unwrap();\n         let LoadedDiscovery::Semantic { router, .. } = &eager.discovery else {\n",
+  "patch_sha256": "bd772374279b323264e90b18595723ede06af62e541571a181c5035f97809b9c",
+  "checks_passed": [
+    "rustfmt --edition 2024 --check crates/borsuk/src/two_bit_generation.rs",
+    "git diff --check",
+    "exact parent commit, one-file diff, clean working tree, source SHA-256"
+  ],
+  "gates_unrun": [
+    "object-native-generation-tests",
+    "semantic-object-store-parity",
+    "paged-source-parity",
+    "fragmented-paged-source-parity",
+    "release",
+    "clippy",
+    "test-build",
+    "full workspace assurance"
+  ],
+  "unrun_reason": "Assignment forbids local Cargo/build/tests/cloud due sustained local PSI; parent owns external exact-source qualification. No compilation, Clippy or runtime success claimed.",
+  "narrow_gate_for_parent": "CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::semantic_object_store_parity -- --exact --test-threads=1",
+  "assertions": [
+    "All graph placeholders include nonempty one-byte diverse_graph.bin",
+    "Exact original cap retained",
+    "Present diverse graph: Invalid(remote metadata length)",
+    "Missing diverse graph: Store(NotFound) with exact diverse_graph.bin path",
+    "Each case: exactly one root payload GET and zero child payload GETs",
+    "Each case: empty scratch directory",
+    "Both error assertions include actual error Debug"
+  ],
+  "evidence": {
+    "diagnosis_consultation": "6060930e5cd64a86",
+    "remote_attempt": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/startup-wave8/implementation-gates/a0001",
+    "original_result": "FAIL / exit 101 / qualified=false, unchanged",
+    "source_before_equals_after": true,
+    "failed_source_file_hashes_match_base": true,
+    "test_log_and_receipts_hashes_match_terminal": true
+  },
+  "parent_authority": [
+    "integration and push",
+    "native goal and original FAIL",
+    "source identity/controller/config freeze",
+    "remote gates"
+  ],
+  "actions_not_taken": [
+    "Cargo",
+    "build",
+    "tests",
+    "cloud",
+    "reviews",
+    "children",
+    "merge",
+    "push"
+  ]
+}

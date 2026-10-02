@@ -46,9 +46,9 @@ PREFIX = 'research/semantic-router/20261002/fresh1m-startup-wave8-paired-'
 CELLS = ('control', 'candidate', 'candidate', 'control')
 WIDTHS = dict(control=4, candidate=8)
 SOURCE_COMMITS = dict(control='f4d76fc040aa89c44b3526e37f148e78d21241fa',
-    candidate='660fd425a8a45dda17cbf6f44915bd36615ce87a')
+    candidate='1e4ed13777a59e7acdd34acc9510b9d156aa17bf')
 SOURCE_IDS = dict(control='295a79de9a499cc388db14b4b78ac9fcd4f1eb8673ceb5c1222dfc7f119e9ae4',
-    candidate='58535ffeb5bb74a09fba9da489d64b6c9b21495c6be53f320a3f8efc2d47756b')
+    candidate='7e4fabf96284e4ccd080cf14b8bfbfd0f3ff41271e920c8e39d5d1fa252cd830')
 CONTROL_DELTA = {
     'crates/borsuk/src/object_native_generation.rs': '06e37eff99905c6073fba411e451bcfceeb7d20e2e3d9b50ea8d604deb27fb56',
     'crates/borsuk/src/two_bit_generation.rs': '6b37d3c3b3c570719f2f9879b3c5889625d470f52f9b5581afb762e46d30afe9'}

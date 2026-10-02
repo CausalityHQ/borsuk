@@ -1,0 +1,15 @@
+{
+  "schema": "borsuk-startup-wave8-fixture-repair-root-verification-v1",
+  "candidate_commit": "1e4ed13777a59e7acdd34acc9510b9d156aa17bf",
+  "source_identity_sha256": "7e4fabf96284e4ccd080cf14b8bfbfd0f3ff41271e920c8e39d5d1fa252cd830",
+  "source_file_count": 399,
+  "scope": "fixture only against previous candidate; production unchanged",
+  "controller_mock_check": {
+    "exit_status": 0,
+    "wall_seconds": 28.44,
+    "max_rss_kib": 64936
+  },
+  "rust_qualification": "UNRUN",
+  "native_integrated": false,
+  "original_a0001_disposition": "FAIL unchanged"
+}
