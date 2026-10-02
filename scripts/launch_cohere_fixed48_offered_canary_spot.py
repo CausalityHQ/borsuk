@@ -164,7 +164,7 @@ def head_roster(repo, config, offered_config, offered_proof, evidence, manifest)
     for name in ('canonical','sq8'):
         pin = publication[name]; add('serving/'+name,pin,dict(bucket=BUCKET,key=pin['key'],etag=pin['etag']))
     pin = arm['leaf_object']
-    add('serving/router/leaves.bin',pin,dict(bucket=BUCKET,key=namespace+'/objects/'+pin['sha256']))
+    add('serving/router/leaves.bin',pin,dict(bucket=BUCKET,key=namespace+'/generations/'+root_sha+'/router/leaves.bin'))
     small = 'serving/manifest.json'
     body = encoded(publication['manifest'])+b'\n'
     assert runtime.identity(assets[small]) == dict(bytes=len(body),sha256=sha(body)) and len(body) <= LIMITS['small_body_bytes']
@@ -743,6 +743,7 @@ with ExitStack() as stack:
     stack.enter_context(patch.object(Path,'open',metadata_open))
     p=c.qualify(Path.cwd())
     assert len(p['assets']) == 51 and p['offered_qualification']['native_source_file_count'] == 399
+    assert p['assets']['serving/router/leaves.bin']['source']['key'] == p['offered_qualification']['namespace_prefix']+'/generations/'+p['assets']['serving/manifest.json']['sha256']+'/router/leaves.bin', 'leaf HEAD must use production generation layout'
     import platform,os
     with patch.object(platform,'freedesktop_os_release',return_value=dict(ID='ubuntu',VERSION_ID='24.04')), patch.object(platform,'machine',return_value='x86_64'), patch.object(os,'confstr',return_value='glibc 2.39'), patch.dict(os.environ,dict.fromkeys(c.fixed.retained.THREAD_ENV,'2')|{'AWS_MAX_ATTEMPTS':'1'}):
         assert c.eligibility(Path.cwd(),cfg)['required_glibc'] == p['required_glibc']

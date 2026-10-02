@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-08b0db7ce350174e2",
+  "nodes": {
+    "0": {
+      "instance_id": "i-08b0db7ce350174e2"
+    }
+  },
+  "prefix": "research/semantic-router/20261002/fixed48-offered-canary-a0002",
+  "source_commit": "ec9b5f39d67cf6fc7d0f82c14d1a3ce31a798f36",
+  "source_archive_sha256": "6e4a2af042bb9d4249961ee2b7fdc0fc27683225bfc821f4803674ffe4118125"
+}

@@ -1,0 +1,5 @@
+actual: research/semantic-router/20261002/fixed48-cold-a0005/serving/objects/53474c34a22f8df40f86adc5a530bcd16dfaefe9eb655e21c6fffbd16cf6fa38
+production: research/semantic-router/20261002/fixed48-cold-a0005/serving/generations/aa9f0919843660e965953f67453ee0b0ca6a58255b2cfab52e1880fad4c608dc/router/leaves.bin
+Traceback (most recent call last):
+  File "<stdin>", line 6, in <module>
+AssertionError: canary leaf HEAD key differs from production generation layout

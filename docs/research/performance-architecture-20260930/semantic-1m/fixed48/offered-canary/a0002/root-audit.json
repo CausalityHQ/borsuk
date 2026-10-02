@@ -1,0 +1,105 @@
+{
+  "all_emitted_artifacts_authenticated": true,
+  "artifacts": {
+    "asset-head-roster.json": {
+      "bytes": 16464,
+      "sha256": "d42ec5c25d2839092d668291f7eba24bc2cf5258e98b836ae0d4b65b5975ed49"
+    },
+    "asset-heads.json": {
+      "bytes": 18704,
+      "sha256": "5700f0402b535308435b8acef56d0a503beafd0a399bd5f1f4debe667bb3a6bb"
+    },
+    "bootstrap-sdk-ledger.jsonl": {
+      "bytes": 4973,
+      "sha256": "feb6008b64c0c71bfba2c81142f6100fa31401c74b67bb393a3ccf12a5c68c9f"
+    },
+    "bootstrap-staging.json": {
+      "bytes": 426,
+      "sha256": "e70514bea28632634c7127704d09fb4e37cf80e8bd95f1fba7c46973b9ff6308"
+    },
+    "cleanup.json": {
+      "bytes": 74,
+      "sha256": "4d5a4852690d87291dc076da9ae35484514de25159e5d52b705b12a0d306862a"
+    },
+    "config.json": {
+      "bytes": 11316,
+      "sha256": "5e03f0c9b45b0a6e3f2f549125f0b518afeeb2146fc3b242724396970bbb2f62"
+    },
+    "eligibility.json": {
+      "bytes": 949,
+      "sha256": "0bf89aa2ca0fb021342b142d5a5ed5dd54aac7470970b6a09daa5d918b9ed4d5"
+    },
+    "failure.json": {
+      "bytes": 158,
+      "sha256": "52f424e9efab3c9678b71ddc9f36ed551f9d2d65480ffa043dd637feb6fa0304"
+    },
+    "imports.json": {
+      "bytes": 786,
+      "sha256": "734eb888dea60f112de28d83ea2157975811f283d9dbd204408c76be6f160156"
+    },
+    "offered-asset-manifest.json": {
+      "bytes": 365,
+      "sha256": "012eb8827cb5f3ad3bc756ff3f2e60a1c9cb7e58a373f14e4664dac88817c944"
+    },
+    "offered-config.json": {
+      "bytes": 25472,
+      "sha256": "efddf6530238acc4eb520ae65fa2a7d2214a9f1e66b2d145bab1727aa6669e7f"
+    },
+    "offered-controller-config.json": {
+      "bytes": 9950,
+      "sha256": "e71154102baaf7b650b969a10a6edaca7230e19e2f230b4fe9ba587b1992733d"
+    },
+    "offered-qualification.json": {
+      "bytes": 1914,
+      "sha256": "a6f9afdceacfe778853a657601249683e78944d7b033399015af3d963da54df0"
+    },
+    "profile-resources.txt": {
+      "bytes": 1059,
+      "sha256": "a4d43c0b1ac8cb61924894baad8da5c28161ff0ddef0f53cb0ad2dda6317cd32"
+    },
+    "profile.log": {
+      "bytes": 4281,
+      "sha256": "495645d19469c19d3957e08be7d8f8fa6ad421d5be2255c01635d980e3bdf017"
+    },
+    "resources.json": {
+      "bytes": 4745,
+      "sha256": "88f25f787338f41d3c05380bad5c273d9d39b8731e356008aff022b7fb5bbdb3"
+    },
+    "sdk-ledger.jsonl": {
+      "bytes": 29601,
+      "sha256": "74464df4da86a639381d9d1c58e23863a4f3dd0b0e928378512a887e9619bca9"
+    },
+    "source-qualification.json": {
+      "bytes": 34917,
+      "sha256": "58d241ca7ab9d40781962738c921278807bd2fbfcea08861c5aefee8d116e250"
+    },
+    "summary.json": {
+      "bytes": 174,
+      "sha256": "489c178fdf5a87e4abdd01372d657c838c2a61f291c91ec5f8abe975779df959"
+    }
+  },
+  "cleanup": {
+    "process_cleanup": true,
+    "sdk_closed": true,
+    "temporary_files_removed": true
+  },
+  "controller_exit_status": 2,
+  "controller_session": 11848,
+  "correct_key": "research/semantic-router/20261002/fixed48-cold-a0005/serving/generations/aa9f0919843660e965953f67453ee0b0ca6a58255b2cfab52e1880fad4c608dc/router/leaves.bin",
+  "correct_key_readonly_HEAD": {
+    "ContentLength": 48125000,
+    "ETag": "\"9945624868700afd678010735c905750-6\""
+  },
+  "emitted_artifact_count": 19,
+  "failed_key": "research/semantic-router/20261002/fixed48-cold-a0005/serving/objects/53474c34a22f8df40f86adc5a530bcd16dfaefe9eb655e21c6fffbd16cf6fa38",
+  "independently_observed_instance_state": "terminated",
+  "infrastructure_status": "FAIL",
+  "instance_id": "i-08b0db7ce350174e2",
+  "native_ann_calls": 0,
+  "original_status_preserved": true,
+  "replacement_automatic": false,
+  "required_complete_roster": 22,
+  "root_cause": "canary HEAD roster used objects/SHA for router leaves; production uses generations/root/router/leaves.bin",
+  "schema": "borsuk-fixed48-offered-canary-root-audit-v1",
+  "scientific_status": "UNMEASURED"
+}
