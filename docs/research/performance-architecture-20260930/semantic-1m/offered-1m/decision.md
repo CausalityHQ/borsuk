@@ -13,3 +13,7 @@ Original a0005 campaign remains FAILED1 because its final shell required a nonem
 ## Baseline and next decision
 
 Verified a0005: recall@10=97.5% (624/640), zero ID/recall delta from frozen quality control; cold p90/p95=512.7403/538.5831ms, native peakRSS39,706,624B. Serial full-span1.994485/s is not saturation. Published444ms1M D768 p90 context is missed by68.7403ms; corpus/protocol differ, with no matched vendor result. Throughput/quality/cost under offered load remains unmeasured. Next compare each cell's all-offer completion, dispatch and latency tails, then select the largest passing tested rate and one measured startup/fetch bottleneck. CoHere1M,10M/100M scale and lifecycle/cost requirements remain open.
+
+## a0001 setup failure
+
+Original controller16810 exited1; instance i-0cd7ce838bb4869c5 is terminated. Both terminal raw/gzip bodies authenticate. The isolated worker environment omitted boto3, imported by the checkpoint lifecycle before the scheduler. Native invocations and HTTP attempts are zero; offered quality/latency/throughput are unmeasured. Preserve this FAIL and original config/authority. A prospective a0002 will change only the launcher dependency installation and add an actual isolated import preflight. Scheduler, retained index, panel, quality/resource/dispatch gates remain frozen. No paid rerun until the real environment gate passes.
