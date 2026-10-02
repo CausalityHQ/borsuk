@@ -24,10 +24,13 @@ import struct
 import sys
 import tempfile
 
-from check_semantic_router_coverage import (
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts.check_semantic_router_coverage import (
     authenticated, canonical, decode, digest, fields, integer, require, sha,
 )
-from prepare_semantic_positive_inputs import output_file
+from scripts.prepare_semantic_positive_inputs import output_file
 
 CONFIG_SCHEMA = "borsuk-semantic-frozen-offline-config-v1"
 RECEIPT_SCHEMA = "borsuk-semantic-closed-measurement-v1"

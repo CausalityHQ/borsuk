@@ -1,0 +1,36 @@
+{
+  "checks": [
+    {
+      "checks": 88,
+      "command": "python3 -m scripts.evaluate_semantic_frozen_diagnostics --self-check",
+      "exit_status": 0
+    },
+    {
+      "checks": 88,
+      "command": "python3 scripts/evaluate_semantic_frozen_diagnostics.py --self-check",
+      "exit_status": 0
+    },
+    {
+      "command": "nonrepo PYTHONPATH repository package import",
+      "exit_status": 0
+    },
+    {
+      "command": "python3 -m py_compile scripts/evaluate_semantic_frozen_diagnostics.py",
+      "exit_status": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_status": 0
+    }
+  ],
+  "integrated_commit": "f647fef3",
+  "launch_authority": false,
+  "native_run": false,
+  "real_panel_or_truth_opened": false,
+  "root_repair": "Package-qualified existing imports with direct-CLI repository path setup; -m initially failed ModuleNotFoundError before synthetic execution.",
+  "schema": "borsuk-fixed48-offline-evaluator-integration-v1",
+  "source_sha256": "ccba9e39f78bdfd39aad1ddef693251ca97f7d84f51418a3bafd9b2722279546",
+  "synthetic_memory_bytes": 268435456,
+  "timeout_seconds": 55,
+  "worker_commit": "726acf26518cf2013a7e745a4b7f2fb04670d3cc"
+}

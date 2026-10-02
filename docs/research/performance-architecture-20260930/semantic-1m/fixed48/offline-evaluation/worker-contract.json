@@ -1,0 +1,143 @@
+{
+  "api": "evaluate(config_path, config_sha256) -> dict; measurement validation and order bijection precede any truth open; replay compares canonical recomputed report bytes",
+  "base_commit": "e3777d3ecec25f70d728427021a8e1309df1aeb7",
+  "cli": [
+    "python3 scripts/evaluate_semantic_frozen_diagnostics.py CONFIG CONFIG_SHA NEW_OUTPUT",
+    "python3 scripts/evaluate_semantic_frozen_diagnostics.py --replay CONFIG CONFIG_SHA EXISTING_OUTPUT",
+    "python3 scripts/evaluate_semantic_frozen_diagnostics.py --self-check"
+  ],
+  "config": {
+    "inputs": {
+      "measurement_receipt": {
+        "bytes": "positive integer",
+        "path": "ABSOLUTE_REGULAR_NOFOLLOW",
+        "sha256": "lowercase64hex"
+      },
+      "measurements": {
+        "bytes": "positive integer",
+        "path": "ABSOLUTE_REGULAR_NOFOLLOW",
+        "sha256": "lowercase64hex"
+      },
+      "order": {
+        "bytes": "positive integer",
+        "path": "ABSOLUTE_REGULAR_NOFOLLOW",
+        "sha256": "lowercase64hex"
+      },
+      "scorer_config": {
+        "bytes": "positive integer",
+        "path": "ABSOLUTE_REGULAR_NOFOLLOW",
+        "sha256": "lowercase64hex"
+      },
+      "truth": {
+        "bytes": "positive integer",
+        "path": "ABSOLUTE_REGULAR_NOFOLLOW",
+        "sha256": "lowercase64hex"
+      }
+    },
+    "schema": "borsuk-semantic-frozen-offline-config-v1"
+  },
+  "delivery": {
+    "author": "Roman Bartusiak <riomus@gmail.com>",
+    "checks": [
+      {
+        "checks": 88,
+        "command": "rtk proxy /usr/bin/time -f 'elapsed_seconds=%e peak_rss_kib=%M exit_status=%x' python3 scripts/evaluate_semantic_frozen_diagnostics.py --self-check",
+        "elapsed_seconds": 0.56,
+        "exit_status": 0,
+        "peak_rss_kib": 24392
+      },
+      {
+        "command": "rtk proxy python3 -m py_compile scripts/evaluate_semantic_frozen_diagnostics.py",
+        "exit_status": 0
+      },
+      {
+        "command": "rtk proxy git diff HEAD^ HEAD --check",
+        "exit_status": 0
+      },
+      {
+        "command": "rtk proxy python3 scripts/evaluate_semantic_frozen_diagnostics.py",
+        "exit_status": 2,
+        "meaning": "expected invalid CLI rejection"
+      }
+    ],
+    "commit": "726acf26518cf2013a7e745a4b7f2fb04670d3cc",
+    "native_execution": false,
+    "owned_paths": [
+      "scripts/evaluate_semantic_frozen_diagnostics.py"
+    ],
+    "parent": "e3777d3ecec25f70d728427021a8e1309df1aeb7",
+    "pushed": false,
+    "real_panel_or_truth_opened": false,
+    "source_sha256": "1f40402ac3af50d7b861276fdea28b4d05e194c3d1e25446a30d6870427d7667",
+    "worktree_clean": true
+  },
+  "exit_codes": {
+    "0": "valid complete evidence (scientific GO or FAIL); successful replay/self-check",
+    "2": "invalid evidence, output collision, or replay mismatch"
+  },
+  "input_caps_bytes": {
+    "config": 65536,
+    "measurement_receipt": 65536,
+    "measurements": 16777216,
+    "order": 8000000,
+    "scorer_config": 65536,
+    "truth": 51200
+  },
+  "launch_authority": false,
+  "measurement_receipt": {
+    "binary_sha256": "lowercase64hex; must equal frozen identity/summary",
+    "cleanup_complete": true,
+    "exit_status": 0,
+    "generation_prefix": "exact scorer config value",
+    "generation_root_sha256": "lowercase64hex; must equal frozen identity/summary",
+    "measurement_sealed_before_truth": true,
+    "measurements": {
+      "bytes": "positive integer",
+      "path": "exact descriptor from config/scorer config",
+      "sha256": "lowercase64hex"
+    },
+    "native_qualification_passed": true,
+    "order": {
+      "bytes": "positive integer",
+      "path": "exact descriptor from config/scorer config",
+      "sha256": "lowercase64hex"
+    },
+    "requests": {
+      "bytes": "positive integer",
+      "path": "exact descriptor from config/scorer config",
+      "sha256": "lowercase64hex"
+    },
+    "resource_gate_passed": true,
+    "router_source_sha256": "lowercase64hex; must equal frozen identity/summary",
+    "schema": "borsuk-semantic-closed-measurement-v1",
+    "scorer_config": {
+      "bytes": "positive integer",
+      "path": "exact descriptor from config/scorer config",
+      "sha256": "lowercase64hex"
+    },
+    "scorer_source_sha256": "lowercase64hex; must equal frozen identity/summary"
+  },
+  "output": "canonical JSON file, schema borsuk-semantic-frozen-offline-result-v1; execution_status=SUCCESS, scientific_status=GO or FAIL, failure_class=null/discovery/downstream, first_crossing_stage; per_query and aggregate keyed by six contract stage names; local_measurement query_wall_ns/query_process_cpu_ns and logical_io separated; chronology_authority explicitly root attestation",
+  "owned_file": "scripts/evaluate_semantic_frozen_diagnostics.py",
+  "proof": {
+    "closure_hits10_floor": 608,
+    "cold_http_measured": false,
+    "denominators": [
+      640,
+      6400
+    ],
+    "measurement_rows": 68,
+    "order": "rows LEu64 exact bijection physical->logical",
+    "physical_s3_measured": false,
+    "result_schema": "borsuk-semantic-router-scorer-result-v3",
+    "returned_hits10_floor": 608,
+    "scorer_schema": "borsuk-semantic-router-scorer-config-v3",
+    "truth": "64x100 LEi64 unique in-range per query"
+  },
+  "receipt_authority": "Root-generated, authenticated closed receipt; booleans are root attestations, not independently reproduced qualification/resource/chronology proof. Root must seal measurements and receipt before its one exhaustive GT construction. Receipt contains no truth pointer. Old receipts are not implicitly accepted.",
+  "schema": "borsuk-fixed48-sealed-offline-evaluator-contract-v1",
+  "synthetic_limits": {
+    "memory_bytes": 268435456,
+    "wall_seconds": 55
+  }
+}
