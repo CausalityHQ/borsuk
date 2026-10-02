@@ -1,0 +1,87 @@
+{
+  "actual_completed_full_span_qps": 7.597044082309215,
+  "cold_ms": {
+    "p50": 485.77551200000005,
+    "p90": 541.0950237,
+    "p95": 557.4093259499999,
+    "p99": 624.9676307699999
+  },
+  "counterfactual": {
+    "assumption": "Subtract aggregate measured POST process CPU savings from each cold wall observation; ignores CPU overlap, scheduling/network feedback and sampling error. Optimistic diagnostic, NOT measured SIMD or prediction. No stage-specific CPU profile available.",
+    "erasing_all_post_cpu_cold_p90_ms": 405.7498673,
+    "halving_all_post_cpu_cold_p90_ms": 472.59502369999996
+  },
+  "created_ns": 1790984111400934924,
+  "dataset": "CoHere",
+  "dimensions": 768,
+  "k": 10,
+  "matched_vendor_measured": false,
+  "metric": "cosine",
+  "native_post_cpu_ms": {
+    "max": 150.0,
+    "p50": 130.0,
+    "p90": 140.0,
+    "sampling_resolution_ms": 10,
+    "sum": 8390.0
+  },
+  "native_whole_process_cpu_ms": {
+    "max": 200.0,
+    "p50": 180.0,
+    "p90": 190.0,
+    "sum": 11590.0
+  },
+  "new_ann_execution": false,
+  "nominal_offered_qps": 8,
+  "offline_result": {
+    "bytes": 41485,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/scientific-execution/python-replay-a0002/a0002/screen/offline-result.json",
+    "sha256": "f6a82af70d37aacfe26c984de578f3201768b5c2620e39f0ee0d610b9500e7dd"
+  },
+  "quality_aggregate": {
+    "nominated_units": {
+      "hits10": 619,
+      "hits100": 5956,
+      "recall10": 0.9671875,
+      "recall100": 0.930625
+    },
+    "page_closure": {
+      "hits10": 625,
+      "hits100": 6063,
+      "recall10": 0.9765625,
+      "recall100": 0.94734375
+    },
+    "returned_ids": {
+      "hits10": 619,
+      "hits100": 6003,
+      "recall10": 0.9671875,
+      "recall100": 0.93796875
+    },
+    "source_ranked_pages": {
+      "hits10": 625,
+      "hits100": 6063,
+      "recall10": 0.9765625,
+      "recall100": 0.94734375
+    },
+    "source_scored_units": {
+      "hits10": 625,
+      "hits100": 6063,
+      "recall10": 0.9765625,
+      "recall100": 0.94734375
+    },
+    "sq8_admitted_ranges": {
+      "hits10": 625,
+      "hits100": 6013,
+      "recall10": 0.9765625,
+      "recall100": 0.93953125
+    }
+  },
+  "quality_scope": "Retained previously closed offline decomposition; no new queries, truth opening or tuning. Current fixed48 CoHere only; ReLAION preceding arm separately bound.",
+  "records": {
+    "bytes": 1484741,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-http/a0002/screen/rate5-records.jsonl",
+    "sha256": "2c313cc6225146edd78f76571a7b16620b0c86b0b611f9bdb8112d01c61ab332"
+  },
+  "schema": "borsuk-current-architecture-evidence-v1",
+  "source_commit": "3666440662c2aa43b524c0949e2c73e3867075b2",
+  "split": "FIRST1M sealed64 reused offered panel"
+}
