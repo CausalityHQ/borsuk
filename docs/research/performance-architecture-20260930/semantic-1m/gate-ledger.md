@@ -106,3 +106,17 @@ This ledger changes no experiment's outcome and selects no new production defaul
 ## Fresh 1M quality survivor
 
 [Closed a0001](quality-execution/a0001/decision.md): ReLAION FIRST1M D768 cosine, fixed fresh64; R10 624/640=97.5%, R100 6077/6400=94.953125%. GO against prospective 95% R10 gate, not the historical 98% R100 arm. All21 bodies authenticate and independent truth recount agrees. Build1353.076s under1GiB service with substantial reclaim; no cold HTTP/QPS/cost claim. Next: unchanged-source object-native cold measurement with explicit build/serving envelopes.
+
+## 2026-10-02 measured failures and prospective replacements
+
+| Gate and origin | Class | Current evidence / replacement measurement |
+| --- | --- | --- |
+| Local 8 GiB, zero new swap, sustained full-memory-PSI stop; operator host-safety direction | Host safety | No local Cargo remains; both paid jobs terminated. New Python workers are bounded to 200 MiB synthetic checks. Heavy builds stay remote. |
+| Fresh1m 95% R10 / all64, [CoHere preregistration](cohere-quality/preregister.md) | Frozen experiment; practical representative-quality target | CoHere FIRST1M/newfixed64 R10=91.25%, R100=85.359375%, FAIL. Coverage586/640 before final ranking, returned584; no gate relaxation. New top32 coverage arm gets a distinct excluded panel and its own prospective bound. |
+| Six client owners / 8 offeredQPS / ABBA/all64, [wave8 preregistration](startup-wave8/preregistration.md) | Frozen experiment | ReLAION control0 two drops at750/875ms, FAIL; wave8 unstarted. New protocol uses eight owners at unchanged8QPS and collects four declared cells after nonfatal science failures. Every failed cell stays FAIL; matched ratio only if allfour qualify. |
+| Initial semantic walk <=1031 units, source-qualified Fresh1m implementation | Frozen implementation admission | Today guard remains; top32 may nominate2048 plus up to7 initial-page additions. Coverage-only falsifier is not admission/returned-quality qualification. Any native expansion requires explicit source-qualified2055-unit bound and source/SQ8 loss/resource measurement. |
+| Selected top32 payload<=4MiB, nominations<=2048, closurepages<=2048; [new coverage preregistration](cohere-top32-coverage/preregister.md) | New prospective experiment admission | Derived from32 leaves of at most64 FP16 D768 unit records. Measure actual selectedbytes/coverage; these are not universal100M product caps. Passing608/640 closure hits is only a discovery ceiling. |
+| Compiler8GiB/zero swap, seven affected/release/Clippy/testcompile gates, [wave8 qualification](startup-wave8/qualification-decision.md) | Host/experiment safety | Actual native399 identity7e4fab qualified, no full-workspace execution claim. Librarydelivery source matches every qualified Git blob. Native ANN RSS/maintenance/100M remain separate measurements. |
+| Published1M D768444ms / 10M D10241214ms@8QPS context and practical95%R10, prior source-dated target matrix | Product comparison context | No matched vendor win. Latest ReLAION successful-only control p90=632.183ms/p95=777.308ms with two drops; candidate unmeasured. Published p95 and saturation unknown. CoHere cold latency/QPS unknown. Fresh matched end-to-end tails/completions/lifecycle dollars are next evidence; do not extrapolate100M latency. |
+
+100M source/layout arithmetic remains a projection. Current1M build/scoring process peaks, cgroup peaks, scratch and router bytes do not prove generation-pin/swap/maintenance RSS,10M/100M latency or total dollar. Preserve historical GO/FAIL rows above.
