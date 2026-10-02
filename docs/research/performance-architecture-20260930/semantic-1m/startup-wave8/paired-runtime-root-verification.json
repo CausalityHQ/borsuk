@@ -1,0 +1,12 @@
+{
+  "schema": "borsuk-startup-wave8-paired-runtime-root-verification-v1",
+  "implementation_commit": "1ac459dd99786dd9100265a0ff874acb86330353",
+  "integrated_commit": "79dbb1e5",
+  "self_check": {
+    "exit_status": 0,
+    "wall_seconds": 2.61,
+    "max_rss_kib": 66452
+  },
+  "actual_paired_measurement": false,
+  "candidate_native_qualified": false
+}
