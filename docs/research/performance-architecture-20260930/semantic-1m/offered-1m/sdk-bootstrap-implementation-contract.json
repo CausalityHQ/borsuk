@@ -1,0 +1,335 @@
+{
+  "schema": "borsuk-offered-sdk-bootstrap-contract-v1",
+  "base_commit": "eee22ddc1bafabab8b9305eb1f37a8d54ec65b08",
+  "source_file": "scripts/launch_native_semantic_1m_offered_spot.py",
+  "source_sha256": "c325c2e942d48db049709bfa3ef03e5bb4087f87c6340d61f479decb539f0e95",
+  "packages": [
+    "numpy==2.3.3",
+    "pyarrow==24.0.0",
+    "boto3==1.40.72",
+    "botocore==1.40.72",
+    "s3transfer==0.14.0",
+    "jmespath==1.0.1",
+    "python-dateutil==2.9.0",
+    "six==1.17.0",
+    "urllib3==2.6.3"
+  ],
+  "isolated_venv": "/tmp/borsuk-offered-sdk-bootstrap-venv",
+  "test_python": "Python 3.14.4",
+  "remote_python": "3.12 (generated shell unchanged; local host has Python 3.14.4)",
+  "generated_install": "\"$root/venv/bin/python\" -m pip install --disable-pip-version-check --only-binary=:all: --no-deps numpy==2.3.3 pyarrow==24.0.0 boto3==1.40.72 botocore==1.40.72 s3transfer==0.14.0 jmespath==1.0.1 python-dateutil==2.9.0 six==1.17.0 urllib3==2.6.3",
+  "generated_smoke": "PYTHONPATH=\"$root/repo\" \"$root/venv/bin/python\" -c 'import numpy, pyarrow; from scripts import launch_native_semantic_1m_offered_spot as launch; launch.ids.lifecycle()'",
+  "smoke_before_service": true,
+  "results": {
+    "contract-red": {
+      "command": [
+        "/tmp/borsuk-offered-sdk-bootstrap-venv/bin/python",
+        "-c",
+        "import sys\ndef deny_external(event, args):\n    if event in ('socket.connect', 'socket.getaddrinfo', 'subprocess.Popen', 'os.system'):\n        raise AssertionError('runtime external action forbidden: '+event)\nsys.addaudithook(deny_external)\nimport numpy, pyarrow; from scripts import launch_native_semantic_1m_offered_spot as launch; launch.ids.lifecycle()"
+      ],
+      "exit_code": 1,
+      "elapsed_seconds": 0.2024258429883048,
+      "timeout_seconds": 55,
+      "log": "/tmp/borsuk-offered-sdk-bootstrap-contract-red.log"
+    },
+    "contract-install": {
+      "command": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/tmp/borsuk-offered-sdk-bootstrap-contract-install.time",
+        "/tmp/borsuk-offered-sdk-bootstrap-venv/bin/python",
+        "-m",
+        "pip",
+        "install",
+        "--no-index",
+        "--find-links=/tmp/borsuk-offered-sdk-bootstrap-wheels",
+        "--disable-pip-version-check",
+        "--only-binary=:all:",
+        "--no-deps",
+        "numpy==2.3.3",
+        "pyarrow==24.0.0",
+        "boto3==1.40.72",
+        "botocore==1.40.72",
+        "s3transfer==0.14.0",
+        "jmespath==1.0.1",
+        "python-dateutil==2.9.0",
+        "six==1.17.0",
+        "urllib3==2.6.3"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 1.2565198289812542,
+      "timeout_seconds": 120,
+      "log": "/tmp/borsuk-offered-sdk-bootstrap-contract-install.log"
+    },
+    "pip-check": {
+      "command": [
+        "/tmp/borsuk-offered-sdk-bootstrap-venv/bin/python",
+        "-m",
+        "pip",
+        "check"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 0.2794022269663401,
+      "timeout_seconds": 55,
+      "log": "/tmp/borsuk-offered-sdk-bootstrap-pip-check.log"
+    },
+    "contract-green": {
+      "command": [
+        "/tmp/borsuk-offered-sdk-bootstrap-venv/bin/python",
+        "-c",
+        "import sys\ndef deny_external(event, args):\n    if event in ('socket.connect', 'socket.getaddrinfo', 'subprocess.Popen', 'os.system'):\n        raise AssertionError('runtime external action forbidden: '+event)\nsys.addaudithook(deny_external)\nimport numpy, pyarrow; from scripts import launch_native_semantic_1m_offered_spot as launch; launch.ids.lifecycle()\nimport importlib.metadata as metadata\nimport boto3, botocore, s3transfer, jmespath, dateutil, six, urllib3, resource\nfrom pathlib import Path\nassert callable(launch.remote_worker)\nfor module in (boto3,botocore,s3transfer,jmespath,dateutil,six,urllib3,numpy,pyarrow):\n    assert Path(module.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()), module.__file__\nassert not any('Mock' in type(module).__name__ for module in sys.modules.values())\nassert resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024 <= 200*1024**2\nimport json\nprint(json.dumps(dict(versions={name:metadata.version(name) for name in\n    ('numpy','pyarrow','boto3','botocore','s3transfer','jmespath','python-dateutil','six','urllib3')},\n    lifecycle=[module.__file__ for module in launch.ids.lifecycle()],\n    remote_worker_module=launch.remote_worker.__module__,\n    peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024)))\n"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 0.37694453896256164,
+      "timeout_seconds": 55,
+      "log": "/tmp/borsuk-offered-sdk-bootstrap-contract-green.log"
+    },
+    "generated-smoke": {
+      "command": [
+        "bash",
+        "-eu",
+        "-c",
+        "root=/tmp/borsuk-offered-sdk-smoke-ze_tgagb\nPYTHONPATH=\"$root/repo\" \"$root/venv/bin/python\" -c 'import numpy, pyarrow; from scripts import launch_native_semantic_1m_offered_spot as launch; launch.ids.lifecycle()'"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 0.2764794370159507,
+      "timeout_seconds": 55,
+      "log": "/tmp/borsuk-offered-sdk-bootstrap-generated-smoke.log"
+    },
+    "shell-syntax": {
+      "command": [
+        "bash",
+        "-n",
+        "/tmp/borsuk-offered-sdk-bootstrap-user-data.sh"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 0.0035406140377745032,
+      "timeout_seconds": 55,
+      "log": "/tmp/borsuk-offered-sdk-bootstrap-shell-syntax.log"
+    },
+    "self-check": {
+      "command": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/tmp/borsuk-offered-sdk-bootstrap-self-check.time",
+        "/tmp/borsuk-offered-sdk-bootstrap-venv/bin/python",
+        "scripts/launch_native_semantic_1m_offered_spot.py",
+        "--self-check"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 1.8402866249671206,
+      "timeout_seconds": 55,
+      "log": "/tmp/borsuk-offered-sdk-bootstrap-self-check.log"
+    },
+    "diff-check": {
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 1.5135221499949694,
+      "timeout_seconds": 55,
+      "log": "/tmp/borsuk-offered-sdk-bootstrap-diff-check.log"
+    }
+  },
+  "red_missing_sdk": true,
+  "real_imports": {
+    "versions": {
+      "numpy": "2.3.3",
+      "pyarrow": "24.0.0",
+      "boto3": "1.40.72",
+      "botocore": "1.40.72",
+      "s3transfer": "0.14.0",
+      "jmespath": "1.0.1",
+      "python-dateutil": "2.9.0",
+      "six": "1.17.0",
+      "urllib3": "2.6.3"
+    },
+    "lifecycle": [
+      "/home/rb/worktrees/borsuk-offered-sdk-bootstrap/scripts/launch_native_metadata_ranges_cold_spot.py",
+      "/home/rb/worktrees/borsuk-offered-sdk-bootstrap/scripts/launch_native_semantic_router_cold_spot.py"
+    ],
+    "remote_worker_module": "scripts.launch_native_semantic_1m_offered_spot",
+    "peak_rss_bytes": 85880832
+  },
+  "import_audit": {
+    "files": [
+      "scripts/audit_v36_ranked_physical_ids.py",
+      "scripts/check_native_metadata_ranges_build.py",
+      "scripts/check_native_metadata_ranges_stats.py",
+      "scripts/check_native_semantic_concurrency.py",
+      "scripts/check_native_semantic_router_stats.py",
+      "scripts/check_native_startup_build.py",
+      "scripts/check_native_startup_stats.py",
+      "scripts/launch_native_metadata_ranges_cold_spot.py",
+      "scripts/launch_native_peer_1m_spot.py",
+      "scripts/launch_native_semantic_1m_cold_spot.py",
+      "scripts/launch_native_semantic_1m_offered_spot.py",
+      "scripts/launch_native_semantic_1m_quality_spot.py",
+      "scripts/launch_native_semantic_fresh_panel_spot.py",
+      "scripts/launch_native_semantic_panel_ids_spot.py",
+      "scripts/launch_native_semantic_router_cold_spot.py",
+      "scripts/launch_native_startup_profile_spot.py",
+      "scripts/launch_v157_primary_feasibility_spot.py",
+      "scripts/launch_v174_relaid_bind_compile_spot.py",
+      "scripts/package_semantic_native_generation.py",
+      "scripts/prepare_native_semantic_publication.py",
+      "scripts/rest_coexistence_load.py",
+      "scripts/run_native_cold_first_query.py",
+      "scripts/run_native_cold_offered.py",
+      "scripts/run_native_metadata_ranges_cold.py",
+      "scripts/run_native_peer_1m_worker.py",
+      "scripts/run_native_peer_offered_http.py",
+      "scripts/run_native_semantic_1m_cold.py",
+      "scripts/run_native_semantic_1m_offered.py",
+      "scripts/run_native_semantic_1m_quality.py",
+      "scripts/run_native_semantic_router_cold.py",
+      "scripts/run_native_union_http.py",
+      "scripts/run_native_union_offered_http.py",
+      "scripts/select_v36_rank16_fresh_ids.py"
+    ],
+    "third_party": [
+      "boto3",
+      "botocore",
+      "pyarrow"
+    ],
+    "runtime_external_actions_denied": [
+      "socket.connect",
+      "socket.getaddrinfo",
+      "subprocess.Popen",
+      "os.system"
+    ],
+    "real_sdk": true,
+    "sys_modules_mocks": false,
+    "sdk_clients_created": false
+  },
+  "status": "PASS",
+  "dependency_metadata": {
+    "boto3": [
+      "botocore (<1.41.0,>=1.40.72)",
+      "jmespath (<2.0.0,>=0.7.1)",
+      "s3transfer (<0.15.0,>=0.14.0)",
+      "botocore[crt] (<2.0a0,>=1.21.0) ; extra == 'crt'"
+    ],
+    "botocore": [
+      "jmespath (<2.0.0,>=0.7.1)",
+      "python-dateutil (<3.0.0,>=2.1)",
+      "urllib3 (<1.27,>=1.25.4) ; python_version < \"3.10\"",
+      "urllib3 (!=2.2.0,<3,>=1.25.4) ; python_version >= \"3.10\"",
+      "awscrt (==0.27.6) ; extra == 'crt'"
+    ],
+    "s3transfer": [
+      "botocore (<2.0a.0,>=1.37.4)",
+      "botocore[crt] (<2.0a.0,>=1.37.4) ; extra == 'crt'"
+    ],
+    "jmespath": null,
+    "python-dateutil": [
+      "six >=1.5"
+    ],
+    "six": null,
+    "urllib3": [
+      "brotli>=1.2.0; (platform_python_implementation == 'CPython') and extra == 'brotli'",
+      "brotlicffi>=1.2.0.0; (platform_python_implementation != 'CPython') and extra == 'brotli'",
+      "h2<5,>=4; extra == 'h2'",
+      "pysocks!=1.5.7,<2.0,>=1.5.6; extra == 'socks'",
+      "backports-zstd>=1.0.0; (python_version < '3.14') and extra == 'zstd'"
+    ]
+  },
+  "download": {
+    "command": [
+      "timeout",
+      "--signal=TERM",
+      "--kill-after=5",
+      "120",
+      "/tmp/borsuk-offered-sdk-bootstrap-venv/bin/python",
+      "-m",
+      "pip",
+      "download",
+      "--disable-pip-version-check",
+      "--retries",
+      "0",
+      "--timeout",
+      "15",
+      "--only-binary=:all:",
+      "--no-deps",
+      "--dest",
+      "/tmp/borsuk-offered-sdk-bootstrap-wheels",
+      "numpy==2.3.3",
+      "pyarrow==24.0.0",
+      "boto3==1.40.72",
+      "botocore==1.40.72",
+      "s3transfer==0.14.0",
+      "jmespath==1.0.1",
+      "python-dateutil==2.9.0",
+      "six==1.17.0",
+      "urllib3==2.6.3"
+    ],
+    "exit_code": 0,
+    "log": "/tmp/borsuk-offered-sdk-bootstrap-download.log",
+    "downloads": 1
+  },
+  "baseline_install": {
+    "command": [
+      "timeout",
+      "--signal=TERM",
+      "--kill-after=5",
+      "120",
+      "/usr/bin/time",
+      "-v",
+      "-o",
+      "/tmp/borsuk-offered-sdk-bootstrap-baseline-install.time",
+      "/tmp/borsuk-offered-sdk-bootstrap-venv/bin/python",
+      "-m",
+      "pip",
+      "install",
+      "--disable-pip-version-check",
+      "--no-index",
+      "--find-links=/tmp/borsuk-offered-sdk-bootstrap-wheels",
+      "--only-binary=:all:",
+      "--no-deps",
+      "numpy==2.3.3",
+      "pyarrow==24.0.0"
+    ],
+    "exit_code": 0,
+    "log": "/tmp/borsuk-offered-sdk-bootstrap-baseline-install.log"
+  },
+  "regression_self_check_red": {
+    "command": [
+      "timeout",
+      "55",
+      "/usr/bin/time",
+      "-v",
+      "-o",
+      "/tmp/borsuk-offered-sdk-bootstrap-selfcheck-red.time",
+      "python3",
+      "scripts/launch_native_semantic_1m_offered_spot.py",
+      "--self-check"
+    ],
+    "exit_code": 1,
+    "log": "/tmp/borsuk-offered-sdk-bootstrap-selfcheck-red.log",
+    "expected_failure": "AssertionError: bootstrap dependency closure"
+  },
+  "timing_reports": {
+    "self-check": {
+      "path": "/tmp/borsuk-offered-sdk-bootstrap-self-check.time",
+      "peak_rss_bytes": 87306240
+    },
+    "contract-install": {
+      "path": "/tmp/borsuk-offered-sdk-bootstrap-contract-install.time",
+      "peak_rss_bytes": 63221760
+    },
+    "baseline-install": {
+      "path": "/tmp/borsuk-offered-sdk-bootstrap-baseline-install.time",
+      "peak_rss_bytes": 96694272
+    }
+  },
+  "commit": "b6b07312b02b8c30fadc5ab52af63fe848c82cab",
+  "committed_parent": "eee22ddc1bafabab8b9305eb1f37a8d54ec65b08",
+  "committed_files": [
+    "scripts/launch_native_semantic_1m_offered_spot.py"
+  ],
+  "clean_worktree": true
+}
