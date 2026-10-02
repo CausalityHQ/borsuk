@@ -1,0 +1,59 @@
+{
+  "ann_quality_measured": false,
+  "authority_pending": true,
+  "build_limit_seconds": 3600,
+  "compute_cap_usd": 1.25,
+  "construction_authority_pending": true,
+  "corpus_inputs": {
+    "order": {
+      "bytes": 8000000,
+      "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/order.u64",
+      "sha256": "25672572b8e36eafea6ba856068f33aca5064e3ce02544340f682cd39881ea02"
+    },
+    "raw": {
+      "bytes": 3072000000,
+      "key": "research/v261-cohere-dual-graph-1m/2dee58896e42f84d74e2653dc0960e19d6defc63/runs/a0001/artifacts/vectors.raw",
+      "producer_terminal": {
+        "key": "research/v261-cohere-dual-graph-1m/2dee58896e42f84d74e2653dc0960e19d6defc63/runs/a0001/terminal.json",
+        "sha256": "00c7d4803354f15d5f62bea6e53fd0672a0f5fc91cc482e1fa4b20b8951a9f82"
+      },
+      "sha256": "6c82a340e3e1b4226640e593efa9c4000c6a5962d4b13063093a1dab689a9005"
+    },
+    "root_manifest": {
+      "bytes": 33963,
+      "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/manifest.json",
+      "sha256": "a4eb4851c545e828f3d08181a0c3e9cca09ed9341032ee3e69c511b9b7caf67e"
+    },
+    "sq8": {
+      "bytes": 780000000,
+      "key": "research/native-union/20260929/cohere-source-1m-v4/objects/b2f2f7dbec79c8646495b4a1500c363c5ccbf51690cf1e936d1264e7ee3839e1",
+      "sha256": "b2f2f7dbec79c8646495b4a1500c363c5ccbf51690cf1e936d1264e7ee3839e1"
+    }
+  },
+  "cpu_quota_percent": 200,
+  "dataset": "CoHere",
+  "dimensions": 768,
+  "ebs_s3_allowance_usd": 0.15,
+  "k": 100,
+  "machine_limit_seconds": 9000,
+  "metric": "cosine",
+  "native_payload_admission_bytes": 536870912,
+  "original_preparation_campaign_status": "FAIL",
+  "profile": "fresh1m",
+  "quality_gate": {
+    "all_queries_frozen_before_truth": true,
+    "mean_returned_recall_at_10_minimum": 0.95,
+    "query_replacement_allowed": false,
+    "recall_at_100_report_only": true
+  },
+  "queries": 64,
+  "remote_cgroup_memory_max_bytes": 4294967296,
+  "remote_swap_max_bytes": 0,
+  "rows": 1000000,
+  "schema": "borsuk-cohere-semantic-1m-prospective-quality-v1",
+  "score_limit_seconds": 900,
+  "service_limit_seconds": 7200,
+  "source_software_limits": "unchanged fresh1m profile; report actual GET/bytes and bounded admission failures; not universal product ceilings",
+  "tasks_max": 512,
+  "threads": 2
+}
