@@ -1,0 +1,73 @@
+{
+  "schema": "borsuk-fixed48-closed-diagnostic-decomposition-v1",
+  "qualification": "UNQUALIFIED: original a4 execution INVALID; cleanup gate failed",
+  "records": {
+    "path": "screen/records.jsonl",
+    "bytes": 1443375,
+    "sha256": "28ef526f8c0b573904584277313fcb5d645b6501462a66fead35b1b1aaddb924"
+  },
+  "population": 64,
+  "quantile_method": "linear interpolation matching frozen runtime source; not nearest-rank",
+  "wall_ms": {
+    "discovery": {
+      "p50": 103.726281,
+      "p90": 123.2909633,
+      "p95": 125.80599025,
+      "p99": 184.06523158999983
+    },
+    "source": {
+      "p50": 111.80474799999999,
+      "p90": 151.35163150000002,
+      "p95": 168.46950099999995,
+      "p99": 216.45758872999994
+    },
+    "planning": {
+      "p50": 12.7011055,
+      "p90": 18.1915024,
+      "p95": 19.534008299999996,
+      "p99": 20.38333752
+    },
+    "sq8": {
+      "p50": 89.67207450000001,
+      "p90": 107.27253230000002,
+      "p95": 125.78574429999995,
+      "p99": 140.76870592
+    },
+    "before_connect": {
+      "p50": 186.3305105,
+      "p90": 218.8569246,
+      "p95": 226.42836959999997,
+      "p99": 244.21311521
+    },
+    "head_read": {
+      "p50": 82.157563,
+      "p90": 98.2022706,
+      "p95": 101.85989524999998,
+      "p99": 113.44717344999994
+    },
+    "remote_open": {
+      "p50": 89.2681455,
+      "p90": 106.8719646,
+      "p95": 116.50720694999998,
+      "p99": 130.61894390999998
+    },
+    "native_query": {
+      "p50": 318.9713295,
+      "p90": 392.5964586,
+      "p95": 415.24140664999993,
+      "p99": 439.6857501
+    },
+    "query_process_cpu": {
+      "p50": 130.0,
+      "p90": 140.0,
+      "p95": 150.0,
+      "p99": 153.7
+    }
+  },
+  "notes": [
+    "Component percentiles must not be summed into an end-to-end percentile.",
+    "Per-process CPU sampled around POST; includes all process threads and native overhead, not per-stage CPU.",
+    "Read-only decomposition of authenticated terminal rows; no new ANN execution, quality or protocol change."
+  ],
+  "next_decisive_gate": "Fix per-call scratch ownership and preserve failure closure; then qualify a fresh unchanged-quality cold protocol before offered throughput/performance intervention."
+}
