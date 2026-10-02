@@ -1,0 +1,19 @@
+{
+  "worker_commit": "a47f40255529c9a71b0e697a9ad7265acc8864de",
+  "root_integration_commit": "792939a9",
+  "owned_file": "scripts/launch_cohere_semantic_artifact_reproduction_spot.py",
+  "owned_file_sha256": "aa6fd1bd9dac7f659e1d9be305dd6df445a6391301ceeff5ec914bcc1e4b2c12",
+  "root_self_check_exit": 0,
+  "memory_limit_bytes": 268435456,
+  "timeout_seconds": 55,
+  "checks": [
+    "real generated upload from default service cwd",
+    "success marker last and failed upload suppresses marker",
+    "real Git collection admits only own untracked output",
+    "changed source/config/code reject",
+    "existing closed body and lifecycle authentication"
+  ],
+  "log_sha256": "9d7309a15365f0b18bc8019242d8dc0c688a688dbc8aa51b6e383a4cdec6bf9a",
+  "old_attempt_status": "FAIL preserved",
+  "new_remote_run": false
+}
