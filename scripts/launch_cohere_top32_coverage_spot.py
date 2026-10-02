@@ -365,7 +365,7 @@ def stage(repo, out, prefix):
         assert closure['wall_seconds'] <= WORKER_SECONDS
         write(out / 'coverage-closure.json', closure)
         write(out / 'profile-cgroup.json', counters)
-        validate_coverage(out, proof, prefix, repo)
+        validate_coverage(out, proof, prefix, repo, collected=False)
         status.update(status='complete', helper_exit_code=0)
         write(out / 'failure.json', status)
         return closure
@@ -390,7 +390,7 @@ def stage(repo, out, prefix):
         write(out / 'coverage-closure.json', closure)
 
 
-def validate_coverage(out, proof, prefix, repo):
+def validate_coverage(out, proof, prefix, repo, *, collected=True):
     out,repo = Path(out),Path(repo).resolve()
     helper = helper_module(repo)
     screen = out / 'screen'
@@ -415,9 +415,12 @@ def validate_coverage(out, proof, prefix, repo):
     assert versions['threads'] == 2 and versions['aws_max_attempts'] == 1
     assert versions['thread_environment'] == dict.fromkeys(THREAD_ENV,'2')
     assert versions['python'].startswith('3.12.') and (out / 'cpu.txt').read_text().strip()
-    timing = (out / 'profile-resources.txt').read_text()
-    assert 0 <= int(timing.split('Maximum resident set size (kbytes): ',1)[1].splitlines()[0]) * 1024 <= MEMORY
-    assert int(timing.split('Exit status: ',1)[1].splitlines()[0]) == 0
+    # The enclosing GNU time writes its final fields only after stage exits.
+    # Stage admission uses the closed process, cgroup and helper reports below.
+    if collected:
+        timing = (out / 'profile-resources.txt').read_text()
+        assert 0 <= int(timing.split('Maximum resident set size (kbytes): ',1)[1].splitlines()[0]) * 1024 <= MEMORY
+        assert int(timing.split('Exit status: ',1)[1].splitlines()[0]) == 0
     for name in ('resources.json','final-resources.json'):
         report = json.loads((screen / name).read_bytes())
         assert report['schema'] == 'borsuk-cohere-top32-preparation-resources-v1' and report['passed'] is True
