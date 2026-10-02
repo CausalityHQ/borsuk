@@ -1,0 +1,10 @@
+{
+  "source_commit": "f344bf28",
+  "selfcheck_exit": 0,
+  "historical_validation_exit": 0,
+  "checks": 68,
+  "read_only": true,
+  "measurement_rerun": false,
+  "native_source_unchanged": true,
+  "original_collection_fail_preserved": true
+}
