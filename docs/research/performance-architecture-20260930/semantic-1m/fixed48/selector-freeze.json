@@ -1,0 +1,33 @@
+{
+  "actual_selection_executed": false,
+  "artifacts": {
+    "decision.md": {
+      "bytes": 3387,
+      "sha256": "2222c69b71713b6b1f6992204a9563871c321312c2199aa5fe6d78e670027f70"
+    },
+    "selector-protocol.json": {
+      "bytes": 8573,
+      "sha256": "f521c49f1abdcf9bcf72f445186a5349a4831972aeb4933e86afca6f726b37c2"
+    }
+  },
+  "metadata_only": true,
+  "remaining_gates": [
+    "authenticate selected locators before vector preparation",
+    "raw and normalized duplicate audit before ground truth",
+    "exact-source Rust qualification",
+    "all nominations sealed before one ground-truth pass"
+  ],
+  "replacement_allowed": false,
+  "root_self_check": {
+    "exit_status": 0,
+    "memory_limit_bytes": 268435456,
+    "synthetic_only": true,
+    "timeout_seconds": 55
+  },
+  "schema": "borsuk-fixed48-selector-freeze-v1",
+  "selector": {
+    "path": "scripts/select_cohere_fixed48_fresh64.py",
+    "sha256": "bf9170bd46ffec1f2f5638f92056b0f7be30f177b3b2595e80e011115554e269"
+  },
+  "selector_commit": "7b7d17a2"
+}
