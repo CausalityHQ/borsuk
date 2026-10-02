@@ -9,6 +9,7 @@ controller_code_sha256={every CODE path:SHA256}, native_source_manifest=
 --startup-wave8-implementation reuses that lifecycle with separate authority.
 --root-reuse-implementation qualifies a root-frozen authenticated-root candidate.
 --bounded-publication-implementation qualifies the exact bounded publisher candidate.
+--fixed48-implementation qualifies the source-only fixed48 routing candidate.
 CLI aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT.
 """
 import contextlib
@@ -50,7 +51,29 @@ IMPLEMENTATION = False
 STARTUP_WAVE8 = False
 ROOT_REUSE = False
 BOUNDED_PUBLICATION = False
+FIXED48 = False
 # Historical source fixture only; production authority is the root-frozen manifest.
+FIXED48_CHECK_COMMIT = '5efb136e95956b0cea0aa38214299a42f4264684'
+FIXED48_CHECK_CONTROL = 'f86ee6a80ace374d6674c9b65ea9141fc4a7de36'
+FIXED48_DELTA = ('crates/borsuk/src/bin/check_semantic_router_scorer.rs',
+                 'crates/borsuk/src/semantic_unit_router.rs',
+                 'crates/borsuk/src/two_bit_generation.rs')
+FIXED48_STAGE_SCHEMA = 'borsuk-fixed48-implementation-stage-v1'
+FIXED48_REQUIRED_TESTS = {
+    'semantic-unit-router-tests': (
+        'semantic_unit_router::tests::fresh48_seed_completion_retains_all_3072_units_and_512_pages',
+        'semantic_unit_router::tests::fresh_binary_root_selected_leaves_and_scattered_closure_without_training'),
+    'source-walk-tests': (
+        'two_bit_generation::source_walk_tests::semantic_object_store_parity',
+        'two_bit_generation::source_walk_tests::fresh48_source_walk_completes_512_pages_once_and_rejects_excess_before_io')}
+FIXED48_STAGES = tuple((name, command.split()) for name, command in (
+    ('semantic-unit-router-tests', 'cargo test --locked -p borsuk --lib semantic_unit_router::'),
+    ('source-walk-tests', 'cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::'),
+    ('semantic-router-scorer-tests', 'cargo test --locked -p borsuk --bin check_semantic_router_scorer'),
+    ('generation-integration', 'cargo test --locked -p borsuk --test two_bit_generation'),
+    ('release', 'cargo build --locked -p borsuk --release --example two_bit_http --bin check_semantic_router_scorer --bin two_bit_plan_demo'),
+    ('clippy', 'cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious'),
+    ('test-build', 'env -u BORSUK_TEST_BUILD_COMMAND bash scripts/check_rust_test_build.sh')))
 BOUNDED_PUBLICATION_CHECK_COMMIT = 'da56bcb080f559c81886e4e603226bd5e5415564'
 BOUNDED_PUBLICATION_CHECK_CONTROL = '68294a2e67a298006ac79f4dfc96e76e1f7a4ddf'
 BOUNDED_PUBLICATION_CHECK_IDENTITY = 'e8c0e6b3d42b5e73ae6faa558c5337b8d25bc8b444d660704256e4c1ec0d1f74'
@@ -119,13 +142,13 @@ def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 
 
-def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False):
+def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False):
     """Select the protocol explicitly in every controller/worker process."""
-    global SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, NATIVE_DELTA, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
+    global SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, NATIVE_DELTA, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
     global SCHEMA, CONFIG_SCHEMA, RECEIPT_SCHEMA, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, TERMINAL_IDENTITIES
-    assert type(semantic_1m) is type(test_build) is type(implementation) is type(startup_wave8) is type(root_reuse) is type(bounded_publication) is bool
-    scoped = startup_wave8 or root_reuse or bounded_publication
-    assert sum((startup_wave8, root_reuse, bounded_publication)) <= 1 and not (scoped and test_build), 'mutually exclusive execution modes'
+    assert type(semantic_1m) is type(test_build) is type(implementation) is type(startup_wave8) is type(root_reuse) is type(bounded_publication) is type(fixed48) is bool
+    scoped = startup_wave8 or root_reuse or bounded_publication or fixed48
+    assert sum((startup_wave8, root_reuse, bounded_publication, fixed48)) <= 1 and not (scoped and test_build), 'mutually exclusive execution modes'
     if scoped:
         semantic_1m = implementation = True
     assert not (test_build and implementation), 'mutually exclusive execution modes'
@@ -136,8 +159,9 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
     STARTUP_WAVE8 = startup_wave8
     ROOT_REUSE = root_reuse
     BOUNDED_PUBLICATION = bounded_publication
-    NATIVE_DELTA = BOUNDED_PUBLICATION_DELTA if bounded_publication else ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
-    RELEASE_ARTIFACTS = ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
+    FIXED48 = fixed48
+    NATIVE_DELTA = FIXED48_DELTA if fixed48 else BOUNDED_PUBLICATION_DELTA if bounded_publication else ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
+    RELEASE_ARTIFACTS = ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
     TERMINAL_IDENTITIES = (*FULL_TERMINAL_IDENTITIES, 'controller_source_commit', 'candidate_delta_paths') if scoped else FULL_TERMINAL_IDENTITIES
     ARTIFACTS = (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS) if implementation else FULL_ARTIFACTS
     ROOT = (semantic.ROOT.parent/'semantic-1m' if semantic_1m else semantic.ROOT/'metadata-waves') / ('implementation-gates/remote-implementation' if implementation else 'implementation-gates/remote-test-build' if test_build else 'implementation-gates/remote-full')
@@ -194,21 +218,32 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
         RECEIPT_SCHEMA = 'borsuk-bounded-publication-implementation-gates-receipt-v1'
         CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_bounded_publication_implementation.sh')
         FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_bounded_publication_implementation.sh'])
+    if fixed48:
+        ROOT = semantic.ROOT.parent/'semantic-1m/fixed48/implementation-gates'
+        CONFIG = ROOT/'config.json'
+        TOKEN_PREFIX = 'fixed48-implementation-'
+        PREFIX = 'research/semantic-router/20261002/' + TOKEN_PREFIX
+        TAG = 'borsuk-fixed48-implementation'
+        SCHEMA = 'borsuk-fixed48-implementation-gates-spot-v1'
+        CONFIG_SCHEMA = 'borsuk-fixed48-implementation-gates-v1'
+        RECEIPT_SCHEMA = 'borsuk-fixed48-implementation-gates-receipt-v1'
+        CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_fixed48_implementation.sh')
+        FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_fixed48_implementation.sh'])
 
 
 @contextlib.contextmanager
-def execution_mode(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False):
+def execution_mode(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False):
     """Restore the caller's protocol after a worker or synthetic check."""
-    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION
-    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication)
+    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48)
     try:
         yield
     finally:
-        configure(previous[0], test_build=previous[1], implementation=previous[2], startup_wave8=previous[3], root_reuse=previous[4], bounded_publication=previous[5])
+        configure(previous[0], test_build=previous[1], implementation=previous[2], startup_wave8=previous[3], root_reuse=previous[4], bounded_publication=previous[5], fixed48=previous[6])
 
 
 def mode_flag():
-    return ' --bounded-publication-implementation' if BOUNDED_PUBLICATION else ' --root-reuse-implementation' if ROOT_REUSE else ' --startup-wave8-implementation' if STARTUP_WAVE8 else ' --semantic-1m-implementation' if IMPLEMENTATION else ' --semantic-1m-test-build' if TEST_BUILD else ' --semantic-1m' if SEMANTIC_1M else ''
+    return ' --fixed48-implementation' if FIXED48 else ' --bounded-publication-implementation' if BOUNDED_PUBLICATION else ' --root-reuse-implementation' if ROOT_REUSE else ' --startup-wave8-implementation' if STARTUP_WAVE8 else ' --semantic-1m-implementation' if IMPLEMENTATION else ' --semantic-1m-test-build' if TEST_BUILD else ' --semantic-1m' if SEMANTIC_1M else ''
 
 
 def qualify(base=Path('.')):
@@ -227,9 +262,9 @@ def qualify(base=Path('.')):
     assert type(pointer['bytes']) is int and pointer['bytes'] > 0
     assert worker.artifact(base/path) == {key:pointer[key] for key in ('bytes','sha256')}, 'manifest authority'
     manifest = json.loads((base/path).read_bytes())
-    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION:
+    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
         assert re.fullmatch('[0-9a-f]{40}', config['controller_source_commit']), 'frozen controller commit'
-        assert manifest['schema'] == ('borsuk-bounded-publication-native-source-manifest-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
+        assert manifest['schema'] == ('borsuk-fixed48-native-source-manifest-v1' if FIXED48 else 'borsuk-bounded-publication-native-source-manifest-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
         assert manifest['candidate_qualification_pending'] is True, 'source authority is not completed assurance'
         assert type(manifest['candidate_delta_paths']) is list and manifest['candidate_delta_paths'] == list(NATIVE_DELTA), 'exact candidate native delta'
         if STARTUP_WAVE8:
@@ -243,7 +278,7 @@ def qualify(base=Path('.')):
     assert identity == manifest['source_identity_sha256']
     assert SEMANTIC_1M or identity == SOURCE_IDENTITY, 'historical native source identity'
     assert re.fullmatch('[0-9a-f]{40}', manifest['native_source_commit'])
-    proof = dict(schema='borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
+    proof = dict(schema='borsuk-fixed48-implementation-gates-qualification-v1' if FIXED48 else 'borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
         config_path=str(CONFIG), config_sha256=worker.sha(body), campaign_schema=SCHEMA,
         source_sha256=inventory, source_identity_sha256=identity, source_file_count=399,
         native_source_commit=manifest['native_source_commit'], native_source_manifest=pointer,
@@ -256,7 +291,7 @@ def qualify(base=Path('.')):
         proof.update(execution_kind=FIXED['execution_kind'])
         if TEST_BUILD:
             proof.update(actual_workspace_test_build=False)
-    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION:
+    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
         proof.update(controller_source_commit=config['controller_source_commit'],
                      candidate_delta_paths=list(NATIVE_DELTA))
     return proof
@@ -264,7 +299,7 @@ def qualify(base=Path('.')):
 
 def preflight(base=Path('.')):
     assert not subprocess.check_output(['git','status','--porcelain'], cwd=base, text=True).strip(), 'dirty source'
-    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION:
+    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
         proof = qualify(base)
         parents = subprocess.check_output(['git','rev-list','--parents','-n','1','HEAD'], cwd=base, text=True).split()
         assert len(parents) == 2, 'one source-bundle parent required'
@@ -296,35 +331,59 @@ def stage(repo, out):
     return proof
 
 
-def validate_bounded_publication_stages(log):
+def validate_bounded_publication_stages(log, *, fixed48=False):
     from datetime import datetime
+    stages = FIXED48_STAGES if fixed48 else BOUNDED_PUBLICATION_STAGES
+    schema = FIXED48_STAGE_SCHEMA if fixed48 else BOUNDED_PUBLICATION_STAGE_SCHEMA
+    named_stages = {test: index for index, (name, _) in enumerate(stages)
+        for test in FIXED48_REQUIRED_TESTS.get(name, ())} if fixed48 else {BOUNDED_PUBLICATION_CAP_TEST: 1}
+    passes = dict.fromkeys(named_stages, 0)
+    test_counts = [0]*4
     records = []
-    cap_test_passes = 0
     with Path(log).open() as source:
         for line in source:
-            if line.rstrip() == 'test '+BOUNDED_PUBLICATION_CAP_TEST+' ... ok':
-                assert len(records) == 3, 'cap fixture must execute in stage two'
-                cap_test_passes += 1
+            match = re.fullmatch(r'test (\S+) \.\.\. ok\n?', line)
+            if match and match[1] in named_stages:
+                test = match[1]
+                assert len(records) == 2*named_stages[test]+1, 'named test in wrong stage: '+test
+                passes[test] += 1
+            if fixed48:
+                summary = re.fullmatch(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; \d+ ignored; \d+ measured; \d+ filtered out;.*\n?', line)
+                if summary:
+                    assert len(records) in (1, 3, 5, 7), 'tests outside the four execution stages'
+                    assert int(summary[2]) == 0, 'failed tests'
+                    test_counts[len(records)//2] += int(summary[1])
             if not line.startswith('{'):
                 continue
             try:
                 record = json.loads(line)
             except ValueError:
                 continue
-            if isinstance(record, dict) and record.get('schema') == BOUNDED_PUBLICATION_STAGE_SCHEMA:
+            if isinstance(record, dict) and record.get('schema') == schema:
                 records.append(record)
-                assert len(records) <= 2*len(BOUNDED_PUBLICATION_STAGES), 'extra gate stage records'
-    assert len(records) == 2*len(BOUNDED_PUBLICATION_STAGES), 'seven completed stages required'
-    assert cap_test_passes == 1, 'cap fixture must pass exactly once'
-    for index, (name, command) in enumerate(BOUNDED_PUBLICATION_STAGES):
+                assert len(records) <= 2*len(stages), 'extra gate stage records'
+    assert len(records) == 2*len(stages), 'seven completed stages required'
+    assert all(count == 1 for count in passes.values()), 'named tests must pass exactly once'
+    previous_finish = None
+    for index, (name, command) in enumerate(stages):
         start, end = records[2*index:2*index+2]
         assert start['stage'] == end['stage'] == name and start['command'] == end['command'] == command
-        assert start['finished_at'] is start['exit_status'] is start['gate_status'] is start['tests_run'] is start['publication_cap_test_passed'] is None
+        test_field = 'required_test_passes' if fixed48 else 'publication_cap_test_passed'
+        assert start['finished_at'] is start['exit_status'] is start['gate_status'] is start['tests_run'] is start[test_field] is None
         assert type(end['exit_status']) is type(end['gate_status']) is int and end['exit_status'] == end['gate_status'] == 0
         assert start['started_at'] == end['started_at']
         assert datetime.fromisoformat(end['finished_at']) >= datetime.fromisoformat(start['started_at'])
         assert (type(end['tests_run']) is int and end['tests_run'] > 0) if index < 4 else end['tests_run'] is None
-        assert end['publication_cap_test_passed'] is True if index == 1 else end['publication_cap_test_passed'] is None
+        if fixed48:
+            assert index >= 4 or end['tests_run'] == test_counts[index], 'actual test count'
+            expected = {test: passes[test] for test in FIXED48_REQUIRED_TESTS.get(name, ())}
+            assert end[test_field] == expected and all(type(count) is int for count in end[test_field].values()), 'actual named test passes'
+            started, finished = datetime.fromisoformat(start['started_at']), datetime.fromisoformat(end['finished_at'])
+            assert started.utcoffset().total_seconds() == finished.utcoffset().total_seconds() == 0, 'UTC stage timestamps'
+            assert previous_finish is None or started >= previous_finish, 'serial stage timestamps'
+            previous_finish = finished
+        else:
+            assert end[test_field] is True if index == 1 else end[test_field] is None
     return records[1::2]
 
 
@@ -346,7 +405,7 @@ def validate_receipt(out, proof):
         assert receipt['command'][1:] == list(worker.COMMAND[1:]), 'exact full command'
     assert isinstance(receipt['command'][0], str) and receipt['command'][0]
     assert receipt['environment'] == FIXED['environment']
-    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION:
+    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
         assert all(receipt[key] == proof[key] for key in ('controller_source_commit','candidate_delta_paths')), 'receipt source bundle authority'
     assert receipt['source_sha256'] == proof['source_sha256']
     assert receipt['source_identity_sha256'] == worker.source_identity(receipt['source_sha256']) == proof['source_identity_sha256']
@@ -370,8 +429,8 @@ def validate_receipt(out, proof):
     assert worker.artifact(out/'native-source-manifest.json')['sha256'] == proof['native_source_manifest_sha256']
     for name in ('source-before.json','source-after.json'):
         assert json.loads((out/name).read_bytes()) == proof['source_sha256']
-    if BOUNDED_PUBLICATION:
-        assert receipt['stages'] == validate_bounded_publication_stages(out/'test.log'), 'actual stage receipt'
+    if BOUNDED_PUBLICATION or FIXED48:
+        assert receipt['stages'] == validate_bounded_publication_stages(out/'test.log', fixed48=FIXED48), 'actual stage receipt'
     worker.validate_cgroup(json.loads((out/'workspace-cgroup.json').read_bytes()))
     return receipt
 
@@ -520,7 +579,7 @@ def _worker_self_check(proof, config_body, manifest_body):
     failures = ('success', 'exit17', 'timeout', 'source-drift', 'reclaim', 'oom', 'peak', 'orphan', 'log-fsync')
     if IMPLEMENTATION:
         failures += ('missing-binary', 'bad-binary', 'symlink-binary', 'copy-failure')
-    if BOUNDED_PUBLICATION:
+    if BOUNDED_PUBLICATION or FIXED48:
         failures += ('missing-stage', 'zero-stage-record', 'stage-order', 'stage-bool', 'missing-cap-proof')
     for failure in failures:
         with tempfile.TemporaryDirectory() as tmp:
@@ -559,22 +618,31 @@ def _worker_self_check(proof, config_body, manifest_body):
                     assert 'BORSUK_TEST_BUILD_COMMAND' not in kw['env']
                 assert not Path(kw['env']['CARGO_TARGET_DIR']).is_relative_to(repo)
                 kw['stdout'].write(b'full mocked cargo log\n')
-                if BOUNDED_PUBLICATION:
-                    stages = list(BOUNDED_PUBLICATION_STAGES)
+                if BOUNDED_PUBLICATION or FIXED48:
+                    stages = list(FIXED48_STAGES if FIXED48 else BOUNDED_PUBLICATION_STAGES)
                     if failure == 'stage-order':
                         stages.reverse()
                     for index, (name, command) in enumerate(stages):
                         if failure == 'missing-stage' and index == 6:
                             continue
-                        record = dict(schema=BOUNDED_PUBLICATION_STAGE_SCHEMA, stage=name,
+                        record = dict(schema=FIXED48_STAGE_SCHEMA if FIXED48 else BOUNDED_PUBLICATION_STAGE_SCHEMA, stage=name,
                             command=command, started_at='2026-10-02T00:00:00Z',
-                            finished_at=None, exit_status=None, gate_status=None, tests_run=None, publication_cap_test_passed=None)
+                            finished_at=None, exit_status=None, gate_status=None, tests_run=None)
+                        field = 'required_test_passes' if FIXED48 else 'publication_cap_test_passed'
+                        record[field] = None
                         kw['stdout'].write(encoded(record)+b'\n')
-                        if index == 1 and failure != 'missing-cap-proof':
+                        named = FIXED48_REQUIRED_TESTS.get(name, ()) if FIXED48 else ()
+                        if FIXED48:
+                            if failure != 'missing-cap-proof':
+                                for test in named:
+                                    kw['stdout'].write(('test '+test+' ... ok\n').encode())
+                            if index < 4:
+                                kw['stdout'].write(f'test result: ok. {max(1, len(named))} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s\n'.encode())
+                        elif index == 1 and failure != 'missing-cap-proof':
                             kw['stdout'].write(('test '+BOUNDED_PUBLICATION_CAP_TEST+' ... ok\n').encode())
                         record.update(finished_at=record['started_at'], exit_status=0, gate_status=0,
-                            tests_run=(0 if failure == 'zero-stage-record' else False if failure == 'stage-bool' else 1) if index < 4 else None,
-                            publication_cap_test_passed=(failure != 'missing-cap-proof') if index == 1 else None)
+                            tests_run=(0 if failure == 'zero-stage-record' else False if failure == 'stage-bool' else max(1, len(named))) if index < 4 else None)
+                        record[field] = {test: int(failure != 'missing-cap-proof') for test in named} if FIXED48 else (failure != 'missing-cap-proof') if index == 1 else None
                         kw['stdout'].write(encoded(record)+b'\n')
                 Path(args[args.index('-o')+1]).write_text('GNU time mocked resources\n')
                 if IMPLEMENTATION:
@@ -601,10 +669,10 @@ def _worker_self_check(proof, config_body, manifest_body):
                     contextlib.ExitStack() as patches:
                 if failure == 'copy-failure':
                     patches.enter_context(patch.object(worker.shutil, 'copyfileobj', side_effect=OSError('binary copy failed')))
-                previous = authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.CONFIG, authority.CODE, authority.FIXED
+                previous = authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.CONFIG, authority.CODE, authority.FIXED
                 result = worker.main('cargo' if TEST_BUILD or IMPLEMENTATION else 'fake-cargo', repo, out,
-                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION, startup_wave8=STARTUP_WAVE8, root_reuse=ROOT_REUSE, bounded_publication=BOUNDED_PUBLICATION)
-                assert previous == (authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.CONFIG, authority.CODE, authority.FIXED)
+                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION, startup_wave8=STARTUP_WAVE8, root_reuse=ROOT_REUSE, bounded_publication=BOUNDED_PUBLICATION, fixed48=FIXED48)
+                assert previous == (authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.CONFIG, authority.CODE, authority.FIXED)
             assert len(calls) == 1, 'full test repeated'
             assert type(result['exit_status']) is int
             assert result['exit_status'] == {'exit17':17, 'timeout':124}.get(failure,0)
@@ -642,12 +710,12 @@ def _worker_self_check(proof, config_body, manifest_body):
                             (out/'workspace-receipt.json').write_bytes(encoded(altered))
                             rejected(lambda: validate_receipt(out, proof))
                             (out/'workspace-receipt.json').write_bytes(encoded(result))
-                    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION:
+                    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
                         for changed in (dict(controller_source_commit='0'*40), dict(candidate_delta_paths=[])):
                             (out/'workspace-receipt.json').write_bytes(encoded(dict(result, **changed)))
                             rejected(lambda:validate_receipt(out, proof))
                         (out/'workspace-receipt.json').write_bytes(encoded(result))
-                    if BOUNDED_PUBLICATION:
+                    if BOUNDED_PUBLICATION or FIXED48:
                         assert len(result['stages']) == 7 and all(record['tests_run'] > 0 for record in result['stages'][:4])
                         for stages in ([], result['stages'][:-1], list(reversed(result['stages']))):
                             (out/'workspace-receipt.json').write_bytes(encoded(dict(result, stages=stages)))
@@ -749,7 +817,7 @@ def _collection_self_check(proof, files, body):
         mutations = [dict(terminal,config_sha256='0'*64), dict(terminal,instance_id='i-other'),
                      dict(terminal,source_archive_sha256='2'*64), dict(terminal,exit_code=False),
                      dict(terminal,artifacts={n:v for n,v in terminal['artifacts'].items() if n != 'test.log'})]
-        if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION:
+        if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
             mutations.extend((dict(terminal,controller_source_commit='0'*40),dict(terminal,candidate_delta_paths=[])))
         if IMPLEMENTATION:
             downloaded = out/'downloaded'
@@ -807,7 +875,7 @@ def _remote_self_check(native_manifest=None, config_draft=None, manifest_body=No
         for name in CODE:
             (repo/name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(base/name, repo/name)
-        if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION:
+        if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
             for name in native_manifest['source_sha256']:
                 path = repo/name
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -821,7 +889,7 @@ def _remote_self_check(native_manifest=None, config_draft=None, manifest_body=No
         inventory = worker.source_hashes(repo)
         manifest_path = ROOT/'native-source-manifest.json'
         (repo/manifest_path).parent.mkdir(parents=True)
-        manifest = native_manifest if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION else dict(source_sha256=inventory, source_file_count=399,
+        manifest = native_manifest if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 else dict(source_sha256=inventory, source_file_count=399,
             source_identity_sha256=worker.source_identity(inventory), native_source_commit='1'*40)
         assert manifest['source_sha256'] == inventory
         if manifest_body is None:
@@ -831,7 +899,7 @@ def _remote_self_check(native_manifest=None, config_draft=None, manifest_body=No
         config = dict(FIXED if config_draft is None else config_draft, controller_authority_pending=False,
             controller_code_sha256={n:worker.artifact(repo/n)['sha256'] for n in CODE},
             native_source_manifest=dict(path=str(manifest_path), **worker.artifact(repo/manifest_path)))
-        if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION:
+        if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
             config['controller_source_commit'] = '4'*40
         if config_draft is not None:
             assert config_draft['native_source_manifest'] == config['native_source_manifest'], 'actual draft manifest pointer'
@@ -868,6 +936,7 @@ def _remote_self_check(native_manifest=None, config_draft=None, manifest_body=No
             print(f'PASS actual temporary Git preflight: candidate={proof["native_source_commit"]}; source_files=399; delta={len(NATIVE_DELTA)}; userdata={len(bootstrap.encode())}; origin ref and archive digest synthetic')
         cargo = root/'cargo'
         cargo_commands = [['test', '--locked', '--workspace', '--all-targets', '--no-run'] if TEST_BUILD else list(worker.COMMAND[1:])]
+        stage_names = ()
         if IMPLEMENTATION:
             cargo_commands = [command.split() for command in (
                 'test --locked -p borsuk --lib two_bit_generation:: -- --test-threads=1',
@@ -905,11 +974,12 @@ def _remote_self_check(native_manifest=None, config_draft=None, manifest_body=No
                                'generation-integration','gc-integration','application-ids-integration',
                                'http-example-tests','release','clippy','test-build')
                 stage_schema = 'borsuk-root-reuse-implementation-stage-v1'
-            if BOUNDED_PUBLICATION:
-                cargo_commands = [command[1:] for _, command in BOUNDED_PUBLICATION_STAGES[:-1]] + [
+            if BOUNDED_PUBLICATION or FIXED48:
+                protocol = FIXED48_STAGES if FIXED48 else BOUNDED_PUBLICATION_STAGES
+                cargo_commands = [command[1:] for _, command in protocol[:-1]] + [
                     ['test','--locked','--workspace','--all-targets','--no-run']]
-                stage_names = tuple(name for name, _ in BOUNDED_PUBLICATION_STAGES)
-                stage_schema = BOUNDED_PUBLICATION_STAGE_SCHEMA
+                stage_names = tuple(name for name, _ in protocol)
+                stage_schema = FIXED48_STAGE_SCHEMA if FIXED48 else BOUNDED_PUBLICATION_STAGE_SCHEMA
         cargo.write_text(f'''#!{sys.executable}
 import json, os, sys
 from pathlib import Path
@@ -938,10 +1008,16 @@ else:
     if os.environ.get('MUTATE'):
         with Path(os.environ['MUTATE']).open('ab') as out: out.write(b' ')
     print('fake workspace cargo')
-    if {BOUNDED_PUBLICATION!r} and len(previous) < 4:
-        if len(previous) == 1 and os.environ.get('CARGO_CAP_TEST') != 'missing':
+    if {BOUNDED_PUBLICATION or FIXED48!r} and len(previous) < 4:
+        named = {FIXED48_REQUIRED_TESTS!r}.get({stage_names!r}[len(previous)], ()) if {FIXED48!r} else ()
+        for test in named:
+            case, affected = os.environ.get('CARGO_NAMED_TEST', '').split(':', 1) if ':' in os.environ.get('CARGO_NAMED_TEST', '') else ('', '')
+            if test == affected and case == 'missing': continue
+            print('test '+test+' ... '+('ignored' if test == affected and case == 'ignored' else 'ok'))
+            if test == affected and case == 'duplicate': print('test '+test+' ... ok')
+        if {BOUNDED_PUBLICATION!r} and len(previous) == 1 and os.environ.get('CARGO_CAP_TEST') != 'missing':
             print('test {BOUNDED_PUBLICATION_CAP_TEST} ... '+('ignored' if os.environ.get('CARGO_CAP_TEST') == 'ignored' else 'ok'))
-        count = 0 if len(previous)+1 == int(os.environ.get('CARGO_ZERO_STAGE', '0')) else 1
+        count = 0 if len(previous)+1 == int(os.environ.get('CARGO_ZERO_STAGE', '0')) else max(1, len(named))
         print(f'test result: ok. {{count}} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s')
     sys.exit(int(os.environ.get('CARGO_EXIT', '0')) if len(previous)+1 == int(os.environ.get('CARGO_FAIL_STAGE', '1')) else 0)
 ''')
@@ -982,7 +1058,7 @@ with patch.object(Path, 'read_text', read):
         env.pop('BORSUK_TEST_BUILD_COMMAND', None)
         flag = mode_flag().strip()
         cli = [sys.executable, '-m', MODULE, flag]
-        failures = [('success',None), ('exit17',None), ('native',NATIVE_DELTA[0] if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION else 'mock-0.rs'),
+        failures = [('success',None), ('exit17',None), ('native',NATIVE_DELTA[0] if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 else 'mock-0.rs'),
                     ('config',str(CONFIG)), ('code',CODE[0]), ('manifest',str(manifest_path))]
         if TEST_BUILD or IMPLEMENTATION:
             failures.append(('script','scripts/check_rust_test_build.sh'))
@@ -990,9 +1066,14 @@ with patch.object(Path, 'read_text', read):
             failures.append(('pipeline',FIXED['command'][1]))
             failures.append(('missing-binary',None))
             failures.extend((f'fail-stage-{stage}',None) for stage in range(2,len(cargo_commands)+1))
-        if BOUNDED_PUBLICATION:
+        if BOUNDED_PUBLICATION or FIXED48:
             failures.extend((f'zero-stage-{stage}',None) for stage in range(1,5))
+        if BOUNDED_PUBLICATION:
             failures.extend((name,None) for name in ('missing-cap-test','ignored-cap-test'))
+        if FIXED48:
+            failures.extend((case+'-named-'+test, None)
+                for names in FIXED48_REQUIRED_TESTS.values() for test in names
+                for case in ('missing', 'ignored', 'duplicate'))
         for failure, mutation in failures:
             out = root/failure
             out.mkdir()
@@ -1000,18 +1081,23 @@ with patch.object(Path, 'read_text', read):
             before = (repo/mutation).read_bytes() if mutation else None
             zero_tests = failure.startswith('zero-stage-')
             cap_failed = failure in ('missing-cap-test','ignored-cap-test')
-            failing_stage = 2 if cap_failed else int(failure.rsplit('-',1)[1]) if failure.startswith('fail-stage-') or zero_tests else 1
+            named_case, named_test = failure.split('-named-', 1) if '-named-' in failure else ('', '')
+            named_failed = bool(named_case)
+            named_stage = next((index+1 for index, (name, _) in enumerate(FIXED48_STAGES)
+                if named_test in FIXED48_REQUIRED_TESTS.get(name, ())), 1)
+            failing_stage = named_stage if named_failed else 2 if cap_failed else int(failure.rsplit('-',1)[1]) if failure.startswith('fail-stage-') or zero_tests else 1
             cargo_failed = failure == 'exit17' or failure.startswith('fail-stage-')
-            pipeline_failed = cargo_failed or zero_tests or cap_failed
+            pipeline_failed = cargo_failed or zero_tests or cap_failed or named_failed
             result = subprocess.run([sys.executable,'-c',runner,flag,str(cargo),str(repo),str(out)],
                 cwd=root, env=dict(env, MUTATE=str(repo/mutation) if mutation else '',
                                   CARGO_EXIT='17' if cargo_failed else '0', CARGO_FAIL_STAGE=str(failing_stage),
                                   CARGO_ZERO_STAGE=str(failing_stage) if zero_tests else '0',
                                   CARGO_CAP_TEST='missing' if failure == 'missing-cap-test' else 'ignored' if failure == 'ignored-cap-test' else 'ok',
+                                  CARGO_NAMED_TEST=named_case+':'+named_test if named_failed else '',
                                   MISSING_BINARY=Path(RELEASE_ARTIFACTS[-1]).name if failure == 'missing-binary' else ''), capture_output=True, text=True)
             assert result.returncode == (0 if failure == 'success' else 17 if cargo_failed else 96), result.stderr
             receipt = json.loads((out/'workspace-receipt.json').read_bytes())
-            assert receipt['exit_status'] == (17 if cargo_failed else 96 if zero_tests or cap_failed else 0)
+            assert receipt['exit_status'] == (17 if cargo_failed else 96 if zero_tests or cap_failed or named_failed else 0)
             assert receipt['qualified'] is (failure == 'success')
             assert receipt['source_file_count'] == 399 and (out/'cargo-called').exists()
             log = (out/'test.log').read_text()
@@ -1031,11 +1117,16 @@ with patch.object(Path, 'read_text', read):
                     assert start['stage'] == end['stage'] == stage_names[stage]
                     assert start['exit_status'] is start['finished_at'] is None
                     assert type(end['exit_status']) is int and end['exit_status'] == (17 if cargo_failed and stage == count-1 else 0)
-                    if BOUNDED_PUBLICATION:
-                        assert start['tests_run'] is start['gate_status'] is start['publication_cap_test_passed'] is None
-                        assert end['tests_run'] == (0 if zero_tests and stage == count-1 else 1) if stage < 4 else end['tests_run'] is None
-                        assert end['gate_status'] == (96 if (zero_tests or cap_failed) and stage == count-1 else end['exit_status'])
-                        assert end['publication_cap_test_passed'] is (not cap_failed) if stage == 1 else end['publication_cap_test_passed'] is None
+                    if BOUNDED_PUBLICATION or FIXED48:
+                        field = 'required_test_passes' if FIXED48 else 'publication_cap_test_passed'
+                        assert start['tests_run'] is start['gate_status'] is start[field] is None
+                        names = FIXED48_REQUIRED_TESTS.get(stage_names[stage], ()) if FIXED48 else ()
+                        assert end['tests_run'] == (0 if zero_tests and stage == count-1 else max(1, len(names))) if stage < 4 else end['tests_run'] is None
+                        assert end['gate_status'] == (96 if (zero_tests or cap_failed or named_failed) and stage == count-1 else end['exit_status'])
+                        if FIXED48:
+                            assert end[field] == {test: (2 if named_case == 'duplicate' else 0) if test == named_test else 1 for test in names}
+                        else:
+                            assert end[field] is (not cap_failed) if stage == 1 else end[field] is None
                     assert start['started_at'] == end['started_at']
                     assert datetime.fromisoformat(end['finished_at']) >= datetime.fromisoformat(start['started_at'])
                 bash_called = (out/'bash-called').read_text().splitlines()
@@ -1118,14 +1209,14 @@ with patch.object(Path, 'read_text', read):
                 checked = subprocess.run([sys.executable,'-m',MODULE,'--semantic-1m-test-build','--check-receipt',str(root/'success')],
                                          cwd=root, env=env, capture_output=True)
                 assert checked.returncode != 0, 'implementation receipt accepted as compile-only'
-                if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION:
+                if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
                     wrong = subprocess.run([sys.executable,'-c',runner,'--semantic-1m-implementation',str(cargo),str(repo),str(out)],
                                            cwd=root, env=env, capture_output=True)
                     assert wrong.returncode != 0 and not (out/'target').exists()
                     checked = subprocess.run([sys.executable,'-m',MODULE,'--semantic-1m-implementation','--check-receipt',str(root/'success')],
                                              cwd=root, env=env, capture_output=True)
                     assert checked.returncode != 0, 'startup-wave8 receipt accepted as semantic-1m implementation'
-                    for sibling in ('--startup-wave8-implementation', '--root-reuse-implementation', '--bounded-publication-implementation'):
+                    for sibling in ('--startup-wave8-implementation', '--root-reuse-implementation', '--bounded-publication-implementation', '--fixed48-implementation'):
                         if sibling == flag:
                             continue
                         wrong = subprocess.run([sys.executable,'-c',runner,sibling,str(cargo),str(repo),str(out)],
@@ -1254,12 +1345,109 @@ def _bounded_publication_protocol_self_check():
     assert previous == (CONFIG, PREFIX, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, mode_flag())
 
 
-def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication=False):
+def _fixed48_protocol_self_check():
+    import inspect
+    assert 'fixed48' in inspect.signature(configure).parameters, 'fixed48 mode missing'
+    previous = CONFIG, PREFIX, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, NATIVE_DELTA, mode_flag()
+    with execution_mode(fixed48=True):
+        assert str(CONFIG).endswith('semantic-1m/fixed48/implementation-gates/config.json')
+        assert PREFIX == 'research/semantic-router/20261002/fixed48-implementation-'
+        assert mode_flag() == ' --fixed48-implementation'
+        assert FIXED['command'] == ['bash', 'scripts/check_fixed48_implementation.sh']
+        assert CODE == (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_fixed48_implementation.sh')
+        assert NATIVE_DELTA == ('crates/borsuk/src/bin/check_semantic_router_scorer.rs',
+            'crates/borsuk/src/semantic_unit_router.rs', 'crates/borsuk/src/two_bit_generation.rs')
+        assert list(NATIVE_DELTA) == sorted(NATIVE_DELTA)
+        assert RELEASE_ARTIFACTS == ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo')
+        assert ARTIFACTS == (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS) and len(ARTIFACTS) == 16
+        assert CONFIG_SCHEMA == FIXED['schema'] == 'borsuk-fixed48-implementation-gates-v1'
+        assert SCHEMA == 'borsuk-fixed48-implementation-gates-spot-v1'
+        assert RECEIPT_SCHEMA == 'borsuk-fixed48-implementation-gates-receipt-v1'
+        assert FIXED['environment'] == dict(worker.ENVIRONMENT, BORSUK_TEST_BUILD_JOBS='1', BORSUK_TEST_BUILD_COMMAND=None)
+        assert FIXED['execution_kind'] == 'implementation-gates'
+        assert FIXED['memory_bytes'] == 8*1024**3 and FIXED['swap_bytes'] == 0
+        assert FIXED['cpu_quota_percent'] == 200 and FIXED['tasks_max'] == 512
+        assert FIXED['test_limit_seconds'] == 7200 and FIXED['service_limit_seconds'] == 7260
+        assert FIXED['machine_limit_seconds'] == WALL == 9000
+        assert FIXED['spot_max_usd_per_hour'] == .50
+        assert FIXED['compute_cap_usd'] == 1.25 and FIXED['ebs_s3_allowance_usd'] == .15
+        for mode in ('test_build', 'startup_wave8', 'root_reuse', 'bounded_publication'):
+            rejected(lambda: configure(fixed48=True, **{mode: True}))
+        rejected(lambda: configure(fixed48=1))
+        for mode in ('startup_wave8', 'root_reuse', 'bounded_publication'):
+            with execution_mode(**{mode: True}):
+                assert not FIXED48
+            assert FIXED48 and NATIVE_DELTA == FIXED48_DELTA
+        try:
+            with execution_mode():
+                raise RuntimeError('synthetic interruption')
+        except RuntimeError:
+            assert FIXED48
+    assert previous == (CONFIG, PREFIX, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, NATIVE_DELTA, mode_flag())
+
+
+def _fixed48_stages_self_check():
+    import inspect
+    assert 'fixed48' in inspect.signature(validate_bounded_publication_stages).parameters, 'fixed48 stage authentication missing'
+    with tempfile.TemporaryDirectory() as tmp:
+        log = Path(tmp)/'test.log'
+        lines = []
+        for index, (name, command) in enumerate(FIXED48_STAGES):
+            record = dict(schema=FIXED48_STAGE_SCHEMA, stage=name, command=command,
+                started_at='2026-10-02T00:00:00Z', finished_at=None,
+                exit_status=None, gate_status=None, tests_run=None, required_test_passes=None)
+            lines.append(encoded(record).decode())
+            names = FIXED48_REQUIRED_TESTS.get(name, ())
+            lines.extend('test '+test+' ... ok' for test in names)
+            tests = max(1, len(names)) if index < 4 else None
+            if index < 4:
+                lines.append(f'test result: ok. {tests} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s')
+            record.update(finished_at=record['started_at'], exit_status=0, gate_status=0,
+                tests_run=tests, required_test_passes={test: 1 for test in names})
+            lines.append(encoded(record).decode())
+        log.write_text('\n'.join(lines)+'\n')
+        records = validate_bounded_publication_stages(log, fixed48=True)
+        assert len(records) == 7 and [r['tests_run'] for r in records[:4]] == [2, 2, 1, 1]
+        for names in FIXED48_REQUIRED_TESTS.values():
+            for name in names:
+                passed = 'test '+name+' ... ok'
+                for replacement in ('', passed.replace('ok', 'ignored'), passed+'\n'+passed):
+                    log.write_text('\n'.join(lines).replace(passed, replacement)+'\n')
+                    rejected(lambda: validate_bounded_publication_stages(log, fixed48=True))
+                misplaced = [line for line in lines if line != passed]
+                misplaced.insert(0, passed)
+                log.write_text('\n'.join(misplaced)+'\n')
+                rejected(lambda: validate_bounded_publication_stages(log, fixed48=True))
+        for index, line in enumerate(lines):
+            if not line.startswith('{'):
+                continue
+            record = json.loads(line)
+            changes = [('command', ['cargo', 'test', '--workspace']), ('stage', 'wrong-stage')]
+            if record['finished_at']:
+                changes += [('exit_status', 17), ('exit_status', False), ('gate_status', 96),
+                            ('required_test_passes', {}), ('finished_at', '2026-10-01T00:00:00Z')]
+                if record['tests_run'] is not None:
+                    changes += [('tests_run', 0), ('tests_run', False), ('tests_run', 99)]
+            else:
+                changes += [('exit_status', 0), ('required_test_passes', {})]
+            for key, value in changes:
+                if record[key] == value and type(record[key]) is type(value):
+                    continue
+                changed = list(lines)
+                changed[index] = encoded(dict(record, **{key: value})).decode()
+                log.write_text('\n'.join(changed)+'\n')
+                rejected(lambda: validate_bounded_publication_stages(log, fixed48=True))
+        for changed in (lines[:-1], lines+lines[-2:], list(reversed(lines))):
+            log.write_text('\n'.join(changed)+'\n')
+            rejected(lambda: validate_bounded_publication_stages(log, fixed48=True))
+
+
+def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication=False, fixed48=False):
     controller, config_commit, bundle = '4'*40, '5'*40, '6'*40
     blob = b'mocked exact candidate blob'
-    with execution_mode(startup_wave8=not (root_reuse or bounded_publication), root_reuse=root_reuse, bounded_publication=bounded_publication):
+    with execution_mode(startup_wave8=not (root_reuse or bounded_publication or fixed48), root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48):
         proof = dict(controller_source_commit=controller, candidate_delta_paths=list(NATIVE_DELTA),
-                     native_source_commit=BOUNDED_PUBLICATION_CHECK_COMMIT if bounded_publication else '7'*40 if root_reuse else STARTUP_WAVE8_COMMIT,
+                     native_source_commit=FIXED48_CHECK_COMMIT if fixed48 else BOUNDED_PUBLICATION_CHECK_COMMIT if bounded_publication else '7'*40 if root_reuse else STARTUP_WAVE8_COMMIT,
                      source_sha256={name:worker.sha(blob) for name in NATIVE_DELTA})
         answers = {
             ('status','--porcelain'): '',
@@ -1269,7 +1457,10 @@ def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication
             ('diff','--no-renames','--name-only',controller,config_commit): str(CONFIG),
             ('diff','--no-renames','--name-only',config_commit,'HEAD'): '\n'.join(NATIVE_DELTA),
             **{('show',proof['native_source_commit']+':'+name):blob for name in NATIVE_DELTA}}
-        for failure in ('success','dirty','merge-bundle','wrong-controller','unpublished-config','extra-config-delta','missing-native-delta','extra-native-delta','wrong-candidate-blob'):
+        failures = ('success','dirty','merge-bundle','wrong-controller','unpublished-config','extra-config-delta','missing-native-delta','extra-native-delta','wrong-candidate-blob')
+        if fixed48:
+            failures += ('historical-two-path-bundle',)
+        for failure in failures:
             changed = dict(answers)
             key, value = {
                 'success': (('status','--porcelain'), ''),
@@ -1280,6 +1471,7 @@ def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication
                 'extra-config-delta': (('diff','--no-renames','--name-only',controller,config_commit), str(CONFIG)+'\nother.py'),
                 'missing-native-delta': (('diff','--no-renames','--name-only',config_commit,'HEAD'), NATIVE_DELTA[0]),
                 'extra-native-delta': (('diff','--no-renames','--name-only',config_commit,'HEAD'), '\n'.join((*NATIVE_DELTA,'other.rs'))),
+                'historical-two-path-bundle': (('diff','--no-renames','--name-only',config_commit,'HEAD'), '\n'.join(NATIVE_DELTA[1:])),
                 'wrong-candidate-blob': (('show',proof['native_source_commit']+':'+NATIVE_DELTA[0]), b'tampered')
             }[failure]
             changed[key] = value
@@ -1294,8 +1486,8 @@ def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication
                     rejected(lambda:preflight())
 
 
-def self_check(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False):
-    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication):
+def self_check(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False):
+    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48):
         _self_check()
 
 
@@ -1305,7 +1497,16 @@ def _self_check():
     base = Path(__file__).resolve().parents[1]
     manifest = json.loads((base/semantic.ROOT/'metadata-waves/native-source-manifest.json').read_bytes())
     inventory = manifest['source_sha256']
-    if BOUNDED_PUBLICATION:
+    if FIXED48:
+        inventory = worker.source_hashes(base)
+        for name in NATIVE_DELTA:
+            inventory[name] = worker.sha(subprocess.check_output(['git','show',FIXED48_CHECK_COMMIT+':'+name], cwd=base))
+        assert len(inventory) == 399
+        manifest = dict(schema='borsuk-fixed48-native-source-manifest-v1', source_sha256=inventory,
+            source_identity_sha256=worker.source_identity(inventory), source_file_count=399,
+            native_source_commit=FIXED48_CHECK_COMMIT, candidate_delta_paths=list(NATIVE_DELTA),
+            candidate_qualification_pending=True, control_native_source_commit=FIXED48_CHECK_CONTROL)
+    elif BOUNDED_PUBLICATION:
         inventory = worker.source_hashes(base)
         for name in NATIVE_DELTA:
             inventory[name] = worker.sha(subprocess.check_output(['git','show',BOUNDED_PUBLICATION_CHECK_COMMIT+':'+name], cwd=base))
@@ -1336,7 +1537,7 @@ def _self_check():
     config = dict(FIXED, controller_authority_pending=False,
         controller_code_sha256={n:worker.artifact(base/n)['sha256'] for n in CODE},
         native_source_manifest=dict(path=str(manifest_path),bytes=len(manifest_body),sha256=worker.sha(manifest_body)))
-    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION:
+    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
         config['controller_source_commit'] = '4'*40
     with tempfile.TemporaryDirectory() as tmp:
         repo, out = Path(tmp)/'repo', Path(tmp)/'out'
@@ -1358,21 +1559,25 @@ def _self_check():
             for key,value in (('controller_authority_pending',True), ('memory_bytes',worker.MEMORY+1),
                               ('command',[*FIXED['command'],'--no-run']), ('environment',dict(FIXED['environment'],CARGO_BUILD_JOBS='2')),
                               ('controller_code_sha256',dict(config['controller_code_sha256'],**{CODE[0]:'0'*64})),
+                              ('controller_code_sha256',{name:digest for name,digest in config['controller_code_sha256'].items() if name != CODE[0]}),
+                              ('controller_code_sha256',dict(config['controller_code_sha256'],**{'scripts/unowned.py':'0'*64})),
                               ('native_source_manifest',dict(config['native_source_manifest'],sha256='0'*64))):
                 (repo/CONFIG).write_bytes(encoded(dict(config,**{key:value})))
                 rejected(lambda:qualify(repo))
-            if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION:
+            if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
                 for value in ('not-a-commit', '4'*39):
                     (repo/CONFIG).write_bytes(encoded(dict(config,controller_source_commit=value)))
                     rejected(lambda:qualify(repo))
             bad_manifest = [('source_identity_sha256','0'*64), ('source_file_count',398),
                             ('native_source_commit','not-a-commit')]
-            if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION:
+            if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
                 bad_manifest.extend((('candidate_delta_paths',[]),
                     ('candidate_delta_paths',dict.fromkeys(NATIVE_DELTA)),
                     ('candidate_delta_paths',list(reversed(NATIVE_DELTA))),
                     ('candidate_qualification_pending',False),('candidate_qualification_pending',1),
                     ('schema','wrong-manifest-mode'),('control_native_source_commit','not-a-commit')))
+                if FIXED48:
+                    bad_manifest.append(('candidate_delta_paths',list(FIXED48_DELTA[1:])))
                 if STARTUP_WAVE8:
                     bad_manifest.append(('native_source_commit','0'*40))
             for key,value in bad_manifest:
@@ -1400,7 +1605,7 @@ def _self_check():
             rejected(lambda:preflight(repo))
         body = user_data('0'*40,'1'*64,'sources/mock',PREFIX+'a0001',proof)
         assert len(CODE) == len(set(CODE)) == (24 if IMPLEMENTATION else 23 if TEST_BUILD else 22)
-        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == (14 if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION else 18 if IMPLEMENTATION else 13)
+        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == (16 if FIXED48 else 14 if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION else 18 if IMPLEMENTATION else 13)
         assert '--on-active=9000s' in body and 'RuntimeMaxSec=7260' in body
         assert all(k in body for k in ('MemoryMax=8G','MemorySwapMax=0','CPUQuota=200%','TasksMax=512'))
         assert 'build-essential' in body and 'python3-dev' in body
@@ -1428,20 +1633,21 @@ def _self_check():
     if semantic_1m:
         _remote_self_check(manifest)
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024
-    print(f'PASS workspace {"implementation-gates" if IMPLEMENTATION else "test-build" if TEST_BUILD else "execution"} ({"bounded-publication" if BOUNDED_PUBLICATION else "root-reuse" if ROOT_REUSE else "startup-wave8" if STARTUP_WAVE8 else "semantic-1m" if semantic_1m else "metadata-waves"}): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli={semantic_1m}; code={len(CODE)} artifacts={len(ARTIFACTS)} release_copy={IMPLEMENTATION}; userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
+    print(f'PASS workspace {"implementation-gates" if IMPLEMENTATION else "test-build" if TEST_BUILD else "execution"} ({"fixed48" if FIXED48 else "bounded-publication" if BOUNDED_PUBLICATION else "root-reuse" if ROOT_REUSE else "startup-wave8" if STARTUP_WAVE8 else "semantic-1m" if semantic_1m else "metadata-waves"}): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli={semantic_1m}; code={len(CODE)} artifacts={len(ARTIFACTS)} release_copy={IMPLEMENTATION}; userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
 
 
 if __name__ == '__main__':
     args = sys.argv[1:]
+    fixed48 = args[:1] == ['--fixed48-implementation']
     bounded_publication = args[:1] == ['--bounded-publication-implementation']
     root_reuse = args[:1] == ['--root-reuse-implementation']
     startup_wave8 = args[:1] == ['--startup-wave8-implementation']
-    implementation = bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
+    implementation = fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
     test_build = args[:1] == ['--semantic-1m-test-build']
     semantic_1m = implementation or test_build or args[:1] == ['--semantic-1m']
     if semantic_1m:
         args = args[1:]
-    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication)
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48)
     # ponytail: shared launch archives the repository in memory; stream it in
     # the shared launcher if root's launch resource gate proves insufficient.
     if args[:1] and args[0].startswith('--'):
@@ -1455,7 +1661,10 @@ if __name__ == '__main__':
             _startup_wave8_preflight_self_check(root_reuse=True)
             _bounded_publication_protocol_self_check()
             _startup_wave8_preflight_self_check(bounded_publication=True)
-        self_check(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication)
+            _fixed48_protocol_self_check()
+            _fixed48_stages_self_check()
+            _startup_wave8_preflight_self_check(fixed48=True)
+        self_check(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48)
     elif args[:1] == ['--stage']:
         assert len(args) == 3
         stage(*args[1:])
@@ -1467,7 +1676,7 @@ if __name__ == '__main__':
         assert len(args) == 2
         print(json.dumps(replay(args[1]),sort_keys=True))
     else:
-        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
+        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation | --fixed48-implementation] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
         with open('/tmp/borsuk-native-workspace-execution-launch.lock','a+') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             main(args[0])
