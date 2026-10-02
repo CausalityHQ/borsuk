@@ -1,0 +1,23 @@
+	Command being timed: "taskset -c 0-3 /mnt/native-semantic-1m-cold/screen/scratch/binaries/builder /mnt/native-semantic-1m-cold/screen/builder-config.json 55d7064b170964a0c4e805b5b480c54d3c1af36c6b2bc16099df7c4d925b1085 536870912 /mnt/native-semantic-1m-cold/screen/scratch/generation"
+	User time (seconds): 50.55
+	System time (seconds): 3.64
+	Percent of CPU this job got: 74%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:12.72
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 344576
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 87547
+	Voluntary context switches: 1511
+	Involuntary context switches: 620
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 6601024
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
