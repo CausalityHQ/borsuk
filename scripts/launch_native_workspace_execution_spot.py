@@ -6,6 +6,7 @@ controller_code_sha256={every CODE path:SHA256}, native_source_manifest=
 --semantic-1m selects the new root and manifest-pinned native identity.
 --semantic-1m-test-build selects compile-only execution of the real test-build script.
 --semantic-1m-implementation selects the serial implementation gate script.
+--startup-wave8-implementation reuses that lifecycle with separate authority.
 CLI aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT.
 """
 import contextlib
@@ -44,6 +45,11 @@ TAG = 'borsuk-metadata-waves-workspace'
 SEMANTIC_1M = False
 TEST_BUILD = False
 IMPLEMENTATION = False
+STARTUP_WAVE8 = False
+STARTUP_WAVE8_COMMIT = '660fd425a8a45dda17cbf6f44915bd36615ce87a'
+STARTUP_WAVE8_IDENTITY = '58535ffeb5bb74a09fba9da489d64b6c9b21495c6be53f320a3f8efc2d47756b'
+STARTUP_WAVE8_DELTA = ('crates/borsuk/src/object_native_generation.rs',
+                      'crates/borsuk/src/two_bit_generation.rs')
 RECEIPT_SCHEMA = 'borsuk-native-workspace-execution-receipt-v1'
 WALL = 9000
 INSTANCE_TYPE, IMAGE_ID = 'c7i.2xlarge', semantic.IMAGE_ID
@@ -68,9 +74,11 @@ FULL_ARTIFACTS = ARTIFACTS
 RELEASE_ARTIFACTS = tuple('binaries/'+name for name in (
     'two_bit_http', 'build_two_bit_generation', 'build_semantic_unit_router',
     'repackage_semantic_generation', 'check_semantic_router_scorer'))
+FULL_RELEASE_ARTIFACTS = RELEASE_ARTIFACTS
 TERMINAL_IDENTITIES = ('config_sha256', 'code_identity_sha256', 'campaign_schema',
     'source_identity_sha256', 'source_file_count', 'native_source_manifest_sha256',
     'native_source_commit', 'artifact_roster_sha256', 'awscli_version', 'awscli_sha256')
+FULL_TERMINAL_IDENTITIES = TERMINAL_IDENTITIES
 FIXED = dict(schema=CONFIG_SCHEMA, architecture='x86_64', region=peer.REGION, bucket=peer.BUCKET,
     instance_type=INSTANCE_TYPE, image_id=IMAGE_ID, root_device_name=ROOT_DEVICE_NAME,
     subnet_id=SUBNET, spot_max_usd_per_hour=SPOT_MAX_USD_PER_HOUR, compute_cap_usd=COMPUTE_CAP,
@@ -84,16 +92,22 @@ def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 
 
-def configure(semantic_1m=False, *, test_build=False, implementation=False):
+def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False):
     """Select the protocol explicitly in every controller/worker process."""
-    global SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
-    global SCHEMA, CONFIG_SCHEMA, RECEIPT_SCHEMA, CODE, FIXED, ARTIFACTS
-    assert type(semantic_1m) is type(test_build) is type(implementation) is bool
+    global SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
+    global SCHEMA, CONFIG_SCHEMA, RECEIPT_SCHEMA, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, TERMINAL_IDENTITIES
+    assert type(semantic_1m) is type(test_build) is type(implementation) is type(startup_wave8) is bool
+    assert not (startup_wave8 and test_build), 'mutually exclusive execution modes'
+    if startup_wave8:
+        semantic_1m = implementation = True
     assert not (test_build and implementation), 'mutually exclusive execution modes'
     assert not (test_build or implementation) or semantic_1m, 'script requires explicit semantic-1m mode'
     SEMANTIC_1M = semantic_1m
     TEST_BUILD = test_build
     IMPLEMENTATION = implementation
+    STARTUP_WAVE8 = startup_wave8
+    RELEASE_ARTIFACTS = ('binaries/two_bit_http',) if startup_wave8 else FULL_RELEASE_ARTIFACTS
+    TERMINAL_IDENTITIES = (*FULL_TERMINAL_IDENTITIES, 'controller_source_commit', 'candidate_delta_paths') if startup_wave8 else FULL_TERMINAL_IDENTITIES
     ARTIFACTS = (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS) if implementation else FULL_ARTIFACTS
     ROOT = (semantic.ROOT.parent/'semantic-1m' if semantic_1m else semantic.ROOT/'metadata-waves') / ('implementation-gates/remote-implementation' if implementation else 'implementation-gates/remote-test-build' if test_build else 'implementation-gates/remote-full')
     CONFIG = ROOT/'config.json'
@@ -116,21 +130,32 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False):
         RECEIPT_SCHEMA = 'borsuk-semantic-1m-implementation-gates-receipt-v1'
         CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_semantic_1m_implementation.sh')
         FIXED['schema'] = CONFIG_SCHEMA
+    if startup_wave8:
+        ROOT = semantic.ROOT.parent/'semantic-1m/startup-wave8/implementation-gates'
+        CONFIG = ROOT/'config.json'
+        TOKEN_PREFIX = 'startup-wave8-implementation-'
+        PREFIX = 'research/semantic-router/20261002/' + TOKEN_PREFIX
+        TAG = 'borsuk-startup-wave8-implementation'
+        SCHEMA = 'borsuk-startup-wave8-implementation-gates-spot-v1'
+        CONFIG_SCHEMA = 'borsuk-startup-wave8-implementation-gates-v1'
+        RECEIPT_SCHEMA = 'borsuk-startup-wave8-implementation-gates-receipt-v1'
+        CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_startup_wave8_implementation.sh')
+        FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_startup_wave8_implementation.sh'])
 
 
 @contextlib.contextmanager
-def execution_mode(semantic_1m=False, *, test_build=False, implementation=False):
+def execution_mode(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False):
     """Restore the caller's protocol after a worker or synthetic check."""
-    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION
-    configure(semantic_1m, test_build=test_build, implementation=implementation)
+    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8)
     try:
         yield
     finally:
-        configure(previous[0], test_build=previous[1], implementation=previous[2])
+        configure(previous[0], test_build=previous[1], implementation=previous[2], startup_wave8=previous[3])
 
 
 def mode_flag():
-    return ' --semantic-1m-implementation' if IMPLEMENTATION else ' --semantic-1m-test-build' if TEST_BUILD else ' --semantic-1m' if SEMANTIC_1M else ''
+    return ' --startup-wave8-implementation' if STARTUP_WAVE8 else ' --semantic-1m-implementation' if IMPLEMENTATION else ' --semantic-1m-test-build' if TEST_BUILD else ' --semantic-1m' if SEMANTIC_1M else ''
 
 
 def qualify(base=Path('.')):
@@ -149,6 +174,14 @@ def qualify(base=Path('.')):
     assert type(pointer['bytes']) is int and pointer['bytes'] > 0
     assert worker.artifact(base/path) == {key:pointer[key] for key in ('bytes','sha256')}, 'manifest authority'
     manifest = json.loads((base/path).read_bytes())
+    if STARTUP_WAVE8:
+        assert re.fullmatch('[0-9a-f]{40}', config['controller_source_commit']), 'frozen controller commit'
+        assert manifest['schema'] == 'borsuk-startup-wave8-native-source-manifest-v1'
+        assert manifest['candidate_qualification_pending'] is True, 'source authority is not completed assurance'
+        assert type(manifest['candidate_delta_paths']) is list and manifest['candidate_delta_paths'] == list(STARTUP_WAVE8_DELTA), 'exact candidate native delta'
+        assert manifest['native_source_commit'] == STARTUP_WAVE8_COMMIT, 'fixed startup candidate commit'
+        assert manifest['source_identity_sha256'] == STARTUP_WAVE8_IDENTITY, 'fixed startup candidate identity'
+        assert re.fullmatch('[0-9a-f]{40}', manifest['control_native_source_commit'])
     inventory = worker.source_hashes(base)
     assert type(manifest['source_file_count']) is int and manifest['source_file_count'] == len(inventory) == 399
     assert manifest['source_sha256'] == inventory, 'full native source drift'
@@ -156,7 +189,7 @@ def qualify(base=Path('.')):
     assert identity == manifest['source_identity_sha256']
     assert SEMANTIC_1M or identity == SOURCE_IDENTITY, 'historical native source identity'
     assert re.fullmatch('[0-9a-f]{40}', manifest['native_source_commit'])
-    proof = dict(schema='borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
+    proof = dict(schema='borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
         config_path=str(CONFIG), config_sha256=worker.sha(body), campaign_schema=SCHEMA,
         source_sha256=inventory, source_identity_sha256=identity, source_file_count=399,
         native_source_commit=manifest['native_source_commit'], native_source_manifest=pointer,
@@ -169,11 +202,30 @@ def qualify(base=Path('.')):
         proof.update(execution_kind=FIXED['execution_kind'])
         if TEST_BUILD:
             proof.update(actual_workspace_test_build=False)
+    if STARTUP_WAVE8:
+        proof.update(controller_source_commit=config['controller_source_commit'],
+                     candidate_delta_paths=list(STARTUP_WAVE8_DELTA))
     return proof
 
 
 def preflight(base=Path('.')):
     assert not subprocess.check_output(['git','status','--porcelain'], cwd=base, text=True).strip(), 'dirty source'
+    if STARTUP_WAVE8:
+        proof = qualify(base)
+        parents = subprocess.check_output(['git','rev-list','--parents','-n','1','HEAD'], cwd=base, text=True).split()
+        assert len(parents) == 2, 'one source-bundle parent required'
+        config_commit = parents[1]
+        controller = proof['controller_source_commit']
+        assert subprocess.check_output(['git','rev-list','--parents','-n','1',config_commit], cwd=base, text=True).split() == [config_commit, controller], 'config immediately follows frozen controller'
+        assert subprocess.check_output(['git','for-each-ref','--contains='+config_commit,'--format=%(refname)',
+            'refs/remotes/origin/'], cwd=base, text=True).strip(), 'controller/config commit not on an origin ref'
+        assert subprocess.check_output(['git','diff','--no-renames','--name-only',controller,config_commit],
+            cwd=base, text=True).splitlines() == [str(CONFIG)], 'config-only authority freeze'
+        assert subprocess.check_output(['git','diff','--no-renames','--name-only',config_commit,'HEAD'],
+            cwd=base, text=True).splitlines() == list(STARTUP_WAVE8_DELTA), 'exact two-file candidate source bundle'
+        for name in STARTUP_WAVE8_DELTA:
+            assert worker.sha(subprocess.check_output(['git','show',STARTUP_WAVE8_COMMIT+':'+name], cwd=base)) == proof['source_sha256'][name], 'candidate commit blob: '+name
+        return proof
     assert subprocess.check_output(['git','for-each-ref','--contains=HEAD','--format=%(refname)',
         'refs/remotes/origin/'], cwd=base, text=True).strip(), 'source commit not on an origin ref'
     return qualify(base)
@@ -208,6 +260,8 @@ def validate_receipt(out, proof):
         assert receipt['command'][1:] == list(worker.COMMAND[1:]), 'exact full command'
     assert isinstance(receipt['command'][0], str) and receipt['command'][0]
     assert receipt['environment'] == FIXED['environment']
+    if STARTUP_WAVE8:
+        assert all(receipt[key] == proof[key] for key in ('controller_source_commit','candidate_delta_paths')), 'receipt source bundle authority'
     assert receipt['source_sha256'] == proof['source_sha256']
     assert receipt['source_identity_sha256'] == worker.source_identity(receipt['source_sha256']) == proof['source_identity_sha256']
     assert SEMANTIC_1M or proof['source_identity_sha256'] == SOURCE_IDENTITY
@@ -440,10 +494,10 @@ def _worker_self_check(proof, config_body, manifest_body):
                     contextlib.ExitStack() as patches:
                 if failure == 'copy-failure':
                     patches.enter_context(patch.object(worker.shutil, 'copyfileobj', side_effect=OSError('binary copy failed')))
-                previous = authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.CONFIG, authority.CODE, authority.FIXED
+                previous = authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.CONFIG, authority.CODE, authority.FIXED
                 result = worker.main('cargo' if TEST_BUILD or IMPLEMENTATION else 'fake-cargo', repo, out,
-                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION)
-                assert previous == (authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.CONFIG, authority.CODE, authority.FIXED)
+                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION, startup_wave8=STARTUP_WAVE8)
+                assert previous == (authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.CONFIG, authority.CODE, authority.FIXED)
             assert len(calls) == 1, 'full test repeated'
             assert type(result['exit_status']) is int
             assert result['exit_status'] == {'exit17':17, 'timeout':124}.get(failure,0)
@@ -481,6 +535,11 @@ def _worker_self_check(proof, config_body, manifest_body):
                             (out/'workspace-receipt.json').write_bytes(encoded(altered))
                             rejected(lambda: validate_receipt(out, proof))
                             (out/'workspace-receipt.json').write_bytes(encoded(result))
+                    if STARTUP_WAVE8:
+                        for changed in (dict(controller_source_commit='0'*40), dict(candidate_delta_paths=[])):
+                            (out/'workspace-receipt.json').write_bytes(encoded(dict(result, **changed)))
+                            rejected(lambda:validate_receipt(out, proof))
+                        (out/'workspace-receipt.json').write_bytes(encoded(result))
                 (out/'test.log').write_bytes(b'tampered')
                 rejected(lambda: validate_receipt(out, proof))
             else:
@@ -577,6 +636,8 @@ def _collection_self_check(proof, files, body):
         mutations = [dict(terminal,config_sha256='0'*64), dict(terminal,instance_id='i-other'),
                      dict(terminal,source_archive_sha256='2'*64), dict(terminal,exit_code=False),
                      dict(terminal,artifacts={n:v for n,v in terminal['artifacts'].items() if n != 'test.log'})]
+        if STARTUP_WAVE8:
+            mutations.extend((dict(terminal,controller_source_commit='0'*40),dict(terminal,candidate_delta_paths=[])))
         if IMPLEMENTATION:
             downloaded = out/'downloaded'
             downloaded.mkdir()
@@ -623,7 +684,7 @@ def _collection_self_check(proof, files, body):
             assert replay(partial) == expected and not (partial/'binaries').exists()
 
 
-def _remote_self_check():
+def _remote_self_check(native_manifest=None):
     """Run both CLIs away from the repo, faking only Cargo and cgroup files."""
     import shutil
     base = Path(__file__).resolve().parents[1]
@@ -633,16 +694,27 @@ def _remote_self_check():
         for name in CODE:
             (repo/name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(base/name, repo/name)
-        for index in range(399):
-            (repo/f'mock-{index}.rs').write_text('// mock native source\n')
+        if STARTUP_WAVE8:
+            for name in native_manifest['source_sha256']:
+                path = repo/name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(subprocess.check_output(['git','show',STARTUP_WAVE8_COMMIT+':'+name], cwd=base)
+                    if name in STARTUP_WAVE8_DELTA else (base/name).read_bytes())
+        else:
+            for index in range(399):
+                (repo/f'mock-{index}.rs').write_text('// mock native source\n')
         inventory = worker.source_hashes(repo)
         manifest_path = ROOT/'native-source-manifest.json'
         (repo/manifest_path).parent.mkdir(parents=True)
-        (repo/manifest_path).write_bytes(encoded(dict(source_sha256=inventory, source_file_count=399,
-            source_identity_sha256=worker.source_identity(inventory), native_source_commit='1'*40)))
+        manifest = native_manifest if STARTUP_WAVE8 else dict(source_sha256=inventory, source_file_count=399,
+            source_identity_sha256=worker.source_identity(inventory), native_source_commit='1'*40)
+        assert manifest['source_sha256'] == inventory
+        (repo/manifest_path).write_bytes(encoded(manifest))
         config = dict(FIXED, controller_authority_pending=False,
             controller_code_sha256={n:worker.artifact(repo/n)['sha256'] for n in CODE},
             native_source_manifest=dict(path=str(manifest_path), **worker.artifact(repo/manifest_path)))
+        if STARTUP_WAVE8:
+            config['controller_source_commit'] = '4'*40
         (repo/CONFIG).write_bytes(encoded(config))
         cargo = root/'cargo'
         cargo_commands = [['test', '--locked', '--workspace', '--all-targets', '--no-run'] if TEST_BUILD else list(worker.COMMAND[1:])]
@@ -653,6 +725,20 @@ def _remote_self_check():
                 'build --release --locked -p borsuk --example two_bit_http --bin build_two_bit_generation --bin build_semantic_unit_router --bin repackage_semantic_generation --bin check_semantic_router_scorer',
                 'clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious',
                 'test --locked --workspace --all-targets --no-run')]
+            stage_names = ('generation-tests','scorer-tests','release','clippy','test-build')
+            stage_schema = 'borsuk-semantic-1m-implementation-stage-v1'
+            if STARTUP_WAVE8:
+                cargo_commands = [command.split() for command in (
+                    'test --locked -p borsuk --lib object_native_generation:: -- --test-threads=1',
+                    'test --locked -p borsuk --lib two_bit_generation::source_walk_tests::semantic_object_store_parity -- --exact --test-threads=1',
+                    'test --locked -p borsuk --lib two_bit_generation::source_walk_tests::paged_source_matches_reference_and_preserves_failure_charges -- --exact --test-threads=1',
+                    'test --locked -p borsuk --lib two_bit_generation::source_walk_tests::fragmented_paged_source_preserves_trace_and_rank_across_get_caps -- --exact --test-threads=1',
+                    'build --release --locked -p borsuk --example two_bit_http',
+                    'clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious',
+                    'test --locked --workspace --all-targets --no-run')]
+                stage_names = ('object-native-generation-tests','semantic-object-store-parity','paged-source-parity',
+                               'fragmented-paged-source-parity','release','clippy','test-build')
+                stage_schema = 'borsuk-startup-wave8-implementation-stage-v1'
         cargo.write_text(f'''#!{sys.executable}
 import json, os, sys
 from pathlib import Path
@@ -671,8 +757,8 @@ else:
     assert target.is_dir()
     if not previous: assert not list(target.iterdir())
     with calls.open('a') as out: out.write(json.dumps(sys.argv[1:])+'\\n')
-    if {IMPLEMENTATION!r} and len(previous) == 2:
-        for name in {('two_bit_http','build_two_bit_generation','build_semantic_unit_router','repackage_semantic_generation','check_semantic_router_scorer')!r}:
+    if {IMPLEMENTATION!r} and len(previous) == {4 if STARTUP_WAVE8 else 2}:
+        for name in {tuple(Path(name).name for name in RELEASE_ARTIFACTS)!r}:
             if name == os.environ.get('MISSING_BINARY'): continue
             output = target/'release'/('examples' if name == 'two_bit_http' else '')/name
             output.parent.mkdir(parents=True, exist_ok=True)
@@ -689,7 +775,7 @@ else:
             (root/'bash').write_text(f'''#!{sys.executable}
 import os, sys
 from pathlib import Path
-assert sys.argv[1:] in [['scripts/check_rust_test_build.sh'], ['scripts/check_semantic_1m_implementation.sh']]
+assert sys.argv[1:] in [['scripts/check_rust_test_build.sh'], {FIXED['command'][1:]!r}]
 with (Path(os.environ['CARGO_TARGET_DIR']).parent/'bash-called').open('a') as out:
     out.write(sys.argv[1]+'\\n')
 os.execv('/bin/bash', ['/bin/bash', *sys.argv[1:]])
@@ -720,14 +806,14 @@ with patch.object(Path, 'read_text', read):
         env.pop('BORSUK_TEST_BUILD_COMMAND', None)
         flag = mode_flag().strip()
         cli = [sys.executable, '-m', MODULE, flag]
-        failures = [('success',None), ('exit17',None), ('native','mock-0.rs'),
+        failures = [('success',None), ('exit17',None), ('native',STARTUP_WAVE8_DELTA[0] if STARTUP_WAVE8 else 'mock-0.rs'),
                     ('config',str(CONFIG)), ('code',CODE[0]), ('manifest',str(manifest_path))]
         if TEST_BUILD or IMPLEMENTATION:
             failures.append(('script','scripts/check_rust_test_build.sh'))
         if IMPLEMENTATION:
-            failures.append(('pipeline','scripts/check_semantic_1m_implementation.sh'))
+            failures.append(('pipeline',FIXED['command'][1]))
             failures.append(('missing-binary',None))
-            failures.extend((f'fail-stage-{stage}',None) for stage in range(2,6))
+            failures.extend((f'fail-stage-{stage}',None) for stage in range(2,len(cargo_commands)+1))
         for failure, mutation in failures:
             out = root/failure
             out.mkdir()
@@ -738,7 +824,7 @@ with patch.object(Path, 'read_text', read):
             result = subprocess.run([sys.executable,'-c',runner,flag,str(cargo),str(repo),str(out)],
                 cwd=root, env=dict(env, MUTATE=str(repo/mutation) if mutation else '',
                                   CARGO_EXIT='17' if cargo_failed else '0', CARGO_FAIL_STAGE=str(failing_stage),
-                                  MISSING_BINARY='check_semantic_router_scorer' if failure == 'missing-binary' else ''), capture_output=True, text=True)
+                                  MISSING_BINARY=Path(RELEASE_ARTIFACTS[-1]).name if failure == 'missing-binary' else ''), capture_output=True, text=True)
             assert result.returncode == (0 if failure == 'success' else 17 if cargo_failed else 96), result.stderr
             receipt = json.loads((out/'workspace-receipt.json').read_bytes())
             assert receipt['exit_status'] == (17 if cargo_failed else 0)
@@ -750,21 +836,21 @@ with patch.object(Path, 'read_text', read):
             if IMPLEMENTATION:
                 from datetime import datetime
                 records = [json.loads(line) for line in log.splitlines() if line.startswith('{')]
-                count = failing_stage if cargo_failed else 5
+                count = failing_stage if cargo_failed else len(cargo_commands)
                 assert len(records) == 2*count
-                stage_commands = [['cargo',*args] for args in cargo_commands[:4]] + [
+                stage_commands = [['cargo',*args] for args in cargo_commands[:-1]] + [
                     ['env','-u','BORSUK_TEST_BUILD_COMMAND','bash','scripts/check_rust_test_build.sh']]
                 for stage in range(count):
                     start, end = records[2*stage:2*stage+2]
-                    assert start['schema'] == end['schema'] == 'borsuk-semantic-1m-implementation-stage-v1'
+                    assert start['schema'] == end['schema'] == stage_schema
                     assert start['command'] == end['command'] == stage_commands[stage]
-                    assert start['stage'] == end['stage'] == ('generation-tests','scorer-tests','release','clippy','test-build')[stage]
+                    assert start['stage'] == end['stage'] == stage_names[stage]
                     assert start['exit_status'] is start['finished_at'] is None
                     assert type(end['exit_status']) is int and end['exit_status'] == (17 if cargo_failed and stage == count-1 else 0)
                     assert start['started_at'] == end['started_at']
                     assert datetime.fromisoformat(end['finished_at']) >= datetime.fromisoformat(start['started_at'])
                 bash_called = (out/'bash-called').read_text().splitlines()
-                assert bash_called == ['scripts/check_semantic_1m_implementation.sh'] + (['scripts/check_rust_test_build.sh'] if count == 5 else [])
+                assert bash_called == [FIXED['command'][1]] + (['scripts/check_rust_test_build.sh'] if count == len(cargo_commands) else [])
                 assert receipt['execution_kind'] == 'implementation-gates' and receipt['actual_full_workspace_execution'] is False
                 if cargo_failed:
                     assert not (out/'binaries').exists(), 'failed pipeline copied release outputs'
@@ -776,7 +862,7 @@ with patch.object(Path, 'read_text', read):
                         assert (out/name).stat().st_mode & 0o111
             else:
                 assert log.startswith('fake workspace cargo\n')
-            if TEST_BUILD or (IMPLEMENTATION and count == 5):
+            if TEST_BUILD or (IMPLEMENTATION and count == len(cargo_commands)):
                 assert (out/'bash-called').exists()
                 assert f'rust-test-build status={receipt["exit_status"]}' in log and 'jobs=1' in log
             checked = subprocess.run([*cli,'--check-receipt',str(out)], cwd=root, env=env, capture_output=True)
@@ -819,7 +905,7 @@ with patch.object(Path, 'read_text', read):
                 assert wrong.returncode != 0 and not (out/'target').exists()
                 assert not (out/'cargo-called').exists()
                 if IMPLEMENTATION:
-                    direct = subprocess.run(['/bin/bash','scripts/check_semantic_1m_implementation.sh'],
+                    direct = subprocess.run(['/bin/bash',FIXED['command'][1]],
                         cwd=repo, env=dict(env, BORSUK_TEST_BUILD_COMMAND=shim), capture_output=True)
                     assert direct.returncode == 2 and b'test-only build shim forbidden' in direct.stderr
         # Missing mode must reject the semantic authority before creating a target.
@@ -843,6 +929,13 @@ with patch.object(Path, 'read_text', read):
                 checked = subprocess.run([sys.executable,'-m',MODULE,'--semantic-1m-test-build','--check-receipt',str(root/'success')],
                                          cwd=root, env=env, capture_output=True)
                 assert checked.returncode != 0, 'implementation receipt accepted as compile-only'
+                if STARTUP_WAVE8:
+                    wrong = subprocess.run([sys.executable,'-c',runner,'--semantic-1m-implementation',str(cargo),str(repo),str(out)],
+                                           cwd=root, env=env, capture_output=True)
+                    assert wrong.returncode != 0 and not (out/'target').exists()
+                    checked = subprocess.run([sys.executable,'-m',MODULE,'--semantic-1m-implementation','--check-receipt',str(root/'success')],
+                                             cwd=root, env=env, capture_output=True)
+                    assert checked.returncode != 0, 'startup-wave8 receipt accepted as semantic-1m implementation'
 
 
 def _test_build_protocol_self_check():
@@ -879,8 +972,69 @@ def _test_build_protocol_self_check():
     assert TOKEN_PREFIX == 'metadata-waves-workspace-'
 
 
-def self_check(semantic_1m=False, *, test_build=False, implementation=False):
-    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation):
+def _startup_wave8_protocol_self_check():
+    previous = CONFIG, PREFIX, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, mode_flag()
+    with execution_mode(startup_wave8=True):
+        assert str(CONFIG).endswith('semantic-1m/startup-wave8/implementation-gates/config.json')
+        assert PREFIX == 'research/semantic-router/20261002/startup-wave8-implementation-'
+        assert mode_flag() == ' --startup-wave8-implementation'
+        assert FIXED['command'] == ['bash', 'scripts/check_startup_wave8_implementation.sh']
+        assert FIXED['environment'] == dict(worker.ENVIRONMENT, BORSUK_TEST_BUILD_JOBS='1', BORSUK_TEST_BUILD_COMMAND=None)
+        assert CODE == (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_startup_wave8_implementation.sh')
+        assert RELEASE_ARTIFACTS == ('binaries/two_bit_http',)
+        assert ARTIFACTS == (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS)
+        assert FIXED['schema'] == CONFIG_SCHEMA == 'borsuk-startup-wave8-implementation-gates-v1'
+        assert SCHEMA == 'borsuk-startup-wave8-implementation-gates-spot-v1'
+        assert RECEIPT_SCHEMA == 'borsuk-startup-wave8-implementation-gates-receipt-v1'
+        assert FIXED['execution_kind'] == 'implementation-gates'
+        assert WALL == FIXED['machine_limit_seconds'] == 9000
+        assert FIXED['compute_cap_usd'] == 1.25 and FIXED['ebs_s3_allowance_usd'] == .15
+        rejected(lambda: configure(startup_wave8=True, test_build=True))
+    assert previous == (CONFIG, PREFIX, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, mode_flag())
+
+
+def _startup_wave8_preflight_self_check():
+    controller, config_commit, bundle = '4'*40, '5'*40, '6'*40
+    blob = b'mocked exact candidate blob'
+    with execution_mode(startup_wave8=True):
+        proof = dict(controller_source_commit=controller, candidate_delta_paths=list(STARTUP_WAVE8_DELTA),
+                     native_source_commit=STARTUP_WAVE8_COMMIT,
+                     source_sha256={name:worker.sha(blob) for name in STARTUP_WAVE8_DELTA})
+        answers = {
+            ('status','--porcelain'): '',
+            ('rev-list','--parents','-n','1','HEAD'): bundle+' '+config_commit,
+            ('rev-list','--parents','-n','1',config_commit): config_commit+' '+controller,
+            ('for-each-ref','--contains='+config_commit,'--format=%(refname)','refs/remotes/origin/'): 'refs/remotes/origin/master',
+            ('diff','--no-renames','--name-only',controller,config_commit): str(CONFIG),
+            ('diff','--no-renames','--name-only',config_commit,'HEAD'): '\n'.join(STARTUP_WAVE8_DELTA),
+            **{('show',STARTUP_WAVE8_COMMIT+':'+name):blob for name in STARTUP_WAVE8_DELTA}}
+        for failure in ('success','dirty','merge-bundle','wrong-controller','unpublished-config','extra-config-delta','missing-native-delta','extra-native-delta','wrong-candidate-blob'):
+            changed = dict(answers)
+            key, value = {
+                'success': (('status','--porcelain'), ''),
+                'dirty': (('status','--porcelain'), 'dirty'),
+                'merge-bundle': (('rev-list','--parents','-n','1','HEAD'), bundle+' '+config_commit+' '+controller),
+                'wrong-controller': (('rev-list','--parents','-n','1',config_commit), config_commit+' '+'7'*40),
+                'unpublished-config': (('for-each-ref','--contains='+config_commit,'--format=%(refname)','refs/remotes/origin/'), ''),
+                'extra-config-delta': (('diff','--no-renames','--name-only',controller,config_commit), str(CONFIG)+'\nother.py'),
+                'missing-native-delta': (('diff','--no-renames','--name-only',config_commit,'HEAD'), STARTUP_WAVE8_DELTA[0]),
+                'extra-native-delta': (('diff','--no-renames','--name-only',config_commit,'HEAD'), '\n'.join((*STARTUP_WAVE8_DELTA,'other.rs'))),
+                'wrong-candidate-blob': (('show',STARTUP_WAVE8_COMMIT+':'+STARTUP_WAVE8_DELTA[0]), b'tampered')
+            }[failure]
+            changed[key] = value
+            def git(args, **kwargs):
+                assert args[0] == 'git' and tuple(args[1:]) in changed, args
+                return changed[tuple(args[1:])]
+            with patch.object(sys.modules[__name__], 'qualify', return_value=proof), \
+                    patch.object(subprocess,'check_output',side_effect=git):
+                if failure == 'success':
+                    assert preflight() == proof
+                else:
+                    rejected(lambda:preflight())
+
+
+def self_check(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False):
+    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8):
         _self_check()
 
 
@@ -890,7 +1044,16 @@ def _self_check():
     base = Path(__file__).resolve().parents[1]
     manifest = json.loads((base/semantic.ROOT/'metadata-waves/native-source-manifest.json').read_bytes())
     inventory = manifest['source_sha256']
-    if semantic_1m:
+    if STARTUP_WAVE8:
+        inventory = worker.source_hashes(base)
+        for name in STARTUP_WAVE8_DELTA:
+            inventory[name] = worker.sha(subprocess.check_output(['git','show',STARTUP_WAVE8_COMMIT+':'+name], cwd=base))
+        assert len(inventory) == 399 and worker.source_identity(inventory) == STARTUP_WAVE8_IDENTITY
+        manifest = dict(schema='borsuk-startup-wave8-native-source-manifest-v1', source_sha256=inventory,
+            source_identity_sha256=STARTUP_WAVE8_IDENTITY, source_file_count=399,
+            native_source_commit=STARTUP_WAVE8_COMMIT, candidate_delta_paths=list(STARTUP_WAVE8_DELTA),
+            candidate_qualification_pending=True, control_native_source_commit='f4d76fc040aa89c44b3526e37f148e78d21241fa')
+    elif semantic_1m:
         inventory = dict(inventory, **{'Cargo.toml':'1'*64})
         manifest.update(source_sha256=inventory, source_identity_sha256=worker.source_identity(inventory))
         assert manifest['source_identity_sha256'] != SOURCE_IDENTITY
@@ -899,6 +1062,8 @@ def _self_check():
     config = dict(FIXED, controller_authority_pending=False,
         controller_code_sha256={n:worker.artifact(base/n)['sha256'] for n in CODE},
         native_source_manifest=dict(path=str(manifest_path),bytes=len(manifest_body),sha256=worker.sha(manifest_body)))
+    if STARTUP_WAVE8:
+        config['controller_source_commit'] = '4'*40
     with tempfile.TemporaryDirectory() as tmp:
         repo, out = Path(tmp)/'repo', Path(tmp)/'out'
         repo.mkdir(); out.mkdir()
@@ -922,8 +1087,19 @@ def _self_check():
                               ('native_source_manifest',dict(config['native_source_manifest'],sha256='0'*64))):
                 (repo/CONFIG).write_bytes(encoded(dict(config,**{key:value})))
                 rejected(lambda:qualify(repo))
-            for key,value in (('source_identity_sha256','0'*64), ('source_file_count',398),
-                              ('native_source_commit','not-a-commit')):
+            if STARTUP_WAVE8:
+                for value in ('not-a-commit', '4'*39):
+                    (repo/CONFIG).write_bytes(encoded(dict(config,controller_source_commit=value)))
+                    rejected(lambda:qualify(repo))
+            bad_manifest = [('source_identity_sha256','0'*64), ('source_file_count',398),
+                            ('native_source_commit','not-a-commit')]
+            if STARTUP_WAVE8:
+                bad_manifest.extend((('native_source_commit','0'*40),('candidate_delta_paths',[]),
+                    ('candidate_delta_paths',dict.fromkeys(STARTUP_WAVE8_DELTA)),
+                    ('candidate_delta_paths',list(reversed(STARTUP_WAVE8_DELTA))),
+                    ('candidate_qualification_pending',False),('candidate_qualification_pending',1),
+                    ('schema','wrong-manifest-mode'),('control_native_source_commit','not-a-commit')))
+            for key,value in bad_manifest:
                 (repo/manifest_path).write_bytes(encoded(dict(manifest,**{key:value})))
                 pointer = dict(path=str(manifest_path),**worker.artifact(repo/manifest_path))
                 (repo/CONFIG).write_bytes(encoded(dict(config,native_source_manifest=pointer)))
@@ -948,7 +1124,7 @@ def _self_check():
             rejected(lambda:preflight(repo))
         body = user_data('0'*40,'1'*64,'sources/mock',PREFIX+'a0001',proof)
         assert len(CODE) == len(set(CODE)) == (24 if IMPLEMENTATION else 23 if TEST_BUILD else 22)
-        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == (18 if IMPLEMENTATION else 13)
+        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == (14 if STARTUP_WAVE8 else 18 if IMPLEMENTATION else 13)
         assert '--on-active=9000s' in body and 'RuntimeMaxSec=7260' in body
         assert all(k in body for k in ('MemoryMax=8G','MemorySwapMax=0','CPUQuota=200%','TasksMax=512'))
         assert 'build-essential' in body and 'python3-dev' in body
@@ -959,6 +1135,7 @@ def _self_check():
             assert clippy_install not in body, 'unchanged full/test-build bootstrap'
         assert semantic.AWSCLI_URL in body and semantic.AWSCLI_SHA256 in body
         assert 'phase=publication' not in body and 'native-semantic-publication' not in body
+        assert 'git ' not in body and 'git\n' not in body
         flag = mode_flag()
         for invocation in (f'{MODULE}{flag} --stage', f'{MODULE}{flag} --check-receipt',
                            f'scripts.check_native_workspace_execution{flag} "$CARGO_HOME/bin/cargo"'):
@@ -973,19 +1150,20 @@ def _self_check():
         _collection_self_check(proof,files,body)
     _lifecycle_self_check()
     if semantic_1m:
-        _remote_self_check()
+        _remote_self_check(manifest)
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024
-    print(f'PASS workspace {"implementation-gates" if IMPLEMENTATION else "test-build" if TEST_BUILD else "execution"} ({"semantic-1m" if semantic_1m else "metadata-waves"}): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli={semantic_1m}; code={len(CODE)} artifacts={len(ARTIFACTS)} release_copy={IMPLEMENTATION}; userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
+    print(f'PASS workspace {"implementation-gates" if IMPLEMENTATION else "test-build" if TEST_BUILD else "execution"} ({"startup-wave8" if STARTUP_WAVE8 else "semantic-1m" if semantic_1m else "metadata-waves"}): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli={semantic_1m}; code={len(CODE)} artifacts={len(ARTIFACTS)} release_copy={IMPLEMENTATION}; userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
 
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    implementation = args[:1] == ['--semantic-1m-implementation']
+    startup_wave8 = args[:1] == ['--startup-wave8-implementation']
+    implementation = startup_wave8 or args[:1] == ['--semantic-1m-implementation']
     test_build = args[:1] == ['--semantic-1m-test-build']
     semantic_1m = implementation or test_build or args[:1] == ['--semantic-1m']
     if semantic_1m:
         args = args[1:]
-    configure(semantic_1m, test_build=test_build, implementation=implementation)
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8)
     # ponytail: shared launch archives the repository in memory; stream it in
     # the shared launcher if root's launch resource gate proves insufficient.
     if args[:1] and args[0].startswith('--'):
@@ -993,7 +1171,9 @@ if __name__ == '__main__':
     if args == ['--self-check']:
         with execution_mode():
             _test_build_protocol_self_check()
-        self_check(semantic_1m, test_build=test_build, implementation=implementation)
+            _startup_wave8_protocol_self_check()
+            _startup_wave8_preflight_self_check()
+        self_check(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8)
     elif args[:1] == ['--stage']:
         assert len(args) == 3
         stage(*args[1:])
@@ -1005,7 +1185,7 @@ if __name__ == '__main__':
         assert len(args) == 2
         print(json.dumps(replay(args[1]),sort_keys=True))
     else:
-        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
+        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
         with open('/tmp/borsuk-native-workspace-execution-launch.lock','a+') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             main(args[0])
