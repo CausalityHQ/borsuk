@@ -1,0 +1,115 @@
+{
+  "actual_closed_validator_passed": true,
+  "actual_service_memory_peak_bytes": 2006085632,
+  "actual_service_swap_peak_bytes": 0,
+  "authenticated_artifact_count": 22,
+  "authenticated_artifacts": {
+    "asset-head-roster.json": {
+      "bytes": 16486,
+      "sha256": "c53c6fcf2e40d6b598185eb72001549fd0e3815c981653d3699db0ef9cea4eb1"
+    },
+    "asset-heads.json": {
+      "bytes": 20415,
+      "sha256": "b2eb6513d97240bffbfe9376533d228d69d043f36ed429965d90f50d09035a19"
+    },
+    "bootstrap-sdk-ledger.jsonl": {
+      "bytes": 5648,
+      "sha256": "3be00228197e8e9eacf511e84c37ba0aa1059b13a399a9958d067c85a9825ee3"
+    },
+    "bootstrap-staging.json": {
+      "bytes": 426,
+      "sha256": "31ef045d782c563590ebb7b7efa66e0cc6699c423b76c97361d4e2f9f88acc85"
+    },
+    "cleanup.json": {
+      "bytes": 74,
+      "sha256": "4d5a4852690d87291dc076da9ae35484514de25159e5d52b705b12a0d306862a"
+    },
+    "cli.json": {
+      "bytes": 503,
+      "sha256": "8ac2d188f03ed94e9314df05ae56fb98a245ade27a1ca5dcff8c004167c5851d"
+    },
+    "cli.log": {
+      "bytes": 605,
+      "sha256": "18cdeb6e1274c2023025afb00599e0e5e4ec34c3c1e4e4bca14aa6025ab306ec"
+    },
+    "config.json": {
+      "bytes": 11316,
+      "sha256": "bc61682a9036d597f5a93847e2b43df02c23fc0a1f66af129ffba50e8374537b"
+    },
+    "eligibility.json": {
+      "bytes": 949,
+      "sha256": "0bf89aa2ca0fb021342b142d5a5ed5dd54aac7470970b6a09daa5d918b9ed4d5"
+    },
+    "failure.json": {
+      "bytes": 50,
+      "sha256": "8e9f2356a514ab16e55e26a57dd80934a95339a9e504f20193a5faa55903466c"
+    },
+    "imports.json": {
+      "bytes": 786,
+      "sha256": "ca5038250fc60afd4e6c9d7b2da55684e2b8a09386b57f47f09cb621a91ed7ff"
+    },
+    "offered-asset-manifest.json": {
+      "bytes": 365,
+      "sha256": "012eb8827cb5f3ad3bc756ff3f2e60a1c9cb7e58a373f14e4664dac88817c944"
+    },
+    "offered-config.json": {
+      "bytes": 25472,
+      "sha256": "1bf2dc272ff7dcbcfdd939c8c4eade1de8e21ab2d4ae316b5aab9f2a81de6d11"
+    },
+    "offered-controller-config.json": {
+      "bytes": 9950,
+      "sha256": "7ad00af79a893a7ac0ad3396b7422cd50106084a93c5f06486e6c33184d374b8"
+    },
+    "offered-qualification.json": {
+      "bytes": 1914,
+      "sha256": "8ed7a08a8fd8de938532d2b29097e38743a87989d773e83353303518f8593839"
+    },
+    "profile-resources.txt": {
+      "bytes": 1021,
+      "sha256": "e76f02fad8a7dbc28694de9662fda0dbafa24fca4a77f287031e19a003b47bc2"
+    },
+    "profile.log": {
+      "bytes": 4280,
+      "sha256": "5e93651385a1f903906fe83da1cdab51249c9cd554dbffad534122186561d500"
+    },
+    "resources.json": {
+      "bytes": 4742,
+      "sha256": "69139f7c70b0398841f0209289ef7a22576ca68ae4d0cece685c7246dc52e3b5"
+    },
+    "sdk-ledger.jsonl": {
+      "bytes": 31914,
+      "sha256": "9973f6c7562eb796dd170e403f850da0db1b0847507d46749923ac6d79c254c1"
+    },
+    "small-body.json": {
+      "bytes": 206,
+      "sha256": "8c439f9c6b7c469d5a5227dd8abc0caa47ed6d01e8d7eb252aeca58ff1572cb7"
+    },
+    "source-qualification.json": {
+      "bytes": 38369,
+      "sha256": "28fc1bc7c54a85aacb0f40af0466c5e4f3befd4b90fec542c2f27afb27305e65"
+    },
+    "summary.json": {
+      "bytes": 579,
+      "sha256": "8cc13073b2b649709e196c9ee6f4b73b8b55c9da6aab363ac93f945fdedadf7c"
+    }
+  },
+  "head_keys": 51,
+  "independent_instance_state": [
+    {
+      "id": "i-02bf0b1ade8faa208",
+      "state": "terminated"
+    }
+  ],
+  "infrastructure_status": "INFRA_GO",
+  "instance_id": "i-02bf0b1ade8faa208",
+  "native_ann_calls": 0,
+  "original_controller_exit_status": 0,
+  "original_controller_session": 62910,
+  "performance_measured": false,
+  "qualified": true,
+  "schema": "borsuk-fixed48-offered-canary-root-audit-v1",
+  "scientific_status": "UNMEASURED",
+  "selected_body_bytes": 34661,
+  "source_archive_sha256": "d6ff2351d5cb04d090e51053250599bea1c5f62335e8af65219044146d0b910f",
+  "source_commit": "0884d498a61b72394b7210de3cd8d0ac8e006bf9"
+}
