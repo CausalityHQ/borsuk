@@ -1,0 +1,44 @@
+{
+  "schema": "borsuk-fixed48-cold-source-freeze-v1",
+  "attempt": "a0004",
+  "execution_source": {
+    "archive_sha256": "94dc4f24e5ff9e394579700a74a70254d20dcf2d7d0e7e2b571c8196e7378f31",
+    "commit": "e4c6ca83850b7865eb4b9f4c3eae6031f86a149e"
+  },
+  "runtime_config": {
+    "bytes": 14383,
+    "sha256": "da95471c64d2f44a9c65a152d226530a2fda87ff4a768a35827c23c9f90635e8"
+  },
+  "controller_config": {
+    "bytes": 9381,
+    "sha256": "facff761006fc9fa1b2d35d4113254761ff22a2bb80df5079a446a994f5a96d3"
+  },
+  "asset_manifest": {
+    "bytes": 13203,
+    "sha256": "ce4b1356fe069d66b547ffa3b0a5bfed53aa2988f1949deb7e4eba6e60228fef"
+  },
+  "unchanged_vs_a3": [
+    "native399",
+    "binary",
+    "publisher",
+    "panel",
+    "proofs",
+    "assets",
+    "quality_gates",
+    "resources"
+  ],
+  "changed": [
+    "SDK provisioning and admission",
+    "Python executor code hashes",
+    "serving namespace"
+  ],
+  "preregistration": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0004-execution-decision.md",
+  "canary": {
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/disposable-canary/a0002/root-audit.json",
+    "bytes": 1376,
+    "sha256": "e6f661dda6d0e934c7d72db3b6ea9059fa3bff385b2f8f272c50e844f462f13a"
+  },
+  "native_rebuilt": false,
+  "scientific_panel_rerun": false,
+  "matched_vendor_comparison": false
+}
