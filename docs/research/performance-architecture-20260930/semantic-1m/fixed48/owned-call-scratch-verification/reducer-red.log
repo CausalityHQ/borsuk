@@ -1,0 +1,51 @@
+Traceback (most recent call last):
+  File "/home/rb/worktrees/borsuk-fixed48-owned-call-scratch/scripts/run_cohere_fixed48_cold_http.py", line 648, in run
+    qualification['sdk'] = sdk_guard()
+                           ~~~~~~~~~^^
+  File "/usr/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/unittest/mock.py", line 1241, in _execute_mock_call
+    raise effect
+RuntimeError: original admission failure
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/rb/worktrees/borsuk-fixed48-owned-call-scratch/scripts/run_cohere_fixed48_cold_http.py", line 706, in run
+    summary = dict(summary or reduce_records(records, 0, 0), status='EXECUTION_FAILED',
+                              ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/unittest/mock.py", line 1241, in _execute_mock_call
+    raise effect
+ValueError: reducer rejected
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/rb/worktrees/borsuk-fixed48-owned-call-scratch/scripts/run_cohere_fixed48_cold_http.py", line 846, in failure_reducer_check
+    run(path, artifact(path)['sha256'], Path(__file__).resolve().parents[1], output)
+    ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-fixed48-owned-call-scratch/scripts/run_cohere_fixed48_cold_http.py", line 745, in run
+    config_sha256=expected_sha, status=summary['status'], passed=summary.get('quality_gate_passed', False) and process_cleanup))
+                                       ~~~~~~~^^^^^^^^^^
+TypeError: 'NoneType' object is not subscriptable
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    from scripts.run_cohere_fixed48_cold_http import failure_reducer_check; failure_reducer_check()
+                                                                            ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/rb/worktrees/borsuk-fixed48-owned-call-scratch/scripts/run_cohere_fixed48_cold_http.py", line 848, in failure_reducer_check
+    assert error is original, f'original error masked by {type(error).__name__}: {error}'
+           ^^^^^^^^^^^^^^^^^
+AssertionError: original error masked by TypeError: 'NoneType' object is not subscriptable

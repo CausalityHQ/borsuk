@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    from scripts.run_native_cold_first_query import scratch_ownership_check; scratch_ownership_check()
+                                                                             ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/rb/worktrees/borsuk-fixed48-owned-call-scratch/scripts/run_native_cold_first_query.py", line 202, in scratch_ownership_check
+    assert not observed['child_scratch'].exists(), 'child tempfile escaped call cleanup'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: child tempfile escaped call cleanup

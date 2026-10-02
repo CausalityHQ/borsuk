@@ -1,0 +1,42 @@
+unchanged_base_cold_sha256 fbab85ff0f14ff0c9443493ac406a3ee115c1891626217c735e38f65b9e528b1
+base_source_roster_399_identical_to_current; expected_historical_roster_395
+PASS cap/type/missing source fields; unchanged ordered IDs; exclusive source HEAD startup
+PASS all 64 reducer: separate/combined totals, HEAD accounting, failed/missing offers rejected
+Traceback (most recent call last):
+  File "<stdin>", line 13, in <module>
+  File "<frozen runpy>", line 229, in run_module
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/rb/worktrees/borsuk-fixed48-owned-call-scratch/scripts/run_native_paged_cold_first_query_selfcheck.py", line 334, in <module>
+    identity_check()
+    ~~~~~~~~~~~~~~^^
+  File "/home/rb/worktrees/borsuk-fixed48-owned-call-scratch/scripts/run_native_paged_cold_first_query_selfcheck.py", line 161, in identity_check
+    binary, cfg, qualification, config, proof = fixture(Path(tmp))
+                                                ~~~~~~~^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-fixed48-owned-call-scratch/scripts/run_native_paged_cold_first_query_selfcheck.py", line 141, in fixture
+    assert len(identities) == 395
+           ^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+Command exited with non-zero status 1
+	Command being timed: "python3 -"
+	User time (seconds): 0.22
+	System time (seconds): 0.07
+	Percent of CPU this job got: 98%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.30
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 38852
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 6832
+	Voluntary context switches: 4
+	Involuntary context switches: 20
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1

@@ -1,0 +1,174 @@
+{
+  "schema": "borsuk-fixed48-owned-call-scratch-contract-v1",
+  "base_commit": "17443064c51d570427d2c8ff908015832e929149",
+  "worktree": "/home/rb/worktrees/borsuk-fixed48-owned-call-scratch",
+  "commit": "79c76a3007676b22b2dac741712d6fa4040a5478",
+  "files": {
+    "scripts/run_native_cold_first_query.py": {
+      "path": "scripts/run_native_cold_first_query.py",
+      "bytes": 18809,
+      "sha256": "b4afffd43df8e2ab617749a50fd099fd279e57631e0dcb749b75169ad269a99f"
+    },
+    "scripts/run_cohere_fixed48_cold_http.py": {
+      "path": "scripts/run_cohere_fixed48_cold_http.py",
+      "bytes": 85344,
+      "sha256": "f8650057419628bd93c36672a2dce017fc74da2d76b2a66c80639df6c870b896"
+    }
+  },
+  "scope": {
+    "exact_two_files": true,
+    "native_or_cargo_or_cloud_or_network_execution": false,
+    "science_or_gt_rerun": false,
+    "reviews_or_workers_launched": false,
+    "push_or_integration": false
+  },
+  "implementation": [
+    "cold_call keyword-only stop_call and temp_dir (fresh context-manager factory) hooks; defaults retain existing call sites",
+    "child environment copied and TMPDIR pinned to the resolved unique call directory before spawn",
+    "stop callback still runs inside call directory context before cleanup; real process-group SIGTERM/wait verified",
+    "fixed48 measured_call removes global stop/tempfile patches and records owned directory, child TMPDIR, and owned removal proof; native budget patches unchanged",
+    "reducer rejection is retained separately and is not retried on the same completed ledger; original runtime failure survives error-path reducer/cleanup/resource masks",
+    "failed reduction writes closure metadata only, retains 64 ledger rows/resources/cleanup/COMPLETE, and is EXECUTION_FAILED / scientific INVALID without invented metrics"
+  ],
+  "red": {
+    "patch": {
+      "path": "/tmp/borsuk-owned-red-tests.patch",
+      "bytes": 6642,
+      "sha256": "2729b465aee20d23871c510d464a060913055a074fd15fe113b4072e24eb184f"
+    },
+    "source_sha256": {
+      "scripts/run_native_cold_first_query.py": "9dfc0c1b5e94a2e6a3bff89c1e338bc62feda36e8262a2fe9d87fd5c50e62e17",
+      "scripts/run_cohere_fixed48_cold_http.py": "041f62f3502302eb1116e78c749a6285ec9a9959c83fe0a5667f4e78b22bdffa"
+    },
+    "scratch": {
+      "exit_status": 1,
+      "failure": "child tempfile escaped call cleanup",
+      "command": "python3 -c \"from scripts.run_native_cold_first_query import scratch_ownership_check; scratch_ownership_check()\""
+    },
+    "reducer": {
+      "exit_status": 1,
+      "failure": "original error masked by TypeError: NoneType object is not subscriptable",
+      "command": "python3 -c \"from scripts.run_cohere_fixed48_cold_http import failure_reducer_check; failure_reducer_check()\""
+    }
+  },
+  "verification": {
+    "bounds": {
+      "ulimit_v_kib": 262144,
+      "timeout_seconds": 55
+    },
+    "fixed48": {
+      "command": "python3 scripts/run_cohere_fixed48_cold_http.py --self-check",
+      "exit_status": 0,
+      "wall_seconds": 2.97,
+      "max_rss_kib": 107356,
+      "scenarios": 9,
+      "real_python_child_exit": -15,
+      "overlapping_mocked_owners": 2,
+      "original_8_scenarios_preserved": true,
+      "failure_reducer_and_all64_cleanup_rejection": true
+    },
+    "shared_targeted": {
+      "command": "python3 -c \"from scripts import run_native_paged_cold_first_query_selfcheck as t; t.gates_check(); t.reducer_check(); t.restoration_check(); t.cleanup_check()\"",
+      "exit_status": 0,
+      "includes_success_query_failure_startup_failure": true
+    },
+    "compile_only": {
+      "files": [
+        "scripts/run_native_cold_first_query.py",
+        "scripts/run_cohere_fixed48_cold_http.py"
+      ],
+      "exit_status": 0
+    },
+    "git_diff_check_exit_status": 0,
+    "preexisting_failure": {
+      "command": "python3 -m scripts.run_native_paged_cold_first_query_selfcheck",
+      "exit_status": 1,
+      "location": "scripts/run_native_paged_cold_first_query_selfcheck.py:141",
+      "expected_source_count": 395,
+      "actual_source_count": 399,
+      "same_source_roster_at_base": true,
+      "selfcheck_unchanged_at_base": true,
+      "reproduced_with_base_shared_cold_source": true,
+      "base_source_sha256": "fbab85ff0f14ff0c9443493ac406a3ee115c1891626217c735e38f65b9e528b1",
+      "base_reproduction_exit_status": 1
+    }
+  },
+  "historical": {
+    "artifacts": {
+      "root-failure-audit.json": {
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0004/root-failure-audit.json",
+        "bytes": 2138,
+        "sha256": "7fd187a27520c84bb8cbbabec36c4d7ec22bf7baf879eec62537403f8ce4a452"
+      },
+      "screen/records.jsonl": {
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0004/screen/records.jsonl",
+        "bytes": 1443375,
+        "sha256": "28ef526f8c0b573904584277313fcb5d645b6501462a66fead35b1b1aaddb924"
+      },
+      "screen/publication.json": {
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0004/screen/publication.json",
+        "bytes": 38785,
+        "sha256": "ca94ff0bd8421fd112d54fe11042f944f44919ea6875c178cb45c8559580ccde"
+      }
+    },
+    "unchanged": true,
+    "original_run_disposition": "INVALID",
+    "original_rows": 64,
+    "original_cleanup_flags_all_false": true,
+    "publication_and_raw_records_read_only": true
+  },
+  "logs": {
+    "scratch-red": {
+      "path": "/tmp/borsuk-owned-scratch-red.log",
+      "bytes": 610,
+      "sha256": "2519c25c2f29946106b5add9efe8ea515c984b2fd012060bb199d45dbee0b5b4"
+    },
+    "reducer-red": {
+      "path": "/tmp/borsuk-owned-reducer-red.log",
+      "bytes": 2999,
+      "sha256": "ea7e4dc2b5b62c9bc11992182187db1e1420676ed34a0d5dfdbc9f095bb7e815"
+    },
+    "initial-green": {
+      "path": "/tmp/borsuk-owned-initial-green.log",
+      "bytes": 221,
+      "sha256": "8d9deffe572c0f469ebd884ffc337730530cc3ea8bc5d0c116165e23dbb139d0"
+    },
+    "overlap-green": {
+      "path": "/tmp/borsuk-owned-overlap-green.log",
+      "bytes": 130,
+      "sha256": "2a805c2204342943faa8f23103f5db458096546096ab2541fec57c3da4cafbbe"
+    },
+    "runtime": {
+      "path": "/tmp/borsuk-owned-runtime.log",
+      "bytes": 2150,
+      "sha256": "029e40dac509cb4d7831a92a5fbf3e7b1881e9a5291a7605c9341a4231814ebb"
+    },
+    "shared": {
+      "path": "/tmp/borsuk-owned-shared.log",
+      "bytes": 1827,
+      "sha256": "8ddac0ae3151d9feb19c622cb57cc56938c1289d05b6688924cc9e54db85f571"
+    },
+    "shared-base": {
+      "path": "/tmp/borsuk-owned-shared-base.log",
+      "bytes": 1970,
+      "sha256": "ba05e9423718cd5200f65b2f5dcbada658ac6bea0227706894f6d0f3f72a8ec0"
+    },
+    "runtime-final": {
+      "path": "/tmp/borsuk-owned-runtime-final.log",
+      "bytes": 2152,
+      "sha256": "ecf95f37bc83e14c7ff0a7015fb69ee10934ecbdea472eb50d159ee157caf019"
+    },
+    "shared-targeted-final": {
+      "path": "/tmp/borsuk-owned-shared-targeted-final.log",
+      "bytes": 1218,
+      "sha256": "fdf72291b003d1b488af8bacb7c7ab49f5fc60798153ddb6214e0964e0764e19"
+    }
+  },
+  "parent_notification": {
+    "early_agent_send_rejected": "recipient already has 20 queued instructions",
+    "final_delivery": "agent_complete; parent can retrieve archive if queue remains full"
+  },
+  "clean_worktree": true,
+  "author_and_committer": "Roman Bartusiak <riomus@gmail.com>",
+  "commit_parent": "17443064c51d570427d2c8ff908015832e929149"
+}

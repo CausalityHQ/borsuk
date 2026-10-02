@@ -1,0 +1,2 @@
+{'real_python_child': True, 'child_exit': -15, 'child_scratch_removed': True, 'sibling_preserved': True}
+{'original_failure_retained': True, 'reducer_failure_retained': True, 'ledger_rows': 64, 'closure_artifacts': True}

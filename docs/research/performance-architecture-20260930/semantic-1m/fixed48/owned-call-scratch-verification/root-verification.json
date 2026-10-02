@@ -1,0 +1,97 @@
+{
+  "schema": "borsuk-owned-call-scratch-root-verification-v1",
+  "source_commit": "ca2eb71165d8a27eb53f5598a41d62576c748dda",
+  "source_sha256": {
+    "scripts/run_native_cold_first_query.py": {
+      "path": "scripts/run_native_cold_first_query.py",
+      "bytes": 18809,
+      "sha256": "b4afffd43df8e2ab617749a50fd099fd279e57631e0dcb749b75169ad269a99f"
+    },
+    "scripts/run_cohere_fixed48_cold_http.py": {
+      "path": "scripts/run_cohere_fixed48_cold_http.py",
+      "bytes": 85344,
+      "sha256": "f8650057419628bd93c36672a2dce017fc74da2d76b2a66c80639df6c870b896"
+    }
+  },
+  "worker_commit": "79c76a3007676b22b2dac741712d6fa4040a5478",
+  "root_original_session": 15894,
+  "root_exit_status": 0,
+  "command": "ulimit -v 262144; timeout 55s /usr/bin/time -v python3 scripts/run_cohere_fixed48_cold_http.py --self-check",
+  "scenarios": 9,
+  "actual_real_subprocess_scratch_check": true,
+  "sealed_real_fixture_admission": true,
+  "original_failure_preserved": true,
+  "native_or_network_execution": false,
+  "rust_changed": false,
+  "historical_cold_a4_disposition": "INVALID",
+  "shared_historical_fixture_failure": {
+    "command": "python3 -m scripts.run_native_paged_cold_first_query_selfcheck",
+    "exit_status": 1,
+    "location": "scripts/run_native_paged_cold_first_query_selfcheck.py:141",
+    "expected_source_count": 395,
+    "actual_source_count": 399,
+    "same_source_roster_at_base": true,
+    "selfcheck_unchanged_at_base": true,
+    "reproduced_with_base_shared_cold_source": true,
+    "base_source_sha256": "fbab85ff0f14ff0c9443493ac406a3ee115c1891626217c735e38f65b9e528b1",
+    "base_reproduction_exit_status": 1
+  },
+  "logs": {
+    "scratch-red": {
+      "path": "scratch-red.log",
+      "bytes": 610,
+      "sha256": "2519c25c2f29946106b5add9efe8ea515c984b2fd012060bb199d45dbee0b5b4"
+    },
+    "reducer-red": {
+      "path": "reducer-red.log",
+      "bytes": 2999,
+      "sha256": "ea7e4dc2b5b62c9bc11992182187db1e1420676ed34a0d5dfdbc9f095bb7e815"
+    },
+    "initial-green": {
+      "path": "initial-green.log",
+      "bytes": 221,
+      "sha256": "8d9deffe572c0f469ebd884ffc337730530cc3ea8bc5d0c116165e23dbb139d0"
+    },
+    "overlap-green": {
+      "path": "overlap-green.log",
+      "bytes": 130,
+      "sha256": "2a805c2204342943faa8f23103f5db458096546096ab2541fec57c3da4cafbbe"
+    },
+    "runtime": {
+      "path": "runtime.log",
+      "bytes": 2150,
+      "sha256": "029e40dac509cb4d7831a92a5fbf3e7b1881e9a5291a7605c9341a4231814ebb"
+    },
+    "shared": {
+      "path": "shared.log",
+      "bytes": 1827,
+      "sha256": "8ddac0ae3151d9feb19c622cb57cc56938c1289d05b6688924cc9e54db85f571"
+    },
+    "shared-base": {
+      "path": "shared-base.log",
+      "bytes": 1970,
+      "sha256": "ba05e9423718cd5200f65b2f5dcbada658ac6bea0227706894f6d0f3f72a8ec0"
+    },
+    "runtime-final": {
+      "path": "runtime-final.log",
+      "bytes": 2152,
+      "sha256": "ecf95f37bc83e14c7ff0a7015fb69ee10934ecbdea472eb50d159ee157caf019"
+    },
+    "shared-targeted-final": {
+      "path": "shared-targeted-final.log",
+      "bytes": 1218,
+      "sha256": "fdf72291b003d1b488af8bacb7c7ab49f5fc60798153ddb6214e0964e0764e19"
+    },
+    "root-runtime": {
+      "path": "root-runtime.log",
+      "bytes": 1370,
+      "sha256": "af83a4f9d8cae8a2d10801f805ca8ac6b38dbe80807f04940b29d7f7e709f6b5"
+    },
+    "root-runtime-time": {
+      "path": "root-runtime.time",
+      "bytes": 781,
+      "sha256": "fc631f3c08eb5ee709cf0fd41d5e4e6f812e3c25e8ea49a2487ae532cb5917bc"
+    }
+  },
+  "next_gate": "refresh exact-source certificates, disposable infrastructure canary, prospective cold experiment; no old run relabeling"
+}
