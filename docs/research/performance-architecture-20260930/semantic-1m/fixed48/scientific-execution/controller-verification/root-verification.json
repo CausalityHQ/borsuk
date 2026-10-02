@@ -1,0 +1,40 @@
+{
+  "files": {
+    "request-bound.json": {
+      "bytes": 355,
+      "sha256": "9eeda0ea7b5fe869d6f4ed77a60152cb0a1ca1af88f652bec7ff1cc496b78b1f"
+    },
+    "root-check.log": {
+      "bytes": 284,
+      "sha256": "db9108d39ad4e753af7b7312d4027c97fd65171dfc9ee0d3072f78bf585fb854"
+    },
+    "worker-contract.json": {
+      "bytes": 28776,
+      "sha256": "63f413d8109884381fa4ccc8649fe8c17bf75f399eab4da611072ec11e756b48"
+    },
+    "worker-receipt.json": {
+      "bytes": 2002,
+      "sha256": "75d401f1f9ba60381b96f87815119ebe1561ad88bf92c14f43fca561d342f09c"
+    }
+  },
+  "implementation_commit": "d60b53307442450b7ff8d2b4be9e343fcb54adba",
+  "launch_authority": false,
+  "native_changed": false,
+  "native_source_file_count": 399,
+  "native_source_identity_sha256": "addf62bce23ceee034f22e4d1dfc0b318564d924c6e0fcee34b9336d1532813e",
+  "qualified": true,
+  "root_check": {
+    "checks": 54,
+    "elapsed_seconds": 8.5896012490266,
+    "launch_authority": false,
+    "native_or_real_vectors_or_truth_executed": false,
+    "passed": true,
+    "peak_rss_kib": 90228,
+    "schema": "borsuk-cohere-fixed48-fresh-scientific-spot-v1-self-check",
+    "synthetic": true,
+    "user_data_bytes": 11196
+  },
+  "root_check_exit_status": 0,
+  "rust_gates_reused": true,
+  "schema": "borsuk-fixed48-scientific-controller-root-verification-v1"
+}

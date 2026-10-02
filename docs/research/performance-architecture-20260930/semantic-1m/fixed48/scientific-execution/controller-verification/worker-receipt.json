@@ -1,0 +1,61 @@
+{
+  "actual_cloud_network_native_data_or_truth_execution": false,
+  "base_commit": "ab85653c7d2ea027dedf20554ba7c1390db55e8f",
+  "commands": [
+    {
+      "command": "timeout --signal=TERM --kill-after=5 55 python3 scripts/launch_cohere_fixed48_fresh_scientific_spot.py --self-check",
+      "exit": 0
+    },
+    {
+      "command": "stdlib compile(source)",
+      "exit": 0
+    },
+    {
+      "command": "python3 scripts/launch_cohere_fixed48_fresh_scientific_spot.py --help",
+      "exit": 0
+    },
+    {
+      "command": "git diff --cached --check",
+      "exit": 0
+    },
+    {
+      "command": "git commit; exact parent/one-owned-file/clean/Roman identity checks",
+      "exit": 0
+    }
+  ],
+  "contract": {
+    "bytes": 28776,
+    "path": "/tmp/borsuk-fixed48-scientific-spot-controller-contract.json",
+    "sha256": "63f413d8109884381fa4ccc8649fe8c17bf75f399eab4da611072ec11e756b48"
+  },
+  "cross_reviews_children_operator_merge_or_push": false,
+  "launch_authority": false,
+  "log": {
+    "bytes": 286,
+    "path": "/tmp/borsuk-fixed48-scientific-spot-controller-check.log",
+    "sha256": "870b23e442850faa62aeadf54b78d09ca05b2e73b1294976489467dbf5c60179"
+  },
+  "operator_identity": [
+    "Roman Bartusiak <riomus@gmail.com>",
+    "Roman Bartusiak <riomus@gmail.com>"
+  ],
+  "owned_files": [
+    "scripts/launch_cohere_fixed48_fresh_scientific_spot.py"
+  ],
+  "schema": "borsuk-fixed48-scientific-spot-controller-worker-receipt-v1",
+  "source_sha256": "e83dbe767e8363652119ff9025cfa68047554985fed6f8ba8d5084bad223c378",
+  "status": "SOURCE_ONLY_COMMITTED",
+  "synthetic_check": {
+    "checks": 54,
+    "elapsed_seconds": 7.788735534995794,
+    "launch_authority": false,
+    "native_or_real_vectors_or_truth_executed": false,
+    "passed": true,
+    "peak_rss_kib": 90140,
+    "schema": "borsuk-cohere-fixed48-fresh-scientific-spot-v1-self-check",
+    "synthetic": true,
+    "user_data_bytes": 11196
+  },
+  "worker_commit": "d60b53307442450b7ff8d2b4be9e343fcb54adba",
+  "worktree_clean": true
+}

@@ -1,0 +1,9 @@
+{
+  "selected_and_duplicate_train_shards": 65,
+  "driver_get_dispatch_bound": 67,
+  "staging_sdk_get_bound": 49,
+  "combined_data_get_bound": 116,
+  "cap": 256,
+  "selected_sha256": "dfe569e0198f35d690e5aa6a248aa8eee73b6d59a569b194729368e84aa2f61c",
+  "scope": "asset/config staging plus driver acquisition; bootstrap/source/output collection separate"
+}
