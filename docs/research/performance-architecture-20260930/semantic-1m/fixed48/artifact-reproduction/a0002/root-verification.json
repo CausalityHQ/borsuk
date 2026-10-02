@@ -1,0 +1,13 @@
+{
+  "qualified": true,
+  "original_controller_exit": 0,
+  "original_helper_exit": 0,
+  "terminal_exit": 0,
+  "instance_state_verified": "terminated",
+  "terminal_artifacts": 44,
+  "retained_bodies": 30,
+  "original_collector_full_stream_authentication": true,
+  "root_small_body_identity_and_closed_protocol_verification": true,
+  "large_bodies_retained_in_s3": true,
+  "new_queries_truth_or_ann_measurements": false
+}

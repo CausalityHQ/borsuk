@@ -1,0 +1,23 @@
+	Command being timed: "timeout --signal=TERM --kill-after=30 1800 /mnt/cohere-artifact-reproduction/venv/bin/python -m scripts.launch_cohere_semantic_artifact_reproduction_spot --stage /mnt/cohere-artifact-reproduction/repo /mnt/cohere-artifact-reproduction research/semantic-router/20261002/fixed48-artifact-reproduction-a0002"
+	User time (seconds): 84.10
+	System time (seconds): 13.81
+	Percent of CPU this job got: 63%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:33.51
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 344708
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 31
+	Minor (reclaiming a frame) page faults: 200730
+	Voluntary context switches: 79695
+	Involuntary context switches: 1059
+	Swaps: 0
+	File system inputs: 11400
+	File system outputs: 14162912
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

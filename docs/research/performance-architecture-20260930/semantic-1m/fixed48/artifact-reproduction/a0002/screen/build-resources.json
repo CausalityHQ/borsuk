@@ -1,0 +1,1 @@
+{"command":["/mnt/cohere-artifact-reproduction/screen/builder","/mnt/cohere-artifact-reproduction/screen/builder-config.json","755c24183a0406422bb75bb0b84b2a673638c404d83ab7a442626de67e4dd6a9","536870912","/mnt/cohere-artifact-reproduction/screen/generation"],"exit_status":0,"process_cleanup":true,"process_peak_rss_kib":344708,"wall_seconds":73.44420077799998}

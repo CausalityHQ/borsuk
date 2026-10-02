@@ -1,0 +1,23 @@
+	Command being timed: "/mnt/cohere-artifact-reproduction/screen/builder /mnt/cohere-artifact-reproduction/screen/builder-config.json 755c24183a0406422bb75bb0b84b2a673638c404d83ab7a442626de67e4dd6a9 536870912 /mnt/cohere-artifact-reproduction/screen/generation"
+	User time (seconds): 50.37
+	System time (seconds): 4.78
+	Percent of CPU this job got: 75%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:13.42
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 344708
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 87486
+	Voluntary context switches: 1734
+	Involuntary context switches: 624
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 6601008
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

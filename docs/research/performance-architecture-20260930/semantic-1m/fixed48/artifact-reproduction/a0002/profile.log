@@ -1,0 +1,7 @@
+Running as unit: cohere-artifact-reproduction.service; invocation ID: 388b1fbcaa9c44e4945c85e89713813b
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 2min 33.535s
+CPU time consumed: 1min 37.929s
+Memory peak: 1.5M
+Memory swap peak: 0B
