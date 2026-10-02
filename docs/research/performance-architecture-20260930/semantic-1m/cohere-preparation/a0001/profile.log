@@ -1,0 +1,18 @@
+Running as unit: cohere-fresh64-preparation.service; invocation ID: 49e245f6988144aea9ae0740407a0efa
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/mnt/cohere-fresh64-preparation/repo/scripts/launch_cohere_semantic_1m_preparation_spot.py", line 831, in <module>
+    stage(*sys.argv[2:])
+  File "/mnt/cohere-fresh64-preparation/repo/scripts/launch_cohere_semantic_1m_preparation_spot.py", line 314, in stage
+    validate_cgroup(counters)
+  File "/mnt/cohere-fresh64-preparation/repo/scripts/launch_cohere_semantic_1m_preparation_spot.py", line 249, in validate_cgroup
+    assert int(counters['memory.max']) == MEMORY and 0 <= int(counters['memory.peak']) <= MEMORY
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=1
+Service runtime: 6min 3.333s
+CPU time consumed: 2min 13.247s
+Memory peak: 1.5M
+Memory swap peak: 0B

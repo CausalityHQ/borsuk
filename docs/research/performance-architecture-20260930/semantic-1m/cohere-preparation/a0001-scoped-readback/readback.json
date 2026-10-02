@@ -1,0 +1,132 @@
+{
+  "ann_quality_measured": false,
+  "artifact_bodies_authenticated": {
+    "decision.json": {
+      "authenticated_readback": true,
+      "bytes": 14243,
+      "conditional_get_if_match": true,
+      "etag": "\"1507679b1921f44bb18e65b63ffd7b1c\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/decision.json",
+      "metadata": {
+        "sha256": "222a06414f7ce8030cea8e45d7cc84fe1303f1da20516f552def540469c10eec"
+      },
+      "sha256": "222a06414f7ce8030cea8e45d7cc84fe1303f1da20516f552def540469c10eec",
+      "version_id": null
+    },
+    "duplicate-audit.json": {
+      "authenticated_readback": true,
+      "bytes": 33074,
+      "conditional_get_if_match": true,
+      "etag": "\"6caab394687ad955031f96ce9e5210b6\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/duplicate-audit.json",
+      "metadata": {
+        "sha256": "ac8fb791a581853490acac6a0eb393837c68862bfa7ee39eb92766c1f208868e"
+      },
+      "sha256": "ac8fb791a581853490acac6a0eb393837c68862bfa7ee39eb92766c1f208868e",
+      "version_id": null
+    },
+    "oracle.json": {
+      "authenticated_readback": true,
+      "bytes": 1063,
+      "conditional_get_if_match": true,
+      "etag": "\"cd93123ab0833391a119d881f07c69d2\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/oracle.json",
+      "metadata": {
+        "sha256": "f06dd3a5ec9217ccf8045151540c9f71b517124b954c2e8e23a83bdd040e239b"
+      },
+      "sha256": "f06dd3a5ec9217ccf8045151540c9f71b517124b954c2e8e23a83bdd040e239b",
+      "version_id": null
+    },
+    "panel.json": {
+      "authenticated_readback": true,
+      "bytes": 36744,
+      "conditional_get_if_match": true,
+      "etag": "\"f107a10fe4efa7375bfd7e2f4bb21561\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/panel.json",
+      "metadata": {
+        "sha256": "979ad0f737ff045ab58b09dc9bc84105092c34238a5625558e2caa199e1b796e"
+      },
+      "sha256": "979ad0f737ff045ab58b09dc9bc84105092c34238a5625558e2caa199e1b796e",
+      "version_id": null
+    },
+    "queries.raw": {
+      "authenticated_readback": true,
+      "bytes": 196608,
+      "conditional_get_if_match": true,
+      "etag": "\"df573c11da229b6c948afdaa7496f625\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/queries.raw",
+      "metadata": {
+        "sha256": "928435c9f040637c037ea5dc62778adabfa31979611c6b0c25d57ae320b0ba86"
+      },
+      "sha256": "928435c9f040637c037ea5dc62778adabfa31979611c6b0c25d57ae320b0ba86",
+      "version_id": null
+    },
+    "requests.jsonl": {
+      "authenticated_readback": true,
+      "bytes": 983341,
+      "conditional_get_if_match": true,
+      "etag": "\"3f8e73c0cd35953f9687f0773fa5bf68\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/requests.jsonl",
+      "metadata": {
+        "sha256": "9debc24176e42ab6ce5ed12c7353182daabd12dabe4a9f9998c7e5a73ad8eb49"
+      },
+      "sha256": "9debc24176e42ab6ce5ed12c7353182daabd12dabe4a9f9998c7e5a73ad8eb49",
+      "version_id": null
+    },
+    "resources.json": {
+      "authenticated_readback": true,
+      "bytes": 1598,
+      "conditional_get_if_match": true,
+      "etag": "\"daaee9734c09509cc43f103d72925604\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/resources.json",
+      "metadata": {
+        "sha256": "ff9b300c52703ad50279b3cfdf85ffd7e89d616b4c7b3ee8a332d473675a376a"
+      },
+      "sha256": "ff9b300c52703ad50279b3cfdf85ffd7e89d616b4c7b3ee8a332d473675a376a",
+      "version_id": null
+    },
+    "truth.i64": {
+      "authenticated_readback": true,
+      "bytes": 51200,
+      "conditional_get_if_match": true,
+      "etag": "\"5189ee1ca28ef7e11ab99a6e16607375\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/truth.i64",
+      "metadata": {
+        "sha256": "3ad7d0893fce5c8258ff4da1808225c97d06314165d125e579ef0ad0a2892209"
+      },
+      "sha256": "3ad7d0893fce5c8258ff4da1808225c97d06314165d125e579ef0ad0a2892209",
+      "version_id": null
+    },
+    "truth.u32": {
+      "authenticated_readback": true,
+      "bytes": 25600,
+      "conditional_get_if_match": true,
+      "etag": "\"fa583b49a047d1ee60fa4d7eeace3824\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/truth.u32",
+      "metadata": {
+        "sha256": "4825749d1fd4047f5cc8cbb694848378157415de572a3bb5ee9451d9ba840742"
+      },
+      "sha256": "4825749d1fd4047f5cc8cbb694848378157415de572a3bb5ee9451d9ba840742",
+      "version_id": null
+    }
+  },
+  "confirmed_wire_requests": "UNMEASURED",
+  "helper_exit_code": 0,
+  "input_reconstruction_or_gt_reexecution": false,
+  "logical_get_calls": 9,
+  "logical_head_calls": 9,
+  "observed_at": "2026-10-02T03:23:08.063445+00:00",
+  "original_campaign_status": "FAIL",
+  "original_terminal_sha256": "ab8b1fab71fcda376e3a71143b196ecf55abfce52ad1994cc297ce5f98fa8706",
+  "prepared_campaign_passed": false,
+  "previous_observation_attempt": {
+    "error": "HTTPResponse lacks iter_chunks; closed body before read",
+    "exit_status": 1,
+    "logical_get_calls": 1,
+    "logical_head_calls": 1
+  },
+  "schema": "borsuk-cohere-closed-panel-scoped-readback-v1",
+  "sdk_max_attempts": 1,
+  "source_archive_sha256": "d373a252883cdf7f8f3e368993a0492f9d82393e397d5ad191a20a7e91f81d79",
+  "source_commit": "96b9a4a249df1d9940a160b0e44398abb19bde2e"
+}

@@ -1,0 +1,7 @@
+# CoHere fixed-panel recovery checkpoint
+
+Original preparation a0001 is **FAIL**, worker exit 1, instance `i-03e63596a8ca1c13f` terminated. All 21 available bodies authenticate. The preparation helper completed with exit 0; the controller rejected the aggregate cgroup memory peak 2,155,061,248 bytes against frozen 2,147,483,648 bytes. The peak exceeds the cap by 7,577,600 bytes. Cgroup max events 73,271, OOM/OOM-kill zero, swap zero; process max RSS 344,340 KiB. The resource fields do not establish controller gate compliance. Do not retroactively pass this campaign or change its cap.
+
+Fresh root HEAD + conditional full-body GET authenticated all nine sealed construction objects (1,343,471 bytes) against original terminal and decision identities. This establishes current object/body identity, not restoration of the deleted historical seal-readback receipt or its ETags. The preceding observation failed on an HTTPResponse stream API mismatch after one HEAD/GET; its calls are recorded separately. No input reconstruction, query reselection, GT execution or ANN quality measurement occurred.
+
+The fixed 64 query bytes and truth remain candidates for a distinct source-audited construction authority. An independent bounded audit is active as `ad412ca0570c4ca6`; consume its finding before issuing the next serving/build authority. Preserve the original terminal/resource failure and record fresh-readback provenance separately. CoHere ANN recall/latency/QPS remain UNKNOWN. This preparation safety gate is not a universal ANN product RAM target.

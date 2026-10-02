@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-03e63596a8ca1c13f",
+  "nodes": {
+    "0": {
+      "instance_id": "i-03e63596a8ca1c13f"
+    }
+  },
+  "prefix": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001",
+  "source_commit": "96b9a4a249df1d9940a160b0e44398abb19bde2e",
+  "source_archive_sha256": "d373a252883cdf7f8f3e368993a0492f9d82393e397d5ad191a20a7e91f81d79"
+}
