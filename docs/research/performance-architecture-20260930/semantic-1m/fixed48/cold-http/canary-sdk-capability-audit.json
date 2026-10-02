@@ -1,0 +1,13 @@
+{
+  "source_url": "https://raw.githubusercontent.com/boto/botocore/1.34.46/botocore/data/s3/2006-03-01/service-2.json",
+  "sha256": "0e0760c9ae10e9f8af267b0d9708fefabbaec023370f0044bbecc51565f05699",
+  "botocore_version": "1.34.46",
+  "put_object_accepts_IfNoneMatch": false,
+  "ubuntu_package_source": "https://packages.ubuntu.com/python3-boto3",
+  "ubuntu24_packaged_boto3": "1.34.46+dfsg-1ubuntu1",
+  "required_capability": "S3 PutObject.IfNoneMatch for immutable artifact and terminal writes",
+  "disposition": "bootstrap import-only SDK fallback cannot establish required API capability; repair before launch",
+  "native_or_cloud_execution": false,
+  "local_boto3_version": "1.40.72",
+  "local_botocore_version": "1.40.72"
+}
