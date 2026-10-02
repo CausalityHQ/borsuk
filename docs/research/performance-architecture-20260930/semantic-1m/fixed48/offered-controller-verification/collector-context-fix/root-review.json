@@ -1,0 +1,19 @@
+{
+  "all_worker_log_hashes_authenticated": true,
+  "current_frozen_experiment_source_remains": "0884d498a61b72394b7210de3cd8d0ac8e006bf9",
+  "full_rust_suite_reexecuted": false,
+  "future_launch_requires_new_source_bound_authorities": true,
+  "green_checks": 38,
+  "green_exit_status": 0,
+  "historical_collection_admission": true,
+  "integrated_commit": "39213dfb",
+  "mechanism_review": "actual preflight before roster mutation; only historical ARTIFACTS and TERMINAL_IDENTITIES restored during real validation/replay; owned ID/termination, archive/config/binary/source/roster/body hashes retained",
+  "native_rebuilt": false,
+  "no_remote_experiment_repeated": true,
+  "red_preflight_exit_status": 1,
+  "red_replay_exit_status": 1,
+  "schema": "borsuk-fixed48-offered-collector-review-v1",
+  "source_sha256": "ad249a2fe9549c1c15b6789ddb95e1bcc1f5ca53ab5807a3b81538e92073478f",
+  "worker_commit": "7e30797c3b7790bed0dfdab883899e70cb49d23f",
+  "worker_receipt_sha256": "281691852400b7cd2347f21c2c2d9853725d820442d2a17b0a3a6aca8e356fa0"
+}

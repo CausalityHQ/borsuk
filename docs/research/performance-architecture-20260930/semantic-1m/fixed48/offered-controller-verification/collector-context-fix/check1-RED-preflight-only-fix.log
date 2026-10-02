@@ -1,0 +1,37 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    from scripts import launch_cohere_fixed48_offered_http_spot as c; c.self_check()
+                                                                      ~~~~~~~~~~~~^^
+  File "/home/rb/worktrees/borsuk-offered-collector-roster-context-fix/scripts/launch_cohere_fixed48_offered_http_spot.py", line 837, in self_check
+    checks += staging_collection_check(work,repo,config,proof,worker,capability,rejects,thaw)
+              ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-offered-collector-roster-context-fix/scripts/launch_cohere_fixed48_offered_http_spot.py", line 597, in staging_collection_check
+    collect(SDK(objects),PREFIX+'a0001',dest,'i-owned',proof['source_archive_commit'],proof['source_archive_sha256'])
+    ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-offered-collector-roster-context-fix/scripts/launch_cohere_fixed48_offered_http_spot.py", line 469, in collect
+    return cold.collect(SimpleNamespace(get_object=get_object),prefix,out,instance_id,commit,digest)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-offered-collector-roster-context-fix/scripts/launch_cohere_fixed48_cold_http_spot.py", line 762, in collect
+    complete = validate_closed(out, proof, terminal, files)
+  File "/home/rb/worktrees/borsuk-offered-collector-roster-context-fix/scripts/launch_cohere_fixed48_offered_http_spot.py", line 408, in validate_closed
+    summary = runtime().replay(out/'config.json',proof['config_sha256'],Path.cwd(),out/'screen')
+  File "/usr/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/unittest/mock.py", line 1247, in _execute_mock_call
+    result = effect(*args, **kwargs)
+  File "/home/rb/worktrees/borsuk-offered-collector-roster-context-fix/scripts/launch_cohere_fixed48_offered_http_spot.py", line 593, in historical_replay
+    admit_historical(); return dict(status='FAIL',execution_gate_passed=True)
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/rb/worktrees/borsuk-offered-collector-roster-context-fix/scripts/launch_cohere_fixed48_offered_http_spot.py", line 586, in admit_historical
+    _, historical_proof, evidence = historical_runtime.qualify(historical_repo/CONFIG,artifact(historical_repo/CONFIG)['sha256'],historical_repo)
+                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-offered-collector-roster-context-fix/scripts/run_cohere_fixed48_offered_http.py", line 267, in qualify
+    evidence = historical_inputs(repo,config)
+  File "/home/rb/worktrees/borsuk-offered-collector-roster-context-fix/scripts/run_cohere_fixed48_offered_http.py", line 163, in historical_inputs
+    assert set(terminal['artifacts']) == set(cold_spot.ARTIFACTS)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

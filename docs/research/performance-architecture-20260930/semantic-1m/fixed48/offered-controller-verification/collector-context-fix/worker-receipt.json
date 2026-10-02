@@ -1,0 +1,65 @@
+{
+  "author": "Roman Bartusiak <riomus@gmail.com>",
+  "base": "d77a0ef5ddc5c85497850d0237d6ae0c383bed7f",
+  "branch": "devbox/offered-collector-roster-context-fix",
+  "checks": [
+    {
+      "command": "timeout 60s python3 -B -c \"from scripts import launch_cohere_fixed48_offered_http_spot as c; c.self_check()\"",
+      "exit_status": 1,
+      "failure": "historical_inputs line 163 during collector preflight",
+      "log": "/tmp/borsuk-offered-collector-roster-context-fix-red-trace.log",
+      "log_sha256": "e67f5ea389e70246ca097f4cc56736226de13ff6432c86f15af1fadb6e13cc5b",
+      "stage": "RED before fix"
+    },
+    {
+      "command": "timeout 60s python3 -B -c \"from scripts import launch_cohere_fixed48_offered_http_spot as c; c.self_check()\"",
+      "exit_status": 1,
+      "failure": "historical_inputs line 163 during actual validate_closed replay callback",
+      "log": "/tmp/borsuk-offered-collector-roster-context-fix-replay-red.log",
+      "log_sha256": "a8c6b15853f7a302848df0ce83aaa51b2aed6957deb0d259ed767975abc72fc8",
+      "stage": "RED preflight-only fix"
+    },
+    {
+      "command": "timeout 60s python3 -B -m scripts.launch_cohere_fixed48_offered_http_spot --self-check",
+      "exit_status": 0,
+      "log": "/tmp/borsuk-offered-collector-roster-context-fix-green.log",
+      "log_sha256": "d37305ab2dd42c172c935f297c0fa29ca44069a6586f4805e226e42493fbbc0c",
+      "result": {
+        "checks": 38,
+        "elapsed_seconds": 30.755882624012884,
+        "fresh_cli_preflight": true,
+        "historical_collection_admission": true,
+        "launch_authorized": false,
+        "native_or_cloud_execution": false,
+        "passed": true,
+        "peak_rss_kib": 98884,
+        "real_runtime_integration": false,
+        "runtime_fixture": "explicit temporary stub; actual combined integration remains parent-owned",
+        "source_sha256": "ad249a2fe9549c1c15b6789ddb95e1bcc1f5ca53ab5807a3b81538e92073478f",
+        "user_data_bytes": 12518
+      },
+      "stage": "GREEN complete fix"
+    },
+    {
+      "command": "compile(Path(owned).read_bytes(),owned,\"exec\")",
+      "exit_status": 0,
+      "log": "/tmp/borsuk-offered-collector-roster-context-fix-syntax.log",
+      "log_sha256": "f423df62201d0ab2c9a1f49aaa7da9e518093849cde38e08ef231cb38df8697e",
+      "stage": "syntax"
+    }
+  ],
+  "clean": true,
+  "commit": "7e30797c3b7790bed0dfdab883899e70cb49d23f",
+  "merged": false,
+  "original_trace": {
+    "path": "/tmp/borsuk-fixed48-offered-a0002-collection-recovery.time",
+    "sha256": "0d9747a8f355fe2db4e75644c9c0a2e4c32a3fddc79fe79dabeb58c79c538520"
+  },
+  "owned_files": [
+    "scripts/launch_cohere_fixed48_offered_http_spot.py"
+  ],
+  "owned_source_sha256": "ad249a2fe9549c1c15b6789ddb95e1bcc1f5ca53ab5807a3b81538e92073478f",
+  "pushed": false,
+  "regression": "Actual collection adapter and actual offered validate_closed; both preflight/replay boundary doubles invoke genuine runtime.qualify with frozen old sealed a5 authority, full historical and cgroup assertions, 399 native source hashes and 64 old panel requests. Synthetic offered bodies only; full offered scientific replay remains parent-owned.",
+  "scope": "No Cargo, AWS/network, native/science execution, reviews, children, new campaign record/GT/metrics reads, or frozen evidence edits. Import order unchanged. Actual production preflight runs once before roster mutation; validator restores historical ARTIFACTS and TERMINAL_IDENTITIES."
+}
