@@ -470,6 +470,8 @@ def stage(repo, out, prefix):
         import boto3
         from botocore.config import Config
         capability = sdk_guard()
+        cold_capability = runtime.sdk_guard()
+        assert {k: cold_capability[k] for k in capability} == capability, 'cold runtime SDK parity'
         assert capability['boto3'] == capability['botocore'] == SDK_VERSION, 'worker SDK version'
         s3 = boto3.client('s3', region_name=REGION, config=Config(retries={'total_max_attempts': 1}, connect_timeout=5, read_timeout=5))
         with runtime.observe(out, LIMITS, resources, started + WORKER_SECONDS) as check:
@@ -478,7 +480,7 @@ def stage(repo, out, prefix):
             assert all(proof[k] == early[k] for k in ('source_archive_commit', 'source_archive_sha256', 'config_bytes', *IDENTITIES)), 'bootstrap/worker identities'
             write(out / 'source-qualification.json', dict(early, admission_gates=proof['admission_gates']))
             write(out / 'imports.json', dict(real=True, modules=[MODULE, cold.MODULE, runtime.OWN[:-3].replace('/', '.'), 'boto3', 'botocore.config'],
-                python=sys.version, sdk=capability, files={MODULE:artifact(repo / OWN), cold.MODULE:artifact(repo / cold.OWN),
+                python=sys.version, sdk=capability, cold_runtime_sdk=cold_capability, files={MODULE:artifact(repo / OWN), cold.MODULE:artifact(repo / cold.OWN),
                     runtime.OWN:artifact(repo / runtime.OWN)}, complete=True))
             temporary.mkdir()
             with (out / 'sdk-ledger.jsonl').open('xb') as ledger:
@@ -571,6 +573,8 @@ def validate_closed(out, proof, terminal):
     assert imports['real'] is imports['complete'] is True
     assert imports['sdk'] == dict(boto3=SDK_VERSION, botocore=SDK_VERSION, conditional_put=True, network_calls=0)
     assert boot['sdk'] == imports['sdk']
+    assert {k: imports['cold_runtime_sdk'][k] for k in imports['sdk']} == imports['sdk']
+    assert imports['cold_runtime_sdk']['python_executable'], 'cold runtime interpreter evidence'
     for module, path in ((MODULE, OWN), (cold.MODULE, cold.OWN), (runtime.OWN, runtime.OWN)):
         assert imports['files'][module]['sha256'] == artifact(Path(path))['sha256'], 'import identity'
     head = read_json(out / 'asset-heads.json')

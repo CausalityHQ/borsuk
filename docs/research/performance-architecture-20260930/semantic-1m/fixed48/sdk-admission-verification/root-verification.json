@@ -1,0 +1,100 @@
+{
+  "schema": "borsuk-fixed48-sdk-admission-root-verification-v1",
+  "source_commit": "9c5d93f8075a43fdb63f1ccfe0374433c91b7a44",
+  "sources": {
+    "scripts/run_cohere_fixed48_cold_http.py": {
+      "bytes": 79739,
+      "sha256": "ebbf425e9c4249573f2f038102ccf18f593e2f166c251c35010c113ef13346e8"
+    },
+    "scripts/launch_cohere_fixed48_cold_http_spot.py": {
+      "bytes": 102431,
+      "sha256": "1d8255caa1cb4b48fe4c0d76a9798b599c937782c2edff7927062eae9b78c03d"
+    },
+    "scripts/launch_cohere_fixed48_canary_spot.py": {
+      "bytes": 69521,
+      "sha256": "76a23cb69a2939e4259ca08e1fb79e6658d5f806afdd802914990613ccfcd8b3"
+    }
+  },
+  "sdk_version": "1.40.72",
+  "actual_old_model": {
+    "version": "1.34.46",
+    "bytes": 1017034,
+    "sha256": "0e0760c9ae10e9f8af267b0d9708fefabbaec023370f0044bbecc51565f05699",
+    "conditional_put_rejected": true
+  },
+  "installed_sdk": {
+    "boto3": "1.40.72",
+    "botocore": "1.40.72",
+    "conditional_put": true,
+    "network_calls": 0,
+    "python_executable": "/usr/bin/python3"
+  },
+  "gates": {
+    "runtime": {
+      "exit_status": 0,
+      "scenarios": 8,
+      "wall_seconds": 2.38,
+      "peak_rss_kib": 94644
+    },
+    "real_panel": {
+      "exit_status": 0,
+      "queries": 64,
+      "wall_seconds": 0.42,
+      "peak_rss_kib": 78264
+    },
+    "canary": {
+      "exit_status": 0,
+      "groups": 13,
+      "wall_seconds": 4.63,
+      "peak_rss_kib": 105452
+    }
+  },
+  "artifacts": {
+    "real-panel.time": {
+      "bytes": 726,
+      "sha256": "30b09a9750acec3c7cd753d171259257b6c8a731135f73e3255ced903c3ed481"
+    },
+    "real-panel.log": {
+      "bytes": 722,
+      "sha256": "2c09c6846aa020fab2ec5388121b8b463adb32a216eaa45129bf3b8481c34c69"
+    },
+    "canary.time": {
+      "bytes": 822,
+      "sha256": "4008b55583ba9b5ccb9ac411eb30bfc0d176919160b1daac85fb73238545d94a"
+    },
+    "canary-final.log": {
+      "bytes": 1372,
+      "sha256": "0cdec848f949718618ff3827d7321905ce8ca40f314ddcb9b85be536211cfc6b"
+    },
+    "runtime.time": {
+      "bytes": 780,
+      "sha256": "af7232aeaa9627fbe3d8ac180ef67378a20df939a505fb6e5397cf31ad5c6056"
+    },
+    "runtime.log": {
+      "bytes": 1082,
+      "sha256": "12e9c43d6b5ed72ee0a5e4450e3cb2d0c52655e8696189c5878890e5994cd039"
+    },
+    "canary-final.time": {
+      "bytes": 787,
+      "sha256": "74597aee07c8907f015b9ab1d2b05e1864151f3ec5f223b66bead23e69e7b20e"
+    },
+    "canary.log.gz": {
+      "bytes": 37,
+      "sha256": "77b76df22ba06c1624716c99162322ae9897405073629d9534f4b2e204846f65"
+    }
+  },
+  "native_calls": 0,
+  "network_calls": 0,
+  "remote_canary_passed": false,
+  "launch_authorized": false,
+  "historical_a3_disposition": "INVALID",
+  "artifact_archives": {
+    "canary.log": {
+      "archived_path": "canary.log.gz",
+      "uncompressed_identity": {
+        "bytes": 17,
+        "sha256": "5048a1044bec2cdfcef63fb62f5f0bf2b025ee9212e0d583dbfcf9fb1ccdd194"
+      }
+    }
+  }
+}

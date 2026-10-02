@@ -1,10 +1,10 @@
 {
   "schema": "borsuk-fixed48-retained-cold-root-verification-v1",
-  "source_commit": "9c5d93f8075a43fdb63f1ccfe0374433c91b7a44",
+  "source_commit": "d12f6222a60208aec4563dcf9aa4007144810e7c",
   "owned_source": {
     "path": "scripts/run_cohere_fixed48_cold_http.py",
-    "bytes": 79739,
-    "sha256": "ebbf425e9c4249573f2f038102ccf18f593e2f166c251c35010c113ef13346e8"
+    "bytes": 75536,
+    "sha256": "16d99125759c5e30e20ff7c86f6ce5f8394da955452046a8c8376268b0927307"
   },
   "self_check": {
     "exit_status": 0,
@@ -14,12 +14,12 @@
   },
   "artifacts": {
     "root-selfcheck.time": {
-      "bytes": 780,
-      "sha256": "af7232aeaa9627fbe3d8ac180ef67378a20df939a505fb6e5397cf31ad5c6056"
+      "bytes": 782,
+      "sha256": "fe7fa1f59a8442eab11ab8a21d52e714b6ecd4c0af3eff2a7e8867541ba00b15"
     },
     "root-selfcheck.log": {
-      "bytes": 1082,
-      "sha256": "12e9c43d6b5ed72ee0a5e4450e3cb2d0c52655e8696189c5878890e5994cd039"
+      "bytes": 839,
+      "sha256": "eed7793ff2bb807070983ae6a68865dbc09fef23fd980f29d6d468a70bf7d57b"
     },
     "worker-contract.json": {
       "bytes": 13105,
@@ -38,11 +38,5 @@
   "full_workspace_test_execution": false,
   "launch_authorized": false,
   "cold_http_measurement": "UNMEASURED",
-  "historical_verification_preserved": "historical-raw-query/root-verification.json",
-  "sdk_admission": {
-    "pinned_sdk": "1.40.72",
-    "service_model_conditional_put_required": true,
-    "guard_precedes_client_and_asset_acquisition": true,
-    "actual_old_model_verified_sha256": "0e0760c9ae10e9f8af267b0d9708fefabbaec023370f0044bbecc51565f05699"
-  }
+  "historical_verification_preserved": "historical-original/root-verification.json"
 }
