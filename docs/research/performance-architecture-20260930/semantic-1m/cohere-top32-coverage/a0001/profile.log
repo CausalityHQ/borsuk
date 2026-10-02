@@ -1,0 +1,40 @@
+Running as unit: cohere-top32-coverage.service
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/mnt/cohere-top32-coverage/repo/scripts/launch_cohere_top32_coverage_spot.py", line 806, in <module>
+    stage(*sys.argv[2:])
+  File "/mnt/cohere-top32-coverage/repo/scripts/launch_cohere_top32_coverage_spot.py", line 361, in stage
+    assert type(result['exit_status']) is int and result['exit_status'] == 0 and result['process_cleanup'] is True, 'coverage helper failed'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: coverage helper failed
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=1
+Service runtime: 57.811s
+CPU time consumed: 18.469s
+Memory peak: 3.4M
+Memory swap peak: 0B
+.seal.checked_s3(config["bucket"], ident, path)
+  File "/mnt/cohere-top32-coverage/repo/scripts/seal_v36_rank16_fresh_1m.py", line 20, in checked_s3
+    subprocess.run(["aws", "s3", "cp", f"s3://{bucket}/{ident['key']}", str(path),
+  File "/mnt/cohere-top32-coverage/repo/scripts/prepare_cohere_semantic_1m_panel.py", line 379, in run
+    result = self.native_run(args + ["--debug", "--region", self.config["region"]],
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/cohere-top32-coverage/repo/scripts/prepare_cohere_top32_coverage.py", line 384, in <lambda>
+    self.native_run = lambda *a, **kw: subprocess.run(*a, **kw, timeout=self.remaining())
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 550, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 1209, in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2115, in _communicate
+    ready = selector.select(timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/selectors.py", line 415, in select
+    fd_event_list = self._selector.poll(timeout)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/cohere-top32-coverage/repo/scripts/prepare_cohere_top32_coverage.py", line 410, in expired
+    raise ValueError("preparation deadline/resource monitor stopped stage: " + name)
+ValueError: preparation deadline/resource monitor stopped stage: fixed_locator_extraction
