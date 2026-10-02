@@ -30,7 +30,7 @@ if __package__ in (None, ""):
 from scripts import launch_cohere_semantic_artifact_reproduction_spot as previous
 from scripts import run_cohere_fixed48_fresh_falsifier as driver
 
-ROOT = Path(driver.BASE) / "scientific-execution"
+ROOT = Path(driver.BASE) / "scientific-execution" / "python-replay-a0002"
 CONFIG, NAME = ROOT / "config.json", ""
 OWN = "scripts/launch_cohere_fixed48_fresh_scientific_spot.py"
 MODULE = OWN[:-3].replace("/", ".")

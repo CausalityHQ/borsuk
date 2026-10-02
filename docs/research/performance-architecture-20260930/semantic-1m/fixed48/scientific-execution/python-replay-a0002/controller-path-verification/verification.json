@@ -1,0 +1,27 @@
+{
+  "checks": {
+    "checks": 54,
+    "elapsed_seconds": 11.549539398984052,
+    "launch_authority": false,
+    "native_or_real_vectors_or_truth_executed": false,
+    "passed": true,
+    "peak_rss_kib": 90040,
+    "schema": "borsuk-cohere-fixed48-fresh-scientific-spot-v1-self-check",
+    "synthetic": true,
+    "user_data_bytes": 11196
+  },
+  "code": {
+    "bytes": 79008,
+    "sha256": "9089b169387724db7ae8a374321b433962f0e7e6bb7906268b4014ab49a2a123"
+  },
+  "exit_status": 0,
+  "launch_authority": false,
+  "log": {
+    "bytes": 287,
+    "sha256": "a7bce25002226f6f871f9c2efed88e26dddabd66d61f5c53a9ec40a752ed97ed"
+  },
+  "native_changes": false,
+  "repair_pending": true,
+  "root": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/scientific-execution/python-replay-a0002",
+  "schema": "borsuk-fixed48-a0002-authority-path-check-v1"
+}
