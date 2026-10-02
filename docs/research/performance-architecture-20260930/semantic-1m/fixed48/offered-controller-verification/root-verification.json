@@ -15,11 +15,6 @@
       "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/contract.status",
       "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
     },
-    "import-order-fix/contract.stderr": {
-      "bytes": 0,
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/contract.stderr",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
     "import-order-fix/contract.stdout": {
       "bytes": 13345,
       "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/contract.stdout",
@@ -29,11 +24,6 @@
       "bytes": 2,
       "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/frozen-admission.status",
       "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
-    },
-    "import-order-fix/frozen-admission.stderr": {
-      "bytes": 0,
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/frozen-admission.stderr",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "import-order-fix/frozen-admission.stdout": {
       "bytes": 1139,
@@ -49,11 +39,6 @@
       "bytes": 2,
       "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/green-selfcheck.status",
       "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
-    },
-    "import-order-fix/green-selfcheck.stderr": {
-      "bytes": 0,
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/green-selfcheck.stderr",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "import-order-fix/green-selfcheck.stdout": {
       "bytes": 428,
@@ -74,11 +59,6 @@
       "bytes": 98,
       "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/red-mutation.stderr",
       "sha256": "b725f344b89e1a1cc8bfaeba5dc234f31c5d5c6116e2ed4216ad6490f189d2f0"
-    },
-    "import-order-fix/red-mutation.stdout": {
-      "bytes": 0,
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/red-mutation.stdout",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     "import-order-fix/report.json": {
       "bytes": 1032,
@@ -151,11 +131,6 @@
         "bytes": 428,
         "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/green-selfcheck.stdout",
         "sha256": "bd1d7650efc92b7dcad6ad4857b4e9cefb74868aef5d2bbd30479f6989f159ba"
-      },
-      "stderr": {
-        "bytes": 0,
-        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/green-selfcheck.stderr",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       "worker_report": {
         "bytes": 1032,
