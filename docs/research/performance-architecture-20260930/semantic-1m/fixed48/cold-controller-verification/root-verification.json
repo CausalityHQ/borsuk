@@ -1,0 +1,43 @@
+{
+  "schema": "borsuk-fixed48-cold-controller-root-verification-v1",
+  "controller_source_commit": "c7a52fa49580e14dfdf3c462bc9c561f23cfc487",
+  "owned_source": {
+    "path": "scripts/launch_cohere_fixed48_cold_http_spot.py",
+    "bytes": 83260,
+    "sha256": "e682968f1503580267373e77d17c1a9a3ef41ebe1e62a8b3de38027c8a10125a"
+  },
+  "self_check": {
+    "original_session": 99072,
+    "exit_status": 0,
+    "checks": 39,
+    "command": "timeout 55s prlimit --as=268435456:268435456 python3 scripts/launch_cohere_fixed48_cold_http_spot.py --self-check"
+  },
+  "controller_code_paths": 80,
+  "runtime_code_paths": 74,
+  "artifacts": {
+    "source-head-check.json": {
+      "bytes": 14853,
+      "sha256": "34ef11ad4461fb3bcbdad0416f65a5feead76551b7ef575751c0aff0d8e389d1"
+    },
+    "root-selfcheck.time": {
+      "bytes": 836,
+      "sha256": "8c4488b005e163111838c335f0906b9770f4e3ee0cfae213756c84b2dc2af31d"
+    },
+    "root-selfcheck.log": {
+      "bytes": 427,
+      "sha256": "0ebd54c29a2060b5f74e82ef8c71c6ca2841b61ea942e18c00f56e15e76cfa3d"
+    },
+    "worker-contract.json": {
+      "bytes": 15177,
+      "sha256": "584c882ecf528e41ab4323156f121d335c4dc9fb200d3bae769ea4d1b943ef08"
+    }
+  },
+  "terminal_artifacts": 56,
+  "native_source_count": 399,
+  "native_source_identity_sha256": "addf62bce23ceee034f22e4d1dfc0b318564d924c6e0fcee34b9336d1532813e",
+  "native_rebuilt": false,
+  "native_or_cloud_test_execution": false,
+  "body_hash_check_via_head": false,
+  "benchmark_compute_started": false,
+  "launch_authorized": false
+}
