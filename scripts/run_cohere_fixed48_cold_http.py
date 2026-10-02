@@ -506,10 +506,15 @@ def measured_call(binary, config, arm, body, expected, truth, scratch):
     failures = io.StringIO()
     observed = dict(native_process_started=False, http_attempts=0)
     before = snapshot()
+    def temp_dir():
+        owned = tempfile.TemporaryDirectory(dir=scratch / 'native')
+        observed['temporary_directory'] = owned.name
+        return owned
     def spawn(command, **kwargs):
         command = list(command)
         index = command.index('taskset')
         command[index:index] = ['prlimit', '--as=4294967296:4294967296']
+        observed['child_tmpdir'] = kwargs['env']['TMPDIR']
         process = subprocess.Popen(command, **kwargs)
         observed.update(native_process_started=True, wrapper_pid=process.pid)
         return process
@@ -527,15 +532,14 @@ def measured_call(binary, config, arm, body, expected, truth, scratch):
         assert observed['query_cpu']['ticks'] >= 0, 'nonmonotonic native CPU'
         return status, raw
     row = {}
-    environment = dict(os.environ, TMPDIR=str(scratch / 'native'),
+    environment = dict(os.environ,
         BORSUK_NATIVE_MEMORY_BYTES=str(config['resources']['native_memory_bytes']), AWS_MAX_ATTEMPTS='1')
     try:
-        with (patch.object(cold, 'stop', library.close_native), patch.object(cold.tempfile, 'tempdir', str(scratch / 'native')),
-                patch.object(library, 'NATIVE', config['resources']['native_memory_bytes']), patch.object(library, 'native_budget_model', native_budget_model)):
+        with (patch.object(library, 'NATIVE', config['resources']['native_memory_bytes']), patch.object(library, 'native_budget_model', native_budget_model)):
             row = cold.cold_call(str(binary), config, dict(arm, dataset='CoHere'), body, expected, truth, failures,
                 response_check=lambda r, e, t, a: validate_query(r, arm, e, t),
                 startup_check=lambda v, f, w: library.validate_startup(v, arm, w, wave_objects=8, root_reuse=True),
-                post_call=post, spawn=spawn, env=environment)
+                post_call=post, spawn=spawn, env=environment, stop_call=library.close_native, temp_dir=temp_dir)
             row['accounting'] = library.transport(row['native_header'], row['response'], arm, wave_objects=8, root_reuse=True)
         row.update(outcome='success', **observed)
         row['completed_ns'] = observed['first_wire_completed_ns']
@@ -568,7 +572,8 @@ def measured_call(binary, config, arm, body, expected, truth, scratch):
             row['resource_error'] = str(resource_error)
     row.update(query_ordinal=expected['query_ordinal'], terminal_ns=time.monotonic_ns(),
         expected_authority=arm['authority'], request_sha256=sha(body), request_bytes=len(body), http_retry=False,
-        cgroup_before=before, cgroup_after=snapshot(), temporary_directory_cleanup=not any((scratch / 'native').iterdir()))
+        cgroup_before=before, cgroup_after=snapshot(), temporary_directory_cleanup=
+            'temporary_directory' in observed and not Path(observed['temporary_directory']).exists())
     return row
 
 
@@ -581,7 +586,7 @@ def reduce_records(records, start, end):
         assert row['http_attempts'] == row['valid_ann_requests'] == 1 and row['http_status'] == 200
         assert row['http_retry'] is False and row['response'] == json.loads(base64.b64decode(row['raw_response_base64'], validate=True))
         assert row['native_close']['intentional_stop'] is row['native_close']['process_group_closed'] is True
-        assert row['temporary_directory_cleanup'] is True
+        assert row['temporary_directory_cleanup'] is True, 'owned call temporary directory cleanup not proven'
         assert row['started_ns'] <= row['completed_ns'] <= row['terminal_ns']
         assert row['cold_start_to_first_http_response_ns'] == row['completed_ns'] - row['started_ns']
     for previous, row in zip(records, records[1:]):
@@ -637,6 +642,7 @@ def run(config_path, expected_sha, repo, output):
     started = time.monotonic()
     deadline = started + config['resources']['service_limit_seconds']
     records, failure, summary, s3 = [], None, None, None
+    reducer_error = None
     def terminated(signum, frame):
         raise TimeoutError('runtime termination signal')
     previous = signal.signal(signal.SIGTERM, terminated)
@@ -698,13 +704,26 @@ def run(config_path, expected_sha, repo, output):
                         break
                     checkpoint()
             end = time.monotonic_ns()
-            summary = reduce_records(records, start, end)
+            try:
+                summary = reduce_records(records, start, end)
+            except BaseException as error:
+                reducer_error = error
+                raise
             assert summary['execution_gate_passed'], 'cold execution failed'
     except BaseException as error:
         failure = error
         records.extend(library.aborted_rows('fatal ' + type(error).__name__, len(records)))
-        summary = dict(summary or reduce_records(records, 0, 0), status='EXECUTION_FAILED',
+        if summary is None and reducer_error is None:
+            try:
+                summary = reduce_records(records, 0, 0)
+            except BaseException as reduction_error:
+                reducer_error = reduction_error
+        # Closure metadata only when reduction fails; never manufacture metrics.
+        summary = dict(summary or dict(schema=SCHEMA + '-result', dataset='CoHere', closed=True,
+            offered_queries=64, denominator10=640), status='EXECUTION_FAILED', scientific_disposition='INVALID',
             execution_gate_passed=False, quality_gate_passed=False, error_type=type(error).__name__, error=str(error))
+        if reducer_error is not None:
+            summary['reducer_error'] = dict(error_type=type(reducer_error).__name__, error=str(reducer_error))
     finally:
         cleanup_error = None
         try:
@@ -714,12 +733,13 @@ def run(config_path, expected_sha, repo, output):
             assert not scratch.exists(), 'owned scratch remains'
         except BaseException as error:
             cleanup_error = error
-            summary = dict(summary or {}, status='EXECUTION_FAILED', execution_gate_passed=False,
+            summary = dict(summary or {}, status='EXECUTION_FAILED', scientific_disposition='INVALID', execution_gate_passed=False,
                 quality_gate_passed=False, cleanup_error=str(error))
         process_cleanup = cleanup_error is None and all(r.get('temporary_directory_cleanup', True) and
             (not r.get('native_process_started') or r.get('native_close', {}).get('process_group_closed') is True) for r in records)
         if not process_cleanup:
-            summary.update(status='EXECUTION_FAILED', execution_gate_passed=False, quality_gate_passed=False, cleanup_error='native process closure not proven')
+            summary.update(status='EXECUTION_FAILED', scientific_disposition='INVALID', execution_gate_passed=False,
+                quality_gate_passed=False, process_cleanup_error='native process closure not proven')
         write(output / 'source-qualification.json', qualification)
         report.update(wall_seconds=time.monotonic() - started, process_peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024)
         write(output / 'resources.json', report)
@@ -736,7 +756,7 @@ def run(config_path, expected_sha, repo, output):
         usage = science.scratch_usage(output)
         reserve = len(encoded(summary)) + len(encoded(files)) + 4 * 4096
         if max(usage['unique_inode_bytes'], usage['physical_allocated_bytes']) + reserve > config['resources']['scratch_bytes']:
-            summary.update(status='EXECUTION_FAILED', execution_gate_passed=False, quality_gate_passed=False,
+            summary.update(status='EXECUTION_FAILED', scientific_disposition='INVALID', execution_gate_passed=False, quality_gate_passed=False,
                 resource_error='final artifact scratch admission')
             failure = failure or ValueError('final artifact scratch admission')
         write(output / 'summary.json', summary)
@@ -745,9 +765,9 @@ def run(config_path, expected_sha, repo, output):
             config_sha256=expected_sha, status=summary['status'], passed=summary.get('quality_gate_passed', False) and process_cleanup))
         signal.signal(signal.SIGTERM, previous)
         usage = science.scratch_usage(output)
-        assert max(usage['unique_inode_bytes'], usage['physical_allocated_bytes']) <= config['resources']['scratch_bytes'], 'final whole-output scratch'
-        if cleanup_error is not None:
-            raise cleanup_error
+        if max(usage['unique_inode_bytes'], usage['physical_allocated_bytes']) > config['resources']['scratch_bytes']:
+            failure = failure or AssertionError('final whole-output scratch')
+        failure = failure or cleanup_error
     if failure is not None:
         raise failure
     return summary
@@ -828,12 +848,49 @@ def sdk_admission_check():
     return dict(old_model_rejected=True, current_model_admitted=True, runtime_cloud_calls=0, sdk=capability)
 
 
+def failure_reducer_check():
+    """A failing error-path reducer must not mask the original runtime failure."""
+    original = RuntimeError('original admission failure')
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config = dict(FIXED, execution_source={}, code_sha256={}, proofs=dict(historical_validation={}),
+            resources=dict(HOST, service_limit_seconds=10), namespace_prefix='offline')
+        path, output = root / 'config.json', root / 'output'
+        write(path, config)
+        with (patch.object(sys.modules[__name__], 'qualify', return_value=(config, {}, {})),
+                patch.object(sys.modules[__name__], 'sdk_guard', side_effect=original),
+                patch.object(sys.modules[__name__], 'reduce_records', side_effect=ValueError('reducer rejected')) as reducer,
+                patch.object(os, 'sched_getaffinity', return_value={4, 5}),
+                patch.dict(os.environ, dict.fromkeys(retained.THREAD_ENV, '2') | {'AWS_MAX_ATTEMPTS': '1'})):
+            try:
+                run(path, artifact(path)['sha256'], Path(__file__).resolve().parents[1], output)
+            except BaseException as error:
+                assert error is original, f'original error masked by {type(error).__name__}: {error}'
+            else:
+                raise AssertionError('runtime failure accepted')
+            reducer.assert_called_once()
+        summary = json.loads((output / 'summary.json').read_bytes())
+        assert summary['error'] == str(original) and summary['error_type'] == 'RuntimeError'
+        assert summary['reducer_error'] == dict(error_type='ValueError', error='reducer rejected')
+        assert summary['status'] == 'EXECUTION_FAILED' and summary['scientific_disposition'] == 'INVALID'
+        assert not summary['execution_gate_passed'] and not summary['quality_gate_passed']
+        assert len((output / 'records.jsonl').read_bytes().splitlines()) == 64
+        assert json.loads((output / 'cleanup.json').read_bytes())['process_cleanup']
+        marker = json.loads((output / 'COMPLETE.json').read_bytes())
+        assert not marker['passed'] and not (output / 'scratch').exists()
+        for name in ('records.jsonl', 'resources.json', 'cleanup.json', 'summary.json'):
+            assert marker['files'][name] == artifact(output / name)
+    return dict(original_failure_retained=True, reducer_failure_retained=True, ledger_rows=64, closure_artifacts=True)
+
+
 def self_check():
     import boto3
     def write(path, value):
         Path(path).write_bytes(value if isinstance(value, bytes) else encoded(value) + b'\n')
     sdk_admission = sdk_admission_check()
     closed_panel = closed_panel_admission_check()
+    scratch_ownership = cold.scratch_ownership_check()
+    failure_reducer = failure_reducer_check()
     # The check must catch query rewriting, ordinal, ID and physical-plan drift.
     with tempfile.TemporaryDirectory() as tmp:
         directory = Path(tmp)
@@ -1034,7 +1091,8 @@ def self_check():
                 remote_open_stats=dict(metadata=rows, staging_wall_ns=20, decode_wall_ns=1, source_head_wall_ns=1,
                     router_head_wall_ns=1, source_head_requests=1, router_head_requests=1))
 
-        for mode in ('success', 'http-failure', 'id-tamper', 'publication-tamper', 'body-tamper', 'sdk-retry', 'undrained', 'scratch'):
+        real_measured_call = measured_call
+        for mode in ('success', 'http-failure', 'id-tamper', 'publication-tamper', 'body-tamper', 'sdk-retry', 'undrained', 'scratch', 'cleanup-proof'):
             sdk, calls, state = SDK(mode), [], {}
             dest = directory / ('out-' + mode)
             def publisher(command, log, seconds, timing):
@@ -1072,6 +1130,12 @@ def self_check():
                 state['q'] = q
                 assert command[-1] == '127.0.0.1:8080' and 'prlimit' in command
                 assert kwargs['env']['BORSUK_NATIVE_MEMORY_BYTES'] == str(HOST['native_memory_bytes'])
+                owned = Path(kwargs['stdout'].name).parent
+                assert Path(kwargs['env']['TMPDIR']) == owned and owned.parent == dest / 'scratch/native'
+                (owned / 'child-scratch').mkdir()
+                (owned / 'child-scratch/payload').write_bytes(b'terminated child leftovers')
+                # An unrelated live owner must not make this call's cleanup fail.
+                (owned.parent / 'other-owner').mkdir(exist_ok=True)
                 header = header_for(state['arm'])
                 kwargs['stdout'].write(json.dumps(header) + '\n')
                 kwargs['stdout'].flush()
@@ -1094,6 +1158,14 @@ def self_check():
             def cpu(*unused):
                 return dict(pid=42, start_ticks=1, user_ticks=1, system_ticks=1,
                     address_space_limit_bytes=4 << 30, cpu_affinity=[0, 1, 2, 3])
+            def measured(*args):
+                row = real_measured_call(*args)
+                assert row['temporary_directory_cleanup'] and not Path(row['temporary_directory']).exists()
+                assert Path(row['child_tmpdir']) == Path(row['temporary_directory'])
+                assert (dest / 'scratch/native/other-owner').is_dir()
+                if mode == 'cleanup-proof':
+                    row['temporary_directory_cleanup'] = False
+                return row
             selected = copy.deepcopy(config)
             if mode == 'scratch':
                 selected['resources']['scratch_bytes'] = 1
@@ -1107,6 +1179,7 @@ def self_check():
                     patch.object(os, 'sched_getaffinity', return_value={4, 5}),
                     patch.dict(os.environ, dict.fromkeys(retained.THREAD_ENV, '2') | {'AWS_MAX_ATTEMPTS': '1'}),
                     patch.object(library.quality, 'run_process', side_effect=publisher),
+                    patch.object(sys.modules[__name__], 'measured_call', side_effect=measured),
                     patch.object(subprocess, 'Popen', side_effect=spawn),
                     patch.object(cold.http.client, 'HTTPConnection', Client), patch.object(cold, 'post', side_effect=post),
                     patch.object(library, 'native_cpu', side_effect=cpu),
@@ -1118,7 +1191,7 @@ def self_check():
                 else:
                     assert mode == 'success' and result['returned_hits10'] == 640 and result['actual_http_attempts'] == 64
             assert not (dest / 'scratch').exists()
-            assert json.loads((dest / 'cleanup.json').read_bytes())['process_cleanup'] is (mode != 'undrained')
+            assert json.loads((dest / 'cleanup.json').read_bytes())['process_cleanup'] is (mode not in ('undrained', 'cleanup-proof'))
             rows = [json.loads(line) for line in (dest / 'records.jsonl').read_bytes().splitlines()]
             assert len(rows) == 64 and [r['query_ordinal'] for r in rows] == list(range(64))
             summary = json.loads((dest / 'summary.json').read_bytes())
@@ -1137,6 +1210,15 @@ def self_check():
             elif mode == 'undrained':
                 assert calls == ['publication', 0] and rows[0]['outcome'] == 'failed'
                 assert not json.loads((dest / 'COMPLETE.json').read_bytes())['passed']
+            elif mode == 'cleanup-proof':
+                assert calls == ['publication', *range(64)] and all(r['outcome'] == 'success' for r in rows)
+                assert summary['error'] == summary['reducer_error']['error'] == 'owned call temporary directory cleanup not proven'
+                assert summary['scientific_disposition'] == 'INVALID' and not summary['execution_gate_passed']
+                assert 'latency_ms' not in summary and 'returned_hits10' not in summary
+                marker = json.loads((dest / 'COMPLETE.json').read_bytes())
+                assert not marker['passed']
+                for name in ('records.jsonl', 'resources.json', 'cleanup.json', 'summary.json'):
+                    assert marker['files'][name] == artifact(dest / name)
             else:
                 assert all(r['outcome'] == 'aborted' for r in rows) and not any(type(v) is int for v in calls)
             assert not sdk.meta.events.handlers and sdk.closed and all(s.closed for s in sdk.streams)
@@ -1186,8 +1268,9 @@ def self_check():
                 pass
             else:
                 raise AssertionError('proof tamper accepted')
-        print(json.dumps(dict(self_check=True, queries=64, scenarios=8, native_or_network_execution=False,
-            closed_panel_admission=closed_panel, sdk_admission=sdk_admission)))
+        print(json.dumps(dict(self_check=True, queries=64, scenarios=9, native_or_network_execution=False,
+            closed_panel_admission=closed_panel, sdk_admission=sdk_admission,
+            scratch_ownership=scratch_ownership, failure_reducer=failure_reducer)))
 
 
 if __name__ == '__main__':

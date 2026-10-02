@@ -33,23 +33,29 @@ def checked_response(response, expected, truth, authority):
 
 
 def cold_call(binary, config, item, body, expected, truth, failure_stream=None, *, port=8080,
-              response_check=None, startup_check=None, post_call=None, spawn=None, env=None):
+              response_check=None, startup_check=None, post_call=None, spawn=None, env=None,
+              stop_call=None, temp_dir=None):
+    """temp_dir is a fresh context-manager factory; stop_call runs before its exit."""
     if type(port) is not int or not 1024 <= port <= 65535:
         raise ValueError('port must be an integer in 1024..65535')
     response_check = checked_response if response_check is None else response_check
     startup_check = validate if startup_check is None else startup_check
     post_call = post if post_call is None else post_call
     spawn = subprocess.Popen if spawn is None else spawn
+    stop_call = stop if stop_call is None else stop_call
+    temp_dir = tempfile.TemporaryDirectory if temp_dir is None else temp_dir
     authority = item['authority']
-    with tempfile.TemporaryDirectory() as tmp:
+    with temp_dir() as tmp:
         directory = Path(tmp)
+        # SIGTERM skips child destructors; this call owns all child scratch.
+        environment = dict(os.environ if env is None else env, TMPDIR=str(directory.resolve()))
         with (directory/'server.log').open('x') as log:
             started = time.monotonic_ns()
             server = spawn(['/usr/bin/time', '-v', '-o', str(directory/'server.time'),
                 'timeout', '--signal=TERM', '--kill-after=5', '60', 'taskset', '-c', '0-3', binary,
                 config['bucket'], config['region'], item['indexes']['10'], authority['root_sha256'],
                 str(authority['generation']), str(authority['control_epoch']), f'127.0.0.1:{port}'],
-                stdout=log, stderr=subprocess.STDOUT, start_new_session=True, env=env)
+                stdout=log, stderr=subprocess.STDOUT, start_new_session=True, env=environment)
             client = None
             refused = 0
             failure = None
@@ -85,7 +91,7 @@ def cold_call(binary, config, item, body, expected, truth, failure_stream=None, 
                 raise
             finally:
                 if client is not None: client.close()
-                close = stop(server)
+                close = stop_call(server)
                 if failure is not None and failure_stream is not None:
                     failure_stream.write(json.dumps(dict(query_ordinal=expected['query_ordinal'],
                         dataset=item['dataset'],outcome='failed',error_type=type(failure).__name__,
@@ -149,6 +155,100 @@ def reduce_panel(records):
         query_failed_gets=sum(r['response']['failed_gets'] for r in records),
         metadata_objects=sum(r['metadata']['metadata_objects'] for r in records),
         metadata_bytes=sum(r['metadata']['metadata_bytes'] for r in records))
+
+
+def scratch_ownership_check():
+    """A SIGTERM'd child leaves tempfile contents for its call owner to remove."""
+    import signal
+    from unittest.mock import Mock, patch
+
+    item = dict(dataset='fixture', authority=dict(root_sha256='fixture', generation=1, control_epoch=1),
+        indexes={'10': 'fixture'}, metadata_files={})
+    header = dict(phase='ready', authority=item['authority'], listen='127.0.0.1:8080',
+        remote_open_stats={}, remote_open_wall_ns=0, head_read_wall_ns=0)
+    child = """import pathlib, signal, sys, tempfile
+scratch = tempfile.TemporaryDirectory()
+pathlib.Path(scratch.name, 'payload').write_bytes(b'owned child data')
+print(sys.argv[2], flush=True)
+pathlib.Path(sys.argv[1]).write_text(scratch.name)
+signal.pause()
+"""
+    with tempfile.TemporaryDirectory() as root:
+        shared = Path(root)
+        sibling = shared / 'other-call'
+        sibling.mkdir()
+        (sibling / 'payload').write_bytes(b'preserve sibling')
+        observed = {}
+        environment = dict(os.environ, TMPDIR=root)
+        def spawn(command, **kwargs):
+            directory = Path(kwargs['stdout'].name).parent
+            observed['directory'] = directory
+            (directory / 'server.time').write_text('fixture\n')
+            ready = directory / 'child-ready'
+            process = subprocess.Popen([sys.executable, '-c', child, str(ready), json.dumps(header)], **kwargs)
+            observed['process'] = process
+            deadline = time.monotonic() + 3
+            while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(.01)
+            assert ready.exists(), 'child readiness missing'
+            observed['child_scratch'] = Path(ready.read_text())
+            return process
+        def stop_call(process):
+            assert observed['child_scratch'].is_dir(), 'cleanup ran before stop'
+            os.killpg(process.pid, signal.SIGTERM)
+            code = process.wait(timeout=3)
+            assert code == -signal.SIGTERM and observed['child_scratch'].is_dir()
+            return dict(returncode=code, intentional_stop=True)
+        try:
+            with patch.object(http.client, 'HTTPConnection', Mock()):
+                cold_call('unused', dict(bucket='fixture', region='fixture'), item, b'{}', {}, [],
+                    spawn=spawn, env=environment, post_call=lambda *a: (200, b'{}'),
+                    response_check=lambda *a: 0, startup_check=lambda *a: {}, stop_call=stop_call,
+                    temp_dir=lambda: tempfile.TemporaryDirectory(dir=root))
+            assert observed['child_scratch'].parent == observed['directory']
+            assert not observed['child_scratch'].exists(), 'child tempfile escaped call cleanup'
+            assert not observed['directory'].exists()
+            assert (sibling / 'payload').read_bytes() == b'preserve sibling'
+            assert environment['TMPDIR'] == root, 'caller environment mutated'
+        finally:
+            process = observed.get('process')
+            if process is not None and process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=3)
+        # Nest two mocked calls so both owners are live while the inner one closes.
+        owners, stopped = {}, []
+        original_stop, original_tempdir = stop, tempfile.tempdir
+        def call(label, post_call):
+            def spawn(command, **kwargs):
+                directory = Path(kwargs['stdout'].name).parent
+                owners[label] = directory
+                assert kwargs['env']['TMPDIR'] == str(directory)
+                (directory / 'payload').write_bytes(label.encode())
+                (directory / 'server.time').write_text('fixture\n')
+                kwargs['stdout'].write(json.dumps(header) + '\n')
+                kwargs['stdout'].flush()
+                return Mock(poll=lambda: None, owner=label)
+            def stop_call(process):
+                assert process.owner == label and (owners[label] / 'payload').read_bytes() == label.encode()
+                assert (owners['outer'] / 'payload').read_bytes() == b'outer'
+                stopped.append(label)
+                return dict(intentional_stop=True, returncode=-15)
+            return cold_call('unused', dict(bucket='fixture', region='fixture'), item, b'{}', {}, [],
+                spawn=spawn, env=environment, post_call=post_call, stop_call=stop_call,
+                temp_dir=lambda: tempfile.TemporaryDirectory(dir=root),
+                response_check=lambda *a: 0, startup_check=lambda *a: {})
+        def outer_post(*args):
+            call('inner', lambda *a: (200, b'{}'))
+            assert owners['inner'] != owners['outer'] and not owners['inner'].exists()
+            assert (owners['outer'] / 'payload').read_bytes() == b'outer'
+            return 200, b'{}'
+        with patch.object(http.client, 'HTTPConnection', Mock()):
+            call('outer', outer_post)
+        assert stopped == ['inner', 'outer'] and all(not path.exists() for path in owners.values())
+        assert (sibling / 'payload').read_bytes() == b'preserve sibling'
+        assert stop is original_stop and tempfile.tempdir is original_tempdir
+    return dict(real_python_child=True, child_exit=-signal.SIGTERM, child_scratch_removed=True,
+        sibling_preserved=True, overlapping_owners=2)
 
 
 def main():
