@@ -1,0 +1,104 @@
+{
+  "actual_fixture_passed": true,
+  "artifacts": {
+    "contract.json": {
+      "bytes": 9168,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary-verification/contract.json",
+      "sha256": "8cbc33b6826035522119bb2130c1b35696b5cbcbd3d132e05f2ab9659ee178d0"
+    },
+    "root.log": {
+      "bytes": 1870,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary-verification/root.log",
+      "sha256": "5964a65d62adde202e40c9af03ef509d6ab4211cf21b454934666e4808b8451c"
+    },
+    "root.time": {
+      "bytes": 817,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary-verification/root.time",
+      "sha256": "03af943e0e79cfd14497dd9c1e57d647e4586da1d85d96061078e5d1d301e3d2"
+    },
+    "worker-receipt.json": {
+      "bytes": 1535,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary-verification/worker-receipt.json",
+      "sha256": "1eb873287bbf1423e1e55d6bfb65bb9028b519c4241e61cff41076f91bb70e54"
+    },
+    "worker.log": {
+      "bytes": 1881,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary-verification/worker.log",
+      "sha256": "8fa2ea46c2ff510edcd6d1e07f2526694defa6168c525320c2130912464b80ff"
+    },
+    "worker.time": {
+      "bytes": 815,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary-verification/worker.time",
+      "sha256": "5fa0d2a18d13fae14d4fcaea80c24566931c2083b93ee7ce0955df6539aeeb04"
+    }
+  },
+  "checks": {
+    "artifacts": 22,
+    "checks": [
+      "actual-current-root-receipt/full56-native399-sealed64-qualified-bridge/code-tamper",
+      "actual-final-controller-runtime-canary-metadata-qualify/TEMP-detached-proof-roster/noGT-spies/pending-negative",
+      "actual-installed-pinned-SDK/conditional-PUT-service-model-negative",
+      "real-three-module-imports/noargs-CLI/owned-child-wait",
+      "derived-all51-HEAD/no-large-GET/etag-size-missing-retry/body-tamper/part-cleanup",
+      "actual-generated-Bash/embedded-Python/480-180-150/2GiB-noSwap-threads2",
+      "actual-embedded-setup/source-config-code-link-selfreference-negatives",
+      "real-stage/five-authority-downloads/imports/HEAD/selectedGET/CLI/cleanup/eligibility-failures",
+      "actual-INFRA_GO-terminal/full22-collector/body-terminal-tamper/closeout-before-any-GET",
+      "failed-terminal-retained/cleanup-failure/upload-failure/no-replacement",
+      "shared-lifecycle/all-ACK-fsync-interrupt/sameIDs-terminate-wait/IMDSv2/caps/freshquote-negative"
+    ],
+    "cli_controller_source": {
+      "bytes": 57543,
+      "path": "/home/rb/worktrees/borsuk-prod-ready-v9/scripts/launch_cohere_fixed48_offered_http_spot.py",
+      "sha256": "ecf17803e8ced7641128f4c023a5a123c4c14532ab6cf8f6d2dc78300fc21bea"
+    },
+    "code_paths": 84,
+    "elapsed_seconds": 21.441973669047,
+    "head_keys": 51,
+    "integration": "Actual final combined source qualified with TEMP authorities; production freeze/cheap gate/cloud remain parent-owned",
+    "mocked": [
+      "SDK/lifecycle/cgroup",
+      "temporary offered authority hydration/worker proof/ABI"
+    ],
+    "native_calls": 0,
+    "network_calls": 0,
+    "offered_main_calls": 0,
+    "passed": true,
+    "peak_rss_kib": 117340,
+    "real_combined": {
+      "GT_reads": 0,
+      "code_paths": 84,
+      "head_keys": 51,
+      "metadata_only": true,
+      "native_source_files": 399,
+      "real_combined": true,
+      "source_certificate_gates": 18
+    },
+    "real_fixture": true,
+    "schema": "borsuk-fixed48-offered-disposable-canary-v1-self-check",
+    "selected_body_bytes": 34661
+  },
+  "cloud_execution": false,
+  "exit_status": 0,
+  "full_rust_suite_reexecuted": false,
+  "ground_truth_reads": 0,
+  "historical_timeout_evidence_limitation": {
+    "elapsed_seconds": 55.1,
+    "exit_status": 124,
+    "full_original_files_preserved": false,
+    "note": "Original timing prefix/status retained in session transcript; files reused before preservation steer arrived. Final scratch split fixes block-storage fsync latency.",
+    "peak_rss_kib": 116464,
+    "session": 80548
+  },
+  "launch_authorized": false,
+  "metadata_only": true,
+  "native_execution": false,
+  "qualified": true,
+  "schema": "borsuk-fixed48-offered-canary-root-verification-v1",
+  "source": {
+    "bytes": 74821,
+    "path": "scripts/launch_cohere_fixed48_offered_canary_spot.py",
+    "sha256": "836d32bc210963efa3d435a74bc260ea863358c2626f854d7b20475ed9effeee"
+  },
+  "source_commit": "3d65d00f620ff91fe740b894e860e3bc0aa62beb"
+}

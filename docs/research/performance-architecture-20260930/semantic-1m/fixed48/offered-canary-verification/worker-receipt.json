@@ -1,0 +1,41 @@
+{
+  "source": {
+    "bytes": 74821,
+    "sha256": "836d32bc210963efa3d435a74bc260ea863358c2626f854d7b20475ed9effeee"
+  },
+  "original_final_session": 98931,
+  "exit_status": 0,
+  "artifacts": {
+    "scripts/launch_cohere_fixed48_offered_canary_spot.py": {
+      "bytes": 74821,
+      "sha256": "836d32bc210963efa3d435a74bc260ea863358c2626f854d7b20475ed9effeee"
+    },
+    "/tmp/borsuk-fixed48-offered-canary-final.log": {
+      "bytes": 1881,
+      "sha256": "8fa2ea46c2ff510edcd6d1e07f2526694defa6168c525320c2130912464b80ff"
+    },
+    "/tmp/borsuk-fixed48-offered-canary-final.time": {
+      "bytes": 815,
+      "sha256": "5fa0d2a18d13fae14d4fcaea80c24566931c2083b93ee7ce0955df6539aeeb04"
+    },
+    "/tmp/borsuk-fixed48-offered-canary-contract.json": {
+      "bytes": 9168,
+      "sha256": "8cbc33b6826035522119bb2130c1b35696b5cbcbd3d132e05f2ab9659ee178d0"
+    }
+  },
+  "previous_timeout": {
+    "session": 80548,
+    "exit_status": 124,
+    "elapsed_seconds": 55.1,
+    "peak_rss_kib": 116464,
+    "full_original_files_preserved": false,
+    "note": "Original timing prefix/status retained in session transcript; files reused before preservation steer arrived. Final scratch split fixes block-storage fsync latency."
+  },
+  "commit": "871c82975b54e82f217ddf48283e2eb5e59e69c6",
+  "base": "4a29560d8df4bbaefdc95a966c14af8c8afdc918",
+  "clean_worktree": true,
+  "owned_file": "scripts/launch_cohere_fixed48_offered_canary_spot.py",
+  "source_freeze_pending": true,
+  "production_config_frozen": false,
+  "launch_authorized": false
+}
