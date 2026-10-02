@@ -1,0 +1,12 @@
+{
+  "controller_session": 86661,
+  "controller_exit_status": 2,
+  "phase": "authority-staging-before-instance-launch",
+  "error": "PreconditionFailed conditional PUT existing immutable asset manifest",
+  "existing_key": "research/semantic-router/20261002/fixed48-cold-configs/ce4b1356fe069d66b547ffa3b0a5bfed53aa2988f1949deb7e4eba6e60228fef.json",
+  "instance_created": false,
+  "measurement_started": false,
+  "runtime_invocations": 0,
+  "compute_spend": 0,
+  "historical_a0001_failure_unchanged": true
+}

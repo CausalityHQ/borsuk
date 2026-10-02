@@ -1,0 +1,3 @@
+
+aws: [ERROR]: An error occurred (PreconditionFailed) when calling the PutObject operation (reached max retries: 0): At least one of the pre-conditions you specified did not hold
+CalledProcessError: Command '['aws', 's3api', 'put-object', '--profile', 'causality', '--region', 'eu-central-1', '--bucket', 'borsuk-bench-453182569524-euc1', '--key', 'research/semantic-router/20261002/fixed48-cold-configs/ce4b1356fe069d66b547ffa3b0a5bfed53aa2988f1949deb7e4eba6e60228fef.json', '--body', '/tmp/tmpbpaejby5', '--if-none-match', '*']' returned non-zero exit status 254.
