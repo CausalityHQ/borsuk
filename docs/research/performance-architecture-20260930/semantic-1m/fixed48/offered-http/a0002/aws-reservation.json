@@ -1,0 +1,54 @@
+{
+  "schema": "borsuk-cohere-fixed48-offered-http-spot-v1",
+  "source_commit": "0884d498a61b72394b7210de3cd8d0ac8e006bf9",
+  "source_archive_sha256": "d6ff2351d5cb04d090e51053250599bea1c5f62335e8af65219044146d0b910f",
+  "wall_seconds": 1800,
+  "instance_type": "c7i.2xlarge",
+  "image_id": "ami-0b8a830d6339a9758",
+  "root_device_name": "/dev/sda1",
+  "availability_zone": "eu-central-1a",
+  "subnet_id": "subnet-034528fbd6977848f",
+  "spot_price_observed_usd_per_hour": "0.215200",
+  "spot_quote_timestamp": "2026-10-02T18:00:00+00:00",
+  "spot_max_usd_per_hour": 0.5,
+  "compute_cap_usd": 0.3,
+  "ebs_s3_allowance_usd": 0.15,
+  "total_cost_measured": false,
+  "cost_scope": "1800s at capped Spot rate; boot/termination overhead and EBS/S3 allowance estimated",
+  "qualification": {
+    "config_sha256": "1bf2dc272ff7dcbcfdd939c8c4eade1de8e21ab2d4ae316b5aab9f2a81de6d11",
+    "controller_config_sha256": "7ad00af79a893a7ac0ad3396b7422cd50106084a93c5f06486e6c33184d374b8",
+    "asset_manifest_sha256": "012eb8827cb5f3ad3bc756ff3f2e60a1c9cb7e58a373f14e4664dac88817c944",
+    "code_identity_sha256": "a334f542df962e41eb9ecff6d10df7c94b537b5f3a53ecd7d9bfa840793c361b",
+    "runtime_code_identity_sha256": "dbff5cd207784a2b69fd48cc91371423428be77b940e380edb298e3af54a1626",
+    "refs_identity_sha256": "dc41b026c728de213bb11acc2f402cad1de6ab2cb78c46a6346f79a905bb7d1f",
+    "binary_sha256": "039e8d06e60637302f2c9d61d4f124310727bff67aed89b496124715fd9d108f",
+    "native_source_identity_sha256": "addf62bce23ceee034f22e4d1dfc0b318564d924c6e0fcee34b9336d1532813e",
+    "native_source_file_count": 399,
+    "artifact_roster_sha256": "5cdf045288cddfdbe37c073633838987aed51ce9e7b8cfb25eacf60a4f6eab7c",
+    "campaign_schema": "borsuk-cohere-fixed48-offered-http-spot-v1",
+    "awscli_version": "2.36.11",
+    "awscli_sha256": "50fbb7a2f44a78eab4a210088040e8f0bc4b9937cac8043c2354269d58614df6",
+    "source_archive_commit": "0884d498a61b72394b7210de3cd8d0ac8e006bf9",
+    "source_archive_sha256": "d6ff2351d5cb04d090e51053250599bea1c5f62335e8af65219044146d0b910f",
+    "namespace_prefix": "research/semantic-router/20261002/fixed48-cold-a0005/serving",
+    "output_reserve_bytes": 67108864,
+    "authority_paths": [
+      "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-http/config.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-http/controller-config.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-http/asset-manifest.json"
+    ],
+    "assets": {
+      "native/binaries/two_bit_http": {
+        "bytes": 16185416,
+        "sha256": "039e8d06e60637302f2c9d61d4f124310727bff67aed89b496124715fd9d108f",
+        "source": {
+          "bucket": "borsuk-bench-453182569524-euc1",
+          "key": "research/semantic-router/20261002/fixed48-implementation-a0001/artifacts/binaries/two_bit_http"
+        }
+      }
+    }
+  },
+  "config_sha256": "1bf2dc272ff7dcbcfdd939c8c4eade1de8e21ab2d4ae316b5aab9f2a81de6d11",
+  "interruption_policy": "Discard interrupted worker; no automatic replacement"
+}

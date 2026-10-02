@@ -1,0 +1,2 @@
+{"authenticated_artifacts": 38, "bytes": 18963646, "instance_id": "i-09a9a20f5279f9c13", "original_controller_exit_status": 2, "remote_exit_status": 0, "source_commit": "0884d498a61b72394b7210de3cd8d0ac8e006bf9", "terminal_identity_passed": true}
+{"actual_closed_validator_passed": true, "replay_execution_gate_passed": true, "scientific_status": "PASS"}
