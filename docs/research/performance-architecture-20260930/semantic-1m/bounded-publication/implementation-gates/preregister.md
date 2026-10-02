@@ -6,7 +6,7 @@ The original local job stopped under sustained host PSI before tests. Preserve t
 
 ## Required gates
 
-Seven serial stages: exact semantic publication parity fixture; remaining affected two_bit library tests excluding that fixture; sq8_s3_range library tests; graph publication integration test; locked HTTP release; locked workspace/all-target Clippy correctness and suspicious denied; real workspace test-build script with its test override unset. The first four stages must execute nonzero tests. Require exact commands, start/end and zero exits, source-before/after equality, binary identity, complete resource and artifact receipts. No full workspace test execution claim.
+Seven serial stages: exact semantic publication parity fixture; remaining affected two_bit library tests excluding that fixture, including the named publication_reserves_metadata_before_upload_buffers regression exactly once; sq8_s3_range library tests; graph publication integration test; locked HTTP release; locked workspace/all-target Clippy correctness and suspicious denied; real workspace test-build script with its test override unset. The first four stages must execute nonzero tests. Require exact commands, start/end and zero exits, source-before/after equality, binary identity, complete resource and artifact receipts. No full workspace test execution claim.
 
 ## Resources and ownership
 
