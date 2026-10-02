@@ -1,0 +1,31 @@
+{
+  "query_time": "2026-10-02T20:13:24.464566+00:00",
+  "elapsed_seconds": 0.13357806799467653,
+  "response": {
+    "NextToken": "",
+    "SpotPriceHistory": [
+      {
+        "AvailabilityZone": "eu-central-1a",
+        "AvailabilityZoneId": "euc1-az2",
+        "InstanceType": "c7i.2xlarge",
+        "ProductDescription": "Linux/UNIX",
+        "SpotPrice": "0.215200",
+        "Timestamp": "2026-10-02T18:00:00+00:00"
+      }
+    ],
+    "ResponseMetadata": {
+      "RequestId": "ae4dd5a9-ff18-4199-955b-5b88eea79357",
+      "HTTPStatusCode": 200,
+      "HTTPHeaders": {
+        "x-amzn-requestid": "ae4dd5a9-ff18-4199-955b-5b88eea79357",
+        "cache-control": "no-cache, no-store",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "content-type": "text/xml;charset=UTF-8",
+        "content-length": "563",
+        "date": "Fri, 02 Oct 2026 20:13:24 GMT",
+        "server": "AmazonEC2"
+      },
+      "RetryAttempts": 0
+    }
+  }
+}

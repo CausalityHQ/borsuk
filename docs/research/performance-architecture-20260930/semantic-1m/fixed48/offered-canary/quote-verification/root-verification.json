@@ -1,0 +1,125 @@
+{
+  "actual_live_query_validated": true,
+  "artifacts": {
+    "actual-live-query.json": {
+      "bytes": 970,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/quote-verification/actual-live-query.json",
+      "sha256": "ddf841489ff348d5497a6131d100301dccd6939da06d2a19845f3b5c58818ac2"
+    },
+    "root.log": {
+      "bytes": 1993,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/quote-verification/root.log",
+      "sha256": "0fad386272b189ce915bc05f1c99bd058c2832a9ac32ae4a1aa344b130494b9b"
+    },
+    "root.time": {
+      "bytes": 816,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/quote-verification/root.time",
+      "sha256": "e524cc2b7fe9edfbb07e97195faa4951fd2e88fc24189d512a14d136fcce5aa6"
+    },
+    "worker-contract.json": {
+      "bytes": 9721,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/quote-verification/worker-contract.json",
+      "sha256": "43187a9d218a07d98accf7bfad4ca7238856527e321183cd7f7ba42d76f26420"
+    },
+    "worker-final.log": {
+      "bytes": 2009,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/quote-verification/worker-final.log",
+      "sha256": "f0c3849b78eceefac2ac6f868d066b7ee666db570ed612ca97fbbdcce323e8fa"
+    },
+    "worker-final.time": {
+      "bytes": 856,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/quote-verification/worker-final.time",
+      "sha256": "4e4ba812161c262af18f096119c4dd61a0e43133c768a377d3023d822df68019"
+    },
+    "worker-green.log": {
+      "bytes": 2009,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/quote-verification/worker-green.log",
+      "sha256": "0b1fa4dbbd3916f508657f86004accd026b87bd74899396171c86fb1ef943092"
+    },
+    "worker-green.time": {
+      "bytes": 856,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/quote-verification/worker-green.time",
+      "sha256": "a76973a71e061a05cc285d1e3cbc13d0356d3ff8930132dad081ad7883091f81"
+    },
+    "worker-receipt.json": {
+      "bytes": 18769,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/quote-verification/worker-receipt.json",
+      "sha256": "b41806d5a079dc700006a010a8e17c1d0f8f2c324e5503263761adca0738cf7d"
+    },
+    "worker-red.log": {
+      "bytes": 37,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/quote-verification/worker-red.log",
+      "sha256": "e0005b2897787787320231374e89e49dc8c8c24cca1a7a42d2ef7bd590449461"
+    },
+    "worker-red.time": {
+      "bytes": 887,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/quote-verification/worker-red.time",
+      "sha256": "d81a20b0aad4e025e6db2746131082219a30290ad9cb40ffae2581db007869e9"
+    },
+    "worker-source.py": {
+      "bytes": 81381,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/quote-verification/worker-source.py",
+      "sha256": "86a3f905b5e835c247820d17a55ea9013d1f6da809e126155c18a0c7855e92ed"
+    }
+  },
+  "exit_status": 0,
+  "instance_launches": 0,
+  "native_execution": false,
+  "qualified": true,
+  "root_result": {
+    "artifacts": 22,
+    "checks": [
+      "live-current-query/actual-old-price-event/slow-error-future-malformed-empty-nonfinite-overcap-exact-market-negatives",
+      "actual-current-root-receipt/full56-native399-sealed64-qualified-bridge/code-tamper",
+      "actual-final-controller-runtime-canary-metadata-qualify/TEMP-detached-proof-roster/noGT-spies/pending-negative",
+      "actual-installed-pinned-SDK/conditional-PUT-service-model-negative",
+      "real-three-module-imports/noargs-CLI/owned-child-wait",
+      "derived-all51-HEAD/no-large-GET/etag-size-missing-retry/body-tamper/part-cleanup",
+      "actual-generated-Bash/embedded-Python/480-180-150/2GiB-noSwap-threads2",
+      "actual-embedded-setup/source-config-code-link-selfreference-negatives",
+      "real-stage/five-authority-downloads/imports/HEAD/selectedGET/CLI/cleanup/eligibility-failures",
+      "actual-INFRA_GO-terminal/full22-collector/body-terminal-tamper/closeout-before-any-GET",
+      "failed-terminal-retained/cleanup-failure/upload-failure/no-replacement",
+      "shared-lifecycle/all-ACK-fsync-interrupt/sameIDs-terminate-wait/IMDSv2/caps/freshquote-negative"
+    ],
+    "cli_controller_source": {
+      "bytes": 57543,
+      "path": "/home/rb/worktrees/borsuk-prod-ready-v9/scripts/launch_cohere_fixed48_offered_http_spot.py",
+      "sha256": "ecf17803e8ced7641128f4c023a5a123c4c14532ab6cf8f6d2dc78300fc21bea"
+    },
+    "code_paths": 84,
+    "elapsed_seconds": 26.529928180971183,
+    "head_keys": 51,
+    "integration": "Actual final combined source qualified with TEMP authorities; production freeze/cheap gate/cloud remain parent-owned",
+    "mocked": [
+      "SDK/lifecycle/cgroup",
+      "temporary offered authority hydration/worker proof/ABI"
+    ],
+    "native_calls": 0,
+    "network_calls": 0,
+    "offered_main_calls": 0,
+    "passed": true,
+    "peak_rss_kib": 111784,
+    "real_combined": {
+      "GT_reads": 0,
+      "code_paths": 84,
+      "head_keys": 51,
+      "metadata_only": true,
+      "native_source_files": 399,
+      "real_combined": true,
+      "source_certificate_gates": 18
+    },
+    "real_fixture": true,
+    "schema": "borsuk-fixed48-offered-disposable-canary-v1-self-check",
+    "selected_body_bytes": 34661
+  },
+  "root_session": 94548,
+  "schema": "borsuk-fixed48-canary-quote-root-verification-v1",
+  "scientific_measurement": false,
+  "source": {
+    "bytes": 81381,
+    "path": "scripts/launch_cohere_fixed48_offered_canary_spot.py",
+    "sha256": "86a3f905b5e835c247820d17a55ea9013d1f6da809e126155c18a0c7855e92ed"
+  },
+  "source_commit": "15ae6ed8cd152630603eba9c92a1253eac2c77b7"
+}
