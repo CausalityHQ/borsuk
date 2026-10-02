@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-cohere-preparation-controller-root-verification-v1",
+  "implementation_commit": "1c121a96593e5d317a147194b902e260393fece5",
+  "integrated_commit": "6db671e3",
+  "self_check": {
+    "exit_status": 0,
+    "wall_seconds": 0.71,
+    "max_rss_kib": 67660
+  },
+  "actual_python312_environment_verified": false,
+  "config_sha256": "914ccbeb9b6a09e52040003ce86e9075af9a46a2500553c4e2d991f50a163208",
+  "remote_preparation_launched": false
+}
