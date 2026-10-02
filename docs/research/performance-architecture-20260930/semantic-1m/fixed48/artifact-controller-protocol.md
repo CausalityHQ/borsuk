@@ -1,0 +1,5 @@
+# Code archive and configuration binding
+
+The reproduction controller will use the shared Spot lifecycle with an explicit, origin-backed code archive commit. The config is frozen after that code archive, then authenticated separately and embedded in generated user data if it fits the 16 KiB limit. This avoids a config/archive hash cycle. Preflight must prove the complete imported helper/controller code roster equals that code archive and bind its exact deterministic gzip SHA to config.execution_source. Launch and terminal receipts bind that same source commit/archive and the separate config SHA. No remote Git is needed.
+
+The shared launcher defaults to its existing HEAD archive. Its new optional source_archive_commit proof field requires an origin/main ancestor; only the new reproduction controller opts in. Existing ACK persistence, interruption, termination/wait, and collection behavior is reused. Root owns final infrastructure/cost/config freeze and paid launch. No new reproduction is authorized until its controller authority passes; existing native qualification must be terminal before this shared lifecycle permits another BORSUK instance.
