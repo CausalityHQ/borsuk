@@ -1,0 +1,53 @@
+{
+  "commit": "59f00a30252a116c4a5c42c4bc4cdc182a94b24b",
+  "owned_source": {
+    "path": "scripts/launch_cohere_fixed48_canary_spot.py",
+    "bytes": 69155,
+    "sha256": "9bc9d74c5d1959de5a1583e13a1ca1b38a1499b528a76841ca17055799263395"
+  },
+  "self_check": {
+    "exit_status": 0,
+    "command": "timeout 55s prlimit --as=268435456:268435456 /usr/bin/time -v python3 -m scripts.launch_cohere_fixed48_canary_spot --self-check",
+    "wall_seconds": 4.48,
+    "peak_rss_kib": 109528,
+    "checks": 13
+  },
+  "py_compile_exit_status": 0,
+  "diff_check_exit_status": 0,
+  "generated_bash_bytes": 14006,
+  "artifacts": {
+    "borsuk-fixed48-canary-final-selfcheck.log": {
+      "bytes": 1372,
+      "sha256": "8dfecac448d755887c6eaa3a96f01d3baf647c97db920fc170f8703b0ffc8dc2"
+    },
+    "borsuk-fixed48-canary-final-selfcheck.time": {
+      "bytes": 787,
+      "sha256": "f37002dfe16b45dee78701f50e212ff8a66f23ea4e4ae164d0db412710f68cbe"
+    },
+    "borsuk-fixed48-disposable-spot-canary-contract.json": {
+      "bytes": 6828,
+      "sha256": "e6ad9ecf0e1ba254343d5ba28cb2c361da160fc2ecf834fb029a23969b211764"
+    },
+    "borsuk-canary-sdk-guard-verification.json": {
+      "bytes": 301,
+      "sha256": "752e6e6fe16c23642c5241ec82cb4f65da81e738bd8f1dd4910a3d823731c1d1"
+    }
+  },
+  "real_checks": [
+    "local code/proof/manifest identities",
+    "controller/runtime CLI usage exits",
+    "shared validators"
+  ],
+  "mocked": [
+    "S3 SDK",
+    "EC2 lifecycle",
+    "remote cgroup snapshots",
+    "worker qualification/CLI wiring; each checked separately on actual source"
+  ],
+  "isolated_sdk_only_import_and_cli_smoke": true,
+  "actual_old_sdk_model_rejected": true,
+  "cloud_launched": false,
+  "native_calls": 0,
+  "pushed": false,
+  "performance_measured": false
+}

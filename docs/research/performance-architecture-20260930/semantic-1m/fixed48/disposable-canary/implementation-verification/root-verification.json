@@ -1,0 +1,44 @@
+{
+  "schema": "borsuk-fixed48-disposable-canary-root-verification-v1",
+  "source_commit": "8e2cfcf6409a4369d4a6009a9a520c273d24da73",
+  "owned_source": {
+    "path": "scripts/launch_cohere_fixed48_canary_spot.py",
+    "bytes": 69155,
+    "sha256": "9bc9d74c5d1959de5a1583e13a1ca1b38a1499b528a76841ca17055799263395"
+  },
+  "root_selfcheck_exit_status": 0,
+  "checks": 13,
+  "wall_seconds": 4.5,
+  "native_or_network_execution": false,
+  "remote_infrastructure": "UNMEASURED",
+  "artifacts": {
+    "borsuk-fixed48-canary-child-verification.json": {
+      "bytes": 1770,
+      "sha256": "8e76304653c1b295b9b3d34995585f12771f93ed8b288bd8b8b49594363893fb"
+    },
+    "borsuk-fixed48-canary-final-selfcheck.log": {
+      "bytes": 1372,
+      "sha256": "99dd489d564ae83073a8b18b66b240685ab9cf2908612b63809986e51309b136"
+    },
+    "borsuk-fixed48-canary-final-selfcheck.time": {
+      "bytes": 789,
+      "sha256": "8f54162ce5cfce59b5f7c507e76c34d9b6bb1f1b2a47c15bbd889f17f8d879b1"
+    },
+    "borsuk-fixed48-disposable-spot-canary-contract.json": {
+      "bytes": 6828,
+      "sha256": "e6ad9ecf0e1ba254343d5ba28cb2c361da160fc2ecf834fb029a23969b211764"
+    },
+    "borsuk-canary-sdk-guard-verification.json": {
+      "bytes": 301,
+      "sha256": "752e6e6fe16c23642c5241ec82cb4f65da81e738bd8f1dd4910a3d823731c1d1"
+    },
+    "borsuk-fixed48-canary-root-selfcheck.log": {
+      "bytes": 1372,
+      "sha256": "8dfecac448d755887c6eaa3a96f01d3baf647c97db920fc170f8703b0ffc8dc2"
+    },
+    "borsuk-fixed48-canary-root-selfcheck.time": {
+      "bytes": 789,
+      "sha256": "0134b65281a9272defa3da32df6f34e0df26e5aa94f7872e68349da10bffbf87"
+    }
+  }
+}

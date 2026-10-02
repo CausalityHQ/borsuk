@@ -1,0 +1,11 @@
+{
+  "old_actual_botocore_1_34_46_rejected": true,
+  "old_model_sha256": "0e0760c9ae10e9f8af267b0d9708fefabbaec023370f0044bbecc51565f05699",
+  "installed_actual_model": {
+    "boto3": "1.40.72",
+    "botocore": "1.40.72",
+    "conditional_put": true,
+    "network_calls": 0
+  },
+  "network_calls": 0
+}
