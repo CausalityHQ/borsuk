@@ -1,0 +1,29 @@
+{
+  "config_sha256": "8986f8886222a4c54621bc84b56ca6d0a043cfbac8b1158346b45a508ac719d4",
+  "controller_session": 97549,
+  "exit_status": 2,
+  "failure": "fresh Spot admission",
+  "infrastructure_status": "INVALID_ADMISSION",
+  "instance_ids": [],
+  "local_launch_present": false,
+  "local_reservation_present": false,
+  "next_action": "qualify minimal source correction, preserve frozen a0001 configs and refreeze a distinct canary authority before one explicitly controlled attempt",
+  "observed_quote": {
+    "availability_zone": "eu-central-1a",
+    "instance_type": "c7i.2xlarge",
+    "price_change_timestamp": "2026-10-02T18:00:00+00:00",
+    "price_usd_per_hour": "0.215200"
+  },
+  "primary_source": "https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeSpotPriceHistory.html",
+  "raw_log": {
+    "bytes": 37,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/admission-a0001/controller.log",
+    "sha256": "e0005b2897787787320231374e89e49dc8c8c24cca1a7a42d2ef7bd590449461"
+  },
+  "replacement_automatic": false,
+  "root_cause": "guard mistook last price-change timestamp for live query freshness",
+  "schema": "borsuk-fixed48-offered-canary-admission-disposition-v1",
+  "scientific_status": "UNMEASURED",
+  "source_archive_sha256": "6d855f6358b87d4be686de8163ed37da19f64e4170cdebd479e180fceb180178",
+  "source_commit": "abf407631f174709c503cee9757982f3c872c5da"
+}
