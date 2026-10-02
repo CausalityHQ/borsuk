@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-01b78a542a329d01f",
+  "nodes": {
+    "0": {
+      "instance_id": "i-01b78a542a329d01f"
+    }
+  },
+  "prefix": "research/semantic-router/20261002/startup-wave8-implementation-a0002",
+  "source_commit": "cf832b65ce7322cfb5a1f41fc88c5d9b764af57a",
+  "source_archive_sha256": "6575f75727149e6a0efbf533e6c11552f7f933b18875206a2ef21693c121028a"
+}

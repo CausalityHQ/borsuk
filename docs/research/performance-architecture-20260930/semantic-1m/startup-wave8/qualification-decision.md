@@ -1,6 +1,6 @@
 # Qualification moved to remote execution
 
-Current repaired candidate `1e4ed13777a59e7acdd34acc9510b9d156aa17bf` is **UNVERIFIED**, not integrated. Its parent `660fd425a8a45dda17cbf6f44915bd36615ce87a` failed remote a0001 as recorded below. Its complete 399-file Rust/Cargo inventory is pinned in candidate-native-source-manifest.json. The only native changes against `f4d76fc0` are the eight-object staging wave and its shared test fixture.
+Current repaired candidate `1e4ed13777a59e7acdd34acc9510b9d156aa17bf` is **QUALIFIED by remote a0002**, not yet integrated into root native source. Its parent `660fd425a8a45dda17cbf6f44915bd36615ce87a` failed remote a0001 as recorded below. Its complete 399-file Rust/Cargo inventory is pinned in candidate-native-source-manifest.json. The only native changes against `f4d76fc0` are the eight-object staging wave and its shared test fixture.
 
 Local original 51856 ended 127 before Cargo because the systemd environment omitted Cargo from PATH. Environment-repair original 75707 ended 241: its first affected Cargo process was stopped with SIGTERM under the preregistered sustained host full-memory-PSI >=1% for 30 seconds rule. No tests or qualification gates completed. The owned cgroup peak was 5,534,363,648 bytes, swap peak zero; this is total cgroup memory, not process RSS. Original logs and statuses remain in /data/orchestration/borsuk-startup-wave8-native-qualification. No local retry is authorized.
 
@@ -15,3 +15,9 @@ Original controller 59465 closed with exit 1 after worker exit 101. Owned Spot i
 Read-only source diagnosis `6060930e5cd64a86` identified the crafted graph fixture's absent `diverse_graph.bin`. Four-child admission reaches the aggregate budget failure before the missing object's next wave. Eight-child admission obtains its HEAD in the first wave and correctly fails `Store(NotFound)` before aggregation. Production still rejects the request before child payload GETs. Preserve this failure; repair the fixture to distinguish absent-object and present-object/budget cases while retaining exact errors, zero child GETs, and scratch cleanup. Do not weaken production admission or accept arbitrary errors.
 
 The repaired candidate requires a new exact source inventory and prospective qualification attempt. Reuse the unchanged metadata pass only where source scope permits; candidate-wide release/Clippy/test compilation still require completed receipts. No candidate speedup or 444 ms attainment is established.
+
+## Remote implementation a0002: qualified
+
+Original controller 38051 closed 0; owned Spot i-01b78a542a329d01f terminated. All 14 terminal artifact bodies authenticate. Seven real command stages passed: metadata tests, semantic parity, both graph paged-source tests, HTTP release, workspace Clippy, and real workspace test compilation. Full399 source identity 7e4fabf96284e4ccd080cf14b8bfbfd0f3ff41271e920c8e39d5d1fa252cd830 is unchanged before/after. HTTP binary SHA 0eec7c65d558fb8477f48dc3f3702b404b649b0888ce2250b2c7433726875fbc, 16,153,680 bytes. Compiler cgroup peak 8 GiB, swap/OOM/OOM-kill zero; max/reclaim events 3707. This is scoped qualification, not full workspace test execution or measured ANN improvement.
+
+Paired config freezes the unchanged control proof and newly authenticated candidate proof, four ABBA blocks at 8 offered QPS, retained fixed64 inputs, and dated price provenance. No candidate performance result exists before this run.
