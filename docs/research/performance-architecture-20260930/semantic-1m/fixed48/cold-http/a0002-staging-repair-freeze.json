@@ -1,0 +1,27 @@
+{
+  "controller_staging_repair_verified": true,
+  "files": {
+    "asset-manifest.json": {
+      "bytes": 13203,
+      "sha256": "ce4b1356fe069d66b547ffa3b0a5bfed53aa2988f1949deb7e4eba6e60228fef"
+    },
+    "config.json": {
+      "bytes": 15771,
+      "sha256": "80da907ebcec3c165c4d574cb02c1c6728503cbb37205019cc672e8b8466e2ca"
+    },
+    "controller-config.json": {
+      "bytes": 9921,
+      "sha256": "4440aa8c3ebc5fbe454cdb162cec26d100f7817e353f8c4fe564452675194940"
+    }
+  },
+  "instance_started_by_freeze": false,
+  "native_source_identity_sha256": "addf62bce23ceee034f22e4d1dfc0b318564d924c6e0fcee34b9336d1532813e",
+  "new_native_execution": false,
+  "original_a0001": "FAIL/INVALID",
+  "prelaunch_failure_preserved": true,
+  "schema": "borsuk-fixed48-cold-staging-repair-freeze-v1",
+  "source": {
+    "archive_sha256": "ff03cfc9d53086eca0f04fd2129baff098c4c5fe76db96a74b5ec386e21fe9f5",
+    "commit": "2c66c934f00d0ae8737be26310d3276d7b6de926"
+  }
+}
