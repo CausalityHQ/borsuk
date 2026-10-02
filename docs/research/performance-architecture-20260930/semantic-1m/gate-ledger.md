@@ -135,3 +135,17 @@ This ledger changes no experiment's outcome and selects no new production defaul
 | Physical S3/lifecycle dollar | HttpService calls and consumed payload measured; confirmed wire/billed request totals and total dollar unknown | Source-qualified physical accounting and build/maintenance/storage/recovery cost curve |
 
 This is a matched internal native improvement and a runnable blob-native cold milestone. It proves neither a measured vendor win nor100M production readiness. Published vendor p95/saturation remain unknown; warm is separate.
+
+## 2026-10-02 root-reuse pair: fixed FAIL, valid candidate cells
+
+[Closed root-reuse a0001](startup-wave8/root-reuse/paired/a0001/decision.md), source34eccb89: ReLAION FIRST1M D768 cosine, fixed64 reservoir1000–1063, k10, eight cold owners/8 offered QPS. Candidate cells each64/64, 624/640=97.5%R10; measured coldp90/p95=455.282/463.225ms and448.433/480.708ms. Native process peaks39,424,000/38,014,976B. Finite completed/s7.685/7.708 includes drain/cleanup; saturation unmeasured. Actual control0 dropped ordinal10 with allownersoccupied,63/64; control3 passed64/64 atp90479.245/p95487.676ms. Frozen allfourcells gate FAIL, matched ratio UNMEASURED. Candidate product viability is retained, not retroactively converted into a campaign GO.
+
+| Threshold | Origin/class | Decision/replacement evidence |
+|---|---|---|
+| All256 success, each candidate bothp90/p95 better than BOTHactualcontrols | Root-reuse prospective paired protocol; frozen experiment | FAIL from controlcapacitydrop. No identical automatic repeat. Any future capacity comparison must declare a new admission protocol before measurement. |
+| >=608/640 each, source/scorer ordered parity, identity/resource/cleanup | Frozen current arm and practical quality context | Candidate624/640each and parity verified. Dropped control remains unsuccessful in all-offer population; no success-conditioning pass. |
+| 444ms coldp90 published context | Product comparator context, not universal release guarantee | Candidate misses11.282/4.433ms. No measured vendorwin/p95/QPS/billedcost claim. |
+| Top32 source-nomination/pageclosure>=608/640 on newCoHere64 | Distinct prospective discovery-only falsifier | Frozen configuration; no returnedquality/latency claim. Both policies sealbeforeONEGT; prior91.25%R10 FAIL preserved. |
+| Local8GiB/no-new-swap/PSI safety | Host safety | No localCargo; heavy qualification alreadyremoteclosed0. Current independent maintenance planning is read-only. |
+
+100M layout/RSS/scratch, pinned generations, incremental maintenance and totaldollar remain open. Fresh1m compaction currently rejects pre-sideeffect; allowing a benchmark does not qualify the production lifecycle.
