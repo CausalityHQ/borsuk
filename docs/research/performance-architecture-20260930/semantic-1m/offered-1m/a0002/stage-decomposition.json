@@ -1,0 +1,81 @@
+{
+  "schema": "borsuk-semantic-1m-offered-stage-decomposition-v1",
+  "population": "rate5 all64 successful offered8; same-query mean intervals, no marginal percentile summation",
+  "stages": {
+    "cold": {
+      "mean_ms": 437.565551671875,
+      "min_ms": 355.538045,
+      "max_ms": 524.188973
+    },
+    "head_read": {
+      "mean_ms": 79.530646421875,
+      "min_ms": 70.212432,
+      "max_ms": 96.45635
+    },
+    "remote_open": {
+      "mean_ms": 141.0793674375,
+      "min_ms": 123.697108,
+      "max_ms": 182.4314
+    },
+    "metadata_staging": {
+      "mean_ms": 114.08119140625,
+      "min_ms": 96.760953,
+      "max_ms": 155.473259
+    },
+    "decode": {
+      "mean_ms": 8.9288079375,
+      "min_ms": 8.305995,
+      "max_ms": 10.957897
+    },
+    "source_head": {
+      "mean_ms": 8.925172296875001,
+      "min_ms": 7.160244,
+      "max_ms": 11.998849
+    },
+    "router_head": {
+      "mean_ms": 8.654602421875,
+      "min_ms": 6.60933,
+      "max_ms": 13.228084
+    },
+    "native_query": {
+      "mean_ms": 204.74422575,
+      "min_ms": 131.111533,
+      "max_ms": 308.129836
+    },
+    "discovery": {
+      "mean_ms": 40.3388586875,
+      "min_ms": 33.965845,
+      "max_ms": 66.061155
+    },
+    "source": {
+      "mean_ms": 76.475657921875,
+      "min_ms": 28.652682,
+      "max_ms": 132.944266
+    },
+    "planning": {
+      "mean_ms": 4.3966430625,
+      "min_ms": 2.047468,
+      "max_ms": 6.206698
+    },
+    "sq8": {
+      "mean_ms": 83.485289859375,
+      "min_ms": 52.906634,
+      "max_ms": 200.919155
+    },
+    "metadata_wave0": {
+      "mean_ms": 32.4089241875,
+      "min_ms": 26.373515,
+      "max_ms": 36.672067
+    },
+    "metadata_wave1": {
+      "mean_ms": 48.089573046875,
+      "min_ms": 36.810005,
+      "max_ms": 87.93165
+    },
+    "metadata_wave2": {
+      "mean_ms": 33.56295353125,
+      "min_ms": 25.030473,
+      "max_ms": 63.222905
+    }
+  }
+}
