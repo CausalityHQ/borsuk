@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """One fixed48 campaign: aNNNN | --stage REPO OUTPUT PREFIX | --self-check.
+Read-only original closed receipt: --validate-historical-a0002 REPO.
 
 Root freezes source BEFORE the separate campaign/driver/asset JSON authorities.
 Original retained/native bodies are authenticated transports, never rebuilt.
@@ -482,7 +483,10 @@ def stage(repo, out, prefix):
             # new vectors/scorer/16MiB diagnostics/metadata/debug receipts.
             reserve = sum(x["bytes"] for x in manifest["assets"].values()) + proof["largest_shard_bytes"] + proof["driver_output_reserve_bytes"]
             assert scratch_bytes(out) + reserve <= SCRATCH, "whole frozen staging/driver scratch reserve"
-            write(out / "tool-versions.json", previous.prior.tools())
+            versions = previous.prior.tools()
+            versions["thread_environment"] = {n: os.environ.get(n) for n in driver.retained.THREAD_ENV}
+            assert versions["thread_environment"] == dict.fromkeys(driver.retained.THREAD_ENV, "2"), "two-thread driver environment"
+            write(out / "tool-versions.json", versions)
             for name, entry in sorted(manifest["assets"].items(), key=lambda item: item[0].endswith("COMPLETE.json")):
                 staging["files"][name] = download(s3, entry["source"], out / "assets" / name,
                     {k: entry[k] for k in ("bytes", "sha256")}, repo, deadline)
@@ -531,7 +535,52 @@ def stage(repo, out, prefix):
     return closure
 
 
-def validate_closed(out, proof, terminal, files):
+def validate_closed(out, proof, terminal, files, *, historical_a0002=False):
+    if historical_a0002:
+        # This single immutable failed collection is the entire exception.
+        # No source preflight, remote reads, receipt writes, or science replay.
+        assert out.parts[-len(ROOT.parts)-1:] == (*ROOT.parts, "a0002"), "exact historical attempt"
+        for name, size, digest in (
+            ("aws-terminal.json", 24474, "8c660aed79c910352e4b1f6455b93bf42d070ec85d46b594789fa49f3f6d024a"),
+            ("source-qualification.json", 17814, "de6b59eed6b1ea111dd598ae5aca17b7bbc27715106403bee8f10fd0eb08eede"),
+            ("collection-error.json", 23612, "1ec996e871db7c0c7fc7a994fe39b145ff32bd5a2bd2e53aaf8fc90a5c847965"),
+            ("aws-launch.json", 353, "5fa6e92caaadf4658e835e43f6032906dfd237e08d96ae23e7d20c2f0b2f02ca"),
+            ("aws-closeout.json", 135, "f1390bd0f311d91468fc1896f2748de12adf27caf723e568ff6a5087ca895b6a"),
+            ("root-collection-disposition.json", 563, "f032332a064faa6eeca3f90f905ba3f82aac4132695048a3d818075a05796671")):
+            path = regular_path(out / name)
+            assert path.stat().st_size == size and artifact(path) == dict(bytes=size, sha256=digest), "historical receipt identity: " + name
+        assert terminal == read_json(out / "aws-terminal.json") and proof == read_json(out / "source-qualification.json")
+        assert terminal["schema"] == SCHEMA and terminal["instance_id"] == "i-0ce42d24c2c3fa0c1"
+        assert terminal["source_commit"] == proof["source_archive_commit"]
+        assert terminal["source_archive_sha256"] == proof["source_archive_sha256"]
+        for k in TERMINAL_IDENTITIES: assert terminal[k] == proof[k], "historical terminal identity: " + k
+        launch, close = read_json(out / "aws-launch.json"), read_json(out / "aws-closeout.json")
+        assert launch["prefix"] == PREFIX + "a0002" and close["state"] == "terminated" and close["nodes"] == launch["nodes"]
+        assert launch["instance_id"] == terminal["instance_id"]
+        assert (launch["source_commit"], launch["source_archive_sha256"]) == (terminal["source_commit"], terminal["source_archive_sha256"])
+        error, progress = read_json(out / "collection-error.json"), read_json(out / "collection-progress.json")
+        assert error["execution_status"] == "FAIL" and error["scientific_status"] == "INVALID" and progress["complete"] is False
+        receipts = error["authenticated_files"]
+        assert receipts == progress["files"] and set(receipts) == set(files) == set(terminal["artifacts"]) and len(files) == 70
+        assert files == terminal["artifacts"]
+        for name, receipt in receipts.items():
+            identity = files[name]
+            assert {k: receipt[k] for k in ("bytes", "sha256")} == identity
+            assert receipt["full_body_stream_verified"] is True and receipt["bucket"] == BUCKET
+            assert receipt["key"] == launch["prefix"] + "/artifacts/" + name
+            local = identity["bytes"] <= LOCAL_BYTES or name == "screen/records.jsonl"
+            assert receipt["local_body"] is local, "historical retention policy"
+            if local:
+                assert name != "screen/records.jsonl" or identity["bytes"] <= driver.offline.CAPS["measurements"]
+                path = regular_path(out / name)
+                assert path.stat().st_size == identity["bytes"] and artifact(path) == identity, "historical local body identity: " + name
+        config = read_json(out / "config.json")
+        assert config["execution_source"] == dict(commit=proof["source_archive_commit"], archive_sha256=proof["source_archive_sha256"])
+        assert sha(encoded(config["code_sha256"])) == proof["code_identity_sha256"]
+        dc = read_json(out / "driver-config.json")
+        assert dc["execution_source"] == config["execution_source"]
+        assert dc["code_sha256"] == {n: config["code_sha256"][n] for n in driver.CODE}
+        assert sha(encoded(dc["refs"])) == proof["refs_identity_sha256"]
     assert type(terminal["exit_code"]) is type(terminal["original_exit_code"]) is int
     assert 0 <= terminal["exit_code"] <= 255 and 0 <= terminal["original_exit_code"] <= 255
     complete = terminal["phase"] == "complete" and terminal["exit_code"] == 0
@@ -580,7 +629,9 @@ def validate_closed(out, proof, terminal, files):
     manifest = read_json(out / "asset-manifest.json")
     assert staging["files"] == {n: {k: p[k] for k in ("bytes", "sha256")} for n, p in manifest["assets"].items()}
     for name, count in (("resources.json", 1), ("measurement-resources.json", 0)):
-        driver.check_resources(read_json(out / "screen" / name), dc, count)
+        report = read_json(out / "screen" / name)
+        assert report["thread_environment"] == dict.fromkeys(driver.retained.THREAD_ENV, "2"), "exact driver thread environment"
+        driver.check_resources(report, dc, count)
     cleanup = read_json(out / "screen/cleanup.json")
     assert cleanup["process_cleanup"] is cleanup["native_scratch_empty"] is True
     measurement, scorer = read_json(out / "screen/measurement-receipt.json"), read_json(out / "screen/scorer-config.json")
@@ -611,12 +662,32 @@ def validate_closed(out, proof, terminal, files):
     versions = read_json(out / "tool-versions.json")
     assert versions["versions"] == previous.prior.VERSIONS and versions["threads"] == 2 and versions["aws_max_attempts"] == 1
     assert versions["architecture"] == "x86_64" and versions["os_release"]["ID"] == "ubuntu" and versions["os_release"]["VERSION_ID"] == "24.04"
-    assert versions["thread_environment"] == dict.fromkeys(driver.retained.THREAD_ENV, "2") and versions["python"].startswith("3.12.")
+    expected_threads = dict.fromkeys(driver.retained.THREAD_ENV, "2")
+    if historical_a0002:
+        assert versions["thread_environment"] == {n: v for n, v in expected_threads.items() if n != "BLIS_NUM_THREADS"}, "only original BLIS telemetry omission"
+    else:
+        assert versions["thread_environment"] == expected_threads, "exact collector thread environment"
+    assert versions["python"].startswith("3.12.")
     timing = (out / "profile-resources.txt").read_text()
     assert 0 <= int(timing.split("Maximum resident set size (kbytes): ", 1)[1].splitlines()[0])*1024 <= MEMORY
     assert int(timing.split("Exit status: ", 1)[1].splitlines()[0]) == 0
     assert read_json(out / "failure.json")["status"] == "complete"
     return True
+
+
+def validate_historical_a0002(repo):
+    """Separate read-only disposition; the original collected FAIL stays FAIL."""
+    out = regular_path(Path(repo) / ROOT / "a0002")
+    proof, terminal = read_json(out / "source-qualification.json"), read_json(out / "aws-terminal.json")
+    assert validate_closed(out, proof, terminal, terminal["artifacts"], historical_a0002=True)
+    return dict(schema=SCHEMA + "-historical-a0002-validation", closed_validation_passed=True,
+        original_controller_exit=2, original_collection_execution_status="FAIL", execution_status="SUCCESS",
+        scientific_status=read_json(out / "screen/decision.json")["scientific_status"], instance_id=terminal["instance_id"],
+        state="terminated", authenticated_terminal_bodies=70, terminal=artifact(out / "aws-terminal.json"),
+        config_sha256=proof["config_sha256"], execution_source=dict(commit=proof["source_archive_commit"], archive_sha256=proof["source_archive_sha256"]),
+        missing_collector_field="BLIS_NUM_THREADS", thread_environment=dict.fromkeys(driver.retained.THREAD_ENV, "2"),
+        thread_evidence={n: terminal["artifacts"]["screen/" + n] for n in ("resources.json", "measurement-resources.json")},
+        read_only=True, measurement_rerun=False, launch_authority=False)
 
 
 def collect(s3, prefix, out, instance_id, commit, digest):
@@ -922,7 +993,7 @@ aws() { test -f "$3" || return 44; printf '%s\n' "$4" >> "$root/uploads"; if [ "
             "memory.events": "max 0\noom 0\noom_kill 0", "memory.swap.events": "max 0\nfail 0", "cpu.max": "200000 100000",
             "cpu.stat": "usage_usec 10", "pids.max": "512", "pids.current": "1", "pids.events": "max 0"})
         versions = dict(versions=previous.prior.VERSIONS, architecture="x86_64", os_release=dict(ID="ubuntu", VERSION_ID="24.04"),
-            threads=2, aws_max_attempts=1, python="3.12.0", thread_environment=dict.fromkeys(driver.retained.THREAD_ENV, "2"))
+            threads=2, aws_max_attempts=1, python="3.12.0", thread_environment=dict.fromkeys(previous.prior.THREAD_ENV, "2"))
         # The actual stage starts one separate fake driver process; replay is a
         # second CLI, never another scorer/build/acquisition process.
         stub_driver = '''import json,sys
@@ -938,7 +1009,7 @@ if not replay:
  (out/'resources.json').write_text(json.dumps(dict(http_request_dispatch_attempts=dict(GET=0,HEAD=0,PUT=0))))
 print((out/'decision.json').read_text())
 '''
-        for mode in ("success", "asset-tamper", "pending", "driver-failed", "interrupt", "scratch"):
+        for mode in ("success", "missing-thread", "bad-thread", "asset-tamper", "pending", "driver-failed", "interrupt", "scratch"):
             dest = work / ("stage-" + mode); dest.mkdir(); fake_repo = dest / "repo"; (fake_repo / "scripts").mkdir(parents=True)
             (fake_repo / driver.OWN).write_text(stub_driver)
             assets = {"retained/COMPLETE.json": b"{}", "qualification/binaries/check_semantic_router_scorer": b"fake-native-not-executed"}
@@ -960,17 +1031,21 @@ print((out/'decision.json').read_text())
                 if mode == "interrupt": raise KeyboardInterrupt()
                 if mode == "driver-failed": return dict(exit_status=7, process_cleanup=True)
                 return real_run(*args)
-            with patch.object(module, "WORK_ROOT", dest), patch.object(module, "qualify", return_value=fake_proof), \
+            with patch.dict(os.environ, dict.fromkeys(driver.retained.THREAD_ENV, "2")), \
+                patch.object(module, "WORK_ROOT", dest), patch.object(module, "qualify", return_value=fake_proof), \
                 patch.object(previous.prior, "capture_cgroup", return_value=counters), patch.object(previous.prior, "tools", return_value=versions), \
                 patch.object(previous, "runtime_abi"), patch.object(sdk, "Session", return_value=session), \
                 patch.object(module, "run_cli", side_effect=ran), patch.object(module, "SCRATCH", 1 if mode=="scratch" else SCRATCH):
+                if mode == "missing-thread": os.environ.pop("BLIS_NUM_THREADS")
+                if mode == "bad-thread": os.environ["BLIS_NUM_THREADS"] = "1"
                 try: closure = stage(fake_repo, dest, PREFIX + "a0001")
                 except KeyboardInterrupt: assert mode == "interrupt"
                 else:
                     assert closure["closed"] == (mode=="success"), (mode, read_json(dest / "failure.json"))
                     if mode == "success":
                         assert closure["scientific_status"] == "FAIL" and (dest / "invocations").read_text() == "driver\nreplay\n"
-            if mode in ("asset-tamper", "pending", "scratch"): assert not (dest / "invocations").exists()
+                        assert read_json(dest / "tool-versions.json")["thread_environment"] == dict.fromkeys(driver.retained.THREAD_ENV, "2"), "producer omitted driver thread environment"
+            if mode in ("missing-thread", "bad-thread", "asset-tamper", "pending", "scratch"): assert not (dest / "invocations").exists()
             if mode=="driver-failed": assert read_json(dest / "scientific-closure.json")["driver_exit_code"] == 7
             checks += 1
         # Actual original process-group timeout cleanup, with a sleeping
@@ -1028,7 +1103,8 @@ assert captured
         body("transport-budget.json", dict(driver_actual_dispatches_verified=True, cap=256, dispatches={"staging_GET":0},
             driver_actual_dispatches=dict(GET=0,HEAD=0,PUT=0), prospective_dispatches=0))
         body("runtime-abi.json", dict(qualified=True, builder=dict(sha256=proof2["scorer_binary_sha256"])))
-        body("tool-versions.json", versions); body("profile-cgroup.json", dict(closed=True,before=counters,after=counters))
+        body("tool-versions.json", dict(versions, thread_environment=dict.fromkeys(driver.retained.THREAD_ENV, "2")))
+        body("profile-cgroup.json", dict(closed=True,before=counters,after=counters))
         body("profile-resources.txt", b"Maximum resident set size (kbytes): 1\nExit status: 0\n")
         body("failure.json", dict(status="complete"))
         terminal = dict(schema=SCHEMA, instance_id="i-owned", source_commit="a"*40, source_archive_sha256="b"*64,
@@ -1045,6 +1121,21 @@ assert captured
             assert read_json(dest/"collection-receipt.json")["scientific_status"]=="FAIL"
             assert not read_json(dest/"collection-receipt.json")["files"]["screen/source-order.u64"]["local_body"]
             checks += 1
+            # All eight pass above. Collector and BOTH actual driver reports
+            # independently reject missing, changed, and extra env entries.
+            for name in ("tool-versions.json", "screen/resources.json", "screen/measurement-resources.json"):
+                original = (dest / name).read_bytes()
+                for mode in ("missing", "bad", "extra"):
+                    changed = json.loads(original)
+                    env = changed["thread_environment"]
+                    if mode == "missing": env.pop("BLIS_NUM_THREADS")
+                    if mode == "bad": env["BLIS_NUM_THREADS"] = "1"
+                    if mode == "extra": env["EXTRA_NUM_THREADS"] = "2"
+                    write(dest / name, changed)
+                    rejected(lambda: validate_closed(dest, proof2, terminal, terminal["artifacts"]))
+                (dest / name).unlink()
+                rejected(lambda: validate_closed(dest, proof2, terminal, terminal["artifacts"]))
+                write(dest / name, original)
             write(dest/"aws-closeout.json",dict(state="running",nodes=launch["nodes"])); transport.calls.clear()
             rejected(lambda:collect(transport,PREFIX+"a0001",dest,"i-owned","a"*40,"b"*64)); assert not transport.calls
             write(dest/"aws-closeout.json",dict(state="terminated",nodes=launch["nodes"]))
@@ -1074,6 +1165,9 @@ if __name__ == "__main__":
     try:
         if sys.argv[1:] == ["--help"]: print(__doc__)
         elif sys.argv[1:] == ["--self-check"]: print(json.dumps(self_check(), sort_keys=True))
+        elif sys.argv[1:2] == ["--validate-historical-a0002"]:
+            assert len(sys.argv) == 3, "--validate-historical-a0002 REPO"
+            print(json.dumps(validate_historical_a0002(Path(sys.argv[2])), sort_keys=True))
         elif sys.argv[1:2] == ["--stage"]:
             assert len(sys.argv) == 5, "--stage REPO OUTPUT PREFIX"
             sys.exit(0 if stage(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])["closed"] else 2)
