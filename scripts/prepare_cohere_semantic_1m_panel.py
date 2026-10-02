@@ -304,13 +304,14 @@ def extract(path, rows, local_rows):
     return result
 
 
-def cgroup_limits(group):
+def cgroup_limits(group, limits=None):
+    limits = LIMITS if limits is None else limits
     memory = (group / "memory.max").read_text().strip()
     quota, period = (group / "cpu.max").read_text().split()
-    require(memory != "max" and 0 < int(memory) <= LIMITS["memory_bytes"]
-            and (group / "memory.swap.max").read_text().strip() == "0"
-            and quota != "max" and 0 < int(quota) <= 2 * int(period),
-            "preparation requires cgroup memory<=2GiB, CPU<=2 and no swap")
+    require(memory != "max" and 0 < int(memory) <= limits["memory_bytes"]
+            and (group / "memory.swap.max").read_text().strip() == str(limits["swap_bytes"])
+            and quota != "max" and 0 < int(quota) <= limits["cpu"] * int(period),
+            "preparation cgroup memory/CPU/swap limits differ")
 
 
 def scratch_bytes(out):
@@ -326,8 +327,9 @@ class Accounting:
     """One AWS command at a time; reuse seal helpers through a narrow proxy."""
     DEVNULL = subprocess.DEVNULL
 
-    def __init__(self, config, out, group):
+    def __init__(self, config, out, group, *, limits=None):
         self.config, self.out, self.group = config, out, group
+        self.limits = dict(LIMITS if limits is None else limits)
         self.started = time.monotonic(); self.stages = {}; self.peak_scratch = 0
         self.requests = dict(GET=0, HEAD=0, PUT=0)
         self.received_bytes = self.response_lengths = self.errors = 0
@@ -338,14 +340,14 @@ class Accounting:
 
     def checkpoint(self, reserve=0):
         current = scratch_bytes(self.out); self.peak_scratch = max(self.peak_scratch, current)
-        require(current + reserve <= LIMITS["scratch_bytes"], "preparation scratch limit exceeded")
+        require(current + reserve <= self.limits["scratch_bytes"], "preparation scratch limit exceeded")
         require(shutil.disk_usage(self.out).free >= reserve, "insufficient preparation scratch space")
-        require(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024 <= LIMITS["memory_bytes"],
+        require(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024 <= self.limits["memory_bytes"],
                 "preparation RSS limit exceeded")
         require(next(line.split()[1] for line in Path("/proc/self/status").read_text().splitlines()
                      if line.startswith("VmSwap:")) == "0", "preparation process has swapped")
         if self.group is not None:
-            cgroup_limits(self.group)
+            cgroup_limits(self.group, self.limits)
 
     @contextmanager
     def stage(self, name):
@@ -365,7 +367,7 @@ class Accounting:
             args = ["aws", "s3api", "get-object", "--bucket", bucket_key[0], "--key", key, str(target)]
             require(key in self.sizes, "unregistered object download")
             self.checkpoint(self.sizes[key] + (4 << 20))
-        require(sum(self.requests.values()) < LIMITS["max_requests"], "preparation request limit exceeded")
+        require(sum(self.requests.values()) < self.limits["max_requests"], "preparation request limit exceeded")
         env = dict(os.environ, AWS_MAX_ATTEMPTS="1", AWS_RETRY_MODE="standard",
                    AWS_REGION=self.config["region"], AWS_DEFAULT_REGION=self.config["region"])
         log = self.out / "aws-debug.tmp"
@@ -392,7 +394,7 @@ class Accounting:
                 self.requests[method] += count
             require(sum(counts.values()) > 0, "AWS operation has no auditable transport record")
             self.accounting_complete = True
-            require(sum(self.requests.values()) <= LIMITS["max_requests"], "HTTP dispatch attempt cap exceeded")
+            require(sum(self.requests.values()) <= self.limits["max_requests"], "HTTP dispatch attempt cap exceeded")
             if result.returncode:
                 self.errors += 1
                 raise ValueError(f"AWS {args[2]} failed (exit {result.returncode}); debug log discarded")
@@ -411,7 +413,7 @@ class Accounting:
     def report(self, passed, cleanup=None):
         self.peak_scratch = max(self.peak_scratch, scratch_bytes(self.out))
         return dict(schema="borsuk-cohere-preparation-resources-v1", passed=passed,
-                    prospective_preparation_limits=LIMITS, serving_or_build_measurement=False,
+                    prospective_preparation_limits=self.limits.copy(), serving_or_build_measurement=False,
                     wall_seconds=time.monotonic() - self.started, stage_seconds=self.stages,
                     process_max_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
                     child_max_rss_kib=resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss,
