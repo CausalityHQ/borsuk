@@ -1,0 +1,49 @@
+{
+  "asset_manifest_sha256": "012eb8827cb5f3ad3bc756ff3f2e60a1c9cb7e58a373f14e4664dac88817c944",
+  "attempt": "a0001",
+  "config_sha256": "8370c6c6f3a2dff9757827e12db62e16dd5024a4cfcf4fb28a38debe2a8903ce",
+  "controller_config_sha256": "0cfc3c26df90fbf291066d8992f58dce8421607c8d0ac6767a555abdf3f39524",
+  "dataset": "CoHere FIRST1M D768 cosine",
+  "dispatch_lateness_max_ns": 125000000,
+  "execution_source": {
+    "archive_sha256": "d665a457c6ca37b68aaac5a8620c43c864d684a53341db5fe184087c28dda87b",
+    "commit": "3cb4b1a58e6b22f72b9de40af7d19c9e374c1d53"
+  },
+  "infrastructure_gate": {
+    "bytes": 8932,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/a0003/root-audit.json",
+    "sha256": "a472eb62730a3e5fc7623e039458ca0f363f3c875c7abcc01b7ad2ac2dce4c2f"
+  },
+  "k": 10,
+  "native_or_source_changed_after_canary": false,
+  "offered_qps": [
+    0.25,
+    0.5,
+    1,
+    2,
+    4,
+    8
+  ],
+  "owners": 5,
+  "panel": "same sealed fresh64 reused for capacity, not independent quality panel",
+  "preregistration": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-execution-preregistration.md",
+  "published_context": "Turbopuffer reported 1M D768 cold p90 444ms, protocol mismatch, no measured vendor win",
+  "qualification_passed": true,
+  "quality_gate": "all64 successful, >=608/640 hits and ordered/physical ID parity",
+  "resources": {
+    "cpu_quota_percent": 200,
+    "driver_reserve_bytes": 2147483648,
+    "native_memory_bytes": 2147483648,
+    "native_rlimit_as_bytes": 4294967296,
+    "output_reserve_bytes": 67108864,
+    "scratch_bytes": 17179869184,
+    "shared_memory_bytes": 12884901888,
+    "static_repository_reserve_bytes": 2147483648,
+    "swap_bytes": 0,
+    "tasks_max": 512,
+    "threads": 2
+  },
+  "schema": "borsuk-fixed48-offered-launch-freeze-v1",
+  "stop": "first capacity/quality/dispatch failure stops escalation; identity/resource/cleanup failure invalidates execution",
+  "tail_method": "linear (N-1)*p; success-conditioned with all-offer denominators"
+}
