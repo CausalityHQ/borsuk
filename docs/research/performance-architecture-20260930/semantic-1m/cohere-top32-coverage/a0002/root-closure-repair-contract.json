@@ -1,0 +1,63 @@
+{
+  "schema": "borsuk-cohere-top32-closed-audit-contract-v1",
+  "worktree": "/home/rb/worktrees/borsuk-cohere-top32-closed-audit",
+  "base_commit": "2838f04b5e1da3008222c600ff76e35f4d943882",
+  "owned_code": [
+    "scripts/launch_cohere_top32_coverage_spot.py",
+    "scripts/audit_cohere_top32_closed.py"
+  ],
+  "api": "validate_coverage(out, proof, prefix, repo, *, collected=True); only stage uses collected=False; final timing mandatory by default",
+  "audit_command": "python3 scripts/audit_cohere_top32_closed.py --order-file /tmp/borsuk-cohere-top32-a0002-audit-inputs/order.u64 --source-root-file /tmp/borsuk-cohere-top32-a0002-audit-inputs/source-root.json --output-file NEW_ROOT_AUDIT_JSON",
+  "self_check": "python3 scripts/audit_cohere_top32_closed.py --self-check",
+  "memory_limit_bytes": 268435456,
+  "wall_limit_seconds": 55,
+  "root_cause": "GNU time timing fields parsed inside enclosed stage before process exit",
+  "red": "source-bound temporary stage with empty profile-resources.txt reproduced original line419 IndexError before fix",
+  "green": "same fixture passes; default collected rejects missing timing, exit1, RSS>8GiB; stage rejects cgroup max event",
+  "historical_evidence_source": "2d178890da6aec550cbbc5f81ff2737c5bd68fc4",
+  "order_retrieved_by_parent": "/tmp/borsuk-cohere-top32-a0002-audit-inputs/order.u64",
+  "order_sha256": "25672572b8e36eafea6ba856068f33aca5064e3ce02544340f682cd39881ea02",
+  "audit_output": "/tmp/borsuk-cohere-top32-a0002-root-audit-complete.json",
+  "original_execution_qualified": false,
+  "scientific_report_qualified": false,
+  "missing_original_closure_artifacts": [
+    "source-order.u64",
+    "source-root.json",
+    "seal-readback.json",
+    "decision.json"
+  ],
+  "summary": {
+    "old_unit_hits10": 554,
+    "old_unit_hits100": 5146,
+    "old_page_hits10": 569,
+    "old_page_hits100": 5342,
+    "top32_unit_hits10": 599,
+    "top32_unit_hits100": 5660,
+    "top32_page_hits10": 606,
+    "top32_page_hits100": 5804,
+    "threshold_hits10": 608,
+    "denominator10": 640,
+    "status": "FAIL"
+  },
+  "boundaries": "No native/Cargo/AWS/GT/build/datafit/reviews/children/operator/push. No restored original artifact/config changes. Root owns receipts/freeze/integration.",
+  "source_root_manifest_verified": true,
+  "canonical_row_and_page_manifest_identity_bound": true,
+  "physical_page_manifest_body_verified": false,
+  "source_root_sha256": "a4eb4851c545e828f3d08181a0c3e9cca09ed9341032ee3e69c511b9b7caf67e",
+  "existing_controller_self_check_exit_status": 0,
+  "owned_code_sha256": {
+    "scripts/launch_cohere_top32_coverage_spot.py": "211584781ff82ed8e2e81422b4455b7f19b3aa58ed6588212e3958f040550c2e",
+    "scripts/audit_cohere_top32_closed.py": "782cba3a414d484ad3b412243b53eb61dd84fd5b191fc52ac0a6e20fbac9ede1"
+  },
+  "audit_self_check_exit_status": 0,
+  "closed_actual_offline_audit_exit_status": 0,
+  "original_evidence_modified": false,
+  "checks": "source-bound closure red/green; 608/607 synthetic independent counts; source-order mutation; terminal-body/external pin mutations; missing-order unqualified; no-overwrite; existing controller self-check; Python syntax; diff check",
+  "commit": "bf79c89c88c89546a0340a6e1e087e5ef499eb93",
+  "worktree_clean": true,
+  "commit_only_owned_code": true,
+  "audit_output_identity": {
+    "bytes": 3423,
+    "sha256": "0c15b6d8f79377ff0bf3e536fad72d70fd9d04a96986a9373b71cfd1f85675a4"
+  }
+}
