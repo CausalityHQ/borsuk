@@ -35,6 +35,8 @@ INSTANCE_TYPE, IMAGE_ID = panel.INSTANCE_TYPE, panel.IMAGE_ID
 ROOT_DEVICE_NAME, SUBNET = panel.ROOT_DEVICE_NAME, panel.SUBNET
 SPOT_MAX_USD_PER_HOUR, COMPUTE_CAP = .50, .50
 AWSCLI_VERSION, AWSCLI_SHA256 = panel.AWSCLI_VERSION, panel.AWSCLI_SHA256
+SDK_PACKAGES = ('boto3==1.40.72', 'botocore==1.40.72', 's3transfer==0.14.0',
+    'jmespath==1.0.1', 'python-dateutil==2.9.0', 'six==1.17.0', 'urllib3==2.6.3')
 ARTIFACTS = ('test-resources.txt', 'run-closed.log', *('screen/'+n for n in worker.OUTPUTS))
 TERMINAL_IDENTITIES = (*shared_quality.TERMINAL_IDENTITIES, 'quality_reference_sha256',
     'namespace_prefix', 'measurement_prefix', 'cold_terminal_sha256')
@@ -59,6 +61,10 @@ def user_data(commit, archive_sha, archive_key, prefix, qualification):
     with patch.multiple(shared_quality, CONFIG=CONFIG, SCHEMA=SCHEMA, PREFIX=PREFIX,
         ARTIFACTS=ARTIFACTS, TERMINAL_IDENTITIES=TERMINAL_IDENTITIES, WALL=WALL):
         body = shared_quality.user_data(commit, archive_sha, archive_key, prefix, qualification)
+    body = body.replace('numpy==2.3.3 pyarrow==24.0.0\n',
+        'numpy==2.3.3 pyarrow==24.0.0 '+' '.join(SDK_PACKAGES)+'\n'
+        'PYTHONPATH="$root/repo" "$root/venv/bin/python" -c \'import numpy, pyarrow; '
+        'from scripts import launch_native_semantic_1m_offered_spot as launch; launch.ids.lifecycle()\'\n')
     body = body.replace('MemoryMax=1G', 'MemoryMax=8G -p IOAccounting=yes')
     body = body.replace('RuntimeMaxSec=7200', 'RuntimeMaxSec=3000').replace('--kill-after=5 7200', '--kill-after=90 3000')
     body = body.replace('BORSUK_QUALITY_', 'BORSUK_OFFERED_').replace('semantic-1m-quality', 'semantic-1m-offered')
@@ -478,6 +484,12 @@ def self_check():
         frozen.update(config_path=str(CONFIG),campaign_schema=SCHEMA,awscli_version=AWSCLI_VERSION,
             awscli_sha256=AWSCLI_SHA256,namespace_prefix='retained/native',measurement_prefix=PREFIX+'a0001')
         body=user_data('0'*40,'1'*64,'source/key',PREFIX+'a0001',frozen)
+        install=next(line for line in body.splitlines() if ' -m pip install ' in line)
+        assert install.split('--no-deps ',1)[1].split()==[
+            'numpy==2.3.3','pyarrow==24.0.0','boto3==1.40.72','botocore==1.40.72',
+            's3transfer==0.14.0','jmespath==1.0.1','python-dateutil==2.9.0','six==1.17.0','urllib3==2.6.3'], 'bootstrap dependency closure'
+        assert '--only-binary=:all:' in install
+        assert body.index('launch.ids.lifecycle()') < body.index('systemd-run --unit=semantic-1m-offered')
         assert all(n in body for n in ('MemoryMax=8G','MemorySwapMax=0','CPUQuota=200%','TasksMax=512',
             'RuntimeMaxSec=3000','--on-active=3600s','taskset -c 4-5','--worker','IOAccounting=yes'))
         command=body.split('systemd-run --unit=semantic-1m-offered',1)[1].split('\nfor name',1)[0]
