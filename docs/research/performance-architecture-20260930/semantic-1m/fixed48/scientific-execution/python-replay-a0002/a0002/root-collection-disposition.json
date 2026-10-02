@@ -1,0 +1,14 @@
+{
+  "schema": "borsuk-fixed48-closed-collection-disposition-v1",
+  "original_controller_exit": 2,
+  "original_collection_execution_status": "FAIL",
+  "terminal_execution_status": "SUCCESS",
+  "terminal_exit": 0,
+  "all_terminal_bodies_authenticated": 70,
+  "instance_state_independently_verified": "terminated",
+  "collector_failure_location": "validate_closed line614 thread_environment",
+  "missing_report_field": "BLIS_NUM_THREADS",
+  "driver_actual_threads_complete": true,
+  "scientific_result_pending_final_validation": true,
+  "measurement_rerun": false
+}

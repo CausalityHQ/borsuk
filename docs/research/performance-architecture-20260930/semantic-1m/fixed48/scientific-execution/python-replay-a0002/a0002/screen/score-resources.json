@@ -1,0 +1,1 @@
+{"command":["/mnt/cohere-fixed48-scientific/screen/scorer","/mnt/cohere-fixed48-scientific/screen/scorer-config.json","76718fbb3794748e1292119265c0f1f78d2d701b30bdd49ed31fd373e50f5e36","/mnt/cohere-fixed48-scientific/screen/records.jsonl"],"exit_status":0,"process_cleanup":true,"process_peak_rss_kib":46752,"wall_seconds":7.446367480999982}
