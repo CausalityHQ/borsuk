@@ -1,0 +1,27 @@
+{
+  "schema": "borsuk-root-reuse-root-integration-v1",
+  "qualified": true,
+  "native_source_commit": "ce63da202aff13f86ffb35b486f0a461e0ac7513",
+  "source_identity_sha256": "a34505d9d917bc766c9492034e6e4ac80dfb327f2e5eed0ebb03c5d2d5f72935",
+  "source_file_count": 399,
+  "original_controller_session": 94126,
+  "controller_exit_status": 0,
+  "instance_id": "i-0948e57caf0ab431b",
+  "instance_state": "terminated",
+  "authenticated_artifacts": 14,
+  "stage_records": 20,
+  "actual_full_workspace_execution": false,
+  "new_performance_measurements": false,
+  "integrated_python_checks": {
+    "paired": {
+      "exit_status": 0,
+      "sha256": "c5a5acca3cf8adb25ec394afe3a4ff9eb65a09ff15f60f05d84ac7707f23ce3e",
+      "bytes": 328
+    },
+    "controller": {
+      "exit_status": 0,
+      "sha256": "5f0e6a50441894b04cac1e854b3e0f628137978579cc759bd3fa7f529b201841",
+      "bytes": 411
+    }
+  }
+}

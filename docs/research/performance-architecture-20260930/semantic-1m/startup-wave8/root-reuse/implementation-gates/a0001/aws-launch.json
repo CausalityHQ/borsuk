@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0948e57caf0ab431b",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0948e57caf0ab431b"
+    }
+  },
+  "prefix": "research/semantic-router/20261002/root-reuse-implementation-a0001",
+  "source_commit": "bd9160e8fa0f6a210779ab9238728e0937c800d3",
+  "source_archive_sha256": "7c35f488e595c30766062496113dcc3e6fb013a8c22a51340d68d7215a4f2d43"
+}
