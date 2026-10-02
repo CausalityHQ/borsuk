@@ -1,0 +1,8 @@
+AssertionError: usage: aNNNN | --self-check
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/mnt/cohere-fixed48-canary/repo/scripts/run_cohere_fixed48_cold_http.py", line 1197, in <module>
+    assert len(sys.argv) == 5, 'usage: CONFIG SHA256 REPO NEW_EXTERNAL_OUTPUT | --self-check'
+           ^^^^^^^^^^^^^^^^^^
+AssertionError: usage: CONFIG SHA256 REPO NEW_EXTERNAL_OUTPUT | --self-check
