@@ -31,6 +31,7 @@ run_stage() {
 
 run_stage generation-tests cargo test --locked -p borsuk --lib two_bit_generation:: -- --test-threads=1
 run_stage scorer-tests cargo test --locked -p borsuk --bin check_semantic_router_scorer -- --test-threads=1
+run_stage http-example-tests cargo test --locked -p borsuk --example two_bit_http -- --test-threads=1
 run_stage release cargo build --release --locked -p borsuk --example two_bit_http \
   --bin build_two_bit_generation --bin build_semantic_unit_router \
   --bin repackage_semantic_generation --bin check_semantic_router_scorer

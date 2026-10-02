@@ -212,7 +212,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         max_query_gets: 32,
         max_parallel_gets: 32,
         max_source_bytes: 64 * 1024 * 1024,
-        max_source_gets: 128,
+        max_source_gets: 32,
         max_parallel_source_gets: 16,
         max_query_scratch_bytes: 400_000,
         already_pinned_bytes: 0,
@@ -260,6 +260,66 @@ async fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_cover_matches_authenticated_fixed48_replay_at_caps128_and32() {
+        use borsuk::two_bit_generation::plan_two_bit_source_cover;
+        use sha2::{Digest, Sha256};
+        use std::collections::BTreeSet;
+
+        let raw = include_str!(
+            "../../../docs/research/performance-architecture-20260930/semantic-1m/fixed48/source32-geometry/replay_fixed48_source_get_caps.json"
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(raw.as_bytes())),
+            "e53ad52bc3c0933551d03c4a449d4141963c5f3e5752b83af6764bcc046ea181"
+        );
+        let replay: Value = serde_json::from_str(raw).unwrap();
+        let queries = replay["queries"].as_array().unwrap();
+        assert_eq!(replay["query_count"].as_u64().unwrap(), 64);
+        assert_eq!(queries.len(), 64);
+        assert_eq!(
+            replay["source_byte_cap"].as_u64().unwrap(),
+            64 * 1024 * 1024
+        );
+        for (ordinal, query) in queries.iter().enumerate() {
+            assert_eq!(query["ordinal"].as_u64().unwrap() as usize, ordinal);
+            let closure = query["closure_pages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|page| page.as_u64().unwrap() as usize)
+                .collect::<BTreeSet<_>>();
+            for cap in [128, 32] {
+                let expected = &query["source"][cap.to_string()];
+                let (ranges, bytes) =
+                    plan_two_bit_source_cover(&closure, 1_000_000, 200, cap, 64 * 1024 * 1024)
+                        .unwrap();
+                let endpoints = ranges.iter().map(|r| [r.start, r.end]).collect::<Vec<_>>();
+                let expected_endpoints: Vec<[usize; 2]> =
+                    serde_json::from_value(expected["ranges"].clone()).unwrap();
+                assert_eq!(
+                    endpoints, expected_endpoints,
+                    "ordinal {ordinal}, cap {cap}"
+                );
+                assert_eq!(
+                    ranges.len(),
+                    expected["gets"].as_u64().unwrap() as usize,
+                    "ordinal {ordinal}, cap {cap}"
+                );
+                assert_eq!(
+                    bytes,
+                    expected["bytes"].as_u64().unwrap() as usize,
+                    "ordinal {ordinal}, cap {cap}"
+                );
+                assert_eq!(
+                    ranges.iter().map(|r| r.end - r.start).max().unwrap(),
+                    expected["largest_range_bytes"].as_u64().unwrap() as usize,
+                    "ordinal {ordinal}, cap {cap}"
+                );
+            }
+        }
+    }
 
     #[tokio::test]
     async fn request_identity_geometry_and_nonqueued_admission() {
