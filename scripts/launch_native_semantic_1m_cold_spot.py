@@ -115,7 +115,8 @@ def replay(out):
     repo=Path(__file__).resolve().parents[1]
     config=json.loads((screen/'config.json').read_bytes())
     assert report['phase_admission']==dict(builder_memory_bytes=worker.PAYLOAD,
-        publisher_memory_bytes=config['publisher_memory_bytes'],native_memory_bytes=worker.PAYLOAD,
+        publisher_memory_bytes=config['publisher_memory_bytes'],native_memory_bytes=worker.NATIVE,
+        server_query_slots=worker.SERVER_QUERY_SLOTS,native_budget_model=worker.native_budget_model(),
         memory_bytes=worker.MEMORY,swap_bytes=0), 'phase memory admission'
     qconfig=json.loads(worker.read(repo,config['quality_config']))
     original=worker.read(repo,qconfig['panel']['files']['screen/requests.jsonl'])
@@ -129,6 +130,7 @@ def replay(out):
     refs=worker.source_reference(worker.read(repo,config['quality_run']['files']['screen/records.jsonl']))
     publication=json.loads((screen/'publication.json').read_bytes()); arm=publication['arm']
     worker.validate_roster(arm)
+    assert report['native_budget_model']==worker.native_budget_model(arm['metadata_files'])
     assert arm['indexes']=={'10':config['namespace_prefix']}
     assert publication['head']['root_sha256']==arm['authority']['root_sha256']
     head=worker.base64.b64decode(publication['head_body_base64'],validate=True)
@@ -176,6 +178,7 @@ def main(attempt):
 
 
 def self_check():
+    started=worker.time.monotonic()
     import copy
     import io
     import tempfile
@@ -187,6 +190,11 @@ def self_check():
         try: action()
         except (AssertionError,ValueError,KeyError,FileNotFoundError,FileExistsError,RuntimeError): return
         raise AssertionError('invalid evidence accepted')
+    assert worker.FIXED['native_memory_bytes']==1024**3, 'four-slot HTTP admission'
+    worst=worker.native_budget_model()
+    assert worst['server_query_slots']==worker.FIXED['server_query_slots']==4
+    assert worst['modeled_remote_payload_bytes']==938423992<worker.NATIVE
+    assert worst['source_payload_per_slot']==134217728 and worst['query_payload_per_slot']==57276032
     source = b'{"ordinal":0,"query":[1.0,-0.0]}\n'
     derivative = worker.publisher_requests(source, rows=1, dimensions=2)
     assert derivative == b'{"query":[1.0,-0.0],"query_ordinal":0}\n'
@@ -356,11 +364,14 @@ def self_check():
             elif kind=='counter': r['submitted_gets']+=1
             else: r['transport']['totals']['status_counts'][0][0]=500
             rejects(lambda:worker.transport(h,r,arm))
+        high_rss='User time (seconds): 0.01\nSystem time (seconds): 0.01\nMaximum resident set size (kbytes): 786432\n'
+        assert worker.telemetry.resources(high_rss,worker.NATIVE)['rss_peak_bytes']==768*1024**2
+        rejects(lambda:worker.telemetry.resources(high_rss,worker.PAYLOAD))
         time_log='User time (seconds): 0.01\nSystem time (seconds): 0.01\nMaximum resident set size (kbytes): 42\n'
         # The real cold_call executes against a mocked socket/native process.
         process=Mock(pid=1234,returncode=143); process.poll.return_value=None
         def spawn(args,**kwargs):
-            assert kwargs['env']['BORSUK_NATIVE_MEMORY_BYTES']==str(512 * 1024**2)
+            assert kwargs['env']['BORSUK_NATIVE_MEMORY_BYTES']==str(worker.NATIVE)
             assert args[args.index('prlimit')+1]=='--as=4294967296:4294967296'
             kwargs['stdout'].write(json.dumps(ready)+'\n'); kwargs['stdout'].flush()
             Path(args[3]).write_text(time_log)
@@ -407,7 +418,7 @@ def self_check():
             bad=copy.deepcopy(records)
             if kind=='ledger': bad.pop()
             elif kind=='cleanup': bad[1]['native_close']['process_group_closed']=False
-            elif kind=='resource': bad[1]['resources']['rss_peak_bytes']=worker.PAYLOAD+1
+            elif kind=='resource': bad[1]['resources']['rss_peak_bytes']=worker.NATIVE+1
             elif kind=='raw': bad[1]['raw_response_base64']=worker.base64.b64encode(b'{}').decode()
             elif kind=='identity': bad[1]['request_sha256']='0'*64
             else: bad[1]['started_ns']=0
@@ -426,23 +437,21 @@ def self_check():
         rejects(lambda:worker.qualify(target,'0'*64,repo))
         config['authority_pending']=False
         for field,value in (('rows',100000),('k',100),('memory_bytes',worker.MEMORY+1),
-                            ('publisher_memory_bytes',512 * 1024**2)):
+                            ('publisher_memory_bytes',512 * 1024**2),('native_memory_bytes',worker.PAYLOAD),
+                            ('server_query_slots',1),('server_query_slots',True),('native_budget_model',{})):
             target.write_bytes(worker.encoded(dict(config,**{field:value})))
             with patch.object(worker,'read') as reads,patch.object(worker.quality,'run_process') as processes:
                 rejects(lambda:worker.qualify(target,worker.artifact(target)['sha256'],repo))
                 reads.assert_not_called(); processes.assert_not_called()
         changed=dict(config,code_sha256=dict(config['code_sha256'],**{CODE[0]:'0'*64}))
         target.write_bytes(worker.encoded(changed)); rejects(lambda:worker.qualify(target,worker.artifact(target)['sha256'],repo))
-        # Runtime qualification failures still produce the full aborted population and cleanup.
-        target.write_bytes(worker.encoded(config))
+        # Reject undersized qualification before creating outputs or processes.
+        target.write_bytes(worker.encoded(dict(config,native_memory_bytes=worker.PAYLOAD)))
         out=tmp/'fatal'
-        with patch.object(worker,'qualify',side_effect=AssertionError('pending authority')):
-            rejects(lambda:worker.main(target,'0'*64,repo,out))
-        assert not (out/'scratch').exists()
-        saved=[json.loads(line) for line in (out/'records.jsonl').read_bytes().splitlines()]
-        assert [r['query_ordinal'] for r in saved]==list(range(64)) and all(r['outcome']=='aborted' for r in saved)
-        assert json.loads((out/'cleanup.json').read_bytes())['valid'] is True
-        assert not json.loads((out/'summary.json').read_bytes())['execution_gate_passed']
+        with patch.object(worker.subprocess,'Popen') as processes,patch.object(worker,'read') as reads:
+            rejects(lambda:worker.main(target,worker.artifact(target)['sha256'],repo,out))
+            processes.assert_not_called(); reads.assert_not_called()
+        assert not out.exists()
         # Full runtime and closed offline replay, with synthetic transfers/processes.
         request_body=b''.join(worker.encoded(dict(ordinal=q,query=[1.0]*768))+b'\n' for q in range(64))
         frozen_queries=[dict(phase='frozen_query',ordinal=q,returned_ids=list(range(100)),
@@ -571,7 +580,7 @@ def self_check():
             if name==str(worker.quality.CONFIG): return worker.encoded(qconfig)
             raise AssertionError(name)
         def synthetic_call(binary,cfg,published,body,ref,t):
-            assert cfg['native_memory_bytes']==512 * 1024**2
+            assert cfg['native_memory_bytes']==worker.NATIVE
             assert os.environ.get('BORSUK_NATIVE_MEMORY_BYTES')==environment.get('BORSUK_NATIVE_MEMORY_BYTES')
             q=ref['query_ordinal']; result=copy.deepcopy(row)
             now=worker.time.monotonic_ns()
@@ -635,7 +644,8 @@ def self_check():
                 assert os.environ.get('BORSUK_NATIVE_MEMORY_BYTES')==environment.get('BORSUK_NATIVE_MEMORY_BYTES')
             admission=json.loads((out/'resources.json').read_bytes())['phase_admission']
             assert admission==dict(builder_memory_bytes=512 * 1024**2,publisher_memory_bytes=1024**3,
-                native_memory_bytes=512 * 1024**2,memory_bytes=8 * 1024**3,swap_bytes=0)
+                native_memory_bytes=worker.NATIVE,server_query_slots=4,native_budget_model=worker.native_budget_model(),
+                memory_bytes=8 * 1024**3,swap_bytes=0)
             if mode=='cleanup-failure': real_remove(out/'scratch')
             assert not (out/'scratch').exists()
             saved=[json.loads(line) for line in (out/'records.jsonl').read_bytes().splitlines()]
@@ -697,7 +707,9 @@ def self_check():
             sdk.Session.assert_not_called()
             with patch.dict(sys.modules,{lifecycle.__name__:lifecycle}),worker.panel.contextlib.redirect_stdout(io.StringIO()):
                 lifecycle.self_check(lifecycle_only=True)
-    print('PASS FIRST1M v8 contract, closed a0003 authenticated 66-event publisher/scorer parity and R10=624/640 R100=6077/6400 (campaign FAIL preserved), publisher1GiB/builder-HTTP512MiB admission and env restoration, ordinal/f32 parity, S3 ETag, dynamic startup/IMDS/transport, cold wire boundary, 607/608, ledger/resources/cleanup, original PGID and shared ACK/fsync/termination closure; native UNRUN')
+    assert worker.time.monotonic()-started<55
+    assert worker.resource.getrusage(worker.resource.RUSAGE_SELF).ru_maxrss*1024<=200*1024**2
+    print('PASS FIRST1M v8 contract, closed a0003 authenticated 66-event publisher/scorer parity and R10=624/640 R100=6077/6400 (campaign FAIL preserved), builder512MiB/publisher-HTTP1GiB four-slot admission and env restoration, ordinal/f32 parity, S3 ETag, dynamic startup/IMDS/transport, cold wire boundary, 607/608, ledger/resources/cleanup, original PGID and shared ACK/fsync/termination closure; native UNRUN')
 
 
 if __name__ == '__main__':

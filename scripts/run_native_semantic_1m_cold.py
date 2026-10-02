@@ -40,13 +40,37 @@ encoded, sha, artifact, write, read, identity = (quality.encoded, quality.sha,
     quality.artifact, quality.write, quality.read, quality.identity)
 ROOT = quality.ROOT.parent / 'cold-1m'
 CONFIG = ROOT / 'config.json'
-MEMORY, PAYLOAD = 8 * 1024**3, 512 * 1024**2
+MEMORY, PAYLOAD, NATIVE = 8 * 1024**3, 512 * 1024**2, 1024**3
+SERVER_QUERY_SLOTS = 4
 THREAD_ENV = quality.THREAD_ENV
+
+
+def native_budget_model(files=None):
+    """Mirror remote semantic admission in two_bit_generation/returned_sq8.rs.
+
+    The static bound uses three 64KiB JSONs and the admitted 4MiB root ceiling.
+    This models native payload admission, not observed RSS or runtime overhead.
+    """
+    metadata = (sum(files.values()) if files is not None else
+        3*65536 + 3907*32 + 3072 + 1_000_000 + 125000 + 4*1024**2)
+    root = files['router/root.bin'] if files is not None else 4*1024**2
+    query = 3*16_773_120 + 400_000 + 1024**2 + (16_773_120//780)*256 + 768*4
+    source = 2*64*1024**2
+    total = (3*metadata + 3072*64 + 131072 + 32*root +
+        SERVER_QUERY_SLOTS*(2*2*1024**2 + 1024**2 + query + source))
+    return dict(schema='borsuk-semantic-1m-native-budget-v1',
+        interpretation='native payload admission arithmetic; not observed RSS',
+        server_query_slots=SERVER_QUERY_SLOTS, metadata_bytes=metadata,
+        root_bytes=root, query_payload_per_slot=query, source_payload_per_slot=source,
+        modeled_remote_payload_bytes=total)
+
+
 FIXED = dict(quality.FIXED, schema='borsuk-semantic-1m-cold-v1', k=10,
     score_invocations=0, publication_invocations=1, cold_invocations=64,
     physical_s3_measured=True, cold_http_measured=True, memory_bytes=MEMORY,
     publication_limit_seconds=1800, cold_limit_seconds=900,
-    native_memory_bytes=PAYLOAD, publisher_memory_bytes=1024**3, native_rlimit_as_bytes=4 * 1024**3,
+    native_memory_bytes=NATIVE, publisher_memory_bytes=1024**3,
+    server_query_slots=SERVER_QUERY_SLOTS, native_budget_model=native_budget_model(), native_rlimit_as_bytes=4 * 1024**3,
     namespace_connect_deadline_seconds=45, query_payload_timeout_seconds=5,
     native_process_limit_seconds=60, native_cpu_affinity=[0,1,2,3],
     client_cpu_affinity=[4,5], credential_protocol=stats.CREDENTIAL_PROTOCOL,
@@ -99,6 +123,7 @@ def qualify(config_path, expected_sha, repo):
     assert set(config)==set(FIXED)|{'authority_pending','code_sha256','quality_config',
         'quality_run','native_proofs','binaries','namespace_prefix'}
     assert all(type(config[k]) is type(v) and config[k]==v for k,v in FIXED.items()), 'fixed cold/resource protocol'
+    assert native_budget_model()['modeled_remote_payload_bytes']<=config['native_memory_bytes'], 'four-slot native budget'
     assert set(config['code_sha256'])==set(CODE), 'exact transitive code closure'
     assert all(artifact(panel.repo_path(repo,n))['sha256']==d for n,d in config['code_sha256'].items()), 'code identity'
     qpointer = config['quality_config']
@@ -214,6 +239,7 @@ def validate_roster(arm):
     assert arm['leaf_object']['bytes']==31_250*1540
     identity(arm['leaf_object']); identity(arm['head_file'])
     assert arm['head_file']['bytes']<=65536
+    assert native_budget_model(files)['modeled_remote_payload_bytes']<=NATIVE, 'four-slot native budget'
     return files
 
 
@@ -356,7 +382,7 @@ def measured_call(binary, config, arm, body, expected, truth):
                 scope='native process CPU sampled around one client POST; tick resolution'))
         return status,raw
     item=dict(arm,dataset='ReLAION')
-    env=dict(os.environ,BORSUK_NATIVE_MEMORY_BYTES=str(PAYLOAD),AWS_MAX_ATTEMPTS='1')
+    env=dict(os.environ,BORSUK_NATIVE_MEMORY_BYTES=str(NATIVE),AWS_MAX_ATTEMPTS='1')
     try:
         with patch.object(cold,'stop',close_native):
             row=cold.cold_call(str(binary),config,item,body,expected,truth,failures,
@@ -368,7 +394,7 @@ def measured_call(binary, config, arm, body, expected, truth):
             ('first_post_to_response_ns','connected_ns'),('incoming_http_wall_ns','successful_connect_attempt_ns')):
             row[key]=row['completed_ns']-row[start]
         row['accounting']=transport(row['native_header'],row['response'],arm)
-        row['resources']=telemetry.resources(row['native_time_log'],PAYLOAD)
+        row['resources']=telemetry.resources(row['native_time_log'],NATIVE)
         assert row['native_close']['intentional_stop'] is True and row['native_close']['process_group_closed'] is True
     except Exception as error:
         failed=[json.loads(line) for line in failures.getvalue().splitlines()]
@@ -411,7 +437,7 @@ def reduce_records(records, arm, requests, references, truth, start_ns, end_ns):
         assert header==[row['native_header']] and row['native_header']['listen']=='127.0.0.1:8080'
         assert row['accounting']==transport(row['native_header'],row['response'],arm)
         assert row['returned_hits']==validate_query(row['response'],arm,references[q],truth[q])
-        assert row['resources']==telemetry.resources(row['native_time_log'],PAYLOAD)
+        assert row['resources']==telemetry.resources(row['native_time_log'],NATIVE)
         assert row['native_close']['intentional_stop'] is True and row['native_close']['process_group_closed'] is True
         assert type(row['native_close']['returncode']) is int
         cpu=row['query_cpu']; before,after=cpu['before'],cpu['after']
@@ -506,6 +532,7 @@ def aborted_rows(reason, first=0):
 def main(config_path, expected_sha, repo, output):
     repo,output=Path(repo).resolve(),Path(output).absolute()
     assert not output.is_symlink() and not output.exists() and not output.resolve().is_relative_to(repo)
+    config,proof=qualify(config_path,expected_sha,repo)
     output.mkdir(parents=True)
     scratch=output/'scratch'; scratch.mkdir()
     started=time.monotonic(); counters={}; records=[]; failure=None; summary=None
@@ -523,9 +550,9 @@ def main(config_path, expected_sha, repo, output):
             stop.wait(1)
     monitor=threading.Thread(target=sample,daemon=True); monitor.start()
     try:
-        config,proof=qualify(config_path,expected_sha,repo)
         report['phase_admission']=dict(builder_memory_bytes=PAYLOAD,
-            publisher_memory_bytes=config['publisher_memory_bytes'],native_memory_bytes=PAYLOAD,
+            publisher_memory_bytes=config['publisher_memory_bytes'],native_memory_bytes=NATIVE,
+            server_query_slots=SERVER_QUERY_SLOTS,native_budget_model=native_budget_model(),
             memory_bytes=MEMORY,swap_bytes=0)
         qconfig,_=quality.qualify(repo/quality.CONFIG,config['quality_config']['sha256'],repo)
         counters=dict(before=capture(),closed=False)
@@ -621,6 +648,7 @@ def main(config_path, expected_sha, repo, output):
         head_remote=scratch/'head.json'
         run(['aws','s3','cp',f"s3://{config['bucket']}/{config['namespace_prefix']}/head.json",str(head_remote),'--only-show-errors'],'publication.log',1800)
         arm,manifest=publication_arm(root,config['namespace_prefix'],head_remote.read_bytes())
+        report['native_budget_model']=native_budget_model(arm['metadata_files'])
         for n in STARTUP:
             target=scratch/'metadata-readback'
             run(['aws','s3','cp',f"s3://{config['bucket']}/{config['namespace_prefix']}/generations/{root_sha}/{n}",str(target),'--only-show-errors'],'publication.log',1800)
