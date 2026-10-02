@@ -1,0 +1,34 @@
+{
+  "files": {
+    "offered-canary/asset-head-roster.json": {
+      "bytes": 16486,
+      "sha256": "6e6af78d5f1e18b9c66e31dd4590ad14a18a412587fb58b61834f34efd67c2af"
+    },
+    "offered-canary/config.json": {
+      "bytes": 11316,
+      "sha256": "430a38ca470dbd262c13ebd6c97cde5c8166ab0ecc0158c49fb5fe348f11ac3e"
+    },
+    "offered-canary/offered-qualification.json": {
+      "bytes": 1914,
+      "sha256": "317bb2ae101cade7bb8749c5e01a53b6b0bdb6802f91655a43b955711d4b391e"
+    },
+    "offered-canary/source-freeze.json": {
+      "bytes": 945,
+      "sha256": "ad2facfa85e329b9be9ad1bcf85e29d248c628acff4ce3ae4b05eba7acdea49b"
+    },
+    "offered-http/asset-manifest.json": {
+      "bytes": 365,
+      "sha256": "012eb8827cb5f3ad3bc756ff3f2e60a1c9cb7e58a373f14e4664dac88817c944"
+    },
+    "offered-http/config.json": {
+      "bytes": 25472,
+      "sha256": "8370c6c6f3a2dff9757827e12db62e16dd5024a4cfcf4fb28a38debe2a8903ce"
+    },
+    "offered-http/controller-config.json": {
+      "bytes": 9950,
+      "sha256": "0cfc3c26df90fbf291066d8992f58dce8421607c8d0ac6767a555abdf3f39524"
+    }
+  },
+  "original_commit": "8aad45e1de880ce56c1ba74868afc9c4243b82ab",
+  "schema": "borsuk-frozen-authority-preservation-v1"
+}
