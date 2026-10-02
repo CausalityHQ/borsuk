@@ -27,7 +27,7 @@ use crate::unit_centroid_pages::{UnitCentroidError, UnitCentroidPages};
 const MAX_MANIFEST: usize = 64 * 1024;
 const METADATA_RANGE_BYTES: u64 = 4 * 1024 * 1024;
 const METADATA_PARALLEL_GETS: u64 = 8;
-const METADATA_WAVE_OBJECTS: usize = 4;
+const METADATA_WAVE_OBJECTS: usize = 8;
 const METADATA_FILES: [&str; 11] = [
     "manifest.json",
     "page_manifest.json",
@@ -1395,9 +1395,10 @@ mod tests {
             "five.bin",
             "six.bin",
             "seven.bin",
+            "eight.bin",
         ];
         let size = (METADATA_RANGE_BYTES * 2) as usize + 17;
-        for children in [2, 3, 4, 7] {
+        for children in [2, 3, 4, 7, 8] {
             let (store, prefix, payload) = staging_fixture(RangeFault::None, size).await;
             for name in &names[1..=children] {
                 store
@@ -1424,7 +1425,7 @@ mod tests {
             );
             assert_eq!(stats[0].metadata_wave, 0);
             let mut wall = stats[0].metadata_wave_wall_ns;
-            for (index, batch) in stats[1..].chunks(4).enumerate() {
+            for (index, batch) in stats[1..].chunks(8).enumerate() {
                 wall += batch[0].metadata_wave_wall_ns;
                 assert!(batch.iter().all(|r| r.metadata_wave == index as u64 + 1
                     && r.metadata_wave_wall_ns == batch[0].metadata_wave_wall_ns));
@@ -1440,7 +1441,7 @@ mod tests {
                 );
             }
             assert!(wall <= started.elapsed().as_nanos());
-            assert!(store.peak.load(Ordering::SeqCst) > 1);
+            assert!(store.peak.load(Ordering::SeqCst) >= children);
             assert!(store.peak.load(Ordering::SeqCst) <= METADATA_PARALLEL_GETS as usize);
             assert!(
                 store.peak_buffered.load(Ordering::SeqCst)
@@ -1458,7 +1459,7 @@ mod tests {
             );
             assert_eq!(requests[1].0, requests[0].0);
             let mut cursor = 2;
-            for batch in names[1..=children].chunks(4) {
+            for batch in names[1..=children].chunks(8) {
                 assert!(requests[cursor..cursor + batch.len()].iter().all(|r| r.1));
                 cursor += batch.len()
                     + batch.len() * (size as u64).div_ceil(METADATA_RANGE_BYTES) as usize;
@@ -1478,6 +1479,10 @@ mod tests {
             "three.bin",
             "four.bin",
             "five.bin",
+            "six.bin",
+            "seven.bin",
+            "eight.bin",
+            "nine.bin",
         ];
         for fault in [RangeFault::None, RangeFault::Pending] {
             let (store, prefix, payload) = staging_fixture(fault, 1024).await;
@@ -1500,9 +1505,9 @@ mod tests {
             ));
             if matches!(fault, RangeFault::None) {
                 let (scratch, stats) = staging.await.unwrap();
-                assert_eq!(store.peak.load(Ordering::SeqCst), 4);
-                assert!(stats[1..5].iter().all(|r| r.metadata_wave == 1));
-                assert_eq!(stats[5].metadata_wave, 2);
+                assert_eq!(store.peak.load(Ordering::SeqCst), 8);
+                assert!(stats[1..9].iter().all(|r| r.metadata_wave == 1));
+                assert_eq!(stats[9].metadata_wave, 2);
                 drop(scratch);
             } else {
                 tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -1510,7 +1515,7 @@ mod tests {
                         tokio::select! {
                             result = &mut staging => panic!("pending wave completed: {result:?}"),
                             _ = tokio::task::yield_now() => {
-                                if store.active.load(Ordering::SeqCst) == 4 { break; }
+                                if store.active.load(Ordering::SeqCst) == 8 { break; }
                             }
                         }
                     }
@@ -1527,7 +1532,7 @@ mod tests {
                         .lock()
                         .unwrap()
                         .iter()
-                        .any(|r| r.0.ends_with("/five.bin"))
+                        .any(|r| r.0.ends_with("/nine.bin"))
                 );
             }
             assert_eq!(store.active.load(Ordering::SeqCst), 0);
@@ -1719,7 +1724,18 @@ mod tests {
         ] {
             let (store, prefix, payload) =
                 staging_fixture(fault, METADATA_RANGE_BYTES as usize + 1).await;
-            for name in ["other.bin", "third.bin", "fourth.bin"] {
+            let names = [
+                "manifest.json",
+                "nested/payload.bin",
+                "other.bin",
+                "third.bin",
+                "fourth.bin",
+                "fifth.bin",
+                "sixth.bin",
+                "seventh.bin",
+                "eighth.bin",
+            ];
+            for name in &names[2..] {
                 store
                     .inner
                     .put(&metadata_location(&prefix, name), payload.clone().into())
@@ -1732,13 +1748,7 @@ mod tests {
                 &prefix,
                 &sha256(b"{}"),
                 u64::MAX,
-                &[
-                    "manifest.json",
-                    "nested/payload.bin",
-                    "other.bin",
-                    "third.bin",
-                    "fourth.bin",
-                ],
+                &names,
                 parent.path(),
             )
             .await;
@@ -1751,11 +1761,14 @@ mod tests {
                 ));
             }
             assert_eq!(store.active.load(Ordering::SeqCst), 0);
+            assert_eq!(store.buffered.load(Ordering::SeqCst), 0);
             assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
             let requests = store.requests.lock().unwrap().len();
             tokio::task::yield_now().await;
             assert_eq!(store.requests.lock().unwrap().len(), requests);
             assert_eq!(store.active.load(Ordering::SeqCst), 0);
+            assert_eq!(store.buffered.load(Ordering::SeqCst), 0);
+            assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
         }
     }
 

@@ -2050,7 +2050,7 @@ mod source_walk_tests {
         );
         let mut wall = startup.metadata[0].metadata_wave_wall_ns;
         assert_eq!(startup.metadata[0].metadata_wave, 0);
-        for (i, batch) in startup.metadata[1..].chunks(4).enumerate() {
+        for (i, batch) in startup.metadata[1..].chunks(8).enumerate() {
             wall += batch[0].metadata_wave_wall_ns;
             assert!(batch.iter().all(|r| r.metadata_wave == i as u64 + 1
                 && r.metadata_wave_wall_ns == batch[0].metadata_wave_wall_ns
