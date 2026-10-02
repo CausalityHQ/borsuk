@@ -1,0 +1,24 @@
+{
+  "attempt": "a0002",
+  "compute_created": false,
+  "files": {
+    "asset-manifest.json": {
+      "bytes": 13203,
+      "sha256": "ce4b1356fe069d66b547ffa3b0a5bfed53aa2988f1949deb7e4eba6e60228fef"
+    },
+    "config.json": {
+      "bytes": 15771,
+      "sha256": "7f8fb284f156b5c8a30f31fbb6cbc5e7bbbd3cfce867214d697d83bcb9738b7a"
+    },
+    "controller-config.json": {
+      "bytes": 9921,
+      "sha256": "0cea51bef1d1c905b0a329135494edaf2d9c41dc77100b867111988aa7fcf23e"
+    }
+  },
+  "original_prelaunch_failure_preserved": true,
+  "original_source": {
+    "archive_sha256": "ee21a665947f6da625184b0d9595fd246a0b3ed634a21e3bdb0d1a841de9580a",
+    "commit": "c37d64a6e3fc0874bdf8c7f02132954d775b4cd0"
+  },
+  "schema": "borsuk-prelaunch-authority-copy-v1"
+}
