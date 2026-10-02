@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-03e7664dd48516c0f",
+  "nodes": {
+    "0": {
+      "instance_id": "i-03e7664dd48516c0f"
+    }
+  },
+  "prefix": "research/semantic-router/20261002/fresh1m-startup-wave8-paired-a0002",
+  "source_commit": "c0c403209ab1129ba7739044b18f3991ac052ee5",
+  "source_archive_sha256": "f3e4b583d81302d5053bb89fb869830a64a49d44ae4d2657a3e71afa58e4330e"
+}
