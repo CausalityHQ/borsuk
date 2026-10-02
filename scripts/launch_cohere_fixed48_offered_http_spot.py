@@ -9,7 +9,6 @@ import base64
 from contextlib import contextmanager
 import fcntl
 import gzip
-import importlib
 import io
 import json
 import os
@@ -33,6 +32,8 @@ if __package__ in (None, ''):
 from scripts import launch_cohere_fixed48_cold_http_spot as cold
 from scripts import launch_cohere_fixed48_canary_spot as canary
 from scripts import run_native_cold_offered as offered
+# Capture runtime CODE before preflight substitutes the larger cold.CODE closure.
+from scripts import run_cohere_fixed48_offered_http as offered_runtime
 
 science, fixed = cold.science, cold.runtime
 encoded, sha, artifact = cold.encoded, cold.sha, cold.artifact
@@ -83,7 +84,7 @@ def write(path, value):
 
 
 def runtime():
-    return importlib.import_module(RUNTIME[:-3].replace('/', '.'))
+    return offered_runtime
 
 
 def code_closure(repo):
@@ -682,6 +683,39 @@ def self_check():
             changed = copy.deepcopy(manifest); changed['assets']['sq8.bin'] = entry; write(repo/MANIFEST,changed)
             write(repo/CONTROL,dict(control,asset_manifest=dict(path=str(MANIFEST),**artifact(repo/MANIFEST))))
             rejects(lambda:qualify(repo)); write(repo/MANIFEST,manifest); write(repo/CONTROL,control)
+        # Fresh default CLI must qualify before any runtime import warms its CODE.
+        # Only historical evidence and the post-preflight cloud boundary are doubles.
+        cli_repo = work/'cli-repo'; shutil.copytree(repo,cli_repo)
+        real_worker = runtime()
+        (cli_repo/RUNTIME).write_text((origin/RUNTIME).read_text()+
+            '\n# Explicit temporary historical fixture; never science.\n'+
+            'historical_inputs = lambda repo, config: '+repr(dict(binary=pointer))+'\n')
+        controller = (cli_repo/OWN).read_text()
+        controller = controller.replace("\nif __name__ == '__main__':",
+            "\ndef stage_configs(proof):\n    print(json.dumps(proof,sort_keys=True))\n    raise SystemExit(0)\n\nif __name__ == '__main__':",1)
+        (cli_repo/OWN).write_text(controller)
+        for name in (CONFIG,CONTROL,MANIFEST): (cli_repo/name).unlink()
+        prices = cli_repo/'fixture/prices.json'; write(prices,dict(explicit_temporary_fixture=True))
+        def git(*args):
+            return subprocess.check_output(['git','-c','core.hooksPath=/dev/null',*args],cwd=cli_repo,stderr=subprocess.PIPE)
+        git('init','--initial-branch=master'); git('add','.'); git('commit','-m','Temporary CLI source fixture')
+        cli_source = dict(commit=git('rev-parse','HEAD').decode().strip())
+        cli_source['archive_sha256'] = cold.archive_digest(cli_source['commit'],cli_repo)
+        cli_config = dict(real_worker.FIXED,bucket=BUCKET,namespace_prefix=config['namespace_prefix'],
+            code_sha256={n:artifact(cli_repo/n)['sha256'] for n in worker_code},execution_source=cli_source,
+            cold_run=config['cold_run'],cold_source_authority={},resources=real_worker.LIMITS,
+            prices=dict(path='fixture/prices.json',**artifact(prices)))
+        write(cli_repo/CONFIG,cli_config); write(cli_repo/MANIFEST,manifest)
+        write(cli_repo/CONTROL,dict(control,execution_source=cli_source,
+            code_sha256={n:artifact(cli_repo/n)['sha256'] for n in CODE},
+            runtime_config=dict(path=str(CONFIG),**artifact(cli_repo/CONFIG))))
+        git('add','.'); git('commit','-m','Temporary CLI authority fixture')
+        git('update-ref','refs/remotes/origin/main','HEAD')
+        result = subprocess.run([sys.executable,'-B','-m',MODULE,'a0001'],cwd=cli_repo,
+            capture_output=True,timeout=10,env=dict(os.environ,PYTHONPATH=str(cli_repo)))
+        assert result.returncode == 0,('fresh default CLI preflight',result.stderr)
+        assert json.loads(result.stdout)['runtime_code_identity_sha256'] == sha(encoded(cli_config['code_sha256']))
+        checks += 1
         for args,expected in (([],2),(['--stage'],2),(['--contract'],0)):
             result = subprocess.run([sys.executable,'-B','-m',MODULE,*args],cwd=repo,capture_output=True,timeout=10,
                 env=dict(os.environ,PYTHONPATH=str(repo)))
@@ -785,7 +819,8 @@ systemd-run() { while [ "$1" != timeout ]; do shift; done; "$@"; }
     return dict(passed=True,checks=checks,source_sha256=artifact(Path(__file__))['sha256'],
         elapsed_seconds=time.monotonic()-started,peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
         runtime_fixture='explicit temporary stub; actual combined integration remains parent-owned',
-        real_runtime_integration=False,native_or_cloud_execution=False,launch_authorized=False,user_data_bytes=len(body.encode()))
+        fresh_cli_preflight=True,real_runtime_integration=False,native_or_cloud_execution=False,
+        launch_authorized=False,user_data_bytes=len(body.encode()))
 
 
 if __name__ == '__main__':
