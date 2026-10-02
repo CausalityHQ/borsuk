@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Root-owned startup wave4/wave8 ABBA: aNNNN | --replay DIR | --self-check.
+"""Root-owned width8/root-reuse ABBA: aNNNN | --replay DIR | --self-check.
 
 --worker CONFIG SHA REPO NEW_OUTPUT PREFIX runs the existing paired runtime.
 Only local synthetic checks are authorized during controller development.
@@ -32,8 +32,8 @@ CODE = tuple(sorted((*worker.CODE, MODULE.replace('.', '/')+'.py',
     'scripts/check_native_semantic_metadata_cold.py', 'scripts/launch_native_semantic_metadata_cold_spot.py',
     'scripts/launch_native_workspace_execution_spot.py', 'scripts/run_native_semantic_metadata_cold.py')))
 NAME = ''
-SCHEMA = 'borsuk-startup-wave8-paired-spot-v2'
-TOKEN_PREFIX, TAG = 'startup-wave8-paired-', 'borsuk-startup-wave8-paired'
+SCHEMA = 'borsuk-root-reuse-paired-spot-v1'
+TOKEN_PREFIX, TAG = 'root-reuse-paired-', 'borsuk-root-reuse-paired'
 WALL = worker.FIXED['machine_limit_seconds']
 INSTANCE_TYPE, IMAGE_ID = panel.INSTANCE_TYPE, panel.IMAGE_ID
 ROOT_DEVICE_NAME, SUBNET = panel.ROOT_DEVICE_NAME, panel.SUBNET
@@ -75,7 +75,7 @@ def user_data(commit, archive_sha, archive_key, prefix, qualification):
         body = offered.user_data(commit, archive_sha, archive_key, prefix, qualification)
     body = body.replace('scripts.launch_native_semantic_1m_offered_spot', MODULE)
     body = body.replace('launch_native_semantic_1m_offered_spot as launch', MODULE.split('.')[-1]+' as launch')
-    body = body.replace('semantic-1m-offered', 'startup-wave8-paired')
+    body = body.replace('semantic-1m-offered', 'root-reuse-paired')
     smoke = ('PYTHONPATH="$root/repo" "$root/venv/bin/python" -c \'import numpy, pyarrow; '
         'from scripts import '+MODULE.split('.')[-1]+' as launch; launch.ids.lifecycle()\'')
     assert body.count(smoke) == 1, 'bootstrap import hook changed'
@@ -103,10 +103,11 @@ def checkpoint(marker, paths, config, proof, output, uploaded, put):
     index = marker['cell_index']
     assert type(index) is int and 0 <= index < 4 and index == len(uploaded) and index not in uploaded
     role = worker.CELLS[index]; authority = worker.role_authority(config, role)
-    assert marker['schema'] == 'borsuk-startup-wave8-paired-cell-v2'
+    assert marker['schema'] == 'borsuk-root-reuse-paired-cell-v1'
     assert type(marker['workers']) is int and marker['workers'] == config['workers']
     assert marker['closed'] is marker['cleanup_confirmed'] is True
     assert marker['role'] == role and type(marker['wave_objects']) is int and marker['wave_objects'] == worker.WIDTHS[role]
+    assert marker['root_reuse'] is worker.ROOT_REUSE[role]
     assert marker['role_authority'] == authority and marker['counts']['planned'] == 64
     for name, suffix in (('records', 'records.jsonl'), ('summary', 'summary.json'), ('seal', 'seal.json')):
         path = Path(paths[name])
@@ -114,7 +115,7 @@ def checkpoint(marker, paths, config, proof, output, uploaded, put):
         assert path.absolute() == path.resolve() == output.resolve()/f'cell{index}-{suffix}'
         assert worker.artifact(path) == marker[name], 'closed body identity: '+name
     assert json.loads(paths['summary'].read_bytes()) == {n: v for n, v in marker.items() if n not in ('summary', 'seal')}
-    assert json.loads(paths['seal'].read_bytes()) == dict(schema='borsuk-startup-wave8-cell-seal-v2',
+    assert json.loads(paths['seal'].read_bytes()) == dict(schema='borsuk-root-reuse-cell-seal-v1',
         cell_index=index, role=role, records=marker['records'], summary=marker['summary'])
     for name in ('config_sha256', 'code_identity_sha256', 'refs_identity_sha256'):
         assert marker[name] == proof[name]
@@ -125,6 +126,7 @@ def checkpoint(marker, paths, config, proof, output, uploaded, put):
     assert [r['query_ordinal'] for r in rows] == list(range(64))
     assert all(type(r['cell_index']) is int and r['cell_index'] == index and r['role'] == role
         and type(r['wave_objects']) is int and r['wave_objects'] == worker.WIDTHS[role]
+        and r['root_reuse'] is worker.ROOT_REUSE[role]
         and r['role_authority'] == authority for r in rows)
     receipt = rows[0]['cell_receipt']
     assert receipt['cell_scratch_removed'] is True and not (output/'scratch'/f'cell{index}').exists()
@@ -237,7 +239,7 @@ def self_check():
     with tempfile.TemporaryDirectory() as directory:
         output = Path(directory) / 'screen'; output.mkdir()
         config = dict(worker.FIXED, measurement_prefix=PREFIX + 'a0001', roles={
-            r: dict(wave_objects=w, native_source_commit=worker.SOURCE_COMMITS[r],
+            r: dict(wave_objects=w, root_reuse=worker.ROOT_REUSE[r], native_source_commit=worker.SOURCE_COMMITS[r],
                 binary=dict(bytes=10, sha256=('b' if r == 'control' else 'c')*64),
                 proof=dict(bytes=10, sha256='d'*64), source_manifest=dict(bytes=10, sha256='e'*64))
             for r, w in worker.WIDTHS.items()})
@@ -245,14 +247,14 @@ def self_check():
             roles={r: dict(binary=worker.identity(b['binary'])) for r, b in config['roles'].items()})
         rows = worker.aborted_rows(0, 1, dict(reason='synthetic'), config)
         rows[0]['cell_receipt'] = dict(cell_scratch_removed=True, cell_started=False, binary_after=None)
-        result = dict(schema='borsuk-startup-wave8-paired-cell-v2',workers=config['workers'],cell_index=0, role='control', wave_objects=4, role_authority=worker.role_authority(config, 'control'),
+        result = dict(schema='borsuk-root-reuse-paired-cell-v1',workers=config['workers'],cell_index=0, role='control', wave_objects=8, root_reuse=False, role_authority=worker.role_authority(config, 'control'),
             closed=True, cleanup_confirmed=True, counts=dict(planned=64))
         closed = []
         worker.close_cell(output, rows, result, proof, lambda m, p: closed.append((m, p)))
         marker, paths = closed[0]
         uploaded, calls = set(), []
         for field, value in (('schema','borsuk-startup-wave8-paired-cell-v1'),('workers',6),('workers',True),('closed', False), ('cell_index', True), ('role', 'candidate'),
-            ('wave_objects', 8), ('config_sha256', '0'*64), ('binary_sha256', '0'*64)):
+            ('wave_objects', 4), ('root_reuse', True), ('config_sha256', '0'*64), ('binary_sha256', '0'*64)):
             rejects(lambda: checkpoint(dict(marker, **{field: value}), paths, config, proof, output, set(), calls.append))
         rejects(lambda: checkpoint(marker, {'records': paths['records'], 'summary': paths['summary']},
             config, proof, output, set(), calls.append))
@@ -288,7 +290,7 @@ def self_check():
                 str(output.parent/'pending-output'), PREFIX+'a0001']))
         assert not (output.parent/'pending-output').exists()
         # Original candidate evidence is immutable and explicitly failed.
-        failed_receipt = here/worker.ROOT/'implementation-gates/a0001/workspace-receipt.json'
+        failed_receipt = here/worker.ROOT.parent/'implementation-gates/a0001/workspace-receipt.json'
         receipt = json.loads(failed_receipt.read_bytes())
         assert receipt['qualified'] is False and receipt['exit_status'] == receipt['gate_status'] == 101
         pointer = dict(path=str(failed_receipt.relative_to(here)), **worker.artifact(failed_receipt))
@@ -332,12 +334,12 @@ def self_check():
         install = next(line for line in body.splitlines() if ' -m pip install ' in line)
         assert install.split('--no-deps ', 1)[1].split() == ['numpy==2.3.3', 'pyarrow==24.0.0', *SDK_PACKAGES]
         assert '--only-binary=:all:' in install
-        assert body.index(MODULE+' --import-smoke') < body.index('systemd-run --unit=startup-wave8-paired --wait')
+        assert body.index(MODULE+' --import-smoke') < body.index('systemd-run --unit=root-reuse-paired --wait')
         assert all(n in body for n in ('MemoryMax=8G', 'MemorySwapMax=0', 'CPUQuota=200%', 'TasksMax=512',
             'RuntimeMaxSec=3000', '--on-active=3600s', 'taskset -c 4-5', 'IOAccounting=yes', 'glibc 2.39'))
-        command = body.split('systemd-run --unit=startup-wave8-paired --wait', 1)[1].split('\nfor name', 1)[0]
+        command = body.split('systemd-run --unit=root-reuse-paired --wait', 1)[1].split('\nfor name', 1)[0]
         argv = subprocess.check_output(['bash', '-c', 'systemd-run() { printf "%s\\n" "$@"; }; '
-            'root=/mock; systemd-run --unit=startup-wave8-paired --wait'+command], text=True).splitlines()
+            'root=/mock; systemd-run --unit=root-reuse-paired --wait'+command], text=True).splitlines()
         assert argv[-8:] == ['-m', MODULE, '--worker', '/mock/repo/'+str(CONFIG), digest,
             '/mock/repo', '/mock/screen', PREFIX+'a0001']
         terminal_code = body.split("python3 - <<'PY' >terminal.json\n", 1)[1].split('\nPY\n', 1)[0]
@@ -431,6 +433,28 @@ def self_check():
             assert failure['campaign_abort'] is None and failure['collection_policy'] == config['collection_policy']
             (failed_collection/'aws-terminal.json').write_bytes(worker.encoded(dict(failed_terminal, scientific_qualification='PASS')))
             rejects(lambda: replay(failed_collection, repo))
+        # Successful calls with no strict latency gain also close as scientific FAIL.
+        evidence = worker.inputs(repo,config)
+        ledger = [json.loads(line) for line in (output/'records.jsonl').read_bytes().splitlines()]
+        for row in ledger:
+            if row['role']=='candidate':
+                for name in ('completed_ns','first_wire_completed_ns','cold_start_to_first_http_response_ns',
+                    'first_post_to_response_ns','incoming_http_wall_ns'):
+                    row[name]+=500
+        measured_cells.clear();clock[0]=10**12-10
+        failed_output=output.parent/'latency-runtime'
+        with patch.object(worker,'main',original_main),patch.object(worker,'inputs',return_value=evidence), \
+            patch.object(worker.offered,'schedule_offers',side_effect=schedule),patch.object(worker.time,'monotonic_ns',side_effect=now), \
+            patch.object(bootstrap,'_check_checkpoint_cli'),patch.object(bootstrap,'_checkpoint_cli_call',side_effect=put):
+            failure=remote_worker([str(config_path),digest,str(repo),str(failed_output),PREFIX+'a0001'])
+            collected_failure=output.parent/'latency-collected';failed_terminal=closed_campaign(failed_output,collected_failure)
+            failed_replay=replay(collected_failure,repo)
+            assert failure['all_cells_gate_passed'] and failure['execution_gate_passed'] and not failure['paired_gate_passed']
+            assert failure['counts']['successful']==256 and measured_cells==list(range(4))
+            assert failed_replay['scientific_qualification']==failed_terminal['scientific_qualification']=='FAIL'
+            assert failed_replay['candidate_over_actual_bracketing_control_latency_ratio']['1']['0']['cold']['p90']==1
+            (collected_failure/'aws-terminal.json').write_bytes(worker.encoded(dict(failed_terminal,scientific_qualification='PASS')))
+            rejects(lambda:replay(collected_failure,repo))
         checks.append(dict(user_data_bytes=len(body.encode()), terminal_python_bytes=len(terminal_code.encode())))
         return actual
 
@@ -479,6 +503,6 @@ if __name__ == '__main__':
         remote_worker(args[1:])
     else:
         assert len(args) == 1, 'aNNNN | --self-check | --replay DIR'
-        with open('/tmp/borsuk-startup-wave8-paired-launch.lock', 'a') as lock:
+        with open('/tmp/borsuk-root-reuse-paired-launch.lock', 'a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
             main(args[0])

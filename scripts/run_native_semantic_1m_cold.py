@@ -243,11 +243,13 @@ def validate_roster(arm):
     return files
 
 
-def validate_startup(value, arm, wall, *, wave_objects=4):
+def validate_startup(value, arm, wall, *, wave_objects=4, root_reuse=False):
     assert type(wave_objects) is int and wave_objects in (4, 8)
+    assert type(root_reuse) is bool
     files = validate_roster(arm)
     rows = value['metadata']
-    assert [r['name'] for r in rows]==list(STARTUP) and {r['name']:r['bytes'] for r in rows}==files
+    remote_files = dict(files, **({'manifest.json':0} if root_reuse else {}))
+    assert [r['name'] for r in rows]==list(STARTUP) and {r['name']:r['bytes'] for r in rows}==remote_files
     waves = []
     for i,row in enumerate(rows):
         for name in ('bytes','chunks','logical_head_requests','logical_get_requests',
@@ -255,6 +257,12 @@ def validate_startup(value, arm, wall, *, wave_objects=4):
             stats.integer(row[name],name)
         wave = 0 if i==0 else (i-1)//wave_objects+1
         assert row['metadata_wave']==wave
+        for name in ('reused_root_bytes','retained_root_bytes','local_auth_wall_ns','local_copy_wall_ns'):
+            value_local = row[name] if root_reuse else row.get(name,0)
+            stats.integer(value_local,name,maximum=2**128-1)
+            if i==0 and root_reuse:
+                if name.endswith('bytes'): assert value_local == files['manifest.json']
+            else: assert value_local == 0, 'local root fields outside reuse row'
         if len(waves)==wave: waves.append([])
         waves[wave].append(row)
     for batch in waves:
@@ -263,6 +271,11 @@ def validate_startup(value, arm, wall, *, wave_objects=4):
             assert row['metadata_wave_wall_ns']==duration
             for n in ('head_wall_ns','get_wall_ns','stream_wall_ns','write_wall_ns'):
                 stats.integer(row[n],n,maximum=2**128-1)
+            if root_reuse and row['name']=='manifest.json':
+                assert all(row[n]==0 for n in ('bytes','chunks','logical_head_requests','logical_get_requests',
+                    'payload_buffer_bound_bytes','head_wall_ns','get_wall_ns','stream_wall_ns','write_wall_ns'))
+                assert row['local_auth_wall_ns']+row['local_copy_wall_ns'] <= duration
+                continue
             assert row['logical_head_requests']==int(row['name'] not in EXACT)
             if row['name'] in EXACT: assert row['head_wall_ns']==0
             assert row['logical_get_requests']==(row['bytes']+4194303)//4194304
@@ -278,18 +291,22 @@ def validate_startup(value, arm, wall, *, wave_objects=4):
     stats.integer(value['source_head_requests'],'source HEAD',1,1)
     stats.integer(value['router_head_requests'],'router HEAD',1,1)
     assert sum(value[n] for n in ('staging_wall_ns','decode_wall_ns','source_head_wall_ns','router_head_wall_ns'))<=wall
-    return dict(metadata_objects=8,metadata_bytes=sum(files.values()),
+    opened = dict(metadata_objects=8,metadata_bytes=sum(remote_files.values()),
         logical_metadata_get_requests=sum(r['logical_get_requests'] for r in rows),
-        logical_metadata_head_requests=3,source_head_requests=1,router_head_requests=1,
+        logical_metadata_head_requests=3-int(root_reuse),source_head_requests=1,router_head_requests=1,
         staged_selected_leaf_bytes=0,staged_full_plane_bytes=0)
+    if root_reuse:
+        opened.update(locally_staged_root_bytes=files['manifest.json'],retained_root_bytes=files['manifest.json'],
+            local_auth_wall_ns=rows[0]['local_auth_wall_ns'],local_copy_wall_ns=rows[0]['local_copy_wall_ns'])
+    return opened
 
 
-def transport(header, response, arm, *, wave_objects=4):
+def transport(header, response, arm, *, wave_objects=4, root_reuse=False):
     assert header['phase']=='ready' and header['authority']==arm['authority']
-    opened=validate_startup(header['remote_open_stats'],arm,header['remote_open_wall_ns'],wave_objects=wave_objects)
+    opened=validate_startup(header['remote_open_stats'],arm,header['remote_open_wall_ns'],wave_objects=wave_objects,root_reuse=root_reuse)
     ready=stats.validate_transport(header['transport'],True)
     final=stats.validate_transport(response['transport'],True)
-    assert ready['method_counts']==[opened['logical_metadata_get_requests']+4,5,1]+[0]*7, 'startup S3/IMDS / no retries'
+    assert ready['method_counts']==[opened['logical_metadata_get_requests']+4,5-int(root_reuse),1]+[0]*7, 'startup S3/IMDS / no retries'
     credential_bytes=ready['consumed_payload_bytes']-opened['metadata_bytes']-arm['head_file']['bytes']-arm['metadata_files']['manifest.json']
     stats.integer(credential_bytes,'inferred credential bytes',1)
     query_gets=sum(response[p+'submitted_gets'] for p in ('','source_','router_'))

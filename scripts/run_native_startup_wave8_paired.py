@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Bounded startup wave4/wave8 ABBA; no builds, publication, or cloud launch.
+"""Bounded width8/root-reuse ABBA; no builds, publication, or cloud launch.
 
 CLI: CONFIG SHA REPO NEW_OUTPUT; --replay CONFIG SHA REPO OUTPUT; --self-check.
-Root freezes paired8-config.json with FIXED, exact CODE hashes, original closed
+Root freezes paired-config.json with FIXED, exact CODE hashes, original closed
 cold a0005 authority, prices, and control/candidate role bindings. Each binding
-contains wave_objects, native_source_commit, source_manifest, proof, binary.
-Control reuses its unchanged scoped proof and binary; candidate proof uses schema
-borsuk-startup-wave8-role-proof-v1 and actual combined workspace evidence.
+contains wave_objects, root_reuse, native_source_commit, source_manifest, proof, binary.
+Control reuses its unchanged seven-stage width8 proof and binary; candidate proof
+uses borsuk-root-reuse-role-proof-v1 and ten actual native gate stages.
 main(..., on_cell_closed=None) emits marker/paths after drain, scratch removal,
 and fsync; paths contains records, summary, seal. The controller authenticates
 AWS terminal/source/archive closure and all OUTPUTS before worker replay.
 Eight owners are frozen explicitly; collect all declared cells after nonfatal
-failure and abort remaining work on fatal execution failure. Historical v1
+failure and abort remaining work on fatal execution failure. Historical
 campaigns replay only with their frozen source. Synthetic checks establish no
 native qualification, measured speedup, or 444 pass.
 """
@@ -42,20 +42,33 @@ encoded, sha, artifact, write, read, identity = (previous.encoded, previous.sha,
     previous.artifact, previous.write, previous.read, previous.identity)
 
 
-ROOT = native.ROOT.parent / 'startup-wave8'
-CONFIG = ROOT / 'paired8-config.json'
-MANIFEST = ROOT / 'candidate-native-source-manifest.json'
-PREFIX = 'research/semantic-router/20261002/fresh1m-startup-wave8-paired-'
+ROOT = native.ROOT.parent / 'startup-wave8' / 'root-reuse'
+CONFIG = ROOT / 'paired-config.json'
+MANIFEST = ROOT / 'implementation-gates/native-source-manifest.json'
+PREFIX = 'research/semantic-router/20261002/root-reuse-paired-'
 CELLS = ('control', 'candidate', 'candidate', 'control')
-WIDTHS = dict(control=4, candidate=8)
-SOURCE_COMMITS = dict(control='f4d76fc040aa89c44b3526e37f148e78d21241fa',
-    candidate='1e4ed13777a59e7acdd34acc9510b9d156aa17bf')
-SOURCE_IDS = dict(control='295a79de9a499cc388db14b4b78ac9fcd4f1eb8673ceb5c1222dfc7f119e9ae4',
-    candidate='7e4fabf96284e4ccd080cf14b8bfbfd0f3ff41271e920c8e39d5d1fa252cd830')
+WIDTHS = dict(control=8, candidate=8)
+ROOT_REUSE = dict(control=False, candidate=True)
+SOURCE_COMMITS = dict(control='1e4ed13777a59e7acdd34acc9510b9d156aa17bf',
+    candidate='ce63da202aff13f86ffb35b486f0a461e0ac7513')
+SOURCE_IDS = dict(control='7e4fabf96284e4ccd080cf14b8bfbfd0f3ff41271e920c8e39d5d1fa252cd830',
+    candidate='a34505d9d917bc766c9492034e6e4ac80dfb327f2e5eed0ebb03c5d2d5f72935')
 CONTROL_DELTA = {
-    'crates/borsuk/src/object_native_generation.rs': '06e37eff99905c6073fba411e451bcfceeb7d20e2e3d9b50ea8d604deb27fb56',
-    'crates/borsuk/src/two_bit_generation.rs': '6b37d3c3b3c570719f2f9879b3c5889625d470f52f9b5581afb762e46d30afe9'}
-GATE_COMMANDS = (
+    'crates/borsuk/examples/two_bit_http.rs': 'fdf2835835401a76432aee581a6c84d79a79332cfe78464a6cb10b86b8551317',
+    'crates/borsuk/src/object_native_generation.rs': '62864fa9bf5bcf77f501f66c1d11c7a9af58924c95c9629166023561d3e89b27',
+    'crates/borsuk/src/two_bit_generation.rs': '4c6f866a463c8116562987e25c58562304e21991e84166f76d79316739ed9f6d',
+    'crates/borsuk/src/two_bit_index.rs': '1cc4b90d833bc9854100e457e86acecd634375b84969f71be5d6f80ab6908559',
+    'crates/borsuk/src/two_bit_store.rs': '83126d38f1a81a1bea6af3f99e2bbcab90a3a51a3514ffa60e7e396e9f2330c7'}
+# Exact archived width8 binding. Its proof still calls the old role "candidate".
+CONTROL_BINDING = dict(wave_objects=8,root_reuse=False,native_source_commit=SOURCE_COMMITS['control'],
+    binary=dict(bytes=16153680,sha256='0eec7c65d558fb8477f48dc3f3702b404b649b0888ce2250b2c7433726875fbc',
+        path=str(ROOT.parent/'implementation-gates/a0002/binaries/two_bit_http'),
+        key='research/semantic-router/20261002/startup-wave8-implementation-a0002/artifacts/binaries/two_bit_http'),
+    proof=dict(bytes=45755,sha256='c1ee39cc98358b965e938d0a3e2d5d92bc04cc505b14b3cfd41b5f2c5f15f6ff',
+        path=str(ROOT.parent/'candidate-role-proof.json')),
+    source_manifest=dict(bytes=46612,sha256='975638f75cff8c18204e6f43b78b09da7d463a96bc7e35bf30490635d5027c60',
+        path=str(ROOT.parent/'implementation-gates/a0002/native-source-manifest.json')))
+CONTROL_GATE_COMMANDS = (
     ['cargo','test','--locked','-p','borsuk','--lib','object_native_generation::','--','--test-threads=1'],
     *(['cargo','test','--locked','-p','borsuk','--lib', 'two_bit_generation::source_walk_tests::'+name,
         '--','--exact','--test-threads=1'] for name in ('semantic_object_store_parity',
@@ -64,12 +77,22 @@ GATE_COMMANDS = (
     ['cargo','build','--release','--locked','-p','borsuk','--example','two_bit_http'],
     ['cargo','clippy','--locked','--workspace','--all-targets','--','-D','clippy::correctness','-D','clippy::suspicious'],
     ['env','-u','BORSUK_TEST_BUILD_COMMAND','bash','scripts/check_rust_test_build.sh'])
-GATE_NAMES = ('object-native-generation-tests','semantic-object-store-parity','paged-source-parity',
+CONTROL_GATE_NAMES = ('object-native-generation-tests','semantic-object-store-parity','paged-source-parity',
     'fragmented-paged-source-parity','release','clippy','test-build')
+GATE_COMMANDS = (
+    *(['cargo','test','--locked','-p','borsuk','--lib',name+'::','--','--test-threads=1']
+        for name in ('object_native_generation','two_bit_store','two_bit_generation')),
+    *(['cargo','test','--locked','-p','borsuk','--test',name,'--','--test-threads=1']
+        for name in ('two_bit_generation','two_bit_gc_delayed_delete','two_bit_application_ids')),
+    ['cargo','test','--locked','-p','borsuk','--example','two_bit_http','--','--test-threads=1'],
+    *CONTROL_GATE_COMMANDS[-3:])
+GATE_NAMES = ('object-native-generation-tests','two-bit-store-tests','two-bit-generation-tests',
+    'generation-integration','gc-integration','application-ids-integration','http-example-tests',
+    'release','clippy','test-build')
 MEMORY, NATIVE, THREAD_ENV = previous.MEMORY, previous.NATIVE, previous.THREAD_ENV
-FIXED = dict(previous.FIXED, schema='borsuk-startup-wave8-paired-v2', cold_invocations=256,
+FIXED = dict(previous.FIXED, schema='borsuk-root-reuse-paired-v1', cold_invocations=256,
     concurrency=8, workers=8, collection_policy='continue_nonfatal_abort_fatal',
-    offered_qps=8, cells=list(CELLS), metadata_wave_objects=WIDTHS)
+    offered_qps=8, cells=list(CELLS), metadata_wave_objects=WIDTHS, root_reuse=ROOT_REUSE)
 CODE = tuple(sorted(set((*previous.CODE, 'scripts/check_native_workspace_execution.py', 'scripts/run_native_startup_wave8_paired.py'))))
 COLD_DIRECTORY = str(native.ROOT / 'a0005')
 AUTHORITY_FIELDS = ('cold_config','cold_run','cold_source_authority','cold_fail_disposition','prices','roles')
@@ -81,9 +104,12 @@ transport_failure = previous.transport_failure
 
 
 def validate_role(role, binding, manifest, proof, candidate_sources):
-    assert role in WIDTHS and set(binding) == {'wave_objects','native_source_commit','source_manifest','proof','binary'}
+    assert role in WIDTHS and set(binding) == {'wave_objects','root_reuse','native_source_commit','source_manifest','proof','binary'}
     assert type(binding['wave_objects']) is int and binding['wave_objects'] == WIDTHS[role], 'role wave width'
+    assert binding['root_reuse'] is ROOT_REUSE[role], 'role root reuse'
     assert binding['native_source_commit'] == SOURCE_COMMITS[role], 'role source commit'
+    assert manifest['schema'] == ('borsuk-root-reuse-native-source-manifest-v1' if role=='candidate' else 'borsuk-startup-wave8-native-source-manifest-v1')
+    assert manifest['candidate_delta_paths'] == (list(CONTROL_DELTA) if role=='candidate' else list(CONTROL_DELTA)[1:3])
     expected_sources = dict(candidate_sources)
     if role == 'control': expected_sources.update(CONTROL_DELTA)
     assert type(manifest['source_file_count']) is type(proof['source_file_count']) is int
@@ -99,42 +125,46 @@ def validate_role(role, binding, manifest, proof, candidate_sources):
     assert dict(bytes=proof['binary_bytes'],sha256=proof['binary_sha256']) == identity(binding['binary'])
     for name in ('release_status','clippy_status','workspace_test_compilation_status','oom_kills','swap_peak_bytes'):
         assert type(proof[name]) is int and proof[name] == 0, 'completed source-qualified gate: '+name
-    if role == 'control':
-        assert proof['schema'] == 'borsuk-semantic-1m-scoped-native-proof-v1'
-        assert proof['production_library_unchanged'] is True
-    else:
-        assert proof['schema'] == 'borsuk-startup-wave8-role-proof-v1'
-        assert proof['role'] == role and type(proof['wave_objects']) is int and proof['wave_objects'] == 8
-        assert proof['native_source_commit'] == SOURCE_COMMITS[role]
-        assert proof['production_library_unchanged'] is False
-        assert set(proof['evidence']) == {'workspace_receipt','test_log','workspace_cgroup','source_before','source_after','source_qualification'}
+    assert proof['schema'] == ('borsuk-root-reuse-role-proof-v1' if role=='candidate' else 'borsuk-startup-wave8-role-proof-v1')
+    assert proof['role'] == 'candidate' and type(proof['wave_objects']) is int and proof['wave_objects'] == 8
+    assert proof['native_source_commit'] == SOURCE_COMMITS[role]
+    assert proof['production_library_unchanged'] is False
+    assert set(proof['evidence']) == {'workspace_receipt','test_log','workspace_cgroup','source_before','source_after','source_qualification'}
+    if role == 'candidate': assert proof['root_reuse'] is True
     return proof
 
 
-def validate_candidate(repo, binding, proof):
+def validate_candidate(repo, binding, proof, *, root_reuse=True):
+    assert type(root_reuse) is bool
+    role = 'candidate' if root_reuse else 'control'
+    protocol = 'root-reuse' if root_reuse else 'startup-wave8'
+    gate_names,gate_commands = (GATE_NAMES,GATE_COMMANDS) if root_reuse else (CONTROL_GATE_NAMES,CONTROL_GATE_COMMANDS)
     evidence = proof['evidence']
     bodies = {n:read(repo,p) for n,p in evidence.items()}
     receipt = json.loads(bodies['workspace_receipt'])
-    assert receipt['schema'] == 'borsuk-startup-wave8-implementation-gates-receipt-v1'
+    assert receipt['schema'] == f'borsuk-{protocol}-implementation-gates-receipt-v1'
     assert receipt['qualified'] is receipt['command_started'] is receipt['command_completed'] is receipt['source_unchanged'] is True
     assert receipt['execution_kind'] == 'implementation-gates' and receipt['actual_full_workspace_execution'] is False
-    assert receipt['command'] == ['bash','scripts/check_startup_wave8_implementation.sh']
+    assert receipt['command'] == ['bash','scripts/check_'+protocol.replace('-','_')+'_implementation.sh']
+    assert receipt['environment'] == dict(workspace.ENVIRONMENT,BORSUK_TEST_BUILD_JOBS='1',BORSUK_TEST_BUILD_COMMAND=None)
     assert type(receipt['exit_status']) is type(receipt['gate_status']) is int and receipt['exit_status'] == receipt['gate_status'] == 0
     assert type(receipt['source_file_count']) is int and receipt['source_file_count'] == 399
-    assert receipt['source_identity_sha256'] == SOURCE_IDS['candidate']
+    assert receipt['source_identity_sha256'] == SOURCE_IDS[role]
     assert receipt['source_sha256'] == proof['native_source_sha256']
     for name in ('source_before','source_after'):
         assert json.loads(bodies[name]) == receipt['source_sha256'], 'candidate source before/after'
     qualification = json.loads(bodies['source_qualification'])
-    assert qualification['schema'] == 'borsuk-startup-wave8-implementation-gates-qualification-v1'
+    assert qualification['schema'] == f'borsuk-{protocol}-implementation-gates-qualification-v1'
     assert qualification['source_sha256'] == receipt['source_sha256']
-    assert qualification['native_source_commit'] == SOURCE_COMMITS['candidate']
+    assert qualification['native_source_commit'] == SOURCE_COMMITS[role]
     assert qualification['actual_full_workspace_execution'] is False
     assert qualification['command'] == receipt['command'] and qualification['environment'] == receipt['environment']
     assert receipt['qualification_sha256'] == identity(evidence['source_qualification'])['sha256']
     for name in ('config_sha256','code_identity_sha256','campaign_schema','artifact_roster_sha256','controller_source_commit','candidate_delta_paths','source_identity_sha256','source_file_count'):
         assert receipt[name] == qualification[name], 'candidate receipt/source authority: '+name
-    assert qualification['candidate_delta_paths'] == list(CONTROL_DELTA)
+    expected_delta = list(CONTROL_DELTA) if root_reuse else list(CONTROL_DELTA)[1:3]
+    assert qualification['candidate_delta_paths'] == expected_delta
+    assert qualification['campaign_schema'] == f'borsuk-{protocol}-implementation-gates-spot-v1'
     assert panel.re.fullmatch('[0-9a-f]{40}',qualification['controller_source_commit'])
     for name,path in (('test_log','test.log'),('workspace_cgroup','workspace-cgroup.json'),
         ('source_before','source-before.json'),('source_after','source-after.json'),('source_qualification','source-qualification.json')):
@@ -143,12 +173,13 @@ def validate_candidate(repo, binding, proof):
     assert receipt['artifacts']['native-source-manifest.json'] == identity(binding['source_manifest'])
     assert qualification['native_source_manifest_sha256'] == identity(binding['source_manifest'])['sha256']
     workspace.validate_cgroup(json.loads(bodies['workspace_cgroup']))
-    stages = [json.loads(line) for line in bodies['test_log'].decode().splitlines() if 'borsuk-startup-wave8-implementation-stage-v1' in line]
-    assert len(stages) == 14, 'seven stage start/end pairs'
+    stage_schema = f'borsuk-{protocol}-implementation-stage-v1'
+    stages = [json.loads(line) for line in bodies['test_log'].decode().splitlines() if 'implementation-stage-v1' in line]
+    assert len(stages) == 2*len(gate_names), 'exact native stage start/end pairs'
     last = ''
-    for index,(name,command) in enumerate(zip(GATE_NAMES,GATE_COMMANDS)):
+    for index,(name,command) in enumerate(zip(gate_names,gate_commands)):
         start,end = stages[index*2:index*2+2]
-        assert start['schema'] == end['schema'] == 'borsuk-startup-wave8-implementation-stage-v1'
+        assert start['schema'] == end['schema'] == stage_schema
         assert start['stage'] == end['stage'] == name and start['command'] == end['command'] == command
         assert start['started_at'] == end['started_at'] and start['finished_at'] is start['exit_status'] is None
         assert type(end['exit_status']) is int and end['exit_status'] == 0
@@ -167,6 +198,7 @@ def qualify(config_path, expected_sha, repo):
     assert config['authority_pending'] is False, 'root freeze pending'
     assert set(config) == set(FIXED) | {'authority_pending','code_sha256','measurement_prefix',*AUTHORITY_FIELDS}
     assert all(type(config[n]) is type(v) and config[n] == v for n,v in FIXED.items()), 'fixed paired protocol'
+    assert all(config['root_reuse'][r] is ROOT_REUSE[r] and type(config['metadata_wave_objects'][r]) is int for r in CELLS)
     assert set(config['code_sha256']) == set(CODE), 'exact transitive code closure'
     assert all(artifact(panel.repo_path(repo,n))['sha256'] == d for n,d in config['code_sha256'].items()), 'code identity'
     assert panel.re.fullmatch(panel.re.escape(PREFIX)+r'a[0-9]{4}',config['measurement_prefix'])
@@ -189,6 +221,9 @@ def qualify(config_path, expected_sha, repo):
     assert json.loads(read(repo,pointer)) == checked['cold_config']
     assert json.loads(read(repo,config['prices'])), 'root frozen price provenance'
     pinned = json.loads((repo/MANIFEST).read_bytes())
+    assert pinned['schema'] == 'borsuk-root-reuse-native-source-manifest-v1'
+    assert pinned['candidate_delta_paths'] == list(CONTROL_DELTA), 'exact five native source deltas'
+    assert type(pinned['source_file_count']) is int and pinned['source_file_count'] == 399
     assert pinned['native_source_commit'] == SOURCE_COMMITS['candidate'] and pinned['source_identity_sha256'] == SOURCE_IDS['candidate']
     assert sha(encoded(pinned['source_sha256'])) == SOURCE_IDS['candidate']
     assert set(config['roles']) == set(WIDTHS)
@@ -199,12 +234,9 @@ def qualify(config_path, expected_sha, repo):
         validate_role(role,binding,manifest,proof,pinned['source_sha256'])
         read(repo,binding['binary'])
         if role == 'control':
-            assert binding['proof'] == checked['cold_config']['native_proofs']['http'], 'unchanged archived control proof'
-            assert binding['binary'] == checked['cold_config']['binaries']['http'], 'qualified archived control binary'
-            native.native_proof(repo,binding['proof'],binding['binary'],checked['qualification'])
-            for pointer in proof['evidence'].values(): read(repo,pointer)
-        else: validate_candidate(repo,binding,proof)
-        qualified_roles[role] = dict(wave_objects=WIDTHS[role],native_source_commit=SOURCE_COMMITS[role],
+            assert binding == CONTROL_BINDING, 'unchanged archived width8 control authority'
+        validate_candidate(repo,binding,proof,root_reuse=ROOT_REUSE[role])
+        qualified_roles[role] = dict(wave_objects=WIDTHS[role],root_reuse=ROOT_REUSE[role],native_source_commit=SOURCE_COMMITS[role],
             source_identity_sha256=SOURCE_IDS[role],binary=identity(binding['binary']),proof=identity(binding['proof']),
             source_manifest=identity(binding['source_manifest']),current_whole_tree_full_execution=False)
     assert qualified_roles['control']['binary'] != qualified_roles['candidate']['binary'], 'distinct role binaries'
@@ -225,9 +257,10 @@ def inputs(repo, config):
         for role,binding in config['roles'].items()}
     return evidence
 
-def measured_call(binary, config, evidence, q, port, *, wave_objects):
+def measured_call(binary, config, evidence, q, port, *, wave_objects, root_reuse):
     """cold.stop is installed once by the campaign, before any worker starts."""
     assert type(wave_objects) is int and wave_objects in (4,8)
+    assert type(root_reuse) is bool
     arm, body, expected, truth = (evidence['arm'], evidence['requests'][q],
         evidence['references'][q], evidence['truth'][q])
     failures, observed = io.StringIO(), dict(native_process_started=False, namespace_start_attempted=False, http_attempts=0)
@@ -262,14 +295,14 @@ def measured_call(binary, config, evidence, q, port, *, wave_objects):
     try:
         row = cold.cold_call(str(binary), config, dict(arm, dataset='ReLAION'), body, expected, truth, failures,
             port=port, response_check=lambda r,e,t,a:native.validate_query(r,arm,e,t),
-            startup_check=lambda v,f,w:native.validate_startup(v,arm,w,wave_objects=wave_objects), post_call=post, spawn=spawn,
+            startup_check=lambda v,f,w:native.validate_startup(v,arm,w,wave_objects=wave_objects,root_reuse=root_reuse), post_call=post, spawn=spawn,
             env=dict(os.environ, BORSUK_NATIVE_MEMORY_BYTES=str(NATIVE), AWS_MAX_ATTEMPTS='1'))
         row.update(observed)
         row['completed_ns'] = observed['first_wire_completed_ns']
         for key, start in (('cold_start_to_first_http_response_ns','started_ns'),
             ('first_post_to_response_ns','connected_ns'), ('incoming_http_wall_ns','successful_connect_attempt_ns')):
             row[key] = row['completed_ns']-row[start]
-        stage = 'accounting'; row['accounting'] = native.transport(row['native_header'], row['response'], arm, wave_objects=wave_objects)
+        stage = 'accounting'; row['accounting'] = native.transport(row['native_header'], row['response'], arm, wave_objects=wave_objects,root_reuse=root_reuse)
         stage = 'resources'; row['resources'] = native.telemetry.resources(row['native_time_log'], NATIVE)
         stage = 'cleanup'
         assert row['native_close']['intentional_stop'] is True and row['native_close']['process_group_closed'] is True
@@ -306,7 +339,7 @@ def measured_call(binary, config, evidence, q, port, *, wave_objects):
     return row
 
 
-def validate_success(row, evidence, q, *, wave_objects):
+def validate_success(row, evidence, q, *, wave_objects, root_reuse):
     arm, response = evidence['arm'], row['response']
     assert row['http_status'] == 200 and row['http_attempts'] == row['valid_ann_requests'] == 1
     assert row['native_process_started'] is row['namespace_start_attempted'] is True
@@ -314,7 +347,7 @@ def validate_success(row, evidence, q, *, wave_objects):
     assert len(base64.b64decode(row['raw_response_base64'], validate=True)) == row['response_bytes']
     headers = [json.loads(line) for line in row['native_server_log'].splitlines() if line.startswith('{')]
     assert headers == [row['native_header']] and headers[0]['listen'] == f"127.0.0.1:{row['port']}"
-    assert row['accounting'] == native.transport(headers[0], response, arm, wave_objects=wave_objects)
+    assert row['accounting'] == native.transport(headers[0], response, arm, wave_objects=wave_objects,root_reuse=root_reuse)
     assert row['returned_hits'] == native.validate_query(response, arm, evidence['references'][q], evidence['truth'][q])
     assert row['resources'] == native.telemetry.resources(row['native_time_log'], NATIVE)
     assert row['native_close']['intentional_stop'] is row['native_close']['process_group_closed'] is True
@@ -360,6 +393,7 @@ def reduce_cell(records, evidence, config):
         assert type(row['query_ordinal']) is int and type(row['cell_index']) is int
         assert row['cell_index'] == index and row['offered_qps'] == rate and row['dataset'] == 'ReLAION'
         assert row['role'] == role and type(row['wave_objects']) is int and row['wave_objects'] == width
+        assert row['root_reuse'] is ROOT_REUSE[role]
         assert row['role_authority'] == role_authority(config, role), 'row role/source/binary authority'
         assert row['scheduled_ns'] == epoch+round(q*1e9/rate)
         assert epoch <= row['terminal_ns'] <= terminal
@@ -394,7 +428,7 @@ def reduce_cell(records, evidence, config):
         intervals.append((row['dispatched_ns'], row['terminal_ns'], port))
         if outcome == 'success':
             assert row['failure_kind'] is None and row['abort_admissions'] is False
-            validate_success(row, evidence, q, wave_objects=width); good.append(row)
+            validate_success(row, evidence, q, wave_objects=width,root_reuse=ROOT_REUSE[role]); good.append(row)
         else:
             assert row['error_type'] and row['error'] and row['failure_kind'] in ('transport','fatal')
             expected_kind = 'transport' if transport_failure(row) and 'resource_error' not in row else 'fatal'
@@ -447,7 +481,7 @@ def reduce_cell(records, evidence, config):
     tails = dict(cold=offered.tails([r['cold_start_to_first_http_response_ns'] for r in good]),
         scheduled_response=offered.tails([r['completed_ns']-r['scheduled_ns'] for r in good]),
         dispatch=offered.tails(delays), all_offers=native.telemetry.all_offer_tails(records))
-    return dict(schema='borsuk-startup-wave8-paired-cell-v2', cell_index=index, role=role, wave_objects=width,
+    return dict(schema='borsuk-root-reuse-paired-cell-v1', cell_index=index, role=role, wave_objects=width,root_reuse=ROOT_REUSE[role],
         role_authority=role_authority(config,role), offered_qps=rate, workers=workers,
         dataset='ReLAION', cell_started=started, epoch_ns=epoch, terminal_ns=terminal,
         full_span_ns=span if started else 'UNMEASURED', counts=counts,
@@ -461,6 +495,8 @@ def reduce_cell(records, evidence, config):
         metadata_waves=[sorted({r['metadata_wave'] for r in row['native_header']['remote_open_stats']['metadata']}) for row in good],
         metadata_logical_get_requests=sum(r['accounting']['metadata']['logical_metadata_get_requests'] for r in good),
         metadata_verified_bytes=sum(r['accounting']['metadata']['metadata_bytes'] for r in good),
+        locally_staged_root_bytes=sum(r['accounting']['metadata'].get('locally_staged_root_bytes',0) for r in good),
+        retained_root_bytes_sum_over_successful_processes=sum(r['accounting']['metadata'].get('retained_root_bytes',0) for r in good),
         peak_port_ownership=peak, closed=True, cleanup_confirmed=True,
         latency_ms=tails if started else 'UNMEASURED',
         latency_population='successful responses only; all-offer unsuccessful positions UNBOUNDED',
@@ -479,7 +515,7 @@ def reduce_cell(records, evidence, config):
 
 def role_authority(config, role):
     binding = config['roles'][role]
-    return dict(role=role,wave_objects=WIDTHS[role],native_source_commit=SOURCE_COMMITS[role],
+    return dict(role=role,wave_objects=WIDTHS[role],root_reuse=ROOT_REUSE[role],native_source_commit=SOURCE_COMMITS[role],
         source_identity_sha256=SOURCE_IDS[role],binary=identity(binding['binary']),
         proof=identity(binding['proof']),source_manifest=identity(binding['source_manifest']))
 
@@ -507,17 +543,22 @@ def reduce_records(records, evidence, config):
             for n in ('cold','scheduled_response')} for j in (0,3)} for i in (1,2)}
     counts = {n:sum(c['counts'][n] for c in cells) for n in cells[0]['counts']}
     span = cells[-1]['terminal_ns']-cells[0]['epoch_ns']
-    return dict(schema='borsuk-startup-wave8-paired-result-v2',closed=True,cells=cells,counts=counts,
+    improvement = valid and all(comparison[str(i)][str(j)]['cold'][p] < 1
+        for i in (1,2) for j in (0,3) for p in ('p90','p95'))
+    return dict(schema='borsuk-root-reuse-paired-result-v1',closed=True,cells=cells,counts=counts,
         full_span_ns=span,full_span_qps={n:v*1e9/span for n,v in counts.items()},
         execution_gate_passed=all(c['execution_gate_passed'] for c in cells),
-        paired_gate_passed=valid,candidate_over_actual_bracketing_control_latency_ratio=comparison,
+        paired_gate_passed=improvement,all_cells_gate_passed=valid,intervention_gate_passed=improvement,
+        published_context_gate_passed=valid and all(cells[i]['published_context_gate_passed'] for i in (1,2)),
+        candidate_over_actual_bracketing_control_latency_ratio=comparison,
         comparison_population='candidate cells 1 and 2 versus EACH actual control cell 0 and 3; successful responses only; all four cells must pass',
+        intervention_rule='each candidate cold p90 and p95 strictly below BOTH actual bracketing controls',
         historical_a0002_matched_control=False,sustainable_qps='UNMEASURED',matched_vendor_comparison=False,
         collection_policy=config['collection_policy'],campaign_abort=stop)
 
 
 def aborted_rows(index, epoch, stop, config):
-    return [dict(query_ordinal=q,cell_index=index,role=CELLS[index],wave_objects=WIDTHS[CELLS[index]],
+    return [dict(query_ordinal=q,cell_index=index,role=CELLS[index],wave_objects=WIDTHS[CELLS[index]],root_reuse=ROOT_REUSE[CELLS[index]],
         role_authority=role_authority(config,CELLS[index]),dataset='ReLAION',offered_qps=8,
         scheduled_ns=epoch+q*125000000,dispatched_ns=None,started_ns=None,completed_ns=None,
         port=None,outcome='aborted',abort_after=stop,terminal_ns=epoch,
@@ -535,7 +576,7 @@ def close_cell(output, records, result, proof, on_cell_closed=None):
         code_identity_sha256=proof['code_identity_sha256'],refs_identity_sha256=proof['refs_identity_sha256'],
         binary_sha256=proof['roles'][role]['binary']['sha256'])
     write(paths['summary'],marker)
-    seal = dict(schema='borsuk-startup-wave8-cell-seal-v2',cell_index=index,role=role,
+    seal = dict(schema='borsuk-root-reuse-cell-seal-v1',cell_index=index,role=role,
         records=artifact(paths['records']),summary=artifact(paths['summary']))
     write(paths['seal'],seal)
     descriptor = os.open(output,os.O_RDONLY|os.O_DIRECTORY)
@@ -596,7 +637,7 @@ def main(config_path, expected_sha, repo, output, *, on_cell_closed=None):
                     assert artifact(binary) == identity(pointer), 'role binary drift'
                     def call(q,port):
                         assert not resource_errors and not termination.is_set(), 'shared resource or termination failure'
-                        return measured_call(binary,config,evidence,q,port,wave_objects=WIDTHS[role])
+                        return measured_call(binary,config,evidence,q,port,wave_objects=WIDTHS[role],root_reuse=ROOT_REUSE[role])
                     rows,epoch,terminal,abort = offered.schedule_offers(call,config['offered_qps'],workers=config['workers'],base_port=config['base_port'],deadline_ns=deadline)
                 else:
                     epoch = time.monotonic_ns(); rows = aborted_rows(index,epoch,stop_after,config)
@@ -604,7 +645,7 @@ def main(config_path, expected_sha, repo, output, *, on_cell_closed=None):
                 # Preserve every scheduler row before cleanup or observation can fail.
                 records.extend(rows)
                 for row in rows:
-                    row.update(cell_index=index,role=role,wave_objects=WIDTHS[role],role_authority=role_authority(config,role),dataset='ReLAION')
+                    row.update(cell_index=index,role=role,wave_objects=WIDTHS[role],root_reuse=ROOT_REUSE[role],role_authority=role_authority(config,role),dataset='ReLAION')
                     if row.get('failure_stage') in ('thread_start','callback'):
                         q = row['query_ordinal']
                         row.update(expected_authority=evidence['arm']['authority'],http_retry=False,
@@ -630,8 +671,9 @@ def main(config_path, expected_sha, repo, output, *, on_cell_closed=None):
         for index in range(len(records)//64,4):
             epoch = time.monotonic_ns()
             records.extend(aborted_rows(index,epoch,dict(reason='fatal '+type(error).__name__,observed_ns=epoch),config))
-        summary = dict(schema='borsuk-startup-wave8-paired-result-v2',closed=True,execution_gate_passed=False,
-            paired_gate_passed=False,candidate_over_actual_bracketing_control_latency_ratio='UNMEASURED',
+        summary = dict(schema='borsuk-root-reuse-paired-result-v1',closed=True,execution_gate_passed=False,
+            paired_gate_passed=False,all_cells_gate_passed=False,intervention_gate_passed=False,published_context_gate_passed=False,
+            candidate_over_actual_bracketing_control_latency_ratio='UNMEASURED',
             collection_policy=config['collection_policy'],campaign_abort=stop_after or dict(reason='fatal '+type(error).__name__,observed_ns=time.monotonic_ns()),
             error_type=type(error).__name__,error=str(error),planned_positions=256,closed_cells=cells)
     finally:
@@ -645,7 +687,8 @@ def main(config_path, expected_sha, repo, output, *, on_cell_closed=None):
             assert not resource_errors and not termination.is_set() and time.monotonic_ns()-started_ns <= 3000*10**9
         except BaseException as error:
             cleanup_error = error
-            summary.update(execution_gate_passed=False,paired_gate_passed=False,
+            summary.update(execution_gate_passed=False,paired_gate_passed=False,all_cells_gate_passed=False,
+                intervention_gate_passed=False,published_context_gate_passed=False,
                 candidate_over_actual_bracketing_control_latency_ratio='UNMEASURED',cleanup_error=str(error))
         for name,value in (
             ('records.jsonl',b''.join(encoded(r)+b'\n' for r in records)),
@@ -691,7 +734,7 @@ def replay(config_path, expected_sha, repo, output):
         target = output/f'cell{index}-summary.json'
         assert json.loads(target.read_bytes()) == marker
         assert json.loads((output/f'cell{index}-seal.json').read_bytes()) == dict(
-            schema='borsuk-startup-wave8-cell-seal-v2',cell_index=index,role=CELLS[index],records=artifact(path),summary=artifact(target))
+            schema='borsuk-root-reuse-cell-seal-v1',cell_index=index,role=CELLS[index],records=artifact(path),summary=artifact(target))
     assert (output/'failures.jsonl').read_bytes() == b''.join(encoded(r)+b'\n' for r in records if r['outcome']=='failed')
     counters = json.loads((output/'paired-cgroup.json').read_bytes()); validate_cgroup(counters)
     assert counters['before'] == records[0]['cell_receipt']['campaign_cgroup_before']
@@ -751,7 +794,24 @@ def self_check():
         raise AssertionError('explicit wave8 transport propagation is missing') from error
     assert actual['metadata']['metadata_objects'] == 8
     assert native.transport(header, response, arm) == native.transport(header, response, arm, wave_objects=4)
-    import copy
+    reused = copy.deepcopy(candidate)
+    root = reused['remote_open_stats']['metadata'][0]
+    for name in ('bytes','chunks','logical_head_requests','logical_get_requests',
+        'payload_buffer_bound_bytes','head_wall_ns','get_wall_ns','stream_wall_ns','write_wall_ns'):
+        root[name] = 0
+    for row in reused['remote_open_stats']['metadata']:
+        row.update(reused_root_bytes=0,retained_root_bytes=0,local_auth_wall_ns=0,local_copy_wall_ns=0)
+    root.update(reused_root_bytes=2000,retained_root_bytes=2000,local_auth_wall_ns=2,local_copy_wall_ns=3)
+    reused['transport'] = transport([11,4,1]+[0]*7,sum(sizes)+500)
+    reused_response = dict(response,transport=transport([21,4,1]+[0]*7,sum(sizes)+500+200280))
+    accounting = native.transport(reused,reused_response,arm,wave_objects=8,root_reuse=True)
+    assert accounting['metadata']['metadata_bytes'] == sum(sizes)-2000
+    assert accounting['metadata']['locally_staged_root_bytes'] == accounting['metadata']['retained_root_bytes'] == 2000
+    assert accounting['inferred_credential_consumed_bytes'] == 300
+    control_accounting=native.transport(candidate,response,arm,wave_objects=8,root_reuse=False)
+    assert control_accounting['inferred_credential_consumed_bytes']==accounting['inferred_credential_consumed_bytes']
+    assert control_accounting['startup_transport']['consumed_payload_bytes']-accounting['startup_transport']['consumed_payload_bytes']==2000
+    assert [a-b for a,b in zip(control_accounting['startup_transport']['method_counts'],accounting['startup_transport']['method_counts'])]==[1,1]+[0]*8
     import tempfile
     from unittest.mock import Mock
     started = time.monotonic()
@@ -759,10 +819,39 @@ def self_check():
         try: action()
         except (AssertionError,ValueError,KeyError,TypeError,FileNotFoundError,FileExistsError,RuntimeError): return
         raise AssertionError('invalid evidence accepted')
+    rejects(lambda:native.transport(reused,reused_response,arm,wave_objects=8))
+    rejects(lambda:native.transport(candidate,response,arm,wave_objects=8,root_reuse=True))
+    rejects(lambda:native.transport(reused,reused_response,arm,wave_objects=8,root_reuse=1))
+    for name in ('bytes','chunks','logical_head_requests','logical_get_requests',
+        'payload_buffer_bound_bytes','head_wall_ns','get_wall_ns','stream_wall_ns','write_wall_ns',
+        'reused_root_bytes','retained_root_bytes','local_auth_wall_ns','local_copy_wall_ns'):
+        bad = copy.deepcopy(reused)
+        bad['remote_open_stats']['metadata'][0][name] = 1 if name not in ('local_auth_wall_ns','local_copy_wall_ns') else 11
+        rejects(lambda:native.transport(bad,reused_response,arm,wave_objects=8,root_reuse=True))
+    for name in ('reused_root_bytes','retained_root_bytes','local_auth_wall_ns','local_copy_wall_ns'):
+        bad = copy.deepcopy(reused);bad['remote_open_stats']['metadata'][1][name] = 1
+        rejects(lambda:native.transport(bad,reused_response,arm,wave_objects=8,root_reuse=True))
+        bad = copy.deepcopy(reused);bad['remote_open_stats']['metadata'][0][name] = -1
+        rejects(lambda:native.transport(bad,reused_response,arm,wave_objects=8,root_reuse=True))
+        bad = copy.deepcopy(reused);del bad['remote_open_stats']['metadata'][0][name]
+        rejects(lambda:native.transport(bad,reused_response,arm,wave_objects=8,root_reuse=True))
+        bad = copy.deepcopy(candidate);bad['remote_open_stats']['metadata'][0][name] = 1
+        rejects(lambda:native.transport(bad,response,arm,wave_objects=8,root_reuse=False))
+    zero_local=copy.deepcopy(candidate)
+    for row in zero_local['remote_open_stats']['metadata']:
+        row.update(reused_root_bytes=0,retained_root_bytes=0,local_auth_wall_ns=0,local_copy_wall_ns=0)
+    assert native.transport(zero_local,response,arm,wave_objects=8,root_reuse=False)==control_accounting
+    zero_times=copy.deepcopy(reused);zero_times['remote_open_stats']['metadata'][0].update(local_auth_wall_ns=0,local_copy_wall_ns=0)
+    native.transport(zero_times,reused_response,arm,wave_objects=8,root_reuse=True)
+    bad = copy.deepcopy(reused);bad['transport']['totals']['method_counts'][1] = 5
+    bad['transport']['totals']['attempts'] += 1;bad['transport']['totals']['status_counts'][0][1] += 1
+    rejects(lambda:native.transport(bad,reused_response,arm,wave_objects=8,root_reuse=True))
     # Wrong width must fail, and explicitly widened telemetry must succeed.
     rejects(lambda:native.transport(candidate,response,arm))
     rejects(lambda:native.transport(header,response,arm,wave_objects=8))
     rejects(lambda:native.transport(header,response,arm,wave_objects=True))
+    control,candidate = candidate,reused
+    role_responses = dict(control=response,candidate=reused_response,historical=response)
     templates,failed_templates = {},{}
     log = 'User time (seconds): 0.01\nSystem time (seconds): 0.01\nMaximum resident set size (kbytes): 42\n'
     process = Mock(pid=1234,returncode=143); process.poll.return_value = None
@@ -770,34 +859,37 @@ def self_check():
     def killpg(pid,sig):
         assert pid == 1234
         if sig == 0: raise ProcessLookupError()
-    for width in (4,8):
-        h = header if width == 4 else candidate
+    for role in ('historical','control','candidate'):
+        width,reuse = (4 if role=='historical' else 8),role=='candidate'
+        h = dict(historical=header,control=control,candidate=candidate)[role]
+        reply = role_responses[role]
         def spawn(args,**kwargs):
             assert '--as=4294967296:4294967296' in args and kwargs['start_new_session'] is True
             assert kwargs['env']['BORSUK_NATIVE_MEMORY_BYTES'] == str(NATIVE)
             kwargs['stdout'].write(json.dumps(h)+'\n'); kwargs['stdout'].flush()
             Path(args[3]).write_text(log)
             return process
-        for status,payload in ((200,encoded(response)),(503,b'{"error":"unavailable"}'),(200,encoded(dict(response,authority={})))):
+        for status,payload in ((200,encoded(reply)),(503,b'{"error":"unavailable"}'),(200,encoded(dict(reply,authority={})))):
             original_stop = cold.stop
             with patch.object(subprocess,'Popen',side_effect=spawn), patch.object(cold.http.client,'HTTPConnection'), \
                 patch.object(cold,'post',return_value=(status,payload)), patch.object(native,'native_cpu',side_effect=[cpu,dict(cpu,user_ticks=2)]), \
                 patch.object(native,'cold_stop',return_value=dict(intentional_stop=True,returncode=143)), \
                 patch.object(native.os,'killpg',side_effect=killpg),patch.object(cold,'stop',native.close_native):
-                row = measured_call('mock',FIXED,evidence,0,18080,wave_objects=width)
+                row = measured_call('mock',FIXED,evidence,0,18080,wave_objects=width,root_reuse=reuse)
             assert cold.stop is original_stop and row['cleanup_confirmed'] is True
             assert base64.b64decode(row['raw_response_base64']) == payload
-            if status == 200 and payload == encoded(response):
-                assert row['outcome'] == 'success',row; templates[width] = row
+            if status == 200 and payload == encoded(reply):
+                assert row['outcome'] == 'success',row; templates[role] = row
             else:
                 assert row['outcome'] == 'failed' and row['failure_stream_raw']
                 assert row['failure_kind'] == ('transport' if status == 503 else 'fatal')
-                failed_templates[width,row['failure_kind']]=row
-    # Overlapping calls carry different telemetry widths without module mutation.
+                failed_templates[role,row['failure_kind']]=row
+    # Overlapping calls carry explicit reuse policies without module mutation.
     from concurrent.futures import ThreadPoolExecutor
-    barrier=threading.Barrier(2,timeout=2);cpu_calls={};cpu_lock=threading.Lock()
+    barrier=threading.Barrier(2,timeout=2);cpu_calls={};cpu_lock=threading.Lock();local=threading.local()
     def parallel_spawn(args,**kwargs):
-        port=int(args[-1].rsplit(':',1)[1]);h=copy.deepcopy(header if port==18080 else candidate)
+        port=int(args[-1].rsplit(':',1)[1]);local.role='control' if port==18080 else 'candidate'
+        h=copy.deepcopy(control if port==18080 else candidate)
         h['listen']=args[-1];kwargs['stdout'].write(json.dumps(h)+'\n');kwargs['stdout'].flush()
         Path(args[3]).write_text(log)
         process=Mock(pid=port+100,returncode=143);process.poll.return_value=None;return process
@@ -805,7 +897,7 @@ def self_check():
         with cpu_lock: cpu_calls[pid]=cpu_calls.get(pid,0)+1;tick=cpu_calls[pid]
         return dict(cpu,pid=pid+1,user_ticks=tick)
     def parallel_post(client,payload):
-        barrier.wait();return 200,encoded(response)
+        barrier.wait();return 200,encoded(role_responses[local.role])
     def parallel_kill(pid,sig):
         if sig==0: raise ProcessLookupError()
     with patch.object(subprocess,'Popen',side_effect=parallel_spawn),patch.object(cold.http.client,'HTTPConnection'), \
@@ -813,31 +905,36 @@ def self_check():
         patch.object(native,'cold_stop',return_value=dict(intentional_stop=True,returncode=143)), \
         patch.object(native.os,'killpg',side_effect=parallel_kill),patch.object(cold,'stop',native.close_native):
         with ThreadPoolExecutor(max_workers=2) as executor:
-            futures=[executor.submit(measured_call,'mock',FIXED,evidence,0,port,wave_objects=width) for port,width in ((18080,4),(18085,8))]
+            futures=[executor.submit(measured_call,'mock',FIXED,evidence,0,port,wave_objects=8,root_reuse=reuse)
+                for port,reuse in ((18080,False),(18085,True))]
             overlap=[future.result(timeout=3) for future in futures]
     assert all(row['outcome']=='success' and row['cleanup_confirmed'] for row in overlap),overlap
-    assert overlap[0]['native_header']['remote_open_stats']['metadata'][-1]['metadata_wave']==2
-    assert overlap[1]['native_header']['remote_open_stats']['metadata'][-1]['metadata_wave']==1
+    assert all(row['native_header']['remote_open_stats']['metadata'][-1]['metadata_wave']==1 for row in overlap)
+    assert [row['accounting']['metadata']['metadata_bytes'] for row in overlap]==[sum(sizes),sum(sizes)-2000]
     snapshot = dict(cgroup='/mock',observer_pid=1,process_ids=[1],**{
         'memory.max':str(MEMORY),'memory.peak':'100000','memory.swap.max':'0','memory.swap.peak':'0',
         'memory.events':'oom 0\noom_kill 0\noom_group_kill 0\nmax 0\n','memory.swap.events':'max 0\n',
         'cpu.max':'200000 100000','cpu.stat':'usage_usec 1\n','pids.max':'512','pids.current':'1','pids.events':'max 0\n',
         'memory.current':'100000','memory.stat':'anon 1000\nfile 99000\n','io.stat':'UNMEASURED',
         'io.stat_unavailable':dict(type='FileNotFoundError',errno=2)})
-    config = dict(FIXED,roles={r:dict(wave_objects=w,native_source_commit=SOURCE_COMMITS[r],
+    config = dict(FIXED,roles={r:dict(wave_objects=w,root_reuse=ROOT_REUSE[r],native_source_commit=SOURCE_COMMITS[r],
         binary=dict(bytes=10,sha256=('b' if r=='control' else 'c')*64),
         proof=dict(bytes=10,sha256='d'*64),source_manifest=dict(bytes=10,sha256='e'*64)) for r,w in WIDTHS.items()})
-    def ledger():
+    def ledger(*, improve=True, latencies=None):
         rows=[]; epoch=10**12
         for index,role in enumerate(CELLS):
             for q in range(64):
-                row=copy.deepcopy(templates[WIDTHS[role]]); at=epoch+q*125000000
-                row.update(query_ordinal=q,cell_index=index,role=role,wave_objects=WIDTHS[role],role_authority=role_authority(config,role),
+                row=copy.deepcopy(templates[role]); at=epoch+q*125000000
+                latency = latencies[index][q] if latencies else 500 if improve and role=='candidate' else 1000
+                port = 18080+q%8 if latency>=125000000 else 18080
+                row.update(query_ordinal=q,cell_index=index,role=role,wave_objects=WIDTHS[role],root_reuse=ROOT_REUSE[role],role_authority=role_authority(config,role),
                     dataset='ReLAION',offered_qps=8,scheduled_ns=at,dispatched_ns=at,started_ns=at+1,
-                    successful_connect_attempt_ns=at+100,connected_ns=at+200,completed_ns=at+1000,
-                    first_wire_completed_ns=at+1000,terminal_ns=at+2000,port=18080,cold_start_to_first_http_response_ns=999,
+                    successful_connect_attempt_ns=at+100,connected_ns=at+200,completed_ns=at+latency,
+                    first_wire_completed_ns=at+latency,terminal_ns=at+max(latency+1000,2000),port=port,cold_start_to_first_http_response_ns=latency-1,
                     before_successful_connect_attempt_ns=99,successful_tcp_connect_ns=100,
-                    first_post_to_response_ns=800,incoming_http_wall_ns=900)
+                    first_post_to_response_ns=latency-200,incoming_http_wall_ns=latency-100)
+                row['native_header']['listen']=f'127.0.0.1:{port}'
+                row['native_server_log']=json.dumps(row['native_header'])+'\n'
                 rows.append(row)
             terminal=rows[-1]['terminal_ns']+1
             rows[-64]['cell_receipt']=dict(epoch_ns=epoch,terminal_ns=terminal,abort_after=None,cell_started=True,
@@ -845,14 +942,37 @@ def self_check():
                 cgroup_before=snapshot,cgroup_after=copy.deepcopy(snapshot),resource_errors=[],cell_scratch_removed=True,binary_after=identity(config['roles'][role]['binary']))
             epoch=terminal+1
         return rows
+    tied = reduce_records(ledger(improve=False),evidence,config)
+    assert not tied['paired_gate_passed'] and tied['execution_gate_passed'] and tied['counts']['successful'] == 256
+    assert tied['candidate_over_actual_bracketing_control_latency_ratio']['1']['0']['cold']['p90'] == 1
     rows = ledger(); result = reduce_records(rows,evidence,config)
-    assert result['paired_gate_passed'] and result['counts']['successful'] == 256
-    assert result['candidate_over_actual_bracketing_control_latency_ratio']['1']['0']['cold']['p90'] == 1
+    assert result['paired_gate_passed'] and result['counts']['successful']==256
+    assert abs(result['candidate_over_actual_bracketing_control_latency_ratio']['1']['0']['cold']['p90']-499/999)<1e-12
+    assert result['cells'][1]['locally_staged_root_bytes']==result['cells'][1]['retained_root_bytes_sum_over_successful_processes']==128000
+    assert result['cells'][0]['locally_staged_root_bytes']==0
+    # Each candidate must beat each control on BOTH tails; an average cannot rescue one.
+    for candidate_index in (1,2):
+        for control_index in (0,3):
+            for tail in ('p90','p95'):
+                latencies=[[1000]*64,[500]*64,[500]*64,[1000]*64]
+                latencies[control_index]=[600]*64
+                # Four outliers affect p95; eight affect p90 as well.
+                latencies[candidate_index][-4 if tail=='p95' else -8:]=[700]*(4 if tail=='p95' else 8)
+                rejected=reduce_records(ledger(latencies=latencies),evidence,config)
+                ratios=rejected['candidate_over_actual_bracketing_control_latency_ratio']
+                assert rejected['all_cells_gate_passed'] and rejected['execution_gate_passed']
+                assert not rejected['paired_gate_passed'] and ratios[str(candidate_index)][str(control_index)]['cold'][tail]>1
+                assert ratios[str(candidate_index)][str(3-control_index)]['cold'][tail]<1
+                if tail=='p95': assert ratios[str(candidate_index)][str(control_index)]['cold']['p90']<1
+    context=reduce_records(ledger(latencies=[[550000000]*64,[500000000]*64,[500000000]*64,[550000000]*64]),evidence,config)
+    assert context['paired_gate_passed'] and not context['published_context_gate_passed']
+    assert tied['published_context_gate_passed'] and not tied['intervention_gate_passed']
     assert result == reduce_records(copy.deepcopy(rows),copy.deepcopy(evidence),copy.deepcopy(config))
     rejects(lambda:reduce_records(rows[:-1],evidence,config))
-    for kind in ('role','source','width','truth_hits','request','raw','wave','transport','resource','cleanup','scratch','binary_after','port','order'):
+    for kind in ('role','root_reuse','source','width','truth_hits','request','raw','wave','transport','resource','cleanup','scratch','binary_after','port','order'):
         bad=copy.deepcopy(rows)
         if kind=='role': bad[64]['role']='control'
+        elif kind=='root_reuse': bad[64]['root_reuse']=False
         elif kind=='source': bad[64]['role_authority']['source_identity_sha256']='0'*64
         elif kind=='width': bad[64]['wave_objects']=4
         elif kind=='truth_hits': bad[64]['returned_hits']=9
@@ -877,7 +997,10 @@ def self_check():
     assert not reduce_cell(cell,boundary,config)['valid']
     # Historical reducers still accept the original default4 ledger.
     historical=copy.deepcopy(rows[:64])
-    for row in historical: row['rate_index']=5
+    for row in historical:
+        row.update({n:copy.deepcopy(templates['historical'][n]) for n in
+            ('native_header','native_server_log','accounting','response','raw_response_base64','response_bytes')})
+        row['rate_index']=5
     assert previous.reduce_cell(historical,evidence,previous.FIXED)['attainment']
     for row in historical:
         row['native_header']['listen']='127.0.0.1:8080'
@@ -924,8 +1047,8 @@ def self_check():
     dropped[8]=dict(aborted_rows(0,rows[0]['scheduled_ns'],{},config)[8],outcome='capacity_drop',dispatched_ns=at,terminal_ns=at)
     failed=copy.deepcopy(dropped)
     failed[:64]=copy.deepcopy(rows[:64])
-    at=failed[17]['scheduled_ns'];failure=copy.deepcopy(failed_templates[4,'transport'])
-    failure.update(query_ordinal=17,cell_index=0,role='control',wave_objects=4,role_authority=role_authority(config,'control'),
+    at=failed[17]['scheduled_ns'];failure=copy.deepcopy(failed_templates['control','transport'])
+    failure.update(query_ordinal=17,cell_index=0,role='control',wave_objects=8,root_reuse=False,role_authority=role_authority(config,'control'),
         dataset='ReLAION',offered_qps=8,scheduled_ns=at,dispatched_ns=at,started_ns=at+1,completed_ns=at+1000,
         first_wire_completed_ns=at+1000,terminal_ns=at+2000,port=18080,valid_ann_requests=0)
     stream=json.loads(failure['failure_stream_raw']);stream['started_ns']=failure['started_ns'];stream['completed_ns']=failure['completed_ns']
@@ -951,8 +1074,8 @@ def self_check():
         assert any(r['outcome']=='aborted' for r in poisoned)
         assert all(r['cleanup_confirmed'] is cleaned for r in poisoned if r['port'] is not None)
     # A fatal recorded call stops subsequent cells; an early science stop is invalid.
-    fatal_rows=copy.deepcopy(rows);fatal=copy.deepcopy(failed_templates[4,'fatal'])
-    fatal.update({n:rows[0][n] for n in ('query_ordinal','cell_index','role','wave_objects','role_authority',
+    fatal_rows=copy.deepcopy(rows);fatal=copy.deepcopy(failed_templates['control','fatal'])
+    fatal.update({n:rows[0][n] for n in ('query_ordinal','cell_index','role','wave_objects','root_reuse','role_authority',
         'dataset','offered_qps','scheduled_ns','dispatched_ns','started_ns','completed_ns',
         'first_wire_completed_ns','terminal_ns','port')})
     stream=json.loads(fatal['failure_stream_raw']);stream['started_ns']=fatal['started_ns']
@@ -973,26 +1096,36 @@ def self_check():
     early_stop=copy.deepcopy(dropped);early_stop[64:]=fatal_rows[64:]
     rejects(lambda:reduce_records(early_stop,evidence,config))
     native_manifest=json.loads((Path(__file__).resolve().parents[1]/MANIFEST).read_bytes())
+    archived=json.loads(read(Path(__file__).resolve().parents[1],CONTROL_BINDING['proof']))
+    archived_manifest=json.loads(read(Path(__file__).resolve().parents[1],CONTROL_BINDING['source_manifest']))
+    validate_role('control',CONTROL_BINDING,archived_manifest,archived,native_manifest['source_sha256'])
+    validate_candidate(Path(__file__).resolve().parents[1],CONTROL_BINDING,archived,root_reuse=False)
     role_fixtures = {}
     for role in WIDTHS:
         binding=config['roles'][role];source=dict(native_manifest['source_sha256'])
         if role=='control': source.update(CONTROL_DELTA)
-        manifest=dict(native_source_commit=SOURCE_COMMITS[role],source_file_count=399,source_sha256=source,source_identity_sha256=SOURCE_IDS[role])
-        proof=dict(schema='borsuk-startup-wave8-role-proof-v1' if role=='candidate' else 'borsuk-semantic-1m-scoped-native-proof-v1',
-            qualified=True,authority_pending=False,role=role,wave_objects=WIDTHS[role],native_source_commit=SOURCE_COMMITS[role],source_file_count=399,
+        manifest=dict(schema='borsuk-root-reuse-native-source-manifest-v1' if role=='candidate' else 'borsuk-startup-wave8-native-source-manifest-v1',
+            candidate_delta_paths=list(CONTROL_DELTA) if role=='candidate' else list(CONTROL_DELTA)[1:3],
+            native_source_commit=SOURCE_COMMITS[role],source_file_count=399,source_sha256=source,source_identity_sha256=SOURCE_IDS[role])
+        proof=dict(schema='borsuk-root-reuse-role-proof-v1' if role=='candidate' else 'borsuk-startup-wave8-role-proof-v1',
+            qualified=True,authority_pending=False,role='candidate',wave_objects=WIDTHS[role],root_reuse=ROOT_REUSE[role],native_source_commit=SOURCE_COMMITS[role],source_file_count=399,
             native_source_sha256=source,source_identity_sha256=SOURCE_IDS[role],current_whole_tree_full_execution=False,
-            binary_bytes=10,binary_sha256=binding['binary']['sha256'],production_library_unchanged=role=='control',
+            binary_bytes=10,binary_sha256=binding['binary']['sha256'],production_library_unchanged=False,
             original_full_source_identity_sha256='a'*64,release_status=0,clippy_status=0,workspace_test_compilation_status=0,oom_kills=0,swap_peak_bytes=0,
             evidence={n:dict(path=n,bytes=10,sha256='f'*64) for n in ('workspace_receipt','test_log','workspace_cgroup','source_before','source_after','source_qualification')})
         assert validate_role(role,binding,manifest,proof,native_manifest['source_sha256'])==proof
+        for name,value in (('schema','old'),('candidate_delta_paths',[])):
+            rejects(lambda:validate_role(role,binding,dict(manifest,**{name:value}),proof,native_manifest['source_sha256']))
         role_fixtures[role] = (manifest,proof)
         for field,value in (('qualified',False),('authority_pending',True),('source_identity_sha256','0'*64),('source_file_count',398),
             ('current_whole_tree_full_execution',True),('binary_sha256','0'*64),('release_status',1),('clippy_status',None),
-            ('workspace_test_compilation_status',1),('oom_kills',1),('swap_peak_bytes',1),('production_library_unchanged',role=='candidate')):
+            ('workspace_test_compilation_status',1),('oom_kills',1),('swap_peak_bytes',1),('production_library_unchanged',True)):
             bad=dict(proof,**{field:value});rejects(lambda:validate_role(role,binding,manifest,bad,native_manifest['source_sha256']))
         if role=='candidate':
-            for field,value in (('role','wrong'),('wave_objects',4),('native_source_commit','0'*40)):
+            for field,value in (('role','wrong'),('wave_objects',4),('root_reuse',False),('root_reuse',1),('native_source_commit','0'*40)):
                 rejects(lambda:validate_role(role,binding,manifest,dict(proof,**{field:value}),native_manifest['source_sha256']))
+        for reuse in (not ROOT_REUSE[role],int(ROOT_REUSE[role])):
+            rejects(lambda:validate_role(role,dict(binding,root_reuse=reuse),manifest,proof,native_manifest['source_sha256']))
         bad=copy.deepcopy(manifest);bad['source_sha256'][next(iter(source))]='0'*64
         rejects(lambda:validate_role(role,binding,bad,proof,native_manifest['source_sha256']))
     with tempfile.TemporaryDirectory() as directory:
@@ -1053,35 +1186,37 @@ def self_check():
             proof=copy.deepcopy(proof);binary=put(role+'-http',role.encode())
             proof.update(binary_bytes=binary['bytes'],binary_sha256=binary['sha256'])
             manifest_pointer=put(role+'-manifest.json',manifest)
-            if role=='control': proof['evidence']={'original':put('control-original.json',dict(synthetic=True))}
-            else:
-                qualification=dict(schema='borsuk-startup-wave8-implementation-gates-qualification-v1',
-                    source_sha256=manifest['source_sha256'],source_identity_sha256=SOURCE_IDS[role],source_file_count=399,
-                    native_source_commit=SOURCE_COMMITS[role],actual_full_workspace_execution=False,
-                    command=['bash','scripts/check_startup_wave8_implementation.sh'],environment=workspace.ENVIRONMENT,
-                    config_sha256='a'*64,code_identity_sha256='b'*64,campaign_schema='borsuk-startup-wave8-implementation-gates-spot-v1',
-                    artifact_roster_sha256='c'*64,controller_source_commit='d'*40,candidate_delta_paths=list(CONTROL_DELTA),
-                    native_source_manifest_sha256=manifest_pointer['sha256'])
-                stages=[]
-                for index,(name,command) in enumerate(zip(GATE_NAMES,GATE_COMMANDS)):
-                    start=dict(schema='borsuk-startup-wave8-implementation-stage-v1',stage=name,command=command,
-                        started_at=f'2026-10-02T00:00:{index*2:02d}Z',finished_at=None,exit_status=None)
-                    stages.extend((start,dict(start,finished_at=f'2026-10-02T00:00:{index*2+1:02d}Z',exit_status=0)))
-                cg=dict(before=dict(snapshot,pids_peak='1'),after=dict(snapshot,pids_peak='1'),closed=True)
-                evidence_pointers=dict(source_qualification=put('candidate-source-qualification.json',qualification),
-                    source_before=put('candidate-source-before.json',manifest['source_sha256']),
-                    source_after=put('candidate-source-after.json',manifest['source_sha256']),workspace_cgroup=put('candidate-cgroup.json',cg),
-                    test_log=put('candidate-test.log',b'compiler output\n'+b''.join(encoded(stage)+b'\n' for stage in stages)))
-                receipt=dict(qualification,schema='borsuk-startup-wave8-implementation-gates-receipt-v1',qualified=True,
-                    exit_status=0,gate_status=0,command_started=True,command_completed=True,source_unchanged=True,
-                    execution_kind='implementation-gates',qualification_sha256=evidence_pointers['source_qualification']['sha256'],
-                    artifacts={path:identity(evidence_pointers[name]) for name,path in (
-                        ('test_log','test.log'),('workspace_cgroup','workspace-cgroup.json'),('source_before','source-before.json'),
-                        ('source_after','source-after.json'),('source_qualification','source-qualification.json'))})
-                receipt['artifacts'].update({'binaries/two_bit_http':identity(binary),'native-source-manifest.json':identity(manifest_pointer)})
-                evidence_pointers['workspace_receipt']=put('candidate-workspace-receipt.json',receipt)
-                proof['evidence']=evidence_pointers
-            cfg['roles'][role]=dict(wave_objects=WIDTHS[role],native_source_commit=SOURCE_COMMITS[role],binary=binary,
+            protocol = 'root-reuse' if role=='candidate' else 'startup-wave8'
+            gate_names,gate_commands = (GATE_NAMES,GATE_COMMANDS) if role=='candidate' else (CONTROL_GATE_NAMES,CONTROL_GATE_COMMANDS)
+            qualification=dict(schema=f'borsuk-{protocol}-implementation-gates-qualification-v1',
+                source_sha256=manifest['source_sha256'],source_identity_sha256=SOURCE_IDS[role],source_file_count=399,
+                native_source_commit=SOURCE_COMMITS[role],actual_full_workspace_execution=False,
+                command=['bash','scripts/check_'+protocol.replace('-','_')+'_implementation.sh'],
+                environment=dict(workspace.ENVIRONMENT,BORSUK_TEST_BUILD_JOBS='1',BORSUK_TEST_BUILD_COMMAND=None),
+                config_sha256='a'*64,code_identity_sha256='b'*64,campaign_schema=f'borsuk-{protocol}-implementation-gates-spot-v1',
+                artifact_roster_sha256='c'*64,controller_source_commit='d'*40,
+                candidate_delta_paths=list(CONTROL_DELTA) if role=='candidate' else list(CONTROL_DELTA)[1:3],
+                native_source_manifest_sha256=manifest_pointer['sha256'])
+            stages=[]
+            for index,(name,command) in enumerate(zip(gate_names,gate_commands)):
+                start=dict(schema=f'borsuk-{protocol}-implementation-stage-v1',stage=name,command=command,
+                    started_at=f'2026-10-02T00:00:{index*2:02d}Z',finished_at=None,exit_status=None)
+                stages.extend((start,dict(start,finished_at=f'2026-10-02T00:00:{index*2+1:02d}Z',exit_status=0)))
+            cg=dict(before=dict(snapshot,pids_peak='1'),after=dict(snapshot,pids_peak='1'),closed=True)
+            evidence_pointers=dict(source_qualification=put(role+'-source-qualification.json',qualification),
+                source_before=put(role+'-source-before.json',manifest['source_sha256']),
+                source_after=put(role+'-source-after.json',manifest['source_sha256']),workspace_cgroup=put(role+'-cgroup.json',cg),
+                test_log=put(role+'-test.log',b'compiler output\n'+b''.join(encoded(stage)+b'\n' for stage in stages)))
+            receipt=dict(qualification,schema=f'borsuk-{protocol}-implementation-gates-receipt-v1',qualified=True,
+                exit_status=0,gate_status=0,command_started=True,command_completed=True,source_unchanged=True,
+                execution_kind='implementation-gates',qualification_sha256=evidence_pointers['source_qualification']['sha256'],
+                artifacts={path:identity(evidence_pointers[name]) for name,path in (
+                    ('test_log','test.log'),('workspace_cgroup','workspace-cgroup.json'),('source_before','source-before.json'),
+                    ('source_after','source-after.json'),('source_qualification','source-qualification.json'))})
+            receipt['artifacts'].update({'binaries/two_bit_http':identity(binary),'native-source-manifest.json':identity(manifest_pointer)})
+            evidence_pointers['workspace_receipt']=put(role+'-workspace-receipt.json',receipt)
+            proof['evidence']=evidence_pointers
+            cfg['roles'][role]=dict(wave_objects=WIDTHS[role],root_reuse=ROOT_REUSE[role],native_source_commit=SOURCE_COMMITS[role],binary=binary,
                 source_manifest=manifest_pointer,proof=put(role+'-proof.json',proof))
         frozen_cold.update(native_proofs={'http':cfg['roles']['control']['proof']},binaries={'http':cfg['roles']['control']['binary']})
         cold_path=repo/cfg['cold_config']['path'];cold_path.write_bytes(encoded(frozen_cold)+b'\n')
@@ -1125,9 +1260,10 @@ def self_check():
         target=repo/CONFIG;target.write_bytes(encoded(cfg))
         def qualify_cfg(value):
             target.write_bytes(encoded(value));return qualify(target,artifact(target)['sha256'],repo)
-        with patch.object(previous.cold_spot,'qualify_measurement',return_value=checked),patch.object(previous.cold_spot,'fail_disposition'):
+        with patch.object(previous.cold_spot,'qualify_measurement',return_value=checked),patch.object(previous.cold_spot,'fail_disposition'),patch(__name__+'.CONTROL_BINDING',cfg['roles']['control']):
             _,qualified=qualify_cfg(cfg)
             for field,value in (('authority_pending',True),('schema','old'),('offered_qps',4),('workers',6),('workers',True),('concurrency',6),('collection_policy','stop_any_invalid'),
+                ('root_reuse',dict(control=0,candidate=1)),('metadata_wave_objects',dict(control=8.0,candidate=8)),
                 ('cold_invocations',64),('publication_invocations',1),('code_sha256',{}),('measurement_prefix','historical-a2')):
                 rejects(lambda:qualify_cfg(dict(cfg,**{field:value})))
             wrong=copy.deepcopy(cfg);wrong['cold_run']['directory']=str(native.ROOT/'a0004')
@@ -1148,9 +1284,9 @@ def self_check():
             # Exercise real main files, role binary staging/removal, markers and replay.
             fake_rows=ledger();cursor=[0];calls=[];callbacks=[];mock_clock=[10**12-1]
             def runtime_now(): mock_clock[0]+=1;return mock_clock[0]
-            def fake_measured(binary,config,evidence,q,port,*,wave_objects):
+            def fake_measured(binary,config,evidence,q,port,*,wave_objects,root_reuse):
                 index=cursor[0];role=CELLS[index]
-                assert wave_objects==WIDTHS[role] and Path(binary).read_bytes()==role.encode()
+                assert wave_objects==WIDTHS[role] and root_reuse is ROOT_REUSE[role] and Path(binary).read_bytes()==role.encode()
                 calls.append((index,q,role));return copy.deepcopy(fake_rows[index*64+q])
             def fake_schedule(callback,rate,**kwargs):
                 index=cursor[0];assert rate==8 and kwargs['workers']==8 and kwargs['base_port']==18080
@@ -1172,9 +1308,9 @@ def self_check():
                 assert replay(target,artifact(target)['sha256'],repo,output)==actual
                 rejects(lambda:main(target,artifact(target)['sha256'],repo,output))
                 # Nonfatal failures must measure all four cells and retain FAIL.
-                for kind in ('quality','capacity','transport'):
+                for kind in ('quality','capacity','transport','latency'):
                     cursor[0]=0;calls.clear();callbacks.clear();mock_clock[0]=10**12-1
-                    fake_rows=copy.deepcopy(dropped if kind=='capacity' else failed if kind=='transport' else rows)
+                    fake_rows=copy.deepcopy(dropped if kind=='capacity' else failed if kind=='transport' else ledger(improve=False) if kind=='latency' else rows)
                     observed_evidence=copy.deepcopy(evidence)
                     if kind=='quality':
                         observed_evidence['truth']=[list(range(100,200)) for _ in range(64)]
@@ -1186,9 +1322,14 @@ def self_check():
                     assert cursor[0]==4 and len(calls)==256 and callbacks==list(CELLS)
                     assert failure['execution_gate_passed'] and not failure['paired_gate_passed']
                     assert failure['campaign_abort'] is None and all(c['cell_started'] for c in failure['cells'])
-                    assert failure['candidate_over_actual_bracketing_control_latency_ratio']=='UNMEASURED'
-                    assert not failure['cells'][0]['valid']
-                    if kind!='quality':
+                    if kind=='latency':
+                        assert failure['all_cells_gate_passed'] and all(c['valid'] for c in failure['cells'])
+                        assert failure['counts']['successful']==256
+                        assert failure['candidate_over_actual_bracketing_control_latency_ratio']['2']['3']['cold']['p95']==1
+                    else:
+                        assert failure['candidate_over_actual_bracketing_control_latency_ratio']=='UNMEASURED'
+                        assert not failure['cells'][0]['valid']
+                    if kind in ('capacity','transport'):
                         assert failure['counts']['successful']==255 and all(c['valid'] for c in failure['cells'][1:])
                         assert failure['cells'][0]['latency_ms']['all_offers']['p99']=='UNBOUNDED'
                 fake_rows=ledger()
@@ -1236,7 +1377,7 @@ def self_check():
             assert not (output/'scratch').exists() and len((output/'records.jsonl').read_bytes().splitlines())==256
 
     assert time.monotonic()-started < 55 and resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024 <= 200*1024**2
-    print('PASS startup-wave8 paired synthetic: default4/explicit8, role/source/seven gates, raw wire/GT/parity, ABBA ledger, resources/cleanup, eight/ninth and default-six/seventh admission, full four-cell nonfatal FAIL collection, fatal/deadline abort, deterministic replay/seals; no SDK/network/native/Cargo')
+    print('PASS startup-wave8 paired synthetic: default4/explicit8 reuse, role/source/seven-control/ten-candidate gates, raw wire/GT/parity, ABBA ledger, resources/cleanup, eight/ninth and default-six/seventh admission, full four-cell nonfatal FAIL collection, fatal/deadline abort, deterministic replay/seals; no SDK/network/native/Cargo')
 
 
 if __name__ == '__main__':
