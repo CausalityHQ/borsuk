@@ -11,6 +11,7 @@ from contextlib import contextmanager
 import gzip
 import hashlib
 import importlib
+import importlib.util
 import json
 import math
 import os
@@ -102,11 +103,13 @@ EXPECTED = dict(schema=SCHEMA, authority_pending=False,
     dimensions=768, k=100, queries=64, quality_peek_allowed=False,
     complete_historical_coverage=False, normalization=prior.NORMALIZATION,
     versions=prior.VERSIONS, limits=LIMITS, stage_limit_seconds=1800)
-ARTIFACTS = ("queries.raw", "requests.jsonl", "panel.json", "duplicate-audit.json",
+SEALED_ARTIFACTS = ("queries.raw", "requests.jsonl", "panel.json", "duplicate-audit.json",
     "source-qualification.json", "sq8-ordinal-check.json", "builder-config.json",
     "build.log", "build-resources.txt", "build-resources.json", "generation-manifest.json",
     "nominate-config.json", "nomination.json", "nomination-seal.json", "truth.u32",
-    "truth.i64", "oracle.json", "reduce-config.json", "coverage.json", "resources.json")
+    "truth.i64", "oracle.json", "reduce-config.json", "coverage.json", "resources.json",
+    "source-order.u64", "source-root.json", "prospective-protocol.json")
+ARTIFACTS = (*SEALED_ARTIFACTS, "decision.json", "final-resources.json", "seal-readback.json")
 INPUTS = ("source.raw", "source-order.u64", "source-root.json", "source-sq8.bin",
           "consumed-queries.raw", "prior-queries.raw", "test-queries.raw")
 
@@ -219,7 +222,8 @@ def dependencies(repo, config):
     return native, coverage
 
 
-def validate_metadata(data):
+def validate_metadata(data, selector=None):
+    selector = prior.selector if selector is None else selector
     a, p, f, root = (data[n] for n in ("metadata_authority", "panel", "root_freeze", "root_metadata_freeze"))
     require(a["schema"] == "borsuk-cohere-top32-fresh64-metadata-authority-v1"
             and p["schema"] == "borsuk-cohere-top32-fresh64-locators-v1"
@@ -262,8 +266,8 @@ def validate_metadata(data):
             and previous["normalization"] == prior.NORMALIZATION
             and previous["must_check_before_ground_truth"] is True, "prior64 duplicate authority differs")
     for ordinal, row in enumerate(selected):
-        source = prior.selector.rank_to_ordinal(row["eligible_rank"], spec["eligible_intervals"])
-        index, local = prior.selector.locate(source, a["ordered_train_shards"])
+        source = selector.rank_to_ordinal(row["eligible_rank"], spec["eligible_intervals"])
+        index, local = selector.locate(source, a["ordered_train_shards"])
         shard = a["ordered_train_shards"][index]
         expected = dict(query_ordinal=ordinal, eligible_rank=row["eligible_rank"], source_ordinal=source,
             shard_ordinal=index, shard_key=shard["key"], shard_sha256=shard["sha256"],
@@ -274,7 +278,7 @@ def validate_metadata(data):
                             for e in a["consumed_query_ledger"]), "changed/consumed locator; STOP no replacement")
 
 
-def load_inputs(config, repo):
+def load_inputs(config, repo, helper=None):
     require(all(config["refs"].get(n) == p for n, p in FIXED.items()), "fixed refs differ")
     data = {n: json.loads(read_ref(repo, p)) for n, p in FIXED.items() if n != "preregister"}
     read_ref(repo, FIXED["preregister"])
@@ -291,7 +295,8 @@ def load_inputs(config, repo):
             data[n] = json.loads(body)
     original = data["source_population_authority"]
     old_config = dict(config, refs=dict(prior.FIXED, **original["proofs"]))
-    old = prior.load_inputs(old_config, repo)  # Original source/producer/ledger checks, without RNG or GT.
+    helper = prior if helper is None else helper
+    old = helper.load_inputs(old_config, repo)  # Source/producer/ledger checks, without RNG or GT.
     require(a["corpus"] == original["corpus"] and a["ordered_train_shards"] == original["ordered_train_shards"]
             and a["proofs"] == original["proofs"] and a["consumed_query_ledger"][:-1] == original["consumed_query_ledger"]
             and a["consumed_query_ledger"][-1] == dict(split="train", source_ordinals=a["previous_source_ordinals"],
@@ -300,7 +305,7 @@ def load_inputs(config, repo):
             and a["old_consumed_panel"] == original["old_consumed_panel"], "original population identity differs")
     require(config["corpus"]["raw"]["bytes"] == 3_072_000_000
             and config["builder"] == data["quality_config"]["binaries"]["builder"], "raw/builder authority differs")
-    validate_metadata(data)
+    validate_metadata(data, helper.selector)
     require(identity(repo / "scripts/select_cohere_fresh64_coverage.py")["sha256"]
             == data["root_metadata_freeze"]["selector_sha256"], "frozen selector source identity differs")
     return data, old
@@ -505,6 +510,101 @@ def coverage_status(report):
     return status
 
 
+def isolated_module(repo, name):
+    """Fresh namespace for the authenticated tool; no rebinding shared helpers."""
+    path = repo / ("scripts/" + name + ".py")
+    spec = importlib.util.spec_from_file_location("_top32_" + name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def offline_modules(repo):
+    from types import SimpleNamespace
+    if str(repo / "scripts") not in sys.path:
+        sys.path.insert(0, str(repo / "scripts"))
+    original = isolated_module(repo, "prepare_cohere_semantic_1m_panel")
+    original.selector = isolated_module(repo, "select_cohere_1m_fresh64")
+    original.shared = SimpleNamespace(authenticate=authenticate)
+    coverage = isolated_module(repo, "check_semantic_binary_coverage")
+    primitives = importlib.import_module("check_semantic_router_coverage")
+    require(Path(primitives.__file__).resolve() == repo / "scripts/check_semantic_router_coverage.py",
+            "offline coverage primitive origin differs")
+    return original, coverage
+
+
+def portable_reduce(coverage, out, decision):
+    """Keep original pins/reports intact; resolve only their authenticated storage."""
+    nominate = json.loads((out / "nominate-config.json").read_bytes())
+    reduction = json.loads((out / "reduce-config.json").read_bytes())
+    frozen = json.loads((out / "nomination.json").read_bytes())
+    recorded = json.loads((out / "coverage.json").read_bytes())
+    mapping = {}
+    def bind(pin, name):
+        path = out / name
+        authenticate(path, pin)
+        require(pin["path"] not in mapping or mapping[pin["path"]] == path, "ambiguous original pointer storage")
+        mapping[pin["path"]] = path
+    require(frozen["inputs"] == nominate and recorded["inputs"] == reduction
+            and recorded["nomination_inputs"] == nominate, "original nomination/config/report binding differs")
+    bind(frozen["config"], "nominate-config.json")
+    bind(recorded["config"], "reduce-config.json")
+    bind(reduction["nomination"], "nomination.json")
+    bind(reduction["truth"], "truth.i64")
+    for field, name in (("order", "source-order.u64"), ("requests", "requests.jsonl"),
+                        ("panel", "panel.json"), ("protocol", "prospective-protocol.json")):
+        require(reduction[field] == nominate[field], "frozen input pointer changed: " + field)
+        bind(nominate[field], name)
+    for field, name in (("source_identity", "source-qualification.json"), ("resource_metadata", "build-resources.json")):
+        bind(nominate["provenance"][field], name)
+    regular = coverage.regular
+    @contextmanager
+    def stored(path, *args, **kwargs):
+        # All reduction body reads must use the explicit pinned archive roster.
+        # code_identity() reads only these four authenticated source files.
+        code_files = set(recorded["reduction_code_identity"]["files"])
+        if str(path) in mapping:
+            actual = mapping[str(path)]
+        else:
+            actual = Path(path)
+            require(actual.name in code_files and actual.is_relative_to(Path(coverage.__file__).parent.parent),
+                    "unmapped replay body pointer")
+        with regular(actual, *args, **kwargs) as stream:
+            yield stream
+    coverage.regular = stored  # This instance is private to this replay call.
+    coverage.provenance(frozen["provenance"])
+    repeated = coverage.reduce(reduction, recorded["config"])
+    # Producer Python versions may differ after collection. Source/math identity
+    # and every coverage/provenance field must still agree; never resign a report.
+    require({k: v for k, v in repeated["reduction_code_identity"].items() if k not in ("python", "implementation")}
+            == {k: v for k, v in recorded["reduction_code_identity"].items() if k not in ("python", "implementation")},
+            "coverage reducer source/math identity differs")
+    require({k: v for k, v in repeated.items() if k != "reduction_code_identity"}
+            == {k: v for k, v in recorded.items() if k != "reduction_code_identity"}, "offline coverage reduction differs")
+    require(coverage_status(repeated) == decision["status"], "replayed decision status differs")
+    return repeated
+
+
+def check_archive_arrays(out):
+    raw = (out / "queries.raw").read_bytes()
+    require(len(raw) == 196608, "fixed64 query length differs")
+    lines = (out / "requests.jsonl").read_bytes().splitlines()
+    require(len(lines) == 64, "fixed64 request count differs")
+    for i, line in enumerate(lines):
+        request = json.loads(line)
+        require(set(request) == {"ordinal", "query"} and type(request["ordinal"]) is int
+                and request["ordinal"] == i and len(request["query"]) == 768
+                and all(type(v) in (int, float) and math.isfinite(v) for v in request["query"])
+                and any(v != 0 for v in request["query"])
+                and struct.pack("<768f", *request["query"]) == raw[i * 3072:(i + 1) * 3072],
+                "request/raw FP32 ordinal parity differs")
+    narrow, wide = ((out / name).read_bytes() for name in ("truth.u32", "truth.i64"))
+    require(len(narrow) == 25600 and len(wide) == 51200, "truth width/length differs")
+    for i in range(64):
+        a, b = struct.unpack_from("<100I", narrow, i * 400), struct.unpack_from("<100q", wide, i * 800)
+        require(a == b and len(set(a)) == 100 and all(row < 1_000_000 for row in a), "truth source ordinal widening differs")
+
+
 def cleanup_failure(out):
     removed = []
     for name in (*INPUTS, "builder", "generation", "shard-scratch", "aws-debug.tmp", "all-consumed.raw",
@@ -552,6 +652,7 @@ def run(config_path, sha, repo, out, prefix):
                 publish(out / "duplicate-audit.json", audit)
                 write_queries(out, queries)
                 publish(out / "panel.json", read_ref(repo, FIXED["panel"]))
+                publish(out / "prospective-protocol.json", read_ref(repo, FIXED["prospective_protocol"]))
                 publish(out / "source-qualification.json", proof)
             with accounting.stage("one_genuine_semantic_build"):
                 historical = json.loads((out / "source-root.json").read_bytes())
@@ -605,7 +706,7 @@ def run(config_path, sha, repo, out, prefix):
                 nomination_config_pin = publish(out / "nominate-config.json", nomination_config)
                 nomination = coverage.nominate(nomination_config, nomination_config_pin)
                 check_nomination(nomination, data["panel"])
-                nomination_pin = publish(out / "nomination.json", nomination)
+                nomination_pin = publish(out / "nomination.json", coverage.canonical(nomination))
                 receipt = seal(config, out, prefix + "/nomination", ("nomination.json",), accounting)
                 publish(out / "nomination-seal.json", receipt)
             with accounting.stage("one_exhaustive_f64_gt100"):
@@ -632,21 +733,32 @@ def run(config_path, sha, repo, out, prefix):
                 reduction_pin = publish(out / "reduce-config.json", reduction_config)
                 coverage_report = coverage.reduce(reduction_config, reduction_pin)
                 coverage_status(coverage_report)
-                publish(out / "coverage.json", coverage_report)
+                publish(out / "coverage.json", coverage.canonical(coverage_report))
                 inputs = {n: identity(out / n) for n in INPUTS}
                 publish(out / "resources.json", accounting.report(True))
-                decision = dict(schema="borsuk-cohere-top32-construction-v1", config_sha256=sha, prefix=prefix,
+                decision = dict(schema="borsuk-cohere-top32-construction-v2", config_sha256=sha, prefix=prefix,
                     status=coverage_report["status"], coverage_only=True, qualification=False,
                     complete_historical_coverage=False, returned_recall_measured=False, cold_http_measured=False,
                     physical_s3_query_gets_measured=False, refs=config["refs"], code_sha256=config["code_sha256"],
                     corpus=config["corpus"], selected_locators_sha256=data["panel"]["selected_sha256"],
                     build_invocations=1, oracle_invocations=1, scorer_invocations=0, inputs=inputs,
-                    artifacts={n: identity(out / n) for n in ARTIFACTS})
+                    artifacts={n: identity(out / n) for n in SEALED_ARTIFACTS})
                 publish(out / "decision.json", decision)
             with accounting.stage("conditional_final_seal"):
                 read_config(config_path, sha, repo); load_inputs(config, repo)
-                receipt = seal(config, out, prefix, (*ARTIFACTS, "decision.json"), accounting)
-            publish(out / "final-resources.json", accounting.report(True))
+                receipt = seal(config, out, prefix, (*SEALED_ARTIFACTS, "decision.json"), accounting)
+            removed = []
+            for name in (*INPUTS, "generation"):
+                if name in ("source-order.u64", "source-root.json"):
+                    continue
+                path = out / name
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+                removed.append(name)
+            publish(out / "final-resources.json", dict(accounting.report(True),
+                success_cleanup=dict(removed=removed, heavy_scratch_remaining=False)))
             receipt["final_resources"] = identity(out / "final-resources.json")
             publish(out / "seal-readback.json", receipt)
             return decision
@@ -662,30 +774,25 @@ def run(config_path, sha, repo, out, prefix):
 def replay(config_path, sha, repo, out):
     repo, out = Path(repo).resolve(), Path(out).absolute()
     config = read_config(Path(config_path), sha, repo)
-    _, coverage = dependencies(repo, config)
-    data, _ = load_inputs(config, repo); _, proof = builder_authority(repo, data)
+    original, coverage = offline_modules(repo)
+    data, _ = load_inputs(config, repo, original); _, proof = builder_authority(repo, data)
     decision = json.loads((out / "decision.json").read_bytes())
-    require(decision["schema"] == "borsuk-cohere-top32-construction-v1"
+    require(decision["schema"] == "borsuk-cohere-top32-construction-v2"
             and decision["config_sha256"] == sha and decision["refs"] == config["refs"]
             and decision["code_sha256"] == config["code_sha256"] and decision["corpus"] == config["corpus"]
-            and set(decision["artifacts"]) == set(ARTIFACTS) and set(decision["inputs"]) == set(INPUTS)
+            and set(decision["artifacts"]) == set(SEALED_ARTIFACTS) and set(decision["inputs"]) == set(INPUTS)
             and decision["build_invocations"] == decision["oracle_invocations"] == 1
             and decision["scorer_invocations"] == 0 and decision["coverage_only"] is True
             and decision["qualification"] is decision["returned_recall_measured"]
                 is decision["cold_http_measured"] is decision["physical_s3_query_gets_measured"] is False,
             "construction identity/scope differs")
-    for name, pin in dict(decision["inputs"], **decision["artifacts"]).items():
+    for name, pin in decision["artifacts"].items():
         require(pin["path"] == name, "artifact name differs"); authenticate(out / name, pin)
-    for name, field in (("source.raw", "raw"), ("source-order.u64", "order"),
-                        ("source-root.json", "root_manifest"), ("source-sq8.bin", "sq8")):
+    for name, field in (("source-order.u64", "order"), ("source-root.json", "root_manifest")):
         authenticate(out / name, config["corpus"][field])
     authenticate(out / "panel.json", FIXED["panel"])
+    authenticate(out / "prospective-protocol.json", FIXED["prospective_protocol"])
     require((out / "source-qualification.json").read_bytes() == canonical(proof), "archived builder provenance differs")
-    nomination_config = json.loads((out / "nominate-config.json").read_bytes())
-    for name, relative in (("router_root", "root"), ("membership", "membership"), ("leaves", "leaves")):
-        pin = nomination_config[name]
-        require(pin["path"] == str(out / "generation/router" / (relative + ".bin")), "generated router path differs")
-        authenticate(Path(pin["path"]), pin)
     nomination_seal = json.loads((out / "nomination-seal.json").read_bytes())
     require(set(nomination_seal["artifacts"]) == {"nomination.json"}, "nomination seal roster differs")
     sealed = nomination_seal["artifacts"]["nomination.json"]
@@ -694,14 +801,8 @@ def replay(config_path, sha, repo, out):
             and (sealed["bytes"], sealed["sha256"]) ==
                 (identity(out / "nomination.json")["bytes"], identity(out / "nomination.json")["sha256"]),
             "nomination seal differs")
-    prior.shared.check_outputs(out)
-    reduction = json.loads((out / "reduce-config.json").read_bytes())
-    require(reduction["nomination"] == pointer(out / "nomination.json")
-            and reduction["truth"] == pointer(out / "truth.i64"), "replay reduction pointers differ")
-    repeated = coverage.reduce(reduction, pointer(out / "reduce-config.json"))
-    coverage_status(repeated)
-    require(canonical(repeated) == (out / "coverage.json").read_bytes()
-            and repeated["status"] == decision["status"], "offline coverage reduction differs")
+    check_archive_arrays(out)
+    portable_reduce(coverage, out, decision)
     readback = json.loads((out / "seal-readback.json").read_bytes())
     expected = dict(decision["artifacts"], **{"decision.json": identity(out / "decision.json")})
     require(readback["schema"] == "borsuk-semantic-1m-seal-readback-v1"
@@ -717,7 +818,9 @@ def replay(config_path, sha, repo, out):
 
 
 def self_check():
-    """Full phase-order mock plus actual metadata/assurance/resource falsifiers."""
+    """Bounded phase mocks plus real-tool relocated-output replay falsifiers."""
+    import ast
+    from array import array
     import copy
     from types import SimpleNamespace
     from unittest.mock import patch
@@ -868,8 +971,14 @@ def self_check():
             d = dict(mode="semantic", profile="fresh1m", source_sha256=synthetic["corpus"]["raw"]["sha256"],
                 source_order_sha256=synthetic["corpus"]["order"]["sha256"], sq8_sha256=synthetic["corpus"]["sq8"]["sha256"],
                 input_schema="borsuk-two-bit-plane-v3", input_root_sha256="1" * 64, centroids_sha256="2" * 64)
-            for name in ("root", "membership", "leaves"):
-                p = generation / "router" / (name + ".bin"); publish(p, name.encode())
+            router_bodies = (b"root", b"membership", b"leaves")
+            if mode[0] == "tool":
+                root, membership, leaves, source = fixture(1_000_000, 768, "fresh1m")
+                router_bodies = (root, membership, leaves)
+                d.update(input_schema=source["schema"], input_root_sha256=source["root_sha256"],
+                         centroids_sha256=source["centroids_sha256"])
+            for name, body in zip(("root", "membership", "leaves"), router_bodies):
+                p = generation / "router" / (name + ".bin"); publish(p, body)
                 d[name + "_bytes"], d[name + "_sha256"] = identity(p)["bytes"], identity(p)["sha256"]
             manifest = dict(schema="borsuk-two-bit-generation-v8", generation=1, base_epoch=0, discovery=d,
                 sq8_object_sha256=d["sq8_sha256"])
@@ -915,7 +1024,7 @@ def self_check():
         shared.seal_readback, shared.oracle = sealed, oracle
         shared.check_outputs = lambda out: require((out / "truth.u32").read_bytes() == gold.tobytes()
             and (out / "truth.i64").read_bytes() == gold.astype("<i8").tobytes(), "truth widening")
-        coverage = SimpleNamespace(nominate=nominate, reduce=reduce)
+        coverage = SimpleNamespace(nominate=nominate, reduce=reduce, canonical=lambda value: canonical(value) + b"\n")
         with patch(__name__ + ".read_config", return_value=synthetic), \
                 patch(__name__ + ".dependencies", return_value=(native, coverage)), \
                 patch(__name__ + ".load_inputs", return_value=(data, {})), \
@@ -928,9 +1037,6 @@ def self_check():
             assert result["build_invocations"] == result["oracle_invocations"] == 1
             assert (output / "queries.raw").read_bytes() == queries.tobytes()
             assert [json.loads(line)["ordinal"] for line in (output / "requests.jsonl").read_bytes().splitlines()] == list(range(64))
-            before = events.count("oracle")
-            assert replay(config_path, config_sha, repo, output)["ground_truth_reexecuted"] is False
-            assert events.count("oracle") == before and events.count("build") == 1
             rejected(lambda: run(config_path, config_sha, repo, output, "synthetic/top32"))
             rejected(lambda: publish(output / "nomination.json", {}))
             for failure in ("hash", "build", "rss", "timeout", "cleanup", "nomination", "seal", "input-drift", "writable"):
@@ -939,9 +1045,89 @@ def self_check():
                 assert (failed / "failure.json").exists() and not (failed / "decision.json").exists()
                 assert not any((failed / n).exists() for n in (*INPUTS, "generation", "builder", "shard-scratch"))
                 assert "oracle" not in events and events.count("build") <= 1
+
+            # Reuse the committed tool's deterministic fixture; exercise its public
+            # production nominate/reduce APIs with genuine fixed1M/768 geometry.
+            _, actual = offline_modules(repo)
+            tree = ast.parse(Path(actual.__file__).read_text())
+            tool_check = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "self_check")
+            factory = next(n for n in tool_check.body if isinstance(n, ast.FunctionDef) and n.name == "fixture")
+            namespace = dict(vars(actual))
+            exec(compile(ast.Module(body=[factory], type_ignores=[]), actual.__file__, "exec"), namespace)
+            fixture = namespace["fixture"]
+            order = array("Q", reversed(range(1_000_000)))
+            if sys.byteorder != "little":
+                order.byteswap()
+            bodies["synthetic/order"] = order.tobytes(); del order
+            synthetic["corpus"]["order"] = small_pin("synthetic/order")
+            gold = Array([[999999 - physical for physical in range(32768, 32868)] for _ in range(64)], "<u4")
+            def tool_nominate(config, pin):
+                events.append("nominate")
+                return actual.nominate(config, pin)
+            def tool_reduce(config, pin):
+                events.append("reduce")
+                return actual.reduce(config, pin)
+            coverage.nominate, coverage.reduce, coverage.canonical = tool_nominate, tool_reduce, actual.canonical
+            mode[0] = "tool"; events.clear()
+            remote = work / "remote-output"
+            result = run(config_path, config_sha, repo, remote, "synthetic/tool")
+            assert events == ["extract", "build", "nominate", "nomination-seal", "oracle", "reduce", "final-seal"]
+            report = json.loads((remote / "coverage.json").read_bytes())
+            assert report["summary"][POLICIES[0]]["page_closure_hits10"] == 0
+            assert report["summary"][POLICIES[1]]["page_closure_hits10"] == 640
+            assert not any((remote / n).exists() for n in (*INPUTS, "generation", "builder")
+                           if n not in ("source-order.u64", "source-root.json"))
+            collected = work / "relocated-collected-output"; collected.mkdir()
+            original_pins = {n: identity(remote / n) for n in ARTIFACTS}
+            for name in ARTIFACTS:
+                shutil.copy2(remote / name, collected / name)
+            shutil.rmtree(remote)
+            before = list(events)
+            import builtins
+            original_import = builtins.__import__
+            def offline_import(name, *args, **kwargs):
+                require(name.split(".")[0] not in ("numpy", "pyarrow", "boto3", "botocore")
+                        and not name.startswith(("scripts.run_native_", "run_native_")), "runtime import in replay")
+                return original_import(name, *args, **kwargs)
+            with patch(__name__ + ".dependencies", side_effect=AssertionError("runtime dependency in replay")), \
+                    patch.object(builtins, "__import__", side_effect=offline_import), \
+                    patch.object(shared, "oracle", side_effect=AssertionError("oracle in replay")), \
+                    patch.object(native, "run_process", side_effect=AssertionError("builder in replay")):
+                assert replay(config_path, config_sha, repo, collected)["ground_truth_reexecuted"] is False
+                assert events == before
+                assert {n: identity(collected / n) for n in ARTIFACTS} == original_pins
+                for name in ("source-order.u64", "nomination.json", "truth.i64", "source-qualification.json", "reduce-config.json"):
+                    path = collected / name; body = path.read_bytes()
+                    path.chmod(0o600); path.write_bytes(bytes([body[0] ^ 1]) + body[1:]); path.chmod(0o444)
+                    rejected(lambda: replay(config_path, config_sha, repo, collected))
+                    path.chmod(0o600); path.write_bytes(body); path.chmod(0o444)
+                # A forged nominal SHA fails even with the intact relocated body.
+                rejected(lambda: actual.authenticated(dict(pointer(collected / "nomination.json"), sha256="0" * 64),
+                                                       actual.REPORT_CAP, True))
+                nominal = collected / "nomination.json"; nominal.chmod(0o644)
+                rejected(lambda: replay(config_path, config_sha, repo, collected)); nominal.chmod(0o444)
+                assert replay(config_path, config_sha, repo, collected)["passed"] is True
+            assert {n: identity(collected / n) for n in ARTIFACTS} == original_pins
+
+        # Root's draft is evidence of controller shape, never launch authority.
+        # Validate a temporary refreshed copy without changing that draft.
+        draft = Path("/tmp/borsuk-cohere-top32-root-draft-config.json")
+        if draft.exists():
+            refreshed = json.loads(draft.read_bytes())
+            refreshed.update(authority_pending=False,
+                code_sha256={name: identity(repo / name)["sha256"] for name in code_roster(repo)})
+            temp_config = work / "refreshed-root-draft.json"
+            pin = publish(temp_config, refreshed)
+            assert len(refreshed["code_sha256"]) == 58 and len(refreshed["refs"]) == 45
+            validated = read_config(temp_config, pin["sha256"], repo)
+            original, _ = offline_modules(repo)
+            with patch.object(prior, "selector", None):
+                metadata, _ = load_inputs(validated, repo, original)
+            builder_authority(repo, metadata)
     require(time.monotonic() - started <= 55 and resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024 <= 200 << 20,
             "self-check resource envelope exceeded")
-    print("self-check PASS: phase order, one builder/oracle, offline replay, authentication, exclusions, resources, cleanup, no overwrite")
+    print("self-check PASS: real public tool fixed1M/768; moved ARTIFACTS-only replay without SDK/oracle/heavy bodies; "
+          "640/640 top32 vs 0/640 old16; tamper negatives; phase order, resources, cleanup, no overwrite; refreshed draft if present")
 
 
 def main():
