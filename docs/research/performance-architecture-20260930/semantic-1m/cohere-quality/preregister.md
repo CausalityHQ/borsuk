@@ -1,6 +1,6 @@
 # CoHere FIRST1M fixed64 quality gate
 
-Use the fixed, unreplaced CoHere fresh64 panel and source-ordinal GT100 from the authenticated closed preparation. A construction-only authority is still pending its offline structural gate. Preparation a0001 remains FAIL; no resource pass is inferred from recovered output bytes.
+Use the fixed, unreplaced CoHere fresh64 panel and source-ordinal GT100 from the authenticated closed preparation. The construction-only authority passed its offline structural gate before prospective freeze. Preparation a0001 remains FAIL; no resource pass is inferred from recovered output bytes.
 
 Build one semantic fresh1m generation from the frozen FIRST1M raw/SQ8/order and trusted historical coefficients, then invoke the unchanged production one-pass diagnostic scorer once. All 64 returned sets freeze before truth is opened. Require mean returned recall@10 >=95%; report recall@100, per-query distribution and nomination/source/local/SQ8 loss separately. No retuning, oracle rerun or query replacement. A failed arm closes with its decomposition; no universal architecture rejection follows an old arm's memory or GET cap.
 

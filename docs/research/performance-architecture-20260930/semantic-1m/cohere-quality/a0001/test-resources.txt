@@ -1,0 +1,23 @@
+	Command being timed: "timeout --signal=TERM --kill-after=5 7200 /mnt/native-cohere-semantic-1m-quality/venv/bin/python -m scripts.run_native_cohere_semantic_1m_quality /mnt/native-cohere-semantic-1m-quality/repo/docs/research/performance-architecture-20260930/semantic-1m/cohere-quality/config.json 435bb52600646820b47713ebb6a652c894407016e0a9c86cb15143ba4470814c /mnt/native-cohere-semantic-1m-quality/repo /mnt/native-cohere-semantic-1m-quality/screen"
+	User time (seconds): 77.83
+	System time (seconds): 14.16
+	Percent of CPU this job got: 66%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:18.35
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 404696
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 4
+	Minor (reclaiming a frame) page faults: 457537
+	Voluntary context switches: 817107
+	Involuntary context switches: 5817
+	Swaps: 0
+	File system inputs: 2504936
+	File system outputs: 14172816
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
