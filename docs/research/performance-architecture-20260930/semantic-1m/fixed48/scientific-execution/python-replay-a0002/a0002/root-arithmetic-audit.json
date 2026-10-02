@@ -1,0 +1,77 @@
+{
+  "schema": "borsuk-fixed48-independent-closed-arithmetic-audit-v1",
+  "source_commit": "57fd5a3036995c75b6fd79b919afe57d682b6bfb",
+  "terminal_sha256": "8c660aed79c910352e4b1f6455b93bf42d070ec85d46b594789fa49f3f6d024a",
+  "all64_per_query_quality_recount": true,
+  "seal_before_gt_driver_ledger_verified": true,
+  "original_collector_status": "FAIL",
+  "final_disposition_pending": true,
+  "dataset": "CoHere",
+  "split": "FIRST1M fixed48 new fresh64; panel dfe569e0",
+  "dimensions": 768,
+  "k": 100,
+  "aggregate": {
+    "nominated_units": {
+      "hits10": 619,
+      "hits100": 5956,
+      "recall10": 0.9671875,
+      "recall100": 0.930625
+    },
+    "page_closure": {
+      "hits10": 625,
+      "hits100": 6063,
+      "recall10": 0.9765625,
+      "recall100": 0.94734375
+    },
+    "returned_ids": {
+      "hits10": 619,
+      "hits100": 6003,
+      "recall10": 0.9671875,
+      "recall100": 0.93796875
+    },
+    "source_ranked_pages": {
+      "hits10": 625,
+      "hits100": 6063,
+      "recall10": 0.9765625,
+      "recall100": 0.94734375
+    },
+    "source_scored_units": {
+      "hits10": 625,
+      "hits100": 6063,
+      "recall10": 0.9765625,
+      "recall100": 0.94734375
+    },
+    "sq8_admitted_ranges": {
+      "hits10": 625,
+      "hits100": 6013,
+      "recall10": 0.9765625,
+      "recall100": 0.93953125
+    }
+  },
+  "local_file_wall_ms_nearest_rank": {
+    "0.5": 102.240843,
+    "0.9": 147.267944,
+    "0.95": 149.528249,
+    "0.99": 197.885446
+  },
+  "local_file_cpu_ms_nearest_rank": {
+    "0.5": 129.185941,
+    "0.9": 137.634514,
+    "0.95": 138.401596,
+    "0.99": 140.522329
+  },
+  "observed_scorer_peak_rss_bytes": 47874048,
+  "logical_io_max": {
+    "leaf_bytes": 3885420,
+    "leaf_gets": 48,
+    "source_bytes": 21299200,
+    "source_gets": 76,
+    "sq8_bytes": 16773120,
+    "sq8_gets": 32
+  },
+  "cold_http_measured": false,
+  "physical_s3_ann_measured": false,
+  "matched_control_or_vendor_measured": false,
+  "throughput_measured": false,
+  "total_cost_measured": false
+}
