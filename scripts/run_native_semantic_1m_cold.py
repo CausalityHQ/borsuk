@@ -46,7 +46,7 @@ FIXED = dict(quality.FIXED, schema='borsuk-semantic-1m-cold-v1', k=10,
     score_invocations=0, publication_invocations=1, cold_invocations=64,
     physical_s3_measured=True, cold_http_measured=True, memory_bytes=MEMORY,
     publication_limit_seconds=1800, cold_limit_seconds=900,
-    native_memory_bytes=PAYLOAD, native_rlimit_as_bytes=4 * 1024**3,
+    native_memory_bytes=PAYLOAD, publisher_memory_bytes=1024**3, native_rlimit_as_bytes=4 * 1024**3,
     namespace_connect_deadline_seconds=45, query_payload_timeout_seconds=5,
     native_process_limit_seconds=60, native_cpu_affinity=[0,1,2,3],
     client_cpu_affinity=[4,5], credential_protocol=stats.CREDENTIAL_PROTOCOL,
@@ -518,6 +518,9 @@ def main(config_path, expected_sha, repo, output):
     monitor=threading.Thread(target=sample,daemon=True); monitor.start()
     try:
         config,proof=qualify(config_path,expected_sha,repo)
+        report['phase_admission']=dict(builder_memory_bytes=PAYLOAD,
+            publisher_memory_bytes=config['publisher_memory_bytes'],native_memory_bytes=PAYLOAD,
+            memory_bytes=MEMORY,swap_bytes=0)
         qconfig,_=quality.qualify(repo/quality.CONFIG,config['quality_config']['sha256'],repo)
         counters=dict(before=capture(),closed=False)
         validate_cgroup(dict(counters,after=counters['before'],closed=True))
@@ -600,7 +603,8 @@ def main(config_path, expected_sha, repo, output):
         assert (output/'build.log').read_text().splitlines()[-1]==root_sha
         assert json.loads((root/'manifest.json').read_bytes())['sq8_etag']==head['ETag']
         stage=time.monotonic(); report['publication_invocations']+=1
-        env_before=os.environ.get('BORSUK_NATIVE_MEMORY_BYTES'); os.environ['BORSUK_NATIVE_MEMORY_BYTES']=str(PAYLOAD)
+        # The demo opens the eager local plane before publication/remote reopen.
+        env_before=os.environ.get('BORSUK_NATIVE_MEMORY_BYTES'); os.environ['BORSUK_NATIVE_MEMORY_BYTES']=str(config['publisher_memory_bytes'])
         try:
             result=run([str(executable/'publisher'),str(root),root_sha,str(output/'publisher-requests.jsonl'),sha(derived),
                 str(output/'publication-reference.jsonl'),'0','64','--live-s3',config['bucket'],config['region'],config['namespace_prefix'],

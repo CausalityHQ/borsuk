@@ -114,6 +114,9 @@ def replay(out):
     assert ordinal['id_matches_order'] is ordinal['complete_bijection'] is True
     repo=Path(__file__).resolve().parents[1]
     config=json.loads((screen/'config.json').read_bytes())
+    assert report['phase_admission']==dict(builder_memory_bytes=worker.PAYLOAD,
+        publisher_memory_bytes=config['publisher_memory_bytes'],native_memory_bytes=worker.PAYLOAD,
+        memory_bytes=worker.MEMORY,swap_bytes=0), 'phase memory admission'
     qconfig=json.loads(worker.read(repo,config['quality_config']))
     original=worker.read(repo,qconfig['panel']['files']['screen/requests.jsonl'])
     derivative=worker.publisher_requests(original)
@@ -287,6 +290,7 @@ def self_check():
         # The real cold_call executes against a mocked socket/native process.
         process=Mock(pid=1234,returncode=143); process.poll.return_value=None
         def spawn(args,**kwargs):
+            assert kwargs['env']['BORSUK_NATIVE_MEMORY_BYTES']==str(512 * 1024**2)
             assert args[args.index('prlimit')+1]=='--as=4294967296:4294967296'
             kwargs['stdout'].write(json.dumps(ready)+'\n'); kwargs['stdout'].flush()
             Path(args[3]).write_text(time_log)
@@ -351,9 +355,12 @@ def self_check():
         rejects(lambda:worker.qualify(target,worker.artifact(target)['sha256'],repo))
         rejects(lambda:worker.qualify(target,'0'*64,repo))
         config['authority_pending']=False
-        for field,value in (('rows',100000),('k',100),('memory_bytes',worker.MEMORY+1)):
+        for field,value in (('rows',100000),('k',100),('memory_bytes',worker.MEMORY+1),
+                            ('publisher_memory_bytes',512 * 1024**2)):
             target.write_bytes(worker.encoded(dict(config,**{field:value})))
-            rejects(lambda:worker.qualify(target,worker.artifact(target)['sha256'],repo))
+            with patch.object(worker,'read') as reads,patch.object(worker.quality,'run_process') as processes:
+                rejects(lambda:worker.qualify(target,worker.artifact(target)['sha256'],repo))
+                reads.assert_not_called(); processes.assert_not_called()
         changed=dict(config,code_sha256=dict(config['code_sha256'],**{CODE[0]:'0'*64}))
         target.write_bytes(worker.encoded(changed)); rejects(lambda:worker.qualify(target,worker.artifact(target)['sha256'],repo))
         # Runtime qualification failures still produce the full aborted population and cleanup.
@@ -450,6 +457,8 @@ def self_check():
             elif args[0]==sys.executable:
                 Path(args[-2]).write_bytes(b'raw')
             elif args[0].endswith('/binaries/builder'):
+                assert args[3]==str(512 * 1024**2)
+                assert os.environ.get('BORSUK_NATIVE_MEMORY_BYTES')==environment.get('BORSUK_NATIVE_MEMORY_BYTES')
                 if current_mode[0]=='build-failure': raise RuntimeError('synthetic build failed')
                 builder=json.loads(Path(args[1]).read_bytes())
                 assert builder['sq8_etag']=='"s3-current-etag"' and builder['semantic_profile']=='fresh1m'
@@ -471,6 +480,8 @@ def self_check():
                 Path(log).write_text(root_sha+'\n'); return result
             else:
                 assert args[0].endswith('/binaries/publisher')
+                assert os.environ['BORSUK_NATIVE_MEMORY_BYTES']==str(1024**3), 'publisher admission'
+                if current_mode[0]=='publication-failure': raise RuntimeError('synthetic publication failed')
                 assert args[-4:]==['--panel-count','64','--top-k','100']
                 refs=worker.source_reference(quality_records)
                 startup_event=dict(phase='startup',root_sha256=args[2],generation=1,control_epoch=1,
@@ -488,6 +499,8 @@ def self_check():
             if name==str(worker.quality.CONFIG): return worker.encoded(qconfig)
             raise AssertionError(name)
         def synthetic_call(binary,cfg,published,body,ref,t):
+            assert cfg['native_memory_bytes']==512 * 1024**2
+            assert os.environ.get('BORSUK_NATIVE_MEMORY_BYTES')==environment.get('BORSUK_NATIVE_MEMORY_BYTES')
             q=ref['query_ordinal']; result=copy.deepcopy(row)
             now=worker.time.monotonic_ns()
             result.update(query_ordinal=q,started_ns=now-100000,completed_ns=now-50000,terminal_ns=now,
@@ -511,8 +524,10 @@ def self_check():
             return result
         environment=dict.fromkeys(worker.THREAD_ENV,'2')
         environment.update(AWS_MAX_ATTEMPTS='1',BORSUK_COLD_SOURCE_COMMIT='0'*40,BORSUK_COLD_ARCHIVE_SHA256='1'*64)
-        for mode in ('complete','threshold608','scientific-fail','build-failure','call-failure','cleanup-failure'):
+        for mode in ('complete','threshold608','scientific-fail','build-failure','publication-failure','call-failure','cleanup-failure'):
             current_mode[0]=mode
+            environment['BORSUK_NATIVE_MEMORY_BYTES']='prior admission'
+            if mode=='complete': environment.pop('BORSUK_NATIVE_MEMORY_BYTES')
             expected_truth=[]
             for q in range(64):
                 t=list(range(100))
@@ -537,18 +552,23 @@ def self_check():
                     id_matches_order=True,complete_bijection=True,sq8=runtime_artifact(sq8),order=runtime_artifact(order))),\
                  patch.object(worker,'measured_call',side_effect=synthetic_call),patch.dict(os.environ,environment),\
                  patch.object(worker.shutil,'rmtree',side_effect=remove):
+                if mode=='complete': os.environ.pop('BORSUK_NATIVE_MEMORY_BYTES',None)
                 try: result=worker.main(target,runproof['config_sha256'],repo,out)
                 except (AssertionError,RuntimeError,OSError):
-                    assert mode in ('build-failure','call-failure','cleanup-failure'),mode
+                    assert mode in ('build-failure','publication-failure','call-failure','cleanup-failure'),mode
                 else:
                     assert mode in ('complete','threshold608','scientific-fail')
                     assert result['execution_gate_passed'] and result['quality_gate_passed']==(mode!='scientific-fail')
                     assert result['returned_hits']==dict(complete=640,threshold608=608,**{'scientific-fail':607})[mode]
+                assert os.environ.get('BORSUK_NATIVE_MEMORY_BYTES')==environment.get('BORSUK_NATIVE_MEMORY_BYTES')
+            admission=json.loads((out/'resources.json').read_bytes())['phase_admission']
+            assert admission==dict(builder_memory_bytes=512 * 1024**2,publisher_memory_bytes=1024**3,
+                native_memory_bytes=512 * 1024**2,memory_bytes=8 * 1024**3,swap_bytes=0)
             if mode=='cleanup-failure': real_remove(out/'scratch')
             assert not (out/'scratch').exists()
             saved=[json.loads(line) for line in (out/'records.jsonl').read_bytes().splitlines()]
             assert [r['query_ordinal'] for r in saved]==list(range(64))
-            if mode=='build-failure': assert all(r['outcome']=='aborted' for r in saved)
+            if mode in ('build-failure','publication-failure'): assert all(r['outcome']=='aborted' for r in saved)
             if mode=='call-failure': assert saved[1]['outcome']=='failed' and all(r['outcome']=='aborted' for r in saved[2:])
             if mode in ('complete','threshold608','scientific-fail'):
                 collected=tmp/('collected-'+mode); collected.mkdir(); worker.shutil.copytree(out,collected/'screen')
@@ -605,7 +625,7 @@ def self_check():
             sdk.Session.assert_not_called()
             with patch.dict(sys.modules,{lifecycle.__name__:lifecycle}),worker.panel.contextlib.redirect_stdout(io.StringIO()):
                 lifecycle.self_check(lifecycle_only=True)
-    print('PASS FIRST1M v8 contract, ordinal/f32 parity, S3 ETag, dynamic startup/IMDS/transport, cold wire boundary, 607/608, ledger/resources/cleanup, original PGID and shared ACK/fsync/termination closure; native UNRUN')
+    print('PASS FIRST1M v8 contract, publisher1GiB/builder-HTTP512MiB admission and env restoration, ordinal/f32 parity, S3 ETag, dynamic startup/IMDS/transport, cold wire boundary, 607/608, ledger/resources/cleanup, original PGID and shared ACK/fsync/termination closure; native UNRUN')
 
 
 if __name__ == '__main__':
