@@ -86,3 +86,7 @@ behavior. Run it within60 seconds, 128MiB, and one core; no SDK, network, corpus
 vector, truth, native binary, or Rust build is needed. Actual commands and exit
 statuses accompany the handoff in
 `/tmp/borsuk-cohere-fresh64-metadata-contract.json`.
+
+## Root freeze
+
+Root metadata-only validation and independent seeded rank-to-ordinal mapping passed. Authority root_pending=false SHA956a650eb34618d0d5fcab5d7776ea61e6875be64dd5245701aa521930ab703d; fixed panel has64 locators in59 shards, no replacement. Panel/root-freeze.json bind exact output. No vectors or truth opened and no ANN quality measured. Remote preparation consumes fixed authenticated locators; it must not regenerate selection under a different Python version. Audit indexed corpus and all known consumed vector inputs before sealing new GT. Current historical coverage remains incomplete.

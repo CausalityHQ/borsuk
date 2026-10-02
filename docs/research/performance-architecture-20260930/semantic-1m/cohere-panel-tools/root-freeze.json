@@ -1,0 +1,15 @@
+{
+  "schema": "borsuk-cohere-fresh64-root-freeze-v1",
+  "authority_sha256": "956a650eb34618d0d5fcab5d7776ea61e6875be64dd5245701aa521930ab703d",
+  "panel_sha256": "979ad0f737ff045ab58b09dc9bc84105092c34238a5625558e2caa199e1b796e",
+  "selected_locators_sha256": "379b6421d794fb2d0956e7ed787478b019abfd599e0510be157cdcaa53205abf",
+  "selection_count": 64,
+  "selected_shards": 59,
+  "independent_rank_mapping_equal": true,
+  "root_pending": false,
+  "vector_or_truth_bodies_opened": false,
+  "native_quality_measured": false,
+  "complete_historical_coverage": false,
+  "remote_preparation_note": "Selection generator CPython3.14.4 is pinned; remote preparation must consume/authenticate fixed locators without resampling under Python3.12.",
+  "duplicate_policy": "audit indexed FIRST1M plus all known consumed-vector inputs; STOP whole fixed panel without replacement"
+}

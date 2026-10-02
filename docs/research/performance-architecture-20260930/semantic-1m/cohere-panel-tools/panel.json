@@ -1,0 +1,1025 @@
+{
+  "schema": "borsuk-cohere-first1m-fresh64-locators-v1",
+  "metadata_only": true,
+  "root_pending": false,
+  "qualification": false,
+  "complete_historical_coverage": false,
+  "vector_or_truth_bodies_opened": false,
+  "authority_sha256": "956a650eb34618d0d5fcab5d7776ea61e6875be64dd5245701aa521930ab703d",
+  "source_receipt_sha256": "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87",
+  "corpus": {
+    "dimensions": 768,
+    "first1m_shard_slices": [
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 0
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 1
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 2
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 3
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 4
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 5
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 6
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 7
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 8
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 9
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 10
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 11
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 12
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 13
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 14
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 15
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 16
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 17
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 18
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 19
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 20
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 21
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 22
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 23
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 24
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 25
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 26
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 27
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 28
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 29
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 30
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 31
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 32
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 33
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 34
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 35
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 36
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 37
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 38
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 39
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 40
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 41
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 42
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 43
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 44
+      },
+      {
+        "local_row_end_exclusive": 16975,
+        "local_row_start": 0,
+        "shard_ordinal": 45
+      }
+    ],
+    "metric": "cosine",
+    "normalized_sha256": "fd175b35b04bb6e00210eed9ace3622833af5d7b663a11c47d53f1e6cef8073c",
+    "order": {
+      "bytes": 8000000,
+      "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/order.u64",
+      "sha256": "25672572b8e36eafea6ba856068f33aca5064e3ce02544340f682cd39881ea02"
+    },
+    "order_format": "LEu64 permutation: physical position to original source ordinal",
+    "raw": {
+      "bytes": 3072000000,
+      "key": "research/v261-cohere-dual-graph-1m/2dee58896e42f84d74e2653dc0960e19d6defc63/runs/a0001/artifacts/vectors.raw",
+      "producer_terminal": {
+        "key": "research/v261-cohere-dual-graph-1m/2dee58896e42f84d74e2653dc0960e19d6defc63/runs/a0001/terminal.json",
+        "sha256": "00c7d4803354f15d5f62bea6e53fd0672a0f5fc91cc482e1fa4b20b8951a9f82"
+      },
+      "sha256": "6c82a340e3e1b4226640e593efa9c4000c6a5962d4b13063093a1dab689a9005"
+    },
+    "raw_dtype": "<f4",
+    "root_manifest": {
+      "bytes": 33963,
+      "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/manifest.json",
+      "sha256": "a4eb4851c545e828f3d08181a0c3e9cca09ed9341032ee3e69c511b9b7caf67e"
+    },
+    "rows": 1000000,
+    "source_interval": [
+      0,
+      1000000
+    ],
+    "sq8": {
+      "bytes": 780000000,
+      "key": "research/native-union/20260929/cohere-source-1m-v4/objects/b2f2f7dbec79c8646495b4a1500c363c5ccbf51690cf1e936d1264e7ee3839e1",
+      "sha256": "b2f2f7dbec79c8646495b4a1500c363c5ccbf51690cf1e936d1264e7ee3839e1"
+    }
+  },
+  "selection": {
+    "candidate_interval": [
+      1000000,
+      10000000
+    ],
+    "count": 64,
+    "eligible_intervals": [
+      [
+        1002000,
+        1005000
+      ],
+      [
+        1006000,
+        10000000
+      ]
+    ],
+    "excluded_consumed_intervals": [
+      [
+        1000000,
+        1002000
+      ],
+      [
+        1005000,
+        1006000
+      ]
+    ],
+    "failure_policy": "STOP whole fixed panel on any duplicate or exclusion failure; never replace or resample",
+    "population_sha256": "7788c8228aafea809d1f24d4ebdf98e4a7da905b6ce30c26223102021de1da9f",
+    "population_size": 8997000,
+    "python": {
+      "implementation": "CPython",
+      "version": "3.14.4"
+    },
+    "roster_sha256": "7b2607c50a79c1da6fb91ed351c98b75b0a27b628af3458e30382cc4ee327df7",
+    "rule": "random.Random(seed_integer).sample(range(population_size), 64); map ranks through ascending eligible half-open intervals; preserve sampled order",
+    "seed_integer": 8206844874650668526632870969860184178411035331402446395253641667409609772029,
+    "seed_sha256": "1224e8dade2fdfab239ea10c6b6d648a368194133e3cac7156c1b2887a704bfd",
+    "seed_text": "borsuk-cohere-first1m-fresh64-v1"
+  },
+  "consumed_query_ledger_sha256": "17a3c12bebf23bac4d03b1f9debd30ff40963f0e3da11e400aa945083d238ed6",
+  "selected_sha256": "379b6421d794fb2d0956e7ed787478b019abfd599e0510be157cdcaa53205abf",
+  "selected": [
+    {
+      "query_ordinal": 0,
+      "eligible_rank": 4559837,
+      "source_ordinal": 5562837,
+      "shard_ordinal": 254,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000254.parquet",
+      "shard_sha256": "b80773463fd41357cd24df90d2f0e0a87da4c8626b1f6f265b1cf5011de5b1ef",
+      "shard_bytes": 67122082,
+      "local_row": 14207,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 1,
+      "eligible_rank": 6458580,
+      "source_ordinal": 7461580,
+      "shard_ordinal": 341,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000341.parquet",
+      "shard_sha256": "e2e1ad4209b717967c51d1226c9613369dec079cdfb288c1fd2dafdaa580ed98",
+      "shard_bytes": 67122093,
+      "local_row": 12435,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 2,
+      "eligible_rank": 2205519,
+      "source_ordinal": 3208519,
+      "shard_ordinal": 146,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000146.parquet",
+      "shard_sha256": "ee82ac314bee6a2e1c10a3814c2d83c8f22431daaded7fcb94ae25f720c18294",
+      "shard_bytes": 67121964,
+      "local_row": 19149,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 3,
+      "eligible_rank": 4098529,
+      "source_ordinal": 5101529,
+      "shard_ordinal": 233,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000233.parquet",
+      "shard_sha256": "b894eda506f73f4e4c67f4e345d35217596fbaa4dfd5abaa8356e6c50783c6f7",
+      "shard_bytes": 67122081,
+      "local_row": 11644,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 4,
+      "eligible_rank": 1806217,
+      "source_ordinal": 2809217,
+      "shard_ordinal": 128,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000128.parquet",
+      "shard_sha256": "4ca10876aa6c69228a36c6fedea5356bd94ad88868a27f00e00ec6bf157ab394",
+      "shard_bytes": 67121965,
+      "local_row": 13057,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 5,
+      "eligible_rank": 8921357,
+      "source_ordinal": 9924357,
+      "shard_ordinal": 454,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000454.parquet",
+      "shard_sha256": "7cbc5b528340c8cbbfceae50d2d204ff4d9dd67036250309cba5bdd16ff52564",
+      "shard_bytes": 67121962,
+      "local_row": 6727,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 6,
+      "eligible_rank": 4497657,
+      "source_ordinal": 5500657,
+      "shard_ordinal": 251,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000251.parquet",
+      "shard_sha256": "a534ed542bd7c8c0a6cf7e5d2a072da9b0d8fa8663dfaf488035a98fb330811d",
+      "shard_bytes": 67122081,
+      "local_row": 17562,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 7,
+      "eligible_rank": 2180658,
+      "source_ordinal": 3183658,
+      "shard_ordinal": 145,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000145.parquet",
+      "shard_sha256": "a1fedf2b7a2b73f7c13f38d70848ff321d9e086170e2d9ee4c6dab679aac9b99",
+      "shard_bytes": 67122087,
+      "local_row": 16133,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 8,
+      "eligible_rank": 1930968,
+      "source_ordinal": 2933968,
+      "shard_ordinal": 134,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000134.parquet",
+      "shard_sha256": "8a40b8724222fe6fe75f5e87fea3a8d8b38c9f8ed5e718bf44ef1eee1d24dfe3",
+      "shard_bytes": 67121964,
+      "local_row": 6738,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 9,
+      "eligible_rank": 5921282,
+      "source_ordinal": 6924282,
+      "shard_ordinal": 316,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000316.parquet",
+      "shard_sha256": "e829105269db146c4ab6d58821733989109bbfb71e8294bcc1c27e77d27775c3",
+      "shard_bytes": 67121962,
+      "local_row": 21262,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 10,
+      "eligible_rank": 2300183,
+      "source_ordinal": 3303183,
+      "shard_ordinal": 151,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000151.parquet",
+      "shard_sha256": "657b7a7c883acd9b3648c97da7c2eca3e7b53c7013442f08e238d82cd0d93c5e",
+      "shard_bytes": 67122087,
+      "local_row": 4588,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 11,
+      "eligible_rank": 3018286,
+      "source_ordinal": 4021286,
+      "shard_ordinal": 184,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000184.parquet",
+      "shard_sha256": "6d1963251626ea01a1c546eb282f376031bafa00acbfaf6cb8fd94ecf6fe9ee5",
+      "shard_bytes": 67122088,
+      "local_row": 1806,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 12,
+      "eligible_rank": 870113,
+      "source_ordinal": 1873113,
+      "shard_ordinal": 85,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000085.parquet",
+      "shard_sha256": "00648da6b3bad31ab9ff8f0eaac99088b608f8c685191e0c0768ac3f39c76629",
+      "shard_bytes": 67122091,
+      "local_row": 16288,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 13,
+      "eligible_rank": 5838531,
+      "source_ordinal": 6841531,
+      "shard_ordinal": 313,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000313.parquet",
+      "shard_sha256": "6986f7dd54b4c7b4ef1b9ed776347cdc5807243ffbcb38a94500c0b2bd7a1e51",
+      "shard_bytes": 67121962,
+      "local_row": 4046,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 14,
+      "eligible_rank": 6171805,
+      "source_ordinal": 7174805,
+      "shard_ordinal": 328,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000328.parquet",
+      "shard_sha256": "2797184ae7e4d65bb8f0048be852ee567051383c3024d0eddc3eb377e56793ba",
+      "shard_bytes": 67121964,
+      "local_row": 9645,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 15,
+      "eligible_rank": 2363952,
+      "source_ordinal": 3366952,
+      "shard_ordinal": 154,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000154.parquet",
+      "shard_sha256": "dc97e72736af0d2e0d68f24840e6fd9db08351d503e4d7aaf133518188919b2d",
+      "shard_bytes": 67122088,
+      "local_row": 2822,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 16,
+      "eligible_rank": 7865973,
+      "source_ordinal": 8868973,
+      "shard_ordinal": 405,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000405.parquet",
+      "shard_sha256": "560345b36d1060d65f25133b0bf2d5cc73d6f79dfd44bfaf8c61a65408298c5d",
+      "shard_bytes": 67122087,
+      "local_row": 21748,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 17,
+      "eligible_rank": 7617709,
+      "source_ordinal": 8620709,
+      "shard_ordinal": 394,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000394.parquet",
+      "shard_sha256": "96b19299746b61dbeb6ebd3d05a34ce520f14aa0dbc049f7404db1bc052c2ba4",
+      "shard_bytes": 67121964,
+      "local_row": 13779,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 18,
+      "eligible_rank": 1555988,
+      "source_ordinal": 2558988,
+      "shard_ordinal": 117,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000117.parquet",
+      "shard_sha256": "db8733780d1760d524f8d51ef986584ef0abc3cc6ee446a8229a74d35a834537",
+      "shard_bytes": 67122085,
+      "local_row": 3123,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 19,
+      "eligible_rank": 5027417,
+      "source_ordinal": 6030417,
+      "shard_ordinal": 276,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000276.parquet",
+      "shard_sha256": "30498ab305841f83c1dcc22586c9519255dc33c239d34bc3cac88d285c8c0d5c",
+      "shard_bytes": 67122091,
+      "local_row": 1197,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 20,
+      "eligible_rank": 6800381,
+      "source_ordinal": 7803381,
+      "shard_ordinal": 357,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000357.parquet",
+      "shard_sha256": "ef826e16aeab74ae4c840a312c5c394a9d871dbacb137a11c478d39672f8fe05",
+      "shard_bytes": 67122090,
+      "local_row": 4716,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 21,
+      "eligible_rank": 6981435,
+      "source_ordinal": 7984435,
+      "shard_ordinal": 365,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000365.parquet",
+      "shard_sha256": "3ca8bb24e98fc4358deec22e32cfd69a0eafc0f95af0c618bd62333faa546877",
+      "shard_bytes": 67122092,
+      "local_row": 11010,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 22,
+      "eligible_rank": 5271583,
+      "source_ordinal": 6274583,
+      "shard_ordinal": 287,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000287.parquet",
+      "shard_sha256": "faccc9c839bec1310511734862e7b6bef331cab5c12a1fd7adbcbb0546734fdb",
+      "shard_bytes": 67122091,
+      "local_row": 5068,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 23,
+      "eligible_rank": 4292600,
+      "source_ordinal": 5295600,
+      "shard_ordinal": 242,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000242.parquet",
+      "shard_sha256": "eaa3f4006b6f39381e28f9709d0e593cf7d0bfbf1753a4ce26a1f0c31b7e8b4f",
+      "shard_bytes": 67122079,
+      "local_row": 9110,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 24,
+      "eligible_rank": 6875470,
+      "source_ordinal": 7878470,
+      "shard_ordinal": 360,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000360.parquet",
+      "shard_sha256": "3729c61b91637e507e306cbde3162cbfa8afe7a6511e820671c3f1e1141d3338",
+      "shard_bytes": 67122090,
+      "local_row": 14270,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 25,
+      "eligible_rank": 984296,
+      "source_ordinal": 1987296,
+      "shard_ordinal": 90,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000090.parquet",
+      "shard_sha256": "91de26e697fa783937036ae745e8a87967e1c7ea78b05beb52d31a92051e196e",
+      "shard_bytes": 67122090,
+      "local_row": 21246,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 26,
+      "eligible_rank": 5603295,
+      "source_ordinal": 6606295,
+      "shard_ordinal": 302,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000302.parquet",
+      "shard_sha256": "b8fbe769682cd63cfcf3ab8727b3d48a8149ab19bff45b94bdca1e8399842cc7",
+      "shard_bytes": 67122087,
+      "local_row": 9105,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 27,
+      "eligible_rank": 4998303,
+      "source_ordinal": 6001303,
+      "shard_ordinal": 274,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000274.parquet",
+      "shard_sha256": "0e3ebdf489272c9005a170c1d68153c48b55fd11e8bf1540bb7f410478d29314",
+      "shard_bytes": 67122084,
+      "local_row": 15773,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 28,
+      "eligible_rank": 8093393,
+      "source_ordinal": 9096393,
+      "shard_ordinal": 416,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000416.parquet",
+      "shard_sha256": "7a368540f61df574a7ab5467ae723cec3cf033209274f154f2d271190b281999",
+      "shard_bytes": 67122094,
+      "local_row": 8873,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 29,
+      "eligible_rank": 8402335,
+      "source_ordinal": 9405335,
+      "shard_ordinal": 430,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000430.parquet",
+      "shard_sha256": "e69b9c906c0312e5e1fcf42b0fe723761dba9a5fa093d4c79a291de56f159e1a",
+      "shard_bytes": 67121962,
+      "local_row": 11985,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 30,
+      "eligible_rank": 797219,
+      "source_ordinal": 1800219,
+      "shard_ordinal": 82,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000082.parquet",
+      "shard_sha256": "3046da20570d44d78f884df9113dbc77119aae614590f1a41f4682c84a658291",
+      "shard_bytes": 67122091,
+      "local_row": 8929,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 31,
+      "eligible_rank": 5301168,
+      "source_ordinal": 6304168,
+      "shard_ordinal": 288,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000288.parquet",
+      "shard_sha256": "727c980cfd93905d4b60c5e5baaaf94d214f29f66c65be47a5978801c52f4f4a",
+      "shard_bytes": 67122094,
+      "local_row": 12808,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 32,
+      "eligible_rank": 5663801,
+      "source_ordinal": 6666801,
+      "shard_ordinal": 305,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000305.parquet",
+      "shard_sha256": "1ea78513a6f827dcecffd2e1727c530873592b50b3f8314cf0a6e2b893cc5e6d",
+      "shard_bytes": 67122087,
+      "local_row": 4076,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 33,
+      "eligible_rank": 3233822,
+      "source_ordinal": 4236822,
+      "shard_ordinal": 193,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000193.parquet",
+      "shard_sha256": "5f408ab1cc6c0c5d33b558496c6411147b6cccf6add478a0502e0424e4872273",
+      "shard_bytes": 67122088,
+      "local_row": 20737,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 34,
+      "eligible_rank": 4742267,
+      "source_ordinal": 5745267,
+      "shard_ordinal": 263,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000263.parquet",
+      "shard_sha256": "45ca0d20a5ea9b449b3d7544d4e3781fd6e7b39149aea77a6d1d2751e3b39609",
+      "shard_bytes": 67122085,
+      "local_row": 32,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 35,
+      "eligible_rank": 6801053,
+      "source_ordinal": 7804053,
+      "shard_ordinal": 357,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000357.parquet",
+      "shard_sha256": "ef826e16aeab74ae4c840a312c5c394a9d871dbacb137a11c478d39672f8fe05",
+      "shard_bytes": 67122090,
+      "local_row": 5388,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 36,
+      "eligible_rank": 2045962,
+      "source_ordinal": 3048962,
+      "shard_ordinal": 139,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000139.parquet",
+      "shard_sha256": "32e774bc66ece29ea187f6d92e9731f7e8e1381493e162790a07c07129939142",
+      "shard_bytes": 67122087,
+      "local_row": 12507,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 37,
+      "eligible_rank": 2130891,
+      "source_ordinal": 3133891,
+      "shard_ordinal": 143,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000143.parquet",
+      "shard_sha256": "a6219f97e5ec085976d7ebfd250e212743d3dd15267675a7bba7ed9ed277391f",
+      "shard_bytes": 67121967,
+      "local_row": 10056,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 38,
+      "eligible_rank": 578227,
+      "source_ordinal": 1581227,
+      "shard_ordinal": 72,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000072.parquet",
+      "shard_sha256": "a13090e7ad1001b83cfd919a850cb412d3045935a2049c30718279815a0de742",
+      "shard_bytes": 67122089,
+      "local_row": 8387,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 39,
+      "eligible_rank": 1936591,
+      "source_ordinal": 2939591,
+      "shard_ordinal": 134,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000134.parquet",
+      "shard_sha256": "8a40b8724222fe6fe75f5e87fea3a8d8b38c9f8ed5e718bf44ef1eee1d24dfe3",
+      "shard_bytes": 67121964,
+      "local_row": 12361,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 40,
+      "eligible_rank": 5500805,
+      "source_ordinal": 6503805,
+      "shard_ordinal": 297,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000297.parquet",
+      "shard_sha256": "ccfdac3e76c270b68e90aefb89f682b27b1dc1af14a5720287face7c1bce10df",
+      "shard_bytes": 67122094,
+      "local_row": 15840,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 41,
+      "eligible_rank": 2789351,
+      "source_ordinal": 3792351,
+      "shard_ordinal": 173,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000173.parquet",
+      "shard_sha256": "d21bf0090f4ddb40226379904076cde3117b406cbe05f638b0295627da947016",
+      "shard_bytes": 67121962,
+      "local_row": 13166,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 42,
+      "eligible_rank": 4975987,
+      "source_ordinal": 5978987,
+      "shard_ordinal": 273,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000273.parquet",
+      "shard_sha256": "54c1c71ae8f0bfcda99333e0e04ea7a8db03f4fcbd230211c260ded6181e808e",
+      "shard_bytes": 67122096,
+      "local_row": 15302,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 43,
+      "eligible_rank": 4756059,
+      "source_ordinal": 5759059,
+      "shard_ordinal": 263,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000263.parquet",
+      "shard_sha256": "45ca0d20a5ea9b449b3d7544d4e3781fd6e7b39149aea77a6d1d2751e3b39609",
+      "shard_bytes": 67122085,
+      "local_row": 13824,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 44,
+      "eligible_rank": 635795,
+      "source_ordinal": 1638795,
+      "shard_ordinal": 75,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000075.parquet",
+      "shard_sha256": "e106c856b9bb6a11bcf3ab5295f6d3af495c7c3beab89b89f7a94cfd23de0b4a",
+      "shard_bytes": 67122090,
+      "local_row": 420,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 45,
+      "eligible_rank": 6531035,
+      "source_ordinal": 7534035,
+      "shard_ordinal": 344,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000344.parquet",
+      "shard_sha256": "03b66cdbfd3445f70fc7e618a7793b5292d956ad2f373ea08d16a64dcad590b2",
+      "shard_bytes": 67122093,
+      "local_row": 19355,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 46,
+      "eligible_rank": 2064785,
+      "source_ordinal": 3067785,
+      "shard_ordinal": 140,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000140.parquet",
+      "shard_sha256": "8333d73ceeed77748e6068bb9808e4b45bb56b960059463bd0193bea80e9cacf",
+      "shard_bytes": 67121964,
+      "local_row": 9485,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 47,
+      "eligible_rank": 2760510,
+      "source_ordinal": 3763510,
+      "shard_ordinal": 172,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000172.parquet",
+      "shard_sha256": "542000f7e57c868733e0a8ab2f7131411284a22c4076385b8031fb70a4446965",
+      "shard_bytes": 67122091,
+      "local_row": 6170,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 48,
+      "eligible_rank": 3492577,
+      "source_ordinal": 4495577,
+      "shard_ordinal": 205,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000205.parquet",
+      "shard_sha256": "fbf8dcf7ed907423aea6585ee294a7c1f92e0c6bab8c0e7dce798fb446b008b1",
+      "shard_bytes": 67122089,
+      "local_row": 17352,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 49,
+      "eligible_rank": 1259966,
+      "source_ordinal": 2262966,
+      "shard_ordinal": 103,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000103.parquet",
+      "shard_sha256": "06f8fa1ed6d3bdff8bae431727b2775c296ddb7e68a730af4463aa32ace4d6ee",
+      "shard_bytes": 67122093,
+      "local_row": 12931,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 50,
+      "eligible_rank": 3416878,
+      "source_ordinal": 4419878,
+      "shard_ordinal": 202,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000202.parquet",
+      "shard_sha256": "fb3fca50fcd6b7644bedbf40b676a098d6def0514fa32b9816ff386485d580ba",
+      "shard_bytes": 67122088,
+      "local_row": 7188,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 51,
+      "eligible_rank": 5799740,
+      "source_ordinal": 6802740,
+      "shard_ordinal": 311,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000311.parquet",
+      "shard_sha256": "8de03005d2c2b5db21030f26c04b7802f44793684eaa40d7540f5c997050dce3",
+      "shard_bytes": 67122088,
+      "local_row": 8945,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 52,
+      "eligible_rank": 793556,
+      "source_ordinal": 1796556,
+      "shard_ordinal": 82,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000082.parquet",
+      "shard_sha256": "3046da20570d44d78f884df9113dbc77119aae614590f1a41f4682c84a658291",
+      "shard_bytes": 67122091,
+      "local_row": 5266,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 53,
+      "eligible_rank": 408188,
+      "source_ordinal": 1411188,
+      "shard_ordinal": 64,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000064.parquet",
+      "shard_sha256": "22512a0e237b2728fa301c2ef2cfe93307609bcec45196622258ad17d128afa7",
+      "shard_bytes": 67122091,
+      "local_row": 13108,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 54,
+      "eligible_rank": 836362,
+      "source_ordinal": 1839362,
+      "shard_ordinal": 84,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000084.parquet",
+      "shard_sha256": "9ddbc0c796eefdd6b552d9446490638792527b93bc5305ef78355db74fbb682f",
+      "shard_bytes": 67122091,
+      "local_row": 4382,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 55,
+      "eligible_rank": 964195,
+      "source_ordinal": 1967195,
+      "shard_ordinal": 90,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000090.parquet",
+      "shard_sha256": "91de26e697fa783937036ae745e8a87967e1c7ea78b05beb52d31a92051e196e",
+      "shard_bytes": 67122090,
+      "local_row": 1145,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 56,
+      "eligible_rank": 259893,
+      "source_ordinal": 1262893,
+      "shard_ordinal": 57,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000057.parquet",
+      "shard_sha256": "b7095d6b89e9d1152c901de8dfc242729f91a7942512482bc9dcfd4558be9220",
+      "shard_bytes": 67122087,
+      "local_row": 17728,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 57,
+      "eligible_rank": 3169682,
+      "source_ordinal": 4172682,
+      "shard_ordinal": 191,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000191.parquet",
+      "shard_sha256": "3b1b5e6c80acdfcdb60a4655757c7fbac89cd3334a43ca23afbc67cba30c51da",
+      "shard_bytes": 67121960,
+      "local_row": 287,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 58,
+      "eligible_rank": 1314083,
+      "source_ordinal": 2317083,
+      "shard_ordinal": 106,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000106.parquet",
+      "shard_sha256": "a704c4e03e264a3dad59448c01a5f3cb1bb829fda55c4aba26094b65c30b2c96",
+      "shard_bytes": 67122093,
+      "local_row": 1513,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 59,
+      "eligible_rank": 3155619,
+      "source_ordinal": 4158619,
+      "shard_ordinal": 190,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000190.parquet",
+      "shard_sha256": "77942ea282b5144ada0ccd1b88df3d0385d2eb2d356c98eb0cb03b969a9ec1b0",
+      "shard_bytes": 67122087,
+      "local_row": 8069,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 60,
+      "eligible_rank": 6653327,
+      "source_ordinal": 7656327,
+      "shard_ordinal": 350,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000350.parquet",
+      "shard_sha256": "fdc2b5d75a50b317b18a216d8d493c9fbf748f9573d8c93e47f7aad52e274ba8",
+      "shard_bytes": 67122091,
+      "local_row": 10577,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 61,
+      "eligible_rank": 8722947,
+      "source_ordinal": 9725947,
+      "shard_ordinal": 445,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000445.parquet",
+      "shard_sha256": "f2e4ed63d440568d5cf5d4f8d624a09db1d0df16051a3905c26534323993fe26",
+      "shard_bytes": 67121964,
+      "local_row": 4922,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 62,
+      "eligible_rank": 6290146,
+      "source_ordinal": 7293146,
+      "shard_ordinal": 333,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000333.parquet",
+      "shard_sha256": "0678f061f44068dbc1dc56137fe3b0943cde27e3a8b3da49feae5fd613796a1a",
+      "shard_bytes": 67122087,
+      "local_row": 18761,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 63,
+      "eligible_rank": 4610622,
+      "source_ordinal": 5613622,
+      "shard_ordinal": 256,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000256.parquet",
+      "shard_sha256": "8e814839c1ffa1bf4fc02e264b9744a4b6aca326f8766f2ef1d76950824b75d7",
+      "shard_bytes": 67121964,
+      "local_row": 21302,
+      "embedding_column": "emb"
+    }
+  ]
+}

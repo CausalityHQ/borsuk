@@ -1,0 +1,115 @@
+{
+  "schema": "borsuk-cohere-fresh64-metadata-worker-contract-v1",
+  "worktree": "/home/rb/worktrees/borsuk-cohere-fresh64-metadata",
+  "assigned_base_commit": "c33fd046ceee627ccf9002b96be765a97a71c433",
+  "receipt_base_commit": "84c08fd6bb687fdd8e0b648d6e5afcdd26e48669",
+  "commit": "48ec5bc5deea2cf5110008a9c3b9e7a3ad4f6f86",
+  "commit_parent": "84c08fd6bb687fdd8e0b648d6e5afcdd26e48669",
+  "commit_files": [
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-panel-tools/decision.md",
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-panel-tools/metadata-authority.json",
+    "scripts/select_cohere_1m_fresh64.py"
+  ],
+  "commit_metadata": "48ec5bc5deea2cf5110008a9c3b9e7a3ad4f6f86\n84c08fd6bb687fdd8e0b648d6e5afcdd26e48669\nRoman Bartusiak <riomus@gmail.com>\nRoman Bartusiak <riomus@gmail.com>\nPreregister CoHere FIRST1M fresh64 metadata selection\n\n",
+  "completion": "bounded metadata implementation verified; parent integration and freeze pending",
+  "root_pending": true,
+  "authority_pending": false,
+  "qualification": false,
+  "authority_sha256": "3442800fe4cd1f77c624aba098b9ed642138b31a122a5a1b4fac32787647a4d3",
+  "receipt_sha256": "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87",
+  "ordered_train_shards": 458,
+  "train_rows": 10000000,
+  "population_size": 8997000,
+  "selected_count": 64,
+  "roster_sha256": "7b2607c50a79c1da6fb91ed351c98b75b0a27b628af3458e30382cc4ee327df7",
+  "population_sha256": "7788c8228aafea809d1f24d4ebdf98e4a7da905b6ce30c26223102021de1da9f",
+  "selected_locators_sha256": "379b6421d794fb2d0956e7ed787478b019abfd599e0510be157cdcaa53205abf",
+  "ordered_source_ordinals_sha256": "f58957a9a7cfb445298a6a6a48c139a5dc8f3df1d9f7714602d4a55141ee321c",
+  "python": {
+    "implementation": "CPython",
+    "version": "3.14.4"
+  },
+  "selfcheck_limits": {
+    "wall_seconds": 60,
+    "address_space_bytes": 134217728,
+    "cpu_affinity_cores": 1
+  },
+  "selfcheck_observed": {
+    "wall_seconds": 0.3,
+    "max_rss_kib": 26048,
+    "exit_code": 0
+  },
+  "checks": [
+    {
+      "kind": "bounded_selfcheck",
+      "command": "rtk proxy /usr/bin/time -v timeout 60s python3 -c 'import os,resource,sys; os.sched_setaffinity(0,{min(os.sched_getaffinity(0))}); resource.setrlimit(resource.RLIMIT_AS,(134217728,134217728)); os.execv(sys.executable,[sys.executable,\"scripts/select_cohere_1m_fresh64.py\",\"--self-check\"])'",
+      "exit_code": 0,
+      "output": "{\"selected\": 64, \"selected_sha256\": \"379b6421d794fb2d0956e7ed787478b019abfd599e0510be157cdcaa53205abf\", \"authority_sha256\": \"3442800fe4cd1f77c624aba098b9ed642138b31a122a5a1b4fac32787647a4d3\", \"root_pending\": true}\n{\"self_check\": \"passed\", \"selected\": 64, \"population_size\": 8997000, \"authority_sha256\": \"3442800fe4cd1f77c624aba098b9ed642138b31a122a5a1b4fac32787647a4d3\", \"source_ordinals_sha256\": \"f58957a9a7cfb445298a6a6a48c139a5dc8f3df1d9f7714602d4a55141ee321c\", \"metadata_only\": true, \"network_requests\": 0}\n\tCommand being timed: \"timeout 60s python3 -c import os,resource,sys; os.sched_setaffinity(0,{min(os.sched_getaffinity(0))}); resource.setrlimit(resource.RLIMIT_AS,(134217728,134217728)); os.execv(sys.executable,[sys.executable,\"scripts/select_cohere_1m_fresh64.py\",\"--self-check\"])\"\n\tUser time (seconds): 0.23\n\tSystem time (seconds): 0.02\n\tPercent of CPU this job got: 87%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.30\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 26048\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 1\n\tMinor (reclaiming a frame) page faults: 5256\n\tVoluntary context switches: 10\n\tInvoluntary context switches: 60\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 0\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "kind": "pycompile",
+      "command": "rtk proxy env PYTHONPYCACHEPREFIX=/tmp/borsuk-cohere-fresh64-pycache python3 -m py_compile scripts/select_cohere_1m_fresh64.py",
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "kind": "diffcheck",
+      "command": "rtk proxy git diff --cached --check",
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "kind": "final_diffcheck",
+      "command": "rtk proxy git diff HEAD^ HEAD --check",
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "kind": "unstaged_diff",
+      "command": "rtk proxy git diff --exit-code",
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "kind": "clean_status",
+      "command": "rtk proxy git status --porcelain",
+      "exit_code": 0,
+      "output": ""
+    }
+  ],
+  "earlier_check_attempts": [
+    {
+      "command": "rtk proxy python3 scripts/select_cohere_1m_fresh64.py --self-check",
+      "exit_code": 1,
+      "output": "Traceback (most recent call last):\n  File \"/home/rb/worktrees/borsuk-cohere-fresh64-metadata/scripts/select_cohere_1m_fresh64.py\", line 137, in <module>\n    self_check()\n    ~~~~~~~~~~^^\n  File \"/home/rb/worktrees/borsuk-cohere-fresh64-metadata/scripts/select_cohere_1m_fresh64.py\", line 35, in self_check\n    assert rank_to_ordinal(rank, INTERVALS) == want\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+    },
+    {
+      "command": "rtk proxy /usr/bin/time -v timeout 60s python3 -c 'import os,resource,runpy,sys; os.sched_setaffinity(0,{min(os.sched_getaffinity(0))}); resource.setrlimit(resource.RLIMIT_AS,(134217728,134217728)); sys.argv=[\"scripts/select_cohere_1m_fresh64.py\",\"--self-check\"]; runpy.run_path(sys.argv[0],run_name=\"__main__\")'",
+      "chunk_id": "add531",
+      "wall_time_seconds": 0.152550629,
+      "exit_code": 1,
+      "original_token_count": 499,
+      "output": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    import os,resource,runpy,sys; os.sched_setaffinity(0,{min(os.sched_getaffinity(0))}); resource.setrlimit(resource.RLIMIT_AS,(134217728,134217728)); sys.argv=[\"scripts/select_cohere_1m_fresh64.py\",\"--self-check\"]; runpy.run_path(sys.argv[0],run_name=\"__main__\")\n                                                                                                                                                                                                                         ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"scripts/select_cohere_1m_fresh64.py\", line 15, in <module>\n    from build_cohere_1m_source import BUCKET, DIMS, ROWS, SOURCE_SHA, digest\nModuleNotFoundError: No module named 'build_cohere_1m_source'\nCommand exited with non-zero status 1\n\tCommand being timed: \"timeout 60s python3 -c import os,resource,runpy,sys; os.sched_setaffinity(0,{min(os.sched_getaffinity(0))}); resource.setrlimit(resource.RLIMIT_AS,(134217728,134217728)); sys.argv=[\"scripts/select_cohere_1m_fresh64.py\",\"--self-check\"]; runpy.run_path(sys.argv[0],run_name=\"__main__\")\"\n\tUser time (seconds): 0.08\n\tSystem time (seconds): 0.01\n\tPercent of CPU this job got: 51%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.20\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 34136\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 5323\n\tVoluntary context switches: 6\n\tInvoluntary context switches: 11\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 0\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 1\n",
+      "explanation": "runpy wrapper omitted script-directory module lookup; corrected wrapper execs the actual CLI under identical limits. No implementation failure."
+    }
+  ],
+  "scope": {
+    "existing_repository_files_modified": false,
+    "only_three_new_files": true,
+    "no_control_file_changes": true,
+    "no_corpus_or_vector_or_truth_contents": true,
+    "no_ANN_GT_vector_selection": true,
+    "no_network_or_SDK_or_AWS": true,
+    "no_native_or_Cargo_or_builds": true,
+    "no_live_outputs_or_job_touches": true,
+    "no_reviews_or_children": true,
+    "no_merge_or_push": true
+  },
+  "limitations": [
+    "root_pending remains true until parent freeze; locator output is provisional metadata only",
+    "historical prior-query coverage remains explicitly incomplete",
+    "actual vector/corpus body authentication, raw/normalized duplicate audit, and fresh64 GT are parent preparation work",
+    "any downstream duplicate or exclusion failure must stop the whole fixed panel without replacement"
+  ],
+  "missing_receipt": null
+}
