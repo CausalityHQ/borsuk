@@ -1,0 +1,28 @@
+{
+  "commit": "cff929081efb636d1d161802a233b99e88258c29",
+  "base": "8aad45e1de880ce56c1ba74868afc9c4243b82ab",
+  "owned": "scripts/launch_cohere_fixed48_offered_http_spot.py",
+  "command": "python3 -B -m scripts.launch_cohere_fixed48_offered_http_spot --self-check",
+  "red_mutation_status": 2,
+  "green_status": 0,
+  "green": {
+    "checks": 38,
+    "elapsed_seconds": 31.002358825004194,
+    "fresh_cli_preflight": true,
+    "launch_authorized": false,
+    "native_or_cloud_execution": false,
+    "passed": true,
+    "peak_rss_kib": 96552,
+    "real_runtime_integration": false,
+    "runtime_fixture": "explicit temporary stub; actual combined integration remains parent-owned",
+    "source_sha256": "9a600f5f7de7276639235ea01247d770804d95d9d1f8dff86db451e785140978",
+    "user_data_bytes": 12522
+  },
+  "contract_status": 0,
+  "runtime_code_count": 81,
+  "controller_code_count": 83,
+  "contract_launch_authorized": false,
+  "frozen_admission_status": 0,
+  "clean": true,
+  "logs": "/tmp/borsuk-offered-import-order-4vwamt5h"
+}

@@ -5,6 +5,101 @@
       "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/contract.json",
       "sha256": "7f8080c17ced0e4bc3159ec8eda6e85341ae5014775b9d47da12cff3c54e9f81"
     },
+    "import-order-fix/baseline.json": {
+      "bytes": 398,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/baseline.json",
+      "sha256": "0e1856bce2fb478d6cc6db5e0a73d6b72035a2ab4a435c9bc623c14a002c13f3"
+    },
+    "import-order-fix/contract.status": {
+      "bytes": 2,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/contract.status",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "import-order-fix/contract.stderr": {
+      "bytes": 0,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/contract.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "import-order-fix/contract.stdout": {
+      "bytes": 13345,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/contract.stdout",
+      "sha256": "d06bd8b75623b1432690029002a9ae80243bdc373d218885a56cac98c20448fc"
+    },
+    "import-order-fix/frozen-admission.status": {
+      "bytes": 2,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/frozen-admission.status",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "import-order-fix/frozen-admission.stderr": {
+      "bytes": 0,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/frozen-admission.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "import-order-fix/frozen-admission.stdout": {
+      "bytes": 1139,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/frozen-admission.stdout",
+      "sha256": "4fb11b83da361445a740c185aaf35d076a19af34c91642d27551918e8dde6b7b"
+    },
+    "import-order-fix/frozen_admission.py": {
+      "bytes": 1738,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/frozen_admission.py",
+      "sha256": "b692048ecdbae87e62ba98c1c779a2d3d6b35eb63bdcf88635b057f63be56252"
+    },
+    "import-order-fix/green-selfcheck.status": {
+      "bytes": 2,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/green-selfcheck.status",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "import-order-fix/green-selfcheck.stderr": {
+      "bytes": 0,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/green-selfcheck.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "import-order-fix/green-selfcheck.stdout": {
+      "bytes": 428,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/green-selfcheck.stdout",
+      "sha256": "bd1d7650efc92b7dcad6ad4857b4e9cefb74868aef5d2bbd30479f6989f159ba"
+    },
+    "import-order-fix/prior-root-verification.json": {
+      "bytes": 4780,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/prior-root-verification.json",
+      "sha256": "f20736ca30a40f217f2a4997c1184fbafdc47012ed6f6a06d12590b41daccae9"
+    },
+    "import-order-fix/red-mutation.status": {
+      "bytes": 2,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/red-mutation.status",
+      "sha256": "53c234e5e8472b6ac51c1ae1cab3fe06fad053beb8ebfd8977b010655bfdd3c3"
+    },
+    "import-order-fix/red-mutation.stderr": {
+      "bytes": 98,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/red-mutation.stderr",
+      "sha256": "b725f344b89e1a1cc8bfaeba5dc234f31c5d5c6116e2ed4216ad6490f189d2f0"
+    },
+    "import-order-fix/red-mutation.stdout": {
+      "bytes": 0,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/red-mutation.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "import-order-fix/report.json": {
+      "bytes": 1032,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/report.json",
+      "sha256": "7be790800b0980662cac307a5e0f2f6bc882403b0541173edb36354f9255285d"
+    },
+    "import-order-fix/root-real-fixture.log": {
+      "bytes": 1139,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/root-real-fixture.log",
+      "sha256": "4fb11b83da361445a740c185aaf35d076a19af34c91642d27551918e8dde6b7b"
+    },
+    "import-order-fix/root-real-fixture.time": {
+      "bytes": 802,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/root-real-fixture.time",
+      "sha256": "b576d4d1a507f2e1f3e0a94736019445ff0d0da1bc5c84fb5fc265108f3a2f0a"
+    },
+    "import-order-fix/verify.py": {
+      "bytes": 1758,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/verify.py",
+      "sha256": "88eaf8309fc4d284f4ac0e3e1bf3dc799798b151e0fc330c35a090fe561bcb68"
+    },
     "root-real-handoff.log": {
       "bytes": 349,
       "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/root-real-handoff.log",
@@ -49,36 +144,45 @@
   "authenticated_requests": 64,
   "checks": [
     {
-      "command": "ulimit -v 262144; MALLOC_ARENA_MAX=2 /usr/bin/time -v timeout 55s python3 -B -m scripts.launch_cohere_fixed48_offered_http_spot --self-check",
+      "command": "python3 -B -m scripts.launch_cohere_fixed48_offered_http_spot --self-check",
       "exit_status": 0,
+      "fresh_default_cli_preflight": true,
       "log": {
-        "bytes": 400,
-        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/root-selfcheck.log",
-        "sha256": "6367dbfe94a5e3096c92a82adb377336c1c106e1c74232f5aae6ffd703168133"
+        "bytes": 428,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/green-selfcheck.stdout",
+        "sha256": "bd1d7650efc92b7dcad6ad4857b4e9cefb74868aef5d2bbd30479f6989f159ba"
       },
-      "resources": {
-        "bytes": 810,
-        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/root-selfcheck.time",
-        "sha256": "7f8ce17305dec5290e3e48a3738738836a934c7ca9a21f8f6327ac951de98c88"
+      "stderr": {
+        "bytes": 0,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/green-selfcheck.stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "worker_report": {
+        "bytes": 1032,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/report.json",
+        "sha256": "7be790800b0980662cac307a5e0f2f6bc882403b0541173edb36354f9255285d"
       }
     },
     {
-      "command": "bounded python3 -B stdin: TEMP actual root draft + exact controller/runtime CODE + archived HTTP asset; controller.qualify/runtime.qualify, cellify_for_campaign/reduce_cell, close_cell->checkpoint; finally remove TEMP three authorities",
+      "command": "PYTHONPATH=\"$PWD\" /usr/bin/time -v timeout 55s python3 -B docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/frozen_admission.py",
       "exit_status": 0,
+      "frozen_authorities_unchanged": true,
       "log": {
-        "bytes": 349,
-        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/root-real-handoff.log",
-        "sha256": "0a6f3be5ae4a36d2ae1b9b4f64093535405a1119c42e23e72a9773f58835b426"
+        "bytes": 1139,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/root-real-fixture.log",
+        "sha256": "4fb11b83da361445a740c185aaf35d076a19af34c91642d27551918e8dde6b7b"
       },
       "resources": {
-        "bytes": 744,
-        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/root-real-handoff.time",
-        "sha256": "77cb9e0726d501c8b18eb56f334d30732b57ac1b01555c7418e10c72e09463d1"
+        "bytes": 802,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-controller-verification/import-order-fix/root-real-fixture.time",
+        "sha256": "b576d4d1a507f2e1f3e0a94736019445ff0d0da1bc5c84fb5fc265108f3a2f0a"
       },
-      "temporary_authority_only": true
+      "temporary_controller_hash_only": true
     }
   ],
+  "fresh_source_archive_preflight_pending": true,
   "full_rust_suite_reexecuted": false,
+  "historical_original_admission": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-http/admission-a0001/disposition.json",
   "launch_authorized": false,
   "native_or_cloud_execution": false,
   "native_source_files": 399,
@@ -86,10 +190,10 @@
   "qualified": true,
   "schema": "borsuk-fixed48-offered-controller-root-verification-v1",
   "source": {
-    "bytes": 57543,
+    "bytes": 60303,
     "path": "scripts/launch_cohere_fixed48_offered_http_spot.py",
-    "sha256": "ecf17803e8ced7641128f4c023a5a123c4c14532ab6cf8f6d2dc78300fc21bea"
+    "sha256": "9a600f5f7de7276639235ea01247d770804d95d9d1f8dff86db451e785140978"
   },
-  "source_commit": "19fd31c816a442d3591a84a75d12557b7ca78229",
-  "worker_commit": "afd689986ccaeed19bc2c7d11729cb8f27852125"
+  "source_commit": "efb653ae9317da65d8e4ae63f4faeac82c02bb6f",
+  "worker_commit": "cff929081efb636d1d161802a233b99e88258c29"
 }

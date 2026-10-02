@@ -1,0 +1,12 @@
+{
+  "base": "8aad45e1de880ce56c1ba74868afc9c4243b82ab",
+  "observed_before_edits": true,
+  "qualify_exit": 0,
+  "qualify_source": "3cb4b1a58e6b22f72b9de40af7d19c9e374c1d53",
+  "fresh_cli_exit": 2,
+  "fresh_cli_stderr": "AssertionError: exact executor CODE closure\n",
+  "cold_code_count": 80,
+  "correct_runtime_code_count": 81,
+  "poisoned_runtime_code_count": 83,
+  "controller_code_count": 83
+}
