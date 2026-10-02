@@ -1,0 +1,22 @@
+# Bounded causal next gates
+
+Read-only specialist 41454a657ef04b2b, gpt-6.1-sol/xhigh, completed exit 0. No code changes or experiments.
+
+1. **Wave8: client admission failed; candidate performance remains UNMEASURED.** Diagnosed: offers 6 and 7 arrived at 750/875 ms while all six owners remained occupied. Ownership correctly extends through validation and cleanup; those cleanup intervals were only about 4–5 ms. The frozen first-control stop then censored both candidate cells and the final control. This establishes neither a wave8 regression nor a speedup. [Scheduler](/home/rb/worktrees/borsuk-prod-ready-v9/scripts/run_native_cold_offered.py:64), [closed evidence](/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/startup-wave8/paired/a0001/decision.md).
+
+   **Next gate:** freeze one new ABBA campaign at **8 offered QPS with eight owners**. Two additional owners accommodate the two consecutive censored starts without assuming either finishes within 125 ms; eight is a prospective probe, not proven sufficient. Update the scheduler ceiling, ports, ownership validation and frozen controller hashes together. Continue subsequent cells after nonfatal quality/drop failure; stop immediately on identity, resource, cleanup, termination or deadline failure.
+
+   Reuse the exact qualified wave4/wave8 binaries, sources, publication and fixed64 requests. Bound execution to four 64-offer cells, retaining the remote 8 GiB/zero-swap, CPU200%, native memory and process limits. Preserve all64 success, ≥608/640 hits, dispatch-lateness, scheduled tails, drop accounting and the 444-ms context gate. A failed cell remains FAIL; matched qualification requires all four cells to satisfy the existing attainment gates.
+
+   **Falsifier/risk:** eight owners may increase contention or still drop requests. That rejects this admission hypothesis while leaving candidate observations available. Report all-offer p90/p95/p99 and measured bracketing ratios; unsuccessful positions remain unbounded. The six-owner cgroup peak was 174,444,544 bytes—evidence of that run only, not an eight-owner memory guarantee.
+
+2. **CoHere: discovery coverage is insufficient; its geometric cause remains inferred.** Diagnosed: nomination → closure → source scoring/ranking → SQ8 → returned hits is **569 → 586 → 586 → 586 → 584**. Even perfect downstream ranking could not reach 608. Every query already selected **16 leaves**, so changing the 1.15 boundary alone cannot help. Whether additional nearby leaves recover enough missing neighbors remains untested. [Selection rule](/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk/src/semantic_unit_router.rs:1088), [closed recount](/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/cohere-quality/a0001/root-recount.json).
+
+   **Next gate:** run a **coverage-only fixed-top32 falsifier**, before changing Rust serving code. Freeze one new 64-query panel using the authenticated locator population, excluding consumed queries and the closed panel; audit raw/normalized duplicates without replacements. Construct exact FIRST1M GT100 once. Freeze both existing-rule and top32 nominations before opening truth.
+
+   Reuse authenticated router bodies where available; otherwise allow at most one generation construction with the genuine qualified builder. Adapt the existing coverage arithmetic to FIRST1M/BORSUSR2—the old tool assumes a different schema and ≤100k rows. Prospectively bound selected leaf payload to 4 MiB, nominated units/closure pages to 2048, and remote preparation/construction to 4 GiB, zero swap, two CPUs, scratch≤8 GiB and 1800 seconds.
+
+   **Falsifier/risk:** closure coverage below **608/640** rejects top32 as sufficient. Passing establishes only a discovery ceiling: source/SQ8 admission and returned ranking may lose coverage afterward. Report R100, per-query coverage, bytes and closure sizes; retain the old FAIL.
+
+Local work stays read-only on the 8 GiB/zero-swap host; retain its sustained full-memory-PSI stop rule. No files changed or experiments ran. Relevant source is unchanged from `185aa533`; current HEAD `38222c85` adds the paired closeout.
+
