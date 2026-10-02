@@ -1,0 +1,42 @@
+{
+  "artifacts": {
+    "archive-freeze.json": {
+      "bytes": 141,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-http/production-preflight-a0002/archive-freeze.json",
+      "sha256": "ea41fa985c437568c9d01a32f94210c7c4c0eddd13cc663fdbf00f166c118642"
+    },
+    "archive-freeze.time": {
+      "bytes": 751,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-http/production-preflight-a0002/archive-freeze.time",
+      "sha256": "12c232365ab06a2c3a1efcfe3ed5734225591c78b0e15bc3489ac238d1632dc7"
+    },
+    "preflight.log": {
+      "bytes": 602,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-http/production-preflight-a0002/preflight.log",
+      "sha256": "6c848cff2a7fbf95bee9cd6bd70e770a32e65d9846823439d85925165e1ba45b"
+    },
+    "preflight.time": {
+      "bytes": 751,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-http/production-preflight-a0002/preflight.time",
+      "sha256": "998eb57073dab2dd96b3727f36e7d7f21c1d69fe3ec293bcf2914e76cbbc23a0"
+    }
+  },
+  "binary_sha256": "039e8d06e60637302f2c9d61d4f124310727bff67aed89b496124715fd9d108f",
+  "command": "bounded python3 -B fresh interpreter: launch_cohere_fixed48_offered_http_spot.preflight(Path(\".\"))",
+  "config_sha256": "1bf2dc272ff7dcbcfdd939c8c4eade1de8e21ab2d4ae316b5aab9f2a81de6d11",
+  "controller_code_count": 83,
+  "ec2_launched": false,
+  "elapsed_seconds": 41.121873189054895,
+  "exit_status": 0,
+  "fresh_actual_production_preflight": true,
+  "native_calls": 0,
+  "native_source_file_count": 399,
+  "original_session": 37573,
+  "passed": true,
+  "performance_measured": false,
+  "runtime_code_count": 81,
+  "schema": "borsuk-fixed48-offered-production-preflight-v1",
+  "scientific_status": "UNMEASURED",
+  "source_archive_sha256": "d6ff2351d5cb04d090e51053250599bea1c5f62335e8af65219044146d0b910f",
+  "source_commit": "0884d498a61b72394b7210de3cd8d0ac8e006bf9"
+}
