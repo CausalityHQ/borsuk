@@ -1,28 +1,7 @@
 {
-  "schema": "borsuk-cohere-fixed48-retained-cold-http-v1",
+  "schema": "borsuk-cohere-fixed48-cold-http-spot-v1",
   "authority_pending": true,
-  "rows": 1000000,
-  "dimensions": 768,
-  "queries": 64,
-  "k": 10,
-  "publication_top_k": 100,
-  "concurrency": 1,
-  "server_query_slots": 4,
-  "region": "eu-central-1",
-  "native_cpu_affinity": [
-    0,
-    1,
-    2,
-    3
-  ],
-  "client_cpu_affinity": [
-    4,
-    5
-  ],
-  "credential_protocol": "instance-imdsv2",
-  "selected_sha256": "dfe569e0198f35d690e5aa6a248aa8eee73b6d59a569b194729368e84aa2f61c",
-  "bucket": "borsuk-bench-453182569524-euc1",
-  "namespace_prefix": "research/semantic-router/20261002/fixed48-cold-a0001/serving",
+  "execution_source": null,
   "code_sha256": {
     "crates/borsuk/src/semantic_unit_router.rs": "3ae09d9ff5b8c2a5e9a5151878a9e649c3669db923a2da66623c676ea0b7bb2f",
     "crates/borsuk/src/sq8_source.rs": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795",
@@ -32,6 +11,7 @@
     "scripts/check_native_metadata_ranges_build.py": "da48c53562220026c8024ba2400dca2ba897aa12d49c3e27c3c2fb40b9f0770e",
     "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
     "scripts/check_native_semantic_concurrency.py": "9cb0f018689496f6c2bea48d993a99e64f3f3c9b3850a899ef2c927b75ba83e5",
+    "scripts/check_native_semantic_metadata_cold.py": "19c6a1d5ecde151bf8e3d830a1e1a4b498273b9e550ad5ea67e74aa9dffc6491",
     "scripts/check_native_semantic_router_stats.py": "d1fb970c0ab6ec98ec5311204a54277180631116d48a29a564ed3bbd68e5c5c2",
     "scripts/check_native_startup_build.py": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52",
     "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
@@ -40,6 +20,7 @@
     "scripts/check_semantic_binary_coverage.py": "26c7127593d0e477cc9fff93111632c5c57431737d6be070e173cc5303f5f22a",
     "scripts/check_semantic_router_coverage.py": "221695c725d79dfbc7f0ac3c2a4bd4e46445fc32628a1fd989eb328270356ff3",
     "scripts/evaluate_semantic_frozen_diagnostics.py": "ccba9e39f78bdfd39aad1ddef693251ca97f7d84f51418a3bafd9b2722279546",
+    "scripts/launch_cohere_fixed48_cold_http_spot.py": "e6787ffea94f2112b8f1beca30b36af82315ee45827fb62e42e2cebb6f72f442",
     "scripts/launch_cohere_fixed48_fresh_scientific_spot.py": "11b272c142c95bdac3efa8e7e26e399e21122b0baf3efefc6cbcba93f19fcd9c",
     "scripts/launch_cohere_semantic_1m_preparation_spot.py": "86c5bc52f52a05cb75c05b2feb4fd3a905a67ff053f51a44b34e6349efeee149",
     "scripts/launch_cohere_semantic_artifact_reproduction_spot.py": "aa6fd1bd9dac7f659e1d9be305dd6df445a6391301ceeff5ec914bcc1e4b2c12",
@@ -50,6 +31,7 @@
     "scripts/launch_native_semantic_1m_cold_spot.py": "e39f44fc0b6520009d80e737a83cb75e8313310fd40f9a847de9ad070c0a910e",
     "scripts/launch_native_semantic_1m_quality_spot.py": "5c4c8808c3671f5e5dfa000e902e662135dfab02f271a8b5debd2b283703425d",
     "scripts/launch_native_semantic_fresh_panel_spot.py": "f7b4a664adc4debf42e9d2dc678fa3cb128334e207255b0378d3c8e853c7a175",
+    "scripts/launch_native_semantic_metadata_cold_spot.py": "f87b5f61af16e422f052bf7ef1265c5b5e637d4819f2cdce7875b6a13d4fddf7",
     "scripts/launch_native_semantic_panel_ids_spot.py": "e232d6433b9a8e4efd233bf45206b15dcffc87c96a75d2b4e85997ecced7b387",
     "scripts/launch_native_semantic_router_cold_spot.py": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180",
     "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
@@ -79,9 +61,12 @@
     "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
     "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
     "scripts/run_native_semantic_1m_cold.py": "c120317bbb19feba792146fc6d3ea58312d07bcd876b2f86dde9158dffcef0ee",
+    "scripts/run_native_semantic_1m_offered.py": "7cf8cb1a82cc2e184238f613d2354dd4f0e3a121619a8099074cfafd5d469187",
     "scripts/run_native_semantic_1m_quality.py": "d7a0407a0de0e20c01072b4ec20c41740bd13ea791cf7816b85dcc20f52e4b74",
+    "scripts/run_native_semantic_metadata_cold.py": "15bfd05a21916555d64b64704792b87485b661a6ab615d3f5fb48536961090d7",
     "scripts/run_native_semantic_router_cold.py": "9fe9e968d99a926bdfc15fae0fc0fadd15d44ed1242b6d4fa2e391c1a3b95f88",
     "scripts/run_native_source_frontier_1m.py": "fe91b3afbd95648fa2d6de371ae4fa3b31d549df873496010a643f365bff450d",
+    "scripts/run_native_startup_wave8_paired.py": "895904415117deb90365746921bfaa2e9900b7ff6299f739e076a9f5da1b9692",
     "scripts/run_native_union_cold.py": "6a4bbd483c28432587b8ee9c92e72c679fea73bd65af1a773ee255e67606f7d9",
     "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
     "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6",
@@ -99,127 +84,9 @@
     "scripts/v98_hierarchical_row_router.py": "ce70105ef2a5b75b25147f00dd3d6965e8d52c34a5278ca1267288c0e28e424c",
     "scripts/v99_ranked_gap_range_router.py": "ec8ffc2aaf1376a7d6c3f8228429ec6c37117d0223ebaf9a775ddb4249d29079"
   },
-  "execution_source": null,
-  "asset_manifest": {
-    "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/asset-manifest.json",
-    "bytes": 13202,
-    "sha256": "a4694cc31ce1d8548be3888fb704cc0cf772cbde35ed832d26c624ffb5d44746"
-  },
-  "proofs": {
-    "preregistration": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http-preregister.md",
-      "bytes": 5144,
-      "sha256": "621a10f465c6108edd2d52edf69bb38a9f6a2eb8b3e185d31538962dd10e61f9"
-    },
-    "admission_model": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-admission-model.json",
-      "bytes": 1789,
-      "sha256": "b5f48b08bf4c1ee4eda88b8b770959483dce0d5808bd75803cb11e80472f8537"
-    },
-    "historical_validation": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/scientific-execution/python-replay-a0002/closed-thread-verification/root-historical-validation.json",
-      "bytes": 1333,
-      "sha256": "f31cee923c373f7fb7c0ef446d8d61b93120078a25a04cdd509fe54dca50422c"
-    },
-    "scientific_terminal": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/scientific-execution/python-replay-a0002/a0002/aws-terminal.json",
-      "bytes": 24474,
-      "sha256": "8c660aed79c910352e4b1f6455b93bf42d070ec85d46b594789fa49f3f6d024a"
-    },
-    "scientific_launch": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/scientific-execution/python-replay-a0002/a0002/aws-launch.json",
-      "bytes": 353,
-      "sha256": "5fa6e92caaadf4658e835e43f6032906dfd237e08d96ae23e7d20c2f0b2f02ca"
-    },
-    "scientific_receipt": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/scientific-execution/python-replay-a0002/a0002/screen/measurement-receipt.json",
-      "bytes": 1293,
-      "sha256": "7a8f51d33b304ea1a2f160dd3da2901d3a73f33c4282ee6d117edbe506836d23"
-    },
-    "scientific_marker": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/scientific-execution/python-replay-a0002/a0002/screen/COMPLETE.json",
-      "bytes": 6798,
-      "sha256": "a70a51da4981e6ec66e1c43b1aecbea17c47c7b0424602084ad693c3e683142a"
-    },
-    "scientific_decision": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/scientific-execution/python-replay-a0002/a0002/screen/decision.json",
-      "bytes": 1039,
-      "sha256": "b8e0ce75ba3ba51a29acff94f05eeed89238a93ed815ea3d32eea18679450ff2"
-    },
-    "scientific_resources": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/scientific-execution/python-replay-a0002/a0002/screen/score-resources.json",
-      "bytes": 341,
-      "sha256": "7dfbe2d4a1e358c8ad5dac83567d37023d5dcffe8106a3516b324903e45073bd"
-    },
-    "scientific_original_root": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/scientific-execution/python-replay-a0002/a0002/screen/original-generation-root.json",
-      "bytes": 34656,
-      "sha256": "a5403863f20f4b0ac384f7a268fe83297f61e77771ef348be1ebd0e1eb65b6fb"
-    },
-    "panel": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/panel-tools/panel.json",
-      "bytes": 79074,
-      "sha256": "a137588d5e17703610d9142f468e75362d1aac61d84a0b72f7a8dbcbd1373392"
-    },
-    "retained_terminal": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/artifact-reproduction/a0002/aws-terminal.json",
-      "bytes": 6499,
-      "sha256": "afd23c4d99a5f0b2359c3c1861530b144aa6e19b01f842f0d6f71df945e770b3"
-    },
-    "retained_collection": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/artifact-reproduction/a0002/collection-receipt.json",
-      "bytes": 14946,
-      "sha256": "72074b52e748d1994c94f3b22e789eed8345285cac6c7550b3edcd1308c41eee"
-    },
-    "retained_root": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/artifact-reproduction/a0002/root-verification.json",
-      "bytes": 419,
-      "sha256": "ad49dfb6a003dbfdca6022a60910231121b3742616d6291675a9c0bc18d4b98f"
-    },
-    "retained_config": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/artifact-reproduction/a0002/screen/config.json",
-      "bytes": 15660,
-      "sha256": "a6274a70e4ed55b8c38c1c5a5789bffc0c6437db549abb28159eca015b85a27c"
-    },
-    "retained_marker": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/artifact-reproduction/a0002/screen/COMPLETE.json",
-      "bytes": 4007,
-      "sha256": "2faccd4bccd4c9f5055bc45cd8e794fe80d8aab08deed91de9a85c1cf901e68f"
-    },
-    "ordinal_check": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/artifact-reproduction/a0002/screen/sq8-ordinal-check.json",
-      "bytes": 297,
-      "sha256": "521593b34791cbf9979cf3d2b1a227f36936f0815e422267ffffce1658887fb1"
-    },
-    "native_terminal": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/implementation-gates/a0001/aws-terminal.json",
-      "bytes": 3239,
-      "sha256": "12db9bf44e4a5cb25190082f539cfa9319b2c13292d2bbbc7524061f7aadd67b"
-    },
-    "native_launch": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/implementation-gates/a0001/aws-launch.json",
-      "bytes": 357,
-      "sha256": "138a6be65b9215a6e442b58af99b87ac24ce8c7e4463fafae14845d60e15c067"
-    },
-    "native_root": {
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/implementation-gates/a0001/root-verification.json",
-      "bytes": 476,
-      "sha256": "d8b1a0b8cb3fa3249178424571e8c402c476fb42fb46cad88bb4814c2bd04949"
-    }
-  },
-  "resources": {
-    "shared_memory_bytes": 12884901888,
-    "swap_bytes": 0,
-    "native_memory_bytes": 2147483648,
-    "publisher_memory_bytes": 2147483648,
-    "native_rlimit_as_bytes": 4294967296,
-    "scratch_bytes": 17179869184,
-    "cpu_quota_percent": 200,
-    "tasks_max": 512,
-    "threads": 2,
-    "publication_limit_seconds": 900,
-    "cold_limit_seconds": 900,
-    "service_limit_seconds": 2400,
-    "output_reserve_bytes": 67108864
+  "runtime_config": {
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/config.json",
+    "bytes": 15622,
+    "sha256": "4739a0d664d91600183f5d2e54c7f6dc48b48c864bc7bc15a1c3f0c38e7e0ff1"
   }
 }
