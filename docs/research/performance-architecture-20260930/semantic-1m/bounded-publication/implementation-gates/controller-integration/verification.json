@@ -1,0 +1,17 @@
+{
+  "implementation_commit": "3ef6dcfd30bceb5cfc5c030cb9d9a272baf3a3f2",
+  "integration_commit": "6c2724e8",
+  "native_execution_count": 0,
+  "native_qualification_pending": true,
+  "owned_file_and_closed_worker_log_authentication": true,
+  "root_full_mock_check": {
+    "descendants_remaining": false,
+    "exit_status": 124,
+    "log_bytes": 0,
+    "original_session": 52012,
+    "timeout_seconds": 55
+  },
+  "root_narrow_protocol_and_preflight_exit_status": 0,
+  "root_seven_stage_parser_and_missing_named_cap_exit_status": 0,
+  "schema": "borsuk-bounded-publication-controller-integration-v1"
+}
