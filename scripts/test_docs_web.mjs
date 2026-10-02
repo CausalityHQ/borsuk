@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -393,100 +393,61 @@ async function main() {
     /routing pages\/query/,
   );
 
-  const docsHtml = await readFile(join(webRoot, "docs.html"), "utf8");
-  assert.match(docsHtml, /Search Budgets/, "docs page should explain search knobs as budgets");
-  assert.match(
-    docsHtml,
-    /Segment payload budget/,
-    "docs page should explain max_segments in plain language",
-  );
-  assert.match(
-    docsHtml,
-    /Routing metadata lookahead/,
-    "docs page should explain routing_page_overfetch in plain language",
-  );
-  assert.match(
-    docsHtml,
-    /Candidate rows per segment/,
-    "docs page should explain max_candidates_per_segment in plain language",
-  );
-  assert.match(
-    docsHtml,
-    /Fast S3 Writes/,
-    "docs page should explain the high-scale generated-id write path",
-  );
-  assert.match(
-    docsHtml,
-    /Read-Shaped Leaves/,
-    "docs page should explain compaction after bulk append",
-  );
-  assert.match(
-    docsHtml,
-    /Paged Readers/,
-    "docs page should explain paged routing for large S3 readers",
-  );
-  assert.match(
-    docsHtml,
-    /S3 Proof/,
-    "docs page should separate local attempts from real S3 evidence",
-  );
-  assert.doesNotMatch(
-    docsHtml,
-    /100M read probe/,
-    "default docs should keep deep research evidence out of the production guide",
-  );
-  assert.match(
-    docsHtml,
-    /href="research\.html"/,
-    "default docs should route deep evidence to the research page",
-  );
-
-  // Wayfinding: a sticky table of contents and a start-here quickstart.
-  assert.match(docsHtml, /class="skip-link"/, "docs page should offer a skip link");
-  assert.match(
-    docsHtml,
-    /data-doc-toc/,
-    "docs page should render an on-this-page table of contents",
-  );
-  assert.match(
-    docsHtml,
-    /class="doc-toc"[\s\S]*href="#quickstart"[\s\S]*href="#evidence"[\s\S]*href="research\.html"/,
-    "the TOC should link quickstart, the production contract, and research",
-  );
-  assert.match(docsHtml, /id="quickstart"/, "docs page should have a quickstart section");
-
-  // The example ladder must be present and filled from the CI-run sources — an
-  // empty `<code data-ladder>` slot means the sync generator did not run.
-  for (const rung of [
-    "hello",
-    "report",
-    "filter",
-    "upsert",
-    "hybrid",
-    "s3",
-    "tuning",
-    "production",
-  ]) {
-    for (const lang of ["rust", "python", "typescript"]) {
-      const slot = new RegExp(`<code data-ladder="${rung}:${lang}">([\\s\\S]*?)</code>`);
-      const match = docsHtml.match(slot);
-      assert.ok(match, `docs page is missing the ${rung}:${lang} ladder slot`);
-      assert.ok(
-        match[1].trim().length > 0,
-        `ladder slot ${rung}:${lang} is empty — run scripts/sync_docs_examples.mjs`,
-      );
+  // Current public pages use static copy; archived chart behavior is tested above.
+  const publicPages = new Map();
+  for (const name of ["index.html", "docs.html", "research.html"]) {
+    const html = await readFile(join(webRoot, name), "utf8");
+    publicPages.set(name, html);
+    assert.match(html, /Experimental · Unreleased/, `${name} must show experimental status`);
+    assert.match(html, /<title>[^<]*Experimental/, `${name} title must mark the library experimental`);
+    assert.match(html, /class="skip-link"/, `${name} must offer a skip link`);
+    assert.match(html, /two-bit SOURCE/, `${name} must describe the current nomination path`);
+    assert.match(html, /SQ8/, `${name} must describe quantized range scoring`);
+    assert.doesNotMatch(html, /src="app\.js/, `${name} must not promote archived charts`);
+    const visible = html.replace(/<[^>]+>/g, " ");
+    assert.doesNotMatch(visible, /\b(?:V\d+|v\d+|TurboQuant|pq-scan|100M|GCS|Azure|production-ready|lossless reranking)\b/i,
+      `${name} must not render stale routes or unsupported claims`);
+    for (const key of ["description", "og:title", "og:description", "twitter:title", "twitter:description"]) {
+      assert.match(html, new RegExp(`<meta (?:name|property)="${key}" content="[^"]*[Ee]xperimental`),
+        `${name} must mark ${key} experimental`);
     }
   }
-  assert.match(
-    docsHtml,
-    /<code data-ladder="hello:rust">[\s\S]*BorsukIndex::create/,
-    "the Rust hello rung should show create",
-  );
-  assert.match(
-    docsHtml,
-    /<code data-ladder="production:python">[\s\S]*requests\.total/,
-    "the Python production rung should show request-rate monitoring",
-  );
+  const docsHtml = publicPages.get("docs.html");
+  assert.match(docsHtml, /Native Rust API/);
+  assert.match(docsHtml, /mutation snapshots and recovery/);
+  assert.match(docsHtml, /shared local filesystem/);
+  assert.match(docsHtml, /separate create\/add\/search APIs/);
+  assert.match(docsHtml, /href="research\.html#latest"/);
+  const indexHtml = publicPages.get("index.html");
+  assert.match(indexHtml, /href="docs\.html"/);
+  assert.match(indexHtml, /href="research\.html/);
+  assert.match(researchHtml, /64 sealed queries/);
+  assert.match(researchHtml, /96\.71875%/);
+  assert.match(researchHtml, /541\.10 ms/);
+  assert.match(researchHtml, /7\.597044/);
+  assert.match(researchHtml, /Sustained capacity/);
+  assert.match(researchHtml, /unmeasured/);
+
+  // Verify every local page, asset and fragment, plus repository-backed links.
+  for (const [name, html] of publicPages) {
+    for (const match of html.matchAll(/(?:href|src)="([^"]+)"/g)) {
+      const link = match[1];
+      const url = new URL(link, `https://docs.invalid/${name}`);
+      if (url.hostname === "github.com" && url.pathname.startsWith("/CausalityHQ/borsuk/")) {
+        const [, , , kind, revision, ...parts] = url.pathname.split("/");
+        if (kind === "blob" || kind === "tree") {
+          assert.ok(revision === "main" || /^[a-f0-9]{40}$/.test(revision), `invalid source revision: ${link}`);
+          await stat(join(root, decodeURIComponent(parts.join("/"))));
+        }
+      } else if (url.hostname === "docs.invalid") {
+        const target = decodeURIComponent(url.pathname.slice(1));
+        const targetText = await readFile(join(webRoot, target), "utf8");
+        if (url.hash) {
+          assert.ok(targetText.includes(`id="${decodeURIComponent(url.hash.slice(1))}"`), `${name} has a broken fragment: ${link}`);
+        }
+      }
+    }
+  }
 }
 
 function assertRenderedChart(chart, label) {

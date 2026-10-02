@@ -3,560 +3,99 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>BORSUK — vector search that lives in your object storage</title>
-    <meta
-      name="description"
-      content="BORSUK is an embedded TurboQuant vector-search library over local or S3-compatible object storage, with bounded concurrency, exact reranking, and published recall/latency/resource evidence."
-    />
+    <title>BORSUK — Experimental vector search over object storage</title>
+    <meta name="description" content="BORSUK is an experimental Rust vector-search library with authenticated object-store reads and source-linked development evidence." />
+    <meta property="og:title" content="BORSUK — Experimental vector search" />
+    <meta property="og:description" content="BORSUK is an experimental Rust vector-search library with authenticated object-store reads and source-linked development evidence." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="BORSUK — Experimental vector search" />
+    <meta name="twitter:description" content="BORSUK is an experimental Rust vector-search library with authenticated object-store reads and source-linked development evidence." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Hanken+Grotesk:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&amp;family=Hanken+Grotesk:wght@400;500;600;700&amp;display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="landing.css?v=2" />
     <script type="module" src="hero3d.js?v=4"></script>
   </head>
   <body>
-    <a class="skip-link" href="#start">Skip to quickstart</a>
-
+    <a class="skip-link" href="#start">Skip to the code</a>
     <header class="nav">
-      <a class="brand" href="#top" aria-label="BORSUK home">
-        <span class="brand-mark" aria-hidden="true"></span>
-        BORSUK
-      </a>
+      <a class="brand" href="#top" aria-label="BORSUK home"><span class="brand-mark" aria-hidden="true"></span>BORSUK</a>
       <nav class="nav-links" aria-label="Primary">
         <a href="#how">How it works</a>
-        <a href="#compare">Compare</a>
-        <a href="#pricing">Pricing</a>
         <a href="#evidence">Evidence</a>
         <a href="docs.html">Docs</a>
         <a href="research.html">Research</a>
         <a href="https://github.com/CausalityHQ/borsuk">GitHub</a>
       </nav>
-      <a class="btn btn-primary nav-cta" href="#start">Get started</a>
+      <a class="btn btn-primary nav-cta" href="#start">Explore the code</a>
     </header>
-
     <main id="top">
-      <!-- HERO ------------------------------------------------------------ -->
       <section class="hero">
         <div class="hero-copy">
-          <p class="eyebrow">Nearest-neighbour search on object storage</p>
-          <h1>Vector search that lives in your bucket.</h1>
+          <p class="eyebrow">Experimental · Unreleased</p>
+          <h1>Vector search over object storage.</h1>
           <p class="name-gloss"><strong>B</strong>lob-<strong>O</strong>riented <strong>R</strong>etrieval with <strong>S</strong>egmental <strong>U</strong>nified <strong>K</strong>NN</p>
-          <p class="lede">
-            BORSUK keeps the entire index as immutable objects — standard Parquet
-            tables plus a compact per-segment binary vector sidecar — in the S3,
-            MinIO, SeaweedFS, GCS, or Azure storage you control. Search executes
-            inside your application process with bounded CPU/RAM and no separate
-            BORSUK database cluster.
-          </p>
-          <p class="lede lede-dropin">
-            Migration adapters preserve common Pinecone, Qdrant, turbopuffer,
-            Chroma, and Amazon S3 Vectors call shapes. They are compatibility
-            aids, not promises of identical control-plane or consistency behavior.
-            <a href="docs.html#drop-in">See the adapters →</a>
-          </p>
+          <p class="lede">BORSUK is a Rust library that runs search in your process. The current native path opens a small authenticated semantic directory, reads selected centroid leaves, shortlists two-bit SOURCE candidates, and scores SQ8 vector ranges.</p>
+          <p class="lede lede-dropin">APIs, defaults, and stored formats can change. Local synthetic fixtures and S3 measurements cover specific operations. Python and TypeScript bindings have separate experimental API surfaces.</p>
           <div class="hero-actions">
-            <a class="btn btn-primary" href="#start">Get started</a>
-            <a class="btn btn-ghost" href="docs.html">Read the docs</a>
+            <a class="btn btn-primary" href="#start">Explore the code</a>
+            <a class="btn btn-ghost" href="research.html">Read the evidence</a>
           </div>
-          <dl class="proof" aria-label="Selected full-corpus AWS production evidence">
-            <div>
-              <dt>new layout qualified</dt>
-              <dd>0 <span>/ 6</span></dd>
-            </div>
-            <div>
-              <dt>exact-mode contract</dt>
-              <dd>1.000</dd>
-            </div>
-            <div>
-              <dt>AWS campaign</dt>
-              <dd>running</dd>
-            </div>
-            <div>
-              <dt>default RAM cap</dt>
-              <dd>512 <span>MiB</span></dd>
-            </div>
-            <p class="proof-note">2026-07-21 · fixed-width cell-aligned exact-page rebuilds are running · earlier v8 latency rows are retained as historical evidence, not carried across the format change</p>
-          </dl>
         </div>
         <div class="hero-stage">
-          <div class="hero-canvas" data-hero3d></div>
-          <p class="hero-caption">
-            Vectors grouped into global semantic cells, independent of bounded
-            physical segments. A query pages only the selected PQ cells and
-            exact-reranks lossless rows.
-          </p>
+          <div class="hero-canvas" data-hero3d aria-hidden="true"></div>
+          <p class="hero-caption">Illustration of grouped vectors. The native reader fetches selected centroid, SOURCE, and SQ8 ranges.</p>
         </div>
       </section>
-
-      <!-- TRUST STRIP ----------------------------------------------------- -->
-      <section class="trust" aria-label="Compatibility">
-        <p class="trust-label">Runs on the storage you have</p>
-        <ul class="trust-row">
-          <li>AWS S3</li>
-          <li>MinIO</li>
-          <li>SeaweedFS</li>
-          <li>Google Cloud Storage</li>
-          <li>Azure Blob</li>
-          <li>Local disk</li>
-        </ul>
-        <p class="trust-label">One Rust engine · native bindings</p>
-        <ul class="trust-row">
-          <li>Rust</li>
-          <li>Python</li>
-          <li>TypeScript</li>
-        </ul>
-      </section>
-
-      <!-- PROBLEM / SOLUTION --------------------------------------------- -->
-      <section class="split" id="why">
-        <div class="split-head">
-          <p class="kicker">Why BORSUK</p>
-          <h2>Serving vector search shouldn't mean renting RAM by the gigabyte.</h2>
-          <p class="measure">
-            The usual path stands up a dedicated search service. BORSUK embeds
-            search in the client process and moves durable index state to local or
-            object storage. That removes a separate database tier; it does not
-            remove the client CPU, RAM, disk cache, or operational work.
-          </p>
-        </div>
-        <div class="versus">
-          <article class="versus-col versus-old">
-            <h3>In-memory ANN service</h3>
-            <ul>
-              <li>Whole index pinned in cluster RAM</li>
-              <li>Capacity sized to the dataset, not the traffic</li>
-              <li>A separate tier to run, patch, and page</li>
-              <li>Re-index and re-shard to grow</li>
-            </ul>
-          </article>
-          <article class="versus-col versus-new">
-            <h3>BORSUK on object storage</h3>
-            <ul>
-              <li>Index is immutable Parquet + vector sidecars in the bucket</li>
-              <li>A query streams only the pages it needs</li>
-              <li>No always-on database tier between queries</li>
-              <li>Append segments; compaction runs in the background</li>
-            </ul>
-          </article>
-        </div>
-      </section>
-
-      <!-- FEATURES -------------------------------------------------------- -->
-      <section class="features" id="features">
-        <article class="feature feature-lead">
-          <div class="feature-lead-copy">
-            <p class="kicker">Memory</p>
-            <h2>Working memory is bounded and measured.</h2>
-            <p class="measure">
-              V8 assigns vectors to global coarse-PQ cells independently of
-              ingest checkpoints, consumes code objects in fixed 32-chunk waves,
-              and coalesces shortlisted vectors into bounded standard Arrow IPC
-              record-batch reads.
-              The default admits four searches, caps build workers at four,
-              overlaps S3 waits with one bounded 24-thread small-stack I/O pool,
-              and materializes record IDs only for final top-k rows. Fresh
-              v8 AWS rows are published only after source rebuilds and repeats.
-            </p>
-            <a class="text-link" href="docs.html#memory-tricks">How memory stays low →</a>
-          </div>
-          <figure class="ram-flat" aria-label="Historical GIST CPU, memory, disk, and cache telemetry">
-            <img src="assets/benchmarks/resources/production-current-gist-960-rep-3.svg" alt="Historical v6 GIST resource timeline showing CPU, process RSS, disk I/O, and cache footprint" />
-            <figcaption class="ram-flat-note">
-              GIST-960 · historical v6 evidence · fresh v8 qualification is in progress
-            </figcaption>
-          </figure>
-        </article>
-
-        <article class="feature">
-          <p class="kicker">Answers</p>
-          <h3>Exact when you ask, honest when you don't.</h3>
-          <p>
-            Exact mode returns the true nearest neighbours; every approximate
-            result is re-ranked on full vectors. The production leaf mode is
-            <strong>pq-scan</strong> — paged, graph-free, and bounded on
-            memory. The graph-backed modes <em>vamana-pq</em> and <em>hybrid</em>
-            are experimental.
-          </p>
-        </article>
-
-        <article class="feature">
-          <p class="kicker">Writes</p>
-          <h3>Incremental, not rebuild-the-world.</h3>
-          <p>
-            Inserts append immutable segments. Deletes tombstone and reclaim
-            lazily. Oversized bubbles split, sparse ones merge, and compaction is
-            sharded per segment so many nodes maintain the index in parallel.
-          </p>
-        </article>
-
-        <article class="feature">
-          <p class="kicker">Observability</p>
-          <h3>Every query reports what it touched.</h3>
-          <p>
-            Bytes read, segments searched, routing pages, cache hits, and
-            object-store requests come back on the report — so tuning is a
-            measurement, not a guess.
-          </p>
-        </article>
-      </section>
-
-      <!-- HOW IT WORKS ---------------------------------------------------- -->
       <section class="how" id="how">
-        <div class="split-head">
-          <p class="kicker">How it works</p>
-          <h2>Route to semantic cells, range-read compact codes, then rerank losslessly.</h2>
-        </div>
+        <div class="split-head"><h2>Read selected data, then score the shortlist.</h2></div>
         <ol class="steps">
-          <li>
-            <span class="step-num">1</span>
-            <h3>Route</h3>
-            <p>
-              A persisted adaptive IVF descriptor selects flat, product, or
-              hierarchical semantic cells independently of ingest segments.
-            </p>
-          </li>
-          <li>
-            <span class="step-num">2</span>
-            <h3>Read</h3>
-            <p>
-              Selected rotated product-PQ slices are range-read from packed
-              immutable bundles in 32 MiB/query waves; adjacent slices share a GET.
-            </p>
-          </li>
-          <li>
-            <span class="step-num">3</span>
-            <h3>Re-rank</h3>
-            <p>
-              Only the bounded shortlist fetches fixed-width lossless vectors;
-              IDs and generations are materialized later for the final top-k.
-            </p>
-          </li>
+          <li><span class="step-num">1</span><h3>Select centroid leaves</h3><p>A small authenticated semantic directory identifies leaves to read for the query.</p></li>
+          <li><span class="step-num">2</span><h3>Shortlist candidates</h3><p>Two-bit SOURCE records nominate candidates under explicit read and scratch limits.</p></li>
+          <li><span class="step-num">3</span><h3>Score SQ8 ranges</h3><p>Generation-pinned ranges supply quantized vectors for candidate scoring and logical-ID results.</p></li>
         </ol>
-        <a class="text-link" href="docs.html#visualization">Watch a query run in 3D →</a>
+        <p class="measure">This is approximate retrieval. SQ8 scoring does not guarantee the exact nearest neighbors in the original vectors.</p>
+        <a class="text-link" href="docs.html">Read the native API guide →</a>
       </section>
-
-      <!-- COMPARISON ------------------------------------------------------ -->
-      <section class="compare" id="compare">
-        <div class="split-head">
-          <p class="kicker">Where BORSUK fits</p>
-          <h2>A different point in the design space.</h2>
-          <p class="measure">
-            Most vector search either pins the index in RAM, memory-maps it from
-            local SSD, or hides it behind a managed service. BORSUK keeps it in
-            object storage and stays a source-available library you run in your own process.
-            The table compares design and deployment models — it is not a
-            head-to-head latency benchmark, since these systems don't run on the
-            same hardware.
-          </p>
-        </div>
-
-        <div class="compare-table">
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">System</th>
-                <th scope="col">Kind</th>
-                <th scope="col">Index lives in</th>
-                <th scope="col">Resident RAM</th>
-                <th scope="col">Updates</th>
-                <th scope="col">Open / self-run</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr class="is-borsuk">
-                <th scope="row">BORSUK</th>
-                <td>Library</td>
-                <td>Object storage (S3, GCS, Azure…)</td>
-                <td>193–759 MiB peak on selected AWS profiles</td>
-                <td>Insert · delete · split · merge</td>
-                <td>Source-available BUSL 1.1, in-process</td>
-              </tr>
-              <tr>
-                <th scope="row">SPFresh <span class="tag">paper · SOSP '23</span></th>
-                <td>Research system</td>
-                <td>Local NVMe SSD</td>
-                <td>Working set</td>
-                <td>In-place incremental (LIRE)</td>
-                <td>Open prototype</td>
-              </tr>
-              <tr>
-                <th scope="row">DiskANN / Vamana <span class="tag">paper</span></th>
-                <td>Research + library</td>
-                <td>Local SSD + RAM</td>
-                <td>Graph kept resident</td>
-                <td>Streaming (FreshDiskANN)</td>
-                <td>Open, self-host</td>
-              </tr>
-              <tr>
-                <th scope="row">Annoy <span class="tag">OSS</span></th>
-                <td>Library</td>
-                <td>Memory-mapped local files</td>
-                <td>Mapped file pages</td>
-                <td>Immutable after build</td>
-                <td>Open, in-process</td>
-              </tr>
-              <tr>
-                <th scope="row">FAISS / hnswlib <span class="tag">OSS</span></th>
-                <td>Library</td>
-                <td>RAM (mostly)</td>
-                <td>Whole index resident</td>
-                <td>Incremental add (hnswlib)</td>
-                <td>Open, in-process</td>
-              </tr>
-              <tr>
-                <th scope="row">turbopuffer <span class="tag">commercial</span></th>
-                <td>Managed service</td>
-                <td>Object storage + hot cache</td>
-                <td>Managed for you</td>
-                <td>Yes</td>
-                <td>Closed SaaS</td>
-              </tr>
-              <tr>
-                <th scope="row">Amazon S3 Vectors <span class="tag">commercial</span></th>
-                <td>Managed (AWS)</td>
-                <td>S3-native</td>
-                <td>Managed for you</td>
-                <td>Yes</td>
-                <td>Closed, AWS-only</td>
-              </tr>
-              <tr>
-                <th scope="row">Pinecone <span class="tag">commercial</span></th>
-                <td>Managed service</td>
-                <td>Service (RAM / SSD)</td>
-                <td>Managed for you</td>
-                <td>Yes</td>
-                <td>Closed SaaS</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <p class="compare-note">
-          <strong>The honest trade-off.</strong> An in-memory library answers a
-          query without touching a network, and a managed service hides operations
-          entirely — those are real advantages. BORSUK's bet is the opposite
-          corner: keep the index in the bucket you already have, bound query working
-          memory, stay source-available, and run in your own process with no
-          separate tier to operate. It borrows the incremental-rebalancing idea
-          from SPFresh's LIRE and graph leaves from the Vamana line of work, and
-          lands them on immutable object storage. Reach for an in-memory engine
-          when per-query latency is everything; reach for BORSUK when footprint,
-          cost, and owning your own data path are.
-        </p>
+      <section class="features" id="native-apis">
+        <article class="feature"><h3>Authenticated generations</h3><p>Native APIs construct metadata, publish immutable objects before a conditional head, and open a pinned generation. Fixtures check identity, corruption, and resource admission.</p></article>
+        <article class="feature"><h3>Mutations and recovery</h3><p>Durable snapshots preserve updates and tombstones. Logical-ID search includes the supplied snapshot and suppresses replaced or deleted base IDs before top-k.</p></article>
+        <article class="feature"><h3>Callable maintenance</h3><p>Compaction and garbage collection have lifecycle fixtures. Reader coordination covers cooperating callers on one host or shared local filesystem.</p></article>
+        <article class="feature"><h3>Explicit resource limits</h3><p>Callers set modeled memory, active queries, scratch, and separate SOURCE and SQ8 I/O limits. Whole-process memory needs separate measurement.</p></article>
       </section>
-
-      <!-- PRICING --------------------------------------------------------- -->
-      <section class="pricing" id="pricing">
-        <div class="split-head">
-          <p class="kicker">What it costs</p>
-          <h2>Measured storage and requests, without fake normalization.</h2>
-          <p class="pricing-free">
-            <strong>Source-available, with a revenue-limited grant.</strong> BUSL
-            1.1 permits production use without a separate software fee only when
-            the legal entity and affiliates had no more than
-            <strong>US&nbsp;$100,000 gross annual revenue</strong> in the most recent
-            fiscal year. Larger production users need a commercial license.
-          </p>
-          <p class="measure">
-            Every option needs application/client compute. BORSUK runs search in
-            that process; a managed product runs search behind its API. The fair
-            comparison excludes common client compute from every headline row and
-            reports BORSUK CPU/RAM separately. Storage and GET costs below come
-            from the exact selected Frankfurt index footprints and measured reads.
-          </p>
-        </div>
-
-        <div class="price-cards">
-          <article class="price-card is-borsuk">
-            <p class="price-label">BORSUK — six measured indexes</p>
-            <p class="price-amount">≈ $0.96<span>/mo storage</span></p>
-            <ul class="price-lines">
-              <li><span>Selected footprint</span><span>39.010 GB</span></li>
-              <li><span>Uncached GET cost / 1M queries</span><span>$5.16–$123.84</span></li>
-              <li><span>Disk-cached backing GETs</span><span>0 measured</span></li>
-            </ul>
-            <p class="price-foot">Common application/client compute is omitted for every option. BORSUK may also use bounded local cache disk; it has no separate query API fee.</p>
-          </article>
-
-          <article class="price-card">
-            <p class="price-label">Amazon S3 Vectors</p>
-            <p class="price-amount">$2.50<span>/M API calls + usage</span></p>
-            <ul class="price-lines">
-              <li><span>Storage</span><span>$0.06/GB-mo</span></li>
-              <li><span>Writes</span><span>$0.20/GB</span></li>
-              <li><span>Processed/returned data</span><span>usage</span></li>
-            </ul>
-            <p class="price-foot">AWS's updated 10M-vector/1M-query example totals $11.38/month.</p>
-          </article>
-
-          <article class="price-card">
-            <p class="price-label">turbopuffer</p>
-            <p class="price-amount">$16<span>/mo minimum</span></p>
-            <ul class="price-lines">
-              <li><span>Launch</span><span>$16 min</span></li>
-              <li><span>Scale</span><span>$256 min</span></li>
-              <li><span>Enterprise</span><span>≥ $4,096 + premium</span></li>
-            </ul>
-            <p class="price-foot">Vendor list-price context, not an identical-data benchmark.</p>
-          </article>
-        </div>
-
-        <p class="price-note">
-          Snapshot 2026-07-20. BORSUK uses the Frankfurt S3 Standard price-list
-          values $0.0245/GB-month and $0.43/million GETs. Billing units across
-          vendors are not equivalent and are not collapsed into a fake winner.
-          See the <a href="../research/cost-and-deployment.md">formulas, all six
-          rows, license boundary, Pinecone and Chroma context</a>.
-        </p>
-      </section>
-
-      <!-- QUICKSTART ------------------------------------------------------ -->
       <section class="start" id="start">
-        <div class="split-head">
-          <p class="kicker">Quickstart</p>
-          <h2>Build a local index in the language you ship in.</h2>
-          <p class="measure">
-            BORSUK is written in Rust and exposed directly through PyO3 and N-API,
-            so the Python and TypeScript packages never shell out to a CLI —
-            behaviour and performance match across all three.
-          </p>
-        </div>
-
-        <div class="code-card">
-          <div class="code-tabs" data-code-tabs>
-            <div class="tab-row" role="tablist" aria-label="Quickstart by language">
-              <button type="button" data-code-tab="rust" class="is-active">Rust</button>
-              <button type="button" data-code-tab="python">Python</button>
-              <button type="button" data-code-tab="typescript">TypeScript</button>
-            </div>
-            <pre data-code-panel="rust"><code>use borsuk::{BorsukIndex, IndexConfig, LeafMode, SearchOptions, VectorMetric, VectorRecord};
-
-let mut index = BorsukIndex::create(IndexConfig {
-    uri: "s3://my-bucket/index".into(),
-    metric: VectorMetric::Cosine,
-    dimensions: 768,
-    segment_max_vectors: 4096,
-    ram_budget_bytes: Some(borsuk::DEFAULT_RAM_BUDGET_BYTES),
-    text: false,
-    named_vectors: Default::default(),
-})?;
-
-index.add(vec![VectorRecord::new("doc-1", embedding)])?;
-let hits = index.search_ids(&query, SearchOptions::approx(10, LeafMode::PqScan))?;</code></pre>
-            <pre data-code-panel="python" hidden><code>import borsuk
-
-index = borsuk.create(uri="s3://my-bucket/index", metric="cosine", dim=768)
-index.add([embedding], ids=["doc-1"])
-
-hits = index.search_ids(query, k=10, mode="approx", leaf_mode="pq-scan")</code></pre>
-            <pre data-code-panel="typescript" hidden><code>import { create } from "borsuk";
-
-const index = await create({ uri: "s3://my-bucket/index", metric: "cosine", dimensions: 768 });
-await index.add([embedding], { ids: ["doc-1"] });
-
-const hits = await index.searchIds(query, { k: 10, mode: "approx", leafMode: "pq-scan" });</code></pre>
-          </div>
-          <p class="run-line">
-            Or run the bundled example end to end:
-            <code>cargo run --locked -p borsuk --example local_index</code>
-          </p>
-        </div>
-
+        <div class="split-head"><h2>Start with the native code and fixtures.</h2><p class="measure">Use a pinned source checkout. Read the API composition and failure checks before adapting them to your application.</p></div>
         <div class="resources">
-          <div class="resource-group">
-            <h3>Run it locally</h3>
-            <ul>
-              <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/crates/borsuk/examples/local_index.rs">Rust local example</a></li>
-              <li><a href="https://github.com/CausalityHQ/borsuk/tree/main/python">Python native API</a></li>
-              <li><a href="https://github.com/CausalityHQ/borsuk/tree/main/packages/borsuk">TypeScript native API</a></li>
-            </ul>
-          </div>
-          <div class="resource-group">
-            <h3>S3-compatible examples</h3>
-            <ul>
-              <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/crates/borsuk/examples/s3_index.rs">Rust S3 example</a></li>
-              <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/python/examples/s3_index.py">Python S3 example</a></li>
-              <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/packages/borsuk/examples/s3-index.ts">TypeScript S3 example</a></li>
-            </ul>
-          </div>
-          <div class="resource-group">
-            <h3>Try a real endpoint</h3>
-            <p>
-              A bundled
-              <a href="https://github.com/CausalityHQ/borsuk/tree/main/examples/seaweedfs">SeaweedFS stack</a>
-              runs the Rust, Python, and TypeScript S3-compatible tests locally,
-              so you can watch the network read/write path before wiring up a
-              cloud bucket.
-            </p>
-          </div>
+          <div class="resource-group"><h3>Native Rust</h3><ul>
+            <li><a href="docs.html">API and resource limits</a></li>
+            <li><a href="https://github.com/CausalityHQ/borsuk/blob/001cb6524118db5f788cdb5e37bddbc3b7bc110c/crates/borsuk/tests/two_bit_generation.rs">Build, publish, open, search fixtures</a></li>
+            <li><a href="https://github.com/CausalityHQ/borsuk/blob/001cb6524118db5f788cdb5e37bddbc3b7bc110c/crates/borsuk/tests/two_bit_application_ids.rs">Application IDs and lifecycle fixtures</a></li>
+            <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/release/rust-source-packages.md">Source build guide</a></li>
+          </ul></div>
+          <div class="resource-group"><h3>Experimental bindings</h3><p>The Python and TypeScript create/add/search APIs use a separate code surface. These examples do not exercise the current native generation route.</p><ul>
+            <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/python/README.md">Python local example</a></li>
+            <li><a href="https://github.com/CausalityHQ/borsuk/blob/main/packages/borsuk/README.md">TypeScript local example</a></li>
+          </ul></div>
+          <div class="resource-group"><h3>Publication and maintenance</h3><p>The caller supplies credentials, trusted-head delivery, and maintenance coordination.</p><ul><li><a href="https://github.com/CausalityHQ/borsuk/blob/main/docs/consistency.md">Read the coordination boundary</a></li></ul></div>
         </div>
       </section>
-
-      <!-- EVIDENCE -------------------------------------------------------- -->
       <section class="evidence" id="evidence">
-        <div class="split-head">
-          <p class="kicker">Evidence, not adjectives</p>
-          <h2>Every performance claim is backed by a checked-in artifact.</h2>
-          <p class="measure">
-            The research page renders these live from the CSV data committed to the
-            repository — standard public datasets, interactive mode comparison charts,
-            configuration ablations, resource timelines, dataset-size scale charts,
-            release scale gates, and external comparisons.
-            Measured results are labelled measured; local attempts carry their
-            stop limits.
-          </p>
-        </div>
+        <div class="split-head"><h2>One workload, with reviewable evidence.</h2><p class="measure">The latest development measurement uses CoHere FIRST1M, 768 dimensions, cosine, top 10, and 64 sealed queries. It records its source, resource limits, cold-call protocol, and finite offered load.</p></div>
         <ul class="evidence-grid">
-          <li><a href="research.html#standard-datasets">Six standard datasets</a></li>
-          <li><a href="research.html#mode-evaluation">Seven-method comparison</a></li>
-          <li><a href="research.html#routing-overfetch">routing-overfetch charts</a></li>
-          <li><a href="research.html#research-map">Configuration and scale studies</a></li>
-          <li><a href="research.html#research-map">CPU, RAM, and disk evidence</a></li>
-          <li><a href="research.html#research-map">parallel memory-pressure charts</a></li>
-          <li><a href="research.html#research-map">million-vector release gate charts</a></li>
-          <li><a href="research.html#research-more">Reproduce and extend</a></li>
+          <li><a href="research.html#latest">Latest measurement and scope</a></li>
+          <li><a href="https://github.com/CausalityHQ/borsuk/blob/001cb6524118db5f788cdb5e37bddbc3b7bc110c/docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-http/a0002/decision.md">Recorded decision</a></li>
+          <li><a href="https://github.com/CausalityHQ/borsuk/blob/001cb6524118db5f788cdb5e37bddbc3b7bc110c/docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-http/a0002/root-audit.json">Independent root audit</a></li>
+          <li><a href="https://github.com/CausalityHQ/borsuk/blob/001cb6524118db5f788cdb5e37bddbc3b7bc110c/docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-http/a0002/screen/summary.json">Raw measurement summary</a></li>
         </ul>
-        <p class="evidence-line">
-          Six earlier public-corpus campaigns remain archived as regression
-          evidence. Current typed-Arrow results are being recreated from empty
-          prefixes against the expanded DBpedia, Cohere, LAION, MS&nbsp;MARCO,
-          filter, tenant, hybrid, and late-interaction matrix.
-        </p>
+        <p class="evidence-line">This result does not establish sustained capacity, broad scale, lifecycle cost, or a matched vendor win.</p>
       </section>
-
-      <!-- FINAL CTA ------------------------------------------------------- -->
-      <section class="cta">
-        <h2>Point it at a bucket and search.</h2>
-        <p>Start with a local index in a few lines, then change one URI to go to S3.</p>
-        <div class="hero-actions">
-          <a class="btn btn-primary" href="docs.html">Read the docs</a>
-          <a class="btn btn-ghost btn-ghost-dark" href="https://github.com/CausalityHQ/borsuk">View on GitHub</a>
-        </div>
-      </section>
+      <section class="cta"><h2>Inspect the experiment.</h2><p>Read the current APIs, fixtures, and measurement scope.</p><div class="hero-actions"><a class="btn btn-primary" href="docs.html">Read the docs</a><a class="btn btn-ghost btn-ghost-dark" href="https://github.com/CausalityHQ/borsuk">View on GitHub</a></div></section>
     </main>
-
     <footer class="foot">
-      <div class="foot-brand">
-        <span class="brand-mark" aria-hidden="true"></span>
-        BORSUK
-      </div>
-      <nav class="foot-links" aria-label="Footer">
-        <a href="docs.html">Documentation</a>
-        <a href="https://github.com/CausalityHQ/borsuk">GitHub</a>
-        <a href="docs.html#quickstart">Quickstart</a>
-        <a href="research.html">Research</a>
-      </nav>
-      <p class="foot-license">
-        Source-available under Business Source License 1.1 (BUSL 1.1). The Additional Use Grant covers
-        production at or below US $100,000/year in gross annual revenue across the legal
-        entity and affiliates; otherwise a commercial license is required.
-        Change Date: 2030-07-02; Change License: MIT.
-      </p>
+      <div class="foot-brand"><span class="brand-mark" aria-hidden="true"></span>BORSUK · Experimental</div>
+      <nav class="foot-links" aria-label="Footer"><a href="docs.html">Documentation</a><a href="https://github.com/CausalityHQ/borsuk">GitHub</a><a href="#start">Code and fixtures</a><a href="research.html">Research</a></nav>
+      <p class="foot-license">Source-available under Business Source License 1.1. <a href="https://github.com/CausalityHQ/borsuk/blob/main/LICENSE">Read the license and Additional Use Grant.</a></p>
     </footer>
-
-    <script src="app.js?v=7" defer></script>
   </body>
 </html>
