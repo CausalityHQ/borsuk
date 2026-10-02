@@ -19,4 +19,3 @@ Read-only specialist 41454a657ef04b2b, gpt-6.1-sol/xhigh, completed exit 0. No c
    **Falsifier/risk:** closure coverage below **608/640** rejects top32 as sufficient. Passing establishes only a discovery ceiling: source/SQ8 admission and returned ranking may lose coverage afterward. Report R100, per-query coverage, bytes and closure sizes; retain the old FAIL.
 
 Local work stays read-only on the 8 GiB/zero-swap host; retain its sustained full-memory-PSI stop rule. No files changed or experiments ran. Relevant source is unchanged from `185aa533`; current HEAD `38222c85` adds the paired closeout.
-
