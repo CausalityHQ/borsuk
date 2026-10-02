@@ -32,7 +32,7 @@ run_stage() {
 run_stage object-native-generation-tests cargo test --locked -p borsuk --lib object_native_generation:: -- --test-threads=1
 run_stage two-bit-store-tests cargo test --locked -p borsuk --lib two_bit_store:: -- --test-threads=1
 run_stage two-bit-generation-tests cargo test --locked -p borsuk --lib two_bit_generation:: -- --test-threads=1
-run_stage two-bit-index-tests cargo test --locked -p borsuk --lib two_bit_index:: -- --test-threads=1
+# Index/restart assertions live in the generation fixtures above; no index-local tests exist.
 run_stage generation-integration cargo test --locked -p borsuk --test two_bit_generation -- --test-threads=1
 run_stage gc-integration cargo test --locked -p borsuk --test two_bit_gc_delayed_delete -- --test-threads=1
 run_stage application-ids-integration cargo test --locked -p borsuk --test two_bit_application_ids -- --test-threads=1

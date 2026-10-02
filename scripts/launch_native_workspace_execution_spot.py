@@ -766,7 +766,6 @@ def _remote_self_check(native_manifest=None):
                     'test --locked -p borsuk --lib object_native_generation:: -- --test-threads=1',
                     'test --locked -p borsuk --lib two_bit_store:: -- --test-threads=1',
                     'test --locked -p borsuk --lib two_bit_generation:: -- --test-threads=1',
-                    'test --locked -p borsuk --lib two_bit_index:: -- --test-threads=1',
                     'test --locked -p borsuk --test two_bit_generation -- --test-threads=1',
                     'test --locked -p borsuk --test two_bit_gc_delayed_delete -- --test-threads=1',
                     'test --locked -p borsuk --test two_bit_application_ids -- --test-threads=1',
@@ -775,7 +774,7 @@ def _remote_self_check(native_manifest=None):
                     'clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious',
                     'test --locked --workspace --all-targets --no-run')]
                 stage_names = ('object-native-generation-tests','two-bit-store-tests','two-bit-generation-tests',
-                               'two-bit-index-tests','generation-integration','gc-integration','application-ids-integration',
+                               'generation-integration','gc-integration','application-ids-integration',
                                'http-example-tests','release','clippy','test-build')
                 stage_schema = 'borsuk-root-reuse-implementation-stage-v1'
         cargo.write_text(f'''#!{sys.executable}
