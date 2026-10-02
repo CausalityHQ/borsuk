@@ -1,0 +1,155 @@
+{
+  "state": "complete",
+  "base": "09e0ac54738529a6084f80ef55c51aad1cc54ba9",
+  "offered_config_seam": {
+    "cold_config": "path may be original cold_run.directory/screen/config.json; bytes/SHA exact archived config",
+    "cold_fail_disposition": "required new key: null for complete campaigns, bytes/SHA/path pointer for the sole approved bootstrap-log failure",
+    "cold_source_authority": "Required bytes/SHA/path pointer for both campaign states; reviewed original source bridge permits qualification in Git-free deployments."
+  },
+  "disposition_required_shape": {
+    "schema": "borsuk-semantic-1m-cold-fail-disposition-v1",
+    "authority_pending": false,
+    "decision": "reuse-authenticated-closed-measurement-for-offered",
+    "reason": "bootstrap-empty-publication-log",
+    "cold_directory": "<cold_run.directory>",
+    "source_commit": "<original terminal source_commit>",
+    "source_archive_sha256": "<original terminal source_archive_sha256>",
+    "terminal": {
+      "bytes": "<aws-terminal byte count>",
+      "sha256": "<aws-terminal SHA256>"
+    },
+    "config": {
+      "bytes": "<screen/config byte count>",
+      "sha256": "<screen/config SHA256>"
+    },
+    "artifact_roster_sha256": "<terminal artifact_roster_sha256>",
+    "artifacts": "<exact original terminal.artifacts, including zero-byte entries>",
+    "historical_campaign_status": {
+      "status": "failed",
+      "phase": "quality",
+      "exit_code": 1,
+      "original_exit_code": 1
+    },
+    "service_exit_status": 0,
+    "failed_presence_artifact": "screen/publication.log",
+    "only_bootstrap_presence_failure": true
+  },
+  "unchanged_receipts": true,
+  "source_authority_required_shape": {
+    "schema": "borsuk-semantic-1m-cold-source-authority-v1",
+    "authority_pending": false,
+    "source_commit": "<original terminal.source_commit>",
+    "source_archive_sha256": "<original terminal.source_archive_sha256>",
+    "config": {
+      "bytes": "<original screen/config.json byte count>",
+      "sha256": "<original screen/config.json SHA256>"
+    },
+    "code_sha256": "<exact original48 config.code_sha256>",
+    "qualification": "<exact original aws-reservation.qualification>"
+  },
+  "owned_files": [
+    "scripts/launch_native_semantic_1m_cold_spot.py",
+    "scripts/run_native_semantic_1m_offered.py"
+  ],
+  "api": {
+    "qualify_measurement": "qualify_measurement(out, repo=None, source_authority=None)",
+    "archived_authority": "Source pointer required by offered config; direct local replay can independently use original Git config/code; never require Git in deployment",
+    "replay": "replay(a0005) returns {executed: false, execution_gate_passed: false}",
+    "result": "historical_campaign_status {status,phase,exit_code,original_exit_code}; measurement_gate_passed; quality_gate; context444miss; valid_calls; actual_http_attempts; identity_gate; resource_gate; cleanup_gate; qualification; cold_config"
+  },
+  "artifact_rule": " if [ \"$name\" = run-closed.log ]; then name=run.log; fi; test ! -L \"$name\"; test -f \"$name\"; if [ \"$name\" = screen/failures.jsonl ] || [ \"$name\" = screen/publication.log ]; then :; else test -s \"$name\"; fi",
+  "frozen_rules": "Only regular non-symlink artifacts; publication.log and failures.jsonl may be empty; every other body nonempty. New cold and offered code pins remain strict.",
+  "commands": [
+    {
+      "command": "timeout 55s /usr/bin/time -v python3 scripts/launch_native_semantic_1m_cold_spot.py --self-check",
+      "exit_code": 0,
+      "elapsed_seconds": 9.05,
+      "max_rss_kib": 116996
+    },
+    {
+      "command": "timeout 55s /usr/bin/time -v python3 scripts/launch_native_semantic_1m_offered_spot.py --self-check",
+      "exit_code": 0,
+      "elapsed_seconds": 1.67,
+      "max_rss_kib": 85640
+    },
+    {
+      "command": "timeout 55s /usr/bin/time -v python3 /tmp/borsuk-cold-root-draft-check.py",
+      "exit_code": 0,
+      "elapsed_seconds": 1.57,
+      "max_rss_kib": 85692
+    },
+    {
+      "command": "python3 -m py_compile scripts/launch_native_semantic_1m_cold_spot.py scripts/run_native_semantic_1m_offered.py; git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "test_coverage": [
+    "Executed exact original generated final presence rule RED exit1 for empty regular publication.log; current exact generated rule GREEN exit0",
+    "All25 Bash absent/directory/symlink negatives; requiredempty negatives excluding ONLY2emptylogs",
+    "Actual a0005 all64 cold ledger/canonical reducer/GT/scorer parity/summary/publication/source proof/ordinal/cgroup/resources/cleanup gates",
+    "All25 body tamper negatives; terminated identity/source/reservation/roster tamper negatives",
+    "Reauthenticated summary/ledger/resource/admission/cgroup/cleanup/publication negatives",
+    "Root source bridge pending/source/archive/config/CODE/qualification negatives with Git forbidden",
+    "Offered pending/null/wrongrootdisposition/arbitraryfailure/quality/resource/cleanup/64call/currentCODE negative gates",
+    "Actual parent frozen-shape draft source/disposition + offered qualifier with temporary pendingFalse copies, Git/native blocked"
+  ],
+  "prior_failed_checks": [
+    {
+      "check": "Bash absent test-resources.txt",
+      "cause": "AND-list bypassed Bash errexit",
+      "repair": "standalone regular/link checks; repaired check passes"
+    },
+    {
+      "check": "Offered fixture zero log auth",
+      "cause": "shared read.identity requires positive byte count",
+      "repair": "allow exact2 empty logs through artifact regular/bodySHA validation only"
+    },
+    {
+      "check": "CLI test patched __main__ rather than imported cold_spot",
+      "cause": "mock did not intercept actual offered caller module",
+      "repair": "patch actual caller module; repaired check passes"
+    }
+  ],
+  "accidental_action": {
+    "action": "First miniature accidentally extracted trap upload loop",
+    "result": "One local AWS upload failed immediately for missing credentials; no successful cloud action, no cold/native/data rerun",
+    "repair": "rsplit final presence loop, assert no aws in exact extracted rule; all subsequent execution offline/stubbed"
+  },
+  "immutable_receipts": true,
+  "no_push": true,
+  "no_children": true,
+  "no_reviews": true,
+  "root_draft_check": {
+    "parent_actual_drafts": true,
+    "temporary_pending_false_only": true,
+    "new_code_pins_strict": true,
+    "git_forbidden": true,
+    "native_forbidden": true,
+    "measurement": {
+      "quality_gate_passed": true,
+      "context_p90_attained": false,
+      "historical_campaign_status": {
+        "status": "failed",
+        "phase": "quality",
+        "exit_code": 1,
+        "original_exit_code": 1
+      },
+      "measurement_gate_passed": true,
+      "quality_gate": true,
+      "context444miss": true,
+      "valid_calls": 64,
+      "actual_http_attempts": 64,
+      "identity_gate": true,
+      "resource_gate": true,
+      "cleanup_gate": true
+    },
+    "wall_seconds": 1.4540601129992865,
+    "max_rss_kib": 85692
+  },
+  "commit": "5bc0c200d31ddedd5e8a3e9217f983fb6e732522",
+  "clean_worktree": true,
+  "commit_files": [
+    "scripts/launch_native_semantic_1m_cold_spot.py",
+    "scripts/run_native_semantic_1m_offered.py"
+  ]
+}
