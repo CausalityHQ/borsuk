@@ -149,3 +149,28 @@ This is a matched internal native improvement and a runnable blob-native cold mi
 | Local8GiB/no-new-swap/PSI safety | Host safety | No localCargo; heavy qualification alreadyremoteclosed0. Current independent maintenance planning is read-only. |
 
 100M layout/RSS/scratch, pinned generations, incremental maintenance and totaldollar remain open. Fresh1m compaction currently rejects pre-sideeffect; allowing a benchmark does not qualify the production lifecycle.
+
+
+## 2026-10-02 publication delivery and fixed48 next gate
+
+[Publication a0002](bounded-publication/implementation-gates/a0002/decision.md)
+closed0 and is integrated. It removes whole-SOURCE-plane hydration from local
+publication validation and reserves live metadata before upload buffers. Exact399
+source identities match qualified dc6151a4;29 focused tests, HTTP release,
+workspace Clippy and real workspace test compilation pass. All14 bodies
+authenticate and the Spot worker is terminated. This is a substantive library
+increment, not a new recall, cold-latency, QPS or dollar measurement.
+
+| Threshold | Origin/class | Current decision and replacement evidence |
+|---|---|---|
+| Compilation8GiB/no swap/jobs1/CPU200% | Qualification safety; not serving memory | PASS original10273; actual cgroup peak8GiB/max4451/OOM0/swap0. Changed-source full-workspace test execution remains separate. |
+| Fixed48/3072 nominated units/3079 seed walk/512 closure pages/4096 source scores | [Prospective fixed48 protocol](fixed48/decision.md); new arm admission | Routing source UNVERIFIED; fixture binding repaired before launch. Qualify its exact two-file delta atop the delivered publication source, then measure retained traces/source/SQ8 loss and actual memory. No historical cap silently relaxed. |
+| Fresh64/128 consumed exclusions/population8996872/no replacement | Frozen metadata selector; experiment admission | ONE metadata selection completed,64 unique eligible locators and all body identities independently verified. Vector duplicate audit, ground truth and ANN measurements remain pending. |
+| Reproduction12GiB memory/16GiB scratch/1800s/no swap | [Prospective artifact prerequisite](fixed48/artifact-reproduction-preregister.md); new remote experiment admission | Old measured scratch7,257,693,686B/cgroup7,932,358,656B informs headroom only. Reproduce original payload identities with the already qualified builder once; retain bodies. No query/truth or performance result. Final infrastructure/config freeze still required before launch. |
+| Practical95% mean R10 and published cold comparison context | Product target; unchanged prior source-dated references | Latest ReLAION FIRST1M fresh64 candidates97.5%R10,p90448.433–455.282ms; matched campaign FAIL due control drop. CoHere top32 discovery page coverage606/640=94.6875%,below608; not returned recall. Fresh fixed48 measurements unknown. |
+
+Convergence: delivered bounded publication; actual fixed48 quality delta,
+end-to-end p90/p95, sustainable QPS and lifecycle cost are UNKNOWN. Both vendor
+win and10M/100M bounded lifecycle remain unproven. Next decisive test is the
+source-qualified fixed48 fresh64 one-pass production scorer; discovery and
+returned-quality loss are separate gates. No consumed-panel retuning/rescore.
