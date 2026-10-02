@@ -1,0 +1,20 @@
+{
+  "cgroup.procs": "1473795",
+  "cpu.max": "200000 100000",
+  "cpu.stat": "usage_usec 506071\nuser_usec 199246\nsystem_usec 306824\nnice_usec 200000\ncore_sched.force_idle_usec 0\nnr_periods 5\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+  "host_meminfo": "MemTotal:       24021692 kB\nMemFree:          709512 kB\nMemAvailable:   19119664 kB\nBuffers:          578608 kB\nCached:         16550432 kB\nSwapCached:       125072 kB\nActive:          5456228 kB\nInactive:       14050524 kB\nActive(anon):    1995832 kB\nInactive(anon):  1343524 kB\nActive(file):    3460396 kB\nInactive(file): 12707000 kB\nUnevictable:        7676 kB\nMlocked:            6736 kB\nSwapTotal:       8388604 kB\nSwapFree:        6656912 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              2232 kB\nWriteback:             0 kB\nAnonPages:       2351732 kB\nMapped:           685976 kB\nShmem:            957424 kB\nKReclaimable:    2864288 kB\nSlab:            3448220 kB\nSReclaimable:    2864288 kB\nSUnreclaim:       583932 kB\nKernelStack:       10256 kB\nPageTables:        30080 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:    20399448 kB\nCommitted_AS:    6282572 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:       33064 kB\nVmallocChunk:          0 kB\nPercpu:            10112 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:    372736 kB\nFilePmdMapped:         0 kB\nCmaTotal:              0 kB\nCmaFree:            5688 kB\nUnaccepted:            0 kB\nBalloon:               0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      276332 kB\nDirectMap2M:     8570880 kB\nDirectMap1G:    16777216 kB\n",
+  "host_memory_pressure": "some avg10=0.00 avg60=0.00 avg300=0.00 total=285707664\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=231592821\n",
+  "memory.current": "18571264",
+  "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+  "memory.max": "8589934592",
+  "memory.peak": "23003136",
+  "memory.swap.current": "0",
+  "memory.swap.events": "high 0\nmax 0\nfail 0",
+  "memory.swap.max": "0",
+  "memory.swap.peak": "0",
+  "pids.current": "1",
+  "pids.events": "max 0",
+  "pids.max": "512",
+  "pids.peak": "21",
+  "time_ns": 1790979501095897289
+}

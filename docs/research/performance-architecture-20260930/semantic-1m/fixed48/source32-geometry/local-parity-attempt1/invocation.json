@@ -1,0 +1,41 @@
+{
+  "cgroup": "/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service/app.slice/borsuk-source32-parity-20261002.scope",
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-p",
+    "borsuk",
+    "--lib",
+    "two_bit_generation::source_walk_tests::fragmented_paged_source_preserves_trace_and_rank_across_get_caps",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+  "environment": {
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_HOME": "/data/cache/cargo",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/data/target",
+    "HOME": "/home/rb",
+    "LANG": "C.UTF-8",
+    "LOGNAME": "rb",
+    "MKL_NUM_THREADS": "2",
+    "OMP_NUM_THREADS": "2",
+    "OPENBLAS_NUM_THREADS": "2",
+    "PATH": "/data/cache/cargo/bin:/home/rb/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/rb/.local/bin:/data/cache/cargo/bin:/home/rb/.local/bin:/home/rb/.npm-global/bin:/home/rb/.pulumi/bin:/run/user/1001/fnm_multishells/3539630_1790882599647/bin:/home/rb/.local/share/fnm:/home/rb/.codex/tmp/arg0/codex-arg0zGOPpJ:/home/rb/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/rb/.local/bin:/data/cache/cargo/bin:/home/rb/.local/bin:/home/rb/.npm-global/bin:/home/rb/.pulumi/bin:/run/user/1001/fnm_multishells/3531446_1790882593880/bin:/home/rb/.local/share/fnm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin",
+    "RAYON_NUM_THREADS": "2",
+    "RUSTC_WORKSPACE_WRAPPER": "",
+    "RUSTC_WRAPPER": "",
+    "RUSTUP_HOME": "/data/cache/rustup",
+    "RUST_TEST_THREADS": "1",
+    "TOKIO_WORKER_THREADS": "2",
+    "USER": "rb"
+  },
+  "runner": {
+    "bytes": 6031,
+    "path": "/data/orchestration/borsuk-source32-parity-20261002/runner.py",
+    "sha256": "3a1616efee1ea7d9833195bd7e557c2787860d7fb537b5e0b67baf0c21b51f76"
+  },
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n"
+}

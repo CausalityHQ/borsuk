@@ -1,0 +1,1 @@
+host memory PSI full avg10 >= 1 sustained for at least 30 seconds

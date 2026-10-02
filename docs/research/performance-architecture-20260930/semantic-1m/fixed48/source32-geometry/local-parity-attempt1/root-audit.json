@@ -1,0 +1,30 @@
+{
+  "cargo_exit_status": -15,
+  "compiler_lane_released": true,
+  "host_full_psi_peak_avg10": 19.3,
+  "invocation_id": "4cd94d5525b747aeb2bf866a3aba10db",
+  "kernel_memory_peak_bytes": 5379039232,
+  "native_source_unchanged": true,
+  "next_action": "Use existing remote semantic-1m implementation qualification; no local retry.",
+  "original_session": 36616,
+  "raw_artifacts": {
+    "parity.log": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/source32-geometry/local-parity-attempt1/parity.log.gz",
+      "bytes": 59511,
+      "sha256": "426d5a135e1745facb6059545dc2f9e375fa95d4957112876989d9073e8b62f8"
+    },
+    "resources.jsonl": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/source32-geometry/local-parity-attempt1/resources.jsonl.gz",
+      "bytes": 10658,
+      "sha256": "cac22a63af327d79e239187cd9ba5a8167a4ab7a467eab8c7a5ce872ce3484f6"
+    }
+  },
+  "runner_exit_status": 1,
+  "schema": "borsuk-source32-local-parity-attempt-v1",
+  "scope_terminal": true,
+  "source_commit": "97aa599ee567d4ac84a99365529e4285b117fd01",
+  "status": "RESOURCE_INTERRUPTED_UNVERIFIED",
+  "swap_peak_bytes": 0,
+  "test_execution_verified": false,
+  "unit": "borsuk-source32-parity-20261002.scope"
+}

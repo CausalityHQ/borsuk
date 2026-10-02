@@ -1,0 +1,6 @@
+{
+  "cargo_pid": 1475852,
+  "runner_pid": 1473795,
+  "scope": "/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service/app.slice/borsuk-source32-parity-20261002.scope",
+  "start_ns": 1790979502579864900
+}
