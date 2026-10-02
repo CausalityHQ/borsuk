@@ -2578,7 +2578,7 @@ mod source_walk_tests {
         });
         let graph_body = serde_json::to_vec(&graph_root).unwrap();
         // Unknown graph lengths join admission before the aggregate budget is checked.
-        for name in ["centroids.bin", "graph.bin"] {
+        for name in ["centroids.bin", "graph.bin", "diverse_graph.bin"] {
             store
                 .put(&metadata_location(&prefix, name), vec![0].into())
                 .await
@@ -2593,27 +2593,53 @@ mod source_walk_tests {
             .put(&root_key, graph_body.clone().into())
             .await
             .unwrap();
-        store.reads.lock().unwrap().clear();
-        assert!(matches!(
-            stage_two_bit_metadata(
+        let diverse_key = metadata_location(&prefix, "diverse_graph.bin");
+        for diverse_present in [true, false] {
+            if !diverse_present {
+                store.delete(&diverse_key).await.unwrap();
+            }
+            store.reads.lock().unwrap().clear();
+            let error = stage_two_bit_metadata(
                 store.as_ref(),
                 &prefix,
                 &hash(&graph_body),
                 cap,
-                scratch.path()
+                scratch.path(),
             )
-            .await,
-            Err(ObjectNativeOpenError::Invalid("remote metadata length"))
-        ));
-        assert!(
-            !store
-                .reads
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|(name, head, _, _)| !head && !name.ends_with("/manifest.json"))
-        );
-        assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+            .await
+            .err()
+            .unwrap();
+            if diverse_present {
+                assert!(
+                    matches!(
+                        error,
+                        ObjectNativeOpenError::Invalid("remote metadata length")
+                    ),
+                    "{error:?}"
+                );
+            } else {
+                assert!(
+                    matches!(
+                        &error,
+                        ObjectNativeOpenError::Store(object_store::Error::NotFound { path, .. })
+                            if path.as_str() == diverse_key.as_ref()
+                    ),
+                    "{error:?}"
+                );
+            }
+            assert_eq!(
+                store
+                    .reads
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(_, head, _, _)| !head)
+                    .map(|(name, _, _, _)| name.as_str())
+                    .collect::<Vec<_>>(),
+                [root_key.as_ref()]
+            );
+            assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+        }
         store.put(&root_key, root_body.into()).await.unwrap();
         let eager = TwoBitGeneration::open(&root, &root_sha, limits).unwrap();
         let LoadedDiscovery::Semantic { router, .. } = &eager.discovery else {
