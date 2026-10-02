@@ -243,7 +243,8 @@ def validate_roster(arm):
     return files
 
 
-def validate_startup(value, arm, wall):
+def validate_startup(value, arm, wall, *, wave_objects=4):
+    assert type(wave_objects) is int and wave_objects in (4, 8)
     files = validate_roster(arm)
     rows = value['metadata']
     assert [r['name'] for r in rows]==list(STARTUP) and {r['name']:r['bytes'] for r in rows}==files
@@ -252,7 +253,7 @@ def validate_startup(value, arm, wall):
         for name in ('bytes','chunks','logical_head_requests','logical_get_requests',
             'payload_buffer_bound_bytes','metadata_wave'):
             stats.integer(row[name],name)
-        wave = 0 if i==0 else (i-1)//4+1
+        wave = 0 if i==0 else (i-1)//wave_objects+1
         assert row['metadata_wave']==wave
         if len(waves)==wave: waves.append([])
         waves[wave].append(row)

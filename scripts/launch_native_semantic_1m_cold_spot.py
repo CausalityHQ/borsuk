@@ -582,6 +582,13 @@ def self_check():
             router_head_requests=1,source_head_wall_ns=2,router_head_wall_ns=2)
         opened=worker.validate_startup(startup,arm,40)
         assert opened['metadata_objects']==8 and opened['logical_metadata_head_requests']==3
+        merged=copy.deepcopy(startup)
+        for row in merged['metadata'][1:]:
+            row['metadata_wave']=1
+        worker.validate_startup(merged,arm,40,wave_objects=8)
+        rejects(lambda:worker.validate_startup(merged,arm,40))
+        rejects(lambda:worker.validate_startup(startup,arm,40,wave_objects=8))
+        rejects(lambda:worker.validate_startup(merged,arm,40,wave_objects=True))
         for kind in ('v7','payload','length','hash','wave','head','buffer','order'):
             bad_arm=copy.deepcopy(arm); bad=copy.deepcopy(startup)
             if kind=='v7': bad_arm['metadata_files']['router/manifest.json']=bad_arm['metadata_files'].pop('router/root.bin')
