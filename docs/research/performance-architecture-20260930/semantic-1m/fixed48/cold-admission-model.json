@@ -1,0 +1,31 @@
+{
+  "schema": "borsuk-fixed48-prospective-cold-admission-model-v1",
+  "authority_pending": true,
+  "native_source_identity_sha256": "addf62bce23ceee034f22e4d1dfc0b318564d924c6e0fcee34b9336d1532813e",
+  "source_metadata": "artifact-reproduction/a0002/screen/generation/manifest.json",
+  "server_slots": 4,
+  "metadata_bytes": 3556524,
+  "router_root_bytes": 2267840,
+  "modeled_remote_payload_bytes": 870514692,
+  "observed_scientific_scorer_rss_bytes": 47874048,
+  "interpretation": "payload admission model, not cold RSS; cannot infer 100M scaling",
+  "prospective_remote_limits": {
+    "shared_memory_bytes": 12884901888,
+    "swap_bytes": 0,
+    "native_memory_bytes": 2147483648,
+    "publisher_memory_bytes": 2147483648,
+    "native_rlimit_as_bytes": 4294967296,
+    "scratch_bytes": 17179869184,
+    "cpu_quota_percent": 200,
+    "tasks_max": 512
+  },
+  "limit_class": "prospective bounded remote host admission for unchanged 1M candidate, not universal product cap",
+  "transport_delta": [
+    "sq8_object_key",
+    "sq8_etag",
+    "canonical.object_key"
+  ],
+  "unchanged_payloads": true,
+  "resource_gate": "measure actual per-stage RSS/cgroups/whole scratch; no OOM/new swap; reject invalid closure",
+  "launch_authority": false
+}
