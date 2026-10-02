@@ -84,7 +84,8 @@ def panel_inputs(directory):
     truth = [list(struct.unpack_from('<100q', raw_truth, q * 800)) for q in range(64)]
     for row, reference, targets in zip(derived.splitlines(), references, truth):
         query = json.loads(row)['query']
-        assert any(query) and abs(sum(v * v for v in query) - 1) < 1e-5, 'preserve sealed normalization'
+        # Publisher validation preserves raw values; Rust owns cosine normalization.
+        assert any(struct.unpack('<768f', struct.pack('<768f', *query))), 'nonzero f32 query required'
         assert len(set(targets)) == 100 and all(type(n) is int and 0 <= n < 1_000_000 for n in targets)
         assert len(reference['ids']) == len(set(reference['ids'])) == 100
         assert all(type(n) is int and 0 <= n < 1_000_000 for n in reference['ids'])
@@ -737,16 +738,42 @@ def run(config_path, expected_sha, repo, output):
     return summary
 
 
+def closed_panel_admission_check():
+    """Authenticate and parse the existing panel; never execute or rescore it."""
+    repo = Path(__file__).resolve().parents[1]
+    config = json.loads((repo / BASE / 'cold-http/a0002/config.json').read_bytes())
+    assets, historical = historical_assets(repo, read_proofs(repo, config['proofs']))
+    directory = repo / SCIENTIFIC / 'screen'
+    before = {name: artifact(directory / name) for name in ('requests.jsonl', 'records.jsonl', 'truth.i64')}
+    assert all(pin == library.identity(assets['panel/' + name]) for name, pin in before.items())
+    requests = [json.loads(row) for row in (directory / 'requests.jsonl').read_bytes().splitlines()]
+    norms = [sum(v * v for v in row['query']) for row in requests]
+    assert all(norm > 1 for norm in norms), 'regression requires original nonunit queries'
+    derived, references, truth = panel_inputs(directory)
+    assert len(derived.splitlines()) == len(references) == len(truth) == 64
+    for original, row in zip(requests, derived.splitlines()):
+        value = json.loads(row)
+        assert value == dict(query_ordinal=original['ordinal'], query=original['query'])
+        assert struct.pack('<768f', *value['query']) == struct.pack('<768f', *original['query'])
+    assert before == {name: artifact(directory / name) for name in before}
+    return dict(panel=before, execution_source=historical['historical_validation']['execution_source'],
+        queries=64, f32_bits_equal=True, json_numeric_values_equal=True,
+        squared_norm_min=min(norms), squared_norm_max=max(norms), query_execution=False, quality_recomputed=False)
+
+
 def self_check():
     def write(path, value):
         Path(path).write_bytes(value if isinstance(value, bytes) else encoded(value) + b'\n')
-    # The check must catch normalization, ordinal, ID and physical-plan drift.
+    closed_panel = closed_panel_admission_check()
+    # The check must catch query rewriting, ordinal, ID and physical-plan drift.
     with tempfile.TemporaryDirectory() as tmp:
         directory = Path(tmp)
         requests, frozen, truth = [], [], []
         for q in range(64):
             query = [0.0] * 768
-            query[q] = 1.0
+            query[q] = 2.5 + q / 64
+            query[(q + 1) % 768] = -0.125
+            query[(q + 2) % 768] = -0.0
             requests.append(dict(ordinal=q, query=query))
             returned = list(range(100))
             truth.append(list(range(100)))
@@ -763,16 +790,35 @@ def self_check():
         for original, row in zip(requests, derived.splitlines()):
             value = json.loads(row)
             assert value['query_ordinal'] == original['ordinal']
+            assert value['query'] == original['query']
             assert struct.pack('<768f', *value['query']) == struct.pack('<768f', *original['query'])
         assert references[0]['ids'] == list(range(100)) and truths == truth
         original_records = (directory / 'records.jsonl').read_bytes()
-        (directory / 'requests.jsonl').write_bytes(request_body.replace(b'"ordinal": 1,', b'"ordinal": 0,', 1))
-        try:
-            panel_inputs(directory)
-        except AssertionError:
-            pass
-        else:
-            raise AssertionError('ordinal tamper accepted')
+        # Unit vectors are also valid; neither large nor subnormal f32 values
+        # may be normalized, rounded in JSON, or rejected because of their norm.
+        for value in (1.0, 2 ** -149, 3.4028234663852886e38):
+            changed = copy.deepcopy(requests)
+            changed[0]['query'] = [value] + [0.0] * 767
+            (directory / 'requests.jsonl').write_bytes(b''.join(encoded(r) + b'\n' for r in changed))
+            admitted = json.loads(panel_inputs(directory)[0].splitlines()[0])['query']
+            assert admitted == changed[0]['query']
+            assert struct.pack('<768f', *admitted) == struct.pack('<768f', *changed[0]['query'])
+        for field, value in (
+                ('query', [0.0] * 767), ('query', [0.0] * 768),
+                ('query', [1e-50] * 768), ('query', [1e39] + [0.0] * 767),
+                ('query', [float('nan')] + [0.0] * 767),
+                ('query', [float('inf')] + [0.0] * 767),
+                ('query', [-float('inf')] + [0.0] * 767),
+                ('ordinal', 1), ('ordinal', 0.0), ('ordinal', False)):
+            changed = copy.deepcopy(requests)
+            changed[0][field] = value
+            (directory / 'requests.jsonl').write_bytes(b''.join(json.dumps(r).encode() + b'\n' for r in changed))
+            try:
+                panel_inputs(directory)
+            except (AssertionError, OverflowError):
+                pass
+            else:
+                raise AssertionError('invalid query/ordinal accepted: ' + field)
         (directory / 'requests.jsonl').write_bytes(request_body)
 
         files = {'manifest.json': b'', 'page_manifest.json': b'{}', 'plane/manifest.json': b'{}',
@@ -1072,7 +1118,8 @@ def self_check():
                 pass
             else:
                 raise AssertionError('proof tamper accepted')
-        print(json.dumps(dict(self_check=True, queries=64, scenarios=8, native_or_network_execution=False)))
+        print(json.dumps(dict(self_check=True, queries=64, scenarios=8, native_or_network_execution=False,
+            closed_panel_admission=closed_panel)))
 
 
 if __name__ == '__main__':
