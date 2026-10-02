@@ -1,0 +1,109 @@
+{
+  "base": "68294a2e67a298006ac79f4dfc96e76e1f7a4ddf",
+  "status": "SOURCE UNVERIFIED; reviewed publication upload-phase budget repaired; root external qualification pending; no local retry",
+  "files": [
+    "crates/borsuk/src/two_bit_generation.rs",
+    "crates/borsuk/src/two_bit_store.rs",
+    "crates/borsuk/src/two_bit_source.rs"
+  ],
+  "api": {
+    "generation": "crate-private TwoBitGeneration::validate_local_publication(root: &Path, trusted_sha256: &str, limits: TwoBitGenerationLimits) -> Result<()>; shares open_inner with an explicit local-publication mode, no remote ETag or public API change",
+    "plane": "crate-private TwoBitPlane::validate_local_records(path: &Path, authority: &PageAuthority) -> Result<(), SourceBuildError>; streaming entire records SHA plus existing verify_payload per page"
+  },
+  "borrow_lifetimes": "Validator borrows immutable local root and trusted SHA only for call; temporary metadata generation and page authority are dropped before existing semantic publication validation/upload. Streaming page buffer is dropped before returning. No retained record payload or queryable metadata-only local generation escapes.",
+  "peak_arithmetic": {
+    "serving": "Unchanged eager/remote admission and semantic query-limit clamping, caller pins counted exactly once; shared paged metadata model used for bounded publication",
+    "bounded_validation": "3 * startup_metadata_disk_bytes + codec_memory + 131072 + graph_memory + semantic_router_memory + query_memory + source_query_memory + already_pinned_bytes + min(rows,32) * record_bytes; checked arithmetic before allocation",
+    "record_file": "Excluded from startup_metadata_disk_bytes only in paged/local-publication mode; exact full local file length checked, all pages verified, full SHA independently verified; no full records Vec",
+    "other_publication_phases": "Existing semantic admit and complete root/membership/leaves/centroids validation plus authenticated canonical/metadata uploads retained, sequential after bounded validation",
+    "publication_phase": "max_memory_bytes - already_pinned_bytes - [8 * (root_body.capacity + plane_body.capacity + page_body.capacity + namespace_length) + 131072 + actual retained HeadBody/UpdateVersion inline and String capacities]; checked arithmetic/underflow. Same budget for complete semantic admit and both authenticated uploads. Pins once. Temporary raw plane/page bodies and SQ8 HEAD result explicitly dropped; parsed metadata dropped before final head parse.",
+    "bounded_validation_head": "Fresh retained HeadBody/UpdateVersion charged by reducing shared validator max_memory_bytes by its checked actual payload; caller already_pinned_bytes and query permissions unchanged."
+  },
+  "checks": [
+    "cargo test -p borsuk --lib source_walk_tests (new bounded publication and existing ordered eager/remote publisher parity)",
+    "cargo test -p borsuk --lib two_bit_build",
+    "cargo test -p borsuk --lib two_bit_compaction",
+    "cargo test -p borsuk --lib two_bit_store",
+    "cargo test -p borsuk --lib sq8_s3_range",
+    "cargo build -p borsuk --release --example two_bit_http",
+    "cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "cargo test --workspace --no-run"
+  ],
+  "restrictions": "No Cargo/rustc/native/cloud/dataset/reviews/children/operator/docs/config/push until parent grants sole compiler lane; resource gates parent-owned, jobs1/8GiB/0swap/CPU200/Tasks512/pressurestop. No RED or PASS claims without execution.",
+  "source_sha256": {
+    "crates/borsuk/src/two_bit_generation.rs": "300b125bd094fb49c47c6ba4a48a3a301075a5e611fa8dbe419fd4e6834b861b",
+    "crates/borsuk/src/two_bit_store.rs": "8c1d29370eeb8e17e4846ab68e9578f781424dcf250ee22ede513bfc1dca8c1c",
+    "crates/borsuk/src/two_bit_source.rs": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0"
+  },
+  "test_cases": "Extended existing source_walk_tests::semantic_object_store_parity; publication uses cap strictly below eager reader model, with explicit model delta and no resident records; eager/remote ordered search comparisons continue from the same published head.",
+  "verification": {
+    "rustfmt_edition_2024_check": 0,
+    "git_diff_check": 0,
+    "rust_execution": "repaired cb63 source not compiled/tested locally; parent owns external qualification"
+  },
+  "telemetry": "No new telemetry/schema/profile/router/scorer changes.",
+  "candidate_commit": "cb63b58ffd9de57ca78aacfb2e7db67fc3644955",
+  "selected_commands": [
+    "cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::semantic_object_store_parity -- --exact",
+    "cargo test --locked -p borsuk --lib two_bit_store::root_seed_tests::publication_reserves_metadata_before_upload_buffers -- --exact",
+    "cargo test --locked -p borsuk --lib two_bit_ -- --skip two_bit_generation::source_walk_tests::semantic_object_store_parity --skip two_bit_store::root_seed_tests::publication_reserves_metadata_before_upload_buffers",
+    "cargo test --locked -p borsuk --lib sq8_s3_range::",
+    "cargo test --locked -p borsuk --test two_bit_generation",
+    "cargo build --locked -p borsuk --release --example two_bit_http",
+    "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "bash scripts/check_rust_test_build.sh"
+  ],
+  "gate_environment": {
+    "cwd": "/home/rb/worktrees/borsuk-bounded-publication-validation",
+    "CARGO_TARGET_DIR": "/data/target",
+    "CARGO_BUILD_JOBS": "1",
+    "BORSUK_TEST_BUILD_JOBS": "1",
+    "RUSTC_WRAPPER": "",
+    "RUSTC_WORKSPACE_WRAPPER": "",
+    "unset": [
+      "BORSUK_TEST_BUILD_COMMAND"
+    ],
+    "resources": {
+      "MemoryMax": "8G",
+      "MemorySwapMax": "0",
+      "CPUQuota": "200%",
+      "TasksMax": "512"
+    },
+    "sequencing": "Each command serial; stop/collect original job on failure or host full PSI >=1% sustained 30s, never chain onward after failure. Parent owns fresh resource check and controlled lane grant.",
+    "PATH": "/data/cache/cargo/bin:/usr/local/bin:/usr/bin:/bin",
+    "CARGO_HOME": "/data/cache/cargo",
+    "RUSTUP_HOME": "/data/cache/rustup",
+    "RUST_TEST_THREADS": "1"
+  },
+  "lane_grant": "immediate-1790927059363373850 (devbox/main clearance immediate1790926998800879561)",
+  "runner_unit": "borsuk-bounded-publication-validation-da56bcb-r1.service",
+  "runner_preflight_repair": {
+    "original_exec": 22492,
+    "unit": "borsuk-bounded-publication-validation-da56bcb.service",
+    "invocation": "82fd87aa010d4f9aa0ebd0a9c1fcc14c",
+    "exit_code": 1,
+    "cause": "cwd contract key treated as env key; no Cargo stage entered",
+    "runtime_ms": 254
+  },
+  "gate_receipt": {
+    "path": "/tmp/borsuk-bounded-publication-validation-gates.json",
+    "sha256": "9db4713a15a48a1c007ee05258d39c9cf0ed211ac01cc755ea15df17732eb4f8",
+    "original_exec": 66939,
+    "invocation": "2fb32b6d3c9243fba31fb7263fec0e01",
+    "stage_1_exit_code": -15,
+    "stopped_reason": "host full PSI avg10 >=1% sustained 30s",
+    "max_host_full_psi_avg10": 11.5,
+    "memory_peak_bytes": "4695310336",
+    "memory_swap_peak_bytes": "0",
+    "remaining_stages": "not entered",
+    "source": "da56bcb080f559c81886e4e603226bd5e5415564 (historical stopped gate; does not verify repaired source)"
+  },
+  "repair_parent": "da56bcb080f559c81886e4e603226bd5e5415564",
+  "reserve_evidence": {
+    "JSON": "Root/plane/page bodies <=65536 each, immutable authenticated schemas; root strings bounded by encoded length, f32 Vec geometric capacity <=2N aside from fixed initial capacity, >=2 JSON bytes/element including separators. Plane13 fixed fields and strict7scalar page Value. Eight encoded copies cover retained bodies, parsed Strings, float growth and in-scope clones. Fixed structs/initial Vec/map nodes/borrowed <=10entry roster/localpaths bounded within131072 reserve.",
+    "head": "HeadBody and UpdateVersion sizeof plus every String capacity including schema,rootSHA,mutationSHA,fence,ETag,version explicitly charged; unbounded remote version cannot hide in fixed reserve.",
+    "namespace": "8 times caller namespace length explicitly charged, independent of bounded manifest object keys.",
+    "dropped": "Temporary plane/page encoded bodies freed before semantic/uploads, full SQ8 ObjectMeta freed before both phases, parsed Manifest/SourcePlaneReceipt/page Value freed before final root property parse."
+  },
+  "cap_falsifier": "two_bit_store::root_seed_tests::publication_reserves_metadata_before_upload_buffers; sparse8MiB+1 artifact with actual full zero-file SHA:16MiB remainder minus live metadata/head/namespace rejects existing uploader at upload-memory guard; +2MiB sufficient cap succeeds and object HEAD length matches. Source-derived/unexecuted; no RSS claim."
+}
