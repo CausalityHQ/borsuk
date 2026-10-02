@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One retained fixed48 cold HTTP gate: aNNNN | --self-check.
+"""One retained fixed48 cold HTTP gate: aNNNN | --self-check | --stage-configs-check.
 
 Root freezes executor source, then config.json, controller-config.json and
 asset-manifest.json beneath ROOT. contract() exposes the exact freeze API.
@@ -123,8 +123,8 @@ def contract():
             service_limit_seconds=SERVICE_SECONDS, output_reserve_bytes="root-frozen positive integer <=256MiB"),
         namespace_prefix=PREFIX + "aNNNN/serving", instance_type=INSTANCE_TYPE, image_id=IMAGE_ID,
         machine_limit_seconds=WALL, worker_limit_seconds=WORKER_SECONDS, compute_cap_usd=COMPUTE_CAP,
-        ebs_s3_allowance_usd=.15, cli="aNNNN | --self-check", worker_cli="--stage REPO OUTPUT PREFIX",
-        api=["contract", "qualify", "preflight", "stage_configs", "user_data", "poll", "stage", "offline_reduce", "validate_closed", "collect", "main", "self_check"],
+        ebs_s3_allowance_usd=.15, cli="aNNNN | --self-check | --stage-configs-check", worker_cli="--stage REPO OUTPUT PREFIX",
+        api=["contract", "qualify", "preflight", "stage_configs", "stage_configs_check", "user_data", "poll", "stage", "offline_reduce", "validate_closed", "collect", "main", "self_check"],
         source_freeze="All CODE matches pushed archive; three JSON authorities absent from executor archive and committed afterwards.",
         cold_http_measured=False, launch_authorized=False)
 
@@ -223,10 +223,53 @@ def config_key(digest):
 
 
 def stage_configs(proof):
-    for identity, body in [(dict(bytes=len(encoded(proof)), sha256=sha(encoded(proof))), encoded(proof)),
-            *[(artifact(Path(n)), Path(n).read_bytes()) for n in proof["authority_paths"]]]:
-        pin(identity, LOCAL_BYTES)
-        lifecycle()[0].peer.put_if_absent(config_key(identity["sha256"]), body)
+    """Reuse only fully authenticated immutable JSON; never overwrite or retry."""
+    from botocore.config import Config
+    from botocore.exceptions import ClientError
+
+    body = encoded(proof)
+    authorities = [(pin(dict(bytes=len(body), sha256=sha(body)), LOCAL_BYTES), body)]
+    for name, digest in zip(proof["authority_paths"],
+            (proof[n] for n in ("config_sha256", "controller_config_sha256", "asset_manifest_sha256")), strict=True):
+        identity = pin(artifact(Path(name)), LOCAL_BYTES)
+        assert identity["sha256"] == digest, "frozen authority drift"
+        body = Path(name).read_bytes()
+        assert dict(bytes=len(body), sha256=sha(body)) == identity, "local authority drift"
+        authorities.append((identity, body))
+    s3 = lifecycle()[0].boto3.Session(profile_name="causality", region_name=REGION).client("s3",
+        config=Config(retries={"total_max_attempts": 1}, connect_timeout=5, read_timeout=5))
+    try:
+        for identity, body in authorities:
+            key = config_key(identity["sha256"])
+            try:
+                response = s3.get_object(Bucket=BUCKET, Key=key)
+            except ClientError as error:
+                if error.response.get("Error", {}).get("Code") not in {"NoSuchKey", "404", "NotFound"}:
+                    raise
+                try:
+                    s3.put_object(Bucket=BUCKET, Key=key, Body=body, IfNoneMatch="*")
+                except ClientError as error:
+                    if error.response.get("Error", {}).get("Code") != "PreconditionFailed":
+                        raise
+                    response = s3.get_object(Bucket=BUCKET, Key=key)
+                else:
+                    continue
+            stream = response["Body"]
+            try:
+                assert response["ContentLength"] == identity["bytes"], "remote authority length"
+                remote = bytearray()
+                while True:
+                    chunk = stream.read(identity["bytes"] + 1 - len(remote))
+                    if not chunk:
+                        break
+                    remote.extend(chunk)
+                    assert len(remote) <= identity["bytes"], "remote authority overflow"
+                assert dict(bytes=len(remote), sha256=sha(remote)) == identity, "remote authority SHA/length"
+                assert remote == body, "remote authority body differs"
+            finally:
+                stream.close()
+    finally:
+        s3.close()
 
 
 def user_data(commit, archive_sha, archive_key, prefix, qualification):
@@ -723,6 +766,95 @@ def main(attempt):
             return lifecycle()[0].main(attempt, campaign=sys.modules[__name__])
     finally:
         os.chdir(before)
+
+
+def stage_configs_check():
+    """Source-bound offline check of immutable reuse, races and closed failures."""
+    import tempfile
+    from botocore.exceptions import ClientError
+    from unittest.mock import Mock
+
+    shared, _ = lifecycle()
+    def error(code, operation):
+        return ClientError(dict(Error=dict(Code=code)), operation)
+    class Stream(io.BytesIO):
+        def read(self, size=-1):
+            assert 0 < size <= LOCAL_BYTES + 1
+            if self.failed:
+                raise OSError("stream failed")
+            return super().read(min(size, 7))
+    class S3:
+        def __init__(self, objects=None, mode="ok"):
+            self.objects, self.mode = dict(objects or {}), mode
+            self.puts, self.gets, self.streams, self.closed = [], [], [], False
+        def get_object(self, Bucket, Key):
+            assert Bucket == BUCKET
+            self.gets.append(Key)
+            if self.mode == "access":
+                raise error("AccessDenied", "GetObject")
+            if self.mode == "transport":
+                raise OSError("transport failed")
+            if Key not in self.objects or self.mode == "race-missing" or (self.mode.startswith("race") and len(self.gets) == 1):
+                raise error("NoSuchKey", "GetObject")
+            body = self.objects[Key]
+            stream = Stream(body[:-1] if self.mode == "truncated" else body + b"x" if self.mode == "overflow" else body)
+            stream.failed = self.mode == "stream-failure"
+            self.streams.append(stream)
+            return dict(Body=stream, ContentLength=len(body) + (self.mode == "length"))
+        def put_object(self, Bucket, Key, Body, IfNoneMatch):
+            assert Bucket == BUCKET and IfNoneMatch == "*"
+            self.puts.append(Key)
+            if self.mode == "put-failure":
+                raise error("AccessDenied", "PutObject")
+            if self.mode.startswith("race"):
+                self.objects[Key] = Body if self.mode == "race-ok" else Body + b"tamper"
+            if Key in self.objects:
+                raise error("PreconditionFailed", "PutObject")
+            self.objects[Key] = Body
+        def close(self):
+            self.closed = True
+    with tempfile.TemporaryDirectory(prefix="fixed48-authority-check-") as tmp:
+        paths = [Path(tmp) / n for n in ("config.json", "controller-config.json", "asset-manifest.json")]
+        for i, path in enumerate(paths):
+            write(path, dict(authority=i))
+        proof = dict(authority_paths=list(map(str, paths)), **{field: artifact(path)["sha256"]
+            for field, path in zip(("config_sha256", "controller_config_sha256", "asset_manifest_sha256"), paths)})
+        def run(sdk, rejected=False, twice=False, local_failure=False):
+            session = Mock(); session.client.return_value = sdk
+            with patch.object(shared.boto3, "Session", return_value=session) as factory, \
+                    patch.object(shared.peer, "put_if_absent", side_effect=lambda key, body:
+                        sdk.put_object(Bucket=BUCKET, Key=key, Body=body, IfNoneMatch="*")):
+                try:
+                    stage_configs(proof)
+                    if twice:
+                        stage_configs(proof)
+                except (AssertionError, ClientError, OSError):
+                    assert rejected
+                else:
+                    assert not rejected
+            assert sdk.closed is bool(factory.call_count) and all(stream.closed for stream in sdk.streams)
+            assert factory.call_count == (0 if local_failure else 2 if twice else 1)
+            if factory.call_count:
+                factory.assert_called_with(profile_name="causality", region_name=REGION)
+                options = session.client.call_args.kwargs["config"]
+                assert options.retries["total_max_attempts"] == 1
+                assert options.connect_timeout == options.read_timeout == 5
+        initial = S3(); run(initial, twice=True)
+        assert len(initial.objects) == len(initial.puts) == 4 and len(initial.gets) == 8
+        for mode in ("tamper", "length", "truncated", "overflow", "stream-failure", "access", "transport", "put-failure", "race-ok", "race-tamper", "race-missing"):
+            sdk = S3({} if mode == "put-failure" or mode.startswith("race") else initial.objects, mode)
+            if mode == "tamper":
+                key = config_key(proof["asset_manifest_sha256"]); sdk.objects[key] = b"x" * len(sdk.objects[key])
+            run(sdk, rejected=mode != "race-ok")
+            assert len(sdk.puts) == (4 if mode == "race-ok" else int(mode in ("put-failure", "race-tamper", "race-missing")))
+            assert len(sdk.gets) == (8 if mode == "race-ok" else 4 if mode == "tamper" else 2 if mode.startswith("race") else 1)
+        proof["config_sha256"] = "0" * 64
+        drift = S3(initial.objects); run(drift, rejected=True, local_failure=True)
+        assert not drift.gets and not drift.puts
+        paths[0].write_bytes(b"x" * (LOCAL_BYTES + 1))
+        run(S3(), rejected=True, local_failure=True)
+    return dict(passed=True, source_sha256=artifact(Path(__file__))["sha256"], scenarios=14,
+        native_or_cloud_execution=False)
 
 
 def self_check():
@@ -1239,6 +1371,8 @@ if __name__ == "__main__":
     try:
         if sys.argv[1:] == ["--self-check"]:
             print(json.dumps(self_check(), sort_keys=True))
+        elif sys.argv[1:] == ["--stage-configs-check"]:
+            print(json.dumps(stage_configs_check(), sort_keys=True))
         elif sys.argv[1:2] == ["--stage"]:
             assert len(sys.argv) == 5, "--stage REPO OUTPUT PREFIX"
             sys.exit(0 if stage(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])["closed"] else 2)
