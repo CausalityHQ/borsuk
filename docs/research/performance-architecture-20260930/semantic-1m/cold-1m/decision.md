@@ -29,3 +29,9 @@ a0003 prospectively gives only the publisher 1GiB admission, while builder and H
 a0003 completed native publication and all64 live S3 k100 validations. The adapter rejected the log because its synthetic fixture omitted the native final summary: actual roster is startup +64 queries +summary (66 events). All23 closed terminal bodies authenticate; the instance is terminated, with zero cold calls. Independent ordered-ID/plan parity and sealed-truth recount yield 624/640 recall@10 and 6077/6400 recall@100 for publication validation. Overall a0003 remains execution FAIL; no cold latency/QPS is reported.
 
 a0004 changes only the Python log parser and mock to the strict actual contract. Missing/extra events, query errors, invalid summary counts/types and changed reference plans fail closed. The authenticated a0003 log is now a mandatory regression fixture. Root self-check original23336 passed. Native binaries, algorithm, panel, admission limits and cold timing remain unchanged; actual authority uses a fresh namespace and refreshed code hashes.
+
+## Attempt a0005
+
+a0004 remains execution FAIL: HTTP startup rejected the 512MiB admission before any query; all25 bodies authenticate and the instance is terminated. The unchanged HTTP binary reserves four query slots. Its actual-metadata payload model is 870733975B; the static admitted-layout bound is 938423992B. These are admission arithmetic, not observed RSS.
+
+a0005 prospectively assigns HTTP 1GiB, separately from builder512MiB and publisher1GiB; shared8GiB/no-swap and AS4GiB remain fixed. Native source, four slots, fixed fresh panel, quality gates, fetch caps and wire timing are unchanged. Both cold and offered self-checks pass; the offered path still refuses failed cold authority. Actual cold latency/QPS remain unmeasured until this new campaign closes.
