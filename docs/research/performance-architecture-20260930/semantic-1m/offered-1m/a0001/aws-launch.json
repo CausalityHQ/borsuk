@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0cd7ce838bb4869c5",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0cd7ce838bb4869c5"
+    }
+  },
+  "prefix": "research/semantic-router/20261002/fresh1m-offered-a0001",
+  "source_commit": "6caab4a88669c59ad454b46186b774185e16a346",
+  "source_archive_sha256": "653a53df4164723597cec78cba41f575f6ea3627d56724eb48907882249d3ae0"
+}
