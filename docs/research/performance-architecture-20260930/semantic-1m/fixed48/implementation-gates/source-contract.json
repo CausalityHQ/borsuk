@@ -1,0 +1,214 @@
+{
+  "allocation_math": {
+    "caller_pin": "Existing scorer32*1024*1024 =33554432-byte allowance is retained.64 traces=3970560 bytes; inverse8000000+request body2097152+truth51200 leaves19435520 bytes for ordinary requests/results/plans/evaluator sets. Returned SOURCE/SQ8 buffers do not survive into frozen results, and returned_sq8 copies only top100 result records.",
+    "codec": "768*4*64 =196608 bytes.",
+    "fresh_source_rank_vectors_upper_bound": "walk3079*8 + memo4096*16 + temporary4096*16 + two page maxima512*16 + selected512*8 + ranked512*16 =184376 bytes, excluding separately charged trace and bounded sets/codec state",
+    "leaf_query": "2 * 4730880 + 1048576 = 10510336 bytes per active query; leaf bodies are dropped before SOURCE reads.",
+    "note": "No freezing or cloud qualification follows from these arithmetic bounds.",
+    "planner": "Existing1048576 transient planner bytes cover disjoint leaf/validation/ranking/cover lifetimes. SOURCE memo reserves at most4096*(usize,f64),512-page maxima reserve512 pairs, semantic selected IDs reserve512; trace nomination reserves4096 IDs without growth.",
+    "router_root": "32 * authenticated root bytes; preregistered retained-root charge 72570880 bytes (2267840 *32), from committed plan evidence.",
+    "scope": "Prospective modeled payload arithmetic only; no measured RSS or artifact/data admission was performed.",
+    "source_query": "2 * min(SOURCE budget67108864, SOURCE file200000000) =134217728 bytes per active paged query.",
+    "sq8_query": "3*16773120 + (400000+62040+1048576) + floor(16773120/780)*256 +768*4 =57338072 bytes per active query.",
+    "total": "With preregistered root charge and one active query: modeled bytes =3*admitted_disk_metadata_bytes +308519128. Opener must reject above536870912; actual authenticated disk size/resource proof remains root-owned and UNRUN.",
+    "trace_formula": "sizeof(TwoBitPlanTrace) + max((2*min(pages,159)+2*(min(units,128)+min(units,1272))+min(units,2544))*sizeof(usize)+4*sizeof(TwoBitDiscoveryTrace), (min(pages,512)+min(units,4096)+48+min(units,3072)+8)*sizeof(usize))",
+    "trace_x86_64_layout_arithmetic": {
+      "discovery_record": 64,
+      "max_trace_bytes": 62040,
+      "native_confirmation": "UNRUN; production uses size_of rather than hardcoded ABI sizes",
+      "trace_struct": 152,
+      "usize": 8
+    }
+  },
+  "base_sha": "53e0d09f31aa7ee6a60c3b2017404309795f3cd1",
+  "branch": "devbox/fresh48-production-routing",
+  "candidate_sha": "5efb136e95956b0cea0aa38214299a42f4264684",
+  "committed_evidence": [
+    "/home/rb/worktrees/borsuk-fresh48-production-routing/docs/research/performance-architecture-20260930/semantic-1m/fixed48/decision.md",
+    "/home/rb/worktrees/borsuk-fresh48-production-routing/docs/research/performance-architecture-20260930/semantic-1m/fixed48/plan.md"
+  ],
+  "fresh1m": {
+    "closure_pages": 512,
+    "dimensions": 768,
+    "excess_closure_policy": "Reject before SOURCE cover/fetch/scoring without truncating units or adding pages",
+    "leaf_payload_bytes": 4730880,
+    "original_units": 3072,
+    "rows": 1000000,
+    "seed_completed_units": 3079,
+    "selected_leaves": 48,
+    "source_scored_units": 4096
+  },
+  "lifecycle": "Do not agent_complete/archive this SAME worker yet. Hold for root exact-source affected/release/Clippy/real-workspace-test-build exit0 gates. Root owns review/integration/freeze/cloud experiments.",
+  "owned_files": [
+    {
+      "path": "/home/rb/worktrees/borsuk-fresh48-production-routing/crates/borsuk/src/semantic_unit_router.rs",
+      "relative_path": "crates/borsuk/src/semantic_unit_router.rs",
+      "sha256": "3ae09d9ff5b8c2a5e9a5151878a9e649c3669db923a2da66623c676ea0b7bb2f"
+    },
+    {
+      "path": "/home/rb/worktrees/borsuk-fresh48-production-routing/crates/borsuk/src/two_bit_generation.rs",
+      "relative_path": "crates/borsuk/src/two_bit_generation.rs",
+      "sha256": "e9c0f79f69da2d70b8682f5aefc033d5c9039ed8a235a4a1d0a736089da22f32"
+    }
+  ],
+  "pending_exact_source_gates": [
+    {
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "semantic_unit_router::"
+      ],
+      "authorization": "parent must grant environment and resources first",
+      "status": "UNRUN"
+    },
+    {
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "source_walk_tests"
+      ],
+      "authorization": "parent must grant environment and resources first",
+      "status": "UNRUN"
+    },
+    {
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "check_semantic_router_scorer"
+      ],
+      "authorization": "parent must grant environment and resources first",
+      "status": "UNRUN"
+    },
+    {
+      "argv": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "borsuk",
+        "--lib",
+        "--bin",
+        "check_semantic_router_scorer",
+        "--bin",
+        "two_bit_plan_demo"
+      ],
+      "authorization": "parent must grant environment and resources first",
+      "status": "UNRUN"
+    },
+    {
+      "argv": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "authorization": "parent must grant environment and resources first",
+      "status": "UNRUN"
+    },
+    {
+      "argv": [
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ],
+      "authorization": "parent must grant environment and resources first",
+      "status": "UNRUN"
+    }
+  ],
+  "performed_checks": [
+    {
+      "command": "rustfmt --check --edition 2024 crates/borsuk/src/semantic_unit_router.rs crates/borsuk/src/two_bit_generation.rs",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check (including committed diff)",
+      "exit_code": 0
+    },
+    {
+      "command": "git status --short",
+      "result": "clean after candidate commit"
+    },
+    {
+      "command": "Git identity/commit attribution",
+      "result": "Roman Bartusiak <riomus@gmail.com>; no AI attribution"
+    }
+  ],
+  "preserved": {
+    "graph": "None admission: at most2 walks, max1272 per walk, max2544 unique SOURCE evaluations/completion, min(total pages,159) per walk; source scores and tie ordering unchanged.",
+    "leaf_concurrent": 16,
+    "native100k": "First 8 leaves, extend within 1.15 boundary to max16; 2MiB leaf cap, 1031 seed-completed walk cap, 2544 SOURCE completion cap.",
+    "normalization": "Original cosine f32 normalization, ordered f64 squared-distance ranking, leaf-ID tie break unchanged.",
+    "one_pass_diagnostics": "Existing diagnostic_search_with_store and scorer retain all source/nomination/admission/returned-ID stages; all64 outputs freeze before truth is opened. No second scoring/read pass or truth input was added.",
+    "persistent_format_training_encoding": "Unchanged; no compatibility readers or aliases.",
+    "source_io": {
+      "bytes": 67108864,
+      "concurrent": 16,
+      "gets": 128
+    },
+    "sq8_io": {
+      "bytes": 16773120,
+      "concurrent": 16,
+      "gets": 32
+    }
+  },
+  "prohibited_actions_performed": [],
+  "proposed_gate_execution": {
+    "environment": "Parent-provided exact-source environment, target/cache locations, memory and timeout limits; none granted or used in this child.",
+    "max_build_jobs": 2,
+    "sequential": true,
+    "workspace_test_build_requirement": "Run the real script with BORSUK_TEST_BUILD_COMMAND unset; require actual workspace all-targets test compilation exit0, not a test-only true override."
+  },
+  "schema": "borsuk-fresh48-production-routing-contract-v1",
+  "seam": {
+    "caller_adaptation": "All direct call sites are in owned two_bit_generation.rs. Production supplies authenticated generation.semantic_profile(); graph callers supply None.",
+    "function": "plan_two_bit_source_walks",
+    "outside_owned_files_edited": false,
+    "parent_uplink": "One attempted seam report was rejected because recipient already had 20 queued instructions. This durable contract and terminal outcome carry the result; no repeated send.",
+    "signature": "(rows, dimensions, nomination_page_limit, semantic_profile: Option<SemanticProfile>, walks, prepared, record, max_query_gets, max_query_bytes, trace)",
+    "trace_api": "scratch_bytes(rows) remains a conservative bound across supported discovery lifetimes; profile admission is explicit and never inferred from rows or page count."
+  },
+  "status": "candidate_ready_UNVERIFIED_held_for_parent_exact_source_gates",
+  "synthetic_tests": {
+    "coverage": "Deterministic fixed48 tied/distinct rankings; all3072 units retained, seed-only7 additions,3079 walk, SOURCE4096 once,512 closure acceptance,513 pages/excess units/bytes/leaves reject before SOURCE scoring and shared pre-fetch admission; explicit graph/profile isolation.",
+    "new_or_extended": [
+      "fresh48_seed_completion_retains_all_3072_units_and_512_pages",
+      "fresh_binary_root_selected_leaves_and_scattered_closure_without_training",
+      "fresh48_source_walk_completes_512_pages_once_and_rejects_excess_before_io"
+    ],
+    "regressions_retained": [
+      "frozen_native100k_membership_leaves_and_nomination",
+      "selected_validation_is_bounded_and_retains_every_unit_and_partial_tail",
+      "semantic_object_store_parity",
+      "semantic_d768_diagnostic_scratch_preserves_production_search",
+      "bounded_completion_recovers_unvisited_rows_without_duplicate_or_extra_work",
+      "source_nomination_precedes_centroid_cutoff_and_scores_units_once",
+      "source_nomination_handles_one_graph_partial_rows_and_rejects_invalid_walks"
+    ],
+    "status": "UNRUN by explicit source-only assignment"
+  },
+  "unchanged_scorer": {
+    "adaptation_required": false,
+    "path": "/home/rb/worktrees/borsuk-fresh48-production-routing/crates/borsuk/src/bin/check_semantic_router_scorer.rs",
+    "sha256": "02d4e305a7d545846f364292c5dd2230c9387c1dbf727e2cccc03035f02fbe1e"
+  },
+  "untouched_remote_qualification": 31035,
+  "worktree": "/home/rb/worktrees/borsuk-fresh48-production-routing"
+}
