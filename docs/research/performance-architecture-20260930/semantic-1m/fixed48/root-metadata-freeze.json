@@ -1,0 +1,50 @@
+{
+  "actual_selection_count": 1,
+  "ann_measured": false,
+  "artifacts": {
+    "authority.json": {
+      "bytes": 224514,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/panel-tools/authority.json",
+      "sha256": "6c6508887785d380436a91e1d06d33a9292d80de1dd5fdb8ac56050cdf97ce9e"
+    },
+    "panel.json": {
+      "bytes": 79074,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/panel-tools/panel.json",
+      "sha256": "a137588d5e17703610d9142f468e75362d1aac61d84a0b72f7a8dbcbd1373392"
+    },
+    "root-freeze.json": {
+      "bytes": 1413,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/panel-tools/root-freeze.json",
+      "sha256": "8b69a199151a32c7b900fa0bb8bcdd03b2f28fbcda8d55ada4efb7b6868cabb5"
+    },
+    "verification.json": {
+      "bytes": 9794,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/panel-tools/verification.json",
+      "sha256": "1fe5c381eb3cb3224a1963573442abae551cdd4d3cf7634000229d7de9c4519b"
+    }
+  },
+  "eligible_population": 8996872,
+  "exact_interval_membership": true,
+  "excluded_previous_count": 128,
+  "ground_truth_constructed": false,
+  "historical_output_root_pending_preserved": true,
+  "metadata_qualified": true,
+  "original_quality_fail_preserved": true,
+  "protocol": {
+    "bytes": 8573,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/selector-protocol.json",
+    "sha256": "f521c49f1abdcf9bcf72f445186a5349a4831972aeb4933e86afca6f726b37c2"
+  },
+  "raw_normalized_duplicate_gate_pending": true,
+  "replacement_allowed": false,
+  "schema": "borsuk-fixed48-root-metadata-freeze-v1",
+  "selected_count": 64,
+  "selected_sha256": "dfe569e0198f35d690e5aa6a248aa8eee73b6d59a569b194729368e84aa2f61c",
+  "selector": {
+    "bytes": 35678,
+    "path": "scripts/select_cohere_fixed48_fresh64.py",
+    "sha256": "bf9170bd46ffec1f2f5638f92056b0f7be30f177b3b2595e80e011115554e269"
+  },
+  "shard_locator_mapping_verified": true,
+  "vector_duplicates_checked": false
+}

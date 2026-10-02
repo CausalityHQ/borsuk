@@ -1,0 +1,14 @@
+{
+  "artifact": {
+    "bytes": 33963,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/artifact-admission/original-v4-generation-root.json",
+    "sha256": "a4eb4851c545e828f3d08181a0c3e9cca09ed9341032ee3e69c511b9b7caf67e"
+  },
+  "historical_failed_closure_restored": false,
+  "immutable_original_identity_verified": true,
+  "original_execution_fail_preserved": true,
+  "query_or_truth_body_opened": false,
+  "schema": "borsuk-fixed48-original-root-foundation-v1",
+  "separate_foundation_authority": true,
+  "source_key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/manifest.json"
+}
