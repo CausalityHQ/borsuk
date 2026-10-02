@@ -99,9 +99,18 @@ def archive_digest(commit, base):
     return digest.hexdigest()
 
 
-def preflight(base=Path('.')):
+def preflight(base=Path('.'), collection_out=None):
     base = Path(base).resolve()
-    assert not subprocess.check_output(['git', 'status', '--porcelain'], cwd=base, text=True).strip(), 'dirty source'
+    owned_prefix = None
+    if collection_out is not None:
+        collection_out = h.regular_path(collection_out)
+        assert re.fullmatch(r'a[0-9]{4}', collection_out.name)
+        assert collection_out == h.regular_path(base / ROOT / NAME / collection_out.name), 'unowned collection output'
+        if collection_out.is_relative_to(base):
+            owned_prefix = str(collection_out.relative_to(base)) + '/'
+    status = subprocess.check_output(['git', 'status', '--porcelain', '-z', '--untracked-files=all'], cwd=base, text=True)
+    assert all(owned_prefix and entry.startswith('?? ') and entry[3:].startswith(owned_prefix)
+               for entry in status.split('\0') if entry), 'dirty source'
     body = (base / CONFIG).read_bytes()
     assert body == subprocess.check_output(['git', 'show', 'HEAD:' + str(CONFIG)], cwd=base), 'uncommitted config'
     proof = qualify(base, config_sha=sha(body))
@@ -181,7 +190,7 @@ done
     body = body.replace('phase=bootstrap\n', 'phase=bootstrap\nBORSUK_OUTPUT=' + shell_quote(destination) + '\n', 1)
     body = body.replace('if [ -f "$name" ]; then', 'if [ -f "$name" ] && { [ "$name" != screen/COMPLETE.json ] || [ "$code" = 0 ]; }; then')
     body = body.replace('timeout --kill-after=5 60 aws s3 cp "$name"',
-        f'systemd-run --quiet --wait --pipe -p MemoryMax={MEMORY} -p MemorySwapMax=0 -p CPUQuota=200% -p TasksMax=512 -p RuntimeMaxSec=135 --setenv=AWS_MAX_ATTEMPTS=1 timeout --kill-after=5 120 aws s3 cp "$name"')
+        f'systemd-run --quiet --wait --pipe -p MemoryMax={MEMORY} -p MemorySwapMax=0 -p CPUQuota=200% -p TasksMax=512 -p RuntimeMaxSec=135 --setenv=AWS_MAX_ATTEMPTS=1 timeout --kill-after=5 120 aws s3 cp "$root/$name"')
     marker = 'exec >run.log 2>&1\n'
     assert body.count(marker) == 1
     body = body.replace(marker, marker + f"python3 -c 'import base64,gzip; from pathlib import Path; Path(\"source-qualification.json\").write_bytes(gzip.decompress(base64.b64decode(\"{proof64}\",validate=True)))'\n" + "printf '%s\\n' '{\"status\":\"pending\",\"replacement_allowed\":false}' >failure.json\n")
@@ -355,6 +364,7 @@ def validate_closed(out, proof, terminal, files):
 def collect(s3, prefix, out, instance_id, commit, digest):
     out = h.regular_path(out)
     assert re.fullmatch(re.escape(PREFIX) + r'a[0-9]{4}', prefix)
+    assert out == h.regular_path(ROOT / NAME / prefix.removeprefix(PREFIX)), 'unowned collection output'
     launch, close, reservation = (bounded_json(out / n) for n in ('aws-launch.json', 'aws-closeout.json', 'aws-reservation.json'))
     assert close['state'] == 'terminated' and close['nodes'] == launch['nodes'], 'owned termination wait required'
     assert instance_id == launch['instance_id'] in {n['instance_id'] for n in close['nodes'].values()}
@@ -362,7 +372,7 @@ def collect(s3, prefix, out, instance_id, commit, digest):
     for record in (launch, reservation):
         assert record['source_commit'] == commit and record['source_archive_sha256'] == digest
     proof = reservation['qualification']
-    assert proof == preflight(), 'collection frozen authority drift'
+    assert proof == preflight(collection_out=out), 'collection frozen authority drift'
     assert reservation['config_sha256'] == proof['config_sha256'], 'reservation config drift'
     assert proof['source_archive_commit'] == commit and proof['source_archive_sha256'] == digest
     stream = s3.get_object(Bucket=BUCKET, Key=prefix + '/terminal.json')['Body']
@@ -493,6 +503,87 @@ def self_check():
                     rejected(lambda: preflight(repo))
                 with patch.object(subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'git ancestry')):
                     rejected(lambda: preflight(repo))
+            # Real Git status and collection admission; only historical reference
+            # loading is cached, using the authorities authenticated above.
+            authority = h.authorities(config, repo)
+            source_repo = work / 'source-repo'; source_repo.mkdir()
+            def git(*args):
+                return subprocess.check_output(['git', *args], cwd=source_repo, stderr=subprocess.PIPE)
+            git('init', '-q')
+            for name in CODE:
+                target = source_repo/name; target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((repo/name).read_bytes())
+            owned = source_repo/ROOT/'a0001'; owned.mkdir(parents=True)
+            tracked = owned/'tracked.log'; tracked.write_bytes(b'frozen tracked log')
+            git('add', '.')
+            git('-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'Synthetic frozen source')
+            source_commit = git('rev-parse', 'HEAD').decode().strip()
+            source_digest = archive_digest(source_commit, source_repo)
+            source_config = source_repo/ROOT/'config.json'
+            write(source_config, dict(config, execution_source=dict(commit=source_commit, archive_sha256=source_digest)))
+            git('add', str(ROOT/'config.json'))
+            git('-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'Synthetic separate config freeze')
+            git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+            config_commit = git('rev-parse', 'HEAD').decode().strip()
+            before = Path.cwd()
+            try:
+                os.chdir(source_repo)
+                with patch.object(module, 'CONFIG', ROOT/'config.json'), \
+                        patch.object(h, '__file__', str(source_repo/h.OWN)), patch.object(h, 'authorities', return_value=authority):
+                    source_proof = preflight()
+                    launch = dict(source_commit=source_commit, source_archive_sha256=source_digest,
+                        instance_id='i-original', nodes={'0':dict(instance_id='i-original')}, prefix=PREFIX+'a0001')
+                    terminal = dict(**launch, **{k:source_proof[k] for k in TERMINAL_IDENTITIES},
+                        schema=SCHEMA, status='failed', phase='complete', exit_code=96, original_exit_code=0, artifacts={})
+                    for name, value in (('aws-launch.json', launch),
+                            ('aws-closeout.json', dict(state='terminated', nodes=launch['nodes'])),
+                            ('aws-reservation.json', dict(schema=SCHEMA, qualification=source_proof,
+                                config_sha256=source_proof['config_sha256'], source_commit=source_commit, source_archive_sha256=source_digest))):
+                        write(owned/name, value)
+                    s3 = Mock(); s3.get_object.side_effect=lambda **k: {'Body':io.BytesIO(encoded(terminal))}
+                    collect_args = (s3, launch['prefix'], owned, 'i-original', source_commit, source_digest)
+                    rejected(lambda: preflight())  # launch still refuses its dirty output
+                    assert collect(*collect_args)['exit_code'] == 96
+                    assert bounded_json(owned/'collection-receipt.json')['complete'] is False
+                    # Every authority/path rejection happens before a remote fetch.
+                    def refused():
+                        s3.reset_mock(); rejected(lambda: collect(*collect_args)); s3.get_object.assert_not_called()
+                    for path in (tracked, source_repo/OWN, source_config):
+                        saved = path.read_bytes(); path.write_bytes(saved+b'changed'); refused(); path.write_bytes(saved)
+                    # Clean, committed drift must still fail original code/config
+                    # binding; a blanket clean-tree exemption cannot admit it.
+                    for path in (source_repo/OWN, source_config):
+                        if path == source_config:
+                            changed = bounded_json(path)
+                            changed['sq8_object_key'] = 'changed/objects/' + config['corpus']['sq8']['sha256']
+                            write(path, changed)
+                        else:
+                            path.write_bytes(path.read_bytes()+b'\n# committed controller drift\n')
+                        git('add', str(path.relative_to(source_repo)))
+                        git('-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'Synthetic committed drift')
+                        git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+                        refused()
+                        git('reset', '--hard', config_commit)
+                        git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+                    for name in ('a0002/unrelated.log', 'a0001-other/lookalike.log'):
+                        path = source_repo/ROOT/name; path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(b'unrelated'); refused(); path.unlink()
+                    reservation_path = owned/'aws-reservation.json'
+                    saved = reservation_path.read_bytes(); reservation = bounded_json(reservation_path)
+                    reservation['qualification']['refs_identity_sha256'] = '0'*64
+                    write(reservation_path, reservation); refused(); write(reservation_path, saved)
+                    s3.reset_mock()
+                    rejected(lambda: collect(s3, PREFIX+'a0002', owned, 'i-original', source_commit, source_digest))
+                    s3.get_object.assert_not_called()
+                    outside = work/'outside/a0001'; outside.mkdir(parents=True)
+                    for name in ('aws-launch.json', 'aws-closeout.json', 'aws-reservation.json'):
+                        shutil.copyfile(owned/name, outside/name)
+                    shutil.rmtree(owned)  # remove owned untracked files; restore tracked source
+                    owned.mkdir(); tracked.write_bytes(b'frozen tracked log')
+                    with patch.object(module, 'ROOT', outside.parent):
+                        assert collect(s3, launch['prefix'], outside, 'i-original', source_commit, source_digest)['exit_code'] == 96
+            finally:
+                os.chdir(before)
             # Streaming gzip identity agrees with the shared launcher's exact bytes.
             payload = b'tiny frozen source\n' * 1000
             process = Mock(); process.stdout = io.BytesIO(payload); process.wait.return_value = 0
@@ -545,14 +636,14 @@ def self_check():
                 stub = '''curl() { case "$*" in */api/token*) echo mock-token;; *) echo i-synthetic;; esac; }
 shutdown() { :; }
 timeout() { shift 2; "$@"; }
-systemd-run() { while [ "$1" != timeout ]; do shift; done; "$@"; }
-aws() { printf '%s\\n' "$4" >>uploads; if [ "$MODE" = upload-failed ] && [[ "$4" = */artifacts/profile.log ]]; then return 55; fi; }
+systemd-run() { while [ "$1" != timeout ]; do shift; done; (cd /; "$@"); }
+aws() { test -f "$3" || return 44; cmp "$3" "$root/${4##*/artifacts/}" 2>/dev/null || { [ "$4" = "$BORSUK_OUTPUT/terminal.json" ] && cmp "$3" "$root/terminal.json"; } || return 45; printf '%s\\n' "$4" >>"$root/uploads"; if [ "$MODE" = upload-failed ] && [[ "$4" = */artifacts/profile.log ]]; then return 55; fi; }
 '''
                 run = 'BORSUK_OUTPUT=s3://'+BUCKET+'/'+PREFIX+'a0001; root='+str(destination)+'; phase='+('reproduction' if mode=='helper-failed' else 'complete')+'; export MODE='+mode+'; export ARTIFACT_NAMES='+__import__('shlex').quote(' '.join(n for n in UPLOAD_FILES if n != 'screen/COMPLETE.json')+' screen/COMPLETE.json')+'; cd "$root"\n'
                 script_finish = stub+run+finish.replace('/dev/ttyS0', str(destination/'serial'))+'\n(exit '+('7' if mode=='helper-failed' else '0')+'); finish\n'
-                finished = subprocess.run(['bash', '-c', script_finish], capture_output=True, timeout=10)
+                finished = subprocess.run(['bash', '-c', script_finish], capture_output=True, timeout=10, cwd='/')
                 terminal = bounded_json(destination/'terminal.json')
-                assert terminal['exit_code'] == finished.returncode == {'success':0, 'helper-failed':7, 'upload-failed':96}[mode]
+                assert terminal['exit_code'] == finished.returncode == {'success':0, 'helper-failed':7, 'upload-failed':96}[mode], (mode, terminal['exit_code'], finished.returncode, finished.stderr)
                 assert terminal['original_exit_code'] == (7 if mode=='helper-failed' else 0)
                 assert terminal['status'] == ('complete' if mode=='success' else 'failed')
                 uploads = (destination/'uploads').read_text().splitlines()
@@ -651,7 +742,7 @@ aws() { printf '%s\\n' "$4" >>uploads; if [ "$MODE" = upload-failed ] && [[ "$4"
             marker = actual_replay(path, digest, base, screen)
             if collected_once: return marker
             collected_once.append(True)
-            destination = work/'collected'; destination.mkdir(); shutil.copytree(screen,destination/'screen')
+            destination = work/'collected/a0001'; destination.mkdir(parents=True); shutil.copytree(screen,destination/'screen')
             fixture_config = json.loads(Path(path).read_bytes())
             fixture_proof = dict(proof, config_sha256=digest,
                 builder_binary_sha256=fixture_config['builder']['sha256'],
@@ -682,7 +773,7 @@ aws() { printf '%s\\n' "$4" >>uploads; if [ "$MODE" = upload-failed ] && [[ "$4"
             def get(**kwargs):
                 key=kwargs['Key']; return {'Body':Stream(encoded(terminal) if key.endswith('/terminal.json') else bodies[key.split('/artifacts/',1)[1]])}
             s3.get_object.side_effect=get
-            with patch.object(module,'preflight',return_value=fixture_proof):
+            with patch.object(module,'ROOT',destination.parent), patch.object(module,'preflight',return_value=fixture_proof):
                 assert collect(s3,launch['prefix'],destination,'i-original',source['source_commit'],source['source_archive_sha256'])['exit_code']==0
                 assert s3.get_object.call_count==len(ARTIFACTS)+1
                 receipt=bounded_json(destination/'collection-receipt.json')
@@ -723,7 +814,7 @@ aws() { printf '%s\\n' "$4" >>uploads; if [ "$MODE" = upload-failed ] && [[ "$4"
     if before_draft is not None: assert artifact(draft)==before_draft
     signal.alarm(0)
     assert time.monotonic()-started<55 and resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024 <= 256<<20
-    print(f'PASS config/source/archive and embedded config; bash/finish marker-last/failure; ONE helper/ABI failure/cleanup; ACK/fsync/multiACK/interrupt/terminate-wait; all30 stream tamper/missing/failed/resource rejection and actual retained replay. Indented production-shape user data {len(realistic_data.encode())}/16384 bytes. Cloud/data/native UNRUN.')
+    print(f'PASS config/source/archive and embedded config; real Git owned-output collection/clean committed drift; service-cwd shell/finish marker-last/failure; ONE helper/ABI failure/cleanup; ACK/fsync/multiACK/interrupt/terminate-wait; all30 stream tamper/missing/failed/resource rejection and actual retained replay. Indented production-shape user data {len(realistic_data.encode())}/16384 bytes. {time.monotonic()-started:.2f}/55s; {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024}/268435456 RSS bytes. Cloud/data/native UNRUN.')
 
 
 if __name__ == '__main__':
