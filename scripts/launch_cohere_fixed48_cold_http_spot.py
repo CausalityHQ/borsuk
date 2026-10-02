@@ -48,6 +48,8 @@ REGION, BUCKET = science.REGION, science.BUCKET
 SPOT_MAX_USD_PER_HOUR, COMPUTE_CAP = .50, .50
 AWSCLI_VERSION, AWSCLI_SHA256 = science.AWSCLI_VERSION, science.AWSCLI_SHA256
 LOCAL_BYTES, MAX_BODY_BYTES = 1 << 20, 64 << 20
+DIAGNOSTIC_FILES = ("failure.json", "cold-closure.json", "screen/summary.json", "screen/cleanup.json", "profile.log")
+DIAGNOSTIC_BYTES = 4096
 encoded, sha, artifact, write = science.encoded, science.sha, science.artifact, science.write
 regular_path, read_json = science.regular_path, science.read_json
 archive_digest, lifecycle, pin = science.archive_digest, science.lifecycle, science.pin
@@ -295,6 +297,24 @@ assert used+reserve<=limit and shutil.disk_usage(root).free>=reserve,'bootstrap 
     body = body.replace('timeout --kill-after=5 60 aws s3 cp "$name"',
         f'systemd-run --quiet --wait --pipe -p MemoryMax={MEMORY} -p MemorySwapMax=0 -p CPUQuota=200% -p TasksMax=512 -p RuntimeMaxSec=65 --setenv=AWS_MAX_ATTEMPTS=1 timeout --kill-after=5 60 aws s3 cp "$root/$name"')
     body = body.replace('timeout --kill-after=5 60 aws s3 cp terminal.json', 'timeout --kill-after=5 60 aws s3 cp "$root/terminal.json"')
+    # systemd does not inherit the installing shell's worker-local PATH.
+    body = body.replace(" aws s3 cp ", ' "$root/bin/aws" s3 cp ')
+    body = body.replace("command -v aws >/dev/null", 'test -x "$root/bin/aws"')
+    body = body.replace("cli_version=$(aws --version)", 'cli_version=$("$root/bin/aws" --version)')
+    assert body.count('"$root/bin/aws" s3 cp ') == 2 and "60 aws s3 cp " not in body, "upload CLI hook drift"
+    diagnostics = f'''diagnostics={{}}
+if int(os.environ['EXIT_CODE']):
+    for name in {DIAGNOSTIC_FILES!r}:
+        if name in artifacts:
+            offset=max(0,artifacts[name]['bytes']-{DIAGNOSTIC_BYTES})
+            with Path(name).open('rb') as source:
+                source.seek(offset); body=source.read({DIAGNOSTIC_BYTES})
+            diagnostics[name]={{'offset':offset,'bytes':len(body),'sha256':hashlib.sha256(body).hexdigest(),'body_base64':base64.b64encode(body).decode()}}
+'''
+    assert body.count("code=int(os.environ['EXIT_CODE'])\n") == 1
+    body = body.replace("import hashlib,json,os\n", "import base64,hashlib,json,os\n", 1)
+    body = body.replace("code=int(os.environ['EXIT_CODE'])\n", diagnostics + "code=int(os.environ['EXIT_CODE'])\n", 1)
+    body = body.replace("'artifacts':artifacts}", "'artifacts':artifacts,'failure_diagnostics':diagnostics}", 1)
     # Every generated Python fragment, including the terminal, is syntax checked.
     for fragment in re.findall(r"<<'([A-Z]+)'[^\n]*\n(.*?)\n\1\n", body, re.S):
         compile(fragment[1], "<cold-" + fragment[0] + ">", "exec")
@@ -619,7 +639,7 @@ def collect(s3, prefix, out, instance_id, commit, digest):
     assert reservation["schema"] == SCHEMA and reservation["config_sha256"] == proof["config_sha256"]
     for value in (launch, reservation):
         assert value["source_commit"] == commit and value["source_archive_sha256"] == digest
-    receipts = {}
+    receipts, failure_context = {}, {}
     try:
         with s3.get_object(Bucket=BUCKET, Key=prefix + "/terminal.json")["Body"] as stream:
             raw = stream.read(LOCAL_BYTES + 1)
@@ -632,11 +652,32 @@ def collect(s3, prefix, out, instance_id, commit, digest):
             assert terminal[name] == proof[name], "terminal identity: " + name
         files = terminal["artifacts"]
         assert set(files) <= set(ARTIFACTS), "unexpected terminal body"
-        assert sum(p["bytes"] for p in files.values()) <= 256 << 20, "bounded full collection"
-        for name, identity in files.items():
+        for identity in files.values():
             assert type(identity) is dict and set(identity) == {"bytes", "sha256"}
             assert type(identity["bytes"]) is int and 0 <= identity["bytes"] <= MAX_BODY_BYTES
             assert re.fullmatch("[0-9a-f]{64}", identity["sha256"])
+        assert sum(p["bytes"] for p in files.values()) <= 256 << 20, "bounded full collection"
+        if terminal["status"] == "failed":
+            assert validate_closed(out, proof, terminal, files) is False
+            diagnostics = terminal.get("failure_diagnostics", {})
+            assert type(diagnostics) is dict and set(diagnostics) <= set(DIAGNOSTIC_FILES)
+            for name, diagnostic in diagnostics.items():
+                assert name in files and type(diagnostic) is dict
+                assert set(diagnostic) == {"offset", "bytes", "sha256", "body_base64"}
+                assert type(diagnostic["offset"]) is type(diagnostic["bytes"]) is int
+                assert 0 <= diagnostic["bytes"] <= DIAGNOSTIC_BYTES
+                assert diagnostic["offset"] == max(0, files[name]["bytes"] - DIAGNOSTIC_BYTES)
+                assert diagnostic["offset"] + diagnostic["bytes"] == files[name]["bytes"]
+                assert type(diagnostic["body_base64"]) is str and len(diagnostic["body_base64"]) <= 4 * ((DIAGNOSTIC_BYTES + 2) // 3)
+                body = base64.b64decode(diagnostic["body_base64"], validate=True)
+                assert len(body) == diagnostic["bytes"] and sha(body) == diagnostic["sha256"], "terminal diagnostic authentication"
+                if diagnostic["offset"] == 0:
+                    assert dict(bytes=len(body), sha256=sha(body)) == files[name], "terminal diagnostic body identity"
+            failure_context = dict(original_exit_code=terminal["original_exit_code"], exit_code=terminal["exit_code"],
+                phase=terminal["phase"], failure_diagnostics=diagnostics, terminal_authority=dict(instance_id=instance_id,
+                    config_sha256=proof["config_sha256"], source_commit=commit, source_archive_sha256=digest))
+            write(out / "terminal-failure-diagnostics.json", failure_context)
+        for name, identity in files.items():
             target = regular_path(out / name); target.parent.mkdir(parents=True, exist_ok=True)
             part = target.with_name(target.name + ".part"); part.unlink(missing_ok=True)
             count, hashed = 0, hashlib.sha256()
@@ -659,10 +700,10 @@ def collect(s3, prefix, out, instance_id, commit, digest):
         write(out / "collection-receipt.json", dict(schema=SCHEMA + "-collection", complete=complete,
             instance_id=instance_id, state="terminated", files=receipts, whole_body_verification=True,
             execution_status="SUCCESS" if complete else "FAIL", scientific_status=read_json(out / "screen/summary.json")["status"] if complete else "INVALID",
-            config_sha256=proof["config_sha256"], source_commit=commit, source_archive_sha256=digest))
+            config_sha256=proof["config_sha256"], source_commit=commit, source_archive_sha256=digest, **failure_context))
     except BaseException as error:
         failed = dict(error_type=type(error).__name__, error=str(error), authenticated_files=receipts,
-            execution_status="FAIL", scientific_status="INVALID")
+            execution_status="FAIL", scientific_status="INVALID", **failure_context)
         write(out / "collection-error.json", failed)
         # shared.main writes its own error summary; this ledger must survive it.
         write(out / "collection-authenticated-failure.json", failed)
@@ -810,28 +851,48 @@ def self_check():
         assert all("--setenv=" + n + "=2" in body for n in runtime.retained.THREAD_ENV)
         assert "--setenv=BORSUK_COLD_SOURCE_COMMIT=" + source["commit"] in body
         finish = body[body.index("finish() {\n"):body.index("trap finish EXIT\n")]
-        for mode in ("success", "scientific-fail", "runtime-failed", "upload-failed"):
+        for mode in ("success", "scientific-fail", "runtime-failed", "upload-failed", "runtime-upload-failed"):
             dest = work / mode; dest.mkdir()
             for n in ARTIFACTS:
                 target = dest / n; target.parent.mkdir(parents=True, exist_ok=True); write(target, b"closed fixture\n")
             write(dest / "source-qualification.json", proof); write(dest / "run.log", b"closed log\n")
+            runtime_failed = mode in ("runtime-failed", "runtime-upload-failed")
+            write(dest / "failure.json", dict(status="failed" if runtime_failed else "complete",
+                error_type="RuntimeError", error="synthetic prepublication failure"))
+            write(dest / "screen/summary.json", dict(status="EXECUTION_FAILED", error="synthetic runtime cause"))
+            write(dest / "profile.log", b"prefix" + b"x" * 8192 + b"runtime log tail\n")
+            cli = dest / "bin/aws"; cli.parent.mkdir()
+            cli.write_text('''#!/bin/bash
+root="${0%/bin/aws}"
+test -f "$3" || exit 44
+printf '%s\\n' "$4" >> "$root/uploads"
+if [[ "$MODE" = *upload-failed ]] && [[ "$4" = */artifacts/* ]]; then exit 55; fi
+''')
+            cli.chmod(0o700)
             stub = '''curl() { case "$*" in */api/token*) echo token;; *) echo i-owned;; esac; }
 shutdown() { :; }
-timeout() { shift 2; "$@"; }
-systemd-run() { while [ "$1" != timeout ]; do shift; done; (cd /; "$@"); }
-aws() { test -f "$3" || return 44; printf '%s\\n' "$4" >> "$root/uploads"; if [ "$MODE" = upload-failed ] && [[ "$4" = */artifacts/profile.log ]]; then return 55; fi; }
+systemd-run() { while [ "$1" != timeout ]; do shift; done; (cd /; env -i PATH=/usr/bin:/bin MODE="$MODE" "$@"); }
 '''
-            script = (stub + "root=" + shlex.quote(str(dest)) + "; phase=" + ("cold" if mode == "runtime-failed" else "complete") +
+            script = (stub + "root=" + shlex.quote(str(dest)) + "; phase=" + ("cold" if runtime_failed else "complete") +
                 "; export MODE=" + mode + "; export ARTIFACT_NAMES=" + shlex.quote(" ".join(ARTIFACTS)) + '; cd "$root"\n' +
-                finish.replace("/dev/ttyS0", str(dest / "serial")) + "\n(exit " + ("7" if mode == "runtime-failed" else "0") + "); finish\n")
-            result = subprocess.run(["bash", "-c", script], capture_output=True, cwd="/", timeout=10)
+                finish.replace("/dev/ttyS0", str(dest / "serial")) + "\n(exit " + ("7" if runtime_failed else "0") + "); finish\n")
+            result = subprocess.run(["bash", "-c", script], capture_output=True, cwd="/", timeout=10,
+                env=dict(os.environ, PATH=str(cli.parent) + ":/usr/bin:/bin"))
             terminal = read_json(dest / "terminal.json")
-            assert terminal["exit_code"] == result.returncode == {"runtime-failed": 7, "upload-failed": 96}.get(mode, 0), (mode, result.stderr)
-            assert terminal["original_exit_code"] == (7 if mode == "runtime-failed" else 0)
+            assert terminal["exit_code"] == result.returncode == {"runtime-failed": 7, "upload-failed": 96, "runtime-upload-failed": 96}.get(mode, 0), (mode, result.stderr)
+            assert terminal["original_exit_code"] == (7 if runtime_failed else 0)
             uploads = (dest / "uploads").read_text().splitlines()
             assert bool([n for n in uploads if n.endswith("/screen/COMPLETE.json")]) == (mode in ("success", "scientific-fail"))
             for key in TERMINAL_IDENTITIES:
                 assert terminal[key] == proof[key]
+            if terminal["exit_code"]:
+                diagnostics = terminal["failure_diagnostics"]
+                assert base64.b64decode(diagnostics["failure.json"]["body_base64"]) == (dest / "failure.json").read_bytes()
+                assert base64.b64decode(diagnostics["screen/summary.json"]["body_base64"]) == (dest / "screen/summary.json").read_bytes()
+                assert base64.b64decode(diagnostics["profile.log"]["body_base64"]).endswith(b"runtime log tail\n")
+                assert diagnostics["profile.log"]["bytes"] == 4096
+            if mode == "runtime-upload-failed":
+                shell_failure = terminal
             checks += 1
 
         # Shared.main remains the sole owner of ACKs, fsync and same-ID teardown.
@@ -1129,6 +1190,38 @@ aws() { test -f "$3" || return 44; printf '%s\\n' "$4" >> "$root/uploads"; if [ 
         with patch.object(module, "ROOT", dest.parent), patch.object(module, "preflight", return_value=proof):
             assert collect(transport, PREFIX + "a0001", dest, "i-owned", source["commit"], source["archive_sha256"])["exit_code"] == 7
             assert read_json(dest / "collection-receipt.json")["complete"] is False
+            assert read_json(dest / "collection-receipt.json")["execution_status"] == "FAIL"
+            assert read_json(dest / "collection-receipt.json")["scientific_status"] == "INVALID"
+            # The original runtime error remains available even if every S3
+            # artifact upload failed. Use the real generated-shell diagnostics.
+            failed = dict(terminal, status="failed", phase="cold", exit_code=96, original_exit_code=7,
+                failure_diagnostics=shell_failure["failure_diagnostics"],
+                artifacts={n: shell_failure["artifacts"][n] for n in shell_failure["failure_diagnostics"]})
+            missing = S3({PREFIX + "a0001/terminal.json": encoded(failed)})
+            try:
+                collect(missing, PREFIX + "a0001", dest, "i-owned", source["commit"], source["archive_sha256"])
+            except KeyError:
+                pass
+            else:
+                raise AssertionError("absent artifact admitted")
+            authenticated = read_json(dest / "collection-authenticated-failure.json")
+            assert authenticated["execution_status"] == "FAIL" and authenticated["scientific_status"] == "INVALID"
+            assert authenticated["original_exit_code"] == 7 and authenticated["exit_code"] == 96
+            assert authenticated["failure_diagnostics"] == shell_failure["failure_diagnostics"]
+            assert b"synthetic prepublication failure" in base64.b64decode(authenticated["failure_diagnostics"]["failure.json"]["body_base64"])
+            assert read_json(dest / "terminal-failure-diagnostics.json")["failure_diagnostics"] == authenticated["failure_diagnostics"]
+            for kind in ("hash", "length", "identity"):
+                altered = copy.deepcopy(failed)
+                diagnostic = altered["failure_diagnostics"]["failure.json"]
+                if kind == "hash":
+                    diagnostic["sha256"] = "0" * 64
+                elif kind == "length":
+                    diagnostic["bytes"] = DIAGNOSTIC_BYTES + 1
+                else:
+                    altered["artifacts"]["failure.json"]["sha256"] = "0" * 64
+                bad = S3({PREFIX + "a0001/terminal.json": encoded(altered)})
+                rejected(lambda: collect(bad, PREFIX + "a0001", dest, "i-owned", source["commit"], source["archive_sha256"]))
+                assert bad.calls == [PREFIX + "a0001/terminal.json"]
         os.chdir(oldcwd)
         checks += 1
         forbidden.assert_not_called()
