@@ -1,0 +1,7 @@
+Running as unit: cohere-fixed48-cold.service
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=2
+Service runtime: 7min 31.097s
+CPU time consumed: 9min 9.377s
+Memory peak: 1.5M
+Memory swap peak: 0B

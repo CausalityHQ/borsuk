@@ -1,0 +1,50 @@
+{
+  "schema": "borsuk-fixed48-cold-root-failure-audit-v1",
+  "original_controller_session": 99070,
+  "original_controller_exit_status": 2,
+  "original_exit_code": 2,
+  "terminal_status": "failed",
+  "source_commit": "e4c6ca83850b7865eb4b9f4c3eae6031f86a149e",
+  "source_archive_sha256": "94dc4f24e5ff9e394579700a74a70254d20dcf2d7d0e7e2b571c8196e7378f31",
+  "authenticated_artifact_count": 51,
+  "instance_id": "i-0ff3457907123c929",
+  "independently_observed_instance_state": "terminated",
+  "scientific_disposition": "INVALID",
+  "original_error": "NoneType object has no attribute update",
+  "underlying_gate_failure": "reduce_records asserts temporary_directory_cleanup true; all64 flags false",
+  "masking_failure": "finally summary.update called while summary None after failure reducer raises again",
+  "scratch_root_cause_hypothesis": "Rust tempfile::tempdir inherits shared native TMPDIR outside Python per-call TemporaryDirectory; intentional SIGTERM does not run Rust Drop",
+  "root_cause_source": [
+    "crates/borsuk/examples/two_bit_http.rs:207",
+    "scripts/run_native_cold_first_query.py:44",
+    "scripts/run_cohere_fixed48_cold_http.py:569"
+  ],
+  "diagnostic_raw_records": {
+    "qualified_measurement": false,
+    "rows": 64,
+    "successful_http_rows": 64,
+    "response_order_and_physical_parity_validated": true,
+    "returned_hits10": 619,
+    "denominator10": 640,
+    "recall_at_10": 0.9671875,
+    "cold_latency_ms_linear_interpolation": {
+      "p50": 516.6936989999999,
+      "p90": 594.8058061,
+      "p95": 610.66933335,
+      "p99": 632.2944802699999
+    },
+    "cold_latency_ms_nearest_rank": {
+      "p50": 515.382513,
+      "p90": 599.13949,
+      "p95": 611.199558,
+      "p99": 644.101796
+    },
+    "native_peak_rss_bytes": 45797376,
+    "all_native_process_groups_closed": true,
+    "all_temporary_directory_cleanup": false,
+    "sustainable_qps": "UNMEASURED",
+    "matched_vendor_win": false
+  },
+  "protocol_note": "a4 decision says nearest-rank but source reducer uses linear interpolation; retain both diagnostic labels; frozen original remains INVALID",
+  "paid_replacement_launched": false
+}

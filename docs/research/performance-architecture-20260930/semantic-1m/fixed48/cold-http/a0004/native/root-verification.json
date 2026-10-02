@@ -1,0 +1,11 @@
+{
+  "qualified": true,
+  "source_identity_sha256": "addf62bce23ceee034f22e4d1dfc0b318564d924c6e0fcee34b9336d1532813e",
+  "source_file_count": 399,
+  "authenticated_terminal_artifacts": 16,
+  "focused_tests_passed": 28,
+  "actual_full_workspace_execution": false,
+  "instance_state_verified": "terminated",
+  "new_performance_measurement": false,
+  "next_gate": "Retain authenticated CoHere artifacts, then one fresh truth-free fixed48 falsifier sealed before ground truth."
+}
