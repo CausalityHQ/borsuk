@@ -1,0 +1,39 @@
+{
+    "Contents": [
+        {
+            "Key": "research/semantic-router/20261002/fixed48-cold-a0001/launch.json",
+            "LastModified": "2026-10-02T14:57:01+00:00",
+            "ETag": "\"f3e7b26334c4cef0b4c24d076139069e\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 314,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261002/fixed48-cold-a0001/reservation.json",
+            "LastModified": "2026-10-02T14:56:59+00:00",
+            "ETag": "\"7228b3997d6b6a7ff24637ff8f163775\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 16419,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261002/fixed48-cold-a0001/terminal.json",
+            "LastModified": "2026-10-02T15:00:23+00:00",
+            "ETag": "\"5cbb81865562b57d8160dfb8283c7ebb\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 16226,
+            "StorageClass": "STANDARD"
+        }
+    ],
+    "RequestCharged": null,
+    "Prefix": "research/semantic-router/20261002/fixed48-cold-a0001/"
+}

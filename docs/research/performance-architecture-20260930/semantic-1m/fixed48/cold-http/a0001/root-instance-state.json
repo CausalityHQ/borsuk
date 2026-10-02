@@ -1,0 +1,10 @@
+[
+    {
+        "InstanceId": "i-0863d67a43d2f92bb",
+        "State": {
+            "Code": 48,
+            "Name": "terminated"
+        },
+        "LaunchTime": "2026-10-02T14:56:59+00:00"
+    }
+]

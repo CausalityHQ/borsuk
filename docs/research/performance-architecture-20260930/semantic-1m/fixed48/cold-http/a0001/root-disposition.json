@@ -40,6 +40,24 @@
   "independently_verified_instance_state": "terminated",
   "instance_id": "i-0863d67a43d2f92bb",
   "no_automatic_replacement": true,
+  "observations": {
+    "root-console-latest.json": {
+      "bytes": 108,
+      "sha256": "5dd80cf43b6d6cb50d9719ee6b748ad63f4fbaffcba194b50361039c49b9424a"
+    },
+    "root-console-standard.json": {
+      "bytes": 108,
+      "sha256": "1c92697e5ee0317715d7cf7fab02af42ab2e507fc95492f82d4786c25665b2a2"
+    },
+    "root-instance-state.json": {
+      "bytes": 198,
+      "sha256": "b0189f2c214349188b33fffcf402adee31499ef2a441446cac207c739a6a4f73"
+    },
+    "root-s3-object-list.json": {
+      "bytes": 1367,
+      "sha256": "17c41df1440ab4388ae548f675a3a9fc2bab02ce4e7cab0bd2a5eb2a7717b183"
+    }
+  },
   "s3_artifact_objects_present": 0,
   "schema": "borsuk-fixed48-cold-root-disposition-v1",
   "scientific_status": "INVALID",
