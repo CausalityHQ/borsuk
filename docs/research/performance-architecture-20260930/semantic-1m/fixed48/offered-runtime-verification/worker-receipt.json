@@ -1,0 +1,51 @@
+{
+  "base_commit": "75c548ac95f8e01b60d649bd931f1c6c6620e88d",
+  "checks": [
+    {
+      "bytes": 709,
+      "command": "python3 -m scripts.run_cohere_fixed48_offered_http --self-check (validator absent)",
+      "exit_status": 1,
+      "name": "red",
+      "path": "/tmp/borsuk-offered-runtime-red.log",
+      "sha256": "0748f7213a4fb395d44a562d5e5d6db0e4826e5ae197d15051f77c2b974e7655"
+    },
+    {
+      "bytes": 1391,
+      "command": "bounded actual parent historical_inputs bridge check",
+      "exit_status": 0,
+      "name": "authority",
+      "path": "/tmp/borsuk-offered-runtime-authority.log",
+      "sha256": "3f5cb5e21b8d7d859be81726ea6cbbd32f90ec808ba5e79b0c8f9292da6e0cb8"
+    },
+    {
+      "bytes": 2031,
+      "command": "ulimit -v 262144; MALLOC_ARENA_MAX=2 BORSUK_OFFERED_AUTHORITY_TEST_REPO=/home/rb/worktrees/borsuk-prod-ready-v9 /usr/bin/time -v timeout 55s python3 -m scripts.run_cohere_fixed48_offered_http --self-check",
+      "exit_status": 0,
+      "name": "final",
+      "path": "/tmp/borsuk-offered-runtime-final.log",
+      "sha256": "d81d4cdf408b02e3984c095f49acba864b7a1cdc89e3e1c4abd9033654bfd465"
+    },
+    {
+      "bytes": 915,
+      "command": "ulimit -v 262144; /usr/bin/time -v timeout 55s python3 compile(owned source)",
+      "exit_status": 0,
+      "name": "compile",
+      "path": "/tmp/borsuk-offered-runtime-compile.log",
+      "sha256": "2096021e62c56cca50a68800855e1edf3fe7e479d0b45ab779c88913ec2d0558"
+    }
+  ],
+  "clean_worktree": true,
+  "commit": "32618963cc1a082271b45869eb1be4975ee254e3",
+  "contract": {
+    "bytes": 21408,
+    "path": "/tmp/borsuk-fixed48-offered-runtime-contract.json",
+    "sha256": "786b776b14d26c8ecc49e6c21cd19b0ecdb82dfc1ae6c92b2754008e9a89fdd2"
+  },
+  "known_failures": "No full Rust/Cargo gate run: explicitly prohibited. Historical concurrent seam logs record three existing fixture/closure assertions failing unchanged on base; these were not rerun or modified.",
+  "owned_file": "scripts/run_cohere_fixed48_offered_http.py",
+  "review_correction": "check_cgroup already defaulted drained=False. Explicit False clarifies overlap policy, no behavioral fix claimed. INVALID callback suppression is an actual runtime correction verified by its negative.",
+  "source": {
+    "bytes": 76596,
+    "sha256": "5dce04b26895548f20c11cce1d89ec007b037961f85b105dc54b45988a79729d"
+  }
+}

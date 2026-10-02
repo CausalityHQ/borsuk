@@ -1,0 +1,57 @@
+{
+  "actual_fixture_passed": true,
+  "ann_measurement": false,
+  "cloud_execution": false,
+  "command": "ulimit -v 262144; MALLOC_ARENA_MAX=2 BORSUK_OFFERED_AUTHORITY_TEST_REPO=/home/rb/worktrees/borsuk-prod-ready-v9 /usr/bin/time -v timeout 55s python3 -m scripts.run_cohere_fixed48_offered_http --self-check",
+  "contract": {
+    "bytes": 21408,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-runtime-verification/contract.json",
+    "sha256": "786b776b14d26c8ecc49e6c21cd19b0ecdb82dfc1ae6c92b2754008e9a89fdd2"
+  },
+  "exit_status": 0,
+  "full_rust_suite_reexecuted": false,
+  "logs": {
+    "resources": {
+      "bytes": 799,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-runtime-verification/root-selfcheck.time",
+      "sha256": "1336a2d6c18bd425e87dd2504b4bb990c9be639c842f4e18b108d59b460e4d35"
+    },
+    "root": {
+      "bytes": 1232,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-runtime-verification/root-selfcheck.log",
+      "sha256": "53d5613fb3d788ff0b91e3c5b42ccd3afe8b4d05fd29a368a4eef57b396d6a69"
+    },
+    "worker": {
+      "authority": {
+        "bytes": 1391,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-runtime-verification/worker-authority.log",
+        "sha256": "3f5cb5e21b8d7d859be81726ea6cbbd32f90ec808ba5e79b0c8f9292da6e0cb8"
+      },
+      "compile": {
+        "bytes": 915,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-runtime-verification/worker-compile.log",
+        "sha256": "2096021e62c56cca50a68800855e1edf3fe7e479d0b45ab779c88913ec2d0558"
+      },
+      "final": {
+        "bytes": 2031,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-runtime-verification/worker-final.log",
+        "sha256": "d81d4cdf408b02e3984c095f49acba864b7a1cdc89e3e1c4abd9033654bfd465"
+      },
+      "red": {
+        "bytes": 709,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-runtime-verification/worker-red.log",
+        "sha256": "0748f7213a4fb395d44a562d5e5d6db0e4826e5ae197d15051f77c2b974e7655"
+      }
+    }
+  },
+  "native_execution": false,
+  "qualified": true,
+  "schema": "borsuk-fixed48-offered-runtime-root-verification-v1",
+  "source": {
+    "bytes": 76596,
+    "path": "scripts/run_cohere_fixed48_offered_http.py",
+    "sha256": "5dce04b26895548f20c11cce1d89ec007b037961f85b105dc54b45988a79729d"
+  },
+  "source_commit": "99d46c287811e5c158f3ebd24a2d5a8fc1002aeb",
+  "worker_commit": "32618963cc1a082271b45869eb1be4975ee254e3"
+}

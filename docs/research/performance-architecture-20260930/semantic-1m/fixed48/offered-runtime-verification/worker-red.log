@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/rb/worktrees/borsuk-fixed48-offered-runtime/scripts/run_cohere_fixed48_offered_http.py", line 41, in <module>
+    print(json.dumps(self_check(), sort_keys=True))
+                     ~~~~~~~~~~^^
+  File "/home/rb/worktrees/borsuk-fixed48-offered-runtime/scripts/run_cohere_fixed48_offered_http.py", line 24, in self_check
+    assert callable(globals().get('validate_success')), 'offered authenticated response validator is missing'
+           ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: offered authenticated response validator is missing

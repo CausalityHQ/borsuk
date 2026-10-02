@@ -1,0 +1,24 @@
+{"actual_authenticated_panel": 64, "authority": {"actual_root_bridge": true, "authenticated_artifacts": 56, "bridge": {"bytes": 27212, "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/offered-cold-source-authority.json", "sha256": "8398e4948e0a0b15343c923148c1034d70405c03693ec71af8a61c8627ed07b9"}, "git_unavailable": true, "native_source_files": 399, "negative_cli": 3, "sealed_panel": 64, "tamper_checks": 8, "unused_binaries_omitted": 2}, "campaign": [{"mode": "pass", "positions": 384, "status": "PASS"}, {"mode": "scientific-fail", "positions": 384, "status": "FAIL"}, {"mode": "identity", "positions": 384, "status": "INVALID"}, {"mode": "callback", "positions": 384, "status": "INVALID"}, {"mode": "stage", "positions": 384, "status": "INVALID"}], "dispatch_limit_ns": 125000000, "finite_rate_edge_accepted": true, "invalid_callback_suppressed": true, "overlap": [{"actual_threads": 2, "default_rejects_live_peer": false, "explicit_concurrent_policy": true, "owned_cleanup": true}, {"actual_threads": 2, "default_rejects_live_peer": true, "explicit_concurrent_policy": false, "owned_cleanup": true}], "owners": 5, "quality_boundary": [607, 608], "self_check": true, "sixth_drop": true}
+	Command being timed: "timeout 55s python3 -m scripts.run_cohere_fixed48_offered_http --self-check"
+	User time (seconds): 6.13
+	System time (seconds): 0.59
+	Percent of CPU this job got: 80%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:08.31
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 131976
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 139427
+	Voluntary context switches: 293
+	Involuntary context switches: 212
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 280
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
