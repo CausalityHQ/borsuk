@@ -186,7 +186,7 @@ def authenticate_bindings(a, proofs):
             "historical coverage must remain explicitly incomplete")
 
 
-def validate_population(a):
+def validate_population(a, *, historical_metadata_replay=False):
     spec = a["selection"]
     geometry = dict(candidate_interval=[ROWS, 10_000_000],
                     excluded_consumed_intervals=[[1_000_000, 1_002_000], [1_005_000, 1_006_000]],
@@ -198,7 +198,11 @@ def validate_population(a):
     require(spec["seed_text"] == SEED.decode() and spec["seed_sha256"] == seed.hex()
             and type(spec["seed_integer"]) is int and spec["seed_integer"] == int.from_bytes(seed, "big"),
             "sampling seed authority differs")
-    require(spec["python"] == dict(implementation=platform.python_implementation(), version=platform.python_version()),
+    # Read-only replay authenticates the original sampling provenance; only new
+    # sampling requires that interpreter on the current host.
+    python = (dict(implementation="CPython", version="3.14.4") if historical_metadata_replay else
+              dict(implementation=platform.python_implementation(), version=platform.python_version()))
+    require(spec["python"] == python,
             "frozen Python implementation/version differs")
     require(type(spec["count"]) is int and spec["count"] == 64 and spec["rule"] == RULE
             and spec["failure_policy"] == FAILURE_POLICY, "fixed sampling rule/policy differs")
@@ -249,8 +253,8 @@ def sampled_ranks(a):
     return random.Random(a["selection"]["seed_integer"]).sample(range(POPULATION), 64)
 
 
-def validate_panel(panel, a):
-    validate_population(a)
+def validate_panel(panel, a, *, historical_metadata_replay=False):
+    validate_population(a, historical_metadata_replay=historical_metadata_replay)
     require(len(panel) == 64 and len({r["source_ordinal"] for r in panel}) == 64,
             "STOP whole panel: duplicate or count failure")
     for ordinal, (row, rank) in enumerate(zip(panel, sampled_ranks(a))):

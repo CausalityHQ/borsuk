@@ -137,7 +137,7 @@ def panel_authority(config, repo, old):
     # authenticates that original value rather than substituting the worker's.
     selector.FIXED_PROTOCOL = dict(selector.FIXED_PROTOCOL, python=data["selector_protocol"]["python"])
     selector.load_protocol(repo, REFS["selector_protocol"]["path"], REFS["selector_protocol"]["sha256"])
-    original, first, pins = selector.previous.authenticate(repo)
+    original, first, pins = selector.previous.authenticate(repo, historical_metadata_replay=True)
     second = selector.authenticate_top32(repo, original, first, pins)
     priors = [first, second]
     require(p["prior_panels_vector_hashes"] == a["prior_panels_vector_hashes"] == priors,
@@ -265,7 +265,8 @@ def authorities(config, repo):
             and r["complete"]["path"] == str(directory / "COMPLETE.json"), "retained paths differ")
     read_pointer(r["config"]); read_pointer(r["complete"])
     # Authenticate the entire 30-body retained closure; this never invokes a builder.
-    marker = retained.replay(Path(r["config"]["path"]), r["config"]["sha256"], repo, directory)
+    marker = retained.replay(Path(r["config"]["path"]), r["config"]["sha256"], repo, directory,
+        historical_metadata_replay=True)
     old = offline.decode(retained.archived.read_ref(repo, retained.FIXED["archived_config"]))
     data = panel_authority(config, repo, old)
     proof = native_authority(config, repo)
@@ -752,10 +753,77 @@ def self_check():
         old = offline.decode(retained.archived.read_ref(repo, retained.FIXED["archived_config"]))
         metadata = panel_authority(frozen, repo, old)
         require(len(metadata["panel"]["selected"]) == 64, "one sealed real metadata roster, no vector bodies")
+        # Historical metadata must replay on the worker's Python without admitting
+        # new sampling there or changing the authenticated sampling provenance.
+        import platform
+        coverage = sys.modules["select_cohere_fresh64_coverage"]
+        protocol = coverage.read_checked(repo, coverage.PINS["prospective_protocol"])
+        population_pin = protocol["source_population_authority"]
+        population = coverage.read_checked(repo, population_pin)
+        population_before = canonical(population)
+        version_function = platform.python_version
+        with patch.object(platform, "python_version", return_value="3.12.0"):
+            require(panel_authority(frozen, repo, old) == metadata,
+                    "authenticated historical metadata differs on Python3.12 replay")
+            retained_path = repo / BASE / "artifact-reproduction/a0002/screen/config.json"
+            retained_sha = identity(retained_path)["sha256"]
+            original_retained = retained.read_config(retained_path, retained_sha, repo,
+                historical_metadata_replay=True)
+            require(original_retained == read_json(retained_path), "historical retained config drift")
+            retained.authorities(original_retained, repo, historical_metadata_replay=True); checks += 1
+            rejected(lambda: retained.read_config(retained_path, retained_sha, repo))
+            for field in ("code_sha256", "execution_source"):
+                altered = copy.deepcopy(original_retained)
+                if field == "code_sha256": altered[field][retained.OWN] = "0" * 64
+                else: altered[field]["archive_sha256"] = "0" * 64
+                changed_path = base / "changed-retained-config.json"
+                changed_path.write_bytes(canonical(altered))
+                rejected(lambda: retained.read_config(changed_path, identity(changed_path)["sha256"], repo,
+                    historical_metadata_replay=True))
+            fixture = base / "historical-receipts"
+            terminal = offline.decode(retained.archived.read_ref(repo, retained.HISTORICAL_TERMINAL))
+            directory = str(Path(retained.HISTORICAL_TERMINAL["path"]).parent)
+            historical_pins = [retained.HISTORICAL_TERMINAL, *(dict(terminal["artifacts"][n],
+                path=directory + "/" + n) for n in ("screen/config.json", "screen/provenance.json",
+                    "screen/COMPLETE.json", "source-qualification.json"))]
+            for pin in historical_pins:
+                target = fixture / pin["path"]; target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(retained.archived.read_ref(repo, pin))
+            require(retained.historical_config(fixture)[0] == original_retained, "transported historical receipts")
+            for pin in historical_pins:
+                target = fixture / pin["path"]; body = target.read_bytes()
+                target.write_bytes(body + b" ")
+                rejected(lambda: retained.historical_config(fixture))
+                target.write_bytes(body)
+            for call in (lambda: coverage.authenticate(repo),
+                         lambda: coverage.prepare(repo),
+                         lambda: coverage.original.select_panel(population)):
+                try:
+                    call()
+                except ValueError as error:
+                    require(str(error) == "frozen Python implementation/version differs",
+                            "fresh sampling rejected for the wrong reason")
+                else:
+                    raise AssertionError("cross-version fresh sampling admitted")
+                checks += 1
+            for field, value in (("version", "3.12.0"), ("implementation", "PyPy")):
+                altered = copy.deepcopy(population)
+                altered["selection"]["python"][field] = value
+                rejected(lambda: coverage.original.validate_population(
+                    altered, historical_metadata_replay=True))
+            altered = copy.deepcopy(population)
+            altered["selection"]["population_size"] -= 1
+            rejected(lambda: coverage.original.validate_population(
+                altered, historical_metadata_replay=True))
+            rejected(lambda: coverage.read_checked(repo, dict(population_pin, sha256="0" * 64)))
+            broken_refs = copy.deepcopy(REFS); broken_refs["panel.json"]["sha256"] = "0" * 64
+            with patch.dict(REFS, broken_refs):
+                rejected(lambda: panel_authority(frozen, repo, old))
+        require(platform.python_version is version_function and canonical(population) == population_before
+                and panel_authority(frozen, repo, old) == metadata,
+                "metadata replay leaked interpreter or authority changes")
+        checks += 1
         check_code(frozen, repo); checks += 1
-        broken_refs = copy.deepcopy(REFS); broken_refs["panel.json"]["sha256"] = "0" * 64
-        with patch.dict(REFS, broken_refs):
-            rejected(lambda: panel_authority(frozen, repo, old))
 
         # Original campaign shapes exercise the actual seven-stage receipt and
         # cgroup validators. Only the synthetic native source identity is mocked.

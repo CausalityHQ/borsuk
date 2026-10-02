@@ -13,7 +13,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import platform
 import random
 import stat
 import sys
@@ -103,7 +102,7 @@ def read_checked(repo, pin, raw=False):
         os.close(directory)
 
 
-def authenticate(repo):
+def authenticate(repo, *, historical_metadata_replay=False):
     pins = copy.deepcopy(PINS)
     read_checked(repo, pins["preregister"], raw=True)
     protocol = read_checked(repo, pins["prospective_protocol"])
@@ -138,10 +137,10 @@ def authenticate(repo):
         pins["source_proof_" + name] = pin
         proofs[name] = read_checked(repo, pin)
     original.authenticate_bindings(a, proofs)
-    original.validate_population(a)
+    original.validate_population(a, historical_metadata_replay=historical_metadata_replay)
 
     previous = read_checked(repo, pins["previous_consumed_panel"])
-    original.validate_panel(previous["selected"], a)
+    original.validate_panel(previous["selected"], a, historical_metadata_replay=historical_metadata_replay)
     expected_previous = dict(schema="borsuk-cohere-first1m-fresh64-locators-v1", metadata_only=True,
                              root_pending=False, qualification=False, complete_historical_coverage=False,
                              vector_or_truth_bodies_opened=False,
@@ -246,7 +245,7 @@ def selection_spec(a, prior):
     return dict(**geometry, population_sha256=value_sha(geometry), count=64, seed_text=SEED,
                 seed_sha256=seed.hex(), seed_integer=int.from_bytes(seed, "big"),
                 seed_derivation="SHA256 UTF-8 seed text; entire digest as unsigned big-endian integer",
-                python=dict(implementation=platform.python_implementation(), version=platform.python_version()),
+                python=dict(a["selection"]["python"]),
                 rule=RULE, failure_policy=original.FAILURE_POLICY)
 
 

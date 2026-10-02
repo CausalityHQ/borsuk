@@ -132,7 +132,7 @@ p=h.read_json(repo/h.BASE/'implementation-gates/a0001/source-qualification.json'
 s=h.qualification.worker.source_hashes(repo)
 h.require(s==p['source_sha256'] and len(s)==399 and h.qualification.worker.source_identity(s)==h.SOURCE_ID,'current399 source mismatch')
 r=h.read_json(repo/h.BASE/'artifact-reproduction/a0002/screen/generation/manifest.json')
-h.retained.read_config(repo/h.BASE/'artifact-reproduction/a0002/screen/config.json',c['retained']['config']['sha256'],repo)
+h.retained.read_config(repo/h.BASE/'artifact-reproduction/a0002/screen/config.json',c['retained']['config']['sha256'],repo,historical_metadata_replay=True)
 shards=a['metadata_authority']['ordered_train_shards']
 indexes={x['shard_ordinal'] for x in a['panel']['selected']}
 indexes.update(i for i,x in enumerate(shards) if any(x['source_start']<hi and x['source_end_exclusive']>lo for lo,hi in ((1000000,1002000),(1005000,1006000))))

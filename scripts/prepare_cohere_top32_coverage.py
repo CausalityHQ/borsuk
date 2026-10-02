@@ -278,7 +278,7 @@ def validate_metadata(data, selector=None):
                             for e in a["consumed_query_ledger"]), "changed/consumed locator; STOP no replacement")
 
 
-def load_inputs(config, repo, helper=None):
+def load_inputs(config, repo, helper=None, *, historical_metadata_replay=False):
     require(all(config["refs"].get(n) == p for n, p in FIXED.items()), "fixed refs differ")
     data = {n: json.loads(read_ref(repo, p)) for n, p in FIXED.items() if n != "preregister"}
     read_ref(repo, FIXED["preregister"])
@@ -306,8 +306,11 @@ def load_inputs(config, repo, helper=None):
     require(config["corpus"]["raw"]["bytes"] == 3_072_000_000
             and config["builder"] == data["quality_config"]["binaries"]["builder"], "raw/builder authority differs")
     validate_metadata(data, helper.selector)
-    require(identity(repo / "scripts/select_cohere_fresh64_coverage.py")["sha256"]
-            == data["root_metadata_freeze"]["selector_sha256"], "frozen selector source identity differs")
+    selector = "scripts/select_cohere_fresh64_coverage.py"
+    selector_sha = (config["code_sha256"][selector] if historical_metadata_replay else
+                    identity(repo / selector)["sha256"])
+    require(selector_sha == data["root_metadata_freeze"]["selector_sha256"],
+            "frozen selector source identity differs")
     return data, old
 
 

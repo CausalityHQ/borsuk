@@ -79,6 +79,8 @@ ARTIFACTS = ("config.json", "source-qualification.json", "input-hashes.json", "l
     "sq8-ordinal-check.json", "builder-config.json", "build.log", "build-resources.txt",
     "build-resources.json", "payload-verification.json", "provenance.json", "cleanup.json", "resources.json")
 RETAINED_FILES = (*INPUT_FILES, "builder", *("generation/" + n for n in GENERATION_FILES), *ARTIFACTS)
+HISTORICAL_TERMINAL = dict(path=BASE + "fixed48/artifact-reproduction/a0002/aws-terminal.json",
+    bytes=6499, sha256="afd23c4d99a5f0b2359c3c1861530b144aa6e19b01f842f0d6f71df945e770b3")
 
 
 def regular_path(path):
@@ -93,7 +95,37 @@ def read_json(path):
     return primitives.decode(path.read_bytes())
 
 
-def read_config(path, sha, repo):
+def historical_config(repo):
+    """Authenticate the original executor map against its closed artifact run."""
+    terminal = primitives.decode(archived.read_ref(repo, HISTORICAL_TERMINAL))
+    require(terminal["status"] == terminal["phase"] == "complete"
+            and terminal["exit_code"] == terminal["original_exit_code"] == 0, "historical artifact run not closed")
+    directory = str(Path(HISTORICAL_TERMINAL["path"]).parent)
+    names = ("screen/config.json", "screen/provenance.json", "screen/COMPLETE.json", "source-qualification.json")
+    bodies = {n: primitives.decode(archived.read_ref(repo, dict(terminal["artifacts"][n],
+        path=directory + "/" + n))) for n in names}
+    config, provenance, marker, proof = (bodies[n] for n in names)
+    pin = terminal["artifacts"]["screen/config.json"]
+    require(pin == marker["files"]["config.json"] and marker["config_sha256"] == provenance["config_sha256"]
+            == proof["config_sha256"] == terminal["config_sha256"] == pin["sha256"]
+            and provenance["code_sha256"] == config["code_sha256"] and provenance["refs"] == config["refs"]
+            and provenance["execution_source"] == config["execution_source"]
+            and config["execution_source"] == dict(commit=proof["source_archive_commit"],
+                archive_sha256=proof["source_archive_sha256"])
+            and all(proof[n] == terminal[n] for n in ("source_archive_commit", "source_archive_sha256",
+                "code_identity_sha256", "refs_identity_sha256", "builder_assurance_sha256", "builder_binary_sha256")),
+            "historical config/source/provenance binding differs")
+    require(marker["schema"] == SCHEMA + "-complete" and marker["passed"] is True
+            and marker["build_invocations"] == 1 and marker["process_cleanup"] is marker["retained"] is True
+            and marker["query_or_truth_used"] is marker["quality_measured"] is marker["cold_http_measured"] is False
+            and set(marker["files"]) == set(RETAINED_FILES)
+            and archived.prior.value_sha(marker["files"]) == marker["roster_sha256"]
+            and all(pin == terminal["artifacts"]["screen/" + n] for n, pin in marker["files"].items()),
+            "historical retained closure differs")
+    return config, pin["sha256"]
+
+
+def read_config(path, sha, repo, *, historical_metadata_replay=False):
     require(__debug__, "optimized Python disables authority checks")
     path = regular_path(path)
     require(path.is_file() and path.stat().st_size <= 1 << 20, "bounded regular config required")
@@ -104,9 +136,13 @@ def read_config(path, sha, repo):
             and all(canonical(config.get(k)) == canonical(v) for k, v in EXPECTED.items()), "configuration contract differs")
     require(Path(__file__).resolve() == repo / OWN, "helper origin differs")
     require(config["refs"] == FIXED and set(config["code_sha256"]) == set(CODE), "exact source/ref roster differs")
-    for name, digest in config["code_sha256"].items():
-        require(identity(regular_path(archived.prior.repo_path(repo, name)))["sha256"] == digest,
-                "code identity differs: " + name)
+    if historical_metadata_replay:
+        original, original_sha = historical_config(repo)
+        require(config == original and sha == original_sha, "historical artifact configuration differs")
+    else:
+        for name, digest in config["code_sha256"].items():
+            require(identity(regular_path(archived.prior.repo_path(repo, name)))["sha256"] == digest,
+                    "code identity differs: " + name)
     source = config["execution_source"]
     require(set(source) == {"commit", "archive_sha256"}
             and re.fullmatch("[0-9a-f]{40}", source["commit"])
@@ -147,11 +183,13 @@ def expected_payloads(data):
     return result
 
 
-def authorities(config, repo):
+def authorities(config, repo, *, historical_metadata_replay=False):
+    if historical_metadata_replay:
+        require(config == historical_config(repo)[0], "historical artifact authority differs")
     bodies = {n: archived.read_ref(repo, p) for n, p in FIXED.items()}
     data = {n: primitives.decode(b) for n, b in bodies.items() if n != "preregister"}
     old = data["archived_config"]
-    archived.load_inputs(old, repo, metadata_helper(repo))
+    archived.load_inputs(old, repo, metadata_helper(repo), historical_metadata_replay=historical_metadata_replay)
     require(config["corpus"] == old["corpus"] and config["builder"] == old["builder"], "immutable source/builder differs")
     historical, root, builder = (data[n] for n in ("historical_root", "original_generation", "original_builder"))
     require(root["schema"] == "borsuk-two-bit-generation-v8" and historical["schema"] == "borsuk-two-bit-generation-v4"
@@ -448,10 +486,10 @@ def run(config_path, sha, repo, out):
         raise
 
 
-def replay(config_path, sha, repo, out):
+def replay(config_path, sha, repo, out, *, historical_metadata_replay=False):
     repo, out = Path(repo).resolve(), regular_path(out)
-    config = read_config(config_path, sha, repo)
-    data, binary, proof = authorities(config, repo)
+    config = read_config(config_path, sha, repo, historical_metadata_replay=historical_metadata_replay)
+    data, binary, proof = authorities(config, repo, historical_metadata_replay=historical_metadata_replay)
     marker = read_json(out / "COMPLETE.json")
     require(marker["schema"] == SCHEMA + "-complete" and marker["passed"] is True
             and marker["config_sha256"] == sha and marker["build_invocations"] == 1
@@ -515,14 +553,17 @@ def _self_check():
             frozen_path.write_bytes(canonical(changed))
             rejected(lambda: read_config(frozen_path, identity(frozen_path)["sha256"], repo))
         frozen_path.write_bytes(canonical(frozen))
-        authenticated, binary, archived_proof = authorities(frozen, repo)
+        original, original_sha = historical_config(repo)
+        require(read_config(repo / Path(HISTORICAL_TERMINAL["path"]).parent / "screen/config.json",
+                original_sha, repo, historical_metadata_replay=True) == original, "historical configuration authority")
+        authenticated, binary, archived_proof = authorities(original, repo, historical_metadata_replay=True)
         require(hashlib.sha256(binary).hexdigest() == archived.BUILDER_SHA
                 and archived_proof["original_full_workspace_execution_reused"] is True
                 and archived_proof["native_rebuilt"] is False, "archived qualified binary authority")
-        changed = copy.deepcopy(frozen); changed["payloads"]["plane/page_digests.bin"]["sha256_from"] = "invented"
-        rejected(lambda: authorities(changed, repo))
-        changed = copy.deepcopy(frozen); changed["corpus"]["raw"]["sha256"] = "0" * 64
-        rejected(lambda: authorities(changed, repo))
+        changed = copy.deepcopy(original); changed["payloads"]["plane/page_digests.bin"]["sha256_from"] = "invented"
+        rejected(lambda: authorities(changed, repo, historical_metadata_replay=True))
+        changed = copy.deepcopy(original); changed["corpus"]["raw"]["sha256"] = "0" * 64
+        rejected(lambda: authorities(changed, repo, historical_metadata_replay=True))
         ref_reader = archived.read_ref
         full_pin = primitives.decode(ref_reader(repo, archived.FIXED["quality_config"]))["refs"]["full_verification"]
         def bad_proof(root, pointer):
@@ -532,7 +573,7 @@ def _self_check():
                 return canonical(proof)
             return body
         with patch.object(archived, "read_ref", bad_proof):
-            rejected(lambda: authorities(frozen, repo))
+            rejected(lambda: authorities(original, repo, historical_metadata_replay=True))
         group = base / "cgroup"; group.mkdir()
         for name, value in {"memory.max": str(12 << 30), "memory.swap.max": "0",
                 "cpu.max": "200000 100000", "pids.max": "512", "memory.events": "oom 0\noom_kill 0\nmax 0\n"}.items():
@@ -623,8 +664,8 @@ def _self_check():
             result = publishing(path, value)
             publications.append(path.name)
             return result
-        with patch.dict(os.environ, {n: "2" for n in THREAD_ENV}), patch.multiple(sys.modules[__name__], read_config=lambda *a: config,
-                authorities=lambda *a: (data, b"binary", proof),
+        with patch.dict(os.environ, {n: "2" for n in THREAD_ENV}), patch.multiple(sys.modules[__name__], read_config=lambda *a, **kw: config,
+                authorities=lambda *a, **kw: (data, b"binary", proof),
                 dependencies=lambda *a: (SimpleNamespace(download=download, accounted_helpers=lambda a: nullcontext()), native),
                 admission=lambda *a: None,
                 publish=observed_publish,
@@ -635,7 +676,7 @@ def _self_check():
             require(all((out / n).is_file() for n in RETAINED_FILES), "retained source/generation roster")
             require(publications[-1] == "COMPLETE.json" and all(
                 (out / n).stat().st_mode & 0o222 == 0 for n in RETAINED_FILES), "read-only retention/marker-last")
-            require(replay(config_path, digest, repo, out)["passed"], "retained replay")
+            require(replay(config_path, digest, repo, out, historical_metadata_replay=True)["passed"], "retained replay")
             copied = base / "transported"
             archived.shutil.copytree(out, copied)
             require(replay(config_path, digest, repo, copied)["passed"], "transported retained replay")
