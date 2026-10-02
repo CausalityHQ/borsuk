@@ -7,6 +7,7 @@ controller_code_sha256={every CODE path:SHA256}, native_source_manifest=
 --semantic-1m-test-build selects compile-only execution of the real test-build script.
 --semantic-1m-implementation selects the serial implementation gate script.
 --startup-wave8-implementation reuses that lifecycle with separate authority.
+--root-reuse-implementation qualifies a root-frozen authenticated-root candidate.
 CLI aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT.
 """
 import contextlib
@@ -46,10 +47,17 @@ SEMANTIC_1M = False
 TEST_BUILD = False
 IMPLEMENTATION = False
 STARTUP_WAVE8 = False
+ROOT_REUSE = False
 STARTUP_WAVE8_COMMIT = '1e4ed13777a59e7acdd34acc9510b9d156aa17bf'
 STARTUP_WAVE8_IDENTITY = '7e4fabf96284e4ccd080cf14b8bfbfd0f3ff41271e920c8e39d5d1fa252cd830'
 STARTUP_WAVE8_DELTA = ('crates/borsuk/src/object_native_generation.rs',
                       'crates/borsuk/src/two_bit_generation.rs')
+ROOT_REUSE_DELTA = ('crates/borsuk/examples/two_bit_http.rs',
+                    'crates/borsuk/src/object_native_generation.rs',
+                    'crates/borsuk/src/two_bit_generation.rs',
+                    'crates/borsuk/src/two_bit_index.rs',
+                    'crates/borsuk/src/two_bit_store.rs')
+NATIVE_DELTA = STARTUP_WAVE8_DELTA
 RECEIPT_SCHEMA = 'borsuk-native-workspace-execution-receipt-v1'
 WALL = 9000
 INSTANCE_TYPE, IMAGE_ID = 'c7i.2xlarge', semantic.IMAGE_ID
@@ -92,13 +100,13 @@ def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 
 
-def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False):
+def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False):
     """Select the protocol explicitly in every controller/worker process."""
-    global SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
+    global SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, NATIVE_DELTA, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
     global SCHEMA, CONFIG_SCHEMA, RECEIPT_SCHEMA, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, TERMINAL_IDENTITIES
-    assert type(semantic_1m) is type(test_build) is type(implementation) is type(startup_wave8) is bool
-    assert not (startup_wave8 and test_build), 'mutually exclusive execution modes'
-    if startup_wave8:
+    assert type(semantic_1m) is type(test_build) is type(implementation) is type(startup_wave8) is type(root_reuse) is bool
+    assert not (startup_wave8 and root_reuse) and not ((startup_wave8 or root_reuse) and test_build), 'mutually exclusive execution modes'
+    if startup_wave8 or root_reuse:
         semantic_1m = implementation = True
     assert not (test_build and implementation), 'mutually exclusive execution modes'
     assert not (test_build or implementation) or semantic_1m, 'script requires explicit semantic-1m mode'
@@ -106,8 +114,10 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
     TEST_BUILD = test_build
     IMPLEMENTATION = implementation
     STARTUP_WAVE8 = startup_wave8
-    RELEASE_ARTIFACTS = ('binaries/two_bit_http',) if startup_wave8 else FULL_RELEASE_ARTIFACTS
-    TERMINAL_IDENTITIES = (*FULL_TERMINAL_IDENTITIES, 'controller_source_commit', 'candidate_delta_paths') if startup_wave8 else FULL_TERMINAL_IDENTITIES
+    ROOT_REUSE = root_reuse
+    NATIVE_DELTA = ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
+    RELEASE_ARTIFACTS = ('binaries/two_bit_http',) if startup_wave8 or root_reuse else FULL_RELEASE_ARTIFACTS
+    TERMINAL_IDENTITIES = (*FULL_TERMINAL_IDENTITIES, 'controller_source_commit', 'candidate_delta_paths') if startup_wave8 or root_reuse else FULL_TERMINAL_IDENTITIES
     ARTIFACTS = (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS) if implementation else FULL_ARTIFACTS
     ROOT = (semantic.ROOT.parent/'semantic-1m' if semantic_1m else semantic.ROOT/'metadata-waves') / ('implementation-gates/remote-implementation' if implementation else 'implementation-gates/remote-test-build' if test_build else 'implementation-gates/remote-full')
     CONFIG = ROOT/'config.json'
@@ -141,21 +151,32 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
         RECEIPT_SCHEMA = 'borsuk-startup-wave8-implementation-gates-receipt-v1'
         CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_startup_wave8_implementation.sh')
         FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_startup_wave8_implementation.sh'])
+    if root_reuse:
+        ROOT = semantic.ROOT.parent/'semantic-1m/startup-wave8/root-reuse/implementation-gates'
+        CONFIG = ROOT/'config.json'
+        TOKEN_PREFIX = 'root-reuse-implementation-'
+        PREFIX = 'research/semantic-router/20261002/' + TOKEN_PREFIX
+        TAG = 'borsuk-root-reuse-implementation'
+        SCHEMA = 'borsuk-root-reuse-implementation-gates-spot-v1'
+        CONFIG_SCHEMA = 'borsuk-root-reuse-implementation-gates-v1'
+        RECEIPT_SCHEMA = 'borsuk-root-reuse-implementation-gates-receipt-v1'
+        CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_root_reuse_implementation.sh')
+        FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_root_reuse_implementation.sh'])
 
 
 @contextlib.contextmanager
-def execution_mode(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False):
+def execution_mode(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False):
     """Restore the caller's protocol after a worker or synthetic check."""
-    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8
-    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8)
+    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse)
     try:
         yield
     finally:
-        configure(previous[0], test_build=previous[1], implementation=previous[2], startup_wave8=previous[3])
+        configure(previous[0], test_build=previous[1], implementation=previous[2], startup_wave8=previous[3], root_reuse=previous[4])
 
 
 def mode_flag():
-    return ' --startup-wave8-implementation' if STARTUP_WAVE8 else ' --semantic-1m-implementation' if IMPLEMENTATION else ' --semantic-1m-test-build' if TEST_BUILD else ' --semantic-1m' if SEMANTIC_1M else ''
+    return ' --root-reuse-implementation' if ROOT_REUSE else ' --startup-wave8-implementation' if STARTUP_WAVE8 else ' --semantic-1m-implementation' if IMPLEMENTATION else ' --semantic-1m-test-build' if TEST_BUILD else ' --semantic-1m' if SEMANTIC_1M else ''
 
 
 def qualify(base=Path('.')):
@@ -174,13 +195,14 @@ def qualify(base=Path('.')):
     assert type(pointer['bytes']) is int and pointer['bytes'] > 0
     assert worker.artifact(base/path) == {key:pointer[key] for key in ('bytes','sha256')}, 'manifest authority'
     manifest = json.loads((base/path).read_bytes())
-    if STARTUP_WAVE8:
+    if STARTUP_WAVE8 or ROOT_REUSE:
         assert re.fullmatch('[0-9a-f]{40}', config['controller_source_commit']), 'frozen controller commit'
-        assert manifest['schema'] == 'borsuk-startup-wave8-native-source-manifest-v1'
+        assert manifest['schema'] == ('borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
         assert manifest['candidate_qualification_pending'] is True, 'source authority is not completed assurance'
-        assert type(manifest['candidate_delta_paths']) is list and manifest['candidate_delta_paths'] == list(STARTUP_WAVE8_DELTA), 'exact candidate native delta'
-        assert manifest['native_source_commit'] == STARTUP_WAVE8_COMMIT, 'fixed startup candidate commit'
-        assert manifest['source_identity_sha256'] == STARTUP_WAVE8_IDENTITY, 'fixed startup candidate identity'
+        assert type(manifest['candidate_delta_paths']) is list and manifest['candidate_delta_paths'] == list(NATIVE_DELTA), 'exact candidate native delta'
+        if STARTUP_WAVE8:
+            assert manifest['native_source_commit'] == STARTUP_WAVE8_COMMIT, 'fixed startup candidate commit'
+            assert manifest['source_identity_sha256'] == STARTUP_WAVE8_IDENTITY, 'fixed startup candidate identity'
         assert re.fullmatch('[0-9a-f]{40}', manifest['control_native_source_commit'])
     inventory = worker.source_hashes(base)
     assert type(manifest['source_file_count']) is int and manifest['source_file_count'] == len(inventory) == 399
@@ -189,7 +211,7 @@ def qualify(base=Path('.')):
     assert identity == manifest['source_identity_sha256']
     assert SEMANTIC_1M or identity == SOURCE_IDENTITY, 'historical native source identity'
     assert re.fullmatch('[0-9a-f]{40}', manifest['native_source_commit'])
-    proof = dict(schema='borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
+    proof = dict(schema='borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
         config_path=str(CONFIG), config_sha256=worker.sha(body), campaign_schema=SCHEMA,
         source_sha256=inventory, source_identity_sha256=identity, source_file_count=399,
         native_source_commit=manifest['native_source_commit'], native_source_manifest=pointer,
@@ -202,15 +224,15 @@ def qualify(base=Path('.')):
         proof.update(execution_kind=FIXED['execution_kind'])
         if TEST_BUILD:
             proof.update(actual_workspace_test_build=False)
-    if STARTUP_WAVE8:
+    if STARTUP_WAVE8 or ROOT_REUSE:
         proof.update(controller_source_commit=config['controller_source_commit'],
-                     candidate_delta_paths=list(STARTUP_WAVE8_DELTA))
+                     candidate_delta_paths=list(NATIVE_DELTA))
     return proof
 
 
 def preflight(base=Path('.')):
     assert not subprocess.check_output(['git','status','--porcelain'], cwd=base, text=True).strip(), 'dirty source'
-    if STARTUP_WAVE8:
+    if STARTUP_WAVE8 or ROOT_REUSE:
         proof = qualify(base)
         parents = subprocess.check_output(['git','rev-list','--parents','-n','1','HEAD'], cwd=base, text=True).split()
         assert len(parents) == 2, 'one source-bundle parent required'
@@ -222,9 +244,9 @@ def preflight(base=Path('.')):
         assert subprocess.check_output(['git','diff','--no-renames','--name-only',controller,config_commit],
             cwd=base, text=True).splitlines() == [str(CONFIG)], 'config-only authority freeze'
         assert subprocess.check_output(['git','diff','--no-renames','--name-only',config_commit,'HEAD'],
-            cwd=base, text=True).splitlines() == list(STARTUP_WAVE8_DELTA), 'exact two-file candidate source bundle'
-        for name in STARTUP_WAVE8_DELTA:
-            assert worker.sha(subprocess.check_output(['git','show',STARTUP_WAVE8_COMMIT+':'+name], cwd=base)) == proof['source_sha256'][name], 'candidate commit blob: '+name
+            cwd=base, text=True).splitlines() == list(NATIVE_DELTA), 'exact candidate source bundle'
+        for name in NATIVE_DELTA:
+            assert worker.sha(subprocess.check_output(['git','show',proof['native_source_commit']+':'+name], cwd=base)) == proof['source_sha256'][name], 'candidate commit blob: '+name
         return proof
     assert subprocess.check_output(['git','for-each-ref','--contains=HEAD','--format=%(refname)',
         'refs/remotes/origin/'], cwd=base, text=True).strip(), 'source commit not on an origin ref'
@@ -260,7 +282,7 @@ def validate_receipt(out, proof):
         assert receipt['command'][1:] == list(worker.COMMAND[1:]), 'exact full command'
     assert isinstance(receipt['command'][0], str) and receipt['command'][0]
     assert receipt['environment'] == FIXED['environment']
-    if STARTUP_WAVE8:
+    if STARTUP_WAVE8 or ROOT_REUSE:
         assert all(receipt[key] == proof[key] for key in ('controller_source_commit','candidate_delta_paths')), 'receipt source bundle authority'
     assert receipt['source_sha256'] == proof['source_sha256']
     assert receipt['source_identity_sha256'] == worker.source_identity(receipt['source_sha256']) == proof['source_identity_sha256']
@@ -494,10 +516,10 @@ def _worker_self_check(proof, config_body, manifest_body):
                     contextlib.ExitStack() as patches:
                 if failure == 'copy-failure':
                     patches.enter_context(patch.object(worker.shutil, 'copyfileobj', side_effect=OSError('binary copy failed')))
-                previous = authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.CONFIG, authority.CODE, authority.FIXED
+                previous = authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.CONFIG, authority.CODE, authority.FIXED
                 result = worker.main('cargo' if TEST_BUILD or IMPLEMENTATION else 'fake-cargo', repo, out,
-                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION, startup_wave8=STARTUP_WAVE8)
-                assert previous == (authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.CONFIG, authority.CODE, authority.FIXED)
+                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION, startup_wave8=STARTUP_WAVE8, root_reuse=ROOT_REUSE)
+                assert previous == (authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.CONFIG, authority.CODE, authority.FIXED)
             assert len(calls) == 1, 'full test repeated'
             assert type(result['exit_status']) is int
             assert result['exit_status'] == {'exit17':17, 'timeout':124}.get(failure,0)
@@ -535,7 +557,7 @@ def _worker_self_check(proof, config_body, manifest_body):
                             (out/'workspace-receipt.json').write_bytes(encoded(altered))
                             rejected(lambda: validate_receipt(out, proof))
                             (out/'workspace-receipt.json').write_bytes(encoded(result))
-                    if STARTUP_WAVE8:
+                    if STARTUP_WAVE8 or ROOT_REUSE:
                         for changed in (dict(controller_source_commit='0'*40), dict(candidate_delta_paths=[])):
                             (out/'workspace-receipt.json').write_bytes(encoded(dict(result, **changed)))
                             rejected(lambda:validate_receipt(out, proof))
@@ -636,7 +658,7 @@ def _collection_self_check(proof, files, body):
         mutations = [dict(terminal,config_sha256='0'*64), dict(terminal,instance_id='i-other'),
                      dict(terminal,source_archive_sha256='2'*64), dict(terminal,exit_code=False),
                      dict(terminal,artifacts={n:v for n,v in terminal['artifacts'].items() if n != 'test.log'})]
-        if STARTUP_WAVE8:
+        if STARTUP_WAVE8 or ROOT_REUSE:
             mutations.extend((dict(terminal,controller_source_commit='0'*40),dict(terminal,candidate_delta_paths=[])))
         if IMPLEMENTATION:
             downloaded = out/'downloaded'
@@ -694,26 +716,26 @@ def _remote_self_check(native_manifest=None):
         for name in CODE:
             (repo/name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(base/name, repo/name)
-        if STARTUP_WAVE8:
+        if STARTUP_WAVE8 or ROOT_REUSE:
             for name in native_manifest['source_sha256']:
                 path = repo/name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(subprocess.check_output(['git','show',STARTUP_WAVE8_COMMIT+':'+name], cwd=base)
-                    if name in STARTUP_WAVE8_DELTA else (base/name).read_bytes())
+                    if STARTUP_WAVE8 and name in NATIVE_DELTA else (base/name).read_bytes())
         else:
             for index in range(399):
                 (repo/f'mock-{index}.rs').write_text('// mock native source\n')
         inventory = worker.source_hashes(repo)
         manifest_path = ROOT/'native-source-manifest.json'
         (repo/manifest_path).parent.mkdir(parents=True)
-        manifest = native_manifest if STARTUP_WAVE8 else dict(source_sha256=inventory, source_file_count=399,
+        manifest = native_manifest if STARTUP_WAVE8 or ROOT_REUSE else dict(source_sha256=inventory, source_file_count=399,
             source_identity_sha256=worker.source_identity(inventory), native_source_commit='1'*40)
         assert manifest['source_sha256'] == inventory
         (repo/manifest_path).write_bytes(encoded(manifest))
         config = dict(FIXED, controller_authority_pending=False,
             controller_code_sha256={n:worker.artifact(repo/n)['sha256'] for n in CODE},
             native_source_manifest=dict(path=str(manifest_path), **worker.artifact(repo/manifest_path)))
-        if STARTUP_WAVE8:
+        if STARTUP_WAVE8 or ROOT_REUSE:
             config['controller_source_commit'] = '4'*40
         (repo/CONFIG).write_bytes(encoded(config))
         cargo = root/'cargo'
@@ -739,6 +761,23 @@ def _remote_self_check(native_manifest=None):
                 stage_names = ('object-native-generation-tests','semantic-object-store-parity','paged-source-parity',
                                'fragmented-paged-source-parity','release','clippy','test-build')
                 stage_schema = 'borsuk-startup-wave8-implementation-stage-v1'
+            if ROOT_REUSE:
+                cargo_commands = [command.split() for command in (
+                    'test --locked -p borsuk --lib object_native_generation:: -- --test-threads=1',
+                    'test --locked -p borsuk --lib two_bit_store:: -- --test-threads=1',
+                    'test --locked -p borsuk --lib two_bit_generation:: -- --test-threads=1',
+                    'test --locked -p borsuk --lib two_bit_index:: -- --test-threads=1',
+                    'test --locked -p borsuk --test two_bit_generation -- --test-threads=1',
+                    'test --locked -p borsuk --test two_bit_gc_delayed_delete -- --test-threads=1',
+                    'test --locked -p borsuk --test two_bit_application_ids -- --test-threads=1',
+                    'test --locked -p borsuk --example two_bit_http -- --test-threads=1',
+                    'build --release --locked -p borsuk --example two_bit_http',
+                    'clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious',
+                    'test --locked --workspace --all-targets --no-run')]
+                stage_names = ('object-native-generation-tests','two-bit-store-tests','two-bit-generation-tests',
+                               'two-bit-index-tests','generation-integration','gc-integration','application-ids-integration',
+                               'http-example-tests','release','clippy','test-build')
+                stage_schema = 'borsuk-root-reuse-implementation-stage-v1'
         cargo.write_text(f'''#!{sys.executable}
 import json, os, sys
 from pathlib import Path
@@ -757,7 +796,7 @@ else:
     assert target.is_dir()
     if not previous: assert not list(target.iterdir())
     with calls.open('a') as out: out.write(json.dumps(sys.argv[1:])+'\\n')
-    if {IMPLEMENTATION!r} and len(previous) == {4 if STARTUP_WAVE8 else 2}:
+    if {IMPLEMENTATION!r} and len(previous) == {len(cargo_commands)-3}:
         for name in {tuple(Path(name).name for name in RELEASE_ARTIFACTS)!r}:
             if name == os.environ.get('MISSING_BINARY'): continue
             output = target/'release'/('examples' if name == 'two_bit_http' else '')/name
@@ -806,7 +845,7 @@ with patch.object(Path, 'read_text', read):
         env.pop('BORSUK_TEST_BUILD_COMMAND', None)
         flag = mode_flag().strip()
         cli = [sys.executable, '-m', MODULE, flag]
-        failures = [('success',None), ('exit17',None), ('native',STARTUP_WAVE8_DELTA[0] if STARTUP_WAVE8 else 'mock-0.rs'),
+        failures = [('success',None), ('exit17',None), ('native',NATIVE_DELTA[0] if STARTUP_WAVE8 or ROOT_REUSE else 'mock-0.rs'),
                     ('config',str(CONFIG)), ('code',CODE[0]), ('manifest',str(manifest_path))]
         if TEST_BUILD or IMPLEMENTATION:
             failures.append(('script','scripts/check_rust_test_build.sh'))
@@ -929,13 +968,20 @@ with patch.object(Path, 'read_text', read):
                 checked = subprocess.run([sys.executable,'-m',MODULE,'--semantic-1m-test-build','--check-receipt',str(root/'success')],
                                          cwd=root, env=env, capture_output=True)
                 assert checked.returncode != 0, 'implementation receipt accepted as compile-only'
-                if STARTUP_WAVE8:
+                if STARTUP_WAVE8 or ROOT_REUSE:
                     wrong = subprocess.run([sys.executable,'-c',runner,'--semantic-1m-implementation',str(cargo),str(repo),str(out)],
                                            cwd=root, env=env, capture_output=True)
                     assert wrong.returncode != 0 and not (out/'target').exists()
                     checked = subprocess.run([sys.executable,'-m',MODULE,'--semantic-1m-implementation','--check-receipt',str(root/'success')],
                                              cwd=root, env=env, capture_output=True)
                     assert checked.returncode != 0, 'startup-wave8 receipt accepted as semantic-1m implementation'
+                    sibling = '--startup-wave8-implementation' if ROOT_REUSE else '--root-reuse-implementation'
+                    wrong = subprocess.run([sys.executable,'-c',runner,sibling,str(cargo),str(repo),str(out)],
+                                           cwd=root, env=env, capture_output=True)
+                    assert wrong.returncode != 0 and not (out/'target').exists()
+                    checked = subprocess.run([sys.executable,'-m',MODULE,sibling,'--check-receipt',str(root/'success')],
+                                             cwd=root, env=env, capture_output=True)
+                    assert checked.returncode != 0, 'sibling native intervention receipt accepted'
 
 
 def _test_build_protocol_self_check():
@@ -993,21 +1039,49 @@ def _startup_wave8_protocol_self_check():
     assert previous == (CONFIG, PREFIX, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, mode_flag())
 
 
-def _startup_wave8_preflight_self_check():
+def _root_reuse_protocol_self_check():
+    previous = ROOT_REUSE, NATIVE_DELTA, CONFIG, PREFIX, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, mode_flag()
+    with execution_mode(root_reuse=True):
+        assert str(CONFIG).endswith('semantic-1m/startup-wave8/root-reuse/implementation-gates/config.json')
+        assert PREFIX == 'research/semantic-router/20261002/root-reuse-implementation-'
+        assert mode_flag() == ' --root-reuse-implementation'
+        assert FIXED['command'] == ['bash', 'scripts/check_root_reuse_implementation.sh']
+        assert FIXED['environment'] == dict(worker.ENVIRONMENT, BORSUK_TEST_BUILD_JOBS='1', BORSUK_TEST_BUILD_COMMAND=None)
+        assert CODE == (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_root_reuse_implementation.sh')
+        assert NATIVE_DELTA == ROOT_REUSE_DELTA and len(NATIVE_DELTA) == 5
+        assert list(NATIVE_DELTA) == sorted(NATIVE_DELTA)
+        assert RELEASE_ARTIFACTS == ('binaries/two_bit_http',)
+        assert ARTIFACTS == (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS)
+        assert FIXED['schema'] == CONFIG_SCHEMA == 'borsuk-root-reuse-implementation-gates-v1'
+        assert SCHEMA == 'borsuk-root-reuse-implementation-gates-spot-v1'
+        assert RECEIPT_SCHEMA == 'borsuk-root-reuse-implementation-gates-receipt-v1'
+        assert FIXED['execution_kind'] == 'implementation-gates'
+        assert WALL == FIXED['machine_limit_seconds'] == 9000
+        assert FIXED['compute_cap_usd'] == 1.25 and FIXED['ebs_s3_allowance_usd'] == .15
+        for invalid in (dict(root_reuse=True, test_build=True), dict(root_reuse=True, startup_wave8=True),
+                        dict(root_reuse=1)):
+            rejected(lambda:configure(**invalid))
+        with execution_mode(startup_wave8=True):
+            assert not ROOT_REUSE and NATIVE_DELTA == STARTUP_WAVE8_DELTA
+        assert ROOT_REUSE and NATIVE_DELTA == ROOT_REUSE_DELTA
+    assert previous == (ROOT_REUSE, NATIVE_DELTA, CONFIG, PREFIX, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, mode_flag())
+
+
+def _startup_wave8_preflight_self_check(*, root_reuse=False):
     controller, config_commit, bundle = '4'*40, '5'*40, '6'*40
     blob = b'mocked exact candidate blob'
-    with execution_mode(startup_wave8=True):
-        proof = dict(controller_source_commit=controller, candidate_delta_paths=list(STARTUP_WAVE8_DELTA),
-                     native_source_commit=STARTUP_WAVE8_COMMIT,
-                     source_sha256={name:worker.sha(blob) for name in STARTUP_WAVE8_DELTA})
+    with execution_mode(startup_wave8=not root_reuse, root_reuse=root_reuse):
+        proof = dict(controller_source_commit=controller, candidate_delta_paths=list(NATIVE_DELTA),
+                     native_source_commit='7'*40 if root_reuse else STARTUP_WAVE8_COMMIT,
+                     source_sha256={name:worker.sha(blob) for name in NATIVE_DELTA})
         answers = {
             ('status','--porcelain'): '',
             ('rev-list','--parents','-n','1','HEAD'): bundle+' '+config_commit,
             ('rev-list','--parents','-n','1',config_commit): config_commit+' '+controller,
             ('for-each-ref','--contains='+config_commit,'--format=%(refname)','refs/remotes/origin/'): 'refs/remotes/origin/master',
             ('diff','--no-renames','--name-only',controller,config_commit): str(CONFIG),
-            ('diff','--no-renames','--name-only',config_commit,'HEAD'): '\n'.join(STARTUP_WAVE8_DELTA),
-            **{('show',STARTUP_WAVE8_COMMIT+':'+name):blob for name in STARTUP_WAVE8_DELTA}}
+            ('diff','--no-renames','--name-only',config_commit,'HEAD'): '\n'.join(NATIVE_DELTA),
+            **{('show',proof['native_source_commit']+':'+name):blob for name in NATIVE_DELTA}}
         for failure in ('success','dirty','merge-bundle','wrong-controller','unpublished-config','extra-config-delta','missing-native-delta','extra-native-delta','wrong-candidate-blob'):
             changed = dict(answers)
             key, value = {
@@ -1017,9 +1091,9 @@ def _startup_wave8_preflight_self_check():
                 'wrong-controller': (('rev-list','--parents','-n','1',config_commit), config_commit+' '+'7'*40),
                 'unpublished-config': (('for-each-ref','--contains='+config_commit,'--format=%(refname)','refs/remotes/origin/'), ''),
                 'extra-config-delta': (('diff','--no-renames','--name-only',controller,config_commit), str(CONFIG)+'\nother.py'),
-                'missing-native-delta': (('diff','--no-renames','--name-only',config_commit,'HEAD'), STARTUP_WAVE8_DELTA[0]),
-                'extra-native-delta': (('diff','--no-renames','--name-only',config_commit,'HEAD'), '\n'.join((*STARTUP_WAVE8_DELTA,'other.rs'))),
-                'wrong-candidate-blob': (('show',STARTUP_WAVE8_COMMIT+':'+STARTUP_WAVE8_DELTA[0]), b'tampered')
+                'missing-native-delta': (('diff','--no-renames','--name-only',config_commit,'HEAD'), NATIVE_DELTA[0]),
+                'extra-native-delta': (('diff','--no-renames','--name-only',config_commit,'HEAD'), '\n'.join((*NATIVE_DELTA,'other.rs'))),
+                'wrong-candidate-blob': (('show',proof['native_source_commit']+':'+NATIVE_DELTA[0]), b'tampered')
             }[failure]
             changed[key] = value
             def git(args, **kwargs):
@@ -1033,8 +1107,8 @@ def _startup_wave8_preflight_self_check():
                     rejected(lambda:preflight())
 
 
-def self_check(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False):
-    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8):
+def self_check(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False):
+    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse):
         _self_check()
 
 
@@ -1044,14 +1118,20 @@ def _self_check():
     base = Path(__file__).resolve().parents[1]
     manifest = json.loads((base/semantic.ROOT/'metadata-waves/native-source-manifest.json').read_bytes())
     inventory = manifest['source_sha256']
-    if STARTUP_WAVE8:
+    if ROOT_REUSE:
         inventory = worker.source_hashes(base)
-        for name in STARTUP_WAVE8_DELTA:
+        manifest = dict(schema='borsuk-root-reuse-native-source-manifest-v1', source_sha256=inventory,
+            source_identity_sha256=worker.source_identity(inventory), source_file_count=399,
+            native_source_commit='7'*40, candidate_delta_paths=list(NATIVE_DELTA),
+            candidate_qualification_pending=True, control_native_source_commit=STARTUP_WAVE8_COMMIT)
+    elif STARTUP_WAVE8:
+        inventory = worker.source_hashes(base)
+        for name in NATIVE_DELTA:
             inventory[name] = worker.sha(subprocess.check_output(['git','show',STARTUP_WAVE8_COMMIT+':'+name], cwd=base))
         assert len(inventory) == 399 and worker.source_identity(inventory) == STARTUP_WAVE8_IDENTITY
         manifest = dict(schema='borsuk-startup-wave8-native-source-manifest-v1', source_sha256=inventory,
             source_identity_sha256=STARTUP_WAVE8_IDENTITY, source_file_count=399,
-            native_source_commit=STARTUP_WAVE8_COMMIT, candidate_delta_paths=list(STARTUP_WAVE8_DELTA),
+            native_source_commit=STARTUP_WAVE8_COMMIT, candidate_delta_paths=list(NATIVE_DELTA),
             candidate_qualification_pending=True, control_native_source_commit='f4d76fc040aa89c44b3526e37f148e78d21241fa')
     elif semantic_1m:
         inventory = dict(inventory, **{'Cargo.toml':'1'*64})
@@ -1062,7 +1142,7 @@ def _self_check():
     config = dict(FIXED, controller_authority_pending=False,
         controller_code_sha256={n:worker.artifact(base/n)['sha256'] for n in CODE},
         native_source_manifest=dict(path=str(manifest_path),bytes=len(manifest_body),sha256=worker.sha(manifest_body)))
-    if STARTUP_WAVE8:
+    if STARTUP_WAVE8 or ROOT_REUSE:
         config['controller_source_commit'] = '4'*40
     with tempfile.TemporaryDirectory() as tmp:
         repo, out = Path(tmp)/'repo', Path(tmp)/'out'
@@ -1087,18 +1167,20 @@ def _self_check():
                               ('native_source_manifest',dict(config['native_source_manifest'],sha256='0'*64))):
                 (repo/CONFIG).write_bytes(encoded(dict(config,**{key:value})))
                 rejected(lambda:qualify(repo))
-            if STARTUP_WAVE8:
+            if STARTUP_WAVE8 or ROOT_REUSE:
                 for value in ('not-a-commit', '4'*39):
                     (repo/CONFIG).write_bytes(encoded(dict(config,controller_source_commit=value)))
                     rejected(lambda:qualify(repo))
             bad_manifest = [('source_identity_sha256','0'*64), ('source_file_count',398),
                             ('native_source_commit','not-a-commit')]
-            if STARTUP_WAVE8:
-                bad_manifest.extend((('native_source_commit','0'*40),('candidate_delta_paths',[]),
-                    ('candidate_delta_paths',dict.fromkeys(STARTUP_WAVE8_DELTA)),
-                    ('candidate_delta_paths',list(reversed(STARTUP_WAVE8_DELTA))),
+            if STARTUP_WAVE8 or ROOT_REUSE:
+                bad_manifest.extend((('candidate_delta_paths',[]),
+                    ('candidate_delta_paths',dict.fromkeys(NATIVE_DELTA)),
+                    ('candidate_delta_paths',list(reversed(NATIVE_DELTA))),
                     ('candidate_qualification_pending',False),('candidate_qualification_pending',1),
                     ('schema','wrong-manifest-mode'),('control_native_source_commit','not-a-commit')))
+                if STARTUP_WAVE8:
+                    bad_manifest.append(('native_source_commit','0'*40))
             for key,value in bad_manifest:
                 (repo/manifest_path).write_bytes(encoded(dict(manifest,**{key:value})))
                 pointer = dict(path=str(manifest_path),**worker.artifact(repo/manifest_path))
@@ -1124,7 +1206,7 @@ def _self_check():
             rejected(lambda:preflight(repo))
         body = user_data('0'*40,'1'*64,'sources/mock',PREFIX+'a0001',proof)
         assert len(CODE) == len(set(CODE)) == (24 if IMPLEMENTATION else 23 if TEST_BUILD else 22)
-        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == (14 if STARTUP_WAVE8 else 18 if IMPLEMENTATION else 13)
+        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == (14 if STARTUP_WAVE8 or ROOT_REUSE else 18 if IMPLEMENTATION else 13)
         assert '--on-active=9000s' in body and 'RuntimeMaxSec=7260' in body
         assert all(k in body for k in ('MemoryMax=8G','MemorySwapMax=0','CPUQuota=200%','TasksMax=512'))
         assert 'build-essential' in body and 'python3-dev' in body
@@ -1152,18 +1234,19 @@ def _self_check():
     if semantic_1m:
         _remote_self_check(manifest)
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024
-    print(f'PASS workspace {"implementation-gates" if IMPLEMENTATION else "test-build" if TEST_BUILD else "execution"} ({"startup-wave8" if STARTUP_WAVE8 else "semantic-1m" if semantic_1m else "metadata-waves"}): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli={semantic_1m}; code={len(CODE)} artifacts={len(ARTIFACTS)} release_copy={IMPLEMENTATION}; userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
+    print(f'PASS workspace {"implementation-gates" if IMPLEMENTATION else "test-build" if TEST_BUILD else "execution"} ({"root-reuse" if ROOT_REUSE else "startup-wave8" if STARTUP_WAVE8 else "semantic-1m" if semantic_1m else "metadata-waves"}): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli={semantic_1m}; code={len(CODE)} artifacts={len(ARTIFACTS)} release_copy={IMPLEMENTATION}; userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
 
 
 if __name__ == '__main__':
     args = sys.argv[1:]
+    root_reuse = args[:1] == ['--root-reuse-implementation']
     startup_wave8 = args[:1] == ['--startup-wave8-implementation']
-    implementation = startup_wave8 or args[:1] == ['--semantic-1m-implementation']
+    implementation = root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
     test_build = args[:1] == ['--semantic-1m-test-build']
     semantic_1m = implementation or test_build or args[:1] == ['--semantic-1m']
     if semantic_1m:
         args = args[1:]
-    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8)
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse)
     # ponytail: shared launch archives the repository in memory; stream it in
     # the shared launcher if root's launch resource gate proves insufficient.
     if args[:1] and args[0].startswith('--'):
@@ -1173,7 +1256,9 @@ if __name__ == '__main__':
             _test_build_protocol_self_check()
             _startup_wave8_protocol_self_check()
             _startup_wave8_preflight_self_check()
-        self_check(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8)
+            _root_reuse_protocol_self_check()
+            _startup_wave8_preflight_self_check(root_reuse=True)
+        self_check(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse)
     elif args[:1] == ['--stage']:
         assert len(args) == 3
         stage(*args[1:])
@@ -1185,7 +1270,7 @@ if __name__ == '__main__':
         assert len(args) == 2
         print(json.dumps(replay(args[1]),sort_keys=True))
     else:
-        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
+        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
         with open('/tmp/borsuk-native-workspace-execution-launch.lock','a+') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             main(args[0])
