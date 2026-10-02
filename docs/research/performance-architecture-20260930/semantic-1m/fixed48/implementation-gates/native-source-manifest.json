@@ -1,14 +1,15 @@
 {
   "candidate_delta_paths": [
+    "crates/borsuk/src/bin/check_semantic_router_scorer.rs",
     "crates/borsuk/src/semantic_unit_router.rs",
     "crates/borsuk/src/two_bit_generation.rs"
   ],
   "candidate_qualification_pending": true,
   "control_native_source_commit": "4ea50b232b25f5d14cf21edaa1aa289b00d8db09",
-  "native_source_commit": "a007abe6474a0025b9c24b136854f97be7594843",
+  "native_source_commit": "4d618ffa3289941c71887855f99ef2850925d8c5",
   "schema": "borsuk-fixed48-native-source-manifest-v1",
   "source_file_count": 399,
-  "source_identity_sha256": "24b1646db1ef8566ef3d518f95e6a6f91026a498b0503448e07ba8465decbeb0",
+  "source_identity_sha256": "addf62bce23ceee034f22e4d1dfc0b318564d924c6e0fcee34b9336d1532813e",
   "source_sha256": {
     "Cargo.lock": "d479ad62c5c9441757f5f8b37be5ffa824a7cabd155b00b8bc08d8710fa4d7d3",
     "Cargo.toml": "1ec9ac514515662a0f3a371b1a65d72bf825d67f218dc3f6cc1e5fb0925547d6",
@@ -128,7 +129,7 @@
     "crates/borsuk/src/bin/build_two_bit_generation.rs": "5c1e49e9e0b9d0a8c674548d04e8c08b8c1174bb16a823c58f5994c1d07867e8",
     "crates/borsuk/src/bin/build_two_bit_graph_variant.rs": "57869a285098f55bd1f66f5556ad66a9c981d6a3b157ac98fa00ad4c8672c9a2",
     "crates/borsuk/src/bin/build_two_bit_source.rs": "bcccf832c218d56b75b485687e1dbb9f040efce8b054e25f119101358b9466c4",
-    "crates/borsuk/src/bin/check_semantic_router_scorer.rs": "02d4e305a7d545846f364292c5dd2230c9387c1dbf727e2cccc03035f02fbe1e",
+    "crates/borsuk/src/bin/check_semantic_router_scorer.rs": "f236050e0f04eb489da857ea913ec97e1eafd2787bace58340e7a9cbb8c2be2a",
     "crates/borsuk/src/bin/repackage_semantic_generation.rs": "109870b354ab9d4e5c3786e27779648ace768f2c2f3425ecf641a81c8b0927e6",
     "crates/borsuk/src/bin/two_bit_plan_demo.rs": "2a89f80da6ba650cb9b3c3de5650c43d9facdbfb0a6c5ce00c41522d37b0ef54",
     "crates/borsuk/src/bin/two_bit_union_nomination.rs": "79ed545cdee7183e921295e2cb40fa9371bd1078b8a930c2db7a6cdbb68b03e9",

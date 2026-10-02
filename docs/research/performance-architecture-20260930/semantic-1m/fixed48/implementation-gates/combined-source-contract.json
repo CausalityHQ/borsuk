@@ -1,0 +1,572 @@
+{
+  "candidate_delta_paths": [
+    "crates/borsuk/src/bin/check_semantic_router_scorer.rs",
+    "crates/borsuk/src/semantic_unit_router.rs",
+    "crates/borsuk/src/two_bit_generation.rs"
+  ],
+  "controller_handoff_commit": "57ff94c4860fb277234ca25c2a4412c11d43b3c0",
+  "controller_handoff_status": "source_controller_verified_exact_three_path_contract_native_combination_UNVERIFIED",
+  "launch_authority_established": false,
+  "native_gates_run": false,
+  "native_source_commit": "4d618ffa3289941c71887855f99ef2850925d8c5",
+  "root_controller_change": "Require both new truth-free scorer tests exactly once in existing scorer stage; seven commands unchanged. Updated synthetic count from one to two.",
+  "root_integration_checks": {
+    "diff_check": 0,
+    "fixed48_protocol_and_stage_guards": 0,
+    "python_compile": 0,
+    "shell_syntax": 0
+  },
+  "schema": "borsuk-fixed48-combined-source-v1",
+  "scorer_source_contract": {
+    "base_commit": "0ad75a3e07dcd0e7fc7c6f13677e4212cc5608e6",
+    "bounded_checks": [
+      {
+        "kind": "source-only",
+        "name": "frozen_query_emit_source_parity",
+        "status": "PASS"
+      },
+      {
+        "kind": "source-only",
+        "name": "native_query_failure_emit_source_parity",
+        "status": "PASS"
+      },
+      {
+        "kind": "source-only",
+        "name": "native_limits_source_parity",
+        "status": "PASS"
+      },
+      {
+        "kind": "source-only",
+        "name": "four_existing_test_bodies_source_parity",
+        "status": "PASS"
+      },
+      {
+        "kind": "source-only",
+        "name": "single_owned_path_diff",
+        "status": "PASS"
+      },
+      {
+        "command": [
+          "rustfmt",
+          "--edition",
+          "2024",
+          "--check",
+          "crates/borsuk/src/bin/check_semantic_router_scorer.rs"
+        ],
+        "exit_status": 0,
+        "stderr": "",
+        "stdout": ""
+      },
+      {
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_status": 0,
+        "stderr": "",
+        "stdout": ""
+      }
+    ],
+    "cli": [
+      "check_semantic_router_scorer",
+      "CONFIG",
+      "CONFIG_SHA",
+      "NEW_RESULT_JSONL"
+    ],
+    "config": {
+      "artifact_fields": [
+        "path",
+        "bytes",
+        "sha256"
+      ],
+      "authentication": "sha256 lowercase 64 hex; regular NOFOLLOW exact-length artifacts; order is complete u64 little-endian permutation bound to authenticated plane source_order_sha256",
+      "config_byte_cap": 65536,
+      "count": 64,
+      "dataset_values": [
+        "ReLAION",
+        "CoHere"
+      ],
+      "fields": [
+        "schema",
+        "dataset",
+        "profile",
+        "rows",
+        "dimensions",
+        "first",
+        "count",
+        "store_root",
+        "generation_prefix",
+        "generation_root_sha256",
+        "scratch_parent",
+        "requests",
+        "order",
+        "max_memory_bytes"
+      ],
+      "first": 0,
+      "geometry": {
+        "fresh1m": {
+          "dimensions": 768,
+          "rows": 1000000
+        },
+        "native100k": {
+          "dimensions_max": 768,
+          "dimensions_min": 1,
+          "rows_max": 100000,
+          "rows_min": 1
+        }
+      },
+      "legacy_v2_allowed": false,
+      "order_bytes": "rows*8",
+      "path_constraints": "absolute store_root/scratch_parent/artifact paths; requests/order paths distinct; existing safe generation-prefix validation",
+      "profile_values": [
+        "native100k",
+        "fresh1m"
+      ],
+      "request_fields": [
+        "ordinal",
+        "query"
+      ],
+      "request_ordinals": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63
+      ],
+      "request_query": "finite f32 array of exact configured dimension; production query normalization unchanged",
+      "requests_byte_cap": 2097152,
+      "schema": "borsuk-semantic-router-scorer-config-v3",
+      "strict_unknown_fields": true,
+      "truth_input_allowed": false
+    },
+    "execution": {
+      "codec_changes": false,
+      "conservative_evaluator_charge_bytes": 33554432,
+      "diagnostic_scratch": "400000 + TwoBitPlanTrace::scratch_bytes(rows)",
+      "existing_memory_admission_preserved": true,
+      "file_chunk_bytes": 8192,
+      "layout_changes": false,
+      "library_changes": false,
+      "max_active_queries": 1,
+      "memory_bytes": 536870912,
+      "production_diagnostic_calls_per_query": 1,
+      "ranking_changes": false,
+      "results_and_trace_discarded": "after each frozen_query serialization at loop iteration end; no retained64 results/trace vector",
+      "router_changes": false,
+      "scratch_cleanup": "unchanged native generation/runtime lifetimes and error returns",
+      "second_source_or_sq8_search": false,
+      "source_bytes": 67108864,
+      "source_gets": 128,
+      "source_parallel_gets": 16,
+      "sq8_bytes": 16773120,
+      "sq8_gets": 32,
+      "sq8_parallel_gets": 16,
+      "top_k": 100,
+      "training_changes": false
+    },
+    "offline_evaluation": {
+      "mapping": "inverse_order[logical ID] -> physical row, authenticated retained order",
+      "no_second_search": true,
+      "owner": "parent/later Python evaluator; not part of this commit",
+      "returned_r10": "sum hits10 / 640",
+      "returned_r100": "sum hits100 / 6400",
+      "six_loss_stages": [
+        {
+          "membership": "physical_row//32 in trace.semantic_units",
+          "name": "nominated_units"
+        },
+        {
+          "membership": "physical_row//256 in {unit//8 for unit in trace.semantic_units}",
+          "name": "page_closure"
+        },
+        {
+          "membership": "physical_row//32 in trace.nomination_evaluated_units",
+          "name": "source_scored_units"
+        },
+        {
+          "membership": "physical_row//256 in trace.ranked_candidate_pages",
+          "name": "source_ranked_pages"
+        },
+        {
+          "membership": "physical_row*(dimensions+12) in any half-open frozen range",
+          "name": "sq8_admitted_ranges"
+        },
+        {
+          "hits10": "count of first10 frozen returned_ids in first10 GT IDs",
+          "hits100": "count of frozen returned_ids in GT100 IDs",
+          "name": "returned_ids"
+        }
+      ],
+      "stage_coverage": "count GTfirst10/GT100 physical rows satisfying membership, independent @10/@100",
+      "truth_geometry": "64*100 unique logical i64 IDs, little endian; each within configured rows"
+    },
+    "owned_paths": [
+      "crates/borsuk/src/bin/check_semantic_router_scorer.rs"
+    ],
+    "pending_rust_gate": {
+      "combined_delta": [
+        "crates/borsuk/src/semantic_unit_router.rs",
+        "crates/borsuk/src/two_bit_generation.rs",
+        "crates/borsuk/src/bin/check_semantic_router_scorer.rs"
+      ],
+      "full_source_file_count": 399,
+      "no_independent_worker_build": true,
+      "owner": "parent",
+      "qualified_publication_base": "4ea50b232b25f5d14cf21edaa1aa289b00d8db09",
+      "requirements": [
+        "affected router library tests actual0",
+        "source-walk library tests actual0",
+        "scorer all6 tests actual0",
+        "two_bit_generation integration actual0",
+        "release HTTP/scorer/publisher actual0",
+        "locked workspace all-target Clippy correctness+suspicious actual0",
+        "actual unshimmed workspace test-build jobs1 actual0"
+      ],
+      "same_child_held": true,
+      "status": "PENDING"
+    },
+    "restrictions_observed": [
+      "no Cargo",
+      "no rustc",
+      "no native or data execution",
+      "no truth read",
+      "no cloud",
+      "no reviews",
+      "no children",
+      "no push",
+      "no operator contact",
+      "control brief unchanged"
+    ],
+    "result": {
+      "complete": true,
+      "discovery_fields": [
+        "seed_page",
+        "seed_evaluated_units",
+        "walk_evaluated_units",
+        "seed_work_exhausted",
+        "walk_work_exhausted"
+      ],
+      "failure": {
+        "complete": false,
+        "frozen_marker_on_query_failure": false,
+        "io_failure": "existing exit2 stderr; preserve file even when terminal cannot be written/synced",
+        "native_query_failure_fields": [
+          "phase",
+          "ordinal",
+          "error",
+          "leaf_gets",
+          "leaf_bytes",
+          "source_gets",
+          "source_bytes",
+          "sq8_gets",
+          "sq8_bytes",
+          "stages"
+        ],
+        "partial_rows_preserved": true,
+        "status": "FAIL",
+        "terminal_summary_fields": [
+          "status",
+          "complete",
+          "error"
+        ]
+      },
+      "failure_exit_status": 2,
+      "format": "newline-delimited JSON",
+      "interval_fields": [
+        "start_ns",
+        "end_ns"
+      ],
+      "native_quality_evaluation": false,
+      "offline_required": "Authenticate sealed file bytes/hash, strict v3 schema and exact ordered roster, bound summary identities, matching FROZEN marker and terminal, original normal exit0 and resource/cleanup authority before opening newly constructed truth. A marker alone or partial rows do not qualify.",
+      "output_create_new": true,
+      "physical_s3_measured": false,
+      "quality_pass_claim": false,
+      "queries": 64,
+      "range_bounds": "physical SQ8 byte offsets; half-open [start,end)",
+      "range_fields": [
+        "start",
+        "end"
+      ],
+      "schema": "borsuk-semantic-router-scorer-result-v3",
+      "serialized_sealed_roster": [
+        {
+          "count": 1,
+          "fields": [
+            "schema",
+            "phase",
+            "config_sha256",
+            "binary_sha256",
+            "scorer_source_sha256",
+            "router_source_sha256",
+            "physical_s3_measured"
+          ],
+          "phase": "identity"
+        },
+        {
+          "count": 1,
+          "fields": [
+            "phase",
+            "truth_opened",
+            "profile",
+            "metadata",
+            "evaluator_payload_charge"
+          ],
+          "phase": "startup"
+        },
+        {
+          "count": 64,
+          "fields": [
+            "phase",
+            "ordinal",
+            "truth_opened",
+            "trace",
+            "selected_pages",
+            "ranges",
+            "returned_ids",
+            "leaf_gets",
+            "leaf_bytes",
+            "source_gets",
+            "source_bytes",
+            "sq8_gets",
+            "sq8_bytes",
+            "stages",
+            "query_wall_ns",
+            "query_process_cpu_ns"
+          ],
+          "ordinals": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63
+          ],
+          "phase": "frozen_query"
+        },
+        {
+          "count": 1,
+          "fields": [
+            "phase",
+            "count",
+            "status",
+            "complete",
+            "truth_opened",
+            "summary"
+          ],
+          "phase": "all_queries_frozen"
+        },
+        {
+          "count": 1,
+          "fields": [
+            "phase",
+            "summary"
+          ],
+          "phase": "terminal"
+        }
+      ],
+      "stages_fields": [
+        "discovery",
+        "source",
+        "planning",
+        "sq8",
+        "leaf_peak_inflight"
+      ],
+      "status": "FROZEN",
+      "success_exit_status": 0,
+      "successful_total_records": 68,
+      "summary_fields": [
+        "status",
+        "complete",
+        "queries",
+        "first",
+        "dataset",
+        "profile",
+        "rows",
+        "dimensions",
+        "config_sha256",
+        "binary_sha256",
+        "scorer_source_sha256",
+        "router_source_sha256",
+        "generation_prefix",
+        "generation_root_sha256",
+        "requests_sha256",
+        "requests_bytes",
+        "order_sha256",
+        "order_bytes",
+        "truth_opened",
+        "observed_process_peak_bytes",
+        "physical_s3_measured"
+      ],
+      "sync_sequence": [
+        "emit+flush each frozen_query",
+        "sync_all 64 diagnostics",
+        "emit+flush all_queries_frozen FROZEN marker",
+        "sync_all marker",
+        "emit+flush terminal with identical summary",
+        "sync_all terminal",
+        "exit 0"
+      ],
+      "trace_fields": [
+        "ranked_candidate_pages",
+        "nomination_evaluated_units",
+        "primary_page",
+        "discoveries",
+        "semantic_leaves",
+        "semantic_units",
+        "semantic_seed_additions"
+      ],
+      "truth_opened": false
+    },
+    "rust_tests": {
+      "authored_new": [
+        "truth_free_v3_config_rejects_truth_unknown_fields_and_old_schema",
+        "frozen_marker_requires_complete64_and_binds_measurement_identity"
+      ],
+      "execution": "NOT RUN; explicit assignment prohibits local Cargo/rustc/build/native/data",
+      "expected_scorer_test_count": 6,
+      "preserved_existing": [
+        "real_file_source_and_sq8_preserve_production_ranking_and_fail_closed",
+        "diagnostic_budget_admits_d768_without_spending_the_trace_charge",
+        "inverse_requires_an_exact_permutation_and_maps_physical_coverage",
+        "authenticated_config_and_artifacts_reject_unknown_fields_and_hash_or_length_changes"
+      ]
+    },
+    "schema": "borsuk-fixed48-truth-free-scorer-contract-v1",
+    "source_bytes": 27383,
+    "source_commit": "206875fd4a69d7272e4278e60612ab88f7f7cf64",
+    "source_only_handoff": {
+      "author": "Roman Bartusiak <riomus@gmail.com>",
+      "clean_worktree": true,
+      "committed_owned_paths": [
+        "crates/borsuk/src/bin/check_semantic_router_scorer.rs"
+      ],
+      "exact_parent": true,
+      "rust_status": "UNVERIFIED",
+      "worker_status": "HOLDING SAME CHILD FOR PARENT RUST GATE"
+    },
+    "source_sha256": "f236050e0f04eb489da857ea913ec97e1eafd2787bace58340e7a9cbb8c2be2a",
+    "status": "UNVERIFIED",
+    "worktree": "/home/rb/worktrees/borsuk-fixed48-truth-free-scorer"
+  },
+  "source_file_count": 399,
+  "source_identity_sha256": "addf62bce23ceee034f22e4d1dfc0b318564d924c6e0fcee34b9336d1532813e",
+  "status": "UNVERIFIED"
+}

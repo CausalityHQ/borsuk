@@ -16,7 +16,10 @@ required = {
         "semantic_unit_router::tests::fresh_binary_root_selected_leaves_and_scattered_closure_without_training"),
     "source-walk-tests": (
         "two_bit_generation::source_walk_tests::semantic_object_store_parity",
-        "two_bit_generation::source_walk_tests::fresh48_source_walk_completes_512_pages_once_and_rejects_excess_before_io")}
+        "two_bit_generation::source_walk_tests::fresh48_source_walk_completes_512_pages_once_and_rejects_excess_before_io"),
+    "semantic-router-scorer-tests": (
+        "tests::truth_free_v3_config_rejects_truth_unknown_fields_and_old_schema",
+        "tests::frozen_marker_requires_complete64_and_binds_measurement_identity")}
 stage, started, finished, status, log, log_status = sys.argv[1:7]
 tests = None
 passes = None
