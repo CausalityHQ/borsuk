@@ -2,6 +2,8 @@
 
 Root freezes CONFIG with FIXED, authority_pending=False, exact CODE hashes,
 cold_config (bytes/SHA pointer), cold_run (exact closed cold artifact roster),
+cold_source_authority (root-reviewed original config/code/source/qualification),
+cold_fail_disposition (null for complete campaigns; approved failure pointer),
 measurement_prefix, and prices (bytes/SHA pointer to root price provenance).
 main(CONFIG, SHA, REPO, NEW_OUTPUT, *, on_cell_closed=None) refuses pending
 authority before creating output. The launcher owns cloud and offline replay.
@@ -82,16 +84,14 @@ def qualify(config_path, expected_sha, repo):
     config = json.loads(body)
     assert config['authority_pending'] is False, 'root freeze pending'
     assert set(config) == set(FIXED) | {'authority_pending', 'code_sha256',
-        'cold_config', 'cold_run', 'measurement_prefix', 'prices'}
+        'cold_config', 'cold_run', 'cold_source_authority', 'cold_fail_disposition', 'measurement_prefix', 'prices'}
     assert all(type(config[n]) is type(v) and config[n] == v for n, v in FIXED.items()), 'fixed offered protocol'
     assert set(config['code_sha256']) == set(CODE), 'exact transitive code closure'
     assert all(artifact(panel.repo_path(repo, n))['sha256'] == d
                for n, d in config['code_sha256'].items()), 'code identity'
     assert panel.re.fullmatch(panel.re.escape(PREFIX)+r'a[0-9]{4}', config['measurement_prefix'])
     pointer = config['cold_config']
-    assert pointer['path'] == str(native.CONFIG)
     read(repo, pointer)
-    cold_config, cold_proof = native.qualify(repo/native.CONFIG, pointer['sha256'], repo)
     run = config['cold_run']
     assert set(run) == {'directory', 'files'} and set(run['files']) == set(COLD_ROSTER)
     assert panel.re.fullmatch(panel.re.escape(str(native.ROOT))+r'/a[0-9]{4}', run['directory'])
@@ -100,18 +100,28 @@ def qualify(config_path, expected_sha, repo):
         assert p['path'] == str(Path(run['directory'])/name)
     closed = json.loads(read(repo, run['files']['aws-closeout.json']))
     terminal = json.loads(read(repo, run['files']['aws-terminal.json']))
-    assert closed['state'] == 'terminated' and terminal['status'] == terminal['phase'] == 'complete'
-    assert terminal['exit_code'] == terminal['original_exit_code'] == 0
-    for p in run['files'].values(): read(repo, p)
-    checked = cold_spot.replay(repo/run['directory'])
-    assert checked['executed'] is checked['execution_gate_passed'] is checked['quality_gate_passed'] is True
+    assert closed['state'] == 'terminated', 'closed cold prerequisite'
+    assert pointer['path'] in (str(native.CONFIG), str(Path(run['directory'])/'screen/config.json'))
+    for name,p in run['files'].items():
+        if p['bytes']==0:
+            assert name in ('screen/publication.log','screen/failures.jsonl'), 'only optional cold logs may be empty'
+            assert artifact(panel.repo_path(repo,p['path']))==dict(bytes=0,sha256=p['sha256']), 'empty cold body identity'
+        else: read(repo,p)
+    assert type(config['cold_source_authority']) is dict, 'root cold source authority pointer required'
+    checked = cold_spot.qualify_measurement(repo/run['directory'],repo,config['cold_source_authority'])
+    assert all(checked[n] is True for n in ('measurement_gate_passed','quality_gate','identity_gate','resource_gate','cleanup_gate'))
+    assert checked['valid_calls'] == checked['actual_http_attempts'] == 64
+    cold_spot.fail_disposition(repo,run,config['cold_fail_disposition'],checked)
+    cold_config, cold_proof = checked['cold_config'],checked['qualification']
+    cold_proof = {n:v for n,v in cold_proof.items()
+        if n not in ('campaign_schema','artifact_roster_sha256','awscli_version','awscli_sha256')}
     assert identity(run['files']['screen/config.json']) == identity(pointer)
     assert not cold_config['namespace_prefix'].startswith(config['measurement_prefix'])
     prices = json.loads(read(repo, config['prices']))
     assert type(prices) is dict and prices, 'root frozen price provenance'
     proof = dict(cold_proof, config_path=str(CONFIG), config_sha256=expected_sha,
         code_identity_sha256=sha(encoded(config['code_sha256'])),
-        refs_identity_sha256=sha(encoded({n:config[n] for n in ('cold_config','cold_run','prices')})),
+        refs_identity_sha256=sha(encoded({n:config[n] for n in ('cold_config','cold_run','cold_source_authority','cold_fail_disposition','prices')})),
         measurement_prefix=config['measurement_prefix'], prices=identity(config['prices']),
         cold_terminal_sha256=run['files']['aws-terminal.json']['sha256'])
     return config, proof

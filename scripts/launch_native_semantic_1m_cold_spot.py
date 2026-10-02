@@ -1,4 +1,4 @@
-"""Root-frozen FIRST1M cold gate: aNNNN | --self-check | --replay DIRECTORY."""
+"""Root-frozen cold gate: aNNNN | --self-check | --measurement-self-check | --replay DIRECTORY."""
 from pathlib import Path
 import fcntl
 import json
@@ -56,7 +56,7 @@ def user_data(commit,archive_sha,archive_key,prefix,qualification):
     body=body.replace('semantic-1m-quality','semantic-1m-cold')
     body=body.replace('scripts.run_native_semantic_1m_quality','scripts.run_native_semantic_1m_cold')
     body=body.replace('if [ "$name" = run-closed.log ]; then test -s run.log; else test -s "$name"; fi',
-        'if [ "$name" = screen/failures.jsonl ]; then test -f "$name"; elif [ "$name" = run-closed.log ]; then test -s run.log; else test -s "$name"; fi')
+        'if [ "$name" = run-closed.log ]; then name=run.log; fi; test ! -L "$name"; test -f "$name"; if [ "$name" = screen/failures.jsonl ] || [ "$name" = screen/publication.log ]; then :; else test -s "$name"; fi')
     body=body.replace('"$root/venv/bin/python" -m scripts.run_native_semantic_1m_cold',
         'taskset -c 4-5 "$root/venv/bin/python" -m scripts.run_native_semantic_1m_cold')
     subprocess.run(['bash','-n'],input=body,text=True,check=True)
@@ -69,9 +69,49 @@ def poll(ec2,s3,prefix,instance_id,started):
     return panel.poll(ec2,s3,prefix,instance_id,started)
 
 
-def replay(out):
-    """Read only terminated, authenticated terminal artifacts; never reissue queries."""
+def archived_authority(repo, config_path, source_commit, source_archive_sha256, source_authority=None):
+    """Validate original authority; live qualify/preflight still pin current code.
+
+    Deployments authenticate the root's small source authority through NEW config.
+    Local replay can independently recover those same pins from the original Git
+    commit. Both routes reuse every existing native/quality/config qualifier gate.
+    """
+    repo, config_path = Path(repo).resolve(), Path(config_path).absolute()
+    assert re.fullmatch('[0-9a-f]{40}',source_commit), 'archived source commit'
+    assert re.fullmatch('[0-9a-f]{64}',source_archive_sha256), 'archived source archive'
+    assert config_path.stat().st_size<=65536, 'small original config'
+    config_identity=worker.artifact(config_path); config=json.loads(config_path.read_bytes())
+    assert set(config['code_sha256'])==set(CODE), 'archived transitive code closure'
+    authority=None
+    if source_authority is None:
+        def original(name):
+            return subprocess.check_output(['git','show',source_commit+':'+name],cwd=repo,timeout=5)
+        assert config_identity['sha256']==worker.sha(original(str(CONFIG))), 'archived original config'
+        pins={n:worker.sha(original(n)) for n in CODE}
+    else:
+        authority=json.loads(worker.read(repo,source_authority))
+        pins=authority['code_sha256']
+    assert pins==config['code_sha256'], 'archived code pins'
+    artifact=worker.artifact; code={repo/n:dict(sha256=d) for n,d in pins.items()}
+    with patch.object(worker,'CONFIG',config_path), patch.object(worker,'artifact',
+        side_effect=lambda p:code[Path(p)] if Path(p) in code else artifact(p)):
+        _,proof=worker.qualify(config_path,config_identity['sha256'],repo)
+    proof['config_path']=str(CONFIG)
+    proof=dict(proof,campaign_schema=SCHEMA,artifact_roster_sha256=worker.sha(worker.encoded(ARTIFACTS)),
+        awscli_version=AWSCLI_VERSION,awscli_sha256=AWSCLI_SHA256)
+    if authority is not None:
+        expected=dict(schema='borsuk-semantic-1m-cold-source-authority-v1',authority_pending=False,
+            source_commit=source_commit,source_archive_sha256=source_archive_sha256,
+            config=config_identity,code_sha256=pins,qualification=proof)
+        assert worker.encoded(authority)==worker.encoded(expected), 'exact root archived source authority'
+    return config,proof
+
+
+def closed_artifacts(out, repo, source_authority=None):
+    """Authenticate the terminated campaign without changing its historical status."""
     out=Path(out)
+    for n in ('aws-launch.json','aws-closeout.json','aws-reservation.json','aws-terminal.json'):
+        worker.artifact(out/n)  # Regular receipts, including their historical status.
     launch,closed,reservation,terminal=(json.loads((out/n).read_bytes()) for n in (
         'aws-launch.json','aws-closeout.json','aws-reservation.json','aws-terminal.json'))
     assert closed['state']=='terminated' and closed['nodes']==launch['nodes']
@@ -80,20 +120,39 @@ def replay(out):
     assert re.fullmatch(re.escape(PREFIX)+r'a[0-9]{4}',launch['prefix'])
     for k in ('source_commit','source_archive_sha256'):
         assert terminal[k]==reservation[k]==launch[k]
-    proof=reservation['qualification']
-    assert proof==qualify(Path(__file__).resolve().parents[1]), 'frozen local authority'
+    config,proof=archived_authority(repo,out/'screen/config.json',terminal['source_commit'],
+        terminal['source_archive_sha256'],source_authority)
+    assert worker.encoded(proof)==worker.encoded(reservation['qualification']), 'archived frozen authority'
     assert proof['namespace_prefix']==launch['prefix']+'/native'
     for k in TERMINAL_IDENTITIES: assert terminal[k]==proof[k], 'terminal authority: '+k
     assert set(terminal['artifacts'])<=set(ARTIFACTS)
-    for n,p in terminal['artifacts'].items(): assert worker.artifact(out/n)==p, 'terminal body: '+n
+    for n,p in terminal['artifacts'].items():
+        assert set(p)=={'bytes','sha256'} and type(p['bytes']) is int and p['bytes']>=0, 'terminal body length: '+n
+        assert worker.artifact(out/n)==p, 'terminal body: '+n
+    assert all(type(terminal[n]) is int for n in ('exit_code','original_exit_code')), 'integer campaign exits'
     complete=terminal['phase']=='complete' and terminal['exit_code']==0
     assert terminal['status']==('complete' if complete else 'failed')
+    return config,proof,terminal,complete
+
+
+def replay(out):
+    """Campaign replay preserves execution FAIL, even with valid measurements."""
+    out=Path(out); repo=Path(__file__).resolve().parents[1]
+    config,proof,terminal,complete=closed_artifacts(out,repo)
     if not complete:
         if 'screen/records.jsonl' in terminal['artifacts']:
             rows=[json.loads(line) for line in (out/'screen/records.jsonl').read_bytes().splitlines()]
             assert [r['query_ordinal'] for r in rows]==list(range(64))
         return dict(executed=False,execution_gate_passed=False)
-    assert terminal['original_exit_code']==0 and set(terminal['artifacts'])==set(ARTIFACTS)
+    assert terminal['original_exit_code']==0
+    return validate_measurement(out,repo,config,proof,terminal)
+
+
+def validate_measurement(out,repo,config,proof,terminal):
+    """The complete replay gates, shared by campaign replay and qualification."""
+    assert set(terminal['artifacts'])==set(ARTIFACTS), 'complete measurement roster'
+    assert all(p['bytes']>0 or n in ('screen/publication.log','screen/failures.jsonl')
+        for n,p in terminal['artifacts'].items()), 'required measurement bodies nonempty'
     screen=out/'screen'
     assert worker.artifact(screen/'config.json')['sha256']==proof['config_sha256']
     source={k:terminal[k] for k in ('source_commit','source_archive_sha256')}
@@ -112,8 +171,6 @@ def replay(out):
     ordinal=json.loads((screen/'sq8-ordinal-check.json').read_bytes())
     assert ordinal['rows_checked']==1_000_000 and ordinal['record_bytes']==780
     assert ordinal['id_matches_order'] is ordinal['complete_bijection'] is True
-    repo=Path(__file__).resolve().parents[1]
-    config=json.loads((screen/'config.json').read_bytes())
     assert report['phase_admission']==dict(builder_memory_bytes=worker.PAYLOAD,
         publisher_memory_bytes=config['publisher_memory_bytes'],native_memory_bytes=worker.NATIVE,
         server_query_slots=worker.SERVER_QUERY_SLOTS,native_budget_model=worker.native_budget_model(),
@@ -154,7 +211,56 @@ def replay(out):
     assert summary['execution_gate_passed'] is True
     assert (screen/'failures.jsonl').read_bytes()==b''
     return dict(executed=True,execution_gate_passed=True,quality_gate_passed=summary['quality_gate_passed'],
-        context_p90_attained=summary['context_p90_attained'])
+        context_p90_attained=summary['context_p90_attained'],
+        historical_campaign_status={k:terminal[k] for k in ('status','phase','exit_code','original_exit_code')},
+        measurement_gate_passed=True,quality_gate=summary['quality_gate_passed'],
+        context444miss=not summary['context_p90_attained'],valid_calls=summary['valid_calls'],
+        actual_http_attempts=summary['actual_http_attempts'],identity_gate=True,resource_gate=True,cleanup_gate=True)
+
+
+def qualify_measurement(out, repo=None, source_authority=None):
+    """Qualify all closed measurements regardless of historical campaign status.
+
+    This does not authorize use of a failed campaign. Offered qualification must
+    separately authenticate the root's narrowly bound fail disposition.
+    """
+    out=Path(out); repo=Path(repo or Path(__file__).resolve().parents[1]).resolve()
+    config,proof,terminal,_=closed_artifacts(out,repo,source_authority)
+    result=validate_measurement(out,repo,config,proof,terminal)
+    # Measurement execution and campaign execution are distinct facts.
+    result.pop('executed'); result.pop('execution_gate_passed')
+    return dict(result,qualification=proof,cold_config=config)
+
+
+def fail_disposition(repo, run, pointer, checked):
+    """Only a source-bound, root-frozen bootstrap log failure permits reuse."""
+    status=checked['historical_campaign_status']
+    if status==dict(status='complete',phase='complete',exit_code=0,original_exit_code=0):
+        assert pointer is None, 'complete campaign needs no fail disposition'
+        return
+    assert status==dict(status='failed',phase='quality',exit_code=1,original_exit_code=1), 'unsupported historical failure'
+    assert pointer is not None, 'root fail disposition required'
+    terminal=json.loads(worker.read(repo,run['files']['aws-terminal.json']))
+    expected=dict(schema='borsuk-semantic-1m-cold-fail-disposition-v1',authority_pending=False,
+        decision='reuse-authenticated-closed-measurement-for-offered',reason='bootstrap-empty-publication-log',
+        cold_directory=run['directory'],source_commit=terminal['source_commit'],
+        source_archive_sha256=terminal['source_archive_sha256'],
+        terminal=worker.identity(run['files']['aws-terminal.json']),config=worker.identity(run['files']['screen/config.json']),
+        artifact_roster_sha256=terminal['artifact_roster_sha256'],artifacts=terminal['artifacts'],
+        historical_campaign_status=status,service_exit_status=0,failed_presence_artifact='screen/publication.log',
+        only_bootstrap_presence_failure=True)
+    assert worker.encoded(json.loads(worker.read(repo,pointer)))==worker.encoded(expected), 'exact root fail disposition'
+    log=worker.read(repo,run['files']['run-closed.log']).decode()
+    markers=('Running as unit: semantic-1m-cold.service','Finished with result: success',
+        'Main processes terminated with: code=exited/status=0')
+    assert all(log.splitlines().count(m)==1 for m in markers), 'unique successful Python service'
+    assert log.count('Running as unit:')==log.count('Finished with result:')==log.count('Main processes terminated with:')==1
+    assert log.index(markers[0])<log.index(markers[1])<log.index(markers[2])
+    assert terminal['artifacts']['screen/publication.log']==dict(bytes=0,sha256=worker.sha(b'')), 'sole empty bootstrap log'
+    assert all(p['bytes']>0 for n,p in terminal['artifacts'].items()
+        if n not in ('screen/publication.log','screen/failures.jsonl')), 'no other presence failure'
+    assert all(checked[n] is True for n in ('measurement_gate_passed','quality_gate','identity_gate','resource_gate','cleanup_gate'))
+    assert checked['valid_calls']==checked['actual_http_attempts']==64
 
 
 def collect(s3,prefix,out,instance_id,commit,digest):
@@ -177,8 +283,167 @@ def main(attempt):
         os.chdir(before)
 
 
+def measurement_self_check():
+    """Executed Bash rule and authenticated actual a0005/tamper regressions only."""
+    import copy
+    import tempfile
+    from unittest.mock import Mock
+    started=worker.time.monotonic(); repo=Path(__file__).resolve().parents[1]
+    fixture=repo/ROOT/'a0005'
+    def rejects(action):
+        try: action()
+        except (AssertionError,ValueError,KeyError,FileNotFoundError,RuntimeError): return
+        raise AssertionError('invalid closed measurement accepted')
+    checked=qualify_measurement(fixture,repo)
+    assert checked['historical_campaign_status']==dict(status='failed',phase='quality',exit_code=1,original_exit_code=1)
+    assert all(checked[n] is True for n in ('measurement_gate_passed','quality_gate','context444miss','identity_gate','resource_gate','cleanup_gate'))
+    assert checked['valid_calls']==checked['actual_http_attempts']==64
+    assert replay(fixture)==dict(executed=False,execution_gate_passed=False)
+    # Historical cold authority is usable, but it cannot authorize NEW code.
+    rejects(lambda:worker.qualify(repo/CONFIG,worker.artifact(repo/CONFIG)['sha256'],repo))
+    reservation=json.loads((fixture/'aws-reservation.json').read_bytes())
+    terminal=json.loads((fixture/'aws-terminal.json').read_bytes())
+    body=user_data(terminal['source_commit'],terminal['source_archive_sha256'],'source/key',PREFIX+'a0005',reservation['qualification'])
+    rule=body.rsplit('for name in $ARTIFACT_NAMES; do\n',1)[1].split('\ndone',1)[0]
+    assert 'aws' not in rule and 'test -f' in rule, 'test only final presence loop'
+    old='if [ "$name" = screen/failures.jsonl ]; then test -f "$name"; elif [ "$name" = run-closed.log ]; then test -s run.log; else test -s "$name"; fi'
+    with tempfile.TemporaryDirectory() as directory:
+        tmp=Path(directory); mock=tmp/'presence'; mock.mkdir()
+        for n in ARTIFACTS:
+            p=mock/('run.log' if n=='run-closed.log' else n); p.parent.mkdir(parents=True,exist_ok=True)
+            p.write_bytes(b'' if n in ('screen/publication.log','screen/failures.jsonl') else b'required')
+        def bash(clause, names=ARTIFACTS):
+            script='for name in '+ ' '.join(names)+'; do\n'+clause+'\ndone'
+            return subprocess.run(['bash','-ec',script],cwd=mock,timeout=5,check=False).returncode
+        assert bash(old)==1, 'RED legacy rejects zero-byte publisher log'
+        assert bash(rule)==0, 'GREEN only empty publication/failure logs allowed'
+        for n in ARTIFACTS:
+            p=mock/('run.log' if n=='run-closed.log' else n); original=p.read_bytes()
+            p.unlink(); assert bash(rule)!=0, 'absent accepted: '+n
+            p.mkdir(); assert bash(rule)!=0, 'directory accepted: '+n
+            p.rmdir(); p.symlink_to(mock/'screen/build.log'); assert bash(rule)!=0, 'symlink accepted: '+n
+            p.unlink(); p.write_bytes(b'')
+            assert (bash(rule)==0)==(n in ('screen/publication.log','screen/failures.jsonl')), 'required empty accepted: '+n
+            p.write_bytes(original)
+        copied=tmp/'closed'; worker.shutil.copytree(fixture,copied)
+        def change_json(name,change,authenticate=False):
+            path=copied/name; original=path.read_bytes(); tpath=copied/'aws-terminal.json'; oldterminal=tpath.read_bytes()
+            value=json.loads(original); change(value); path.write_bytes(worker.encoded(value)+b'\n')
+            if authenticate:
+                receipt=json.loads(oldterminal); receipt['artifacts'][name]=worker.artifact(path)
+                tpath.write_bytes(worker.encoded(receipt))
+            try: rejects(lambda:qualify_measurement(copied,repo))
+            finally: path.write_bytes(original); tpath.write_bytes(oldterminal)
+        module=sys.modules[__name__]
+        with patch.object(module,'archived_authority',return_value=(checked['cold_config'],checked['qualification'])):
+            for n in ARTIFACTS:
+                p=copied/n; original=p.read_bytes(); p.write_bytes(original+b'tamper')
+                rejects(lambda:qualify_measurement(copied,repo)); p.write_bytes(original)
+            for name,change in (
+                ('aws-closeout.json',lambda v:v.update(state='running')),
+                ('aws-launch.json',lambda v:v.update(instance_id='i-unrelated')),
+                ('aws-terminal.json',lambda v:v.update(source_archive_sha256='0'*64)),
+                ('aws-terminal.json',lambda v:v['artifacts'].pop('screen/publication.log')),
+                ('aws-reservation.json',lambda v:v['qualification'].update(code_identity_sha256='0'*64))):
+                change_json(name,change)
+            for name,change in (
+                ('screen/summary.json',lambda v:v.update(returned_hits=623)),
+                ('screen/resources.json',lambda v:v.update(cold_invocations=63)),
+                ('screen/resources.json',lambda v:v.update(wall_seconds=7201)),
+                ('screen/resources.json',lambda v:v['phase_admission'].update(native_memory_bytes=worker.PAYLOAD)),
+                ('screen/cold-cgroup.json',lambda v:v['after'].update({'memory.swap.peak':'1\n'})),
+                ('screen/cleanup.json',lambda v:v.update(valid=False)),
+                ('screen/publication.json',lambda v:v['head'].update(root_sha256='0'*64))):
+                change_json(name,change,True)
+            path=copied/'screen/records.jsonl'; original=path.read_bytes(); rows=[json.loads(line) for line in original.splitlines()]
+            rows[0]['response']['ids'][0]=999999
+            path.write_bytes(b''.join(worker.encoded(r)+b'\n' for r in rows))
+            oldterminal=(copied/'aws-terminal.json').read_bytes(); receipt=json.loads(oldterminal)
+            receipt['artifacts']['screen/records.jsonl']=worker.artifact(path)
+            (copied/'aws-terminal.json').write_bytes(worker.encoded(receipt))
+            rejects(lambda:qualify_measurement(copied,repo))
+            path.write_bytes(original); (copied/'aws-terminal.json').write_bytes(oldterminal)
+        # Local archived Git authority also rejects a tampered config with rehashed receipt.
+        changed=tmp/'config.json'; changed.write_bytes((fixture/'screen/config.json').read_bytes())
+        config=json.loads(changed.read_bytes()); config['code_sha256'][CODE[0]]='0'*64
+        changed.write_bytes(worker.encoded(config))
+        rejects(lambda:archived_authority(repo,changed,terminal['source_commit'],terminal['source_archive_sha256']))
+        # Exercise the offered qualification with the real closed measurement.
+        from scripts import run_native_semantic_1m_offered as offered_worker
+        sandbox=tmp/'repo'; sandbox.mkdir()
+        for n in offered_worker.CODE:
+            target=sandbox/n; target.parent.mkdir(parents=True,exist_ok=True); target.write_bytes((repo/n).read_bytes())
+        worker.shutil.copytree(fixture,sandbox/ROOT/'a0005')
+        target=sandbox/offered_worker.CONFIG; target.parent.mkdir(parents=True)
+        run=dict(directory=str(ROOT/'a0005'),files={n:dict(path=str(ROOT/'a0005'/n),**worker.artifact(fixture/n)) for n in offered_worker.COLD_ROSTER})
+        disposition=dict(schema='borsuk-semantic-1m-cold-fail-disposition-v1',authority_pending=False,
+            decision='reuse-authenticated-closed-measurement-for-offered',reason='bootstrap-empty-publication-log',
+            cold_directory=run['directory'],source_commit=terminal['source_commit'],source_archive_sha256=terminal['source_archive_sha256'],
+            terminal=worker.identity(run['files']['aws-terminal.json']),config=worker.identity(run['files']['screen/config.json']),
+            artifact_roster_sha256=terminal['artifact_roster_sha256'],artifacts=terminal['artifacts'],
+            historical_campaign_status=checked['historical_campaign_status'],service_exit_status=0,
+            failed_presence_artifact='screen/publication.log',only_bootstrap_presence_failure=True)
+        dpath=tmp/'disposition.json'; dpath.write_bytes(worker.encoded(disposition))
+        price=tmp/'prices.json'; price.write_bytes(worker.encoded(dict(provenance='synthetic-only')))
+        config=dict(offered_worker.FIXED,authority_pending=False,code_sha256={n:worker.artifact(sandbox/n)['sha256'] for n in offered_worker.CODE},
+            cold_config=run['files']['screen/config.json'],cold_run=run,cold_fail_disposition=dict(path='mock-disposition',**worker.artifact(dpath)),
+            measurement_prefix=offered_worker.PREFIX+'a0001',prices=dict(path='mock-prices',**worker.artifact(price)))
+        source_authority=dict(schema='borsuk-semantic-1m-cold-source-authority-v1',authority_pending=False,
+            source_commit=terminal['source_commit'],source_archive_sha256=terminal['source_archive_sha256'],
+            config=worker.identity(run['files']['screen/config.json']),code_sha256=checked['cold_config']['code_sha256'],qualification=checked['qualification'])
+        source=tmp/'source-authority.json'; source.write_bytes(worker.encoded(source_authority))
+        config['cold_source_authority']=dict(path='mock-source-authority',**worker.artifact(source))
+        real_read=worker.read
+        def read(_,pointer):
+            if pointer['path']=='mock-source-authority':
+                value=source.read_bytes(); assert dict(bytes=len(value),sha256=worker.sha(value))==worker.identity(pointer); return value
+            if pointer['path']=='mock-disposition':
+                value=dpath.read_bytes(); assert dict(bytes=len(value),sha256=worker.sha(value))==worker.identity(pointer); return value
+            if pointer['path']=='mock-prices': return price.read_bytes()
+            return real_read(repo,pointer)
+        # A deployed git archive has no history; the frozen bridge needs no Git.
+        with patch.object(worker,'read',side_effect=read),patch.object(subprocess,'check_output',side_effect=AssertionError('Git forbidden')):
+            assert qualify_measurement(fixture,repo,config['cold_source_authority'])==checked
+            for field,value in (('authority_pending',True),('source_commit','0'*40),('source_archive_sha256','0'*64),
+                ('config',dict(bytes=1,sha256='0'*64)),('qualification',{}),('code_sha256',{})):
+                bad=dict(source_authority,**{field:value}); source.write_bytes(worker.encoded(bad))
+                pointer=dict(path='mock-source-authority',**worker.artifact(source))
+                rejects(lambda:qualify_measurement(fixture,repo,pointer))
+            source.write_bytes(worker.encoded(source_authority))
+        def qualify_config():
+            target.write_bytes(worker.encoded(config))
+            return offered_worker.qualify(target,worker.artifact(target)['sha256'],sandbox)
+        with patch.object(offered_worker,'read',side_effect=read),patch.object(worker,'read',side_effect=read), \
+            patch.object(offered_worker.cold_spot,'qualify_measurement',side_effect=lambda *args:checked),patch.object(offered_worker.subprocess,'Popen',side_effect=AssertionError('native forbidden')):
+            _,proof=qualify_config()
+            assert proof['cold_terminal_sha256']==run['files']['aws-terminal.json']['sha256']
+            saved=copy.deepcopy(config)
+            for pointer in (None,dict(config['cold_fail_disposition'],sha256='0'*64)):
+                config['cold_fail_disposition']=pointer; rejects(qualify_config)
+            config=copy.deepcopy(saved)
+            config['cold_source_authority']=None; rejects(qualify_config); config=copy.deepcopy(saved)
+            for field,value in (('authority_pending',True),('source_commit','0'*40),('service_exit_status',1),
+                ('only_bootstrap_presence_failure',False),('only_bootstrap_presence_failure',1),('reason','other-failure')):
+                bad=dict(disposition,**{field:value}); dpath.write_bytes(worker.encoded(bad))
+                config['cold_fail_disposition']=dict(path='mock-disposition',**worker.artifact(dpath)); rejects(qualify_config)
+            dpath.write_bytes(worker.encoded(disposition)); config=copy.deepcopy(saved)
+            for field,value in (('valid_calls',63),('quality_gate',False),('cleanup_gate',False),('resource_gate',False)):
+                bad=dict(checked,**{field:value})
+                with patch.object(offered_worker.cold_spot,'qualify_measurement',return_value=bad): rejects(qualify_config)
+            config['code_sha256'][offered_worker.CODE[0]]='0'*64; rejects(qualify_config)
+        # Authenticated service logs must have one unambiguous normal exit.
+        for log in (b'Main processes terminated with: code=exited/status=0\n',
+            (fixture/'run-closed.log').read_bytes()+b'Main processes terminated with: code=exited/status=1\n'):
+            def bad_log(_,p): return log if p['path'].endswith('/run-closed.log') else read(_,p)
+            with patch.object(worker,'read',side_effect=bad_log): rejects(lambda:fail_disposition(repo,run,saved['cold_fail_disposition'],checked))
+    assert worker.time.monotonic()-started<55
+    assert worker.resource.getrusage(worker.resource.RUSAGE_SELF).ru_maxrss*1024<=200*1024**2
+    print('PASS Bash RED/GREEN and all25 absent/directory/symlink/required-empty negatives; actual a0005 measurement/GT/summary/resources/cleanup PASS, campaign FAIL and context444miss preserved; body/identity/source/reducer/resource/cleanup/disposition/code-pin tamper negatives; native/cloud UNRUN')
+
+
 def self_check():
     started=worker.time.monotonic()
+    measurement_self_check()
     import copy
     import io
     import tempfile
@@ -666,7 +931,7 @@ def self_check():
                 for name,value in (('aws-launch.json',launch),('aws-closeout.json',dict(nodes=launch['nodes'],state='terminated')),
                     ('aws-reservation.json',reservation),('aws-terminal.json',terminal)):
                     (collected/name).write_bytes(worker.encoded(value))
-                with patch.object(module,'qualify',return_value=receipt),patch.object(worker,'read',side_effect=runtime_read):
+                with patch.object(module,'archived_authority',return_value=(runconfig,receipt)),patch.object(worker,'read',side_effect=runtime_read):
                     replayed=replay(collected)
                     assert replayed['executed'] and replayed['quality_gate_passed']==(mode!='scientific-fail')
                     s3=Mock()
@@ -713,12 +978,14 @@ def self_check():
 
 
 if __name__ == '__main__':
-    if sys.argv[1:] == ['--self-check']:
+    if sys.argv[1:] == ['--measurement-self-check']:
+        measurement_self_check()
+    elif sys.argv[1:] == ['--self-check']:
         self_check()
     elif len(sys.argv)==3 and sys.argv[1]=='--replay':
         print(json.dumps(replay(sys.argv[2]),sort_keys=True))
     else:
-        assert len(sys.argv)==2, 'usage: aNNNN | --self-check | --replay DIRECTORY'
+        assert len(sys.argv)==2, 'usage: aNNNN | --self-check | --measurement-self-check | --replay DIRECTORY'
         with open('/tmp/borsuk-semantic-1m-cold-launch.lock','a+') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             main(sys.argv[1])
