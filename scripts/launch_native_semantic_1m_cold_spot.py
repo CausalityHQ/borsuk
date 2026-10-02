@@ -1,5 +1,6 @@
 """Root-frozen cold gate: aNNNN | --self-check | --measurement-self-check | --replay DIRECTORY."""
 from pathlib import Path
+from contextlib import ExitStack
 import fcntl
 import json
 import os
@@ -92,9 +93,18 @@ def archived_authority(repo, config_path, source_commit, source_archive_sha256, 
         authority=json.loads(worker.read(repo,source_authority))
         pins=authority['code_sha256']
     assert pins==config['code_sha256'], 'archived code pins'
-    artifact=worker.artifact; code={repo/n:dict(sha256=d) for n,d in pins.items()}
-    with patch.object(worker,'CONFIG',config_path), patch.object(worker,'artifact',
-        side_effect=lambda p:code[Path(p)] if Path(p) in code else artifact(p)):
+    # The original config binds both source inventories. All other artifacts
+    # keep their real byte identities, including every nested config and proof.
+    native=json.loads(worker.read(repo,config['native_proofs']['http']))['native_source_sha256']
+    artifact=worker.artifact; code={panel.repo_path(repo,n):dict(sha256=d) for n,d in pins.items()}
+    def source_artifact(path):
+        path=Path(path)
+        return code[path] if path in code else artifact(path)
+    with ExitStack() as archived:
+        archived.enter_context(patch.object(worker,'CONFIG',config_path))
+        archived.enter_context(patch.object(worker.quality,'source_hashes',return_value=native))
+        for module in (worker,worker.quality,panel,ids):
+            archived.enter_context(patch.object(module,'artifact',side_effect=source_artifact))
         _,proof=worker.qualify(config_path,config_identity['sha256'],repo)
     proof['config_path']=str(CONFIG)
     proof=dict(proof,campaign_schema=SCHEMA,artifact_roster_sha256=worker.sha(worker.encoded(ARTIFACTS)),
@@ -283,6 +293,78 @@ def main(attempt):
         os.chdir(before)
 
 
+def archived_source_self_check():
+    """Real paired8 authority must survive historical/current source divergence."""
+    import copy
+    import tempfile
+    from scripts import run_native_startup_wave8_paired as paired
+    repo=Path(__file__).resolve().parents[1]
+    fixture=repo/ROOT/'a0005'
+    config=json.loads((repo/paired.CONFIG).read_bytes())
+    config['authority_pending']=False
+    config['code_sha256']={n:worker.artifact(repo/n)['sha256'] for n in paired.CODE}
+    historical=json.loads((fixture/'screen/config.json').read_bytes())
+    assert historical['code_sha256']['scripts/run_native_cold_offered.py']!=config['code_sha256']['scripts/run_native_cold_offered.py']
+    authority=json.loads(worker.read(repo,config['cold_source_authority']))
+    local=archived_authority(repo,fixture/'screen/config.json',authority['source_commit'],authority['source_archive_sha256'])
+    assert local==(historical,authority['qualification']), 'original Git/source bridge parity'
+    def rejects(action,reason):
+        try: action()
+        except AssertionError as error:
+            assert reason in str(error), str(error)
+            return
+        raise AssertionError('invalid archived source accepted: '+reason)
+    with tempfile.TemporaryDirectory() as directory:
+        target=Path(directory)/'paired8-config.json'
+        def qualify_config():
+            target.write_bytes(worker.encoded(config))
+            return paired.qualify(target,worker.artifact(target)['sha256'],repo)
+        with patch.object(paired,'CONFIG',target), \
+            patch.object(subprocess,'check_output',side_effect=AssertionError('Git forbidden')), \
+            patch.object(subprocess,'Popen',side_effect=AssertionError('external execution forbidden')):
+            _,proof=qualify_config()
+            assert proof['cold_terminal_sha256']=='25de5c930a066bdae71d48078e23901d79c6bc150770987cfaeeb5c105d714b6'
+            assert proof['roles']['control']['wave_objects']==4 and proof['roles']['candidate']['wave_objects']==8
+            checked=qualify_measurement(fixture,repo,config['cold_source_authority'])
+            assert checked['qualification']==local[1]
+            assert checked['historical_campaign_status']==dict(status='failed',phase='quality',exit_code=1,original_exit_code=1)
+            assert checked['measurement_gate_passed'] is checked['context444miss'] is True
+            saved=copy.deepcopy(config)
+            for field,value,reason in (('authority_pending',True,'root freeze pending'),
+                ('code_sha256',dict(config['code_sha256'],**{'scripts/run_native_cold_offered.py':'0'*64}),'code identity')):
+                config[field]=value; rejects(qualify_config,reason); config=copy.deepcopy(saved)
+            # Rehashed source pointers still cannot change the original bridge.
+            real_read=worker.read
+            for field,value,reason in (('authority_pending',True,'exact root archived source authority'),
+                ('source_commit','0'*40,'exact root archived source authority'),
+                ('source_archive_sha256','0'*64,'exact root archived source authority'),
+                ('config',dict(bytes=1,sha256='0'*64),'exact root archived source authority'),
+                ('code_sha256',dict(authority['code_sha256'],**{'scripts/run_native_cold_offered.py':'0'*64}),'archived code pins'),
+                ('qualification',dict(authority['qualification'],source_identity_sha256='0'*64),'exact root archived source authority')):
+                body=worker.encoded(dict(authority,**{field:value}))
+                config['cold_source_authority']=dict(saved['cold_source_authority'],bytes=len(body),sha256=worker.sha(body))
+                def altered_read(base,pointer):
+                    if pointer['path']==config['cold_source_authority']['path']:
+                        assert dict(bytes=len(body),sha256=worker.sha(body))==worker.identity(pointer)
+                        return body
+                    return real_read(base,pointer)
+                with patch.object(worker,'read',side_effect=altered_read): rejects(qualify_config,reason)
+                config=copy.deepcopy(saved)
+            # Change nested bodies without changing any real repository file.
+            real_bytes=Path.read_bytes
+            qreservation=repo/historical['quality_run']['directory']/'aws-reservation.json'
+            for path,field,value,reason in (
+                (repo/worker.quality.CONFIG,'authority_pending',True,'authority body identity'),
+                (qreservation,'qualification',{},'authority body identity'),
+                (repo/historical['native_proofs']['http']['path'],'native_source_sha256',{},'authority body identity')):
+                changed=json.loads(real_bytes(path)); changed[field]=value; body=worker.encoded(changed)
+                def altered_bytes(p): return body if p==path else real_bytes(p)
+                with patch.object(Path,'read_bytes',altered_bytes): rejects(qualify_config,reason)
+            # Historical source overlays must never leak into new qualification.
+            rejects(lambda:worker.quality.qualify(repo/worker.quality.CONFIG,historical['quality_config']['sha256'],repo),'adapter/helper source drift')
+    print('PASS actual paired8/current scheduler + a0005 Git/no-Git parity; current code, source/config/nested proof tamper rejected; historical FAIL/context444miss preserved; native/cloud UNRUN')
+
+
 def measurement_self_check():
     """Executed Bash rule and authenticated actual a0005/tamper regressions only."""
     import copy
@@ -443,6 +525,7 @@ def measurement_self_check():
 
 def self_check():
     started=worker.time.monotonic()
+    archived_source_self_check()
     measurement_self_check()
     import copy
     import io
