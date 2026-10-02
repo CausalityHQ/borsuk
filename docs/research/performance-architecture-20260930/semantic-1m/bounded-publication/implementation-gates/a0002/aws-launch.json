@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0e89b24a9d13bb2d7",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0e89b24a9d13bb2d7"
+    }
+  },
+  "prefix": "research/semantic-router/20261002/bounded-publication-implementation-a0002",
+  "source_commit": "fa4beae2d8a9b505a488847e1b2e9126c91e0364",
+  "source_archive_sha256": "6bc27f3d75f6008962cffe150ddadb2b725bea400b93cff8d9a3225debd6d0a4"
+}
