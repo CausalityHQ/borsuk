@@ -196,7 +196,6 @@ pub(crate) const ROUTER_FILES: [&str; 3] = [
     "router/leaves.bin",
 ];
 pub(crate) const ROUTER_ROOT_CAP: usize = 4 * 1024 * 1024;
-const LEAF_BYTES: usize = 2 * 1024 * 1024;
 
 /// Concrete discovery policy. Compaction inherits it unless explicitly changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -490,7 +489,7 @@ pub struct TwoBitDiscoveryTrace {
 #[doc(hidden)]
 #[derive(Debug, Default, serde::Serialize)]
 pub struct TwoBitPlanTrace {
-    /// Source nomination order: up to318 graph pages or1024 semantic closure pages.
+    /// Source nomination order: up to318 graph pages or512 Fresh1m closure pages.
     pub ranked_candidate_pages: Vec<usize>,
     /// Globally distinct32-row units source-scored, including bounded completion.
     pub nomination_evaluated_units: Vec<usize>,
@@ -509,31 +508,30 @@ impl TwoBitPlanTrace {
     /// Conservative retained ID/record payload excluding allocator overhead.
     pub fn scratch_bytes(rows: usize) -> usize {
         let units = rows.div_ceil(32);
-        // Retain the graph allowance, cover the full semantic page closure and
-        // charge semantic IDs too. Nomination reserves up to2544 slots; seed
-        // completion retains at most8 slots (at most7 additions).
-        let ids = (2 * rows.div_ceil(256).min(159)).max(rows.div_ceil(256).min(1024))
+        // Graph discoveries and semantic IDs are mutually exclusive. Charge the
+        // larger retained capacity, including nomination's full completion reserve
+        // and the discovery Vec's minimum four-record growth allocation.
+        let graph_ids = 2 * rows.div_ceil(256).min(159)
             + 2 * (units.min(128) + units.min(1272))
-            + units.min(2544)
-            + 16
-            + units.min(1024)
-            + 8;
-        ids.checked_mul(std::mem::size_of::<usize>())
-            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
-            .and_then(|bytes| bytes.checked_add(2 * std::mem::size_of::<TwoBitDiscoveryTrace>()))
-            .expect("bounded trace geometry")
+            + units.min(2544);
+        let semantic_ids = rows.div_ceil(256).min(512) + units.min(4096) + 48 + units.min(3072) + 8;
+        let graph_bytes = graph_ids * std::mem::size_of::<usize>()
+            + 4 * std::mem::size_of::<TwoBitDiscoveryTrace>();
+        let semantic_bytes = semantic_ids * std::mem::size_of::<usize>();
+        graph_bytes.max(semantic_bytes) + std::mem::size_of::<Self>()
     }
 }
 /// Offline source nomination and SQ8 page admission using the production planner.
 /// The caller binds the prepared query and authenticated records to one source;
 /// discovery, source-read charges and retained trace memory remain caller-owned.
-/// The explicit nomination limit must fit the physical pages; graph production
-/// retains min(total pages,159), while semantic discovery supplies its full closure.
+/// The explicit profile admits semantic walk/completion bounds; `None` retains
+/// graph limits. Semantic discovery supplies its entire admitted page closure.
 #[doc(hidden)]
 pub fn plan_two_bit_source_walks<'a>(
     rows: usize,
     dimensions: usize,
     nomination_page_limit: usize,
+    semantic_profile: Option<SemanticProfile>,
     walks: &[(usize, Vec<usize>)],
     prepared: &PreparedTwoBit,
     mut record: impl FnMut(usize) -> Option<&'a [u8]>,
@@ -545,8 +543,12 @@ pub fn plan_two_bit_source_walks<'a>(
     // arithmetic. Actual query budgets are applied after nomination as before.
     choose_budgeted_pages_sparse(&[], &[0], rows, dimensions, 1, 1, usize::MAX)
         .map_err(TwoBitGenerationError::Budget)?;
+    if semantic_profile.is_some_and(|profile| !profile.valid_geometry(rows, dimensions)) {
+        return Err(TwoBitGenerationError::Invalid("source semantic profile"));
+    }
+    let source_unit_limit = semantic_profile.map_or(2544, SemanticProfile::source_unit_limit);
     let mut nomination_evaluated_units = Vec::with_capacity(if trace.is_some() {
-        rows.div_ceil(32).min(2544)
+        rows.div_ceil(32).min(source_unit_limit)
     } else {
         0
     });
@@ -567,11 +569,8 @@ pub fn plan_two_bit_source_walks<'a>(
         }
         Ok(maximum)
     };
-    let ranked = if nomination_page_limit == rows.div_ceil(256).min(159) {
-        rank_walked_source(rows, walks, score)
-    } else {
-        rank_walked_source_with_limit(rows, walks, nomination_page_limit, score)
-    }?;
+    let ranked =
+        rank_walked_source_with_limit(rows, walks, nomination_page_limit, semantic_profile, score)?;
     if let Some(trace) = trace {
         trace.primary_page = ranked[0].0;
         trace.nomination_evaluated_units = nomination_evaluated_units;
@@ -622,33 +621,29 @@ pub fn plan_two_bit_source_cover(
 }
 
 // Source nomination over bounded graph walks; no corpus-sized query allocation.
+#[cfg(test)]
 fn rank_walked_source(
     rows: usize,
     walks: &[(usize, Vec<usize>)],
     score: impl FnMut(usize) -> Result<f64>,
 ) -> Result<Vec<(usize, f64)>> {
-    rank_walked_source_with_limit(rows, walks, rows.div_ceil(256).min(159), score)
+    rank_walked_source_with_limit(rows, walks, rows.div_ceil(256).min(159), None, score)
 }
 
-fn rank_walked_source_with_limit(
+fn admit_source_walks(
     rows: usize,
     walks: &[(usize, Vec<usize>)],
-    page_limit: usize,
-    mut score: impl FnMut(usize) -> Result<f64>,
-) -> Result<Vec<(usize, f64)>> {
+    semantic_profile: Option<SemanticProfile>,
+) -> Result<Vec<usize>> {
     let invalid = || TwoBitGenerationError::Invalid("walked source geometry");
-    if rows == 0
-        || walks.is_empty()
-        || walks.len() > 2
-        || page_limit == 0
-        || page_limit > rows.div_ceil(256)
-    {
+    let walk_limit = semantic_profile.map_or(1272, SemanticProfile::walk_unit_limit);
+    let walk_count = if semantic_profile.is_some() { 1 } else { 2 };
+    if rows == 0 || walks.is_empty() || walks.len() > walk_count {
         return Err(invalid());
     }
-    let count = page_limit;
-    let mut units = Vec::with_capacity(2 * 1272);
+    let mut units = Vec::with_capacity(walk_count * walk_limit);
     for (seed, evaluated) in walks {
-        if *seed >= rows.div_ceil(256) || evaluated.is_empty() || evaluated.len() > 1272 {
+        if *seed >= rows.div_ceil(256) || evaluated.is_empty() || evaluated.len() > walk_limit {
             return Err(invalid());
         }
         let mut sorted = evaluated.clone();
@@ -664,7 +659,45 @@ fn rank_walked_source_with_limit(
     }
     units.sort_unstable();
     units.dedup();
-    let mut memo = Vec::with_capacity(units.len());
+    if let Some(profile) = semantic_profile {
+        let pages = units.iter().map(|unit| unit / 8).collect::<BTreeSet<_>>();
+        if pages.len() > profile.closure_page_limit() {
+            return Err(TwoBitGenerationError::Invalid("semantic closure page cap"));
+        }
+    }
+    Ok(units)
+}
+
+fn rank_walked_source_with_limit(
+    rows: usize,
+    walks: &[(usize, Vec<usize>)],
+    page_limit: usize,
+    semantic_profile: Option<SemanticProfile>,
+    mut score: impl FnMut(usize) -> Result<f64>,
+) -> Result<Vec<(usize, f64)>> {
+    let invalid = || TwoBitGenerationError::Invalid("walked source geometry");
+    if page_limit == 0
+        || page_limit > rows.div_ceil(256)
+        || (semantic_profile.is_none() && page_limit != rows.div_ceil(256).min(159))
+        || semantic_profile.is_some_and(|profile| page_limit > profile.closure_page_limit())
+    {
+        return Err(invalid());
+    }
+    let count = page_limit;
+    let units = admit_source_walks(rows, walks, semantic_profile)?;
+    if semantic_profile.is_some()
+        && units
+            .iter()
+            .map(|unit| unit / 8)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != page_limit
+    {
+        return Err(invalid());
+    }
+    let source_unit_limit = semantic_profile.map_or(2544, SemanticProfile::source_unit_limit);
+    let page_capacity = semantic_profile.map_or(2544, SemanticProfile::closure_page_limit);
+    let mut memo = Vec::with_capacity(rows.div_ceil(32).min(source_unit_limit));
     for unit in units {
         let value = score(unit)?;
         if !value.is_finite() {
@@ -672,9 +705,9 @@ fn rank_walked_source_with_limit(
         }
         memo.push((unit, value));
     }
-    fn page_maxima(mut units: Vec<(usize, f64)>) -> Vec<(usize, f64)> {
+    fn page_maxima(mut units: Vec<(usize, f64)>, capacity: usize) -> Vec<(usize, f64)> {
         units.sort_unstable_by_key(|&(page, _)| page);
-        let mut pages = Vec::<(usize, f64)>::with_capacity(units.len());
+        let mut pages = Vec::<(usize, f64)>::with_capacity(units.len().min(capacity));
         for (page, value) in units {
             if let Some(last) = pages.last_mut()
                 && last.0 == page
@@ -690,13 +723,14 @@ fn rank_walked_source_with_limit(
         memo.iter()
             .map(|&(unit, value)| (unit / 8, value))
             .collect(),
+        page_capacity,
     );
     let walked_count = memo.len();
     let mut completion = global.clone();
     completion.sort_unstable_by(|&(lp, l), &(rp, r)| r.total_cmp(&l).then(lp.cmp(&rp)));
     'complete: for (page, _) in completion {
         for unit in page * 8..((page + 1) * 8).min(rows.div_ceil(32)) {
-            if memo.len() == 2544 {
+            if memo.len() == source_unit_limit {
                 break 'complete;
             }
             if memo[..walked_count]
@@ -716,8 +750,9 @@ fn rank_walked_source_with_limit(
         memo.iter()
             .map(|&(unit, value)| (unit / 8, value))
             .collect(),
+        page_capacity,
     );
-    let mut selected = Vec::with_capacity(2 * count);
+    let mut selected = Vec::with_capacity(walks.len() * count);
     for (seed, evaluated) in walks {
         let mut pages = page_maxima(
             evaluated
@@ -729,6 +764,7 @@ fn rank_walked_source_with_limit(
                     (unit / 8, global[index].1)
                 })
                 .collect(),
+            page_capacity,
         );
         pages.sort_unstable_by(|&(lp, l), &(rp, r)| r.total_cmp(&l).then(lp.cmp(&rp)));
         if pages.len() < count {
@@ -1076,8 +1112,8 @@ impl TwoBitGeneration {
             return Err(bad("plane file geometry"));
         }
         // Three copies cover reads/decoding, plus graph towers. Per-query 1MiB
-        // covers one sequential1400-evaluation walk plus two retained traces
-        // and at most318 union-page planner vectors.
+        // covers sequential discovery/planner vectors through Fresh1m's3079 walk
+        // and4096 SOURCE units. Retained diagnostic arrays use their own scratch charge.
         let planner_bytes = (limits.max_query_scratch_bytes as u64)
             .checked_add(1024 * 1024)
             .ok_or(bad("query memory"))?;
@@ -1125,8 +1161,11 @@ impl TwoBitGeneration {
                     // Conservative binary decoding/prototype and root/membership copies;
                     // leaf buffers/validated units for every concurrent query, no cache.
                     let root = admitted_size("router/root.bin").ok()? as u64;
+                    let Discovery::Semantic { profile, .. } = &manifest.discovery else {
+                        unreachable!()
+                    };
                     root.checked_mul(32)?.checked_add(
-                        (LEAF_BYTES as u64 * 2 + 1024 * 1024)
+                        (profile.selected_leaf_bytes() as u64 * 2 + 1024 * 1024)
                             .checked_mul(limits.max_active_queries as u64)?,
                     )?
                 } else {
@@ -1334,6 +1373,20 @@ impl TwoBitGeneration {
         }
         Ok(vec![(nomination.seed_page, nomination.walk_units)])
     }
+    fn admit_leaves(router: &SemanticUnitRouter, ids: &[usize]) -> Result<()> {
+        let profile = router.manifest().profile;
+        let bytes = ids.iter().try_fold(0_usize, |bytes, &id| {
+            bytes.checked_add(router.manifest().leaves.get(id)?.bytes)
+        });
+        if ids.is_empty()
+            || ids.len() > profile.selected_leaf_limit()
+            || (profile == SemanticProfile::Fresh1m && ids.len() != 48)
+            || bytes.is_none_or(|bytes| bytes > profile.selected_leaf_bytes())
+        {
+            return Err(TwoBitGenerationError::Invalid("leaf admission"));
+        }
+        Ok(())
+    }
     fn local_walks(
         &self,
         normalized: &[f32],
@@ -1345,6 +1398,7 @@ impl TwoBitGeneration {
         let ids = router
             .select_leaves(normalized)
             .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
+        Self::admit_leaves(router, &ids)?;
         let mut file = fs::File::open(local).map_err(TwoBitGenerationError::Io)?;
         if file.metadata().map_err(TwoBitGenerationError::Io)?.len()
             != router.manifest().leaf_payload.bytes as u64
@@ -1385,13 +1439,7 @@ impl TwoBitGeneration {
         let ids = router
             .select_leaves(normalized)
             .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
-        let bytes = ids
-            .iter()
-            .map(|id| router.manifest().leaves[*id].bytes)
-            .sum::<usize>();
-        if ids.len() > 16 || bytes > LEAF_BYTES {
-            return Err(TwoBitGenerationError::Invalid("leaf admission"));
-        }
+        Self::admit_leaves(router, &ids)?;
         let active = std::sync::atomic::AtomicUsize::new(0);
         struct Active<'a>(&'a std::sync::atomic::AtomicUsize);
         impl Drop for Active<'_> {
@@ -1548,9 +1596,10 @@ impl TwoBitGeneration {
         stages.leaf_peak_inflight = peak.load(std::sync::atomic::Ordering::Relaxed);
         let (walks, router_stats) = result?;
         async {
-            let closure = walks
-                .iter()
-                .flat_map(|(_, units)| units.iter().map(|unit| unit / 8))
+            // Validate the same explicit discovery bounds before SOURCE cover/I/O.
+            let closure = admit_source_walks(self.rows(), &walks, self.semantic_profile())?
+                .into_iter()
+                .map(|unit| unit / 8)
                 .collect::<BTreeSet<_>>();
             let width = self.plane.receipt().record_bytes;
             let (cover, _) = plan_two_bit_source_cover(
@@ -1695,6 +1744,7 @@ impl TwoBitGeneration {
             } else {
                 self.pages.rows().div_ceil(256).min(159)
             },
+            self.semantic_profile(),
             walks,
             prepared,
             record,
@@ -3327,7 +3377,10 @@ mod source_walk_tests {
             );
             assert!(read.3.is_some());
         }
-        assert!(leaves.submitted_gets <= 16 && leaves.verified_bytes <= LEAF_BYTES);
+        assert!(
+            leaves.submitted_gets <= 16
+                && leaves.verified_bytes <= SemanticProfile::Native100k.selected_leaf_bytes()
+        );
         assert!(source.submitted_gets <= 128 && source.verified_bytes <= 64 * 1024 * 1024);
         let expected = eager
             .search_with_store(store.as_ref(), &query, 100, None)
@@ -4097,6 +4150,7 @@ mod source_walk_tests {
                     rows,
                     2,
                     rows.div_ceil(256).min(159),
+                    None,
                     &walks,
                     &prepared,
                     |row| local.plane.record(row),
@@ -4124,6 +4178,7 @@ mod source_walk_tests {
                         rows,
                         2,
                         rows.div_ceil(256).min(159),
+                        None,
                         &walks,
                         &prepared,
                         |row| local.plane.record(row),
@@ -4304,6 +4359,7 @@ mod source_walk_tests {
             513,
             2,
             1,
+            Some(SemanticProfile::Native100k),
             &walks,
             &prepared,
             |_| Some(&record),
@@ -4323,6 +4379,7 @@ mod source_walk_tests {
                     513,
                     2,
                     limit,
+                    Some(SemanticProfile::Native100k),
                     &walks,
                     &prepared,
                     |_| Some(&record),
@@ -4333,6 +4390,142 @@ mod source_walk_tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn fresh48_source_walk_completes_512_pages_once_and_rejects_excess_before_io() {
+        let original = std::iter::once(1)
+            .chain((1..512).flat_map(|page| (0..6).map(move |offset| page * 8 + offset)))
+            .chain((1..6).map(|page| page * 8 + 6))
+            .collect::<BTreeSet<_>>();
+        let (_, units, _) =
+            crate::semantic_unit_router::seed_walk(&original, 1_000_000, SemanticProfile::Fresh1m)
+                .unwrap();
+        assert_eq!(units.len(), 3079);
+        let walks = [(seed, units.clone())];
+        assert!(rank_walked_source(1_000_000, &walks, |_| panic!("graph cap relaxed")).is_err());
+        let mut seen = BTreeSet::new();
+        let ranked = rank_walked_source_with_limit(
+            1_000_000,
+            &walks,
+            512,
+            Some(SemanticProfile::Fresh1m),
+            |unit| {
+                assert!(seen.insert(unit), "source unit scored twice");
+                Ok(if unit == 4095 { 10. } else { 1. })
+            },
+        )
+        .unwrap();
+        assert_eq!(seen, (0..4096).collect());
+        assert_eq!(ranked.len(), 512);
+        assert_eq!(ranked[0], (511, 10.));
+        let codec = crate::rotated_two_bit::RotatedTwoBitCodec::new(&[0.; 768], 0).unwrap();
+        let prepared = codec.prepare_query(&[1.; 768], 400_000).unwrap();
+        let record = codec.encode(&[1.; 768]).unwrap();
+        let mut trace = TwoBitPlanTrace {
+            semantic_leaves: (0..48).collect(),
+            semantic_units: original.into_iter().collect(),
+            semantic_seed_additions: additions,
+            ..Default::default()
+        };
+        let plan = plan_two_bit_source_walks(
+            1_000_000,
+            768,
+            512,
+            Some(SemanticProfile::Fresh1m),
+            &walks,
+            &prepared,
+            |_| Some(&record),
+            32,
+            16_773_120,
+            Some(&mut trace),
+        )
+        .unwrap();
+        assert_eq!(trace.nomination_evaluated_units.len(), 4096);
+        assert_eq!(
+            trace
+                .nomination_evaluated_units
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            seen
+        );
+        assert_eq!(trace.ranked_candidate_pages, (0..512).collect::<Vec<_>>());
+        assert_eq!(
+            plan.ranges.iter().map(|range| range.len()).sum::<usize>(),
+            84 * 256 * 780
+        );
+        let retained = std::mem::size_of::<TwoBitPlanTrace>()
+            + (trace.nomination_evaluated_units.capacity()
+                + trace.ranked_candidate_pages.capacity()
+                + trace.semantic_leaves.capacity()
+                + trace.semantic_units.capacity()
+                + trace.semantic_seed_additions.capacity())
+                * std::mem::size_of::<usize>();
+        assert!(retained <= TwoBitPlanTrace::scratch_bytes(1_000_000));
+        let mut excess = units.clone();
+        excess.remove(excess.iter().position(|&unit| unit == 8).unwrap());
+        excess.push(512 * 8);
+        assert_eq!(excess.len(), 3079);
+        assert!(
+            admit_source_walks(
+                1_000_000,
+                &[(0, excess.clone())],
+                Some(SemanticProfile::Fresh1m)
+            )
+            .is_err()
+        );
+        for (limit, invalid) in [
+            (512, excess.clone()),
+            (513, excess),
+            (512, (0..3080).collect()),
+        ] {
+            assert!(
+                plan_two_bit_source_walks(
+                    1_000_000,
+                    768,
+                    limit,
+                    Some(SemanticProfile::Fresh1m),
+                    &[(0, invalid)],
+                    &prepared,
+                    |_| panic!("rejected closure read SOURCE"),
+                    32,
+                    16_773_120,
+                    None,
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            plan_two_bit_source_walks(
+                1_000_000,
+                768,
+                512,
+                None,
+                &walks,
+                &prepared,
+                |_| panic!("graph cap relaxed"),
+                32,
+                16_773_120,
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            plan_two_bit_source_walks(
+                100_000,
+                768,
+                512,
+                Some(SemanticProfile::Fresh1m),
+                &walks,
+                &prepared,
+                |_| panic!("wrong profile read SOURCE"),
+                32,
+                16_773_120,
+                None,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -4388,7 +4581,18 @@ mod source_walk_tests {
         let record = codec.encode(&[1.0, 0.0]).unwrap();
         let walks = [(0, (0..9).collect())];
         assert!(matches!(
-            plan_two_bit_source_walks(257, 2, 2, &walks, &prepared, |_| None, 32, 257 * 14, None),
+            plan_two_bit_source_walks(
+                257,
+                2,
+                2,
+                None,
+                &walks,
+                &prepared,
+                |_| None,
+                32,
+                257 * 14,
+                None
+            ),
             Err(TwoBitGenerationError::Invalid("missing source record"))
         ));
         let mut nonfinite = record.clone();
@@ -4399,6 +4603,7 @@ mod source_walk_tests {
                 257,
                 2,
                 2,
+                None,
                 &walks,
                 &prepared,
                 |_| Some(&nonfinite),
@@ -4423,6 +4628,7 @@ mod source_walk_tests {
                     257,
                     2,
                     2,
+                    None,
                     &invalid,
                     &prepared,
                     |_| panic!("invalid walk scored"),
@@ -4439,6 +4645,7 @@ mod source_walk_tests {
                     rows,
                     dimensions,
                     rows.div_ceil(256).min(159),
+                    None,
                     &walks,
                     &prepared,
                     |_| panic!("invalid geometry scored"),

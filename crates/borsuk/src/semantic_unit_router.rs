@@ -55,6 +55,33 @@ impl SemanticProfile {
             Self::Fresh1m => rows == 1_000_000 && dimensions == 768,
         }
     }
+    pub(crate) const fn selected_leaf_limit(self) -> usize {
+        match self {
+            Self::Native100k => 16,
+            Self::Fresh1m => 48,
+        }
+    }
+    pub(crate) const fn selected_leaf_bytes(self) -> usize {
+        match self {
+            Self::Native100k => 2 * 1024 * 1024,
+            Self::Fresh1m => 48 * LEAF_UNITS * (4 + 768 * 2),
+        }
+    }
+    pub(crate) const fn walk_unit_limit(self) -> usize {
+        self.selected_leaf_limit() * LEAF_UNITS + 7
+    }
+    pub(crate) const fn closure_page_limit(self) -> usize {
+        match self {
+            Self::Native100k => 1024,
+            Self::Fresh1m => 512,
+        }
+    }
+    pub(crate) const fn source_unit_limit(self) -> usize {
+        match self {
+            Self::Native100k => 2544,
+            Self::Fresh1m => 4096,
+        }
+    }
     fn code(self) -> u32 {
         match self {
             Self::Native100k => 1,
@@ -930,6 +957,7 @@ impl SemanticUnitRouter {
                 .leaves
                 .iter()
                 .map(|leaf| leaf.prototype.as_slice()),
+            self.manifest.profile,
         )
     }
 
@@ -969,7 +997,10 @@ impl SemanticUnitRouter {
     /// missing seed-page units added. No padding beyond the original page closure.
     pub fn validate_selected(&self, leaf_ids: &[usize], bodies: &[&[u8]]) -> Result<Nomination> {
         require(
-            !leaf_ids.is_empty() && leaf_ids.len() <= 16 && leaf_ids.len() == bodies.len(),
+            !leaf_ids.is_empty()
+                && leaf_ids.len() <= self.manifest.profile.selected_leaf_limit()
+                && (self.manifest.profile != SemanticProfile::Fresh1m || leaf_ids.len() == 48)
+                && leaf_ids.len() == bodies.len(),
             "selected leaf count",
         )?;
         let mut selected = BTreeSet::new();
@@ -978,7 +1009,10 @@ impl SemanticUnitRouter {
         for (&id, body) in leaf_ids.iter().zip(bodies) {
             require(selected.insert(id), "duplicate selected leaf")?;
             bytes = sum(&[bytes, body.len()])?;
-            require(bytes <= 2 * 1024 * 1024, "selected leaf byte cap")?;
+            require(
+                bytes <= self.manifest.profile.selected_leaf_bytes(),
+                "selected leaf byte cap",
+            )?;
             for unit in self.validate_leaf(id, body)? {
                 require(units.insert(unit), "disjoint selected units")?;
             }
@@ -1083,11 +1117,16 @@ pub fn validate_publication(
 
 /// Frozen first-eight/1.15-boundary/max-sixteen rule for normalized coordinates.
 pub fn select_leaves(query: &[f32], prototypes: &[Vec<f32>]) -> Result<Vec<usize>> {
-    rank_leaves(query, prototypes.iter().map(Vec::as_slice))
+    rank_leaves(
+        query,
+        prototypes.iter().map(Vec::as_slice),
+        SemanticProfile::Native100k,
+    )
 }
 fn rank_leaves<'a>(
     query: &[f32],
     prototypes: impl ExactSizeIterator<Item = &'a [f32]>,
+    profile: SemanticProfile,
 ) -> Result<Vec<usize>> {
     require(
         !query.is_empty() && query.iter().all(|x| x.is_finite()) && prototypes.len() > 0,
@@ -1108,8 +1147,14 @@ fn rank_leaves<'a>(
         ranked.push((distance, id));
     }
     ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-    let mut count = ranked.len().min(8);
-    if count == 8 {
+    let mut count = match profile {
+        SemanticProfile::Native100k => ranked.len().min(8),
+        SemanticProfile::Fresh1m => {
+            require(ranked.len() >= 48, "fresh selected leaf count")?;
+            48
+        }
+    };
+    if profile == SemanticProfile::Native100k && count == 8 {
         let boundary = ranked[7].0;
         for &(distance, _) in ranked.iter().take(16).skip(8) {
             if distance > 1.15 * boundary {
@@ -1132,8 +1177,18 @@ pub fn seed_walk(
             SemanticProfile::Native100k => (1..=100_000).contains(&rows),
             SemanticProfile::Fresh1m => rows == 1_000_000,
         } && !units.is_empty()
+            && units.len() <= profile.selected_leaf_limit() * LEAF_UNITS
             && units.last().is_some_and(|&u| u < rows.div_ceil(32)),
         "semantic units",
+    )?;
+    require(
+        units
+            .iter()
+            .map(|unit| unit / 8)
+            .collect::<BTreeSet<_>>()
+            .len()
+            <= profile.closure_page_limit(),
+        "semantic closure page cap",
     )?;
     let seed = units.first().ok_or("no semantic seed")? / 8;
     let additions = (seed * 8..((seed + 1) * 8).min(rows.div_ceil(32)))
@@ -1141,7 +1196,10 @@ pub fn seed_walk(
         .collect::<Vec<_>>();
     let mut walk = units.clone();
     walk.extend(additions.iter().copied());
-    require(walk.len() <= 1031, "semantic walk unit cap")?;
+    require(
+        walk.len() <= profile.walk_unit_limit(),
+        "semantic walk unit cap",
+    )?;
     Ok((seed, walk.into_iter().collect(), additions))
 }
 
@@ -1318,19 +1376,36 @@ mod tests {
         assert_eq!(r.manifest().leaves.len(), 49);
     }
 
+    fn fresh48_units() -> BTreeSet<usize> {
+        std::iter::once(1)
+            .chain((1..512).flat_map(|page| (0..6).map(move |offset| page * 8 + offset)))
+            .chain((1..6).map(|page| page * 8 + 6))
+            .collect()
+    }
+
     #[test]
-    fn fresh_seed_completion_keeps_a_scattered_1024_page_closure() {
-        let units = (0..1024).map(|page| page * 8 + 1).collect::<BTreeSet<_>>();
+    fn fresh48_seed_completion_retains_all_3072_units_and_512_pages() {
+        let units = fresh48_units();
         let (seed, walk, additions) =
             seed_walk(&units, 1_000_000, SemanticProfile::Fresh1m).unwrap();
+        assert_eq!(units.len(), 3072);
         assert_eq!(seed, 0);
-        assert_eq!(walk.len(), 1031);
+        assert_eq!(walk.len(), 3079);
         assert_eq!(additions, [0, 2, 3, 4, 5, 6, 7]);
+        assert!(units.iter().all(|unit| walk.binary_search(unit).is_ok()));
         assert_eq!(
             walk.iter().map(|u| u / 8).collect::<BTreeSet<_>>(),
-            (0..1024).collect()
+            (0..512).collect()
         );
         assert!(seed_walk(&units, 1_000_000, SemanticProfile::Native100k).is_err());
+        let mut excess = units.clone();
+        excess.insert(15);
+        assert!(seed_walk(&excess, 1_000_000, SemanticProfile::Fresh1m).is_err());
+        excess = units;
+        excess.remove(&8);
+        excess.insert(512 * 8);
+        assert_eq!(excess.len(), 3072);
+        assert!(seed_walk(&excess, 1_000_000, SemanticProfile::Fresh1m).is_err());
     }
 
     #[test]
@@ -1351,7 +1426,7 @@ mod tests {
             rows: geometry.rows,
             dimensions: geometry.dimensions,
         };
-        let selected_units = (0..1024).map(|page| page * 8 + 1).collect::<BTreeSet<_>>();
+        let selected_units = fresh48_units();
         let order = selected_units
             .iter()
             .copied()
@@ -1365,7 +1440,7 @@ mod tests {
             let mut body = Vec::new();
             for &unit in units {
                 membership[unit * 4..unit * 4 + 4].copy_from_slice(&(id as u32).to_le_bytes());
-                if id < 16 {
+                if id < 48 {
                     body.extend_from_slice(&(unit as u32).to_le_bytes());
                     body.resize(body.len() + 1536, 0);
                 }
@@ -1379,11 +1454,11 @@ mod tests {
                 bytes,
                 unit_count: units.len(),
                 source_rows: units.len() * 32,
-                sha256: if id < 16 { hash(&body) } else { "3".repeat(64) },
+                sha256: if id < 48 { hash(&body) } else { "3".repeat(64) },
                 prototype: vec![0.; 768],
             });
             offset += bytes;
-            if id < 16 {
+            if id < 48 {
                 bodies.push(body);
             }
         }
@@ -1420,13 +1495,43 @@ mod tests {
             SemanticUnitRouter::open(&root, &membership, &hash(&root), &input, profile.root_cap())
                 .unwrap();
         let ids = router.nominate(&[1.; 768]).unwrap();
-        assert_eq!(ids, (0..16).collect::<Vec<_>>());
+        assert_eq!(ids, (0..48).collect::<Vec<_>>());
         let nomination = router
             .validate_selected(&ids, &bodies.iter().map(Vec::as_slice).collect::<Vec<_>>())
             .unwrap();
         assert_eq!(nomination.units, selected_units);
-        assert_eq!(nomination.walk_units.len(), 1031);
-        assert_eq!(nomination.page_closure.len(), 1024);
+        assert_eq!(nomination.walk_units.len(), 3079);
+        assert_eq!(nomination.page_closure.len(), 512);
+        assert_eq!(bodies.iter().map(Vec::len).sum::<usize>(), 4_730_880);
+        let leaf_excess = router
+            .validate_selected(&[0; 49], &[bodies[0].as_slice(); 49])
+            .err()
+            .unwrap();
+        assert!(leaf_excess.to_string().contains("selected leaf count"));
+        let byte_excess = router
+            .validate_selected(&[0; 48], &[vec![0; 4_730_881].as_slice(); 48])
+            .err()
+            .unwrap();
+        assert!(byte_excess.to_string().contains("selected leaf byte cap"));
+        assert!(
+            router
+                .validate_selected(
+                    &ids[..47],
+                    &bodies[..47].iter().map(Vec::as_slice).collect::<Vec<_>>()
+                )
+                .is_err()
+        );
+        let expected = (0..48).collect::<Vec<_>>();
+        assert_eq!(router.nominate(&[1.; 768]).unwrap(), expected);
+        let mut distinct = router.manifest.clone();
+        for leaf in &mut distinct.leaves {
+            leaf.prototype[0] = leaf.leaf_id as f32;
+        }
+        let distinct = SemanticUnitRouter {
+            manifest: distinct,
+            membership: router.membership.clone(),
+        };
+        assert_eq!(distinct.select_leaves(&[0.; 768]).unwrap(), expected);
         let mut overflow = root.clone();
         overflow[64..72].copy_from_slice(&u64::MAX.to_le_bytes());
         assert!(
