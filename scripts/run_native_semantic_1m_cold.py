@@ -6,7 +6,7 @@ exact terminal artifact roster plus aws-{reservation,launch,closeout,terminal}.
 native_proofs.{http,publisher} bind the same unchanged 399-file production tree,
 binary bytes/SHA, completed release/Clippy/test-compilation and reused original
 full-suite source identity. Root supplies these authorities; pending is rejected.
-The launcher --self-check uses synthetic bodies/processes only.
+The launcher --self-check reads the closed publication fixture and mocks execution.
 """
 import base64
 import importlib.metadata
@@ -481,11 +481,17 @@ def publication_arm(root, prefix, head_body):
 
 def publication_reference(path, arm, expected):
     events=[json.loads(line) for line in Path(path).read_bytes().splitlines()]
-    assert len(events)==65 and events[0]['phase']=='startup'
-    header,rows=events[0],events[1:]
-    assert header['top_k']==100 and header['declared_panel_count']==64
+    assert len(events)==66 and len(expected)==64 and events[0]['phase']=='startup'
+    header,rows,summary=events[0],events[1:-1],events[-1]
+    assert type(header['top_k']) is int and header['top_k']==100
+    assert type(header['declared_panel_count']) is int and header['declared_panel_count']==64
     assert all(header[k]==v for k,v in arm['authority'].items())
     assert [r['query_ordinal'] for r in rows]==list(range(64)) and all(r['phase']=='query' for r in rows)
+    assert all(type(r['query_ordinal']) is int for r in rows)
+    assert summary['phase']=='summary'
+    assert type(summary['count']) is int and summary['count']==64
+    assert type(summary['top_k']) is int and summary['top_k']==100
+    assert type(summary['measurement_wall_ns']) is int and summary['measurement_wall_ns']>=0
     for row,reference in zip(rows,expected):
         assert all(row[k]==reference[k] for k in PARITY), 'publication/sealed scorer parity'
     return dict(validated_queries=64,top_k=100,source_scorer_parity=True,

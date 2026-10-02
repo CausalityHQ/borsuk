@@ -200,6 +200,76 @@ def self_check():
         dict(query=[1,-0.0],k=10,root_sha256='a'*64,generation=1,control_epoch=1))
     with tempfile.TemporaryDirectory() as directory:
         tmp=Path(directory)
+        # The closed native publisher is the contract fixture, not the mock below.
+        closed=here/ROOT/'a0003'
+        terminal=json.loads((closed/'aws-terminal.json').read_bytes())
+        launch=json.loads((closed/'aws-launch.json').read_bytes())
+        closeout=json.loads((closed/'aws-closeout.json').read_bytes())
+        reservation=json.loads((closed/'aws-reservation.json').read_bytes())
+        assert closeout['state']=='terminated' and closeout['nodes']==launch['nodes']
+        assert terminal['instance_id']==launch['instance_id']==launch['nodes']['0']['instance_id']
+        for k in ('source_commit','source_archive_sha256'):
+            assert terminal[k]==launch[k]==reservation[k]
+        assert terminal['status']=='failed' and terminal['original_exit_code']==terminal['exit_code']==1
+        fixture=closed/'screen/publication-reference.jsonl'
+        assert worker.artifact(fixture)==terminal['artifacts']['screen/publication-reference.jsonl']==dict(
+            bytes=96415,sha256='1d47c84a05e33e40537310fbe5e7c197cedca4c9cb481f31ad38e73991d02e63')
+        def closed_read(name):
+            pointer=dict(path=str((closed/name).relative_to(here)),**terminal['artifacts'][name])
+            return worker.read(here,pointer)
+        config_body=closed_read('screen/config.json')
+        frozen_config=json.loads(config_body)
+        assert worker.sha(config_body)==terminal['config_sha256']==reservation['qualification']['config_sha256']
+        builder=json.loads(closed_read('screen/builder-config.json'))
+        root_sha=closed_read('screen/build.log').decode().strip()
+        assert re.fullmatch('[0-9a-f]{64}',root_sha)
+        assert builder['generation']==frozen_config['generation']==1
+        assert builder['base_epoch']==frozen_config['base_epoch']==0
+        published=dict(authority=dict(root_sha256=root_sha,generation=builder['generation'],control_epoch=1))
+        quality_body=worker.read(here,frozen_config['quality_run']['files']['screen/records.jsonl'])
+        assert worker.sha(quality_body)==terminal['quality_reference_sha256']
+        references=worker.source_reference(quality_body)
+        events=[json.loads(line) for line in fixture.read_bytes().splitlines()]
+        validated=worker.publication_reference(fixture,published,references)
+        assert validated==dict(validated_queries=64,top_k=100,source_scorer_parity=True,
+            publish_wall_ns=events[0]['publish_wall_ns'],remote_open_wall_ns=events[0]['remote_open_wall_ns'])
+        qconfig=json.loads(worker.read(here,frozen_config['quality_config']))
+        truth_body=worker.read(here,qconfig['panel']['files']['screen/truth.i64'])
+        truth=[worker.struct.unpack_from('<100q',truth_body,q*800) for q in range(64)]
+        assert sum(len(set(r['ids'][:10])&set(t[:10])) for r,t in zip(events[1:-1],truth))==624
+        assert sum(len(set(r['ids'])&set(t)) for r,t in zip(events[1:-1],truth))==6077
+        verification=json.loads((closed/'verification.json').read_bytes())
+        assert verification['status']=='EXECUTION_FAILED' and verification['cold_invocations']==0
+        assert json.loads(closed_read('screen/resources.json'))['cold_invocations']==0
+        candidate=tmp/'publication-reference.jsonl'
+        def reject_events(bad,refs=references,authority=published):
+            candidate.write_bytes(b''.join(worker.encoded(r)+b'\n' for r in bad))
+            rejects(lambda:worker.publication_reference(candidate,authority,refs))
+        for bad in (events[:-1],events+[events[-1]],events[:1]+events[2:],events[1:],
+                    [events[-1],*events[1:-1],events[0]]):
+            reject_events(bad)
+        for index,field,values in (
+            (0,'phase',('query',)),(0,'top_k',(10,True,100.0)),
+            (0,'declared_panel_count',(63,64.0)),
+            (1,'phase',('query-error','startup','summary')),
+            (1,'query_ordinal',(1,False,0.0)),(64,'query_ordinal',(62,)),
+            (65,'phase',('query',)),(65,'count',(63,True,64.0,'64')),
+            (65,'top_k',(10,True,100.0,'100')),
+            (65,'measurement_wall_ns',(-1,True,1.0,'1',None))):
+            for value in values:
+                bad=copy.deepcopy(events); bad[index][field]=value; reject_events(bad)
+        for field in ('count','top_k','measurement_wall_ns'):
+            bad=copy.deepcopy(events); del bad[-1][field]; reject_events(bad)
+        for field in worker.PARITY:
+            bad=copy.deepcopy(events); bad[1][field]=None; reject_events(bad)
+        for field in published['authority']:
+            bad=copy.deepcopy(events); bad[0][field]=None; reject_events(bad)
+        reject_events(events,refs=references[:-1])
+        reject_events(events,authority=dict(authority=dict(published['authority'],root_sha256='0'*64)))
+        for measurement in (0,1):
+            good=copy.deepcopy(events); good[-1]['measurement_wall_ns']=measurement
+            candidate.write_bytes(b''.join(worker.encoded(r)+b'\n' for r in good))
+            assert worker.publication_reference(candidate,published,references)==validated
         # Existing source/binary/config/ordinal/run_process tests remain shared.
         with worker.panel.contextlib.redirect_stdout(io.StringIO()): shared_quality.self_check()
         local=tmp/'sq8'; local.write_bytes(b'packed')
@@ -485,8 +555,10 @@ def self_check():
                 assert args[-4:]==['--panel-count','64','--top-k','100']
                 refs=worker.source_reference(quality_records)
                 startup_event=dict(phase='startup',root_sha256=args[2],generation=1,control_epoch=1,
-                    top_k=100,declared_panel_count=64,publish_wall_ns=1,remote_open_wall_ns=40)
-                events=[startup_event,*[dict(phase='query',**{k:r[k] for k in ('query_ordinal',*worker.PARITY)}) for r in refs]]
+                    top_k=100,declared_panel_count=64,publish_wall_ns=1,head_read_wall_ns=10,remote_open_wall_ns=40)
+                events=[startup_event,*[dict(phase='query',query_wall_ns=40,query_process_cpu_ns=10,
+                    **{k:r[k] for k in ('query_ordinal',*worker.PARITY)}) for r in refs],
+                    dict(phase='summary',count=64,top_k=100,measurement_wall_ns=2560)]
                 Path(args[5]).write_bytes(b''.join(worker.encoded(r)+b'\n' for r in events))
             with Path(log).open('ab') as stream: stream.write(b'synthetic transfer/process\n')
             return result
@@ -625,7 +697,7 @@ def self_check():
             sdk.Session.assert_not_called()
             with patch.dict(sys.modules,{lifecycle.__name__:lifecycle}),worker.panel.contextlib.redirect_stdout(io.StringIO()):
                 lifecycle.self_check(lifecycle_only=True)
-    print('PASS FIRST1M v8 contract, publisher1GiB/builder-HTTP512MiB admission and env restoration, ordinal/f32 parity, S3 ETag, dynamic startup/IMDS/transport, cold wire boundary, 607/608, ledger/resources/cleanup, original PGID and shared ACK/fsync/termination closure; native UNRUN')
+    print('PASS FIRST1M v8 contract, closed a0003 authenticated 66-event publisher/scorer parity and R10=624/640 R100=6077/6400 (campaign FAIL preserved), publisher1GiB/builder-HTTP512MiB admission and env restoration, ordinal/f32 parity, S3 ETag, dynamic startup/IMDS/transport, cold wire boundary, 607/608, ledger/resources/cleanup, original PGID and shared ACK/fsync/termination closure; native UNRUN')
 
 
 if __name__ == '__main__':
