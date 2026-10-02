@@ -1,0 +1,72 @@
+{
+  "state": "verified",
+  "base": "01b1ab1405e7f3ded37cf885df94ac265e4dc0d4",
+  "commit": "74aee2cc6bba730d68b6b0fe24458a6616c5998d",
+  "owned_files": [
+    "scripts/launch_native_semantic_1m_cold_spot.py"
+  ],
+  "worktree_clean": true,
+  "control_file_unchanged": true,
+  "source_commit": "3a2c9784006fcaf425d46273740e9b2fd7d4db18",
+  "source_archive_sha256": "2888c54720ab9aa10c16f3d6585c5024249f113852bb2a37e0142e6b97194586",
+  "original_config_sha256": "f546f58dd1da0e558a493d170ba489265061efd0e23bc2822df4c9373c866994",
+  "source_authority_path": "docs/research/performance-architecture-20260930/semantic-1m/offered-1m/cold-source-authority.json",
+  "source_authority_sha256": "218f37348ca88adab782e8e6d1c30e3ad5bffa61661b71b9f1dae81d60b2b2e6",
+  "fix": "Reuse cold, nested quality, panel and ID validators with the exact original CODE pins authenticated by Git or the root source authority; bind historical native source inventory to the original config-pinned HTTP proof. All other artifact bytes and nested proofs remain authenticated normally.",
+  "live_new_code_pins_strict": true,
+  "no_git_deployment_parity": true,
+  "immutable_historical_receipts": true,
+  "historical_campaign_status": {
+    "status": "failed",
+    "phase": "quality",
+    "exit_code": 1,
+    "original_exit_code": 1
+  },
+  "historical_context444miss": true,
+  "tests": [
+    {
+      "command": "timeout 55s /usr/bin/time -v python3 scripts/launch_native_semantic_1m_cold_spot.py --self-check",
+      "exit_code": 0,
+      "elapsed_seconds": 10.03,
+      "max_rss_kib": 122168,
+      "log": "/tmp/borsuk-archived-nested-source-validation-self-check.log"
+    },
+    {
+      "command": "python3 -m py_compile scripts/launch_native_semantic_1m_cold_spot.py",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "red_regression": {
+    "command": "timeout 55s /usr/bin/time -v python3 -c \"from scripts.launch_native_semantic_1m_cold_spot import archived_source_self_check; archived_source_self_check()\"",
+    "exit_code": 1,
+    "expected_error": "adapter/helper source drift",
+    "log": "/tmp/borsuk-archived-nested-source-validation-red.log"
+  },
+  "actual_root_regression": "Real paired8 config copied to /tmp, pending=False and exact current CODE hashes only in that temporary copy; current changed scheduler and real a0005/source bridge/full qualification; Git and external execution forbidden.",
+  "negative_checks": [
+    "pending new config",
+    "current scheduler CODE pin mismatch",
+    "rehashed pending/source commit/archive/config/CODE/qualification bridge tamper",
+    "nested quality config body",
+    "nested quality reservation qualification body",
+    "original HTTP proof native inventory body",
+    "live quality source drift after archived context restoration",
+    "all existing cold self-check disposition/resource/measurement/receipt negatives"
+  ],
+  "source_regression": {
+    "command": "timeout 55s /usr/bin/time -v python3 -c \"from scripts.launch_native_semantic_1m_cold_spot import archived_source_self_check; archived_source_self_check()\"",
+    "exit_code": 0,
+    "elapsed_seconds": 4.01,
+    "max_rss_kib": 90044,
+    "log": "/tmp/borsuk-archived-nested-source-validation-source.log"
+  },
+  "native_cloud_query_vector_gt_execution": "UNRUN",
+  "reviews_children_operator_contact": "NONE",
+  "merged": false,
+  "pushed": false,
+  "root_owns_freeze_launch_integration": true
+}
