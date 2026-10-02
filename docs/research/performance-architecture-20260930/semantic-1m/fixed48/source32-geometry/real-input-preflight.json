@@ -1,0 +1,44 @@
+{
+  "source_only_real_fixture": "PASS",
+  "elapsed_s": 0.12007428501965478,
+  "queries": 64,
+  "truth_rows": 64,
+  "derived_requests_bytes": 983194,
+  "inputs": {
+    "requests.jsonl": {
+      "bytes": 982810,
+      "sha256": "f0ee89e3751765cac78eb128ba577bb870e3a910fb2c4eb486c80740544bc5cd"
+    },
+    "records.jsonl": {
+      "bytes": 2086748,
+      "sha256": "631fd161bf859d77b9d772576de806d4b71e155bd70b9d6f6b9b68bcfeac6be8"
+    },
+    "truth.i64": {
+      "bytes": 51200,
+      "sha256": "0b13e27aade93e099c5114f0262b71b2cb28f0b4ef85a487d15bebaeea802970"
+    }
+  },
+  "sdk": {
+    "boto3": "1.40.72",
+    "botocore": "1.40.72",
+    "conditional_put": true,
+    "network_calls": 0,
+    "python_executable": "/usr/bin/python3"
+  },
+  "native_calls": 0,
+  "network_calls": 0,
+  "new_quality_evaluation": false,
+  "schema": "borsuk-source32-input-preflight-v1",
+  "source_commit": "a93522bae18b10da06236e44bea4d5f80cee526f",
+  "scope": "Exact retained consumed64 input validator and no-network SDK admission only; not native parity, full runtime qualification, or scientific measurement.",
+  "command": "python3: panel_inputs(Path('docs/research/performance-architecture-20260930/semantic-1m/fixed48/scientific-execution/python-replay-a0002/a0002/screen')); sdk_guard()",
+  "controller_code_sha256": {
+    "scripts/run_cohere_fixed48_cold_http.py": "775d4c00d1878c7e58b6bffdf6df148b26153cbf3416d7a522a935177d581228"
+  },
+  "remaining_gates": [
+    "Exact native candidate qualification",
+    "Real ordinal54 control/candidate parity",
+    "Frozen full runtime admission and independent infrastructure canary",
+    "Matched ABBA measured panel"
+  ]
+}
