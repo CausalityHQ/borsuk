@@ -1,0 +1,8 @@
+{
+  "exact_worker_commit": "31cbc7acae15647126f051f4c9fc426547b25f7d",
+  "root_self_check_exit": 0,
+  "root_memory_limit_bytes": 268435456,
+  "root_timeout_seconds": 55,
+  "cloud_data_native_execution": false,
+  "launch_authority_frozen": false
+}

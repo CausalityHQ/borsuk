@@ -1,0 +1,30 @@
+{
+  "schema": "borsuk-fixed48-retained-artifact-controller-verification-v1",
+  "commit": "31cbc7acae15647126f051f4c9fc426547b25f7d",
+  "base_commit": "172f8f29712788d02c8153531026a9738f8a12a7",
+  "owned_files": [
+    "scripts/launch_cohere_semantic_artifact_reproduction_spot.py"
+  ],
+  "clean_worktree": true,
+  "file_sha256": "7eef304ceb3e087a627be62c2b161c2180fbeeda7ef90d93f7717ba5795d0485",
+  "git_identity": "Roman Bartusiak <riomus@gmail.com>",
+  "self_check_exit": 0,
+  "elapsed_seconds": 2.37,
+  "max_rss_kib": 75116,
+  "indented_production_shape_user_data_bytes": 16238,
+  "memory_limit_bytes": 268435456,
+  "timeout_seconds": 55,
+  "log": {
+    "path": "/tmp/borsuk-fixed48-retained-artifact-controller-check.log",
+    "sha256": "b73ba3371274091c3677e3dfa33f23d7a54e2b60c65a183cd38277e33d7a2674"
+  },
+  "contract_path": "/tmp/borsuk-fixed48-retained-artifact-controller-contract.json",
+  "code_roster_count": 62,
+  "helper_code_roster_count": 59,
+  "retained_count": 30,
+  "launch_authority": false,
+  "cloud_data_native_run": false,
+  "config_modified": false,
+  "merged_or_pushed": false,
+  "early_parent_notification": "Rejected because parent already had 20 queued instructions; contract is durable and final completion archive supplies it."
+}
