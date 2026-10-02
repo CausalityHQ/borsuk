@@ -17,3 +17,22 @@ Verified a0005: recall@10=97.5% (624/640), zero ID/recall delta from frozen qual
 ## a0001 setup failure
 
 Original controller16810 exited1; instance i-0cd7ce838bb4869c5 is terminated. Both terminal raw/gzip bodies authenticate. The isolated worker environment omitted boto3, imported by the checkpoint lifecycle before the scheduler. Native invocations and HTTP attempts are zero; offered quality/latency/throughput are unmeasured. Preserve this FAIL and original config/authority. A prospective a0002 will change only the launcher dependency installation and add an actual isolated import preflight. Scheduler, retained index, panel, quality/resource/dispatch gates remain frozen. No paid rerun until the real environment gate passes.
+
+## a0002 closed: offered-load attainment GO; external latency gap remains
+
+Frozen source `9a778f3461468447cbdf32a992b86cf4ca893b77`, config `4b6ab555053d64f7df09b7e86ab2ef607eb164fe423b3b1fbfb40b20df9394d6`; original controller63405 exit0, owned Spot `i-025060f9c7da1ad79` independently terminated. All24 terminal artifact bodies and gzip parity authenticated; replay exit0. Root independently recounted sealed truth, exact ordered-ID parity against qualified cold reference, and percentile interpolation for all384 successful offers. Shared8GiB/no-swap/native1GiB admission unchanged; measured native maximum RSS39,206,912B. No build or publication occurred.
+
+ReLAION FIRST1M, D768 cosine, fixed64 reservoir1000–1063, k10. Each cell returned624/640 hits (97.5%), all64 success, zero errors/drops, dispatch gate passed.
+
+| Offered QPS | Cold p90 ms | Cold p95 ms | Full-span completion/s |
+|---:|---:|---:|---:|
+|0.25|612.361|687.000|0.253|
+|0.5|512.700|528.375|0.506|
+|1|498.586|502.049|1.008|
+|2|503.003|522.973|1.996|
+|4|493.211|515.470|3.946|
+|8|482.202|509.032|7.665|
+
+8-QPS scheduled-response p90/p95=482.603/509.386ms. Full-span includes final response and cleanup; this finite64-query cell is not sustainable saturation. Largest tested passing offered rate8; higher rates untested. 444ms published1MD768 cold-p90 context remains missed by38.202ms (8.60%); no matched vendor measurement or win. AWS subsecond directional context attained under our distinct protocol. No percentile/QPS extrapolation to10M/100M. Earlier serial a5 p90512.740ms is a separate protocol, not a matched speedup baseline.
+
+Next decisive engineering step: decompose startup/open and query fetch timing in these authenticated records, choose one causal startup/fetch reduction, then prospectively pair unchanged candidate against that intervention. In parallel construct the already fixed fresh CoHere64 metadata authority, then prepare/seal its GT and qualify the same production index. Total lifecycle cost, sustained capacity, CoHere1M quality/latency, maintenance/pinning,10M/100M remain open. Historical a1 setupFAIL and a5 campaignFAIL remain unchanged.

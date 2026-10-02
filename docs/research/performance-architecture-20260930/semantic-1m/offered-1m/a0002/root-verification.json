@@ -1,0 +1,266 @@
+{
+  "all384_ordered_id_parity_with_qualified_cold_panel": true,
+  "all384_successful": true,
+  "authenticated_terminal_artifacts": 24,
+  "cells": [
+    {
+      "all_offer_recall_at_10": 0.975,
+      "capacity_drops": 0,
+      "errors": 0,
+      "full_span_qps": {
+        "admitted": 0.25346363013215245,
+        "dispatched": 0.25346363013215245,
+        "planned": 0.25346363013215245,
+        "successful": 0.25346363013215245,
+        "terminal_completed": 0.25346363013215245
+      },
+      "latency_ms": {
+        "all_offers": {
+          "p50": 529.712939,
+          "p90": 613.0159821,
+          "p95": 687.7101754999999,
+          "p99": 833.1254321199998
+        },
+        "cold": {
+          "p50": 529.0043479999999,
+          "p90": 612.3606186000001,
+          "p95": 687.0003644499999,
+          "p99": 832.3305880399998
+        },
+        "dispatch": {
+          "p50": 0.096448,
+          "p90": 0.1061417,
+          "p95": 0.11017505,
+          "p99": 0.12096832999999996
+        },
+        "scheduled_response": {
+          "p50": 529.712939,
+          "p90": 613.0159821,
+          "p95": 687.7101754999999,
+          "p99": 833.1254321199998
+        }
+      },
+      "offered_qps": 0.25,
+      "peak_port_ownership": 1,
+      "returned_hits": 624
+    },
+    {
+      "all_offer_recall_at_10": 0.975,
+      "capacity_drops": 0,
+      "errors": 0,
+      "full_span_qps": {
+        "admitted": 0.5060678550006185,
+        "dispatched": 0.5060678550006185,
+        "planned": 0.5060678550006185,
+        "successful": 0.5060678550006185,
+        "terminal_completed": 0.5060678550006185
+      },
+      "latency_ms": {
+        "all_offers": {
+          "p50": 463.2609385,
+          "p90": 513.2014929000001,
+          "p95": 529.0024728999999,
+          "p99": 568.7897395800001
+        },
+        "cold": {
+          "p50": 462.57956,
+          "p90": 512.7002542,
+          "p95": 528.3746302,
+          "p99": 568.0980996
+        },
+        "dispatch": {
+          "p50": 0.093233,
+          "p90": 0.103597,
+          "p95": 0.10535885,
+          "p99": 0.11511397999999996
+        },
+        "scheduled_response": {
+          "p50": 463.2609385,
+          "p90": 513.2014929000001,
+          "p95": 529.0024728999999,
+          "p99": 568.7897395800001
+        }
+      },
+      "offered_qps": 0.5,
+      "peak_port_ownership": 1,
+      "returned_hits": 624
+    },
+    {
+      "all_offer_recall_at_10": 0.975,
+      "capacity_drops": 0,
+      "errors": 0,
+      "full_span_qps": {
+        "admitted": 1.0078020584271254,
+        "dispatched": 1.0078020584271254,
+        "planned": 1.0078020584271254,
+        "successful": 1.0078020584271254,
+        "terminal_completed": 1.0078020584271254
+      },
+      "latency_ms": {
+        "all_offers": {
+          "p50": 460.032744,
+          "p90": 499.30138980000004,
+          "p95": 502.7465413,
+          "p99": 532.6537997199999
+        },
+        "cold": {
+          "p50": 459.414185,
+          "p90": 498.58580820000003,
+          "p95": 502.04874209999997,
+          "p99": 531.98819521
+        },
+        "dispatch": {
+          "p50": 0.099988,
+          "p90": 0.1363292,
+          "p95": 0.16864989999999996,
+          "p99": 0.18975386
+        },
+        "scheduled_response": {
+          "p50": 460.032744,
+          "p90": 499.30138980000004,
+          "p95": 502.7465413,
+          "p99": 532.6537997199999
+        }
+      },
+      "offered_qps": 1,
+      "peak_port_ownership": 1,
+      "returned_hits": 624
+    },
+    {
+      "all_offer_recall_at_10": 0.975,
+      "capacity_drops": 0,
+      "errors": 0,
+      "full_span_qps": {
+        "admitted": 1.9962936423582558,
+        "dispatched": 1.9962936423582558,
+        "planned": 1.9962936423582558,
+        "successful": 1.9962936423582558,
+        "terminal_completed": 1.9962936423582558
+      },
+      "latency_ms": {
+        "all_offers": {
+          "p50": 456.19066250000003,
+          "p90": 503.5451723,
+          "p95": 523.5365659999999,
+          "p99": 546.9271689899999
+        },
+        "cold": {
+          "p50": 455.6504585,
+          "p90": 503.00252320000004,
+          "p95": 522.97347335,
+          "p99": 546.31047111
+        },
+        "dispatch": {
+          "p50": 0.0924035,
+          "p90": 0.1011986,
+          "p95": 0.12730424999999998,
+          "p99": 0.14471835999999996
+        },
+        "scheduled_response": {
+          "p50": 456.19066250000003,
+          "p90": 503.5451723,
+          "p95": 523.5365659999999,
+          "p99": 546.9271689899999
+        }
+      },
+      "offered_qps": 2,
+      "peak_port_ownership": 2,
+      "returned_hits": 624
+    },
+    {
+      "all_offer_recall_at_10": 0.975,
+      "capacity_drops": 0,
+      "errors": 0,
+      "full_span_qps": {
+        "admitted": 3.9456190395116812,
+        "dispatched": 3.9456190395116812,
+        "planned": 3.9456190395116812,
+        "successful": 3.9456190395116812,
+        "terminal_completed": 3.9456190395116812
+      },
+      "latency_ms": {
+        "all_offers": {
+          "p50": 446.0907775,
+          "p90": 493.6894384,
+          "p95": 515.89934805,
+          "p99": 538.1715206199999
+        },
+        "cold": {
+          "p50": 445.56779800000004,
+          "p90": 493.2105657,
+          "p95": 515.46964295,
+          "p99": 537.7070765499999
+        },
+        "dispatch": {
+          "p50": 0.0835945,
+          "p90": 0.0932927,
+          "p95": 0.09561475,
+          "p99": 0.12788807
+        },
+        "scheduled_response": {
+          "p50": 446.0907775,
+          "p90": 493.6894384,
+          "p95": 515.89934805,
+          "p99": 538.1715206199999
+        }
+      },
+      "offered_qps": 4,
+      "peak_port_ownership": 3,
+      "returned_hits": 624
+    },
+    {
+      "all_offer_recall_at_10": 0.975,
+      "capacity_drops": 0,
+      "errors": 0,
+      "full_span_qps": {
+        "admitted": 7.6650780268276515,
+        "dispatched": 7.6650780268276515,
+        "planned": 7.6650780268276515,
+        "successful": 7.6650780268276515,
+        "terminal_completed": 7.6650780268276515
+      },
+      "latency_ms": {
+        "all_offers": {
+          "p50": 439.9303985,
+          "p90": 482.6034855,
+          "p95": 509.3861182999999,
+          "p99": 523.712708
+        },
+        "cold": {
+          "p50": 439.4990235,
+          "p90": 482.202197,
+          "p95": 509.03182624999994,
+          "p99": 523.23650246
+        },
+        "dispatch": {
+          "p50": 0.07076199999999999,
+          "p90": 0.079086,
+          "p95": 0.08393105,
+          "p99": 0.10020477999999998
+        },
+        "scheduled_response": {
+          "p50": 439.9303985,
+          "p90": 482.6034855,
+          "p95": 509.3861182999999,
+          "p99": 523.712708
+        }
+      },
+      "offered_qps": 8,
+      "peak_port_ownership": 5,
+      "returned_hits": 624
+    }
+  ],
+  "controller_exit_code": 0,
+  "eight_qps_cold_p90_gap_ms": 38.20219700000001,
+  "independent_percentiles_equal": true,
+  "largest_passing_tested_offered_qps": 8,
+  "matched_vendor_measured": false,
+  "native_peak_rss_bytes": 39206912,
+  "owned_instance_id": "i-025060f9c7da1ad79",
+  "owned_instance_terminated": true,
+  "published_444ms_context_pass": false,
+  "schema": "borsuk-semantic-1m-offered-root-verification-v1",
+  "sealed_truth_sha256": "273eb6878c4e701efad4c14d74d9a3ce5067f9a692828cc69f729015af8d4bb3",
+  "sustainable_qps": "UNMEASURED",
+  "total_lifecycle_cost": "UNMEASURED"
+}
