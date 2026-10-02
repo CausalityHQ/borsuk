@@ -34,7 +34,7 @@ SCHEMA = 'borsuk-cohere-top32-coverage-spot-v1'
 PREFIX = 'research/semantic-router/20261002/cohere-top32-coverage-'
 TOKEN_PREFIX, TAG = 'cohere-top32-coverage-', 'borsuk-cohere-top32-coverage'
 WALL, WORKER_SECONDS, SERVICE_SECONDS = 3000, 1800, 1860
-MEMORY, SCRATCH = 4 << 30, 8 << 30
+MEMORY, SCRATCH = 8 << 30, 8 << 30
 INSTANCE_TYPE, IMAGE_ID = 'c7i.2xlarge', 'ami-0b8a830d6339a9758'
 ROOT_DEVICE_NAME, SUBNET = '/dev/sda1', 'subnet-034528fbd6977848f'
 REGION, BUCKET = 'eu-central-1', 'borsuk-bench-453182569524-euc1'
@@ -269,7 +269,7 @@ python3.12 -m venv "$root/venv"
 "$root/venv/bin/python" -m pip install --disable-pip-version-check --only-binary=:all: --no-deps numpy==2.3.3 pyarrow==24.0.0
 lscpu >cpu.txt
 phase=coverage
-systemd-run --unit=cohere-top32-coverage --wait --pipe -p MemoryMax=4G -p MemorySwapMax=0 -p CPUQuota=200% -p TasksMax=512 -p RuntimeMaxSec=1860 -p WorkingDirectory="$root" \\
+systemd-run --unit=cohere-top32-coverage --wait --pipe -p MemoryMax={MEMORY} -p MemorySwapMax=0 -p CPUQuota=200% -p TasksMax=512 -p RuntimeMaxSec=1860 -p WorkingDirectory="$root" \\
  --setenv=PYTHONPATH="$root/repo" --setenv=AWS_MAX_ATTEMPTS=1 --setenv=LC_ALL=C {env} \\
  --setenv=BORSUK_COVERAGE_SOURCE_COMMIT={commit} --setenv=BORSUK_COVERAGE_ARCHIVE_SHA256={archive_sha} \\
  /usr/bin/time -v -o "$root/profile-resources.txt" timeout --signal=TERM --kill-after=30 1800 \\
@@ -341,7 +341,7 @@ def stage(repo, out, prefix):
         assert re.fullmatch('[0-9a-f]{40}',source['source_commit'])
         assert re.fullmatch('[0-9a-f]{64}',source['source_archive_sha256'])
         write(out / 'config.json', (repo / CONFIG).read_bytes())
-        write(out / 'helper-config.json', (repo / HELPER_CONFIG).read_bytes())
+        write(out / 'helper-config.json', repo_path(repo, HELPER_CONFIG).read_bytes())
         write(out / 'source-qualification.json', dict(proof, **source))
         nested = json.loads((out / 'helper-config.json').read_bytes())
         original,_ = helper.offline_modules(repo)
@@ -372,6 +372,12 @@ def stage(repo, out, prefix):
     except BaseException as error:
         status.update(status='failed', error_type=type(error).__name__, error=str(error), helper_exit_code=closure['helper_exit_code'])
         if helper is not None and (out / 'screen').exists():
+            for name, key in (('failure.json', 'helper_failure'), ('failure-resources.json', 'helper_failure_resources')):
+                path = out / 'screen' / name
+                if path.exists():
+                    assert artifact(path)['bytes'] <= 1 << 20, 'bounded helper failure body'
+                    status[key] = json.loads(path.read_bytes())
+            write(out / 'failure.json', status)
             status['cleanup'] = helper.cleanup_failure(out / 'screen')
         write(out / 'failure.json', status)
         raise
@@ -560,13 +566,24 @@ def self_check():
     helper = helper_module(repo)
     draft = Path('/tmp/borsuk-cohere-top32-root-draft-config.json')
     before_draft = artifact(draft) if draft.exists() else None
-    with tempfile.TemporaryDirectory() as directory:
+    original_repo_path = repo_path
+    with tempfile.TemporaryDirectory() as directory, patch.object(module, 'repo_path',
+            side_effect=lambda base, name: nested_target if name == HELPER_CONFIG else original_repo_path(base, name)):
         work = Path(directory)
-        pin = dict(path=HELPER_CONFIG, **artifact(repo / HELPER_CONFIG))
-        config = dict(FIXED, authority_pending=False, helper_config=pin,
+        # Refresh only temporary copies; committed 4GiB authority remains frozen.
+        nested_target = work / 'helper.json'
+        nested = json.loads((repo / HELPER_CONFIG).read_bytes())
+        nested.update(limits=dict(helper.LIMITS),
+            code_sha256={n:artifact(repo / n)['sha256'] for n in HELPER_CODE})
+        write(nested_target, nested)
+        pin = dict(path=HELPER_CONFIG, **artifact(nested_target))
+        config = dict(json.loads((repo / CONFIG).read_bytes()), memory_bytes=MEMORY,
+            authority_pending=False, helper_config=pin,
             controller_code_sha256={n:artifact(repo / n)['sha256'] for n in CODE})
         target = work / 'controller.json'; write(target, config)
-        # Real frozen helper, 45 original refs, and separately archived builder.
+        # Unrefreshed authority must fail before any launch or cloud import.
+        rejected(lambda:qualify(repo))
+        # Actual helper metadata, 45 original refs, and separately archived builder.
         proof = qualify(repo, target)
         assert len(proof['code_sha256']) == 60 and len(proof['refs']) == 45
         assert proof['helper_config_sha256'] == pin['sha256']
@@ -600,7 +617,7 @@ def self_check():
             shared,_ = lifecycle()
             body = user_data('0'*40,'1'*64,'source/key',PREFIX+'a0001',proof)
             assert '--on-active=3000s' in body and 'RuntimeMaxSec=1860' in body
-            assert all(n in body for n in ('MemoryMax=4G','MemorySwapMax=0','CPUQuota=200%','TasksMax=512'))
+            assert all(n in body for n in ('MemoryMax=8589934592','MemorySwapMax=0','CPUQuota=200%','TasksMax=512'))
             assert all('--setenv='+n+'=2' in body for n in THREAD_ENV)
             command = body.split('systemd-run --unit=cohere-top32-coverage',1)[1].split('\nfor name',1)[0]
             shell = 'systemd-run() { printf "%s\\n" "$@"; }; root=/synthetic; systemd-run --unit=cohere-top32-coverage'+command
@@ -691,12 +708,36 @@ def self_check():
             source=dict(source_commit='0'*40,source_archive_sha256='1'*64)
             with patch.dict(os.environ,BORSUK_COVERAGE_SOURCE_COMMIT=source['source_commit'],
                     BORSUK_COVERAGE_ARCHIVE_SHA256=source['source_archive_sha256']):
-                for mode in ('success','nonzero','cleanup','interrupt'):
+                real_cleanup = helper.cleanup_failure
+                for mode in ('success','nonzero','cleanup','interrupt','observer'):
                     out=work/('stage-'+mode); out.mkdir()
-                    result=dict(exit_status=2 if mode=='nonzero' else 0,process_cleanup=mode!='cleanup')
+                    result=dict(exit_status=2 if mode in ('nonzero','observer') else 0,process_cleanup=mode!='cleanup')
+                    diagnostic=dict(schema='borsuk-cohere-top32-preparation-resources-v1', passed=False,
+                        resource_failure=dict(stage='fixed_locator_extraction',error_type='ValueError',
+                            error='cgroup memory admission failure', cgroup_path='/synthetic/cgroup',
+                            cgroup={'memory.current':'1234','memory.peak':'2345','memory.max':str(MEMORY),
+                                'memory.stat':'anon 100\nfile 1134','memory.events':'max 271\noom 0\noom_kill 0',
+                                'memory.swap.current':'0','memory.swap.max':'0','memory.swap.peak':'0',
+                                'memory.swap.events':'max 0\nfail 0'},process_pid=1234,
+                            process_rss_kib=42,process_max_rss_kib=42,child_max_rss_kib=0,snapshot_errors={}))
+                    def prepared(*args):
+                        if mode=='interrupt':
+                            raise KeyboardInterrupt()
+                        if mode=='observer':
+                            screen=out/'screen'; screen.mkdir(); write(screen/'source.raw',b'owned input')
+                            write(screen/'failure-resources.json',diagnostic)
+                            write(screen/'failure.json',dict(error_type='ValueError',error='cgroup memory admission failure'))
+                        return result
+                    def cleaned(screen):
+                        if mode=='observer':
+                            saved=json.loads((out/'failure.json').read_bytes())
+                            assert saved['helper_failure_resources']==diagnostic, 'diagnostic must precede controller cleanup'
+                            assert saved['helper_failure']['error']=='cgroup memory admission failure'
+                        return real_cleanup(screen)
                     with patch.object(module,'CONFIG',target),patch.object(module,'qualify',return_value=proof), \
                          patch.object(module,'tools',return_value={}),patch.object(module,'capture_cgroup',return_value=counters), \
-                         patch.object(module,'run_process',side_effect=KeyboardInterrupt() if mode=='interrupt' else None,return_value=result) as process, \
+                         patch.object(module,'run_process',side_effect=prepared) as process, \
+                         patch.object(helper,'cleanup_failure',side_effect=cleaned), \
                          patch.object(module,'validate_coverage',return_value='FAIL'):
                         try:
                             closed=stage(repo,out,PREFIX+'a0001')
@@ -708,6 +749,9 @@ def self_check():
                     assert process.call_args.args[2]<=1800
                     failure=json.loads((out/'failure.json').read_bytes())
                     assert failure['status']==('complete' if mode=='success' else 'failed')
+                    if mode=='observer':
+                        assert failure['helper_failure_resources']==diagnostic
+                        assert not (out/'screen/source.raw').exists()
             from scripts import run_native_semantic_1m_quality as native
             process=Mock(pid=1234)
             with patch.object(native.subprocess,'Popen',return_value=process),patch.object(native.os,'killpg') as killed:
@@ -795,7 +839,7 @@ def self_check():
         assert artifact(draft)==before_draft
     signal.alarm(0)
     assert time.monotonic()-started<55
-    print('PASS frozen60code/45refs/archived builder; actual26-artifact relocated helper replay; mocked ACK/fsync/multiACK/interrupt/termination wait, terminal/body/roster/resource failures. Cloud/native UNRUN.')
+    print('PASS temporary8GiB60code/45refs/archived builder; actual26-artifact relocated helper replay; observer diagnostics before cleanup; mocked ACK/fsync/multiACK/interrupt/termination wait, terminal/body/roster/resource failures. Cloud/native UNRUN.')
 
 
 if __name__ == '__main__':

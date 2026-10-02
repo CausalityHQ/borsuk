@@ -34,7 +34,7 @@ from scripts import prepare_cohere_semantic_1m_panel as prior
 require, canonical = prior.require, prior.canonical
 SCHEMA = "borsuk-cohere-top32-preparation-v1"
 BASE = prior.BASE + "cohere-top32-coverage/"
-LIMITS = dict(memory_bytes=4 << 30, scratch_bytes=8 << 30, cpu=2, threads=2,
+LIMITS = dict(memory_bytes=8 << 30, scratch_bytes=8 << 30, cpu=2, threads=2,
               swap_bytes=0, max_requests=256)
 POLICIES = ("existing_first8_boundary1.15_max16", "fixed_top32_same_squared_distance_ranking")
 BUILDER_SHA = "54071f8e7daf70589a416a2d9b8b4eefe42456a566bad767a77872b55c6e6c3f"
@@ -380,6 +380,7 @@ class Accounting(prior.Accounting):
         self.deadline = None
         self.native_active = False
         self.build_invocations = self.oracle_invocations = 0
+        self.resource_failure = None
         self.baseline_events = self.events()
         self.native_run = lambda *a, **kw: subprocess.run(*a, **kw, timeout=self.remaining())
 
@@ -402,15 +403,43 @@ class Accounting(prior.Accounting):
             require(all(int(v) == int(self.baseline_events.get(k, 0)) for k, v in self.events().items()
                         if k in ("oom", "oom_kill", "max")), "cgroup memory admission failure")
 
+    def record_resource_failure(self, stage, error):
+        counters, errors = {}, {}
+        if self.group is not None:
+            for name in ("memory.current", "memory.max", "memory.peak", "memory.stat", "memory.events",
+                         "memory.swap.current", "memory.swap.max", "memory.swap.peak", "memory.swap.events"):
+                try:
+                    counters[name] = (self.group / name).read_text().strip()
+                except OSError as failure:
+                    errors[name] = str(failure)
+        rss = None
+        try:
+            rss = int(next(line.split()[1] for line in Path("/proc/self/status").read_text().splitlines()
+                           if line.startswith("VmRSS:")))
+        except (OSError, ValueError, StopIteration) as failure:
+            errors["process_rss_kib"] = str(failure)
+        self.resource_failure = dict(stage=stage, error_type=type(error).__name__, error=str(error),
+            cgroup_path=None if self.group is None else str(self.group), cgroup=counters,
+            process_pid=os.getpid(), process_rss_kib=rss,
+            process_max_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+            child_max_rss_kib=resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss,
+            snapshot_errors=errors)
+        # The observer must sync the reason before signalling code that cleans up inputs.
+        publish(self.out / "failure-resources.json", dict(
+            schema="borsuk-cohere-top32-preparation-resources-v1", passed=False,
+            resource_failure=self.resource_failure))
+
     @contextmanager
     def stage(self, name):
         require(self.deadline is None, "overlapping preparation stages")
         self.deadline = time.monotonic() + self.config["stage_limit_seconds"]
+        failures = []
         def expired(*unused):
-            raise ValueError("preparation deadline/resource monitor stopped stage: " + name)
+            if failures:
+                raise failures[0]
+            raise ValueError("preparation stage deadline exceeded: " + name)
         previous = signal.signal(signal.SIGALRM, expired)
         stop = threading.Event()
-        failures = []
         def monitor():
             while not stop.wait(.25):
                 try:
@@ -418,16 +447,20 @@ class Accounting(prior.Accounting):
                 except FileNotFoundError:
                     continue  # One owned temporary file may be removed between stat and open.
                 except Exception as error:
-                    failures.append(str(error))
-                    if not (self.native_active and time.monotonic() >= self.deadline):
-                        os.kill(os.getpid(), signal.SIGALRM)
+                    failures.append(error)
+                    try:
+                        self.record_resource_failure(name, error)
+                    finally:
+                        if not (self.native_active and time.monotonic() >= self.deadline):
+                            os.kill(os.getpid(), signal.SIGALRM)
                     return
         observer = threading.Thread(target=monitor, daemon=True)
         observer.start(); signal.setitimer(signal.ITIMER_REAL, self.config["stage_limit_seconds"])
         try:
             with super().stage(name):
                 yield
-            require(not failures, "resource observer failure: " + str(failures))
+            if failures:
+                raise failures[0]
         finally:
             signal.setitimer(signal.ITIMER_REAL, 0)
             stop.set(); observer.join(timeout=2)
@@ -439,6 +472,7 @@ class Accounting(prior.Accounting):
             build_invocations=self.build_invocations, oracle_invocations=self.oracle_invocations,
             scorer_invocations=0, stage_limit_seconds=self.config["stage_limit_seconds"],
             scratch_sample_interval_seconds=.25, memory_events=self.events(),
+            resource_failure=self.resource_failure,
             aggregate_memory_peak_bytes=None if self.group is None else int((self.group / "memory.peak").read_text()),
             coverage_only=True, returned_recall_measured=False, cold_http_measured=False,
             physical_s3_query_gets_measured=False)
@@ -764,9 +798,11 @@ def run(config_path, sha, repo, out, prefix):
             return decision
     except BaseException as error:
         cleanup = cleanup_failure(out)
-        publish(out / "failure-resources.json", accounting.report(False, cleanup))
+        if not (out / "failure-resources.json").exists():
+            publish(out / "failure-resources.json", accounting.report(False, cleanup))
         publish(out / "failure.json", dict(schema="borsuk-cohere-top32-failure-v1", config_sha256=sha,
             error_type=type(error).__name__, error=str(error), replacement_allowed=False, cleanup=cleanup,
+            resource_failure=accounting.resource_failure,
             build_invocations=accounting.build_invocations, oracle_invocations=accounting.oracle_invocations))
         raise
 
@@ -817,6 +853,66 @@ def replay(config_path, sha, repo, out):
                 ground_truth_reexecuted=False, builder_reexecuted=False)
 
 
+def resource_monitor_self_check():
+    """A max-event failure retains its pre-cleanup reason and reaps Python."""
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory() as directory:
+        work = Path(directory)
+        out, group = work / "output", work / "cgroup"
+        out.mkdir(); group.mkdir()
+        values = {"memory.max": str(LIMITS["memory_bytes"]), "memory.current": "1234",
+            "memory.peak": "2345", "memory.stat": "anon 100\nfile 1134\n",
+            "memory.events": "max 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+            "memory.swap.current": "0", "memory.swap.max": "0", "memory.swap.peak": "0",
+            "memory.swap.events": "max 0\nfail 0\n", "cpu.max": "200000 100000",
+            "cpu.stat": "usage_usec 10\n"}
+        for name, value in values.items():
+            (group / name).write_text(value)
+        account = Accounting(dict(limits=LIMITS, stage_limit_seconds=5), out, group)
+        (out / "source.raw").write_bytes(b"owned heavy input stand-in")
+        children, before_cleanup, popen = [], [], subprocess.Popen
+        def started(*args, **kwargs):
+            child = popen(*args, **kwargs); children.append(child)
+            kill = child.kill
+            def checked_kill():
+                try:
+                    before_cleanup.append((out / "failure-resources.json").read_bytes())
+                finally:
+                    kill()
+            child.kill = checked_kill
+            (group / "memory.events").write_text("max 271\noom 0\noom_kill 0\noom_group_kill 0\n")
+            return child
+        previous = signal.getsignal(signal.SIGALRM)
+        with patch.object(subprocess, "Popen", side_effect=started):
+            try:
+                with account.stage("fixed_locator_extraction"):
+                    account.native_run([sys.executable, "-c", "import time; time.sleep(5)"],
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            except ValueError as error:
+                assert str(error) == "cgroup memory admission failure", str(error)
+            else:
+                raise AssertionError("nonzero max-event accepted")
+        assert children and all(child.poll() is not None for child in children)
+        assert account.deadline is None and signal.getsignal(signal.SIGALRM) == previous
+        path = out / "failure-resources.json"
+        before = path.read_bytes()
+        assert before_cleanup == [before], "diagnostic must precede subprocess cleanup"
+        failure = json.loads(before)["resource_failure"]
+        assert failure["stage"] == "fixed_locator_extraction"
+        assert failure["error_type"] == "ValueError" and failure["error"] == "cgroup memory admission failure"
+        assert failure["cgroup"]["memory.current"] == "1234"
+        assert failure["cgroup"]["memory.peak"] == "2345"
+        assert failure["cgroup"]["memory.stat"] == "anon 100\nfile 1134"
+        assert "max 271" in failure["cgroup"]["memory.events"]
+        assert failure["cgroup"]["memory.swap.current"] == "0"
+        assert failure["process_pid"] == os.getpid() and failure["process_rss_kib"] > 0
+        assert failure["process_max_rss_kib"] > 0
+        assert not failure["snapshot_errors"]
+        cleanup_failure(out)
+        (group / "memory.events").write_text(values["memory.events"])
+        assert not (out / "source.raw").exists() and path.read_bytes() == before
+
+
 def self_check():
     """Bounded phase mocks plus real-tool relocated-output replay falsifiers."""
     import ast
@@ -825,6 +921,7 @@ def self_check():
     from types import SimpleNamespace
     from unittest.mock import patch
     started = time.monotonic()
+    resource_monitor_self_check()
     repo = Path(__file__).resolve().parents[1]
     if str(repo / "scripts") not in sys.path:
         sys.path.insert(0, str(repo / "scripts"))
@@ -910,14 +1007,14 @@ def self_check():
                 rejected(lambda: duplicate_audit(queries, changed, work, None))
 
         group = work / "cgroup"; group.mkdir()
-        for n, value in {"memory.max": str(4 << 30), "memory.peak": "1234", "memory.swap.max": "0",
+        for n, value in {"memory.max": str(LIMITS["memory_bytes"]), "memory.peak": "1234", "memory.swap.max": "0",
                 "memory.swap.peak": "0", "cpu.max": "200000 100000", "cpu.stat": "usage_usec 10",
                 "memory.events": "max 0\noom 0\noom_kill 0"}.items():
             (group / n).write_text(value)
         prior.cgroup_limits(group, LIMITS)
         rejected(lambda: prior.cgroup_limits(group))
         (group / "memory.max").write_text(str(2 << 30)); prior.cgroup_limits(group)
-        (group / "memory.max").write_text(str(4 << 30))
+        (group / "memory.max").write_text(str(LIMITS["memory_bytes"]))
         old_account = prior.Accounting(config, work, None)
         assert old_account.limits == dict(memory_bytes=2 << 30, scratch_bytes=8 << 30,
             cpu=2, threads=2, swap_bytes=0, max_requests=128)
@@ -925,12 +1022,12 @@ def self_check():
         account.checkpoint()
         assert account.limits == LIMITS and prior.LIMITS == old_account.limits
         for name, value in (("memory.swap.max", "1"), ("cpu.max", "300000 100000"),
-                            ("memory.swap.peak", "1"), ("memory.peak", str(5 << 30)),
+                            ("memory.swap.peak", "1"), ("memory.peak", str(LIMITS["memory_bytes"] + 1)),
                             ("memory.events", "max 0\noom 1\noom_kill 0")):
             previous = (group / name).read_text(); (group / name).write_text(value)
             rejected(lambda: account.checkpoint()); (group / name).write_text(previous)
         rejected(lambda: account.checkpoint(9 << 30))
-        with patch.object(prior.resource, "getrusage", return_value=SimpleNamespace(ru_maxrss=(5 << 30) // 1024)):
+        with patch.object(prior.resource, "getrusage", return_value=SimpleNamespace(ru_maxrss=(LIMITS["memory_bytes"] + 1024) // 1024)):
             rejected(lambda: account.checkpoint())
         fast = Accounting(dict(config, stage_limit_seconds=.01), work, group)
         def timed_out():
@@ -987,7 +1084,7 @@ def self_check():
             if mode[0] == "timeout":
                 raise subprocess.TimeoutExpired(args, seconds)
             return dict(exit_status=1 if mode[0] == "build" else 0, process_cleanup=mode[0] != "cleanup",
-                        wall_seconds=1, process_peak_rss_kib=(5 << 20) if mode[0] == "rss" else 100)
+                        wall_seconds=1, process_peak_rss_kib=(LIMITS["memory_bytes"] // 1024 + 1) if mode[0] == "rss" else 100)
         native = SimpleNamespace(run_process=build, PAYLOAD=512 << 20,
             ordinal_check=lambda *args: dict(id_matches_order=True), local_head=lambda p: dict(etag='"synthetic"'))
         def nominate(config, pin):
@@ -1115,6 +1212,7 @@ def self_check():
         if draft.exists():
             refreshed = json.loads(draft.read_bytes())
             refreshed.update(authority_pending=False,
+                limits=dict(LIMITS),
                 code_sha256={name: identity(repo / name)["sha256"] for name in code_roster(repo)})
             temp_config = work / "refreshed-root-draft.json"
             pin = publish(temp_config, refreshed)
