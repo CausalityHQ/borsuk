@@ -1,0 +1,14 @@
+{
+  "schema": "borsuk-startup-wave8-paired-controller-root-verification-v1",
+  "implementation_commit": "e90c5e58a8b6435c8919a8345192f1b4f935f16e",
+  "integrated_commit": "9cebae00",
+  "self_check": {
+    "exit_status": 0,
+    "wall_seconds": 4.5,
+    "max_rss_kib": 112272
+  },
+  "candidate_source_commit": "1e4ed13777a59e7acdd34acc9510b9d156aa17bf",
+  "candidate_source_identity": "7e4fabf96284e4ccd080cf14b8bfbfd0f3ff41271e920c8e39d5d1fa252cd830",
+  "native_qualification_pending": true,
+  "paired_measurement_launched": false
+}

@@ -1,0 +1,875 @@
+{
+  "ann_quality_measured": false,
+  "check_max_rss_kib": 31868,
+  "check_wall_seconds": 0.10084294498665258,
+  "complete_historical_coverage": false,
+  "construction_inputs": {
+    "consumed-queries.raw": {
+      "bytes": 3072000,
+      "path": "consumed-queries.raw",
+      "sha256": "28af674aaa41964d065c0cab8390488961aa4fa7b3d07bef4e95bb2bad7d769c"
+    },
+    "prior-queries.raw": {
+      "bytes": 6144000,
+      "path": "prior-queries.raw",
+      "sha256": "f9a97e1b1580ef6a87de0652629bb7e45f04c10c931b8437f5131226bec38fe3"
+    },
+    "source-order.u64": {
+      "bytes": 8000000,
+      "path": "source-order.u64",
+      "sha256": "25672572b8e36eafea6ba856068f33aca5064e3ce02544340f682cd39881ea02"
+    },
+    "source-root.json": {
+      "bytes": 33963,
+      "path": "source-root.json",
+      "sha256": "a4eb4851c545e828f3d08181a0c3e9cca09ed9341032ee3e69c511b9b7caf67e"
+    },
+    "source.raw": {
+      "bytes": 3072000000,
+      "path": "source.raw",
+      "sha256": "6c82a340e3e1b4226640e593efa9c4000c6a5962d4b13063093a1dab689a9005"
+    },
+    "test-queries.raw": {
+      "bytes": 3072000,
+      "path": "test-queries.raw",
+      "sha256": "5daa4587485442d6bf17d801f05c9733ef652711ddf5f1a55b723c3d9a5c2922"
+    }
+  },
+  "dimensions": 768,
+  "evidence_bodies": {
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001-scoped-readback/readback.json": {
+      "bytes": 5497,
+      "sha256": "ceb282074e66500f1213ea230d416c2a49c23cdb32c070d2cdc0a6f00b415aea"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/aws-closeout.json": {
+      "bytes": 135,
+      "sha256": "26103e9b223f5ad71d7b52428ee1ad3ca5e0b1eb8503deea63f4f607db9b07aa"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/aws-launch.json": {
+      "bytes": 361,
+      "sha256": "808859a6c65deebee157ccb5f707fc325201000d4b0c4540ad7e50fb5afdb4da"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/aws-reservation.json": {
+      "bytes": 11660,
+      "sha256": "7f3bca19e8350b1afbb50f0d47578114c202bd7d13b0696dd7b3bed6bc8cf0f3"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/aws-terminal.json": {
+      "bytes": 3421,
+      "sha256": "ab8b1fab71fcda376e3a71143b196ecf55abfce52ad1994cc297ce5f98fa8706"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/config.json": {
+      "bytes": 6000,
+      "sha256": "914ccbeb9b6a09e52040003ce86e9075af9a46a2500553c4e2d991f50a163208"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/cpu.txt": {
+      "bytes": 3517,
+      "sha256": "396d14f90b7420fe624960f04559cf69bec58d72bceb66d1f6a2e89bd477c4cd"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/failure.json": {
+      "bytes": 511,
+      "sha256": "a3f1daf2a247ce0e0281101fb92d9b6043c7c7928a469b31d1c43779e916d9bb"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/helper-config.json": {
+      "bytes": 15208,
+      "sha256": "21804f730d1044e5798e391949d62abd588efab2a09b5883d258adf4cc175dff"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/preparation-closure.json": {
+      "bytes": 1187,
+      "sha256": "265e0ca899a1e5217d810fd96bad788911dc7d0d20c753cb092bb21eb8b84bf6"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/profile-cgroup.json": {
+      "bytes": 1358,
+      "sha256": "1cec7b1a290eeb40115b310243ad18b8047014dd0f54f3656dc7c0a4edff8b7d"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/profile-resources.txt": {
+      "bytes": 1070,
+      "sha256": "7f5a4e828f709b3bc292a9d54771213de033d00c10a176f21118a26ccdfc4b6b"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/profile.log": {
+      "bytes": 1063,
+      "sha256": "bf293111675e4358eb524201e514874baaef4358ff002b194978936e471817f3"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/run-closed.log": {
+      "bytes": 5503,
+      "sha256": "89d5473dc58a0fac4e6c35e8da1ca4b161cd5c91fe7e9a10c4efe4285de8312f"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/screen/decision.json": {
+      "bytes": 14243,
+      "sha256": "222a06414f7ce8030cea8e45d7cc84fe1303f1da20516f552def540469c10eec"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/screen/duplicate-audit.json": {
+      "bytes": 33074,
+      "sha256": "ac8fb791a581853490acac6a0eb393837c68862bfa7ee39eb92766c1f208868e"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/screen/final-resources.json": {
+      "bytes": 1613,
+      "sha256": "901624b13436435c9ff224cd43cd90ea276be602629ab096c16a58b4c2b884f1"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/screen/oracle.json": {
+      "bytes": 1063,
+      "sha256": "f06dd3a5ec9217ccf8045151540c9f71b517124b954c2e8e23a83bdd040e239b"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/screen/panel.json": {
+      "bytes": 36744,
+      "sha256": "979ad0f737ff045ab58b09dc9bc84105092c34238a5625558e2caa199e1b796e"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/screen/queries.raw": {
+      "bytes": 196608,
+      "sha256": "928435c9f040637c037ea5dc62778adabfa31979611c6b0c25d57ae320b0ba86"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/screen/requests.jsonl": {
+      "bytes": 983341,
+      "sha256": "9debc24176e42ab6ce5ed12c7353182daabd12dabe4a9f9998c7e5a73ad8eb49"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/screen/resources.json": {
+      "bytes": 1598,
+      "sha256": "ff9b300c52703ad50279b3cfdf85ffd7e89d616b4c7b3ee8a332d473675a376a"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/screen/truth.i64": {
+      "bytes": 51200,
+      "sha256": "3ad7d0893fce5c8258ff4da1808225c97d06314165d125e579ef0ad0a2892209"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/screen/truth.u32": {
+      "bytes": 25600,
+      "sha256": "4825749d1fd4047f5cc8cbb694848378157415de572a3bb5ee9451d9ba840742"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/source-qualification.json": {
+      "bytes": 9559,
+      "sha256": "cc9fae133de26c7115e284b908d995ee6e723aa87ee63075283860fd4772d9b5"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/tool-versions.json": {
+      "bytes": 682,
+      "sha256": "24d233757eeb32d618be4bc42d0bb7ef8bf6edfb187cd03f3bcc499e19308d26"
+    }
+  },
+  "fresh_sealed_observations": {
+    "decision.json": {
+      "authenticated_readback": true,
+      "bytes": 14243,
+      "conditional_get_if_match": true,
+      "etag": "\"1507679b1921f44bb18e65b63ffd7b1c\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/decision.json",
+      "metadata": {
+        "sha256": "222a06414f7ce8030cea8e45d7cc84fe1303f1da20516f552def540469c10eec"
+      },
+      "sha256": "222a06414f7ce8030cea8e45d7cc84fe1303f1da20516f552def540469c10eec",
+      "version_id": null
+    },
+    "duplicate-audit.json": {
+      "authenticated_readback": true,
+      "bytes": 33074,
+      "conditional_get_if_match": true,
+      "etag": "\"6caab394687ad955031f96ce9e5210b6\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/duplicate-audit.json",
+      "metadata": {
+        "sha256": "ac8fb791a581853490acac6a0eb393837c68862bfa7ee39eb92766c1f208868e"
+      },
+      "sha256": "ac8fb791a581853490acac6a0eb393837c68862bfa7ee39eb92766c1f208868e",
+      "version_id": null
+    },
+    "oracle.json": {
+      "authenticated_readback": true,
+      "bytes": 1063,
+      "conditional_get_if_match": true,
+      "etag": "\"cd93123ab0833391a119d881f07c69d2\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/oracle.json",
+      "metadata": {
+        "sha256": "f06dd3a5ec9217ccf8045151540c9f71b517124b954c2e8e23a83bdd040e239b"
+      },
+      "sha256": "f06dd3a5ec9217ccf8045151540c9f71b517124b954c2e8e23a83bdd040e239b",
+      "version_id": null
+    },
+    "panel.json": {
+      "authenticated_readback": true,
+      "bytes": 36744,
+      "conditional_get_if_match": true,
+      "etag": "\"f107a10fe4efa7375bfd7e2f4bb21561\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/panel.json",
+      "metadata": {
+        "sha256": "979ad0f737ff045ab58b09dc9bc84105092c34238a5625558e2caa199e1b796e"
+      },
+      "sha256": "979ad0f737ff045ab58b09dc9bc84105092c34238a5625558e2caa199e1b796e",
+      "version_id": null
+    },
+    "queries.raw": {
+      "authenticated_readback": true,
+      "bytes": 196608,
+      "conditional_get_if_match": true,
+      "etag": "\"df573c11da229b6c948afdaa7496f625\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/queries.raw",
+      "metadata": {
+        "sha256": "928435c9f040637c037ea5dc62778adabfa31979611c6b0c25d57ae320b0ba86"
+      },
+      "sha256": "928435c9f040637c037ea5dc62778adabfa31979611c6b0c25d57ae320b0ba86",
+      "version_id": null
+    },
+    "requests.jsonl": {
+      "authenticated_readback": true,
+      "bytes": 983341,
+      "conditional_get_if_match": true,
+      "etag": "\"3f8e73c0cd35953f9687f0773fa5bf68\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/requests.jsonl",
+      "metadata": {
+        "sha256": "9debc24176e42ab6ce5ed12c7353182daabd12dabe4a9f9998c7e5a73ad8eb49"
+      },
+      "sha256": "9debc24176e42ab6ce5ed12c7353182daabd12dabe4a9f9998c7e5a73ad8eb49",
+      "version_id": null
+    },
+    "resources.json": {
+      "authenticated_readback": true,
+      "bytes": 1598,
+      "conditional_get_if_match": true,
+      "etag": "\"daaee9734c09509cc43f103d72925604\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/resources.json",
+      "metadata": {
+        "sha256": "ff9b300c52703ad50279b3cfdf85ffd7e89d616b4c7b3ee8a332d473675a376a"
+      },
+      "sha256": "ff9b300c52703ad50279b3cfdf85ffd7e89d616b4c7b3ee8a332d473675a376a",
+      "version_id": null
+    },
+    "truth.i64": {
+      "authenticated_readback": true,
+      "bytes": 51200,
+      "conditional_get_if_match": true,
+      "etag": "\"5189ee1ca28ef7e11ab99a6e16607375\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/truth.i64",
+      "metadata": {
+        "sha256": "3ad7d0893fce5c8258ff4da1808225c97d06314165d125e579ef0ad0a2892209"
+      },
+      "sha256": "3ad7d0893fce5c8258ff4da1808225c97d06314165d125e579ef0ad0a2892209",
+      "version_id": null
+    },
+    "truth.u32": {
+      "authenticated_readback": true,
+      "bytes": 25600,
+      "conditional_get_if_match": true,
+      "etag": "\"fa583b49a047d1ee60fa4d7eeace3824\"",
+      "key": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001/sealed/truth.u32",
+      "metadata": {
+        "sha256": "4825749d1fd4047f5cc8cbb694848378157415de572a3bb5ee9451d9ba840742"
+      },
+      "sha256": "4825749d1fd4047f5cc8cbb694848378157415de572a3bb5ee9451d9ba840742",
+      "version_id": null
+    }
+  },
+  "gt_k": 100,
+  "historical_etags_reconstructed": false,
+  "historical_seal_readback_available": false,
+  "input_reconstruction_or_gt_reexecution": false,
+  "original_campaign_status": "FAIL",
+  "original_cgroup_validator_rejected": true,
+  "original_code_bodies": {
+    "scripts/audit_v36_ranked_physical_ids.py": {
+      "bytes": 5240,
+      "sha256": "67af40bf3d505d45979f269218f4bfd426aaaa5f1e6705b6947bd32831d8bb2b"
+    },
+    "scripts/build_cohere_1m_source.py": {
+      "bytes": 6053,
+      "sha256": "64ce6d7ae35874fb561748786d4e3a8241771a85e949a82da4e85da925ce4eeb"
+    },
+    "scripts/check_native_metadata_ranges_stats.py": {
+      "bytes": 3865,
+      "sha256": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3"
+    },
+    "scripts/check_native_semantic_router_stats.py": {
+      "bytes": 33088,
+      "sha256": "d1fb970c0ab6ec98ec5311204a54277180631116d48a29a564ed3bbd68e5c5c2"
+    },
+    "scripts/check_native_startup_build.py": {
+      "bytes": 12001,
+      "sha256": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52"
+    },
+    "scripts/check_native_startup_stats.py": {
+      "bytes": 2667,
+      "sha256": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29"
+    },
+    "scripts/launch_cohere_semantic_1m_preparation_spot.py": {
+      "bytes": 54796,
+      "sha256": "86c5bc52f52a05cb75c05b2feb4fd3a905a67ff053f51a44b34e6349efeee149"
+    },
+    "scripts/launch_native_metadata_ranges_cold_spot.py": {
+      "bytes": 33805,
+      "sha256": "e746c30f61335c707d9c9398e1cd11778994fc5e02c5d84022a47ee7e40221f4"
+    },
+    "scripts/launch_native_peer_1m_spot.py": {
+      "bytes": 15926,
+      "sha256": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c"
+    },
+    "scripts/launch_native_semantic_router_cold_spot.py": {
+      "bytes": 120089,
+      "sha256": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180"
+    },
+    "scripts/launch_native_startup_profile_spot.py": {
+      "bytes": 39151,
+      "sha256": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d"
+    },
+    "scripts/launch_v157_primary_feasibility_spot.py": {
+      "bytes": 11195,
+      "sha256": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b"
+    },
+    "scripts/launch_v174_relaid_bind_compile_spot.py": {
+      "bytes": 9775,
+      "sha256": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a"
+    },
+    "scripts/native_geometric_layout_screen.py": {
+      "bytes": 78486,
+      "sha256": "f12c50c2cb492c003f78dc208cdb3e39d5e73af9cd253db46ce2cc6872400bf6"
+    },
+    "scripts/native_rotated_two_bit_codes.py": {
+      "bytes": 13090,
+      "sha256": "8d7e52b78f8d8c44fe120a04cd146744ae6f5392867a806de4c528154aacdc33"
+    },
+    "scripts/native_row_score_code_artifacts.py": {
+      "bytes": 8265,
+      "sha256": "e670519128fef19547fe4daae48518d94ef1b2658e6cd1b00bd7b1e62687ebf4"
+    },
+    "scripts/native_two_bit_cosine_development.py": {
+      "bytes": 6741,
+      "sha256": "ad439e50a8a5e448d520136516e0e4a3813c51d0a01bb570a19c13ffb092244d"
+    },
+    "scripts/native_two_bit_topology.py": {
+      "bytes": 9693,
+      "sha256": "142aaf45ba490bc62868e7f946d0ed43ad020511ca7cd6967233262217e2e1b3"
+    },
+    "scripts/package_semantic_native_generation.py": {
+      "bytes": 20103,
+      "sha256": "cb6a540c810e3a75381d22339eb72f00382b0972a2d3ee687bbb1d97d5a1b594"
+    },
+    "scripts/prepare_cohere_semantic_1m_panel.py": {
+      "bytes": 59233,
+      "sha256": "2a831dbac2c153424cca2ee23c3621f93cb4a863b470f4ee44acc49769f39a24"
+    },
+    "scripts/prepare_native_semantic_publication.py": {
+      "bytes": 52270,
+      "sha256": "2d3a9270f5ad847981d9d89fea8ead9e9295f742369fa1b9fd9cf3e7c7e2c7e4"
+    },
+    "scripts/prepare_semantic_1m_fresh_panel.py": {
+      "bytes": 34348,
+      "sha256": "bf747e3e250a73c7d4e9d7545666d7b7b7f6fcf61d293e16efcc863196b0c1d6"
+    },
+    "scripts/rest_coexistence_load.py": {
+      "bytes": 25100,
+      "sha256": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd"
+    },
+    "scripts/run_native_cold.py": {
+      "bytes": 7915,
+      "sha256": "adc14ad6580b328e8bee9c75660493d6b7bb526865686f8e110e83feea5a262c"
+    },
+    "scripts/run_native_cold_first_query.py": {
+      "bytes": 13030,
+      "sha256": "fbab85ff0f14ff0c9443493ac406a3ee115c1891626217c735e38f65b9e528b1"
+    },
+    "scripts/run_native_metadata_ranges_cold.py": {
+      "bytes": 9422,
+      "sha256": "1322fe19b705caeab275bce69ea6b4a9f2ed84cb6505dcbfe01b25301fdb71b8"
+    },
+    "scripts/run_native_peer_1m_worker.py": {
+      "bytes": 10729,
+      "sha256": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3"
+    },
+    "scripts/run_native_peer_offered_http.py": {
+      "bytes": 4155,
+      "sha256": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b"
+    },
+    "scripts/run_native_semantic_router_cold.py": {
+      "bytes": 131731,
+      "sha256": "9fe9e968d99a926bdfc15fae0fc0fadd15d44ed1242b6d4fa2e391c1a3b95f88"
+    },
+    "scripts/run_native_source_frontier_1m.py": {
+      "bytes": 14781,
+      "sha256": "fe91b3afbd95648fa2d6de371ae4fa3b31d549df873496010a643f365bff450d"
+    },
+    "scripts/run_native_union_cold.py": {
+      "bytes": 13229,
+      "sha256": "6a4bbd483c28432587b8ee9c92e72c679fea73bd65af1a773ee255e67606f7d9"
+    },
+    "scripts/run_native_union_http.py": {
+      "bytes": 10532,
+      "sha256": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880"
+    },
+    "scripts/run_native_union_offered_http.py": {
+      "bytes": 8999,
+      "sha256": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6"
+    },
+    "scripts/seal_v36_rank16_fresh_1m.py": {
+      "bytes": 10878,
+      "sha256": "78246ff37132f7ecb6036c0cdddcb264d6c9d762f8e02a71f98fa7855b30b0dc"
+    },
+    "scripts/select_cohere_1m_fresh64.py": {
+      "bytes": 24896,
+      "sha256": "a26de9f65b52ffefa98abae237ce3065fe1b1ef3dea4d4220cfeaf7ae3588980"
+    },
+    "scripts/select_v36_rank16_fresh_ids.py": {
+      "bytes": 6905,
+      "sha256": "6388e274ba128d770bbadd8b02833af4f685214bc1f78c9796fd778471d30399"
+    },
+    "scripts/v102_two_wave_pq48_refinement.py": {
+      "bytes": 14187,
+      "sha256": "2b702b08a49f9a325de8e2e6ef04b6c6489215aba9fb208bbd41253166afc27b"
+    },
+    "scripts/v271_fresh_frontier.py": {
+      "bytes": 8695,
+      "sha256": "3e0cc374e8888729ec9dc6bf3e0b74fee114c9c04c01f1aa74369716364588ac"
+    },
+    "scripts/v284_page_primary_dev64.py": {
+      "bytes": 5016,
+      "sha256": "7602ec6365995f73d6656ab59c246950225e507b79190e16cf523c4d9c076d1e"
+    },
+    "scripts/v285_exact_page_rank_bound.py": {
+      "bytes": 3827,
+      "sha256": "f5ffd1b3798ec1ee19948206ea150734895abba6ab500ca5ec6a8834d8f60aa9"
+    },
+    "scripts/v291_two_stage_development.py": {
+      "bytes": 9655,
+      "sha256": "2c55907696c22273f8adec826059969d4262fcfbb97de9cd5ef579cb75073916"
+    },
+    "scripts/v97_row_width_screen.py": {
+      "bytes": 50388,
+      "sha256": "49307a79702dd297416950cf55d600f080da450ad217e9f8d9af1616b2e17477"
+    },
+    "scripts/v98_hierarchical_row_router.py": {
+      "bytes": 52964,
+      "sha256": "ce70105ef2a5b75b25147f00dd3d6965e8d52c34a5278ca1267288c0e28e424c"
+    },
+    "scripts/v99_ranked_gap_range_router.py": {
+      "bytes": 22008,
+      "sha256": "ec8ffc2aaf1376a7d6c3f8228429ec6c37117d0223ebaf9a775ddb4249d29079"
+    }
+  },
+  "original_memory_cap_bytes": 2147483648,
+  "original_memory_peak_bytes": 2155061248,
+  "original_preparation_limits": {
+    "cpu": 2,
+    "max_requests": 128,
+    "memory_bytes": 2147483648,
+    "scratch_bytes": 8589934592,
+    "swap_bytes": 0,
+    "threads": 2
+  },
+  "original_reference_bodies": {
+    "candidate": {
+      "bytes": 1959,
+      "path": "docs/research/native-union-20260928/fresh-cohere-source-candidate.json",
+      "sha256": "d8d633b217ecc1f64bd531ef3b514fccc414f0afaf4b6b8233280ff7e5e43631"
+    },
+    "confirm936_config": {
+      "bytes": 6482,
+      "path": "docs/research/native-union-20260928/fresh-cohere-confirm936-config.json",
+      "sha256": "ccd1af074ee18c1edd3a77edbb5929cea9677c14fd7b669dc0251efa2d773795"
+    },
+    "dev64_config": {
+      "bytes": 6159,
+      "path": "docs/research/native-union-20260928/fresh-cohere-dev64-config.json",
+      "sha256": "0a1f90c2679f6ab6b27095cea7dea600add31ddd99e411ab7cc5cc6e23d0b1ce"
+    },
+    "metadata_authority": {
+      "bytes": 176689,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-panel-tools/metadata-authority.json",
+      "sha256": "956a650eb34618d0d5fcab5d7776ea61e6875be64dd5245701aa521930ab703d"
+    },
+    "old_identity": {
+      "bytes": 1157,
+      "path": "docs/research/native-union-20260928/fresh-cohere-seal/a0001/identity.json",
+      "sha256": "5fa4d5df83c24f87863d8115671d42b215c7961caf4822d6b93856da46e4dd20"
+    },
+    "old_seal": {
+      "bytes": 1810,
+      "path": "docs/research/native-union-20260928/fresh-cohere-seal/a0001/seal.json",
+      "sha256": "ee86ab749d222394861d272714f27edd2f4b80bdcb09b04682144bbd6803fd69"
+    },
+    "old_verification": {
+      "bytes": 1759,
+      "path": "docs/research/native-union-20260928/fresh-cohere-seal/a0001/verification.json",
+      "sha256": "570f18bbb7080bdae68e59f829eb955ead74f5e9341de2c2e0b79a7be17ca92d"
+    },
+    "panel": {
+      "bytes": 36744,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-panel-tools/panel.json",
+      "sha256": "979ad0f737ff045ab58b09dc9bc84105092c34238a5625558e2caa199e1b796e"
+    },
+    "registered_test": {
+      "bytes": 4159,
+      "path": "docs/research/native-union-20260928/fresh-cohere-10m-test-family.json",
+      "sha256": "9081d1bebdb795c8326e69ff3eaf3c64104658284123801d8f44f257e887ba11"
+    },
+    "root_freeze": {
+      "bytes": 868,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-panel-tools/root-freeze.json",
+      "sha256": "c0af609473b8eee64ab0264c9458edffb7891557c830012aec7a7b37f39fd535"
+    },
+    "source_build": {
+      "bytes": 1210,
+      "path": "docs/research/native-union-20260928/cohere-source-1m/a0001/source-build.json",
+      "sha256": "40fdf63450fe1e764716bb1ee0182af1afe3ac0468f52c6421bd6311b0d029cd"
+    },
+    "source_receipt": {
+      "bytes": 135298,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-source-receipt.json",
+      "sha256": "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87"
+    },
+    "source_terminal": {
+      "bytes": 5296,
+      "path": "docs/research/native-union-20260928/cohere-source-1m/a0001/terminal.json",
+      "sha256": "905ed20152c29ded8f339fd030f9c02a0cabd67c7d54b143b9832ed56a643d92"
+    },
+    "source_verification": {
+      "bytes": 3774,
+      "path": "docs/research/native-union-20260928/cohere-source-1m/a0001/verification.json",
+      "sha256": "c974a2912790dfccf1ff6e8f6555b662d82b61071f0adf0c6fe983a59f9f66cc"
+    },
+    "stress": {
+      "bytes": 104518,
+      "path": "docs/research/native-union-20260928/fresh-cohere-stress-query-families.json",
+      "sha256": "844506cbeed7a29c92afb905c373d568e2262c9d0a3f59c448454330ac63ddfd"
+    },
+    "v271": {
+      "bytes": 1592,
+      "path": "docs/research/native-union-20260928/fresh-cohere-prior-identity/verification.json",
+      "sha256": "86bb1ebb7902c573f22d54a08179cccffb20f2bc71e5a94cffbc82a8e9f16867"
+    },
+    "v277": {
+      "bytes": 1648,
+      "path": "docs/research/native-union-20260928/fresh-cohere-prior-identity/v277-verification.json",
+      "sha256": "15ebb42b8a793836fbb4a5b196de2f3c7a37c8666391ee46f021e02056a5ee62"
+    },
+    "v278": {
+      "bytes": 965,
+      "path": "docs/research/native-union-20260928/fresh-history-source-inventory/v278-exclusion-proof.json",
+      "sha256": "d14a4b745d5d9b3f1686d50c4b186892bdf9db7ccdeb131147588b39bb2fd342"
+    }
+  },
+  "prefix": "research/semantic-router/20261002/cohere-fresh64-preparation-a0001",
+  "prepared_campaign_passed": false,
+  "queries": 64,
+  "resource_qualification": "failed",
+  "resource_qualification_passed": false,
+  "root_authority_issued": false,
+  "schema": "borsuk-cohere-closed-panel-construction-check-v1",
+  "scoped_construction_passed": true,
+  "sealed_artifacts": {
+    "decision.json": {
+      "bytes": 14243,
+      "path": "decision.json",
+      "sha256": "222a06414f7ce8030cea8e45d7cc84fe1303f1da20516f552def540469c10eec"
+    },
+    "duplicate-audit.json": {
+      "bytes": 33074,
+      "path": "duplicate-audit.json",
+      "sha256": "ac8fb791a581853490acac6a0eb393837c68862bfa7ee39eb92766c1f208868e"
+    },
+    "oracle.json": {
+      "bytes": 1063,
+      "path": "oracle.json",
+      "sha256": "f06dd3a5ec9217ccf8045151540c9f71b517124b954c2e8e23a83bdd040e239b"
+    },
+    "panel.json": {
+      "bytes": 36744,
+      "path": "panel.json",
+      "sha256": "979ad0f737ff045ab58b09dc9bc84105092c34238a5625558e2caa199e1b796e"
+    },
+    "queries.raw": {
+      "bytes": 196608,
+      "path": "queries.raw",
+      "sha256": "928435c9f040637c037ea5dc62778adabfa31979611c6b0c25d57ae320b0ba86"
+    },
+    "requests.jsonl": {
+      "bytes": 983341,
+      "path": "requests.jsonl",
+      "sha256": "9debc24176e42ab6ce5ed12c7353182daabd12dabe4a9f9998c7e5a73ad8eb49"
+    },
+    "resources.json": {
+      "bytes": 1598,
+      "path": "resources.json",
+      "sha256": "ff9b300c52703ad50279b3cfdf85ffd7e89d616b4c7b3ee8a332d473675a376a"
+    },
+    "truth.i64": {
+      "bytes": 51200,
+      "path": "truth.i64",
+      "sha256": "3ad7d0893fce5c8258ff4da1808225c97d06314165d125e579ef0ad0a2892209"
+    },
+    "truth.u32": {
+      "bytes": 25600,
+      "path": "truth.u32",
+      "sha256": "4825749d1fd4047f5cc8cbb694848378157415de572a3bb5ee9451d9ba840742"
+    }
+  },
+  "selected_locators_sha256": "379b6421d794fb2d0956e7ed787478b019abfd599e0510be157cdcaa53205abf",
+  "serving_or_build_qualified": false,
+  "source": {
+    "source_archive_sha256": "d373a252883cdf7f8f3e368993a0492f9d82393e397d5ad191a20a7e91f81d79",
+    "source_commit": "96b9a4a249df1d9940a160b0e44398abb19bde2e"
+  },
+  "source_corpus": {
+    "dimensions": 768,
+    "first1m_shard_slices": [
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 0
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 1
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 2
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 3
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 4
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 5
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 6
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 7
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 8
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 9
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 10
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 11
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 12
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 13
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 14
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 15
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 16
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 17
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 18
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 19
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 20
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 21
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 22
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 23
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 24
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 25
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 26
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 27
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 28
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 29
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 30
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 31
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 32
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 33
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 34
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 35
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 36
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 37
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 38
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 39
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 40
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 41
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 42
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 43
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 44
+      },
+      {
+        "local_row_end_exclusive": 16975,
+        "local_row_start": 0,
+        "shard_ordinal": 45
+      }
+    ],
+    "metric": "cosine",
+    "normalized_sha256": "fd175b35b04bb6e00210eed9ace3622833af5d7b663a11c47d53f1e6cef8073c",
+    "order": {
+      "bytes": 8000000,
+      "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/order.u64",
+      "sha256": "25672572b8e36eafea6ba856068f33aca5064e3ce02544340f682cd39881ea02"
+    },
+    "order_format": "LEu64 permutation: physical position to original source ordinal",
+    "raw": {
+      "bytes": 3072000000,
+      "key": "research/v261-cohere-dual-graph-1m/2dee58896e42f84d74e2653dc0960e19d6defc63/runs/a0001/artifacts/vectors.raw",
+      "producer_terminal": {
+        "key": "research/v261-cohere-dual-graph-1m/2dee58896e42f84d74e2653dc0960e19d6defc63/runs/a0001/terminal.json",
+        "sha256": "00c7d4803354f15d5f62bea6e53fd0672a0f5fc91cc482e1fa4b20b8951a9f82"
+      },
+      "sha256": "6c82a340e3e1b4226640e593efa9c4000c6a5962d4b13063093a1dab689a9005"
+    },
+    "raw_dtype": "<f4",
+    "root_manifest": {
+      "bytes": 33963,
+      "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/manifest.json",
+      "sha256": "a4eb4851c545e828f3d08181a0c3e9cca09ed9341032ee3e69c511b9b7caf67e"
+    },
+    "rows": 1000000,
+    "source_interval": [
+      0,
+      1000000
+    ],
+    "sq8": {
+      "bytes": 780000000,
+      "key": "research/native-union/20260929/cohere-source-1m-v4/objects/b2f2f7dbec79c8646495b4a1500c363c5ccbf51690cf1e936d1264e7ee3839e1",
+      "sha256": "b2f2f7dbec79c8646495b4a1500c363c5ccbf51690cf1e936d1264e7ee3839e1"
+    }
+  },
+  "truth_id_space": "source ordinal",
+  "validator_body": {
+    "bytes": 22787,
+    "sha256": "330e4f5510b6d5e72a83614c39c9e95533b9e0e79256890b551e67a1b82fc0e6"
+  }
+}

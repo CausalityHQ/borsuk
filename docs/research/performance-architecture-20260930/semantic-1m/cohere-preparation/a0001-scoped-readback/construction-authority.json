@@ -1,0 +1,32 @@
+{
+  "allowed_use": "one prospectively frozen CoHere FIRST1M semantic fresh1m build and one production diagnostic score",
+  "ann_quality_measured": false,
+  "authority_pending": false,
+  "complete_historical_coverage": false,
+  "constructed_inputs_reusable": true,
+  "fresh_readback": {
+    "bytes": 5497,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001-scoped-readback/readback.json",
+    "sha256": "ceb282074e66500f1213ea230d416c2a49c23cdb32c070d2cdc0a6f00b415aea"
+  },
+  "original_campaign_status": "FAIL",
+  "original_terminal": {
+    "bytes": 3421,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/aws-terminal.json",
+    "sha256": "ab8b1fab71fcda376e3a71143b196ecf55abfce52ad1994cc297ce5f98fa8706"
+  },
+  "prepared_campaign_passed": false,
+  "resource_qualification": "FAILED frozen preparation peak gate",
+  "schema": "borsuk-cohere-fixed64-construction-authority-v1",
+  "serving_build_resource_qualification_pending": true,
+  "structural_verification": {
+    "bytes": 32862,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001-scoped-readback/structural-verification.json",
+    "sha256": "4221f6822e757add8f25ecb752058e27af988e9adc7b7b9535295c3c7874b032"
+  },
+  "validator": {
+    "bytes": 22787,
+    "path": "scripts/check_cohere_closed_panel_construction.py",
+    "sha256": "330e4f5510b6d5e72a83614c39c9e95533b9e0e79256890b551e67a1b82fc0e6"
+  }
+}

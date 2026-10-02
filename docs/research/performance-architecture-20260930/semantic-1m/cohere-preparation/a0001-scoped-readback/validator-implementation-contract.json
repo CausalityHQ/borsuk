@@ -1,0 +1,113 @@
+{
+  "bounds": {
+    "address_space_bytes": 209715200,
+    "wall_seconds": 55
+  },
+  "check_commands": [
+    [
+      "python3",
+      "scripts/check_cohere_closed_panel_construction.py",
+      "--self-check"
+    ],
+    [
+      "python3",
+      "-m",
+      "py_compile",
+      "scripts/check_cohere_closed_panel_construction.py"
+    ],
+    [
+      "git",
+      "diff",
+      "--cached",
+      "--check"
+    ]
+  ],
+  "cli": [
+    "python3",
+    "scripts/check_cohere_closed_panel_construction.py",
+    "REPO",
+    "NEW_OUTPUT_JSON"
+  ],
+  "evidence_base_commit": "90c98a9f65de6a3e79323df3ce9c8c3587c98d28",
+  "fresh_readback_sha256": "ceb282074e66500f1213ea230d416c2a49c23cdb32c070d2cdc0a6f00b415aea",
+  "implementation_commit": "6e203e8a983ba75b415c63b160ccc7b3c8f9d76c",
+  "implementation_commit_parent": "90c98a9f65de6a3e79323df3ce9c8c3587c98d28",
+  "negative_checks": [
+    "in-memory query byte flip",
+    "unchanged original cgroup validator",
+    "original campaign replay remains unprepared",
+    "existing output",
+    "optimized Python"
+  ],
+  "observed_bounds": {
+    "check_max_rss_kib": 33208,
+    "check_wall_seconds": 0.1024790060473606
+  },
+  "optional_lint": "Ruff unavailable in offline tool cache; no download attempted",
+  "original_campaign_validator_modified": false,
+  "original_terminal_body_roster": [
+    "config.json",
+    "helper-config.json",
+    "source-qualification.json",
+    "cpu.txt",
+    "tool-versions.json",
+    "run-closed.log",
+    "profile.log",
+    "profile-resources.txt",
+    "profile-cgroup.json",
+    "preparation-closure.json",
+    "failure.json",
+    "screen/final-resources.json",
+    "screen/queries.raw",
+    "screen/requests.jsonl",
+    "screen/truth.u32",
+    "screen/truth.i64",
+    "screen/panel.json",
+    "screen/duplicate-audit.json",
+    "screen/oracle.json",
+    "screen/resources.json",
+    "screen/decision.json"
+  ],
+  "output_kind": "fresh JSON file; an existing path is rejected",
+  "output_schema": "borsuk-cohere-closed-panel-construction-check-v1",
+  "report_scope": {
+    "ann_quality_measured": false,
+    "complete_historical_coverage": false,
+    "historical_etags_reconstructed": false,
+    "original_campaign_status": "FAIL",
+    "prepared_campaign_passed": false,
+    "resource_qualification": "failed",
+    "resource_qualification_passed": false,
+    "root_authority_issued": false,
+    "scoped_construction_passed": true,
+    "serving_or_build_qualified": false
+  },
+  "schema": "borsuk-cohere-closed-panel-structural-contract-v1",
+  "script": "scripts/check_cohere_closed_panel_construction.py",
+  "sealed_roster": [
+    "queries.raw",
+    "requests.jsonl",
+    "truth.u32",
+    "truth.i64",
+    "panel.json",
+    "duplicate-audit.json",
+    "oracle.json",
+    "resources.json",
+    "decision.json"
+  ],
+  "source_bindings": "26 evidence bodies including the 21 original terminal bodies, four pinned AWS controls and fresh readback; 44 original code bodies and 18 reference bodies",
+  "verification": {
+    "clean_worktree": true,
+    "py_compile_exit": 0,
+    "real_cli_exit": 0,
+    "self_check_exit": 0,
+    "staged_diff_check_exit": 0
+  },
+  "verified_cli": [
+    "/usr/bin/python3",
+    "scripts/check_cohere_closed_panel_construction.py",
+    "/home/rb/worktrees/borsuk-cohere-closed-panel-structural",
+    "/tmp/borsuk-cohere-closed-panel-structural-check-j4_a28hy/report.json"
+  ],
+  "verified_output": "/tmp/borsuk-cohere-closed-panel-structural-check-j4_a28hy/report.json"
+}
