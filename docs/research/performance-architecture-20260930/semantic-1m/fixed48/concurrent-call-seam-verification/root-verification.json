@@ -1,0 +1,165 @@
+{
+  "schema": "borsuk-fixed48-concurrent-call-seam-root-verification-v1",
+  "source_commit": "cf3748ad095e518682c216a7456db4140788d006",
+  "worker_commit": "838b0c028e16f1fdeb44e95169330115ce3f1248",
+  "sources": {
+    "scripts/run_native_semantic_1m_cold.py": {
+      "path": "scripts/run_native_semantic_1m_cold.py",
+      "bytes": 47747,
+      "sha256": "4b8fad8efff7a5105b3fb2eec1637a4264bc38d9e5205fdfba371a94dfa5a701"
+    },
+    "scripts/run_cohere_fixed48_cold_http.py": {
+      "path": "scripts/run_cohere_fixed48_cold_http.py",
+      "bytes": 94541,
+      "sha256": "775d4c00d1878c7e58b6bffdf6df148b26153cbf3416d7a522a935177d581228"
+    }
+  },
+  "root_original_session": 43366,
+  "root_exit_status": 0,
+  "command": "ulimit -v 262144; MALLOC_ARENA_MAX=2 timeout 55s /usr/bin/time -v python3 scripts/run_cohere_fixed48_cold_http.py --self-check",
+  "nine_runtime_scenarios": true,
+  "two_real_mocked_threads": true,
+  "default_serial_population_drain_preserved": true,
+  "explicit_concurrent_policy_requires_final_cell_drain": true,
+  "native_or_network_execution": false,
+  "native_changed": false,
+  "historical_cold_a5_source_preserved": true,
+  "logs": {
+    "baseline-driver": {
+      "path": "baseline-driver.log",
+      "bytes": 675,
+      "sha256": "d713805734ef848795ce9d832c9fadb5ca1ad7942439ab1bcb771738efee02c5"
+    },
+    "baseline-offered": {
+      "path": "baseline-offered.log",
+      "bytes": 1474,
+      "sha256": "cb237d549b12f9673485fe804b30ee81f67c30d6c791ea23edf1cbd723191f05"
+    },
+    "baseline-paged": {
+      "path": "baseline-paged.log",
+      "bytes": 1844,
+      "sha256": "559c83067b43cb017de46917abfc5a55c3101f4a8ebf976f4f18934a79fdc363"
+    },
+    "baseline-semantic": {
+      "path": "baseline-semantic.log",
+      "bytes": 1731,
+      "sha256": "9f35bf4fe7150c4fa5d12caa5bc34d3747c3b02a4bc62517b2694299246453bb"
+    },
+    "compile": {
+      "path": "compile.log",
+      "bytes": 982,
+      "sha256": "3f89cd05d0a858cd092d7b0935a552fb9d951fea7735ecaab592961ec0c7e1a5"
+    },
+    "diff-check": {
+      "path": "diff-check.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "green": {
+      "path": "green.log",
+      "bytes": 2372,
+      "sha256": "6e54c0a593136eae55598d06dcdc571d076bc1e5ed09f8fa6837cbcc48d9208c"
+    },
+    "measurement": {
+      "path": "measurement.log",
+      "bytes": 1102,
+      "sha256": "ca5e895c02b7670efc7213391d88246f06342547ac6fa02b08c2c91f8265057e"
+    },
+    "offered": {
+      "path": "offered.log",
+      "bytes": 1477,
+      "sha256": "6ebd89af99e4c2f2bc163897f5b585d76dbfb62cc89040a2fa368689300da263"
+    },
+    "paged": {
+      "path": "paged.log",
+      "bytes": 1845,
+      "sha256": "b4d4f3e0c68c41aa20b568c59715c178fa52221af22992466281c753b2dfc859"
+    },
+    "race-red": {
+      "path": "race-red.log",
+      "bytes": 1484,
+      "sha256": "30374817ba872d2756cc7d033c9cfc6d7bab3c8e61cf071b763156fce0d16193"
+    },
+    "red": {
+      "path": "red.log",
+      "bytes": 1617,
+      "sha256": "e195e26c7da19412d06db23a9b194809e8d5532865c3d7418d750d3784e93ef8"
+    },
+    "semantic": {
+      "path": "semantic.log",
+      "bytes": 1732,
+      "sha256": "24e69776fef84b8da837c380c9eeb869a99cca5a0b5b80bd1d833509d3c3d404"
+    },
+    "shared-targeted": {
+      "path": "shared-targeted.log",
+      "bytes": 1230,
+      "sha256": "97f665de356023dc25a258d6e7281186d40cbf65d15763eb19d523f0153d32bd"
+    },
+    "stats": {
+      "path": "stats.log",
+      "bytes": 956,
+      "sha256": "21313840353e3e015119e91f59a27b2d801b5e188c83f1531aac12bfbfa351d0"
+    },
+    "drain-red": {
+      "path": "drain-red.log",
+      "bytes": 1727,
+      "sha256": "ffd30063e42303935028d73b15069952f8e82479904d5bb8d79085f8c1ae9cb5"
+    },
+    "final-compile": {
+      "path": "final-compile.log",
+      "bytes": 969,
+      "sha256": "2e2728f922c59a80ff8fa85c56fa7b10d4da4ca70017ebe62dbc60da98be872b"
+    },
+    "final-driver": {
+      "path": "final-driver.log",
+      "bytes": 79,
+      "sha256": "9535a50cef37b72c923d7c252600f59d976e1e10085e65f6f75e251344b0992e"
+    },
+    "final-fixed48": {
+      "path": "final-fixed48.log",
+      "bytes": 2783,
+      "sha256": "7cdb99158bd19cbaa87270be26078e0e439bdd9e61f86f5cdba74092576d5e20"
+    },
+    "final-measurement": {
+      "path": "final-measurement.log",
+      "bytes": 1102,
+      "sha256": "b8a9422485c83d365ee8f90f96fa681b0956cdb64c8b246c07394b518becb80b"
+    },
+    "final-offered": {
+      "path": "final-offered.log",
+      "bytes": 1474,
+      "sha256": "3e24dfdf19d8275c265fadb3fc68bffc2324ed73e8e4c4d32117b8dddcc59607"
+    },
+    "final-paged": {
+      "path": "final-paged.log",
+      "bytes": 1843,
+      "sha256": "703842d99b0e4f04a5af8bec86ad5f7273e31b80a406efdf42e0dbb8a8605bdd"
+    },
+    "final-semantic": {
+      "path": "final-semantic.log",
+      "bytes": 1729,
+      "sha256": "348fcc126b8cfd551d8b7149f6adfbf8545d7491624b0db23be152fbe8eef7e9"
+    },
+    "final-shared-targeted": {
+      "path": "final-shared-targeted.log",
+      "bytes": 1229,
+      "sha256": "7e082230e3f8829a257d764de8f878d54db7519bbd87e368c03e517b20deb24c"
+    },
+    "final-stats": {
+      "path": "final-stats.log",
+      "bytes": 956,
+      "sha256": "9c113c241ac8a1664cd84525499e0001fd1837aaf2207ebbf752c839480db199"
+    },
+    "root-runtime": {
+      "path": "root-runtime.log",
+      "bytes": 1991,
+      "sha256": "4268c38c9717ddeae171e554f6a87411aab664bc89d6b12fe3ed10c17a937228"
+    },
+    "root-runtime-time": {
+      "path": "root-runtime.time",
+      "bytes": 783,
+      "sha256": "07478147e265ca48fab3dbce9a39cddef8bd9a46798fd0064e3dcb43d54ceead"
+    }
+  },
+  "preexisting_failures": null
+}

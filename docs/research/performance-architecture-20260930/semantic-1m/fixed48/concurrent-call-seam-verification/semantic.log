@@ -1,0 +1,37 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/rb/worktrees/borsuk-fixed48-concurrent-call-seam/scripts/launch_native_semantic_1m_cold_spot.py", line 1074, in <module>
+    self_check()
+    ~~~~~~~~~~^^
+  File "/home/rb/worktrees/borsuk-fixed48-concurrent-call-seam/scripts/launch_native_semantic_1m_cold_spot.py", line 528, in self_check
+    archived_source_self_check()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/rb/worktrees/borsuk-fixed48-concurrent-call-seam/scripts/launch_native_semantic_1m_cold_spot.py", line 327, in archived_source_self_check
+    assert proof['roles']['control']['wave_objects']==4 and proof['roles']['candidate']['wave_objects']==8
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+Command exited with non-zero status 1
+	Command being timed: "timeout 55s python3 -m scripts.launch_native_semantic_1m_cold_spot --self-check"
+	User time (seconds): 0.99
+	System time (seconds): 0.27
+	Percent of CPU this job got: 66%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.90
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 91004
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 2
+	Minor (reclaiming a frame) page faults: 70069
+	Voluntary context switches: 242
+	Involuntary context switches: 197
+	Swaps: 0
+	File system inputs: 64
+	File system outputs: 824
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1

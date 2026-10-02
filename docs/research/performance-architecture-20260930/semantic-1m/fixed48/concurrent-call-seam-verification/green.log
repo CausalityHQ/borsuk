@@ -1,0 +1,24 @@
+{"self_check": true, "queries": 64, "scenarios": 9, "native_or_network_execution": false, "closed_panel_admission": {"panel": {"requests.jsonl": {"bytes": 982810, "sha256": "f0ee89e3751765cac78eb128ba577bb870e3a910fb2c4eb486c80740544bc5cd"}, "records.jsonl": {"bytes": 2086748, "sha256": "631fd161bf859d77b9d772576de806d4b71e155bd70b9d6f6b9b68bcfeac6be8"}, "truth.i64": {"bytes": 51200, "sha256": "0b13e27aade93e099c5114f0262b71b2cb28f0b4ef85a487d15bebaeea802970"}}, "execution_source": {"archive_sha256": "cd28212e165ac31e25cf31638fec4ed6357e7acdac201c2e3a937aad74775c36", "commit": "57fd5a3036995c75b6fd79b919afe57d682b6bfb"}, "queries": 64, "f32_bits_equal": true, "json_numeric_values_equal": true, "squared_norm_min": 162.33715045834438, "squared_norm_max": 241.38631057359763, "query_execution": false, "quality_recomputed": false}, "sdk_admission": {"old_model_rejected": true, "current_model_admitted": true, "runtime_cloud_calls": 0, "sdk": {"boto3": "1.40.72", "botocore": "1.40.72", "conditional_put": true, "network_calls": 0, "python_executable": "/usr/bin/python3"}}, "scratch_ownership": {"real_python_child": true, "child_exit": -15, "child_scratch_removed": true, "sibling_preserved": true, "overlapping_owners": 2}, "failure_reducer": {"original_failure_retained": true, "reducer_failure_retained": true, "ledger_rows": 64, "closure_artifacts": true}, "concurrent_calls": {"real_python_threads": 2, "distinct_ports": [18080, 18081], "posts": 2, "stops": 2, "a_closed_while_b_alive": true, "shared_globals_unchanged": true, "injected_budget_negatives": true}}
+	Command being timed: "timeout 55s python3 scripts/run_cohere_fixed48_cold_http.py --self-check"
+	User time (seconds): 2.33
+	System time (seconds): 0.65
+	Percent of CPU this job got: 96%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:03.10
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 107756
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 29416
+	Voluntary context switches: 323
+	Involuntary context switches: 452
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 176
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

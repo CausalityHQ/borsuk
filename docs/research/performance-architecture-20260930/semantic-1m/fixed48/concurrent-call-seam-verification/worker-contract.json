@@ -1,0 +1,647 @@
+{
+  "schema": "borsuk-fixed48-concurrent-call-seam-contract-v1",
+  "base_commit": "7fe3742f6aacd556ce0a17bbae8dac58476002d1",
+  "worktree": "/home/rb/worktrees/borsuk-fixed48-concurrent-call-seam",
+  "branch": "devbox/fixed48-concurrent-call-seam",
+  "commit": "838b0c028e16f1fdeb44e95169330115ce3f1248",
+  "files": {
+    "scripts/run_native_semantic_1m_cold.py": {
+      "path": "scripts/run_native_semantic_1m_cold.py",
+      "bytes": 47747,
+      "sha256": "4b8fad8efff7a5105b3fb2eec1637a4264bc38d9e5205fdfba371a94dfa5a701"
+    },
+    "scripts/run_cohere_fixed48_cold_http.py": {
+      "path": "scripts/run_cohere_fixed48_cold_http.py",
+      "bytes": 94541,
+      "sha256": "775d4c00d1878c7e58b6bffdf6df148b26153cbf3416d7a522a935177d581228"
+    }
+  },
+  "diff": {
+    "path": "/tmp/borsuk-concurrent-final.diff",
+    "bytes": 21092,
+    "sha256": "dde76c2629a53bea251025171268f0b79e052a4b02d3a0b588b5522a2cb766ca"
+  },
+  "api": {
+    "fixed48.measured_call": "(binary, config, arm, body, expected, truth, scratch, *, port=8080, require_cgroup_drained=True)",
+    "native.validate_roster": "(arm, *, native_memory_bytes=1073741824, budget_model=None)",
+    "native.validate_startup": "(value, arm, wall, *, wave_objects=4, root_reuse=False, native_memory_bytes=1073741824, budget_model=None)",
+    "native.transport": "(header, response, arm, *, wave_objects=4, root_reuse=False, native_memory_bytes=1073741824, budget_model=None)",
+    "native.publication_arm": "(root, prefix, head_body, *, native_memory_bytes=1073741824, budget_model=None)",
+    "budget_model": "Optional concrete dict; None computes the existing semantic default. Checked positive integer memory/payload, exactly four slots, matching metadata byte sum and root size; modeled payload must fit injected memory.",
+    "fixed48_model": "native_budget_model(metadata_files, retained_root=True), native_memory_bytes from config.resources; validated before spawning",
+    "require_cgroup_drained": "Keyword-only bool, default True preserves serial shared-cgroup population check. False skips only per-call process population subset check; owned PGID stop/wait, own scratch deletion, and all shared memory/swap/OOM/limits checks remain mandatory."
+  },
+  "verification": {
+    "bounds": {
+      "ulimit_v_kib": 262144,
+      "timeout_seconds": 55,
+      "environment": {
+        "MALLOC_ARENA_MAX": "2"
+      }
+    },
+    "fixed48": {
+      "self_check": true,
+      "queries": 64,
+      "scenarios": 9,
+      "native_or_network_execution": false,
+      "closed_panel_admission": {
+        "panel": {
+          "requests.jsonl": {
+            "bytes": 982810,
+            "sha256": "f0ee89e3751765cac78eb128ba577bb870e3a910fb2c4eb486c80740544bc5cd"
+          },
+          "records.jsonl": {
+            "bytes": 2086748,
+            "sha256": "631fd161bf859d77b9d772576de806d4b71e155bd70b9d6f6b9b68bcfeac6be8"
+          },
+          "truth.i64": {
+            "bytes": 51200,
+            "sha256": "0b13e27aade93e099c5114f0262b71b2cb28f0b4ef85a487d15bebaeea802970"
+          }
+        },
+        "execution_source": {
+          "archive_sha256": "cd28212e165ac31e25cf31638fec4ed6357e7acdac201c2e3a937aad74775c36",
+          "commit": "57fd5a3036995c75b6fd79b919afe57d682b6bfb"
+        },
+        "queries": 64,
+        "f32_bits_equal": true,
+        "json_numeric_values_equal": true,
+        "squared_norm_min": 162.33715045834438,
+        "squared_norm_max": 241.38631057359763,
+        "query_execution": false,
+        "quality_recomputed": false
+      },
+      "sdk_admission": {
+        "old_model_rejected": true,
+        "current_model_admitted": true,
+        "runtime_cloud_calls": 0,
+        "sdk": {
+          "boto3": "1.40.72",
+          "botocore": "1.40.72",
+          "conditional_put": true,
+          "network_calls": 0,
+          "python_executable": "/usr/bin/python3"
+        }
+      },
+      "scratch_ownership": {
+        "real_python_child": true,
+        "child_exit": -15,
+        "child_scratch_removed": true,
+        "sibling_preserved": true,
+        "overlapping_owners": 2
+      },
+      "failure_reducer": {
+        "original_failure_retained": true,
+        "reducer_failure_retained": true,
+        "ledger_rows": 64,
+        "closure_artifacts": true
+      },
+      "concurrent_calls": {
+        "real_python_threads": 2,
+        "distinct_ports": [
+          18080,
+          18081
+        ],
+        "posts": 2,
+        "stops": 2,
+        "a_closed_while_b_alive": true,
+        "shared_globals_unchanged": true,
+        "injected_budget_negatives": true,
+        "explicit_concurrent_policy": true,
+        "default_rejects_live_peer": false,
+        "final_cell_drained": true
+      },
+      "serial_population_guard": {
+        "real_python_threads": 2,
+        "distinct_ports": [
+          18080,
+          18081
+        ],
+        "posts": 2,
+        "stops": 2,
+        "a_closed_while_b_alive": true,
+        "shared_globals_unchanged": true,
+        "injected_budget_negatives": true,
+        "explicit_concurrent_policy": false,
+        "default_rejects_live_peer": true,
+        "final_cell_drained": true
+      }
+    },
+    "green_source_sha256": {
+      "scripts/run_native_semantic_1m_cold.py": "4b8fad8efff7a5105b3fb2eec1637a4264bc38d9e5205fdfba371a94dfa5a701",
+      "scripts/run_cohere_fixed48_cold_http.py": "775d4c00d1878c7e58b6bffdf6df148b26153cbf3416d7a522a935177d581228"
+    },
+    "green": [
+      "fixed48 nine scenarios and real concurrent-call falsifier",
+      "semantic --measurement-self-check",
+      "semantic router stats self-check",
+      "shared paged gates/reducer/restoration/cleanup targeted checks",
+      "compile owned files",
+      "git diff --check"
+    ],
+    "red": {
+      "port": "Both real threads rejected missing port keyword on base",
+      "race": "With only port forwarding added, two overlapping measured_call threads left shared globals changed",
+      "test_patch": {
+        "path": "/tmp/borsuk-concurrent-red.patch",
+        "bytes": 8852,
+        "sha256": "1c2cff5c4c000c1780e3c23ea42968d0db2d6e0a6ec22236edd46aa40e230518"
+      },
+      "drain_policy": "Realistic serial population test confirms A fails while B lives; test then rejects the absent explicit drain keyword before implementation."
+    },
+    "baseline": {
+      "base_commit": "7fe3742f6aacd556ce0a17bbae8dac58476002d1",
+      "exact_clean_base_verified": true,
+      "base_source_sha256": {
+        "scripts/run_native_semantic_1m_cold.py": "c120317bbb19feba792146fc6d3ea58312d07bcd876b2f86dde9158dffcef0ee",
+        "scripts/run_cohere_fixed48_cold_http.py": "f8650057419628bd93c36672a2dce017fc74da2d76b2a66c80639df6c870b896"
+      },
+      "final_source_sha256": {
+        "scripts/run_native_semantic_1m_cold.py": "4b8fad8efff7a5105b3fb2eec1637a4264bc38d9e5205fdfba371a94dfa5a701",
+        "scripts/run_cohere_fixed48_cold_http.py": "815258e7ef84e17e69e4fe9f7f88e9d9459044488b1385862c28048030e4ec51"
+      },
+      "tests": [
+        {
+          "name": "semantic",
+          "command": [
+            "/usr/bin/time",
+            "-v",
+            "timeout",
+            "55s",
+            "python3",
+            "-m",
+            "scripts.launch_native_semantic_1m_cold_spot",
+            "--self-check"
+          ],
+          "exit_status": 1,
+          "log": "/tmp/borsuk-concurrent-baseline-semantic.log"
+        },
+        {
+          "name": "offered",
+          "command": [
+            "/usr/bin/time",
+            "-v",
+            "timeout",
+            "55s",
+            "python3",
+            "-m",
+            "scripts.launch_native_semantic_1m_offered_spot",
+            "--self-check"
+          ],
+          "exit_status": 1,
+          "log": "/tmp/borsuk-concurrent-baseline-offered.log"
+        },
+        {
+          "name": "paged",
+          "command": [
+            "/usr/bin/time",
+            "-v",
+            "timeout",
+            "55s",
+            "python3",
+            "-m",
+            "scripts.run_native_paged_cold_first_query_selfcheck"
+          ],
+          "exit_status": 1,
+          "log": "/tmp/borsuk-concurrent-baseline-paged.log"
+        }
+      ],
+      "final_sources_restored": true
+    },
+    "known_failures": [
+      {
+        "command": "python3 -m scripts.launch_native_semantic_1m_cold_spot --self-check",
+        "location": "scripts/launch_native_semantic_1m_cold_spot.py:327",
+        "reason": "historical paired role wave_objects assertion",
+        "current_exit": 1,
+        "base_exit": 1,
+        "final_traceback_identical_to_base": true
+      },
+      {
+        "command": "python3 -m scripts.launch_native_semantic_1m_offered_spot --self-check",
+        "location": "scripts/launch_native_semantic_1m_offered_spot.py:517",
+        "reason": "import/evidence code closure drift after runtime checks",
+        "current_exit": 1,
+        "base_exit": 1,
+        "final_traceback_identical_to_base": true
+      },
+      {
+        "command": "python3 -m scripts.run_native_paged_cold_first_query_selfcheck",
+        "location": "scripts/run_native_paged_cold_first_query_selfcheck.py:141",
+        "reason": "unchanged historical fixture expects 395 native source files; exact base and current have 399",
+        "current_exit": 1,
+        "base_exit": 1,
+        "final_traceback_identical_to_base": true
+      }
+    ],
+    "baseline_assertions_and_fixtures_unchanged": true,
+    "full_suite_claim": false,
+    "final_checks": {
+      "source_sha256": {
+        "scripts/run_native_semantic_1m_cold.py": "4b8fad8efff7a5105b3fb2eec1637a4264bc38d9e5205fdfba371a94dfa5a701",
+        "scripts/run_cohere_fixed48_cold_http.py": "775d4c00d1878c7e58b6bffdf6df148b26153cbf3416d7a522a935177d581228"
+      },
+      "results": [
+        {
+          "name": "semantic",
+          "command": [
+            "/usr/bin/time",
+            "-v",
+            "timeout",
+            "55s",
+            "python3",
+            "-m",
+            "scripts.launch_native_semantic_1m_cold_spot",
+            "--self-check"
+          ],
+          "exit_status": 1,
+          "log": "/tmp/borsuk-concurrent-final-semantic.log"
+        },
+        {
+          "name": "measurement",
+          "command": [
+            "/usr/bin/time",
+            "-v",
+            "timeout",
+            "55s",
+            "python3",
+            "-m",
+            "scripts.launch_native_semantic_1m_cold_spot",
+            "--measurement-self-check"
+          ],
+          "exit_status": 0,
+          "log": "/tmp/borsuk-concurrent-final-measurement.log"
+        },
+        {
+          "name": "offered",
+          "command": [
+            "/usr/bin/time",
+            "-v",
+            "timeout",
+            "55s",
+            "python3",
+            "-m",
+            "scripts.launch_native_semantic_1m_offered_spot",
+            "--self-check"
+          ],
+          "exit_status": 1,
+          "log": "/tmp/borsuk-concurrent-final-offered.log"
+        },
+        {
+          "name": "paged",
+          "command": [
+            "/usr/bin/time",
+            "-v",
+            "timeout",
+            "55s",
+            "python3",
+            "-m",
+            "scripts.run_native_paged_cold_first_query_selfcheck"
+          ],
+          "exit_status": 1,
+          "log": "/tmp/borsuk-concurrent-final-paged.log"
+        },
+        {
+          "name": "stats",
+          "command": [
+            "/usr/bin/time",
+            "-v",
+            "timeout",
+            "55s",
+            "python3",
+            "-m",
+            "scripts.check_native_semantic_router_stats",
+            "--self-check"
+          ],
+          "exit_status": 0,
+          "log": "/tmp/borsuk-concurrent-final-stats.log"
+        },
+        {
+          "name": "shared-targeted",
+          "command": [
+            "/usr/bin/time",
+            "-v",
+            "timeout",
+            "55s",
+            "python3",
+            "-c",
+            "from scripts import run_native_paged_cold_first_query_selfcheck as t; t.gates_check(); t.reducer_check(); t.restoration_check(); t.cleanup_check()"
+          ],
+          "exit_status": 0,
+          "log": "/tmp/borsuk-concurrent-final-shared-targeted.log"
+        },
+        {
+          "name": "compile",
+          "command": [
+            "/usr/bin/time",
+            "-v",
+            "timeout",
+            "55s",
+            "python3",
+            "-c",
+            "from pathlib import Path; [compile(Path(n).read_bytes(), n, 'exec') for n in ('scripts/run_native_semantic_1m_cold.py', 'scripts/run_cohere_fixed48_cold_http.py')]; print('PASS compile owned two files')"
+          ],
+          "exit_status": 0,
+          "log": "/tmp/borsuk-concurrent-final-compile.log"
+        }
+      ]
+    },
+    "native_source_roster": {
+      "current_count": 399,
+      "base_count": 399,
+      "frozen_legacy_fixture_count": 395,
+      "fixture_unchanged": true
+    },
+    "bounded_test_commands": "Every test command runs under ulimit -v 262144 and /usr/bin/time -v timeout 55s; MALLOC_ARENA_MAX=2. Check scripts run these commands sequentially."
+  },
+  "prospective_admission": {
+    "owners": 5,
+    "per_owner_native_memory_bytes": 2147483648,
+    "driver_reserve_bytes": 2147483648,
+    "total_bytes": 12884901888,
+    "interpretation": "prospective host admission only; not actual RSS or throughput evidence"
+  },
+  "historical": {
+    "unchanged": true,
+    "artifacts": {
+      "root-failure-audit.json": {
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0004/root-failure-audit.json",
+        "bytes": 2138,
+        "sha256": "7fd187a27520c84bb8cbbabec36c4d7ec22bf7baf879eec62537403f8ce4a452"
+      },
+      "diagnostic-decomposition.json": {
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0004/diagnostic-decomposition.json",
+        "bytes": 2206,
+        "sha256": "46b2c3c7e1bf121bbfe18a562f52a953d30dab0f2e96383e11463ea080454fc8"
+      },
+      "screen/records.jsonl": {
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0004/screen/records.jsonl",
+        "bytes": 1443375,
+        "sha256": "28ef526f8c0b573904584277313fcb5d645b6501462a66fead35b1b1aaddb924"
+      },
+      "screen/publication.json": {
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0004/screen/publication.json",
+        "bytes": 38785,
+        "sha256": "ca94ff0bd8421fd112d54fe11042f944f44919ea6875c178cb45c8559580ccde"
+      }
+    },
+    "cold_a4_disposition": "INVALID",
+    "raw_metrics_qualified": false,
+    "a3_canary_untouched": true
+  },
+  "scope": {
+    "only_owned_two_files": true,
+    "native_or_cargo_or_cloud_or_network_execution": false,
+    "science_or_gt_execution": false,
+    "reviews_or_children": false,
+    "operator_contact": false,
+    "push_or_merge": false
+  },
+  "logs": {
+    "baseline-driver": {
+      "path": "/tmp/borsuk-concurrent-baseline-driver.log",
+      "bytes": 675,
+      "sha256": "d713805734ef848795ce9d832c9fadb5ca1ad7942439ab1bcb771738efee02c5",
+      "command": "python3 /tmp/borsuk-concurrent-baseline.py",
+      "exit_status": 0,
+      "peak_rss_kib": null,
+      "elapsed_wall": null
+    },
+    "baseline-offered": {
+      "path": "/tmp/borsuk-concurrent-baseline-offered.log",
+      "bytes": 1474,
+      "sha256": "cb237d549b12f9673485fe804b30ee81f67c30d6c791ea23edf1cbd723191f05",
+      "command": "timeout 55s python3 -m scripts.launch_native_semantic_1m_offered_spot --self-check",
+      "exit_status": 1,
+      "peak_rss_kib": 83580,
+      "elapsed_wall": "0:01.70"
+    },
+    "baseline-paged": {
+      "path": "/tmp/borsuk-concurrent-baseline-paged.log",
+      "bytes": 1844,
+      "sha256": "559c83067b43cb017de46917abfc5a55c3101f4a8ebf976f4f18934a79fdc363",
+      "command": "timeout 55s python3 -m scripts.run_native_paged_cold_first_query_selfcheck",
+      "exit_status": 1,
+      "peak_rss_kib": 38852,
+      "elapsed_wall": "0:00.40"
+    },
+    "baseline-semantic": {
+      "path": "/tmp/borsuk-concurrent-baseline-semantic.log",
+      "bytes": 1731,
+      "sha256": "9f35bf4fe7150c4fa5d12caa5bc34d3747c3b02a4bc62517b2694299246453bb",
+      "command": "timeout 55s python3 -m scripts.launch_native_semantic_1m_cold_spot --self-check",
+      "exit_status": 1,
+      "peak_rss_kib": 86948,
+      "elapsed_wall": "0:01.40"
+    },
+    "compile": {
+      "path": "/tmp/borsuk-concurrent-compile.log",
+      "bytes": 982,
+      "sha256": "3f89cd05d0a858cd092d7b0935a552fb9d951fea7735ecaab592961ec0c7e1a5",
+      "command": "timeout 55s python3 -c from pathlib import Path; names=(\"scripts/run_native_semantic_1m_cold.py\", \"scripts/run_cohere_fixed48_cold_http.py\"); [compile(Path(n).read_bytes(), n, \"exec\") for n in names]; print(\"PASS compile owned two files\")",
+      "exit_status": 0,
+      "peak_rss_kib": 21288,
+      "elapsed_wall": "0:00.10"
+    },
+    "diff-check": {
+      "path": "/tmp/borsuk-concurrent-diff-check.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command": "git diff --check",
+      "exit_status": 0,
+      "peak_rss_kib": null,
+      "elapsed_wall": null
+    },
+    "green": {
+      "path": "/tmp/borsuk-concurrent-green.log",
+      "bytes": 2372,
+      "sha256": "6e54c0a593136eae55598d06dcdc571d076bc1e5ed09f8fa6837cbcc48d9208c",
+      "command": "timeout 55s python3 scripts/run_cohere_fixed48_cold_http.py --self-check",
+      "exit_status": 0,
+      "peak_rss_kib": 107756,
+      "elapsed_wall": "0:03.10"
+    },
+    "measurement": {
+      "path": "/tmp/borsuk-concurrent-measurement.log",
+      "bytes": 1102,
+      "sha256": "ca5e895c02b7670efc7213391d88246f06342547ac6fa02b08c2c91f8265057e",
+      "command": "timeout 55s python3 -m scripts.launch_native_semantic_1m_cold_spot --measurement-self-check",
+      "exit_status": 0,
+      "peak_rss_kib": 114492,
+      "elapsed_wall": "0:05.01"
+    },
+    "offered": {
+      "path": "/tmp/borsuk-concurrent-offered.log",
+      "bytes": 1477,
+      "sha256": "6ebd89af99e4c2f2bc163897f5b585d76dbfb62cc89040a2fa368689300da263",
+      "command": "timeout 55s python3 -m scripts.launch_native_semantic_1m_offered_spot --self-check",
+      "exit_status": 1,
+      "peak_rss_kib": 83464,
+      "elapsed_wall": "0:01.70"
+    },
+    "paged": {
+      "path": "/tmp/borsuk-concurrent-paged.log",
+      "bytes": 1845,
+      "sha256": "b4d4f3e0c68c41aa20b568c59715c178fa52221af22992466281c753b2dfc859",
+      "command": "timeout 55s python3 -m scripts.run_native_paged_cold_first_query_selfcheck",
+      "exit_status": 1,
+      "peak_rss_kib": 38968,
+      "elapsed_wall": "0:00.40"
+    },
+    "race-red": {
+      "path": "/tmp/borsuk-concurrent-race-red.log",
+      "bytes": 1484,
+      "sha256": "30374817ba872d2756cc7d033c9cfc6d7bab3c8e61cf071b763156fce0d16193",
+      "command": "timeout 55s python3 scripts/run_cohere_fixed48_cold_http.py --self-check",
+      "exit_status": 1,
+      "peak_rss_kib": 84776,
+      "elapsed_wall": "0:01.40"
+    },
+    "red": {
+      "path": "/tmp/borsuk-concurrent-red.log",
+      "bytes": 1617,
+      "sha256": "e195e26c7da19412d06db23a9b194809e8d5532865c3d7418d750d3784e93ef8",
+      "command": "timeout 55s python3 scripts/run_cohere_fixed48_cold_http.py --self-check",
+      "exit_status": 1,
+      "peak_rss_kib": 90552,
+      "elapsed_wall": "0:01.90"
+    },
+    "semantic": {
+      "path": "/tmp/borsuk-concurrent-semantic.log",
+      "bytes": 1732,
+      "sha256": "24e69776fef84b8da837c380c9eeb869a99cca5a0b5b80bd1d833509d3c3d404",
+      "command": "timeout 55s python3 -m scripts.launch_native_semantic_1m_cold_spot --self-check",
+      "exit_status": 1,
+      "peak_rss_kib": 91004,
+      "elapsed_wall": "0:01.90"
+    },
+    "shared-targeted": {
+      "path": "/tmp/borsuk-concurrent-shared-targeted.log",
+      "bytes": 1230,
+      "sha256": "97f665de356023dc25a258d6e7281186d40cbf65d15763eb19d523f0153d32bd",
+      "command": "timeout 55s python3 -c from scripts import run_native_paged_cold_first_query_selfcheck as t; t.gates_check(); t.reducer_check(); t.restoration_check(); t.cleanup_check()",
+      "exit_status": 0,
+      "peak_rss_kib": 31724,
+      "elapsed_wall": "0:00.20"
+    },
+    "stats": {
+      "path": "/tmp/borsuk-concurrent-stats.log",
+      "bytes": 956,
+      "sha256": "21313840353e3e015119e91f59a27b2d801b5e188c83f1531aac12bfbfa351d0",
+      "command": "timeout 55s python3 -m scripts.check_native_semantic_router_stats --self-check",
+      "exit_status": 0,
+      "peak_rss_kib": 18996,
+      "elapsed_wall": "0:00.10"
+    },
+    "drain-red": {
+      "path": "/tmp/borsuk-concurrent-drain-red.log",
+      "bytes": 1727,
+      "sha256": "ffd30063e42303935028d73b15069952f8e82479904d5bb8d79085f8c1ae9cb5",
+      "command": "timeout 55s python3 scripts/run_cohere_fixed48_cold_http.py --self-check",
+      "exit_status": 1,
+      "peak_rss_kib": 84624,
+      "elapsed_wall": "0:01.40"
+    },
+    "final-compile": {
+      "path": "/tmp/borsuk-concurrent-final-compile.log",
+      "bytes": 969,
+      "sha256": "2e2728f922c59a80ff8fa85c56fa7b10d4da4ca70017ebe62dbc60da98be872b",
+      "command": "timeout 55s python3 -c from pathlib import Path; [compile(Path(n).read_bytes(), n, 'exec') for n in ('scripts/run_native_semantic_1m_cold.py', 'scripts/run_cohere_fixed48_cold_http.py')]; print('PASS compile owned two files')",
+      "exit_status": 0,
+      "peak_rss_kib": 21820,
+      "elapsed_wall": "0:00.10"
+    },
+    "final-driver": {
+      "path": "/tmp/borsuk-concurrent-final-driver.log",
+      "bytes": 79,
+      "sha256": "9535a50cef37b72c923d7c252600f59d976e1e10085e65f6f75e251344b0992e",
+      "command": "python3 /tmp/borsuk-concurrent-final-checks.py",
+      "exit_status": 0,
+      "peak_rss_kib": null,
+      "elapsed_wall": null
+    },
+    "final-fixed48": {
+      "path": "/tmp/borsuk-concurrent-final-fixed48.log",
+      "bytes": 2783,
+      "sha256": "7cdb99158bd19cbaa87270be26078e0e439bdd9e61f86f5cdba74092576d5e20",
+      "command": "timeout 55s python3 scripts/run_cohere_fixed48_cold_http.py --self-check",
+      "exit_status": 0,
+      "peak_rss_kib": 108132,
+      "elapsed_wall": "0:03.01"
+    },
+    "final-measurement": {
+      "path": "/tmp/borsuk-concurrent-final-measurement.log",
+      "bytes": 1102,
+      "sha256": "b8a9422485c83d365ee8f90f96fa681b0956cdb64c8b246c07394b518becb80b",
+      "command": "timeout 55s python3 -m scripts.launch_native_semantic_1m_cold_spot --measurement-self-check",
+      "exit_status": 0,
+      "peak_rss_kib": 114604,
+      "elapsed_wall": "0:04.90"
+    },
+    "final-offered": {
+      "path": "/tmp/borsuk-concurrent-final-offered.log",
+      "bytes": 1474,
+      "sha256": "3e24dfdf19d8275c265fadb3fc68bffc2324ed73e8e4c4d32117b8dddcc59607",
+      "command": "timeout 55s python3 -m scripts.launch_native_semantic_1m_offered_spot --self-check",
+      "exit_status": 1,
+      "peak_rss_kib": 83532,
+      "elapsed_wall": "0:01.70"
+    },
+    "final-paged": {
+      "path": "/tmp/borsuk-concurrent-final-paged.log",
+      "bytes": 1843,
+      "sha256": "703842d99b0e4f04a5af8bec86ad5f7273e31b80a406efdf42e0dbb8a8605bdd",
+      "command": "timeout 55s python3 -m scripts.run_native_paged_cold_first_query_selfcheck",
+      "exit_status": 1,
+      "peak_rss_kib": 38876,
+      "elapsed_wall": "0:00.40"
+    },
+    "final-semantic": {
+      "path": "/tmp/borsuk-concurrent-final-semantic.log",
+      "bytes": 1729,
+      "sha256": "348fcc126b8cfd551d8b7149f6adfbf8545d7491624b0db23be152fbe8eef7e9",
+      "command": "timeout 55s python3 -m scripts.launch_native_semantic_1m_cold_spot --self-check",
+      "exit_status": 1,
+      "peak_rss_kib": 85752,
+      "elapsed_wall": "0:01.30"
+    },
+    "final-shared-targeted": {
+      "path": "/tmp/borsuk-concurrent-final-shared-targeted.log",
+      "bytes": 1229,
+      "sha256": "7e082230e3f8829a257d764de8f878d54db7519bbd87e368c03e517b20deb24c",
+      "command": "timeout 55s python3 -c from scripts import run_native_paged_cold_first_query_selfcheck as t; t.gates_check(); t.reducer_check(); t.restoration_check(); t.cleanup_check()",
+      "exit_status": 0,
+      "peak_rss_kib": 31736,
+      "elapsed_wall": "0:00.20"
+    },
+    "final-stats": {
+      "path": "/tmp/borsuk-concurrent-final-stats.log",
+      "bytes": 956,
+      "sha256": "9c113c241ac8a1664cd84525499e0001fd1837aaf2207ebbf752c839480db199",
+      "command": "timeout 55s python3 -m scripts.check_native_semantic_router_stats --self-check",
+      "exit_status": 0,
+      "peak_rss_kib": 19044,
+      "elapsed_wall": "0:00.10"
+    }
+  },
+  "baseline_reproduction": {
+    "path": "/tmp/borsuk-concurrent-baseline.py",
+    "bytes": 1808,
+    "sha256": "2f9dd07a5a05b4302dc2be92d2dc8f7996a58aaa3cae7121b71a2124c6526f83"
+  },
+  "parent_drain_policy_authorization": {
+    "message": "immediate-1790965443891858742-1312788",
+    "mandatory_future_harness_contract": "Future offered caller may pass require_cgroup_drained=False only when its whole-cell final closure runs check_cgroup(..., drained=True) after all owners finish.",
+    "new_offered_harness_or_config_or_launch": false
+  },
+  "final_reproduction": {
+    "path": "/tmp/borsuk-concurrent-final-checks.py",
+    "bytes": 1744,
+    "sha256": "fb3966bca47009a1ea7686bc95832839b522d979f2a9dd35761fb42ba9246e8c"
+  },
+  "author_and_committer": "Roman Bartusiak <riomus@gmail.com>",
+  "commit_parent": "7fe3742f6aacd556ce0a17bbae8dac58476002d1",
+  "clean_worktree": true,
+  "committed_exact_owned_files": true,
+  "source_and_log_hashes_reverified": true
+}
