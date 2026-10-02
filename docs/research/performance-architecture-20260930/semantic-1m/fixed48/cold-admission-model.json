@@ -6,7 +6,7 @@
   "server_slots": 4,
   "metadata_bytes": 3556524,
   "router_root_bytes": 2267840,
-  "modeled_remote_payload_bytes": 870514692,
+  "modeled_remote_payload_bytes": 891584516,
   "observed_scientific_scorer_rss_bytes": 47874048,
   "interpretation": "payload admission model, not cold RSS; cannot infer 100M scaling",
   "prospective_remote_limits": {
@@ -27,5 +27,13 @@
   ],
   "unchanged_payloads": true,
   "resource_gate": "measure actual per-stage RSS/cgroups/whole scratch; no OOM/new swap; reject invalid closure",
-  "launch_authority": false
+  "launch_authority": false,
+  "selected_leaf_bytes": 4730880,
+  "model_correction": {
+    "prior_modeled_bytes": 870514692,
+    "undercount_bytes": 21069824,
+    "cause": "old two MiB leaf bound instead of current Fresh1m 48*64*1540 per-query selected leaf admission",
+    "source": "current native query slot admission; eight retained startup body lengths authenticated via COMPLETE.json"
+  },
+  "serving_transport_note": "Compute again with actual rebased manifest length and retained head root; this value uses original retained manifest and excludes retained head root."
 }
