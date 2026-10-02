@@ -1,0 +1,51 @@
+{
+  "cold_http_measured": false,
+  "controller_exit_status": 2,
+  "controller_session": 99282,
+  "diagnosis": {
+    "confirmed": "All terminal-declared artifact keys absent; direct terminal upload succeeds; AWS CLI installed beneath worker-local bin; systemd upload services do not receive worker PATH.",
+    "runtime_failure": "Original worker exit2 before publication; error body unavailable, not diagnosed from missing bodies."
+  },
+  "execution_status": "FAIL",
+  "files": {
+    "aws-closeout.json": {
+      "bytes": 135,
+      "sha256": "4e035cb3b0f28cfed8a692ac4ab21538a249159392cc3174650ee72883f63818"
+    },
+    "aws-launch.json": {
+      "bytes": 347,
+      "sha256": "6e44ecdee26f6d8e876e028e3a0130df13aea75540836d15ec8ae9a72e221867"
+    },
+    "aws-reservation.json": {
+      "bytes": 19588,
+      "sha256": "9d1a73f991b8c1acd71427ef97298536f60f37ef1f2073fff68fac5079c2ed91"
+    },
+    "aws-terminal.json": {
+      "bytes": 16226,
+      "sha256": "6c2d0f770b015aa469f6a6eb5f78760d72b70967732170d721c1975224d23dd9"
+    },
+    "aws-user-data.sh": {
+      "bytes": 11195,
+      "sha256": "8c836b7124a3b541dd38efbf68454c0f3441ac4a49207f97c8d692c3cfd04d1d"
+    },
+    "collection-authenticated-failure.json": {
+      "bytes": 220,
+      "sha256": "105839d745c201a2bdfbb3d89266b2b5de97c96d7ebc04aad340b0ac85e5f904"
+    },
+    "collection-error.json": {
+      "bytes": 220,
+      "sha256": "105839d745c201a2bdfbb3d89266b2b5de97c96d7ebc04aad340b0ac85e5f904"
+    }
+  },
+  "independently_verified_instance_state": "terminated",
+  "instance_id": "i-0863d67a43d2f92bb",
+  "no_automatic_replacement": true,
+  "s3_artifact_objects_present": 0,
+  "schema": "borsuk-fixed48-cold-root-disposition-v1",
+  "scientific_status": "INVALID",
+  "source_archive_sha256": "fff6e64e568c155666b1388f6c98b766f98ff3179e717a530a0894f395ce99a2",
+  "source_commit": "c7a52fa49580e14dfdf3c462bc9c561f23cfc487",
+  "terminal_declared_artifacts": 22,
+  "terminal_exit_code": 96,
+  "terminal_original_exit_code": 2
+}
