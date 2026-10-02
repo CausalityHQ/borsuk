@@ -12,6 +12,7 @@ import fcntl
 import gzip
 import hashlib
 import io
+import inspect
 import json
 import os
 from pathlib import Path
@@ -226,6 +227,7 @@ def stage_configs(proof):
     """Reuse only fully authenticated immutable JSON; never overwrite or retry."""
     from botocore.config import Config
     from botocore.exceptions import ClientError
+    runtime.sdk_guard()
 
     body = encoded(proof)
     authorities = [(pin(dict(bytes=len(body), sha256=sha(body)), LOCAL_BYTES), body)]
@@ -284,14 +286,24 @@ def user_data(commit, archive_sha, archive_key, prefix, qualification):
         body = bootstrap.user_data(commit, archive_sha, archive_key, prefix, adapter)
     source_line = f"aws s3 cp 's3://{BUCKET}/{archive_key}' source.tar.gz --only-show-errors\n"
     assert body.count(source_line) == 1, "source bootstrap hook drift"
-    source_command = (f"systemd-run --quiet --wait --pipe -p MemoryMax={MEMORY} -p MemorySwapMax=0 -p CPUQuota=200% -p TasksMax=512 -p RuntimeMaxSec=300 -p WorkingDirectory=\"$root\" "
-        f"python3.12 - {shlex.quote(BUCKET)} {shlex.quote(archive_key)} {archive_sha} {SCRATCH} <<'SOURCE'\n" + science.BOOTSTRAP_STAGE + "SOURCE\n")
+    sdk_program = f'SDK_VERSION={runtime.SDK_VERSION!r}\n' + inspect.getsource(runtime.sdk_guard)
+    source_program = sdk_program + 'capability=sdk_guard()\n' + science.BOOTSTRAP_STAGE
+    source_program = source_program.replace('source_authenticated=True,', 'source_authenticated=True,sdk=capability,')
+    bounded = f'systemd-run --quiet --wait --pipe -p MemoryMax={MEMORY} -p MemorySwapMax=0 -p CPUQuota=200% -p TasksMax=512 -p WorkingDirectory="$root" '
+    source_command = f'''phase=sdk-install
+python3.12 -m venv "$root/venv"
+mkdir -p "$root/pip-temp"
+{bounded}-p RuntimeMaxSec=100 --setenv=TMPDIR="$root/pip-temp" timeout --kill-after=5 90 "$root/venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir --only-binary=:all: --retries=0 --timeout=10 boto3=={runtime.SDK_VERSION} botocore=={runtime.SDK_VERSION}
+rm -rf "$root/pip-temp"
+phase=source-download
+{bounded}-p RuntimeMaxSec=300 "$root/venv/bin/python" - {shlex.quote(BUCKET)} {shlex.quote(archive_key)} {archive_sha} {SCRATCH} <<'SOURCE'
+{source_program}SOURCE
+'''
     body = body.replace(source_line, source_command)
     early = {k: qualification[k] for k in (*TERMINAL_IDENTITIES, "source_archive_commit", "source_archive_sha256")}
     early["proof_sha256"] = sha(encoded(qualification))
     early64 = base64.b64encode(gzip.compress(encoded(early), mtime=0)).decode()
     install = f'''phase=install
-python3.12 -m venv --system-site-packages "$root/venv"
 lscpu >cpu.txt
 phase=cold
 systemd-run --unit=cohere-fixed48-cold --wait --pipe -p MemoryMax={MEMORY} -p MemorySwapMax=0 -p CPUQuota=200% -p TasksMax=512 -p RuntimeMaxSec={SERVICE_SECONDS} -p WorkingDirectory="$root" \\
@@ -308,7 +320,7 @@ systemd-run --unit=cohere-fixed48-cold --wait --pipe -p MemoryMax={MEMORY} -p Me
     body = body.replace("'source_archive_sha256':'" + archive_sha + "',", "", 1)
     body = body.replace(", 'runtime_abi_sha256':artifacts.get('runtime-abi.json',{}).get('sha256')", "")
     body = body.replace("/mnt/native-semantic-router-cold", str(WORK_ROOT))
-    body = body.replace("python3-boto3 python3.12", "python3-boto3 python3.12 python3.12-venv")
+    body = body.replace("python3-boto3 python3.12", "python3.12 python3.12-venv")
     body = body.replace("exec >run.log 2>&1\n", "exec >run.log 2>&1\n" +
         f"python3 -c 'import base64,gzip; from pathlib import Path; Path(\"source-qualification.json\").write_bytes(gzip.decompress(base64.b64decode(\"{early64}\",validate=True)))'\n", 1)
     reserve = '''import os,shutil,sys,zipfile
@@ -363,7 +375,7 @@ if int(os.environ['EXIT_CODE']):
         compile(fragment[1], "<cold-" + fragment[0] + ">", "exec")
     subprocess.run(["bash", "-n"], input=body, text=True, check=True)
     assert len(body.encode()) <= 16384, "EC2 user data cap"
-    assert not any(n in body for n in ("cargo ", "rustup", "unused", "pip install", "--publish"))
+    assert not any(n in body for n in ("cargo ", "rustup", "unused", "--system-site-packages", "--publish"))
     return body
 
 
@@ -424,6 +436,7 @@ def stage(repo, out, prefix):
         runtime.check_cgroup(before, before, runtime.HOST)
         import boto3
         from botocore.config import Config
+        capability = runtime.sdk_guard()
         s3 = boto3.client("s3", region_name=REGION, config=Config(retries={"total_max_attempts": 1}, connect_timeout=5, read_timeout=5))
         early = read_json(out / "source-qualification.json")
         deadline = started + WORKER_SECONDS
@@ -455,7 +468,7 @@ def stage(repo, out, prefix):
             release = platform.freedesktop_os_release()
             assert platform.machine() == "x86_64" and (release["ID"], release["VERSION_ID"]) == ("ubuntu", "24.04")
             write(out / "tool-versions.json", dict(python=sys.version, architecture=platform.machine(), os_release=release,
-                thread_environment=dict.fromkeys(runtime.retained.THREAD_ENV, "2"), aws_max_attempts=1))
+                thread_environment=dict.fromkeys(runtime.retained.THREAD_ENV, "2"), aws_max_attempts=1, sdk=capability))
             config = read_json(out / "config.json")
             reserve = sum(p["bytes"] for p in proof["assets"].values()) + proof["output_reserve_bytes"]
             whole_admission(out, reserve, staging)
@@ -602,10 +615,13 @@ def offline_reduce(screen, config, proof, repo):
     runtime.check_cgroup(resources["cgroup"]["before"], resources["cgroup"]["after"], config["resources"], drained=True)
     assert 0 <= resources["peak_scratch_bytes"] <= SCRATCH and resources["process_peak_rss_bytes"] <= MEMORY
     source = read_json(screen / "source-qualification.json")
+    assert source["sdk"] == dict(boto3=runtime.SDK_VERSION, botocore=runtime.SDK_VERSION,
+        conditional_put=True, network_calls=0, python_executable=source["sdk"]["python_executable"])
+    assert type(source["sdk"]["python_executable"]) is str and source["sdk"]["python_executable"].startswith("/")
     assert source == dict(execution_source=config["execution_source"], current_executor_sha256=config["code_sha256"],
         original_qualification_source_identity=driver.SOURCE_ID, actual_full_workspace_execution=False,
         historical_science=config["proofs"]["historical_validation"], native_rebuilt=False,
-        build_invocations=0, scientific_scorer_invocations=0, oracle_invocations=0)
+        build_invocations=0, scientific_scorer_invocations=0, oracle_invocations=0, sdk=source["sdk"])
     sdk_rows = [json.loads(line) for line in (screen / "sdk-ledger.jsonl").read_bytes().splitlines()]
     assert sdk_rows and all(r["sdk_http_dispatch_attempts"] == 1 and r["retry_attempts"] == 0 and r["error"] is None for r in sdk_rows)
     return reduced
@@ -659,6 +675,10 @@ def validate_closed(out, proof, terminal, files):
     assert versions["architecture"] == "x86_64" and versions["python"].startswith("3.12.")
     assert versions["os_release"]["ID"] == "ubuntu" and versions["os_release"]["VERSION_ID"] == "24.04"
     assert versions["thread_environment"] == dict.fromkeys(runtime.retained.THREAD_ENV, "2") and versions["aws_max_attempts"] == 1
+    capability = versions["sdk"]
+    assert capability == boot["sdk"] == read_json(out / "screen/source-qualification.json")["sdk"], "SDK/interpreter handoff drift"
+    assert capability == dict(boto3=runtime.SDK_VERSION, botocore=runtime.SDK_VERSION, conditional_put=True,
+        network_calls=0, python_executable=str(WORK_ROOT / "venv/bin/python")), "pinned worker SDK evidence"
     timing = (out / "profile-resources.txt").read_text()
     assert 0 <= int(timing.split("Maximum resident set size (kbytes): ", 1)[1].splitlines()[0]) * 1024 <= MEMORY
     assert int(timing.split("Exit status: ", 1)[1].splitlines()[0]) == 0
@@ -883,7 +903,14 @@ def self_check():
     proofs = {n: dict(path=str(p), **artifact(repo / p)) for n, p in runtime.PROOF_PATHS.items()}
     original_proofs = runtime.read_proofs(repo, proofs)
     assets, historical = runtime.historical_assets(repo, original_proofs)
-    verified = root_verification(repo)
+    # A changed executor needs a fresh root certificate before launch. Local
+    # orchestration checks use a current-source fixture; production stays strict.
+    certificate_path = repo / VERIFICATION / "root-verification.json"
+    original_certificate = read_json(certificate_path)
+    certificate = dict(original_certificate, owned_source=dict(path=runtime.OWN, **artifact(repo / runtime.OWN)))
+    real_read_json = read_json
+    with patch.object(module, "read_json", side_effect=lambda p: certificate if Path(p) == certificate_path else real_read_json(p)):
+        verified = root_verification(repo)
     assert len(assets) == 38 and len(proofs) == 20 and len(CODE) == 80
     assert set(runtime.CODE) < set(CODE) and len(RUNTIME_FILES) == 18 and len(ARTIFACTS) == 56
     assert historical["scientific_decision"]["scientific_status"] == "GO"
@@ -915,7 +942,7 @@ def self_check():
             return selected.read_bytes()
         def local_artifact(name):
             return real_artifact(control_path if Path(name) == repo / CONTROL else name)
-        with patch.object(module, "read_json", side_effect=local_json), patch.object(module, "artifact", side_effect=local_artifact), patch.object(science, "read_repo", side_effect=local_pointer):
+        with patch.object(module, "read_json", side_effect=local_json), patch.object(module, "artifact", side_effect=local_artifact), patch.object(science, "read_repo", side_effect=local_pointer), patch.object(module, "root_verification", return_value=verified):
             proof = qualify(repo, path)
             assert proof["root_verification"] == verified and proof["assets"] == assets
             checks += 1
@@ -979,6 +1006,13 @@ def self_check():
         finally:
             os.chdir(previous_cwd)
         user_data_bytes = len(body.encode())
+        assert body.count('python3.12 -m venv "$root/venv"') == 1 and '--system-site-packages' not in body
+        assert f'boto3=={runtime.SDK_VERSION} botocore=={runtime.SDK_VERSION}' in body
+        assert body.index('phase=sdk-install\n') < body.index("<<'SOURCE'\n") < body.index('phase=cold\n')
+        assert '"$root/venv/bin/python" - ' in body and f'"$root/venv/bin/python" -m {MODULE} --stage' in body
+        source_program = body.split("<<'SOURCE'\n", 1)[1].split('\nSOURCE\n', 1)[0]
+        assert source_program.index('capability=sdk_guard()') < source_program.index("s3=boto3.client(")
+        assert f'SDK_VERSION={runtime.SDK_VERSION!r}\n' + inspect.getsource(runtime.sdk_guard) in source_program
         assert all(s in body for s in ("--on-active=3000s", "MemoryMax=12884901888", "MemorySwapMax=0", "CPUQuota=200%", "TasksMax=512", "RuntimeMaxSec=2400", "taskset -c 4-5"))
         assert all("--setenv=" + n + "=2" in body for n in runtime.retained.THREAD_ENV)
         assert "--setenv=BORSUK_COLD_SOURCE_COMMIT=" + source["commit"] in body
@@ -1086,18 +1120,30 @@ systemd-run() { while [ "$1" != timeout ]; do shift; done; (cd /; env -i PATH=/u
         class SourceS3:
             def get_object(self, **kwargs):
                 return dict(Body=io.BytesIO(archive_body))
-        for mode in ("source-ok", "source-tamper", "source-scratch"):
+        from botocore.model import ServiceModel
+        from botocore.session import Session, get_session
+        old_model = copy.deepcopy(get_session().get_component('data_loader').load_service_model('s3', 'service-2'))
+        old_model['shapes'][old_model['operations']['PutObject']['input']['shape']]['members'].pop('IfNoneMatch')
+        for mode in ("source-ok", "source-tamper", "source-scratch", "source-old-sdk"):
             destination = work / mode; destination.mkdir()
             arguments = ["-", BUCKET, "source", "0" * 64 if mode == "source-tamper" else sha(archive_body), str(1 if mode == "source-scratch" else SCRATCH)]
             oldcwd = Path.cwd(); os.chdir(destination)
             try:
-                with patch.object(shared.boto3, "client", return_value=SourceS3()), patch.object(sys, "argv", arguments):
+                with ExitStack() as stack:
+                    client = stack.enter_context(patch.object(shared.boto3, "client", return_value=SourceS3()))
+                    stack.enter_context(patch.object(sys, "argv", arguments))
+                    if mode == "source-old-sdk":
+                        stack.enter_context(patch.object(Session, "get_service_model", return_value=ServiceModel(old_model)))
                     if mode == "source-ok":
-                        exec(compile(science.BOOTSTRAP_STAGE, "<shared-source-stage>", "exec"), {})
+                        exec(compile(source_program, "<generated-source-stage>", "exec"), {})
                         assert read_json(destination / "bootstrap-staging.json")["source_authenticated"] is True
+                        assert read_json(destination / "bootstrap-staging.json")["sdk"] == runtime.sdk_guard()
                         checks += 1
                     else:
-                        rejected(lambda: exec(compile(science.BOOTSTRAP_STAGE, "<shared-source-stage>", "exec"), {}))
+                        rejected(lambda: exec(compile(source_program, "<generated-source-stage>", "exec"), {}))
+                    if mode == "source-old-sdk":
+                        client.assert_not_called()
+                        assert not (destination / "source.tar.gz").exists()
             finally:
                 os.chdir(oldcwd)
 
@@ -1177,7 +1223,7 @@ systemd-run() { while [ "$1" != timeout ]; do shift; done; (cd /; env -i PATH=/u
             def close(self):
                 self.closed = True
         cgroup = read_json(fixture / "resources.json")["cgroup"]["before"]
-        for mode in ("stage-ok", "stage-runtime-failed", "stage-body-tamper", "stage-scratch"):
+        for mode in ("stage-ok", "stage-runtime-failed", "stage-body-tamper", "stage-scratch", "stage-old-sdk"):
             stage_out = work / mode; stage_out.mkdir(); stage_repo = stage_out / "repo"; stage_repo.mkdir()
             selected = dict(fixture_config, namespace_prefix=PREFIX + "a0001/serving")
             selected_body = encoded(selected) + b"\n"
@@ -1211,13 +1257,15 @@ systemd-run() { while [ "$1" != timeout ]; do shift; done; (cd /; env -i PATH=/u
                 runner = stack.enter_context(patch.object(runtime, "run", side_effect=mock_runtime))
                 stack.enter_context(patch.object(module, "offline_reduce", return_value=dict(status="FAIL")))
                 stack.enter_context(patch.object(shared.boto3, "client", return_value=sdk))
+                if mode == "stage-old-sdk":
+                    stack.enter_context(patch.object(Session, "get_service_model", return_value=ServiceModel(old_model)))
                 stack.enter_context(patch.dict(os.environ, dict.fromkeys(runtime.retained.THREAD_ENV, "2") |
                     dict(AWS_MAX_ATTEMPTS="1", BORSUK_COLD_SOURCE_COMMIT=source["commit"], BORSUK_COLD_ARCHIVE_SHA256=source["archive_sha256"])))
                 stack.enter_context(patch.object(bootstrap.platform, "freedesktop_os_release", return_value=dict(ID="ubuntu", VERSION_ID="24.04")))
                 if mode == "stage-scratch":
                     stack.enter_context(patch.object(module, "SCRATCH", 1))
                 closed = stage(stage_repo, stage_out, PREFIX + "a0001")
-            assert sdk.closed and not sdk.meta.events.handlers
+            assert sdk.closed is (mode != "stage-old-sdk") and not sdk.meta.events.handlers
             assert closed["closed"] is (mode == "stage-ok")
             if mode == "stage-ok":
                 assert closed["execution_status"] == "SUCCESS" and closed["scientific_status"] == "FAIL"
@@ -1225,6 +1273,10 @@ systemd-run() { while [ "$1" != timeout ]; do shift; done; (cd /; env -i PATH=/u
                 assert len([p for p in (stage_out / "native").rglob("*") if p.is_file()]) == len(NATIVE_FILES)
             else:
                 assert read_json(stage_out / "failure.json")["status"] == "failed"
+                if mode == "stage-old-sdk":
+                    runner.assert_not_called()
+                    assert read_json(stage_out / "failure.json")["error"].startswith("SDK lacks PutObject.IfNoneMatch:")
+                    assert not (stage_out / "controller-sdk-ledger.jsonl").exists()
             assert not (stage_out / "screen/scratch").exists()
         checks += 1
 
@@ -1255,6 +1307,8 @@ systemd-run() { while [ "$1" != timeout ]; do shift; done; (cd /; env -i PATH=/u
         bodies["source-qualification.json"] = encoded(proof) + b"\n"
         source_qualification = json.loads(bodies["screen/source-qualification.json"])
         source_qualification["execution_source"] = source
+        capability = dict(runtime.sdk_guard(), python_executable=str(WORK_ROOT / "venv/bin/python"))
+        source_qualification["sdk"] = capability
         bodies["screen/source-qualification.json"] = encoded(source_qualification) + b"\n"
         for name in NATIVE_FILES:
             bodies["native/" + name] = ("qualified fixture " + name).encode()
@@ -1267,14 +1321,14 @@ systemd-run() { while [ "$1" != timeout ]; do shift; done; (cd /; env -i PATH=/u
             ldd={n: dict(returncode=0, stdout="libc.so.6 => /lib/libc.so.6", stderr="") for n in ("two_bit_http", "two_bit_plan_demo")})
         bodies["runtime-abi.json"] = encoded(abi) + b"\n"
         bodies["bootstrap-staging.json"] = encoded(dict(source_authenticated=True, source_archive_sha256=source["archive_sha256"],
-            scratch_limit_bytes=SCRATCH, scratch_before_extract_bytes=1, source_repository_reserve_bytes=1)) + b"\n"
+            scratch_limit_bytes=SCRATCH, scratch_before_extract_bytes=1, source_repository_reserve_bytes=1, sdk=capability)) + b"\n"
         bodies["cold-closure.json"] = encoded(dict(closed=True, process_cleanup=True, replay_passed=True, runtime_invocations=1,
             build_invocations=0, scientific_scorer_invocations=0, oracle_invocations=0, execution_status="SUCCESS", scientific_status="PASS", wall_seconds=1)) + b"\n"
         bodies["profile-cgroup.json"] = encoded(dict(before=cgroup, after=cgroup, closed=True)) + b"\n"
         bodies["staging.json"] = encoded(dict(closed=True, shared_hardlinks_accounted=True, peak_scratch_bytes=1,
             scratch_usage=dict(unique_inode_bytes=1, physical_allocated_bytes=1))) + b"\n"
         bodies["tool-versions.json"] = encoded(dict(architecture="x86_64", python="3.12.3", os_release=dict(ID="ubuntu", VERSION_ID="24.04"),
-            thread_environment=dict.fromkeys(runtime.retained.THREAD_ENV, "2"), aws_max_attempts=1)) + b"\n"
+            thread_environment=dict.fromkeys(runtime.retained.THREAD_ENV, "2"), aws_max_attempts=1, sdk=capability)) + b"\n"
         bodies["profile-resources.txt"] = b"Maximum resident set size (kbytes): 1\nExit status: 0\n"
         bodies["failure.json"] = encoded(dict(status="complete")) + b"\n"
         bodies["controller-sdk-ledger.jsonl"] = b"".join(encoded(dict(operation=operation,
@@ -1357,7 +1411,9 @@ systemd-run() { while [ "$1" != timeout ]; do shift; done; (cd /; env -i PATH=/u
         os.chdir(oldcwd)
         checks += 1
         forbidden.assert_not_called()
-    assert root_verification(repo) == verified and runtime.read_proofs(repo, proofs) == original_proofs
+    assert read_json(certificate_path) == original_certificate and runtime.read_proofs(repo, proofs) == original_proofs
+    with patch.object(module, "read_json", side_effect=lambda p: certificate if Path(p) == certificate_path else real_read_json(p)):
+        assert root_verification(repo) == verified
     signal.alarm(0)
     assert time.monotonic() - started < 55 and "numpy" not in sys.modules and "pyarrow" not in sys.modules
     return dict(schema=SCHEMA + "-self-check", passed=True, checks=checks, controller_code_paths=len(CODE),

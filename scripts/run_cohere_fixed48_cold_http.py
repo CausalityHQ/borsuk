@@ -73,6 +73,19 @@ HOST = dict(shared_memory_bytes=12 << 30, swap_bytes=0, native_memory_bytes=2 <<
 DEADLINES = ('publication_limit_seconds', 'cold_limit_seconds', 'service_limit_seconds', 'output_reserve_bytes')
 DELTA = ('sq8_object_key', 'sq8_etag', 'canonical.object_key')
 LEAF_BYTES = 48 * 64 * 1540  # Unchanged native Fresh1m admission.
+SDK_VERSION = '1.40.72'  # Same conditional-publication SDK as the disposable canary.
+
+
+def sdk_guard(model=None):
+    """Admit conditional publication without credentials or network calls."""
+    import boto3, botocore, botocore.session, sys
+    model = botocore.session.get_session().get_service_model('s3') if model is None else model
+    capability = dict(boto3=boto3.__version__, botocore=botocore.__version__,
+        conditional_put='IfNoneMatch' in model.operation_model('PutObject').input_shape.members,
+        network_calls=0, python_executable=sys.executable)
+    assert capability['conditional_put'], f'SDK lacks PutObject.IfNoneMatch: {capability}'
+    assert boto3.__version__ == botocore.__version__ == SDK_VERSION, f'pinned cold SDK: {capability}'
+    return capability
 
 
 def panel_inputs(directory):
@@ -615,10 +628,10 @@ def run(config_path, expected_sha, repo, output):
     scratch = output / 'scratch'
     (scratch / 'native').mkdir(parents=True)
     write(output / 'config.json', Path(config_path).read_bytes())
-    write(output / 'source-qualification.json', dict(execution_source=config['execution_source'],
+    qualification = dict(execution_source=config['execution_source'],
         current_executor_sha256=config['code_sha256'], original_qualification_source_identity=driver.SOURCE_ID,
         actual_full_workspace_execution=False, historical_science=config['proofs']['historical_validation'],
-        native_rebuilt=False, build_invocations=0, scientific_scorer_invocations=0, oracle_invocations=0))
+        native_rebuilt=False, build_invocations=0, scientific_scorer_invocations=0, oracle_invocations=0)
     report = dict(build_invocations=0, scientific_scorer_invocations=0, oracle_invocations=0,
         publication_invocations=0, cold_invocations=0, shared_hardlinks_accounted=True)
     started = time.monotonic()
@@ -632,6 +645,7 @@ def run(config_path, expected_sha, repo, output):
         assert all(os.environ.get(n) == '2' for n in retained.THREAD_ENV) and os.environ.get('AWS_MAX_ATTEMPTS') == '1'
         import boto3
         from botocore.config import Config
+        qualification['sdk'] = sdk_guard()
         s3 = boto3.client('s3', region_name=config['region'], config=Config(retries={'total_max_attempts': 1}, connect_timeout=5, read_timeout=5))
         with observe(output, config['resources'], report, deadline) as checkpoint, (output / 'sdk-ledger.jsonl').open('xb') as ledger:
             checkpoint(sum(p['bytes'] for p in assets.values()) + config['resources']['output_reserve_bytes'])
@@ -706,6 +720,7 @@ def run(config_path, expected_sha, repo, output):
             (not r.get('native_process_started') or r.get('native_close', {}).get('process_group_closed') is True) for r in records)
         if not process_cleanup:
             summary.update(status='EXECUTION_FAILED', execution_gate_passed=False, quality_gate_passed=False, cleanup_error='native process closure not proven')
+        write(output / 'source-qualification.json', qualification)
         report.update(wall_seconds=time.monotonic() - started, process_peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024)
         write(output / 'resources.json', report)
         write(output / 'cleanup.json', dict(valid=cleanup_error is None, scratch_removed=not scratch.exists(),
@@ -761,9 +776,63 @@ def closed_panel_admission_check():
         squared_norm_min=min(norms), squared_norm_max=max(norms), query_execution=False, quality_recomputed=False)
 
 
+def sdk_admission_check():
+    """Exercise real botocore shapes and reject an old model before cloud entry."""
+    import boto3
+    from botocore.exceptions import ParamValidationError
+    from botocore.model import ServiceModel
+    from botocore.session import Session, get_session
+    from botocore.validate import validate_parameters
+    model = get_session().get_component('data_loader').load_service_model('s3', 'service-2')
+    old = copy.deepcopy(model)
+    shape = old['operations']['PutObject']['input']['shape']
+    old['shapes'][shape]['members'].pop('IfNoneMatch')
+    old = ServiceModel(old)
+    params = dict(Bucket='offline', Key='object', Body=b'body', IfNoneMatch='*')
+    try:
+        validate_parameters(params, old.operation_model('PutObject').input_shape)
+    except ParamValidationError as error:
+        assert 'IfNoneMatch' in str(error)
+    else:
+        raise AssertionError('old service model accepted conditional PUT')
+    validate_parameters(params, ServiceModel(model).operation_model('PutObject').input_shape)
+    capability = sdk_guard(ServiceModel(model))
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config = dict(FIXED, execution_source={}, code_sha256={},
+            proofs=dict(historical_validation={}), resources=dict(HOST, service_limit_seconds=10),
+            namespace_prefix='offline', region='eu-central-1')
+        path, output = root / 'config.json', root / 'output'
+        write(path, config)
+        with (patch.object(Session, 'get_service_model', return_value=old),
+                patch.object(boto3, 'client', side_effect=AssertionError('cloud forbidden')) as client,
+                patch.object(sys.modules[__name__], 'qualify', return_value=(config, {}, {})),
+                patch.object(sys.modules[__name__], 'stage_asset', side_effect=AssertionError('download forbidden')) as download,
+                patch.object(sys.modules[__name__], 'publish_generation', side_effect=AssertionError('publication forbidden')) as publish,
+                patch.object(os, 'sched_getaffinity', return_value={4, 5}),
+                patch.dict(os.environ, dict.fromkeys(retained.THREAD_ENV, '2') | {'AWS_MAX_ATTEMPTS': '1'})):
+            try:
+                run(path, artifact(path)['sha256'], Path(__file__).resolve().parents[1], output)
+            except AssertionError as error:
+                assert str(error).startswith('SDK lacks PutObject.IfNoneMatch:')
+                assert boto3.__version__ in str(error) and sys.executable in str(error)
+            else:
+                raise AssertionError('old SDK entered runtime')
+            client.assert_not_called(); download.assert_not_called(); publish.assert_not_called()
+        summary = json.loads((output / 'summary.json').read_bytes())
+        assert summary['status'] == 'EXECUTION_FAILED' and summary['error'].startswith('SDK lacks PutObject.IfNoneMatch:')
+        assert not (output / 'scratch').exists() and not json.loads((output / 'COMPLETE.json').read_bytes())['passed']
+        cleanup = json.loads((output / 'cleanup.json').read_bytes())
+        assert cleanup['process_cleanup'] and cleanup['publication_invocations'] == cleanup['cold_invocations'] == 0
+        assert len((output / 'records.jsonl').read_bytes().splitlines()) == 64
+    return dict(old_model_rejected=True, current_model_admitted=True, runtime_cloud_calls=0, sdk=capability)
+
+
 def self_check():
+    import boto3
     def write(path, value):
         Path(path).write_bytes(value if isinstance(value, bytes) else encoded(value) + b'\n')
+    sdk_admission = sdk_admission_check()
     closed_panel = closed_panel_admission_check()
     # The check must catch query rewriting, ordinal, ID and physical-plan drift.
     with tempfile.TemporaryDirectory() as tmp:
@@ -1031,8 +1100,7 @@ def self_check():
             selected.update(execution_source=dict(commit='0' * 40, archive_sha256='0' * 64), code_sha256={},
                 proofs=dict(historical_validation=dict(path='fixture', bytes=1, sha256='0' * 64)))
             write(config_path, selected)
-            with (patch.dict(sys.modules, {'boto3': SimpleNamespace(client=lambda *a, **k: sdk),
-                        'botocore': SimpleNamespace(), 'botocore.config': SimpleNamespace(Config=lambda **kwargs: kwargs)}),
+            with (patch.object(boto3, 'client', return_value=sdk),
                     patch.object(sys.modules[__name__], 'qualify', return_value=(selected, assets, dict(scientific_original_root=original))),
                     patch.object(driver, 'native_authority', return_value=dict(source_identity_sha256=driver.SOURCE_ID)),
                     patch.object(sys.modules[__name__], 'snapshot', side_effect=lambda: copy.deepcopy(cgroup)),
@@ -1119,7 +1187,7 @@ def self_check():
             else:
                 raise AssertionError('proof tamper accepted')
         print(json.dumps(dict(self_check=True, queries=64, scenarios=8, native_or_network_execution=False,
-            closed_panel_admission=closed_panel)))
+            closed_panel_admission=closed_panel, sdk_admission=sdk_admission)))
 
 
 if __name__ == '__main__':
