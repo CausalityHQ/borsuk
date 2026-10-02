@@ -1,0 +1,12 @@
+{
+  "schema": "borsuk-closed-artifact-archive-v1",
+  "profile.log": {
+    "archived_path": "profile.log.gz",
+    "archived_bytes": 1109,
+    "archived_sha256": "11e8b2089d9974b19298139ee2b6cbd098cac6a7502598ce264e3f42dad95df7",
+    "bytes": 4271,
+    "sha256": "25210875acdad51002866a389a083593abfeeeb74fb5466c75a3f93221418134",
+    "compression": "gzip",
+    "exact_original_preserved": true
+  }
+}
