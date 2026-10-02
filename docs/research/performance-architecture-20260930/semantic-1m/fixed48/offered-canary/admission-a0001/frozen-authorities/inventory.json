@@ -1,0 +1,41 @@
+{
+  "files": {
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/asset-head-roster.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/admission-a0001/frozen-authorities/canary-asset-head-roster.json",
+      "bytes": 16464,
+      "sha256": "8855dfdd842a621b049fa513acabcf12e65821d4a719e2cc52474dfefee16a15"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/config.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/admission-a0001/frozen-authorities/canary-config.json",
+      "bytes": 11316,
+      "sha256": "8986f8886222a4c54621bc84b56ca6d0a043cfbac8b1158346b45a508ac719d4"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/offered-qualification.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/admission-a0001/frozen-authorities/canary-offered-qualification.json",
+      "bytes": 1914,
+      "sha256": "f65f40648bb61c32abc7a5ddb9619f216763837ebc040b236222d20226581b64"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/source-freeze.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/admission-a0001/frozen-authorities/canary-source-freeze.json",
+      "bytes": 899,
+      "sha256": "6cb624da226e2ff4ecc086587e50e4a86b58594fdfb35c206d3ab7f54368fdbb"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-http/asset-manifest.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/admission-a0001/frozen-authorities/offered-asset-manifest.json",
+      "bytes": 365,
+      "sha256": "012eb8827cb5f3ad3bc756ff3f2e60a1c9cb7e58a373f14e4664dac88817c944"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-http/config.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/admission-a0001/frozen-authorities/offered-config.json",
+      "bytes": 25472,
+      "sha256": "69ec27dd2838836b81814a6ac735e7757987d212d959d1004c3ba758d34459fc"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-http/controller-config.json": {
+      "archived_path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/offered-canary/admission-a0001/frozen-authorities/offered-controller-config.json",
+      "bytes": 9950,
+      "sha256": "4d7b26585b7b431cfbbe9e64641d6cdab36b66ab325f09064877a6f711e8a98d"
+    }
+  },
+  "original_commit": "dd3a504c252a0a20ebeea2246fef35abe6ebb889",
+  "schema": "borsuk-fixed48-admission-frozen-authorities-v1"
+}
