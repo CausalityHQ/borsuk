@@ -136,7 +136,7 @@ def root_verification(repo):
     assert root["owned_source"] == dict(path=runtime.OWN, **artifact(repo / runtime.OWN)), "unqualified runtime source"
     assert root["historical_proofs_authenticated"] == len(runtime.PROOF_PATHS) == 20
     assert root["asset_identities_and_sources_authenticated"] == 38 and root["executor_closure_paths"] == len(runtime.CODE) == 74
-    assert root["self_check"]["exit_status"] == 0 and root["self_check"]["queries"] == 64 and root["self_check"]["scenarios"] == 8
+    assert root["self_check"]["exit_status"] == 0 and root["self_check"]["queries"] == 64 and root["self_check"]["scenarios"] == 9
     assert root["native_or_network_execution"] is root["native_rebuilt"] is root["full_workspace_test_execution"] is root["launch_authorized"] is False
     assert root["cold_http_measurement"] == "UNMEASURED"
     for name, identity in root["artifacts"].items():

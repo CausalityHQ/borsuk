@@ -1,0 +1,226 @@
+{
+  "affected_callers": [
+    {
+      "file": "scripts/run_cohere_fixed48_cold_http.py",
+      "function": "run",
+      "reason": "shared panel admission before publication and HTTP"
+    },
+    {
+      "file": "scripts/launch_cohere_fixed48_cold_http_spot.py",
+      "function": "offline_reduce",
+      "reason": "reuses panel_inputs on authenticated closed science; controller self-check captures changed raw synthetic fixture and feeds it to offline_reduce"
+    },
+    {
+      "file": "scripts/run_cohere_fixed48_cold_http.py",
+      "function": "self_check",
+      "reason": "raw nonunit regression, f32 bits and numeric equality, invalid input checks"
+    }
+  ],
+  "api": {
+    "closed_panel_admission_check": {
+      "role": "self-check only; committed historical proof pins authenticate closed actual panel, parse and compare bits/values; no query execution or quality recomputation",
+      "signature": "closed_panel_admission_check()"
+    },
+    "panel_inputs": {
+      "admission": "exact64 ordered requests, 768 finite numeric components representable as f32, nonzero after f32 conversion",
+      "caller_contract_unchanged": true,
+      "normalization_owner": "Rust sq8_source::cosine_vector; Python never normalizes",
+      "rejects": [
+        "wrong dimension",
+        "zero",
+        "all values underflowing to f32 zero",
+        "NaN",
+        "positive/negative infinity",
+        "f32 overflow",
+        "invalid/out-of-order ordinal"
+      ],
+      "request_derivative": "ordinal -> query_ordinal; query JSON numeric values and f32 bits unchanged",
+      "retained_validation": [
+        "exact64 references/ordinals",
+        "truth 64x100 little-endian i64",
+        "truth and reference IDs unique and in FIRST1M",
+        "physical parity and source pins in existing callers"
+      ],
+      "return": "(derived_bytes, references_list, truth_list)",
+      "signature": "panel_inputs(directory)"
+    }
+  },
+  "author": "Roman Bartusiak <riomus@gmail.com>",
+  "base_commit": "0da292619b0f14fa8d02c32d5c4cba1f16fa9535",
+  "checks": {
+    "controller": {
+      "command": "timeout 55s /usr/bin/time -v python3 -m scripts.launch_cohere_fixed48_cold_http_spot --self-check",
+      "existing43_checks_reached": false,
+      "exit_code": 2,
+      "failure": "AssertionError: unqualified runtime source",
+      "failure_location": "scripts/launch_cohere_fixed48_cold_http_spot.py:135 (root_verification)",
+      "reason_run": "Changed shared admission affects offline_reduce and captured runtime raw fixture",
+      "resolution_owner": "parent fresh-source verification/config/gate; frozen historical source pin deliberately unchanged"
+    },
+    "diffcheck": {
+      "command": "git diff --check",
+      "exit_code": 0
+    },
+    "git": {
+      "clean": true,
+      "merged": false,
+      "only_owned_file_changed": true,
+      "pushed": false,
+      "single_commit_on_exact_base": true
+    },
+    "green": {
+      "command": "python3 -c \"from scripts.run_cohere_fixed48_cold_http import closed_panel_admission_check; closed_panel_admission_check()\"",
+      "exit_code": 0,
+      "quality_recomputed": false,
+      "queries": 64
+    },
+    "pycompile": {
+      "command": "python3 -m py_compile scripts/run_cohere_fixed48_cold_http.py",
+      "exit_code": 0
+    },
+    "red": {
+      "before_production_change": true,
+      "command": "python3 -c \"from scripts.run_cohere_fixed48_cold_http import closed_panel_admission_check; closed_panel_admission_check()\"",
+      "exit_code": 1,
+      "expected_failure": "AssertionError: preserve sealed normalization"
+    },
+    "runtime": {
+      "command": "timeout 55s bash -c 'ulimit -v 262144; /usr/bin/time -v python3 -m scripts.run_cohere_fixed48_cold_http --self-check'",
+      "direct_cli_runs": 1,
+      "exit_code": 0,
+      "memory_limit_bytes": 268435456,
+      "negative_cases": [
+        "dimension767",
+        "zero768",
+        "f32 underflow to zero",
+        "f32 overflow",
+        "NaN",
+        "Inf",
+        "-Inf",
+        "out-of-order ordinal",
+        "float ordinal",
+        "bool ordinal"
+      ],
+      "peak_rss_kib": 78144,
+      "positive_cases": [
+        "nonunit raw signed query",
+        "negative zero preserved",
+        "unit query",
+        "smallest positive f32 subnormal",
+        "largest finite f32"
+      ],
+      "scenarios": 8,
+      "timeout_seconds": 55,
+      "wall_seconds": 2.2
+    }
+  },
+  "commit": "fe92a0d89bbe85c0ed57e6e10867a2cf051e379e",
+  "complete": true,
+  "logs": {
+    "controller": {
+      "bytes": 867,
+      "path": "/tmp/borsuk-fixed48-raw-query-admission-controller.log",
+      "sha256": "0f3bda9ed929ae39507c5e1ff298e6bc2ce1206892ce33c4f2f980b50dbcdfab"
+    },
+    "diffcheck": {
+      "bytes": 0,
+      "path": "/tmp/borsuk-fixed48-raw-query-admission-diffcheck.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "green": {
+      "bytes": 722,
+      "path": "/tmp/borsuk-fixed48-raw-query-admission-green.log",
+      "sha256": "2c09c6846aa020fab2ec5388121b8b463adb32a216eaa45129bf3b8481c34c69"
+    },
+    "history": {
+      "bytes": 756,
+      "path": "/tmp/borsuk-fixed48-raw-query-admission-history.log",
+      "sha256": "9be647dc77883adec3c194df384569959ce3685827f0b1abe4cdf2e789c0b9f7"
+    },
+    "pycompile": {
+      "bytes": 0,
+      "path": "/tmp/borsuk-fixed48-raw-query-admission-pycompile.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "red": {
+      "bytes": 677,
+      "path": "/tmp/borsuk-fixed48-raw-query-admission-red.log",
+      "sha256": "61adb0afdf049981c176e9d0d5491b6f2c646117127b65e277b76c83cf90ca92"
+    },
+    "runtime": {
+      "bytes": 1619,
+      "path": "/tmp/borsuk-fixed48-raw-query-admission-runtime.log",
+      "sha256": "3bb7848aafd0e5a07a1eecca7ec0ce588bb527740e661deb9a95a47e23288c3c"
+    }
+  },
+  "measurement_interpretation": "Historical cold zero hits and 64 aborted calls are not an ANN quality measurement; cold latency/QPS remain UNMEASURED.",
+  "not_executed": [
+    "cloud/network",
+    "native binaries",
+    "Cargo",
+    "corpus processing",
+    "new scientific scoring",
+    "ground-truth recomputation",
+    "reviews",
+    "children",
+    "operator messages",
+    "new freeze",
+    "launch"
+  ],
+  "owned_files": [
+    "scripts/run_cohere_fixed48_cold_http.py"
+  ],
+  "parent_next_steps": [
+    "verify commit and contract",
+    "integrate and push",
+    "fresh source and configuration qualification before any authorized gate"
+  ],
+  "repo": "/home/rb/worktrees/borsuk-fixed48-raw-query-admission",
+  "schema": "borsuk-fixed48-raw-query-admission-contract-v1",
+  "source": {
+    "a0001_failure_identity_equal": true,
+    "closed_panel": {
+      "execution_source": {
+        "archive_sha256": "cd28212e165ac31e25cf31638fec4ed6357e7acdac201c2e3a937aad74775c36",
+        "commit": "57fd5a3036995c75b6fd79b919afe57d682b6bfb"
+      },
+      "f32_bits_equal": true,
+      "json_numeric_values_equal": true,
+      "panel": {
+        "records.jsonl": {
+          "bytes": 2086748,
+          "sha256": "631fd161bf859d77b9d772576de806d4b71e155bd70b9d6f6b9b68bcfeac6be8"
+        },
+        "requests.jsonl": {
+          "bytes": 982810,
+          "sha256": "f0ee89e3751765cac78eb128ba577bb870e3a910fb2c4eb486c80740544bc5cd"
+        },
+        "truth.i64": {
+          "bytes": 51200,
+          "sha256": "0b13e27aade93e099c5114f0262b71b2cb28f0b4ef85a487d15bebaeea802970"
+        }
+      },
+      "quality_recomputed": false,
+      "queries": 64,
+      "query_execution": false,
+      "squared_norm_max": 241.38631057359763,
+      "squared_norm_min": 162.33715045834438
+    },
+    "cold_authenticated_bodies": 22,
+    "failure_identity": {
+      "bytes": 118,
+      "sha256": "3178aea49ee5bc2295d2653b40fff58a3238d1c90d8775d56426ecca608e57e5"
+    },
+    "historical_files_configs_truth_unchanged": true,
+    "native_source_unchanged": true,
+    "original_cold_execution_status": "FAIL",
+    "original_controller_exit": 2,
+    "original_controller_session": 92214,
+    "owned_source": {
+      "bytes": 75536,
+      "path": "scripts/run_cohere_fixed48_cold_http.py",
+      "sha256": "16d99125759c5e30e20ff7c86f6ce5f8394da955452046a8c8376268b0927307"
+    },
+    "owned_spot_state": "terminated"
+  }
+}

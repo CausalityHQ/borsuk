@@ -91,7 +91,27 @@
       "path": "root-runtime.time",
       "bytes": 781,
       "sha256": "fc631f3c08eb5ee709cf0fd41d5e4e6f812e3c25e8ea49a2487ae532cb5917bc"
+    },
+    "root-controller.log": {
+      "path": "root-controller.log",
+      "bytes": 428,
+      "sha256": "b8b19a4084fb780e0d666bcabdf87e1b54a8dab11ce623299dee8293e8143cd4"
+    },
+    "root-controller.time": {
+      "path": "root-controller.time",
+      "bytes": 794,
+      "sha256": "82e03374b87020f69e06d957040a6222b08f678175921d11ecbfb1e4284fa2c2"
     }
   },
-  "next_gate": "refresh exact-source certificates, disposable infrastructure canary, prospective cold experiment; no old run relabeling"
+  "next_gate": "refresh exact-source certificates, disposable infrastructure canary, prospective cold experiment; no old run relabeling",
+  "controller_check": {
+    "original_session": 14556,
+    "exit_status": 0,
+    "checks": 44,
+    "wall_seconds": 46.847341749002226,
+    "peak_rss_kib": 128836,
+    "native_or_cloud_execution": false,
+    "source_sha256": "ad6cfd50f505cb95d68399110316ad4072cf5823042294997ade93152535134b",
+    "limit_note": "Original ulimit argument used KiB incorrectly; same original PID2387354 corrected via prlimit RLIMIT_AS268435456 before completion; no replacement/retry."
+  }
 }

@@ -1,0 +1,40 @@
+{
+  "schema": "borsuk-raw-query-admission-root-verification-v1",
+  "source_commit": "d12f6222a60208aec4563dcf9aa4007144810e7c",
+  "runtime_exit_status": 0,
+  "controller_exit_status": 0,
+  "controller_command": [
+    "timeout",
+    "55s",
+    "prlimit",
+    "--as=268435456:268435456",
+    "python3",
+    "-c",
+    "from scripts.launch_cohere_fixed48_cold_http_spot import self_check; self_check()"
+  ],
+  "initial_controller_exit_status": 2,
+  "initial_failure": "root verification identity changed during check; final stable-record check passed",
+  "artifacts": {
+    "controller.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "controller.time": {
+      "bytes": 816,
+      "sha256": "fbeb252e55353522064b10955da9ef9a7aa3b579142e3c10a5753220c1e95242"
+    },
+    "initial-controller.time": {
+      "bytes": 829,
+      "sha256": "3eb026592d2085bba4f2c53687f7b6b48d3b881376898b7090000e860f4d7445"
+    },
+    "initial-controller.log.gz": {
+      "bytes": 37,
+      "sha256": "77b76df22ba06c1624716c99162322ae9897405073629d9534f4b2e204846f65",
+      "uncompressed_bytes": 17,
+      "uncompressed_sha256": "5048a1044bec2cdfcef63fb62f5f0bf2b025ee9212e0d583dbfcf9fb1ccdd194"
+    }
+  },
+  "native_rebuilt": false,
+  "network_or_native_execution": false,
+  "cold_measurement": "UNMEASURED"
+}
