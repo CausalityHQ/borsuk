@@ -391,6 +391,39 @@ async fn validate_owned_object(
     Ok(())
 }
 
+// All three JSON schemas/lengths were authenticated by the shared reader.
+// Eight encoded copies cover retained bodies, String payloads/copies and
+// numeric Vec growth (<= twice length apart from fixed initial capacity;
+// each f32 uses >=2 JSON bytes including array separators).
+// Page Value has exactly seven scalar fields; plane has thirteen fixed fields.
+// 128KiB covers fixed structs/map nodes/roster/local paths. Namespace copies and
+// the actual sealed HeadBody/UpdateVersion allocations are charged separately.
+// These allocations coexist with semantic validation or multipart buffers.
+fn publication_phase_budget(
+    max_memory_bytes: u64,
+    pinned_bytes: u64,
+    manifest_bytes: [usize; 3],
+    head_bytes: usize,
+    namespace_bytes: usize,
+) -> Result<usize> {
+    let retained = manifest_bytes
+        .into_iter()
+        .chain(std::iter::once(namespace_bytes))
+        .try_fold(131072_u64, |total, bytes| {
+            u64::try_from(bytes)
+                .ok()?
+                .checked_mul(8)?
+                .checked_add(total)
+        })
+        .and_then(|n| n.checked_add(u64::try_from(head_bytes).ok()?))
+        .ok_or(TwoBitStoreError::Invalid("publication memory"))?;
+    let remaining = max_memory_bytes
+        .checked_sub(pinned_bytes)
+        .and_then(|n| n.checked_sub(retained))
+        .ok_or(TwoBitStoreError::Invalid("publication memory"))?;
+    usize::try_from(remaining).map_err(|_| TwoBitStoreError::Invalid("publication memory"))
+}
+
 /// Validate prepared local metadata, stream/hash it to an immutable root prefix,
 /// then CAS the head. SQ8 must already exist at its immutable approved key/ETag.
 /// Replacement requires the previous mutation head to be sealed first. The caller
@@ -414,9 +447,37 @@ pub async fn publish_two_bit_generation(
     } else {
         None
     };
+    let head_bytes = authority
+        .as_ref()
+        .map_or(Some(0), |(head, version)| {
+            [
+                std::mem::size_of_val(head),
+                std::mem::size_of_val(version),
+                head.schema.capacity(),
+                head.root_sha256.capacity(),
+                head.mutation.as_ref().map_or(0, |m| m.sha256.capacity()),
+                head.fence.as_ref().map_or(0, String::capacity),
+                version.e_tag.as_ref().map_or(0, String::capacity),
+                version.version.as_ref().map_or(0, String::capacity),
+            ]
+            .into_iter()
+            .try_fold(0_usize, usize::checked_add)
+        })
+        .ok_or(TwoBitStoreError::Invalid("publication memory"))?;
     // Share serving metadata admission/identity checks and stream every local
     // record page/full SHA, then release validation buffers before uploads.
-    TwoBitGeneration::validate_local_publication(local, trusted_root_sha256, limits)?;
+    // Retained sealed control is charged without expanding caller pin authority.
+    let validation_limits = TwoBitGenerationLimits {
+        max_memory_bytes: limits
+            .max_memory_bytes
+            .checked_sub(
+                u64::try_from(head_bytes)
+                    .map_err(|_| TwoBitStoreError::Invalid("publication memory"))?,
+            )
+            .ok_or(TwoBitStoreError::Invalid("publication memory"))?,
+        ..limits
+    };
+    TwoBitGeneration::validate_local_publication(local, trusted_root_sha256, validation_limits)?;
     let read = |name: &str, digest: &str| -> Result<Vec<u8>> {
         let size = fs::metadata(local.join(name))?.len();
         if size == 0 || size > 65536 {
@@ -439,6 +500,21 @@ pub async fn publish_two_bit_generation(
             "prepared generation epoch changed",
         ));
     }
+    let plane_body = read("plane/manifest.json", &manifest.plane_manifest_sha256)?;
+    let plane: SourcePlaneReceipt = serde_json::from_slice(&plane_body)
+        .map_err(|_| TwoBitStoreError::Invalid("plane schema"))?;
+    let page_body = read("page_manifest.json", &manifest.page_manifest_sha256)?;
+    let pages: serde_json::Value =
+        serde_json::from_slice(&page_body).map_err(|_| TwoBitStoreError::Invalid("page schema"))?;
+    let budget = publication_phase_budget(
+        limits.max_memory_bytes,
+        limits.already_pinned_bytes,
+        [root.capacity(), plane_body.capacity(), page_body.capacity()],
+        head_bytes,
+        prefix.as_ref().len(),
+    )?;
+    drop(plane_body);
+    drop(page_body);
     validate_owned_object(store, prefix, &manifest.sq8_object_key, base_epoch).await?;
     if manifest
         .canonical
@@ -452,14 +528,6 @@ pub async fn publish_two_bit_generation(
     {
         validate_owned_object(store, prefix, &manifest.canonical.object_key, base_epoch).await?;
     }
-    let plane: SourcePlaneReceipt = serde_json::from_slice(&read(
-        "plane/manifest.json",
-        &manifest.plane_manifest_sha256,
-    )?)
-    .map_err(|_| TwoBitStoreError::Invalid("plane schema"))?;
-    let pages: serde_json::Value =
-        serde_json::from_slice(&read("page_manifest.json", &manifest.page_manifest_sha256)?)
-            .map_err(|_| TwoBitStoreError::Invalid("page schema"))?;
     let source = store
         .head(&ObjectPath::from(manifest.sq8_object_key.clone()))
         .await?;
@@ -475,6 +543,7 @@ pub async fn publish_two_bit_generation(
     if source.size != source_size as u64 || source.e_tag.as_deref() != Some(&manifest.sq8_etag) {
         return Err(TwoBitStoreError::Invalid("SQ8 HEAD identity"));
     }
+    drop(source);
     let mut roster = vec![
         ("manifest.json", trusted_root_sha256),
         ("page_manifest.json", manifest.page_manifest_sha256.as_str()),
@@ -522,13 +591,7 @@ pub async fn publish_two_bit_generation(
                 units: plane.rows.div_ceil(32),
                 blob_bytes: 32 + plane.rows.div_ceil(32) * plane.dimensions * 2,
             };
-            let cap = usize::try_from(
-                limits
-                    .max_memory_bytes
-                    .saturating_sub(limits.already_pinned_bytes),
-            )
-            .map_err(|_| TwoBitStoreError::Invalid("publication memory"))?;
-            crate::semantic_unit_router::admit(geometry, cap, *profile)
+            crate::semantic_unit_router::admit(geometry, budget, *profile)
                 .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
             let read = |name: &str, size, sha: &str| {
                 read_authenticated(&local.join(name), size, sha)
@@ -557,12 +620,6 @@ pub async fn publish_two_bit_generation(
             ]);
         }
     }
-    let budget = usize::try_from(
-        limits
-            .max_memory_bytes
-            .saturating_sub(limits.already_pinned_bytes),
-    )
-    .map_err(|_| TwoBitStoreError::Invalid("upload budget"))?;
     let metadata_prefix = prefix.clone().join("generations").join(trusted_root_sha256);
     upload_authenticated_file(
         store,
@@ -589,10 +646,14 @@ pub async fn publish_two_bit_generation(
         )
         .await?;
     }
+    let generation = manifest.generation;
+    drop(manifest);
+    drop(plane);
+    drop(pages);
     publish_head(
         store,
         prefix,
-        manifest.generation,
+        generation,
         trusted_root_sha256,
         root.into_boxed_slice(),
         expected,
@@ -843,6 +904,61 @@ pub async fn end_two_bit_write_fence(
 #[cfg(test)]
 mod root_seed_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn publication_reserves_metadata_before_upload_buffers() {
+        use sha2::{Digest, Sha256};
+        let remaining = 16 * 1024 * 1024;
+        let pinned = 262144;
+        let budget =
+            publication_phase_budget(remaining + pinned, pinned, [4096, 1024, 512], 512, 128)
+                .unwrap();
+        assert!(budget < remaining as usize);
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let bytes = 8 * 1024 * 1024 + 1;
+        file.as_file().set_len(bytes).unwrap();
+        let mut digest = Sha256::new();
+        for _ in 0..128 {
+            digest.update([0_u8; 65536]);
+        }
+        digest.update([0]);
+        let artifact = Artifact {
+            bytes,
+            sha256: format!("{:x}", digest.finalize()),
+        };
+        let store = object_store::memory::InMemory::new();
+        let key = ObjectPath::from("publication/canonical");
+        let error = upload_authenticated_file(&store, &key, file.path(), &artifact, budget)
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            matches!(
+                error,
+                ResidentGraphStoreError::Invalid("upload memory budget")
+            ),
+            "{error:?}"
+        );
+        assert!(store.head(&key).await.is_err());
+        let sufficient = publication_phase_budget(
+            remaining + pinned + 2 * 1024 * 1024,
+            pinned,
+            [4096, 1024, 512],
+            512,
+            128,
+        )
+        .unwrap();
+        upload_authenticated_file(&store, &key, file.path(), &artifact, sufficient)
+            .await
+            .unwrap();
+        assert_eq!(store.head(&key).await.unwrap().size, bytes);
+        assert!(
+            publication_phase_budget(remaining, u64::MAX, [4096, 1024, 512], 512, 128).is_err()
+        );
+        assert!(
+            publication_phase_budget(remaining, 0, [4096, 1024, 512], usize::MAX, 128).is_err()
+        );
+    }
 
     #[tokio::test]
     async fn root_seed_rechecks_body_namespace_digest_and_generation_before_staging() {
