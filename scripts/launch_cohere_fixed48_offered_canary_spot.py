@@ -10,6 +10,7 @@ import importlib
 import inspect
 import io
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -92,7 +93,10 @@ def contract():
         result='terminal INFRA_GO / FAIL only; scientific_status UNMEASURED, no performance claim',
         prefix=PREFIX+'aNNNN', instance_type=INSTANCE_TYPE, region=REGION, image_id=IMAGE_ID,
         root_device_name=ROOT_DEVICE_NAME, root_volume=dict(gib=80,type='gp3',encrypted=True,delete_on_termination=True),
-        metadata='IMDSv2 required', spot_max_usd_per_hour=SPOT_MAX_USD_PER_HOUR, fresh_quote_max_age_seconds=300,
+        metadata='IMDSv2 required', spot_max_usd_per_hour=SPOT_MAX_USD_PER_HOUR, fresh_quote_retrieval_max_seconds=300,
+        spot_quote='Synchronous exact type/AZ/Linux/UNIX query with StartTime=EndTime=UTC now; AWS Timestamp is the price-change event, which may precede StartTime. No event-age limit.',
+        spot_quote_receipt='aws-reservation.json and remote reservation.json: spot_quote_retrieval records checked_at, query_start_time, query_end_time, retrieval_seconds and exact market/price/event_timestamp; original spot_quote_timestamp preserved.',
+        spot_quote_api='https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeSpotPriceHistory.html',
         cli='--contract | --prepare-authorities (LOCAL root only) | --self-check | --stage REPO WORKER_ROOT PREFIX | aNNNN',
         actual_integration='requires final controller in combined source; root freezes/launches after its real-fixture cheap gate',
         native_calls=0, offered_main_calls=0, publication_calls=0, performance_measured=False, launch_authorized=False)
@@ -547,7 +551,8 @@ def collect(s3,prefix,out,instance_id,commit,digest):
 def lifecycle_adapter():
     from datetime import datetime,timezone
     shared,_ = lifecycle()
-    real_session = shared.boto3.Session
+    real_session,real_dumps = shared.boto3.Session,json.dumps
+    quote_receipt = {}
     def session(*args,**kwargs):
         value = real_session(*args,**kwargs); real_client = value.client
         def client(service,*args,**kwargs):
@@ -555,15 +560,35 @@ def lifecycle_adapter():
             if service == 'ec2':
                 quote = result.describe_spot_price_history
                 def fresh(**kwargs):
-                    response = quote(**kwargs); row = response['SpotPriceHistory'][0]
-                    age = (datetime.now(timezone.utc)-row['Timestamp']).total_seconds()
-                    assert -10 <= age <= 300 and 0 < float(row['SpotPrice']) <= SPOT_MAX_USD_PER_HOUR, 'fresh Spot admission'
+                    quote_receipt.clear()
+                    assert kwargs['InstanceTypes'] == [INSTANCE_TYPE] and kwargs['ProductDescriptions'] == ['Linux/UNIX']
+                    assert isinstance(kwargs['AvailabilityZone'],str) and kwargs['AvailabilityZone'] and kwargs['MaxResults'] == 1 and 'NextToken' not in kwargs
+                    started = time.monotonic(); now = datetime.now(timezone.utc)
+                    kwargs.update(StartTime=now,EndTime=now)
+                    response = quote(**kwargs)
+                    duration = time.monotonic()-started; checked_at = datetime.now(timezone.utc)
+                    assert math.isfinite(duration) and 0 <= duration <= 300, 'fresh Spot retrieval'
+                    rows = response['SpotPriceHistory']; assert len(rows) == 1, 'effective Spot quote required'
+                    row = rows[0]; event = row['Timestamp']; price = float(row['SpotPrice'])
+                    assert isinstance(event,datetime) and event.utcoffset() is not None and event <= now, 'invalid/future Spot price event'
+                    assert (row['InstanceType'],row['AvailabilityZone'],row['ProductDescription']) == (INSTANCE_TYPE,kwargs['AvailabilityZone'],'Linux/UNIX'), 'Spot market mismatch'
+                    assert math.isfinite(price) and 0 < price <= SPOT_MAX_USD_PER_HOUR, 'Spot price admission'
                     assert SPOT_MAX_USD_PER_HOUR*WALL/3600 <= COMPUTE_CAP
+                    quote_receipt.update(checked_at=checked_at.isoformat(),query_start_time=now.isoformat(),query_end_time=now.isoformat(),
+                        retrieval_seconds=duration,instance_type=INSTANCE_TYPE,availability_zone=kwargs['AvailabilityZone'],
+                        product_description='Linux/UNIX',price_usd_per_hour=row['SpotPrice'],event_timestamp=event.isoformat())
                     return response
                 result.describe_spot_price_history = fresh
             return result
         value.client = client; return value
+    def dumps(value,*args,**kwargs):
+        if isinstance(value,dict) and value.get('schema') == SCHEMA and 'spot_quote_timestamp' in value:
+            assert quote_receipt and (value['spot_quote_timestamp'],value['spot_price_observed_usd_per_hour'],value['availability_zone']) == \
+                (quote_receipt['event_timestamp'],quote_receipt['price_usd_per_hour'],quote_receipt['availability_zone']), 'Spot retrieval receipt mismatch'
+            value = dict(value,spot_quote_retrieval=dict(quote_receipt))
+        return real_dumps(value,*args,**kwargs)
     with patch.object(shared.boto3,'Session',side_effect=session), \
+            patch.object(shared.json,'dumps',side_effect=dumps), \
             patch.multiple(canary,SCHEMA=SCHEMA,ALLOWANCE=ALLOWANCE):
         with canary.lifecycle_adapter() as shared: yield shared
 
@@ -616,6 +641,33 @@ def self_check():
             patch.object(boto3,'Session',side_effect=AssertionError('cloud forbidden')) as cloud, \
             patch.object(runtime,'main',side_effect=AssertionError('offered experiment forbidden')) as experiment:
         work = Path(tmp)
+        shared,_ = lifecycle()
+        old_event = datetime(2026,10,2,18,tzinfo=timezone.utc)
+        for mode in ('old-event','slow','error','future','malformed','naive','bad-price','empty','nan','infinite','overcap','zero','type','az','product'):
+            ec2,session = Mock(),Mock(); session.client.return_value = ec2
+            row = dict(SpotPrice='0.215200',Timestamp=old_event,InstanceType=INSTANCE_TYPE,
+                AvailabilityZone='fixture-az',ProductDescription='Linux/UNIX')
+            if mode == 'future': row['Timestamp'] = datetime.now(timezone.utc)+timedelta(hours=1)
+            if mode == 'malformed': row['Timestamp'] = 'invalid'
+            if mode == 'naive': row['Timestamp'] = old_event.replace(tzinfo=None)
+            if mode == 'bad-price': row['SpotPrice'] = 'invalid'
+            if mode in ('nan','infinite','overcap','zero'): row['SpotPrice'] = dict(nan='NaN',infinite='Infinity',overcap='0.500001',zero='0')[mode]
+            if mode in ('type','az','product'): row[dict(type='InstanceType',az='AvailabilityZone',product='ProductDescription')[mode]] = 'wrong'
+            ec2.describe_spot_price_history.side_effect = OSError('quote retrieval failed') if mode == 'error' else None
+            ec2.describe_spot_price_history.return_value = dict(SpotPriceHistory=[] if mode == 'empty' else [row])
+            quote_call = ec2.describe_spot_price_history
+            with patch.object(shared.boto3,'Session',return_value=session),lifecycle_adapter() as adapted:
+                client = adapted.boto3.Session().client('ec2')
+                with patch.object(time,'monotonic',side_effect=[0,301 if mode == 'slow' else .1]):
+                    action = lambda: client.describe_spot_price_history(InstanceTypes=[INSTANCE_TYPE],
+                        ProductDescriptions=['Linux/UNIX'],AvailabilityZone='fixture-az',MaxResults=1)
+                    if mode == 'old-event':
+                        assert action()['SpotPriceHistory'][0] == row
+                    else: reject(action)
+            if mode == 'old-event':
+                query = quote_call.call_args.kwargs
+                assert query['StartTime'] == query['EndTime'] and query['StartTime'] > old_event
+        checks.append('live-current-query/actual-old-price-event/slow-error-future-malformed-empty-nonfinite-overcap-exact-market-negatives')
         gate = dict(path=str(VERIFICATION),**artifact(repo/VERIFICATION))
         assert root_gate(repo,gate)
         reject(lambda: root_gate(repo,dict(gate,sha256='0'*64)))
@@ -645,8 +697,12 @@ def self_check():
         checks.append('actual-current-root-receipt/full56-native399-sealed64-qualified-bridge/code-tamper')
         # Hardlinks preserve all real bodies without payload copies or source writes.
         combined = Path(source_tmp)/'combined'
-        shutil.copytree(repo,combined,copy_function=os.link,ignore=shutil.ignore_patterns('.git','__pycache__','target'))
         ctl_real = controller()
+        fixture_authorities = {ctl_real.CONFIG,ctl_real.CONTROL,ctl_real.MANIFEST,CONFIG,QUALIFICATION,HEAD_ROSTER}
+        def fixture_ignore(directory,names):
+            return set(shutil.ignore_patterns('.git','__pycache__','target')(directory,names)) | \
+                {n for n in names if (Path(directory)/n).relative_to(repo) in fixture_authorities}
+        shutil.copytree(repo,combined,copy_function=os.link,ignore=fixture_ignore)
         real_manifest = dict(schema=ctl_real.ASSET_SCHEMA,authority_pending=False,
             assets={ctl_real.HTTP:archived['assets']['qualification/binaries/two_bit_http']})
         for name,value in ((ctl_real.CONFIG,offered_config),(ctl_real.MANIFEST,real_manifest)):
@@ -911,12 +967,14 @@ with ExitStack() as stack:
         checks.append('failed-terminal-retained/cleanup-failure/upload-failure/no-replacement')
 
         shared,_ = lifecycle()
-        for mode in ('success','multi-ack','fsync','poll','wait','stale'):
+        for mode in ('success','multi-ack','fsync','poll','wait','future'):
             ec2,s3,session = Mock(),Mock(),Mock(); session.client.side_effect = [ec2,s3]
             ec2.describe_instances.return_value = {'Reservations':[]}
             ec2.describe_subnets.return_value = {'Subnets':[{'AvailabilityZone':'fixture-az'}]}
-            timestamp = datetime.now(timezone.utc)-timedelta(seconds=301 if mode == 'stale' else 0)
-            ec2.describe_spot_price_history.return_value = {'SpotPriceHistory':[dict(SpotPrice='0.1',Timestamp=timestamp)]}
+            timestamp = datetime.now(timezone.utc)+timedelta(hours=1) if mode == 'future' else old_event
+            ec2.describe_spot_price_history.return_value = {'SpotPriceHistory':[dict(SpotPrice='0.215200',Timestamp=timestamp,
+                InstanceType=INSTANCE_TYPE,AvailabilityZone='fixture-az',ProductDescription='Linux/UNIX')]}
+            quote_call = ec2.describe_spot_price_history
             ids = ['i-owned','i-extra'] if mode == 'multi-ack' else ['i-owned']
             ec2.run_instances.return_value = {'Instances':[{'InstanceId':n} for n in ids]}; launch_call = ec2.run_instances
             events = []; ec2.terminate_instances.side_effect = lambda **kw:events.append('terminate')
@@ -931,13 +989,16 @@ with ExitStack() as stack:
             with patch.object(module,'ROOT',work/('launch-'+mode)),patch.object(module,'preflight',return_value=launch_proof), \
                     patch.object(module,'stage_config'),patch.object(module,'user_data',return_value='fixture'), \
                     patch.object(shared.boto3,'Session',return_value=session),patch.object(subprocess,'check_output',side_effect=['','a'*40,b'fixture archive']), \
-                    patch.object(subprocess,'run'),patch.object(shared.peer,'missing',return_value=True),patch.object(shared.peer,'put_if_absent'), \
+                    patch.object(subprocess,'run'),patch.object(shared.peer,'missing',return_value=True),patch.object(shared.peer,'put_if_absent') as putter, \
                     patch.object(module,'poll',side_effect=InterruptedError('interrupted') if mode == 'poll' else None), \
                     patch.object(module,'collect',side_effect=collected) as collector, \
                     patch.object(os,'fsync',side_effect=OSError('fsync') if mode == 'fsync' else None),redirect_stdout(io.StringIO()):
                 if mode in ('success','multi-ack'): main('a0001')
                 else: reject(lambda: main('a0001'))
-            if mode == 'stale': launch_call.assert_not_called(); collector.assert_not_called(); continue
+            if mode == 'future':
+                launch_call.assert_not_called(); collector.assert_not_called()
+                assert not (work/('launch-'+mode)/'a0001/aws-reservation.json').exists()
+                continue
             launch_call.assert_called_once()
             ec2.terminate_instances.assert_called_once_with(InstanceIds=ids)
             ec2.get_waiter.return_value.wait.assert_called_once_with(InstanceIds=ids)
@@ -948,7 +1009,14 @@ with ExitStack() as stack:
             assert params['InstanceType'] == INSTANCE_TYPE and params['ImageId'] == IMAGE_ID
             assert params['BlockDeviceMappings'] == [dict(DeviceName=ROOT_DEVICE_NAME,Ebs=dict(DeleteOnTermination=True,Encrypted=True,VolumeSize=80,VolumeType='gp3'))]
             reservation = read_json(work/('launch-'+mode)/'a0001/aws-reservation.json')
+            remote = [json.loads(call.args[1]) for call in putter.call_args_list if call.args[0] == PREFIX+'a0001/reservation.json']
+            assert remote == [reservation], 'local/remote Spot receipt drift'
             assert reservation['compute_cap_usd'] == COMPUTE_CAP and reservation['ebs_s3_allowance_usd'] == ALLOWANCE and reservation['wall_seconds'] == WALL
+            receipt = reservation['spot_quote_retrieval']; query = quote_call.call_args.kwargs
+            assert receipt['query_start_time'] == receipt['query_end_time'] == query['StartTime'].isoformat() == query['EndTime'].isoformat()
+            assert receipt['event_timestamp'] == reservation['spot_quote_timestamp'] == old_event.isoformat()
+            assert old_event < query['StartTime'] <= datetime.fromisoformat(receipt['checked_at']) and 0 <= receipt['retrieval_seconds'] <= 300
+            assert (receipt['instance_type'],receipt['availability_zone'],receipt['product_description'],receipt['price_usd_per_hour']) == (INSTANCE_TYPE,'fixture-az','Linux/UNIX','0.215200')
         checks.append('shared-lifecycle/all-ACK-fsync-interrupt/sameIDs-terminate-wait/IMDSv2/caps/freshquote-negative')
         cloud.assert_not_called(); experiment.assert_not_called()
     signal.alarm(0)
