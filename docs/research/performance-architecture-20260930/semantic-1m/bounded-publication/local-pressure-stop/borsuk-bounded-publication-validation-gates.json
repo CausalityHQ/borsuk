@@ -1,0 +1,88 @@
+{
+  "source": "da56bcb080f559c81886e4e603226bd5e5415564",
+  "runner_pid": 2758395,
+  "unit": "borsuk-bounded-publication-validation-da56bcb-r1.service",
+  "cgroup": "/user.slice/user-1001.slice/user@1001.service/app.slice/borsuk-bounded-publication-validation-da56bcb-r1.service",
+  "environment": {
+    "CARGO_TARGET_DIR": "/data/target",
+    "CARGO_BUILD_JOBS": "1",
+    "BORSUK_TEST_BUILD_JOBS": "1",
+    "RUSTC_WRAPPER": "",
+    "RUSTC_WORKSPACE_WRAPPER": "",
+    "PATH": "/data/cache/cargo/bin:/usr/local/bin:/usr/bin:/bin",
+    "CARGO_HOME": "/data/cache/cargo",
+    "RUSTUP_HOME": "/data/cache/rustup",
+    "RUST_TEST_THREADS": "1"
+  },
+  "started_at": 1790927323.4967725,
+  "stages": [
+    {
+      "stage": 1,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "two_bit_generation::source_walk_tests::semantic_object_store_parity",
+        "--",
+        "--exact"
+      ],
+      "log": "/tmp/borsuk-bounded-publication-validation-stage-1.log",
+      "started_at": 1790927323.4970453,
+      "initial_cgroup": {
+        "memory.max": "8589934592",
+        "memory.swap.max": "0",
+        "cpu.max": "200000 100000",
+        "pids.max": "512",
+        "memory.current": "7876608",
+        "memory.peak": "11956224",
+        "memory.swap.current": "0",
+        "memory.swap.peak": "0",
+        "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+      },
+      "max_host_full_psi_avg10": 11.5,
+      "pid": 2758506,
+      "current_cgroup": {
+        "memory.max": "8589934592",
+        "memory.swap.max": "0",
+        "cpu.max": "200000 100000",
+        "pids.max": "512",
+        "memory.current": "4514684928",
+        "memory.peak": "4695310336",
+        "memory.swap.current": "0",
+        "memory.swap.peak": "0",
+        "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+      },
+      "stopped_reason": "host full PSI avg10 >=1% sustained 30s",
+      "exit_code": -15,
+      "finished_at": 1790927447.709815,
+      "terminal_cgroup": {
+        "memory.max": "8589934592",
+        "memory.swap.max": "0",
+        "cpu.max": "200000 100000",
+        "pids.max": "512",
+        "memory.current": "4510183424",
+        "memory.peak": "4695310336",
+        "memory.swap.current": "0",
+        "memory.swap.peak": "0",
+        "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+      },
+      "log_sha256": "ed8e64c33523641248bbddbedf495d94dcf244703f5e3c603bf6923e613e8f07"
+    }
+  ],
+  "status": "failed",
+  "initial_cgroup": {
+    "memory.max": "8589934592",
+    "memory.swap.max": "0",
+    "cpu.max": "200000 100000",
+    "pids.max": "512",
+    "memory.current": "7938048",
+    "memory.peak": "11956224",
+    "memory.swap.current": "0",
+    "memory.swap.peak": "0",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+  },
+  "finished_at": 1790927447.7104735
+}

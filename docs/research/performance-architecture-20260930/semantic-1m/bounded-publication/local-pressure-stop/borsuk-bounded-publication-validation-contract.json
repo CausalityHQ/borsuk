@@ -1,0 +1,96 @@
+{
+  "base": "68294a2e67a298006ac79f4dfc96e76e1f7a4ddf",
+  "status": "SOURCE UNVERIFIED; original actual gate runner pressure-stopped and collected, lane released, no retry/chaining",
+  "files": [
+    "crates/borsuk/src/two_bit_generation.rs",
+    "crates/borsuk/src/two_bit_store.rs",
+    "crates/borsuk/src/two_bit_source.rs"
+  ],
+  "api": {
+    "generation": "crate-private TwoBitGeneration::validate_local_publication(root: &Path, trusted_sha256: &str, limits: TwoBitGenerationLimits) -> Result<()>; shares open_inner with an explicit local-publication mode, no remote ETag or public API change",
+    "plane": "crate-private TwoBitPlane::validate_local_records(path: &Path, authority: &PageAuthority) -> Result<(), SourceBuildError>; streaming entire records SHA plus existing verify_payload per page"
+  },
+  "borrow_lifetimes": "Validator borrows immutable local root and trusted SHA only for call; temporary metadata generation and page authority are dropped before existing semantic publication validation/upload. Streaming page buffer is dropped before returning. No retained record payload or queryable metadata-only local generation escapes.",
+  "peak_arithmetic": {
+    "serving": "Unchanged eager/remote admission and semantic query-limit clamping, caller pins counted exactly once; shared paged metadata model used for bounded publication",
+    "bounded_validation": "3 * startup_metadata_disk_bytes + codec_memory + 131072 + graph_memory + semantic_router_memory + query_memory + source_query_memory + already_pinned_bytes + min(rows,32) * record_bytes; checked arithmetic before allocation",
+    "record_file": "Excluded from startup_metadata_disk_bytes only in paged/local-publication mode; exact full local file length checked, all pages verified, full SHA independently verified; no full records Vec",
+    "other_publication_phases": "Existing semantic admit and complete root/membership/leaves/centroids validation plus authenticated canonical/metadata uploads retained, sequential after bounded validation"
+  },
+  "checks": [
+    "cargo test -p borsuk --lib source_walk_tests (new bounded publication and existing ordered eager/remote publisher parity)",
+    "cargo test -p borsuk --lib two_bit_build",
+    "cargo test -p borsuk --lib two_bit_compaction",
+    "cargo test -p borsuk --lib two_bit_store",
+    "cargo test -p borsuk --lib sq8_s3_range",
+    "cargo build -p borsuk --release --example two_bit_http",
+    "cargo clippy --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "cargo test --workspace --no-run"
+  ],
+  "restrictions": "No Cargo/rustc/native/cloud/dataset/reviews/children/operator/docs/config/push until parent grants sole compiler lane; resource gates parent-owned, jobs1/8GiB/0swap/CPU200/Tasks512/pressurestop. No RED or PASS claims without execution.",
+  "source_sha256": {
+    "crates/borsuk/src/two_bit_generation.rs": "300b125bd094fb49c47c6ba4a48a3a301075a5e611fa8dbe419fd4e6834b861b",
+    "crates/borsuk/src/two_bit_store.rs": "a4d823069e6c337cd5f019457287021fb53943161d446c8cdd4f49ab544e27cd",
+    "crates/borsuk/src/two_bit_source.rs": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0"
+  },
+  "test_cases": "Extended existing source_walk_tests::semantic_object_store_parity; publication uses cap strictly below eager reader model, with explicit model delta and no resident records; eager/remote ordered search comparisons continue from the same published head.",
+  "verification": {
+    "rustfmt_edition_2024_check": 0,
+    "git_diff_check": 0,
+    "rust_execution": "not run; no lane grant"
+  },
+  "telemetry": "No new telemetry/schema/profile/router/scorer changes.",
+  "candidate_commit": "da56bcb080f559c81886e4e603226bd5e5415564",
+  "selected_commands": [
+    "cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::semantic_object_store_parity -- --exact",
+    "cargo test --locked -p borsuk --lib two_bit_ -- --skip two_bit_generation::source_walk_tests::semantic_object_store_parity",
+    "cargo test --locked -p borsuk --lib sq8_s3_range::",
+    "cargo build --locked -p borsuk --release --example two_bit_http",
+    "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "bash scripts/check_rust_test_build.sh"
+  ],
+  "gate_environment": {
+    "cwd": "/home/rb/worktrees/borsuk-bounded-publication-validation",
+    "CARGO_TARGET_DIR": "/data/target",
+    "CARGO_BUILD_JOBS": "1",
+    "BORSUK_TEST_BUILD_JOBS": "1",
+    "RUSTC_WRAPPER": "",
+    "RUSTC_WORKSPACE_WRAPPER": "",
+    "unset": [
+      "BORSUK_TEST_BUILD_COMMAND"
+    ],
+    "resources": {
+      "MemoryMax": "8G",
+      "MemorySwapMax": "0",
+      "CPUQuota": "200%",
+      "TasksMax": "512"
+    },
+    "sequencing": "Each command serial; stop/collect original job on failure or host full PSI >=1% sustained 30s, never chain onward after failure. Parent owns fresh resource check and controlled lane grant.",
+    "PATH": "/data/cache/cargo/bin:/usr/local/bin:/usr/bin:/bin",
+    "CARGO_HOME": "/data/cache/cargo",
+    "RUSTUP_HOME": "/data/cache/rustup",
+    "RUST_TEST_THREADS": "1"
+  },
+  "lane_grant": "immediate-1790927059363373850 (devbox/main clearance immediate1790926998800879561)",
+  "runner_unit": "borsuk-bounded-publication-validation-da56bcb-r1.service",
+  "runner_preflight_repair": {
+    "original_exec": 22492,
+    "unit": "borsuk-bounded-publication-validation-da56bcb.service",
+    "invocation": "82fd87aa010d4f9aa0ebd0a9c1fcc14c",
+    "exit_code": 1,
+    "cause": "cwd contract key treated as env key; no Cargo stage entered",
+    "runtime_ms": 254
+  },
+  "gate_receipt": {
+    "path": "/tmp/borsuk-bounded-publication-validation-gates.json",
+    "sha256": "9db4713a15a48a1c007ee05258d39c9cf0ed211ac01cc755ea15df17732eb4f8",
+    "original_exec": 66939,
+    "invocation": "2fb32b6d3c9243fba31fb7263fec0e01",
+    "stage_1_exit_code": -15,
+    "stopped_reason": "host full PSI avg10 >=1% sustained 30s",
+    "max_host_full_psi_avg10": 11.5,
+    "memory_peak_bytes": "4695310336",
+    "memory_swap_peak_bytes": "0",
+    "remaining_stages": "not entered"
+  }
+}

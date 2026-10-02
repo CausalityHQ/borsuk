@@ -1,0 +1,38 @@
+{
+  "schema": "borsuk-bounded-publication-validation-source-receipt-v1",
+  "commit": "da56bcb080f559c81886e4e603226bd5e5415564",
+  "base": "68294a2e67a298006ac79f4dfc96e76e1f7a4ddf",
+  "status": "SOURCE UNVERIFIED; local gate pressure-stopped before test execution; no local retry",
+  "original_runner": 66939,
+  "invocation": "2fb32b6d3c9243fba31fb7263fec0e01",
+  "files": {
+    "crates/borsuk/src/two_bit_generation.rs": {
+      "sha256": "300b125bd094fb49c47c6ba4a48a3a301075a5e611fa8dbe419fd4e6834b861b",
+      "bytes": 174296
+    },
+    "crates/borsuk/src/two_bit_store.rs": {
+      "sha256": "a4d823069e6c337cd5f019457287021fb53943161d446c8cdd4f49ab544e27cd",
+      "bytes": 32847
+    },
+    "crates/borsuk/src/two_bit_source.rs": {
+      "sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",
+      "bytes": 22632
+    },
+    "borsuk-bounded-publication-validation-contract.json": {
+      "sha256": "2f331ed7910fb649e3dd01fba7c15f43c77b1d997796723c27b3f2cbd681a4db",
+      "bytes": 6110
+    },
+    "borsuk-bounded-publication-validation-gates.json": {
+      "sha256": "9db4713a15a48a1c007ee05258d39c9cf0ed211ac01cc755ea15df17732eb4f8",
+      "bytes": 3026
+    },
+    "borsuk-bounded-publication-validation-stage-1.log": {
+      "sha256": "ed8e64c33523641248bbddbedf495d94dcf244703f5e3c603bf6923e613e8f07",
+      "bytes": 59744
+    },
+    "borsuk-bounded-publication-validation-runner.py": {
+      "sha256": "67513e270bb7061f2c248fe3fe1c00b8c6ae89e9acaa7b69467648c4ba25c840",
+      "bytes": 4733
+    }
+  }
+}
