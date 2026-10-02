@@ -2,6 +2,10 @@
 
 Root decision after read-only consultation78792bc21a9044c1: prefer a hierarchical semantic-cell architecture for the next production design, retain the qualified current library as control, and test the smallest locality hypothesis before seeking approval for a format rewrite. SOURCE32 remains an unverified transport candidate, not the scale solution. No new routing fit, code quantization, production format or ANN execution is authorized here.
 
+## Authority preparation
+
+Before the offline run, root restored the missing 2267840-byte router directory from the closed campaign with one S3 GET and verified its exact terminal SHA/length. `router-root-restoration.json` records this read-only input preparation. It is outside the no-network replay and creates no new measurement. The replay must parse the authenticated directory; a length-derived leaf roster is insufficient.
+
 ## Frozen analytical intervention
 
 - Inputs: the closed CoHere FIRST1M D768 sealed64 trace and offered rate5 records already authenticated by `replay_fixed48_source_get_caps.py`; the same scientific terminal, generation root, plane and SQ8 page geometry; and its router membership body (125000B, SHA a97f1bdbdbfaccc8009b56fd85c2c82e5f01405a650222d335b66c156fe8cdc1). Bind membership through both terminal and generation discovery descriptor, not a bare hash alone.

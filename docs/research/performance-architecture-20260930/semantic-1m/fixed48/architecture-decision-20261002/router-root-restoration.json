@@ -1,0 +1,13 @@
+{
+  "body": {
+    "bytes": 2267840,
+    "sha256": "efadc03a3e30d3ae75668762ad44d425f66c5ca373d0683acc6a0d7fe0232254"
+  },
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "get_requests": 1,
+  "key": "research/semantic-router/20261002/fixed48-scientific-a0002/artifacts/screen/store/research/semantic-router/20261002/fixed48-fresh64/router/root.bin",
+  "purpose": "input preparation before offline falsifier; no experiment or query",
+  "schema": "borsuk-closed-authority-restoration-v1",
+  "terminal_sha256": "8c660aed79c910352e4b1f6455b93bf42d070ec85d46b594789fa49f3f6d024a",
+  "time_utc": "2026-10-02T23:54:59.155962+00:00"
+}
