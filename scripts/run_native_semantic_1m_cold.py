@@ -284,9 +284,9 @@ def validate_startup(value, arm, wall, *, wave_objects=4):
         staged_selected_leaf_bytes=0,staged_full_plane_bytes=0)
 
 
-def transport(header, response, arm):
+def transport(header, response, arm, *, wave_objects=4):
     assert header['phase']=='ready' and header['authority']==arm['authority']
-    opened=validate_startup(header['remote_open_stats'],arm,header['remote_open_wall_ns'])
+    opened=validate_startup(header['remote_open_stats'],arm,header['remote_open_wall_ns'],wave_objects=wave_objects)
     ready=stats.validate_transport(header['transport'],True)
     final=stats.validate_transport(response['transport'],True)
     assert ready['method_counts']==[opened['logical_metadata_get_requests']+4,5,1]+[0]*7, 'startup S3/IMDS / no retries'
@@ -357,7 +357,7 @@ def http_request(query, authority):
     return encoded(dict(query=query,k=10,**authority))
 
 
-def measured_call(binary, config, arm, body, expected, truth):
+def measured_call(binary, config, arm, body, expected, truth, *, wave_objects=4):
     failures, observed = io.StringIO(), dict(native_process_started=False,http_attempts=0)
     spawn = subprocess.Popen
     def popen(*args,**kwargs):
@@ -388,13 +388,13 @@ def measured_call(binary, config, arm, body, expected, truth):
         with patch.object(cold,'stop',close_native):
             row=cold.cold_call(str(binary),config,item,body,expected,truth,failures,
                 response_check=lambda r,e,t,a:validate_query(r,arm,e,t),
-                startup_check=lambda v,f,w:validate_startup(v,arm,w),post_call=post,spawn=popen,env=env)
+                startup_check=lambda v,f,w:validate_startup(v,arm,w,wave_objects=wave_objects),post_call=post,spawn=popen,env=env)
         row.update(outcome='success',**observed)
         row['completed_ns']=observed['first_wire_completed_ns']
         for key,start in (('cold_start_to_first_http_response_ns','started_ns'),
             ('first_post_to_response_ns','connected_ns'),('incoming_http_wall_ns','successful_connect_attempt_ns')):
             row[key]=row['completed_ns']-row[start]
-        row['accounting']=transport(row['native_header'],row['response'],arm)
+        row['accounting']=transport(row['native_header'],row['response'],arm,wave_objects=wave_objects)
         row['resources']=telemetry.resources(row['native_time_log'],NATIVE)
         assert row['native_close']['intentional_stop'] is True and row['native_close']['process_group_closed'] is True
     except Exception as error:
@@ -418,7 +418,7 @@ def sq8_authority(head, local, expected):
     return head['ETag']
 
 
-def reduce_records(records, arm, requests, references, truth, start_ns, end_ns):
+def reduce_records(records, arm, requests, references, truth, start_ns, end_ns, *, wave_objects=4):
     assert len(records)==64 and [r['query_ordinal'] for r in records]==list(range(64)), 'closed ledger roster'
     successful, aborted = [], False
     for q,row in enumerate(records):
@@ -436,7 +436,7 @@ def reduce_records(records, arm, requests, references, truth, start_ns, end_ns):
         assert row['response']==json.loads(base64.b64decode(row['raw_response_base64'],validate=True))
         header=[json.loads(line) for line in row['native_server_log'].splitlines() if line.startswith('{')]
         assert header==[row['native_header']] and row['native_header']['listen']=='127.0.0.1:8080'
-        assert row['accounting']==transport(row['native_header'],row['response'],arm)
+        assert row['accounting']==transport(row['native_header'],row['response'],arm,wave_objects=wave_objects)
         assert row['returned_hits']==validate_query(row['response'],arm,references[q],truth[q])
         assert row['resources']==telemetry.resources(row['native_time_log'],NATIVE)
         assert row['native_close']['intentional_stop'] is True and row['native_close']['process_group_closed'] is True
