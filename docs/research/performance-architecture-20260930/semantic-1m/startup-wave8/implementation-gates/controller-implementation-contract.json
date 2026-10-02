@@ -1,0 +1,513 @@
+{
+  "actual_full_workspace_execution": false,
+  "artifact_roster": [
+    "source-qualification.json",
+    "config.json",
+    "native-source-manifest.json",
+    "source-before.json",
+    "source-after.json",
+    "workspace-receipt.json",
+    "test.log",
+    "test-resources.txt",
+    "workspace-cgroup.json",
+    "cpu.txt",
+    "rustc-version.txt",
+    "cargo-version.txt",
+    "run-closed.log",
+    "binaries/two_bit_http"
+  ],
+  "campaign_schema": "borsuk-startup-wave8-implementation-gates-spot-v1",
+  "code_roster": [
+    "scripts/check_native_metadata_ranges_stats.py",
+    "scripts/check_native_semantic_router_stats.py",
+    "scripts/check_native_startup_build.py",
+    "scripts/check_native_startup_stats.py",
+    "scripts/check_native_workspace_execution.py",
+    "scripts/launch_native_metadata_ranges_cold_spot.py",
+    "scripts/launch_native_peer_1m_spot.py",
+    "scripts/launch_native_semantic_router_cold_spot.py",
+    "scripts/launch_native_startup_profile_spot.py",
+    "scripts/launch_native_workspace_execution_spot.py",
+    "scripts/launch_v157_primary_feasibility_spot.py",
+    "scripts/launch_v174_relaid_bind_compile_spot.py",
+    "scripts/package_semantic_native_generation.py",
+    "scripts/prepare_native_semantic_publication.py",
+    "scripts/rest_coexistence_load.py",
+    "scripts/run_native_cold_first_query.py",
+    "scripts/run_native_metadata_ranges_cold.py",
+    "scripts/run_native_peer_1m_worker.py",
+    "scripts/run_native_peer_offered_http.py",
+    "scripts/run_native_semantic_router_cold.py",
+    "scripts/run_native_union_http.py",
+    "scripts/run_native_union_offered_http.py",
+    "scripts/check_rust_test_build.sh",
+    "scripts/check_startup_wave8_implementation.sh"
+  ],
+  "config_contract": {
+    "controller_authority_pending": false,
+    "controller_code_sha256": {
+      "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
+      "scripts/check_native_semantic_router_stats.py": "d1fb970c0ab6ec98ec5311204a54277180631116d48a29a564ed3bbd68e5c5c2",
+      "scripts/check_native_startup_build.py": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52",
+      "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+      "scripts/check_native_workspace_execution.py": "03e35b27af9e2bfed3bac66372e558f7cf0b3a23cff182165a76e275af17b110",
+      "scripts/check_rust_test_build.sh": "a41d6498d84a26816a868ff96b93aae36c329fcf0630fbfc8438471ef28ba681",
+      "scripts/check_startup_wave8_implementation.sh": "5323f4c692d7fe0a17ceea69842f972e295988c6806690db2b8802cf2b8ea421",
+      "scripts/launch_native_metadata_ranges_cold_spot.py": "e746c30f61335c707d9c9398e1cd11778994fc5e02c5d84022a47ee7e40221f4",
+      "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
+      "scripts/launch_native_semantic_router_cold_spot.py": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180",
+      "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
+      "scripts/launch_native_workspace_execution_spot.py": "2c6e943107a8308ebe5430ee82788d96c05f73a93cf3b286b8dce65e332049e3",
+      "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b",
+      "scripts/launch_v174_relaid_bind_compile_spot.py": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a",
+      "scripts/package_semantic_native_generation.py": "cb6a540c810e3a75381d22339eb72f00382b0972a2d3ee687bbb1d97d5a1b594",
+      "scripts/prepare_native_semantic_publication.py": "2d3a9270f5ad847981d9d89fea8ead9e9295f742369fa1b9fd9cf3e7c7e2c7e4",
+      "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+      "scripts/run_native_cold_first_query.py": "fbab85ff0f14ff0c9443493ac406a3ee115c1891626217c735e38f65b9e528b1",
+      "scripts/run_native_metadata_ranges_cold.py": "1322fe19b705caeab275bce69ea6b4a9f2ed84cb6505dcbfe01b25301fdb71b8",
+      "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+      "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+      "scripts/run_native_semantic_router_cold.py": "9fe9e968d99a926bdfc15fae0fc0fadd15d44ed1242b6d4fa2e391c1a3b95f88",
+      "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+      "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6"
+    },
+    "controller_source_commit": "root freezes origin-backed controller/code/manifest commit before CONFIG-only commit",
+    "fixed": {
+      "architecture": "x86_64",
+      "bucket": "borsuk-bench-453182569524-euc1",
+      "command": [
+        "bash",
+        "scripts/check_startup_wave8_implementation.sh"
+      ],
+      "compute_cap_usd": 1.25,
+      "cpu_quota_percent": 200,
+      "ebs_s3_allowance_usd": 0.15,
+      "environment": {
+        "BORSUK_TEST_BUILD_COMMAND": null,
+        "BORSUK_TEST_BUILD_JOBS": "1",
+        "CARGO_BUILD_JOBS": "1",
+        "RAYON_NUM_THREADS": "2",
+        "RUSTC_WORKSPACE_WRAPPER": "",
+        "RUSTC_WRAPPER": "",
+        "RUST_TEST_THREADS": "1",
+        "TOKIO_WORKER_THREADS": "2"
+      },
+      "execution_kind": "implementation-gates",
+      "image_id": "ami-0b8a830d6339a9758",
+      "instance_type": "c7i.2xlarge",
+      "machine_limit_seconds": 9000,
+      "memory_bytes": 8589934592,
+      "region": "eu-central-1",
+      "root_device_name": "/dev/sda1",
+      "schema": "borsuk-startup-wave8-implementation-gates-v1",
+      "service_limit_seconds": 7260,
+      "spot_max_usd_per_hour": 0.5,
+      "subnet_id": "subnet-034528fbd6977848f",
+      "swap_bytes": 0,
+      "tasks_max": 512,
+      "test_limit_seconds": 7200
+    },
+    "native_source_manifest": {
+      "bytes": 46612,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/startup-wave8/candidate-native-source-manifest.json",
+      "sha256": "1339f3aa96e9f18b8d0023ad0d52c5453e702bddd5f29ae79187f5cfe003dcff"
+    },
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/startup-wave8/implementation-gates/config.json",
+    "required_keys": [
+      "architecture",
+      "bucket",
+      "command",
+      "compute_cap_usd",
+      "controller_authority_pending",
+      "controller_code_sha256",
+      "controller_source_commit",
+      "cpu_quota_percent",
+      "ebs_s3_allowance_usd",
+      "environment",
+      "execution_kind",
+      "image_id",
+      "instance_type",
+      "machine_limit_seconds",
+      "memory_bytes",
+      "native_source_manifest",
+      "region",
+      "root_device_name",
+      "schema",
+      "service_limit_seconds",
+      "spot_max_usd_per_hour",
+      "subnet_id",
+      "swap_bytes",
+      "tasks_max",
+      "test_limit_seconds"
+    ]
+  },
+  "historical_configs_modified": false,
+  "implementation_commit": "92dc00e1d811f0d2d76e527df2032d8484b3efe4",
+  "limitations": [
+    "native candidate remains unverified; no Rust tests, native builds, SDK network, cloud launch, integration or push performed",
+    "root owns controller/config freeze, clean bundle assembly, archive, paid launch, termination, collection and candidate integration",
+    "mock ELF artifact validates copy/identity behavior only; real release binary identity comes from remote gate artifacts"
+  ],
+  "mock_verification": {
+    "actual_checks": [
+      "fixed candidate commit/identity/delta types rejected when altered",
+      "preflight rejects dirty/merged/unpublished/wrong-parent/extra-CONFIG/missing-or-extra-native-delta/wrong-candidate-blob",
+      "real remote stage/worker/receipt/replay CLIs run away from repo; only Cargo and cgroup evidence faked",
+      "all seven stage commands and stage exits; fail stages 1..7 stop without later commands or copied binary",
+      "true/false/arbitrary build shims rejected before Cargo/target; final real check_rust_test_build.sh executes shim unset",
+      "native/config/code/manifest/script drift, copied binary corruption/absence/symlink/copy failure rejected",
+      "exit17/124 preserved; OOM/peak/orphans/persistence failure rejected; zero swap and CPU/Tasks admission enforced",
+      "shared Spot mocks exercise same IDs, every ACK including multi-ACK/fsync failure, termination waiter before collection",
+      "terminal/controller/delta/config/archive/instance/artifact identity rejection; collection and gzip replay tested",
+      "full workspace claim remains false; historical full/test-build/implementation modes reject startup receipts"
+    ],
+    "commit_scope_check": {
+      "author": "Roman Bartusiak <riomus@gmail.com>",
+      "clean": true,
+      "git_status_core_preload_index": false,
+      "returncode": 0
+    },
+    "historical_mode_checks": [
+      {
+        "command": [
+          "/usr/bin/python3",
+          "-m",
+          "scripts.launch_native_workspace_execution_spot",
+          "--self-check"
+        ],
+        "elapsed_seconds": 0.451,
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "PASS workspace execution (metadata-waves): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli=False; code=22 artifacts=13 release_copy=False; userdata=6633 peak_bytes=57987072; AWS/Cargo/cgroup MOCKED\n"
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "-m",
+          "scripts.launch_native_workspace_execution_spot",
+          "--semantic-1m",
+          "--self-check"
+        ],
+        "elapsed_seconds": 7.411,
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "PASS workspace execution (semantic-1m): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli=True; code=22 artifacts=13 release_copy=False; userdata=6669 peak_bytes=57917440; AWS/Cargo/cgroup MOCKED\n"
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "-m",
+          "scripts.launch_native_workspace_execution_spot",
+          "--semantic-1m-test-build",
+          "--self-check"
+        ],
+        "elapsed_seconds": 10.661,
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "PASS workspace test-build (semantic-1m): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli=True; code=23 artifacts=13 release_copy=False; userdata=6706 peak_bytes=58044416; AWS/Cargo/cgroup MOCKED\n"
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "-m",
+          "scripts.launch_native_workspace_execution_spot",
+          "--semantic-1m-implementation",
+          "--self-check"
+        ],
+        "elapsed_seconds": 22.111,
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "PASS workspace implementation-gates (semantic-1m): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli=True; code=24 artifacts=18 release_copy=True; userdata=6952 peak_bytes=58327040; AWS/Cargo/cgroup MOCKED\n"
+      }
+    ],
+    "historical_protocol_and_userdata_preservation": [
+      {
+        "fields_identical": [
+          "ROOT",
+          "CONFIG",
+          "PREFIX",
+          "TOKEN_PREFIX",
+          "TAG",
+          "SCHEMA",
+          "CONFIG_SCHEMA",
+          "RECEIPT_SCHEMA",
+          "CODE",
+          "FIXED",
+          "ARTIFACTS",
+          "RELEASE_ARTIFACTS",
+          "TERMINAL_IDENTITIES"
+        ],
+        "mode": "default",
+        "userdata_bytes": 6633,
+        "userdata_identical": true,
+        "userdata_sha256": "d358b7d4d6006a916e5188b426de176c1562bb7f159ca6420fcca0c8792e4478"
+      },
+      {
+        "fields_identical": [
+          "ROOT",
+          "CONFIG",
+          "PREFIX",
+          "TOKEN_PREFIX",
+          "TAG",
+          "SCHEMA",
+          "CONFIG_SCHEMA",
+          "RECEIPT_SCHEMA",
+          "CODE",
+          "FIXED",
+          "ARTIFACTS",
+          "RELEASE_ARTIFACTS",
+          "TERMINAL_IDENTITIES"
+        ],
+        "mode": "--semantic-1m",
+        "userdata_bytes": 6669,
+        "userdata_identical": true,
+        "userdata_sha256": "de16116f4515710c624c22cd4b6e453a070a95987300a7c3d5ca74461ac8bcd8"
+      },
+      {
+        "fields_identical": [
+          "ROOT",
+          "CONFIG",
+          "PREFIX",
+          "TOKEN_PREFIX",
+          "TAG",
+          "SCHEMA",
+          "CONFIG_SCHEMA",
+          "RECEIPT_SCHEMA",
+          "CODE",
+          "FIXED",
+          "ARTIFACTS",
+          "RELEASE_ARTIFACTS",
+          "TERMINAL_IDENTITIES"
+        ],
+        "mode": "--semantic-1m-test-build",
+        "userdata_bytes": 6706,
+        "userdata_identical": true,
+        "userdata_sha256": "22c2d5b60e21ca0084cf18aad3faf02513aadb2b23f171bf3b8e1d68dd2e1947"
+      },
+      {
+        "fields_identical": [
+          "ROOT",
+          "CONFIG",
+          "PREFIX",
+          "TOKEN_PREFIX",
+          "TAG",
+          "SCHEMA",
+          "CONFIG_SCHEMA",
+          "RECEIPT_SCHEMA",
+          "CODE",
+          "FIXED",
+          "ARTIFACTS",
+          "RELEASE_ARTIFACTS",
+          "TERMINAL_IDENTITIES"
+        ],
+        "mode": "--semantic-1m-implementation",
+        "userdata_bytes": 6952,
+        "userdata_identical": true,
+        "userdata_sha256": "1f4510071a1b6397eda919b0dcd2301f34efe2764c9d6b21f3785c6323b18f6c"
+      }
+    ],
+    "memory_limit_bytes": 209715200,
+    "no_real_cargo": true,
+    "no_sdk_network": true,
+    "per_check_limit_seconds": 55,
+    "post_commit_check_recovery": {
+      "initial_failure": "git status threaded lstat could not start under 200MiB RLIMIT_AS",
+      "recovery": "git -c core.preloadIndex=false status --porcelain passed under the same cap; clean and exact three-file commit verified"
+    },
+    "startup_command": [
+      "timeout",
+      "--signal=TERM",
+      "--kill-after=2",
+      "55",
+      "python3",
+      "-m",
+      "scripts.launch_native_workspace_execution_spot",
+      "--startup-wave8-implementation",
+      "--self-check"
+    ],
+    "startup_peak_bytes": 59748352,
+    "startup_returncode": 0,
+    "userdata_bash_n_returncode": 0,
+    "userdata_bytes": 7010,
+    "userdata_path": "/tmp/borsuk-startup-wave8-remote-gates-userdata.sh",
+    "userdata_sha256": "d13abaab635a1e311625554f921172655204b00fda0b53f22238d68fc59c740d"
+  },
+  "mode_api": {
+    "cli_flag": "--startup-wave8-implementation",
+    "controller_actions": [
+      "aNNNN",
+      "--self-check",
+      "--stage REPO OUT",
+      "--check-receipt OUT",
+      "--replay OUT"
+    ],
+    "controller_api": "configure(startup_wave8=True); execution_mode(startup_wave8=True)",
+    "controller_module": "scripts.launch_native_workspace_execution_spot",
+    "worker_api": "main(cargo, repo, out, startup_wave8=True)",
+    "worker_arguments": [
+      "CARGO",
+      "REPO",
+      "OUT"
+    ],
+    "worker_module": "scripts.check_native_workspace_execution"
+  },
+  "native_candidate_unverified": true,
+  "native_gates_executed": false,
+  "native_source_authority": {
+    "authority": "committed full399 map + exact manifest bytes/SHA; no completed assurance dependency",
+    "candidate_delta_paths": [
+      "crates/borsuk/src/object_native_generation.rs",
+      "crates/borsuk/src/two_bit_generation.rs"
+    ],
+    "candidate_qualification_pending": true,
+    "control_native_source_commit": "f4d76fc040aa89c44b3526e37f148e78d21241fa",
+    "manifest_schema": "borsuk-startup-wave8-native-source-manifest-v1",
+    "native_source_commit": "660fd425a8a45dda17cbf6f44915bd36615ce87a",
+    "source_file_count": 399,
+    "source_identity_sha256": "58535ffeb5bb74a09fba9da489d64b6c9b21495c6be53f320a3f8efc2d47756b"
+  },
+  "owned_files": [
+    "scripts/check_startup_wave8_implementation.sh",
+    "scripts/launch_native_workspace_execution_spot.py",
+    "scripts/check_native_workspace_execution.py"
+  ],
+  "paid_launch_executed": false,
+  "parent_base": "1620d6687f6e7dc6f38045291e1608185a102a52",
+  "prefix": "research/semantic-router/20261002/startup-wave8-implementation-",
+  "preflight_authority": "startup-only parent-chain + CONFIG-only freeze + exact two-file native delta + full399 candidate identity + candidate blob SHA checks; historical preflight unchanged",
+  "preserve_exact_commands_and_exit_statuses": true,
+  "qualification_schema": "borsuk-startup-wave8-implementation-gates-qualification-v1",
+  "receipt_schema": "borsuk-startup-wave8-implementation-gates-receipt-v1",
+  "release_artifact_roster": [
+    "binaries/two_bit_http"
+  ],
+  "remote_git": false,
+  "root": "docs/research/performance-architecture-20260930/semantic-1m/startup-wave8/implementation-gates",
+  "schema": "borsuk-startup-wave8-remote-gates-contract-v1",
+  "serial_jobs": 1,
+  "source_bundle_sequence": [
+    "controller_source_commit: origin-backed code/manifest commit; root freezes this hash into CONFIG",
+    "next controller/config commit changes ONLY CONFIG and must be on an origin ref",
+    "next local clean single-parent bundle commit changes EXACT candidate_delta_paths to candidate commit blobs",
+    "launch from bundle checkout; existing reservation and terminal bind bundle source_commit and archive SHA",
+    "root preserves controller/config parent commit and bundle/archive identity in freeze evidence"
+  ],
+  "stage_schema": "borsuk-startup-wave8-implementation-stage-v1",
+  "stages": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "object_native_generation::",
+        "--",
+        "--test-threads=1"
+      ],
+      "stage": "object-native-generation-tests"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "two_bit_generation::source_walk_tests::semantic_object_store_parity",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "stage": "semantic-object-store-parity"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "two_bit_generation::source_walk_tests::paged_source_matches_reference_and_preserves_failure_charges",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "stage": "paged-source-parity"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "two_bit_generation::source_walk_tests::fragmented_paged_source_preserves_trace_and_rank_across_get_caps",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ],
+      "stage": "fragmented-paged-source-parity"
+    },
+    {
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--example",
+        "two_bit_http"
+      ],
+      "stage": "release"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "stage": "clippy"
+    },
+    {
+      "command": [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ],
+      "stage": "test-build"
+    }
+  ],
+  "stop_first_failure": true,
+  "tag": "borsuk-startup-wave8-implementation",
+  "terminal_identity_roster": [
+    "config_sha256",
+    "code_identity_sha256",
+    "campaign_schema",
+    "source_identity_sha256",
+    "source_file_count",
+    "native_source_manifest_sha256",
+    "native_source_commit",
+    "artifact_roster_sha256",
+    "awscli_version",
+    "awscli_sha256",
+    "controller_source_commit",
+    "candidate_delta_paths"
+  ],
+  "test_build_shim_unset": true,
+  "token_prefix": "startup-wave8-implementation-"
+}

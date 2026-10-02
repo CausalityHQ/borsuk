@@ -1,0 +1,16 @@
+{
+  "artifacts": 14,
+  "cloud_executed": false,
+  "code_files": 24,
+  "command": "/usr/bin/time -v timeout 55s python3 -m scripts.launch_native_workspace_execution_spot --startup-wave8-implementation --self-check",
+  "elapsed_seconds": 28.45,
+  "exit_status": 0,
+  "implementation_commit": "92dc00e1d811f0d2d76e527df2032d8484b3efe4",
+  "integrated_commit": "b5968c81e9a479a325489656414407408300bda4",
+  "max_rss_kib": 64932,
+  "native_executed": false,
+  "native_qualification_pending": true,
+  "schema": "borsuk-startup-wave8-controller-root-verification-v1",
+  "swap": 0,
+  "userdata_bytes": 7010
+}
