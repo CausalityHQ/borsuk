@@ -1,0 +1,23 @@
+{
+  "schema": "borsuk-fixed48-real-panel-admission-v1",
+  "source_commit": "d12f6222a60208aec4563dcf9aa4007144810e7c",
+  "source_sha256": "16d99125759c5e30e20ff7c86f6ce5f8394da955452046a8c8376268b0927307",
+  "exit_status": 0,
+  "wall_seconds": 0.42,
+  "peak_rss_kib": 78200,
+  "real_authenticated_queries": 64,
+  "raw_f32_and_values_preserved": true,
+  "native_or_network_execution": false,
+  "measurement": false,
+  "separate_canary_passed": false,
+  "artifacts": {
+    "real-panel.log": {
+      "bytes": 722,
+      "sha256": "2c09c6846aa020fab2ec5388121b8b463adb32a216eaa45129bf3b8481c34c69"
+    },
+    "real-panel.time": {
+      "bytes": 884,
+      "sha256": "ebd342166444ac2ad19b51ad24eeee3d2a48a45dbb7fec9eb78a0598a5719a78"
+    }
+  }
+}
