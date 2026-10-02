@@ -94,6 +94,7 @@ pub struct TwoBitHead {
     empty: bool,
     generation: u64,
     root_sha256: String,
+    root: Box<[u8]>,
     prefix: ObjectPath,
     pub(crate) version: UpdateVersion,
 }
@@ -121,6 +122,20 @@ impl TwoBitHead {
     /// Authenticated immutable root digest.
     pub fn root_sha256(&self) -> &str {
         &self.root_sha256
+    }
+    /// Exact retained immutable manifest allocation, separate from transport buffers.
+    pub fn retained_root_bytes(&self) -> u64 {
+        self.root.len() as u64
+    }
+    pub(crate) fn authenticated_root(&self, prefix: &ObjectPath, digest: &str) -> Result<&[u8]> {
+        if *prefix != self.metadata_prefix() || digest != self.root_sha256 {
+            return Err(TwoBitStoreError::Invalid("root seed namespace/identity"));
+        }
+        let (dimensions, empty) = root_properties(&self.root, digest, self.generation)?;
+        if dimensions != self.dimensions || empty != self.empty {
+            return Err(TwoBitStoreError::Invalid("root seed binding"));
+        }
+        Ok(&self.root)
     }
     /// Prefix to pass to `TwoBitGeneration::open_remote`.
     pub fn metadata_prefix(&self) -> ObjectPath {
@@ -250,19 +265,35 @@ async fn head_from_control(
         .join(head.root_sha256.as_str())
         .join("manifest.json");
     let (root, _) = small_object(store, &root_path, 65536).await?;
+    let (dimensions, empty) = root_properties(&root, &head.root_sha256, head.generation)?;
+    Ok(TwoBitHead {
+        epoch: head.epoch,
+        dimensions,
+        empty,
+        generation: head.generation,
+        root_sha256: head.root_sha256.clone(),
+        root: root.into_boxed_slice(),
+        prefix: prefix.clone(),
+        version,
+    })
+}
+fn root_properties(bytes: &[u8], digest: &str, generation: u64) -> Result<(usize, bool)> {
+    if bytes.is_empty() || bytes.len() > 65536 {
+        return Err(TwoBitStoreError::Invalid("root length"));
+    }
     use sha2::{Digest, Sha256};
-    if format!("{:x}", Sha256::digest(&root)) != head.root_sha256 {
+    if !valid_sha256(digest) || format!("{:x}", Sha256::digest(bytes)) != digest {
         return Err(TwoBitStoreError::Invalid("root identity"));
     }
     let root: Root =
-        serde_json::from_slice(&root).map_err(|_| TwoBitStoreError::Invalid("root schema"))?;
-    let (dimensions, empty) = match root {
-        Root::Empty(root) if root.valid() && root.generation == head.generation => {
-            (root.dimensions, true)
+        serde_json::from_slice(bytes).map_err(|_| TwoBitStoreError::Invalid("root schema"))?;
+    match root {
+        Root::Empty(root) if root.valid() && root.generation == generation => {
+            Ok((root.dimensions, true))
         }
         Root::Populated(manifest)
             if manifest.schema == crate::two_bit_generation::SCHEMA
-                && manifest.generation == head.generation
+                && manifest.generation == generation
                 && !manifest.low.is_empty()
                 && manifest.low.len() == manifest.step.len()
                 && manifest.canonical.valid()
@@ -271,19 +302,10 @@ async fn head_from_control(
                     .discovery
                     .valid(manifest.canonical.rows, manifest.canonical.dimensions) =>
         {
-            (manifest.low.len(), false)
+            Ok((manifest.low.len(), false))
         }
-        _ => return Err(TwoBitStoreError::Invalid("head generation")),
-    };
-    Ok(TwoBitHead {
-        epoch: head.epoch,
-        dimensions,
-        empty,
-        generation: head.generation,
-        root_sha256: head.root_sha256.clone(),
-        prefix: prefix.clone(),
-        version,
-    })
+        _ => Err(TwoBitStoreError::Invalid("head generation")),
+    }
 }
 pub(crate) async fn discovery_profile(
     store: &dyn ObjectStore,
@@ -572,8 +594,7 @@ pub async fn publish_two_bit_generation(
         prefix,
         manifest.generation,
         trusted_root_sha256,
-        manifest.low.len(),
-        false,
+        root.into_boxed_slice(),
         expected,
         authority,
     )
@@ -585,11 +606,11 @@ async fn publish_head(
     prefix: &ObjectPath,
     generation: u64,
     root_sha256: &str,
-    dimensions: usize,
-    empty: bool,
+    root: Box<[u8]>,
     expected: Option<&TwoBitHead>,
     authority: Option<(HeadBody, UpdateVersion)>,
 ) -> Result<TwoBitHead> {
+    let (dimensions, empty) = root_properties(&root, root_sha256, generation)?;
     if expected.is_some_and(|h| {
         h.prefix != *prefix || h.generation >= generation || h.dimensions != dimensions
     }) {
@@ -622,6 +643,7 @@ async fn publish_head(
         empty,
         generation,
         root_sha256: root_sha256.to_owned(),
+        root,
         prefix: prefix.clone(),
         version,
     })
@@ -710,7 +732,13 @@ pub(crate) async fn publish_empty_with_mode(
         Err(error) => return Err(error.into()),
     }
     publish_head(
-        store, prefix, generation, &digest, dimensions, true, expected, authority,
+        store,
+        prefix,
+        generation,
+        &digest,
+        bytes.into_boxed_slice(),
+        expected,
+        authority,
     )
     .await
 }
@@ -810,4 +838,85 @@ pub async fn end_two_bit_write_fence(
     )
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod root_seed_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn root_seed_rechecks_body_namespace_digest_and_generation_before_staging() {
+        let store = object_store::memory::InMemory::new();
+        let prefix = ObjectPath::from("seed/index");
+        let published = publish_empty_two_bit_generation(&store, &prefix, 2, 1, None)
+            .await
+            .unwrap();
+        let metadata = published.metadata_prefix();
+        let scratch = tempfile::tempdir().unwrap();
+        assert_eq!(published.retained_root_bytes(), published.root.len() as u64);
+        assert_eq!(
+            published
+                .authenticated_root(&metadata, published.root_sha256())
+                .unwrap(),
+            published.root.as_ref()
+        );
+        // No remote root exists during these attempts. The exact seed-admission
+        // error proves rejection precedes any remote HEAD/GET or child future.
+        store
+            .delete(&metadata.clone().join("manifest.json"))
+            .await
+            .unwrap();
+        for fault in [
+            "corrupt",
+            "empty",
+            "oversized",
+            "digest",
+            "prefix",
+            "generation",
+            "dimensions",
+            "kind",
+        ] {
+            let mut head = TwoBitHead {
+                epoch: published.epoch,
+                dimensions: published.dimensions,
+                empty: true,
+                generation: published.generation,
+                root_sha256: published.root_sha256.clone(),
+                root: published.root.clone(),
+                prefix: prefix.clone(),
+                version: published.version.clone(),
+            };
+            match fault {
+                "corrupt" => head.root[0] ^= 1,
+                "empty" => head.root = Box::new([]),
+                "oversized" => head.root = vec![0; 65537].into_boxed_slice(),
+                "digest" => head.root_sha256 = "0".repeat(64),
+                "prefix" => head.prefix = ObjectPath::from("foreign/index"),
+                "generation" => head.generation += 1,
+                "dimensions" => head.dimensions += 1,
+                _ => head.empty = false,
+            }
+            let error = crate::object_native_generation::stage_two_bit_metadata(
+                &store,
+                &metadata,
+                published.root_sha256(),
+                128_000_000,
+                scratch.path(),
+                Some(&head),
+            )
+            .await
+            .err()
+            .unwrap();
+            assert!(
+                matches!(
+                    error,
+                    crate::object_native_generation::ObjectNativeOpenError::Invalid(
+                        "root seed admission"
+                    )
+                ),
+                "{fault}: {error:?}"
+            );
+            assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+        }
+    }
 }

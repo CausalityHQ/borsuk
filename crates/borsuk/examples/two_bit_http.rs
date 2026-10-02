@@ -218,14 +218,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         already_pinned_bytes: 0,
     };
     let started = Instant::now();
-    let generation = TwoBitGeneration::open_remote(
-        store,
-        &head.metadata_prefix(),
-        head.root_sha256(),
-        limits,
-        scratch.path(),
-    )
-    .await?;
+    let generation =
+        TwoBitGeneration::open_remote_from_head(store, &head, limits, scratch.path()).await?;
     let remote_open_wall_ns = started.elapsed().as_nanos();
     let state = Arc::new(AppState {
         generation,

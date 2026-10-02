@@ -6,10 +6,9 @@ use crate::{
         TwoBitGeneration, TwoBitGenerationError, TwoBitGenerationLimits, TwoBitMutationSearchResult,
     },
     two_bit_mutations::{TwoBitMutationHit, TwoBitMutationSnapshot},
-    two_bit_store::{EmptyRoot, TwoBitHead, TwoBitStoreError, small_object},
+    two_bit_store::{EmptyRoot, TwoBitHead, TwoBitStoreError},
 };
 use object_store::ObjectStore;
-use sha2::{Digest, Sha256};
 use std::path::Path;
 use tokio::sync::Semaphore;
 
@@ -75,19 +74,19 @@ impl TwoBitIndex {
                 .ok_or(bad("empty query memory"))?;
             let modeled = fixed
                 .checked_add(131072)
+                .and_then(|n| n.checked_add(head.retained_root_bytes()))
                 .and_then(|n| n.checked_add(query_bytes))
                 .and_then(|n| n.checked_add(limits.already_pinned_bytes))
                 .ok_or(bad("empty index memory"))?;
             if modeled > limits.max_memory_bytes {
                 return Err(bad("empty index memory"));
             }
-            let (bytes, _) =
-                small_object(store, &head.metadata_prefix().join("manifest.json"), 1024).await?;
-            if format!("{:x}", Sha256::digest(&bytes)) != head.root_sha256() {
-                return Err(bad("empty root identity"));
+            let bytes = head.authenticated_root(&head.metadata_prefix(), head.root_sha256())?;
+            if bytes.len() > 1024 {
+                return Err(bad("empty root length"));
             }
             let root: EmptyRoot =
-                serde_json::from_slice(&bytes).map_err(|_| bad("empty root schema"))?;
+                serde_json::from_slice(bytes).map_err(|_| bad("empty root schema"))?;
             if !root.valid()
                 || root.generation != head.generation()
                 || root.dimensions != head.dimensions()
@@ -104,10 +103,9 @@ impl TwoBitIndex {
                     .ok_or(bad("index memory"))?,
                 ..limits
             };
-            let base = TwoBitGeneration::open_remote(
+            let base = TwoBitGeneration::open_remote_from_head(
                 store,
-                &head.metadata_prefix(),
-                head.root_sha256(),
+                &head,
                 loader_limits,
                 scratch_parent,
             )
@@ -128,6 +126,11 @@ impl TwoBitIndex {
     /// Pinned identity and conditional token for mutation recovery/publication.
     pub fn head(&self) -> &TwoBitHead {
         &self.head
+    }
+
+    /// Populated-base startup counters, including local authenticated root reuse.
+    pub fn remote_open_stats(&self) -> Option<&crate::two_bit_generation::RemoteOpenStats> {
+        self.base.as_ref()?.remote_open_stats()
     }
 
     /// Up to k logical IDs, including a truly empty result. The same query slot

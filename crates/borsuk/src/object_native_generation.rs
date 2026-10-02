@@ -182,8 +182,16 @@ pub struct MetadataReadStats {
     /// Actual critical wall of this whole wave, repeated for every member.
     /// Count once per wave, never sum overlapping per-object waits.
     pub metadata_wave_wall_ns: u128,
-    /// Bytes streamed to the scratch file.
+    /// Remote bytes streamed to the scratch file; excludes a local root seed.
     pub bytes: u64,
+    /// Authenticated root bytes copied locally, never network transfer.
+    pub reused_root_bytes: u64,
+    /// Immutable head allocation charged separately from payload buffers.
+    pub retained_root_bytes: u64,
+    /// Local root-seed authentication time; zero for remote payloads.
+    pub local_auth_wall_ns: u128,
+    /// Local root-seed file creation/copy/flush time; zero for remote payloads.
+    pub local_copy_wall_ns: u128,
     /// Number of transport chunks received.
     pub chunks: u64,
     /// HEAD admission wait, in nanoseconds.
@@ -255,6 +263,7 @@ pub(crate) async fn stage_generation_metadata(
         names,
         scratch_parent,
         false,
+        None,
     )
     .await
 }
@@ -266,6 +275,7 @@ pub(crate) async fn stage_two_bit_metadata(
     trusted_sha256: &str,
     max_bytes: u64,
     scratch_parent: &Path,
+    head: Option<&crate::two_bit_store::TwoBitHead>,
 ) -> Result<(tempfile::TempDir, Vec<MetadataReadStats>), ObjectNativeOpenError> {
     stage_metadata(
         store,
@@ -275,6 +285,7 @@ pub(crate) async fn stage_two_bit_metadata(
         &["manifest.json"],
         scratch_parent,
         true,
+        head,
     )
     .await
 }
@@ -384,6 +395,10 @@ async fn stage_metadata_payload(
         metadata_wave_wall_ns: 0,
         name: name.to_owned(),
         bytes: count,
+        reused_root_bytes: 0,
+        retained_root_bytes: 0,
+        local_auth_wall_ns: 0,
+        local_copy_wall_ns: 0,
         chunks,
         head_wall_ns: 0,
         logical_head_requests: 0,
@@ -412,6 +427,7 @@ async fn stage_metadata(
     names: &[&str],
     scratch_parent: &Path,
     two_bit: bool,
+    head: Option<&crate::two_bit_store::TwoBitHead>,
 ) -> Result<(tempfile::TempDir, Vec<MetadataReadStats>), ObjectNativeOpenError> {
     if !is_hash(trusted_sha256) || max_bytes == 0 {
         return Err(ObjectNativeOpenError::Invalid(
@@ -421,6 +437,18 @@ async fn stage_metadata(
     if names.first() != Some(&"manifest.json") {
         return Err(ObjectNativeOpenError::Invalid("metadata root order"));
     }
+    let auth_started = std::time::Instant::now();
+    let seed = head
+        .map(|head| {
+            head.authenticated_root(prefix, trusted_sha256)
+                .map_err(|_| ObjectNativeOpenError::Invalid("root seed admission"))
+        })
+        .transpose()?;
+    let local_auth_wall_ns = if seed.is_some() {
+        auth_started.elapsed().as_nanos()
+    } else {
+        0
+    };
     let scratch = tempfile::tempdir_in(scratch_parent).map_err(ObjectNativeOpenError::Io)?;
     let mut total = 0_u64;
     let mut stats = Vec::with_capacity(names.len());
@@ -475,7 +503,7 @@ async fn stage_metadata(
                     _ => None,
                 }
             } else {
-                None
+                seed.map(<[u8]>::len)
             };
             let (expected, logical_head_requests, head_wall_ns) = match exact {
                 Some(length) => (length as u64, 0, 0),
@@ -507,6 +535,33 @@ async fn stage_metadata(
             |(name, expected, heads, head_wall)| {
                 let scratch = scratch.path();
                 async move {
+                    if name == "manifest.json"
+                        && let Some(seed) = seed
+                    {
+                        let copy_started = std::time::Instant::now();
+                        let mut output =
+                            File::create(scratch.join(name)).map_err(ObjectNativeOpenError::Io)?;
+                        output.write_all(seed).map_err(ObjectNativeOpenError::Io)?;
+                        output.flush().map_err(ObjectNativeOpenError::Io)?;
+                        return Ok(MetadataReadStats {
+                            name: name.to_owned(),
+                            metadata_wave: 0,
+                            metadata_wave_wall_ns: 0,
+                            bytes: 0,
+                            reused_root_bytes: seed.len() as u64,
+                            retained_root_bytes: seed.len() as u64,
+                            local_auth_wall_ns,
+                            local_copy_wall_ns: copy_started.elapsed().as_nanos(),
+                            chunks: 0,
+                            head_wall_ns: 0,
+                            logical_head_requests: 0,
+                            logical_get_requests: 0,
+                            payload_buffer_bound_bytes: 0,
+                            get_wall_ns: 0,
+                            stream_wall_ns: 0,
+                            write_wall_ns: 0,
+                        });
+                    }
                     let mut entry = stage_metadata_payload(
                         store,
                         prefix,
@@ -569,7 +624,8 @@ async fn stage_metadata(
                 }
             }
         }
-        let wave_wall_ns = wave_started.elapsed().as_nanos();
+        let wave_wall_ns =
+            wave_started.elapsed().as_nanos() + if index == 0 { local_auth_wall_ns } else { 0 };
         for entry in &mut batch {
             entry.metadata_wave = wave;
             entry.metadata_wave_wall_ns = wave_wall_ns;

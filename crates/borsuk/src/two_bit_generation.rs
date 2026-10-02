@@ -783,6 +783,49 @@ impl TwoBitGeneration {
         limits: TwoBitGenerationLimits,
         scratch_parent: &Path,
     ) -> Result<Self> {
+        Self::open_remote_inner(store, prefix, trusted_sha256, limits, scratch_parent, None).await
+    }
+
+    /// Reuse the bounded immutable root authenticated by an authorized head.
+    /// Its retained allocation is charged in addition to existing pins, even if
+    /// the caller releases the head after this open. Child admission is unchanged.
+    pub async fn open_remote_from_head(
+        store: &dyn ObjectStore,
+        head: &crate::two_bit_store::TwoBitHead,
+        limits: TwoBitGenerationLimits,
+        scratch_parent: &Path,
+    ) -> Result<Self> {
+        let caller_pins = limits.already_pinned_bytes;
+        let limits = TwoBitGenerationLimits {
+            already_pinned_bytes: limits
+                .already_pinned_bytes
+                .checked_add(head.retained_root_bytes())
+                .ok_or(TwoBitGenerationError::Invalid("retained root memory"))?,
+            ..limits
+        };
+        let mut generation = Self::open_remote_inner(
+            store,
+            &head.metadata_prefix(),
+            head.root_sha256(),
+            limits,
+            scratch_parent,
+            Some(head),
+        )
+        .await?;
+        // The retained root is already in modeled_memory_bytes. It must not
+        // authorize caller-owned mutation snapshots or exclusion rosters.
+        generation.limits.already_pinned_bytes = caller_pins;
+        Ok(generation)
+    }
+
+    async fn open_remote_inner(
+        store: &dyn ObjectStore,
+        prefix: &ObjectPath,
+        trusted_sha256: &str,
+        limits: TwoBitGenerationLimits,
+        scratch_parent: &Path,
+        head: Option<&crate::two_bit_store::TwoBitHead>,
+    ) -> Result<Self> {
         let staging_started = std::time::Instant::now();
         let (scratch, metadata) = stage_two_bit_metadata(
             store,
@@ -792,6 +835,7 @@ impl TwoBitGeneration {
                 .max_memory_bytes
                 .saturating_sub(limits.already_pinned_bytes),
             scratch_parent,
+            head,
         )
         .await
         .map_err(TwoBitGenerationError::Stage)?;
@@ -2066,6 +2110,33 @@ mod source_walk_tests {
         assert!(wall <= startup.staging_wall_ns);
     }
 
+    fn assert_reused_root(generation: &TwoBitGeneration, bytes: u64) {
+        let startup = generation.remote_open_stats().unwrap();
+        let root = &startup.metadata[0];
+        assert_eq!(root.name, "manifest.json");
+        assert_eq!(root.reused_root_bytes, bytes);
+        assert_eq!(root.retained_root_bytes, bytes);
+        assert_eq!(root.logical_head_requests, 0);
+        assert_eq!(root.logical_get_requests, 0);
+        assert_eq!(root.bytes, 0);
+        assert_eq!(root.chunks, 0);
+        assert_eq!(root.payload_buffer_bound_bytes, 0);
+        assert_eq!(
+            root.head_wall_ns + root.get_wall_ns + root.stream_wall_ns + root.write_wall_ns,
+            0
+        );
+        assert!(root.local_auth_wall_ns > 0 && root.local_copy_wall_ns > 0);
+        assert!(root.local_auth_wall_ns + root.local_copy_wall_ns <= root.metadata_wave_wall_ns);
+        assert!(
+            startup.metadata[1..]
+                .iter()
+                .all(|row| row.reused_root_bytes == 0
+                    && row.retained_root_bytes == 0
+                    && row.local_auth_wall_ns == 0
+                    && row.local_copy_wall_ns == 0)
+        );
+    }
+
     #[derive(Debug, Default)]
     struct RecordedStore {
         inner: object_store::memory::InMemory,
@@ -2073,6 +2144,8 @@ mod source_walk_tests {
         writes: std::sync::Mutex<Vec<String>>,
         fail_head: std::sync::atomic::AtomicUsize,
         metadata_fault: std::sync::Mutex<Option<&'static str>>,
+        root_read_budget: std::sync::Mutex<Option<(String, usize)>>,
+        bad_etag_suffix: std::sync::Mutex<Option<&'static str>>,
     }
     impl std::fmt::Display for RecordedStore {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -2086,9 +2159,32 @@ mod source_walk_tests {
             path: &ObjectPath,
             options: object_store::GetOptions,
         ) -> object_store::Result<object_store::GetResult> {
+            {
+                let mut guard = self.root_read_budget.lock().unwrap();
+                if let Some((root, remaining)) = guard.as_mut()
+                    && root.as_str() == path.as_ref()
+                {
+                    if options.head || *remaining == 0 {
+                        return Err(object_store::Error::Generic {
+                            store: "recorded",
+                            source: std::io::Error::other("redundant root HEAD/GET").into(),
+                        });
+                    }
+                    *remaining -= 1;
+                }
+            }
             let head = options.head;
             let etag = options.if_match.clone();
             let mut result = self.inner.get_opts(path, options).await?;
+            if head
+                && self
+                    .bad_etag_suffix
+                    .lock()
+                    .unwrap()
+                    .is_some_and(|suffix| path.as_ref().ends_with(suffix))
+            {
+                result.meta.e_tag = Some("W/weak".into());
+            }
             self.reads
                 .lock()
                 .unwrap()
@@ -2424,6 +2520,24 @@ mod source_walk_tests {
         let root_key = metadata_location(&prefix, "manifest.json");
         let root_body = fs::read(root.join("manifest.json")).unwrap();
         let scratch = tempfile::tempdir().unwrap();
+        // Published heads already own the authenticated body: no root transport.
+        store.reads.lock().unwrap().clear();
+        *store.root_read_budget.lock().unwrap() = Some((root_key.to_string(), 0));
+        let published =
+            TwoBitGeneration::open_remote_from_head(store.as_ref(), &head, limits, scratch.path())
+                .await
+                .unwrap();
+        assert_reused_root(&published, root_body.len() as u64);
+        assert!(
+            store
+                .reads
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|read| read.0 != root_key.as_ref())
+        );
+        assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+        *store.root_read_budget.lock().unwrap() = None;
         for (body, trusted) in [
             (b"{}".to_vec(), root_sha.clone()),
             (b"{".to_vec(), hash(b"{")),
@@ -2432,9 +2546,16 @@ mod source_walk_tests {
             store.put(&root_key, body.into()).await.unwrap();
             store.reads.lock().unwrap().clear();
             assert!(
-                stage_two_bit_metadata(store.as_ref(), &prefix, &trusted, u64::MAX, scratch.path())
-                    .await
-                    .is_err()
+                stage_two_bit_metadata(
+                    store.as_ref(),
+                    &prefix,
+                    &trusted,
+                    u64::MAX,
+                    scratch.path(),
+                    None
+                )
+                .await
+                .is_err()
             );
             let reads = store.reads.lock().unwrap().len();
             assert_eq!(reads, 2);
@@ -2450,12 +2571,94 @@ mod source_walk_tests {
             assert_eq!(store.reads.lock().unwrap().len(), reads);
             assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
         }
-        store.put(&root_key, root_body.into()).await.unwrap();
+        store
+            .put(&root_key, root_body.clone().into())
+            .await
+            .unwrap();
         store.reads.lock().unwrap().clear();
         let mut lazy =
             TwoBitGeneration::open_remote(store.as_ref(), &prefix, &root_sha, limits, temp.path())
                 .await
                 .unwrap();
+        // The complete authority-head + open path must perform exactly one root GET.
+        let direct_reads = store.reads.lock().unwrap().clone();
+        store.reads.lock().unwrap().clear();
+        let authenticated_head = crate::two_bit_store::read_two_bit_head(store.as_ref(), &index)
+            .await
+            .unwrap()
+            .unwrap();
+        *store.root_read_budget.lock().unwrap() = Some((root_key.to_string(), 0));
+        let reused = TwoBitGeneration::open_remote_from_head(
+            store.as_ref(),
+            &authenticated_head,
+            limits,
+            scratch.path(),
+        )
+        .await
+        .unwrap();
+        assert_reused_root(&reused, root_body.len() as u64);
+        assert_eq!(
+            reused.limits.already_pinned_bytes,
+            limits.already_pinned_bytes
+        );
+        assert_eq!(
+            reused.modeled_memory_bytes - lazy.modeled_memory_bytes,
+            root_body.len() as u64
+        );
+        {
+            let reads = store.reads.lock().unwrap();
+            assert_eq!(
+                reads
+                    .iter()
+                    .filter(|read| read.0 == root_key.as_ref() && !read.1)
+                    .count(),
+                1
+            );
+            assert!(
+                reads
+                    .iter()
+                    .all(|read| read.0 != root_key.as_ref() || !read.1)
+            );
+        }
+        assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+        *store.root_read_budget.lock().unwrap() = None;
+        drop(reused);
+        drop(authenticated_head);
+        drop(published);
+        for _ in 0..2 {
+            store.reads.lock().unwrap().clear();
+            *store.root_read_budget.lock().unwrap() = Some((root_key.to_string(), 1));
+            let coordinated = crate::two_bit_index::TwoBitIndex::open_coordinated(
+                store.as_ref(),
+                &index,
+                &temp.path().join("reader-maintenance"),
+                limits,
+                scratch.path(),
+            )
+            .await
+            .unwrap();
+            let root_stats = &coordinated.remote_open_stats().unwrap().metadata[0];
+            assert_eq!(root_stats.reused_root_bytes, head.retained_root_bytes());
+            assert_eq!(
+                root_stats.logical_get_requests + root_stats.logical_head_requests,
+                0
+            );
+            assert_eq!(
+                store
+                    .reads
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|read| read.0 == root_key.as_ref())
+                    .count(),
+                1
+            );
+            assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+            drop(coordinated);
+        }
+        *store.root_read_budget.lock().unwrap() = None;
+        // Preserve the standalone trusted-SHA path's transport assertions.
+        *store.reads.lock().unwrap() = direct_reads;
         assert!(lazy.plane.record(0).is_none());
         let startup = lazy.remote_open_stats().unwrap();
         assert_eq!(startup.source_head_requests, 1);
@@ -2522,13 +2725,44 @@ mod source_walk_tests {
                     .any(|suffix| name.ends_with(suffix)))
         );
         let scratch = tempfile::tempdir().unwrap();
+        store.reads.lock().unwrap().clear();
+        *store.root_read_budget.lock().unwrap() = Some((root_key.to_string(), 0));
+        for pinned in [0, u64::MAX] {
+            assert!(
+                TwoBitGeneration::open_remote_from_head(
+                    store.as_ref(),
+                    &head,
+                    TwoBitGenerationLimits {
+                        max_memory_bytes: head.retained_root_bytes(),
+                        already_pinned_bytes: pinned,
+                        ..limits
+                    },
+                    scratch.path(),
+                )
+                .await
+                .is_err()
+            );
+            assert!(store.reads.lock().unwrap().is_empty());
+            assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+        }
+        {
+            let mut pending = std::pin::pin!(TwoBitGeneration::open_remote_from_head(
+                store.as_ref(),
+                &head,
+                limits,
+                scratch.path(),
+            ));
+            assert!(futures_util::poll!(pending.as_mut()).is_pending());
+            assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 1);
+        }
+        assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
         for fault in ["size", "range", "short", "long", "corrupt"] {
             *store.metadata_fault.lock().unwrap() = Some(fault);
             store.reads.lock().unwrap().clear();
-            let error = TwoBitGeneration::open_remote(
+            *store.root_read_budget.lock().unwrap() = Some((root_key.to_string(), 0));
+            let error = TwoBitGeneration::open_remote_from_head(
                 store.as_ref(),
-                &prefix,
-                &root_sha,
+                &head,
                 limits,
                 scratch.path(),
             )
@@ -2567,6 +2801,25 @@ mod source_walk_tests {
             assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
         }
         *store.metadata_fault.lock().unwrap() = None;
+        for (suffix, expected) in [
+            ("plane/records.bin", "source ETag"),
+            ("router/leaves.bin", "leaf ETag"),
+        ] {
+            *store.bad_etag_suffix.lock().unwrap() = Some(suffix);
+            let error = TwoBitGeneration::open_remote_from_head(
+                store.as_ref(),
+                &head,
+                limits,
+                scratch.path(),
+            )
+            .await
+            .err()
+            .unwrap();
+            assert!(matches!(error, TwoBitGenerationError::Invalid(actual) if actual == expected));
+            assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+        }
+        *store.bad_etag_suffix.lock().unwrap() = None;
+        *store.root_read_budget.lock().unwrap() = None;
         // Use the same authenticated source/page fixture with a graph descriptor:
         // semantic decoded-memory admission would reject this small cap earlier.
         let root_body = fs::read(root.join("manifest.json")).unwrap();
@@ -2605,6 +2858,7 @@ mod source_walk_tests {
                 &hash(&graph_body),
                 cap,
                 scratch.path(),
+                None,
             )
             .await
             .err()
@@ -2694,6 +2948,31 @@ mod source_walk_tests {
             .await
             .unwrap();
         assert_eq!(expected.ranked.candidates, actual.ranked.candidates);
+        *store.root_read_budget.lock().unwrap() = Some((root_key.to_string(), 0));
+        let reused =
+            TwoBitGeneration::open_remote_from_head(store.as_ref(), &head, limits, scratch.path())
+                .await
+                .unwrap();
+        let reused_result = reused
+            .search_with_store(store.as_ref(), &query, 100, None)
+            .await
+            .unwrap();
+        assert_eq!(actual.ranked.candidates, reused_result.ranked.candidates);
+        assert_eq!(actual.plan, reused_result.plan);
+        assert_eq!(actual.source_stats, reused_result.source_stats);
+        assert_eq!(actual.router_stats, reused_result.router_stats);
+        store.reads.lock().unwrap().clear();
+        assert!(matches!(
+            reused
+                .search_with_store(store.as_ref(), &query, 100, Some(&[1001]))
+                .await
+                .err()
+                .unwrap(),
+            TwoBitGenerationError::Invalid("search admission")
+        ));
+        assert!(store.reads.lock().unwrap().is_empty());
+        drop(reused);
+        *store.root_read_budget.lock().unwrap() = None;
         assert_eq!(expected.plan, actual.plan);
         assert_eq!(expected.ranked.stats, actual.ranked.stats);
         assert_eq!(actual.source_stats, source);
@@ -2966,15 +3245,18 @@ mod source_walk_tests {
                 .unwrap(),
             DiscoveryMode::Semantic
         );
-        let current = TwoBitGeneration::open_remote(
+        let new_root_key = metadata_location(&compacted.metadata_prefix(), "manifest.json");
+        *store.root_read_budget.lock().unwrap() = Some((new_root_key.to_string(), 0));
+        let current = TwoBitGeneration::open_remote_from_head(
             store.as_ref(),
-            &compacted.metadata_prefix(),
-            compacted.root_sha256(),
+            &compacted,
             limits,
             temp.path(),
         )
         .await
         .unwrap();
+        assert_reused_root(&current, compacted.retained_root_bytes());
+        *store.root_read_budget.lock().unwrap() = None;
         let found = current
             .search_with_store(store.as_ref(), &[1., 0.], 100, None)
             .await
@@ -3200,12 +3482,96 @@ mod source_walk_tests {
     }
 
     #[tokio::test]
+    async fn empty_head_reuse_and_coordinated_restart_charge_retained_body() {
+        let store = RecordedStore::default();
+        let prefix = ObjectPath::from("empty/index");
+        let scratch = tempfile::tempdir().unwrap();
+        let head =
+            crate::two_bit_store::publish_empty_two_bit_generation(&store, &prefix, 2, 1, None)
+                .await
+                .unwrap();
+        let root_key = metadata_location(&head.metadata_prefix(), "manifest.json");
+        let mut limits = TwoBitGenerationLimits {
+            max_memory_bytes: 128_000_000,
+            max_active_queries: 1,
+            max_query_bytes: 14,
+            max_query_gets: 1,
+            max_parallel_gets: 1,
+            max_source_bytes: 1024,
+            max_source_gets: 1,
+            max_parallel_source_gets: 1,
+            max_query_scratch_bytes: 400_000,
+            already_pinned_bytes: 0,
+        };
+        limits.max_memory_bytes = head.metadata_prefix().as_ref().len() as u64 * 2
+            + 4096
+            + 131072
+            + head.retained_root_bytes()
+            + 2 * 16
+            + 400_000
+            + 4096;
+        store.reads.lock().unwrap().clear();
+        *store.root_read_budget.lock().unwrap() = Some((root_key.to_string(), 0));
+        let index =
+            crate::two_bit_index::TwoBitIndex::open_remote(&store, head, limits, scratch.path())
+                .await
+                .unwrap();
+        assert!(index.head().is_empty());
+        assert!(store.reads.lock().unwrap().is_empty());
+        drop(index);
+        let maintenance = tempfile::tempdir().unwrap();
+        for _ in 0..2 {
+            store.reads.lock().unwrap().clear();
+            *store.root_read_budget.lock().unwrap() = Some((root_key.to_string(), 1));
+            let reopened = crate::two_bit_index::TwoBitIndex::open_coordinated(
+                &store,
+                &prefix,
+                maintenance.path(),
+                limits,
+                scratch.path(),
+            )
+            .await
+            .unwrap();
+            assert!(reopened.head().is_empty());
+            assert_eq!(
+                store
+                    .reads
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|read| read.0 == root_key.as_ref())
+                    .count(),
+                1
+            );
+            drop(reopened);
+        }
+        *store.root_read_budget.lock().unwrap() = Some((root_key.to_string(), 1));
+        let head = crate::two_bit_store::read_two_bit_head(&store, &prefix)
+            .await
+            .unwrap()
+            .unwrap();
+        store.reads.lock().unwrap().clear();
+        limits.max_memory_bytes -= 1;
+        let error =
+            crate::two_bit_index::TwoBitIndex::open_remote(&store, head, limits, scratch.path())
+                .await
+                .err()
+                .unwrap();
+        assert!(matches!(
+            error,
+            crate::two_bit_store::TwoBitStoreError::Invalid("empty index memory")
+        ));
+        assert!(store.reads.lock().unwrap().is_empty());
+        assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
     async fn fragmented_paged_source_preserves_trace_and_rank_across_get_caps() {
         assert_paged_source(262_145, true).await;
     }
 
     async fn assert_paged_source(rows: usize, fragmented: bool) {
-        use object_store::{PutPayload, memory::InMemory};
+        use object_store::PutPayload;
         use sha2::{Digest, Sha256};
         let hash = |body: &[u8]| format!("{:x}", Sha256::digest(body));
         let temp = tempfile::tempdir().unwrap();
@@ -3231,7 +3597,7 @@ mod source_walk_tests {
         let sq8_path = temp.path().join("sq8");
         fs::write(&raw_path, &raw).unwrap();
         fs::write(&sq8_path, &sq8).unwrap();
-        let store = InMemory::new();
+        let store = RecordedStore::default();
         let sq8_sha = hash(&sq8);
         let key = ObjectPath::from(format!("tenant/objects/{sq8_sha}"));
         store.put(&key, PutPayload::from(sq8)).await.unwrap();
@@ -3433,6 +3799,57 @@ mod source_walk_tests {
             .await
             .unwrap();
         assert_eq!(expected.ranked.candidates, actual.ranked.candidates);
+        let index = ObjectPath::from("tenant");
+        crate::two_bit_store::commit_control(
+            &store,
+            &index,
+            &crate::two_bit_store::HeadBody {
+                schema: "borsuk-two-bit-head-v2".into(),
+                epoch: 1,
+                generation: 7,
+                root_sha256: root_sha.clone(),
+                mutation: None,
+                fence: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        let root_key = metadata_location(&prefix, "manifest.json");
+        store.reads.lock().unwrap().clear();
+        *store.root_read_budget.lock().unwrap() = Some((root_key.to_string(), 1));
+        let head = crate::two_bit_store::read_two_bit_head(&store, &index)
+            .await
+            .unwrap()
+            .unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let reused = TwoBitGeneration::open_remote_from_head(&store, &head, limits, scratch.path())
+            .await
+            .unwrap();
+        assert_reused_root(&reused, head.retained_root_bytes());
+        assert_eq!(
+            reused.modeled_memory_bytes - remote.modeled_memory_bytes,
+            head.retained_root_bytes()
+        );
+        assert_eq!(
+            store
+                .reads
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|read| read.0 == root_key.as_ref())
+                .count(),
+            1
+        );
+        assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+        let reused_result = reused
+            .search_with_store(&store, &query, 10, None)
+            .await
+            .unwrap();
+        assert_eq!(actual.ranked.candidates, reused_result.ranked.candidates);
+        assert_eq!(actual.plan, reused_result.plan);
+        remote = reused;
+        *store.root_read_budget.lock().unwrap() = None;
         assert_eq!(expected.plan, actual.plan);
         assert_eq!(expected.ranked.stats, actual.ranked.stats);
         assert_eq!(expected.source_stats, Sq8ReadStats::default());
