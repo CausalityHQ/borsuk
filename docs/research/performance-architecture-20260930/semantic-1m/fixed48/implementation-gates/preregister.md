@@ -37,3 +37,23 @@ bytes/SHA authenticate. Do not score queries, read truth or infer ANN improvemen
 from this qualification. Next is the one frozen fresh64 production falsifier:
 unchanged router artifact payloads, duplicate audit before GT, nominations sealed
 before the sole GT100 pass and full source/SQ8 loss/resource decomposition.
+
+
+## Prospective truth-free scorer seam before launch
+
+Inspection found current experimental scorer config-v2 requires truth identity
+before invocation. This cannot establish the new protocol's nomination-before-GT
+construction boundary. Before this unrun qualification is frozen for launch,
+include a third explicit native path, bin/check_semantic_router_scorer.rs, that
+extracts its existing production diagnostic loop as a truth-free config-v3
+measurement. Emit every existing frozen query diagnostic/returned ID/read/stage
+field, sync all64 and a completed FROZEN marker; no GT path, identity or body is
+accepted. No second production query pass. Offline evaluation after the sole
+GT100 authenticates those frozen bytes and computes the same six loss stages.
+
+The persistent library format/routing/ranking is unchanged. Old experiments
+retain their archived source/binaries/config-v2 receipts; this current tool
+rejects incompatible config rather than retaining a legacy execution mode.
+All-source manifest and exact3 native delta will be refreshed before launch;
+seven original qualification commands still exercise the scorer and release it.
+No existing experimental outcome or acceptance threshold is changed.
