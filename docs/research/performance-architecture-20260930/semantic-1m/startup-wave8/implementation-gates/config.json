@@ -19,7 +19,7 @@
     "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
     "scripts/launch_native_semantic_router_cold_spot.py": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180",
     "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
-    "scripts/launch_native_workspace_execution_spot.py": "2c6e943107a8308ebe5430ee82788d96c05f73a93cf3b286b8dce65e332049e3",
+    "scripts/launch_native_workspace_execution_spot.py": "2a0c0f709c231a6233fd2a9c571f1c86b2265540016e09d10e7c5539bb197559",
     "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b",
     "scripts/launch_v174_relaid_bind_compile_spot.py": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a",
     "scripts/package_semantic_native_generation.py": "cb6a540c810e3a75381d22339eb72f00382b0972a2d3ee687bbb1d97d5a1b594",
@@ -33,7 +33,7 @@
     "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
     "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6"
   },
-  "controller_source_commit": "3176951f38c9c2961d5cefa11f0a3d0257b28644",
+  "controller_source_commit": "4e1616eb7ccb9d41d7daed1fa6ff78d16eda2c39",
   "cpu_quota_percent": 200,
   "ebs_s3_allowance_usd": 0.15,
   "environment": {
@@ -54,7 +54,7 @@
   "native_source_manifest": {
     "bytes": 46612,
     "path": "docs/research/performance-architecture-20260930/semantic-1m/startup-wave8/candidate-native-source-manifest.json",
-    "sha256": "1339f3aa96e9f18b8d0023ad0d52c5453e702bddd5f29ae79187f5cfe003dcff"
+    "sha256": "975638f75cff8c18204e6f43b78b09da7d463a96bc7e35bf30490635d5027c60"
   },
   "region": "eu-central-1",
   "root_device_name": "/dev/sda1",
