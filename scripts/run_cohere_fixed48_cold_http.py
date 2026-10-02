@@ -482,9 +482,9 @@ def publish_generation(s3, config, scratch, output, references, ledger, checkpoi
             row['consumed_response_bytes'] = len(raw)
         assert 0 < len(raw) <= 65536 and len(raw) == response['ContentLength'], 'bounded production head'
         write(head_path, raw)
-    with patch.object(library, 'NATIVE', config['resources']['native_memory_bytes']), patch.object(library, 'native_budget_model', native_budget_model):
-        arm, published = library.publication_arm(root, prefix, raw)
-        validation = library.publication_reference(output / 'publication-reference.jsonl', arm, references)
+    arm, published = library.publication_arm(root, prefix, raw,
+        native_memory_bytes=config['resources']['native_memory_bytes'], budget_model=models['http'])
+    validation = library.publication_reference(output / 'publication-reference.jsonl', arm, references)
     assert published == manifest and artifact(original_path) == artifact(output / 'original-generation-root.json')
     for name in library.STARTUP:
         fetch(s3, dict(bucket=bucket, key=prefix + '/generations/' + root_sha + '/' + name),
@@ -502,7 +502,9 @@ def publish_generation(s3, config, scratch, output, references, ledger, checkpoi
     return arm
 
 
-def measured_call(binary, config, arm, body, expected, truth, scratch):
+def measured_call(binary, config, arm, body, expected, truth, scratch, *, port=8080, require_cgroup_drained=True):
+    """Concurrent callers opting out of per-call cgroup drain must prove final cell drain."""
+    assert type(require_cgroup_drained) is bool, 'require_cgroup_drained must be bool'
     failures = io.StringIO()
     observed = dict(native_process_started=False, http_attempts=0)
     before = snapshot()
@@ -535,12 +537,14 @@ def measured_call(binary, config, arm, body, expected, truth, scratch):
     environment = dict(os.environ,
         BORSUK_NATIVE_MEMORY_BYTES=str(config['resources']['native_memory_bytes']), AWS_MAX_ATTEMPTS='1')
     try:
-        with (patch.object(library, 'NATIVE', config['resources']['native_memory_bytes']), patch.object(library, 'native_budget_model', native_budget_model)):
-            row = cold.cold_call(str(binary), config, dict(arm, dataset='CoHere'), body, expected, truth, failures,
-                response_check=lambda r, e, t, a: validate_query(r, arm, e, t),
-                startup_check=lambda v, f, w: library.validate_startup(v, arm, w, wave_objects=8, root_reuse=True),
-                post_call=post, spawn=spawn, env=environment, stop_call=library.close_native, temp_dir=temp_dir)
-            row['accounting'] = library.transport(row['native_header'], row['response'], arm, wave_objects=8, root_reuse=True)
+        admission = dict(native_memory_bytes=config['resources']['native_memory_bytes'],
+            budget_model=native_budget_model(arm['metadata_files'], retained_root=True))
+        library.validate_roster(arm, **admission)
+        row = cold.cold_call(str(binary), config, dict(arm, dataset='CoHere'), body, expected, truth, failures, port=port,
+            response_check=lambda r, e, t, a: validate_query(r, arm, e, t),
+            startup_check=lambda v, f, w: library.validate_startup(v, arm, w, wave_objects=8, root_reuse=True, **admission),
+            post_call=post, spawn=spawn, env=environment, stop_call=library.close_native, temp_dir=temp_dir)
+        row['accounting'] = library.transport(row['native_header'], row['response'], arm, wave_objects=8, root_reuse=True, **admission)
         row.update(outcome='success', **observed)
         row['completed_ns'] = observed['first_wire_completed_ns']
         for key, start in (('cold_start_to_first_http_response_ns', 'started_ns'), ('first_post_to_response_ns', 'connected_ns'),
@@ -548,7 +552,7 @@ def measured_call(binary, config, arm, body, expected, truth, scratch):
             row[key] = row['completed_ns'] - row[start]
         assert row['native_close']['intentional_stop'] is row['native_close']['process_group_closed'] is True
         row['resources'] = telemetry.resources(row['native_time_log'], config['resources']['native_memory_bytes'])
-        check_cgroup(before, snapshot(), config['resources'], drained=True)
+        check_cgroup(before, snapshot(), config['resources'], drained=require_cgroup_drained)
     except Exception as error:
         failed = [json.loads(line) for line in failures.getvalue().splitlines()]
         if not row and failed:
@@ -1092,6 +1096,139 @@ def self_check():
                     router_head_wall_ns=1, source_head_requests=1, router_head_requests=1))
 
         real_measured_call = measured_call
+        def concurrent_calls_check(arm, response, *, concurrent=False):
+            # Two real Python threads must overlap without patching call globals.
+            scratch = directory / ('concurrent' if concurrent else 'serial-drain-guard')
+            (scratch / 'native').mkdir(parents=True)
+            barrier, a_done = threading.Barrier(2, timeout=5), threading.Event()
+            a_before, lock, live = threading.Event(), threading.Lock(), set()
+            owners, results, errors, posts, stops = {}, {}, {}, [], []
+            ports = (18080, 18081)
+            def globals_now():
+                return (library.NATIVE, library.native_budget_model, cold.stop, library.close_native,
+                    tempfile.tempdir, tempfile.TemporaryDirectory, dict(os.environ))
+            original_globals = globals_now()
+            def snapshot():
+                value = copy.deepcopy(cgroup)
+                with lock:
+                    value['process_ids'] = [123, *sorted(live)]
+                value['pids.current'] = str(len(value['process_ids']))
+                a_before.set()
+                return value
+            class ConcurrentClient(Client):
+                def __init__(self, host, port, **kwargs):
+                    assert host == '127.0.0.1' and port in ports
+                    self.port = port
+            def spawn(command, **kwargs):
+                port = int(command[-1].split(':')[-1])
+                assert port in ports and port not in owners
+                owned = Path(kwargs['stdout'].name).parent
+                assert kwargs['env']['TMPDIR'] == str(owned) and owned.parent == scratch / 'native'
+                assert kwargs['env']['BORSUK_NATIVE_MEMORY_BYTES'] == str(HOST['native_memory_bytes'])
+                owners[port] = owned
+                (owned / 'payload').write_text(str(port))
+                header = dict(header_for(arm), listen=f'127.0.0.1:{port}')
+                kwargs['stdout'].write(json.dumps(header) + '\n')
+                kwargs['stdout'].flush()
+                write(Path(command[command.index('-o') + 1]), native_time.encode())
+                with lock:
+                    live.add(port)
+                return SimpleNamespace(pid=port, poll=lambda: None, returncode=-15, wait=lambda **kw: -15)
+            def post(client, body):
+                port = client.port
+                assert body == library.http_request(requests[port - ports[0]]['query'], arm['authority'])
+                posts.append(port)
+                barrier.wait()
+                assert len(owners) == 2 and owners[ports[0]] != owners[ports[1]]
+                assert globals_now() == original_globals, 'measured_call mutated shared globals'
+                if port == ports[1]:
+                    assert a_done.wait(5), 'A did not close while B was alive'
+                    assert not owners[ports[0]].exists() and stops == [ports[0]]
+                    assert (owners[port] / 'payload').read_text() == str(port), 'A deleted B scratch'
+                    assert globals_now() == original_globals
+                return 200, encoded(dict(response, query_ordinal=port - ports[0]))
+            def stop(process):
+                assert (owners[process.pid] / 'payload').read_text() == str(process.pid)
+                if process.pid == ports[0]:
+                    assert owners[ports[1]].exists() and not a_done.is_set()
+                stops.append(process.pid)
+                with lock:
+                    live.remove(process.pid)
+                return dict(returncode=-15, intentional_stop=True)
+            def killpg(pid, sig):
+                assert pid in stops
+                if sig == 0:
+                    raise ProcessLookupError()
+            def call(port):
+                q = port - ports[0]
+                try:
+                    if port == ports[1]:
+                        assert a_before.wait(5), 'A did not take its before snapshot'
+                    results[port] = real_measured_call('fixture', config, arm,
+                        library.http_request(requests[q]['query'], arm['authority']),
+                        dict(references[q], ids=references[q]['ids'][:10]), truths[q], scratch, port=port,
+                        **({'require_cgroup_drained': False} if concurrent else {}))
+                except Exception as error:
+                    errors[port] = repr(error)
+                finally:
+                    if port == ports[0]:
+                        a_done.set()
+            with (patch.object(sys.modules[__name__], 'snapshot', side_effect=snapshot),
+                    patch.object(subprocess, 'Popen', side_effect=spawn),
+                    patch.object(cold.http.client, 'HTTPConnection', ConcurrentClient),
+                    patch.object(cold, 'post', side_effect=post),
+                    patch.object(library, 'native_cpu', side_effect=lambda *a: dict(pid=42, start_ticks=1, user_ticks=1, system_ticks=1)),
+                    patch.object(library, 'cold_stop', side_effect=stop), patch.object(os, 'killpg', side_effect=killpg)):
+                threads = [threading.Thread(target=call, args=(port,)) for port in ports]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(6)
+                assert all(not thread.is_alive() for thread in threads), 'concurrent calls hung'
+            assert not errors, errors
+            assert globals_now() == original_globals
+            assert sorted(posts) == list(ports) and stops == list(ports), (posts, stops)
+            assert results[ports[0]]['cgroup_before']['process_ids'] == [123]
+            assert results[ports[0]]['cgroup_after']['process_ids'] == [123, ports[1]], 'missing live peer snapshot'
+            for port, row in results.items():
+                if port == ports[0] and not concurrent:
+                    assert row['outcome'] == 'failed' and row['error'] == 'remaining descendants', row
+                else:
+                    assert row['outcome'] == 'success', row
+                assert row['http_attempts'] == row['valid_ann_requests'] == 1
+                assert row['returned_hits'] == 10 and row['response']['ids'] == list(range(10))
+                assert row['accounting']['query_transport_submissions'] == 50
+                assert row['native_close']['process_group_closed'] and row['temporary_directory_cleanup']
+                assert Path(row['child_tmpdir']) == owners[port] and not owners[port].exists()
+            # The offered harness must close the entire cell after all owners finish.
+            check_cgroup(cgroup, snapshot(), config['resources'], drained=True)
+            for invalid in (None, 0, 1, 'false'):
+                try:
+                    real_measured_call('fixture', config, arm, b'', references[0], truths[0], scratch,
+                        require_cgroup_drained=invalid)
+                except (AssertionError, ValueError):
+                    pass
+                else:
+                    raise AssertionError('non-bool drain policy admitted')
+            # Injected budgets reject invalid types, geometry, slot counts and insufficient admission.
+            model = native_budget_model(arm['metadata_files'], retained_root=True)
+            for memory, injected in [
+                    (value, model) for value in (0, -1, True, 2.0, '2147483648', model['modeled_remote_payload_bytes'] - 1)
+                    ] + [(HOST['native_memory_bytes'], dict(model, **{key: value})) for key, value in (
+                        ('modeled_remote_payload_bytes', True), ('modeled_remote_payload_bytes', -1),
+                        ('modeled_remote_payload_bytes', 1.5), ('server_query_slots', 1),
+                        ('metadata_bytes', model['metadata_bytes'] + 1), ('root_bytes', model['root_bytes'] + 1))]:
+                try:
+                    library.validate_roster(arm, native_memory_bytes=memory, budget_model=injected)
+                except (AssertionError, ValueError):
+                    pass
+                else:
+                    raise AssertionError('invalid injected memory/model admitted')
+            library.validate_roster(arm, native_memory_bytes=model['modeled_remote_payload_bytes'], budget_model=model)
+            return dict(real_python_threads=2, distinct_ports=list(ports), posts=2, stops=2,
+                a_closed_while_b_alive=True, shared_globals_unchanged=True, injected_budget_negatives=True,
+                explicit_concurrent_policy=concurrent, default_rejects_live_peer=not concurrent, final_cell_drained=True)
+
         for mode in ('success', 'http-failure', 'id-tamper', 'publication-tamper', 'body-tamper', 'sdk-retry', 'undrained', 'scratch', 'cleanup-proof'):
             sdk, calls, state = SDK(mode), [], {}
             dest = directory / ('out-' + mode)
@@ -1111,8 +1248,9 @@ def self_check():
                 for name in library.STARTUP:
                     sdk.objects['new/owned/generations/' + command[index + 2] + '/' + name] = root / name
                 sdk.objects[manifest['canonical']['object_key']] = root / 'canonical.bin'
-                with patch.object(library, 'NATIVE', HOST['native_memory_bytes']), patch.object(library, 'native_budget_model', native_budget_model):
-                    arm, unused = library.publication_arm(root, 'new/owned', head)
+                arm, unused = library.publication_arm(root, 'new/owned', head,
+                    native_memory_bytes=HOST['native_memory_bytes'],
+                    budget_model=native_budget_model({n: artifact(root / n)['bytes'] for n in library.STARTUP}, retained_root=True))
                 state['arm'] = arm
                 rows = [dict(phase='startup', top_k=100, declared_panel_count=64, publish_wall_ns=10, remote_open_wall_ns=10, **arm['authority'])]
                 rows += [dict(r, phase='query') for r in references]
@@ -1202,6 +1340,8 @@ def self_check():
                 assert all(r['accounting']['query_transport_submissions'] == 50 and r['accounting']['final_process_transport']['attempts'] == 66 for r in rows)
                 assert (dest / 'original-generation-root.json').read_bytes() == (fixture / 'generation/manifest.json').read_bytes()
                 assert json.loads((dest / 'resources.json').read_bytes())['scratch_usage']['hardlink_aliases'] >= 11
+                serial_population_guard = concurrent_calls_check(state['arm'], rows[0]['response'])
+                concurrent_calls = concurrent_calls_check(state['arm'], rows[0]['response'], concurrent=True)
             elif mode in ('http-failure', 'id-tamper'):
                 assert calls == ['publication', *range(6)] and rows[5]['outcome'] == 'failed'
                 assert rows[5]['http_attempts'] == 1 and rows[5]['failure_transport']['final_process_transport']['attempts'] == 66
@@ -1270,7 +1410,8 @@ def self_check():
                 raise AssertionError('proof tamper accepted')
         print(json.dumps(dict(self_check=True, queries=64, scenarios=9, native_or_network_execution=False,
             closed_panel_admission=closed_panel, sdk_admission=sdk_admission,
-            scratch_ownership=scratch_ownership, failure_reducer=failure_reducer)))
+            scratch_ownership=scratch_ownership, failure_reducer=failure_reducer, concurrent_calls=concurrent_calls,
+            serial_population_guard=serial_population_guard)))
 
 
 if __name__ == '__main__':

@@ -226,7 +226,7 @@ def validate_query(response, arm, expected, truth=None, telemetry_required=True)
     return None if truth is None else len(set(response['ids']) & set(truth[:10]))
 
 
-def validate_roster(arm):
+def validate_roster(arm, *, native_memory_bytes=NATIVE, budget_model=None):
     files, hashes = arm['metadata_files'],arm['metadata_sha256']
     assert set(files)==set(hashes)==set(STARTUP), 'v8 eight-object startup roster'
     for n,size in files.items():
@@ -239,14 +239,22 @@ def validate_roster(arm):
     assert arm['leaf_object']['bytes']==31_250*1540
     identity(arm['leaf_object']); identity(arm['head_file'])
     assert arm['head_file']['bytes']<=65536
-    assert native_budget_model(files)['modeled_remote_payload_bytes']<=NATIVE, 'four-slot native budget'
+    stats.integer(native_memory_bytes,'native memory bytes',1)
+    model = native_budget_model(files) if budget_model is None else budget_model
+    assert type(model) is dict, 'native budget model'
+    for key, expected in (('server_query_slots',SERVER_QUERY_SLOTS),
+            ('metadata_bytes',sum(files.values())),('root_bytes',files['router/root.bin'])):
+        stats.integer(model[key],key,expected,expected)
+    modeled = stats.integer(model['modeled_remote_payload_bytes'],'modeled native payload bytes',1)
+    assert modeled<=native_memory_bytes, 'four-slot native budget'
     return files
 
 
-def validate_startup(value, arm, wall, *, wave_objects=4, root_reuse=False):
+def validate_startup(value, arm, wall, *, wave_objects=4, root_reuse=False,
+        native_memory_bytes=NATIVE, budget_model=None):
     assert type(wave_objects) is int and wave_objects in (4, 8)
     assert type(root_reuse) is bool
-    files = validate_roster(arm)
+    files = validate_roster(arm,native_memory_bytes=native_memory_bytes,budget_model=budget_model)
     rows = value['metadata']
     remote_files = dict(files, **({'manifest.json':0} if root_reuse else {}))
     assert [r['name'] for r in rows]==list(STARTUP) and {r['name']:r['bytes'] for r in rows}==remote_files
@@ -301,9 +309,11 @@ def validate_startup(value, arm, wall, *, wave_objects=4, root_reuse=False):
     return opened
 
 
-def transport(header, response, arm, *, wave_objects=4, root_reuse=False):
+def transport(header, response, arm, *, wave_objects=4, root_reuse=False,
+        native_memory_bytes=NATIVE, budget_model=None):
     assert header['phase']=='ready' and header['authority']==arm['authority']
-    opened=validate_startup(header['remote_open_stats'],arm,header['remote_open_wall_ns'],wave_objects=wave_objects,root_reuse=root_reuse)
+    opened=validate_startup(header['remote_open_stats'],arm,header['remote_open_wall_ns'],
+        wave_objects=wave_objects,root_reuse=root_reuse,native_memory_bytes=native_memory_bytes,budget_model=budget_model)
     ready=stats.validate_transport(header['transport'],True)
     final=stats.validate_transport(response['transport'],True)
     assert ready['method_counts']==[opened['logical_metadata_get_requests']+4,5-int(root_reuse),1]+[0]*7, 'startup S3/IMDS / no retries'
@@ -502,7 +512,7 @@ def reduce_records(records, arm, requests, references, truth, start_ns, end_ns, 
         native_peak_rss_bytes=max((r['resources']['rss_peak_bytes'] for r in successful),default=0))
 
 
-def publication_arm(root, prefix, head_body):
+def publication_arm(root, prefix, head_body, *, native_memory_bytes=NATIVE, budget_model=None):
     manifest=json.loads((root/'manifest.json').read_bytes())
     assert manifest['schema']=='borsuk-two-bit-generation-v8' and manifest['generation']==1 and manifest['base_epoch']==0
     assert manifest['discovery']['mode']=='semantic' and manifest['discovery']['profile']=='fresh1m'
@@ -515,7 +525,7 @@ def publication_arm(root, prefix, head_body):
         indexes={'10':prefix},metadata_files={n:files[n]['bytes'] for n in STARTUP},
         metadata_sha256={n:files[n]['sha256'] for n in STARTUP},
         head_file=dict(bytes=len(head_body),sha256=sha(head_body)),leaf_object=artifact(root/'router/leaves.bin'))
-    validate_roster(arm)
+    validate_roster(arm,native_memory_bytes=native_memory_bytes,budget_model=budget_model)
     discovery=manifest['discovery']
     assert files['router/root.bin']==dict(bytes=discovery['root_bytes'],sha256=discovery['root_sha256'])
     assert files['router/membership.bin']==dict(bytes=discovery['membership_bytes'],sha256=discovery['membership_sha256'])
