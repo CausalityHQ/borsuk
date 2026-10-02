@@ -1,0 +1,1 @@
+{"checks": 120, "elapsed_seconds": 5.583473464997951, "launch_authority": false, "native_executed": false, "passed": true, "peak_rss_kib": 93308, "real_vectors_or_truth_opened": false, "schema": "borsuk-cohere-fixed48-fresh-falsifier-v1-self-check", "synthetic": true}

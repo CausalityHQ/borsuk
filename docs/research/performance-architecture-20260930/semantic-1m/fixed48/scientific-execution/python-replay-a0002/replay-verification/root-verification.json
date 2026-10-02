@@ -1,0 +1,27 @@
+{
+  "source_commit": "57ea1226",
+  "driver": {
+    "exit_status": 0,
+    "checks": 120,
+    "elapsed_seconds": 5.744805452995934,
+    "peak_rss_kib": 92296
+  },
+  "controller": {
+    "exit_status": 0,
+    "checks": 54,
+    "elapsed_seconds": 8.725423911004327,
+    "peak_rss_kib": 90460,
+    "user_data_bytes": 11196
+  },
+  "metadata": {
+    "exit_status": 0,
+    "replay_runtime": "3.12.0",
+    "native_source_identity_sha256": "addf62bce23ceee034f22e4d1dfc0b318564d924c6e0fcee34b9336d1532813e",
+    "selected_sha256": "dfe569e0198f35d690e5aa6a248aa8eee73b6d59a569b194729368e84aa2f61c",
+    "acquisition_objects": 67
+  },
+  "native_executed": false,
+  "network_requests": 0,
+  "launch_authority": false,
+  "historical_failure_preserved": true
+}

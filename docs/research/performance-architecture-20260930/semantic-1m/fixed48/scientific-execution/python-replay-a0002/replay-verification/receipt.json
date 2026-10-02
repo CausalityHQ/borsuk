@@ -1,0 +1,157 @@
+{
+  "status": "verified",
+  "base_commit": "2d111027de53edae66fd65f1fe8734b80ba4c222",
+  "repo": "/home/rb/worktrees/borsuk-fixed48-historical-python-replay",
+  "commands": [
+    {
+      "command": "timeout 55s python3 -B scripts/run_cohere_fixed48_fresh_falsifier.py --self-check (regression before fix)",
+      "exit_status": 2,
+      "log": "red.log",
+      "expected": "frozen Python implementation/version differs"
+    },
+    {
+      "command": "timeout 55s python3 -B scripts/run_cohere_fixed48_fresh_falsifier.py --self-check",
+      "exit_status": 0,
+      "log": "driver.log"
+    },
+    {
+      "command": "timeout 55s python3 -B scripts/launch_cohere_fixed48_fresh_scientific_spot.py --self-check",
+      "exit_status": 2,
+      "log": "controller.log"
+    },
+    {
+      "command": "timeout 55s python3 -B /tmp/borsuk-fixed48-historical-python-replay-verification/metadata-only-check.py",
+      "exit_status": 0,
+      "log": "metadata-only.log"
+    },
+    {
+      "command": "timeout 55s python3 -B /tmp/borsuk-fixed48-historical-python-replay-verification/metadata-check.py",
+      "exit_status": 1,
+      "log": "metadata.log",
+      "reason": "same controller INSPECT dependency"
+    }
+  ],
+  "historical_artifacts_changed": false,
+  "config_changed": false,
+  "native_source_changed": false,
+  "real_vectors_or_truth_opened": false,
+  "network_requests": 0,
+  "aws_or_cargo_invocations": 0,
+  "operator_contacted": false,
+  "commit": "e2c8bea761c4b80e1b963a4dfb85d9129fc5ca6b",
+  "logs_sha256": {
+    "red.log": "bdc42c7e2b515175806716d06f3e87d12a9d379d39092e97a9a2fede47adea54",
+    "driver.log": "f1c751b752f551413299857956706fc5925aba8c17f25343df0b44534d6f2f68",
+    "controller.log": "a465bd8a950905b29c1b321aef02d5e0dd0073d6cc31a3d8c09cfd07f241a9d4",
+    "metadata-only.log": "6edcfe2bc70f55c60831082c20ad8743f2b6181b9247989298ea4d7055614914",
+    "metadata.log": "56a1ebef281eed9e762e184799516692780dc2179df3ef874f5b328a3800f5fc"
+  },
+  "initial_owned_source_sha256": {
+    "scripts/run_cohere_fixed48_fresh_falsifier.py": "9ac39b8da92929852456da3511fa1fb1084115f941a9db273cf84ac327acf260",
+    "scripts/select_cohere_1m_fresh64.py": "d19156194ac889c50548c70318d6b33e9ebcfadc49f822326119847050e5f4a7",
+    "scripts/select_cohere_fresh64_coverage.py": "3a359b4c54c8f89d9531ef8077a27188d065dcbf0006562ed3ef815ff089ea0c"
+  },
+  "owned_source_sha256": {
+    "scripts/run_cohere_fixed48_fresh_falsifier.py": "e1b9bca8202dc37995261b2969a7cf7a505b344595422309401ee1f1c369c9ad",
+    "scripts/select_cohere_1m_fresh64.py": "d19156194ac889c50548c70318d6b33e9ebcfadc49f822326119847050e5f4a7",
+    "scripts/select_cohere_fresh64_coverage.py": "3a359b4c54c8f89d9531ef8077a27188d065dcbf0006562ed3ef815ff089ea0c",
+    "scripts/reproduce_cohere_semantic_artifacts.py": "3b9a3fa4197885f48fe9d701811ac98e45bff7073a0d5ecc436feef68037aadd",
+    "scripts/launch_cohere_fixed48_fresh_scientific_spot.py": "d98890eaf9b17a54a17bde283f07646b2fd1690fc69edc446358f7ac11cab75e",
+    "scripts/prepare_cohere_top32_coverage.py": "5829e79f794a26c1456ee18e7134c608ddb40fdad16a0a899de78d99e27ea4d9"
+  },
+  "scope_authorization": {
+    "original_files": 3,
+    "extended_files": 6,
+    "parent": "borsuk/prod-ready-v9",
+    "five_file_message": "immediate-1790944857622066245-1312788",
+    "sixth_file_reply_to": "immediate-1790945067899519569-1312788"
+  },
+  "resolved_dependencies": [
+    "retained.read_config current-source guard rejects unchanged archived a0002 config code_sha256 for scripts/select_cohere_1m_fresh64.py",
+    "authorities -> retained.replay -> retained.read_config",
+    "archived.load_inputs original selector-source pin"
+  ],
+  "final_commands": [
+    {
+      "command": "timeout 55s python3 -B scripts/run_cohere_fixed48_fresh_falsifier.py --self-check",
+      "exit_status": 0,
+      "log": "driver-stage2.log",
+      "log_sha256": "6fb6c2d931d3319854cb59119d99677de5aec0300116813cf3ea01a1b5e75fdc"
+    },
+    {
+      "command": "timeout 55s python3 -B scripts/launch_cohere_fixed48_fresh_scientific_spot.py --self-check",
+      "exit_status": 0,
+      "log": "controller-stage2.log",
+      "log_sha256": "42d0c3daa4ecf6d5e2e02ac3b61e5b05b12275c562c29b14e3c94955bd7195f7"
+    },
+    {
+      "command": "timeout 55s python3 -B -c <RLIMIT_AS=256MiB,signal.alarm(55),runpy retained --self-check>",
+      "exit_status": 0,
+      "log": "retained-stage2.log",
+      "log_sha256": "0c81af09f40ff43411c9cb48d269f87b9fe68e9b25fe327c32f454a117f89424"
+    },
+    {
+      "command": "timeout 55s python3 -B /tmp/borsuk-fixed48-historical-python-replay-verification/metadata-check.py",
+      "exit_status": 0,
+      "log": "metadata-final.log",
+      "log_sha256": "3ead28d54eb0ebf2b46b7076b73180b163e1796c7b1da0254b73a5f37475cc78"
+    },
+    {
+      "command": "git diff --check",
+      "exit_status": 0
+    }
+  ],
+  "driver_result": {
+    "checks": 120,
+    "elapsed_seconds": 5.583473464997951,
+    "launch_authority": false,
+    "native_executed": false,
+    "passed": true,
+    "peak_rss_kib": 93308,
+    "real_vectors_or_truth_opened": false,
+    "schema": "borsuk-cohere-fixed48-fresh-falsifier-v1-self-check",
+    "synthetic": true
+  },
+  "controller_result": {
+    "checks": 54,
+    "elapsed_seconds": 8.202162455010694,
+    "launch_authority": false,
+    "native_or_real_vectors_or_truth_executed": false,
+    "passed": true,
+    "peak_rss_kib": 90912,
+    "schema": "borsuk-cohere-fixed48-fresh-scientific-spot-v1-self-check",
+    "synthetic": true,
+    "user_data_bytes": 11192
+  },
+  "metadata_result": {
+    "acquisition_objects": 67,
+    "controller_INSPECT_passed": true,
+    "metadata_only": true,
+    "native_source_identity_sha256": "addf62bce23ceee034f22e4d1dfc0b318564d924c6e0fcee34b9336d1532813e",
+    "network_requests": 0,
+    "new_sampling_host_mismatch_rejected": true,
+    "passed": true,
+    "peak_rss_kib": 64180,
+    "replay_runtime": "3.12.0",
+    "restoration_verified": true,
+    "runtime_panel_authority_passed": true,
+    "sampling_provenance": {
+      "implementation": "CPython",
+      "version": "3.14.4"
+    },
+    "sealed_locators": 64,
+    "selected_sha256": "dfe569e0198f35d690e5aa6a248aa8eee73b6d59a569b194729368e84aa2f61c",
+    "stale_source_config_rejected": true
+  },
+  "runtime": "Python3.14.4; scoped test runtime platform.python_version=3.12.0",
+  "historical_config_guard": "pinned original a0002 terminal -> original config/source qualification/provenance/COMPLETE and all30 identities; no current selector comparison during explicit replay",
+  "fresh_creation_current_source_guard": true,
+  "driver_controller_current_source_guards": true,
+  "historical_sampling_provenance": {
+    "implementation": "CPython",
+    "version": "3.14.4"
+  },
+  "git_diff_check_exit_status": 0,
+  "clean_worktree": true,
+  "commit_author": "Roman Bartusiak <riomus@gmail.com>"
+}
