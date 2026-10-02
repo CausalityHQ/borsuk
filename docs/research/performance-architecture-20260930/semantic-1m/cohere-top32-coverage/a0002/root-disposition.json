@@ -1,0 +1,48 @@
+{
+  "authenticated_artifact_count": 34,
+  "cold_http_measured": false,
+  "execution_status": "FAIL",
+  "helper_exit_status": 0,
+  "instance_id": "i-0cf4cb21be146c65d",
+  "instance_state": "terminated",
+  "new_gt_or_measurement_rerun_authorized": false,
+  "original_exit_status": 1,
+  "reported_summary": {
+    "existing_first8_boundary1.15_max16": {
+      "nomination_unit_R10": 0.865625,
+      "nomination_unit_R100": 0.8040625,
+      "nomination_unit_hits10": 554,
+      "nomination_unit_hits100": 5146,
+      "page_closure_R10": 0.8890625,
+      "page_closure_R100": 0.8346875,
+      "page_closure_hits10": 569,
+      "page_closure_hits100": 5342,
+      "within_current_walk_guard_queries": 64
+    },
+    "fixed_top32_same_squared_distance_ranking": {
+      "nomination_unit_R10": 0.9359375,
+      "nomination_unit_R100": 0.884375,
+      "nomination_unit_hits10": 599,
+      "nomination_unit_hits100": 5660,
+      "page_closure_R10": 0.946875,
+      "page_closure_R100": 0.906875,
+      "page_closure_hits10": 606,
+      "page_closure_hits100": 5804,
+      "within_current_walk_guard_queries": 0
+    }
+  },
+  "reported_threshold": {
+    "denominator10": 640,
+    "hits10_minimum": 608
+  },
+  "returned_recall_measured": false,
+  "root_cause_pending": "post-helper validate_coverage IndexError deleted four closure files",
+  "schema": "borsuk-cohere-top32-a0002-closed-disposition-v1",
+  "scientific_report_qualified": false,
+  "scientific_report_status": "FAIL",
+  "service_memory_max_events": 0,
+  "service_memory_peak_bytes": 7932358656,
+  "service_swap_peak_bytes": 0,
+  "source_archive_sha256": "f35b08806829df80c249dc52858154b3e67da4724cc40a1023601698f5510fd0",
+  "source_commit": "2d178890da6aec550cbbc5f81ff2737c5bd68fc4"
+}

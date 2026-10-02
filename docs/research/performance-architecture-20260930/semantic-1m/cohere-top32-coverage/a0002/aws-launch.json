@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0cf4cb21be146c65d",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0cf4cb21be146c65d"
+    }
+  },
+  "prefix": "research/semantic-router/20261002/cohere-top32-coverage-a0002",
+  "source_commit": "2d178890da6aec550cbbc5f81ff2737c5bd68fc4",
+  "source_archive_sha256": "f35b08806829df80c249dc52858154b3e67da4724cc40a1023601698f5510fd0"
+}
