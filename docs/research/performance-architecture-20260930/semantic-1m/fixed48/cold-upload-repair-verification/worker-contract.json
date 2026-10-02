@@ -1,0 +1,178 @@
+{
+  "base_commit": "52a683810cb9d2bb8c715701667294cf37599084",
+  "changes": {
+    "collector": "Validates terminal source/instance/config identities, diagnostic structure, bounds, hash, offset and complete-body identity before artifact GETs; retains original_exit_code/phase and authenticated diagnostic bodies in terminal-failure-diagnostics.json and collection failure ledger, even when all remote artifacts absent.",
+    "execution_status": "FAIL",
+    "runtime_file_changed": false,
+    "scientific_status": "INVALID",
+    "terminal_diagnostic_tail_limit_bytes": 4096,
+    "terminal_diagnostics_files": [
+      "failure.json",
+      "cold-closure.json",
+      "screen/summary.json",
+      "screen/cleanup.json",
+      "profile.log"
+    ],
+    "terminal_diagnostics_total_payload_limit_bytes": 20480
+  },
+  "checks": {
+    "actual_frozen_runtime_profile_admission": {
+      "actual_frozen_runtime_authority_admitted": true,
+      "first_asset_seam_reached": true,
+      "historical_runtime_cause": "UNKNOWN",
+      "native_or_network_execution": false,
+      "profile_affinity_and_environment_admitted": true,
+      "summary": "EXECUTION_FAILED"
+    },
+    "bash_syntax": "PASS: user_data validates bash -n and every generated Python fragment",
+    "diagnostics_red": "Full generated-shell test after absolute-CLI repair failed KeyError: failure_diagnostics before diagnostic implementation; final test covers original runtime error plus ALL artifact upload failures, missing S3 bodies and hash/length/full-body-identity tampering.",
+    "diff_check": "PASS",
+    "logs": {
+      "/tmp/borsuk-fixed48-actual-profile-admission.log": {
+        "bytes": 244,
+        "sha256": "f202dd85bcac5467e2ea8f1f31d91b4b0489f830cae9c6fee223e35ed816ecc1"
+      },
+      "/tmp/borsuk-fixed48-diagnostics-red.log": {
+        "bytes": 32,
+        "sha256": "b9881f86985a9d4fdd8074c79a1709beaad7c6f961f17113221af512856a051c"
+      },
+      "/tmp/borsuk-fixed48-source-bound-upload.log": {
+        "bytes": 1502,
+        "sha256": "a862705a2a2dec6a10242cc31fb19f1e27b275c7de56e6060ea953ffeaf4ccee"
+      },
+      "/tmp/borsuk-fixed48-upload-diagnostics-final.log": {
+        "bytes": 426,
+        "sha256": "d6340af7c7d1ac01cce90b86d55d423020324ea23e0d0718f7518e3acf749971"
+      },
+      "/tmp/borsuk-fixed48-upload-red.log": {
+        "bytes": 4213,
+        "sha256": "76e8d3a905c5b29b5b01d2f4b2de676bdf5b55cf6e80abb7886b3c480d5d6784"
+      }
+    },
+    "mock_lifecycle": "PASS: same-ID teardown, fsync and ACK failures; termination and wait BEFORE collection unchanged",
+    "pre_edit_actual_controller_admission": true,
+    "pre_edit_actual_runtime_admission": true,
+    "py_compile": "PASS",
+    "resource_caps": {
+      "address_space_bytes": 268435456,
+      "wall_seconds": 55
+    },
+    "self_check": {
+      "artifacts": 56,
+      "asset_count": 38,
+      "checks": 43,
+      "cold_http_measured": false,
+      "controller_code_paths": 80,
+      "elapsed_seconds": 44.81507896701805,
+      "launch_authorized": false,
+      "native_or_cloud_execution": false,
+      "passed": true,
+      "peak_rss_kib": 87456,
+      "proof_count": 20,
+      "runtime_bodies": 18,
+      "runtime_code_paths": 74,
+      "schema": "borsuk-cohere-fixed48-cold-http-spot-v1-self-check",
+      "synthetic": true,
+      "user_data_bytes": 11635
+    },
+    "source_bound_red_green": {
+      "base_controller_sha256": "e682968f1503580267373e77d17c1a9a3ef41ebe1e62a8b3de38027c8a10125a",
+      "checks": {
+        "GREEN_current": {
+          "artifact_exit_status": 0,
+          "generated_shell_sha256": "a1fae196e80e1b6cb66d58c48f8a2c0ddbc41a2f6128eeaa6e6ad0cd4ce40ce8",
+          "stderr": "",
+          "terminal_exit_status": 0,
+          "uploader_command": "systemd-run --quiet --wait --pipe -p MemoryMax=12884901888 -p MemorySwapMax=0 -p CPUQuota=200% -p TasksMax=512 -p RuntimeMaxSec=65 --setenv=AWS_MAX_ATTEMPTS=1 timeout --kill-after=5 60 \"$root/bin/aws\" s3 cp \"$root/$name\" \"s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261002/fixed48-cold-a0001/artifacts/$name\" --only-show-errors",
+          "user_data_bytes": 11695
+        },
+        "RED_base52a68381": {
+          "artifact_exit_status": 127,
+          "generated_shell_sha256": "e9eec97e5116aa12fe8f20c7f0fd95cacd21191067ebe42844b3b599944b7a59",
+          "stderr": "timeout: failed to execute process: No such file or directory (os error 2)\n",
+          "terminal_exit_status": 0,
+          "uploader_command": "systemd-run --quiet --wait --pipe -p MemoryMax=12884901888 -p MemorySwapMax=0 -p CPUQuota=200% -p TasksMax=512 -p RuntimeMaxSec=65 --setenv=AWS_MAX_ATTEMPTS=1 timeout --kill-after=5 60 aws s3 cp \"$root/$name\" \"s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261002/fixed48-cold-a0001/artifacts/$name\" --only-show-errors",
+          "user_data_bytes": 11106
+        }
+      },
+      "current_controller_sha256": "e88afbfc2e83be60ea2a8b24662269c0aaa1532247395ca5632169f6ce4bfbd9",
+      "native_or_cloud_execution": false,
+      "source_commit": "52a68381"
+    }
+  },
+  "clean_worktree": true,
+  "commit": "f641de8083bb95f544a2b970e3e25bb2e809469b",
+  "controller_sha256": "e88afbfc2e83be60ea2a8b24662269c0aaa1532247395ca5632169f6ce4bfbd9",
+  "forbidden_execution": {
+    "cargo": false,
+    "children": false,
+    "cloud": false,
+    "native": false,
+    "new_launch": false,
+    "operator_messages": false,
+    "review": false,
+    "scientific_rerun": false
+  },
+  "merged": false,
+  "operator_identity": "Roman Bartusiak <riomus@gmail.com>",
+  "owned_files": [
+    "scripts/launch_cohere_fixed48_cold_http_spot.py"
+  ],
+  "preserved_cold_http_files": {
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0001/aws-closeout.json": {
+      "bytes": 135,
+      "sha256": "4e035cb3b0f28cfed8a692ac4ab21538a249159392cc3174650ee72883f63818"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0001/aws-launch.json": {
+      "bytes": 347,
+      "sha256": "6e44ecdee26f6d8e876e028e3a0130df13aea75540836d15ec8ae9a72e221867"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0001/aws-reservation.json": {
+      "bytes": 19588,
+      "sha256": "9d1a73f991b8c1acd71427ef97298536f60f37ef1f2073fff68fac5079c2ed91"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0001/aws-terminal.json": {
+      "bytes": 16226,
+      "sha256": "6c2d0f770b015aa469f6a6eb5f78760d72b70967732170d721c1975224d23dd9"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0001/aws-user-data.sh": {
+      "bytes": 11195,
+      "sha256": "8c836b7124a3b541dd38efbf68454c0f3441ac4a49207f97c8d692c3cfd04d1d"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0001/collection-authenticated-failure.json": {
+      "bytes": 220,
+      "sha256": "105839d745c201a2bdfbb3d89266b2b5de97c96d7ebc04aad340b0ac85e5f904"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0001/collection-error.json": {
+      "bytes": 220,
+      "sha256": "105839d745c201a2bdfbb3d89266b2b5de97c96d7ebc04aad340b0ac85e5f904"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0001/root-disposition.json": {
+      "bytes": 1990,
+      "sha256": "a0e6317c51c0a5c1e9f9822680514a22f1bc6a2cb04825047379ecdd97cc8170"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/asset-manifest.json": {
+      "bytes": 13203,
+      "sha256": "ce4b1356fe069d66b547ffa3b0a5bfed53aa2988f1949deb7e4eba6e60228fef"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/config.json": {
+      "bytes": 15771,
+      "sha256": "0d6dc3074937a04088a9e1b809cafa6ffb3b990a9504e6a89966fce2b08f639c"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/controller-config.json": {
+      "bytes": 9921,
+      "sha256": "d03aa75013b7120ba33c87af06393248a19cd89276786cd4fbd1e586210239fa"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/freeze.json": {
+      "bytes": 1752,
+      "sha256": "919aeddcb4ee4c14b030f8ce06377574a493b820f26ea21da78f90fe3c561686"
+    }
+  },
+  "pushed": false,
+  "root_cause": "Artifact systemd-run services do not inherit worker shell PATH. AWS CLI lives under $root/bin/aws; generated bare aws fails127 under sanitized PATH, while direct terminal upload resolves it. All generated uploaders now use explicit worker-local absolute CLI; readiness/version admission uses same executable.",
+  "schema": "borsuk-fixed48-cold-upload-diagnostics-worker-contract-v1",
+  "unknowns": [
+    "Historical a0001 original worker exit2 before publication remains undiagnosed: error artifacts absent. No deterministic failure reproduced in actual frozen controller/runtime authority or profile admission.",
+    "New controller intentionally differs from old frozen controller authority. Parent must own any future source/config freeze and run; no new config frozen by worker."
+  ]
+}

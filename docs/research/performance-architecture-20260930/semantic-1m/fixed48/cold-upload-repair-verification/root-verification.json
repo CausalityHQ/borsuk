@@ -1,0 +1,61 @@
+{
+  "controller_sha256": "e88afbfc2e83be60ea2a8b24662269c0aaa1532247395ca5632169f6ce4bfbd9",
+  "files": {
+    "borsuk-fixed48-actual-profile-admission.log": {
+      "bytes": 244,
+      "sha256": "f202dd85bcac5467e2ea8f1f31d91b4b0489f830cae9c6fee223e35ed816ecc1"
+    },
+    "borsuk-fixed48-diagnostics-red.log": {
+      "bytes": 32,
+      "sha256": "b9881f86985a9d4fdd8074c79a1709beaad7c6f961f17113221af512856a051c"
+    },
+    "borsuk-fixed48-source-bound-upload.log": {
+      "bytes": 1502,
+      "sha256": "a862705a2a2dec6a10242cc31fb19f1e27b275c7de56e6060ea953ffeaf4ccee"
+    },
+    "borsuk-fixed48-upload-diagnostics-final.log": {
+      "bytes": 426,
+      "sha256": "d6340af7c7d1ac01cce90b86d55d423020324ea23e0d0718f7518e3acf749971"
+    },
+    "borsuk-fixed48-upload-red.log": {
+      "bytes": 4213,
+      "sha256": "76e8d3a905c5b29b5b01d2f4b2de676bdf5b55cf6e80abb7886b3c480d5d6784"
+    },
+    "root-selfcheck.log": {
+      "bytes": 426,
+      "sha256": "09e7d9b7d652024e26a339399a1c4598a665a4f293351c56734fdc99a511a200"
+    },
+    "root-selfcheck.time": {
+      "bytes": 852,
+      "sha256": "d8b229cce54e8ec7bcc3cb824649e5504d5efeefb5f940a5898ea9c53848adaf"
+    },
+    "worker-contract.json": {
+      "bytes": 9142,
+      "sha256": "c71f9e4605abafc171f7fe9c81e8fbae9ce84c644fdd55b8c994902b9cd0de7b"
+    }
+  },
+  "integrated_commit": "b429160a",
+  "native_or_cloud_execution": false,
+  "original_runtime_failure_cause": "UNKNOWN",
+  "root_exit_status": 0,
+  "root_selfcheck": {
+    "artifacts": 56,
+    "asset_count": 38,
+    "checks": 43,
+    "cold_http_measured": false,
+    "controller_code_paths": 80,
+    "elapsed_seconds": 45.66934890701668,
+    "launch_authorized": false,
+    "native_or_cloud_execution": false,
+    "passed": true,
+    "peak_rss_kib": 87704,
+    "proof_count": 20,
+    "runtime_bodies": 18,
+    "runtime_code_paths": 74,
+    "schema": "borsuk-cohere-fixed48-cold-http-spot-v1-self-check",
+    "synthetic": true,
+    "user_data_bytes": 11635
+  },
+  "rust_changed": false,
+  "worker_commit": "f641de8083bb95f544a2b970e3e25bb2e809469b"
+}
