@@ -161,5 +161,30 @@
       "sha256": "07478147e265ca48fab3dbce9a39cddef8bd9a46798fd0064e3dcb43d54ceead"
     }
   },
-  "preexisting_failures": null
+  "preexisting_failures": [
+    {
+      "command": "python3 -m scripts.launch_native_semantic_1m_cold_spot --self-check",
+      "location": "scripts/launch_native_semantic_1m_cold_spot.py:327",
+      "reason": "historical paired role wave_objects assertion",
+      "current_exit": 1,
+      "base_exit": 1,
+      "final_traceback_identical_to_base": true
+    },
+    {
+      "command": "python3 -m scripts.launch_native_semantic_1m_offered_spot --self-check",
+      "location": "scripts/launch_native_semantic_1m_offered_spot.py:517",
+      "reason": "import/evidence code closure drift after runtime checks",
+      "current_exit": 1,
+      "base_exit": 1,
+      "final_traceback_identical_to_base": true
+    },
+    {
+      "command": "python3 -m scripts.run_native_paged_cold_first_query_selfcheck",
+      "location": "scripts/run_native_paged_cold_first_query_selfcheck.py:141",
+      "reason": "unchanged historical fixture expects 395 native source files; exact base and current have 399",
+      "current_exit": 1,
+      "base_exit": 1,
+      "final_traceback_identical_to_base": true
+    }
+  ]
 }
