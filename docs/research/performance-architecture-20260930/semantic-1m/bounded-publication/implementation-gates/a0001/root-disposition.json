@@ -1,0 +1,25 @@
+{
+  "available_artifacts_authenticated": 10,
+  "controller_exit_status": 1,
+  "full_roster_expected": 14,
+  "instance_id": "i-0af73ecbe6259dd7b",
+  "native_source_failure_observed": false,
+  "original_controller_session": 31035,
+  "process_resource_observation": {
+    "gnu_time_complete": false,
+    "systemd_memory_peak": "5.8G",
+    "systemd_swap_peak": "0B"
+  },
+  "qualification": false,
+  "schema": "borsuk-bounded-publication-closed-interruption-v1",
+  "source_after_missing": true,
+  "source_archive_sha256": "6bc27f3d75f6008962cffe150ddadb2b725bea400b93cff8d9a3225debd6d0a4",
+  "source_before_matches": true,
+  "source_commit": "fa4beae2d8a9b505a488847e1b2e9126c91e0364",
+  "spot_request": "sir-93tfmh3j",
+  "spot_status": "instance-terminated-no-capacity",
+  "terminal_sha256": "66244ef554313654ceecc56b5c10cd1cc46f1230a7218fb2dc4d74afddf73bad",
+  "terminated": true,
+  "tests_completed": 0,
+  "workspace_receipt_missing": true
+}
