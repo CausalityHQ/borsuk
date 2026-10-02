@@ -1,0 +1,36 @@
+{
+  "archived_builder_sha256": "54071f8e7daf70589a416a2d9b8b4eefe42456a566bad767a77872b55c6e6c3f",
+  "artifacts": {
+    "self-check-resources.txt": {
+      "bytes": 791,
+      "sha256": "6f5ba9a429d5d5e3a3f3689beac26f98b321c6081844150bff0832f2ada09d72"
+    },
+    "self-check.log": {
+      "bytes": 230,
+      "sha256": "63b363a2f675f32a8d26746d0c669a25737b6b9c0903e90426b490ebda50c30c"
+    }
+  },
+  "code_files": 58,
+  "controller_launch_authority_pending": true,
+  "diff_check_exit_status": 0,
+  "measured_new_coverage": false,
+  "native_executed": false,
+  "new_generation_builds": 0,
+  "new_ground_truth_constructions": 0,
+  "owned_child_commits": [
+    "51b982b4237f361bf6564dc816858eb515feb1c4",
+    "a51bc92092e2a70129b7da8d84e245c0ddaf4078"
+  ],
+  "passed": true,
+  "preparation_config_sha256": "e0e95fdc9a41fe907e71900d23ca9382c0c8a80f4fa73d969b53cb3e8d63d0bb",
+  "real_queries_or_truth_opened": false,
+  "refs": 45,
+  "root_integrated_commits": [
+    "54a71782",
+    "6eb23052"
+  ],
+  "schema": "borsuk-cohere-top32-root-helper-integration-v1",
+  "self_check_exit_status": 0,
+  "syntax_exit_status": 0,
+  "synthetic_quality_only": true
+}
