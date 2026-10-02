@@ -1,0 +1,185 @@
+{
+  "actual_closed_validator_passed": true,
+  "all_declared_artifacts_authenticated": true,
+  "artifact_count": 22,
+  "artifacts": {
+    "asset-head-roster.json": {
+      "bytes": 16486,
+      "sha256": "6e6af78d5f1e18b9c66e31dd4590ad14a18a412587fb58b61834f34efd67c2af"
+    },
+    "asset-heads.json": {
+      "bytes": 20415,
+      "sha256": "32cf40ff790fa097251e570cc75398a3bcc193f09a2ae1e9188ea7992f46df6d"
+    },
+    "bootstrap-sdk-ledger.jsonl": {
+      "bytes": 5648,
+      "sha256": "001f8ced306cbd642898ae99e6e0c94558c551f8aaa992e177469c7c19f50084"
+    },
+    "bootstrap-staging.json": {
+      "bytes": 426,
+      "sha256": "6f39952f5d4abfb9a2d009dbd7a29d3e288960b84e858975182c9e7481b20b8d"
+    },
+    "cleanup.json": {
+      "bytes": 74,
+      "sha256": "4d5a4852690d87291dc076da9ae35484514de25159e5d52b705b12a0d306862a"
+    },
+    "cli.json": {
+      "bytes": 503,
+      "sha256": "8ac2d188f03ed94e9314df05ae56fb98a245ade27a1ca5dcff8c004167c5851d"
+    },
+    "cli.log": {
+      "bytes": 605,
+      "sha256": "18cdeb6e1274c2023025afb00599e0e5e4ec34c3c1e4e4bca14aa6025ab306ec"
+    },
+    "config.json": {
+      "bytes": 11316,
+      "sha256": "430a38ca470dbd262c13ebd6c97cde5c8166ab0ecc0158c49fb5fe348f11ac3e"
+    },
+    "eligibility.json": {
+      "bytes": 949,
+      "sha256": "0bf89aa2ca0fb021342b142d5a5ed5dd54aac7470970b6a09daa5d918b9ed4d5"
+    },
+    "failure.json": {
+      "bytes": 50,
+      "sha256": "8e9f2356a514ab16e55e26a57dd80934a95339a9e504f20193a5faa55903466c"
+    },
+    "imports.json": {
+      "bytes": 786,
+      "sha256": "bc56bbbe045e0f4e85ad1903688456e196b35da697259a8bdafb9b79e7d2501c"
+    },
+    "offered-asset-manifest.json": {
+      "bytes": 365,
+      "sha256": "012eb8827cb5f3ad3bc756ff3f2e60a1c9cb7e58a373f14e4664dac88817c944"
+    },
+    "offered-config.json": {
+      "bytes": 25472,
+      "sha256": "8370c6c6f3a2dff9757827e12db62e16dd5024a4cfcf4fb28a38debe2a8903ce"
+    },
+    "offered-controller-config.json": {
+      "bytes": 9950,
+      "sha256": "0cfc3c26df90fbf291066d8992f58dce8421607c8d0ac6767a555abdf3f39524"
+    },
+    "offered-qualification.json": {
+      "bytes": 1914,
+      "sha256": "317bb2ae101cade7bb8749c5e01a53b6b0bdb6802f91655a43b955711d4b391e"
+    },
+    "profile-resources.txt": {
+      "bytes": 1021,
+      "sha256": "a7dee3a755986634522329feee0f501421b53a8220e76b0786b3ea5830f9b715"
+    },
+    "profile.log": {
+      "bytes": 4280,
+      "sha256": "79322f5608410eb8be8cf09a9d66033fde98164be77b30f95aa87d937e549a25"
+    },
+    "resources.json": {
+      "bytes": 4743,
+      "sha256": "eda8feb819ad430cf43e4f5d049531a71e4fcf1377573fcff70d24ef915f9cc4"
+    },
+    "sdk-ledger.jsonl": {
+      "bytes": 31914,
+      "sha256": "bdeec82d766953bad6a667d091c5831a8f6cc1eef613621b884039f2bd5093b0"
+    },
+    "small-body.json": {
+      "bytes": 206,
+      "sha256": "8c439f9c6b7c469d5a5227dd8abc0caa47ed6d01e8d7eb252aeca58ff1572cb7"
+    },
+    "source-qualification.json": {
+      "bytes": 34939,
+      "sha256": "4a47e5d743a2d3f8021eb5cdc8cd99f169a30e205b615a408f66d049b3889ff6"
+    },
+    "summary.json": {
+      "bytes": 579,
+      "sha256": "8cc13073b2b649709e196c9ee6f4b73b8b55c9da6aab363ac93f945fdedadf7c"
+    }
+  },
+  "cgroup": {
+    "after": {
+      "cgroup": "/sys/fs/cgroup/system.slice/cohere-fixed48-offered-canary.service",
+      "cpu.max": "200000 100000\n",
+      "cpu.stat": "usage_usec 49507883\nuser_usec 40140364\nsystem_usec 9367518\nnice_usec 1532000\ncore_sched.force_idle_usec 0\nnr_periods 580\nnr_throttled 1\nthrottled_usec 1019\nnr_bursts 0\nburst_usec 0\n",
+      "io.stat": "UNMEASURED",
+      "io.stat_unavailable": {
+        "errno": 2,
+        "type": "FileNotFoundError"
+      },
+      "memory.current": "1395724288\n",
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n",
+      "memory.max": "2147483648\n",
+      "memory.peak": "2005258240\n",
+      "memory.stat": "anon 62361600\nfile 1266769920\nkernel 65536000\nkernel_stack 65536\npagetables 376832\nsec_pagetables 0\npercpu 800\nsock 0\nvmalloc 0\nshmem 0\nzswap 0\nzswapped 0\nfile_mapped 368640\nfile_dirty 8118272\nfile_writeback 0\nswapcached 0\nanon_thp 0\nfile_thp 62914560\nshmem_thp 0\ninactive_anon 0\nactive_anon 62230528\ninactive_file 1257955328\nactive_file 8814592\nunevictable 0\nslab_reclaimable 64906632\nslab_unreclaimable 175728\nslab 65082360\nworkingset_refault_anon 0\nworkingset_refault_file 0\nworkingset_activate_anon 0\nworkingset_activate_file 0\nworkingset_restore_anon 0\nworkingset_restore_file 0\nworkingset_nodereclaim 0\npgdemote_kswapd 0\npgdemote_direct 0\npgdemote_khugepaged 0\npgdemote_proactive 0\npgpromote_success 0\npgscan 0\npgsteal 0\npswpin 0\npswpout 0\npgscan_kswapd 0\npgscan_direct 0\npgscan_khugepaged 0\npgscan_proactive 0\npgsteal_kswapd 0\npgsteal_direct 0\npgsteal_khugepaged 0\npgsteal_proactive 0\npgfault 446742\npgmajfault 141\npgrefill 0\npgactivate 0\npgdeactivate 0\npglazyfree 0\npglazyfreed 0\nswpin_zero 0\nswpout_zero 0\nzswpin 0\nzswpout 0\nzswpwb 0\nthp_fault_alloc 0\nthp_collapse_alloc 0\nthp_swpout 0\nthp_swpout_fallback 0\nnuma_pages_migrated 0\nnuma_pte_updates 0\nnuma_hint_faults 0\n",
+      "memory.swap.events": "high 0\nmax 0\nfail 0\n",
+      "memory.swap.max": "0\n",
+      "memory.swap.peak": "0\n",
+      "observer_pid": 1710,
+      "pids.current": "4\n",
+      "pids.events": "max 0\n",
+      "pids.max": "512\n",
+      "process_ids": [
+        1187,
+        1708,
+        1709,
+        1710
+      ]
+    },
+    "before": {
+      "cgroup": "/sys/fs/cgroup/system.slice/cohere-fixed48-offered-canary.service",
+      "cpu.max": "200000 100000\n",
+      "cpu.stat": "usage_usec 19909574\nuser_usec 17755140\nsystem_usec 2154433\nnice_usec 1532000\ncore_sched.force_idle_usec 0\nnr_periods 330\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n",
+      "io.stat": "UNMEASURED",
+      "io.stat_unavailable": {
+        "errno": 2,
+        "type": "FileNotFoundError"
+      },
+      "memory.current": "1382993920\n",
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n",
+      "memory.max": "2147483648\n",
+      "memory.peak": "2005258240\n",
+      "memory.stat": "anon 50843648\nfile 1266475008\nkernel 65417216\nkernel_stack 49152\npagetables 344064\nsec_pagetables 0\npercpu 800\nsock 0\nvmalloc 0\nshmem 0\nzswap 0\nzswapped 0\nfile_mapped 323584\nfile_dirty 126251008\nfile_writeback 6885376\nswapcached 0\nanon_thp 0\nfile_thp 62914560\nshmem_thp 0\ninactive_anon 0\nactive_anon 50716672\ninactive_file 1257660416\nactive_file 8814592\nunevictable 0\nslab_reclaimable 64864320\nslab_unreclaimable 141968\nslab 65006288\nworkingset_refault_anon 0\nworkingset_refault_file 0\nworkingset_activate_anon 0\nworkingset_activate_file 0\nworkingset_restore_anon 0\nworkingset_restore_file 0\nworkingset_nodereclaim 0\npgdemote_kswapd 0\npgdemote_direct 0\npgdemote_khugepaged 0\npgdemote_proactive 0\npgpromote_success 0\npgscan 0\npgsteal 0\npswpin 0\npswpout 0\npgscan_kswapd 0\npgscan_direct 0\npgscan_khugepaged 0\npgscan_proactive 0\npgsteal_kswapd 0\npgsteal_direct 0\npgsteal_khugepaged 0\npgsteal_proactive 0\npgfault 404131\npgmajfault 141\npgrefill 0\npgactivate 0\npgdeactivate 0\npglazyfree 0\npglazyfreed 0\nswpin_zero 0\nswpout_zero 0\nzswpin 0\nzswpout 0\nzswpwb 0\nthp_fault_alloc 0\nthp_collapse_alloc 0\nthp_swpout 0\nthp_swpout_fallback 0\nnuma_pages_migrated 0\nnuma_pte_updates 0\nnuma_hint_faults 0\n",
+      "memory.swap.events": "high 0\nmax 0\nfail 0\n",
+      "memory.swap.max": "0\n",
+      "memory.swap.peak": "0\n",
+      "observer_pid": 1710,
+      "pids.current": "4\n",
+      "pids.events": "max 0\n",
+      "pids.max": "512\n",
+      "process_ids": [
+        1187,
+        1708,
+        1709,
+        1710
+      ]
+    },
+    "closed": true
+  },
+  "cleanup": {
+    "process_cleanup": true,
+    "sdk_closed": true,
+    "temporary_files_removed": true
+  },
+  "closeout": {
+    "nodes": {
+      "0": {
+        "instance_id": "i-0aba8666cba5f13f8"
+      }
+    },
+    "observed_elapsed_s": 99,
+    "state": "terminated"
+  },
+  "config_sha256": "430a38ca470dbd262c13ebd6c97cde5c8166ab0ecc0158c49fb5fe348f11ac3e",
+  "controller_exit_status": 0,
+  "controller_session": 66197,
+  "head_keys": 51,
+  "independently_observed_instance_state": "terminated",
+  "infrastructure_status": "INFRA_GO",
+  "instance_id": "i-0aba8666cba5f13f8",
+  "native_ann_calls": 0,
+  "observed_scratch_peak_bytes": 883888128,
+  "performance_measured": false,
+  "schema": "borsuk-fixed48-offered-canary-root-audit-v1",
+  "scientific_status": "UNMEASURED",
+  "scope_note": "scratch observed after bootstrap; full bootstrap staging reserve/cleanup independently authenticated",
+  "selected_asset_bytes": 34661,
+  "source_archive_sha256": "d665a457c6ca37b68aaac5a8620c43c864d684a53341db5fe184087c28dda87b",
+  "source_commit": "3cb4b1a58e6b22f72b9de40af7d19c9e374c1d53",
+  "worker_wall_seconds": 25.107973563
+}
