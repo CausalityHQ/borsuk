@@ -1,0 +1,17 @@
+# Prospective fixed48 routing falsifier
+
+Chosen intervention: Fresh1m selects the first 48 leaves from the existing normalized-f32, ordered-f64 squared-distance ranking with the same leaf-ID tie break. Native100k and graph discovery retain their current rules. No training, encoding, persistent layout, source order, or distance change.
+
+This is a prospective test, not a product default qualification. Historical top32 CoHere coverage remains FAIL (606/640 page-closure hits@10 versus 608 required); it is not returned recall. The completed read-only plan is consultation e7211d8137f244ee (GPT-6.1 Sol/XHigh, exit 0). Its source label a345399 means the qualified 399-file inventory a34505d9d917bc766c9492034e6e4ac80dfb327f2e5eed0ebb03c5d2d5f72935, not a Git revision.
+
+Before selecting queries, freeze: 48 leaves; 4,730,880 leaf payload bytes; 3,072 original units; 3,079 seed-completed units; at most 512 closure pages, rejected before SOURCE I/O without truncation; at most 4,096 SOURCE-scored units. Retain SOURCE 64 MiB/128 logical GETs, SQ8 16,773,120 bytes/32 logical GETs and 16 concurrent reads per stage for this arm. These are experiment admission limits, not universal architecture limits. Charge actual retained trace/router/caller-pin allocations prospectively; 512 MiB is this scorer process envelope, not measured RSS or a product limit.
+
+The plan's 1.5-times top32 footprint extrapolations are estimates, not bounds or new observations. Only 48*64*1540 leaf bytes and unit/page maxima above are arithmetic admission bounds. No new quality, latency, QPS or cost result exists.
+
+Reuse the production one-pass diagnostic scorer and authenticated file ObjectStore. Require original retained root/router/leaf/source/SQ8/page-digest/order bodies; stop artifact admission if an authority is absent. Do not reconstruct an index to fill a missing receipt. Freeze source, binaries and resource admission before data execution.
+
+New panel: exactly 64 locators with seed text `borsuk-cohere-first1m-fixed48-routing-fresh64-v1`; exclude FIRST1M, both consumed fresh64 panels and the historical consumed-query ledger. Freeze locators before vector extraction; reject raw/normalized duplicates without replacement. Nominate and seal all64 before the sole GT100 construction; freeze all scorer outputs before truth evaluation. No alternative-width evaluation or consumed-panel rerun.
+
+Record losses through nominated units, closure pages, SOURCE-scored units, SOURCE-ranked pages, SQ8-admitted ranges and returned IDs. Report @10 and @100 separately. Authority/execution/resource/cleanup failure is FAIL. Fewer than608/640 closure hits@10 is discovery FAIL; fewer than608/640 returned hits@10 after discovery passes is downstream FAIL. GO to a separately frozen cold end-to-end test only with all64 complete, returned recall@10>=95%, authenticated closure and actual resource compliance. A failed arm does not invalidate another Pareto-valid architecture.
+
+Implementation is delegated as a source-only candidate while the unrelated publication qualification runs. No local Cargo, data, cloud run or claimed Rust completion is authorized for that child. Root will provide an exact-source bounded gate and require affected tests, release/scorer binaries, workspace Clippy and actual workspace test compilation before integration. Publication cb63 evidence cannot qualify changed routing.
