@@ -1,0 +1,27 @@
+{
+  "status": "FAIL",
+  "instance_state_verified": "terminated",
+  "controller_exit_status": 1,
+  "remote_original_exit_code": 0,
+  "remote_terminal_exit_code": 96,
+  "artifact_objects_retained": 0,
+  "available_s3_objects": {
+    "launch.json": {
+      "bytes": 331,
+      "sha256": "d4f2f79cafe60debf54a23550034df371cdfa8ffaebdb618a39e78c7b27cfa0a"
+    },
+    "reservation.json": {
+      "bytes": 1945,
+      "sha256": "22aa44d9754383b6046768c31ed61a4d90681c9fdceda7c3903b5d020e80a42e"
+    },
+    "terminal.json": {
+      "bytes": 6384,
+      "sha256": "b723303d0de04b27bade1146f386c51269073d6cfd79a0c55328888dd453fbd9"
+    }
+  },
+  "historical_payload_verification": "UNKNOWN: terminal hashes are uncorroborated without bodies",
+  "scientific_queries_or_truth": false,
+  "collection_blocker": "Launch-only clean-tree preflight rejects owned output directory",
+  "upload_blocker": "systemd-run upload has relative input path but no WorkingDirectory",
+  "next_gate": "Bounded real-shell upload cwd regression and collection dirty-output regression; fresh code/config preregistered before separate exact reproduction attempt"
+}

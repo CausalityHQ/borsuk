@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-06185b8d501f3cdd2",
+  "nodes": {
+    "0": {
+      "instance_id": "i-06185b8d501f3cdd2"
+    }
+  },
+  "prefix": "research/semantic-router/20261002/fixed48-artifact-reproduction-a0001",
+  "source_commit": "98ec24a45f4509a13b9d294464b77b9fd972cdb7",
+  "source_archive_sha256": "51513bbfac0019d31599f6a0cceaa407506aa614fbf9993dffa560821bf9b6b8"
+}
