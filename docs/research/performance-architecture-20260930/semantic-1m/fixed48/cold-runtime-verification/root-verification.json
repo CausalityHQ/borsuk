@@ -1,29 +1,33 @@
 {
   "schema": "borsuk-fixed48-retained-cold-root-verification-v1",
-  "source_commit": "1f9c049eb076c526c5345ee103063866e904013c",
+  "source_commit": "d12f6222a60208aec4563dcf9aa4007144810e7c",
   "owned_source": {
     "path": "scripts/run_cohere_fixed48_cold_http.py",
-    "bytes": 72363,
-    "sha256": "6d5ee9962dac2041aa816a8fdd7d5e25169a2803331800e0000245533bbe2f41"
+    "bytes": 75536,
+    "sha256": "16d99125759c5e30e20ff7c86f6ce5f8394da955452046a8c8376268b0927307"
   },
   "self_check": {
     "exit_status": 0,
     "queries": 64,
     "scenarios": 8,
-    "command": "timeout 55s prlimit --as=268435456:268435456 python3 scripts/run_cohere_fixed48_cold_http.py --self-check"
+    "command": "timeout 55s prlimit --as=268435456:268435456 /usr/bin/time -v python3 -m scripts.run_cohere_fixed48_cold_http --self-check"
   },
   "artifacts": {
     "root-selfcheck.time": {
-      "bytes": 825,
-      "sha256": "60887b94baddeab3742b49ffdc2ef638c61be191fe16cde7758a297bb81ea1fe"
+      "bytes": 782,
+      "sha256": "fe7fa1f59a8442eab11ab8a21d52e714b6ecd4c0af3eff2a7e8867541ba00b15"
     },
     "root-selfcheck.log": {
-      "bytes": 90,
-      "sha256": "7630b4bed57903e59a65062f8c9eceee086daf83a0218a547028cee5233d887b"
+      "bytes": 839,
+      "sha256": "eed7793ff2bb807070983ae6a68865dbc09fef23fd980f29d6d468a70bf7d57b"
     },
     "worker-contract.json": {
       "bytes": 13105,
       "sha256": "b4c5906b2c3d21e1b516f93229c692772cec56fb8373f62a402f025c6dc96741"
+    },
+    "raw-query-admission-contract.json": {
+      "bytes": 8274,
+      "sha256": "6959657205486bc81ca3df1e717d7f503292fac6f25ce4551540cb7b0d619707"
     }
   },
   "historical_proofs_authenticated": 20,
@@ -33,5 +37,6 @@
   "native_rebuilt": false,
   "full_workspace_test_execution": false,
   "launch_authorized": false,
-  "cold_http_measurement": "UNMEASURED"
+  "cold_http_measurement": "UNMEASURED",
+  "historical_verification_preserved": "historical-original/root-verification.json"
 }
