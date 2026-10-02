@@ -32,7 +32,7 @@ CODE = tuple(sorted((*worker.CODE, MODULE.replace('.', '/')+'.py',
     'scripts/check_native_semantic_metadata_cold.py', 'scripts/launch_native_semantic_metadata_cold_spot.py',
     'scripts/launch_native_workspace_execution_spot.py', 'scripts/run_native_semantic_metadata_cold.py')))
 NAME = ''
-SCHEMA = 'borsuk-startup-wave8-paired-spot-v1'
+SCHEMA = 'borsuk-startup-wave8-paired-spot-v2'
 TOKEN_PREFIX, TAG = 'startup-wave8-paired-', 'borsuk-startup-wave8-paired'
 WALL = worker.FIXED['machine_limit_seconds']
 INSTANCE_TYPE, IMAGE_ID = panel.INSTANCE_TYPE, panel.IMAGE_ID
@@ -103,6 +103,8 @@ def checkpoint(marker, paths, config, proof, output, uploaded, put):
     index = marker['cell_index']
     assert type(index) is int and 0 <= index < 4 and index == len(uploaded) and index not in uploaded
     role = worker.CELLS[index]; authority = worker.role_authority(config, role)
+    assert marker['schema'] == 'borsuk-startup-wave8-paired-cell-v2'
+    assert type(marker['workers']) is int and marker['workers'] == config['workers']
     assert marker['closed'] is marker['cleanup_confirmed'] is True
     assert marker['role'] == role and type(marker['wave_objects']) is int and marker['wave_objects'] == worker.WIDTHS[role]
     assert marker['role_authority'] == authority and marker['counts']['planned'] == 64
@@ -112,7 +114,7 @@ def checkpoint(marker, paths, config, proof, output, uploaded, put):
         assert path.absolute() == path.resolve() == output.resolve()/f'cell{index}-{suffix}'
         assert worker.artifact(path) == marker[name], 'closed body identity: '+name
     assert json.loads(paths['summary'].read_bytes()) == {n: v for n, v in marker.items() if n not in ('summary', 'seal')}
-    assert json.loads(paths['seal'].read_bytes()) == dict(schema='borsuk-startup-wave8-cell-seal-v1',
+    assert json.loads(paths['seal'].read_bytes()) == dict(schema='borsuk-startup-wave8-cell-seal-v2',
         cell_index=index, role=role, records=marker['records'], summary=marker['summary'])
     for name in ('config_sha256', 'code_identity_sha256', 'refs_identity_sha256'):
         assert marker[name] == proof[name]
@@ -243,13 +245,13 @@ def self_check():
             roles={r: dict(binary=worker.identity(b['binary'])) for r, b in config['roles'].items()})
         rows = worker.aborted_rows(0, 1, dict(reason='synthetic'), config)
         rows[0]['cell_receipt'] = dict(cell_scratch_removed=True, cell_started=False, binary_after=None)
-        result = dict(cell_index=0, role='control', wave_objects=4, role_authority=worker.role_authority(config, 'control'),
+        result = dict(schema='borsuk-startup-wave8-paired-cell-v2',workers=config['workers'],cell_index=0, role='control', wave_objects=4, role_authority=worker.role_authority(config, 'control'),
             closed=True, cleanup_confirmed=True, counts=dict(planned=64))
         closed = []
         worker.close_cell(output, rows, result, proof, lambda m, p: closed.append((m, p)))
         marker, paths = closed[0]
         uploaded, calls = set(), []
-        for field, value in (('closed', False), ('cell_index', True), ('role', 'candidate'),
+        for field, value in (('schema','borsuk-startup-wave8-paired-cell-v1'),('workers',6),('workers',True),('closed', False), ('cell_index', True), ('role', 'candidate'),
             ('wave_objects', 8), ('config_sha256', '0'*64), ('binary_sha256', '0'*64)):
             rejects(lambda: checkpoint(dict(marker, **{field: value}), paths, config, proof, output, set(), calls.append))
         rejects(lambda: checkpoint(marker, {'records': paths['records'], 'summary': paths['summary']},
@@ -403,13 +405,17 @@ def self_check():
 
         # A closed quality failure is a scientific FAIL, with no speedup claim.
         evidence = copy.deepcopy(worker.inputs(repo, config)); evidence['truth'] = [list(range(100, 200)) for _ in range(64)]
-        ledger = [json.loads(line) for line in (output/'records.jsonl').read_bytes().splitlines()][:64]
+        ledger = [json.loads(line) for line in (output/'records.jsonl').read_bytes().splitlines()]
+        measured_cells = []
         for row in ledger: row['returned_hits'] = 0
         clock = [10**12-10]
         def now(): clock[0] += 1; return clock[0]
         def schedule(*args, **kwargs):
-            receipt = ledger[0]['cell_receipt']; clock[0] = receipt['terminal_ns']+1
-            return copy.deepcopy(ledger), receipt['epoch_ns'], receipt['terminal_ns'], None
+            index = len(measured_cells); measured_cells.append(index)
+            assert kwargs['workers'] == config['workers'] == 8
+            selected = copy.deepcopy(ledger[index*64:(index+1)*64])
+            receipt = selected[0]['cell_receipt']; clock[0] = receipt['terminal_ns']+1
+            return selected, receipt['epoch_ns'], receipt['terminal_ns'], None
         failed_output = output.parent/'scientific-runtime'
         with patch.object(worker, 'main', original_main), patch.object(worker, 'inputs', return_value=evidence), \
             patch.object(worker.offered, 'schedule_offers', side_effect=schedule), patch.object(worker.time, 'monotonic_ns', side_effect=now), \
@@ -420,6 +426,9 @@ def self_check():
             assert failure['execution_gate_passed'] and failed_replay['executed'] and not failed_replay['paired_gate_passed']
             assert failed_replay['scientific_qualification'] == failed_terminal['scientific_qualification'] == 'FAIL'
             assert failed_replay['candidate_over_actual_bracketing_control_latency_ratio'] == 'UNMEASURED'
+            assert measured_cells == list(range(4)) and failure['counts']['successful'] == 256
+            assert all(c['cell_started'] and not c['quality_gate_passed'] for c in failure['cells'])
+            assert failure['campaign_abort'] is None and failure['collection_policy'] == config['collection_policy']
             (failed_collection/'aws-terminal.json').write_bytes(worker.encoded(dict(failed_terminal, scientific_qualification='PASS')))
             rejects(lambda: replay(failed_collection, repo))
         checks.append(dict(user_data_bytes=len(body.encode()), terminal_python_bytes=len(terminal_code.encode())))
@@ -453,7 +462,7 @@ def self_check():
     assert time.monotonic()-started < 55 and resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024 <= 200*1024**2
     print('PASS paired controller: source/binary/proof/width negatives, drained callback/seal ordering, '
         'generated shell/terminal, actual producer and closed replay, full-roster tamper rejection, '
-        'scientific FAIL preserved, all-ACK fsync/interrupt/terminate-wait/collection; '+json.dumps(checks[0])+
+        'four-cell nonfatal scientific FAIL preserved, all-ACK fsync/interrupt/terminate-wait/collection; '+json.dumps(checks[0])+
         '; synthetic Python/process/SDK only, no native/Cargo/network/corpus/cloud')
 
 

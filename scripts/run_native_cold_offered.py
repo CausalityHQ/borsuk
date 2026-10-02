@@ -63,8 +63,8 @@ def reduce_cell(records, offered_qps, epoch, terminal, arm_failed):
 
 def schedule_offers(call_one, offered_qps, *, workers=6, base_port=18080, deadline_ns=None):
     """Absolute offers; a slot stays owned through callback validation and cleanup."""
-    if type(workers) is not int or not 1 <= workers <= 6:
-        raise ValueError('workers must be in 1..6')
+    if type(workers) is not int or not 1 <= workers <= 8:
+        raise ValueError('workers must be in 1..8')
     if type(base_port) is not int or not 1024 <= base_port <= 65536-workers:
         raise ValueError('worker ports must be in 1024..65535')
     if type(offered_qps) not in (int, float) or not math.isfinite(offered_qps) or offered_qps <= 0:

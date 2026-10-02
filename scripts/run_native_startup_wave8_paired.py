@@ -2,7 +2,7 @@
 """Bounded startup wave4/wave8 ABBA; no builds, publication, or cloud launch.
 
 CLI: CONFIG SHA REPO NEW_OUTPUT; --replay CONFIG SHA REPO OUTPUT; --self-check.
-Root freezes paired-config.json with FIXED, exact CODE hashes, original closed
+Root freezes paired8-config.json with FIXED, exact CODE hashes, original closed
 cold a0005 authority, prices, and control/candidate role bindings. Each binding
 contains wave_objects, native_source_commit, source_manifest, proof, binary.
 Control reuses its unchanged scoped proof and binary; candidate proof uses schema
@@ -10,7 +10,10 @@ borsuk-startup-wave8-role-proof-v1 and actual combined workspace evidence.
 main(..., on_cell_closed=None) emits marker/paths after drain, scratch removal,
 and fsync; paths contains records, summary, seal. The controller authenticates
 AWS terminal/source/archive closure and all OUTPUTS before worker replay.
-Synthetic checks establish no native qualification, measured speedup, or 444 pass.
+Eight owners are frozen explicitly; collect all declared cells after nonfatal
+failure and abort remaining work on fatal execution failure. Historical v1
+campaigns replay only with their frozen source. Synthetic checks establish no
+native qualification, measured speedup, or 444 pass.
 """
 import base64
 from datetime import datetime
@@ -40,7 +43,7 @@ encoded, sha, artifact, write, read, identity = (previous.encoded, previous.sha,
 
 
 ROOT = native.ROOT.parent / 'startup-wave8'
-CONFIG = ROOT / 'paired-config.json'
+CONFIG = ROOT / 'paired8-config.json'
 MANIFEST = ROOT / 'candidate-native-source-manifest.json'
 PREFIX = 'research/semantic-router/20261002/fresh1m-startup-wave8-paired-'
 CELLS = ('control', 'candidate', 'candidate', 'control')
@@ -64,7 +67,8 @@ GATE_COMMANDS = (
 GATE_NAMES = ('object-native-generation-tests','semantic-object-store-parity','paged-source-parity',
     'fragmented-paged-source-parity','release','clippy','test-build')
 MEMORY, NATIVE, THREAD_ENV = previous.MEMORY, previous.NATIVE, previous.THREAD_ENV
-FIXED = dict(previous.FIXED, schema='borsuk-startup-wave8-paired-v1', cold_invocations=256,
+FIXED = dict(previous.FIXED, schema='borsuk-startup-wave8-paired-v2', cold_invocations=256,
+    concurrency=8, workers=8, collection_policy='continue_nonfatal_abort_fatal',
     offered_qps=8, cells=list(CELLS), metadata_wave_objects=WIDTHS)
 CODE = tuple(sorted(set((*previous.CODE, 'scripts/check_native_workspace_execution.py', 'scripts/run_native_startup_wave8_paired.py'))))
 COLD_DIRECTORY = str(native.ROOT / 'a0005')
@@ -342,7 +346,9 @@ def reduce_cell(records, evidence, config):
     assert receipt['admission_deadline_ns'] == receipt['worker_started_ns']+(3000-90)*10**9
     index = records[0]['cell_index']; stats.integer(index, 'cell', 0, 3)
     role = CELLS[index]; width = WIDTHS[role]
-    rate = 8; active, intervals, delays, good = [], [], [], []
+    assert config['workers'] == config['concurrency'] == 8 and type(config['workers']) is int
+    rate, workers, base_port = config['offered_qps'], config['workers'], config['base_port']
+    active, intervals, delays, good = [], [], [], []
     fatal = False
     # This is deliberately after drain, never a per-call sibling PID check.
     validate_cgroup(dict(before=receipt['campaign_cgroup_before'], after=receipt['cgroup_after'], closed=True))
@@ -374,7 +380,7 @@ def reduce_cell(records, evidence, config):
                 assert row['dispatched_ns'] is None and row['abort_after'] == receipt['abort_after']
                 assert isinstance(row['abort_after'], dict)
             continue
-        stats.integer(port, 'port', 18080, 18085)
+        stats.integer(port, 'port', base_port, base_port+workers-1)
         assert outcome in ('success','failed') and row['dispatched_ns'] is not None
         assert row['request_sha256'] == sha(evidence['requests'][q]) and row['request_bytes'] == len(evidence['requests'][q])
         assert row['expected_authority'] == evidence['arm']['authority'] and row['http_retry'] is False
@@ -418,18 +424,18 @@ def reduce_cell(records, evidence, config):
         active = [(s,e,p) for s,e,p in active if e > start]
         assert all(p != port for _,_,p in active), 'early port reuse'
         active.append((start,end,port)); peak = max(peak,len(active))
-        assert peak <= 6
+        assert peak <= workers
     for row in records:
         if row['outcome'] == 'capacity_drop':
-            assert sum(s <= row['dispatched_ns'] < e for s,e,_ in intervals) == 6, 'drop without six owners'
+            assert sum(s <= row['dispatched_ns'] < e for s,e,_ in intervals) == workers, 'drop without full ownership'
     abort = receipt['abort_after']
     if receipt['cell_started'] and abort is not None:
         assert epoch <= abort['observed_ns'] <= terminal
+        fatal = True
         if abort['reason'] == 'admission deadline': assert abort['observed_ns'] >= receipt['admission_deadline_ns']
         else:
             origin = records[abort['query_ordinal']]
             assert origin['abort_admissions'] is True and origin['terminal_ns'] == abort['observed_ns']
-            fatal = True
     counts = dict(planned=64, dispatched=sum(r['dispatched_ns'] is not None for r in records),
         admitted=len(intervals), terminal_completed=len(intervals), successful=len(good))
     hits = sum(r['returned_hits'] for r in good)
@@ -441,8 +447,8 @@ def reduce_cell(records, evidence, config):
     tails = dict(cold=offered.tails([r['cold_start_to_first_http_response_ns'] for r in good]),
         scheduled_response=offered.tails([r['completed_ns']-r['scheduled_ns'] for r in good]),
         dispatch=offered.tails(delays), all_offers=native.telemetry.all_offer_tails(records))
-    return dict(schema='borsuk-startup-wave8-paired-cell-v1', cell_index=index, role=role, wave_objects=width,
-        role_authority=role_authority(config,role), offered_qps=rate,
+    return dict(schema='borsuk-startup-wave8-paired-cell-v2', cell_index=index, role=role, wave_objects=width,
+        role_authority=role_authority(config,role), offered_qps=rate, workers=workers,
         dataset='ReLAION', cell_started=started, epoch_ns=epoch, terminal_ns=terminal,
         full_span_ns=span if started else 'UNMEASURED', counts=counts,
         full_span_qps={n:v*1e9/span if started else 'UNMEASURED' for n,v in counts.items()},
@@ -490,7 +496,7 @@ def reduce_records(records, evidence, config):
         assert receipt['cell_scratch_removed'] is True, 'cell scratch cleanup'
         if stop is None:
             assert cell['cell_started'] is True
-            if not cell['valid']: stop = dict(cell_index=index,reason='cell validation failed',observed_ns=cell['terminal_ns'])
+            if not cell['execution_gate_passed']: stop = dict(cell_index=index,reason='fatal cell execution failure',observed_ns=cell['terminal_ns'])
         else:
             assert cell['cell_started'] is False and receipt['abort_after'] == stop and cell['aborted'] == 64
     valid = all(c['valid'] for c in cells)
@@ -501,13 +507,13 @@ def reduce_records(records, evidence, config):
             for n in ('cold','scheduled_response')} for j in (0,3)} for i in (1,2)}
     counts = {n:sum(c['counts'][n] for c in cells) for n in cells[0]['counts']}
     span = cells[-1]['terminal_ns']-cells[0]['epoch_ns']
-    return dict(schema='borsuk-startup-wave8-paired-result-v1',closed=True,cells=cells,counts=counts,
+    return dict(schema='borsuk-startup-wave8-paired-result-v2',closed=True,cells=cells,counts=counts,
         full_span_ns=span,full_span_qps={n:v*1e9/span for n,v in counts.items()},
         execution_gate_passed=all(c['execution_gate_passed'] for c in cells),
         paired_gate_passed=valid,candidate_over_actual_bracketing_control_latency_ratio=comparison,
         comparison_population='candidate cells 1 and 2 versus EACH actual control cell 0 and 3; successful responses only; all four cells must pass',
         historical_a0002_matched_control=False,sustainable_qps='UNMEASURED',matched_vendor_comparison=False,
-        escalation_stop=stop)
+        collection_policy=config['collection_policy'],campaign_abort=stop)
 
 
 def aborted_rows(index, epoch, stop, config):
@@ -529,7 +535,7 @@ def close_cell(output, records, result, proof, on_cell_closed=None):
         code_identity_sha256=proof['code_identity_sha256'],refs_identity_sha256=proof['refs_identity_sha256'],
         binary_sha256=proof['roles'][role]['binary']['sha256'])
     write(paths['summary'],marker)
-    seal = dict(schema='borsuk-startup-wave8-cell-seal-v1',cell_index=index,role=role,
+    seal = dict(schema='borsuk-startup-wave8-cell-seal-v2',cell_index=index,role=role,
         records=artifact(paths['records']),summary=artifact(paths['summary']))
     write(paths['seal'],seal)
     descriptor = os.open(output,os.O_RDONLY|os.O_DIRECTORY)
@@ -582,6 +588,8 @@ def main(config_path, expected_sha, repo, output, *, on_cell_closed=None):
             for index,role in enumerate(CELLS):
                 before = native.capture(); cell_scratch = scratch/f'cell{index}'
                 if stop_after is None:
+                    assert not resource_errors and not termination.is_set(), 'shared resource or termination failure'
+                    validate_cgroup(dict(before=baseline,after=before,closed=True))
                     cell_scratch.mkdir(); binary = cell_scratch/'http'
                     pointer = config['roles'][role]['binary']
                     write(binary,read(repo,pointer)); binary.chmod(0o500)
@@ -589,7 +597,7 @@ def main(config_path, expected_sha, repo, output, *, on_cell_closed=None):
                     def call(q,port):
                         assert not resource_errors and not termination.is_set(), 'shared resource or termination failure'
                         return measured_call(binary,config,evidence,q,port,wave_objects=WIDTHS[role])
-                    rows,epoch,terminal,abort = offered.schedule_offers(call,8,workers=6,base_port=18080,deadline_ns=deadline)
+                    rows,epoch,terminal,abort = offered.schedule_offers(call,config['offered_qps'],workers=config['workers'],base_port=config['base_port'],deadline_ns=deadline)
                 else:
                     epoch = time.monotonic_ns(); rows = aborted_rows(index,epoch,stop_after,config)
                     terminal,abort = time.monotonic_ns(),stop_after
@@ -612,8 +620,8 @@ def main(config_path, expected_sha, repo, output, *, on_cell_closed=None):
                     resource_errors=list(resource_errors),cell_scratch_removed=not cell_scratch.exists(),binary_after=binary_after)
                 result = reduce_cell(rows,evidence,config)
                 cells.append(close_cell(output,rows,result,proof,on_cell_closed))
-                if not result['valid'] and stop_after is None:
-                    stop_after = dict(cell_index=index,reason='cell validation failed',observed_ns=terminal)
+                if not result['execution_gate_passed'] and stop_after is None:
+                    stop_after = dict(cell_index=index,reason='fatal cell execution failure',observed_ns=terminal)
         summary = reduce_records(records,evidence,config)
         assert summary['execution_gate_passed'] and not termination.is_set(), 'fatal identity/resource/cleanup failure'
     except BaseException as error:
@@ -622,8 +630,9 @@ def main(config_path, expected_sha, repo, output, *, on_cell_closed=None):
         for index in range(len(records)//64,4):
             epoch = time.monotonic_ns()
             records.extend(aborted_rows(index,epoch,dict(reason='fatal '+type(error).__name__,observed_ns=epoch),config))
-        summary = dict(schema='borsuk-startup-wave8-paired-result-v1',closed=True,execution_gate_passed=False,
+        summary = dict(schema='borsuk-startup-wave8-paired-result-v2',closed=True,execution_gate_passed=False,
             paired_gate_passed=False,candidate_over_actual_bracketing_control_latency_ratio='UNMEASURED',
+            collection_policy=config['collection_policy'],campaign_abort=stop_after or dict(reason='fatal '+type(error).__name__,observed_ns=time.monotonic_ns()),
             error_type=type(error).__name__,error=str(error),planned_positions=256,closed_cells=cells)
     finally:
         stop.set()
@@ -682,7 +691,7 @@ def replay(config_path, expected_sha, repo, output):
         target = output/f'cell{index}-summary.json'
         assert json.loads(target.read_bytes()) == marker
         assert json.loads((output/f'cell{index}-seal.json').read_bytes()) == dict(
-            schema='borsuk-startup-wave8-cell-seal-v1',cell_index=index,role=CELLS[index],records=artifact(path),summary=artifact(target))
+            schema='borsuk-startup-wave8-cell-seal-v2',cell_index=index,role=CELLS[index],records=artifact(path),summary=artifact(target))
     assert (output/'failures.jsonl').read_bytes() == b''.join(encoded(r)+b'\n' for r in records if r['outcome']=='failed')
     counters = json.loads((output/'paired-cgroup.json').read_bytes()); validate_cgroup(counters)
     assert counters['before'] == records[0]['cell_receipt']['campaign_cgroup_before']
@@ -876,35 +885,43 @@ def self_check():
     old_args=(historical,arm,evidence['requests'],evidence['references'],evidence['truth'],historical[0]['scheduled_ns'],historical[0]['cell_receipt']['terminal_ns'])
     assert native.reduce_records(*old_args)==native.reduce_records(*old_args,wave_objects=4)
     assert native.reduce_records(*old_args)['execution_gate_passed']
-    # Six owners retain their slots through cleanup: position 6 must drop.
-    owners,held,release= set(),threading.Event(),threading.Event(); lock=threading.Lock()
-    def call(q,port):
-        with lock:
-            assert port not in owners;owners.add(port)
-            if len(owners)==6: held.set()
-        if q<6: assert release.wait(2)
-        with lock: owners.remove(port)
-        return dict(outcome='success',cleanup_confirmed=True,abort_admissions=False)
-    def unlock():
-        assert held.wait(2);time.sleep(.025);release.set()
-    unlocker=threading.Thread(target=unlock);unlocker.start()
-    with patch.object(offered,'scheduled_offsets_ns',return_value=[q*4000000 for q in range(64)]):
-        held_rows,_,_,_=offered.schedule_offers(call,250)
-    unlocker.join(2)
-    assert held_rows[6]['outcome']=='capacity_drop' and len(held_rows)==64 and not owners
-    assert any(r['outcome']=='success' for r in held_rows[12:])
-    dropped=copy.deepcopy(rows);until=dropped[6]['scheduled_ns']+1000000
-    for q in range(6):
-        dropped[q]['terminal_ns']=until;dropped[q]['port']=18080+q
-        dropped[q]['native_header']['listen']=f'127.0.0.1:{18080+q}'
+    # Ownership includes callback validation/cleanup, with no spare ninth slot.
+    for workers in (8,6):
+        owners,held,release = set(),threading.Event(),threading.Event()
+        lock=threading.Lock();clock=[10**12];peak=[0]
+        def call(q,port):
+            with lock:
+                assert port not in owners;owners.add(port);peak[0]=max(peak[0],len(owners))
+                if len(owners)==workers: held.set()
+            if q<workers: assert release.wait(2)
+            with lock: owners.remove(port)
+            return dict(outcome='success',cleanup_confirmed=True,abort_admissions=False)
+        def advance(delay):
+            clock[0]+=round(delay*1e9)
+            if clock[0]>=10**12+workers*1000000: assert held.wait(2)
+            if clock[0]>=10**12+63*1000000: release.set()
+        kwargs={} if workers==6 else dict(workers=workers)
+        def schedule():
+            with patch.object(offered,'scheduled_offsets_ns',return_value=[q*1000000 for q in range(64)]), \
+                patch.object(time,'monotonic_ns',side_effect=lambda:clock[0]),patch.object(time,'sleep',side_effect=advance):
+                return offered.schedule_offers(call,1000,**kwargs)
+        held_rows,_,_,abort=schedule()
+        assert abort is None and held_rows[workers]['outcome']=='capacity_drop'
+        assert {r['port'] for r in held_rows[:workers]}==set(range(18080,18080+workers))
+        assert peak[0]==workers and len(held_rows)==64 and not owners
+    for kwargs in (dict(workers=9),dict(workers=0),dict(workers=True),dict(workers=8.0),
+        dict(workers=8,base_port=65529),dict(base_port=1023),dict(base_port=True),dict(base_port=18080.0)):
+        rejects(lambda:offered.schedule_offers(lambda q,p:None,8,**kwargs))
+    for workers,port in ((1,65535),(8,65528)):
+        checked,_,_,abort=offered.schedule_offers(lambda q,p:None,8,workers=workers,base_port=port,deadline_ns=0)
+        assert abort['reason']=='admission deadline' and all(r['outcome']=='aborted' for r in checked)
+    dropped=copy.deepcopy(rows);until=dropped[8]['scheduled_ns']+1000000
+    for q in range(8):
+        dropped[q]['terminal_ns']=until;dropped[q]['port']=config['base_port']+q
+        dropped[q]['native_header']['listen']=f"127.0.0.1:{dropped[q]['port']}"
         dropped[q]['native_server_log']=json.dumps(dropped[q]['native_header'])+'\n'
-    at=dropped[6]['scheduled_ns']
-    dropped[6]=dict(aborted_rows(0,rows[0]['scheduled_ns'],{},config)[6],outcome='capacity_drop',dispatched_ns=at,terminal_ns=at)
-    stopped=dict(cell_index=0,reason='cell validation failed',observed_ns=rows[0]['cell_receipt']['terminal_ns'])
-    for index in range(1,4):
-        receipt=copy.deepcopy(rows[index*64]['cell_receipt']);receipt.update(cell_started=False,abort_after=stopped,binary_after=None)
-        dropped[index*64:(index+1)*64]=aborted_rows(index,receipt['epoch_ns'],stopped,config)
-        dropped[index*64]['cell_receipt']=receipt
+    at=dropped[8]['scheduled_ns']
+    dropped[8]=dict(aborted_rows(0,rows[0]['scheduled_ns'],{},config)[8],outcome='capacity_drop',dispatched_ns=at,terminal_ns=at)
     failed=copy.deepcopy(dropped)
     failed[:64]=copy.deepcopy(rows[:64])
     at=failed[17]['scheduled_ns'];failure=copy.deepcopy(failed_templates[4,'transport'])
@@ -919,6 +936,42 @@ def self_check():
     rejected=reduce_records(dropped,evidence,config)
     assert not rejected['paired_gate_passed'] and rejected['candidate_over_actual_bracketing_control_latency_ratio']=='UNMEASURED'
     assert rejected['cells'][0]['capacity_drops']==1 and rejected['cells'][0]['latency_ms']['all_offers']['p99']=='UNBOUNDED'
+    assert rejected['execution_gate_passed'] and all(c['cell_started'] for c in rejected['cells'])
+    assert rejected['counts']['successful']==255 and rejected['cells'][0]['peak_port_ownership']==8
+    for port in (18079,18088,True,18080.0):
+        invalid=copy.deepcopy(rows);invalid[0]['port']=port
+        rejects(lambda:reduce_records(invalid,evidence,config))
+    invalid=copy.deepcopy(dropped);invalid[7]['terminal_ns']=invalid[7]['completed_ns']
+    rejects(lambda:reduce_records(invalid,evidence,config))
+    # Callback failures poison admission; cleanup is never assumed by the pool.
+    for cleaned in (False,True):
+        poisoned,_,_,abort=offered.schedule_offers(lambda q,p:dict(outcome='failed',cleanup_confirmed=cleaned,
+            abort_admissions=True),1000,workers=8)
+        assert abort['reason']==('fatal call failure' if cleaned else 'cleanup unconfirmed')
+        assert any(r['outcome']=='aborted' for r in poisoned)
+        assert all(r['cleanup_confirmed'] is cleaned for r in poisoned if r['port'] is not None)
+    # A fatal recorded call stops subsequent cells; an early science stop is invalid.
+    fatal_rows=copy.deepcopy(rows);fatal=copy.deepcopy(failed_templates[4,'fatal'])
+    fatal.update({n:rows[0][n] for n in ('query_ordinal','cell_index','role','wave_objects','role_authority',
+        'dataset','offered_qps','scheduled_ns','dispatched_ns','started_ns','completed_ns',
+        'first_wire_completed_ns','terminal_ns','port')})
+    stream=json.loads(fatal['failure_stream_raw']);stream['started_ns']=fatal['started_ns']
+    fatal['failure_stream_raw']=json.dumps(stream)+'\n'
+    fatal['cell_receipt']=copy.deepcopy(rows[0]['cell_receipt']);fatal_rows[0]=fatal
+    fatal_rows[0]['cell_receipt']['abort_after']=dict(query_ordinal=0,reason='fatal call failure',observed_ns=fatal['terminal_ns'])
+    for q in range(1,64):
+        fatal_rows[q]=aborted_rows(0,rows[0]['scheduled_ns'],fatal_rows[0]['cell_receipt']['abort_after'],config)[q]
+        fatal_rows[q]['terminal_ns']=fatal['terminal_ns']
+    stopped=dict(cell_index=0,reason='fatal cell execution failure',observed_ns=rows[0]['cell_receipt']['terminal_ns'])
+    for index in range(1,4):
+        receipt=copy.deepcopy(rows[index*64]['cell_receipt']);receipt.update(cell_started=False,abort_after=stopped,binary_after=None)
+        fatal_rows[index*64:(index+1)*64]=aborted_rows(index,receipt['epoch_ns'],stopped,config)
+        fatal_rows[index*64]['cell_receipt']=receipt
+    fatal_result=reduce_records(fatal_rows,evidence,config)
+    assert not fatal_result['execution_gate_passed'] and fatal_result['campaign_abort']==stopped
+    assert fatal_result['counts']['admitted']==1 and all(c['aborted']==64 for c in fatal_result['cells'][1:])
+    early_stop=copy.deepcopy(dropped);early_stop[64:]=fatal_rows[64:]
+    rejects(lambda:reduce_records(early_stop,evidence,config))
     native_manifest=json.loads((Path(__file__).resolve().parents[1]/MANIFEST).read_bytes())
     role_fixtures = {}
     for role in WIDTHS:
@@ -1074,7 +1127,7 @@ def self_check():
             target.write_bytes(encoded(value));return qualify(target,artifact(target)['sha256'],repo)
         with patch.object(previous.cold_spot,'qualify_measurement',return_value=checked),patch.object(previous.cold_spot,'fail_disposition'):
             _,qualified=qualify_cfg(cfg)
-            for field,value in (('authority_pending',True),('schema','old'),('offered_qps',4),('workers',8),
+            for field,value in (('authority_pending',True),('schema','old'),('offered_qps',4),('workers',6),('workers',True),('concurrency',6),('collection_policy','stop_any_invalid'),
                 ('cold_invocations',64),('publication_invocations',1),('code_sha256',{}),('measurement_prefix','historical-a2')):
                 rejects(lambda:qualify_cfg(dict(cfg,**{field:value})))
             wrong=copy.deepcopy(cfg);wrong['cold_run']['directory']=str(native.ROOT/'a0004')
@@ -1093,15 +1146,16 @@ def self_check():
                 rejects(lambda:qualify_cfg(cfg));path.write_bytes(saved)
             _,qualified=qualify_cfg(cfg)
             # Exercise real main files, role binary staging/removal, markers and replay.
-            fake_rows=ledger();cursor=[0];calls=[];callbacks=[]
+            fake_rows=ledger();cursor=[0];calls=[];callbacks=[];mock_clock=[10**12-1]
+            def runtime_now(): mock_clock[0]+=1;return mock_clock[0]
             def fake_measured(binary,config,evidence,q,port,*,wave_objects):
                 index=cursor[0];role=CELLS[index]
                 assert wave_objects==WIDTHS[role] and Path(binary).read_bytes()==role.encode()
                 calls.append((index,q,role));return copy.deepcopy(fake_rows[index*64+q])
             def fake_schedule(callback,rate,**kwargs):
-                index=cursor[0];assert rate==8 and kwargs['workers']==6 and kwargs['base_port']==18080
+                index=cursor[0];assert rate==8 and kwargs['workers']==8 and kwargs['base_port']==18080
                 selected=[callback(q,18080) for q in range(64)]
-                receipt=selected[0]['cell_receipt'];cursor[0]+=1
+                receipt=selected[0]['cell_receipt'];cursor[0]+=1;mock_clock[0]=receipt['terminal_ns']+1
                 return selected,receipt['epoch_ns'],receipt['terminal_ns'],None
             def cell_closed(marker,paths):
                 assert not (paths['records'].parent/'scratch'/f"cell{marker['cell_index']}").exists()
@@ -1112,34 +1166,77 @@ def self_check():
             with patch.dict(os.environ,env),patch.object(os,'sched_getaffinity',return_value={4,5}), \
                 patch.object(native,'capture',return_value=snapshot),patch.object(ids,'tool_versions',return_value={'synthetic':True}), \
                 patch(__name__+'.inputs',return_value=evidence),patch(__name__+'.measured_call',side_effect=fake_measured), \
-                patch.object(offered,'schedule_offers',side_effect=fake_schedule),patch.object(time,'monotonic_ns',return_value=10**12):
+                patch.object(offered,'schedule_offers',side_effect=fake_schedule),patch.object(time,'monotonic_ns',side_effect=runtime_now):
                 actual=main(target,artifact(target)['sha256'],repo,output,on_cell_closed=cell_closed)
                 assert actual['paired_gate_passed'] and len(calls)==256 and callbacks==list(CELLS)
                 assert replay(target,artifact(target)['sha256'],repo,output)==actual
                 rejects(lambda:main(target,artifact(target)['sha256'],repo,output))
+                # Nonfatal failures must measure all four cells and retain FAIL.
+                for kind in ('quality','capacity','transport'):
+                    cursor[0]=0;calls.clear();callbacks.clear();mock_clock[0]=10**12-1
+                    fake_rows=copy.deepcopy(dropped if kind=='capacity' else failed if kind=='transport' else rows)
+                    observed_evidence=copy.deepcopy(evidence)
+                    if kind=='quality':
+                        observed_evidence['truth']=[list(range(100,200)) for _ in range(64)]
+                        for row in fake_rows: row['returned_hits']=0
+                    failed_output=root/('nonfatal-'+kind)
+                    with patch(__name__+'.inputs',return_value=observed_evidence):
+                        failure=main(target,artifact(target)['sha256'],repo,failed_output,on_cell_closed=cell_closed)
+                        assert replay(target,artifact(target)['sha256'],repo,failed_output)==failure
+                    assert cursor[0]==4 and len(calls)==256 and callbacks==list(CELLS)
+                    assert failure['execution_gate_passed'] and not failure['paired_gate_passed']
+                    assert failure['campaign_abort'] is None and all(c['cell_started'] for c in failure['cells'])
+                    assert failure['candidate_over_actual_bracketing_control_latency_ratio']=='UNMEASURED'
+                    assert not failure['cells'][0]['valid']
+                    if kind!='quality':
+                        assert failure['counts']['successful']==255 and all(c['valid'] for c in failure['cells'][1:])
+                        assert failure['cells'][0]['latency_ms']['all_offers']['p99']=='UNBOUNDED'
+                fake_rows=ledger()
                 # Cleanup and binary identity failures must preserve the original 64 rows.
                 remove=shutil.rmtree
-                for kind in ('cell_cleanup','binary_drift'):
-                    cursor[0]=0;failed_output=root/kind
+                for kind in ('cell_cleanup','binary_drift','native_cleanup','native_identity','fatal_call','resource','termination','deadline'):
+                    cursor[0]=0;calls.clear();mock_clock[0]=10**12-1;failed_output=root/kind
                     def cleanup(path,*args,**kwargs):
                         if kind=='cell_cleanup' and Path(path).name=='cell0': raise RuntimeError('synthetic cell cleanup failed')
                         return remove(path,*args,**kwargs)
                     def scheduled(callback,rate,**kwargs):
                         answer=fake_schedule(callback,rate,**kwargs)
+                        selected,epoch,terminal,abort=answer
                         if kind=='binary_drift':
                             binary=failed_output/'scratch/cell0/http';binary.chmod(0o600);binary.write_bytes(b'drift')
-                        return answer
+                        elif kind=='native_cleanup': selected[0]['native_close']['process_group_closed']=False
+                        elif kind=='native_identity': selected[0]['response']['authority']={}
+                        elif kind=='fatal_call':
+                            selected=copy.deepcopy(fatal_rows[:64]);abort=selected[0]['cell_receipt']['abort_after']
+                        elif kind=='resource':
+                            # The observer/main resource check must abort before cell1.
+                            snapshot['memory.events']='oom 1\noom_kill 1\noom_group_kill 0\nmax 0\n'
+                        elif kind=='termination': os.kill(os.getpid(),signal.SIGTERM)
+                        elif kind=='deadline':
+                            epoch=kwargs['deadline_ns'];terminal=epoch+1
+                            abort=dict(query_ordinal=0,reason='admission deadline',observed_ns=epoch)
+                            selected=aborted_rows(0,epoch,abort,config)
+                        mock_clock[0]=terminal+1
+                        return selected,epoch,terminal,abort
                     with patch.object(shutil,'rmtree',side_effect=cleanup),patch.object(offered,'schedule_offers',side_effect=scheduled):
                         rejects(lambda:main(target,artifact(target)['sha256'],repo,failed_output))
+                    snapshot['memory.events']='oom 0\noom_kill 0\noom_group_kill 0\nmax 0\n'
                     retained=[json.loads(line) for line in (failed_output/'records.jsonl').read_bytes().splitlines()]
-                    assert len(retained)==256 and all(row['outcome']=='success' and 'raw_response_base64' in row for row in retained[:64])
+                    assert cursor[0]==1 and len(calls)==64
+                    assert len(retained)==256
+                    if kind not in ('deadline','fatal_call'): assert all(row['outcome']=='success' and 'raw_response_base64' in row for row in retained[:64])
+                    if kind in ('deadline','fatal_call'):
+                        assert len(closed_failure_cells:=json.loads((failed_output/'summary.json').read_bytes())['closed_cells'])==4
+                        assert closed_failure_cells[0]['execution_gate_passed'] is False
                     assert all(row['outcome']=='aborted' for row in retained[64:])
-                    assert json.loads((failed_output/'summary.json').read_bytes())['paired_gate_passed'] is False
+                    closed_failure=json.loads((failed_output/'summary.json').read_bytes())
+                    assert closed_failure['paired_gate_passed'] is closed_failure['execution_gate_passed'] is False
+                    assert closed_failure['candidate_over_actual_bracketing_control_latency_ratio']=='UNMEASURED'
                     assert not (failed_output/'scratch').exists()
             assert not (output/'scratch').exists() and len((output/'records.jsonl').read_bytes().splitlines())==256
 
     assert time.monotonic()-started < 55 and resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024 <= 200*1024**2
-    print('PASS startup-wave8 paired synthetic: default4/explicit8, role/source/seven gates, raw wire/GT/parity, ABBA ledger, resources/cleanup, six-owner drop, deterministic replay/seals; no SDK/network/native/Cargo')
+    print('PASS startup-wave8 paired synthetic: default4/explicit8, role/source/seven gates, raw wire/GT/parity, ABBA ledger, resources/cleanup, eight/ninth and default-six/seventh admission, full four-cell nonfatal FAIL collection, fatal/deadline abort, deterministic replay/seals; no SDK/network/native/Cargo')
 
 
 if __name__ == '__main__':
