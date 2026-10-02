@@ -441,6 +441,12 @@ def validate_closed(out,proof,terminal,files):
 
 
 def collect(s3,prefix,out,instance_id,commit,digest):
+    # Historical admission must run before the offered collector replaces cold's rosters.
+    proof = preflight(collection_out=out)
+    historical_rosters = dict(ARTIFACTS=cold.ARTIFACTS,TERMINAL_IDENTITIES=cold.TERMINAL_IDENTITIES)
+    def closed(*args):
+        with patch.multiple(cold,**historical_rosters):
+            return validate_closed(*args)
     # Shared collector enforces exact ACKed IDs terminated/waited before this fetch.
     def get_object(**kwargs):
         response = s3.get_object(**kwargs)
@@ -463,7 +469,7 @@ def collect(s3,prefix,out,instance_id,commit,digest):
             response['Body'].close(); raise
     with patch.multiple(cold,ROOT=ROOT,PREFIX=PREFIX,SCHEMA=SCHEMA,ARTIFACTS=ARTIFACTS,
         TERMINAL_IDENTITIES=TERMINAL_IDENTITIES,MAX_BODY_BYTES=OUTPUT_BYTES,
-        DIAGNOSTIC_FILES=DIAGNOSTIC_FILES,preflight=preflight,validate_closed=validate_closed):
+        DIAGNOSTIC_FILES=DIAGNOSTIC_FILES,preflight=lambda **kwargs:proof,validate_closed=closed):
         return cold.collect(SimpleNamespace(get_object=get_object),prefix,out,instance_id,commit,digest)
 
 
@@ -574,11 +580,30 @@ def staging_collection_check(work,repo,config,proof,worker,capability,rejects,th
     terminal = dict(proof,schema=SCHEMA,instance_id='i-owned',source_commit=proof['source_archive_commit'],source_archive_sha256=proof['source_archive_sha256'],
         phase='complete',status='complete',exit_code=0,original_exit_code=0,artifacts={n:dict(bytes=len(b),sha256=sha(b)) for n,b in bodies.items()})
     objects = {PREFIX+'a0001/artifacts/'+n:b for n,b in bodies.items()}; terminal_key=PREFIX+'a0001/terminal.json'; objects[terminal_key]=encoded(terminal)
+    # Admit the real sealed a5 archive at BOTH callbacks through this adapter.
+    # Synthetic offered output keeps new campaign records and native/cloud out.
+    historical_runtime = runtime(); historical_repo = Path(__file__).resolve().parents[1]
+    historical_config = read_json(historical_repo/CONFIG)
+    admissions = []; historical_cgroup_check = fixed.check_cgroup
+    def admit_historical():
+        with patch.object(fixed,'check_cgroup',historical_cgroup_check):
+            _, historical_proof, evidence = historical_runtime.qualify(historical_repo/CONFIG,artifact(historical_repo/CONFIG)['sha256'],historical_repo)
+        assert historical_proof['native_source_file_count'] == 399
+        assert len(evidence['requests']) == 64 and evidence['binary'] == historical_config['cold_run']['files'][HTTP]
+        admissions.append(True)
+    def historical_preflight(**kwargs):
+        admit_historical(); return proof
+    def historical_replay(*args):
+        admit_historical(); return dict(status='FAIL',execution_gate_passed=True)
+    with patch.object(module,'ROOT',dest.parent),patch.object(module,'preflight',side_effect=historical_preflight),\
+        patch.object(module,'runtime',return_value=worker),patch.object(worker,'replay',side_effect=historical_replay),\
+        patch.object(fixed,'check_cgroup'):
+        collect(SDK(objects),PREFIX+'a0001',dest,'i-owned',proof['source_archive_commit'],proof['source_archive_sha256'])
+        receipt = read_json(dest/'collection-receipt.json'); assert receipt['whole_body_verification'] is receipt['complete'] is True and receipt['scientific_status'] == 'FAIL'
+        assert len(admissions) == 2; checks += 1
     worker.replay = lambda *args:dict(status='FAIL',execution_gate_passed=True)
     with patch.object(module,'ROOT',dest.parent),patch.object(module,'preflight',return_value=proof),\
         patch.object(module,'runtime',return_value=worker),patch.object(fixed,'check_cgroup'):
-        collect(SDK(objects),PREFIX+'a0001',dest,'i-owned',proof['source_archive_commit'],proof['source_archive_sha256'])
-        receipt = read_json(dest/'collection-receipt.json'); assert receipt['whole_body_verification'] is receipt['complete'] is True and receipt['scientific_status'] == 'FAIL'; checks += 1
         for field,value in (('instance_id','i-foreign'),('exit_code',True),('source_commit','0'*40),('code_identity_sha256','0'*64)):
             objects[terminal_key]=encoded(dict(terminal,**{field:value}))
             rejects(lambda:collect(SDK(objects),PREFIX+'a0001',dest,'i-owned',proof['source_archive_commit'],proof['source_archive_sha256']))
@@ -819,7 +844,7 @@ systemd-run() { while [ "$1" != timeout ]; do shift; done; "$@"; }
     return dict(passed=True,checks=checks,source_sha256=artifact(Path(__file__))['sha256'],
         elapsed_seconds=time.monotonic()-started,peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
         runtime_fixture='explicit temporary stub; actual combined integration remains parent-owned',
-        fresh_cli_preflight=True,real_runtime_integration=False,native_or_cloud_execution=False,
+        fresh_cli_preflight=True,historical_collection_admission=True,real_runtime_integration=False,native_or_cloud_execution=False,
         launch_authorized=False,user_data_bytes=len(body.encode()))
 
 
