@@ -1,0 +1,21 @@
+{
+  "authority_pending": false,
+  "root_pending": true,
+  "qualification": false,
+  "metadata_only": true,
+  "locator_metadata_only": true,
+  "vector_or_truth_bodies_opened": false,
+  "raw_normalized_duplicate_gate_pending": true,
+  "ground_truth_constructed": false,
+  "ann_measured": false,
+  "complete_historical_coverage": false,
+  "original_quality_status": "FAIL",
+  "original_quality_fail_unchanged": true,
+  "schema": "borsuk-cohere-top32-fresh64-root-freeze-v1",
+  "authority_sha256": "d07bef1f8552a0884cceb04c7404ad596516666aa1433ba06be7c26182b3027b",
+  "panel_sha256": "572e11afce1f778ababcbd17038ba8e5ac3ab2c0744e1075b56d6af2d9d07f49",
+  "selected_locators_sha256": "583067ac7d7d88b25400f9b7d80026767589a8506e07dd970bddb003549e2dad",
+  "selection_count": 64,
+  "selected_shards": 62,
+  "root_action": "Authenticate metadata, then freeze before vector/GT construction; no resampling"
+}

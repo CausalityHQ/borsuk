@@ -1,0 +1,158 @@
+{
+  "authority_pending": false,
+  "root_pending": true,
+  "qualification": false,
+  "metadata_only": true,
+  "locator_metadata_only": true,
+  "vector_or_truth_bodies_opened": false,
+  "raw_normalized_duplicate_gate_pending": true,
+  "ground_truth_constructed": false,
+  "ann_measured": false,
+  "complete_historical_coverage": false,
+  "original_quality_status": "FAIL",
+  "original_quality_fail_unchanged": true,
+  "schema": "borsuk-cohere-top32-fresh64-metadata-verification-v1",
+  "artifacts": {
+    "authority.json": {
+      "bytes": 202936,
+      "sha256": "d07bef1f8552a0884cceb04c7404ad596516666aa1433ba06be7c26182b3027b"
+    },
+    "panel.json": {
+      "bytes": 58878,
+      "sha256": "572e11afce1f778ababcbd17038ba8e5ac3ab2c0744e1075b56d6af2d9d07f49"
+    },
+    "root-freeze.json": {
+      "bytes": 897,
+      "sha256": "a79ebfdf80458c51136ab1b25a4330c7f31be289fbfc9621e74a204be1f30779"
+    }
+  },
+  "input_pins": {
+    "preregister": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/preregister.md",
+      "bytes": 1833,
+      "sha256": "8c134c4ecfc0662d555c6c197419ceb3da4623c23285973d9582005886858e13"
+    },
+    "prospective_protocol": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/prospective-protocol.json",
+      "bytes": 2378,
+      "sha256": "b4547ffd131a72e1f5cd2e244a26d47743892c39da1c2cf3a7c48500c9c9048f"
+    },
+    "previous_root_freeze": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-panel-tools/root-freeze.json",
+      "bytes": 868,
+      "sha256": "c0af609473b8eee64ab0264c9458edffb7891557c830012aec7a7b37f39fd535"
+    },
+    "source_population_authority": {
+      "bytes": 176689,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-panel-tools/metadata-authority.json",
+      "sha256": "956a650eb34618d0d5fcab5d7776ea61e6875be64dd5245701aa521930ab703d"
+    },
+    "previous_consumed_panel": {
+      "bytes": 36744,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-panel-tools/panel.json",
+      "sha256": "979ad0f737ff045ab58b09dc9bc84105092c34238a5625558e2caa199e1b796e"
+    },
+    "previous_duplicate_audit": {
+      "bytes": 33074,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/screen/duplicate-audit.json",
+      "sha256": "ac8fb791a581853490acac6a0eb393837c68862bfa7ee39eb92766c1f208868e"
+    },
+    "previous_quality_recount": {
+      "bytes": 1025,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-quality/a0001/root-recount.json",
+      "sha256": "e2204adbeaf85813a91e96ad175e0bffaf3e75690bb8b9c85197a3d2520d0189"
+    },
+    "previous_quality_terminal": {
+      "bytes": 3783,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-quality/a0001/aws-terminal.json",
+      "sha256": "ab6b66ca67bb4f5f095bd448adf7fa9aa81632ee1530bf8f26947414a63d638d"
+    },
+    "source_receipt": {
+      "bytes": 135298,
+      "key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/STAGING_COMPLETE.json",
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-source-receipt.json",
+      "sha256": "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87"
+    },
+    "source_proof_candidate": {
+      "bytes": 1959,
+      "path": "docs/research/native-union-20260928/fresh-cohere-source-candidate.json",
+      "sha256": "d8d633b217ecc1f64bd531ef3b514fccc414f0afaf4b6b8233280ff7e5e43631"
+    },
+    "source_proof_confirm936_config": {
+      "bytes": 6482,
+      "path": "docs/research/native-union-20260928/fresh-cohere-confirm936-config.json",
+      "sha256": "ccd1af074ee18c1edd3a77edbb5929cea9677c14fd7b669dc0251efa2d773795"
+    },
+    "source_proof_dev64_config": {
+      "bytes": 6159,
+      "path": "docs/research/native-union-20260928/fresh-cohere-dev64-config.json",
+      "sha256": "0a1f90c2679f6ab6b27095cea7dea600add31ddd99e411ab7cc5cc6e23d0b1ce"
+    },
+    "source_proof_old_identity": {
+      "bytes": 1157,
+      "path": "docs/research/native-union-20260928/fresh-cohere-seal/a0001/identity.json",
+      "sha256": "5fa4d5df83c24f87863d8115671d42b215c7961caf4822d6b93856da46e4dd20"
+    },
+    "source_proof_old_seal": {
+      "bytes": 1810,
+      "path": "docs/research/native-union-20260928/fresh-cohere-seal/a0001/seal.json",
+      "sha256": "ee86ab749d222394861d272714f27edd2f4b80bdcb09b04682144bbd6803fd69"
+    },
+    "source_proof_old_verification": {
+      "bytes": 1759,
+      "path": "docs/research/native-union-20260928/fresh-cohere-seal/a0001/verification.json",
+      "sha256": "570f18bbb7080bdae68e59f829eb955ead74f5e9341de2c2e0b79a7be17ca92d"
+    },
+    "source_proof_registered_test": {
+      "bytes": 4159,
+      "path": "docs/research/native-union-20260928/fresh-cohere-10m-test-family.json",
+      "sha256": "9081d1bebdb795c8326e69ff3eaf3c64104658284123801d8f44f257e887ba11"
+    },
+    "source_proof_source_build": {
+      "bytes": 1210,
+      "path": "docs/research/native-union-20260928/cohere-source-1m/a0001/source-build.json",
+      "sha256": "40fdf63450fe1e764716bb1ee0182af1afe3ac0468f52c6421bd6311b0d029cd"
+    },
+    "source_proof_source_terminal": {
+      "bytes": 5296,
+      "path": "docs/research/native-union-20260928/cohere-source-1m/a0001/terminal.json",
+      "sha256": "905ed20152c29ded8f339fd030f9c02a0cabd67c7d54b143b9832ed56a643d92"
+    },
+    "source_proof_source_verification": {
+      "bytes": 3774,
+      "path": "docs/research/native-union-20260928/cohere-source-1m/a0001/verification.json",
+      "sha256": "c974a2912790dfccf1ff6e8f6555b662d82b61071f0adf0c6fe983a59f9f66cc"
+    },
+    "source_proof_stress": {
+      "bytes": 104518,
+      "path": "docs/research/native-union-20260928/fresh-cohere-stress-query-families.json",
+      "sha256": "844506cbeed7a29c92afb905c373d568e2262c9d0a3f59c448454330ac63ddfd"
+    },
+    "source_proof_v271": {
+      "bytes": 1592,
+      "path": "docs/research/native-union-20260928/fresh-cohere-prior-identity/verification.json",
+      "sha256": "86bb1ebb7902c573f22d54a08179cccffb20f2bc71e5a94cffbc82a8e9f16867"
+    },
+    "source_proof_v277": {
+      "bytes": 1648,
+      "path": "docs/research/native-union-20260928/fresh-cohere-prior-identity/v277-verification.json",
+      "sha256": "15ebb42b8a793836fbb4a5b196de2f3c7a37c8666391ee46f021e02056a5ee62"
+    },
+    "source_proof_v278": {
+      "bytes": 965,
+      "path": "docs/research/native-union-20260928/fresh-history-source-inventory/v278-exclusion-proof.json",
+      "sha256": "d14a4b745d5d9b3f1686d50c4b186892bdf9db7ccdeb131147588b39bb2fd342"
+    }
+  },
+  "original_population_size": 8997000,
+  "excluded_previous_count": 64,
+  "population_size": 8996936,
+  "interval_subtraction_bijection": true,
+  "previous64_source_disjoint": true,
+  "corpus_known_consumed_test_scopes_disjoint": true,
+  "authenticated_train_shards": 458,
+  "selected_count": 64,
+  "selected_sha256": "583067ac7d7d88b25400f9b7d80026767589a8506e07dd970bddb003549e2dad",
+  "network_requests": 0,
+  "new_vector_duplicates_checked": false
+}
