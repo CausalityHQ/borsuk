@@ -1,0 +1,2407 @@
+{
+  "authority_pending": false,
+  "root_pending": true,
+  "qualification": false,
+  "metadata_only": true,
+  "locator_metadata_only": true,
+  "vector_or_truth_bodies_opened": false,
+  "raw_normalized_duplicate_gate_pending": true,
+  "ground_truth_constructed": false,
+  "ann_measured": false,
+  "complete_historical_coverage": false,
+  "original_quality_status": "FAIL",
+  "original_quality_fail_unchanged": true,
+  "original_top32_execution_status": "FAIL",
+  "original_top32_exit_status": 1,
+  "original_top32_execution_qualified": false,
+  "original_top32_report_status": "FAIL",
+  "original_top32_fail_unchanged": true,
+  "original_top32_closure_restored": false,
+  "new_vector_duplicates_checked": false,
+  "schema": "borsuk-cohere-fixed48-fresh64-locators-v1",
+  "input_pins": {
+    "preregister": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/preregister.md",
+      "bytes": 1833,
+      "sha256": "8c134c4ecfc0662d555c6c197419ceb3da4623c23285973d9582005886858e13"
+    },
+    "prospective_protocol": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/prospective-protocol.json",
+      "bytes": 2378,
+      "sha256": "b4547ffd131a72e1f5cd2e244a26d47743892c39da1c2cf3a7c48500c9c9048f"
+    },
+    "previous_root_freeze": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-panel-tools/root-freeze.json",
+      "bytes": 868,
+      "sha256": "c0af609473b8eee64ab0264c9458edffb7891557c830012aec7a7b37f39fd535"
+    },
+    "source_population_authority": {
+      "bytes": 176689,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-panel-tools/metadata-authority.json",
+      "sha256": "956a650eb34618d0d5fcab5d7776ea61e6875be64dd5245701aa521930ab703d"
+    },
+    "previous_consumed_panel": {
+      "bytes": 36744,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-panel-tools/panel.json",
+      "sha256": "979ad0f737ff045ab58b09dc9bc84105092c34238a5625558e2caa199e1b796e"
+    },
+    "previous_duplicate_audit": {
+      "bytes": 33074,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/screen/duplicate-audit.json",
+      "sha256": "ac8fb791a581853490acac6a0eb393837c68862bfa7ee39eb92766c1f208868e"
+    },
+    "previous_quality_recount": {
+      "bytes": 1025,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-quality/a0001/root-recount.json",
+      "sha256": "e2204adbeaf85813a91e96ad175e0bffaf3e75690bb8b9c85197a3d2520d0189"
+    },
+    "previous_quality_terminal": {
+      "bytes": 3783,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-quality/a0001/aws-terminal.json",
+      "sha256": "ab6b66ca67bb4f5f095bd448adf7fa9aa81632ee1530bf8f26947414a63d638d"
+    },
+    "source_receipt": {
+      "bytes": 135298,
+      "key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/STAGING_COMPLETE.json",
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-source-receipt.json",
+      "sha256": "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87"
+    },
+    "source_proof_candidate": {
+      "bytes": 1959,
+      "path": "docs/research/native-union-20260928/fresh-cohere-source-candidate.json",
+      "sha256": "d8d633b217ecc1f64bd531ef3b514fccc414f0afaf4b6b8233280ff7e5e43631"
+    },
+    "source_proof_confirm936_config": {
+      "bytes": 6482,
+      "path": "docs/research/native-union-20260928/fresh-cohere-confirm936-config.json",
+      "sha256": "ccd1af074ee18c1edd3a77edbb5929cea9677c14fd7b669dc0251efa2d773795"
+    },
+    "source_proof_dev64_config": {
+      "bytes": 6159,
+      "path": "docs/research/native-union-20260928/fresh-cohere-dev64-config.json",
+      "sha256": "0a1f90c2679f6ab6b27095cea7dea600add31ddd99e411ab7cc5cc6e23d0b1ce"
+    },
+    "source_proof_old_identity": {
+      "bytes": 1157,
+      "path": "docs/research/native-union-20260928/fresh-cohere-seal/a0001/identity.json",
+      "sha256": "5fa4d5df83c24f87863d8115671d42b215c7961caf4822d6b93856da46e4dd20"
+    },
+    "source_proof_old_seal": {
+      "bytes": 1810,
+      "path": "docs/research/native-union-20260928/fresh-cohere-seal/a0001/seal.json",
+      "sha256": "ee86ab749d222394861d272714f27edd2f4b80bdcb09b04682144bbd6803fd69"
+    },
+    "source_proof_old_verification": {
+      "bytes": 1759,
+      "path": "docs/research/native-union-20260928/fresh-cohere-seal/a0001/verification.json",
+      "sha256": "570f18bbb7080bdae68e59f829eb955ead74f5e9341de2c2e0b79a7be17ca92d"
+    },
+    "source_proof_registered_test": {
+      "bytes": 4159,
+      "path": "docs/research/native-union-20260928/fresh-cohere-10m-test-family.json",
+      "sha256": "9081d1bebdb795c8326e69ff3eaf3c64104658284123801d8f44f257e887ba11"
+    },
+    "source_proof_source_build": {
+      "bytes": 1210,
+      "path": "docs/research/native-union-20260928/cohere-source-1m/a0001/source-build.json",
+      "sha256": "40fdf63450fe1e764716bb1ee0182af1afe3ac0468f52c6421bd6311b0d029cd"
+    },
+    "source_proof_source_terminal": {
+      "bytes": 5296,
+      "path": "docs/research/native-union-20260928/cohere-source-1m/a0001/terminal.json",
+      "sha256": "905ed20152c29ded8f339fd030f9c02a0cabd67c7d54b143b9832ed56a643d92"
+    },
+    "source_proof_source_verification": {
+      "bytes": 3774,
+      "path": "docs/research/native-union-20260928/cohere-source-1m/a0001/verification.json",
+      "sha256": "c974a2912790dfccf1ff6e8f6555b662d82b61071f0adf0c6fe983a59f9f66cc"
+    },
+    "source_proof_stress": {
+      "bytes": 104518,
+      "path": "docs/research/native-union-20260928/fresh-cohere-stress-query-families.json",
+      "sha256": "844506cbeed7a29c92afb905c373d568e2262c9d0a3f59c448454330ac63ddfd"
+    },
+    "source_proof_v271": {
+      "bytes": 1592,
+      "path": "docs/research/native-union-20260928/fresh-cohere-prior-identity/verification.json",
+      "sha256": "86bb1ebb7902c573f22d54a08179cccffb20f2bc71e5a94cffbc82a8e9f16867"
+    },
+    "source_proof_v277": {
+      "bytes": 1648,
+      "path": "docs/research/native-union-20260928/fresh-cohere-prior-identity/v277-verification.json",
+      "sha256": "15ebb42b8a793836fbb4a5b196de2f3c7a37c8666391ee46f021e02056a5ee62"
+    },
+    "source_proof_v278": {
+      "bytes": 965,
+      "path": "docs/research/native-union-20260928/fresh-history-source-inventory/v278-exclusion-proof.json",
+      "sha256": "d14a4b745d5d9b3f1686d50c4b186892bdf9db7ccdeb131147588b39bb2fd342"
+    },
+    "top32_authority": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/panel-tools/authority.json",
+      "bytes": 202936,
+      "sha256": "d07bef1f8552a0884cceb04c7404ad596516666aa1433ba06be7c26182b3027b"
+    },
+    "top32_panel": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/panel-tools/panel.json",
+      "bytes": 58878,
+      "sha256": "572e11afce1f778ababcbd17038ba8e5ac3ab2c0744e1075b56d6af2d9d07f49"
+    },
+    "top32_root_freeze": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/panel-tools/root-freeze.json",
+      "bytes": 897,
+      "sha256": "a79ebfdf80458c51136ab1b25a4330c7f31be289fbfc9621e74a204be1f30779"
+    },
+    "top32_verification": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/panel-tools/verification.json",
+      "bytes": 7152,
+      "sha256": "c8b770f6753df4f39eabe87cac750e49d7491766810ef46277377eab95d7ecdb"
+    },
+    "top32_terminal": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/a0002/aws-terminal.json",
+      "bytes": 5530,
+      "sha256": "f7aa03265a032ea075bdd3506360186a156e841a4eb931b4fc7b4de3af6a0611"
+    },
+    "top32_execution_panel": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/a0002/screen/panel.json",
+      "bytes": 58878,
+      "sha256": "572e11afce1f778ababcbd17038ba8e5ac3ab2c0744e1075b56d6af2d9d07f49"
+    },
+    "top32_duplicate_audit": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/a0002/screen/duplicate-audit.json",
+      "bytes": 42110,
+      "sha256": "ec642ebd86ddcbc033815b47eaa797825ed80369f48ee3c7bf6bbecbd138d124"
+    },
+    "top32_root_independent_audit": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/a0002/root-independent-audit.json",
+      "bytes": 3423,
+      "sha256": "0c15b6d8f79377ff0bf3e536fad72d70fd9d04a96986a9373b71cfd1f85675a4"
+    },
+    "fixed48_protocol": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/selector-protocol.json",
+      "bytes": 8573,
+      "sha256": "f521c49f1abdcf9bcf72f445186a5349a4831972aeb4933e86afca6f726b37c2"
+    }
+  },
+  "source_receipt_sha256": "0965aa0241199822dfac3410bba4edad5536ac0eb0aaa8ab83c216e8c5749a87",
+  "corpus": {
+    "dimensions": 768,
+    "first1m_shard_slices": [
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 0
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 1
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 2
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 3
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 4
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 5
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 6
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 7
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 8
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 9
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 10
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 11
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 12
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 13
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 14
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 15
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 16
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 17
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 18
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 19
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 20
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 21
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 22
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 23
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 24
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 25
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 26
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 27
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 28
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 29
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 30
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 31
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 32
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 33
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 34
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 35
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 36
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 37
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 38
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 39
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 40
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 41
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 42
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 43
+      },
+      {
+        "local_row_end_exclusive": 21845,
+        "local_row_start": 0,
+        "shard_ordinal": 44
+      },
+      {
+        "local_row_end_exclusive": 16975,
+        "local_row_start": 0,
+        "shard_ordinal": 45
+      }
+    ],
+    "metric": "cosine",
+    "normalized_sha256": "fd175b35b04bb6e00210eed9ace3622833af5d7b663a11c47d53f1e6cef8073c",
+    "order": {
+      "bytes": 8000000,
+      "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/order.u64",
+      "sha256": "25672572b8e36eafea6ba856068f33aca5064e3ce02544340f682cd39881ea02"
+    },
+    "order_format": "LEu64 permutation: physical position to original source ordinal",
+    "raw": {
+      "bytes": 3072000000,
+      "key": "research/v261-cohere-dual-graph-1m/2dee58896e42f84d74e2653dc0960e19d6defc63/runs/a0001/artifacts/vectors.raw",
+      "producer_terminal": {
+        "key": "research/v261-cohere-dual-graph-1m/2dee58896e42f84d74e2653dc0960e19d6defc63/runs/a0001/terminal.json",
+        "sha256": "00c7d4803354f15d5f62bea6e53fd0672a0f5fc91cc482e1fa4b20b8951a9f82"
+      },
+      "sha256": "6c82a340e3e1b4226640e593efa9c4000c6a5962d4b13063093a1dab689a9005"
+    },
+    "raw_dtype": "<f4",
+    "root_manifest": {
+      "bytes": 33963,
+      "key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/manifest.json",
+      "sha256": "a4eb4851c545e828f3d08181a0c3e9cca09ed9341032ee3e69c511b9b7caf67e"
+    },
+    "rows": 1000000,
+    "source_interval": [
+      0,
+      1000000
+    ],
+    "sq8": {
+      "bytes": 780000000,
+      "key": "research/native-union/20260929/cohere-source-1m-v4/objects/b2f2f7dbec79c8646495b4a1500c363c5ccbf51690cf1e936d1264e7ee3839e1",
+      "sha256": "b2f2f7dbec79c8646495b4a1500c363c5ccbf51690cf1e936d1264e7ee3839e1"
+    }
+  },
+  "selection": {
+    "candidate_interval": [
+      1000000,
+      10000000
+    ],
+    "excluded_consumed_intervals": [
+      [
+        1000000,
+        1002000
+      ],
+      [
+        1005000,
+        1006000
+      ]
+    ],
+    "excluded_previous_source_ordinals": [
+      1033667,
+      1262893,
+      1411188,
+      1581227,
+      1611312,
+      1638795,
+      1714827,
+      1763498,
+      1796556,
+      1800219,
+      1839362,
+      1873113,
+      1967195,
+      1987296,
+      2173080,
+      2262966,
+      2272061,
+      2317083,
+      2397123,
+      2440619,
+      2558988,
+      2809217,
+      2933968,
+      2939591,
+      2963357,
+      3006339,
+      3048962,
+      3055503,
+      3067785,
+      3078447,
+      3105133,
+      3133891,
+      3183658,
+      3208519,
+      3303183,
+      3366952,
+      3457253,
+      3516241,
+      3730553,
+      3763510,
+      3792351,
+      3996074,
+      4021286,
+      4021395,
+      4142959,
+      4158619,
+      4172682,
+      4210282,
+      4236822,
+      4262207,
+      4419878,
+      4495577,
+      4575097,
+      4738141,
+      4883823,
+      5069381,
+      5101529,
+      5295600,
+      5316120,
+      5339613,
+      5346082,
+      5500657,
+      5562837,
+      5613622,
+      5637657,
+      5738580,
+      5745267,
+      5759059,
+      5910479,
+      5943389,
+      5978987,
+      6001303,
+      6030417,
+      6258303,
+      6274583,
+      6304168,
+      6343246,
+      6354772,
+      6374275,
+      6503805,
+      6568383,
+      6606295,
+      6666801,
+      6669676,
+      6802740,
+      6824918,
+      6841531,
+      6852153,
+      6924282,
+      6940923,
+      6967997,
+      7174805,
+      7293146,
+      7316782,
+      7331303,
+      7342896,
+      7461580,
+      7534035,
+      7656327,
+      7803381,
+      7804053,
+      7878470,
+      7984435,
+      8013273,
+      8023048,
+      8172738,
+      8304863,
+      8344841,
+      8388622,
+      8620709,
+      8837427,
+      8851711,
+      8868973,
+      9094675,
+      9096393,
+      9119198,
+      9213146,
+      9279025,
+      9305411,
+      9392724,
+      9405335,
+      9561113,
+      9725947,
+      9783780,
+      9908945,
+      9924357,
+      9929063,
+      9959596
+    ],
+    "eligible_intervals": [
+      [
+        1002000,
+        1005000
+      ],
+      [
+        1006000,
+        1033667
+      ],
+      [
+        1033668,
+        1262893
+      ],
+      [
+        1262894,
+        1411188
+      ],
+      [
+        1411189,
+        1581227
+      ],
+      [
+        1581228,
+        1611312
+      ],
+      [
+        1611313,
+        1638795
+      ],
+      [
+        1638796,
+        1714827
+      ],
+      [
+        1714828,
+        1763498
+      ],
+      [
+        1763499,
+        1796556
+      ],
+      [
+        1796557,
+        1800219
+      ],
+      [
+        1800220,
+        1839362
+      ],
+      [
+        1839363,
+        1873113
+      ],
+      [
+        1873114,
+        1967195
+      ],
+      [
+        1967196,
+        1987296
+      ],
+      [
+        1987297,
+        2173080
+      ],
+      [
+        2173081,
+        2262966
+      ],
+      [
+        2262967,
+        2272061
+      ],
+      [
+        2272062,
+        2317083
+      ],
+      [
+        2317084,
+        2397123
+      ],
+      [
+        2397124,
+        2440619
+      ],
+      [
+        2440620,
+        2558988
+      ],
+      [
+        2558989,
+        2809217
+      ],
+      [
+        2809218,
+        2933968
+      ],
+      [
+        2933969,
+        2939591
+      ],
+      [
+        2939592,
+        2963357
+      ],
+      [
+        2963358,
+        3006339
+      ],
+      [
+        3006340,
+        3048962
+      ],
+      [
+        3048963,
+        3055503
+      ],
+      [
+        3055504,
+        3067785
+      ],
+      [
+        3067786,
+        3078447
+      ],
+      [
+        3078448,
+        3105133
+      ],
+      [
+        3105134,
+        3133891
+      ],
+      [
+        3133892,
+        3183658
+      ],
+      [
+        3183659,
+        3208519
+      ],
+      [
+        3208520,
+        3303183
+      ],
+      [
+        3303184,
+        3366952
+      ],
+      [
+        3366953,
+        3457253
+      ],
+      [
+        3457254,
+        3516241
+      ],
+      [
+        3516242,
+        3730553
+      ],
+      [
+        3730554,
+        3763510
+      ],
+      [
+        3763511,
+        3792351
+      ],
+      [
+        3792352,
+        3996074
+      ],
+      [
+        3996075,
+        4021286
+      ],
+      [
+        4021287,
+        4021395
+      ],
+      [
+        4021396,
+        4142959
+      ],
+      [
+        4142960,
+        4158619
+      ],
+      [
+        4158620,
+        4172682
+      ],
+      [
+        4172683,
+        4210282
+      ],
+      [
+        4210283,
+        4236822
+      ],
+      [
+        4236823,
+        4262207
+      ],
+      [
+        4262208,
+        4419878
+      ],
+      [
+        4419879,
+        4495577
+      ],
+      [
+        4495578,
+        4575097
+      ],
+      [
+        4575098,
+        4738141
+      ],
+      [
+        4738142,
+        4883823
+      ],
+      [
+        4883824,
+        5069381
+      ],
+      [
+        5069382,
+        5101529
+      ],
+      [
+        5101530,
+        5295600
+      ],
+      [
+        5295601,
+        5316120
+      ],
+      [
+        5316121,
+        5339613
+      ],
+      [
+        5339614,
+        5346082
+      ],
+      [
+        5346083,
+        5500657
+      ],
+      [
+        5500658,
+        5562837
+      ],
+      [
+        5562838,
+        5613622
+      ],
+      [
+        5613623,
+        5637657
+      ],
+      [
+        5637658,
+        5738580
+      ],
+      [
+        5738581,
+        5745267
+      ],
+      [
+        5745268,
+        5759059
+      ],
+      [
+        5759060,
+        5910479
+      ],
+      [
+        5910480,
+        5943389
+      ],
+      [
+        5943390,
+        5978987
+      ],
+      [
+        5978988,
+        6001303
+      ],
+      [
+        6001304,
+        6030417
+      ],
+      [
+        6030418,
+        6258303
+      ],
+      [
+        6258304,
+        6274583
+      ],
+      [
+        6274584,
+        6304168
+      ],
+      [
+        6304169,
+        6343246
+      ],
+      [
+        6343247,
+        6354772
+      ],
+      [
+        6354773,
+        6374275
+      ],
+      [
+        6374276,
+        6503805
+      ],
+      [
+        6503806,
+        6568383
+      ],
+      [
+        6568384,
+        6606295
+      ],
+      [
+        6606296,
+        6666801
+      ],
+      [
+        6666802,
+        6669676
+      ],
+      [
+        6669677,
+        6802740
+      ],
+      [
+        6802741,
+        6824918
+      ],
+      [
+        6824919,
+        6841531
+      ],
+      [
+        6841532,
+        6852153
+      ],
+      [
+        6852154,
+        6924282
+      ],
+      [
+        6924283,
+        6940923
+      ],
+      [
+        6940924,
+        6967997
+      ],
+      [
+        6967998,
+        7174805
+      ],
+      [
+        7174806,
+        7293146
+      ],
+      [
+        7293147,
+        7316782
+      ],
+      [
+        7316783,
+        7331303
+      ],
+      [
+        7331304,
+        7342896
+      ],
+      [
+        7342897,
+        7461580
+      ],
+      [
+        7461581,
+        7534035
+      ],
+      [
+        7534036,
+        7656327
+      ],
+      [
+        7656328,
+        7803381
+      ],
+      [
+        7803382,
+        7804053
+      ],
+      [
+        7804054,
+        7878470
+      ],
+      [
+        7878471,
+        7984435
+      ],
+      [
+        7984436,
+        8013273
+      ],
+      [
+        8013274,
+        8023048
+      ],
+      [
+        8023049,
+        8172738
+      ],
+      [
+        8172739,
+        8304863
+      ],
+      [
+        8304864,
+        8344841
+      ],
+      [
+        8344842,
+        8388622
+      ],
+      [
+        8388623,
+        8620709
+      ],
+      [
+        8620710,
+        8837427
+      ],
+      [
+        8837428,
+        8851711
+      ],
+      [
+        8851712,
+        8868973
+      ],
+      [
+        8868974,
+        9094675
+      ],
+      [
+        9094676,
+        9096393
+      ],
+      [
+        9096394,
+        9119198
+      ],
+      [
+        9119199,
+        9213146
+      ],
+      [
+        9213147,
+        9279025
+      ],
+      [
+        9279026,
+        9305411
+      ],
+      [
+        9305412,
+        9392724
+      ],
+      [
+        9392725,
+        9405335
+      ],
+      [
+        9405336,
+        9561113
+      ],
+      [
+        9561114,
+        9725947
+      ],
+      [
+        9725948,
+        9783780
+      ],
+      [
+        9783781,
+        9908945
+      ],
+      [
+        9908946,
+        9924357
+      ],
+      [
+        9924358,
+        9929063
+      ],
+      [
+        9929064,
+        9959596
+      ],
+      [
+        9959597,
+        10000000
+      ]
+    ],
+    "population_size": 8996872,
+    "roster_sha256": "7b2607c50a79c1da6fb91ed351c98b75b0a27b628af3458e30382cc4ee327df7",
+    "population_sha256": "08464de975e3b33e31e8c5b29fcc1cd2f6a86ff9eee83fb5735d94ed7c91335b",
+    "count": 64,
+    "seed_text": "borsuk-cohere-first1m-fixed48-routing-fresh64-v1",
+    "seed_sha256": "d31cca33f03c780e2b9aa1657ef63c5ea09e5caaddedb349683ca400c13cafa0",
+    "seed_integer": 95488878321902159916894867338516023972602448798521457180518314845014815715232,
+    "seed_derivation": "SHA256 UTF-8 seed text; entire digest as unsigned big-endian integer",
+    "python": {
+      "implementation": "CPython",
+      "version": "3.14.4"
+    },
+    "rule": "random.Random(seed_integer).sample(range(population_size), 64); map ranks through ascending eligible half-open intervals; preserve sampled order",
+    "failure_policy": "STOP whole fixed panel on any duplicate or exclusion failure; never replace or resample"
+  },
+  "consumed_query_ledger_sha256": "3bd5eb095e443e0583cf3cdbc505c3719780963489d51b7959eac246d586f518",
+  "selected_sha256": "dfe569e0198f35d690e5aa6a248aa8eee73b6d59a569b194729368e84aa2f61c",
+  "selected": [
+    {
+      "query_ordinal": 0,
+      "source_ordinal": 7004785,
+      "eligible_rank": 6001694,
+      "shard_ordinal": 320,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000320.parquet",
+      "shard_sha256": "008b662a4f8d5697b59c48d0aeb66f6f6ed8da3c5fff38adb82a76f90fc6ee5f",
+      "shard_bytes": 67122209,
+      "local_row": 14385,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 1,
+      "source_ordinal": 7993070,
+      "eligible_rank": 6989967,
+      "shard_ordinal": 365,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000365.parquet",
+      "shard_sha256": "3ca8bb24e98fc4358deec22e32cfd69a0eafc0f95af0c618bd62333faa546877",
+      "shard_bytes": 67122092,
+      "local_row": 19645,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 2,
+      "source_ordinal": 4745815,
+      "eligible_rank": 3742761,
+      "shard_ordinal": 217,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000217.parquet",
+      "shard_sha256": "4187e12e4f7c88c1a9b7c72dd630aba03fc7ee67ab55992b06d7c2ece2d8ff7a",
+      "shard_bytes": 67122085,
+      "local_row": 5450,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 3,
+      "source_ordinal": 4730480,
+      "eligible_rank": 3727427,
+      "shard_ordinal": 216,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000216.parquet",
+      "shard_sha256": "0c6d946808d982a6c47c7effb3f0864b9168ba2c690219634dedcef2104078e4",
+      "shard_bytes": 67122091,
+      "local_row": 11960,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 4,
+      "source_ordinal": 3507809,
+      "eligible_rank": 2504772,
+      "shard_ordinal": 160,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000160.parquet",
+      "shard_sha256": "645169fda53b6fb4de7d3776dd6110c6b4cedf578aebbe494a03a5a14f68330d",
+      "shard_bytes": 67122090,
+      "local_row": 12609,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 5,
+      "source_ordinal": 2941224,
+      "eligible_rank": 1938200,
+      "shard_ordinal": 134,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000134.parquet",
+      "shard_sha256": "8a40b8724222fe6fe75f5e87fea3a8d8b38c9f8ed5e718bf44ef1eee1d24dfe3",
+      "shard_bytes": 67121964,
+      "local_row": 13994,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 6,
+      "source_ordinal": 3464241,
+      "eligible_rank": 2461204,
+      "shard_ordinal": 158,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000158.parquet",
+      "shard_sha256": "57233685561d484bc0f5a2f20231fc486047d081bdbc45bcf573d06737b6de29",
+      "shard_bytes": 67121959,
+      "local_row": 12731,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 7,
+      "source_ordinal": 5767890,
+      "eligible_rank": 4764822,
+      "shard_ordinal": 264,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000264.parquet",
+      "shard_sha256": "2d2f8156ce45f3de9e14f09819aede4df5746b38c6b2a48a15acef1b014274e8",
+      "shard_bytes": 67122092,
+      "local_row": 810,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 8,
+      "source_ordinal": 9699888,
+      "eligible_rank": 8696766,
+      "shard_ordinal": 444,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000444.parquet",
+      "shard_sha256": "cdd8536716df886ef0f4fbbcfcdb9ccdd10542ac4637e69a1a64f58b6da24eb2",
+      "shard_bytes": 67122084,
+      "local_row": 708,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 9,
+      "source_ordinal": 8384361,
+      "eligible_rank": 7381253,
+      "shard_ordinal": 383,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000383.parquet",
+      "shard_sha256": "8bd779f8dc7c1406d8cc5e5e2a504cf33eb8c7f6ed0924e47045f9186eb010dd",
+      "shard_bytes": 67122090,
+      "local_row": 17726,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 10,
+      "source_ordinal": 1714262,
+      "eligible_rank": 711256,
+      "shard_ordinal": 78,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000078.parquet",
+      "shard_sha256": "202d1b064e5e34231e6b00890b0e938a358528a64a671a4fcdc7d2ff87dd4c84",
+      "shard_bytes": 67122091,
+      "local_row": 10352,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 11,
+      "source_ordinal": 1270814,
+      "eligible_rank": 267812,
+      "shard_ordinal": 58,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000058.parquet",
+      "shard_sha256": "3c3aefeda6762ab21b0899407a22a23301eb8f42d5d1b5eda51d127ae770147d",
+      "shard_bytes": 67122091,
+      "local_row": 3804,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 12,
+      "source_ordinal": 3560777,
+      "eligible_rank": 2557739,
+      "shard_ordinal": 163,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000163.parquet",
+      "shard_sha256": "8683961cd7ca124d0dfdd2b4d1224dbb20d8526eb9872e89696ab0a2cc7d3133",
+      "shard_bytes": 67122090,
+      "local_row": 42,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 13,
+      "source_ordinal": 4792056,
+      "eligible_rank": 3789002,
+      "shard_ordinal": 219,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000219.parquet",
+      "shard_sha256": "54e09685b8367dbe5da69e5252bd4269a50a0fc2ef8d6f657f44e9f821e2c21c",
+      "shard_bytes": 67122091,
+      "local_row": 8001,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 14,
+      "source_ordinal": 5114864,
+      "eligible_rank": 4111807,
+      "shard_ordinal": 234,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000234.parquet",
+      "shard_sha256": "f79507ff1a9a3b6483bc8a9e5e0427a3ebfb71ff9d867305b8db5cf79f3ec433",
+      "shard_bytes": 67122094,
+      "local_row": 3134,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 15,
+      "source_ordinal": 4217671,
+      "eligible_rank": 3214623,
+      "shard_ordinal": 193,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000193.parquet",
+      "shard_sha256": "5f408ab1cc6c0c5d33b558496c6411147b6cccf6add478a0502e0424e4872273",
+      "shard_bytes": 67122088,
+      "local_row": 1586,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 16,
+      "source_ordinal": 2272391,
+      "eligible_rank": 1269374,
+      "shard_ordinal": 104,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000104.parquet",
+      "shard_sha256": "d677e12a8bd195ea0719a329b0a4f8923d5196364cc412b518569eff03953e2c",
+      "shard_bytes": 67121962,
+      "local_row": 511,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 17,
+      "source_ordinal": 3767834,
+      "eligible_rank": 2764794,
+      "shard_ordinal": 172,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000172.parquet",
+      "shard_sha256": "542000f7e57c868733e0a8ab2f7131411284a22c4076385b8031fb70a4446965",
+      "shard_bytes": 67122091,
+      "local_row": 10494,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 18,
+      "source_ordinal": 4998715,
+      "eligible_rank": 3995660,
+      "shard_ordinal": 228,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000228.parquet",
+      "shard_sha256": "247444438f2952ce45bf73c6a26dfe86112561066f2a804479f4c5702d9d7a81",
+      "shard_bytes": 67122215,
+      "local_row": 18055,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 19,
+      "source_ordinal": 5498221,
+      "eligible_rank": 4495160,
+      "shard_ordinal": 251,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000251.parquet",
+      "shard_sha256": "a534ed542bd7c8c0a6cf7e5d2a072da9b0d8fa8663dfaf488035a98fb330811d",
+      "shard_bytes": 67122081,
+      "local_row": 15126,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 20,
+      "source_ordinal": 8390149,
+      "eligible_rank": 7387040,
+      "shard_ordinal": 384,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000384.parquet",
+      "shard_sha256": "2af87a452092c398e20546633759e4cad9434d9b700b00b909db24f6a3c536e0",
+      "shard_bytes": 67122087,
+      "local_row": 1669,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 21,
+      "source_ordinal": 7462051,
+      "eligible_rank": 6458954,
+      "shard_ordinal": 341,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000341.parquet",
+      "shard_sha256": "e2e1ad4209b717967c51d1226c9613369dec079cdfb288c1fd2dafdaa580ed98",
+      "shard_bytes": 67122093,
+      "local_row": 12906,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 22,
+      "source_ordinal": 1073251,
+      "eligible_rank": 70250,
+      "shard_ordinal": 49,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000049.parquet",
+      "shard_sha256": "7a01028a862ce6e124a96f5529316396ba2ed038f13191cc27e181714c475cce",
+      "shard_bytes": 67122094,
+      "local_row": 2846,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 23,
+      "source_ordinal": 2140684,
+      "eligible_rank": 1137670,
+      "shard_ordinal": 97,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000097.parquet",
+      "shard_sha256": "6b8f32d1160cf96ff73e0fd9d3f166102be4906b0b4215644029d51a862901d8",
+      "shard_bytes": 67122091,
+      "local_row": 21719,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 24,
+      "source_ordinal": 2187368,
+      "eligible_rank": 1184353,
+      "shard_ordinal": 100,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000100.parquet",
+      "shard_sha256": "d75db4c13807ff5b511929e4e3eeb886f81147e17d0199ebdff77d8a134c5e80",
+      "shard_bytes": 67122091,
+      "local_row": 2868,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 25,
+      "source_ordinal": 7943457,
+      "eligible_rank": 6940355,
+      "shard_ordinal": 363,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000363.parquet",
+      "shard_sha256": "83c460c66bd570277ff42b46005c27e118582c7262d821ed87caca995500842b",
+      "shard_bytes": 67122088,
+      "local_row": 13722,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 26,
+      "source_ordinal": 4953780,
+      "eligible_rank": 3950725,
+      "shard_ordinal": 226,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000226.parquet",
+      "shard_sha256": "3a5573aa6d79984075b060183724f17ebaffb725e9713931c53a3dffd9c7b706",
+      "shard_bytes": 67122088,
+      "local_row": 16810,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 27,
+      "source_ordinal": 3393095,
+      "eligible_rank": 2390059,
+      "shard_ordinal": 155,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000155.parquet",
+      "shard_sha256": "a41e33519b65c53ca563fa36b51b64f261a7fd5670d4f0115ee30bb2bd2685f7",
+      "shard_bytes": 67121962,
+      "local_row": 7120,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 28,
+      "source_ordinal": 4212984,
+      "eligible_rank": 3209936,
+      "shard_ordinal": 192,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000192.parquet",
+      "shard_sha256": "a36f0565c005d62e7fd703f33f1fa22a6c6f45e43c4e86c4fa3c200abf28edeb",
+      "shard_bytes": 67122090,
+      "local_row": 18744,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 29,
+      "source_ordinal": 7259227,
+      "eligible_rank": 6256135,
+      "shard_ordinal": 332,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000332.parquet",
+      "shard_sha256": "7c0d2a5d0d02508235edb647c46d21e9d72a63b2d34bd70a56c12782694a0db3",
+      "shard_bytes": 67122094,
+      "local_row": 6687,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 30,
+      "source_ordinal": 2493724,
+      "eligible_rank": 1490704,
+      "shard_ordinal": 114,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000114.parquet",
+      "shard_sha256": "4adcbf3f7e9bace0f7a749c51d8c0f0595b0fd1055bfe24342a855dd9903cbf7",
+      "shard_bytes": 67122085,
+      "local_row": 3394,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 31,
+      "source_ordinal": 4804865,
+      "eligible_rank": 3801811,
+      "shard_ordinal": 219,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000219.parquet",
+      "shard_sha256": "54e09685b8367dbe5da69e5252bd4269a50a0fc2ef8d6f657f44e9f821e2c21c",
+      "shard_bytes": 67122091,
+      "local_row": 20810,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 32,
+      "source_ordinal": 7586690,
+      "eligible_rank": 6583592,
+      "shard_ordinal": 347,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000347.parquet",
+      "shard_sha256": "7d2e08732fc69364f7305889522258d7940199ab9b86a69fec6483a6f6001dec",
+      "shard_bytes": 67122092,
+      "local_row": 6475,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 33,
+      "source_ordinal": 9986323,
+      "eligible_rank": 8983195,
+      "shard_ordinal": 457,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000457.parquet",
+      "shard_sha256": "191d22a2d4ab09ec1d6e91a987481e5b26317fc0c74670add285364d28db4e70",
+      "shard_bytes": 51728164,
+      "local_row": 3158,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 34,
+      "source_ordinal": 9373519,
+      "eligible_rank": 8370400,
+      "shard_ordinal": 429,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000429.parquet",
+      "shard_sha256": "aaffd453372d87b15522f0faefbb78e22c412e197a8bb968e59ea2db7c4218fe",
+      "shard_bytes": 67122088,
+      "local_row": 2014,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 35,
+      "source_ordinal": 9039656,
+      "eligible_rank": 8036543,
+      "shard_ordinal": 413,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000413.parquet",
+      "shard_sha256": "fd6d446ddc934b5b703249866e418b24df38f53a030f5c48665607a318f7b0d8",
+      "shard_bytes": 67122095,
+      "local_row": 17671,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 36,
+      "source_ordinal": 1058410,
+      "eligible_rank": 55409,
+      "shard_ordinal": 48,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000048.parquet",
+      "shard_sha256": "7c974d78baf5700b2ebb2862b75add66194553c8135c0ad0b9734ff4592fea65",
+      "shard_bytes": 67122088,
+      "local_row": 9850,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 37,
+      "source_ordinal": 9768963,
+      "eligible_rank": 8765840,
+      "shard_ordinal": 447,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000447.parquet",
+      "shard_sha256": "70f94335df68f810264d9b835f0620648470de0ccb018a6764d14253e1a95216",
+      "shard_bytes": 67122085,
+      "local_row": 4248,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 38,
+      "source_ordinal": 6285044,
+      "eligible_rank": 5281969,
+      "shard_ordinal": 287,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000287.parquet",
+      "shard_sha256": "faccc9c839bec1310511734862e7b6bef331cab5c12a1fd7adbcbb0546734fdb",
+      "shard_bytes": 67122091,
+      "local_row": 15529,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 39,
+      "source_ordinal": 3896358,
+      "eligible_rank": 2893317,
+      "shard_ordinal": 178,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000178.parquet",
+      "shard_sha256": "3848927a96ece0fdb5c121a31a970f557567e6fb08ff0b0eaa45403a7ad02837",
+      "shard_bytes": 67122090,
+      "local_row": 7948,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 40,
+      "source_ordinal": 4693030,
+      "eligible_rank": 3689977,
+      "shard_ordinal": 214,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000214.parquet",
+      "shard_sha256": "f9f3bc419e426881c3532f36e7df42b4501b8d4aa845aea53a1afdd264c71d63",
+      "shard_bytes": 67122085,
+      "local_row": 18200,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 41,
+      "source_ordinal": 5912471,
+      "eligible_rank": 4909402,
+      "shard_ordinal": 270,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000270.parquet",
+      "shard_sha256": "c7a0751d47115b0d221196a016ad8c50fbadc71d0a12bbcec59b75e506994c4d",
+      "shard_bytes": 67122092,
+      "local_row": 14321,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 42,
+      "source_ordinal": 8770208,
+      "eligible_rank": 7767098,
+      "shard_ordinal": 401,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000401.parquet",
+      "shard_sha256": "6d2b21e7112c3c609ef2ad4f6fe03c0ceb69f9159e0c3095fb2fc56ace5fd032",
+      "shard_bytes": 67122094,
+      "local_row": 10363,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 43,
+      "source_ordinal": 1538135,
+      "eligible_rank": 535132,
+      "shard_ordinal": 70,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000070.parquet",
+      "shard_sha256": "893cc877c7df34b311b31a0cce22553e44e6605cbf0f243ed5de0b269217e272",
+      "shard_bytes": 67122091,
+      "local_row": 8985,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 44,
+      "source_ordinal": 7728493,
+      "eligible_rank": 6725394,
+      "shard_ordinal": 353,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000353.parquet",
+      "shard_sha256": "a4ebddf0b8444073afcf80853ae4e69053d5849e789c59d4bf3f92e6e79cebb2",
+      "shard_bytes": 67122091,
+      "local_row": 17208,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 45,
+      "source_ordinal": 5297401,
+      "eligible_rank": 4294343,
+      "shard_ordinal": 242,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000242.parquet",
+      "shard_sha256": "eaa3f4006b6f39381e28f9709d0e593cf7d0bfbf1753a4ce26a1f0c31b7e8b4f",
+      "shard_bytes": 67122079,
+      "local_row": 10911,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 46,
+      "source_ordinal": 8655952,
+      "eligible_rank": 7652842,
+      "shard_ordinal": 396,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000396.parquet",
+      "shard_sha256": "e98e8935f693051cd8b94aead26618a3f5ab5e18abc044e226a16f553d10096d",
+      "shard_bytes": 67122085,
+      "local_row": 5332,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 47,
+      "source_ordinal": 1594736,
+      "eligible_rank": 591732,
+      "shard_ordinal": 73,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000073.parquet",
+      "shard_sha256": "7481787022f9a1b421a4a7ea005767cbe14c8fef7c786ef5495c330e7f583cd5",
+      "shard_bytes": 67122090,
+      "local_row": 51,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 48,
+      "source_ordinal": 4973600,
+      "eligible_rank": 3970545,
+      "shard_ordinal": 227,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000227.parquet",
+      "shard_sha256": "8cc31797972dc2cbe02b4850373996475cad4188406bccf5a915e5272b600fe5",
+      "shard_bytes": 67121880,
+      "local_row": 14785,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 49,
+      "source_ordinal": 6530133,
+      "eligible_rank": 5527053,
+      "shard_ordinal": 298,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000298.parquet",
+      "shard_sha256": "e5c0fa19ceefb086d18d0e094c3b1a6809142575a277fd3341d0ae4a65a52a5e",
+      "shard_bytes": 67121967,
+      "local_row": 20323,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 50,
+      "source_ordinal": 1378606,
+      "eligible_rank": 375604,
+      "shard_ordinal": 63,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000063.parquet",
+      "shard_sha256": "0c8c763f9dfbdff2d9659b7bb0f99ee3a8c0625794016d5744a86b66eded043b",
+      "shard_bytes": 67122085,
+      "local_row": 2371,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 51,
+      "source_ordinal": 2763766,
+      "eligible_rank": 1760745,
+      "shard_ordinal": 126,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000126.parquet",
+      "shard_sha256": "0fde0f9c87c8d18ee38bc4b65f91412c5b7f336c4df1c779d5f472d74af0fe2f",
+      "shard_bytes": 67122087,
+      "local_row": 11296,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 52,
+      "source_ordinal": 1676738,
+      "eligible_rank": 673732,
+      "shard_ordinal": 76,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000076.parquet",
+      "shard_sha256": "ac9028065a47170d30c410fb6a2639292b2665c96e653bc089fc75932df8830f",
+      "shard_bytes": 67122089,
+      "local_row": 16518,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 53,
+      "source_ordinal": 4582236,
+      "eligible_rank": 3579183,
+      "shard_ordinal": 209,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000209.parquet",
+      "shard_sha256": "32cff3dad6ff7f1117f79d8f6a98bcaaa4229b5bc7c03480c724cdd79acc5735",
+      "shard_bytes": 67121961,
+      "local_row": 16631,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 54,
+      "source_ordinal": 5194729,
+      "eligible_rank": 4191672,
+      "shard_ordinal": 237,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000237.parquet",
+      "shard_sha256": "46decdd3f9dd8987161fcd32cdb2457484fda8598e99cd831a338cbde87c2f02",
+      "shard_bytes": 67122094,
+      "local_row": 17464,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 55,
+      "source_ordinal": 7821825,
+      "eligible_rank": 6818724,
+      "shard_ordinal": 358,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000358.parquet",
+      "shard_sha256": "46aecc57a7ba1f2894f7ac8fb6c377d6bcb77d38c079d41a45a8c9b78b17008a",
+      "shard_bytes": 67121965,
+      "local_row": 1315,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 56,
+      "source_ordinal": 8327702,
+      "eligible_rank": 7324595,
+      "shard_ordinal": 381,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000381.parquet",
+      "shard_sha256": "4b3be58fbda1e31f664f7f05e5b690d16cadd5a23f0a3c6cbfaa2c3a468277a4",
+      "shard_bytes": 67122090,
+      "local_row": 4757,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 57,
+      "source_ordinal": 1784402,
+      "eligible_rank": 781394,
+      "shard_ordinal": 81,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000081.parquet",
+      "shard_sha256": "2b44624cbbf3dc7ad384519bb52c753174e197beb87b3e87b7cb75c23938b7c2",
+      "shard_bytes": 67122091,
+      "local_row": 14957,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 58,
+      "source_ordinal": 6011442,
+      "eligible_rank": 5008370,
+      "shard_ordinal": 275,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000275.parquet",
+      "shard_sha256": "8006c920c310dc6d849f7f49231bab02672c3d5b3039864659eb3d8cf58aa02e",
+      "shard_bytes": 67122091,
+      "local_row": 4067,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 59,
+      "source_ordinal": 8840670,
+      "eligible_rank": 7837559,
+      "shard_ordinal": 404,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000404.parquet",
+      "shard_sha256": "8cdd33bdb3d76ce6ae5a119c4462f6a9ff57d0ab305fd475b861e5e659987941",
+      "shard_bytes": 67122094,
+      "local_row": 15290,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 60,
+      "source_ordinal": 9318419,
+      "eligible_rank": 8315300,
+      "shard_ordinal": 426,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000426.parquet",
+      "shard_sha256": "3ff5395657dcb91e22172925cb1409606333999d72a3d5cfb96a56d457cd0d51",
+      "shard_bytes": 67122087,
+      "local_row": 12449,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 61,
+      "source_ordinal": 7775062,
+      "eligible_rank": 6771963,
+      "shard_ordinal": 355,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000355.parquet",
+      "shard_sha256": "38e65b59cc23bf5612fdfb57b0569db360d2e42e771ccf9dca93378ef3ee2eae",
+      "shard_bytes": 67121961,
+      "local_row": 20087,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 62,
+      "source_ordinal": 6212529,
+      "eligible_rank": 5209456,
+      "shard_ordinal": 284,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000284.parquet",
+      "shard_sha256": "d7cb3282542a4188ca5be3d5710a114182213775d60d6f185bf03f9f5d86e0aa",
+      "shard_bytes": 67122090,
+      "local_row": 8549,
+      "embedding_column": "emb"
+    },
+    {
+      "query_ordinal": 63,
+      "source_ordinal": 6945133,
+      "eligible_rank": 5942043,
+      "shard_ordinal": 317,
+      "shard_key": "publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized/train-00000317.parquet",
+      "shard_sha256": "bee1bad5fdcc4694616079c9c839d6fa2c884bccc0fa61ef1676a5bea1683bff",
+      "shard_bytes": 67122087,
+      "local_row": 20268,
+      "embedding_column": "emb"
+    }
+  ],
+  "prior_panels_vector_hashes": [
+    {
+      "query_ordinals": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63
+      ],
+      "source_ordinals": [
+        5562837,
+        7461580,
+        3208519,
+        5101529,
+        2809217,
+        9924357,
+        5500657,
+        3183658,
+        2933968,
+        6924282,
+        3303183,
+        4021286,
+        1873113,
+        6841531,
+        7174805,
+        3366952,
+        8868973,
+        8620709,
+        2558988,
+        6030417,
+        7803381,
+        7984435,
+        6274583,
+        5295600,
+        7878470,
+        1987296,
+        6606295,
+        6001303,
+        9096393,
+        9405335,
+        1800219,
+        6304168,
+        6666801,
+        4236822,
+        5745267,
+        7804053,
+        3048962,
+        3133891,
+        1581227,
+        2939591,
+        6503805,
+        3792351,
+        5978987,
+        5759059,
+        1638795,
+        7534035,
+        3067785,
+        3763510,
+        4495577,
+        2262966,
+        4419878,
+        6802740,
+        1796556,
+        1411188,
+        1839362,
+        1967195,
+        1262893,
+        4172682,
+        2317083,
+        4158619,
+        7656327,
+        9725947,
+        7293146,
+        5613622
+      ],
+      "raw_sha256": [
+        "7facf4c6ef70413c46d50b7ca896740a2e25b2e1281b50b60c64d65ad9657468",
+        "7e4e21c32e770b44ef2ea00f3dd9663c5e0837fee287cb222edc594ec3f926de",
+        "adc47b55ea74a3958fd2b795dda7a30dcbc3f1994fcc69d7455aef8f6639fcd5",
+        "059106571e0733dd3ab606d96668736cb5f6fd4b03e931cc09cc7998ef80104a",
+        "267febf8435768ce3488c914d4958a2f54a0e5afc067b22cfb564a856d32dc15",
+        "275f16ea0a8833d31cf55f9ba77e29f6fd1c572baf40fc98e537567eedde5ed9",
+        "beae257b355275670274f72d980a8ac0713ade2b811509f383743cd744cf9c1e",
+        "06d539a3417142fcc4b6bc4fd2f4545a24a89a1253689afa1a7fc74b4fdb1b2c",
+        "06de693f050ab35c9147d5a20e2cc277138976b2f49b1c98803b59c6d242c20b",
+        "1d883da8425a2bcf7c9b9be3542abf8aa121895249b42e59f8ecc9e78b1b659c",
+        "619a8dbb06d0bf2ce27b66c08b6a4795acbe30ae43f9bf1f62480212c9cf6f76",
+        "b6d7700c9a4b16aa60c31da2a2eb448c4db5088558b7fe7257a8c32d63f8bcdf",
+        "92cd59cc2d7abfc32809be1d470632b0d94ea2e39d5d1683ea6271184e9fb0ac",
+        "2729964c0870d674c81af0b4d38ca6a6e1bff3011241fecaee5fb3edd2a736dd",
+        "4177e183add5d871288e83483b899b11f3d933d4f527d8c2b795482cfad9392b",
+        "a6bd9b89a3bcbed3bc14140879dd33a9cae4378f2cfe8f5376fe9432b7748e01",
+        "208d674781aea4077e32e1be92e98c8842cd12cbfb3a8ad24fb13ee9aecedb71",
+        "94ac06f1c0ae05101a74464a6a4fddba7658e2ada6585f7b079492b5e35f866b",
+        "9ccb52da1fd02cf2cb4503fcc1c99460bfc0d1e6e0d4ad5c285d7590763e6a00",
+        "9efd89aff777ba69c5b0c3c692b1913ed9df303f223cd1807c7cb8e007816787",
+        "7d373d4cd7586bc9408efe42a221970eb730678d98a7996a67ea7c0fa4cd28b7",
+        "c4350baa65ed8bb74189ea17de0b2f6fa6820220e6a872396a6b3abdc15d20b5",
+        "c91df282234f06d7125cb18bdfd953aba6f3f796064a20fecca5b97ac479e2e1",
+        "d3385ed623cf80a08fb5ef9cac4f2a870c711ce30d75d3a4c57461cfa52cb0d7",
+        "95bf39210617d88e4c1e8ca6144420014ab2cc3454409d96125340f59816d755",
+        "7d0881aa17c553feeed2ee28a8a3e3752584cb7f97d5e45a4331d3c682b77c8a",
+        "bc95de538e4518b490c33c934b15dd13f29df0fd39614365e3bebfcfb58005aa",
+        "9a1bf456fb12e7783ecad17bf07dfcc82884225f7466707b256c028ea01b1c90",
+        "621ca715042039f9491cca585eec85680a73b07fea1bec25b6074eb621e2de7f",
+        "58b5dd9fc413d59badeacc5eb1a920345a2bd37c1b6decfa7893e3adf79fb491",
+        "0a5422503071fb8cb86c563a6fabe85404a916b7035525b8cd596f30bc5f785b",
+        "5c53052cda4e9a9551a453034ae3700118d2ececab070265940ab70d60f87544",
+        "744789e761f6ac31e50ef9a11fca6f79a0fc595fb754220fe546a65da4059588",
+        "9ad569ae311e2ed414dc728406ac017e093193084fe9d83fea72fdb99db02d38",
+        "c334626d080e10a20420b6de6294756aacf28b752bdc007b68e6e6574deb1242",
+        "0449b9442f2cc7af750ec96dc94b692f37101d9bc5760303f1ed031080abfed5",
+        "97c753cb24bdc5e875ca1cdd6d3321558ffaa2130848387200a9d8dab5b6b4c3",
+        "ce67fa9ac438f7eb4db7d47e2522a423ef803803ed8b7ec554408d53caf681e6",
+        "fff3985b34a925151aad5bb786309b2575f24787e401b0aa37d3fe6fb2637690",
+        "bf521ec72474986d4d108da7b8f41ce772aea32fc7f752b6a207869ee9bc51c9",
+        "f61628fb61dc9907f5729823a3ecacfb0adad9d6d68dfcabc1c922c5288e14f7",
+        "141229f944034a46763c83ce5635d604814cbf9f5f80a0670d395d1066d2ebc6",
+        "915568d51bd86c0137aeca464e1fc0d86a97a86cd2a38eb67a2f4943bcf8a484",
+        "6fe86cec0c0a2880c9fa4dcae837cd56849ac187237646e988f9a76a7207c11d",
+        "d17639d27ca0755e0ea3cbe0ef72761c8a4006df90a326d7d37e5c6327c56da0",
+        "f6d17c5076bb10933912901e6d33f1298892d937f010f3abe3b1609496a1adc8",
+        "64cf11a1ae24ef3d1f4085f646b1bbeae1179a8e1132eaf873d480eaebeea503",
+        "80891e66b4a53cbcc55d2336e1cfe0aa56adeb60d759d44bb13c88686f52422f",
+        "64138d2fae7aa7211dcd62f97fb557aa723ef4c9bd74ffe7a33a7d5f7305bf28",
+        "e9a4879d3ebbcf2d30c54d2ab1a2d67feed9d1e6b36226f6c744a4b750674c74",
+        "cd709e19159018e26153b7f6360b0f06237257e21b864dc36154d1caf596671d",
+        "9899ccf31b5a6d35be1615cd11ca39c839b381ee7fd34c54f50d210b0ed0332a",
+        "bca67896aa70c7e0b06f636c630c6acf97bb904f0376254fe08dae634e455c85",
+        "c68afa9f27faf9ad4e31826c896558ba69909001801a68d2e4a73599c04a7948",
+        "7679a9837103696e6cd0d65f6f65c68126206894103a7711362ad1223539a1ea",
+        "30c85a5b18f0e803924c7002d2e91a17a23f62b4bb5dce599f56b0bc8b1baeb1",
+        "bbf88c9a2ab7ec41f6ab00bb532c73ab45ceba73a0ec7e44b9cd40143eeb3e24",
+        "cc85b2ccbae29eefc9f19cab3f374d1d1df69689edeeb147bb1e2e2f03f3551c",
+        "20f99e4eb9c2e2ccee3d3045be1c57a05fbec7b481cf78f432c1a8ba2ccc3c10",
+        "d8f7a301ca5317328797107554d0cff5d67118a95adf3645f732e9510cd45aa7",
+        "dd935848458d71be0aff47fb3a86bea70cc05dd69464f7ca66da94d0fde11f8d",
+        "73e2686903fcf8c1ed7c87822f1d48f674f212111e0f2eb41bfadb179bd53ee0",
+        "601c3325446281cf6fc2489d4c8ab0958a563e827ba0aa5da7617a15b0f84fb3",
+        "b1dfa631e24df2a3e8f8b444deba65b50b57ed6c77c09ca9a3ca583ffc47b2d4"
+      ],
+      "normalized_sha256": [
+        "0cab798343e85426a2930b852b879c111fd00fb2dd0aaeebe98a66217931f7e8",
+        "768902987ccd19919a93f48fe9c5a9c27e4bee608b6c1f76654a253da3beeb16",
+        "824d6ec5cc2401745897464effeadd6a41de94f7f8d5462287d09369e70e8de0",
+        "2eb1d804f5ce0cdb9cd27f94fc7ee8d9cef83c12b7e863c46b2db7d77a2f868c",
+        "add2af0f42d9571758ca913738d3edd78d5588dd53d2974331f027e4a2daf2fe",
+        "320aaf3789bd581ccaee48dd73e36c0a94d5018773d844ed10b7ba34b0a2a4a8",
+        "e9de90c0b71142f0135d3d2cb46ed1adb0ca3033f36acf5674700fe96923335a",
+        "33066efd225114b679e9cd16ef22adc3d2aaee15baebc36481bcf5d3578810d4",
+        "060276b6be6153a48962dee6e5a73af230504594049687b4e2491c317dcd8165",
+        "bae1f62d5e5e8f5a02411376667ab3efe2abfaae543599df79d51347aba9ffe0",
+        "ef63e21d136b40dee947c6610b69f4feeeb0611cadf01edea0d6873a747a8114",
+        "17e8424072b2d840d8f4cf4a670e0f418a2671faef943858bb49a1724fe9322c",
+        "1481b55e822744d2184cdd16c9f0c473eb245d8d04105e4565165d9596033cae",
+        "869c898469dfb21d2a2730fb4e0d9105c2c96d06c07e57ed3a34105c9f0d023b",
+        "b93110cb1345e062d73b23b871da39a95c5c1e0f881dbf62fe00a12835af5d68",
+        "bf46fbcb33d859dc2d3332037d9606f68bb94acde514052ace9d3fb3a32af7aa",
+        "2b8f2b928d2d4d66e5c73739f9b8001a148ca9ccaa5aa7a3ebc2a30f12169efe",
+        "3811ecb8187625568acf64154d6f8cbfa0016ebdbff1122c89c08fa8584eb6c4",
+        "3c396f3ff76533cd9e401ef1c3593f571a38ab3418acf0876b54120e6379e807",
+        "5e628ebf8e3b1ac8ece1f32945cc188254dd7931392210da76513d0807daef8e",
+        "b2bb69853d46a067de04634bdeb2864807572eec25a785942b28567c57dd0040",
+        "b27906c764c608e0091ce05fbcbeba533c7ba95c3947a4a0421b5341507af183",
+        "b7379aee8e0b0b780a8b8d54a71123dbf4fcb41b8e82c7b49764c4d796a6e1e9",
+        "2fb7163a0da375718265ab26d948fad71ae59f37caf5c8304c66a12491e359a9",
+        "cdef259a6f27100fbfba0fd1b96bf23255148b5b0d0886866f98f409baa90a77",
+        "7e1899c3d9c21917826e8eb9992d9a77ed37b2b0bc75fbba5f16a6db11cd754d",
+        "e42b9caa466e7dfcd5a283ac34ae6119a56cccf1b15b9f6be70fe86de67964a0",
+        "fadcd16d8d965514e0f42e292f1dd4f00e9bd9570b88e47e2475d926a3b76f5d",
+        "247efff9bea50098190460b1fcf38faea80a3ea9fe88a34fd704b9a442d034db",
+        "53792d7187362449452132d9ff9ef99e996974988e943697c6cb6533caca52cb",
+        "8cea5c54e80420d6e2377c40754de19e822872da9857910a09af787f35ba56f6",
+        "9a9f193989b8772cebf6043da9ee25d5788d490a85f6e61a0ffff32855b5d907",
+        "baee6c43e6c185bce635a16354c8a901f359e342ba10eb4e50d48e53e18ccae5",
+        "69432db53f9c7e3440a7b2e830f2574b7c1b6c28fe04b9428324c6a80eae3e87",
+        "814032e017d0c1d156859e09eefd47fe0ac8334ce359ca09e8e0f327282ae622",
+        "6a5cc44c74d033bc3bfcaabb209df9b25ea0de1d45ab50a80882c4d3c8fc0c55",
+        "3ed0455309bb838391f69e759e0beca728730e76c61cb2dad2c2f33b3db61922",
+        "4493a37660524a0a8f4ed868987d8c81b9fbe89c9648476b7fbefe484215abd0",
+        "18d058b32307ba30d49b867597fae5002a80bbc984e3aabeceb4c255dc2bac8e",
+        "7001c20e4e529af794c9e1f5f289077f3d02e83ff7e81d0726b02a62059f2ee8",
+        "4f5a85ed4683af85a95c023ed3d47b27d74954eeee8d84444805517c13919541",
+        "dc3451661afb217b8d746ffaf8b1f2fee37ed265f6bb85c06a9936507c45cdd4",
+        "0fe79f1ab12566e0607d805d9b1331f0098fa618a59e8aa20d0983d25a2bd437",
+        "1a531852fc9209a860384b66b3105136458f0f525343c744c04fcb3d5d6d20e7",
+        "cd121465281ce8b8b2bab8ab792295695cedb5b2fc884f56c8272fe0e56dd896",
+        "97a8b885bedc52e7da08a814f062f02b4b27aaf1da556ef393221e9952074df2",
+        "8139429d9cc8c5e4b0f5d55745256e5105fbd138f66007284fc3a4c980ac278f",
+        "17fa8466b44e6fd707c6672fc525100caf84247ec824cd5b1e4b13982f0568e0",
+        "0d1b946aac3555f08ba73c1da45c18b8664a466203f9f5a1d4b8a80597e1ec30",
+        "32ec7502498b1ec75979bcb046850c1c7e21ceeb9aadf2f7b64acbfd17999fff",
+        "84459595fb7646a5c5c7aa4c9c6d0a6f5e969575aaca8784a03a02d927ab01cf",
+        "5b87e0f65e0320b240c0a7a1417eebb209b965c55e351467b83c51f12fe83a18",
+        "a041058a9575969e44aef46c3fd4d41ec434bb2af5eb4d1504c997c2c9d15d8a",
+        "875876230e7ab946f0d0d0f0d476917f50ddd1cf0aa99cf70aab5c2dd8e8c435",
+        "31588f1f83c5bc17445b78dcb0f1530ed73569a04f87ea3c455bc74ff422dd4d",
+        "80cc19623eb6f6e40f434a3b93a0e79352d0d71baa54614aeb2b9e921cdd89d7",
+        "131b1a96efda44d4fbb9025d3cba93f7e0b10da36ff2675a447268580b2bf0e8",
+        "a6113d6d915cbc76f0df51c59901e563df4c8f06bc2e3093cf230453aba2ddd7",
+        "dcdfcb32d743edca401c8b3d38b2928a8944069803a6781a059695765691de19",
+        "21a2b0f193399cb7aa9dce0060cfbd2c3b43cb9e2f2e6d95fb1ea37278081db4",
+        "8d28cdef43ec33ea2f77500b1b9c28a6014485b1b196672e05d63a06861e2ac5",
+        "80fbed10ecc69c7cc5e41b57d9a908b1eaa8da67a0ac9140812b212cddc2b4d2",
+        "501587bba094cb490fb6d40e163f2728265cd9420ec25c694d07d8a42be61842",
+        "f45ff450c6c2e1bcd749574c3152a8d01b2885ba9d57f1aa38fae8e7c23c6a82"
+      ],
+      "normalization": "original-le-f32-to-le-f64-divide-sqrt-sum-squares-axis1-zero-to-positive-v1",
+      "raw_hash_dtype": "little-endian f32 bits",
+      "normalized_hash_dtype": "little-endian f64; normalized signed zero canonicalized",
+      "audit_pin": {
+        "bytes": 33074,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-preparation/a0001/screen/duplicate-audit.json",
+        "sha256": "ac8fb791a581853490acac6a0eb393837c68862bfa7ee39eb92766c1f208868e"
+      },
+      "must_check_before_ground_truth": true
+    },
+    {
+      "query_ordinals": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63
+      ],
+      "source_ordinals": [
+        8344841,
+        6354772,
+        3457253,
+        5069381,
+        5910479,
+        3105133,
+        6568383,
+        5316120,
+        1714827,
+        3730553,
+        3996074,
+        5943389,
+        6374275,
+        8013273,
+        5738580,
+        7331303,
+        1763498,
+        6669676,
+        9305411,
+        8304863,
+        6343246,
+        2173080,
+        4262207,
+        9213146,
+        3078447,
+        3516241,
+        1033667,
+        6824918,
+        8851711,
+        8023048,
+        4021395,
+        3006339,
+        9392724,
+        9561113,
+        2963357,
+        7342896,
+        4883823,
+        9094675,
+        6940923,
+        4575097,
+        9279025,
+        4738141,
+        8388622,
+        6258303,
+        9783780,
+        3055503,
+        6967997,
+        2440619,
+        7316782,
+        9929063,
+        8172738,
+        5339613,
+        9119198,
+        4142959,
+        2272061,
+        5637657,
+        9908945,
+        9959596,
+        8837427,
+        4210282,
+        2397123,
+        1611312,
+        6852153,
+        5346082
+      ],
+      "raw_sha256": [
+        "2f59ed0d6cd0e5f2548a19b5b92d6d98b5b4953bc8dd43cb84e6b25939934cda",
+        "1dda430c406418353c20e4803cc0939e515b013214c15e6117b86214133696c1",
+        "bbfe8e431d6908e3ef7445e51fa5c36841a0cce99fd07e43978ace34294fcfbb",
+        "3e9ed84b3b004dd45b6dd808efff93ec98eb3c04da925fc608f298569cd9fe4d",
+        "f984304851bb7ca498319870260f85cfa4e5ae7340ab70b42a7ded8f644c30da",
+        "23b359400311ebf74b61c1ef1ae6d39b5f39dce656449664d268a8f6416a1fb7",
+        "3c773e35831b8906ad1a4b8297bef740db201628f18cea27a731f2c88e300861",
+        "c49d4c17f8865fd71fcf2a5ef28add491f91c855df4516e99d1a6a427db319e2",
+        "e88a1578f694874455d1afedc2dd4983d02f16280e6f44e15c54f80e303a69d4",
+        "36afc08e2feeb1795bee68d4762e6e8e43fb8d4f90c7e6e73be01d4dcdb0e992",
+        "0dad6b7de6c4744501918b2eccce327c6964518f96030c23f924b426dc87b62e",
+        "ce6c47d044a840a89fe5999e73b26022e31a4b0ca43114881ba4c22d5271fc21",
+        "b5acfdd0cc3ab1d0c6e3f86f6f7d1fdb678693d100b680490e70ec0efa33d802",
+        "75d119884c9e2fbba3ea1321e4b2e4173b350d250bfb7bbf4eebe3893c939b78",
+        "b59f16380afb44c5a416559b23271fbe327bf81b35b415e044805a689ef1bbef",
+        "a0df160aa406fd1d407357e80adcd40a0339960a8a647119641826e24abeca6b",
+        "33ae6a9d8735946dac0af2193c6ec040781451b0c191a821b511159ca0aff9fa",
+        "b070aac0b6b90e0f7b7b8af5da42faa349986262bdc2056c239581368c6276e6",
+        "c4e88d31ca7b0a82968508ae1b577c8a4c5d5a6795710f535873b93d5e3699b4",
+        "92d3e0b5f2ea82cb18d90de4cd7ac44fb2742aae8d6c2219be22f3cfd8e49b00",
+        "bb6149f83ead407a3fead0ddec2a19485d19802127bc205a1050fb36c30f7499",
+        "8bb5ce39fd45fa21ef82c45e8d616d96eb0fcb20a1f03fb0470bb7f2da87db05",
+        "42295c57cebae3a8cff776b42f0fe4c805ab6e174fbdd48b21b38b73fe5504b2",
+        "3116381d5dfba1251d8b8dbded95abc8e3326944278884a98168c876533670cd",
+        "46037a6e21850a85611749bd08bfd75795ae53dc3b44953f52b9d8e4b6fc9cf2",
+        "945360eaa225797fdb0e0e3fced57071eaf688a36ef15608ebf22b2defeaa9e7",
+        "b1dfb47cf2baa0db18ea3b0a9356ed5356ad4cd145d9ffcc023d1ead135072f4",
+        "b4e50ae0bcde0cf087dda0c0c9e24eec54befbe49b13cf67a80c86e0ebd4c753",
+        "7c5ce64fa679fd1fd104a6d4e1fa0fb9b2ad72d980ac0d633104d9919cf71fef",
+        "84dd40041b9adfaf8ccfe0e5a851f0f9da59c261b83e1ebcd80c588f829f7f9e",
+        "5dfa339a96bc831e985212e02724c147c9910e56ceb8a88e7d42b586904f3324",
+        "2422f8e1294c5c83859ae93f6ecdb70565ab671db090daa665a186d7e21a941a",
+        "225ffc61a7a70e67ee211af21149e8d41d083b1395b31a8d1dcc89ee83674bcd",
+        "bdf40d76e6a02592aea82c8ae5918fa6bc7f2cc2df4f4b53383a645d66898b52",
+        "67b730eb58ffa57927fa9a0aee0501676c56c4af286ab08ef6729546c5061522",
+        "7b44130a8a0ea954bc5643d8ea077fcdf62157d74ba7f34416ca08816b71ae2f",
+        "79fe58d1b2e50c379a95a4a1ef21316c2e0a55b5c6ccaaae1cdad100ad4b2410",
+        "66f578afd67c877ab1316098deaf7def68ac838b809bde1b15fc89d1cd5212d9",
+        "987b48dc1fc299aea48d9647025b93ffd09664c1410f3d3407f7ea5b3609fcac",
+        "243328c199d636715c9f0ab536eabf1ed091d2009d68cf5f36b83f33800dd911",
+        "79c3448aba1d8ca511f5e03ae62091a3cdd95f80e124987a2236ab96ed62999c",
+        "a872586c13d3182ccd7f8917f86531991e94a177f2747d644a6633beeafc900a",
+        "aa8e5ad8c5ace71e0e6eb1b662b1bb0e8e695ba24ce224d6a7a9d6ef47f9c541",
+        "f41ac1e8a1b1033d3692eae155fe8987960509658ea12495164dcd8c15b5f23c",
+        "d242d87631e697b0055b9ba5640c5bbf83390cb211af4f49ee38fed87944f069",
+        "adfa33fe7f6dafe16bc5e7146cd44699a16e14375b43a47f50cc5e307919c02d",
+        "50a318bcda9601aa687c5fd212f1a850ba8b2b0e52ffc7ed92da4087aabe3c4b",
+        "765f786a3819266536394fbe09be1d5e7dff288a4952deddbd7b8ce53fc9eec6",
+        "a17eb950bc8da7b184e47dff4ca73920abde896176860340f15f799a24a8a12d",
+        "36e0a8354e2d0dcaa5f7bc08e0082d435085eb6a15e1fc68852191095d6db1d2",
+        "6a75a5a2d1f148d748c1af6683ea16938d403a472533c19ca1b0c5f7743118f7",
+        "93f7e716c3b117d756bf9b666998c5557c34f498d265c1d38e11ca29c50dd422",
+        "3b691bd1dee1b218513b30d5775371f69b82d0862a81d4fc4e6f8cd39001491d",
+        "2e52655ab7bd63540717ac367fbd22c43ba9c87f5c099b70da6a3e5ea8e51fb1",
+        "cb5754c3455c3e97fc2552edb6c95d71994a8c49fb8bea0550fd001551fac500",
+        "3fa2a75f6d2569ef2e0679bf3b2da67e86a7042cceb84cff5148deda640d8466",
+        "45cfc528975f8832e8203601e1856b20cd598afe3d07dcf5f218666b158e942b",
+        "090b9473f366feec4ab000ad0e5ee9888bd8882b6b698e654b5563efbd91bd97",
+        "82b8359a8de28df7878cb84f5aae79b3f51ec92e9a9c42da194426a0ce6620f6",
+        "c3a49a7f479282eaa98dc5c5285ccec37f5c231b127dc4dc2d4d073d929651f9",
+        "9eafd908f8e962892061b258ede7bf075257b2ddae830b62abd0d1a27499d693",
+        "3a04e4a3595d50994b26aaa4f59b94d94e0396bfd9f98a7960940858f3ab6c31",
+        "62ca726deb0ef4fd65a9484be0d72e77a7137b0fe786c41da3b6fffe3c24f3ee",
+        "7eb381bc236a62abe3a887d258ccf04671e439aa1e706370708ad86667bf5206"
+      ],
+      "normalized_sha256": [
+        "49f4786c5fde110a8da1c7c6c65ee25d554df59f34bf3a53567bdca3278fc42c",
+        "dc7e200805e4a41d2af3f036d6c021e2a6baaa98bf5c4da8b1a4c95b04c3f42e",
+        "64bb5304987e41a9d805855af1358f5290585c4cfbb6310eede3e4e7954b2aed",
+        "208e977fb2841ef366b7ab9e323a3c120d1eb0d08d4e579d35f3b5e7d1d87a92",
+        "8d08acbc11179147a7c533e4ad5c1c58183b3163a63015fa0d45752627e7335e",
+        "97544112a93976eca2b477dfba1d0454f6cd1df4a30490dfbb3bc4d66033dfa9",
+        "b259d582afbc4c7d361c22b3999bc6757a371507883b8e1f996b5a868e6d6784",
+        "9ce2ee48fad90f331a8b913cd86a7214db3ad2a143ef637d3af6749eeaa55cae",
+        "009121e5c49706b6eca92ccd728701037f830dc0e6f4b27723640a572d4735c1",
+        "b0a2dbd4bb98574eb356ca074aeb2764ed47dcbd245f010329564b50128096eb",
+        "74a4ce3e488ae8775129a9233610b051610d4d28535e8d203d9397e81dfe9265",
+        "6c04c095b7633cc1346ea14b68481cd78144cb6a64a18a2de7af56f8c7c3e1bc",
+        "8dc909973831af40167b24627e3c6211c4217d95e8943843e0ea884104faa03c",
+        "3e22fe675afc1f11d92cc5773c36155bc1406f037e90d837e7e8a5d896359ab5",
+        "fd223a2c1dbbb700cd19ea936874ec91b16f03f0ad889d677d3a49841ff3a619",
+        "cf58b34798a0023dfb572cd26799657f019c69c2443c202f9d45fb1b48038e74",
+        "9bc4346137424e10140e5aecf985aac3c3e57e3c606168658c614f0e0eb4934b",
+        "763873f9a9d69961c8237a4ca6a02816e88f35f9632e89623d705e8e1014935c",
+        "b55c364f74b54b6b1cb21cf4c897d2e589334750632660e32ab03c1dec49eed2",
+        "a43680c9e748aacb25f5c0fda26a31e676e732530f4e8df8fa205f15884dcbbc",
+        "fcf77f3723ffeeaf370d56a8fb6276a8ce81fc8438079c04f55d8d484f119c69",
+        "d173cee29b64600a3a3e3bc4574a280864101f47018c16b25b01c8d2a5c1c106",
+        "2370765c937787a26fada9ddc05ae328bdca143bc82a5beb15bbbac141a6b3e1",
+        "7ea5fad396ea8972629362b5a29c28cbfc71e75a718661f0ff36a640c2a3a9e5",
+        "9308063a3bdf19d4a94a3ca965c35b1aeee4d6ab4ae05fc5599289edd7ab4579",
+        "5767c3581b1aa1d64f3890676190eb4e399e7bec22214bbc9425087a977bcd80",
+        "68cba1bd727c0d8e17c24aa2664ef221b366f1fa3d51ed9a79b29f9e0bdc3802",
+        "889c340a6d6af21fb3628e80930f688ec638736f945a700a6af07dd9987aa85d",
+        "7cbe098da8a42c563aa3cda5fd6f886150f6898fd3b5f8946b0af2d389524795",
+        "e1b90d558a0fe01fb314c73ba21595088a36538e4071a5d0d84ea6b139af2183",
+        "62e311d7bd0ce573689f2575c0de762c2bb078fc2aacdde0d59d845513ff64ea",
+        "c174c3cf3c1dc5bbcdb645e439ffa3d5067046b59c7e5b0c2f4a6ed638483706",
+        "180c84780d2280f2b1b27aeeb8c312b4c7469c5ad447762e617cef73d2bd58d7",
+        "24ea0f24206f73d1c9bcead8f175a9db01d15139cb3ec55caf20d1f7ea3d483f",
+        "5a98808b2ad509270ebaed7e616fbdcdda1655f69bbd60b0dff4226f02da9bc7",
+        "1d8c641c9ffcec73ecc3899b08e974b0dd58ca9c8b9a2192edb757156e0561dc",
+        "00f3115871ea763866bf80f3c2d0cf4b29a66ed62778ee76e04a5a5df8acb75e",
+        "b60ceeac3d2f08f4fd4ee20a11614439796532ad8e10fcb92a775c2026793f35",
+        "f7a86f937186b55d757d92fe403ed8075f370cfdecb5927bac81a3f7e363f200",
+        "509f9ea0a96405d5ba03e3cd0a4621ba9b14c6107745e6e03d0be76ff1c55f52",
+        "6a7f4d35b02bfb9f4043fe44f69720b506131360f48a62ceb1d82cda6a9d70a7",
+        "b33359a36b317cec7e347ee4e75abd4b6ccde024800d8c6d64917fa1d4a5cf79",
+        "021738c0240de407fda66dd78cc3156303808d5a9f90024d28d57c4225db20b8",
+        "8ef5d763a3006406c45a13a80bd9736d6ec6490b63d86c313824baed9aec0c94",
+        "1aecbd450806f6c043d819ecea6e536029157f1ced2ff83cc3f5059d4ea00833",
+        "a5a6e6b06369643b90da69d37a1c3bd9c29de3bb71ea0b132ddf15f97b154137",
+        "142036848ee5684682706eed368d9a3b3700e00bc76d5b71e8e52491febed9fe",
+        "12522b690d0844aab8d9cc69e9a3ec6aa9d53b43ef3438a189f8cbf8868851c3",
+        "fb52c8e1938b0d3a9d6384df90b3983b0c5ab1cb67df0fb1b7659f6cca11a79e",
+        "6e7a720c03dfc10947d002b0534eb30cd0fce24e36fcef00d6045e06146e237e",
+        "b4c86e45bcba42a50517728c1a4be99cc3d1811e17e52c5f2e02f46acbffe9c8",
+        "2cd946017611736a717247105a3b2259bbbed5f26f2e9cef143599943cbf240f",
+        "90119f0edc23bf62c5bb7a9374e9fc9ae3c847207972bee9e5f622cffd53b8eb",
+        "d53b7e80bb243c6e081af87ea5c9931e39afef9e906f33443343807d01e680ae",
+        "391b1718fd36098ed5f6ae9d46196a110232c358fd64129fc6d2bc5ac967d7c3",
+        "e8d5f87bec16193969b88eff58dc50395ab4d2c1afc7cb5d00b80fa24b4e12d8",
+        "14de47581ba2b92ccbce2f9bb6caaa0ddb6015e9542ef988e489499e42bd07da",
+        "82d8d52ad337ffc7c3b6cc7ec504666bb3e62e4af61be541d5b7927081c4c9ee",
+        "dc32c3074b08c908664ad9dd244f799524a005ffa33bd17d0766c0edee47eb5a",
+        "f2e75ef7181dfadd999b84f0f70dbc684cb410de288243b0e2ccec2865104056",
+        "fa526317ce2246353a9de70b208c41c06eeec079ef957914772c046ac4340a72",
+        "7e056933a4e0c01293eeb6e5759ca97362b6fa34ea897439e0a53ede113a51c4",
+        "2793f7d81644c4d90567e4dcff34236543f90ec3b36b36f3d67fc4d705fbe2eb",
+        "84705fe7158627ab8e9a18582ce68cf1f7803aa2e139243e5bbc21db9ae0f04e"
+      ],
+      "normalization": "original-le-f32-to-le-f64-divide-sqrt-sum-squares-axis1-zero-to-positive-v1",
+      "raw_hash_dtype": "little-endian f32 bits",
+      "normalized_hash_dtype": "little-endian f64; normalized signed zero canonicalized",
+      "audit_pin": {
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/a0002/screen/duplicate-audit.json",
+        "bytes": 42110,
+        "sha256": "ec642ebd86ddcbc033815b47eaa797825ed80369f48ee3c7bf6bbecbd138d124"
+      },
+      "terminal_pin": {
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/a0002/aws-terminal.json",
+        "bytes": 5530,
+        "sha256": "f7aa03265a032ea075bdd3506360186a156e841a4eb931b4fc7b4de3af6a0611"
+      },
+      "panel_pin": {
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/a0002/screen/panel.json",
+        "bytes": 58878,
+        "sha256": "572e11afce1f778ababcbd17038ba8e5ac3ab2c0744e1075b56d6af2d9d07f49"
+      },
+      "must_check_before_ground_truth": true
+    }
+  ],
+  "authority_sha256": "6c6508887785d380436a91e1d06d33a9292d80de1dd5fdb8ac56050cdf97ce9e"
+}

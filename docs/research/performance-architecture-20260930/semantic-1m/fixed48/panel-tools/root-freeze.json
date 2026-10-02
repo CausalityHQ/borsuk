@@ -1,0 +1,32 @@
+{
+  "authority_pending": false,
+  "root_pending": true,
+  "qualification": false,
+  "metadata_only": true,
+  "locator_metadata_only": true,
+  "vector_or_truth_bodies_opened": false,
+  "raw_normalized_duplicate_gate_pending": true,
+  "ground_truth_constructed": false,
+  "ann_measured": false,
+  "complete_historical_coverage": false,
+  "original_quality_status": "FAIL",
+  "original_quality_fail_unchanged": true,
+  "original_top32_execution_status": "FAIL",
+  "original_top32_exit_status": 1,
+  "original_top32_execution_qualified": false,
+  "original_top32_report_status": "FAIL",
+  "original_top32_fail_unchanged": true,
+  "original_top32_closure_restored": false,
+  "new_vector_duplicates_checked": false,
+  "schema": "borsuk-cohere-fixed48-fresh64-root-freeze-v1",
+  "authority_sha256": "6c6508887785d380436a91e1d06d33a9292d80de1dd5fdb8ac56050cdf97ce9e",
+  "panel_sha256": "a137588d5e17703610d9142f468e75362d1aac61d84a0b72f7a8dbcbd1373392",
+  "selected_locators_sha256": "dfe569e0198f35d690e5aa6a248aa8eee73b6d59a569b194729368e84aa2f61c",
+  "selection_count": 64,
+  "protocol_pin": {
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/selector-protocol.json",
+    "bytes": 8573,
+    "sha256": "f521c49f1abdcf9bcf72f445186a5349a4831972aeb4933e86afca6f726b37c2"
+  },
+  "root_action": "Independently authenticate and freeze locators before vector/GT construction; no resampling"
+}
