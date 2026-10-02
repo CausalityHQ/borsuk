@@ -8,5 +8,12 @@
   "measurement_started": false,
   "runtime_invocations": 0,
   "compute_spend": 0,
-  "historical_a0001_failure_unchanged": true
+  "historical_a0001_failure_unchanged": true,
+  "existing_authority_readback": {
+    "bytes": 13203,
+    "sha256": "ce4b1356fe069d66b547ffa3b0a5bfed53aa2988f1949deb7e4eba6e60228fef",
+    "exact_frozen_body_equal": true,
+    "no_overwrite": true,
+    "scope": "read-only postfailure S3 GET, not native execution"
+  }
 }
