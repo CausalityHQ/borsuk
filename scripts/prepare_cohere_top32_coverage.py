@@ -71,10 +71,10 @@ FIXED = {
         "bytes": 1833,
         "sha256": "8c134c4ecfc0662d555c6c197419ceb3da4623c23285973d9582005886858e13"
     },
-    "prospective_protocol": {
-        "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/prospective-protocol.json",
-        "bytes": 2378,
-        "sha256": "b4547ffd131a72e1f5cd2e244a26d47743892c39da1c2cf3a7c48500c9c9048f"
+    "resource_protocol": {
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/resource-a0002-protocol.json",
+        "bytes": 2674,
+        "sha256": "49465eda3ec96a3ca1834b86704a531b0839db2a5e6d926f04076e656043ecae"
     },
     "source_receipt": {
         "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-source-receipt.json",
@@ -686,7 +686,7 @@ def run(config_path, sha, repo, out, prefix):
                 publish(out / "duplicate-audit.json", audit)
                 write_queries(out, queries)
                 publish(out / "panel.json", read_ref(repo, FIXED["panel"]))
-                publish(out / "prospective-protocol.json", read_ref(repo, FIXED["prospective_protocol"]))
+                publish(out / "prospective-protocol.json", read_ref(repo, FIXED["resource_protocol"]))
                 publish(out / "source-qualification.json", proof)
             with accounting.stage("one_genuine_semantic_build"):
                 historical = json.loads((out / "source-root.json").read_bytes())
@@ -732,8 +732,8 @@ def run(config_path, sha, repo, out, prefix):
                 require(not (out / "truth.i64").exists() and not (out / "truth.u32").exists(), "truth before nomination")
                 nomination_config = dict(generated, schema="borsuk-semantic-binary-coverage-nominate-config-v1",
                     order=pointer(out / "source-order.u64"), requests=pointer(out / "requests.jsonl"),
-                    panel=pointer(out / "panel.json"), protocol=dict(FIXED["prospective_protocol"],
-                        path=str(repo / FIXED["prospective_protocol"]["path"])),
+                    panel=pointer(out / "panel.json"), protocol=dict(FIXED["resource_protocol"],
+                        path=str(repo / FIXED["resource_protocol"]["path"])),
                     provenance=dict(source_commit=proof["source_commit"], source_archive_sha256=proof["source_archive_sha256"],
                         builder_commit=proof["builder_commit"], builder_binary_sha256=BUILDER_SHA,
                         source_identity=pointer(out / "source-qualification.json"), resource_metadata=pointer(out / "build-resources.json")))
@@ -827,7 +827,7 @@ def replay(config_path, sha, repo, out):
     for name, field in (("source-order.u64", "order"), ("source-root.json", "root_manifest")):
         authenticate(out / name, config["corpus"][field])
     authenticate(out / "panel.json", FIXED["panel"])
-    authenticate(out / "prospective-protocol.json", FIXED["prospective_protocol"])
+    authenticate(out / "prospective-protocol.json", FIXED["resource_protocol"])
     require((out / "source-qualification.json").read_bytes() == canonical(proof), "archived builder provenance differs")
     nomination_seal = json.loads((out / "nomination-seal.json").read_bytes())
     require(set(nomination_seal["artifacts"]) == {"nomination.json"}, "nomination seal roster differs")
@@ -1211,12 +1211,13 @@ def self_check():
         draft = Path("/tmp/borsuk-cohere-top32-root-draft-config.json")
         if draft.exists():
             refreshed = json.loads(draft.read_bytes())
+            refreshed["refs"].update(FIXED)
             refreshed.update(authority_pending=False,
                 limits=dict(LIMITS),
                 code_sha256={name: identity(repo / name)["sha256"] for name in code_roster(repo)})
             temp_config = work / "refreshed-root-draft.json"
             pin = publish(temp_config, refreshed)
-            assert len(refreshed["code_sha256"]) == 58 and len(refreshed["refs"]) == 45
+            assert len(refreshed["code_sha256"]) == 58 and len(refreshed["refs"]) == 46
             validated = read_config(temp_config, pin["sha256"], repo)
             original, _ = offline_modules(repo)
             with patch.object(prior, "selector", None):

@@ -223,7 +223,7 @@ def qualify(base=Path('.'), config_path=None):
     original,_ = helper.offline_modules(base)
     data,_ = helper.load_inputs(nested, base, original)
     _,assurance = helper.builder_authority(base, data)
-    assert len(nested['refs']) == 45, 'exact metadata authority roster'
+    assert len(nested['refs']) == 46, 'exact metadata authority roster'
     return dict(config_path=str(CONFIG), config_sha256=sha(body), helper_config=pin,
         helper_config_sha256=pin['sha256'], code_sha256=code,
         code_identity_sha256=sha(encoded(code)), refs=nested['refs'],
@@ -583,9 +583,9 @@ def self_check():
         target = work / 'controller.json'; write(target, config)
         # Unrefreshed authority must fail before any launch or cloud import.
         rejected(lambda:qualify(repo))
-        # Actual helper metadata, 45 original refs, and separately archived builder.
+        # Actual helper metadata, 46 authenticated refs, and separately archived builder.
         proof = qualify(repo, target)
-        assert len(proof['code_sha256']) == 60 and len(proof['refs']) == 45
+        assert len(proof['code_sha256']) == 60 and len(proof['refs']) == 46
         assert proof['helper_config_sha256'] == pin['sha256']
         assert proof['builder_binary_sha256'] == helper.BUILDER_SHA
         assert proof['original_source_identity_sha256'] == helper.ORIGINAL_SOURCE
@@ -839,7 +839,7 @@ def self_check():
         assert artifact(draft)==before_draft
     signal.alarm(0)
     assert time.monotonic()-started<55
-    print('PASS temporary8GiB60code/45refs/archived builder; actual26-artifact relocated helper replay; observer diagnostics before cleanup; mocked ACK/fsync/multiACK/interrupt/termination wait, terminal/body/roster/resource failures. Cloud/native UNRUN.')
+    print('PASS temporary8GiB60code/46refs/archived builder; actual26-artifact relocated helper replay; observer diagnostics before cleanup; mocked ACK/fsync/multiACK/interrupt/termination wait, terminal/body/roster/resource failures. Cloud/native UNRUN.')
 
 
 if __name__ == '__main__':

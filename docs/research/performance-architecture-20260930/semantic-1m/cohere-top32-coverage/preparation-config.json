@@ -38,7 +38,7 @@
     "scripts/native_two_bit_topology.py": "142aaf45ba490bc62868e7f946d0ed43ad020511ca7cd6967233262217e2e1b3",
     "scripts/package_semantic_native_generation.py": "cb6a540c810e3a75381d22339eb72f00382b0972a2d3ee687bbb1d97d5a1b594",
     "scripts/prepare_cohere_semantic_1m_panel.py": "951d3daeae022ace32e35eb19fbd72f9dce0271c9faa80ed6de4600588cdd3c4",
-    "scripts/prepare_cohere_top32_coverage.py": "1ef43350a0402067d2d39538765fb981de457f50b62712ddacb678a1f9972c11",
+    "scripts/prepare_cohere_top32_coverage.py": "0f1043688dfe555200f69044d0719b70802804ffc441040fd21b99dbc3e2fe61",
     "scripts/prepare_native_semantic_publication.py": "2d3a9270f5ad847981d9d89fea8ead9e9295f742369fa1b9fd9cf3e7c7e2c7e4",
     "scripts/prepare_semantic_1m_fresh_panel.py": "bf747e3e250a73c7d4e9d7545666d7b7b7f6fcf61d293e16efcc863196b0c1d6",
     "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
@@ -347,7 +347,7 @@
   "limits": {
     "cpu": 2,
     "max_requests": 256,
-    "memory_bytes": 4294967296,
+    "memory_bytes": 8589934592,
     "scratch_bytes": 8589934592,
     "swap_bytes": 0,
     "threads": 2
@@ -455,6 +455,11 @@
       "bytes": 4159,
       "path": "docs/research/native-union-20260928/fresh-cohere-10m-test-family.json",
       "sha256": "9081d1bebdb795c8326e69ff3eaf3c64104658284123801d8f44f257e887ba11"
+    },
+    "resource_protocol": {
+      "bytes": 2674,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/cohere-top32-coverage/resource-a0002-protocol.json",
+      "sha256": "49465eda3ec96a3ca1834b86704a531b0839db2a5e6d926f04076e656043ecae"
     },
     "root_freeze": {
       "bytes": 897,
