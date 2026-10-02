@@ -22,7 +22,7 @@
   },
   "base_sha": "53e0d09f31aa7ee6a60c3b2017404309795f3cd1",
   "branch": "devbox/fresh48-production-routing",
-  "candidate_sha": "5efb136e95956b0cea0aa38214299a42f4264684",
+  "candidate_sha": "af07e7c72e0a98e559290a244a75f799f308b870",
   "committed_evidence": [
     "/home/rb/worktrees/borsuk-fresh48-production-routing/docs/research/performance-architecture-20260930/semantic-1m/fixed48/decision.md",
     "/home/rb/worktrees/borsuk-fresh48-production-routing/docs/research/performance-architecture-20260930/semantic-1m/fixed48/plan.md"
@@ -48,7 +48,7 @@
     {
       "path": "/home/rb/worktrees/borsuk-fresh48-production-routing/crates/borsuk/src/two_bit_generation.rs",
       "relative_path": "crates/borsuk/src/two_bit_generation.rs",
-      "sha256": "e9c0f79f69da2d70b8682f5aefc033d5c9039ed8a235a4a1d0a736089da22f32"
+      "sha256": "1eb72a6256017533866fa231650db5b51334122051d8cadfb9c60688c9157833"
     }
   ],
   "pending_exact_source_gates": [
@@ -175,6 +175,23 @@
     "max_build_jobs": 2,
     "sequential": true,
     "workspace_test_build_requirement": "Run the real script with BORSUK_TEST_BUILD_COMMAND unset; require actual workspace all-targets test compilation exit0, not a test-only true override."
+  },
+  "repair": {
+    "change": "Test-only one-line binding: let (seed, units, additions) = seed_walk(...). Production unchanged.",
+    "historical_contract_path": "/tmp/borsuk-fresh48-production-routing-contract-5efb136e.json",
+    "historical_contract_sha256": "f5128418835b0a95acaf4aa52fbd4672e857d2ab0d3addd76bde0fe5b238e40f",
+    "parent_candidate_sha": "5efb136e95956b0cea0aa38214299a42f4264684",
+    "parent_notification": "One new-result send rejected: recipient already has20 queued instructions. Final terminal response and refreshed contract carry handoff; no repeat attempted.",
+    "performed_checks": [
+      "rustfmt --check --edition 2024 on both owned source files: exit0",
+      "git diff --check: exit0",
+      "distinct repair commit changes only one test binding",
+      "worktree clean"
+    ],
+    "repair_commit_sha": "af07e7c72e0a98e559290a244a75f799f308b870",
+    "root_previous_source_manifest": "e17a54bb is historical pending source; parent must refresh exact source before launch",
+    "rust_gates": "UNRUN here; root remote-owned exact-source gates pending",
+    "source_inspection": "Read all bindings and uses in the new Fresh48 SOURCE test and the two extended router tests; no additional missing fixture bindings found. This is source inspection, not compilation."
   },
   "schema": "borsuk-fresh48-production-routing-contract-v1",
   "seam": {
