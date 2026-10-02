@@ -1,0 +1,57 @@
+{
+  "actual_test": {
+    "executed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "passed": 1
+  },
+  "ann_quality_measured": false,
+  "authenticated_artifacts": 17,
+  "cache_retention_expiry_ns": 1791070064959738265,
+  "cache_started_cold": true,
+  "cache_state": "available",
+  "comparison": {
+    "decision": "Use bounded remote build resources; first cold narrow test proved executable without PSI/swap/OOM. Cache reuse speedup remains UNMEASURED; no automatic warm retry.",
+    "local": "Same unchanged narrow test was pressure-stopped before execution; no successful matched time baseline.",
+    "spot": "Retained Spot1885s executed different source and five-stage suite on fresh target; cannot claim narrow-test speedup."
+  },
+  "cost": {
+    "billing_measured": false,
+    "compute_rate_based_estimate_usd": 0.04307049604254133,
+    "elapsed_root_and_cache_storage_estimate_usd": 0.0014975833105250718,
+    "excludes": "S3/transfer/tax and actual billing; provisioning/termination boundaries estimated from controller timestamps",
+    "maximum_80GiB_24h_cache_storage_estimate_usd": 0.2538666666666667,
+    "rate_usd_per_hour": 0.4074,
+    "storage_usd_per_gib_month": 0.0952
+  },
+  "full_workspace_execution": false,
+  "instance_id": "i-0bc4f4139a6d42c01",
+  "instance_state": "terminated",
+  "observed_resources": {
+    "cgroup_full_avg10_max": 0.0,
+    "cgroup_some_avg10_max": 0.0,
+    "host_full_avg10_max": 0.0,
+    "host_some_avg10_max": 0.0,
+    "kernel_memory_peak_bytes": 6308208640,
+    "kernel_swap_peak_bytes": 0,
+    "sample_count": 266
+  },
+  "qualified": true,
+  "schema": "borsuk-cargo-pilot-root-verification-v1",
+  "source_commit": "3666440662c2aa43b524c0949e2c73e3867075b2",
+  "source_file_count": 399,
+  "source_identity_sha256": "addf62bce23ceee034f22e4d1dfc0b318564d924c6e0fcee34b9336d1532813e",
+  "terminal_sha256": "35a670516b68a759175b42fefc2d6279544371c387bbb4e17f3cced06f87267b",
+  "volume_id": "vol-0b559583b4b92951c",
+  "wall": {
+    "boot_to_execution_seconds": 68.60268089,
+    "cache_preparation_seconds": 4.748039848,
+    "cargo_narrow_test_seconds": 264.332813349,
+    "code_freeze_to_authenticated_result_seconds": 474.813308352,
+    "controller_launch_to_authenticated_result_seconds": 395.503669453,
+    "request_to_termination_seconds": 380.593484912,
+    "setup_after_download_seconds": 9.584849719,
+    "source_download_seconds": 7.746240242,
+    "worker_complete_to_authenticated_result_seconds": 43.598537255
+  }
+}
