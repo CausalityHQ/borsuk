@@ -3,6 +3,7 @@ import fcntl
 import gzip
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -212,8 +213,11 @@ def main(attempt, campaign=None):
     assert token_prefix.isascii() and 0 < len(token_prefix) < 64
     assert not subprocess.check_output(['git', 'status', '--porcelain'], text=True).strip()
     proof = campaign.preflight()
-    commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-    archive = gzip.compress(subprocess.check_output(['git', 'archive', '--format=tar', 'HEAD']), mtime=0)
+    commit = proof.get('source_archive_commit', subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip())
+    assert re.fullmatch(r'[0-9a-f]{40}', commit)
+    if 'source_archive_commit' in proof:
+        subprocess.run(['git', 'merge-base', '--is-ancestor', commit, 'origin/main'], check=True)
+    archive = gzip.compress(subprocess.check_output(['git', 'archive', '--format=tar', commit]), mtime=0)
     digest = peer.sha(archive)
     key = 'research/native-library-check/sources/' + digest + '.tar.gz'
     prefix = getattr(campaign, 'PREFIX', 'research/native-union/20260930/metadata-ranges-cold-') + attempt
@@ -326,7 +330,7 @@ def self_check(lifecycle_only=False):
         startup.terminate_owned(ec2, owned)
     assert ec2.terminate_instances.call_count == 2
     ec2.get_waiter.return_value.wait.assert_called_once_with(InstanceIds=['i-original'])
-    for failure in ('fsync', 'launch-upload', 'poll', 'interruption', 'interrupt', 'success', 'multi-ack'):
+    for failure in ('fsync', 'launch-upload', 'poll', 'interruption', 'interrupt', 'success', 'multi-ack', 'archive-source'):
         with tempfile.TemporaryDirectory() as tmp:
             ec2, s3, session = Mock(), Mock(), Mock()
             session.client.side_effect = [ec2, s3]
@@ -338,7 +342,7 @@ def self_check(lifecycle_only=False):
             expected_owned = {str(i):dict(instance_id=node) for i,node in enumerate(instance_ids)}
             ec2.run_instances.return_value = {'Instances': [{'InstanceId': node} for node in instance_ids]}
             writes = [None, None, OSError('upload')] if failure == 'launch-upload' else [None, None, None]
-            error = {'interruption': RuntimeError('worker interrupted'), 'interrupt': KeyboardInterrupt(), 'success': None}.get(failure, ReadTimeoutError(endpoint_url='mock'))
+            error = {'interruption': RuntimeError('worker interrupted'), 'interrupt': KeyboardInterrupt(), 'success': None, 'archive-source': None}.get(failure, ReadTimeoutError(endpoint_url='mock'))
             events = []
             ec2.terminate_instances.side_effect = lambda **kw: events.append('terminate')
             ec2.get_waiter.return_value.wait.side_effect = lambda **kw: events.append('wait')
@@ -347,13 +351,18 @@ def self_check(lifecycle_only=False):
                 events.append('collect')
                 return dict(status='complete', phase='complete', exit_code=0,
                     artifacts={name: {} for name in ARTIFACTS})
-            with patch.object(module, 'ROOT', Path(tmp)), patch.object(boto3, 'Session', return_value=session), patch.object(subprocess, 'check_output', side_effect=['', '0'*40, b'archive']), patch.object(module, 'preflight', return_value={'config_sha256': '1'*64}), patch.object(module, 'user_data', return_value='mock'), patch.object(peer, 'missing', return_value=True), patch.object(peer, 'put_if_absent', side_effect=writes), patch.object(os, 'fsync', side_effect=OSError('persist') if failure == 'fsync' else None), patch.object(module, 'poll', side_effect=error), patch.object(module, 'collect', side_effect=collected):
+            with patch.object(module, 'ROOT', Path(tmp)), patch.object(boto3, 'Session', return_value=session), patch.object(subprocess, 'check_output', side_effect=['', '0'*40, b'archive']), patch.object(module, 'preflight', return_value=dict(config_sha256='1'*64, **({'source_archive_commit':'2'*40} if failure == 'archive-source' else {}))), patch.object(subprocess, 'run') as git_run, patch.object(module, 'user_data', return_value='mock'), patch.object(peer, 'missing', return_value=True), patch.object(peer, 'put_if_absent', side_effect=writes), patch.object(os, 'fsync', side_effect=OSError('persist') if failure == 'fsync' else None), patch.object(module, 'poll', side_effect=error), patch.object(module, 'collect', side_effect=collected):
                 try:
                     main('a0001')
                 except (OSError, ReadTimeoutError, RuntimeError, KeyboardInterrupt):
                     pass
                 else:
-                    assert failure == 'success', 'failure swallowed'
+                    assert failure in ('success', 'archive-source'), 'failure swallowed'
+            if failure == 'archive-source':
+                git_run.assert_called_once_with(['git', 'merge-base', '--is-ancestor', '2'*40, 'origin/main'], check=True)
+                assert json.loads((Path(tmp)/'metadata-ranges-cold/a0001/aws-reservation.json').read_text())['source_commit'] == '2'*40
+            else:
+                git_run.assert_not_called()
             ec2.run_instances.assert_called_once()
             assert ec2.run_instances.call_args.kwargs['BlockDeviceMappings'] == [{'DeviceName': '/dev/xvda', 'Ebs': {'DeleteOnTermination': True, 'Encrypted': True, 'VolumeSize': 80, 'VolumeType': 'gp3'}}]
             assert json.loads((Path(tmp)/'metadata-ranges-cold/a0001/aws-reservation.json').read_text())['root_device_name'] == '/dev/xvda'

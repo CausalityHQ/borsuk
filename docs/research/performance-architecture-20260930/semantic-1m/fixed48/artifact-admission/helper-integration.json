@@ -1,0 +1,17 @@
+{
+  "full_shared_self_check_exit": 1,
+  "full_shared_self_check_scope": "Historical control source identity assertion fails on current source, also reproduced against unchanged fa94 baseline; lifecycle-only check passes.",
+  "helper_source_commit": "9f3a56973c744dd75d58100ecbde41f8aae87fa8",
+  "integrated_commit": "fa94eb3d",
+  "launch_authority": false,
+  "log": {
+    "path": "/tmp/borsuk-artifact-launcher-lifecycle.log",
+    "sha256": "a09f30ea5d6296a9397c16ad67ce07f62f429a8834f7d557681adb262a2e1619"
+  },
+  "native_or_data_run": false,
+  "resource_limit_bytes": 268435456,
+  "schema": "borsuk-fixed48-retained-helper-integration-v1",
+  "shared_archive_option_lifecycle_check_exit": 0,
+  "synthetic_self_check_exit": 0,
+  "timeout_seconds": 55
+}
