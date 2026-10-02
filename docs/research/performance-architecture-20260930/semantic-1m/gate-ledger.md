@@ -120,3 +120,18 @@ This ledger changes no experiment's outcome and selects no new production defaul
 | Published1M D768444ms / 10M D10241214ms@8QPS context and practical95%R10, prior source-dated target matrix | Product comparison context | No matched vendor win. Latest ReLAION successful-only control p90=632.183ms/p95=777.308ms with two drops; candidate unmeasured. Published p95 and saturation unknown. CoHere cold latency/QPS unknown. Fresh matched end-to-end tails/completions/lifecycle dollars are next evidence; do not extrapolate100M latency. |
 
 100M source/layout arithmetic remains a projection. Current1M build/scoring process peaks, cgroup peaks, scratch and router bytes do not prove generation-pin/swap/maintenance RSS,10M/100M latency or total dollar. Preserve historical GO/FAIL rows above.
+
+## 2026-10-02 eight-owner matched result
+
+[Closed paired a0002](startup-wave8/paired/a0002/decision.md) supersedes the earlier candidate-UNMEASURED checkpoint for the new protocol; the earlier six-owner FAIL remains unchanged. ReLAION FIRST1M D768 cosine/fixed64 reservoir1000–1063/k10/8 offered QPS/eight owners: all256 successful, every cell624/640=97.5%R10 and exact ordered source-reference parity. Candidate coldp90=461.848/452.096ms and p95=466.883/459.379ms; actualbracketing controlp90=601.051/497.652ms,p95=648.377/501.403ms. Each candidate beats BOTH controls; p90reduction7.19–24.78%,p956.88–29.15%.
+
+| Requirement | Current measured attainment | Remaining decisive evidence |
+| --- | --- | --- |
+| Frozen paired all64/95%R10/dispatch/identity/resource/cleanup | PASS allfourcells; recall delta0pp, no drops/errors | Retain qualified width8 candidate; no identical repeat required |
+| Published1M D768444ms context | Candidate misses by8.096–17.848ms under this disclosed different cold protocol | One causal stage-driven intervention; matched vendor comparison still absent |
+| Throughput | 8 offered QPS/all64completed per cell; finite cleanup/drain-inclusive7.651–7.717successes/s for candidates | Sustained-load/saturation curve and cost per successful query unmeasured |
+| Bounded serving memory | Native peak38.33MB; shared cgroup actualpeak178,855,936B/OOMswap0 | Generation swap/pins/maintenance/concurrency and10M/100M RSS not established |
+| CoHere representative quality | Originalfresh64 R1091.25%/R10085.359375%, FAIL unchanged | Newly excluded64 panel, fixed top32 nomination/page-closure ceiling before native change |
+| Physical S3/lifecycle dollar | HttpService calls and consumed payload measured; confirmed wire/billed request totals and total dollar unknown | Source-qualified physical accounting and build/maintenance/storage/recovery cost curve |
+
+This is a matched internal native improvement and a runnable blob-native cold milestone. It proves neither a measured vendor win nor100M production readiness. Published vendor p95/saturation remain unknown; warm is separate.
