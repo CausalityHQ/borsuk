@@ -1,0 +1,38 @@
+[
+    {
+        "Key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/centroids.bin",
+        "Bytes": 48000032
+    },
+    {
+        "Key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/diverse_graph.bin",
+        "Bytes": 4265768
+    },
+    {
+        "Key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/graph.bin",
+        "Bytes": 4265768
+    },
+    {
+        "Key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/manifest.json",
+        "Bytes": 33963
+    },
+    {
+        "Key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/page_digests.bin",
+        "Bytes": 125024
+    },
+    {
+        "Key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/page_manifest.json",
+        "Bytes": 280
+    },
+    {
+        "Key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/plane/manifest.json",
+        "Bytes": 549
+    },
+    {
+        "Key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/plane/mean.bin",
+        "Bytes": 3072
+    },
+    {
+        "Key": "research/native-union/20260929/cohere-source-1m-v4/artifacts/generation/plane/records.bin",
+        "Bytes": 200000000
+    }
+]

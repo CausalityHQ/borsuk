@@ -1,0 +1,42 @@
+{
+  "authenticated_small_bodies": {
+    "original-plane-manifest.json": {
+      "bytes": 549,
+      "sha256": "379c7e778672251a362ec2819e9745ec7ed206659e74104bc1a493ce343501b2"
+    },
+    "page-manifest.json": {
+      "bytes": 280,
+      "sha256": "dd18a4538064cd717aaa1a8a9bb1cae9b14189b171dd60113bff413584fd9142"
+    }
+  },
+  "corpus_or_truth_bodies_opened": false,
+  "global_bucket_absence_claim": false,
+  "heavy_body_authentication_pending": true,
+  "inspected_prefix": "research/semantic-router/20261002/cohere-top32-coverage-a0002/",
+  "mean_hashes_match_metadata_only": true,
+  "metadata_only": true,
+  "new_query_panel_selected": false,
+  "objects_listed": 62,
+  "original_execution_fail_preserved": true,
+  "original_plane_schema": "borsuk-two-bit-plane-v2",
+  "records_hashes_match_metadata_only": true,
+  "required_plane_schema": "borsuk-two-bit-plane-v3",
+  "required_plane_sha256": "70c41ff884b4dd1e2101fe9e4fc239b0d0e6c65be701c5b54245c2000e11a3ef",
+  "required_router": {
+    "leaves": {
+      "bytes": 48125000,
+      "sha256": "53474c34a22f8df40f86adc5a530bcd16dfaefe9eb655e21c6fffbd16cf6fa38"
+    },
+    "membership": {
+      "bytes": 125000,
+      "sha256": "a97f1bdbdbfaccc8009b56fd85c2c82e5f01405a650222d335b66c156fe8cdc1"
+    },
+    "root": {
+      "bytes": 2267840,
+      "sha256": "efadc03a3e30d3ae75668762ad44d425f66c5ca373d0683acc6a0d7fe0232254"
+    }
+  },
+  "retained_generation_body_unavailable_for_immediate_scorer": true,
+  "retained_router_bodies_in_inspected_prefix": false,
+  "schema": "borsuk-fixed48-artifact-admission-audit-v1"
+}

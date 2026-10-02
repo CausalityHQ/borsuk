@@ -1,0 +1,250 @@
+[
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/archived-builder-assurance.json",
+        "Bytes": 91048
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/config.json",
+        "Bytes": 8724
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/coverage-closure.json",
+        "Bytes": 1136
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/cpu.txt",
+        "Bytes": 3517
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/failure.json",
+        "Bytes": 389
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/helper-config.json",
+        "Bytes": 26989
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/profile-cgroup.json",
+        "Bytes": 1350
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/profile-resources.txt",
+        "Bytes": 1036
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/profile.log",
+        "Bytes": 26518
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/run-closed.log",
+        "Bytes": 5501
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/build-resources.json",
+        "Bytes": 2065
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/build-resources.txt",
+        "Bytes": 944
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/build.log",
+        "Bytes": 65
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/builder-config.json",
+        "Bytes": 33501
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/coverage.json",
+        "Bytes": 1009369
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/duplicate-audit.json",
+        "Bytes": 42110
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/final-resources.json",
+        "Bytes": 2124
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/generation-manifest.json",
+        "Bytes": 34552
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/nominate-config.json",
+        "Bytes": 2266
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/nomination-seal.json",
+        "Bytes": 388
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/nomination.json",
+        "Bytes": 966714
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/oracle.json",
+        "Bytes": 1206
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/panel.json",
+        "Bytes": 58878
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/prospective-protocol.json",
+        "Bytes": 2674
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/queries.raw",
+        "Bytes": 196608
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/reduce-config.json",
+        "Bytes": 1145
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/requests.jsonl",
+        "Bytes": 983691
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/resources.json",
+        "Bytes": 1861
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/source-qualification.json",
+        "Bytes": 91047
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/sq8-ordinal-check.json",
+        "Bytes": 297
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/truth.i64",
+        "Bytes": 51200
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/screen/truth.u32",
+        "Bytes": 25600
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/source-qualification.json",
+        "Bytes": 18037
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/artifacts/tool-versions.json",
+        "Bytes": 877
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/launch.json",
+        "Bytes": 323
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/nomination/sealed/nomination.json",
+        "Bytes": 966714
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/reservation.json",
+        "Bytes": 19287
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/build-resources.json",
+        "Bytes": 2065
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/build-resources.txt",
+        "Bytes": 944
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/build.log",
+        "Bytes": 65
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/builder-config.json",
+        "Bytes": 33501
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/coverage.json",
+        "Bytes": 1009369
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/decision.json",
+        "Bytes": 25463
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/duplicate-audit.json",
+        "Bytes": 42110
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/generation-manifest.json",
+        "Bytes": 34552
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/nominate-config.json",
+        "Bytes": 2266
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/nomination-seal.json",
+        "Bytes": 388
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/nomination.json",
+        "Bytes": 966714
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/oracle.json",
+        "Bytes": 1206
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/panel.json",
+        "Bytes": 58878
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/prospective-protocol.json",
+        "Bytes": 2674
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/queries.raw",
+        "Bytes": 196608
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/reduce-config.json",
+        "Bytes": 1145
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/requests.jsonl",
+        "Bytes": 983691
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/resources.json",
+        "Bytes": 1861
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/source-order.u64",
+        "Bytes": 8000000
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/source-qualification.json",
+        "Bytes": 91047
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/source-root.json",
+        "Bytes": 33963
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/sq8-ordinal-check.json",
+        "Bytes": 297
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/truth.i64",
+        "Bytes": 51200
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/sealed/truth.u32",
+        "Bytes": 25600
+    },
+    {
+        "Key": "research/semantic-router/20261002/cohere-top32-coverage-a0002/terminal.json",
+        "Bytes": 5530
+    }
+]
