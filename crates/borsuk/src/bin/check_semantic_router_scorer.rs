@@ -1,9 +1,8 @@
-//! Frozen local/logical-I/O scale scorer through the current production generation.
+//! Truth-free frozen local/logical-I/O diagnostics through the production generation.
 use borsuk::{
     semantic_unit_router::SemanticProfile,
     two_bit_generation::{
         DiscoveryMode, TwoBitGeneration, TwoBitGenerationLimits, TwoBitPlanTrace,
-        TwoBitSearchResult,
     },
 };
 use object_store::{chunked::ChunkedStore, local::LocalFileSystem, path::Path as ObjectPath};
@@ -46,7 +45,6 @@ struct Config {
     generation_root_sha256: String,
     scratch_parent: PathBuf,
     requests: Artifact,
-    truth: Artifact,
     order: Artifact,
     max_memory_bytes: u64,
 }
@@ -97,11 +95,11 @@ fn checked(a: &Artifact, cap: usize) -> Result<Vec<u8>> {
 }
 fn validate_config(c: &Config) -> Result<()> {
     require(
-        c.schema == "borsuk-semantic-router-scorer-config-v2"
+        c.schema == "borsuk-semantic-router-scorer-config-v3"
             && matches!(c.dataset.as_str(), "ReLAION" | "CoHere")
             && c.profile.valid_geometry(c.rows, c.dimensions)
             && c.count == PANEL
-            && c.first.checked_add(c.count).is_some()
+            && c.first == 0
             && c.store_root.is_absolute()
             && c.scratch_parent.is_absolute()
             && valid_sha(&c.generation_root_sha256)
@@ -121,11 +119,7 @@ fn validate_config(c: &Config) -> Result<()> {
         "generation prefix",
     )?;
     let mut paths = BTreeSet::new();
-    for (a, cap) in [
-        (&c.requests, 2 * 1024 * 1024),
-        (&c.truth, PANEL * 100 * 8),
-        (&c.order, c.rows * 8),
-    ] {
+    for (a, cap) in [(&c.requests, 2 * 1024 * 1024), (&c.order, c.rows * 8)] {
         require(
             a.path.is_absolute()
                 && paths.insert(&a.path)
@@ -135,10 +129,7 @@ fn validate_config(c: &Config) -> Result<()> {
             "artifact descriptor",
         )?;
     }
-    require(
-        c.truth.bytes == PANEL * 100 * 8 && c.order.bytes == c.rows * 8,
-        "truth/order exact geometry",
-    )
+    require(c.order.bytes == c.rows * 8, "order exact geometry")
 }
 fn config(path: &Path, sha: &str) -> Result<Config> {
     let file = OpenOptions::new()
@@ -206,17 +197,6 @@ fn executable_sha() -> Result<String> {
     }
     Ok(format!("{:x}", digest.finalize()))
 }
-fn coverage(gold: &[i64], inverse: &[usize], includes: impl Fn(usize) -> bool) -> Value {
-    let hits10 = gold[..10]
-        .iter()
-        .filter(|&&id| includes(inverse[id as usize]))
-        .count();
-    let hits100 = gold
-        .iter()
-        .filter(|&&id| includes(inverse[id as usize]))
-        .count();
-    json!({"hits10":hits10,"hits100":hits100})
-}
 fn diagnostic_scratch_bytes(rows: usize) -> Result<usize> {
     // Keep the production codec allowance; admission also charges the trace.
     400_000_usize
@@ -230,7 +210,27 @@ fn scorer_store(root: &Path) -> object_store::Result<ChunkedStore> {
         8192,
     ))
 }
-async fn run(c: &Config, events: &mut File) -> Result<Value> {
+fn freeze(c: &Config, events: &mut File, identity: &Value, completed: usize) -> Result<Value> {
+    require(completed == PANEL, "complete frozen panel required")?;
+    // All diagnostics must be durable before claiming the measurement is frozen.
+    events.sync_all()?;
+    let summary = json!({"status":"FROZEN","complete":true,"queries":completed,"first":c.first,
+        "dataset":c.dataset,"profile":c.profile,"rows":c.rows,"dimensions":c.dimensions,
+        "config_sha256":identity["config_sha256"],"binary_sha256":identity["binary_sha256"],
+        "scorer_source_sha256":identity["scorer_source_sha256"],"router_source_sha256":identity["router_source_sha256"],
+        "generation_prefix":c.generation_prefix,"generation_root_sha256":c.generation_root_sha256,
+        "requests_sha256":c.requests.sha256,"requests_bytes":c.requests.bytes,
+        "order_sha256":c.order.sha256,"order_bytes":c.order.bytes,
+        "truth_opened":false,"observed_process_peak_bytes":observed_peak_bytes(),"physical_s3_measured":false});
+    emit(
+        events,
+        &json!({"phase":"all_queries_frozen","count":completed,"status":"FROZEN",
+        "complete":true,"truth_opened":false,"summary":summary}),
+    )?;
+    events.sync_all()?;
+    Ok(summary)
+}
+async fn run(c: &Config, events: &mut File, identity: &Value) -> Result<Value> {
     let store = scorer_store(&c.store_root)?;
     let prefix = ObjectPath::from(c.generation_prefix.clone());
     let limits = TwoBitGenerationLimits {
@@ -260,7 +260,7 @@ async fn run(c: &Config, events: &mut File) -> Result<Value> {
         "native generation/profile agreement",
     )?;
     // The native opener authenticated this receipt. Bind the independently retained
-    // evaluator mapping to the same source order; it never enters nomination.
+    // offline mapping to the same source order; it never enters nomination.
     let root_path = c
         .store_root
         .join(&c.generation_prefix)
@@ -314,7 +314,7 @@ async fn run(c: &Config, events: &mut File) -> Result<Value> {
         &json!({"phase":"startup","truth_opened":false,"profile":c.profile,
         "metadata":generation.remote_open_stats(),"evaluator_payload_charge":EVALUATOR_CHARGE}),
     )?;
-    let mut frozen: Vec<(TwoBitSearchResult, TwoBitPlanTrace)> = Vec::with_capacity(PANEL);
+    let mut completed = 0;
     for request in &requests {
         let wall = Instant::now();
         let cpu = cpu_ns();
@@ -336,6 +336,10 @@ async fn run(c: &Config, events: &mut File) -> Result<Value> {
                 return Err(error.into());
             }
         };
+        require(
+            result.ranked.candidates.len() >= 10,
+            "fewer than ten returned IDs",
+        )?;
         for candidate in &result.ranked.candidates {
             require(
                 candidate.id >= 0
@@ -354,62 +358,9 @@ async fn run(c: &Config, events: &mut File) -> Result<Value> {
             "sq8_gets":result.ranked.stats.submitted_gets,"sq8_bytes":result.ranked.stats.verified_bytes,
             "stages":result.stages,"query_wall_ns":wall.elapsed().as_nanos(),"query_process_cpu_ns":cpu_ns()-cpu}),
         )?;
-        frozen.push((result, trace));
+        completed += 1;
     }
-    emit(
-        events,
-        &json!({"phase":"all_queries_frozen","count":PANEL,"truth_opened":false}),
-    )?;
-    let truth = checked(&c.truth, PANEL * 100 * 8)?;
-    let mut hits10 = 0;
-    let mut hits100 = 0;
-    for (index, ((result, trace), truth)) in
-        frozen.iter().zip(truth.chunks_exact(100 * 8)).enumerate()
-    {
-        let gold = truth
-            .chunks_exact(8)
-            .map(|word| i64::from_le_bytes(word.try_into().unwrap()))
-            .collect::<Vec<_>>();
-        require(
-            gold.iter().all(|&id| id >= 0 && (id as usize) < c.rows)
-                && gold.iter().collect::<BTreeSet<_>>().len() == 100,
-            "truth logical IDs/uniqueness",
-        )?;
-        let nominated: BTreeSet<_> = trace.semantic_units.iter().copied().collect();
-        let closure: BTreeSet<_> = nominated.iter().map(|u| u / 8).collect();
-        let scored: BTreeSet<_> = trace.nomination_evaluated_units.iter().copied().collect();
-        let source_pages: BTreeSet<_> = trace.ranked_candidate_pages.iter().copied().collect();
-        let ids = result
-            .ranked
-            .candidates
-            .iter()
-            .map(|r| r.id)
-            .collect::<Vec<_>>();
-        require(ids.len() >= 10, "fewer than ten returned IDs")?;
-        let h10 = ids[..10]
-            .iter()
-            .filter(|id| gold[..10].contains(id))
-            .count();
-        let h100 = ids.iter().filter(|id| gold.contains(id)).count();
-        hits10 += h10;
-        hits100 += h100;
-        let row_bytes = c.dimensions + 12;
-        emit(
-            events,
-            &json!({"phase":"evaluation","ordinal":c.first+index,
-            "nominated_units":coverage(&gold,&inverse,|row|nominated.contains(&(row/32))),
-            "page_closure":coverage(&gold,&inverse,|row|closure.contains(&(row/256))),
-            "source_scored_units":coverage(&gold,&inverse,|row|scored.contains(&(row/32))),
-            "source_ranked_pages":coverage(&gold,&inverse,|row|source_pages.contains(&(row/256))),
-            "sq8_admitted_ranges":coverage(&gold,&inverse,|row|result.plan.ranges.iter().any(|r|r.contains(&(row*row_bytes)))),
-            "returned_hits10":h10,"returned_hits100":h100}),
-        )?;
-    }
-    Ok(
-        json!({"status":if hits10 >= 608 {"PASS"} else {"FAIL"},"complete":true,"queries":PANEL,
-        "hits10":hits10,"hits100":hits100,"mean_returned_r10":hits10 as f64/640.,"mean_returned_r100":hits100 as f64/6400.,
-        "observed_process_peak_bytes":observed_peak_bytes(),"physical_s3_measured":false}),
-    )
+    freeze(c, events, identity, completed)
 }
 fn execute() -> Result<bool> {
     let args = std::env::args().collect::<Vec<_>>();
@@ -421,18 +372,16 @@ fn execute() -> Result<bool> {
         .write(true)
         .create_new(true)
         .open(&args[3])?;
-    emit(
-        &mut events,
-        &json!({"schema":"borsuk-semantic-router-scorer-result-v2","phase":"identity",
+    let identity = json!({"schema":"borsuk-semantic-router-scorer-result-v3","phase":"identity",
         "config_sha256":args[2],"binary_sha256":executable_sha()?,"scorer_source_sha256":hash(include_bytes!("check_semantic_router_scorer.rs")),
-        "router_source_sha256":hash(include_bytes!("../semantic_unit_router.rs")),"physical_s3_measured":false}),
-    )?;
+        "router_source_sha256":hash(include_bytes!("../semantic_unit_router.rs")),"physical_s3_measured":false});
+    emit(&mut events, &identity)?;
     let result = (|| -> Result<Value> {
         let c = config(Path::new(&args[1]), &args[2])?;
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?
-            .block_on(run(&c, &mut events))
+            .block_on(run(&c, &mut events, &identity))
     })();
     let terminal = match result {
         Ok(summary) => summary,
@@ -441,7 +390,7 @@ fn execute() -> Result<bool> {
     emit(&mut events, &json!({"phase":"terminal","summary":terminal}))?;
     events.sync_all()?;
     println!("{terminal}");
-    Ok(terminal["status"] == "PASS")
+    Ok(terminal["status"] == "FROZEN")
 }
 fn main() {
     match execute() {
@@ -456,6 +405,97 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn config_value(dir: &Path) -> Value {
+        json!({"schema":"borsuk-semantic-router-scorer-config-v3",
+        "dataset":"CoHere","profile":"fresh1m","rows":1_000_000,"dimensions":768,
+        "first":0,"count":64,"store_root":dir.join("store"),"generation_prefix":"semantic/index",
+        "generation_root_sha256":"a".repeat(64),"scratch_parent":dir.join("scratch"),
+        "requests":{"path":dir.join("requests.jsonl"),"bytes":1024,"sha256":"b".repeat(64)},
+        "order":{"path":dir.join("order.u64"),"bytes":8_000_000,"sha256":"c".repeat(64)},
+        "max_memory_bytes":536_870_912})
+    }
+    #[test]
+    fn truth_free_v3_config_rejects_truth_unknown_fields_and_old_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let value = config_value(dir.path());
+        let body = serde_json::to_vec(&value).unwrap();
+        std::fs::write(&path, &body).unwrap();
+        config(&path, &hash(&body)).unwrap();
+        for field in [
+            "truth",
+            "truth_path",
+            "truth_sha256",
+            "truth_body",
+            "unknown",
+        ] {
+            let mut invalid = value.clone();
+            invalid[field] =
+                json!({"path":"/unreadable/truth","bytes":51200,"sha256":"d".repeat(64)});
+            assert!(serde_json::from_value::<Config>(invalid).is_err());
+        }
+        for (field, rejected) in [
+            ("schema", json!("borsuk-semantic-router-scorer-config-v2")),
+            ("first", json!(1)),
+            ("count", json!(63)),
+        ] {
+            let mut invalid = value.clone();
+            invalid[field] = rejected;
+            let body = serde_json::to_vec(&invalid).unwrap();
+            std::fs::write(&path, &body).unwrap();
+            assert!(config(&path, &hash(&body)).is_err());
+        }
+    }
+    #[test]
+    fn frozen_marker_requires_complete64_and_binds_measurement_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let c: Config = serde_json::from_value(config_value(dir.path())).unwrap();
+        let identity = json!({"config_sha256":"d".repeat(64),"binary_sha256":"e".repeat(64),
+            "scorer_source_sha256":"f".repeat(64),"router_source_sha256":"0".repeat(64)});
+        let path = dir.path().join("records.jsonl");
+        let mut events = File::create(&path).unwrap();
+        assert!(freeze(&c, &mut events, &identity, 0).is_err());
+        assert_eq!(events.metadata().unwrap().len(), 0);
+        for ordinal in 0..63 {
+            emit(
+                &mut events,
+                &json!({"phase":"frozen_query","ordinal":ordinal}),
+            )
+            .unwrap();
+        }
+        let partial_length = events.metadata().unwrap().len();
+        for count in [63, 65] {
+            assert!(freeze(&c, &mut events, &identity, count).is_err());
+            assert_eq!(events.metadata().unwrap().len(), partial_length);
+        }
+        emit(&mut events, &json!({"phase":"frozen_query","ordinal":63})).unwrap();
+        let summary = freeze(&c, &mut events, &identity, 64).unwrap();
+        assert_eq!(summary["status"], "FROZEN");
+        assert_eq!(summary["complete"], true);
+        assert_eq!(summary["queries"], 64);
+        assert_eq!(summary["first"], 0);
+        for field in [
+            "config_sha256",
+            "binary_sha256",
+            "scorer_source_sha256",
+            "router_source_sha256",
+        ] {
+            assert_eq!(summary[field], identity[field]);
+        }
+        assert_eq!(summary["generation_root_sha256"], "a".repeat(64));
+        assert_eq!(summary["requests_sha256"], "b".repeat(64));
+        assert_eq!(summary["order_sha256"], "c".repeat(64));
+        assert!(summary.get("hits10").is_none());
+        let records = std::fs::read_to_string(&path).unwrap();
+        let records = records
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 65);
+        assert_eq!(records[64]["phase"], "all_queries_frozen");
+        assert_eq!(records[64]["count"], 64);
+        assert_eq!(records[64]["summary"], summary);
+    }
     #[tokio::test]
     async fn real_file_source_and_sq8_preserve_production_ranking_and_fail_closed() {
         use borsuk::{
