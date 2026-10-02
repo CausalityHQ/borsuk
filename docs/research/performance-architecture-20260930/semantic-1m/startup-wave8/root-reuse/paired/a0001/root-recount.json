@@ -1,0 +1,83 @@
+{
+  "schema": "borsuk-root-reuse-root-recount-v1",
+  "verified": true,
+  "all24_bodies_authenticated": true,
+  "raw_response_gt_ordered_reference_parity": true,
+  "cells": [
+    {
+      "cell": 0,
+      "role": "control",
+      "successes": 63,
+      "capacity_drops": 1,
+      "hits10": 615,
+      "all_offer_recall10": 0.9609375,
+      "success_conditioned_recall10": 0.9761904761904762,
+      "cold_ms": {
+        "p50": 444.969496,
+        "p90": 740.9856418000002,
+        "p95": 820.3361796999999,
+        "p99": 1101.8275520200002
+      },
+      "finite_successes_per_second": 7.559127682108056,
+      "native_peak_rss_bytes": 37838848
+    },
+    {
+      "cell": 1,
+      "role": "candidate",
+      "successes": 64,
+      "capacity_drops": 0,
+      "hits10": 624,
+      "all_offer_recall10": 0.975,
+      "success_conditioned_recall10": 0.975,
+      "cold_ms": {
+        "p50": 402.765273,
+        "p90": 455.28211080000005,
+        "p95": 463.2248001,
+        "p99": 510.91539794999994
+      },
+      "finite_successes_per_second": 7.685119326347647,
+      "native_peak_rss_bytes": 39424000
+    },
+    {
+      "cell": 2,
+      "role": "candidate",
+      "successes": 64,
+      "capacity_drops": 0,
+      "hits10": 624,
+      "all_offer_recall10": 0.975,
+      "success_conditioned_recall10": 0.975,
+      "cold_ms": {
+        "p50": 398.3653145,
+        "p90": 448.4328133,
+        "p95": 480.70784889999993,
+        "p99": 767.9139016999999
+      },
+      "finite_successes_per_second": 7.707843559716281,
+      "native_peak_rss_bytes": 38014976
+    },
+    {
+      "cell": 3,
+      "role": "control",
+      "successes": 64,
+      "capacity_drops": 0,
+      "hits10": 624,
+      "all_offer_recall10": 0.975,
+      "success_conditioned_recall10": 0.975,
+      "cold_ms": {
+        "p50": 431.821933,
+        "p90": 479.24530960000004,
+        "p95": 487.67588515000006,
+        "p99": 529.9158167099998
+      },
+      "finite_successes_per_second": 7.655864794060114,
+      "native_peak_rss_bytes": 38305792
+    }
+  ],
+  "frozen_campaign_result": "FAIL",
+  "reason": "control0 capacity_drop ordinal10; allfour qualifying required",
+  "paired_gain_claim": false,
+  "published_context_met": false,
+  "matched_vendor_measured": false,
+  "billed_cost_measured": false,
+  "sustainable_qps_measured": false
+}
