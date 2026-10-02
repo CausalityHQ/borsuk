@@ -1,0 +1,9 @@
+{
+  "captured_failure": "AssertionError at validate_closed: versions[\"architecture\"] == \"x86_64\" and versions[\"python\"].startswith(\"3.12.\")",
+  "command": "python3 -B: import scripts.launch_cohere_fixed48_offered_http_spot; self_check()",
+  "native_or_cloud_execution": false,
+  "production_authority_relaxed": false,
+  "repair": "Only explicit temporary remote interpreter fixture sets sys.version=3.12.fixture while staging; production OS/Python assertions unchanged.",
+  "root_cause": "Mock worker tool-versions used actual host Python3.14; collection correctly required declared remote Python3.12.",
+  "schema": "borsuk-fixed48-offered-controller-failed-fixture-v1"
+}
