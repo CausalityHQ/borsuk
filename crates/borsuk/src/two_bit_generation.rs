@@ -859,6 +859,7 @@ impl TwoBitGeneration {
             trusted_sha256,
             limits,
             Some((location, etag, head.size)),
+            false,
         )?;
         let decode_wall_ns = decode_started.elapsed().as_nanos();
         let router_head_started = std::time::Instant::now();
@@ -905,21 +906,39 @@ impl TwoBitGeneration {
     /// Open local metadata under a trusted root SHA. No PQ or SQ8 payload load.
     /// Artifact paths are fixed under `root`; caller supplies immutable metadata.
     pub fn open(root: &Path, trusted_sha256: &str, limits: TwoBitGenerationLimits) -> Result<Self> {
-        Self::open_inner(root, trusted_sha256, limits, None)
+        Self::open_inner(root, trusted_sha256, limits, None, false)
+    }
+    /// Reuse serving admission/identity checks while streaming local records.
+    /// No metadata-only local generation escapes or authorizes query snapshots.
+    pub(crate) fn validate_local_publication(
+        root: &Path,
+        trusted_sha256: &str,
+        limits: TwoBitGenerationLimits,
+    ) -> Result<()> {
+        Self::open_inner(root, trusted_sha256, limits, None, true).map(drop)
     }
     fn open_inner(
         root: &Path,
         trusted_sha256: &str,
         limits: TwoBitGenerationLimits,
         remote: Option<(ObjectPath, String, u64)>,
+        validate_local_records: bool,
     ) -> Result<Self> {
-        let paged = remote.is_some();
+        let paged = remote.is_some() || validate_local_records;
         let mut limits = limits;
         let bad = TwoBitGenerationError::Invalid;
         let size = |name: &str| {
-            fs::metadata(root.join(name))
-                .map(|m| m.len())
-                .map_err(TwoBitGenerationError::Io)
+            let path = root.join(name);
+            let metadata = if validate_local_records {
+                fs::symlink_metadata(path)
+            } else {
+                fs::metadata(path)
+            }
+            .map_err(TwoBitGenerationError::Io)?;
+            if validate_local_records && !metadata.is_file() {
+                return Err(bad("nonregular publication artifact"));
+            }
+            Ok(metadata.len())
         };
         let manifest_size = size("manifest.json")?;
         if manifest_size == 0
@@ -973,6 +992,15 @@ impl TwoBitGeneration {
             || !manifest.canonical.valid()
         {
             return Err(bad("root identity"));
+        }
+        if validate_local_records {
+            // These files are authenticated by the publisher's existing
+            // semantic validation/uploads, before it can commit the head.
+            size("canonical.bin")?;
+            if manifest.discovery.mode() == DiscoveryMode::Semantic {
+                size("router/leaves.bin")?;
+                size("centroids.bin")?;
+            }
         }
         if manifest.discovery.mode() == DiscoveryMode::Semantic {
             limits.max_source_bytes = limits.max_source_bytes.min(64 * 1024 * 1024);
@@ -1037,6 +1065,7 @@ impl TwoBitGeneration {
             || geometry.rows != manifest.canonical.rows
             || admitted_size("plane/mean.bin")? != expected_mean
             || (!paged && admitted_size("plane/records.bin")? != expected_records)
+            || (validate_local_records && size("plane/records.bin")? != expected_records as u64)
             || admitted_size("plane/page_digests.bin")?
                 != geometry
                     .rows
@@ -1077,6 +1106,15 @@ impl TwoBitGeneration {
         } else {
             0
         };
+        let validation_page_bytes = if validate_local_records {
+            geometry
+                .rows
+                .min(32)
+                .checked_mul(padded.div_ceil(4) + 8)
+                .ok_or(bad("validation page memory"))? as u64
+        } else {
+            0
+        };
         let modeled = disk
             .checked_mul(3)
             .and_then(|n| n.checked_add(codec_memory))
@@ -1097,13 +1135,14 @@ impl TwoBitGeneration {
             })
             .and_then(|n| n.checked_add(query_memory))
             .and_then(|n| n.checked_add(source_query_memory))
+            .and_then(|n| n.checked_add(validation_page_bytes))
             .and_then(|n| n.checked_add(limits.already_pinned_bytes))
             .ok_or(bad("memory overflow"))?;
         if modeled > limits.max_memory_bytes {
             return Err(bad("memory cap"));
         }
         let memory = usize::try_from(limits.max_memory_bytes).map_err(|_| bad("memory width"))?;
-        let (plane, source) = if let Some((location, etag, bytes)) = remote {
+        let (plane, source) = if paged {
             let (plane, authority) = TwoBitPlane::open_metadata(
                 &root.join("plane"),
                 &manifest.plane_manifest_sha256,
@@ -1112,17 +1151,25 @@ impl TwoBitGeneration {
                 memory,
             )
             .map_err(TwoBitGenerationError::Plane)?;
-            if u64::try_from(authority.object_bytes()).map_err(|_| bad("source size"))? != bytes {
-                return Err(bad("source HEAD geometry"));
+            if validate_local_records {
+                plane
+                    .validate_local_records(&root.join("plane/records.bin"), &authority)
+                    .map_err(TwoBitGenerationError::Plane)?;
             }
-            (
-                plane,
+            let source = if let Some((location, etag, bytes)) = remote {
+                if u64::try_from(authority.object_bytes()).map_err(|_| bad("source size"))? != bytes
+                {
+                    return Err(bad("source HEAD geometry"));
+                }
                 Some(RemoteSource {
                     authority,
                     location,
                     etag,
-                }),
-            )
+                })
+            } else {
+                None
+            };
+            (plane, source)
         } else {
             (
                 TwoBitPlane::open(
@@ -2499,12 +2546,355 @@ mod source_walk_tests {
             already_pinned_bytes: 0,
         };
         let index = ObjectPath::from("semantic/index");
+        // Publication admits paged serving metadata and one validation page,
+        // even when the eager reference's whole record allocation cannot fit.
+        let mut publication_limits = TwoBitGenerationLimits {
+            max_active_queries: 1,
+            max_query_bytes: 2 * 1024 * 1024,
+            max_source_bytes: 65536,
+            already_pinned_bytes: 262144,
+            ..limits
+        };
+        let bounded =
+            TwoBitGeneration::open_inner(&root, &root_sha, publication_limits, None, true).unwrap();
+        assert!(bounded.plane.record(0).is_none());
+        assert!(bounded.source.is_none());
+        let bounded_bytes = bounded.modeled_memory_bytes;
+        let eager_bytes = TwoBitGeneration::open(&root, &root_sha, publication_limits)
+            .unwrap()
+            .modeled_memory_bytes;
+        assert_eq!(
+            eager_bytes - bounded_bytes,
+            3 * fs::metadata(root.join("plane/records.bin")).unwrap().len()
+                - 2 * publication_limits.max_source_bytes as u64
+                - 32 * bounded.plane.receipt().record_bytes as u64,
+        );
+        let semantic_bytes = crate::semantic_unit_router::admit(
+            crate::semantic_unit_router::Geometry {
+                rows,
+                dimensions: 2,
+                units: rows.div_ceil(32),
+                blob_bytes: 32 + rows.div_ceil(32) * 2 * 2,
+            },
+            usize::MAX,
+            bounded.semantic_profile().unwrap(),
+        )
+        .unwrap() as u64;
+        publication_limits.max_memory_bytes = bounded
+            .modeled_memory_bytes
+            .max(semantic_bytes + publication_limits.already_pinned_bytes);
+        assert!(publication_limits.max_memory_bytes < eager_bytes);
+        drop(bounded);
+        assert!(TwoBitGeneration::open(&root, &root_sha, publication_limits).is_err());
+        TwoBitGeneration::validate_local_publication(&root, &root_sha, publication_limits).unwrap();
+        for rejected in [
+            TwoBitGenerationLimits {
+                max_memory_bytes: bounded_bytes - 1,
+                ..publication_limits
+            },
+            TwoBitGenerationLimits {
+                max_active_queries: 0,
+                ..publication_limits
+            },
+            TwoBitGenerationLimits {
+                max_source_bytes: 0,
+                ..publication_limits
+            },
+            TwoBitGenerationLimits {
+                max_query_bytes: 0,
+                ..publication_limits
+            },
+            TwoBitGenerationLimits {
+                already_pinned_bytes: u64::MAX,
+                ..publication_limits
+            },
+            TwoBitGenerationLimits {
+                already_pinned_bytes: publication_limits.max_memory_bytes,
+                ..publication_limits
+            },
+        ] {
+            assert!(
+                TwoBitGeneration::validate_local_publication(&root, &root_sha, rejected).is_err()
+            );
+        }
+        // Both local readers reject byte corruption, truncation and growth,
+        // including the final partial source page and digest table entry.
+        store.writes.lock().unwrap().clear();
+        for name in [
+            "plane/records.bin",
+            "plane/page_digests.bin",
+            "plane/mean.bin",
+            "page_digests.bin",
+            "router/root.bin",
+            "router/membership.bin",
+        ] {
+            let path = root.join(name);
+            let original = fs::read(&path).unwrap();
+            for fault in ["corrupt", "short", "long"] {
+                let mut damaged = original.clone();
+                match fault {
+                    "corrupt" => *damaged.last_mut().unwrap() ^= 1,
+                    "short" => {
+                        damaged.pop();
+                    }
+                    _ => damaged.push(0),
+                }
+                fs::write(&path, damaged).unwrap();
+                assert!(
+                    TwoBitGeneration::open(&root, &root_sha, limits).is_err(),
+                    "{name} {fault}"
+                );
+                assert!(
+                    crate::two_bit_store::publish_two_bit_generation(
+                        store.as_ref(),
+                        &index,
+                        &root,
+                        &root_sha,
+                        publication_limits,
+                        None,
+                    )
+                    .await
+                    .is_err(),
+                    "{name} {fault}"
+                );
+                assert!(store.writes.lock().unwrap().is_empty());
+                assert!(
+                    TwoBitGeneration::validate_local_publication(
+                        &root,
+                        &root_sha,
+                        publication_limits
+                    )
+                    .is_err(),
+                    "{name} {fault}"
+                );
+            }
+            fs::write(path, original).unwrap();
+        }
+        let plane_path = root.join("plane/manifest.json");
+        let root_path = root.join("manifest.json");
+        let original_plane = fs::read(&plane_path).unwrap();
+        let original_root = fs::read(&root_path).unwrap();
+        let sidecar_path = root.join("plane/page_digests.bin");
+        let original_sidecar = fs::read(&sidecar_path).unwrap();
+        for fault in [
+            "whole_sha",
+            "late_page",
+            "source_order",
+            "schema",
+            "geometry",
+        ] {
+            let mut plane: serde_json::Value = serde_json::from_slice(&original_plane).unwrap();
+            let mut manifest: serde_json::Value = serde_json::from_slice(&original_root).unwrap();
+            match fault {
+                "whole_sha" => {
+                    plane["records_sha256"] = "0".repeat(64).into();
+                    manifest["discovery"]["records_sha256"] = plane["records_sha256"].clone();
+                }
+                "late_page" => {
+                    let mut sidecar = original_sidecar.clone();
+                    *sidecar.last_mut().unwrap() ^= 1;
+                    plane["page_digest_sha256"] = hash(&sidecar).into();
+                    fs::write(&sidecar_path, sidecar).unwrap();
+                }
+                "source_order" => plane["source_order_sha256"] = "0".repeat(64).into(),
+                "schema" => plane["schema"] = "borsuk-two-bit-plane-v2".into(),
+                _ => plane["record_bytes"] = 1.into(),
+            }
+            let plane_body = serde_json::to_vec(&plane).unwrap();
+            manifest["plane_manifest_sha256"] = hash(&plane_body).into();
+            let root_body = serde_json::to_vec(&manifest).unwrap();
+            let trusted = hash(&root_body);
+            fs::write(&plane_path, plane_body).unwrap();
+            fs::write(&root_path, root_body).unwrap();
+            assert!(
+                TwoBitGeneration::open(&root, &trusted, limits).is_err(),
+                "{fault}"
+            );
+            let error =
+                TwoBitGeneration::validate_local_publication(&root, &trusted, publication_limits)
+                    .err()
+                    .unwrap();
+            if fault == "whole_sha" {
+                assert!(
+                    matches!(
+                        error,
+                        TwoBitGenerationError::Plane(SourceBuildError::Invalid(
+                            "artifact identity"
+                        ))
+                    ),
+                    "{error:?}"
+                );
+            } else if fault == "late_page" {
+                assert!(
+                    matches!(
+                        error,
+                        TwoBitGenerationError::Plane(SourceBuildError::Invalid(
+                            "source page digest"
+                        ))
+                    ),
+                    "{error:?}"
+                );
+            }
+            fs::write(&sidecar_path, &original_sidecar).unwrap();
+        }
+        fs::write(&plane_path, original_plane).unwrap();
+        fs::write(&root_path, &original_root).unwrap();
+        for fault in ["schema", "canonical", "object_key", "mean_binding"] {
+            let mut manifest: serde_json::Value = serde_json::from_slice(&original_root).unwrap();
+            match fault {
+                "schema" => manifest["schema"] = "borsuk-two-bit-generation-v7".into(),
+                "canonical" => manifest["canonical"]["rows"] = (rows + 1).into(),
+                "object_key" => manifest["sq8_object_key"] = "wrong/objects/wrong".into(),
+                _ => manifest["discovery"]["mean_sha256"] = "0".repeat(64).into(),
+            }
+            let body = serde_json::to_vec(&manifest).unwrap();
+            fs::write(&root_path, &body).unwrap();
+            assert!(
+                TwoBitGeneration::open(&root, &hash(&body), limits).is_err(),
+                "{fault}"
+            );
+            assert!(
+                TwoBitGeneration::validate_local_publication(
+                    &root,
+                    &hash(&body),
+                    publication_limits
+                )
+                .is_err(),
+                "{fault}"
+            );
+        }
+        fs::write(root_path, original_root).unwrap();
+        // Publication alone authenticates canonical IDs and the complete
+        // semantic payload/centroids; these checks must survive the new scan.
+        for name in ["canonical.bin", "router/leaves.bin", "centroids.bin"] {
+            let path = root.join(name);
+            let original = fs::read(&path).unwrap();
+            let mut damaged = original.clone();
+            let byte = if name == "canonical.bin" {
+                damaged.len() - (8 + 2 * 4)
+            } else {
+                damaged.len() - 1
+            };
+            damaged[byte] ^= 1;
+            fs::write(&path, damaged).unwrap();
+            assert!(
+                crate::two_bit_store::publish_two_bit_generation(
+                    store.as_ref(),
+                    &index,
+                    &root,
+                    &root_sha,
+                    publication_limits,
+                    None,
+                )
+                .await
+                .is_err(),
+                "{name}"
+            );
+            assert!(
+                !store
+                    .writes
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|key| key.ends_with("/head.json"))
+            );
+            assert!(
+                crate::two_bit_store::read_two_bit_head(store.as_ref(), &index)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            fs::write(path, original).unwrap();
+        }
+        #[cfg(unix)]
+        for name in [
+            "manifest.json",
+            "plane/records.bin",
+            "plane/mean.bin",
+            "page_digests.bin",
+            "router/leaves.bin",
+            "canonical.bin",
+            "centroids.bin",
+        ] {
+            let path = root.join(name);
+            let saved = root.join("saved-artifact");
+            fs::rename(&path, &saved).unwrap();
+            #[cfg(target_os = "linux")]
+            let kinds = &["directory", "symlink", "socket", "fifo"][..];
+            #[cfg(not(target_os = "linux"))]
+            let kinds = &["directory", "symlink", "socket"][..];
+            for &kind in kinds {
+                let socket = match kind {
+                    "directory" => {
+                        fs::create_dir(&path).unwrap();
+                        None
+                    }
+                    "symlink" => {
+                        std::os::unix::fs::symlink(&saved, &path).unwrap();
+                        None
+                    }
+                    #[cfg(target_os = "linux")]
+                    "fifo" => {
+                        rustix::fs::mkfifoat(
+                            rustix::fs::CWD,
+                            &path,
+                            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+                        )
+                        .unwrap();
+                        None
+                    }
+                    _ => Some(std::os::unix::net::UnixListener::bind(&path).unwrap()),
+                };
+                store.writes.lock().unwrap().clear();
+                assert!(
+                    crate::two_bit_store::publish_two_bit_generation(
+                        store.as_ref(),
+                        &index,
+                        &root,
+                        &root_sha,
+                        publication_limits,
+                        None,
+                    )
+                    .await
+                    .is_err(),
+                    "{name} {kind}"
+                );
+                assert!(store.writes.lock().unwrap().is_empty());
+                drop(socket);
+                if kind == "directory" {
+                    fs::remove_dir(&path).unwrap();
+                } else {
+                    fs::remove_file(&path).unwrap();
+                }
+            }
+            fs::rename(saved, path).unwrap();
+        }
+        // Cancellation at the first yielded remote check cannot publish a head.
+        store.writes.lock().unwrap().clear();
+        {
+            let mut pending = std::pin::pin!(crate::two_bit_store::publish_two_bit_generation(
+                store.as_ref(),
+                &index,
+                &root,
+                &root_sha,
+                publication_limits,
+                None,
+            ));
+            assert!(futures_util::poll!(pending.as_mut()).is_pending());
+        }
+        assert!(store.writes.lock().unwrap().is_empty());
+        assert!(
+            crate::two_bit_store::read_two_bit_head(store.as_ref(), &index)
+                .await
+                .unwrap()
+                .is_none()
+        );
         let head = crate::two_bit_store::publish_two_bit_generation(
             store.as_ref(),
             &index,
             &root,
             &root_sha,
-            limits,
+            publication_limits,
             None,
         )
         .await

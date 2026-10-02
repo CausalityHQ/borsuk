@@ -414,9 +414,9 @@ pub async fn publish_two_bit_generation(
     } else {
         None
     };
-    // Admit and authenticate using exactly the serving reader, then release it
-    // before multipart buffers are allocated. No SQ8 payload is loaded.
-    drop(TwoBitGeneration::open(local, trusted_root_sha256, limits)?);
+    // Share serving metadata admission/identity checks and stream every local
+    // record page/full SHA, then release validation buffers before uploads.
+    TwoBitGeneration::validate_local_publication(local, trusted_root_sha256, limits)?;
     let read = |name: &str, digest: &str| -> Result<Vec<u8>> {
         let size = fs::metadata(local.join(name))?.len();
         if size == 0 || size > 65536 {

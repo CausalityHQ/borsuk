@@ -517,6 +517,51 @@ impl TwoBitPlane {
         &self.receipt
     }
 
+    // The generation admits one page before entering this validation-only scan.
+    // Reuse the serving authority for every page, plus the eager full-file SHA.
+    pub(crate) fn validate_local_records(
+        &self,
+        path: &Path,
+        authority: &crate::sq8_page_authority::PageAuthority,
+    ) -> Result<(), SourceBuildError> {
+        let bad = SourceBuildError::Invalid;
+        // Reject FIFOs/devices/symlinks before open can block on a non-file.
+        if !fs::symlink_metadata(path)?.is_file() {
+            return Err(bad("nonregular publication artifact"));
+        }
+        let mut file = File::open(path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.len() != authority.object_bytes() as u64 {
+            return Err(bad("artifact length"));
+        }
+        let first = authority
+            .byte_range(0, 0)
+            .map_err(|_| bad("source page geometry"))?;
+        let mut buffer = Vec::new();
+        buffer
+            .try_reserve_exact(first.len())
+            .map_err(|_| bad("allocation"))?;
+        buffer.resize(first.len(), 0);
+        let mut digest = Sha256::new();
+        for page in 0..self.receipt.rows.div_ceil(self.receipt.page_rows) {
+            let range = authority
+                .byte_range(page, page)
+                .map_err(|_| bad("source page geometry"))?;
+            let payload = &mut buffer[..range.len()];
+            file.read_exact(payload)?;
+            authority
+                .verify_payload(page, page, payload)
+                .map_err(|_| bad("source page digest"))?;
+            digest.update(payload);
+        }
+        if file.read(&mut [0])? != 0
+            || format!("{:x}", digest.finalize()) != self.receipt.records_sha256
+        {
+            return Err(bad("artifact identity"));
+        }
+        Ok(())
+    }
+
     /// Borrow a physical row; no allocation or vector hydration.
     pub fn record(&self, physical_row: usize) -> Option<&[u8]> {
         if physical_row >= self.receipt.rows {
