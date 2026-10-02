@@ -1,0 +1,23 @@
+{
+  "controller_log": {
+    "bytes": 44,
+    "sha256": "6fbeb4aff67c2f8b02218f6776f3486235ab0e242646b0eebbc05663f3b0f24c"
+  },
+  "error": "exact executor CODE closure",
+  "exit_status": 2,
+  "instance_acknowledged": false,
+  "native_invocations": 0,
+  "original_controller_session": 62546,
+  "performance_measured": false,
+  "reproduction": {
+    "cold_code_count_before_import": 80,
+    "frozen_runtime_code_count": 81,
+    "runtime_code_count_under_patched_preflight": 83
+  },
+  "reservation_present": false,
+  "root_commit": "8aad45e1de880ce56c1ba74868afc9c4243b82ab",
+  "schema": "borsuk-fixed48-offered-invalid-admission-v1",
+  "scientific_status": "UNMEASURED",
+  "source_commit": "3cb4b1a58e6b22f72b9de40af7d19c9e374c1d53",
+  "status": "INVALID_ADMISSION"
+}
