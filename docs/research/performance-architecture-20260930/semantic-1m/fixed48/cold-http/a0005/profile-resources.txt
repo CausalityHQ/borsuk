@@ -1,0 +1,23 @@
+	Command being timed: "timeout --signal=TERM --kill-after=30 2340 taskset -c 4-5 /mnt/cohere-fixed48-cold/venv/bin/python -m scripts.launch_cohere_fixed48_cold_http_spot --stage /mnt/cohere-fixed48-cold/repo /mnt/cohere-fixed48-cold research/semantic-router/20261002/fixed48-cold-a0005"
+	User time (seconds): 393.87
+	System time (seconds): 176.58
+	Percent of CPU this job got: 122%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 7:46.17
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 207308
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 4
+	Minor (reclaiming a frame) page faults: 817432
+	Voluntary context switches: 33116159
+	Involuntary context switches: 1510240
+	Swaps: 0
+	File system inputs: 1032
+	File system outputs: 8690296
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
