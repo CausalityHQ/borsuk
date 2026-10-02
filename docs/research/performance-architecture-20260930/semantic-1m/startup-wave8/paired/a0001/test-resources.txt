@@ -1,0 +1,23 @@
+	Command being timed: "timeout --signal=TERM --kill-after=90 3000 taskset -c 4-5 /mnt/native-startup-wave8-paired/venv/bin/python -m scripts.launch_native_startup_wave8_paired_spot --worker /mnt/native-startup-wave8-paired/repo/docs/research/performance-architecture-20260930/semantic-1m/startup-wave8/paired-config.json 30a3a0ac0d81afa77ef10f145cb9013659dd016c27c8fc861ab13988b2fb2e47 /mnt/native-startup-wave8-paired/repo /mnt/native-startup-wave8-paired/screen research/semantic-router/20261002/fresh1m-startup-wave8-paired-a0001"
+	User time (seconds): 14.23
+	System time (seconds): 3.30
+	Percent of CPU this job got: 101%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:17.36
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 92864
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 2
+	Minor (reclaiming a frame) page faults: 833510
+	Voluntary context switches: 168812
+	Involuntary context switches: 2987
+	Swaps: 0
+	File system inputs: 120
+	File system outputs: 477144
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
