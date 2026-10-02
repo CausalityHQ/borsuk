@@ -1,0 +1,18 @@
+{
+  "ann_measured": false,
+  "authenticated_artifacts": 14,
+  "automatic_replacement": false,
+  "build_invocations": 0,
+  "controller_exit_status": 2,
+  "driver_invocations": 0,
+  "execution_status": "FAIL",
+  "ground_truth_constructed": false,
+  "historical_failure_preserved": true,
+  "instance_id": "i-0cd9269b3f3fc5d22",
+  "instance_state_independently_verified": "terminated",
+  "root_cause": "frozen Python implementation/version differs",
+  "root_reproduction_python": "3.12.0",
+  "schema": "borsuk-fixed48-scientific-execution-closed-failure-v1",
+  "scientific_quality_status": "UNMEASURED",
+  "terminal_exit_status": 2
+}

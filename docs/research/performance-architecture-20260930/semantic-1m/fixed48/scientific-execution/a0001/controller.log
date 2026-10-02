@@ -1,0 +1,6 @@
+{"instance_id": "i-0cd9269b3f3fc5d22", "nodes": {"0": {"instance_id": "i-0cd9269b3f3fc5d22"}}, "prefix": "research/semantic-router/20261002/fixed48-scientific-a0001", "source_commit": "06e04d7a8a42b5c6941314578d0f29df1ac5c10e", "source_archive_sha256": "a9a78c1365a9040983789df1ed9b12c1b17efabc68b066176f8415189e25cb97"}
+{"instance_id": "i-0cd9269b3f3fc5d22", "state": "pending"}
+{"instance_id": "i-0cd9269b3f3fc5d22", "state": "running"}
+{"instance_id": "i-0cd9269b3f3fc5d22", "state": "running"}
+{"instance_id": "i-0cd9269b3f3fc5d22", "state": "running"}
+AssertionError: 

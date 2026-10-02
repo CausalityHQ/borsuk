@@ -1,0 +1,1 @@
+{"cap": 256, "dispatches": {"staging_GET": 2}, "driver_actual_dispatches_verified": false, "prospective_dispatches": 116, "scope": "worker SDK config2/assets GETs plus unchanged driver Accounting actual dispatches; bootstrap/install/uploads separate"}

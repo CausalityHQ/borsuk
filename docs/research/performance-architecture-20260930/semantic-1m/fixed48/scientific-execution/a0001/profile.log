@@ -1,0 +1,19 @@
+Running as unit: cohere-fixed48-scientific.service
+Traceback (most recent call last):
+  File "<string>", line 8, in <module>
+  File "/mnt/cohere-fixed48-scientific/repo/scripts/run_cohere_fixed48_fresh_falsifier.py", line 140, in panel_authority
+    original, first, pins = selector.previous.authenticate(repo)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/cohere-fixed48-scientific/repo/scripts/select_cohere_fresh64_coverage.py", line 141, in authenticate
+    original.validate_population(a)
+  File "/mnt/cohere-fixed48-scientific/repo/scripts/select_cohere_1m_fresh64.py", line 201, in validate_population
+    require(spec["python"] == dict(implementation=platform.python_implementation(), version=platform.python_version()),
+  File "/mnt/cohere-fixed48-scientific/repo/scripts/select_cohere_1m_fresh64.py", line 32, in require
+    raise ValueError(message)
+ValueError: frozen Python implementation/version differs
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=2
+Service runtime: 1.742s
+CPU time consumed: 1.849s
+Memory peak: 6.2M
+Memory swap peak: 0B
