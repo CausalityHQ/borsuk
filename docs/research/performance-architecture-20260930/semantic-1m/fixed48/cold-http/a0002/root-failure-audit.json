@@ -1,0 +1,25 @@
+{
+  "a0001_failure_body_identity_equal": true,
+  "actual_sealed_request_body": {
+    "bytes": 982810,
+    "sha256": "f0ee89e3751765cac78eb128ba577bb870e3a910fb2c4eb486c80740544bc5cd"
+  },
+  "authenticated_artifacts": 22,
+  "cold_latency_qps": "UNMEASURED",
+  "controller_exit_status": 2,
+  "controller_session": 92214,
+  "execution_status": "FAIL",
+  "failure": "preserve sealed normalization",
+  "full_body_sha_verified": true,
+  "independently_verified_instance_state": "terminated",
+  "instance_id": "i-09b5e98ab04f7ccc8",
+  "native_http_attempts": 0,
+  "native_publication_invocations": 0,
+  "native_source_changed": false,
+  "original_a0001_failure_preserved": true,
+  "root_reproduction": "panel_inputs on actual authenticated closed scientific panel raises exact same assertion",
+  "schema": "borsuk-fixed48-cold-root-failure-audit-v1",
+  "scientific_status": "INVALID",
+  "squared_query_norm_max": 241.38631057359763,
+  "squared_query_norm_min": 162.33715045834438
+}
