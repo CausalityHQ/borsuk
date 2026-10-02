@@ -1,0 +1,96 @@
+{
+  "actual_original_native_qualification": {
+    "actual_full_workspace_execution": false,
+    "assigned_base_native_authority": "EXPECTED FAIL: exact combined native source differs; older native dc6151 at assigned base",
+    "campaign": 86025,
+    "closed_status": "PASS",
+    "exact_native_identity": "addf62bce23ceee034f22e4d1dfc0b318564d924c6e0fcee34b9336d1532813e",
+    "genuine_bundles": [
+      "/tmp/borsuk-fixed48-driver-actual-native-authority.json",
+      "/tmp/borsuk-fixed48-driver-actual-qualification-config.json"
+    ],
+    "native_files": 399,
+    "original_bundle_files_authenticated": 21,
+    "original_focused_tests": 28,
+    "original_gate_stages": 7,
+    "original_python_code_map_independent_of_current": true,
+    "qualified_scorer_sha256": "b5d0b22c9878a9e466c386b5a0451247fca14d36f9b67cc912be8c73247a6f54",
+    "read_only": true,
+    "root_independent_integration": "Root reported genuine-bundle closed_qualification+native_authority PASS with currentmain399 addf62",
+    "terminal_artifacts_authenticated": 16
+  },
+  "base_commit": "1adef6a8db87a3d683a94b82dec7a49ffee873be",
+  "checks": [
+    {
+      "checks": 103,
+      "command": "python3 scripts/run_cohere_fixed48_fresh_falsifier.py --self-check",
+      "elapsed_seconds": 5.535366007999983,
+      "exit_status": 0,
+      "peak_rss_kib": 91572
+    },
+    {
+      "checks": 103,
+      "command": "python3 -m scripts.run_cohere_fixed48_fresh_falsifier --self-check",
+      "elapsed_seconds": 5.4248182059964165,
+      "exit_status": 0,
+      "peak_rss_kib": 86740
+    },
+    {
+      "command": "py_compile.compile(owned_file,doraise=True)",
+      "passed": true
+    },
+    {
+      "command": "python3 owned_file (no arguments)",
+      "exit_status": 2,
+      "expected": true,
+      "usage_reported": true
+    },
+    {
+      "command": "import owned module from /tmp",
+      "numpy_pyarrow_not_imported": true,
+      "origin_is_owned_file": true,
+      "passed": true
+    },
+    {
+      "command": "git diff --check",
+      "exit_status": 0
+    }
+  ],
+  "commit": "17ee87b4231159e4662b42b053449baade98ab66",
+  "contract": "/tmp/borsuk-fixed48-one-pass-scientific-driver-contract.json",
+  "driver_identity": {
+    "bytes": 79480,
+    "path": "run_cohere_fixed48_fresh_falsifier.py",
+    "sha256": "cd6cea085042376f50f6fcb7c8c81b4492cf9c22e93f2fee79010756019c438e"
+  },
+  "git_author": {
+    "email": "riomus@gmail.com",
+    "name": "Roman Bartusiak"
+  },
+  "notes": [
+    "Synthetic fixtures use genuine original qualification shapes and real seven-stage/cgroup validators; source map identity alone mocked for synthetic399 fixture.",
+    "Full68 scorer records/receipt-before-GT chronology, one-scorer/one-oracle guards, both prior64 duplicates and historical audit, ETag/payload preservation, unsafe keys, authority drift/pending, partial and rehashed closures, failure/RSS/scratch/cleanup/timeout/deadline and replay verified.",
+    "Root must integrate qualified native399 and freeze exact67-file current import closure plus retained COMPLETE before any scientific launch.",
+    "Existing retained.replay binds its frozen CODE map to REPO; original immutable receipts must remain unchanged."
+  ],
+  "owned_file": "scripts/run_cohere_fixed48_fresh_falsifier.py",
+  "retained_assets": "PENDING; old artifact attempt71180 helper0/upload96 had zero retained bodies; no COMPLETE admitted",
+  "schema": "borsuk-fixed48-scientific-driver-worker-receipt-v1",
+  "scientific_measurement": "UNMEASURED",
+  "scope": {
+    "cargo_executed": false,
+    "cloud_operations": false,
+    "consults_reviews_children": false,
+    "data_or_truth_opened": false,
+    "launch_authority": false,
+    "merge_push": false,
+    "native_executed": false,
+    "operator_contact": false,
+    "paid_experiments": false,
+    "source_files_changed": [
+      "scripts/run_cohere_fixed48_fresh_falsifier.py"
+    ]
+  },
+  "status": "SOURCE_ONLY_COMMITTED",
+  "worktree_clean": true
+}

@@ -1,0 +1,14 @@
+{
+  "worker_commit": "17ee87b4231159e4662b42b053449baade98ab66",
+  "root_integration_commit": "64a498b1",
+  "source_sha256": "cd6cea085042376f50f6fcb7c8c81b4492cf9c22e93f2fee79010756019c438e",
+  "root_self_check_exit": 0,
+  "synthetic_checks": 103,
+  "memory_limit_bytes": 268435456,
+  "wall_limit_seconds": 55,
+  "actual_original_closed_qualification_check": "PASS",
+  "current399_native_authority_check": "PASS",
+  "native_source_identity_sha256": "addf62bce23ceee034f22e4d1dfc0b318564d924c6e0fcee34b9336d1532813e",
+  "query_native_gt_execution": false,
+  "retained_artifact_prerequisite": "a0002 CLOSED GO;44 bodies authenticated/30retained"
+}
