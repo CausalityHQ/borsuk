@@ -1,0 +1,24 @@
+{
+  "GT_reads": 0,
+  "config_sha256": "8986f8886222a4c54621bc84b56ca6d0a043cfbac8b1158346b45a508ac719d4",
+  "elapsed_seconds": 1.3882817970006727,
+  "exit_status": 0,
+  "gate_order": [
+    "source-bound actual sealed fixture",
+    "local SDK/import/lifecycle/CLI checks",
+    "production metadata-only qualification",
+    "one disposable infrastructure canary",
+    "separately frozen offered-load measurement"
+  ],
+  "head_keys": 51,
+  "metadata_only": true,
+  "native_calls": 0,
+  "network_calls": 0,
+  "offered_config_sha256": "69ec27dd2838836b81814a6ac735e7757987d212d959d1004c3ba758d34459fc",
+  "qualified": true,
+  "schema": "borsuk-fixed48-offered-canary-production-freeze-v1",
+  "scientific_measurement": false,
+  "source": "abf407631f174709c503cee9757982f3c872c5da",
+  "source_archive_sha256": "6d855f6358b87d4be686de8163ed37da19f64e4170cdebd479e180fceb180178",
+  "userdata_bytes": 15627
+}
