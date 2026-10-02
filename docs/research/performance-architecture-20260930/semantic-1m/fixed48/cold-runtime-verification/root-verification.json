@@ -1,0 +1,37 @@
+{
+  "schema": "borsuk-fixed48-retained-cold-root-verification-v1",
+  "source_commit": "1f9c049eb076c526c5345ee103063866e904013c",
+  "owned_source": {
+    "path": "scripts/run_cohere_fixed48_cold_http.py",
+    "bytes": 72363,
+    "sha256": "6d5ee9962dac2041aa816a8fdd7d5e25169a2803331800e0000245533bbe2f41"
+  },
+  "self_check": {
+    "exit_status": 0,
+    "queries": 64,
+    "scenarios": 8,
+    "command": "timeout 55s prlimit --as=268435456:268435456 python3 scripts/run_cohere_fixed48_cold_http.py --self-check"
+  },
+  "artifacts": {
+    "root-selfcheck.time": {
+      "bytes": 825,
+      "sha256": "60887b94baddeab3742b49ffdc2ef638c61be191fe16cde7758a297bb81ea1fe"
+    },
+    "root-selfcheck.log": {
+      "bytes": 90,
+      "sha256": "7630b4bed57903e59a65062f8c9eceee086daf83a0218a547028cee5233d887b"
+    },
+    "worker-contract.json": {
+      "bytes": 13105,
+      "sha256": "b4c5906b2c3d21e1b516f93229c692772cec56fb8373f62a402f025c6dc96741"
+    }
+  },
+  "historical_proofs_authenticated": 20,
+  "asset_identities_and_sources_authenticated": 38,
+  "executor_closure_paths": 74,
+  "native_or_network_execution": false,
+  "native_rebuilt": false,
+  "full_workspace_test_execution": false,
+  "launch_authorized": false,
+  "cold_http_measurement": "UNMEASURED"
+}
