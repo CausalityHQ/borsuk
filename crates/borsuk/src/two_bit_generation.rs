@@ -4398,7 +4398,7 @@ mod source_walk_tests {
             .chain((1..512).flat_map(|page| (0..6).map(move |offset| page * 8 + offset)))
             .chain((1..6).map(|page| page * 8 + 6))
             .collect::<BTreeSet<_>>();
-        let (_, units, _) =
+        let (seed, units, additions) =
             crate::semantic_unit_router::seed_walk(&original, 1_000_000, SemanticProfile::Fresh1m)
                 .unwrap();
         assert_eq!(units.len(), 3079);
