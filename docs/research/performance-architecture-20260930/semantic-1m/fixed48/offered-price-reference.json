@@ -1,0 +1,24 @@
+{
+  "availability_zone": "eu-central-1a",
+  "cost_per_query": "UNMEASURED",
+  "historical_quote_timestamp": "2026-10-02T18:00:00+00:00",
+  "historical_reservation": {
+    "bytes": 19846,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/a0005/aws-reservation.json",
+    "sha256": "fd1eaa9177879f3a9b259832e33f963e4ac46dff71f7c263fa0b9d86a6cf8679"
+  },
+  "historical_spot_price_usd_per_hour": "0.215200",
+  "instance_type": "c7i.2xlarge",
+  "measured_lifecycle_billing": false,
+  "physical_s3_requests_measured": false,
+  "prospective": {
+    "capped_machine_compute_usd": 0.25,
+    "compute_admission_usd": 0.3,
+    "ebs_s3_allowance_usd": 0.15,
+    "machine_seconds": 1800,
+    "spot_max_usd_per_hour": 0.5
+  },
+  "quote_scope": "historical cold a5 admission; fresh live quote required by controller before new launch",
+  "region": "eu-central-1",
+  "schema": "borsuk-fixed48-offered-price-reference-v1"
+}
