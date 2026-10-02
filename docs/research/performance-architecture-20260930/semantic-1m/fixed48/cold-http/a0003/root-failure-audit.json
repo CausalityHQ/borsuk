@@ -1,0 +1,45 @@
+{
+  "all_declared_artifact_bodies_authenticated": true,
+  "authenticated_artifact_count": 48,
+  "cleanup_evidence": {
+    "cold_closure": {
+      "build_invocations": 0,
+      "closed": false,
+      "execution_status": "FAIL",
+      "oracle_invocations": 0,
+      "process_cleanup": false,
+      "replay_passed": false,
+      "runtime_invocations": 1,
+      "scientific_scorer_invocations": 0,
+      "scientific_status": "INVALID",
+      "wall_seconds": 145.010806792
+    },
+    "instance": "terminated",
+    "screen_cleanup": {
+      "build_invocations": 0,
+      "cold_invocations": 0,
+      "oracle_invocations": 0,
+      "process_cleanup": true,
+      "publication_invocations": 1,
+      "remote_namespace_retained": "research/semantic-router/20261002/fixed48-cold-a0003/serving",
+      "scientific_scorer_invocations": 0,
+      "scratch_removed": true,
+      "valid": true
+    }
+  },
+  "cold_performance_and_quality": "UNMEASURED",
+  "independently_observed_instance_state": "terminated",
+  "instance_id": "i-05820e247c8a628e6",
+  "original_controller_exit_status": 2,
+  "original_controller_session": 3827,
+  "original_exit_code": 2,
+  "reason": "Ubuntu system botocore rejects PutObject.IfNoneMatch in runtime publication; no cold HTTP attempts",
+  "replacement_launched": false,
+  "root_cause_caller": "scripts/run_cohere_fixed48_cold_http.py:424",
+  "root_error": "Assumed cold Python SDK was readonly; failed to trace publication conditional write caller despite canary SDK repair",
+  "schema": "borsuk-fixed48-cold-root-failure-audit-v1",
+  "scientific_disposition": "INVALID",
+  "source_archive_sha256": "aecb2e5afc0d6d062103c226ee0fa1d618384215fa290c0e45fb9809cda86519",
+  "source_commit": "c94be5765296eb34bc4ce10f027f42af95d9d489",
+  "terminal_status": "failed"
+}

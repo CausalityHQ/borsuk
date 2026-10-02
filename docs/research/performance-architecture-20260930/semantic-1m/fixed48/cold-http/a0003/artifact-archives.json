@@ -1,0 +1,20 @@
+{
+  "native/run-closed.log": {
+    "archive_sha256": "a9cb32ac081370b6a9ea801af61bd68d9088803c99364a7e03269aaeb31104ed",
+    "archived_path": "native/run-closed.log.gz",
+    "bytes": 77777,
+    "sha256": "2cbc1ac7c3e62943e8c9bcd8da37ace20e7731fa175fc50c37e7e317c0bb8111"
+  },
+  "native/test.log": {
+    "archive_sha256": "e8ce80fc5329be6b53dae27749622d6f88d498f1d3568983ae692bf01affa5ea",
+    "archived_path": "native/test.log.gz",
+    "bytes": 741238,
+    "sha256": "4128a3467ccf0786fe9b05b94c6e3b61fde7b3d8e6a6ec2f67c3bbe3e97acdf5"
+  },
+  "run-closed.log": {
+    "archive_sha256": "52667df2d430f1ec27a268f5b42120fe42d7d920afb805723782954d83eac5df",
+    "archived_path": "run-closed.log.gz",
+    "bytes": 4534,
+    "sha256": "07b0553540f7c30a71c9bab349f75413b482cf53680a9f349b3efb70d580553c"
+  }
+}
