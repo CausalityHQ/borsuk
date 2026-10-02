@@ -1,0 +1,35 @@
+{
+  "integrated_commit": "a80ba86b",
+  "native_or_cloud_execution": false,
+  "root_stage_exit_status": 0,
+  "root_stage_result": {
+    "native_or_cloud_execution": false,
+    "passed": true,
+    "scenarios": 14,
+    "source_sha256": "d88ff2618c24dce14b9b6ea3ead573c661199643d505953cbdd2c8526f337b74"
+  },
+  "rust_changed": false,
+  "source_sha256": "d88ff2618c24dce14b9b6ea3ead573c661199643d505953cbdd2c8526f337b74",
+  "unchanged_lifecycle_reused": true,
+  "worker_commit": "82eb1ab0fd1091b391e368643616b4dc2b5dd2fe",
+  "worker_full_controller_result": {
+    "artifacts": 56,
+    "asset_count": 38,
+    "checks": 43,
+    "cold_http_measured": false,
+    "command": "python3 scripts/launch_cohere_fixed48_cold_http_spot.py --self-check",
+    "controller_code_paths": 80,
+    "elapsed_seconds": 44.89556365396129,
+    "exit_status": 0,
+    "launch_authorized": false,
+    "native_or_cloud_execution": false,
+    "passed": true,
+    "peak_rss_kib": 88036,
+    "proof_count": 20,
+    "runtime_bodies": 18,
+    "runtime_code_paths": 74,
+    "schema": "borsuk-cohere-fixed48-cold-http-spot-v1-self-check",
+    "synthetic": true,
+    "user_data_bytes": 11627
+  }
+}
