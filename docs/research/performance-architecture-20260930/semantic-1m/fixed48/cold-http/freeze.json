@@ -1,0 +1,36 @@
+{
+  "schema": "borsuk-fixed48-cold-http-freeze-v1",
+  "execution_source": {
+    "commit": "c7a52fa49580e14dfdf3c462bc9c561f23cfc487",
+    "archive_sha256": "fff6e64e568c155666b1388f6c98b766f98ff3179e717a530a0894f395ce99a2"
+  },
+  "authorities": {
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/config.json": {
+      "bytes": 15771,
+      "sha256": "0d6dc3074937a04088a9e1b809cafa6ffb3b990a9504e6a89966fce2b08f639c"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/controller-config.json": {
+      "bytes": 9921,
+      "sha256": "d03aa75013b7120ba33c87af06393248a19cd89276786cd4fbd1e586210239fa"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/asset-manifest.json": {
+      "bytes": 13203,
+      "sha256": "ce4b1356fe069d66b547ffa3b0a5bfed53aa2988f1949deb7e4eba6e60228fef"
+    }
+  },
+  "qualification_passed": true,
+  "controller_code_paths": 80,
+  "runtime_code_paths": 74,
+  "terminal_artifacts": 56,
+  "native_source_identity_sha256": "addf62bce23ceee034f22e4d1dfc0b318564d924c6e0fcee34b9336d1532813e",
+  "native_rebuilt": false,
+  "build_invocations": 0,
+  "scientific_scorer_invocations": 0,
+  "oracle_invocations": 0,
+  "panel_sha256": "dfe569e0198f35d690e5aa6a248aa8eee73b6d59a569b194729368e84aa2f61c",
+  "quality_gate": "all64 success and at least608/640 recall@10 hits plus source/orderedID/physical read parity",
+  "latency_context": "published1M D768 p90<444ms; stated cache/corpus/vendor protocol differences; not a matched vendor win",
+  "capacity_qps": "UNMEASURED; serial full-span rate only",
+  "full_workspace_execution": false,
+  "launch_preflight": "required after commit and push; no instance started by freeze"
+}

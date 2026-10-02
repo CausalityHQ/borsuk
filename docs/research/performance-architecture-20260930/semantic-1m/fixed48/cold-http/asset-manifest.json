@@ -1,6 +1,6 @@
 {
   "schema": "borsuk-fixed48-retained-cold-assets-v1",
-  "authority_pending": true,
+  "authority_pending": false,
   "assets": {
     "generation/manifest.json": {
       "bytes": 34656,

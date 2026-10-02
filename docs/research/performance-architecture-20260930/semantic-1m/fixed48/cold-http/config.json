@@ -1,6 +1,6 @@
 {
   "schema": "borsuk-cohere-fixed48-retained-cold-http-v1",
-  "authority_pending": true,
+  "authority_pending": false,
   "rows": 1000000,
   "dimensions": 768,
   "queries": 64,
@@ -99,11 +99,14 @@
     "scripts/v98_hierarchical_row_router.py": "ce70105ef2a5b75b25147f00dd3d6965e8d52c34a5278ca1267288c0e28e424c",
     "scripts/v99_ranked_gap_range_router.py": "ec8ffc2aaf1376a7d6c3f8228429ec6c37117d0223ebaf9a775ddb4249d29079"
   },
-  "execution_source": null,
+  "execution_source": {
+    "commit": "c7a52fa49580e14dfdf3c462bc9c561f23cfc487",
+    "archive_sha256": "fff6e64e568c155666b1388f6c98b766f98ff3179e717a530a0894f395ce99a2"
+  },
   "asset_manifest": {
     "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/asset-manifest.json",
-    "bytes": 13202,
-    "sha256": "a4694cc31ce1d8548be3888fb704cc0cf772cbde35ed832d26c624ffb5d44746"
+    "bytes": 13203,
+    "sha256": "ce4b1356fe069d66b547ffa3b0a5bfed53aa2988f1949deb7e4eba6e60228fef"
   },
   "proofs": {
     "preregistration": {

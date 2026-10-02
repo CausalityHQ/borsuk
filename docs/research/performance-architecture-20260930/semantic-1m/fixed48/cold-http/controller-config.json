@@ -1,7 +1,10 @@
 {
   "schema": "borsuk-cohere-fixed48-cold-http-spot-v1",
-  "authority_pending": true,
-  "execution_source": null,
+  "authority_pending": false,
+  "execution_source": {
+    "commit": "c7a52fa49580e14dfdf3c462bc9c561f23cfc487",
+    "archive_sha256": "fff6e64e568c155666b1388f6c98b766f98ff3179e717a530a0894f395ce99a2"
+  },
   "code_sha256": {
     "crates/borsuk/src/semantic_unit_router.rs": "3ae09d9ff5b8c2a5e9a5151878a9e649c3669db923a2da66623c676ea0b7bb2f",
     "crates/borsuk/src/sq8_source.rs": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795",
@@ -20,7 +23,7 @@
     "scripts/check_semantic_binary_coverage.py": "26c7127593d0e477cc9fff93111632c5c57431737d6be070e173cc5303f5f22a",
     "scripts/check_semantic_router_coverage.py": "221695c725d79dfbc7f0ac3c2a4bd4e46445fc32628a1fd989eb328270356ff3",
     "scripts/evaluate_semantic_frozen_diagnostics.py": "ccba9e39f78bdfd39aad1ddef693251ca97f7d84f51418a3bafd9b2722279546",
-    "scripts/launch_cohere_fixed48_cold_http_spot.py": "e6787ffea94f2112b8f1beca30b36af82315ee45827fb62e42e2cebb6f72f442",
+    "scripts/launch_cohere_fixed48_cold_http_spot.py": "e682968f1503580267373e77d17c1a9a3ef41ebe1e62a8b3de38027c8a10125a",
     "scripts/launch_cohere_fixed48_fresh_scientific_spot.py": "11b272c142c95bdac3efa8e7e26e399e21122b0baf3efefc6cbcba93f19fcd9c",
     "scripts/launch_cohere_semantic_1m_preparation_spot.py": "86c5bc52f52a05cb75c05b2feb4fd3a905a67ff053f51a44b34e6349efeee149",
     "scripts/launch_cohere_semantic_artifact_reproduction_spot.py": "aa6fd1bd9dac7f659e1d9be305dd6df445a6391301ceeff5ec914bcc1e4b2c12",
@@ -86,7 +89,7 @@
   },
   "runtime_config": {
     "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/cold-http/config.json",
-    "bytes": 15622,
-    "sha256": "4739a0d664d91600183f5d2e54c7f6dc48b48c864bc7bc15a1c3f0c38e7e0ff1"
+    "bytes": 15771,
+    "sha256": "0d6dc3074937a04088a9e1b809cafa6ffb3b990a9504e6a89966fce2b08f639c"
   }
 }
