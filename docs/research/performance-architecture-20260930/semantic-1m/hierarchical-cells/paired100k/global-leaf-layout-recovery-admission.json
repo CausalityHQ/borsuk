@@ -1,0 +1,176 @@
+{
+  "items": {
+    "CoHere": {
+      "build_inputs": {
+        "canonical": {
+          "bytes": 308000000,
+          "path": "/mnt/hierarchical-100k/screen/measurement/cohere-generation/canonical.bin",
+          "sha256": "38304c3b448f2f62b32da8b443bbe52f20ccc63f5472d0e7885d5c268dd7a6df"
+        },
+        "generation": {
+          "bytes": 34667,
+          "path": "/mnt/hierarchical-100k/screen/measurement/cohere-generation/manifest.json",
+          "sha256": "233226f08d589f4d263c06aef8849ef3d57756c0625a5067608d889b40a270df"
+        },
+        "mean": {
+          "bytes": 3072,
+          "path": "/mnt/hierarchical-100k/screen/measurement/cohere-generation/plane/mean.bin",
+          "sha256": "b50ffae3e16cc5e155ceee3adffcac0dc04d6812b0a1bb8fc01cbd259b58440a"
+        },
+        "order": {
+          "bytes": 800000,
+          "path": "/mnt/hierarchical-100k/screen/scratch/cohere/order",
+          "sha256": "e2314ca14f5aa6f08b02cc328b863c921e55b1461a413ad6d3d66e781ff42d50"
+        },
+        "plane": {
+          "bytes": 651,
+          "path": "/mnt/hierarchical-100k/screen/measurement/cohere-generation/plane/manifest.json",
+          "sha256": "310ee747fcdd22adb98c55870e255fbc9a91531241e7bf4bd228828a713557ce"
+        },
+        "records": {
+          "bytes": 20000000,
+          "path": "/mnt/hierarchical-100k/screen/measurement/cohere-generation/plane/records.bin",
+          "sha256": "f47e344a6a959bfe1e9fe301785410b06667cf07d2bc0386892f510c7f5c6cf8"
+        },
+        "sq8": {
+          "bytes": 78000000,
+          "path": "/mnt/hierarchical-100k/screen/scratch/cohere/sq8",
+          "sha256": "c16929252705c831c6846022eec46481fc004f521f0c0814a53d49fece8771e0"
+        }
+      },
+      "expected_cell_root_sha256": "89aee41edba2f4bc447fc5fb66ecee3f470e4ff50627c6f294da6208fdbcb6b2",
+      "original_build_config": {
+        "bytes": 1421,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/screen/measurement/cohere-build.json",
+        "sha256": "c481aaf478ec4a51a1cd34f1f26976cdaa08311ce19e885f64ecb2ec07f74c3b"
+      },
+      "original_generation_sha256": "233226f08d589f4d263c06aef8849ef3d57756c0625a5067608d889b40a270df",
+      "original_writer_config": {
+        "bytes": 33571,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/screen/measurement/cohere-writer.json",
+        "sha256": "9a8091a22087556e5f50355e8d4c3328ef160f0a1a897d11c6fcead29021bccf"
+      },
+      "output_cell_path": "/mnt/hierarchical-100k/screen/measurement/cohere-cells",
+      "writer_inputs": {
+        "order": {
+          "path": "/mnt/hierarchical-100k/screen/scratch/cohere/order",
+          "sha256": "e2314ca14f5aa6f08b02cc328b863c921e55b1461a413ad6d3d66e781ff42d50"
+        },
+        "raw": "/mnt/hierarchical-100k/screen/scratch/cohere/source",
+        "sq8": "/mnt/hierarchical-100k/screen/scratch/cohere/sq8"
+      }
+    },
+    "ReLAION": {
+      "build_inputs": {
+        "canonical": {
+          "bytes": 308000000,
+          "path": "/mnt/hierarchical-100k/screen/measurement/relaion-generation/canonical.bin",
+          "sha256": "c260b7fe0b6a54de98dfba3f2599d272242f724421064ed5ca18c0cd63e6283d"
+        },
+        "generation": {
+          "bytes": 34630,
+          "path": "/mnt/hierarchical-100k/screen/measurement/relaion-generation/manifest.json",
+          "sha256": "60893e05a256c8f04c633aa600828ba06d2cbc16cd9269f3c713d92b6e7796c9"
+        },
+        "mean": {
+          "bytes": 3072,
+          "path": "/mnt/hierarchical-100k/screen/measurement/relaion-generation/plane/mean.bin",
+          "sha256": "197a8ead172a5a41e029c8f0c9d39b981150c69fc3b0367316fb89c920eb1beb"
+        },
+        "order": {
+          "bytes": 800000,
+          "path": "/mnt/hierarchical-100k/screen/scratch/relaion/order",
+          "sha256": "22abeb087000ea2978c4fef8e85c2f7fda4e4b22c4e5126ba37a1c19816fab18"
+        },
+        "plane": {
+          "bytes": 651,
+          "path": "/mnt/hierarchical-100k/screen/measurement/relaion-generation/plane/manifest.json",
+          "sha256": "762eb65ab8a4f6da9b0c96c71c1908e0c9abde4368f0124c879c267b18a8eefe"
+        },
+        "records": {
+          "bytes": 20000000,
+          "path": "/mnt/hierarchical-100k/screen/measurement/relaion-generation/plane/records.bin",
+          "sha256": "624e63de5905210bde24a4e7752573d6811d9fa5142e5b529ff0e9f65054ce83"
+        },
+        "sq8": {
+          "bytes": 78000000,
+          "path": "/mnt/hierarchical-100k/screen/scratch/relaion/sq8",
+          "sha256": "be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b"
+        }
+      },
+      "expected_cell_root_sha256": "fec06fb0eee4a1380a42356af3ef43d38137a95b4bdb09d457b434b5369c076b",
+      "original_build_config": {
+        "bytes": 1428,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/screen/measurement/relaion-build.json",
+        "sha256": "caa461189e80aa0a8e49bed01b4fbf0b129ad2f5120c4f378f8a20d1f0d3bf5d"
+      },
+      "original_generation_sha256": "60893e05a256c8f04c633aa600828ba06d2cbc16cd9269f3c713d92b6e7796c9",
+      "original_writer_config": {
+        "bytes": 33527,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/screen/measurement/relaion-writer.json",
+        "sha256": "8879e10fb0545d38dc08f91ba9c851439264b6b225664b09a8d29567937dfe86"
+      },
+      "output_cell_path": "/mnt/hierarchical-100k/screen/measurement/relaion-cells",
+      "writer_inputs": {
+        "order": {
+          "path": "/mnt/hierarchical-100k/screen/scratch/relaion/order",
+          "sha256": "22abeb087000ea2978c4fef8e85c2f7fda4e4b22c4e5126ba37a1c19816fab18"
+        },
+        "raw": "/mnt/hierarchical-100k/screen/scratch/relaion/raw",
+        "sq8": "/mnt/hierarchical-100k/screen/scratch/relaion/sq8"
+      }
+    }
+  },
+  "original_binaries": {
+    "cells": {
+      "bytes": 4837336,
+      "path": "/mnt/hierarchical-100k/screen/scratch/native-cells",
+      "sha256": "a2d88fb01d02b94ca888819d1a006ae780f50b0f15526b65a6c718c965c63dbb"
+    },
+    "writer": {
+      "bytes": 4293168,
+      "path": "/mnt/hierarchical-100k/screen/scratch/native-writer",
+      "sha256": "adde84b81925b22a91e046e50266a648b65cef37414c493c14e4058be1d1612d"
+    }
+  },
+  "original_local_config": {
+    "bytes": 69631,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/screen/local-config.json",
+    "sha256": "577c246522e6feee267d37038422a31358ec0fc627817671b1d00439e6881539"
+  },
+  "physical_s3_query_measured": false,
+  "resource_limits": {
+    "build_max_output_bytes": 268435456,
+    "build_max_payload_bytes": 67108864,
+    "cpu_affinity": [
+      0,
+      1
+    ],
+    "max_evaluator_payload_bytes": 134217728,
+    "max_log_bytes": 16777216,
+    "max_query_payload_bytes": 134217728,
+    "max_resident_directory_payload_bytes": 402653184,
+    "max_result_bytes": 134217728,
+    "memory_max_bytes": 2147483648,
+    "scratch_max_bytes": 17179869184,
+    "timeout_seconds": 1669,
+    "writer_max_memory_bytes": 67108864
+  },
+  "rules": [
+    "Only original source-qualified writer/cells binaries and exact terminal-authenticated original config bytes may reconstruct the frozen cells",
+    "Create all original absolute input paths inside one disposable owned worker root; reject existing or symlinked destinations",
+    "Verify every raw/order/SQ8/mean/records/canonical/generation descriptor before build; retain original config SHA and flags",
+    "Both exact root hashes must match before any query; mismatch is INVALID, never a new-layout control",
+    "Authenticate and retain recovered manifest/directories.bin/cells.bin identities before cleanup for reproducible post-run audit",
+    "Only separately qualified new nomination binary may run hierarchy/global policies; no new builder or scoring arm",
+    "Seal both datasets and both policies before offline truth; authenticate per-query hierarchy coverage parity against original traces"
+  ],
+  "schema": "borsuk-global-leaf-exact-layout-recovery-admission-v1",
+  "scientific_result": false,
+  "source_proof": {
+    "bytes": 1566,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/screen/native-proof.json",
+    "sha256": "e96f9baf9cbad62ffae1efe3fe822439e63177aef736a467d0ac32f87513fc6f"
+  },
+  "state": "PROSPECTIVE_NOT_EXECUTED"
+}
