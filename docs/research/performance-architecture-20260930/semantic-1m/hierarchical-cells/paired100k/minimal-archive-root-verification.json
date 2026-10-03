@@ -1,0 +1,26 @@
+{
+  "archive_pilot": "PENDING",
+  "config_sha256": "f4908db3124b74e7136cd03b053411447a776b0ccf78e49bdf4842123759c1db",
+  "cpu_affinity": [
+    0
+  ],
+  "cpu_quota_percent": 100,
+  "cpu_seconds": 9.118,
+  "external_git_shim_used": false,
+  "log_sha256": "93d134918cb1987beb13884b13fbc54782dafa620807e38f8dae4bd6e51a041a",
+  "memory_limit_bytes": 268435456,
+  "native_identity_sha256": "690a545e782b7f732acf9c78b71d2d40a465fd308011762a255d2b74f96742ce",
+  "native_source_file_count": 401,
+  "old_config_sha256": "36ccb229fc8d3abe2b31580f2ec4848f84baf3310d954809630e7408ee1b9612",
+  "original_session": 84674,
+  "reported_memory_peak": "98.5M",
+  "schema": "borsuk-minimal-controller-archive-root-verification-v1",
+  "scientific_result_available": false,
+  "self_check_exit_status": 0,
+  "source_archive_paths_count": 445,
+  "source_archive_paths_sha256": "74222f7bbbeb6277e8208d3c90e2ca0dd85778a054feeb64a5e7cc5cbe0606ca",
+  "source_commit": "17989e60365e7709b26b9b6c8560ee636932bc8f",
+  "swap_bytes": 0,
+  "tasks_max": 512,
+  "wall_seconds": 11.225
+}
