@@ -1,5 +1,7 @@
 {
+  "canary_schema": "borsuk-hierarchical-100k-infrastructure-canary-v2",
   "closeout": "Sync terminal artifacts, stop immediately, terminate and wait for every owned instance before collection",
+  "deployment_schema": "borsuk-hierarchical-100k-spot-v2",
   "failure_policy": {
     "architecture_scope": "These prospective arm thresholds are not universal product or 100M gates",
     "completed_quality_failure": "FAIL for this frozen arm; preserve result and choose one causal redesign",
@@ -26,9 +28,9 @@
       "state": "PASS"
     },
     {
-      "evidence": "archive-pilot.json",
+      "evidence": "minimal-archive-pilot.json",
       "gate": "bounded_source_archive_preparation",
-      "required": "Streamed archive original job closed0 under1GiB/noSwap/CPU1; all SIGTERM ACK IDs fsynced and cleanup verified",
+      "required": "Explicit445-file roster including all401 qualified native files; original minimal archive pilot closed0 under256MiB/noSwap/CPU1; unchanged native/source and SIGTERM ACKfsync/cleanup proof",
       "scientific_measurement": false,
       "state": "PASS"
     },

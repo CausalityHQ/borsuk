@@ -1,0 +1,27 @@
+{
+  "archive_bytes": 3660376,
+  "archive_sha256": "cd14a8a83d78ee781fffb6bcfc5a0c6c0215bfc7cdf35053589367eaf7498851",
+  "cloud_execution": false,
+  "config_sha256": "f4908db3124b74e7136cd03b053411447a776b0ccf78e49bdf4842123759c1db",
+  "declared_native_file_count": 401,
+  "exit_status": 0,
+  "host_memory_psi_avg10_after": 0.0,
+  "log_sha256": "36d863fc8c277e165c36d5539250e79cd78655e2aebbde4b43e53fa805883724",
+  "member_count": 445,
+  "original_session": 7564,
+  "original_unit_terminal": true,
+  "resources": {
+    "cpu.stat": "usage_usec 2387608\nuser_usec 2069526\nsystem_usec 318082\nnice_usec 0\ncore_sched.force_idle_usec 0\nnr_periods 24\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+    "memory.max": "268435456",
+    "memory.peak": "46571520",
+    "memory.swap.max": "0",
+    "memory.swap.peak": "0"
+  },
+  "schema": "borsuk-minimal-source-archive-pilot-v1",
+  "scientific_result_available": false,
+  "source_archive_paths_sha256": "74222f7bbbeb6277e8208d3c90e2ca0dd85778a054feeb64a5e7cc5cbe0606ca",
+  "source_commit": "09bd83a4ba197e29ee9933d801a17e4089045763",
+  "systemd_unit": "borsuk-minimal-archive-pilot-20261003.service",
+  "wall_seconds": 1.8199881300097331
+}
