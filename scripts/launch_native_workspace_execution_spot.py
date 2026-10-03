@@ -66,7 +66,8 @@ HIERARCHICAL_CELLS_REQUIRED_TESTS = {
         'loss_receipt_separates_boundary_recovery_nomination_and_final_ranking',
         'cell_local_block_nomination_omits_other_blocks_even_for_tied_codes',
         'resident_directory_preload_is_admitted_charged_and_has_no_query_reads',
-        'resident_preload_rejects_corrupt_unused_interior_page')),
+        'resident_preload_rejects_corrupt_unused_interior_page',
+        'whole_cell_matches_two_stage_with_one_wave_and_full_payload_charges')),
     'hierarchical-cell-bin-tests': ('tests::configurations_reject_unknown_fields_and_truth_in_requests',)}
 HIERARCHICAL_CELLS_STAGES = tuple((name, command.split()) for name, command in (
     ('hierarchical-cell-tests', 'cargo test --locked -p borsuk --lib hierarchical_semantic_cells::'),
