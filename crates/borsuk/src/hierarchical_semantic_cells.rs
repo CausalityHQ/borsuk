@@ -2642,3 +2642,1820 @@ mod tests {
         assert!(error.to_string().contains("directory page SHA256"));
     }
 }
+
+/// Source-neighborhood screening only; this API neither builds an index nor
+/// accepts queries, truth, nomination policy, or a parameter sweep.
+pub mod split_balance_diagnostic {
+    use super::*;
+    use serde_json::{Value, json};
+    use std::{fmt, os::unix::fs::MetadataExt, path::Component};
+
+    /// Exact diagnostic configuration, with all numerical controls frozen here.
+    pub const CONFIG_SCHEMA: &str = "borsuk-constrained-split-config-v1";
+    /// Terminal report marker; a PASS is not ANN recall or product qualification.
+    pub const REPORT_SCHEMA: &str = "borsuk-constrained-split-diagnostic-v1";
+    const AUTH_CAP: usize = 1024 * 1024 * 1024;
+    const MEMORY_CAP: usize = 512 * 1024 * 1024;
+    const DIRECTORY_CAP: usize = 16 * 1024 * 1024;
+    const OUTPUT_CAP: usize = 2 * 1024 * 1024;
+    const PARENT_ROWS_CAP: usize = 32768;
+    const CANDIDATES: usize = 8;
+    const MIN_VERIFIED: usize = 4;
+    const PANEL: usize = 128;
+    const NEIGHBORS: usize = 16;
+
+    /// Exact original artifacts. Paths are local; nothing is fetched or decoded
+    /// from SQ8 into original vectors. Root pins bind canonical/order identities.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct DatasetInputs {
+        /// Original hierarchical manifest.
+        pub root: Artifact,
+        /// Complete original directory bytes.
+        pub directories: Artifact,
+        /// Complete original cells, including their authenticated ID rosters.
+        pub cells: Artifact,
+        /// Original normalized ID + FP32 canonical records.
+        pub canonical: Artifact,
+        /// Original physical-to-source-ordinal LE u64 permutation.
+        pub order: Artifact,
+    }
+
+    /// Strict source-only inputs. Only the two original datasets are admitted;
+    /// no query/truth fields, numerical overrides, or optional sweep controls.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct Config {
+        /// Must equal [`CONFIG_SCHEMA`].
+        pub schema: String,
+        /// Exactly `cohere` and `relaion`, in this deterministic map order.
+        pub datasets: BTreeMap<String, DatasetInputs>,
+    }
+
+    #[derive(Debug)]
+    struct InputUnavailable;
+    impl fmt::Display for InputUnavailable {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("original input unavailable; no download or reconstruction")
+        }
+    }
+    impl Error for InputUnavailable {}
+
+    fn reserved<T>(capacity: usize) -> Result<Vec<T>> {
+        require(
+            capacity
+                .checked_mul(std::mem::size_of::<T>())
+                .is_some_and(|bytes| bytes <= MEMORY_CAP / 4),
+            "diagnostic allocation cap/overflow",
+        )?;
+        let mut values = Vec::new();
+        values.try_reserve_exact(capacity)?;
+        Ok(values)
+    }
+    fn filled<T: Clone>(count: usize, value: T) -> Result<Vec<T>> {
+        let mut values = reserved(count)?;
+        values.resize(count, value);
+        Ok(values)
+    }
+
+    // Walk pinned directory handles, so neither a final symlink nor a symlink
+    // in an ancestor can redirect an input/output. NONBLOCK rejects FIFOs
+    // without hanging. This does not alter the prototype's existing file API.
+    fn secure_open(path: &Path, flags: rustix::fs::OFlags) -> Result<File> {
+        require(
+            path.is_absolute() && path.as_os_str().len() <= 4096,
+            "diagnostic absolute bounded local path",
+        )?;
+        let parts = path.components().collect::<Vec<_>>();
+        require(
+            !parts.is_empty()
+                && parts.len() <= 128
+                && parts[1..]
+                    .iter()
+                    .all(|part| matches!(part, Component::Normal(_))),
+            "diagnostic path components",
+        )?;
+        let mut directory = rustix::fs::open(
+            "/",
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )?;
+        if parts.len() == 1 {
+            return Ok(File::from(directory));
+        }
+        for (index, component) in parts[1..].iter().enumerate() {
+            let Component::Normal(name) = component else {
+                unreachable!()
+            };
+            let last = index + 2 == parts.len();
+            let fd = rustix::fs::openat(
+                &directory,
+                *name,
+                (if last {
+                    flags
+                } else {
+                    rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY
+                }) | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::NONBLOCK
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            )?;
+            if last {
+                return Ok(File::from(fd));
+            }
+            directory = fd;
+        }
+        Err("diagnostic empty path".into())
+    }
+
+    // Keep the descriptor and stat identity. Per-row digests bind later source
+    // reads to the initial authenticated stream, without streaming 1GiB twice.
+    struct Pinned {
+        file: File,
+        stamp: (u64, u64, u64, i64, i64, i64, i64),
+    }
+    fn stamp(file: &File) -> Result<(u64, u64, u64, i64, i64, i64, i64)> {
+        let m = file.metadata()?;
+        require(m.is_file(), "diagnostic regular file")?;
+        Ok((
+            m.dev(),
+            m.ino(),
+            m.len(),
+            m.mtime(),
+            m.mtime_nsec(),
+            m.ctime(),
+            m.ctime_nsec(),
+        ))
+    }
+    impl Pinned {
+        fn open(a: &Artifact, cap: usize) -> Result<Self> {
+            require(
+                a.bytes > 0 && a.bytes <= cap && valid_sha(&a.sha256),
+                "diagnostic artifact descriptor/cap",
+            )?;
+            let file = match secure_open(&a.path, rustix::fs::OFlags::RDONLY) {
+                Ok(file) => file,
+                Err(error)
+                    if error.downcast_ref::<rustix::io::Errno>()
+                        == Some(&rustix::io::Errno::NOENT) =>
+                {
+                    return Err(Box::new(InputUnavailable));
+                }
+                Err(error) => return Err(error),
+            };
+            let identity = stamp(&file)?;
+            require(
+                identity.2 == a.bytes as u64,
+                "diagnostic exact artifact length",
+            )?;
+            Ok(Self {
+                file,
+                stamp: identity,
+            })
+        }
+        fn unchanged(&self) -> Result<()> {
+            require(
+                stamp(&self.file)? == self.stamp,
+                "diagnostic input changed during replay",
+            )
+        }
+        fn small(a: &Artifact, cap: usize, budget: &mut Budget) -> Result<Vec<u8>> {
+            let pin = Self::open(a, cap)?;
+            budget.admit(a.bytes)?;
+            let body = pin.at(0, a.bytes)?;
+            require(hash(&body) == a.sha256, "diagnostic artifact SHA256")?;
+            budget.verified(a.bytes)?;
+            budget.poll()?;
+            pin.unchanged()?;
+            Ok(body)
+        }
+        fn at(&self, offset: usize, bytes: usize) -> Result<Vec<u8>> {
+            require(
+                offset
+                    .checked_add(bytes)
+                    .is_some_and(|end| end as u64 <= self.stamp.2),
+                "diagnostic range/overflow",
+            )?;
+            let mut body = filled(bytes, 0_u8)?;
+            self.file.read_exact_at(&mut body, offset as u64)?;
+            Ok(body)
+        }
+    }
+
+    #[derive(Default)]
+    struct Counts {
+        admitted_bytes: usize,
+        auth_bytes: usize,
+        canonical_auth_rows: usize,
+        canonical_replay_rows: usize,
+        parent_rows: usize,
+        trainer_calls: usize,
+        trainer_distance_upper_bound: usize,
+        assignment_distances: usize,
+        neighbor_distances: usize,
+    }
+    struct Budget {
+        start: Instant,
+        counts: Counts,
+        cgroup: Option<PathBuf>,
+    }
+    fn cgroup_controls(body: &str, memory: &str, swap: &str) -> Result<()> {
+        let fields = body.split_whitespace().collect::<Vec<_>>();
+        require(fields.len() == 2, "diagnostic cpu.max fields")?;
+        let quota = fields[0].parse::<u64>()?;
+        let period = fields[1].parse::<u64>()?;
+        let memory = memory.trim().parse::<usize>()?;
+        require(
+            quota > 0
+                && period > 0
+                && quota <= period
+                && memory > 0
+                && memory <= MEMORY_CAP
+                && swap.trim() == "0",
+            "diagnostic CPU1/512Mi/noSwap controls",
+        )
+    }
+    impl Budget {
+        fn new(enforce: bool) -> Result<Self> {
+            let cgroup = if enforce {
+                let body = fs::read_to_string("/proc/self/cgroup")?;
+                let path = body
+                    .lines()
+                    .find_map(|line| line.strip_prefix("0::"))
+                    .ok_or("diagnostic requires cgroup v2")?;
+                require(
+                    Path::new(path).is_absolute()
+                        && !Path::new(path)
+                            .components()
+                            .any(|p| matches!(p, Component::ParentDir)),
+                    "diagnostic cgroup path",
+                )?;
+                let path = Path::new("/sys/fs/cgroup").join(path.trim_start_matches('/'));
+                cgroup_controls(
+                    &fs::read_to_string(path.join("cpu.max"))?,
+                    &fs::read_to_string(path.join("memory.max"))?,
+                    &fs::read_to_string(path.join("memory.swap.max"))?,
+                )?;
+                Some(path)
+            } else {
+                None
+            };
+            let budget = Self {
+                start: Instant::now(),
+                counts: Counts::default(),
+                cgroup,
+            };
+            budget.poll()?;
+            Ok(budget)
+        }
+        fn poll(&self) -> Result<()> {
+            require(
+                self.start.elapsed().as_secs_f64() < 180.,
+                "diagnostic 180s deadline",
+            )?;
+            if let Some(path) = &self.cgroup {
+                cgroup_controls(
+                    &fs::read_to_string(path.join("cpu.max"))?,
+                    &fs::read_to_string(path.join("memory.max"))?,
+                    &fs::read_to_string(path.join("memory.swap.max"))?,
+                )?;
+                let current = fs::read_to_string(path.join("memory.current"))?
+                    .trim()
+                    .parse::<usize>()?;
+                let peak = fs::read_to_string(path.join("memory.peak"))?
+                    .trim()
+                    .parse::<usize>()?;
+                require(
+                    current <= MEMORY_CAP && peak <= MEMORY_CAP,
+                    "diagnostic charged memory cap",
+                )?;
+                let status = fs::read_to_string("/proc/self/status")?;
+                let swap = status
+                    .lines()
+                    .find_map(|line| line.strip_prefix("VmSwap:"))
+                    .and_then(|line| line.split_whitespace().next())
+                    .ok_or("diagnostic process swap accounting")?
+                    .parse::<usize>()?;
+                require(swap == 0, "diagnostic process swap")?;
+            }
+            Ok(())
+        }
+        fn admit(&mut self, bytes: usize) -> Result<()> {
+            let admitted = self
+                .counts
+                .admitted_bytes
+                .checked_add(bytes)
+                .ok_or("diagnostic auth count overflow")?;
+            require(
+                admitted <= AUTH_CAP,
+                "diagnostic 1GiB cumulative input read cap",
+            )?;
+            self.counts.admitted_bytes = admitted;
+            Ok(())
+        }
+        fn verified(&mut self, bytes: usize) -> Result<()> {
+            let verified = self
+                .counts
+                .auth_bytes
+                .checked_add(bytes)
+                .ok_or("diagnostic verified read count overflow")?;
+            require(
+                verified <= AUTH_CAP && verified <= self.counts.admitted_bytes,
+                "diagnostic cumulative verified input read cap/admission",
+            )?;
+            self.counts.auth_bytes = verified;
+            Ok(())
+        }
+        fn parents(&mut self, rows: usize) -> Result<()> {
+            self.counts.parent_rows = self
+                .counts
+                .parent_rows
+                .checked_add(rows)
+                .ok_or("diagnostic parent count overflow")?;
+            require(
+                self.counts.parent_rows <= PARENT_ROWS_CAP,
+                "diagnostic parent row cap",
+            )
+        }
+        fn receipt(&self) -> Result<Value> {
+            let observed = if let Some(path) = &self.cgroup {
+                json!({"path":path,"cpu_max":fs::read_to_string(path.join("cpu.max"))?.trim(),
+                    "memory_max":fs::read_to_string(path.join("memory.max"))?.trim(),
+                    "memory_swap_max":fs::read_to_string(path.join("memory.swap.max"))?.trim(),
+                    "memory_peak_bytes":fs::read_to_string(path.join("memory.peak"))?.trim().parse::<usize>()?})
+            } else {
+                Value::Null
+            };
+            Ok(json!({"elapsed_seconds":self.start.elapsed().as_secs_f64(),
+                "limits":{"cpu":1,"charged_memory_bytes":MEMORY_CAP,"swap_bytes":0,
+                    "seconds":180,"output_bytes":OUTPUT_CAP,"parent_rows":PARENT_ROWS_CAP,
+                    "cumulative_authenticated_input_read_bytes":AUTH_CAP}, "observed_controls":observed,
+                "operations":{"cumulative_verified_input_read_bytes":self.counts.auth_bytes,
+                    "admitted_authentication_read_bytes":self.counts.admitted_bytes,
+                    "canonical_rereads_charged_to_same_limit":true,
+                    "canonical_authentication_rows":self.counts.canonical_auth_rows,
+                    "canonical_replay_rows":self.counts.canonical_replay_rows,
+                    "parent_rows":self.counts.parent_rows,"trainer_calls":self.counts.trainer_calls,
+                    "trainer_requested_max_iterations":4,
+                    "trainer_distance_evaluations_upper_bound":self.counts.trainer_distance_upper_bound,
+                    "assignment_distance_evaluations":self.counts.assignment_distances,
+                    "cosine_neighbor_distance_evaluations":self.counts.neighbor_distances}}))
+        }
+    }
+
+    fn descriptors(config: &Config) -> Result<()> {
+        require(
+            config.schema == CONFIG_SCHEMA
+                && config.datasets.len() == 2
+                && config.datasets.contains_key("cohere")
+                && config.datasets.contains_key("relaion"),
+            "diagnostic frozen schema/datasets",
+        )?;
+        let mut paths = BTreeSet::new();
+        let mut total = 0_usize;
+        for inputs in config.datasets.values() {
+            for (a, cap) in [
+                (&inputs.root, ROOT_CAP),
+                (&inputs.directories, DIRECTORY_CAP),
+                (&inputs.cells, 100_000 * 988),
+                (&inputs.canonical, 100_000 * (8 + 4 * 768)),
+                (&inputs.order, 100_000 * 8),
+            ] {
+                require(
+                    a.path.is_absolute()
+                        && paths.insert(&a.path)
+                        && a.bytes > 0
+                        && a.bytes <= cap
+                        && valid_sha(&a.sha256),
+                    "diagnostic declared artifact limits/uniqueness",
+                )?;
+                total = total
+                    .checked_add(a.bytes)
+                    .ok_or("diagnostic declared input overflow")?;
+            }
+        }
+        require(
+            total <= AUTH_CAP - ROOT_CAP,
+            "diagnostic declared streamed input cap",
+        )
+    }
+
+    fn geometry(manifest: &Manifest, inputs: &DatasetInputs) -> Result<()> {
+        let rows = manifest.rows;
+        let dimensions = manifest.dimensions;
+        require(
+            manifest.schema == SCHEMA
+                && manifest.input.schema == BUILD_SCHEMA
+                && rows == 100_000
+                && dimensions == 768
+                && manifest.seed == NATIVE_CODEC_SEED
+                && (1..=512).contains(&manifest.input.cell_rows)
+                && (2..=1024).contains(&manifest.input.sample_rows)
+                && (1..=32).contains(&manifest.input.max_depth)
+                && (1..=rows).contains(&manifest.build.cells)
+                && (1..=rows).contains(&manifest.build.directories)
+                && manifest.build.max_cell_rows <= manifest.input.cell_rows
+                && manifest.build.max_depth <= manifest.input.max_depth
+                && manifest.mean.len() == dimensions
+                && manifest.mean.iter().all(|v| v.is_finite())
+                && manifest.low.len() == dimensions
+                && manifest.low.iter().all(|v| v.is_finite())
+                && manifest.step.len() == dimensions
+                && manifest.step.iter().all(|v| v.is_finite() && *v > 0.)
+                && manifest.directory_bytes == inputs.directories.bytes
+                && manifest.directory_sha256 == inputs.directories.sha256
+                && manifest.cell_bytes == inputs.cells.bytes
+                && manifest.input.canonical.bytes == inputs.canonical.bytes
+                && manifest.input.canonical.sha256 == inputs.canonical.sha256
+                && inputs.canonical.bytes == rows * (8 + 4 * dimensions)
+                && manifest.input.order.bytes == inputs.order.bytes
+                && manifest.input.order.sha256 == inputs.order.sha256
+                && inputs.order.bytes == rows * 8
+                && manifest.input.records.bytes % rows == 0
+                && (9..=200).contains(&(manifest.input.records.bytes / rows))
+                && in_bounds(&manifest.root_directory, manifest.directory_bytes, PAGE_CAP),
+            "diagnostic exact original root/geometry/pin binding",
+        )?;
+        require(
+            manifest
+                .directory_bytes
+                .checked_add(manifest.cell_bytes)
+                .and_then(|n| n.checked_add(inputs.root.bytes))
+                == Some(manifest.build.output_bytes),
+            "diagnostic build output byte binding",
+        )
+    }
+
+    struct Source {
+        pin: Pinned,
+        inverse: Vec<usize>,
+        row_hashes: Vec<[u8; 32]>,
+        width: usize,
+        dimensions: usize,
+    }
+    fn vector(body: &[u8], dimensions: usize) -> Result<Vec<f32>> {
+        require(
+            body.len() == 8 + 4 * dimensions,
+            "diagnostic canonical row geometry",
+        )?;
+        let mut values = reserved(dimensions)?;
+        for word in body[8..].chunks_exact(4) {
+            let value = f32::from_le_bytes(word.try_into()?);
+            require(value.is_finite(), "diagnostic nonfinite source")?;
+            values.push(value);
+        }
+        let normalized = cosine_vector(&values)?;
+        require(
+            values
+                .iter()
+                .zip(normalized.iter())
+                .all(|(a, b)| (a - b).abs() <= 1e-5),
+            "diagnostic original source normalization",
+        )?;
+        Ok(values)
+    }
+    impl Source {
+        fn authenticate(
+            inputs: &DatasetInputs,
+            rows: usize,
+            dimensions: usize,
+            budget: &mut Budget,
+        ) -> Result<Self> {
+            let order = Pinned::small(&inputs.order, rows * 8, budget)?;
+            let mut inverse = filled(rows, usize::MAX)?;
+            for (physical, word) in order.chunks_exact(8).enumerate() {
+                let id = usize::try_from(u64::from_le_bytes(word.try_into()?))?;
+                require(
+                    id < rows && inverse[id] == usize::MAX,
+                    "diagnostic source order permutation",
+                )?;
+                inverse[id] = physical;
+            }
+            let pin = Pinned::open(&inputs.canonical, inputs.canonical.bytes)?;
+            budget.admit(inputs.canonical.bytes)?;
+            let width = 8 + 4 * dimensions;
+            let mut row_hashes = filled(rows, [0_u8; 32])?;
+            let mut body = filled(width, 0_u8)?;
+            let mut digest = Sha256::new();
+            let mut reader = std::io::BufReader::with_capacity(65536, &pin.file);
+            for physical in 0..rows {
+                reader.read_exact(&mut body)?;
+                let id = usize::try_from(i64::from_le_bytes(body[..8].try_into()?))?;
+                require(
+                    id < rows && inverse[id] == physical,
+                    "diagnostic canonical/source order ID binding",
+                )?;
+                vector(&body, dimensions)?;
+                digest.update(&body);
+                row_hashes[id] = Sha256::digest(&body).into();
+                budget.counts.canonical_auth_rows += 1;
+                if physical % 256 == 0 {
+                    budget.poll()?;
+                }
+            }
+            require(
+                reader.read(&mut [0])? == 0
+                    && format!("{:x}", digest.finalize()) == inputs.canonical.sha256,
+                "diagnostic original canonical SHA256/EOF",
+            )?;
+            budget.verified(inputs.canonical.bytes)?;
+            budget.poll()?;
+            pin.unchanged()?;
+            Ok(Self {
+                pin,
+                inverse,
+                row_hashes,
+                width,
+                dimensions,
+            })
+        }
+        fn rows(&self, ids: &[usize], budget: &mut Budget) -> Result<Vec<Vec<f32>>> {
+            budget.parents(ids.len())?;
+            budget.admit(
+                ids.len()
+                    .checked_mul(self.width)
+                    .ok_or("diagnostic canonical replay byte overflow")?,
+            )?;
+            let mut rows = reserved(ids.len())?;
+            for (slot, &id) in ids.iter().enumerate() {
+                require(id < self.inverse.len(), "diagnostic source ordinal bounds")?;
+                let body = self.pin.at(
+                    self.inverse[id]
+                        .checked_mul(self.width)
+                        .ok_or("diagnostic canonical offset overflow")?,
+                    self.width,
+                )?;
+                let row_hash: [u8; 32] = Sha256::digest(&body).into();
+                require(
+                    row_hash == self.row_hashes[id]
+                        && i64::from_le_bytes(body[..8].try_into()?) == id as i64,
+                    "diagnostic replay canonical authentication",
+                )?;
+                budget.verified(self.width)?;
+                rows.push(vector(&body, self.dimensions)?);
+                budget.counts.canonical_replay_rows += 1;
+                if slot % 64 == 0 {
+                    budget.poll()?;
+                }
+            }
+            self.pin.unchanged()?;
+            Ok(rows)
+        }
+    }
+
+    fn rosters(
+        prototype: &Prototype,
+        inputs: &DatasetInputs,
+        budget: &mut Budget,
+    ) -> Result<Vec<usize>> {
+        budget.admit(inputs.cells.bytes)?;
+        let mut leaves = reserved(prototype.manifest.build.cells)?;
+        for page in prototype.directories.values() {
+            for node in &page.children {
+                if let Target::Cell { cell } = &node.target {
+                    leaves.push((cell.id, node.rows, cell));
+                }
+            }
+        }
+        leaves.sort_unstable_by_key(|item| item.0);
+        let mut roster = reserved(prototype.rows())?;
+        let mut seen = filled(prototype.rows(), false)?;
+        let mut digest = Sha256::new();
+        let mut offset = 0;
+        for (_, rows, cell) in leaves {
+            budget.poll()?;
+            require(
+                cell.whole.offset == offset && cell.first_row == roster.len(),
+                "diagnostic contiguous original cell geometry",
+            )?;
+            let body = read_checked_range(&prototype.cells, cell.whole.offset, cell.whole.bytes)?;
+            require(
+                hash(&body) == cell.whole.sha256
+                    && hash(&body[..cell.source.bytes]) == cell.source.sha256,
+                "diagnostic original whole/source cell SHA256",
+            )?;
+            digest.update(&body);
+            let width = 8 + prototype.codec.record_bytes();
+            for (slot, record) in body[..cell.source.bytes].chunks_exact(width).enumerate() {
+                let id = usize::try_from(i64::from_le_bytes(record[..8].try_into()?))?;
+                let sq8_start = cell.source.bytes + slot * (12 + prototype.dimensions());
+                require(
+                    id < seen.len()
+                        && !seen[id]
+                        && i64::from_le_bytes(body[sq8_start..sq8_start + 8].try_into()?)
+                            == id as i64,
+                    "diagnostic original complete/unique source roster and SQ8 ID binding",
+                )?;
+                let norm = f32::from_le_bytes(body[sq8_start + 8..sq8_start + 12].try_into()?);
+                require(
+                    norm.is_finite() && norm > 0.,
+                    "diagnostic SQ8 stored norm geometry",
+                )?;
+                seen[id] = true;
+                roster.push(id);
+            }
+            require(
+                cell.source.bytes == rows * width,
+                "diagnostic source roster size",
+            )?;
+            for span in &cell.refinement {
+                let start = span.offset - cell.whole.offset;
+                require(
+                    hash(&body[start..start + span.bytes]) == span.sha256,
+                    "diagnostic original refinement SHA256",
+                )?;
+            }
+            offset += body.len();
+        }
+        require(
+            roster.len() == prototype.rows()
+                && seen.iter().all(|v| *v)
+                && offset == inputs.cells.bytes
+                && format!("{:x}", digest.finalize()) == inputs.cells.sha256,
+            "diagnostic original cells complete stream SHA256",
+        )?;
+        budget.verified(offset)?;
+        budget.poll()?;
+        Ok(roster)
+    }
+    fn read_checked_range(file: &File, offset: usize, bytes: usize) -> Result<Vec<u8>> {
+        let mut body = filled(bytes, 0_u8)?;
+        file.read_exact_at(&mut body, offset as u64)?;
+        Ok(body)
+    }
+    fn members(
+        node: &Node,
+        prototype: &Prototype,
+        roster: &[usize],
+        depth: usize,
+        ids: &mut Vec<usize>,
+    ) -> Result<()> {
+        require(
+            depth <= prototype.manifest.input.max_depth + 1,
+            "diagnostic original directory depth",
+        )?;
+        match &node.target {
+            Target::Cell { cell } => {
+                ids.extend_from_slice(&roster[cell.first_row..cell.first_row + node.rows])
+            }
+            Target::Directory { span } => {
+                for child in &prototype
+                    .directories
+                    .get(&span.offset)
+                    .ok_or("diagnostic missing directory")?
+                    .children
+                {
+                    members(child, prototype, roster, depth + 1, ids)?;
+                }
+            }
+        }
+        Ok(())
+    }
+    // Frozen hash encodings use the raw 32-byte root digest followed by LE
+    // u64 directory offset, then (for panel rows) LE u64 source ordinal.
+    fn root_digest(root: &str) -> [u8; 32] {
+        // Descriptor validation precedes all calls. Decode without allocating.
+        let mut bytes = [0_u8; 32];
+        for (index, pair) in root.as_bytes().chunks_exact(2).enumerate() {
+            let digit = |value: u8| {
+                if value <= b'9' {
+                    value - b'0'
+                } else {
+                    value - b'a' + 10
+                }
+            };
+            bytes[index] = digit(pair[0]) * 16 + digit(pair[1]);
+        }
+        bytes
+    }
+    fn node_key(root: &str, offset: usize) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(root_digest(root));
+        digest.update((offset as u64).to_le_bytes());
+        digest.finalize().into()
+    }
+    fn row_key(root: &str, offset: usize, ordinal: usize) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(root_digest(root));
+        digest.update((offset as u64).to_le_bytes());
+        digest.update((ordinal as u64).to_le_bytes());
+        digest.finalize().into()
+    }
+    fn candidate_offsets(prototype: &Prototype, root: &str) -> Result<Vec<usize>> {
+        freeze_candidates(
+            root,
+            prototype.directories.iter().filter_map(|(&offset, page)| {
+                (page.children.len() == 2)
+                    .then(|| (offset, page.children[0].rows, page.children[1].rows))
+            }),
+            prototype.directories.len(),
+        )
+    }
+    fn freeze_candidates(
+        root: &str,
+        pages: impl Iterator<Item = (usize, usize, usize)>,
+        capacity: usize,
+    ) -> Result<Vec<usize>> {
+        let mut offsets = reserved(capacity)?;
+        for (offset, a, b) in pages {
+            let rows = a
+                .checked_add(b)
+                .ok_or("diagnostic candidate row overflow")?;
+            if (513..=2048).contains(&rows) && a.abs_diff(b) <= 1 {
+                require(
+                    offsets.len() < capacity,
+                    "diagnostic candidate allocation bound",
+                )?;
+                offsets.push((node_key(root, offset), offset));
+            }
+        }
+        offsets.sort_unstable();
+        offsets.truncate(CANDIDATES);
+        let mut selected = reserved(offsets.len())?;
+        selected.extend(offsets.into_iter().map(|(_, offset)| offset));
+        Ok(selected)
+    }
+    fn id_hash(ids: impl Iterator<Item = usize>) -> String {
+        let mut digest = Sha256::new();
+        for id in ids {
+            digest.update((id as u64).to_le_bytes());
+        }
+        format!("{:x}", digest.finalize())
+    }
+    fn float_hash(values: impl Iterator<Item = f32>) -> String {
+        let mut digest = Sha256::new();
+        for value in values {
+            digest.update(value.to_le_bytes());
+        }
+        format!("{:x}", digest.finalize())
+    }
+
+    fn coordinate_split(ids: &[usize], rows: &[Vec<f32>]) -> Result<Vec<bool>> {
+        require(
+            ids.len() == rows.len() && rows.len() >= 2 && !rows[0].is_empty(),
+            "diagnostic coordinate geometry",
+        )?;
+        let dimensions = rows[0].len();
+        let mut minimum = filled(dimensions, f32::INFINITY)?;
+        let mut maximum = filled(dimensions, f32::NEG_INFINITY)?;
+        for row in rows {
+            require(
+                row.len() == dimensions && row.iter().all(|v| v.is_finite()),
+                "diagnostic coordinate nonfinite/geometry",
+            )?;
+            for coordinate in 0..dimensions {
+                minimum[coordinate] = minimum[coordinate].min(row[coordinate]);
+                maximum[coordinate] = maximum[coordinate].max(row[coordinate]);
+            }
+        }
+        require(
+            minimum
+                .iter()
+                .zip(&maximum)
+                .all(|(a, b)| (b - a).is_finite()),
+            "diagnostic coordinate range overflow",
+        )?;
+        let coordinate = (0..dimensions)
+            .max_by(|&a, &b| {
+                (maximum[a] - minimum[a])
+                    .total_cmp(&(maximum[b] - minimum[b]))
+                    .then(b.cmp(&a))
+            })
+            .ok_or("diagnostic empty coordinate")?;
+        let mut projected = reserved(ids.len())?;
+        projected.extend(
+            rows.iter()
+                .enumerate()
+                .map(|(slot, row)| (row[coordinate], ids[slot], slot)),
+        );
+        projected.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        let mut left = filled(ids.len(), false)?;
+        for item in &projected[..ids.len() / 2] {
+            left[item.2] = true;
+        }
+        Ok(left)
+    }
+    fn constrained(
+        ids: &[usize],
+        delta: &[f32],
+        original: &[bool],
+        fallback: &[bool],
+        degenerate: bool,
+    ) -> Result<Vec<bool>> {
+        require(
+            ids.len() >= 2
+                && ids.len() <= 2048
+                && ids.len() == original.len()
+                && ids.len() == fallback.len()
+                && (ids.len() == delta.len() || (degenerate && delta.is_empty()))
+                && delta.iter().all(|v| v.is_finite()),
+            "diagnostic constrained geometry/nonfinite",
+        )?;
+        let count = original.iter().filter(|v| **v).count();
+        let lower = ids.len().div_ceil(4);
+        let mut left = reserved(ids.len())?;
+        if count.min(ids.len() - count) >= lower {
+            left.extend_from_slice(original);
+        } else if degenerate {
+            left.extend_from_slice(fallback);
+        } else {
+            let n_a = delta
+                .iter()
+                .filter(|v| **v <= 0.)
+                .count()
+                .clamp(lower, ids.len() - lower);
+            let mut order = reserved(ids.len())?;
+            order.extend(
+                delta
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, value)| (*value, ids[slot], slot)),
+            );
+            order.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            left.resize(ids.len(), false);
+            for item in &order[..n_a] {
+                left[item.2] = true;
+            }
+        }
+        let count = left.iter().filter(|v| **v).count();
+        require(
+            count.min(ids.len() - count) >= lower,
+            "diagnostic complete balanced constrained partition",
+        )?;
+        Ok(left)
+    }
+    struct Replay {
+        sample: Vec<usize>,
+        centers: Vec<Vec<f32>>,
+        delta: Vec<f32>,
+        original: Vec<bool>,
+        proposed: Vec<bool>,
+        fallback: bool,
+        identical: bool,
+        degenerate: bool,
+    }
+    fn replay(
+        ids: &[usize],
+        rows: &[Vec<f32>],
+        sample_rows: usize,
+        budget: &mut Budget,
+    ) -> Result<Replay> {
+        require(
+            (2..=1024).contains(&sample_rows)
+                && ids.len() == rows.len()
+                && (2..=2048).contains(&ids.len())
+                && ids.windows(2).all(|w| w[0] < w[1]),
+            "diagnostic replay geometry/source order",
+        )?;
+        let sample_count = sample_rows.min(ids.len());
+        let mut sample = reserved(sample_count)?;
+        let mut training = reserved(sample_count)?;
+        for slot in 0..sample_count {
+            let index = slot * ids.len() / sample_count;
+            sample.push(index);
+            let mut row = reserved(rows[index].len())?;
+            row.extend_from_slice(&rows[index]);
+            training.push(row);
+        }
+        let identical = training.iter().all(|row| row == &training[0]);
+        let centers = if identical {
+            Vec::new()
+        } else {
+            budget.poll()?;
+            budget.counts.trainer_calls += 1;
+            // Actual trainer may stop early. This deliberately reports an
+            // upper bound, not an invented observed iteration count.
+            budget.counts.trainer_distance_upper_bound +=
+                (2 * sample_count + 2) * 4 + 2 * sample_count;
+            train_logical_cell_centroids(&training, VectorMetric::SquaredEuclidean, 2, 4)?
+        };
+        budget.poll()?;
+        let coordinate = coordinate_split(ids, rows)?;
+        let mut assigned = filled(ids.len(), false)?;
+        let mut delta = reserved(ids.len())?;
+        let mut degenerate = identical;
+        if !identical {
+            require(
+                centers.len() == 2
+                    && centers.iter().all(|center| {
+                        center.len() == rows[0].len() && center.iter().all(|v| v.is_finite())
+                    }),
+                "diagnostic learned center geometry",
+            )?;
+            let separation = VectorMetric::SquaredEuclidean.distance(&centers[0], &centers[1])?;
+            require(separation.is_finite(), "diagnostic nonfinite separator")?;
+            degenerate = separation <= 0.;
+            for (slot, row) in rows.iter().enumerate() {
+                let a = VectorMetric::SquaredEuclidean.distance(row, &centers[0])?;
+                let b = VectorMetric::SquaredEuclidean.distance(row, &centers[1])?;
+                let margin = a - b;
+                require(
+                    a.is_finite() && b.is_finite() && margin.is_finite(),
+                    "diagnostic nonfinite learned assignment",
+                )?;
+                assigned[slot] = a <= b;
+                delta.push(margin);
+                budget.counts.assignment_distances += 2;
+            }
+        }
+        let count = assigned.iter().filter(|v| **v).count();
+        let fallback = identical || count.min(ids.len() - count) < ids.len().div_ceil(4);
+        let proposed = constrained(ids, &delta, &assigned, &coordinate, degenerate)?;
+        let original = if fallback { coordinate } else { assigned };
+        Ok(Replay {
+            sample,
+            centers,
+            delta,
+            original,
+            proposed,
+            fallback,
+            identical,
+            degenerate,
+        })
+    }
+    fn verify_membership(
+        ids: &[usize],
+        assigned: &[bool],
+        actual_left: &[usize],
+        actual_right: &[usize],
+    ) -> Result<()> {
+        require(
+            ids.len() == assigned.len() && actual_left.len() + actual_right.len() == ids.len(),
+            "diagnostic original child membership count",
+        )?;
+        let mut left = reserved(actual_left.len())?;
+        let mut right = reserved(actual_right.len())?;
+        left.extend_from_slice(actual_left);
+        right.extend_from_slice(actual_right);
+        left.sort_unstable();
+        right.sort_unstable();
+        require(
+            ids.iter()
+                .zip(assigned)
+                .filter_map(|(&id, &a)| a.then_some(id))
+                .eq(left)
+                && ids
+                    .iter()
+                    .zip(assigned)
+                    .filter_map(|(&id, &a)| (!a).then_some(id))
+                    .eq(right),
+            "diagnostic original child membership mismatch",
+        )
+    }
+    fn panel(ids: &[usize], sample: &[usize], root: &str, offset: usize) -> Result<Vec<usize>> {
+        let mut sampled = filled(ids.len(), false)?;
+        for &slot in sample {
+            require(
+                slot < ids.len() && !sampled[slot],
+                "diagnostic trainer sample uniqueness",
+            )?;
+            sampled[slot] = true;
+        }
+        let mut order = reserved(ids.len())?;
+        order.extend(
+            ids.iter()
+                .enumerate()
+                .filter(|(slot, _)| !sampled[*slot])
+                .map(|(slot, &id)| (row_key(root, offset, id), id, slot)),
+        );
+        order.sort_unstable();
+        order.truncate(PANEL);
+        let mut slots = reserved(order.len())?;
+        slots.extend(order.into_iter().map(|(_, _, slot)| slot));
+        Ok(slots)
+    }
+    fn cuts(
+        ids: &[usize],
+        rows: &[Vec<f32>],
+        panel: &[usize],
+        old: &[bool],
+        new: &[bool],
+        budget: &mut Budget,
+    ) -> Result<(usize, usize, String)> {
+        require(
+            panel.len() == PANEL
+                && ids.len() == rows.len()
+                && old.len() == ids.len()
+                && new.len() == ids.len(),
+            "diagnostic exact 128-row panel",
+        )?;
+        let mut old_cut = 0;
+        let mut new_cut = 0;
+        let mut edges = Sha256::new();
+        let mut neighbors = reserved(ids.len() - 1)?;
+        for (ordinal, &slot) in panel.iter().enumerate() {
+            require(slot < ids.len(), "diagnostic panel source bounds")?;
+            neighbors.clear();
+            for (other, row) in rows.iter().enumerate() {
+                if slot == other {
+                    continue;
+                }
+                let distance = VectorMetric::Cosine.distance(&rows[slot], row)?;
+                require(distance.is_finite(), "diagnostic nonfinite local cosine")?;
+                neighbors.push((distance, ids[other], other));
+                budget.counts.neighbor_distances += 1;
+            }
+            neighbors.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            for &(distance, id, other) in &neighbors[..NEIGHBORS] {
+                old_cut += usize::from(old[slot] != old[other]);
+                new_cut += usize::from(new[slot] != new[other]);
+                edges.update((ids[slot] as u64).to_le_bytes());
+                edges.update((id as u64).to_le_bytes());
+                edges.update(distance.to_le_bytes());
+            }
+            if ordinal % 4 == 0 {
+                budget.poll()?;
+            }
+        }
+        Ok((old_cut, new_cut, format!("{:x}", edges.finalize())))
+    }
+
+    fn dataset(inputs: &DatasetInputs, budget: &mut Budget) -> Result<Value> {
+        let root_body = Pinned::small(&inputs.root, ROOT_CAP, budget)?;
+        let manifest: Manifest = serde_json::from_slice(&root_body)?;
+        geometry(&manifest, inputs)?;
+        let codec = RotatedTwoBitCodec::new(&manifest.mean, manifest.seed)?;
+        require(
+            codec.record_bytes() == manifest.input.records.bytes / manifest.rows,
+            "diagnostic original codec record geometry",
+        )?;
+        let body = Pinned::small(&inputs.directories, DIRECTORY_CAP, budget)?;
+        let cell_pin = Pinned::open(&inputs.cells, inputs.cells.bytes)?;
+        let admission = directory_admission(
+            manifest.directory_bytes,
+            manifest.build.directories,
+            manifest.build.cells,
+        )?;
+        require(
+            admission.modeled_preload_peak_bytes <= MEMORY_CAP / 2,
+            "diagnostic directory payload admission",
+        )?;
+        let mut prototype = Prototype {
+            manifest,
+            directories: BTreeMap::new(),
+            cells: cell_pin.file.try_clone()?,
+            codec,
+            startup: ReadStats::default(),
+            startup_directory: ReadStats::default(),
+            directory_admission: admission,
+        };
+        prototype.preload(&body)?;
+        let mut pending = reserved(prototype.directories.len())?;
+        pending.push((prototype.manifest.root_directory.offset, 1));
+        let mut deepest = 1;
+        while let Some((offset, depth)) = pending.pop() {
+            require(
+                depth <= prototype.manifest.input.max_depth,
+                "diagnostic complete directory depth",
+            )?;
+            let page = &prototype.directories[&offset];
+            require(
+                page.children.len() == 2,
+                "diagnostic original binary directory fanout",
+            )?;
+            for child in &page.children {
+                deepest = deepest.max(depth + 1);
+                match &child.target {
+                    Target::Directory { span } => pending.push((span.offset, depth + 1)),
+                    Target::Cell { .. } => require(
+                        depth + 1 <= prototype.manifest.input.max_depth,
+                        "diagnostic complete leaf depth",
+                    )?,
+                }
+            }
+        }
+        require(
+            deepest == prototype.manifest.build.max_depth,
+            "diagnostic original maximum depth receipt",
+        )?;
+        drop(body);
+        let selected = candidate_offsets(&prototype, &inputs.root.sha256)?;
+        let roster = rosters(&prototype, inputs, budget)?;
+        cell_pin.unchanged()?;
+        let source =
+            Source::authenticate(inputs, prototype.rows(), prototype.dimensions(), budget)?;
+        let mut reports = reserved(selected.len())?;
+        let mut measured = 0;
+        let mut verified_fallbacks = 0;
+        let mut old_sum = 0;
+        let mut new_sum = 0;
+        let mut old_worst = 0;
+        let mut new_worst = 0;
+        for &offset in &selected {
+            budget.poll()?;
+            let page = &prototype.directories[&offset];
+            let mut left = reserved(page.children[0].rows)?;
+            let mut right = reserved(page.children[1].rows)?;
+            members(&page.children[0], &prototype, &roster, 1, &mut left)?;
+            members(&page.children[1], &prototype, &roster, 1, &mut right)?;
+            let mut ids = reserved(left.len() + right.len())?;
+            ids.extend_from_slice(&left);
+            ids.extend_from_slice(&right);
+            ids.sort_unstable();
+            require(
+                ids.windows(2).all(|w| w[0] < w[1]),
+                "diagnostic unique parent membership",
+            )?;
+            let rows = source.rows(&ids, budget)?;
+            let replay = replay(&ids, &rows, prototype.manifest.input.sample_rows, budget)?;
+            verify_membership(&ids, &replay.original, &left, &right)?;
+            let slots = panel(&ids, &replay.sample, &inputs.root.sha256, offset)?;
+            let mut report = json!({"directory_offset":offset,"selection_hash":node_key(&inputs.root.sha256,offset).iter()
+                    .map(|byte| format!("{byte:02x}")).collect::<String>(),
+                "rows":ids.len(),"original_membership_verified":true,
+                "original_fallback":replay.fallback,"identical_sample":replay.identical,
+                "degenerate_separator":replay.degenerate,
+                "parent_source_ordinals_sha256":id_hash(ids.iter().copied()),
+                "original_left_sha256":id_hash(ids.iter().zip(&replay.original).filter_map(|(&id,&a)| a.then_some(id))),
+                "original_right_sha256":id_hash(ids.iter().zip(&replay.original).filter_map(|(&id,&a)| (!a).then_some(id))),
+                "proposed_left_sha256":id_hash(ids.iter().zip(&replay.proposed).filter_map(|(&id,&a)| a.then_some(id))),
+                "proposed_right_sha256":id_hash(ids.iter().zip(&replay.proposed).filter_map(|(&id,&a)| (!a).then_some(id))),
+                "proposed_left_rows":replay.proposed.iter().filter(|v| **v).count(),
+                "source_fp32_sha256":float_hash(rows.iter().flatten().copied()),
+                "trainer_source_ordinals":replay.sample.iter().map(|&slot| ids[slot]).collect::<Vec<_>>(),
+                "trainer_max_iterations":4,"trainer_metric":"squared_euclidean",
+                "learned_centers":replay.centers,
+                "centers_fp32_sha256":float_hash(replay.centers.iter().flatten().copied()),
+                "delta_fp32_sha256":float_hash(replay.delta.iter().copied()),
+                "source_panel_ordinals":slots.iter().map(|&slot| ids[slot]).collect::<Vec<_>>()});
+            if !replay.fallback {
+                report["status"] = json!("SKIPPED_SUCCESSFUL_UNCONSTRAINED");
+            } else {
+                verified_fallbacks += 1;
+                if slots.len() < PANEL {
+                    report["status"] = json!("INSUFFICIENT_NONTRAINING_ROWS");
+                } else {
+                    let (old, new, edge_sha) = cuts(
+                        &ids,
+                        &rows,
+                        &slots,
+                        &replay.original,
+                        &replay.proposed,
+                        budget,
+                    )?;
+                    measured += 1;
+                    old_sum += old;
+                    new_sum += new;
+                    old_worst = old_worst.max(old);
+                    new_worst = new_worst.max(new);
+                    report["status"] = json!("MEASURED");
+                    report["local_directed_edges"] = json!(PANEL * NEIGHBORS);
+                    report["local_cosine16_edges_sha256"] = json!(edge_sha);
+                    report["coordinate_crossing_edges"] = json!(old);
+                    report["constrained_crossing_edges"] = json!(new);
+                    report["coordinate_cut_fraction"] =
+                        json!(old as f64 / (PANEL * NEIGHBORS) as f64);
+                    report["constrained_cut_fraction"] =
+                        json!(new as f64 / (PANEL * NEIGHBORS) as f64);
+                }
+            }
+            reports.push(report);
+        }
+        source.pin.unchanged()?;
+        cell_pin.unchanged()?;
+        let enough = measured >= MIN_VERIFIED;
+        let passed = enough && old_sum > 0 && new_sum * 10 <= old_sum * 9 && new_worst <= old_worst;
+        let edges = measured * PANEL * NEIGHBORS;
+        let fraction = |count| {
+            if edges == 0 {
+                Value::Null
+            } else {
+                json!(count as f64 / edges as f64)
+            }
+        };
+        Ok(
+            json!({"input_pins":inputs,"selected_directory_offsets":selected,"nodes":reports,
+            "verified_fallback_nodes":verified_fallbacks,"measured_nodes":measured,
+            "status":if !enough {"INCONCLUSIVE"} else if passed {"PASS"} else {"REJECT"},
+            "local_directed_edges":edges,"coordinate_crossing_edges":old_sum,"constrained_crossing_edges":new_sum,
+            "coordinate_aggregate_cut_fraction":fraction(old_sum),"constrained_aggregate_cut_fraction":fraction(new_sum),
+            "coordinate_worst_node_cut_fraction":if enough {json!(old_worst as f64 / (PANEL*NEIGHBORS) as f64)} else {Value::Null},
+            "constrained_worst_node_cut_fraction":if enough {json!(new_worst as f64 / (PANEL*NEIGHBORS) as f64)} else {Value::Null},
+            "ten_percent_aggregate_and_no_worse_worst_node":passed}),
+        )
+    }
+
+    /// Check exact originals under the caller's CPU1/512Mi/noSwap cgroup.
+    /// Structural/authentication/control/resource failures return an error;
+    /// insufficient nodes close INCONCLUSIVE without expanding the first eight.
+    /// The returned JSON measures source-neighborhood cuts, never ANN recall.
+    pub fn check(config: &Config) -> Result<Value> {
+        descriptors(config)?;
+        let mut budget = Budget::new(true)?;
+        check_with_budget(config, &mut budget)
+    }
+    fn check_with_budget(config: &Config, budget: &mut Budget) -> Result<Value> {
+        descriptors(config)?;
+        let mut datasets = serde_json::Map::new();
+        for (name, inputs) in &config.datasets {
+            datasets.insert(name.clone(), dataset(inputs, budget)?);
+        }
+        let status = if datasets.values().any(|d| d["status"] == "INCONCLUSIVE") {
+            "INCONCLUSIVE"
+        } else if datasets.values().all(|d| d["status"] == "PASS") {
+            "PASS"
+        } else {
+            "REJECT"
+        };
+        budget.poll()?;
+        Ok(json!({"schema":REPORT_SCHEMA,"status":status,
+            "scope":"source-neighborhood diagnostic; not recall or product quality",
+            "query_or_truth_used":false,"descendant_rebuilds":0,"retraining_sweeps":0,
+            "selection":"first8 SHA256(raw32 root digest || LE u64 directory offset); no expansion",
+            "panel":"first128 SHA256(raw32 root digest || LE u64 directory offset || LE u64 source ordinal), excluding trainer sample",
+            "datasets":datasets,"resources":budget.receipt()?}))
+    }
+
+    /// Execute `CONFIG SHA NEW_OUTPUT` with bounded, fsynced terminal JSON.
+    /// Creates the output exclusively before admitting config or originals, so
+    /// subsequent failures leave a terminal INVALID or INPUT_UNAVAILABLE report.
+    /// Returns the report status; errors are reserved for output creation/sync.
+    pub fn execute(config_path: &Path, sha: &str, output: &Path) -> Result<String> {
+        execute_with_budget(config_path, sha, output, Budget::new(true))
+    }
+    fn execute_with_budget(
+        config_path: &Path,
+        sha: &str,
+        output: &Path,
+        mut budget: Result<Budget>,
+    ) -> Result<String> {
+        let directory = secure_open(
+            output.parent().ok_or("diagnostic output parent")?,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY,
+        )?;
+        let mut file = secure_open(
+            output,
+            rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CREATE | rustix::fs::OFlags::EXCL,
+        )?;
+        require(file.metadata()?.is_file(), "diagnostic regular new output")?;
+        let result = (|| -> Result<Value> {
+            let budget = budget
+                .as_mut()
+                .map_err(|error| -> Box<dyn Error + Send + Sync> { error.to_string().into() })?;
+            require(valid_sha(sha), "diagnostic config SHA256")?;
+            let file = secure_open(config_path, rustix::fs::OFlags::RDONLY)?;
+            let pin = Pinned {
+                stamp: stamp(&file)?,
+                file,
+            };
+            let bytes = usize::try_from(pin.stamp.2)?;
+            require(
+                bytes > 0 && bytes <= ROOT_CAP,
+                "diagnostic strict config size/type",
+            )?;
+            budget.admit(bytes)?;
+            let body = pin.at(0, bytes)?;
+            require(hash(&body) == sha, "diagnostic config authentication")?;
+            budget.verified(bytes)?;
+            pin.unchanged()?;
+            let config: Config = serde_json::from_slice(&body)?;
+            let mut report = check_with_budget(&config, budget)?;
+            report["config_sha256"] = json!(sha);
+            Ok(report)
+        })();
+        let mut report = match result {
+            Ok(report) => report,
+            Err(error) => {
+                json!({"schema":REPORT_SCHEMA,"status":if error.is::<InputUnavailable>() {
+                "INPUT_UNAVAILABLE" } else { "INVALID" },"config_sha256":sha,
+                "scope":"source-neighborhood diagnostic; not recall or product quality",
+                "query_or_truth_used":false,"resources":budget.as_ref().ok().and_then(|b| b.receipt().ok()),
+                "error":error.to_string().chars().take(1024).collect::<String>()})
+            }
+        };
+        seal_terminal(&mut file, &directory, &mut report)
+    }
+
+    fn seal_terminal(file: &mut File, directory: &File, report: &mut Value) -> Result<String> {
+        let body = terminal_body(report)?;
+        file.write_all(&body)?;
+        file.sync_all()?;
+        directory.sync_all()?;
+        Ok(report["status"]
+            .as_str()
+            .ok_or("diagnostic terminal status")?
+            .to_owned())
+    }
+
+    struct TerminalBuffer(Vec<u8>);
+    impl Write for TerminalBuffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if !self
+                .0
+                .len()
+                .checked_add(bytes.len())
+                .is_some_and(|size| size < OUTPUT_CAP)
+            {
+                return Err(std::io::Error::other("diagnostic terminal output cap"));
+            }
+            self.0.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    fn terminal_body(report: &mut Value) -> Result<Vec<u8>> {
+        let mut buffer = TerminalBuffer(reserved(OUTPUT_CAP)?);
+        if serde_json::to_writer(&mut buffer, &*report).is_err() {
+            *report = json!({"schema":REPORT_SCHEMA,"status":"INVALID","error":"diagnostic output cap",
+                "query_or_truth_used":false});
+            buffer.0.clear();
+            serde_json::to_writer(&mut buffer, &*report)?;
+        }
+        buffer.0.push(b'\n');
+        Ok(buffer.0)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn artifact(path: &Path, body: &[u8]) -> Artifact {
+            fs::write(path, body).unwrap();
+            Artifact {
+                path: path.into(),
+                bytes: body.len(),
+                sha256: hash(body),
+            }
+        }
+        fn inputs(dir: &Path) -> DatasetInputs {
+            DatasetInputs {
+                root: artifact(&dir.join("root"), b"root"),
+                directories: artifact(&dir.join("directories"), b"directory"),
+                cells: artifact(&dir.join("cells"), b"cells"),
+                canonical: artifact(&dir.join("canonical"), b"canonical"),
+                order: artifact(&dir.join("order"), b"order"),
+            }
+        }
+        fn budget() -> Budget {
+            Budget::new(false).unwrap()
+        }
+        fn source_fixture(dir: &Path) -> DatasetInputs {
+            let mut inputs = inputs(dir);
+            let mut canonical = Vec::new();
+            let mut order = Vec::new();
+            for (id, row) in [(2_u64, [1_f32, 0_f32]), (0, [0., 1.]), (1, [-1., 0.])] {
+                canonical.extend_from_slice(&(id as i64).to_le_bytes());
+                for value in row {
+                    canonical.extend_from_slice(&value.to_le_bytes());
+                }
+                order.extend_from_slice(&id.to_le_bytes());
+            }
+            inputs.canonical = artifact(&dir.join("canonical"), &canonical);
+            inputs.order = artifact(&dir.join("order"), &order);
+            inputs
+        }
+
+        #[test]
+        fn constrained_cost_matches_exhaustive_small_partitions() {
+            // Fixed-center squared-distance cost differs from sum(left delta)
+            // by a constant. Exhaust every feasible small binary partition.
+            for rows in 2_usize..=7 {
+                let ids = (0..rows).collect::<Vec<_>>();
+                let fallback = (0..rows).map(|slot| slot < rows / 2).collect::<Vec<_>>();
+                let lower = rows.div_ceil(4);
+                for pattern in 0..3_usize.pow(rows as u32) {
+                    let mut word = pattern;
+                    let delta = (0..rows)
+                        .map(|_| {
+                            let value = (word % 3) as f32 - 1.;
+                            word /= 3;
+                            value
+                        })
+                        .collect::<Vec<_>>();
+                    let original = delta.iter().map(|v| *v <= 0.).collect::<Vec<_>>();
+                    let actual = constrained(&ids, &delta, &original, &fallback, false).unwrap();
+                    let cost = actual
+                        .iter()
+                        .zip(&delta)
+                        .filter_map(|(&left, &d)| left.then_some(d))
+                        .sum::<f32>();
+                    let best = (0..1_usize << rows)
+                        .filter(|mask| {
+                            let count = mask.count_ones() as usize;
+                            count >= lower && count <= rows - lower
+                        })
+                        .map(|mask| {
+                            delta
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(slot, &d)| ((mask >> slot) & 1 == 1).then_some(d))
+                                .sum::<f32>()
+                        })
+                        .min_by(f32::total_cmp)
+                        .unwrap();
+                    assert_eq!(cost, best, "rows={rows} pattern={pattern}");
+                    let count = actual.iter().filter(|v| **v).count();
+                    assert!((lower..=rows - lower).contains(&count));
+                }
+            }
+        }
+
+        #[test]
+        fn successful_identical_and_degenerate_splits_are_unchanged() {
+            let ids = (0..16).collect::<Vec<_>>();
+            let rows = (0..16)
+                .map(|slot| {
+                    if slot < 8 {
+                        vec![1., 0.]
+                    } else {
+                        vec![-1., 0.]
+                    }
+                })
+                .collect::<Vec<_>>();
+            let replayed = replay(&ids, &rows, 8, &mut budget()).unwrap();
+            assert!(!replayed.fallback);
+            assert_eq!(replayed.original, replayed.proposed);
+            assert_eq!(replayed.sample, vec![0, 2, 4, 6, 8, 10, 12, 14]);
+            assert_eq!(replayed.centers, vec![vec![1., 0.], vec![-1., 0.]]);
+            let same = vec![vec![1., 0.]; 16];
+            let replayed = replay(&ids, &same, 8, &mut budget()).unwrap();
+            assert!(replayed.fallback && replayed.identical && replayed.degenerate);
+            assert!(replayed.centers.is_empty());
+            assert_eq!(replayed.original, replayed.proposed);
+            assert_eq!(
+                replayed.original,
+                (0..16).map(|slot| slot < 8).collect::<Vec<_>>()
+            );
+            let fallback = (0..16).map(|slot| slot < 8).collect::<Vec<_>>();
+            assert_eq!(
+                constrained(&ids, &[0.; 16], &[true; 16], &fallback, true).unwrap(),
+                fallback
+            );
+        }
+
+        #[test]
+        fn learned_unbalanced_replay_preserves_centers_and_moves_minimum_population() {
+            let ids = (0..20).collect::<Vec<_>>();
+            let mut rows = vec![vec![1., 0.]; 20];
+            rows[19] = vec![-1., 0.];
+            let proof = replay(&ids, &rows, 20, &mut budget()).unwrap();
+            assert!(proof.fallback && !proof.identical && !proof.degenerate);
+            assert_eq!(proof.centers, vec![vec![1., 0.], vec![-1., 0.]]);
+            assert_eq!(proof.proposed.iter().filter(|v| **v).count(), 15);
+            assert_eq!(
+                proof.proposed,
+                (0..20).map(|slot| slot < 15).collect::<Vec<_>>()
+            );
+            let unconstrained = proof.delta.iter().map(|v| *v <= 0.).collect::<Vec<_>>();
+            assert_eq!(
+                unconstrained
+                    .iter()
+                    .zip(&proof.proposed)
+                    .filter(|(a, b)| a != b)
+                    .count(),
+                4
+            );
+            assert_eq!(proof.original, coordinate_split(&ids, &rows).unwrap());
+        }
+
+        #[test]
+        fn first_eight_candidate_hash_order_is_frozen_without_expansion() {
+            let root = "a".repeat(64);
+            let mut pages = (0..20).map(|offset| (offset, 512, 512)).collect::<Vec<_>>();
+            pages.extend([(20, 256, 256), (21, 1025, 1025), (22, 400, 600)]);
+            let actual = freeze_candidates(&root, pages.iter().copied(), pages.len()).unwrap();
+            let mut expected = (0..20)
+                .map(|offset| (node_key(&root, offset), offset))
+                .collect::<Vec<_>>();
+            expected.sort_unstable();
+            assert_eq!(
+                actual,
+                expected[..8]
+                    .iter()
+                    .map(|(_, offset)| *offset)
+                    .collect::<Vec<_>>()
+            );
+            pages.reverse();
+            assert_eq!(
+                actual,
+                freeze_candidates(&root, pages.iter().copied(), pages.len()).unwrap()
+            );
+            assert_eq!(
+                freeze_candidates(&root, [(2, 256, 257)].into_iter(), 1).unwrap(),
+                vec![2]
+            );
+            assert!(freeze_candidates(&root, [(0, usize::MAX, 1)].into_iter(), 1).is_err());
+            assert!(freeze_candidates(&root, [(0, 512, 512)].into_iter(), 0).is_err());
+        }
+
+        #[test]
+        fn deterministic_delta_ties_coordinate_ties_and_partial_panel() {
+            let ids = vec![60, 10, 40, 30, 20, 70, 50];
+            let result = constrained(
+                &ids,
+                &[1.; 7],
+                &[false; 7],
+                &[false, true, false, true, false, false, true],
+                false,
+            )
+            .unwrap();
+            let mut selected = ids
+                .iter()
+                .zip(&result)
+                .filter_map(|(&id, &a)| a.then_some(id))
+                .collect::<Vec<_>>();
+            selected.sort_unstable();
+            assert_eq!(selected, vec![10, 20]); // ceil(7/4), with ordinal tie breaking.
+            let rows = vec![vec![1., 0.]; 7];
+            let fallback = coordinate_split(&ids, &rows).unwrap();
+            let mut selected = ids
+                .iter()
+                .zip(&fallback)
+                .filter_map(|(&id, &a)| a.then_some(id))
+                .collect::<Vec<_>>();
+            selected.sort_unstable();
+            assert_eq!(selected, vec![10, 20, 30]);
+            let ids = (0..200).collect::<Vec<_>>();
+            let sample = (0..80).collect::<Vec<_>>();
+            let first = panel(&ids, &sample, &"b".repeat(64), 9).unwrap();
+            assert_eq!(first.len(), 120); // no expansion/reuse of training rows.
+            assert!(first.iter().all(|slot| *slot >= 80));
+            assert_eq!(first, panel(&ids, &sample, &"b".repeat(64), 9).unwrap());
+            assert!(panel(&ids, &[0, 0], &"b".repeat(64), 9).is_err());
+            assert_ne!(node_key(&"a".repeat(64), 1), node_key(&"a".repeat(64), 2));
+            assert_ne!(
+                row_key(&"a".repeat(64), 1, 2),
+                row_key(&"a".repeat(64), 1, 3)
+            );
+            let raw = [0xaa_u8; 32];
+            let mut digest = Sha256::new();
+            digest.update(raw);
+            digest.update(9_u64.to_le_bytes());
+            let expected: [u8; 32] = digest.finalize().into();
+            assert_eq!(node_key(&"a".repeat(64), 9), expected);
+            let mut digest = Sha256::new();
+            digest.update(raw);
+            digest.update(9_u64.to_le_bytes());
+            digest.update(17_u64.to_le_bytes());
+            let expected: [u8; 32] = digest.finalize().into();
+            assert_eq!(row_key(&"a".repeat(64), 9, 17), expected);
+        }
+
+        #[test]
+        fn original_membership_mismatch_is_invalid() {
+            let ids = vec![0, 1, 2, 3];
+            let membership = vec![true, true, false, false];
+            verify_membership(&ids, &membership, &[1, 0], &[3, 2]).unwrap();
+            assert!(verify_membership(&ids, &membership, &[0, 2], &[1, 3]).is_err());
+            assert!(verify_membership(&ids, &membership, &[0, 0], &[2, 3]).is_err());
+            assert!(verify_membership(&ids, &membership, &[0], &[2, 3]).is_err());
+        }
+
+        #[test]
+        fn local_cosine_edges_reuse_same_rows_and_exclude_self() {
+            let ids = (0..160).collect::<Vec<_>>();
+            // Equal vectors make distance ties observable: ordinal is the
+            // second key and self is excluded from the exact local 16NN.
+            let rows = vec![vec![1., 0.]; 160];
+            let panel = (0..128).collect::<Vec<_>>();
+            let old = (0..160).map(|slot| slot < 80).collect::<Vec<_>>();
+            let new = vec![true; 160];
+            let (a, b, sha) = cuts(&ids, &rows, &panel, &old, &new, &mut budget()).unwrap();
+            assert_eq!(a, 48 * 16);
+            assert_eq!(b, 0);
+            let mut expected = Sha256::new();
+            for &source in &panel {
+                for neighbor in (0_usize..17).filter(|id| *id != source).take(16) {
+                    expected.update((source as u64).to_le_bytes());
+                    expected.update((neighbor as u64).to_le_bytes());
+                    expected.update(0_f32.to_le_bytes());
+                }
+            }
+            assert_eq!(sha, format!("{:x}", expected.finalize()));
+            assert_eq!(
+                sha,
+                cuts(&ids, &rows, &panel, &old, &new, &mut budget())
+                    .unwrap()
+                    .2
+            );
+            let (a, b, _) = cuts(&ids, &rows, &panel, &old, &old, &mut budget()).unwrap();
+            assert_eq!(a, b);
+            let mut changed = rows;
+            changed[100][0] = f32::NAN;
+            assert!(cuts(&ids, &changed, &panel, &old, &old, &mut budget()).is_err());
+        }
+
+        #[test]
+        fn canonical_order_nonfinite_and_post_authentication_tamper_fail_closed() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut inputs = source_fixture(dir.path());
+            let mut accounting = budget();
+            let source = Source::authenticate(&inputs, 3, 2, &mut accounting).unwrap();
+            assert_eq!(accounting.counts.auth_bytes, 72);
+            assert_eq!(
+                source.rows(&[0, 1, 2], &mut accounting).unwrap(),
+                vec![vec![0., 1.], vec![-1., 0.], vec![1., 0.]]
+            );
+            assert_eq!(accounting.counts.auth_bytes, 120);
+            assert_eq!(accounting.counts.admitted_bytes, 120);
+            let mut body = fs::read(&inputs.canonical.path).unwrap();
+            body[8..12].copy_from_slice(&0.5_f32.to_le_bytes());
+            fs::write(&inputs.canonical.path, &body).unwrap();
+            assert!(source.rows(&[2], &mut accounting).is_err());
+            assert_eq!(accounting.counts.auth_bytes, 120);
+            assert_eq!(accounting.counts.admitted_bytes, 136);
+            let mut body = fs::read(&inputs.canonical.path).unwrap();
+            body[8..12].copy_from_slice(&f32::NAN.to_le_bytes());
+            inputs.canonical = artifact(&inputs.canonical.path, &body);
+            assert!(Source::authenticate(&inputs, 3, 2, &mut budget()).is_err());
+            inputs = source_fixture(dir.path());
+            inputs.order = artifact(&inputs.order.path, &[0_u8; 24]);
+            assert!(Source::authenticate(&inputs, 3, 2, &mut budget()).is_err());
+            inputs = source_fixture(dir.path());
+            let words = [0_u64, 2, 1]
+                .into_iter()
+                .flat_map(u64::to_le_bytes)
+                .collect::<Vec<_>>();
+            inputs.order = artifact(&inputs.order.path, &words);
+            assert!(Source::authenticate(&inputs, 3, 2, &mut budget()).is_err());
+        }
+
+        #[test]
+        fn artifact_tamper_geometry_and_all_limits_fail_closed() {
+            let dir = tempfile::tempdir().unwrap();
+            let a = artifact(&dir.path().join("artifact"), b"abcd");
+            assert_eq!(Pinned::small(&a, 4, &mut budget()).unwrap(), b"abcd");
+            let mut wrong = a.clone();
+            wrong.bytes = usize::MAX;
+            assert!(Pinned::small(&wrong, 4, &mut budget()).is_err());
+            wrong = a.clone();
+            wrong.sha256 = "a".repeat(64);
+            assert!(Pinned::small(&wrong, 4, &mut budget()).is_err());
+            fs::write(&a.path, b"abce").unwrap();
+            assert!(Pinned::small(&a, 4, &mut budget()).is_err());
+            assert!(filled::<u64>(usize::MAX, 0).is_err());
+            assert!(vector(&[0; 15], 2).is_err());
+            assert!(vector(&[0; 16], 2).is_err()); // zero norm.
+            assert!(coordinate_split(&[0, 1], &[vec![f32::MAX], vec![-f32::MAX]]).is_err());
+            assert!(
+                constrained(&[0, 1], &[f32::NAN, 1.], &[false; 2], &[true, false], false).is_err()
+            );
+            assert!(constrained(&[0, 1], &[0.], &[false; 2], &[true, false], true).is_err());
+            assert!(replay(&[0, 0], &[vec![1., 0.], vec![1., 0.]], 2, &mut budget()).is_err());
+            let mut b = budget();
+            b.counts.admitted_bytes = AUTH_CAP;
+            assert!(b.admit(1).is_err());
+            assert_eq!(b.counts.auth_bytes, 0);
+            assert_eq!(b.counts.admitted_bytes, AUTH_CAP);
+            assert!(b.verified(AUTH_CAP + 1).is_err());
+            let mut b = budget();
+            b.counts.parent_rows = PARENT_ROWS_CAP;
+            assert!(b.parents(1).is_err());
+            let mut b = budget();
+            b.start = Instant::now()
+                .checked_sub(std::time::Duration::from_secs(181))
+                .unwrap();
+            assert!(b.poll().is_err());
+            cgroup_controls("100000 100000", "536870912", "0").unwrap();
+            for (cpu, memory, swap) in [
+                ("max 100000", "536870912", "0"),
+                ("200000 100000", "536870912", "0"),
+                ("100000 100000", "536870913", "0"),
+                ("100000 100000", "536870912", "1"),
+                ("0 100000", "536870912", "0"),
+            ] {
+                assert!(cgroup_controls(cpu, memory, swap).is_err());
+            }
+        }
+
+        #[test]
+        fn fifo_symlink_ancestors_and_missing_originals_fail_closed() {
+            let dir = tempfile::tempdir().unwrap();
+            let a = artifact(&dir.path().join("real"), b"abcd");
+            let link = dir.path().join("link");
+            std::os::unix::fs::symlink(&a.path, &link).unwrap();
+            let mut redirected = a.clone();
+            redirected.path = link;
+            assert!(Pinned::small(&redirected, 4, &mut budget()).is_err());
+            let alias = dir.path().join("alias");
+            std::os::unix::fs::symlink(dir.path(), &alias).unwrap();
+            redirected.path = alias.join("real");
+            assert!(Pinned::small(&redirected, 4, &mut budget()).is_err());
+            let fifo = dir.path().join("fifo");
+            rustix::fs::mknodat(
+                rustix::fs::CWD,
+                &fifo,
+                rustix::fs::FileType::Fifo,
+                rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+                0,
+            )
+            .unwrap();
+            redirected.path = fifo;
+            let start = Instant::now();
+            assert!(Pinned::small(&redirected, 4, &mut budget()).is_err());
+            assert!(start.elapsed().as_secs_f64() < 1.);
+            redirected.path = dir.path().join("missing");
+            let error = Pinned::small(&redirected, 4, &mut budget()).unwrap_err();
+            assert!(error.is::<InputUnavailable>());
+        }
+
+        #[test]
+        fn strict_config_and_created_output_terminal_no_overwrite() {
+            let dir = tempfile::tempdir().unwrap();
+            let first = dir.path().join("cohere");
+            fs::create_dir(&first).unwrap();
+            let second = dir.path().join("relaion");
+            fs::create_dir(&second).unwrap();
+            let config = Config {
+                schema: CONFIG_SCHEMA.into(),
+                datasets: BTreeMap::from([
+                    ("cohere".into(), inputs(&first)),
+                    ("relaion".into(), inputs(&second)),
+                ]),
+            };
+            descriptors(&config).unwrap();
+            let value = serde_json::to_value(&config).unwrap();
+            for key in [
+                "query",
+                "queries",
+                "truth",
+                "gt",
+                "requests",
+                "sample_rows",
+                "download",
+            ] {
+                let mut bad = value.clone();
+                bad[key] = json!([]);
+                assert!(serde_json::from_value::<Config>(bad).is_err());
+                let mut bad = value.clone();
+                bad["datasets"]["cohere"][key] = json!([]);
+                assert!(serde_json::from_value::<Config>(bad).is_err());
+            }
+            let mut bad = config.clone();
+            bad.datasets.get_mut("relaion").unwrap().canonical =
+                bad.datasets["cohere"].canonical.clone();
+            assert!(descriptors(&bad).is_err());
+            let config_path = dir.path().join("config");
+            fs::write(&config_path, b"{}").unwrap();
+            let output = dir.path().join("terminal");
+            // Independent of the test caller's cgroup: missing controls or a
+            // wrong SHA both fail before originals are opened, with INVALID.
+            assert_eq!(
+                execute(&config_path, &"a".repeat(64), &output).unwrap(),
+                "INVALID"
+            );
+            let body = fs::read(&output).unwrap();
+            let report: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(report["status"], "INVALID");
+            assert!(body.len() <= OUTPUT_CAP);
+            assert!(execute(&config_path, &"a".repeat(64), &output).is_err());
+            assert_eq!(fs::read(&output).unwrap(), body);
+            let mut unavailable = config;
+            unavailable.datasets.get_mut("cohere").unwrap().root.path =
+                dir.path().join("missing-original-root");
+            let body = serde_json::to_vec(&unavailable).unwrap();
+            fs::write(&config_path, &body).unwrap();
+            let output = dir.path().join("unavailable-terminal");
+            assert_eq!(
+                execute_with_budget(&config_path, &hash(&body), &output, Ok(budget())).unwrap(),
+                "INPUT_UNAVAILABLE"
+            );
+            let report: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+            assert_eq!(report["status"], "INPUT_UNAVAILABLE");
+            assert_eq!(report["query_or_truth_used"], false);
+            let output = dir.path().join("tampered-config-terminal");
+            assert_eq!(
+                execute_with_budget(&config_path, &"a".repeat(64), &output, Ok(budget())).unwrap(),
+                "INVALID"
+            );
+        }
+
+        #[test]
+        fn output_cap_and_fsync_failure_cannot_return_pass() {
+            let mut oversized =
+                json!({"schema":REPORT_SCHEMA,"status":"PASS","payload":"x".repeat(OUTPUT_CAP)});
+            let body = terminal_body(&mut oversized).unwrap();
+            assert_eq!(oversized["status"], "INVALID");
+            assert!(body.len() < 512 && body.last() == Some(&b'\n'));
+            let dir = tempfile::tempdir().unwrap();
+            let parent = secure_open(
+                dir.path(),
+                rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY,
+            )
+            .unwrap();
+            let output = dir.path().join("sealed");
+            let mut file = secure_open(
+                &output,
+                rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CREATE | rustix::fs::OFlags::EXCL,
+            )
+            .unwrap();
+            let mut report = json!({"schema":REPORT_SCHEMA,"status":"INCONCLUSIVE"});
+            assert_eq!(
+                seal_terminal(&mut file, &parent, &mut report).unwrap(),
+                "INCONCLUSIVE"
+            );
+            let bytes = fs::read(&output).unwrap();
+            assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), report);
+            // Socket writes succeed but fsync is unsupported. An interrupted
+            // durability barrier must never be reported as successful sealing.
+            let (sender, _receiver) = std::os::unix::net::UnixStream::pair().unwrap();
+            let mut socket = File::from(std::os::fd::OwnedFd::from(sender));
+            let mut report = json!({"schema":REPORT_SCHEMA,"status":"PASS"});
+            assert!(seal_terminal(&mut socket, &parent, &mut report).is_err());
+        }
+    }
+}
