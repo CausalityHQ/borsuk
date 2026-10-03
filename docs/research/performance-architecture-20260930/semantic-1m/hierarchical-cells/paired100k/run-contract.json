@@ -1,72 +1,79 @@
 {
-  "schema": "borsuk-hierarchical-100k-prospective-run-order-v1",
-  "science_authority_pending": true,
-  "purpose": "One consumed64 ReLAION and CoHere 100k diagnostic, after source and infrastructure admission",
+  "closeout": "Sync terminal artifacts, stop immediately, terminate and wait for every owned instance before collection",
+  "failure_policy": {
+    "architecture_scope": "These prospective arm thresholds are not universal product or 100M gates",
+    "completed_quality_failure": "FAIL for this frozen arm; preserve result and choose one causal redesign",
+    "interruption": "Discard interrupted measurement cell; no automatic replacement",
+    "source_identity_execution_or_resource_failure": "INVALID; preserve original receipt and repair before scientific use"
+  },
   "ordered_gates": [
     {
-      "gate": "exact_native_qualification",
-      "state": "PASS",
       "evidence": "../implementation-gates/a0002/integration-verification.json",
-      "required": "All six exact-source gates zero; all 401 native files match; terminal bodies authenticate; original instance terminated"
+      "gate": "exact_native_qualification",
+      "required": "All six exact-source gates zero; all 401 native files match; terminal bodies authenticate; original instance terminated",
+      "state": "PASS"
     },
     {
-      "gate": "real_sealed_request_fixture",
-      "state": "PASS",
       "evidence": "../implementation-gates/real-request-fixture.json",
-      "required": "Authenticated complete historical request files; production converter preserves all original f32 query bits for both consumed64 panels; no truth read"
+      "gate": "real_sealed_request_fixture",
+      "required": "Authenticated complete historical request files; production converter preserves all original f32 query bits for both consumed64 panels; no truth read",
+      "state": "PASS"
     },
     {
+      "evidence": "adapter-root-verification.json",
       "gate": "final_adapter_checks",
-      "state": "PASS",
       "required": "Final source-bound synthetic lifecycle, body identity, deadline, scratch, CLI and cleanup checks, plus actual completed-qualification metadata admission",
-      "evidence": "adapter-root-verification.json"
+      "state": "PASS"
     },
     {
-      "gate": "disposable_infrastructure_canary",
-      "state": "PENDING",
-      "required": "Same frozen controller source and authorities; actual imports, SDK model, CLI admission, HEAD every declared S3 key, authenticate one small non-scientific body, close and terminate owned instance",
-      "ann_queries": 0,
-      "truth_or_panel_body_reads": 0,
-      "dataset_payload_gets": 0,
-      "selected_body_max_bytes": 1048576,
-      "wall_seconds_max": 480,
-      "scratch_bytes_max": 4294967296,
-      "compute_cap_usd": 0.12,
-      "ebs_s3_allowance_usd": 0.05,
+      "evidence": "archive-pilot.json",
+      "gate": "bounded_source_archive_preparation",
+      "required": "Streamed archive original job closed0 under1GiB/noSwap/CPU1; all SIGTERM ACK IDs fsynced and cleanup verified",
       "scientific_measurement": false,
-      "source_bootstrap_is_separately_charged": true
+      "state": "PASS"
+    },
+    {
+      "ann_queries": 0,
+      "compute_cap_usd": 0.12,
+      "dataset_payload_gets": 0,
+      "ebs_s3_allowance_usd": 0.05,
+      "gate": "disposable_infrastructure_canary",
+      "required": "Same frozen controller source and authorities; actual imports, SDK model, CLI admission, HEAD every declared S3 key, authenticate one small non-scientific body, close and terminate owned instance",
+      "scientific_measurement": false,
+      "scratch_bytes_max": 4294967296,
+      "selected_body_max_bytes": 1048576,
+      "source_bootstrap_is_separately_charged": true,
+      "state": "PENDING",
+      "truth_or_panel_body_reads": 0,
+      "wall_seconds_max": 480
     },
     {
       "gate": "staging_and_native_input_admission",
-      "state": "PENDING",
-      "required": "Authenticate all complete dataset bodies and qualified binaries; decode original ReLAION f32 bytes exactly; current-writer codec, canonical IDs and coefficient bits match retained authorities; disposable native input checks excluded from measured counters"
+      "required": "Authenticate all complete dataset bodies and qualified binaries; decode original ReLAION f32 bytes exactly; current-writer codec, canonical IDs and coefficient bits match retained authorities; disposable native input checks excluded from measured counters",
+      "state": "PENDING"
     },
     {
-      "gate": "one_paired_consumed64_diagnostic",
-      "state": "PENDING",
-      "required": "Both query configurations sealed before execution; native query traces synced before truth; one native process at a time; terminal bodies and resource closure authenticate",
-      "memory_bytes": 2147483648,
-      "swap_bytes": 0,
       "cpu_quota_percent": 200,
-      "tasks_max": 512,
-      "whole_worker_scratch_bytes": 17179869184,
       "cumulative_wall_seconds": 1800,
       "fetch_policy": "whole_cell",
-      "per_query_total_cell_gets_max": 32,
-      "per_query_total_cell_bytes_max": 16777216,
+      "gate": "one_paired_consumed64_diagnostic",
+      "matched_vendor_measurement": false,
+      "memory_bytes": 2147483648,
       "per_dataset_mean_recall_at_100_minimum": 0.98,
       "per_dataset_nearest_rank_p05_hits_minimum": 95,
-      "matched_vendor_measurement": false,
+      "per_query_total_cell_bytes_max": 16777216,
+      "per_query_total_cell_gets_max": 32,
       "physical_s3_query_measurement": false,
-      "unchanged_V282_comparison_scope": "retained quality reference only"
+      "required": "Both query configurations sealed before execution; native query traces synced before truth; one native process at a time; terminal bodies and resource closure authenticate",
+      "state": "PENDING",
+      "swap_bytes": 0,
+      "tasks_max": 512,
+      "unchanged_V282_comparison_scope": "retained quality reference only",
+      "whole_worker_scratch_bytes": 17179869184
     }
   ],
-  "failure_policy": {
-    "source_identity_execution_or_resource_failure": "INVALID; preserve original receipt and repair before scientific use",
-    "completed_quality_failure": "FAIL for this frozen arm; preserve result and choose one causal redesign",
-    "interruption": "Discard interrupted measurement cell; no automatic replacement",
-    "architecture_scope": "These prospective arm thresholds are not universal product or 100M gates"
-  },
-  "closeout": "Sync terminal artifacts, stop immediately, terminate and wait for every owned instance before collection",
-  "product_ready_claim": false
+  "product_ready_claim": false,
+  "purpose": "One consumed64 ReLAION and CoHere 100k diagnostic, after source and infrastructure admission",
+  "schema": "borsuk-hierarchical-100k-prospective-run-order-v1",
+  "science_authority_pending": true
 }
