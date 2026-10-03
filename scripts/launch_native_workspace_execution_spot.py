@@ -59,8 +59,7 @@ BOUNDED_PUBLICATION = False
 FIXED48 = False
 HIERARCHICAL_CELLS = False
 HIERARCHICAL_CELLS_DELTA = ('crates/borsuk/src/bin/hierarchical_semantic_cells.rs',
-                          'crates/borsuk/src/hierarchical_semantic_cells.rs',
-                          'crates/borsuk/src/lib.rs')
+                          'crates/borsuk/src/hierarchical_semantic_cells.rs')
 HIERARCHICAL_CELLS_STAGE_SCHEMA = 'borsuk-hierarchical-cells-implementation-stage-v1'
 HIERARCHICAL_CELLS_REQUIRED_TESTS = {
     'hierarchical-cell-tests': tuple('hierarchical_semantic_cells::tests::' + name for name in (
@@ -72,9 +71,15 @@ HIERARCHICAL_CELLS_REQUIRED_TESTS = {
         'resident_directory_preload_is_admitted_charged_and_has_no_query_reads',
         'resident_preload_rejects_corrupt_unused_interior_page',
         'whole_cell_matches_two_stage_with_one_wave_and_full_payload_charges',
-        'nonunit_query_nonzero_mean_preserves_native_sq2_scoring_and_nomination')),
+        'nonunit_query_nonzero_mean_preserves_native_sq2_scoring_and_nomination',
+        'nomination_global_finds_leaf_hidden_by_hierarchy_pruning',
+        'nomination_unpruned_parity_caps_source_binding_and_failure_charges')),
     'hierarchical-cell-bin-tests': ('tests::configurations_reject_unknown_fields_and_truth_in_requests',
-        'tests::created_outputs_close_invalid_on_bad_truth_or_output_cap_without_overwrite'),}
+        'tests::created_outputs_close_invalid_on_bad_truth_or_output_cap_without_overwrite',
+        'tests::nomination_cli_full64_freezes_prefix_and_both_policies_without_truth',
+        'tests::nomination_cli_rejects_truth_fields_incomplete_panels_and_tampering',
+        'tests::nomination_prefix_rejects_fifo_and_symlink_without_blocking',
+        'tests::nomination_freeze_reserve_and_synced_prefix_tamper_close_invalid'),}
 HIERARCHICAL_CELLS_STAGES = tuple((name, command.split()) for name, command in (
     ('hierarchical-cell-tests', 'cargo test --locked -p borsuk --lib hierarchical_semantic_cells::'),
     ('hierarchical-cell-bin-tests', 'cargo test --locked -p borsuk --bin hierarchical_semantic_cells'),
