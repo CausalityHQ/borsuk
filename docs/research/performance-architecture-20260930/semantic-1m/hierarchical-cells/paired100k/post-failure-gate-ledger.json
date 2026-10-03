@@ -1,0 +1,45 @@
+{
+  "schema": "borsuk-hierarchical-post-failure-gate-ledger-v1",
+  "state": "PROSPECTIVE_DIAGNOSTIC_NOT_EXECUTED",
+  "source_revision": "272bf466",
+  "evidence": "a0001/root-decision.json",
+  "gates": [
+    {
+      "kind": "host_safety",
+      "threshold": "No local Rust on pressured shared host; authorized compiler scope8GiB/noSwap/jobs1/CPU200/Tasks512; stop original sustained full PSI>=1% for30s",
+      "origin": "operator resource policy and recorded local pressure stops",
+      "replacement": "Appropriately bounded remote qualification, exact source and original handle; do not silently lift local caps"
+    },
+    {
+      "kind": "frozen_experiment_admission",
+      "threshold": "a0001 mean R100>=.98, nearest-rank p05 hits>=95,GET<=32,bytes<=16MiB",
+      "origin": "paired100k/config.json and native diagnostic-v3 fixed options",
+      "observed": "ReLAION .649375/45,CoHere .68875/50; closed scientific FAIL remains immutable",
+      "replacement": "None for a0001; future architecture preregisters its own measured Pareto envelope"
+    },
+    {
+      "kind": "prospective_causal_diagnostic",
+      "threshold": "Same authenticated cell layout,leaf prototypes,Euclidean distance,24 selected cells,existing local block nomination andSQ8; no parameter sweep",
+      "origin": "source route at hierarchical_semantic_cells.rs1257 plus actual closed24cell reads",
+      "replacement": "Global all-leaf ranking isolates levelwise pruning; nomination must seal before truth. Design review pending; no new arm executed"
+    },
+    {
+      "kind": "current_product_target",
+      "threshold": "Equal-or-better recall and matched end-to-end cold p90/p95,QPS per total lifecycle dollar vs BOTH vendors",
+      "origin": "active product goal",
+      "replacement": "Fresh matched corpus/split/cache/region/concurrency and actual S3 bytes/retries/errors/RSS with pins+maintenance; published mismatched targets cannot prove a win"
+    },
+    {
+      "kind": "scale_admission",
+      "threshold": "Actual 1M then10M then100M serving/build/maintenance/pinning/concurrency envelopes",
+      "origin": "active goal and completed layout research",
+      "replacement": "Full-leaf f32 diagnostic costs C*D comparisons and C*D*4 prototype bytes per query/residency; it is not automatically a100M production router"
+    }
+  ],
+  "decisions": [
+    "Do not optimize SIMD to address fetched-cell coverage loss",
+    "Do not combine global leaf routing with normalized prototypes,overlap,new quantizer orfullSQ8 nomination in one causal experiment",
+    "Missing original candidate directory/cell artifacts must be restored with exact original root authentication before same-layout comparison; unmatched reconstructed layouts invalidate causal conclusion",
+    "No new paid run until source-qualified implementation,cheap real-fixture admission and required infrastructure canary close"
+  ]
+}
