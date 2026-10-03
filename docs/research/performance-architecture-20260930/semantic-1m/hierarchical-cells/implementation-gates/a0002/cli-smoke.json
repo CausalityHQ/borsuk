@@ -1,0 +1,40 @@
+{
+  "corpus_reads": 0,
+  "elapsed_seconds": 0.01947585097514093,
+  "native_builds": 0,
+  "passed": true,
+  "query_or_truth_reads": 0,
+  "resource_scope": {
+    "cpu_quota_percent": 100,
+    "memory_bytes": 268435456,
+    "swap_bytes": 0
+  },
+  "results": [
+    {
+      "argv": [],
+      "binary": {
+        "bytes": 4837336,
+        "sha256": "a2d88fb01d02b94ca888819d1a006ae780f50b0f15526b65a6c718c965c63dbb"
+      },
+      "exit_status": 2,
+      "expected_exit_status": 2,
+      "name": "hierarchical_semantic_cells",
+      "stderr": "INVALID: usage: hierarchical_semantic_cells build|diagnose CONFIG CONFIG_SHA256 NEW_OUTPUT\n",
+      "stdout": ""
+    },
+    {
+      "argv": [],
+      "binary": {
+        "bytes": 4293168,
+        "sha256": "adde84b81925b22a91e046e50266a648b65cef37414c493c14e4058be1d1612d"
+      },
+      "exit_status": 1,
+      "expected_exit_status": 1,
+      "name": "build_two_bit_generation",
+      "stderr": "Error: \"usage: build_two_bit_generation CONFIG CONFIG_SHA MAX_MEMORY_BYTES NEW_OUTPUT\"\n",
+      "stdout": ""
+    }
+  ],
+  "schema": "borsuk-hierarchical-qualified-cli-smoke-v1",
+  "temporary_binary_cleanup_complete": true
+}
