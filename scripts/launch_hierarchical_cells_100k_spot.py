@@ -1568,20 +1568,22 @@ def probe_qualify(base=Path('.'), *, canary=False):
 
 
 def probe_require_admission(config, proof, repo):
-    """A frozen, root-authenticated real no-GT gate; canary does not replace it."""
+    """Cheap authenticated inputs precede canary and the one paired execution."""
     admission = config['admission']
-    exact(admission['schema'], 'borsuk-global-leaf-real-no-gt-admission-v1', 'probe admission schema')
+    exact(admission['schema'], 'borsuk-global-leaf-real-no-gt-admission-v2', 'probe admission schema')
     exact(admission['authority_pending'], False, 'real fixture admission pending')
-    exact(admission['source_bound_real_no_gt'], True, 'real exact-layout no-GT admission')
+    exact(admission['source_bound_real_no_gt'], True, 'cheap real-input no-GT admission')
     # Config identity omits the admission object itself to avoid a recursive SHA.
     content = {k: v for k, v in config.items() if k != 'admission'}
     exact(admission['config_sha256'], local.sha(local.canonical(content)), 'admission final configuration')
     for n in ('code_identity_sha256', 'refs_identity_sha256', 'native_identity_sha256'):
         exact(admission[n], proof[n], 'admission unchanged final authority')
     receipt = read_ref(repo, admission['receipt'], 8 << 20)
-    for n, expected in dict(schema='borsuk-global-leaf-real-no-gt-admission-receipt-v1', status='ADMITTED',
-            complete=True, truth_opened=False, roots_authenticated=True, hierarchy_parity=True,
-            resource_gate_passed=True, native_units_drained=True, dataset_count=2, selection_receipts=256).items():
+    for n, expected in dict(schema='borsuk-global-leaf-real-no-gt-admission-receipt-v2', status='ADMITTED',
+            complete=True, truth_opened=False, original_root_authority_pins_authenticated=True,
+            historical_control_schema_admitted=True, exact_request_bodies_authenticated=True,
+            query_f32_hashes_authenticated=True, resource_gate_passed=True, cleanup_complete=True,
+            dataset_count=2, queries=128, ann_queries=0, native_processes=0, selection_receipts=0).items():
         exact(receipt[n], expected, 'real noGT receipt')
     for n in ('config_sha256', 'code_identity_sha256', 'refs_identity_sha256', 'native_identity_sha256'):
         exact(receipt[n], admission[n], 'real admission source/config receipt')
@@ -1924,11 +1926,42 @@ def probe_cli(args):
             probe_main(args[1] if canary else args[0], canary=canary)
 
 
+def probe_admission_self_check():
+    """Cheap admission precedes the single nomination run."""
+    proof = {n: 'a'*64 for n in ('code_identity_sha256', 'refs_identity_sha256', 'native_identity_sha256')}
+    config = dict(protocol='fixture', admission=dict(schema='borsuk-global-leaf-real-no-gt-admission-v2',
+        authority_pending=False, source_bound_real_no_gt=True, result_sha256='b'*64, **proof))
+    config['admission']['config_sha256'] = local.sha(local.canonical({'protocol': 'fixture'}))
+    receipt = dict(schema='borsuk-global-leaf-real-no-gt-admission-receipt-v2', status='ADMITTED',
+        complete=True, truth_opened=False, original_root_authority_pins_authenticated=True,
+        historical_control_schema_admitted=True, exact_request_bodies_authenticated=True,
+        query_f32_hashes_authenticated=True, resource_gate_passed=True, cleanup_complete=True,
+        dataset_count=2, queries=128, ann_queries=0, native_processes=0, selection_receipts=0,
+        **{n: config['admission'][n] for n in (*proof, 'config_sha256', 'result_sha256')})
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        def check(value):
+            (root/'receipt.json').write_bytes(local.canonical(value))
+            config['admission']['receipt'] = dict(local.identity(root/'receipt.json'), path='receipt.json')
+            probe_require_admission(config, proof, root)
+        check(receipt)
+        for field, value in (('selection_receipts', 256), ('native_processes', 1), ('truth_opened', True),
+                             ('queries', 127), ('query_f32_hashes_authenticated', False)):
+            try:
+                check(dict(receipt, **{field: value}))
+            except Exception:
+                pass
+            else:
+                raise AssertionError('admitted invalid cheap receipt: '+field)
+    print('PASS cheap admission accepts exact inputs without executing the paired probe; invalid receipts rejected')
+
+
 def probe_self_check(metadata_repo=None):
     """Real SDK service model/CLI, mocked transport/optional decoder imports."""
     from contextlib import ExitStack
     from types import SimpleNamespace
     import botocore.session
+    probe_admission_self_check()
     metadata_repo = Path(metadata_repo or os.environ.get('BORSUK_GLOBAL_LEAF_METADATA_REPO', Path(__file__).resolve().parents[1]))
     probe.self_check_qualification(metadata_repo)
     original_config = local.read_json(local.identity(metadata_repo/probe.OLD/'screen/config.json'), 256 << 10)
