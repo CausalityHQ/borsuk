@@ -27,7 +27,7 @@
   ],
   "initial_source_limitations": [
     "Quantizer distortion guarantees do not establish routing coverage or end-to-end ANN recall",
-    "The hypergraph paper evaluates QQP and STS-B with D384 embeddings and relevant-pair Hit@10, not our D768 exact-neighbor recall@100 or S3 cold tails",
+    "The hypergraph paper's complementary candidate-generation mechanism is a useful hypothesis for D768, D1000 and other dimensions. Its D384 relevant-pair Hit@10 numbers require a transfer test before being reported as our exact-neighbor recall@100 or S3 cold tails; differing dimensions are not a rejection criterion",
     "Hypergraph candidate generation depends on embedding-coordinate activation distributions; combining it with a random rotation requires a separate selectivity and coverage test",
     "Turbopuffer's published 100B architecture discussion includes SSD-resident deployments; it does not establish a matched fully cold S3 result",
     "The current whole-directory resident prototype has no measured 100M admission or serving result"
