@@ -29,8 +29,14 @@ NATIVE = "borsuk-hierarchical-cells-nomination-v1"
 POLICIES = ["hierarchical8_and24", "global_top24"]
 DATASETS = ["relaion", "cohere"]
 SPLIT = "already consumed historical first64; not fresh holdout"
-PROTOCOL = dict(bytes=3288, sha256="49c413b3624fa6135a119205990487596662d89b3637221b8373366f0f0d2b91")
+# e3926e41 includes the required truth-free original control replay admission.
+PROTOCOL = dict(bytes=3707, sha256="2914b9bc79cb9cfaf77a270cca868c90398c20dd83149c6896dd7706ac7def04")
 AUDIT = dict(bytes=186248, sha256="ed420f8a4562fe36b0343c66356cf5f573d6493a875e0621fd4ba1f230484e3e")
+HISTORICAL_TERMINAL = dict(bytes=4916, sha256="a0ca521980142f869e7be74b10802926459674cc06ec2e7bf6e11214c8065bf2")
+HISTORICAL_OPTIONS = dict(blocks_per_cell=4, boundary_beam=24, fetch_policy="whole_cell",
+                          max_cell_bytes=16777216, max_cell_gets=32, max_cells=32,
+                          max_query_payload_bytes=134217728, max_refinement_bytes=0,
+                          max_refinement_gets=1, max_source_bytes=0, max_source_gets=1, primary_beam=8)
 ROOTS = dict(relaion="fec06fb0eee4a1380a42356af3ef43d38137a95b4bdb09d457b434b5369c076b",
              cohere="89aee41edba2f4bc447fc5fb66ecee3f470e4ff50627c6f294da6208fdbcb6b2")
 REQUESTS = dict(relaion=dict(bytes=937167, sha256="6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330"),
@@ -457,7 +463,8 @@ def closed_receipt(desc, config, sealed):
     expected = dict(schema=SCHEMA + "-closed-receipt", status="CLOSED_VALID", execution_exit_code=0,
                     source_qualified=True, resources_qualified=True, cleanup_complete=True,
                     both_sealed_before_truth=True, truth_opened=False,
-                    protocol=config["protocol"], historical_audit=config["historical_audit"], source=config["source"])
+                    protocol=config["protocol"], historical_audit=config["historical_audit"],
+                    historical_control=config["historical_control"], source=config["source"])
     keys(receipt, [*expected, "datasets"], "closed root receipt")
     same({k: receipt[k] for k in expected}, expected, "closed execution/resource/cleanup/source qualification")
     keys(receipt["datasets"], DATASETS, "receipt both datasets")
@@ -477,13 +484,101 @@ def closed_receipt(desc, config, sealed):
     return receipt
 
 
+def original_control_parity(config, sealed, audit):
+    """Authenticate closed a0001 controls and compare ID sets without opening GT.
+
+    Old query_frozen events have no query hash. Their ordinal and identity's
+    requests SHA bind the original panel through the terminal-pinned config.
+    nominations() independently hashes that same pinned panel's original f32
+    LE bytes for both new arms. Never invent a historical per-query hash.
+    """
+    control = config["historical_control"]
+    same(content_pin(control["terminal"]), HISTORICAL_TERMINAL, "original terminal pin")
+    terminal = load(control["terminal"])
+    same({k: terminal[k] for k in ("schema", "phase", "status", "exit_code", "original_exit_code")},
+         dict(schema="borsuk-hierarchical-100k-spot-v2", phase="complete", status="complete",
+              exit_code=0, original_exit_code=0), "original closed execution")
+    for name in DATASETS:
+        old = control["datasets"][name]
+        dataset = config["datasets"][name]
+        for key, suffix in (("diagnostic_config", "diagnose.json"), ("diagnostic", "diagnostic.jsonl")):
+            same(content_pin(old[key]), terminal["artifacts"][f"screen/measurement/{name}-{suffix}"],
+                 "original terminal-bound " + key)
+        original = load(old["diagnostic_config"], 65536)
+        keys(original, "schema candidate_root requests first count top_k options max_resident_directory_payload_bytes truth truth_width max_evaluator_payload_bytes max_result_bytes", "original diagnostic config")
+        same({k: original[k] for k in ("schema", "first", "count", "top_k", "truth_width", "options")},
+             dict(schema="borsuk-hierarchical-cells-diagnostic-v3", first=0, count=64, top_k=100,
+                  truth_width=100, options=HISTORICAL_OPTIONS), "original diagnostic geometry/options")
+        for key, cap in (("candidate_root", 65536), ("requests", 32 * MIB), ("truth", 25600)):
+            descriptor(original[key], cap)  # metadata only; old truth/map are NEVER opened
+            same(content_pin(original[key]), content_pin(dataset[key]), "original diagnostic " + key + " binding")
+        body = read_artifact(old["diagnostic"], 16 * MIB)
+        lines = body.splitlines(keepends=True)
+        require(len(lines) == 131, "original exact131 closed events")
+        prefix, prefix_bytes = hashlib.sha256(), 0
+        for index, line in enumerate(lines):
+            require(line.endswith(b"\n") and len(line) <= 8 * MIB, "original event newline/cap")
+            event = parse(line)
+            if index == 0:
+                expected = dict(phase="identity", schema=original["schema"], first=0, count=64, top_k=100,
+                                config_sha256=old["diagnostic_config"]["sha256"],
+                                candidate_root_sha256=original["candidate_root"]["sha256"],
+                                requests_sha256=original["requests"]["sha256"], options=HISTORICAL_OPTIONS,
+                                physical_s3_measured=False, scientific_qualification=False)
+                # These are historical source identities, not the current binary.
+                for role, path in (("module", "crates/borsuk/src/hierarchical_semantic_cells.rs"),
+                                   ("binary", "crates/borsuk/src/bin/hierarchical_semantic_cells.rs")):
+                    expected[role + "_source_sha256"] = audit["authenticated_source_bodies"][path]["sha256"]
+                same({k: event[k] for k in expected}, expected, "original diagnostic identity/query/source binding")
+            elif index <= 64:
+                ordinal = index - 1
+                keys(event, "phase ordinal truth_opened underfilled trace", "original query event")
+                same({k: event[k] for k in ("phase", "ordinal", "truth_opened")},
+                     dict(phase="query_frozen", ordinal=ordinal, truth_opened=False), "original query ordinal")
+                row = sealed[name]["rows"][2 * ordinal]
+                same([row["ordinal"], row["policy"]], [ordinal, POLICIES[0]], "new hierarchy parity ordinal/policy")
+                old_primary, old_covered = (roster(event["trace"][key]) for key in ("primary_ids", "covered_ids"))
+                require(old_primary <= old_covered, "original primary subset covered")
+                same(row["primary_ids"], sorted(old_primary), "pretruth original hierarchy primary-ID parity")
+                same(row["covered_ids"], sorted(old_covered), "pretruth original hierarchy covered-ID parity")
+            elif index == 65:
+                same(event, dict(phase="all_queries_frozen", first=0, count=64, truth_opened=False,
+                                 trace_prefix_bytes=prefix_bytes, trace_prefix_sha256=prefix.hexdigest()),
+                     "original frozen prefix bytes/SHA")
+            elif index < 130:
+                # Authenticate the complete original file without interpreting
+                # its already-consumed loss values as fresh truth or parity.
+                keys(event, "phase ordinal truth_sha256 loss", "original loss event")
+                same([event["phase"], event["ordinal"], event["truth_sha256"]],
+                     ["loss_attribution", index - 66, original["truth"]["sha256"]], "original closed loss roster")
+            else:
+                same(event, dict(phase="terminal", status="DIAGNOSTIC", complete=True, queries=64,
+                                 truth_opened=True, scientific_qualification=False, quality_or_performance_claim=False),
+                     "original complete diagnostic terminal")
+            if index <= 64:
+                prefix.update(line)
+                prefix_bytes += len(line)
+        sealed[name]["original_control_parity"] = dict(queries=64, primary_ids_equal=True, covered_ids_equal=True,
+                                                       original_requests_sha256=original["requests"]["sha256"],
+                                                       original_diagnostic=content_pin(old["diagnostic"]),
+                                                       original_config=content_pin(old["diagnostic_config"]),
+                                                       original_prefix=dict(bytes=prefix_bytes, sha256=prefix.hexdigest()),
+                                                       before_truth_open=True)
+
+
 def authenticate(config):
-    keys(config, "schema protocol historical_audit source closed_receipt datasets", "reducer config")
+    keys(config, "schema protocol historical_audit historical_control source closed_receipt datasets", "reducer config")
     require(config["schema"] == SCHEMA, "reducer schema")
     keys(config["datasets"], DATASETS, "both required datasets")
     # Merely naming a truth body as a source/proof must not move its open ahead
     # of the boundary. Metadata inspection is allowed; no truth fd is opened.
     truth_descs, pretruth_descs = [], [config["protocol"], config["historical_audit"], config["closed_receipt"]]
+    control = keys(config["historical_control"], "terminal datasets", "historical control")
+    keys(control["datasets"], DATASETS, "historical control both datasets")
+    pretruth_descs.append(control["terminal"])
+    for name in DATASETS:
+        old = keys(control["datasets"][name], "diagnostic_config diagnostic", "historical dataset")
+        pretruth_descs.extend(old.values())
     keys(config["source"], "revision archive module binary_source executable reducer", "current source")
     pretruth_descs.extend(config["source"][k] for k in ("archive", "module", "binary_source", "executable", "reducer"))
     for name in DATASETS:
@@ -516,6 +611,7 @@ def authenticate(config):
     # Explicit root authority is mandatory. A native marker alone is never
     # treated as execution, resource, source, or cleanup qualification.
     closed_receipt(config["closed_receipt"], config, sealed)
+    original_control_parity(config, sealed, audit)
     return sealed, audit
 
 
@@ -563,6 +659,7 @@ def reduce_dataset(seal, truth, historical):
              [original["ordinal"], original["native_loss"]["primary_hits"], original["coverage_ceiling_hits"],
               original["roster_sizes"]["covered"], original["local_reads"]["requested_bytes"]], "historical hierarchy per-query reproduction")
     return dict(policies=summaries, paired_per_query=paired, prefix=seal["prefix"],
+                original_control_parity=seal["original_control_parity"],
                 resident_leaf_cells=seal["resident_leaf_cells"], startup_local_reads=seal["startup_local_reads"])
 
 
@@ -624,6 +721,9 @@ def contract():
                 self_check="python3 scripts/reduce_hierarchical_global_leaf_coverage.py --self-check",
                 artifact="{path:absolute_local_regular_file, bytes:positive_integer, sha256:lowercase64}; no symlink/FIFO; no gzip substitution",
                 config=dict(schema=SCHEMA, protocol="artifact pinned to PROTOCOL", historical_audit="artifact pinned to AUDIT",
+                            historical_control=dict(terminal="artifact pinned to original a0001 aws-terminal.json",
+                                                    datasets={name: dict(diagnostic_config="raw artifact of original terminal-bound screen/measurement/" + name + "-diagnose.json",
+                                                                         diagnostic="raw artifact of original terminal-bound screen/measurement/" + name + "-diagnostic.jsonl") for name in DATASETS}),
                             source=dict(revision="full40 qualified current source revision", archive="artifact; streamed <=1GiB",
                                         module="artifact of current Rust module", binary_source="artifact of current Rust CLI source",
                                         executable="artifact of qualified executable; streamed <=1GiB",
@@ -640,6 +740,7 @@ def contract():
                                     source_qualified=True, resources_qualified=True, cleanup_complete=True,
                                     both_sealed_before_truth=True, truth_opened=False,
                                     protocol="exact config.protocol descriptor", historical_audit="exact config.historical_audit descriptor",
+                                    historical_control="exact config.historical_control object (terminal and both original diagnostic/config descriptors)",
                                     source="exact config.source object",
                                     datasets={name: dict(nomination_config="exact dataset descriptor", nominations="exact dataset descriptor",
                                                         candidate_root="exact dataset descriptor", directories="exact dataset descriptor", requests="exact dataset descriptor",
@@ -648,11 +749,15 @@ def contract():
                                                         execution_exit_code=0, sealed_before_truth=True, fsynced=True, complete=True,
                                                         resources=dict(memory_limit_bytes="1..536870912", memory_peak_bytes="1..memory_limit_bytes",
                                                                        swap_limit_bytes=0, swap_peak_bytes=0, cpu_count=1, oom=0, oom_kill=0)) for name in DATASETS}),
-                pins=dict(protocol=PROTOCOL, historical_audit=AUDIT, roots=ROOTS, requests=REQUESTS, truths=TRUTHS),
+                pins=dict(protocol=PROTOCOL, historical_audit=AUDIT, historical_terminal=HISTORICAL_TERMINAL,
+                          roots=ROOTS, requests=REQUESTS, truths=TRUTHS),
                 roster=["identity", "128 selection_frozen: ordinal0..63, hierarchy then global", "all_selections_frozen", "terminal NOMINATIONS_FROZEN complete=true"],
                 checks=["Strict fields/types/duplicate JSON rejection; all131 events, newline/line/body caps and full body pin",
                         "Both datasets: original layout, original query bytes, current source/binary bindings, prefix bytes/SHA and marker identities",
                         "Root receipt asserts exact source qualification and execution0/resources/cleanup/both-fsynced-before-truth; never inferred from marker",
+                        "BEFORE GT: original a0001 terminal authenticates both diagnostic configs and bodies; exact64 hierarchy primary/covered source-ID set parity by ordinal",
+                        "Old traces have no per-query query_sha256: original identity requests SHA -> terminal-bound diagnostic_config.requests -> same authenticated original request panel -> new arm f32 LE hashes",
+                        "Original source identities are checked against historical audit source pins, separately from current qualified source/binary",
                         "All pretruth admission passes before either GT is opened; both truths pinned LEu32 64x100 unique logical IDs0..99999",
                         "Authenticated complete directory topology, source ranges/population/prototypes; selected24 unique primary8, total_cmp/cell-ID ordering",
                         "Source-ID roster disjointness, consistent per-cell membership across all selections; source-ID uniqueness and original source ordinal bounds",
@@ -786,14 +891,45 @@ def synthetic_fixture(directory):
                                roster_sizes=dict(covered=96), local_reads=dict(requested_bytes=96 * 988)))
     truth_desc = save("truth.u32", struct.pack("<6400I", *(sid for row in truth_rows for sid in row)))
     protocol_desc = save("protocol.json", dict(split=SPLIT))
-    audit_desc = save("audit.json", dict(audit_status="VALID", datasets={name: dict(per_query=historical) for name in DATASETS}))
+    old_sources = {"crates/borsuk/src/hierarchical_semantic_cells.rs": dict(bytes=1, sha256="1" * 64),
+                   "crates/borsuk/src/bin/hierarchical_semantic_cells.rs": dict(bytes=1, sha256="2" * 64)}
+    audit_desc = save("audit.json", dict(audit_status="VALID", authenticated_source_bodies=old_sources,
+                                         datasets={name: dict(per_query=historical) for name in DATASETS}))
+    old_datasets, old_artifacts = {}, {}
+    for name in DATASETS:
+        old_config = dict(schema="borsuk-hierarchical-cells-diagnostic-v3", candidate_root=root_desc, requests=requests,
+                          first=0, count=64, top_k=100, truth_width=100, truth=truth_desc, options=HISTORICAL_OPTIONS,
+                          max_evaluator_payload_bytes=128*MIB, max_resident_directory_payload_bytes=384*MIB, max_result_bytes=128*MIB)
+        old_config_desc = save(name + "-original-diagnose.json", old_config)
+        old_events = [dict(phase="identity", schema=old_config["schema"], first=0, count=64, top_k=100,
+                           config_sha256=old_config_desc["sha256"], candidate_root_sha256=root_desc["sha256"],
+                           requests_sha256=requests["sha256"], options=HISTORICAL_OPTIONS,
+                           physical_s3_measured=False, scientific_qualification=False,
+                           module_source_sha256="1"*64, binary_source_sha256="2"*64)]
+        for ordinal in range(64):
+            old_events.append(dict(phase="query_frozen", ordinal=ordinal, truth_opened=False, underfilled=False,
+                                   trace={key: receipts[0][key] for key in ("primary_ids", "covered_ids")}))
+        old_prefix = b"".join(encoded(event) + b"\n" for event in old_events)
+        old_events.append(dict(phase="all_queries_frozen", first=0, count=64, truth_opened=False,
+                               trace_prefix_bytes=len(old_prefix), trace_prefix_sha256=pin(old_prefix)["sha256"]))
+        old_events.extend(dict(phase="loss_attribution", ordinal=i, truth_sha256=truth_desc["sha256"], loss={}) for i in range(64))
+        old_events.append(dict(phase="terminal", status="DIAGNOSTIC", complete=True, queries=64,
+                               truth_opened=True, scientific_qualification=False, quality_or_performance_claim=False))
+        old_body = b"".join(encoded(event) + b"\n" for event in old_events)
+        old_desc = save(name + "-original-diagnostic.jsonl", old_body)
+        old_datasets[name] = dict(diagnostic_config=old_config_desc, diagnostic=old_desc)
+        old_artifacts["screen/measurement/" + name + "-diagnose.json"] = content_pin(old_config_desc)
+        old_artifacts["screen/measurement/" + name + "-diagnostic.jsonl"] = content_pin(old_desc)
+    old_terminal = save("original-terminal.json", dict(schema="borsuk-hierarchical-100k-spot-v2", phase="complete",
+                                                       status="complete", exit_code=0, original_exit_code=0, artifacts=old_artifacts))
+    control = dict(terminal=old_terminal, datasets=old_datasets)
     ds = dict(candidate_root=root_desc, directories=dirs, requests=requests, nomination_config=config_desc,
               nominations=nom_desc, truth=truth_desc, truth_id_space="logical_source_ordinal_le_u32")
-    config = dict(schema=SCHEMA, protocol=protocol_desc, historical_audit=audit_desc, source=source,
+    config = dict(schema=SCHEMA, protocol=protocol_desc, historical_audit=audit_desc, historical_control=control, source=source,
                   datasets={name: copy.deepcopy(ds) for name in DATASETS})
     receipt = dict(schema=SCHEMA + "-closed-receipt", status="CLOSED_VALID", execution_exit_code=0,
                    source_qualified=True, resources_qualified=True, cleanup_complete=True, both_sealed_before_truth=True, truth_opened=False,
-                   protocol=protocol_desc, historical_audit=audit_desc, source=source, datasets={})
+                   protocol=protocol_desc, historical_audit=audit_desc, historical_control=control, source=source, datasets={})
     for name in DATASETS:
         entry = {k: ds[k] for k in ("nomination_config", "nominations", "candidate_root", "directories", "requests")}
         entry.update(prefix=prefix, source_identity_sha256=identity["source_identity_sha256"], execution_exit_code=0,
@@ -802,7 +938,7 @@ def synthetic_fixture(directory):
                                     cpu_count=1, oom=0, oom_kill=0))
         receipt["datasets"][name] = entry
     config["closed_receipt"] = save("closed.json", receipt)
-    overrides = dict(PROTOCOL=content_pin(protocol_desc), AUDIT=content_pin(audit_desc),
+    overrides = dict(PROTOCOL=content_pin(protocol_desc), AUDIT=content_pin(audit_desc), HISTORICAL_TERMINAL=content_pin(old_terminal),
                      ROOTS={name: root_desc["sha256"] for name in DATASETS}, REQUESTS={name: content_pin(requests) for name in DATASETS},
                      TRUTHS={name: truth_desc["sha256"] for name in DATASETS}, BASELINES={name: (6006, 63) for name in DATASETS})
     return config, overrides, body, receipt, save
@@ -810,7 +946,7 @@ def synthetic_fixture(directory):
 
 def self_check():
     checks, opens = [], []
-    production_pins = {name: copy.deepcopy(globals()[name]) for name in ("PROTOCOL", "AUDIT", "ROOTS", "REQUESTS", "TRUTHS", "BASELINES")}
+    production_pins = {name: copy.deepcopy(globals()[name]) for name in ("PROTOCOL", "AUDIT", "HISTORICAL_TERMINAL", "ROOTS", "REQUESTS", "TRUTHS", "BASELINES")}
     original_read = read_artifact
     with tempfile.TemporaryDirectory(prefix="sealed-coverage-synthetic-") as temporary:
         directory = Path(temporary)
@@ -823,6 +959,7 @@ def self_check():
             return original_read(desc, cap, retain)
 
         def reject(label, mutation, before_truth=True):
+            trusted_terminal = HISTORICAL_TERMINAL
             current = copy.deepcopy(config)
             mutation(current)
             opens.clear()
@@ -832,7 +969,39 @@ def self_check():
                 require(not before_truth or not opens, "truth opened before rejection: " + label)
             else:
                 raise AssertionError("accepted invalid fixture: " + label)
+            finally:
+                globals()["HISTORICAL_TERMINAL"] = trusted_terminal
             checks.append(label)
+
+        def historical_mutant(current, target, mutate_events=None, mutate_config=None, mutate_terminal=None, reseal=True):
+            control = current["historical_control"]
+            old = control["datasets"][target]
+            original = parse(Path(old["diagnostic_config"]["path"]).read_bytes())
+            events = [parse(line) for line in Path(old["diagnostic"]["path"]).read_bytes().splitlines()]
+            if mutate_config:
+                mutate_config(original)
+                old["diagnostic_config"] = save("mutant-original-config.json", original)
+                events[0].update(config_sha256=old["diagnostic_config"]["sha256"], requests_sha256=original["requests"]["sha256"])
+                for event in events[66:130]:
+                    event["truth_sha256"] = original["truth"]["sha256"]
+            if mutate_events:
+                mutate_events(events)
+            if reseal:
+                prefix = pin(b"".join(encoded(event) + b"\n" for event in events[:65]))
+                events[65].update(trace_prefix_bytes=prefix["bytes"], trace_prefix_sha256=prefix["sha256"])
+            old["diagnostic"] = save("mutant-original-trace.jsonl", b"".join(encoded(event) + b"\n" for event in events))
+            terminal = parse(Path(control["terminal"]["path"]).read_bytes())
+            for key, suffix in (("diagnostic_config", "diagnose.json"), ("diagnostic", "diagnostic.jsonl")):
+                terminal["artifacts"][f"screen/measurement/{target}-{suffix}"] = content_pin(old[key])
+            if mutate_terminal:
+                mutate_terminal(terminal)
+            control["terminal"] = save("mutant-original-terminal.json", terminal)
+            # Synthetic-only override: all outer descriptors/proofs agree, so a
+            # parity/query/closure defect cannot hide behind a stale digest.
+            globals()["HISTORICAL_TERMINAL"] = content_pin(control["terminal"])
+            proof = copy.deepcopy(receipt)
+            proof["historical_control"] = control
+            current["closed_receipt"] = save("mutant-parity-proof.json", proof)
 
         def replace_nominations(current, replacement, target="cohere"):
             desc = save("bad-nominations.jsonl", replacement)
@@ -869,6 +1038,7 @@ def self_check():
             globals()["read_artifact"] = tracked_read
             first = evaluate(config, "f" * 64)
             require(len(opens) == 2, "exactly two truth reads after seals")
+            require(all(first["datasets"][name]["original_control_parity"]["before_truth_open"] is True for name in DATASETS), "truth-free original control parity")
             require(first["datasets"]["relaion"]["policies"][POLICIES[0]]["fetched"] == dict(total_hits=6006, mean_coverage_fraction=6006/6400, p05_hits=63), "known hierarchy intersections/p05")
             require(first["datasets"]["cohere"]["policies"][POLICIES[1]]["fetched"] == dict(total_hits=4198, mean_coverage_fraction=4198/6400, p05_hits=64), "known global intersections/p05")
             paired = first["datasets"]["relaion"]["paired_per_query"]
@@ -904,6 +1074,33 @@ def self_check():
             checks.extend(["known primary/fetched intersections", "known paired deltas", "SOURCE versus WholeCell bytes",
                            "fourth-lowest p05", "deterministic repeated output", "no overwrite before GT", "noncontiguous source IDs; no physical map",
                            "CONFIG CONFIG_SHA NEW_OUTPUT", "bad CONFIG SHA before GT/no output", "relocated exact sealed artifacts"])
+            checks.extend(["original per-query ID parity before GT", "original requests SHA/config binding without nonexistent old query hashes",
+                           "historical and current native source identities kept separate"])
+            reject("missing historical control", lambda c: c.pop("historical_control"))
+            reject("missing original terminal", lambda c: c["historical_control"].pop("terminal"))
+            reject("changed original terminal pin", lambda c: c["historical_control"]["terminal"].update(sha256="e"*64))
+            reject("original terminal not closed", lambda c: historical_mutant(c, "cohere", mutate_terminal=lambda t: t.update(exit_code=1)))
+            for name in DATASETS:
+                reject("missing historical dataset " + name, lambda c, n=name: c["historical_control"]["datasets"].pop(n))
+                for field in ("diagnostic", "diagnostic_config"):
+                    reject("missing original " + name + " " + field, lambda c, n=name, f=field: c["historical_control"]["datasets"][n].pop(f))
+                    reject("changed original " + name + " " + field, lambda c, n=name, f=field: c["historical_control"]["datasets"][n][f].update(sha256="e"*64))
+                def changed_primary(events):
+                    trace = events[1]["trace"]
+                    trace["primary_ids"][0] = next(sid for sid in trace["covered_ids"] if sid not in trace["primary_ids"])
+                def changed_covered(events):
+                    trace = events[1]["trace"]
+                    index = next(i for i, sid in enumerate(trace["covered_ids"]) if sid not in trace["primary_ids"])
+                    trace["covered_ids"][index] = next(sid for sid in range(100000) if sid not in trace["covered_ids"])
+                reject("same-size primary-ID parity mismatch " + name, lambda c, n=name: historical_mutant(c, n, changed_primary))
+                reject("same-size covered-ID parity mismatch " + name, lambda c, n=name: historical_mutant(c, n, changed_covered))
+            reject("old ordinal gap", lambda c: historical_mutant(c, "cohere", lambda e: e[64].update(ordinal=64)))
+            reject("old requests identity changed", lambda c: historical_mutant(c, "cohere", lambda e: e[0].update(requests_sha256="e"*64)))
+            reject("old terminal-bound config requests changed", lambda c: historical_mutant(c, "cohere", mutate_config=lambda old: old["requests"].update(sha256="e"*64)))
+            reject("old source confused with current", lambda c: historical_mutant(c, "cohere", lambda e: e[0].update(module_source_sha256=c["source"]["module"]["sha256"])))
+            reject("old prefix marker tamper", lambda c: historical_mutant(c, "cohere", lambda e: e[65].update(trace_prefix_sha256="e"*64), reseal=False))
+            reject("old terminal incomplete", lambda c: historical_mutant(c, "cohere", lambda e: e[-1].update(complete=False)))
+            reject("closed receipt omits historical binding", bad_proof(lambda p: p.pop("historical_control")))
             for name in DATASETS:
                 reject("missing " + name, lambda c, n=name: c["datasets"].pop(n))
                 reject("wrong original root " + name, lambda c, n=name: c["datasets"][n]["candidate_root"].update(sha256="d" * 64))
@@ -982,7 +1179,10 @@ def self_check():
                 desc = save("bad-truth.u32", malformed)
                 truth_paths.add(desc["path"])
                 TRUTHS["cohere"] = desc["sha256"]
-                reject(label, lambda c, d=desc: c["datasets"]["cohere"].update(truth=d), before_truth=False)
+                def bad_truth(current, d=desc):
+                    current["datasets"]["cohere"]["truth"] = d
+                    historical_mutant(current, "cohere", mutate_config=lambda old: old.update(truth=d))
+                reject(label, bad_truth, before_truth=False)
                 require(len(opens) == 2, "truth validation occurs after seals")
                 TRUTHS["cohere"] = pin(original_truth)["sha256"]
             # Direct decision boundary cases use independently stipulated counts.
