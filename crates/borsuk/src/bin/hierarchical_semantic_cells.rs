@@ -27,6 +27,7 @@ use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
+    os::unix::fs::OpenOptionsExt,
     path::Path,
     time::Instant,
 };
@@ -355,8 +356,13 @@ fn diagnose(config: DiagnosticConfig, config_sha: &str, output: &Path) -> Result
 // Re-read the synced file prefix before emitting any completion marker. A
 // changed/truncated prefix is INVALID, including tampering after serialization.
 fn verify_nomination_prefix(output: &Path, bytes: usize, expected: &str) -> Result<()> {
-    let mut file = File::open(output)?;
-    require(file.metadata()?.len() == bytes as u64, "nomination prefix exact length")?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags((rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOFOLLOW).bits() as i32)
+        .open(output)?;
+    let metadata = file.metadata()?;
+    require(metadata.is_file() && metadata.len() == bytes as u64,
+        "nomination prefix regular file/exact length")?;
     let mut digest = Sha256::new();
     let mut remaining = bytes;
     let mut buffer = [0_u8; 65536];
@@ -676,6 +682,31 @@ mod tests {
                 assert_eq!(terminal["status"], "INVALID");
             }
         }
+    }
+
+    #[test]
+    fn nomination_prefix_rejects_fifo_and_symlink_without_blocking() {
+        let temp = tempfile::tempdir().unwrap();
+        let regular = temp.path().join("regular");
+        fs::write(&regular, b"prefix\n").unwrap();
+        verify_nomination_prefix(&regular, 7, &hash(b"prefix\n")).unwrap();
+        let symlink = temp.path().join("symlink");
+        std::os::unix::fs::symlink(&regular, &symlink).unwrap();
+        assert!(verify_nomination_prefix(&symlink, 7, &hash(b"prefix\n")).is_err());
+        let fifo = temp.path().join("fifo");
+        rustix::fs::mkfifoat(
+            rustix::fs::CWD,
+            &fifo,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        )
+        .unwrap();
+        // No writer exists: a blocking open would hang before type admission.
+        let (send, receive) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            send.send(verify_nomination_prefix(&fifo, 0, &hash(b"")).is_err())
+        });
+        assert!(receive.recv_timeout(std::time::Duration::from_secs(1)).unwrap());
+        worker.join().unwrap().unwrap();
     }
 
     #[test]
