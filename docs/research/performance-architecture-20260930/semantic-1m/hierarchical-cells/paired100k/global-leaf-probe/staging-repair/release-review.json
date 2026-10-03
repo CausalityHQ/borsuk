@@ -1,0 +1,64 @@
+{
+  "schema": "borsuk-staging-repair-dual-review-v1",
+  "id": "a49da10ad90e4ace",
+  "status": "completed",
+  "prompt_sha256": "8cda142ce1e1d41c1bd9fbfef1b3517c0c07cf94af6bbe9c9de82d69d093fc0c",
+  "force_reason": "New terminal a0001 execution INVALID and new exact source guard repair01847b3 change scratch scan scheduling; prior release critique47631ed7 reviewed da1288fa and cannot qualify this diff. One result-gated review before new paid freeze.",
+  "started_at": 1791037250,
+  "finished_at": 1791037770,
+  "reviewed_commit": "01847b394ddf49492a44fdb8f4269a466cabdd52",
+  "reviewers": [
+    {
+      "role": "research_critic",
+      "id": "863c7b2da8224a71",
+      "status": "completed",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "active_provider": "codex",
+      "providers_used": [
+        "claude",
+        "codex"
+      ],
+      "attempt_history": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5",
+          "budget_usd": 4,
+          "timeout_seconds": 1200,
+          "started_at": 1791037250,
+          "effort": "high",
+          "effort_source": "fallback"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol",
+          "budget_usd": null,
+          "timeout_seconds": 1191,
+          "started_at": 1791037259
+        }
+      ],
+      "result": "**GO to integrate exact `01847b394ddf49492a44fdb8f4269a466cabdd52` against `39472dc1`, then prepare a prospective freeze.** I found no blocking regression in the two-file diff.\n\n- **Authentication remains intact.** [Archive traversal](/home/rb/worktrees/borsuk-global-leaf-staging-timeout-fix/scripts/run_hierarchical_global_leaf_probe.py:567) retains whole-archive authentication before/after, all qualified native/support hashes, completeness, duplicate rejection, and subset size/hash checks. Subset writes have synchronous scans before and after.\n- **Resource checks remain active.** [The helper](/home/rb/worktrees/borsuk-global-leaf-staging-timeout-fix/scripts/launch_hierarchical_cells_100k_spot.py:1630) checks deadline, monitor errors, and previously observed scratch violations without rescanning. The signal timer, periodic monitor, cgroup limits, and cleanup paths remain unchanged. Scratch enforcement still detects violations through scans; it does not reserve space before writes.\n- **The alias correction is sound.** Patching `launcher.probe.ORIGINAL_ROOT` targets the module the helper actually uses. Both standalone and combined CLI logs pass. Candidate file hashes match the repair contract; frozen metadata qualification, Python compilation, and diff checks report exit zero.\n\nTwo evidence limitations matter:\n\n1. The synthetic **38.63s → 0.209s** result establishes removal of repeated tree traversal. It does not prove the real campaign will finish within its deadline or establish this defect as the sole cause. Real archive decompression/authentication and later staging costs remain unmeasured.\n2. The final profiling run finishes before the monitor’s first tick and refreshes its deadline on each check. It therefore supplies no live timeout/monitor-cleanup evidence. Separate negative checks exercise expired deadlines, monitor errors, and scratch violations; lifecycle coverage remains mocked.\n\nBoundary scans with periodic monitoring are an appropriately small fix; incremental disk accounting would add complexity without evidence that it is needed.\n\nKeep **a0001 immutable and INVALID**. Refresh CODE identities and admission/configuration bindings, then pass the source-bound real fixture and new disposable canary before any paid retry. These receipts establish no recall or scientific performance result, so an ANN recall gate is not warranted here.\n\nReview was read-only; I ran no tests, experiments, native execution, or network calls."
+    },
+    {
+      "role": "engineering_critic",
+      "id": "e767947986964a90",
+      "status": "completed",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "active_provider": "codex",
+      "providers_used": [
+        "codex"
+      ],
+      "attempt_history": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra",
+          "budget_usd": null,
+          "timeout_seconds": 1200,
+          "started_at": 1791037250
+        }
+      ],
+      "result": "**GO to integrate exact `01847b394ddf49492a44fdb8f4269a466cabdd52` and prepare a new prospective freeze.** I found no blocking regression in the two-file diff against `39472dc1`. This does not establish readiness for a paid retry.\n\n- **Authentication remains intact.** [Archive traversal](/home/rb/worktrees/borsuk-global-leaf-staging-timeout-fix/scripts/run_hierarchical_global_leaf_probe.py:567) retains whole-archive authentication before/after, all qualified native/support hashes, regular/nonsparse/unique entries, completeness, subset size/hash checks, and the 8 MiB source bound. Full scratch scans bracket subset writes.\n- **Resource enforcement is preserved.** [The helper](/home/rb/worktrees/borsuk-global-leaf-staging-timeout-fix/scripts/launch_hierarchical_cells_100k_spot.py:1630) checks deadline, monitor errors, and recorded peak even with `scan=False`. Periodic scans, deadline signals, cgroup limits, and cleanup remain. Scratch enforcement still detects and aborts overruns; it is not a filesystem quota.\n- **The alias repair matches the actual module used.** [The self-check](/home/rb/worktrees/borsuk-global-leaf-staging-timeout-fix/scripts/run_hierarchical_global_leaf_probe.py:1114) patches `launcher.probe.ORIGINAL_ROOT`. The [assurance receipt](/tmp/borsuk-global-leaf-staging-assurance.json) and referenced logs record exit 0 for both public CLIs, qualification, and compilation. I independently matched both candidate file hashes to the contract; I did not rerun tests.\n\nTwo evidence limitations matter:\n\n1. **38.63 → 0.209 seconds is synthetic only.** The final fixture contains a 4,479-byte archive, extracts no subset, and finishes before its monitor’s first one-second wakeup. It demonstrates removal of repeated directory scans, not real staging throughput or sufficient campaign deadline headroom. The live failure has no phase-level profile proving this was its sole cause.\n2. **Monitor/cleanup integration remains partly mocked.** The self-check exercises guard rejection directly, but does not demonstrate archive traversal interrupted by a live monitor failure. Those mechanisms are unchanged, so this is a coverage limitation rather than an integration blocker.\n\nI independently authenticated all **11 a0001 terminal artifacts at `05ba9706`** and confirmed the recorded same-instance termination, exit 2, seven GETs, zero stages/datasets, and unopened truth. Keep that attempt immutable and execution **INVALID**; it supports no recall disposition.\n\nProceed with fresh CODE identities, source-bound real-input admission, and a new disposable canary before considering another paid execution. No files were edited, and no tests, native workloads, or network operations were run."
+    }
+  ]
+}
