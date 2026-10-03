@@ -1,0 +1,17 @@
+{
+  "collected_wrapper_exit": 1,
+  "cpu_time_ms": 161,
+  "host_memory_psi_full_avg10_observed": 9.12,
+  "host_memory_psi_some_avg10_observed": 13.18,
+  "local_retry": false,
+  "main_signal": 15,
+  "next_action": "Authenticate exact payloads on bounded remote host before corpus diagnostic; do not infer payload corruption or architecture failure",
+  "original_session": 30278,
+  "peak_bytes": 37167104,
+  "result_receipt_created": false,
+  "runtime_limit_seconds": 60,
+  "schema": "borsuk-next100k-codec-check-interruption-v1",
+  "status": "INCOMPLETE_INFRASTRUCTURE_TIMEOUT",
+  "swap_peak_bytes": 0,
+  "unit": "borsuk-next100k-codec-admission-20261003.service"
+}

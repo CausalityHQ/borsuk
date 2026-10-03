@@ -1,0 +1,33 @@
+{
+  "correction": {
+    "policy": "bounded authenticated resident directory for first100k prototype",
+    "requirements": [
+      "Charge full directory bytes and parsed allocation before preload",
+      "Report startup GETs/bytes separately",
+      "Query directory GETs zero after successful admitted preload",
+      "Cell and refinement dependency waves remain explicit",
+      "No100M resident feasibility claim; derive scale model before promotion"
+    ]
+  },
+  "finding": {
+    "function": "Prototype::route",
+    "geometry": {
+      "balanced_leaf_depths_approx": [
+        7,
+        8
+      ],
+      "maximum_cell_rows": 512,
+      "minimum_leaf_count": 196,
+      "rows": 100000
+    },
+    "measurement_status": "source-derived model, not S3 latency measurement",
+    "mechanism": "Each binary directory level submits dependent range reads; hierarchy depth remains on query critical path",
+    "path": "crates/borsuk/src/hierarchical_semantic_cells.rs"
+  },
+  "native_gates_run": false,
+  "preserved_original_source": true,
+  "real_query_or_truth_opened": false,
+  "schema": "borsuk-hierarchical-cell-prequalification-review-v1",
+  "source_candidate": "b0c49ac6ca5e822039e594ad15480779ab53f4c6",
+  "status": "SOURCE_ONLY_REVIEW_CORRECTION_REQUIRED"
+}

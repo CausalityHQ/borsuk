@@ -1,0 +1,79 @@
+{
+  "datasets": [
+    {
+      "assets": {
+        "order.u64": {
+          "body_hash_verified_by_this_receipt": false,
+          "bytes": 800000,
+          "expected_sha256": "22abeb087000ea2978c4fef8e85c2f7fda4e4b22c4e5126ba37a1c19816fab18",
+          "path": "/tmp/borsuk-semantic-router-inputs/relaion/order.u64"
+        },
+        "plane-mean.bin": {
+          "body_hash_verified_by_this_receipt": false,
+          "bytes": 3072,
+          "expected_sha256": "197a8ead172a5a41e029c8f0c9d39b981150c69fc3b0367316fb89c920eb1beb",
+          "path": "/tmp/borsuk-semantic-router-inputs/relaion/plane-mean.bin"
+        },
+        "plane-records.bin": {
+          "body_hash_verified_by_this_receipt": false,
+          "bytes": 20000000,
+          "expected_sha256": "624e63de5905210bde24a4e7752573d6811d9fa5142e5b529ff0e9f65054ce83",
+          "path": "/tmp/borsuk-semantic-router-inputs/relaion/plane-records.bin"
+        },
+        "sq8.bin": {
+          "body_hash_verified_by_this_receipt": false,
+          "bytes": 78000000,
+          "expected_sha256": "be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b",
+          "path": "/tmp/borsuk-semantic-router-inputs/relaion/sq8.bin"
+        }
+      },
+      "dataset": "relaion",
+      "plane_descriptor": {
+        "bytes": 548,
+        "path": "/tmp/borsuk-semantic-router-inputs/relaion/plane-manifest.json",
+        "schema": "borsuk-two-bit-plane-v2",
+        "sha256": "16dd4cfabb6e2a079fd261c4f0626cafa4bcb4ec3e82aee303b066f08d2ae4fa"
+      },
+      "required_action": "current writer rebuild; authenticate full assets and compare unchanged encoding before diagnostic"
+    },
+    {
+      "assets": {
+        "order.u64": {
+          "body_hash_verified_by_this_receipt": false,
+          "bytes": 800000,
+          "expected_sha256": "e2314ca14f5aa6f08b02cc328b863c921e55b1461a413ad6d3d66e781ff42d50",
+          "path": "/tmp/borsuk-semantic-router-inputs/cohere/order.u64"
+        },
+        "plane-mean.bin": {
+          "body_hash_verified_by_this_receipt": false,
+          "bytes": 3072,
+          "expected_sha256": "b50ffae3e16cc5e155ceee3adffcac0dc04d6812b0a1bb8fc01cbd259b58440a",
+          "path": "/tmp/borsuk-semantic-router-inputs/cohere/plane-mean.bin"
+        },
+        "plane-records.bin": {
+          "body_hash_verified_by_this_receipt": false,
+          "bytes": 20000000,
+          "expected_sha256": "f47e344a6a959bfe1e9fe301785410b06667cf07d2bc0386892f510c7f5c6cf8",
+          "path": "/tmp/borsuk-semantic-router-inputs/cohere/plane-records.bin"
+        },
+        "sq8.bin": {
+          "body_hash_verified_by_this_receipt": false,
+          "bytes": 78000000,
+          "expected_sha256": "c16929252705c831c6846022eec46481fc004f521f0c0814a53d49fece8771e0",
+          "path": "/tmp/borsuk-semantic-router-inputs/cohere/sq8.bin"
+        }
+      },
+      "dataset": "cohere",
+      "plane_descriptor": {
+        "bytes": 548,
+        "path": "/tmp/borsuk-semantic-router-inputs/cohere/plane-manifest.json",
+        "schema": "borsuk-two-bit-plane-v2",
+        "sha256": "5b945745af8709927f078e19e0fe7b14466675c9ec21b9227ac21ef1d04be31f"
+      },
+      "required_action": "current writer rebuild; authenticate full assets and compare unchanged encoding before diagnostic"
+    }
+  ],
+  "query_or_truth_opened": false,
+  "schema": "borsuk-hierarchical-cell-input-preparation-v1",
+  "status": "metadata inventory only; not native input qualification"
+}
