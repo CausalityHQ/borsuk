@@ -1,0 +1,61 @@
+{
+  "schema": "borsuk-hierarchical-coverage-root-verification-v1",
+  "status": "PASS",
+  "source_commit": "ef6cafc1",
+  "source_sha256": "c53b5820ba818f4744897d3ad04c17043f6509e117ac050798ea132dfe71cd99",
+  "self_check_exit_status": 0,
+  "self_check_count": 42,
+  "result_exit_status": 0,
+  "result": {
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/independent-coverage-audit.json",
+    "bytes": 186248,
+    "sha256": "ed420f8a4562fe36b0343c66356cf5f573d6493a875e0621fd4ba1f230484e3e"
+  },
+  "limits": {
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "cpu_percent": 100,
+    "affinity": [
+      0
+    ],
+    "deadline_seconds": 120
+  },
+  "self_check_observed": {
+    "wall_seconds": 1.456,
+    "memory_peak_bytes": 44650496,
+    "swap_bytes": 0
+  },
+  "result_observed": {
+    "after": {
+      "cpu.max": "100000 100000",
+      "cpu_affinity": [
+        0
+      ],
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+      "memory.max": "268435456",
+      "memory.peak": "35676160",
+      "memory.swap.max": "0",
+      "memory.swap.peak": "0",
+      "path": "/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service/app.slice/borsuk-coverage-ceilings-root-result-20261003.service"
+    },
+    "auditor_peak_rss_bytes": 47779840,
+    "before": {
+      "cpu.max": "100000 100000",
+      "cpu_affinity": [
+        0
+      ],
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+      "memory.max": "268435456",
+      "memory.peak": "12693504",
+      "memory.swap.max": "0",
+      "memory.swap.peak": "0",
+      "path": "/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service/app.slice/borsuk-coverage-ceilings-root-result-20261003.service"
+    },
+    "deadline_seconds": 120,
+    "wall_seconds": 0.517486247990746
+  },
+  "truth_basis": "authenticated native loss accounting; exact real truth intersections not independently recounted",
+  "new_ann_execution": false,
+  "matched_vendor_claim": false,
+  "decision": "Do not run full-fetched SQ8 alone on this frozen layout; proceed only with preregistered routing coverage probe."
+}

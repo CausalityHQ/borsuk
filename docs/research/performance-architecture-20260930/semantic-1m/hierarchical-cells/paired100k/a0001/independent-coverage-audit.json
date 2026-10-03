@@ -1,0 +1,6241 @@
+{
+  "audit_resources": {
+    "after": {
+      "cpu.max": "100000 100000",
+      "cpu_affinity": [
+        0
+      ],
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+      "memory.max": "268435456",
+      "memory.peak": "35676160",
+      "memory.swap.max": "0",
+      "memory.swap.peak": "0",
+      "path": "/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service/app.slice/borsuk-coverage-ceilings-root-result-20261003.service"
+    },
+    "auditor_peak_rss_bytes": 47779840,
+    "before": {
+      "cpu.max": "100000 100000",
+      "cpu_affinity": [
+        0
+      ],
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+      "memory.max": "268435456",
+      "memory.peak": "12693504",
+      "memory.swap.max": "0",
+      "memory.swap.peak": "0",
+      "path": "/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service/app.slice/borsuk-coverage-ceilings-root-result-20261003.service"
+    },
+    "deadline_seconds": 120,
+    "wall_seconds": 0.517486247990746
+  },
+  "audit_status": "VALID",
+  "authenticated_source_bodies": {
+    "crates/borsuk/src/bin/build_two_bit_generation.rs": {
+      "bytes": 5808,
+      "sha256": "5c1e49e9e0b9d0a8c674548d04e8c08b8c1174bb16a823c58f5994c1d07867e8"
+    },
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs": {
+      "bytes": 19547,
+      "sha256": "99730faeea64fde6ba33dc6c05e99ee77cc07b48e4350bd089537a9fa672b686"
+    },
+    "crates/borsuk/src/hierarchical_semantic_cells.rs": {
+      "bytes": 94229,
+      "sha256": "f14b86361ca7da229822a81016f0c5641ab48a850e19aa4c4257e125a003d6ad"
+    },
+    "scripts/audit_v36_ranked_physical_ids.py": {
+      "bytes": 5240,
+      "sha256": "67af40bf3d505d45979f269218f4bfd426aaaa5f1e6705b6947bd32831d8bb2b"
+    },
+    "scripts/benchmark_with_resources.py": {
+      "bytes": 12230,
+      "sha256": "5b46cd201dfc8491b3dd024bcabcbc8269d41fe9ca699b7e3a3e03fcccc146c4"
+    },
+    "scripts/check_hierarchical_cells_implementation.sh": {
+      "bytes": 3829,
+      "sha256": "d472fc37c2295535181448a8dda3b3bf49eded54a2b1a9edc93e3964fcc9f04d"
+    },
+    "scripts/check_native_metadata_ranges_build.py": {
+      "bytes": 4893,
+      "sha256": "da48c53562220026c8024ba2400dca2ba897aa12d49c3e27c3c2fb40b9f0770e"
+    },
+    "scripts/check_native_metadata_ranges_stats.py": {
+      "bytes": 3865,
+      "sha256": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3"
+    },
+    "scripts/check_native_semantic_concurrency.py": {
+      "bytes": 12310,
+      "sha256": "9cb0f018689496f6c2bea48d993a99e64f3f3c9b3850a899ef2c927b75ba83e5"
+    },
+    "scripts/check_native_semantic_router_stats.py": {
+      "bytes": 33088,
+      "sha256": "d1fb970c0ab6ec98ec5311204a54277180631116d48a29a564ed3bbd68e5c5c2"
+    },
+    "scripts/check_native_startup_build.py": {
+      "bytes": 12001,
+      "sha256": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52"
+    },
+    "scripts/check_native_startup_stats.py": {
+      "bytes": 2667,
+      "sha256": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29"
+    },
+    "scripts/check_semantic_router_coverage.py": {
+      "bytes": 41100,
+      "sha256": "221695c725d79dfbc7f0ac3c2a4bd4e46445fc32628a1fd989eb328270356ff3"
+    },
+    "scripts/launch_hierarchical_cells_100k_spot.py": {
+      "bytes": 100881,
+      "sha256": "cc9cfcecb6f97a00038aa9a738fcbdbf916ea71f01a2d4c3ae8a46bbbc17a12d"
+    },
+    "scripts/launch_native_metadata_ranges_cold_spot.py": {
+      "bytes": 48920,
+      "sha256": "f1dfdb56d08f864594c4dadbdbae593b61d5285f60703712e91865ebd0a9d0e2"
+    },
+    "scripts/launch_native_peer_1m_spot.py": {
+      "bytes": 15926,
+      "sha256": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c"
+    },
+    "scripts/launch_native_semantic_panel_ids_spot.py": {
+      "bytes": 49653,
+      "sha256": "e232d6433b9a8e4efd233bf45206b15dcffc87c96a75d2b4e85997ecced7b387"
+    },
+    "scripts/launch_native_semantic_router_cold_spot.py": {
+      "bytes": 120089,
+      "sha256": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180"
+    },
+    "scripts/launch_native_startup_profile_spot.py": {
+      "bytes": 39151,
+      "sha256": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d"
+    },
+    "scripts/launch_v157_primary_feasibility_spot.py": {
+      "bytes": 11195,
+      "sha256": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b"
+    },
+    "scripts/launch_v174_relaid_bind_compile_spot.py": {
+      "bytes": 9775,
+      "sha256": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a"
+    },
+    "scripts/package_semantic_native_generation.py": {
+      "bytes": 20103,
+      "sha256": "cb6a540c810e3a75381d22339eb72f00382b0972a2d3ee687bbb1d97d5a1b594"
+    },
+    "scripts/prepare_hierarchical_cells_100k.py": {
+      "bytes": 55611,
+      "sha256": "0878f2d02285ae678e15c04862d76b5b0066f68d67bb786453f55d73ba40b724"
+    },
+    "scripts/prepare_native_semantic_publication.py": {
+      "bytes": 52270,
+      "sha256": "2d3a9270f5ad847981d9d89fea8ead9e9295f742369fa1b9fd9cf3e7c7e2c7e4"
+    },
+    "scripts/prepare_semantic_positive_inputs.py": {
+      "bytes": 27544,
+      "sha256": "99599d83c091c68661b5347ce568a92145695e420d8c9a3d61e7e0d6b84e884f"
+    },
+    "scripts/rest_coexistence_load.py": {
+      "bytes": 25100,
+      "sha256": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd"
+    },
+    "scripts/run_native_cold_first_query.py": {
+      "bytes": 18809,
+      "sha256": "b4afffd43df8e2ab617749a50fd099fd279e57631e0dcb749b75169ad269a99f"
+    },
+    "scripts/run_native_cold_offered.py": {
+      "bytes": 15926,
+      "sha256": "bcd4bbee7d14870489503f9d4e1ec17c53176ef97f0ce851a2f9e8189aa40dfb"
+    },
+    "scripts/run_native_metadata_ranges_cold.py": {
+      "bytes": 9422,
+      "sha256": "1322fe19b705caeab275bce69ea6b4a9f2ed84cb6505dcbfe01b25301fdb71b8"
+    },
+    "scripts/run_native_peer_1m_worker.py": {
+      "bytes": 10729,
+      "sha256": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3"
+    },
+    "scripts/run_native_peer_offered_http.py": {
+      "bytes": 4155,
+      "sha256": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b"
+    },
+    "scripts/run_native_semantic_router_cold.py": {
+      "bytes": 131731,
+      "sha256": "9fe9e968d99a926bdfc15fae0fc0fadd15d44ed1242b6d4fa2e391c1a3b95f88"
+    },
+    "scripts/run_native_union_http.py": {
+      "bytes": 10532,
+      "sha256": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880"
+    },
+    "scripts/run_native_union_offered_http.py": {
+      "bytes": 8999,
+      "sha256": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6"
+    },
+    "scripts/select_v36_rank16_fresh_ids.py": {
+      "bytes": 6905,
+      "sha256": "6388e274ba128d770bbadd8b02833af4f685214bc1f78c9796fd778471d30399"
+    }
+  },
+  "authenticated_terminal_bodies": {
+    "run-closed.log": {
+      "bytes": 22130,
+      "sha256": "3a5ebc686e101654367086220f408d4f00f7db42bfc341055455678b60ac005d"
+    },
+    "screen/admission.json": {
+      "bytes": 7510,
+      "sha256": "b0314ab7ce0204ac58325e27cf8119c51cb58b6900515b60568cbfb83fa9d603"
+    },
+    "screen/cleanup.json": {
+      "bytes": 109,
+      "sha256": "f68a70bc9e1a07934e796ac5f744aa359f38dee25c58c498481765bb1461c73b"
+    },
+    "screen/cohere-panel-binding.json": {
+      "bytes": 13342,
+      "sha256": "2bee11ea404c1925d300049b50bdfbef85596b88ab73398098aa14fbc6f2e49d"
+    },
+    "screen/config.json": {
+      "bytes": 10497,
+      "sha256": "f4908db3124b74e7136cd03b053411447a776b0ccf78e49bdf4842123759c1db"
+    },
+    "screen/local-config.json": {
+      "bytes": 69631,
+      "sha256": "577c246522e6feee267d37038422a31358ec0fc627817671b1d00439e6881539"
+    },
+    "screen/measurement/cohere-build.json": {
+      "bytes": 1421,
+      "sha256": "c481aaf478ec4a51a1cd34f1f26976cdaa08311ce19e885f64ecb2ec07f74c3b"
+    },
+    "screen/measurement/cohere-build.log": {
+      "bytes": 676,
+      "sha256": "49ae82435ccc8422b88c8b19f0ff7f78028c43d9d338982db73ceb6d4d1f7c3a"
+    },
+    "screen/measurement/cohere-diagnose.json": {
+      "bytes": 1022,
+      "sha256": "0084493691b06ce167bd5ec19202830f0490b3c5bc588a59df3677a58ca093cc"
+    },
+    "screen/measurement/cohere-diagnose.log": {
+      "bytes": 60,
+      "sha256": "0e0e50c2eaf32b6e48d84d51e16b2d15a78dcaa99ffa1bc78f85b3e3417a5482"
+    },
+    "screen/measurement/cohere-diagnostic.jsonl": {
+      "bytes": 6044638,
+      "sha256": "fc12f5e90917495f9c17e6b71172ec0b288e079083151bdc2fe51c2a55155746"
+    },
+    "screen/measurement/cohere-writer.json": {
+      "bytes": 33571,
+      "sha256": "9a8091a22087556e5f50355e8d4c3328ef160f0a1a897d11c6fcead29021bccf"
+    },
+    "screen/measurement/cohere-writer.log": {
+      "bytes": 65,
+      "sha256": "16db5fa0f9bdc674f9bb3f1276c57ff5efe0e25ee1b220542850fe2329b05182"
+    },
+    "screen/measurement/frozen-config.json": {
+      "bytes": 69631,
+      "sha256": "577c246522e6feee267d37038422a31358ec0fc627817671b1d00439e6881539"
+    },
+    "screen/measurement/receipt.json": {
+      "bytes": 55156,
+      "sha256": "c09a36faf981d8968fa88a8082914afbd7f7804b2d4073d5b1da7222cfec0ed4"
+    },
+    "screen/measurement/relaion-build.json": {
+      "bytes": 1428,
+      "sha256": "caa461189e80aa0a8e49bed01b4fbf0b129ad2f5120c4f378f8a20d1f0d3bf5d"
+    },
+    "screen/measurement/relaion-build.log": {
+      "bytes": 676,
+      "sha256": "4f606c975e1abeedbe71c259066001267d22638a9a503fb9779e5877e87321f6"
+    },
+    "screen/measurement/relaion-diagnose.json": {
+      "bytes": 1025,
+      "sha256": "5c45c2819602e842f6ea84460b9462123e24f3c6a22f4167dba0abaf2e95bae6"
+    },
+    "screen/measurement/relaion-diagnose.log": {
+      "bytes": 60,
+      "sha256": "7b19b6f513ebd1e0c220b14089fc3002a8273f0d538bce6274a8804b5f7ef6e4"
+    },
+    "screen/measurement/relaion-diagnostic.jsonl": {
+      "bytes": 5825513,
+      "sha256": "af193458abe29522b126951a35df56d589a8b1c1f7aa536e895f638a2dd607e5"
+    },
+    "screen/measurement/relaion-writer.json": {
+      "bytes": 33527,
+      "sha256": "8879e10fb0545d38dc08f91ba9c851439264b6b225664b09a8d29567937dfe86"
+    },
+    "screen/measurement/relaion-writer.log": {
+      "bytes": 65,
+      "sha256": "d32b021d891bcd7b96b31a5fc461cfba883fe3ba5519c87afbc66158dd5ec80f"
+    },
+    "screen/native-proof.json": {
+      "bytes": 1566,
+      "sha256": "e96f9baf9cbad62ffae1efe3fe822439e63177aef736a467d0ac32f87513fc6f"
+    },
+    "screen/relaion-panel-binding.json": {
+      "bytes": 13344,
+      "sha256": "56d283a082384ec9cc59aecaa0b88ec6a5c060eb0a1f43b676b40341314f8408"
+    },
+    "screen/resources.json": {
+      "bytes": 6236,
+      "sha256": "bf63c78fce3547c54fdc44039f3486395fb24019f1b49d372cd30b9262966950"
+    },
+    "screen/source-qualification.json": {
+      "bytes": 20851,
+      "sha256": "5891948e0c78b270d8c6646a54ee4b70682e467f69224ffc011a640a7e477a7b"
+    },
+    "screen/staging.json": {
+      "bytes": 6719,
+      "sha256": "302ff2b82ddadc6f886fcd8b396b95c13bc27e69a948e51241dd5722345ca902"
+    },
+    "screen/summary.json": {
+      "bytes": 13189,
+      "sha256": "bd6fd7d46d6bc874e651e250c406a6acb0a074142336c62a7371317e0c518f9c"
+    },
+    "screen/tool-versions.json": {
+      "bytes": 152,
+      "sha256": "c71a3549a54b01135a3e36608c9f0c23719cd9fcb8dde4abc3405cbf7a9e2430"
+    },
+    "screen/worker-cgroup.json": {
+      "bytes": 1062,
+      "sha256": "a80be6111b05d67b8c669af6e7f014a09b5792656037bcdef63c69d5ce05e9a7"
+    },
+    "test-resources.txt": {
+      "bytes": 968,
+      "sha256": "9c1e4c3d5e59b96abada88f73371362022e224ee42bfa70e54e59a2dc792d436"
+    }
+  },
+  "controls": {
+    "a0001/aws-closeout.json": {
+      "bytes": 135,
+      "sha256": "b72a14426e80eecc659c776191623630596c673815f2ebfe2f3ebca68a26fe0c"
+    },
+    "a0001/aws-launch.json": {
+      "bytes": 348,
+      "sha256": "5e201469b045a061d480e8225a1540e659c7aeeda16ad1b812245df5070adbc6"
+    },
+    "a0001/aws-reservation.json": {
+      "bytes": 25126,
+      "sha256": "a9e0c653cf7ec442e93cf99b0d2db519981258489b347738d2d29cea4d6c0572"
+    },
+    "a0001/aws-terminal.json": {
+      "bytes": 4916,
+      "sha256": "a0ca521980142f869e7be74b10802926459674cc06ec2e7bf6e11214c8065bf2"
+    },
+    "a0001/root-decision.json": {
+      "bytes": 1115,
+      "sha256": "34d75611d232e45bce4b159837f59dc67bb487004ba86bf1be488119cab27e80"
+    },
+    "coverage-ceiling-preregistration.json": {
+      "bytes": 2017,
+      "sha256": "c86aa3c45ecd560ee93e2fdf5ed0a647f46f8ed57c6406536a1997358a51dbcf"
+    }
+  },
+  "datasets": {
+    "cohere": {
+      "ceiling_basis": "authenticated_native_loss_accounting",
+      "coverage_ceiling": {
+        "mean_hits_at_100": 0.748125,
+        "p05_hits": 51,
+        "quality_gate_possible": false,
+        "total_hits": 4788
+      },
+      "freeze": {
+        "bytes": 6022217,
+        "sha256": "2b14feaf794a0a18e45a5e50ffdf6eb51c711023832cfd8361788a53113fadcc"
+      },
+      "interpretation": {
+        "explanation": "Coverage below either gate makes full-fetched SQ8 alone insufficient even with perfect ranking. Zero final-ranking misses on the nominated set does not establish quantization loss or exact-score equivalence.",
+        "final_ranking_misses": 0,
+        "full_fetched_sq8_alone_sufficient": false,
+        "full_fetched_sq8_measured": false,
+        "local_nomination_misses": 380,
+        "perfect_ranking_of_fetched_cells_can_meet_original_gate": false,
+        "quantization_loss_established": false
+      },
+      "local_reads": {
+        "failed_gets": {
+          "maximum": 0,
+          "mean": 0.0,
+          "minimum": 0,
+          "total": 0
+        },
+        "requested_bytes": {
+          "maximum": 9475908,
+          "mean": 8653228.1875,
+          "minimum": 7566104,
+          "total": 553806604
+        },
+        "submitted_gets": {
+          "maximum": 24,
+          "mean": 24.0,
+          "minimum": 24,
+          "total": 1536
+        },
+        "verified_bytes": {
+          "maximum": 9475908,
+          "mean": 8653228.1875,
+          "minimum": 7566104,
+          "total": 553806604
+        }
+      },
+      "nomination_ceiling": {
+        "mean_hits_at_100": 0.68875,
+        "p05_hits": 50,
+        "quality_gate_possible": false,
+        "total_hits": 4408
+      },
+      "per_query": [
+        {
+          "coverage_ceiling_hits": 58,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8191508,
+            "submitted_gets": 24,
+            "verified_bytes": 8191508
+          },
+          "native_loss": {
+            "boundary_hits": 58,
+            "boundary_misses": 42,
+            "boundary_recovered": 24,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 0,
+            "nomination_hits": 58,
+            "primary_hits": 34,
+            "returned_hits": 58,
+            "router_misses": 66,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 58,
+          "ordinal": 0,
+          "returned_hits": 58,
+          "roster_sizes": {
+            "covered": 8291,
+            "nominated": 3072,
+            "primary": 3065,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3313841,
+              "wall_ns": 3313544
+            },
+            "local_nomination": {
+              "process_cpu_ns": 11220432,
+              "wall_ns": 11220098
+            },
+            "routing": {
+              "process_cpu_ns": 595544,
+              "wall_ns": 600292
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 65,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8531380,
+            "submitted_gets": 24,
+            "verified_bytes": 8531380
+          },
+          "native_loss": {
+            "boundary_hits": 65,
+            "boundary_misses": 35,
+            "boundary_recovered": 20,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 2,
+            "nomination_hits": 63,
+            "primary_hits": 45,
+            "returned_hits": 63,
+            "router_misses": 55,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 63,
+          "ordinal": 1,
+          "returned_hits": 63,
+          "roster_sizes": {
+            "covered": 8635,
+            "nominated": 3069,
+            "primary": 3115,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3271463,
+              "wall_ns": 3271183
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9470048,
+              "wall_ns": 9469705
+            },
+            "routing": {
+              "process_cpu_ns": 546797,
+              "wall_ns": 546778
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 47,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8495812,
+            "submitted_gets": 24,
+            "verified_bytes": 8495812
+          },
+          "native_loss": {
+            "boundary_hits": 47,
+            "boundary_misses": 53,
+            "boundary_recovered": 20,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 1,
+            "nomination_hits": 46,
+            "primary_hits": 27,
+            "returned_hits": 46,
+            "router_misses": 73,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 46,
+          "ordinal": 2,
+          "returned_hits": 46,
+          "roster_sizes": {
+            "covered": 8599,
+            "nominated": 3072,
+            "primary": 3168,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3241360,
+              "wall_ns": 3241017
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9494730,
+              "wall_ns": 9494335
+            },
+            "routing": {
+              "process_cpu_ns": 561200,
+              "wall_ns": 561196
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 58,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9196304,
+            "submitted_gets": 24,
+            "verified_bytes": 9196304
+          },
+          "native_loss": {
+            "boundary_hits": 58,
+            "boundary_misses": 42,
+            "boundary_recovered": 23,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 3,
+            "nomination_hits": 55,
+            "primary_hits": 35,
+            "returned_hits": 55,
+            "router_misses": 65,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 55,
+          "ordinal": 3,
+          "returned_hits": 55,
+          "roster_sizes": {
+            "covered": 9308,
+            "nominated": 3072,
+            "primary": 3112,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3246342,
+              "wall_ns": 3246043
+            },
+            "local_nomination": {
+              "process_cpu_ns": 10106137,
+              "wall_ns": 10112319
+            },
+            "routing": {
+              "process_cpu_ns": 475392,
+              "wall_ns": 475402
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 74,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9198280,
+            "submitted_gets": 24,
+            "verified_bytes": 9198280
+          },
+          "native_loss": {
+            "boundary_hits": 74,
+            "boundary_misses": 26,
+            "boundary_recovered": 22,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 8,
+            "nomination_hits": 66,
+            "primary_hits": 52,
+            "returned_hits": 66,
+            "router_misses": 48,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 66,
+          "ordinal": 4,
+          "returned_hits": 66,
+          "roster_sizes": {
+            "covered": 9310,
+            "nominated": 3072,
+            "primary": 2958,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3238921,
+              "wall_ns": 3238695
+            },
+            "local_nomination": {
+              "process_cpu_ns": 10031739,
+              "wall_ns": 10031585
+            },
+            "routing": {
+              "process_cpu_ns": 511867,
+              "wall_ns": 511905
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 87,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8778380,
+            "submitted_gets": 24,
+            "verified_bytes": 8778380
+          },
+          "native_loss": {
+            "boundary_hits": 87,
+            "boundary_misses": 13,
+            "boundary_recovered": 34,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 13,
+            "nomination_hits": 74,
+            "primary_hits": 53,
+            "returned_hits": 74,
+            "router_misses": 47,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 74,
+          "ordinal": 5,
+          "returned_hits": 74,
+          "roster_sizes": {
+            "covered": 8885,
+            "nominated": 3056,
+            "primary": 3436,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3222167,
+              "wall_ns": 3221952
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9629815,
+              "wall_ns": 9629574
+            },
+            "routing": {
+              "process_cpu_ns": 439240,
+              "wall_ns": 439240
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 73,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8278452,
+            "submitted_gets": 24,
+            "verified_bytes": 8278452
+          },
+          "native_loss": {
+            "boundary_hits": 73,
+            "boundary_misses": 27,
+            "boundary_recovered": 28,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 2,
+            "nomination_hits": 71,
+            "primary_hits": 45,
+            "returned_hits": 71,
+            "router_misses": 55,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 71,
+          "ordinal": 6,
+          "returned_hits": 71,
+          "roster_sizes": {
+            "covered": 8379,
+            "nominated": 3072,
+            "primary": 3201,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3227171,
+              "wall_ns": 3226951
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9090071,
+              "wall_ns": 9089828
+            },
+            "routing": {
+              "process_cpu_ns": 545084,
+              "wall_ns": 545107
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 63,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8352552,
+            "submitted_gets": 24,
+            "verified_bytes": 8352552
+          },
+          "native_loss": {
+            "boundary_hits": 63,
+            "boundary_misses": 37,
+            "boundary_recovered": 26,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 0,
+            "nomination_hits": 63,
+            "primary_hits": 37,
+            "returned_hits": 63,
+            "router_misses": 63,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 63,
+          "ordinal": 7,
+          "returned_hits": 63,
+          "roster_sizes": {
+            "covered": 8454,
+            "nominated": 3072,
+            "primary": 2666,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3238034,
+              "wall_ns": 3237769
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9089988,
+              "wall_ns": 9089718
+            },
+            "routing": {
+              "process_cpu_ns": 544465,
+              "wall_ns": 544596
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 98,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8202376,
+            "submitted_gets": 24,
+            "verified_bytes": 8202376
+          },
+          "native_loss": {
+            "boundary_hits": 98,
+            "boundary_misses": 2,
+            "boundary_recovered": 15,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 36,
+            "nomination_hits": 62,
+            "primary_hits": 83,
+            "returned_hits": 62,
+            "router_misses": 17,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 62,
+          "ordinal": 8,
+          "returned_hits": 62,
+          "roster_sizes": {
+            "covered": 8302,
+            "nominated": 3072,
+            "primary": 2900,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3248372,
+              "wall_ns": 3248140
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8990446,
+              "wall_ns": 8990181
+            },
+            "routing": {
+              "process_cpu_ns": 514408,
+              "wall_ns": 514590
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 76,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8810984,
+            "submitted_gets": 24,
+            "verified_bytes": 8810984
+          },
+          "native_loss": {
+            "boundary_hits": 76,
+            "boundary_misses": 24,
+            "boundary_recovered": 24,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 4,
+            "nomination_hits": 72,
+            "primary_hits": 52,
+            "returned_hits": 72,
+            "router_misses": 48,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 72,
+          "ordinal": 9,
+          "returned_hits": 72,
+          "roster_sizes": {
+            "covered": 8918,
+            "nominated": 3072,
+            "primary": 3257,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3252548,
+              "wall_ns": 3252331
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9646443,
+              "wall_ns": 9646098
+            },
+            "routing": {
+              "process_cpu_ns": 544059,
+              "wall_ns": 544112
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 69,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8403928,
+            "submitted_gets": 24,
+            "verified_bytes": 8403928
+          },
+          "native_loss": {
+            "boundary_hits": 69,
+            "boundary_misses": 31,
+            "boundary_recovered": 33,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 1,
+            "nomination_hits": 68,
+            "primary_hits": 36,
+            "returned_hits": 68,
+            "router_misses": 64,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 68,
+          "ordinal": 10,
+          "returned_hits": 68,
+          "roster_sizes": {
+            "covered": 8506,
+            "nominated": 3072,
+            "primary": 2516,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3243063,
+              "wall_ns": 3242811
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9120842,
+              "wall_ns": 9120657
+            },
+            "routing": {
+              "process_cpu_ns": 473928,
+              "wall_ns": 473935
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 95,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9198280,
+            "submitted_gets": 24,
+            "verified_bytes": 9198280
+          },
+          "native_loss": {
+            "boundary_hits": 95,
+            "boundary_misses": 5,
+            "boundary_recovered": 12,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 9,
+            "nomination_hits": 86,
+            "primary_hits": 83,
+            "returned_hits": 86,
+            "router_misses": 17,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 86,
+          "ordinal": 11,
+          "returned_hits": 86,
+          "roster_sizes": {
+            "covered": 9310,
+            "nominated": 3072,
+            "primary": 2918,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3226921,
+              "wall_ns": 3226629
+            },
+            "local_nomination": {
+              "process_cpu_ns": 10043404,
+              "wall_ns": 10043135
+            },
+            "routing": {
+              "process_cpu_ns": 582141,
+              "wall_ns": 582141
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 76,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8705268,
+            "submitted_gets": 24,
+            "verified_bytes": 8705268
+          },
+          "native_loss": {
+            "boundary_hits": 76,
+            "boundary_misses": 24,
+            "boundary_recovered": 44,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 0,
+            "nomination_hits": 76,
+            "primary_hits": 32,
+            "returned_hits": 76,
+            "router_misses": 68,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 76,
+          "ordinal": 12,
+          "returned_hits": 76,
+          "roster_sizes": {
+            "covered": 8811,
+            "nominated": 3072,
+            "primary": 3256,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3241660,
+              "wall_ns": 3241433
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9507849,
+              "wall_ns": 9507583
+            },
+            "routing": {
+              "process_cpu_ns": 436979,
+              "wall_ns": 437058
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 40,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7566104,
+            "submitted_gets": 24,
+            "verified_bytes": 7566104
+          },
+          "native_loss": {
+            "boundary_hits": 40,
+            "boundary_misses": 60,
+            "boundary_recovered": 17,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 1,
+            "nomination_hits": 39,
+            "primary_hits": 23,
+            "returned_hits": 39,
+            "router_misses": 77,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 39,
+          "ordinal": 13,
+          "returned_hits": 39,
+          "roster_sizes": {
+            "covered": 7658,
+            "nominated": 3072,
+            "primary": 2596,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3238877,
+              "wall_ns": 3238618
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8280064,
+              "wall_ns": 8279772
+            },
+            "routing": {
+              "process_cpu_ns": 537854,
+              "wall_ns": 537796
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 62,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8316984,
+            "submitted_gets": 24,
+            "verified_bytes": 8316984
+          },
+          "native_loss": {
+            "boundary_hits": 62,
+            "boundary_misses": 38,
+            "boundary_recovered": 32,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 0,
+            "nomination_hits": 62,
+            "primary_hits": 30,
+            "returned_hits": 62,
+            "router_misses": 70,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 62,
+          "ordinal": 14,
+          "returned_hits": 62,
+          "roster_sizes": {
+            "covered": 8418,
+            "nominated": 3072,
+            "primary": 3024,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3240456,
+              "wall_ns": 3240178
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9050416,
+              "wall_ns": 9050096
+            },
+            "routing": {
+              "process_cpu_ns": 524110,
+              "wall_ns": 524211
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 50,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7985016,
+            "submitted_gets": 24,
+            "verified_bytes": 7985016
+          },
+          "native_loss": {
+            "boundary_hits": 50,
+            "boundary_misses": 50,
+            "boundary_recovered": 31,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 0,
+            "nomination_hits": 50,
+            "primary_hits": 19,
+            "returned_hits": 50,
+            "router_misses": 81,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 50,
+          "ordinal": 15,
+          "returned_hits": 50,
+          "roster_sizes": {
+            "covered": 8082,
+            "nominated": 3072,
+            "primary": 2721,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3237361,
+              "wall_ns": 3237032
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8674761,
+              "wall_ns": 8674467
+            },
+            "routing": {
+              "process_cpu_ns": 540166,
+              "wall_ns": 540172
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 55,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9066876,
+            "submitted_gets": 24,
+            "verified_bytes": 9066876
+          },
+          "native_loss": {
+            "boundary_hits": 55,
+            "boundary_misses": 45,
+            "boundary_recovered": 26,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 3,
+            "nomination_hits": 52,
+            "primary_hits": 29,
+            "returned_hits": 52,
+            "router_misses": 71,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 52,
+          "ordinal": 16,
+          "returned_hits": 52,
+          "roster_sizes": {
+            "covered": 9177,
+            "nominated": 3072,
+            "primary": 3075,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3246658,
+              "wall_ns": 3246378
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9732261,
+              "wall_ns": 9731972
+            },
+            "routing": {
+              "process_cpu_ns": 491939,
+              "wall_ns": 491958
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 79,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9334624,
+            "submitted_gets": 24,
+            "verified_bytes": 9334624
+          },
+          "native_loss": {
+            "boundary_hits": 79,
+            "boundary_misses": 21,
+            "boundary_recovered": 42,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 4,
+            "nomination_hits": 75,
+            "primary_hits": 37,
+            "returned_hits": 75,
+            "router_misses": 63,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 75,
+          "ordinal": 17,
+          "returned_hits": 75,
+          "roster_sizes": {
+            "covered": 9448,
+            "nominated": 3072,
+            "primary": 3150,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3306555,
+              "wall_ns": 3306242
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9861129,
+              "wall_ns": 9860787
+            },
+            "routing": {
+              "process_cpu_ns": 506449,
+              "wall_ns": 506534
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 78,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9208160,
+            "submitted_gets": 24,
+            "verified_bytes": 9208160
+          },
+          "native_loss": {
+            "boundary_hits": 78,
+            "boundary_misses": 22,
+            "boundary_recovered": 32,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 1,
+            "nomination_hits": 77,
+            "primary_hits": 46,
+            "returned_hits": 77,
+            "router_misses": 54,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 77,
+          "ordinal": 18,
+          "returned_hits": 77,
+          "roster_sizes": {
+            "covered": 9320,
+            "nominated": 3072,
+            "primary": 2988,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3237538,
+              "wall_ns": 3237245
+            },
+            "local_nomination": {
+              "process_cpu_ns": 10008554,
+              "wall_ns": 10008289
+            },
+            "routing": {
+              "process_cpu_ns": 596070,
+              "wall_ns": 596120
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 65,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8914724,
+            "submitted_gets": 24,
+            "verified_bytes": 8914724
+          },
+          "native_loss": {
+            "boundary_hits": 65,
+            "boundary_misses": 35,
+            "boundary_recovered": 27,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 0,
+            "nomination_hits": 65,
+            "primary_hits": 38,
+            "returned_hits": 65,
+            "router_misses": 62,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 65,
+          "ordinal": 19,
+          "returned_hits": 65,
+          "roster_sizes": {
+            "covered": 9023,
+            "nominated": 3072,
+            "primary": 3375,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3242712,
+              "wall_ns": 3242437
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9772645,
+              "wall_ns": 9772356
+            },
+            "routing": {
+              "process_cpu_ns": 572599,
+              "wall_ns": 572547
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 67,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8451352,
+            "submitted_gets": 24,
+            "verified_bytes": 8451352
+          },
+          "native_loss": {
+            "boundary_hits": 67,
+            "boundary_misses": 33,
+            "boundary_recovered": 17,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 6,
+            "nomination_hits": 61,
+            "primary_hits": 50,
+            "returned_hits": 61,
+            "router_misses": 50,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 61,
+          "ordinal": 20,
+          "returned_hits": 61,
+          "roster_sizes": {
+            "covered": 8554,
+            "nominated": 3072,
+            "primary": 2983,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3249279,
+              "wall_ns": 3249007
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9286669,
+              "wall_ns": 9286112
+            },
+            "routing": {
+              "process_cpu_ns": 490850,
+              "wall_ns": 490877
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 97,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8604492,
+            "submitted_gets": 24,
+            "verified_bytes": 8604492
+          },
+          "native_loss": {
+            "boundary_hits": 97,
+            "boundary_misses": 3,
+            "boundary_recovered": 32,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 8,
+            "nomination_hits": 89,
+            "primary_hits": 65,
+            "returned_hits": 89,
+            "router_misses": 35,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 89,
+          "ordinal": 21,
+          "returned_hits": 89,
+          "roster_sizes": {
+            "covered": 8709,
+            "nominated": 3072,
+            "primary": 3044,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3240741,
+              "wall_ns": 3240478
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9425355,
+              "wall_ns": 9425082
+            },
+            "routing": {
+              "process_cpu_ns": 436390,
+              "wall_ns": 436463
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 92,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8447400,
+            "submitted_gets": 24,
+            "verified_bytes": 8447400
+          },
+          "native_loss": {
+            "boundary_hits": 92,
+            "boundary_misses": 8,
+            "boundary_recovered": 6,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 17,
+            "nomination_hits": 75,
+            "primary_hits": 86,
+            "returned_hits": 75,
+            "router_misses": 14,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 75,
+          "ordinal": 22,
+          "returned_hits": 75,
+          "roster_sizes": {
+            "covered": 8550,
+            "nominated": 3072,
+            "primary": 2936,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3353188,
+              "wall_ns": 3352554
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9252347,
+              "wall_ns": 9252068
+            },
+            "routing": {
+              "process_cpu_ns": 515249,
+              "wall_ns": 515237
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 91,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8563984,
+            "submitted_gets": 24,
+            "verified_bytes": 8563984
+          },
+          "native_loss": {
+            "boundary_hits": 91,
+            "boundary_misses": 9,
+            "boundary_recovered": 17,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 3,
+            "nomination_hits": 88,
+            "primary_hits": 74,
+            "returned_hits": 88,
+            "router_misses": 26,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 88,
+          "ordinal": 23,
+          "returned_hits": 88,
+          "roster_sizes": {
+            "covered": 8668,
+            "nominated": 3072,
+            "primary": 3021,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3246629,
+              "wall_ns": 3246369
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9385195,
+              "wall_ns": 9384868
+            },
+            "routing": {
+              "process_cpu_ns": 478488,
+              "wall_ns": 478676
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 90,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9175556,
+            "submitted_gets": 24,
+            "verified_bytes": 9175556
+          },
+          "native_loss": {
+            "boundary_hits": 90,
+            "boundary_misses": 10,
+            "boundary_recovered": 43,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 0,
+            "nomination_hits": 90,
+            "primary_hits": 47,
+            "returned_hits": 90,
+            "router_misses": 53,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 90,
+          "ordinal": 24,
+          "returned_hits": 90,
+          "roster_sizes": {
+            "covered": 9287,
+            "nominated": 3072,
+            "primary": 2638,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3248997,
+              "wall_ns": 3248709
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9931036,
+              "wall_ns": 9930732
+            },
+            "routing": {
+              "process_cpu_ns": 500040,
+              "wall_ns": 500055
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 89,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9460100,
+            "submitted_gets": 24,
+            "verified_bytes": 9460100
+          },
+          "native_loss": {
+            "boundary_hits": 89,
+            "boundary_misses": 11,
+            "boundary_recovered": 36,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 18,
+            "nomination_hits": 71,
+            "primary_hits": 53,
+            "returned_hits": 71,
+            "router_misses": 47,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 71,
+          "ordinal": 25,
+          "returned_hits": 71,
+          "roster_sizes": {
+            "covered": 9575,
+            "nominated": 3072,
+            "primary": 3139,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3252147,
+              "wall_ns": 3251862
+            },
+            "local_nomination": {
+              "process_cpu_ns": 10488373,
+              "wall_ns": 10488106
+            },
+            "routing": {
+              "process_cpu_ns": 563653,
+              "wall_ns": 563686
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 89,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8404916,
+            "submitted_gets": 24,
+            "verified_bytes": 8404916
+          },
+          "native_loss": {
+            "boundary_hits": 89,
+            "boundary_misses": 11,
+            "boundary_recovered": 10,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 28,
+            "nomination_hits": 61,
+            "primary_hits": 79,
+            "returned_hits": 61,
+            "router_misses": 21,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 61,
+          "ordinal": 26,
+          "returned_hits": 61,
+          "roster_sizes": {
+            "covered": 8507,
+            "nominated": 3072,
+            "primary": 2979,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3246420,
+              "wall_ns": 3246215
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9202195,
+              "wall_ns": 9201946
+            },
+            "routing": {
+              "process_cpu_ns": 567150,
+              "wall_ns": 567273
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 60,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8048248,
+            "submitted_gets": 24,
+            "verified_bytes": 8048248
+          },
+          "native_loss": {
+            "boundary_hits": 60,
+            "boundary_misses": 40,
+            "boundary_recovered": 45,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 2,
+            "nomination_hits": 58,
+            "primary_hits": 15,
+            "returned_hits": 58,
+            "router_misses": 85,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 58,
+          "ordinal": 27,
+          "returned_hits": 58,
+          "roster_sizes": {
+            "covered": 8146,
+            "nominated": 3072,
+            "primary": 2691,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3246209,
+              "wall_ns": 3245864
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8795944,
+              "wall_ns": 8795594
+            },
+            "routing": {
+              "process_cpu_ns": 509695,
+              "wall_ns": 509667
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 92,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8352552,
+            "submitted_gets": 24,
+            "verified_bytes": 8352552
+          },
+          "native_loss": {
+            "boundary_hits": 92,
+            "boundary_misses": 8,
+            "boundary_recovered": 21,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 5,
+            "nomination_hits": 87,
+            "primary_hits": 71,
+            "returned_hits": 87,
+            "router_misses": 29,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 87,
+          "ordinal": 28,
+          "returned_hits": 87,
+          "roster_sizes": {
+            "covered": 8454,
+            "nominated": 3072,
+            "primary": 3217,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3231959,
+              "wall_ns": 3231679
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9126863,
+              "wall_ns": 9126624
+            },
+            "routing": {
+              "process_cpu_ns": 495887,
+              "wall_ns": 495998
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 83,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9226932,
+            "submitted_gets": 24,
+            "verified_bytes": 9226932
+          },
+          "native_loss": {
+            "boundary_hits": 83,
+            "boundary_misses": 17,
+            "boundary_recovered": 41,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 2,
+            "nomination_hits": 81,
+            "primary_hits": 42,
+            "returned_hits": 81,
+            "router_misses": 58,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 81,
+          "ordinal": 29,
+          "returned_hits": 81,
+          "roster_sizes": {
+            "covered": 9339,
+            "nominated": 3072,
+            "primary": 3211,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3236318,
+              "wall_ns": 3236037
+            },
+            "local_nomination": {
+              "process_cpu_ns": 10105018,
+              "wall_ns": 10104753
+            },
+            "routing": {
+              "process_cpu_ns": 554777,
+              "wall_ns": 554841
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 98,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9475908,
+            "submitted_gets": 24,
+            "verified_bytes": 9475908
+          },
+          "native_loss": {
+            "boundary_hits": 98,
+            "boundary_misses": 2,
+            "boundary_recovered": 34,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 11,
+            "nomination_hits": 87,
+            "primary_hits": 64,
+            "returned_hits": 87,
+            "router_misses": 36,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 87,
+          "ordinal": 30,
+          "returned_hits": 87,
+          "roster_sizes": {
+            "covered": 9591,
+            "nominated": 3072,
+            "primary": 3405,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3246912,
+              "wall_ns": 3246668
+            },
+            "local_nomination": {
+              "process_cpu_ns": 10386727,
+              "wall_ns": 10386437
+            },
+            "routing": {
+              "process_cpu_ns": 568864,
+              "wall_ns": 568937
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 61,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7634276,
+            "submitted_gets": 24,
+            "verified_bytes": 7634276
+          },
+          "native_loss": {
+            "boundary_hits": 61,
+            "boundary_misses": 39,
+            "boundary_recovered": 19,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 0,
+            "nomination_hits": 61,
+            "primary_hits": 42,
+            "returned_hits": 61,
+            "router_misses": 58,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 61,
+          "ordinal": 31,
+          "returned_hits": 61,
+          "roster_sizes": {
+            "covered": 7727,
+            "nominated": 3072,
+            "primary": 2353,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3240673,
+              "wall_ns": 3240405
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8350972,
+              "wall_ns": 8356945
+            },
+            "routing": {
+              "process_cpu_ns": 438537,
+              "wall_ns": 438494
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 55,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8771464,
+            "submitted_gets": 24,
+            "verified_bytes": 8771464
+          },
+          "native_loss": {
+            "boundary_hits": 55,
+            "boundary_misses": 45,
+            "boundary_recovered": 26,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 0,
+            "nomination_hits": 55,
+            "primary_hits": 29,
+            "returned_hits": 55,
+            "router_misses": 71,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 55,
+          "ordinal": 32,
+          "returned_hits": 55,
+          "roster_sizes": {
+            "covered": 8878,
+            "nominated": 3072,
+            "primary": 3225,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3230904,
+              "wall_ns": 3230583
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9616147,
+              "wall_ns": 9615890
+            },
+            "routing": {
+              "process_cpu_ns": 498436,
+              "wall_ns": 498476
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 73,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8290308,
+            "submitted_gets": 24,
+            "verified_bytes": 8290308
+          },
+          "native_loss": {
+            "boundary_hits": 73,
+            "boundary_misses": 27,
+            "boundary_recovered": 22,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 2,
+            "nomination_hits": 71,
+            "primary_hits": 51,
+            "returned_hits": 71,
+            "router_misses": 49,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 71,
+          "ordinal": 33,
+          "returned_hits": 71,
+          "roster_sizes": {
+            "covered": 8391,
+            "nominated": 3072,
+            "primary": 3126,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3232768,
+              "wall_ns": 3232517
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9063342,
+              "wall_ns": 9063015
+            },
+            "routing": {
+              "process_cpu_ns": 507202,
+              "wall_ns": 507331
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 73,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8544224,
+            "submitted_gets": 24,
+            "verified_bytes": 8544224
+          },
+          "native_loss": {
+            "boundary_hits": 73,
+            "boundary_misses": 27,
+            "boundary_recovered": 35,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 1,
+            "nomination_hits": 72,
+            "primary_hits": 38,
+            "returned_hits": 72,
+            "router_misses": 62,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 72,
+          "ordinal": 34,
+          "returned_hits": 72,
+          "roster_sizes": {
+            "covered": 8648,
+            "nominated": 3072,
+            "primary": 2538,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3239076,
+              "wall_ns": 3238799
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9276747,
+              "wall_ns": 9276511
+            },
+            "routing": {
+              "process_cpu_ns": 495579,
+              "wall_ns": 495630
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 60,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7897084,
+            "submitted_gets": 24,
+            "verified_bytes": 7897084
+          },
+          "native_loss": {
+            "boundary_hits": 60,
+            "boundary_misses": 40,
+            "boundary_recovered": 32,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 6,
+            "nomination_hits": 54,
+            "primary_hits": 28,
+            "returned_hits": 54,
+            "router_misses": 72,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 54,
+          "ordinal": 35,
+          "returned_hits": 54,
+          "roster_sizes": {
+            "covered": 7993,
+            "nominated": 3052,
+            "primary": 2677,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3231053,
+              "wall_ns": 3230763
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8618206,
+              "wall_ns": 8617924
+            },
+            "routing": {
+              "process_cpu_ns": 491747,
+              "wall_ns": 491713
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 75,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8287344,
+            "submitted_gets": 24,
+            "verified_bytes": 8287344
+          },
+          "native_loss": {
+            "boundary_hits": 75,
+            "boundary_misses": 25,
+            "boundary_recovered": 32,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 1,
+            "nomination_hits": 74,
+            "primary_hits": 43,
+            "returned_hits": 74,
+            "router_misses": 57,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 74,
+          "ordinal": 36,
+          "returned_hits": 74,
+          "roster_sizes": {
+            "covered": 8388,
+            "nominated": 3072,
+            "primary": 2883,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3231400,
+              "wall_ns": 3231150
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9188670,
+              "wall_ns": 9200205
+            },
+            "routing": {
+              "process_cpu_ns": 549106,
+              "wall_ns": 549075
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 98,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9272380,
+            "submitted_gets": 24,
+            "verified_bytes": 9272380
+          },
+          "native_loss": {
+            "boundary_hits": 98,
+            "boundary_misses": 2,
+            "boundary_recovered": 17,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 8,
+            "nomination_hits": 90,
+            "primary_hits": 81,
+            "returned_hits": 90,
+            "router_misses": 19,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 90,
+          "ordinal": 37,
+          "returned_hits": 90,
+          "roster_sizes": {
+            "covered": 9385,
+            "nominated": 3072,
+            "primary": 3044,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3240716,
+              "wall_ns": 3240438
+            },
+            "local_nomination": {
+              "process_cpu_ns": 10088023,
+              "wall_ns": 10087713
+            },
+            "routing": {
+              "process_cpu_ns": 540701,
+              "wall_ns": 540725
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 82,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8956220,
+            "submitted_gets": 24,
+            "verified_bytes": 8956220
+          },
+          "native_loss": {
+            "boundary_hits": 82,
+            "boundary_misses": 18,
+            "boundary_recovered": 17,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 6,
+            "nomination_hits": 76,
+            "primary_hits": 65,
+            "returned_hits": 76,
+            "router_misses": 35,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 76,
+          "ordinal": 38,
+          "returned_hits": 76,
+          "roster_sizes": {
+            "covered": 9065,
+            "nominated": 3072,
+            "primary": 3328,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3241116,
+              "wall_ns": 3240849
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9700134,
+              "wall_ns": 9699802
+            },
+            "routing": {
+              "process_cpu_ns": 508782,
+              "wall_ns": 508898
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 60,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8693412,
+            "submitted_gets": 24,
+            "verified_bytes": 8693412
+          },
+          "native_loss": {
+            "boundary_hits": 60,
+            "boundary_misses": 40,
+            "boundary_recovered": 28,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 10,
+            "nomination_hits": 50,
+            "primary_hits": 32,
+            "returned_hits": 50,
+            "router_misses": 68,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 50,
+          "ordinal": 39,
+          "returned_hits": 50,
+          "roster_sizes": {
+            "covered": 8799,
+            "nominated": 3072,
+            "primary": 2753,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3235932,
+              "wall_ns": 3235715
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9466893,
+              "wall_ns": 9466609
+            },
+            "routing": {
+              "process_cpu_ns": 495777,
+              "wall_ns": 495894
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 92,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9169628,
+            "submitted_gets": 24,
+            "verified_bytes": 9169628
+          },
+          "native_loss": {
+            "boundary_hits": 92,
+            "boundary_misses": 8,
+            "boundary_recovered": 37,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 0,
+            "nomination_hits": 92,
+            "primary_hits": 55,
+            "returned_hits": 92,
+            "router_misses": 45,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 92,
+          "ordinal": 40,
+          "returned_hits": 92,
+          "roster_sizes": {
+            "covered": 9281,
+            "nominated": 3072,
+            "primary": 3165,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3231914,
+              "wall_ns": 3231657
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9914431,
+              "wall_ns": 9914237
+            },
+            "routing": {
+              "process_cpu_ns": 506825,
+              "wall_ns": 506964
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 98,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8700328,
+            "submitted_gets": 24,
+            "verified_bytes": 8700328
+          },
+          "native_loss": {
+            "boundary_hits": 98,
+            "boundary_misses": 2,
+            "boundary_recovered": 16,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 8,
+            "nomination_hits": 90,
+            "primary_hits": 82,
+            "returned_hits": 90,
+            "router_misses": 18,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 90,
+          "ordinal": 41,
+          "returned_hits": 90,
+          "roster_sizes": {
+            "covered": 8806,
+            "nominated": 3072,
+            "primary": 3005,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3251200,
+              "wall_ns": 3250976
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9484641,
+              "wall_ns": 9484394
+            },
+            "routing": {
+              "process_cpu_ns": 446065,
+              "wall_ns": 446192
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 65,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8964124,
+            "submitted_gets": 24,
+            "verified_bytes": 8964124
+          },
+          "native_loss": {
+            "boundary_hits": 65,
+            "boundary_misses": 35,
+            "boundary_recovered": 45,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 4,
+            "nomination_hits": 61,
+            "primary_hits": 20,
+            "returned_hits": 61,
+            "router_misses": 80,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 61,
+          "ordinal": 42,
+          "returned_hits": 61,
+          "roster_sizes": {
+            "covered": 9073,
+            "nominated": 3072,
+            "primary": 3080,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3230533,
+              "wall_ns": 3230313
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9667056,
+              "wall_ns": 9666792
+            },
+            "routing": {
+              "process_cpu_ns": 537690,
+              "wall_ns": 537667
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 61,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8743800,
+            "submitted_gets": 24,
+            "verified_bytes": 8743800
+          },
+          "native_loss": {
+            "boundary_hits": 61,
+            "boundary_misses": 39,
+            "boundary_recovered": 22,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 4,
+            "nomination_hits": 57,
+            "primary_hits": 39,
+            "returned_hits": 57,
+            "router_misses": 61,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 57,
+          "ordinal": 43,
+          "returned_hits": 57,
+          "roster_sizes": {
+            "covered": 8850,
+            "nominated": 3072,
+            "primary": 2995,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3235272,
+              "wall_ns": 3234981
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9475505,
+              "wall_ns": 9475186
+            },
+            "routing": {
+              "process_cpu_ns": 516298,
+              "wall_ns": 516288
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 65,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9284236,
+            "submitted_gets": 24,
+            "verified_bytes": 9284236
+          },
+          "native_loss": {
+            "boundary_hits": 65,
+            "boundary_misses": 35,
+            "boundary_recovered": 26,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 4,
+            "nomination_hits": 61,
+            "primary_hits": 39,
+            "returned_hits": 61,
+            "router_misses": 61,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 61,
+          "ordinal": 44,
+          "returned_hits": 61,
+          "roster_sizes": {
+            "covered": 9397,
+            "nominated": 3061,
+            "primary": 3271,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3240282,
+              "wall_ns": 3240054
+            },
+            "local_nomination": {
+              "process_cpu_ns": 10059400,
+              "wall_ns": 10059099
+            },
+            "routing": {
+              "process_cpu_ns": 494865,
+              "wall_ns": 494902
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 87,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9105408,
+            "submitted_gets": 24,
+            "verified_bytes": 9105408
+          },
+          "native_loss": {
+            "boundary_hits": 87,
+            "boundary_misses": 13,
+            "boundary_recovered": 28,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 16,
+            "nomination_hits": 71,
+            "primary_hits": 59,
+            "returned_hits": 71,
+            "router_misses": 41,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 71,
+          "ordinal": 45,
+          "returned_hits": 71,
+          "roster_sizes": {
+            "covered": 9216,
+            "nominated": 3072,
+            "primary": 3559,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3237235,
+              "wall_ns": 3236948
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9829140,
+              "wall_ns": 9835258
+            },
+            "routing": {
+              "process_cpu_ns": 521082,
+              "wall_ns": 521124
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 88,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7707388,
+            "submitted_gets": 24,
+            "verified_bytes": 7707388
+          },
+          "native_loss": {
+            "boundary_hits": 88,
+            "boundary_misses": 12,
+            "boundary_recovered": 10,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 15,
+            "nomination_hits": 73,
+            "primary_hits": 78,
+            "returned_hits": 73,
+            "router_misses": 22,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 73,
+          "ordinal": 46,
+          "returned_hits": 73,
+          "roster_sizes": {
+            "covered": 7801,
+            "nominated": 3072,
+            "primary": 2610,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3232168,
+              "wall_ns": 3231881
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8391294,
+              "wall_ns": 8390980
+            },
+            "routing": {
+              "process_cpu_ns": 425816,
+              "wall_ns": 425806
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 75,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9160736,
+            "submitted_gets": 24,
+            "verified_bytes": 9160736
+          },
+          "native_loss": {
+            "boundary_hits": 75,
+            "boundary_misses": 25,
+            "boundary_recovered": 34,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 1,
+            "nomination_hits": 74,
+            "primary_hits": 41,
+            "returned_hits": 74,
+            "router_misses": 59,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 74,
+          "ordinal": 47,
+          "returned_hits": 74,
+          "roster_sizes": {
+            "covered": 9272,
+            "nominated": 3072,
+            "primary": 3000,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3237487,
+              "wall_ns": 3237302
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9929577,
+              "wall_ns": 9929197
+            },
+            "routing": {
+              "process_cpu_ns": 517795,
+              "wall_ns": 517827
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 87,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8611408,
+            "submitted_gets": 24,
+            "verified_bytes": 8611408
+          },
+          "native_loss": {
+            "boundary_hits": 87,
+            "boundary_misses": 13,
+            "boundary_recovered": 10,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 15,
+            "nomination_hits": 72,
+            "primary_hits": 77,
+            "returned_hits": 72,
+            "router_misses": 23,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 72,
+          "ordinal": 48,
+          "returned_hits": 72,
+          "roster_sizes": {
+            "covered": 8716,
+            "nominated": 3069,
+            "primary": 3214,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3240424,
+              "wall_ns": 3240194
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9447333,
+              "wall_ns": 9446978
+            },
+            "routing": {
+              "process_cpu_ns": 458305,
+              "wall_ns": 458390
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 70,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8833708,
+            "submitted_gets": 24,
+            "verified_bytes": 8833708
+          },
+          "native_loss": {
+            "boundary_hits": 70,
+            "boundary_misses": 30,
+            "boundary_recovered": 35,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 5,
+            "nomination_hits": 65,
+            "primary_hits": 35,
+            "returned_hits": 65,
+            "router_misses": 65,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 65,
+          "ordinal": 49,
+          "returned_hits": 65,
+          "roster_sizes": {
+            "covered": 8941,
+            "nominated": 3047,
+            "primary": 3096,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3223138,
+              "wall_ns": 3222884
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9468546,
+              "wall_ns": 9468248
+            },
+            "routing": {
+              "process_cpu_ns": 491122,
+              "wall_ns": 491270
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 99,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8404916,
+            "submitted_gets": 24,
+            "verified_bytes": 8404916
+          },
+          "native_loss": {
+            "boundary_hits": 99,
+            "boundary_misses": 1,
+            "boundary_recovered": 19,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 9,
+            "nomination_hits": 90,
+            "primary_hits": 80,
+            "returned_hits": 90,
+            "router_misses": 20,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 90,
+          "ordinal": 50,
+          "returned_hits": 90,
+          "roster_sizes": {
+            "covered": 8507,
+            "nominated": 3072,
+            "primary": 2804,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3235256,
+              "wall_ns": 3234968
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8965899,
+              "wall_ns": 8965636
+            },
+            "routing": {
+              "process_cpu_ns": 445531,
+              "wall_ns": 445511
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 93,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8354528,
+            "submitted_gets": 24,
+            "verified_bytes": 8354528
+          },
+          "native_loss": {
+            "boundary_hits": 93,
+            "boundary_misses": 7,
+            "boundary_recovered": 20,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 6,
+            "nomination_hits": 87,
+            "primary_hits": 73,
+            "returned_hits": 87,
+            "router_misses": 27,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 87,
+          "ordinal": 51,
+          "returned_hits": 87,
+          "roster_sizes": {
+            "covered": 8456,
+            "nominated": 3072,
+            "primary": 2849,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3236909,
+              "wall_ns": 3236653
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9104000,
+              "wall_ns": 9103722
+            },
+            "routing": {
+              "process_cpu_ns": 587264,
+              "wall_ns": 587268
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 75,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8708232,
+            "submitted_gets": 24,
+            "verified_bytes": 8708232
+          },
+          "native_loss": {
+            "boundary_hits": 75,
+            "boundary_misses": 25,
+            "boundary_recovered": 25,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 6,
+            "nomination_hits": 69,
+            "primary_hits": 50,
+            "returned_hits": 69,
+            "router_misses": 50,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 69,
+          "ordinal": 52,
+          "returned_hits": 69,
+          "roster_sizes": {
+            "covered": 8814,
+            "nominated": 3072,
+            "primary": 3371,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3235790,
+              "wall_ns": 3235526
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9508327,
+              "wall_ns": 9508053
+            },
+            "routing": {
+              "process_cpu_ns": 503767,
+              "wall_ns": 503767
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 88,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8555092,
+            "submitted_gets": 24,
+            "verified_bytes": 8555092
+          },
+          "native_loss": {
+            "boundary_hits": 88,
+            "boundary_misses": 12,
+            "boundary_recovered": 15,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 19,
+            "nomination_hits": 69,
+            "primary_hits": 73,
+            "returned_hits": 69,
+            "router_misses": 27,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 69,
+          "ordinal": 53,
+          "returned_hits": 69,
+          "roster_sizes": {
+            "covered": 8659,
+            "nominated": 3072,
+            "primary": 3189,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3235772,
+              "wall_ns": 3235470
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9357578,
+              "wall_ns": 9357194
+            },
+            "routing": {
+              "process_cpu_ns": 514484,
+              "wall_ns": 514482
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 70,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9187412,
+            "submitted_gets": 24,
+            "verified_bytes": 9187412
+          },
+          "native_loss": {
+            "boundary_hits": 70,
+            "boundary_misses": 30,
+            "boundary_recovered": 37,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 8,
+            "nomination_hits": 62,
+            "primary_hits": 33,
+            "returned_hits": 62,
+            "router_misses": 67,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 62,
+          "ordinal": 54,
+          "returned_hits": 62,
+          "roster_sizes": {
+            "covered": 9299,
+            "nominated": 3072,
+            "primary": 2888,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3239927,
+              "wall_ns": 3239671
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9917174,
+              "wall_ns": 9916863
+            },
+            "routing": {
+              "process_cpu_ns": 415248,
+              "wall_ns": 415350
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 62,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8863348,
+            "submitted_gets": 24,
+            "verified_bytes": 8863348
+          },
+          "native_loss": {
+            "boundary_hits": 62,
+            "boundary_misses": 38,
+            "boundary_recovered": 31,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 3,
+            "nomination_hits": 59,
+            "primary_hits": 31,
+            "returned_hits": 59,
+            "router_misses": 69,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 59,
+          "ordinal": 55,
+          "returned_hits": 59,
+          "roster_sizes": {
+            "covered": 8971,
+            "nominated": 3057,
+            "primary": 3167,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3230388,
+              "wall_ns": 3230072
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9614062,
+              "wall_ns": 9613753
+            },
+            "routing": {
+              "process_cpu_ns": 516936,
+              "wall_ns": 516914
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 51,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8883108,
+            "submitted_gets": 24,
+            "verified_bytes": 8883108
+          },
+          "native_loss": {
+            "boundary_hits": 51,
+            "boundary_misses": 49,
+            "boundary_recovered": 28,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 0,
+            "nomination_hits": 51,
+            "primary_hits": 23,
+            "returned_hits": 51,
+            "router_misses": 77,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 51,
+          "ordinal": 56,
+          "returned_hits": 51,
+          "roster_sizes": {
+            "covered": 8991,
+            "nominated": 3072,
+            "primary": 2829,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3235612,
+              "wall_ns": 3235282
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9599296,
+              "wall_ns": 9599094
+            },
+            "routing": {
+              "process_cpu_ns": 438035,
+              "wall_ns": 438139
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 73,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8695388,
+            "submitted_gets": 24,
+            "verified_bytes": 8695388
+          },
+          "native_loss": {
+            "boundary_hits": 73,
+            "boundary_misses": 27,
+            "boundary_recovered": 38,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 0,
+            "nomination_hits": 73,
+            "primary_hits": 35,
+            "returned_hits": 73,
+            "router_misses": 65,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 73,
+          "ordinal": 57,
+          "returned_hits": 73,
+          "roster_sizes": {
+            "covered": 8801,
+            "nominated": 3072,
+            "primary": 3305,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3248523,
+              "wall_ns": 3248309
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9311645,
+              "wall_ns": 9311379
+            },
+            "routing": {
+              "process_cpu_ns": 498177,
+              "wall_ns": 498295
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 62,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8264620,
+            "submitted_gets": 24,
+            "verified_bytes": 8264620
+          },
+          "native_loss": {
+            "boundary_hits": 62,
+            "boundary_misses": 38,
+            "boundary_recovered": 20,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 8,
+            "nomination_hits": 54,
+            "primary_hits": 42,
+            "returned_hits": 54,
+            "router_misses": 58,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 54,
+          "ordinal": 58,
+          "returned_hits": 54,
+          "roster_sizes": {
+            "covered": 8365,
+            "nominated": 3072,
+            "primary": 3125,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3242702,
+              "wall_ns": 3242486
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9039840,
+              "wall_ns": 9039633
+            },
+            "routing": {
+              "process_cpu_ns": 503739,
+              "wall_ns": 503671
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 94,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9104420,
+            "submitted_gets": 24,
+            "verified_bytes": 9104420
+          },
+          "native_loss": {
+            "boundary_hits": 94,
+            "boundary_misses": 6,
+            "boundary_recovered": 54,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 23,
+            "nomination_hits": 71,
+            "primary_hits": 40,
+            "returned_hits": 71,
+            "router_misses": 60,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 71,
+          "ordinal": 59,
+          "returned_hits": 71,
+          "roster_sizes": {
+            "covered": 9215,
+            "nominated": 3072,
+            "primary": 3581,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3232298,
+              "wall_ns": 3232059
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9935906,
+              "wall_ns": 9942135
+            },
+            "routing": {
+              "process_cpu_ns": 507883,
+              "wall_ns": 507833
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 68,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8758620,
+            "submitted_gets": 24,
+            "verified_bytes": 8758620
+          },
+          "native_loss": {
+            "boundary_hits": 68,
+            "boundary_misses": 32,
+            "boundary_recovered": 24,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 0,
+            "nomination_hits": 68,
+            "primary_hits": 44,
+            "returned_hits": 68,
+            "router_misses": 56,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 68,
+          "ordinal": 60,
+          "returned_hits": 68,
+          "roster_sizes": {
+            "covered": 8865,
+            "nominated": 3072,
+            "primary": 2744,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3237406,
+              "wall_ns": 3237115
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9505149,
+              "wall_ns": 9504872
+            },
+            "routing": {
+              "process_cpu_ns": 547369,
+              "wall_ns": 547551
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 53,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7607600,
+            "submitted_gets": 24,
+            "verified_bytes": 7607600
+          },
+          "native_loss": {
+            "boundary_hits": 53,
+            "boundary_misses": 47,
+            "boundary_recovered": 24,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 1,
+            "nomination_hits": 52,
+            "primary_hits": 29,
+            "returned_hits": 52,
+            "router_misses": 71,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 52,
+          "ordinal": 61,
+          "returned_hits": 52,
+          "roster_sizes": {
+            "covered": 7700,
+            "nominated": 3072,
+            "primary": 2366,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3238804,
+              "wall_ns": 3238476
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8263745,
+              "wall_ns": 8263443
+            },
+            "routing": {
+              "process_cpu_ns": 538816,
+              "wall_ns": 538769
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 71,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8769488,
+            "submitted_gets": 24,
+            "verified_bytes": 8769488
+          },
+          "native_loss": {
+            "boundary_hits": 71,
+            "boundary_misses": 29,
+            "boundary_recovered": 38,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 1,
+            "nomination_hits": 70,
+            "primary_hits": 33,
+            "returned_hits": 70,
+            "router_misses": 67,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 70,
+          "ordinal": 62,
+          "returned_hits": 70,
+          "roster_sizes": {
+            "covered": 8876,
+            "nominated": 3072,
+            "primary": 3164,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3240944,
+              "wall_ns": 3240681
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9415710,
+              "wall_ns": 9415465
+            },
+            "routing": {
+              "process_cpu_ns": 439378,
+              "wall_ns": 439563
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 88,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8074924,
+            "submitted_gets": 24,
+            "verified_bytes": 8074924
+          },
+          "native_loss": {
+            "boundary_hits": 88,
+            "boundary_misses": 12,
+            "boundary_recovered": 21,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 2,
+            "nomination_hits": 86,
+            "primary_hits": 67,
+            "returned_hits": 86,
+            "router_misses": 33,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 86,
+          "ordinal": 63,
+          "returned_hits": 86,
+          "roster_sizes": {
+            "covered": 8173,
+            "nominated": 3072,
+            "primary": 2588,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3247626,
+              "wall_ns": 3247371
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8632611,
+              "wall_ns": 8632320
+            },
+            "routing": {
+              "process_cpu_ns": 497611,
+              "wall_ns": 497525
+            }
+          }
+        }
+      ],
+      "queries": 64,
+      "returned": {
+        "mean_hits_at_100": 0.68875,
+        "p05_hits": 50,
+        "quality_gate_possible": false,
+        "total_hits": 4408
+      },
+      "stage_timing_ns": {
+        "final_ranking": {
+          "process_cpu_ns": {
+            "maximum": 3353188,
+            "mean": 3243469.796875,
+            "minimum": 3222167,
+            "total": 207582067
+          },
+          "wall_ns": {
+            "maximum": 3352554,
+            "mean": 3243197.15625,
+            "minimum": 3221952,
+            "total": 207564618
+          }
+        },
+        "local_nomination": {
+          "process_cpu_ns": {
+            "maximum": 11220432,
+            "mean": 9459601.484375,
+            "minimum": 8263745,
+            "total": 605414495
+          },
+          "wall_ns": {
+            "maximum": 11220098,
+            "mean": 9459897.21875,
+            "minimum": 8263443,
+            "total": 605433422
+          }
+        },
+        "routing": {
+          "process_cpu_ns": {
+            "maximum": 596070,
+            "mean": 509645.34375,
+            "minimum": 415248,
+            "total": 32617302
+          },
+          "wall_ns": {
+            "maximum": 600292,
+            "mean": 509761.0,
+            "minimum": 415350,
+            "total": 32624704
+          }
+        }
+      },
+      "startup_local_reads": {
+        "startup": {
+          "failed_gets": 0,
+          "requested_bytes": 30435,
+          "submitted_gets": 1,
+          "verified_bytes": 30435
+        },
+        "startup_directory": {
+          "failed_gets": 0,
+          "requested_bytes": 5879576,
+          "submitted_gets": 1,
+          "verified_bytes": 5879576
+        }
+      },
+      "truth_sha256": "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355",
+      "truth_uniqueness_verification": "attested_by_authenticated_native_decompose_loss_not_independently_rechecked"
+    },
+    "relaion": {
+      "ceiling_basis": "authenticated_native_loss_accounting",
+      "coverage_ceiling": {
+        "mean_hits_at_100": 0.86140625,
+        "p05_hits": 55,
+        "quality_gate_possible": false,
+        "total_hits": 5513
+      },
+      "freeze": {
+        "bytes": 5803088,
+        "sha256": "6dba3edf8d2af2b59288ef266f2bca7605b28a5dbbfab5407376db7270c592eb"
+      },
+      "interpretation": {
+        "explanation": "Coverage below either gate makes full-fetched SQ8 alone insufficient even with perfect ranking. Zero final-ranking misses on the nominated set does not establish quantization loss or exact-score equivalence.",
+        "final_ranking_misses": 0,
+        "full_fetched_sq8_alone_sufficient": false,
+        "full_fetched_sq8_measured": false,
+        "local_nomination_misses": 1357,
+        "perfect_ranking_of_fetched_cells_can_meet_original_gate": false,
+        "quantization_loss_established": false
+      },
+      "local_reads": {
+        "failed_gets": {
+          "maximum": 0,
+          "mean": 0.0,
+          "minimum": 0,
+          "total": 0
+        },
+        "requested_bytes": {
+          "maximum": 9227920,
+          "mean": 8293287.4375,
+          "minimum": 7559188,
+          "total": 530770396
+        },
+        "submitted_gets": {
+          "maximum": 24,
+          "mean": 24.0,
+          "minimum": 24,
+          "total": 1536
+        },
+        "verified_bytes": {
+          "maximum": 9227920,
+          "mean": 8293287.4375,
+          "minimum": 7559188,
+          "total": 530770396
+        }
+      },
+      "nomination_ceiling": {
+        "mean_hits_at_100": 0.649375,
+        "p05_hits": 45,
+        "quality_gate_possible": false,
+        "total_hits": 4156
+      },
+      "per_query": [
+        {
+          "coverage_ceiling_hits": 100,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8171748,
+            "submitted_gets": 24,
+            "verified_bytes": 8171748
+          },
+          "native_loss": {
+            "boundary_hits": 100,
+            "boundary_misses": 0,
+            "boundary_recovered": 1,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 21,
+            "nomination_hits": 79,
+            "primary_hits": 99,
+            "returned_hits": 79,
+            "router_misses": 1,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 79,
+          "ordinal": 0,
+          "returned_hits": 79,
+          "roster_sizes": {
+            "covered": 8271,
+            "nominated": 3072,
+            "primary": 2535,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3319992,
+              "wall_ns": 3319598
+            },
+            "local_nomination": {
+              "process_cpu_ns": 11130570,
+              "wall_ns": 11130202
+            },
+            "routing": {
+              "process_cpu_ns": 614533,
+              "wall_ns": 620073
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 59,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8294260,
+            "submitted_gets": 24,
+            "verified_bytes": 8294260
+          },
+          "native_loss": {
+            "boundary_hits": 59,
+            "boundary_misses": 41,
+            "boundary_recovered": 38,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 14,
+            "nomination_hits": 45,
+            "primary_hits": 21,
+            "returned_hits": 45,
+            "router_misses": 79,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 45,
+          "ordinal": 1,
+          "returned_hits": 45,
+          "roster_sizes": {
+            "covered": 8395,
+            "nominated": 2974,
+            "primary": 2646,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3161114,
+              "wall_ns": 3160850
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9362751,
+              "wall_ns": 9373579
+            },
+            "routing": {
+              "process_cpu_ns": 528155,
+              "wall_ns": 528209
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 100,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8949304,
+            "submitted_gets": 24,
+            "verified_bytes": 8949304
+          },
+          "native_loss": {
+            "boundary_hits": 100,
+            "boundary_misses": 0,
+            "boundary_recovered": 7,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 50,
+            "nomination_hits": 50,
+            "primary_hits": 93,
+            "returned_hits": 50,
+            "router_misses": 7,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 50,
+          "ordinal": 2,
+          "returned_hits": 50,
+          "roster_sizes": {
+            "covered": 9058,
+            "nominated": 3029,
+            "primary": 3291,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3235455,
+              "wall_ns": 3235232
+            },
+            "local_nomination": {
+              "process_cpu_ns": 10162682,
+              "wall_ns": 10172737
+            },
+            "routing": {
+              "process_cpu_ns": 450026,
+              "wall_ns": 449951
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 92,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8527428,
+            "submitted_gets": 24,
+            "verified_bytes": 8527428
+          },
+          "native_loss": {
+            "boundary_hits": 92,
+            "boundary_misses": 8,
+            "boundary_recovered": 27,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 20,
+            "nomination_hits": 72,
+            "primary_hits": 65,
+            "returned_hits": 72,
+            "router_misses": 35,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 72,
+          "ordinal": 3,
+          "returned_hits": 72,
+          "roster_sizes": {
+            "covered": 8631,
+            "nominated": 3072,
+            "primary": 3029,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3248373,
+              "wall_ns": 3248153
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9400615,
+              "wall_ns": 9400294
+            },
+            "routing": {
+              "process_cpu_ns": 498515,
+              "wall_ns": 498565
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 78,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8084804,
+            "submitted_gets": 24,
+            "verified_bytes": 8084804
+          },
+          "native_loss": {
+            "boundary_hits": 78,
+            "boundary_misses": 22,
+            "boundary_recovered": 28,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 11,
+            "nomination_hits": 67,
+            "primary_hits": 50,
+            "returned_hits": 67,
+            "router_misses": 50,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 67,
+          "ordinal": 4,
+          "returned_hits": 67,
+          "roster_sizes": {
+            "covered": 8183,
+            "nominated": 3072,
+            "primary": 2482,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3240747,
+              "wall_ns": 3240511
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8871888,
+              "wall_ns": 8871571
+            },
+            "routing": {
+              "process_cpu_ns": 611937,
+              "wall_ns": 611847
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 96,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8232016,
+            "submitted_gets": 24,
+            "verified_bytes": 8232016
+          },
+          "native_loss": {
+            "boundary_hits": 96,
+            "boundary_misses": 4,
+            "boundary_recovered": 12,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 12,
+            "nomination_hits": 84,
+            "primary_hits": 84,
+            "returned_hits": 84,
+            "router_misses": 16,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 84,
+          "ordinal": 5,
+          "returned_hits": 84,
+          "roster_sizes": {
+            "covered": 8332,
+            "nominated": 3072,
+            "primary": 2400,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3242023,
+              "wall_ns": 3241792
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9008442,
+              "wall_ns": 9008182
+            },
+            "routing": {
+              "process_cpu_ns": 493046,
+              "wall_ns": 493144
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 81,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8277464,
+            "submitted_gets": 24,
+            "verified_bytes": 8277464
+          },
+          "native_loss": {
+            "boundary_hits": 81,
+            "boundary_misses": 19,
+            "boundary_recovered": 40,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 15,
+            "nomination_hits": 66,
+            "primary_hits": 41,
+            "returned_hits": 66,
+            "router_misses": 59,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 66,
+          "ordinal": 6,
+          "returned_hits": 66,
+          "roster_sizes": {
+            "covered": 8378,
+            "nominated": 3054,
+            "primary": 3019,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3237428,
+              "wall_ns": 3237147
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9088230,
+              "wall_ns": 9087874
+            },
+            "routing": {
+              "process_cpu_ns": 542524,
+              "wall_ns": 542680
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 91,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8552128,
+            "submitted_gets": 24,
+            "verified_bytes": 8552128
+          },
+          "native_loss": {
+            "boundary_hits": 91,
+            "boundary_misses": 9,
+            "boundary_recovered": 22,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 24,
+            "nomination_hits": 67,
+            "primary_hits": 69,
+            "returned_hits": 67,
+            "router_misses": 31,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 67,
+          "ordinal": 7,
+          "returned_hits": 67,
+          "roster_sizes": {
+            "covered": 8656,
+            "nominated": 3049,
+            "primary": 2944,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3217426,
+              "wall_ns": 3217210
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9279967,
+              "wall_ns": 9286825
+            },
+            "routing": {
+              "process_cpu_ns": 496344,
+              "wall_ns": 496331
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 64,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8373300,
+            "submitted_gets": 24,
+            "verified_bytes": 8373300
+          },
+          "native_loss": {
+            "boundary_hits": 64,
+            "boundary_misses": 36,
+            "boundary_recovered": 30,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 9,
+            "nomination_hits": 55,
+            "primary_hits": 34,
+            "returned_hits": 55,
+            "router_misses": 66,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 55,
+          "ordinal": 8,
+          "returned_hits": 55,
+          "roster_sizes": {
+            "covered": 8475,
+            "nominated": 3049,
+            "primary": 2749,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3215892,
+              "wall_ns": 3215680
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9097523,
+              "wall_ns": 9097293
+            },
+            "routing": {
+              "process_cpu_ns": 575684,
+              "wall_ns": 575908
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 100,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8751704,
+            "submitted_gets": 24,
+            "verified_bytes": 8751704
+          },
+          "native_loss": {
+            "boundary_hits": 100,
+            "boundary_misses": 0,
+            "boundary_recovered": 0,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 13,
+            "nomination_hits": 87,
+            "primary_hits": 100,
+            "returned_hits": 87,
+            "router_misses": 0,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 87,
+          "ordinal": 9,
+          "returned_hits": 87,
+          "roster_sizes": {
+            "covered": 8858,
+            "nominated": 3072,
+            "primary": 2663,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3239541,
+              "wall_ns": 3239275
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9462090,
+              "wall_ns": 9461854
+            },
+            "routing": {
+              "process_cpu_ns": 401532,
+              "wall_ns": 401645
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 91,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9010560,
+            "submitted_gets": 24,
+            "verified_bytes": 9010560
+          },
+          "native_loss": {
+            "boundary_hits": 91,
+            "boundary_misses": 9,
+            "boundary_recovered": 14,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 30,
+            "nomination_hits": 61,
+            "primary_hits": 77,
+            "returned_hits": 61,
+            "router_misses": 23,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 61,
+          "ordinal": 10,
+          "returned_hits": 61,
+          "roster_sizes": {
+            "covered": 9120,
+            "nominated": 3057,
+            "primary": 2833,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3218424,
+              "wall_ns": 3218145
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9707543,
+              "wall_ns": 9707264
+            },
+            "routing": {
+              "process_cpu_ns": 458982,
+              "wall_ns": 459113
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 93,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8303152,
+            "submitted_gets": 24,
+            "verified_bytes": 8303152
+          },
+          "native_loss": {
+            "boundary_hits": 93,
+            "boundary_misses": 7,
+            "boundary_recovered": 18,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 29,
+            "nomination_hits": 64,
+            "primary_hits": 75,
+            "returned_hits": 64,
+            "router_misses": 25,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 64,
+          "ordinal": 11,
+          "returned_hits": 64,
+          "roster_sizes": {
+            "covered": 8404,
+            "nominated": 3039,
+            "primary": 2889,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3208566,
+              "wall_ns": 3208311
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9041327,
+              "wall_ns": 9041050
+            },
+            "routing": {
+              "process_cpu_ns": 510228,
+              "wall_ns": 510447
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 96,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8232016,
+            "submitted_gets": 24,
+            "verified_bytes": 8232016
+          },
+          "native_loss": {
+            "boundary_hits": 96,
+            "boundary_misses": 4,
+            "boundary_recovered": 29,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 37,
+            "nomination_hits": 59,
+            "primary_hits": 67,
+            "returned_hits": 59,
+            "router_misses": 33,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 59,
+          "ordinal": 12,
+          "returned_hits": 59,
+          "roster_sizes": {
+            "covered": 8332,
+            "nominated": 3034,
+            "primary": 2974,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3204751,
+              "wall_ns": 3204488
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9074110,
+              "wall_ns": 9073859
+            },
+            "routing": {
+              "process_cpu_ns": 505701,
+              "wall_ns": 505765
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 47,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7878312,
+            "submitted_gets": 24,
+            "verified_bytes": 7878312
+          },
+          "native_loss": {
+            "boundary_hits": 47,
+            "boundary_misses": 53,
+            "boundary_recovered": 28,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 2,
+            "nomination_hits": 45,
+            "primary_hits": 19,
+            "returned_hits": 45,
+            "router_misses": 81,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 45,
+          "ordinal": 13,
+          "returned_hits": 45,
+          "roster_sizes": {
+            "covered": 7974,
+            "nominated": 3072,
+            "primary": 2813,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3235963,
+              "wall_ns": 3235765
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8594081,
+              "wall_ns": 8593791
+            },
+            "routing": {
+              "process_cpu_ns": 552864,
+              "wall_ns": 552927
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 54,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8273512,
+            "submitted_gets": 24,
+            "verified_bytes": 8273512
+          },
+          "native_loss": {
+            "boundary_hits": 54,
+            "boundary_misses": 46,
+            "boundary_recovered": 38,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 11,
+            "nomination_hits": 43,
+            "primary_hits": 16,
+            "returned_hits": 43,
+            "router_misses": 84,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 43,
+          "ordinal": 14,
+          "returned_hits": 43,
+          "roster_sizes": {
+            "covered": 8374,
+            "nominated": 2923,
+            "primary": 3014,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3108371,
+              "wall_ns": 3108128
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9059513,
+              "wall_ns": 9059174
+            },
+            "routing": {
+              "process_cpu_ns": 513356,
+              "wall_ns": 513445
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 69,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8121360,
+            "submitted_gets": 24,
+            "verified_bytes": 8121360
+          },
+          "native_loss": {
+            "boundary_hits": 69,
+            "boundary_misses": 31,
+            "boundary_recovered": 31,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 17,
+            "nomination_hits": 52,
+            "primary_hits": 38,
+            "returned_hits": 52,
+            "router_misses": 62,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 52,
+          "ordinal": 15,
+          "returned_hits": 52,
+          "roster_sizes": {
+            "covered": 8220,
+            "nominated": 3038,
+            "primary": 2849,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3208084,
+              "wall_ns": 3207826
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8832584,
+              "wall_ns": 8832354
+            },
+            "routing": {
+              "process_cpu_ns": 476626,
+              "wall_ns": 476656
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 98,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7849660,
+            "submitted_gets": 24,
+            "verified_bytes": 7849660
+          },
+          "native_loss": {
+            "boundary_hits": 98,
+            "boundary_misses": 2,
+            "boundary_recovered": 1,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 36,
+            "nomination_hits": 62,
+            "primary_hits": 97,
+            "returned_hits": 62,
+            "router_misses": 3,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 62,
+          "ordinal": 16,
+          "returned_hits": 62,
+          "roster_sizes": {
+            "covered": 7945,
+            "nominated": 3072,
+            "primary": 2667,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3237481,
+              "wall_ns": 3237283
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8592706,
+              "wall_ns": 8592529
+            },
+            "routing": {
+              "process_cpu_ns": 531256,
+              "wall_ns": 531299
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 96,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8269560,
+            "submitted_gets": 24,
+            "verified_bytes": 8269560
+          },
+          "native_loss": {
+            "boundary_hits": 96,
+            "boundary_misses": 4,
+            "boundary_recovered": 8,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 21,
+            "nomination_hits": 75,
+            "primary_hits": 88,
+            "returned_hits": 75,
+            "router_misses": 12,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 75,
+          "ordinal": 17,
+          "returned_hits": 75,
+          "roster_sizes": {
+            "covered": 8370,
+            "nominated": 3072,
+            "primary": 3142,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3241989,
+              "wall_ns": 3241780
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9087519,
+              "wall_ns": 9087200
+            },
+            "routing": {
+              "process_cpu_ns": 597264,
+              "wall_ns": 597289
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 87,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7707388,
+            "submitted_gets": 24,
+            "verified_bytes": 7707388
+          },
+          "native_loss": {
+            "boundary_hits": 87,
+            "boundary_misses": 13,
+            "boundary_recovered": 12,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 14,
+            "nomination_hits": 73,
+            "primary_hits": 75,
+            "returned_hits": 73,
+            "router_misses": 25,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 73,
+          "ordinal": 18,
+          "returned_hits": 73,
+          "roster_sizes": {
+            "covered": 7801,
+            "nominated": 3072,
+            "primary": 2460,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3224752,
+              "wall_ns": 3224538
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8373729,
+              "wall_ns": 8373519
+            },
+            "routing": {
+              "process_cpu_ns": 495218,
+              "wall_ns": 495195
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 94,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8190520,
+            "submitted_gets": 24,
+            "verified_bytes": 8190520
+          },
+          "native_loss": {
+            "boundary_hits": 94,
+            "boundary_misses": 6,
+            "boundary_recovered": 23,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 18,
+            "nomination_hits": 76,
+            "primary_hits": 71,
+            "returned_hits": 76,
+            "router_misses": 29,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 76,
+          "ordinal": 19,
+          "returned_hits": 76,
+          "roster_sizes": {
+            "covered": 8290,
+            "nominated": 3072,
+            "primary": 2892,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3235462,
+              "wall_ns": 3235213
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8988116,
+              "wall_ns": 8987825
+            },
+            "routing": {
+              "process_cpu_ns": 575729,
+              "wall_ns": 575756
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 97,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8558056,
+            "submitted_gets": 24,
+            "verified_bytes": 8558056
+          },
+          "native_loss": {
+            "boundary_hits": 97,
+            "boundary_misses": 3,
+            "boundary_recovered": 18,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 36,
+            "nomination_hits": 61,
+            "primary_hits": 79,
+            "returned_hits": 61,
+            "router_misses": 21,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 61,
+          "ordinal": 20,
+          "returned_hits": 61,
+          "roster_sizes": {
+            "covered": 8662,
+            "nominated": 3025,
+            "primary": 2685,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3196376,
+              "wall_ns": 3196121
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9404192,
+              "wall_ns": 9403929
+            },
+            "routing": {
+              "process_cpu_ns": 448142,
+              "wall_ns": 448235
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 58,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8785296,
+            "submitted_gets": 24,
+            "verified_bytes": 8785296
+          },
+          "native_loss": {
+            "boundary_hits": 58,
+            "boundary_misses": 42,
+            "boundary_recovered": 44,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 9,
+            "nomination_hits": 49,
+            "primary_hits": 14,
+            "returned_hits": 49,
+            "router_misses": 86,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 49,
+          "ordinal": 21,
+          "returned_hits": 49,
+          "roster_sizes": {
+            "covered": 8892,
+            "nominated": 3046,
+            "primary": 2526,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3231976,
+              "wall_ns": 3231750
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9570609,
+              "wall_ns": 9570374
+            },
+            "routing": {
+              "process_cpu_ns": 553675,
+              "wall_ns": 553665
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 99,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8211268,
+            "submitted_gets": 24,
+            "verified_bytes": 8211268
+          },
+          "native_loss": {
+            "boundary_hits": 99,
+            "boundary_misses": 1,
+            "boundary_recovered": 9,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 31,
+            "nomination_hits": 68,
+            "primary_hits": 90,
+            "returned_hits": 68,
+            "router_misses": 10,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 68,
+          "ordinal": 22,
+          "returned_hits": 68,
+          "roster_sizes": {
+            "covered": 8311,
+            "nominated": 3072,
+            "primary": 3115,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3245569,
+              "wall_ns": 3245379
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8960148,
+              "wall_ns": 8959918
+            },
+            "routing": {
+              "process_cpu_ns": 571074,
+              "wall_ns": 571051
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 74,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7924748,
+            "submitted_gets": 24,
+            "verified_bytes": 7924748
+          },
+          "native_loss": {
+            "boundary_hits": 74,
+            "boundary_misses": 26,
+            "boundary_recovered": 23,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 20,
+            "nomination_hits": 54,
+            "primary_hits": 51,
+            "returned_hits": 54,
+            "router_misses": 49,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 54,
+          "ordinal": 23,
+          "returned_hits": 54,
+          "roster_sizes": {
+            "covered": 8021,
+            "nominated": 3047,
+            "primary": 2551,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3228147,
+              "wall_ns": 3227953
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8545330,
+              "wall_ns": 8545133
+            },
+            "routing": {
+              "process_cpu_ns": 519202,
+              "wall_ns": 519257
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 97,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8249800,
+            "submitted_gets": 24,
+            "verified_bytes": 8249800
+          },
+          "native_loss": {
+            "boundary_hits": 97,
+            "boundary_misses": 3,
+            "boundary_recovered": 13,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 38,
+            "nomination_hits": 59,
+            "primary_hits": 84,
+            "returned_hits": 59,
+            "router_misses": 16,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 59,
+          "ordinal": 24,
+          "returned_hits": 59,
+          "roster_sizes": {
+            "covered": 8350,
+            "nominated": 3027,
+            "primary": 2564,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3198268,
+              "wall_ns": 3198013
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9017469,
+              "wall_ns": 9017257
+            },
+            "routing": {
+              "process_cpu_ns": 481668,
+              "wall_ns": 481687
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 89,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8284380,
+            "submitted_gets": 24,
+            "verified_bytes": 8284380
+          },
+          "native_loss": {
+            "boundary_hits": 89,
+            "boundary_misses": 11,
+            "boundary_recovered": 15,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 21,
+            "nomination_hits": 68,
+            "primary_hits": 74,
+            "returned_hits": 68,
+            "router_misses": 26,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 68,
+          "ordinal": 25,
+          "returned_hits": 68,
+          "roster_sizes": {
+            "covered": 8385,
+            "nominated": 3039,
+            "primary": 3020,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3207251,
+              "wall_ns": 3207068
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9054819,
+              "wall_ns": 9054628
+            },
+            "routing": {
+              "process_cpu_ns": 517626,
+              "wall_ns": 517873
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 81,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7908940,
+            "submitted_gets": 24,
+            "verified_bytes": 7908940
+          },
+          "native_loss": {
+            "boundary_hits": 81,
+            "boundary_misses": 19,
+            "boundary_recovered": 13,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 28,
+            "nomination_hits": 53,
+            "primary_hits": 68,
+            "returned_hits": 53,
+            "router_misses": 32,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 53,
+          "ordinal": 26,
+          "returned_hits": 53,
+          "roster_sizes": {
+            "covered": 8005,
+            "nominated": 3072,
+            "primary": 2725,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3246330,
+              "wall_ns": 3246121
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8641275,
+              "wall_ns": 8641093
+            },
+            "routing": {
+              "process_cpu_ns": 563621,
+              "wall_ns": 563623
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 100,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8357492,
+            "submitted_gets": 24,
+            "verified_bytes": 8357492
+          },
+          "native_loss": {
+            "boundary_hits": 100,
+            "boundary_misses": 0,
+            "boundary_recovered": 8,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 26,
+            "nomination_hits": 74,
+            "primary_hits": 92,
+            "returned_hits": 74,
+            "router_misses": 8,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 74,
+          "ordinal": 27,
+          "returned_hits": 74,
+          "roster_sizes": {
+            "covered": 8459,
+            "nominated": 3072,
+            "primary": 2997,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3239348,
+              "wall_ns": 3239110
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9172085,
+              "wall_ns": 9171886
+            },
+            "routing": {
+              "process_cpu_ns": 535130,
+              "wall_ns": 535116
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 55,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8196448,
+            "submitted_gets": 24,
+            "verified_bytes": 8196448
+          },
+          "native_loss": {
+            "boundary_hits": 55,
+            "boundary_misses": 45,
+            "boundary_recovered": 36,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 1,
+            "nomination_hits": 54,
+            "primary_hits": 19,
+            "returned_hits": 54,
+            "router_misses": 81,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 54,
+          "ordinal": 28,
+          "returned_hits": 54,
+          "roster_sizes": {
+            "covered": 8296,
+            "nominated": 3072,
+            "primary": 2988,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3249795,
+              "wall_ns": 3249588
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8999520,
+              "wall_ns": 8999285
+            },
+            "routing": {
+              "process_cpu_ns": 516123,
+              "wall_ns": 516154
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 91,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7603648,
+            "submitted_gets": 24,
+            "verified_bytes": 7603648
+          },
+          "native_loss": {
+            "boundary_hits": 91,
+            "boundary_misses": 9,
+            "boundary_recovered": 16,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 4,
+            "nomination_hits": 87,
+            "primary_hits": 75,
+            "returned_hits": 87,
+            "router_misses": 25,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 87,
+          "ordinal": 29,
+          "returned_hits": 87,
+          "roster_sizes": {
+            "covered": 7696,
+            "nominated": 3072,
+            "primary": 2392,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3233981,
+              "wall_ns": 3233783
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8299882,
+              "wall_ns": 8299704
+            },
+            "routing": {
+              "process_cpu_ns": 486965,
+              "wall_ns": 487065
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 85,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8239920,
+            "submitted_gets": 24,
+            "verified_bytes": 8239920
+          },
+          "native_loss": {
+            "boundary_hits": 85,
+            "boundary_misses": 15,
+            "boundary_recovered": 27,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 7,
+            "nomination_hits": 78,
+            "primary_hits": 58,
+            "returned_hits": 78,
+            "router_misses": 42,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 78,
+          "ordinal": 30,
+          "returned_hits": 78,
+          "roster_sizes": {
+            "covered": 8340,
+            "nominated": 3064,
+            "primary": 2782,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3226332,
+              "wall_ns": 3226098
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8969440,
+              "wall_ns": 8969131
+            },
+            "routing": {
+              "process_cpu_ns": 501688,
+              "wall_ns": 501647
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 95,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8669700,
+            "submitted_gets": 24,
+            "verified_bytes": 8669700
+          },
+          "native_loss": {
+            "boundary_hits": 95,
+            "boundary_misses": 5,
+            "boundary_recovered": 16,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 15,
+            "nomination_hits": 80,
+            "primary_hits": 79,
+            "returned_hits": 80,
+            "router_misses": 21,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 80,
+          "ordinal": 31,
+          "returned_hits": 80,
+          "roster_sizes": {
+            "covered": 8775,
+            "nominated": 3066,
+            "primary": 3406,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3229543,
+              "wall_ns": 3236294
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9383231,
+              "wall_ns": 9382997
+            },
+            "routing": {
+              "process_cpu_ns": 501305,
+              "wall_ns": 501329
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 87,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8096660,
+            "submitted_gets": 24,
+            "verified_bytes": 8096660
+          },
+          "native_loss": {
+            "boundary_hits": 87,
+            "boundary_misses": 13,
+            "boundary_recovered": 37,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 24,
+            "nomination_hits": 63,
+            "primary_hits": 50,
+            "returned_hits": 63,
+            "router_misses": 50,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 63,
+          "ordinal": 32,
+          "returned_hits": 63,
+          "roster_sizes": {
+            "covered": 8195,
+            "nominated": 3047,
+            "primary": 2493,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3226604,
+              "wall_ns": 3226346
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8813270,
+              "wall_ns": 8813029
+            },
+            "routing": {
+              "process_cpu_ns": 523938,
+              "wall_ns": 523986
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 74,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8529404,
+            "submitted_gets": 24,
+            "verified_bytes": 8529404
+          },
+          "native_loss": {
+            "boundary_hits": 74,
+            "boundary_misses": 26,
+            "boundary_recovered": 29,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 8,
+            "nomination_hits": 66,
+            "primary_hits": 45,
+            "returned_hits": 66,
+            "router_misses": 55,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 66,
+          "ordinal": 33,
+          "returned_hits": 66,
+          "roster_sizes": {
+            "covered": 8633,
+            "nominated": 3072,
+            "primary": 2914,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3244206,
+              "wall_ns": 3243914
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9287819,
+              "wall_ns": 9287525
+            },
+            "routing": {
+              "process_cpu_ns": 514801,
+              "wall_ns": 514790
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 56,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8233004,
+            "submitted_gets": 24,
+            "verified_bytes": 8233004
+          },
+          "native_loss": {
+            "boundary_hits": 56,
+            "boundary_misses": 44,
+            "boundary_recovered": 32,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 5,
+            "nomination_hits": 51,
+            "primary_hits": 24,
+            "returned_hits": 51,
+            "router_misses": 76,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 51,
+          "ordinal": 34,
+          "returned_hits": 51,
+          "roster_sizes": {
+            "covered": 8333,
+            "nominated": 3064,
+            "primary": 3044,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3226513,
+              "wall_ns": 3226269
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8971314,
+              "wall_ns": 8970979
+            },
+            "routing": {
+              "process_cpu_ns": 569122,
+              "wall_ns": 569216
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 76,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8379228,
+            "submitted_gets": 24,
+            "verified_bytes": 8379228
+          },
+          "native_loss": {
+            "boundary_hits": 76,
+            "boundary_misses": 24,
+            "boundary_recovered": 32,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 11,
+            "nomination_hits": 65,
+            "primary_hits": 44,
+            "returned_hits": 65,
+            "router_misses": 56,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 65,
+          "ordinal": 35,
+          "returned_hits": 65,
+          "roster_sizes": {
+            "covered": 8481,
+            "nominated": 3072,
+            "primary": 2984,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3240049,
+              "wall_ns": 3239792
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9174689,
+              "wall_ns": 9174443
+            },
+            "routing": {
+              "process_cpu_ns": 596728,
+              "wall_ns": 596630
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 77,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9227920,
+            "submitted_gets": 24,
+            "verified_bytes": 9227920
+          },
+          "native_loss": {
+            "boundary_hits": 77,
+            "boundary_misses": 23,
+            "boundary_recovered": 17,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 15,
+            "nomination_hits": 62,
+            "primary_hits": 60,
+            "returned_hits": 62,
+            "router_misses": 40,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 62,
+          "ordinal": 36,
+          "returned_hits": 62,
+          "roster_sizes": {
+            "covered": 9340,
+            "nominated": 3064,
+            "primary": 3129,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3236975,
+              "wall_ns": 3236643
+            },
+            "local_nomination": {
+              "process_cpu_ns": 10511191,
+              "wall_ns": 10528005
+            },
+            "routing": {
+              "process_cpu_ns": 490070,
+              "wall_ns": 490034
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 84,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8766524,
+            "submitted_gets": 24,
+            "verified_bytes": 8766524
+          },
+          "native_loss": {
+            "boundary_hits": 84,
+            "boundary_misses": 16,
+            "boundary_recovered": 37,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 11,
+            "nomination_hits": 73,
+            "primary_hits": 47,
+            "returned_hits": 73,
+            "router_misses": 53,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 73,
+          "ordinal": 37,
+          "returned_hits": 73,
+          "roster_sizes": {
+            "covered": 8873,
+            "nominated": 3046,
+            "primary": 2923,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3214026,
+              "wall_ns": 3213826
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9516661,
+              "wall_ns": 9523352
+            },
+            "routing": {
+              "process_cpu_ns": 545479,
+              "wall_ns": 545626
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 100,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8292284,
+            "submitted_gets": 24,
+            "verified_bytes": 8292284
+          },
+          "native_loss": {
+            "boundary_hits": 100,
+            "boundary_misses": 0,
+            "boundary_recovered": 0,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 47,
+            "nomination_hits": 53,
+            "primary_hits": 100,
+            "returned_hits": 53,
+            "router_misses": 0,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 53,
+          "ordinal": 38,
+          "returned_hits": 53,
+          "roster_sizes": {
+            "covered": 8393,
+            "nominated": 3072,
+            "primary": 2686,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3244564,
+              "wall_ns": 3244299
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9049096,
+              "wall_ns": 9048730
+            },
+            "routing": {
+              "process_cpu_ns": 419895,
+              "wall_ns": 419984
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 100,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9040200,
+            "submitted_gets": 24,
+            "verified_bytes": 9040200
+          },
+          "native_loss": {
+            "boundary_hits": 100,
+            "boundary_misses": 0,
+            "boundary_recovered": 12,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 33,
+            "nomination_hits": 67,
+            "primary_hits": 88,
+            "returned_hits": 67,
+            "router_misses": 12,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 67,
+          "ordinal": 39,
+          "returned_hits": 67,
+          "roster_sizes": {
+            "covered": 9150,
+            "nominated": 3072,
+            "primary": 3187,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3247717,
+              "wall_ns": 3247511
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9913129,
+              "wall_ns": 9912896
+            },
+            "routing": {
+              "process_cpu_ns": 498030,
+              "wall_ns": 497991
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 45,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8108516,
+            "submitted_gets": 24,
+            "verified_bytes": 8108516
+          },
+          "native_loss": {
+            "boundary_hits": 45,
+            "boundary_misses": 55,
+            "boundary_recovered": 31,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 11,
+            "nomination_hits": 34,
+            "primary_hits": 14,
+            "returned_hits": 34,
+            "router_misses": 86,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 34,
+          "ordinal": 40,
+          "returned_hits": 34,
+          "roster_sizes": {
+            "covered": 8207,
+            "nominated": 3040,
+            "primary": 2752,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3212342,
+              "wall_ns": 3212091
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8797347,
+              "wall_ns": 8797100
+            },
+            "routing": {
+              "process_cpu_ns": 581283,
+              "wall_ns": 581265
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 87,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8183604,
+            "submitted_gets": 24,
+            "verified_bytes": 8183604
+          },
+          "native_loss": {
+            "boundary_hits": 87,
+            "boundary_misses": 13,
+            "boundary_recovered": 13,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 33,
+            "nomination_hits": 54,
+            "primary_hits": 74,
+            "returned_hits": 54,
+            "router_misses": 26,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 54,
+          "ordinal": 41,
+          "returned_hits": 54,
+          "roster_sizes": {
+            "covered": 8283,
+            "nominated": 3065,
+            "primary": 2840,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3243937,
+              "wall_ns": 6242358
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8985161,
+              "wall_ns": 8984938
+            },
+            "routing": {
+              "process_cpu_ns": 518366,
+              "wall_ns": 518333
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 92,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9078732,
+            "submitted_gets": 24,
+            "verified_bytes": 9078732
+          },
+          "native_loss": {
+            "boundary_hits": 92,
+            "boundary_misses": 8,
+            "boundary_recovered": 19,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 17,
+            "nomination_hits": 75,
+            "primary_hits": 73,
+            "returned_hits": 75,
+            "router_misses": 27,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 75,
+          "ordinal": 42,
+          "returned_hits": 75,
+          "roster_sizes": {
+            "covered": 9189,
+            "nominated": 3072,
+            "primary": 2983,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3235098,
+              "wall_ns": 3234880
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9972759,
+              "wall_ns": 12053440
+            },
+            "routing": {
+              "process_cpu_ns": 581709,
+              "wall_ns": 581679
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 100,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7854600,
+            "submitted_gets": 24,
+            "verified_bytes": 7854600
+          },
+          "native_loss": {
+            "boundary_hits": 100,
+            "boundary_misses": 0,
+            "boundary_recovered": 0,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 8,
+            "nomination_hits": 92,
+            "primary_hits": 100,
+            "returned_hits": 92,
+            "router_misses": 0,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 92,
+          "ordinal": 43,
+          "returned_hits": 92,
+          "roster_sizes": {
+            "covered": 7950,
+            "nominated": 3072,
+            "primary": 2848,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3241632,
+              "wall_ns": 3241419
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8610701,
+              "wall_ns": 8610366
+            },
+            "routing": {
+              "process_cpu_ns": 537792,
+              "wall_ns": 537789
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 100,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7801248,
+            "submitted_gets": 24,
+            "verified_bytes": 7801248
+          },
+          "native_loss": {
+            "boundary_hits": 100,
+            "boundary_misses": 0,
+            "boundary_recovered": 6,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 38,
+            "nomination_hits": 62,
+            "primary_hits": 94,
+            "returned_hits": 62,
+            "router_misses": 6,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 62,
+          "ordinal": 44,
+          "returned_hits": 62,
+          "roster_sizes": {
+            "covered": 7896,
+            "nominated": 3071,
+            "primary": 2742,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3230926,
+              "wall_ns": 3230628
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8595740,
+              "wall_ns": 8595443
+            },
+            "routing": {
+              "process_cpu_ns": 440207,
+              "wall_ns": 440255
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 92,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8479016,
+            "submitted_gets": 24,
+            "verified_bytes": 8479016
+          },
+          "native_loss": {
+            "boundary_hits": 92,
+            "boundary_misses": 8,
+            "boundary_recovered": 23,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 15,
+            "nomination_hits": 77,
+            "primary_hits": 69,
+            "returned_hits": 77,
+            "router_misses": 31,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 77,
+          "ordinal": 45,
+          "returned_hits": 77,
+          "roster_sizes": {
+            "covered": 8582,
+            "nominated": 2997,
+            "primary": 2719,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3170919,
+              "wall_ns": 3170720
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9264244,
+              "wall_ns": 9285880
+            },
+            "routing": {
+              "process_cpu_ns": 544387,
+              "wall_ns": 544417
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 98,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8355516,
+            "submitted_gets": 24,
+            "verified_bytes": 8355516
+          },
+          "native_loss": {
+            "boundary_hits": 98,
+            "boundary_misses": 2,
+            "boundary_recovered": 4,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 23,
+            "nomination_hits": 75,
+            "primary_hits": 94,
+            "returned_hits": 75,
+            "router_misses": 6,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 75,
+          "ordinal": 46,
+          "returned_hits": 75,
+          "roster_sizes": {
+            "covered": 8457,
+            "nominated": 3072,
+            "primary": 2992,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3242811,
+              "wall_ns": 3242594
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9169087,
+              "wall_ns": 9158248
+            },
+            "routing": {
+              "process_cpu_ns": 514029,
+              "wall_ns": 514051
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 93,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7559188,
+            "submitted_gets": 24,
+            "verified_bytes": 7559188
+          },
+          "native_loss": {
+            "boundary_hits": 93,
+            "boundary_misses": 7,
+            "boundary_recovered": 7,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 26,
+            "nomination_hits": 67,
+            "primary_hits": 86,
+            "returned_hits": 67,
+            "router_misses": 14,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 67,
+          "ordinal": 47,
+          "returned_hits": 67,
+          "roster_sizes": {
+            "covered": 7651,
+            "nominated": 3043,
+            "primary": 2385,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3211331,
+              "wall_ns": 3211113
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8244732,
+              "wall_ns": 8244502
+            },
+            "routing": {
+              "process_cpu_ns": 502960,
+              "wall_ns": 502992
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 70,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8012680,
+            "submitted_gets": 24,
+            "verified_bytes": 8012680
+          },
+          "native_loss": {
+            "boundary_hits": 70,
+            "boundary_misses": 30,
+            "boundary_recovered": 35,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 12,
+            "nomination_hits": 58,
+            "primary_hits": 35,
+            "returned_hits": 58,
+            "router_misses": 65,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 58,
+          "ordinal": 48,
+          "returned_hits": 58,
+          "roster_sizes": {
+            "covered": 8110,
+            "nominated": 3072,
+            "primary": 2773,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3229176,
+              "wall_ns": 3228931
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8732133,
+              "wall_ns": 8731942
+            },
+            "routing": {
+              "process_cpu_ns": 540160,
+              "wall_ns": 540214
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 91,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7757776,
+            "submitted_gets": 24,
+            "verified_bytes": 7757776
+          },
+          "native_loss": {
+            "boundary_hits": 91,
+            "boundary_misses": 9,
+            "boundary_recovered": 31,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 21,
+            "nomination_hits": 70,
+            "primary_hits": 60,
+            "returned_hits": 70,
+            "router_misses": 40,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 70,
+          "ordinal": 49,
+          "returned_hits": 70,
+          "roster_sizes": {
+            "covered": 7852,
+            "nominated": 3011,
+            "primary": 2654,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3193705,
+              "wall_ns": 3193419
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8389597,
+              "wall_ns": 8389244
+            },
+            "routing": {
+              "process_cpu_ns": 482132,
+              "wall_ns": 482332
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 100,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7891156,
+            "submitted_gets": 24,
+            "verified_bytes": 7891156
+          },
+          "native_loss": {
+            "boundary_hits": 100,
+            "boundary_misses": 0,
+            "boundary_recovered": 9,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 18,
+            "nomination_hits": 82,
+            "primary_hits": 91,
+            "returned_hits": 82,
+            "router_misses": 9,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 82,
+          "ordinal": 50,
+          "returned_hits": 82,
+          "roster_sizes": {
+            "covered": 7987,
+            "nominated": 3072,
+            "primary": 2698,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3233359,
+              "wall_ns": 3233147
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8614898,
+              "wall_ns": 8614610
+            },
+            "routing": {
+              "process_cpu_ns": 533212,
+              "wall_ns": 533425
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 100,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 9121216,
+            "submitted_gets": 24,
+            "verified_bytes": 9121216
+          },
+          "native_loss": {
+            "boundary_hits": 100,
+            "boundary_misses": 0,
+            "boundary_recovered": 17,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 41,
+            "nomination_hits": 59,
+            "primary_hits": 83,
+            "returned_hits": 59,
+            "router_misses": 17,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 59,
+          "ordinal": 51,
+          "returned_hits": 59,
+          "roster_sizes": {
+            "covered": 9232,
+            "nominated": 3053,
+            "primary": 3073,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3224405,
+              "wall_ns": 3224167
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9996386,
+              "wall_ns": 9996107
+            },
+            "routing": {
+              "process_cpu_ns": 439653,
+              "wall_ns": 439710
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 76,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7957352,
+            "submitted_gets": 24,
+            "verified_bytes": 7957352
+          },
+          "native_loss": {
+            "boundary_hits": 76,
+            "boundary_misses": 24,
+            "boundary_recovered": 17,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 12,
+            "nomination_hits": 64,
+            "primary_hits": 59,
+            "returned_hits": 64,
+            "router_misses": 41,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 64,
+          "ordinal": 52,
+          "returned_hits": 64,
+          "roster_sizes": {
+            "covered": 8054,
+            "nominated": 3061,
+            "primary": 2389,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3240295,
+              "wall_ns": 3240091
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8654297,
+              "wall_ns": 8654031
+            },
+            "routing": {
+              "process_cpu_ns": 587286,
+              "wall_ns": 587359
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 66,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8035404,
+            "submitted_gets": 24,
+            "verified_bytes": 8035404
+          },
+          "native_loss": {
+            "boundary_hits": 66,
+            "boundary_misses": 34,
+            "boundary_recovered": 21,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 7,
+            "nomination_hits": 59,
+            "primary_hits": 45,
+            "returned_hits": 59,
+            "router_misses": 55,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 59,
+          "ordinal": 53,
+          "returned_hits": 59,
+          "roster_sizes": {
+            "covered": 8133,
+            "nominated": 3072,
+            "primary": 2874,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3248327,
+              "wall_ns": 3248121
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8815372,
+              "wall_ns": 8815039
+            },
+            "routing": {
+              "process_cpu_ns": 538598,
+              "wall_ns": 550281
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 72,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8033428,
+            "submitted_gets": 24,
+            "verified_bytes": 8033428
+          },
+          "native_loss": {
+            "boundary_hits": 72,
+            "boundary_misses": 28,
+            "boundary_recovered": 21,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 10,
+            "nomination_hits": 62,
+            "primary_hits": 51,
+            "returned_hits": 62,
+            "router_misses": 49,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 62,
+          "ordinal": 54,
+          "returned_hits": 62,
+          "roster_sizes": {
+            "covered": 8131,
+            "nominated": 3072,
+            "primary": 2587,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3249630,
+              "wall_ns": 3249408
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8735752,
+              "wall_ns": 8735409
+            },
+            "routing": {
+              "process_cpu_ns": 543788,
+              "wall_ns": 543876
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 100,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8097648,
+            "submitted_gets": 24,
+            "verified_bytes": 8097648
+          },
+          "native_loss": {
+            "boundary_hits": 100,
+            "boundary_misses": 0,
+            "boundary_recovered": 5,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 31,
+            "nomination_hits": 69,
+            "primary_hits": 95,
+            "returned_hits": 69,
+            "router_misses": 5,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 69,
+          "ordinal": 55,
+          "returned_hits": 69,
+          "roster_sizes": {
+            "covered": 8196,
+            "nominated": 3072,
+            "primary": 2584,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3250447,
+              "wall_ns": 3250218
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8825611,
+              "wall_ns": 8825312
+            },
+            "routing": {
+              "process_cpu_ns": 535786,
+              "wall_ns": 535861
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 97,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8233992,
+            "submitted_gets": 24,
+            "verified_bytes": 8233992
+          },
+          "native_loss": {
+            "boundary_hits": 97,
+            "boundary_misses": 3,
+            "boundary_recovered": 18,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 20,
+            "nomination_hits": 77,
+            "primary_hits": 79,
+            "returned_hits": 77,
+            "router_misses": 21,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 77,
+          "ordinal": 56,
+          "returned_hits": 77,
+          "roster_sizes": {
+            "covered": 8334,
+            "nominated": 3059,
+            "primary": 2859,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3239223,
+              "wall_ns": 3239003
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8865459,
+              "wall_ns": 8865187
+            },
+            "routing": {
+              "process_cpu_ns": 506435,
+              "wall_ns": 506358
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 100,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8669700,
+            "submitted_gets": 24,
+            "verified_bytes": 8669700
+          },
+          "native_loss": {
+            "boundary_hits": 100,
+            "boundary_misses": 0,
+            "boundary_recovered": 1,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 59,
+            "nomination_hits": 41,
+            "primary_hits": 99,
+            "returned_hits": 41,
+            "router_misses": 1,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 41,
+          "ordinal": 57,
+          "returned_hits": 41,
+          "roster_sizes": {
+            "covered": 8775,
+            "nominated": 3055,
+            "primary": 2856,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3225860,
+              "wall_ns": 3225619
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9403183,
+              "wall_ns": 9402982
+            },
+            "routing": {
+              "process_cpu_ns": 422353,
+              "wall_ns": 422461
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 99,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7993908,
+            "submitted_gets": 24,
+            "verified_bytes": 7993908
+          },
+          "native_loss": {
+            "boundary_hits": 99,
+            "boundary_misses": 1,
+            "boundary_recovered": 19,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 34,
+            "nomination_hits": 65,
+            "primary_hits": 80,
+            "returned_hits": 65,
+            "router_misses": 20,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 65,
+          "ordinal": 58,
+          "returned_hits": 65,
+          "roster_sizes": {
+            "covered": 8091,
+            "nominated": 3072,
+            "primary": 2927,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3244236,
+              "wall_ns": 3243992
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8783344,
+              "wall_ns": 8783158
+            },
+            "routing": {
+              "process_cpu_ns": 497408,
+              "wall_ns": 497519
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 95,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8760596,
+            "submitted_gets": 24,
+            "verified_bytes": 8760596
+          },
+          "native_loss": {
+            "boundary_hits": 95,
+            "boundary_misses": 5,
+            "boundary_recovered": 2,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 39,
+            "nomination_hits": 56,
+            "primary_hits": 93,
+            "returned_hits": 56,
+            "router_misses": 7,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 56,
+          "ordinal": 59,
+          "returned_hits": 56,
+          "roster_sizes": {
+            "covered": 8867,
+            "nominated": 3069,
+            "primary": 2834,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3236546,
+              "wall_ns": 3236319
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9565407,
+              "wall_ns": 9565202
+            },
+            "routing": {
+              "process_cpu_ns": 418475,
+              "wall_ns": 418676
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 100,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8380216,
+            "submitted_gets": 24,
+            "verified_bytes": 8380216
+          },
+          "native_loss": {
+            "boundary_hits": 100,
+            "boundary_misses": 0,
+            "boundary_recovered": 0,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 27,
+            "nomination_hits": 73,
+            "primary_hits": 100,
+            "returned_hits": 73,
+            "router_misses": 0,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 73,
+          "ordinal": 60,
+          "returned_hits": 73,
+          "roster_sizes": {
+            "covered": 8482,
+            "nominated": 3072,
+            "primary": 2869,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3236325,
+              "wall_ns": 3236110
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9178393,
+              "wall_ns": 9178094
+            },
+            "routing": {
+              "process_cpu_ns": 520809,
+              "wall_ns": 520804
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 100,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8516560,
+            "submitted_gets": 24,
+            "verified_bytes": 8516560
+          },
+          "native_loss": {
+            "boundary_hits": 100,
+            "boundary_misses": 0,
+            "boundary_recovered": 1,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 22,
+            "nomination_hits": 78,
+            "primary_hits": 99,
+            "returned_hits": 78,
+            "router_misses": 1,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 78,
+          "ordinal": 61,
+          "returned_hits": 78,
+          "roster_sizes": {
+            "covered": 8620,
+            "nominated": 3066,
+            "primary": 2584,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3234229,
+              "wall_ns": 3234050
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9234201,
+              "wall_ns": 9233908
+            },
+            "routing": {
+              "process_cpu_ns": 527922,
+              "wall_ns": 527906
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 84,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 8460244,
+            "submitted_gets": 24,
+            "verified_bytes": 8460244
+          },
+          "native_loss": {
+            "boundary_hits": 84,
+            "boundary_misses": 16,
+            "boundary_recovered": 27,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 15,
+            "nomination_hits": 69,
+            "primary_hits": 57,
+            "returned_hits": 69,
+            "router_misses": 43,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 69,
+          "ordinal": 62,
+          "returned_hits": 69,
+          "roster_sizes": {
+            "covered": 8563,
+            "nominated": 3066,
+            "primary": 3029,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3227768,
+              "wall_ns": 3227535
+            },
+            "local_nomination": {
+              "process_cpu_ns": 9218145,
+              "wall_ns": 9217872
+            },
+            "routing": {
+              "process_cpu_ns": 507326,
+              "wall_ns": 507356
+            }
+          }
+        },
+        {
+          "coverage_ceiling_hits": 95,
+          "local_reads": {
+            "failed_gets": 0,
+            "requested_bytes": 7822984,
+            "submitted_gets": 24,
+            "verified_bytes": 7822984
+          },
+          "native_loss": {
+            "boundary_hits": 95,
+            "boundary_misses": 5,
+            "boundary_recovered": 30,
+            "final_ranking_misses": 0,
+            "local_nomination_misses": 24,
+            "nomination_hits": 71,
+            "primary_hits": 65,
+            "returned_hits": 71,
+            "router_misses": 35,
+            "truth_count": 100
+          },
+          "nomination_ceiling_hits": 71,
+          "ordinal": 63,
+          "returned_hits": 71,
+          "roster_sizes": {
+            "covered": 7918,
+            "nominated": 3048,
+            "primary": 2736,
+            "returned": 100
+          },
+          "stage_timing_ns": {
+            "final_ranking": {
+              "process_cpu_ns": 3212606,
+              "wall_ns": 3212409
+            },
+            "local_nomination": {
+              "process_cpu_ns": 8565841,
+              "wall_ns": 8565585
+            },
+            "routing": {
+              "process_cpu_ns": 514087,
+              "wall_ns": 514039
+            }
+          }
+        }
+      ],
+      "queries": 64,
+      "returned": {
+        "mean_hits_at_100": 0.649375,
+        "p05_hits": 45,
+        "quality_gate_possible": false,
+        "total_hits": 4156
+      },
+      "stage_timing_ns": {
+        "final_ranking": {
+          "process_cpu_ns": {
+            "maximum": 3319992,
+            "mean": 3228289.640625,
+            "minimum": 3108371,
+            "total": 206610537
+          },
+          "wall_ns": {
+            "maximum": 6242358,
+            "mean": 3275017.890625,
+            "minimum": 3108128,
+            "total": 209601145
+          }
+        },
+        "local_nomination": {
+          "process_cpu_ns": {
+            "maximum": 11130570,
+            "mean": 9104514.765625,
+            "minimum": 8244732,
+            "total": 582688945
+          },
+          "wall_ns": {
+            "maximum": 12053440,
+            "mean": 9137763.578125,
+            "minimum": 8244502,
+            "total": 584816869
+          }
+        },
+        "routing": {
+          "process_cpu_ns": {
+            "maximum": 614533,
+            "mean": 517499.453125,
+            "minimum": 401532,
+            "total": 33119965
+          },
+          "wall_ns": {
+            "maximum": 620073,
+            "mean": 517815.03125,
+            "minimum": 401645,
+            "total": 33140162
+          }
+        }
+      },
+      "startup_local_reads": {
+        "startup": {
+          "failed_gets": 0,
+          "requested_bytes": 31479,
+          "submitted_gets": 1,
+          "verified_bytes": 31479
+        },
+        "startup_directory": {
+          "failed_gets": 0,
+          "requested_bytes": 6200518,
+          "submitted_gets": 1,
+          "verified_bytes": 6200518
+        }
+      },
+      "truth_sha256": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c",
+      "truth_uniqueness_verification": "attested_by_authenticated_native_decompose_loss_not_independently_rechecked"
+    }
+  },
+  "dimensions": 768,
+  "instance_id": "i-0097df71ced109493",
+  "instance_state": "terminated",
+  "k": 100,
+  "metric": "cosine",
+  "original_execution": "CLOSED_VALID",
+  "original_terminal": {
+    "bytes": 4916,
+    "sha256": "a0ca521980142f869e7be74b10802926459674cc06ec2e7bf6e11214c8065bf2"
+  },
+  "preregistration": {
+    "bytes": 2017,
+    "sha256": "c86aa3c45ecd560ee93e2fdf5ed0a647f46f8ed57c6406536a1997358a51dbcf"
+  },
+  "rows": 100000,
+  "schema": "borsuk-hierarchical-100k-coverage-ceilings-v1",
+  "scope": {
+    "counters": "Original whole-cell serial local FileRangeReader calls and requested/verified range bytes; startup root/directory reads separate. Auditor evidence file reads excluded.",
+    "fresh_holdout": false,
+    "loss_formulas": "boundary_hits=|truth & covered|; nomination_hits=|truth & nominated|; returned_hits=|truth & returned|; boundary_misses=100-boundary_hits; local_nomination_misses=boundary_hits-nomination_hits; final_ranking_misses=nomination_hits-returned_hits",
+    "new_ann_or_ranking_execution": false,
+    "new_quality_or_performance_measurement": false,
+    "physical_s3_ann_measured": false,
+    "scientific_qualification": false,
+    "timing": "Original process stage wall/CPU counters only: routing, local_nomination (includes local cell fetching), final_ranking. No S3, end-to-end latency, vendor baseline, or full-fetched SQ8 measurement.",
+    "truth": "Optional exact authenticated truth64 bodies enable independent intersections; otherwise counts derive from authenticated native loss_attribution with source-validated unique truth100 and loss formulas.",
+    "vendor_claim": false
+  },
+  "selection": {
+    "blocks_per_cell": 4,
+    "boundary_cells": 24,
+    "max_cells": 32,
+    "primary_cells": 8
+  },
+  "split": "already consumed historical first64; no fresh holdout claim"
+}
