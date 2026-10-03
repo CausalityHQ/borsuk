@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Thin paired consumed64 staging adapter; root freezes CONFIG and owns launch.
 
-CLI: aNNNN | --stage REPO NEW_OUTPUT WORKER_ROOT | --replay OUTPUT | --self-check.
+CLI: aNNNN | --canary aNNNN | --stage[-canary] REPO NEW_OUTPUT WORKER_ROOT
+     --replay[-canary] OUTPUT | --self-check.
 Missing/pending authority closes before cloud. The native proof is supplied by
 the root, never inferred from a binary name or a synthetic test transcript.
 Quality FAIL is a completed diagnostic; identity/execution/resource errors are
@@ -25,6 +26,7 @@ import tempfile
 import threading
 import time
 from unittest.mock import patch
+from types import SimpleNamespace
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -43,6 +45,10 @@ SCHEMA = 'borsuk-hierarchical-100k-spot-v1'
 PREFIX = 'research/hierarchical-cells/20261003/paired100k-'
 TOKEN_PREFIX, TAG = 'hierarchical-100k-', 'borsuk-hierarchical-100k'
 WALL, MEMORY, SCRATCH = 1800, 2 << 30, 16 << 30
+CANARY_SCHEMA = 'borsuk-hierarchical-100k-infrastructure-canary-v1'
+CANARY_PREFIX = 'research/hierarchical-cells/20261003/infrastructure-canary-'
+CANARY_WALL, CANARY_MEMORY, CANARY_SCRATCH = 480, 256 << 20, 4 << 30
+SDK_VERSIONS = dict(boto3='1.40.72', botocore='1.40.72')
 INSTANCE_TYPE, IMAGE_ID = ids.INSTANCE_TYPE, ids.IMAGE_ID
 ROOT_DEVICE_NAME, SUBNET = ids.ROOT_DEVICE_NAME, ids.SUBNET
 REGION, BUCKET = ids.REGION, ids.BUCKET
@@ -88,6 +94,9 @@ OUTPUTS = ('config.json', 'source-qualification.json', 'native-proof.json',
         'writer.json', 'writer.log', 'build.json', 'build.log', 'diagnose.json',
         'diagnose.log', 'diagnostic.jsonl')))
 ARTIFACTS = ('test-resources.txt', 'run-closed.log', *('screen/'+n for n in OUTPUTS))
+CANARY_ARTIFACTS = ('test-resources.txt', 'run-closed.log', *('screen/'+n for n in (
+    'config.json', 'source-qualification.json', 'tool-versions.json',
+    'canary.json', 'summary.json', 'resources.json', 'worker-cgroup.json', 'cleanup.json')))
 TERMINAL_IDENTITIES = ('config_sha256', 'code_identity_sha256', 'refs_identity_sha256',
     'native_identity_sha256', 'artifact_roster_sha256', 'campaign_schema',
     'awscli_version', 'awscli_sha256')
@@ -104,6 +113,58 @@ def body_pin(value):
 
 def transport_path(repo, name):
     return positive.regular_path(name) if Path(name).is_absolute() else repo_path(repo, name)
+
+
+def transport_name(name):
+    # Cold bodies need a safe declaration, not a local copy. Resolve only when
+    # opening a body, so metadata preflight works with absent assets/ paths.
+    require(type(name) is str and name and '\x00' not in name and '\n' not in name,
+            'transport path declaration')
+    require('..' not in Path(name).parts and str(Path(name)) == name, 'transport path traversal')
+    if not Path(name).is_absolute():
+        publication.relative(name)
+
+
+def completed_gate_log(pin, stages):
+    transcript = local.authenticate(pin, 1 << 20, read=True)
+    require(transcript.endswith(b'\n'), 'completed gate transcript newline')
+    events, passed, summaries, test_builds = [], {}, [], 0
+    for line in transcript.splitlines():
+        match = re.fullmatch(rb'test (\S+) \.\.\. ok', line)
+        if match:
+            name = match[1].decode(); passed[name] = passed.get(name, 0)+1
+        match = re.fullmatch(rb'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; .*', line)
+        if match:
+            summaries.append((int(match[1]), int(match[2])))
+        if re.fullmatch(rb'rust-test-build status=0 elapsed_seconds=\d+ jobs=1', line):
+            exact(len(events), 11, 'unshimmed test-build in final stage'); test_builds += 1
+        if not line.startswith(b'{'):
+            continue
+        event = local.decode(line)
+        if type(event) is not dict or event.get('schema') != 'borsuk-hierarchical-cells-implementation-stage-v1':
+            continue
+        position = len(events)
+        require(position < 12, 'extra completed gate')
+        stage = list(local.GATES)[position//2]
+        exact(event['stage'], stage, 'ordered completed gates')
+        exact(event['command'], local.GATES[stage], 'exact completed gate command')
+        if position % 2 == 0:
+            for key in ('finished_at', 'exit_status', 'gate_status', 'tests_run', 'required_test_passes'):
+                exact(event[key], None, 'gate start')
+            passed, summaries = {}, []
+        else:
+            exact(event, stages[position//2], 'authenticated completed stage receipt')
+            exact(event['started_at'], events[-1]['started_at'], 'gate start/completion')
+            exact(event['exit_status'], 0, 'gate exit'); exact(event['gate_status'], 0, 'gate status')
+            expected = dict.fromkeys(local.TESTS.get(stage, ()), 1)
+            exact(event['required_test_passes'], expected, 'named gate test roster')
+            require(all(passed.get(n) == 1 for n in expected), 'actual named gate passes')
+            if position < 6:
+                require(summaries and sum(n for n, _ in summaries) == event['tests_run'] and
+                        all(f == 0 for _, f in summaries), 'actual gate test counts')
+        events.append(event)
+    require(len(events) == 12 and test_builds == 1, 'six completed gates and actual test build')
+    return stages
 
 
 def read_ref(repo, pin, cap=local.CONFIG_CAP):
@@ -173,11 +234,13 @@ def qualification(config, repo):
     for pin in (native['source_archive'], native['gate_log'], *native['binaries'].values()):
         fields(pin, 'path key bytes sha256', 'native transport pin')
         publication.object_identity({k: pin[k] for k in ('key', 'bytes', 'sha256')})
-        transport_path(repo, pin['path'])
+        transport_name(pin['path'])
+    log = dict(body_pin(native['gate_log']), path=str(transport_path(repo, native['gate_log']['path'])))
+    completed_gate_log(log, receipt['stages'])
     return values, identity
 
 
-def qualify(base=Path('.'), *, native_files=True):
+def qualify(base=Path('.'), *, native_files=False, canary=False):
     repo = Path(base).resolve()
     pin = local.identity(repo/CONFIG)
     config = local.read_json(pin, 256 << 10)
@@ -205,8 +268,9 @@ def qualify(base=Path('.'), *, native_files=True):
     require(config['scratch_admission_bytes'] >= 1975116322+extra+config['scratch_reserve_bytes'],
             'whole-worker scratch reserve incomplete')
     if native_files:
-        # Preflight requires actual qualified bodies locally. Runtime instead
-        # downloads those exact pins and performs this same proof validation.
+        # Optional body audit only; launch preflight authenticates metadata,
+        # source and the small completed log. Remote science authenticates every
+        # full cold body before invoking native code.
         proof = copy.deepcopy(config['native'])
         for name in ('source_archive', 'gate_log'):
             proof[name] = dict(body_pin(proof[name]), path=str(transport_path(repo, proof[name]['path'])))
@@ -214,17 +278,19 @@ def qualify(base=Path('.'), *, native_files=True):
             proof[roster] = {n: dict(body_pin(p), path=str(transport_path(repo, p['path']))) for n, p in proof[roster].items()}
         with tempfile.TemporaryDirectory(prefix='hierarchical-proof-') as tmp:
             local.validate_proof(local.write_json(Path(tmp)/'proof.json', proof))
-    proof = dict(config_path=str(CONFIG), config_sha256=pin['sha256'], campaign_schema=SCHEMA,
+    proof = dict(config_path=str(CONFIG), config_sha256=pin['sha256'], campaign_schema=CANARY_SCHEMA if canary else SCHEMA,
         code_identity_sha256=ids.sha(ids.encoded(config['code_sha256'])),
         refs_identity_sha256=ids.sha(ids.encoded(config['refs'])), native_identity_sha256=native_identity,
-        artifact_roster_sha256=ids.sha(ids.encoded(ARTIFACTS)),
+        artifact_roster_sha256=ids.sha(ids.encoded(CANARY_ARTIFACTS if canary else ARTIFACTS)),
         awscli_version=AWSCLI_VERSION, awscli_sha256=AWSCLI_SHA256)
     return config, proof, values
 
 
-def preflight(base=Path('.')):
-    _, proof, _ = qualify(base)
+def preflight(base=Path('.'), *, canary=False):
+    _, proof, _ = qualify(base, canary=canary)
     require(not subprocess.check_output(['git', 'status', '--porcelain'], cwd=base, text=True).strip(), 'dirty source')
+    if not canary:
+        require_canary(base, proof)
     return proof
 
 
@@ -380,21 +446,69 @@ def reduce_diagnostic(path, diagnostic, pin, proof, limits):
         retained_reference='unchanged V282 quality only; current writer is not a V282 latency baseline')
 
 
-def stage(repo, output, worker_root):
+def canary_objects(config, authorities):
+    native = config['native']
+    pins = [native['source_archive'], native['gate_log'], *native['binaries'].values()]
+    pins += [item['artifacts'][role] for item in authorities['sources']['items'] for role in STAGED_ROLES.values()]
+    pins = [{k: p[k] for k in ('key', 'bytes', 'sha256')} for p in pins]
+    require(len(pins) == len({p['key'] for p in pins}) == 18, 'canary native4/dataset14 roster')
+    for pin in pins:
+        publication.object_identity(pin)
+    return pins
+
+
+def infrastructure_canary(config, authorities, client, calls, scratch, check, deadline):
+    # Imports and service-model inspection are real. No native process, helper
+    # preparation, panel producer, request converter or truth reader is invoked.
+    for name in ('numpy', 'pyarrow', 'boto3', 'botocore'):
+        importlib.import_module(name)
+    versions = {n: importlib.metadata.version(n) for n in (*FIXED['versions'], *SDK_VERSIONS)}
+    exact(versions, dict(FIXED['versions'], **SDK_VERSIONS), 'canary installed versions')
+    model = client.meta.service_model
+    require('IfNoneMatch' in model.operation_model('PutObject').input_shape.members,
+            'SDK conditional PutObject service model')
+    for operation in ('HeadObject', 'GetObject'):
+        require({'Bucket', 'Key'} <= set(model.operation_model(operation).input_shape.members), 'SDK read service model')
+    cli = subprocess.run([sys.executable, '-m', MODULE], capture_output=True, text=True,
+        timeout=min(30, max(.001, deadline-time.monotonic())),
+        env=dict(os.environ, OPENBLAS_NUM_THREADS='1', OMP_NUM_THREADS='1'))
+    require(cli.returncode == 2 and 'INVALID:' in cli.stderr and 'CLI:' in cli.stderr and not cli.stdout,
+            'actual controller usage/exit smoke')
+    for pin in canary_objects(config, authorities):
+        check()
+        response = publication.sdk_call(client, calls, 'head_object', pin['key'], BUCKET)
+        exact(response['ContentLength'], pin['bytes'], 'canary HEAD declared length')
+    log = config['native']['gate_log']
+    require(log['bytes'] <= 1 << 20, 'canary selected body cap')
+    check()
+    publication.download(client, calls, BUCKET, {k: log[k] for k in ('key', 'bytes', 'sha256')}, scratch/'gate.log')
+    completed_gate_log(dict(body_pin(log), path=str(scratch/'gate.log')), authorities['receipt']['stages'])
+    check()
+    return dict(schema=CANARY_SCHEMA, status='GO', complete=True, scientific_performance_evidence=False,
+        versions=versions, sdk_conditional_put_model=True, cli_exit_status=cli.returncode,
+        cli_stderr=cli.stderr, sdk_calls=calls, authenticated_log=body_pin(log),
+        head_proves='object presence and declared length only; no body SHA inference',
+        ann_queries=0, native_processes=0, truth_or_panel_body_reads=0, dataset_payload_gets=0)
+
+
+def stage(repo, output, worker_root, *, canary=False):
     repo, out, root = map(lambda p: Path(p).resolve(), (repo, output, worker_root))
     require(out.is_relative_to(root) and repo.is_relative_to(root), 'whole-worker scratch ownership')
     require(not out.exists(), 'output exists')
-    config, proof, authorities = qualify(repo, native_files=False)
+    config, proof, authorities = qualify(repo, canary=canary)
     exact(proof['config_sha256'], os.environ.get('BORSUK_HIERARCHICAL_CONFIG_SHA256'), 'bootstrap config binding')
     remaining = int(os.environ['BORSUK_HIERARCHICAL_DEADLINE_EPOCH'])-time.time()
-    require(0 < remaining <= WALL, 'cumulative worker deadline')
+    wall, memory, scratch_cap = (CANARY_WALL, CANARY_MEMORY, CANARY_SCRATCH) if canary else (WALL, MEMORY, SCRATCH)
+    cpu_quota, affinity = (100, [0]) if canary else (config['cpu_quota_percent'], config['cpu_affinity'])
+    require(0 < remaining <= wall, 'cumulative worker deadline')
     baseline = int(os.environ['BORSUK_HIERARCHICAL_SCRATCH_BASE_USED'])
     deadline = time.monotonic()+remaining
-    limits = dict(LIMITS, timeout_seconds=max(1, int(remaining)), cpu_affinity=config['cpu_affinity'])
+    limits = dict(LIMITS, memory_max_bytes=memory, scratch_max_bytes=scratch_cap,
+                  timeout_seconds=max(1, int(remaining)), cpu_affinity=affinity)
     before = local.resource_snapshot(limits)
     group = Path(before['path'])
     quota, period = map(int, (group/'cpu.max').read_text().split())
-    require(quota*100 == config['cpu_quota_percent']*period and
+    require(quota*100 == cpu_quota*period and
             (group/'pids.max').read_text().strip() == str(config['tasks_max']), 'CPU/tasks cgroup')
     before.update(cpu_max=(group/'cpu.max').read_text().strip(), tasks_max=(group/'pids.max').read_text().strip())
     versions = {n: importlib.metadata.version(n) for n in FIXED['versions']}
@@ -403,6 +517,7 @@ def stage(repo, output, worker_root):
     scratch = out/'scratch'
     scratch.mkdir()
     calls, peaks, errors, stopped = [], {'scratch_bytes': 0}, [], threading.Event()
+    client = None
     result = dict(status='INVALID', complete=False, physical_s3_measured=False, vendor_win=False)
     original_handler = signal.getsignal(signal.SIGALRM)
     original_term = signal.getsignal(signal.SIGTERM)
@@ -412,11 +527,11 @@ def stage(repo, output, worker_root):
     def check():
         amount = scratch_snapshot(root, baseline)
         peaks['scratch_bytes'] = max(peaks['scratch_bytes'], amount)
-        require(amount <= SCRATCH, 'whole-worker scratch cap')
+        require(amount <= scratch_cap, 'whole-worker scratch cap')
         require(time.monotonic() < deadline, 'cumulative worker deadline')
         require(not errors, 'whole-worker monitor: '+str(errors))
     def monitor():
-        while not stopped.wait(.05):
+        while not stopped.wait(1):
             try:
                 check()
             except Exception as error:
@@ -430,45 +545,51 @@ def stage(repo, output, worker_root):
         local.write_json(out/'source-qualification.json', proof)
         local.write_json(out/'tool-versions.json', dict(versions, python=sys.version, executable=sys.executable))
         client = publication.sdk_client(REGION)  # no retry, bounded read/connect timeout
-        native = copy.deepcopy(config['native'])
-        for name, original in [('source_archive', native['source_archive']), ('gate_log', native['gate_log']),
-                               *[(n, p) for n, p in native['binaries'].items()]]:
+        if canary:
+            result = infrastructure_canary(config, authorities, client, calls, scratch, check, deadline)
+            result['config_sha256'] = proof['config_sha256']
+            local.write_json(out/'canary.json', result)
+        else:
+            native = copy.deepcopy(config['native'])
+            for name, original in [('source_archive', native['source_archive']), ('gate_log', native['gate_log']),
+                                   *[(n, p) for n, p in native['binaries'].items()]]:
+                check()
+                path = scratch/('native-'+name)
+                publication.download(client, calls, BUCKET, {k: original[k] for k in ('key', 'bytes', 'sha256')}, path)
+                pin = dict(body_pin(original), path=str(path))
+                if name in ('writer', 'cells'):
+                    path.chmod(0o700); native['binaries'][name] = pin
+                else:
+                    native[name] = pin
+            native['sources'] = {n: dict(body_pin(p), path=str(repo_path(repo, p['path']))) for n, p in native['sources'].items()}
+            native_pin = local.write_json(out/'native-proof.json', native)
+            qualified = local.validate_proof(native_pin)
+            items, reductions = [], {}
+            for original, planned in zip(authorities['sources']['items'], authorities['preparation']['items']):
+                item, binding, bits = panel_inputs(scratch/original['name'], original, planned, calls, client, check)
+                item['panel_binding'] = local.write_json(out/(item['dataset']+'-panel-binding.json'), binding)
+                items.append(item); reductions[item['dataset']] = dict(query_f32_sha256=bits, binding=item['panel_binding'])
+            exact(sum(c.get('verified_bytes', 0) for c in calls[4:]), FIXED['source_encoded_bytes'], 'fourteen dataset bytes')
+            exact(len(calls), 18, 'four qualified artifacts plus fourteen dataset GETs')
+            local.write_json(out/'staging.json', dict(sdk_calls=calls, reductions=reductions, truth_decoded=False,
+                                                    physical_query_s3_measured=False))
+            limits['timeout_seconds'] = max(1, int(deadline-time.monotonic()))
+            prepared = dict(schema=local.SCHEMA, qualification=native_pin, items=items, resources=limits)
+            prepared_pin = local.write_json(out/'local-config.json', prepared)
+            def hook(plans, proof, caps, inner_deadline, receipt):
+                admission(plans, proof, caps, min(deadline, inner_deadline), receipt,
+                          folder=out/'admission-scratch', choice=config['admission'], check=check)
+                local.write_json(out/'admission.json', receipt['admission'])
             check()
-            path = scratch/('native-'+name)
-            publication.download(client, calls, BUCKET, {k: original[k] for k in ('key', 'bytes', 'sha256')}, path)
-            pin = dict(body_pin(original), path=str(path))
-            if name in ('writer', 'cells'):
-                path.chmod(0o700); native['binaries'][name] = pin
-            else:
-                native[name] = pin
-        native['sources'] = {n: dict(body_pin(p), path=str(repo_path(repo, p['path']))) for n, p in native['sources'].items()}
-        native_pin = local.write_json(out/'native-proof.json', native)
-        qualified = local.validate_proof(native_pin)
-        items, reductions = [], {}
-        for original, planned in zip(authorities['sources']['items'], authorities['preparation']['items']):
-            item, binding, bits = panel_inputs(scratch/original['name'], original, planned, calls, client, check)
-            item['panel_binding'] = local.write_json(out/(item['dataset']+'-panel-binding.json'), binding)
-            items.append(item); reductions[item['dataset']] = dict(query_f32_sha256=bits, binding=item['panel_binding'])
-        exact(sum(c.get('verified_bytes', 0) for c in calls[4:]), FIXED['source_encoded_bytes'], 'fourteen dataset bytes')
-        exact(len(calls), 18, 'four qualified artifacts plus fourteen dataset GETs')
-        local.write_json(out/'staging.json', dict(sdk_calls=calls, reductions=reductions, truth_decoded=False,
-                                                physical_query_s3_measured=False))
-        limits['timeout_seconds'] = max(1, int(deadline-time.monotonic()))
-        prepared = dict(schema=local.SCHEMA, qualification=native_pin, items=items, resources=limits)
-        prepared_pin = local.write_json(out/'local-config.json', prepared)
-        def hook(plans, proof, caps, inner_deadline, receipt):
-            admission(plans, proof, caps, min(deadline, inner_deadline), receipt,
-                      folder=out/'admission-scratch', choice=config['admission'], check=check)
-            local.write_json(out/'admission.json', receipt['admission'])
-        receipt = local.prepare(prepared, prepared_pin, out/'measurement', before_diagnostics=hook)
-        check()
-        summaries = {}
-        for dataset, pin in receipt['diagnostic_configs'].items():
-            diagnostic = local.read_json(pin)
-            summaries[dataset] = reduce_diagnostic(receipt['results'][dataset]['path'], diagnostic, pin, qualified, limits)
-        result = dict(status='PASS' if all(v['status'] == 'PASS' for v in summaries.values()) else 'FAIL',
-            complete=True, items=summaries, physical_s3_measured=False, vendor_win=False,
-            scientific_qualification=False, source_only_native_qualification=True)
+            receipt = local.prepare(prepared, prepared_pin, out/'measurement', before_diagnostics=hook)
+            check()
+            summaries = {}
+            for dataset, pin in receipt['diagnostic_configs'].items():
+                diagnostic = local.read_json(pin)
+                summaries[dataset] = reduce_diagnostic(receipt['results'][dataset]['path'], diagnostic, pin, qualified, limits)
+            result = dict(status='PASS' if all(v['status'] == 'PASS' for v in summaries.values()) else 'FAIL',
+                complete=True, items=summaries, physical_s3_measured=False, vendor_win=False,
+                scientific_qualification=False, source_only_native_qualification=True)
     except BaseException as error:
         result['error'] = type(error).__name__+': '+str(error)
         raise
@@ -494,10 +615,13 @@ def stage(repo, output, worker_root):
         local.write_json(out/'worker-cgroup.json', dict(before=before, after=after, closed=True))
         local.write_json(out/'resources.json', dict(peaks, sdk_calls=calls, monitor_errors=errors, deadline_seconds=remaining,
                                                   wall_seconds=remaining-(deadline-time.monotonic())))
+        if client is not None:
+            client.close()
         local.write_json(out/'cleanup.json', dict(scratch_removed=not scratch.exists(), monitor_stopped=True,
-                                                native_processes_concurrent_max=1))
+                                                sdk_client_closed=client is not None,
+                                                native_processes_concurrent_max=0 if canary else 1))
         local.write_json(out/'summary.json', result)
-        require(scratch_snapshot(root, baseline) <= SCRATCH, 'final whole-worker scratch cap')
+        require(scratch_snapshot(root, baseline) <= scratch_cap, 'final whole-worker scratch cap')
         fd = os.open(out, os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
         try:
             os.fsync(fd)
@@ -506,14 +630,19 @@ def stage(repo, output, worker_root):
     return result
 
 
-def user_data(commit, archive_sha, archive_key, prefix, qualification):
+def user_data(commit, archive_sha, archive_key, prefix, qualification, *, canary=False):
+    wall, scratch_cap = (CANARY_WALL, CANARY_SCRATCH) if canary else (WALL, SCRATCH)
+    schema, artifacts = (CANARY_SCHEMA, CANARY_ARTIFACTS) if canary else (SCHEMA, ARTIFACTS)
+    prefix_root = CANARY_PREFIX if canary else PREFIX
+    memory, cpu, cpus, threads = ('256M', 100, '0', 1) if canary else ('2G', 200, '0,1', 2)
+    stage_flag, unit = ('--stage-canary', 'hierarchical-100k-canary') if canary else ('--stage', 'hierarchical-100k')
     require(re.fullmatch('[0-9a-f]{40}', commit) and re.fullmatch('[0-9a-f]{64}', archive_sha), 'archive identity')
-    require(re.fullmatch(re.escape(PREFIX)+r'a[0-9]{4}', prefix), 'attempt prefix')
+    require(re.fullmatch(re.escape(prefix_root)+r'a[0-9]{4}', prefix), 'attempt prefix')
     exact(qualification['config_path'], str(CONFIG), 'bootstrap config path')
     _, bootstrap = ids.lifecycle()
     adapter = {k: qualification[k] for k in TERMINAL_IDENTITIES}
     adapter.update(config_path=str(CONFIG), native_binary={'key': 'unused'}, native_publisher={'key': 'unused'})
-    with patch.multiple(bootstrap, WALL=WALL, SCHEMA=SCHEMA, ARTIFACTS=ARTIFACTS,
+    with patch.multiple(bootstrap, WALL=wall, SCHEMA=schema, ARTIFACTS=artifacts,
                         TERMINAL_IDENTITIES=TERMINAL_IDENTITIES), patch.object(bootstrap, '_offered', return_value=False):
         body = bootstrap.user_data(commit, archive_sha, archive_key, prefix, adapter)
     start, end = body.index('phase=install\n'), body.index('phase=complete\n')
@@ -522,37 +651,39 @@ test "$(uname -m)" = x86_64
 python3.12 -m venv "$root/venv"
 export PIP_CACHE_DIR="$root/pip-cache" TMPDIR="$root"
 "$root/venv/bin/python" -m pip install --disable-pip-version-check --only-binary=:all: --no-deps numpy==2.3.3 pyarrow==24.0.0 boto3==1.40.72 botocore==1.40.72 jmespath==1.0.1 s3transfer==0.14.0 python-dateutil==2.9.0.post0 six==1.17.0 urllib3==2.6.3
-phase=paired-diagnostic
+rm -rf -- "$root/pip-cache"
+sync -f "$root"
+phase={"infrastructure-canary" if canary else "paired-diagnostic"}
 remaining=$((BORSUK_HIERARCHICAL_DEADLINE_EPOCH-$(date +%s)))
 test "$remaining" -gt 0
-systemd-run --unit=hierarchical-100k --wait --pipe -p MemoryMax=2G -p MemorySwapMax=0 -p CPUQuota=200% -p TasksMax=512 -p RuntimeMaxSec="$remaining" -p WorkingDirectory="$root" \\
+systemd-run --unit={unit} --wait --pipe -p MemoryMax={memory} -p MemorySwapMax=0 -p CPUQuota={cpu}% -p TasksMax=512 -p RuntimeMaxSec="$remaining" -p WorkingDirectory="$root" \\
  --setenv=PYTHONPATH="$root/repo" --setenv=AWS_MAX_ATTEMPTS=1 --setenv=TMPDIR="$root" \\
  --setenv=BORSUK_HIERARCHICAL_CONFIG_SHA256={qualification['config_sha256']} \\
  --setenv=BORSUK_HIERARCHICAL_DEADLINE_EPOCH="$BORSUK_HIERARCHICAL_DEADLINE_EPOCH" \\
  --setenv=BORSUK_HIERARCHICAL_SCRATCH_BASE_USED="$BORSUK_HIERARCHICAL_SCRATCH_BASE_USED" \\
- --setenv=OPENBLAS_NUM_THREADS=2 --setenv=OMP_NUM_THREADS=2 --setenv=MKL_NUM_THREADS=2 --setenv=RAYON_NUM_THREADS=2 \\
+ --setenv=OPENBLAS_NUM_THREADS={threads} --setenv=OMP_NUM_THREADS={threads} --setenv=MKL_NUM_THREADS={threads} --setenv=RAYON_NUM_THREADS={threads} \\
  /usr/bin/time -v -o "$root/test-resources.txt" timeout --signal=TERM --kill-after=5 "$remaining" \\
- taskset -c 0,1 "$root/venv/bin/python" -m {MODULE} --stage "$root/repo" "$root/screen" "$root"
+ taskset -c {cpus} "$root/venv/bin/python" -m {MODULE} {stage_flag} "$root/repo" "$root/screen" "$root"
 for name in $ARTIFACT_NAMES; do
  if [ "$name" = run-closed.log ]; then test -s run.log; else test -s "$name"; fi
 done
 '''
     body = body[:start]+command+body[end:]
-    body = body.replace('/mnt/native-semantic-router-cold', '/mnt/hierarchical-100k')
+    body = body.replace('/mnt/native-semantic-router-cold', '/mnt/'+unit)
     body = body.replace('python3-boto3 python3.12', 'python3.12 python3.12-venv')
     body = body.replace(", 'runtime_abi_sha256':artifacts.get('runtime-abi.json',{}).get('sha256')", '')
-    body = body.replace('phase=bootstrap\n', '''phase=bootstrap
-export BORSUK_HIERARCHICAL_DEADLINE_EPOCH=$(($(date +%s)+1800))
+    body = body.replace('phase=bootstrap\n', f'''phase=bootstrap
+export BORSUK_HIERARCHICAL_DEADLINE_EPOCH=$(($(date +%s)+{wall}))
 export BORSUK_HIERARCHICAL_SCRATCH_BASE_USED=$(df -B1 --output=used "$root" | tail -1 | tr -d ' ')
 ''', 1)
-    body = body.replace('exec >run.log 2>&1\n', '''exec >run.log 2>&1
+    body = body.replace('exec >run.log 2>&1\n', f'''exec >run.log 2>&1
 scratch_owner=$$
 (while kill -0 "$scratch_owner" 2>/dev/null; do
  rooted=$(du -sb "$root" | cut -f1)
  used=$(df -B1 --output=used "$root" | tail -1 | tr -d ' ')
  growth=$((used-BORSUK_HIERARCHICAL_SCRATCH_BASE_USED))
  if [ "$growth" -lt 0 ]; then growth=0; fi
- if [ "$((rooted+growth))" -gt 17179869184 ]; then kill -TERM "$scratch_owner"; exit; fi
+ if [ "$((rooted+growth))" -gt {scratch_cap} ]; then kill -TERM "$scratch_owner"; exit; fi
  sleep 1
 done) &
 scratch_watch_pid=$!
@@ -565,6 +696,11 @@ scratch_watch_pid=$!
 ''', 1)
     body = body.replace('./aws/install', './aws/install --install-dir "$root/aws-cli" --bin-dir "$root/bin"')
     body = body.replace('cli_version=$(aws --version)', 'export PATH="$root/bin:$PATH"\ncli_version=$(aws --version)')
+    # Remove only authenticated disposable transport/install files. Their peak
+    # existed under the original baseline/watch; installed assets remain charged.
+    body = body.replace('phase=source-download\n', 'rm -rf -- "$root/aws" "$root/awscliv2.zip"\nphase=source-download\n')
+    body = body.replace('mkdir repo && tar -xzf source.tar.gz -C repo\n',
+                        'mkdir repo && tar -xzf source.tar.gz -C repo\nrm -f -- "$root/source.tar.gz"\nsync -f "$root"\n')
     # The scientific bootstrap uploads terminal last. Durably sync artifacts and
     # the terminal before its marker/publication without changing owned lifecycle.
     body = body.replace('  aws_ready=0\n', '  sync -f "$root" || code=96\n  aws_ready=0\n', 1)
@@ -575,14 +711,43 @@ scratch_watch_pid=$!
     return body
 
 
-def poll(ec2, s3, prefix, instance_id, started):
+def poll(ec2, s3, prefix, instance_id, started, *, canary=False):
     shared, _ = ids.lifecycle()
-    with patch.object(shared, 'WALL', WALL):
+    with patch.object(shared, 'WALL', CANARY_WALL if canary else WALL):
         return shared.poll(ec2, s3, prefix, instance_id, started)
 
 
-def replay(out):
+def validate_canary(receipt, config, authorities):
+    for name, value in dict(schema=CANARY_SCHEMA, status='GO', complete=True,
+            scientific_performance_evidence=False, sdk_conditional_put_model=True,
+            cli_exit_status=2, ann_queries=0, native_processes=0,
+            truth_or_panel_body_reads=0, dataset_payload_gets=0).items():
+        exact(receipt[name], value, 'infrastructure canary: '+name)
+    exact(receipt['versions'], dict(FIXED['versions'], **SDK_VERSIONS), 'canary imports')
+    require('INVALID:' in receipt['cli_stderr'] and 'CLI:' in receipt['cli_stderr'], 'canary actual CLI usage')
+    calls, objects = receipt['sdk_calls'], canary_objects(config, authorities)
+    require(len(calls) == 19, 'canary HEAD18/GET1')
+    for call, pin in zip(calls[:18], objects):
+        exact(call['operation'], 'head_object', 'canary HEAD only')
+        exact(call['key'], pin['key'], 'canary declared object')
+        exact(call['outcome'], 'returned', 'canary HEAD returned')
+        exact(call['declared_bytes'], pin['bytes'], 'canary HEAD length')
+        require('verified_sha256' not in call, 'HEAD is not authenticated body evidence')
+    log, call = config['native']['gate_log'], calls[-1]
+    exact(call['operation'], 'get_object', 'single canary body GET')
+    exact(call['key'], log['key'], 'only small gate log')
+    exact(call['outcome'], 'returned', 'canary log returned')
+    exact(call['declared_bytes'], log['bytes'], 'canary log declared bytes')
+    exact(call['verified_bytes'], log['bytes'], 'canary log verified bytes')
+    exact(call['verified_sha256'], log['sha256'], 'canary log verified SHA')
+    exact(receipt['authenticated_log'], body_pin(log), 'canary log pin')
+    require(log['bytes'] <= 1 << 20, 'canary body cap')
+
+
+def replay(out, *, canary=False):
     out = Path(out)
+    schema, artifacts = (CANARY_SCHEMA, CANARY_ARTIFACTS) if canary else (SCHEMA, ARTIFACTS)
+    wall, memory, scratch_cap = (CANARY_WALL, CANARY_MEMORY, CANARY_SCRATCH) if canary else (WALL, MEMORY, SCRATCH)
     reservation, launch, close, terminal = (json.loads((out/n).read_bytes()) for n in (
         'aws-reservation.json', 'aws-launch.json', 'aws-closeout.json', 'aws-terminal.json'))
     exact(close['nodes'], launch['nodes'], 'SAME owned IDs')
@@ -591,80 +756,303 @@ def replay(out):
     for key in ('source_commit', 'source_archive_sha256'):
         exact(terminal[key], reservation[key], 'terminal archive binding')
         exact(terminal[key], launch[key], 'launch archive binding')
-    exact(terminal['schema'], SCHEMA, 'terminal campaign schema')
+    exact(terminal['schema'], schema, 'terminal campaign schema')
+    exact(reservation['schema'], schema, 'reserved campaign schema')
+    if canary:
+        exact(reservation['wall_seconds'], CANARY_WALL, 'canary reserved deadline')
+        exact(reservation['compute_cap_usd'], .12, 'canary compute cap')
+        exact(reservation['ebs_s3_allowance_usd'], .05, 'canary ancillary cap')
     for name in TERMINAL_IDENTITIES:
         exact(terminal[name], reservation['qualification'][name], 'terminal authority: '+name)
-    require(set(terminal['artifacts']) <= set(ARTIFACTS), 'terminal artifact roster')
+    require(set(terminal['artifacts']) <= set(artifacts), 'terminal artifact roster')
     for name, pin in terminal['artifacts'].items():
         exact(body_pin(local.identity(out/name)), pin, 'collected body identity')
     complete = terminal['phase'] == terminal['status'] == 'complete' and terminal['exit_code'] == 0
     if complete:
         exact(terminal['original_exit_code'], 0, 'original worker success')
-        exact(set(terminal['artifacts']), set(ARTIFACTS), 'complete artifact roster')
+        exact(set(terminal['artifacts']), set(artifacts), 'complete artifact roster')
         config = local.decode((out/'screen/config.json').read_bytes())
+        cpu = 100 if canary else config['cpu_quota_percent']
         exact(local.sha((out/'screen/config.json').read_bytes()), terminal['config_sha256'], 'collected config')
-        receipt = local.decode((out/'screen/measurement/receipt.json').read_bytes())
-        exact(receipt['status'], 'DIAGNOSTIC', 'measurement status')
-        exact(receipt['complete'], True, 'measurement complete')
-        summaries = {}
-        for dataset, pin in receipt['diagnostic_configs'].items():
-            body = out/'screen/measurement'/(dataset+'-diagnose.json')
-            exact(body_pin(local.identity(body)), body_pin(pin), 'collected diagnostic config')
-            diagnostic = local.decode(body.read_bytes())
-            summaries[dataset] = reduce_diagnostic(out/'screen/measurement'/(dataset+'-diagnostic.jsonl'), diagnostic, pin, receipt['proof'], receipt['resource_limits'])
-        summary = local.decode((out/'screen/summary.json').read_bytes())
-        exact(summary['complete'], True, 'complete quality reduction')
-        exact(summary['items'], summaries, 'root quality reduction')
-        exact(summary['status'], 'PASS' if all(v['status'] == 'PASS' for v in summaries.values()) else 'FAIL', 'quality status')
-        exact(summary['physical_s3_measured'], False, 'local query counters only')
-        exact(config['policy'], local.POLICY, 'collected arm')
+        if canary:
+            receipt = local.decode((out/'screen/canary.json').read_bytes())
+            summary = local.decode((out/'screen/summary.json').read_bytes())
+            exact(receipt, summary, 'canary closed summary')
+            exact(receipt['config_sha256'], terminal['config_sha256'], 'canary config binding')
+            authorities, identity = qualification(config, Path(__file__).resolve().parents[1])
+            exact(identity, terminal['native_identity_sha256'], 'canary native identity')
+            validate_canary(receipt, config, authorities)
+        else:
+            receipt = local.decode((out/'screen/measurement/receipt.json').read_bytes())
+            exact(receipt['status'], 'DIAGNOSTIC', 'measurement status')
+            exact(receipt['complete'], True, 'measurement complete')
+            summaries = {}
+            for dataset, pin in receipt['diagnostic_configs'].items():
+                body = out/'screen/measurement'/(dataset+'-diagnose.json')
+                exact(body_pin(local.identity(body)), body_pin(pin), 'collected diagnostic config')
+                diagnostic = local.decode(body.read_bytes())
+                summaries[dataset] = reduce_diagnostic(out/'screen/measurement'/(dataset+'-diagnostic.jsonl'), diagnostic, pin, receipt['proof'], receipt['resource_limits'])
+            summary = local.decode((out/'screen/summary.json').read_bytes())
+            exact(summary['complete'], True, 'complete quality reduction')
+            exact(summary['items'], summaries, 'root quality reduction')
+            exact(summary['status'], 'PASS' if all(v['status'] == 'PASS' for v in summaries.values()) else 'FAIL', 'quality status')
+            exact(summary['physical_s3_measured'], False, 'local query counters only')
+            exact(config['policy'], local.POLICY, 'collected arm')
         clean = local.decode((out/'screen/cleanup.json').read_bytes())
         exact(clean['scratch_removed'], True, 'disposable staging removed')
         exact(clean['monitor_stopped'], True, 'worker monitor cleanup')
+        if canary:
+            exact(clean['sdk_client_closed'], True, 'canary SDK client cleanup')
+            exact(clean['native_processes_concurrent_max'], 0, 'canary no native execution')
         counters = local.decode((out/'screen/worker-cgroup.json').read_bytes())
         exact(counters['closed'], True, 'worker resource closure')
         for snapshot in (counters['before'], counters['after']):
-            require(0 < int(snapshot['memory.max']) <= config['memory_bytes'] and
-                    int(snapshot['memory.peak']) <= config['memory_bytes'], 'worker memory cap')
+            require(0 < int(snapshot['memory.max']) <= memory and
+                    int(snapshot['memory.peak']) <= memory, 'worker memory cap')
             exact(snapshot['memory.swap.max'], '0', 'worker no swap')
             exact(int(snapshot['memory.swap.peak']), 0, 'worker swap peak')
             q, p = map(int, snapshot['cpu_max'].split())
-            require(q*100 == config['cpu_quota_percent']*p, 'worker CPU quota')
+            require(q*100 == cpu*p, 'worker CPU quota')
             exact(int(snapshot['tasks_max']), config['tasks_max'], 'worker tasks cap')
         require(counters['before']['path'] == counters['after']['path'], 'same worker cgroup')
         before_events, after_events = (dict(line.split() for line in counters[k]['memory.events'].splitlines())
                                        for k in ('before', 'after'))
         require(all(before_events.get(k) == after_events.get(k) for k in ('oom', 'oom_kill', 'oom_group_kill')), 'worker no OOM')
         resources = local.decode((out/'screen/resources.json').read_bytes())
-        require(resources['scratch_bytes'] <= SCRATCH and 0 <= resources['wall_seconds'] <= WALL, 'worker scratch/deadline closure')
-        exact(len(resources['sdk_calls']), 18, 'qualified artifact and dataset call roster')
-        admission_receipt = local.decode((out/'screen/admission.json').read_bytes())
-        for name, expected in dict(status='ADMITTED', excluded_from_measurement=True, quality_promotion=False, disposable_outputs_removed=True).items():
-            exact(admission_receipt[name], expected, 'separate real-input admission')
+        require(resources['scratch_bytes'] <= scratch_cap and 0 <= resources['wall_seconds'] <= wall, 'worker scratch/deadline closure')
+        exact(len(resources['sdk_calls']), 19 if canary else 18, 'closed SDK call roster')
+        if canary:
+            exact(resources['sdk_calls'], receipt['sdk_calls'], 'canary SDK resource receipt')
+        if not canary:
+            admission_receipt = local.decode((out/'screen/admission.json').read_bytes())
+            for name, expected in dict(status='ADMITTED', excluded_from_measurement=True, quality_promotion=False, disposable_outputs_removed=True).items():
+                exact(admission_receipt[name], expected, 'separate real-input admission')
     else:
         require(terminal['status'] == 'failed' and terminal['exit_code'] != 0, 'failed terminal closure')
     return dict(executed=complete, physical_s3_measured=False, vendor_win=False)
 
 
-def collect(s3, prefix, out, instance_id, commit, digest):
+def collect(s3, prefix, out, instance_id, commit, digest, *, canary=False):
+    schema, artifacts = (CANARY_SCHEMA, CANARY_ARTIFACTS) if canary else (SCHEMA, ARTIFACTS)
     launch, close = (json.loads((Path(out)/n).read_bytes()) for n in ('aws-launch.json', 'aws-closeout.json'))
     exact(close['nodes'], launch['nodes'], 'collection SAME IDs')
     exact(launch['instance_id'], instance_id, 'collection host')
     exact(launch['prefix'], prefix, 'collection prefix')
-    with patch.multiple(ids, SCHEMA=SCHEMA, ARTIFACTS=ARTIFACTS, replay=replay):
+    with patch.multiple(ids, SCHEMA=schema, ARTIFACTS=artifacts, replay=lambda out: replay(out, canary=canary)):
         return ids.collect(s3, prefix, out, instance_id, commit, digest)
 
 
-def main(attempt):
+def require_canary(base, proof):
+    pointer = local.read_json(local.identity(Path(base)/ROOT/'canary-admission.json'))
+    fields(pointer, 'schema attempt config_sha256 code_identity_sha256 refs_identity_sha256 '
+           'native_identity_sha256 terminal_sha256', 'root canary admission')
+    exact(pointer['schema'], 'borsuk-hierarchical-100k-canary-admission-v1', 'root canary pointer')
+    require(re.fullmatch(r'a[0-9]{4}', pointer['attempt']), 'canary admission attempt')
+    out = Path(base)/ROOT/'canary'/pointer['attempt']
+    exact(local.identity(out/'aws-terminal.json')['sha256'], pointer['terminal_sha256'], 'selected canary terminal')
+    terminal = local.decode((out/'aws-terminal.json').read_bytes())
+    for name in ('config_sha256', 'code_identity_sha256', 'refs_identity_sha256', 'native_identity_sha256'):
+        exact(pointer[name], proof[name], 'canary admission current authority')
+        exact(terminal[name], proof[name], 'canary terminal current authority')
+    require(replay(out, canary=True)['executed'], 'terminated infrastructure canary GO required')
+
+
+def canary_campaign():
+    return SimpleNamespace(ROOT=ROOT, NAME='canary', SCHEMA=CANARY_SCHEMA,
+        PREFIX=CANARY_PREFIX, TOKEN_PREFIX='hierarchical-100k-canary-', TAG=TAG+'-canary',
+        WALL=CANARY_WALL, COMPUTE_CAP=.12, INSTANCE_TYPE=INSTANCE_TYPE, IMAGE_ID=IMAGE_ID,
+        ROOT_DEVICE_NAME=ROOT_DEVICE_NAME, SUBNET=SUBNET, SPOT_MAX_USD_PER_HOUR=SPOT_MAX_USD_PER_HOUR,
+        ARTIFACTS=CANARY_ARTIFACTS, preflight=lambda: preflight(canary=True),
+        user_data=lambda *args: user_data(*args, canary=True),
+        poll=lambda *args: poll(*args, canary=True), collect=lambda *args: collect(*args, canary=True))
+
+
+def canary_reservation(*args, **kwargs):
+    # Shared main owns ACK/fsync/terminate+wait unchanged. Its sole hardcoded
+    # budget default is replaced only for this campaign's reservation constructor.
+    if kwargs.get('schema') == CANARY_SCHEMA and 'ebs_s3_allowance_usd' in kwargs:
+        exact(kwargs['ebs_s3_allowance_usd'], .15, 'shared lifecycle allowance default')
+        kwargs['ebs_s3_allowance_usd'] = .05
+    return dict(*args, **kwargs)
+
+
+def main(attempt, *, canary=False):
     require(re.fullmatch(r'a[0-9]{4}', attempt), 'attempt must be aNNNN')
     before = Path.cwd()
     try:
         os.chdir(Path(__file__).resolve().parents[1])
-        preflight()  # No cloud before frozen authorities and qualified bodies.
+        preflight(canary=canary)  # No cloud before frozen source/metadata/log.
         shared, _ = ids.lifecycle()
+        if canary:
+            with patch.object(shared, 'dict', canary_reservation, create=True):
+                return shared.main(attempt, campaign=canary_campaign())
         return shared.main(attempt, campaign=sys.modules[__name__])
     finally:
         os.chdir(before)
+
+
+def canary_self_check():
+    """Metadata/log only, actual imports/CLI; SDK/cloud operations mocked."""
+    from contextlib import ExitStack
+    from datetime import datetime, timezone
+    from unittest.mock import Mock
+    import botocore.session
+    module, here = sys.modules[__name__], Path(__file__).resolve().parents[1]
+    local.resource_snapshot(dict(memory_max_bytes=CANARY_MEMORY, cpu_affinity=[0]))
+    exact(sorted(os.sched_getaffinity(0)), [0], 'canary check CPU1')
+    def rejects(action):
+        try:
+            action()
+        except (ValueError, OSError, AssertionError, TimeoutError):
+            return
+        raise AssertionError('negative canary accepted')
+    with tempfile.TemporaryDirectory(prefix='hierarchical-infrastructure-check-') as tmp:
+        root = Path(tmp)
+        config = local.decode(Path('/tmp/borsuk-hierarchical-100k-config-draft.json').read_bytes())
+        original = copy.deepcopy(config)
+        # This is a temporary refresh of root's actual metadata shape, never a
+        # modification to its pending draft or its immutable gate receipts.
+        config['authority_pending'] = False
+        config['code_sha256'] = {p: local.identity(here/p)['sha256'] for p in CODE}
+        controller = root/'metadata-controller.json'
+        local.write_json(controller, config)
+        cold_paths = {p['path'] for p in (config['native']['source_archive'], *config['native']['binaries'].values())}
+        open_input = positive.open_input
+        def metadata_only(path):
+            require(not any(str(path).endswith('/'+p) for p in cold_paths), 'preflight opened cold native body')
+            return open_input(path)
+        with patch.object(module, 'CONFIG', controller), patch.object(positive, 'open_input', side_effect=metadata_only):
+            validated, _, authorities = qualify(here)
+            exact(validated, config, 'actual root draft metadata refresh')
+            rejects(lambda: qualify(here, native_files=True))
+            for field, value in (('authority_pending', True), ('code_sha256', original['code_sha256'])):
+                damaged = dict(config, **{field: value}); controller.write_bytes(local.canonical(damaged))
+                rejects(lambda: qualify(here))
+            for path in ('../escape', 'assets/../escape', 'assets//writer', 'assets/writer\n'):
+                damaged = copy.deepcopy(config); damaged['native']['binaries']['writer']['path'] = path
+                controller.write_bytes(local.canonical(damaged)); rejects(lambda: qualify(here))
+        exact(local.decode(Path('/tmp/borsuk-hierarchical-100k-config-draft.json').read_bytes()), original,
+              'root pending draft untouched')
+        repo = root/'repo'; repo.mkdir()
+        (repo/CONFIG).parent.mkdir(parents=True)
+        config_pin = local.write_json(repo/CONFIG, config)
+        proof = dict(config_path=str(CONFIG), config_sha256=config_pin['sha256'], campaign_schema=CANARY_SCHEMA,
+            code_identity_sha256=ids.sha(ids.encoded(config['code_sha256'])),
+            refs_identity_sha256=ids.sha(ids.encoded(config['refs'])),
+            native_identity_sha256=source_identity(source_hashes(here)),
+            artifact_roster_sha256=ids.sha(ids.encoded(CANARY_ARTIFACTS)),
+            awscli_version=AWSCLI_VERSION, awscli_sha256=AWSCLI_SHA256)
+        model = botocore.session.get_session().get_service_model('s3')
+        descriptors = {p['key']: p for p in canary_objects(config, authorities)}
+        log = (here/config['native']['gate_log']['path']).read_bytes()
+        env = dict(BORSUK_HIERARCHICAL_CONFIG_SHA256=proof['config_sha256'],
+            BORSUK_HIERARCHICAL_DEADLINE_EPOCH=str(int(time.time())+60),
+            BORSUK_HIERARCHICAL_SCRATCH_BASE_USED=str(shutil.disk_usage(root).used))
+        with ExitStack() as stack:
+            stack.enter_context(patch.dict(os.environ, env))
+            stack.enter_context(patch.object(module, 'qualify', return_value=(config, proof, authorities)))
+            forbidden = [stack.enter_context(patch.object(owner, name, side_effect=AssertionError('forbidden canary '+name)))
+                for owner, name in ((local, 'prepare'), (local, 'validate_proof'), (local, 'run_stage'),
+                    (positive, 'raw_blocks'), (positive, 'request_bodies'),
+                    (module, 'panel_inputs'), (module, 'admission'))]
+            for mode in ('valid', 'short-log', 'wrong-hash', 'head-length', 'scratch', 'cli-nonzero', 'sdk-model'):
+                client = Mock()
+                client.meta.service_model = model
+                client.head_object.side_effect = lambda **kw: {'ContentLength': descriptors[kw['Key']]['bytes']}
+                def get(**kw):
+                    exact(kw['Key'], config['native']['gate_log']['key'], 'no GT/panel/native payload GET')
+                    body = log[:-1] if mode == 'short-log' else b'X'+log[1:] if mode == 'wrong-hash' else log
+                    return dict(ContentLength=len(log), Body=io.BytesIO(body))
+                client.get_object.side_effect = get
+                if mode == 'head-length': client.head_object.return_value = {'ContentLength': 1}; client.head_object.side_effect = None
+                if mode == 'sdk-model': client.meta.service_model = SimpleNamespace(operation_model=lambda _: SimpleNamespace(input_shape=SimpleNamespace(members={})))
+                out = root/mode
+                with ExitStack() as faults:
+                    faults.enter_context(patch.object(publication, 'sdk_client', return_value=client))
+                    if mode == 'scratch': faults.enter_context(patch.object(module, 'scratch_snapshot', return_value=CANARY_SCRATCH+1))
+                    if mode == 'cli-nonzero': faults.enter_context(patch.object(subprocess, 'run', return_value=subprocess.CompletedProcess([], 7, '', 'bad CLI')))
+                    if mode == 'valid':
+                        result = stage(repo, out, root, canary=True)
+                        validate_canary(result, config, authorities)
+                        exact(len(client.head_object.call_args_list), 18, 'actual mock HEAD18')
+                        exact(len(client.get_object.call_args_list), 1, 'actual mock GET1')
+                        client.close.assert_called_once()
+                    else:
+                        rejects(lambda: stage(repo, out, root, canary=True))
+                        exact(local.decode((out/'summary.json').read_bytes())['status'], 'INVALID', 'canary error INVALID')
+                require(not (out/'scratch').exists(), 'canary scratch cleanup')
+            for spy in forbidden: spy.assert_not_called()
+        # Collect/replay exactly the closed canary roster and all resource pins.
+        out, screen = root/'closed', root/'valid'
+        (out/'screen').mkdir(parents=True)
+        for name in CANARY_ARTIFACTS:
+            destination = out/name
+            if name.startswith('screen/'): shutil.copyfile(screen/name.removeprefix('screen/'), destination)
+            else: destination.write_bytes(b'synthetic lifecycle evidence\n')
+        source = dict(source_commit='a'*40, source_archive_sha256='b'*64)
+        terminal = dict(schema=CANARY_SCHEMA, instance_id='i-canary', phase='complete', status='complete',
+            exit_code=0, original_exit_code=0, **source,
+            **{n: proof[n] for n in TERMINAL_IDENTITIES},
+            artifacts={n: body_pin(local.identity(out/n)) for n in CANARY_ARTIFACTS})
+        nodes = {'0': dict(instance_id='i-canary')}
+        for name, value in (('aws-reservation.json', dict(schema=CANARY_SCHEMA, wall_seconds=480,
+                compute_cap_usd=.12, ebs_s3_allowance_usd=.05, qualification=proof, **source)),
+                ('aws-launch.json', dict(instance_id='i-canary', prefix=CANARY_PREFIX+'a0001', nodes=nodes, **source)),
+                ('aws-closeout.json', dict(nodes=nodes, state='terminated')), ('aws-terminal.json', terminal)):
+            local.write_json(out/name, value)
+        require(replay(out, canary=True)['executed'], 'closed actual canary replay')
+        for name, value in (('native_processes', 1), ('dataset_payload_gets', 1), ('truth_or_panel_body_reads', 1)):
+            rejects(lambda n=name, v=value: validate_canary(dict(result, **{n: v}), config, authorities))
+        close = out/'aws-closeout.json'; original_close = close.read_bytes()
+        close.write_bytes(local.canonical(dict(nodes=nodes, state='running')))
+        sdk = Mock(); rejects(lambda: collect(sdk, CANARY_PREFIX+'a0001', out, 'i-canary', source['source_commit'], source['source_archive_sha256'], canary=True))
+        sdk.get_object.assert_not_called(); close.write_bytes(original_close)
+        pointer = dict(schema='borsuk-hierarchical-100k-canary-admission-v1', attempt='a0001',
+            **{n: proof[n] for n in ('config_sha256', 'code_identity_sha256', 'refs_identity_sha256', 'native_identity_sha256')},
+            terminal_sha256=local.identity(out/'aws-terminal.json')['sha256'])
+        selected = root/ROOT/'canary/a0001'; selected.parent.mkdir(parents=True)
+        shutil.copytree(out, selected); local.write_json(root/ROOT/'canary-admission.json', pointer)
+        require_canary(root, proof)
+        rejects(lambda: require_canary(root, dict(proof, config_sha256='0'*64)))
+        (selected/'aws-terminal.json').write_bytes(b'{}\n'); rejects(lambda: require_canary(root, proof))
+        shell = user_data('a'*40, 'b'*64, 'sources/mock', CANARY_PREFIX+'a0001', proof, canary=True)
+        require(all(s in shell for s in ('MemoryMax=256M', 'CPUQuota=100%', '--stage-canary',
+            '--on-active=480s', '+480))', str(CANARY_SCRATCH), 'sync -f terminal.json',
+            'rm -f -- "$root/source.tar.gz"', 'rm -rf -- "$root/aws" "$root/awscliv2.zip"',
+            'rm -rf -- "$root/pip-cache"')), 'canary bootstrap envelope/disposable transport cleanup')
+        require('MemoryMax=2G' not in shell and '--stage ' not in shell, 'distinct canary mode')
+        for argv in (['--canary', 'a0001'], ['--stage-canary', str(repo), str(root/'cli-canary'), str(root)]):
+            cli = subprocess.run([sys.executable, '-m', MODULE, *argv], capture_output=True, text=True, cwd=here)
+            require(cli.returncode == 2 and 'INVALID:' in cli.stderr, 'actual canary CLI fail closed')
+        # Exercise unchanged shared launch ownership with the canary campaign.
+        shared, _ = ids.lifecycle(); ec2, s3, session = Mock(), Mock(), Mock()
+        session.client.side_effect = [ec2, s3]
+        ec2.describe_instances.return_value = {'Reservations': []}
+        ec2.describe_subnets.return_value = {'Subnets': [{'AvailabilityZone': 'mock-az'}]}
+        ec2.describe_spot_price_history.return_value = {'SpotPriceHistory': [dict(SpotPrice='0.1', Timestamp=datetime.now(timezone.utc))]}
+        ec2.run_instances.return_value = {'Instances': [dict(InstanceId='i-canary')]}
+        events = []
+        ec2.terminate_instances.side_effect = lambda **kw: events.append('terminate')
+        ec2.get_waiter.return_value.wait.side_effect = lambda **kw: events.append('wait')
+        campaign = canary_campaign(); campaign.ROOT = root/'launch'; campaign.preflight = lambda: proof
+        campaign.poll = Mock()
+        def collected(*args):
+            exact(events, ['terminate', 'wait'], 'canary termination before collection')
+            events.append('collect'); return terminal
+        campaign.collect = collected
+        with patch.object(shared, 'dict', canary_reservation, create=True), \
+             patch.object(shared.boto3, 'Session', return_value=session), \
+             patch.object(subprocess, 'check_output', side_effect=['', 'a'*40, b'synthetic source archive']), \
+             patch.object(shared.peer, 'missing', return_value=True), patch.object(shared.peer, 'put_if_absent'):
+            shared.main('a0001', campaign=campaign)
+        reserved = local.decode((campaign.ROOT/'canary/a0001/aws-reservation.json').read_bytes())
+        exact(reserved['compute_cap_usd'], .12, 'actual canary reservation compute')
+        exact(reserved['ebs_s3_allowance_usd'], .05, 'actual canary reservation ancillary')
+        exact(events, ['terminate', 'wait', 'collect'], 'actual canary shared lifecycle')
+        ec2.run_instances.assert_called_once()
+        ec2.terminate_instances.assert_called_once_with(InstanceIds=['i-canary'])
+        ec2.get_waiter.return_value.wait.assert_called_once_with(InstanceIds=['i-canary'])
+    print('PASS actual draft metadata-only preflight, real imports/SDK model/CLI, mocked HEAD18+logGET1, no-native/no-GT spies, negatives, replay/admission/shared canary lifecycle')
 
 
 def self_check():
@@ -715,7 +1103,8 @@ def self_check():
                 else:
                     rejects(lambda: qualify(here, native_files=False))
             controller_path.write_bytes(local.canonical(controller))
-            rejects(lambda: qualify(here), 'UNSUPPLIED-real-archive')
+            qualify(here)
+            rejects(lambda: qualify(here, native_files=True), 'UNSUPPLIED-real-archive')
         # Exercise the real helper with its own explicitly synthetic gate proof
         # and mock CLI; assert hook timing and INVALID cleanup before measurement.
         original_prepare = local.prepare
@@ -900,7 +1289,7 @@ else:
                 **{n: proof[n] for n in TERMINAL_IDENTITIES},
                 artifacts={n: dict(bytes=len(b), sha256=local.sha(b)) for n, b in uploaded.items()})
             for n, v in [('aws-launch.json', host), ('aws-closeout.json', dict(state='terminated', nodes=host['nodes'])),
-                         ('aws-reservation.json', dict(source_commit=host['source_commit'], source_archive_sha256=host['source_archive_sha256'], qualification=proof))]:
+                         ('aws-reservation.json', dict(schema=SCHEMA, source_commit=host['source_commit'], source_archive_sha256=host['source_archive_sha256'], qualification=proof))]:
                 ids.write(collected/n, v)
             def fetch(**kw):
                 b = local.canonical(terminal) if kw['Key'].endswith('/terminal.json') else uploaded[kw['Key'].split('/artifacts/', 1)[1]]
@@ -942,21 +1331,29 @@ else:
         shared, _ = ids.lifecycle()
         shared.self_check(lifecycle_only=True)
     print('PASS synthetic Arrow/authenticated staging/helper hooks/mock CLI/short-body/wrong-hash/scratch/nonzero cleanup/shared owned lifecycle; no real science')
+    canary_self_check()
 
 
 if __name__ == '__main__':
     try:
         if sys.argv[1:] == ['--self-check']:
             self_check()
+        elif sys.argv[1:] == ['--self-check-canary']:
+            canary_self_check()
         elif len(sys.argv) == 5 and sys.argv[1] == '--stage':
             print(json.dumps(stage(*sys.argv[2:])))
+        elif len(sys.argv) == 5 and sys.argv[1] == '--stage-canary':
+            print(json.dumps(stage(*sys.argv[2:], canary=True)))
         elif len(sys.argv) == 3 and sys.argv[1] == '--replay':
             print(json.dumps(replay(sys.argv[2])))
+        elif len(sys.argv) == 3 and sys.argv[1] == '--replay-canary':
+            print(json.dumps(replay(sys.argv[2], canary=True)))
         else:
-            require(len(sys.argv) == 2, __doc__)
+            canary = len(sys.argv) == 3 and sys.argv[1] == '--canary'
+            require(canary or len(sys.argv) == 2, __doc__)
             with open('/tmp/borsuk-hierarchical-100k-launch.lock', 'a+') as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
-                main(sys.argv[1])
+                main(sys.argv[2] if canary else sys.argv[1], canary=canary)
     except Exception as error:
         print('INVALID: '+str(error), file=sys.stderr)
         sys.exit(2)
