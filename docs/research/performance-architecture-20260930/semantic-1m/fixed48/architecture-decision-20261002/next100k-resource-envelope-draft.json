@@ -1,0 +1,74 @@
+{
+  "cap_classification": {
+    "host": "Prospective bounded remote run safety, not library/product RAM target",
+    "phase_payload": "Source-model admission with headroom; actual phase RSS/cgroup peaks must be observed separately",
+    "query_GET_bytes_quality": "Frozen first-arm scientific admission only; misses preserved as that arm FAIL; no universal architecture threshold"
+  },
+  "formula_constants": {
+    "SQ2_record_bytes": 200,
+    "Vec_inline_bytes": 24,
+    "binary_header_bytes": 512,
+    "directory_node_header_bytes": 64,
+    "original_unit_rows": 32,
+    "root_cap_bytes": 65536,
+    "selected_cell_bound": 32,
+    "semantic_leaf_units": 64,
+    "usize_bytes": 8,
+    "whole_cell_row_bytes": 988
+  },
+  "formula_source_sha256": {
+    "crates/borsuk/src/semantic_unit_router.rs": "3ae09d9ff5b8c2a5e9a5151878a9e649c3669db923a2da66623c676ea0b7bb2f",
+    "crates/borsuk/src/two_bit_build.rs": "bd6ecf83d418a346926829ab329ac071ed138c6ac931ba11ed76694bad74ad52"
+  },
+  "geometry": {
+    "cell_rows": 512,
+    "dimensions": 768,
+    "max_depth": 32,
+    "rows": 100000,
+    "sample_rows": 256
+  },
+  "hierarchical_formula_native_commit": "da80bb508a421cc7e61cb1ac2ef2caf9a3aa9c62",
+  "no_100M_feasibility_claim": true,
+  "no_paid_run_started": true,
+  "prospective_host_safety": {
+    "concurrent_native_processes": 1,
+    "cpu_quota_percent": 200,
+    "memory_bytes": 2147483648,
+    "scratch_bytes": 17179869184,
+    "swap_bytes": 0,
+    "tasks_max": 512,
+    "wall_seconds": 1800
+  },
+  "prospective_phase_payload_caps": {
+    "current_writer_bytes": 67108864,
+    "evaluator_bytes": 134217728,
+    "hierarchical_builder_bytes": 67108864,
+    "query_bytes": 134217728,
+    "resident_preload_bytes": 402653184
+  },
+  "required_measurements": [
+    "actual current-writer and hierarchical output scratch including staged input coexistence",
+    "startup root and full-directory bytes plus parsed capacities",
+    "stage cgroup/RSS peaks and scratch high-water",
+    "query route/nomination/rank CPU+wall",
+    "all attempted local positioned read calls and payload separate from unmeasured physical S3",
+    "generation pins, concurrency and maintenance remain unmeasured in this serial diagnostic"
+  ],
+  "schema": "borsuk-hierarchical-100k-resource-envelope-draft-v1",
+  "source_arithmetic_not_RSS": {
+    "cell_count_upper_bound": 775,
+    "encoded_directory_bytes_upper_bound": 50724864,
+    "hierarchical_build_model_bytes": 17390592,
+    "hierarchical_query_model_bytes": 60562048,
+    "preload_peak_model_bytes_upper_bound": 254545152,
+    "writer_outer_plus_semantic_model_bytes": 45563076,
+    "writer_semantic_model_bytes": 44190436
+  },
+  "status": "PROSPECTIVE_DRAFT_PENDING_IMPLEMENTATION_REVIEW_AND_NATIVE_GATES",
+  "whole_cell_arm": {
+    "get_cap": 32,
+    "mean_recall_at_100_minimum": 0.98,
+    "p05_hits_minimum": 95,
+    "payload_bytes_cap": 16777216
+  }
+}
