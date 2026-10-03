@@ -1,0 +1,22 @@
+{
+  "command": "python -m scripts.launch_hierarchical_cells_100k_spot --self-check",
+  "config_sha256": "6e23f6fe4039f99e7cab63bf0cb3be5d3fc0fb52ed65892e28a6a984269d3927",
+  "cpu_quota_percent": 100,
+  "cpu_seconds": 10.08,
+  "exit_status": 0,
+  "memory_limit_bytes": 268435456,
+  "native_identity_sha256": "690a545e782b7f732acf9c78b71d2d40a465fd308011762a255d2b74f96742ce",
+  "native_or_cloud_execution": false,
+  "owned_source_sha256": {
+    "scripts/launch_hierarchical_cells_100k_spot.py": "efbaebbfaf2bfc5d26c14c80c8a86261b5a7dced2caaab943a2c6be804378949",
+    "scripts/prepare_hierarchical_cells_100k.py": "0878f2d02285ae678e15c04862d76b5b0066f68d67bb786453f55d73ba40b724"
+  },
+  "python": "/tmp/borsuk-offered-sdk-bootstrap-venv/bin/python",
+  "reported_memory_peak": "74.2M",
+  "schema": "borsuk-hierarchical-adapter-root-check-v1",
+  "source_commit_before_config": "e289889c2ccbd536010a2148c8ee7bd5fc104fac",
+  "status": "PASS",
+  "swap_bytes": 0,
+  "systemd_invocation": "5cd6b5a5fda94677974c92f9cfd10df3",
+  "wall_seconds": 12.365
+}

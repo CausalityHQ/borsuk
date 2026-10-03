@@ -17,8 +17,9 @@
     },
     {
       "gate": "final_adapter_checks",
-      "state": "PENDING",
-      "required": "Final source-bound synthetic lifecycle, body identity, deadline, scratch, CLI and cleanup checks, plus actual completed-qualification metadata admission"
+      "state": "PASS",
+      "required": "Final source-bound synthetic lifecycle, body identity, deadline, scratch, CLI and cleanup checks, plus actual completed-qualification metadata admission",
+      "evidence": "adapter-root-verification.json"
     },
     {
       "gate": "disposable_infrastructure_canary",
