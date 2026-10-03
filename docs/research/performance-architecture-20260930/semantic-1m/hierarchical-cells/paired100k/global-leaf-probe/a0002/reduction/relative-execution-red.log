@@ -1,0 +1,17 @@
+Traceback (most recent call last):
+  File "/tmp/borsuk-global-leaf-relative-execution-regression.py", line 6, in <module>
+    r=p.verify_execution(out,c,seal,e)
+  File "/home/rb/worktrees/borsuk-prod-ready-v9/scripts/run_hierarchical_global_leaf_probe.py", line 957, in verify_execution
+    native = local.read_json(native_pin, 8 << 20)
+  File "/home/rb/worktrees/borsuk-prod-ready-v9/scripts/prepare_hierarchical_cells_100k.py", line 112, in read_json
+    return decode(authenticate(value, cap, read=True))
+                  ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-prod-ready-v9/scripts/prepare_hierarchical_cells_100k.py", line 99, in authenticate
+    pointer(value, cap)
+    ~~~~~~~^^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-prod-ready-v9/scripts/prepare_hierarchical_cells_100k.py", line 86, in pointer
+    require(type(value['path']) is str and Path(value['path']).is_absolute(), "absolute artifact path")
+    ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-prod-ready-v9/scripts/check_semantic_router_coverage.py", line 46, in require
+    raise ValueError(message)
+ValueError: absolute artifact path

@@ -1,0 +1,10 @@
+{
+  "future_deployment_requires_fresh_code_pins": true,
+  "green_exit_status": 0,
+  "historical_config_rewritten": false,
+  "production_change": "resolve output directory once in shared verify_execution",
+  "red_error": "absolute artifact path",
+  "red_exit_status": 1,
+  "schema": "borsuk-relative-closure-verifier-repair-v1",
+  "scope": "same authenticated closed6stage execution and host/resource/cleanup verifier; no GT/native/cloud calls"
+}

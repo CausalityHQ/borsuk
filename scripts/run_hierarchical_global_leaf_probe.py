@@ -950,7 +950,7 @@ def verify_worker_closure(output, pins, config):
 
 def verify_execution(output, config, seal, evidence):
     """Pair-file integrity alone never substitutes for owned execution closure."""
-    out = Path(output); receipt = local.read_json(local.identity(out/'execution-receipt.json'), 8 << 20)
+    out = Path(output).resolve(); receipt = local.read_json(local.identity(out/'execution-receipt.json'), 8 << 20)
     exact(receipt['schema'], RECEIPT_SCHEMA, 'execution schema'); exact(receipt['status'], 'NOMINATIONS_FROZEN', 'execution complete')
     exact(receipt['complete'], True, 'execution closed'); exact(receipt['truth_opened'], False, 'execution no truth')
     native_pin = dict(body_pin(receipt['native_execution']), path=str(out/'native-execution-receipt.json'))
