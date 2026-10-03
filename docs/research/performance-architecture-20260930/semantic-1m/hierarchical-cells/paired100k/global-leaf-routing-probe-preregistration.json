@@ -1,0 +1,63 @@
+{
+  "schema": "borsuk-global-leaf-routing-probe-preregistration-v1",
+  "state": "PREREGISTERED_NOT_EXECUTED",
+  "review": "c5063b7c5726471c",
+  "datasets": [
+    "ReLAION",
+    "CoHere"
+  ],
+  "rows": 100000,
+  "dimensions": 768,
+  "metric": "cosine",
+  "k": 100,
+  "queries": 64,
+  "split": "already consumed historical first64; not fresh holdout",
+  "single_intervention": "Replace levelwise beam pruning with global top24 unchanged leaf centroid ranking",
+  "policies": {
+    "control": "original levelwise primary8/wider24 union",
+    "candidate": "all admitted leaf means scored by identical normalized-query squared-Euclidean distance; total_cmp then ascending cell ID; select24"
+  },
+  "frozen_layouts": {
+    "ReLAION": "fec06fb0eee4a1380a42356af3ef43d38137a95b4bdb09d457b434b5369c076b",
+    "CoHere": "89aee41edba2f4bc447fc5fb66ecee3f470e4ff50627c6f294da6208fdbcb6b2"
+  },
+  "reconstruction_admission": "Recover original bytes or use ORIGINAL qualified writer+cells binaries/configs at original path geometry to reconstruct EXACT original root hashes; any mismatch INVALID, never new-layout same-control claim",
+  "scope": "routing-only nomination and covered source-ID sets; no SQ2/SQ8 reranking change, no ANN performance or vendor claim",
+  "truth_policy": "No truth accepted by nomination CLI; both datasets and both policies fully fsynced/sealed before separate offline truth evaluator; consumed truth knowledge not a holdout",
+  "quality_endpoint": "coverage fraction and nearest-rank p05 hits (fourth-lowest of64), per-query differences, selected bytes andIDcounts",
+  "interpretation": {
+    "supports_pruning_contribution": "both dataset means improve and p05 nondecrease vs86.140625%/55 and74.8125%/51",
+    "adequate_consumed_coverage": "both mean>=98% andp05>=95; only routing coverage, not returned recall",
+    "otherwise": "global24 not common next remedy; does not exonerate all pruning policies or establish quantizer/metric cause"
+  },
+  "unchanged": [
+    "centroid f32 bits and unnormalized arithmetic means",
+    "source cell membership/layout",
+    "query bits and normalization",
+    "fetch cardinality24",
+    "deterministic tie arithmetic"
+  ],
+  "no_sweep": true,
+  "no_new_training": true,
+  "no_source_truth_selected_cells": true,
+  "resources": {
+    "nomination_max_memory_bytes": 536870912,
+    "swap_bytes": 0,
+    "cpu_count": 1,
+    "max_nomination_output_bytes_per_dataset": 134217728,
+    "directory_payload_encoded_bytes_both_original": 12080094,
+    "raw_leaf_prototype_bytes_both": 1757184,
+    "coordinate_comparisons_both_64_queries": 28114944,
+    "original_reconstruction": "retain original2GiB worker/16GiB scratch safety; actual measured peaks/pins required"
+  },
+  "scale_limit": "Fullleaf comparison is O(CD), already~150M coordinates/query and~600MBrawleafprototypes at100M fulloccupancy before overhead; diagnostic only, no productionpromotion",
+  "required_before_execution": [
+    "independent closed trace audit",
+    "native affected tests/release/workspaceClippy/actualtestbuild exact source0",
+    "cheap exact real-fixture noGT validation",
+    "same-layout root authentication",
+    "source-bound budget/config freeze",
+    "required infrastructure canary and exact owned termination"
+  ],
+  "matched_vendor_win": false
+}

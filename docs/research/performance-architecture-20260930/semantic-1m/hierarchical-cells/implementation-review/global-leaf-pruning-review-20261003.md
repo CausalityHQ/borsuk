@@ -12,7 +12,7 @@ Consultation c5063b7c5726471c completed exit 0, GPT-6.1-Sol high. Read-only revi
    - Root/config/source/request hashes; complete leaf prototypes as exact f32 bits, IDs, row counts and authenticated spans.
    - Complete cell→source-ordinal rosters, authenticated during extraction; `first_row` is a concatenation offset, not source membership.
    - For all 64 requests in both datasets, ordered selected cell IDs/distances, covered source IDs and selected bytes/read counts for both arms.
-   
+
    Sync and hash the complete two-dataset nomination artifact before offline truth access. A routing-only probe needs no SQ8 scoring. If retaining existing downstream scoring, also freeze nominated-block IDs, `nominated_ids` and returned IDs; retain the necessary cell payloads. Current consumed truth is already known, so this sequencing prevents feedback into execution but does not create a held-out evaluation.
 
 4. **Keep file changes bounded.** Add diagnostic routing selection and cell-selection receipts in the library above; expose explicit mode and retain the existing truth barrier in [the diagnostic binary](/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:233). Update `scripts/prepare_hierarchical_cells_100k.py` for paired truth-free execution. Update the launch adapter’s artifact roster/cleanup boundary only if needed to preserve authenticated exports before deletion. No builder, metric, codec or production-default changes. Root owns implementation verification, protocol freeze and execution.
