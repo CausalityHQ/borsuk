@@ -10,6 +10,7 @@ controller_code_sha256={every CODE path:SHA256}, native_source_manifest=
 --root-reuse-implementation qualifies a root-frozen authenticated-root candidate.
 --bounded-publication-implementation qualifies the exact bounded publisher candidate.
 --fixed48-implementation qualifies the source-only fixed48 routing candidate.
+--constrained-split-implementation qualifies the additive source-neighborhood diagnostic.
 --hierarchical-cells-implementation uses a separate minimal-archive v2 root.
 Its config additionally carries hierarchical_archive_authority(...)'s four
 ARCHIVE_FIELDS, derived from the committed controller tree before config freeze.
@@ -58,6 +59,8 @@ ROOT_REUSE = False
 BOUNDED_PUBLICATION = False
 FIXED48 = False
 HIERARCHICAL_CELLS = False
+CONSTRAINED_SPLIT = False
+MINIMAL_ARCHIVE = False
 HIERARCHICAL_CELLS_DELTA = ('crates/borsuk/src/bin/hierarchical_semantic_cells.rs',
                           'crates/borsuk/src/hierarchical_semantic_cells.rs')
 HIERARCHICAL_CELLS_STAGE_SCHEMA = 'borsuk-hierarchical-cells-implementation-stage-v1'
@@ -87,6 +90,47 @@ HIERARCHICAL_CELLS_STAGES = tuple((name, command.split()) for name, command in (
     ('release', 'cargo build --release --locked -p borsuk --bin hierarchical_semantic_cells --example two_bit_http --bin build_two_bit_generation --bin check_semantic_router_scorer'),
     ('clippy', 'cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious'),
     ('test-build', 'env -u BORSUK_TEST_BUILD_COMMAND bash scripts/check_rust_test_build.sh')))
+CONSTRAINED_SPLIT_DELTA = ('crates/borsuk/src/bin/check_hierarchical_split_balance.rs',
+                           'crates/borsuk/src/hierarchical_semantic_cells.rs')
+CONSTRAINED_SPLIT_CONTROL = '8ec64936323aca63d6863351623eebd61c085187'
+CONSTRAINED_SPLIT_PREFIX = dict(bytes=115165,
+    sha256='f30ca0d0ae1e38f28988cf100aec4bdbc68f1ce4acb4f85f488efa83103b2a1f')
+CONSTRAINED_SPLIT_STAGE_SCHEMA = 'borsuk-constrained-split-implementation-stage-v1'
+# Exact mandatory names from the native worker contract; empty rosters fail closed.
+CONSTRAINED_SPLIT_ADDITIVE_TESTS = tuple('hierarchical_semantic_cells::split_balance_diagnostic::tests::' + name for name in (
+    'constrained_cost_matches_exhaustive_small_partitions',
+    'successful_identical_and_degenerate_splits_are_unchanged',
+    'learned_unbalanced_replay_preserves_centers_and_moves_minimum_population',
+    'first_eight_candidate_hash_order_is_frozen_without_expansion',
+    'deterministic_delta_ties_coordinate_ties_and_partial_panel',
+    'original_membership_mismatch_is_invalid',
+    'local_cosine_edges_reuse_same_rows_and_exclude_self',
+    'canonical_order_nonfinite_and_post_authentication_tamper_fail_closed',
+    'artifact_tamper_geometry_and_all_limits_fail_closed',
+    'fifo_symlink_ancestors_and_missing_originals_fail_closed',
+    'strict_config_and_created_output_terminal_no_overwrite',
+    'output_cap_and_fsync_failure_cannot_return_pass',
+))
+CONSTRAINED_SPLIT_BIN_TESTS = ('tests::strict_source_only_cli',)
+CONSTRAINED_SPLIT_STAGES = tuple((name, command.split()) for name, command in (
+    ('hierarchical-cell-tests', 'cargo test --locked -p borsuk --lib hierarchical_semantic_cells::'),
+    ('split-balance-bin-tests', 'cargo test --locked -p borsuk --bin check_hierarchical_split_balance'),
+    ('generation-integration', 'cargo test --locked -p borsuk --test two_bit_generation'),
+    ('release', 'cargo build --release --locked -p borsuk --bin check_hierarchical_split_balance --bin hierarchical_semantic_cells --example two_bit_http'),
+    ('clippy', 'cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious'),
+    ('test-build', 'env -u BORSUK_TEST_BUILD_COMMAND bash scripts/check_rust_test_build.sh')))
+
+
+def constrained_split_required_tests():
+    assert CONSTRAINED_SPLIT_ADDITIVE_TESTS and CONSTRAINED_SPLIT_BIN_TESTS, 'native mandatory test names pending'
+    required = {'hierarchical-cell-tests': (*HIERARCHICAL_CELLS_REQUIRED_TESTS['hierarchical-cell-tests'],
+                                          *CONSTRAINED_SPLIT_ADDITIVE_TESTS),
+                'split-balance-bin-tests': CONSTRAINED_SPLIT_BIN_TESTS}
+    names = [name for group in required.values() for name in group]
+    assert len(names) == len(set(names)) and all(type(name) is str and re.fullmatch(r'[a-zA-Z0-9_]+(?:::[a-zA-Z0-9_]+)+', name) for name in names), 'exact native test names'
+    return required
+
+
 # Historical source fixture only; production authority is the root-frozen manifest.
 FIXED48_CHECK_COMMIT = '5efb136e95956b0cea0aa38214299a42f4264684'
 FIXED48_CHECK_CONTROL = 'f86ee6a80ace374d6674c9b65ea9141fc4a7de36'
@@ -184,13 +228,13 @@ def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 
 
-def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False):
+def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False):
     """Select the protocol explicitly in every controller/worker process."""
-    global SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, NATIVE_DELTA, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
+    global SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, CONSTRAINED_SPLIT, MINIMAL_ARCHIVE, NATIVE_DELTA, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
     global SCHEMA, CONFIG_SCHEMA, RECEIPT_SCHEMA, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, TERMINAL_IDENTITIES
-    assert type(semantic_1m) is type(test_build) is type(implementation) is type(startup_wave8) is type(root_reuse) is type(bounded_publication) is type(fixed48) is type(hierarchical_cells) is bool
-    scoped = startup_wave8 or root_reuse or bounded_publication or fixed48 or hierarchical_cells
-    assert sum((startup_wave8, root_reuse, bounded_publication, fixed48, hierarchical_cells)) <= 1 and not (scoped and test_build), 'mutually exclusive execution modes'
+    assert type(semantic_1m) is type(test_build) is type(implementation) is type(startup_wave8) is type(root_reuse) is type(bounded_publication) is type(fixed48) is type(hierarchical_cells) is type(constrained_split) is bool
+    scoped = startup_wave8 or root_reuse or bounded_publication or fixed48 or hierarchical_cells or constrained_split
+    assert sum((startup_wave8, root_reuse, bounded_publication, fixed48, hierarchical_cells, constrained_split)) <= 1 and not (scoped and test_build), 'mutually exclusive execution modes'
     if scoped:
         semantic_1m = implementation = True
     assert not (test_build and implementation), 'mutually exclusive execution modes'
@@ -203,10 +247,12 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
     BOUNDED_PUBLICATION = bounded_publication
     FIXED48 = fixed48
     HIERARCHICAL_CELLS = hierarchical_cells
-    NATIVE_DELTA = HIERARCHICAL_CELLS_DELTA if hierarchical_cells else FIXED48_DELTA if fixed48 else BOUNDED_PUBLICATION_DELTA if bounded_publication else ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
-    RELEASE_ARTIFACTS = ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation', 'binaries/check_semantic_router_scorer') if hierarchical_cells else ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
+    CONSTRAINED_SPLIT = constrained_split
+    MINIMAL_ARCHIVE = hierarchical_cells or constrained_split
+    NATIVE_DELTA = CONSTRAINED_SPLIT_DELTA if constrained_split else HIERARCHICAL_CELLS_DELTA if hierarchical_cells else FIXED48_DELTA if fixed48 else BOUNDED_PUBLICATION_DELTA if bounded_publication else ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
+    RELEASE_ARTIFACTS = ('binaries/check_hierarchical_split_balance', 'binaries/hierarchical_semantic_cells', 'binaries/two_bit_http') if constrained_split else ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation', 'binaries/check_semantic_router_scorer') if hierarchical_cells else ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
     TERMINAL_IDENTITIES = (*FULL_TERMINAL_IDENTITIES, 'controller_source_commit', 'candidate_delta_paths') if scoped else FULL_TERMINAL_IDENTITIES
-    if hierarchical_cells:
+    if MINIMAL_ARCHIVE:
         TERMINAL_IDENTITIES += ARCHIVE_IDENTITIES
     ARTIFACTS = (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS) if implementation else FULL_ARTIFACTS
     ROOT = (semantic.ROOT.parent/'semantic-1m' if semantic_1m else semantic.ROOT/'metadata-waves') / ('implementation-gates/remote-implementation' if implementation else 'implementation-gates/remote-test-build' if test_build else 'implementation-gates/remote-full')
@@ -286,25 +332,64 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
         CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_hierarchical_cells_implementation.sh')
         FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_hierarchical_cells_implementation.sh'])
 
+    if constrained_split:
+        ROOT = semantic.ROOT.parent/'semantic-1m/hierarchical-cells/constrained-split/implementation-gates'
+        CONFIG = ROOT/'config.json'
+        TOKEN_PREFIX = 'constrained-split-implementation-'
+        PREFIX = 'research/semantic-router/20261003/' + TOKEN_PREFIX
+        TAG = 'borsuk-constrained-split-implementation'
+        SCHEMA = 'borsuk-constrained-split-implementation-gates-spot-v1'
+        CONFIG_SCHEMA = 'borsuk-constrained-split-implementation-gates-v1'
+        RECEIPT_SCHEMA = 'borsuk-constrained-split-implementation-gates-receipt-v1'
+        CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_constrained_split_implementation.sh')
+        FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_constrained_split_implementation.sh'],
+            mandatory_test_names_pending=not (CONSTRAINED_SPLIT_ADDITIVE_TESTS and CONSTRAINED_SPLIT_BIN_TESTS),
+            mandatory_tests={name:list(tests) for name,tests in constrained_split_required_tests().items()}
+                if CONSTRAINED_SPLIT_ADDITIVE_TESTS and CONSTRAINED_SPLIT_BIN_TESTS else {},
+            control_native_source_commit=CONSTRAINED_SPLIT_CONTROL,
+            control_module_prefix=CONSTRAINED_SPLIT_PREFIX)
+
 
 @contextlib.contextmanager
-def execution_mode(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False):
+def execution_mode(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False):
     """Restore the caller's protocol after a worker or synthetic check."""
-    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS
-    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells)
+    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, CONSTRAINED_SPLIT
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split)
     try:
         yield
     finally:
-        configure(previous[0], test_build=previous[1], implementation=previous[2], startup_wave8=previous[3], root_reuse=previous[4], bounded_publication=previous[5], fixed48=previous[6], hierarchical_cells=previous[7])
+        configure(previous[0], test_build=previous[1], implementation=previous[2], startup_wave8=previous[3], root_reuse=previous[4], bounded_publication=previous[5], fixed48=previous[6], hierarchical_cells=previous[7], constrained_split=previous[8])
 
 
 def mode_flag():
-    return ' --hierarchical-cells-implementation' if HIERARCHICAL_CELLS else ' --fixed48-implementation' if FIXED48 else ' --bounded-publication-implementation' if BOUNDED_PUBLICATION else ' --root-reuse-implementation' if ROOT_REUSE else ' --startup-wave8-implementation' if STARTUP_WAVE8 else ' --semantic-1m-implementation' if IMPLEMENTATION else ' --semantic-1m-test-build' if TEST_BUILD else ' --semantic-1m' if SEMANTIC_1M else ''
+    return ' --constrained-split-implementation' if CONSTRAINED_SPLIT else ' --hierarchical-cells-implementation' if HIERARCHICAL_CELLS else ' --fixed48-implementation' if FIXED48 else ' --bounded-publication-implementation' if BOUNDED_PUBLICATION else ' --root-reuse-implementation' if ROOT_REUSE else ' --startup-wave8-implementation' if STARTUP_WAVE8 else ' --semantic-1m-implementation' if IMPLEMENTATION else ' --semantic-1m-test-build' if TEST_BUILD else ' --semantic-1m' if SEMANTIC_1M else ''
+
+
+def archive_binding_prefix():
+    return 'BORSUK_CONSTRAINED_SPLIT_' if CONSTRAINED_SPLIT else 'BORSUK_HIERARCHICAL_'
+
+
+def validate_constrained_split_config(config):
+    required = {name:list(tests) for name,tests in constrained_split_required_tests().items()}
+    assert {'mandatory_test_names_pending', 'mandatory_tests', 'control_native_source_commit',
+            'control_module_prefix'} <= set(config), 'complete constrained split authority'
+    assert config['mandatory_test_names_pending'] is False, 'native mandatory test names pending'
+    assert config['mandatory_tests'] == required, 'exact native mandatory test roster'
+    assert config['control_native_source_commit'] == CONSTRAINED_SPLIT_CONTROL
+    assert config['control_module_prefix'] == CONSTRAINED_SPLIT_PREFIX
+
+
+def validate_constrained_split_prefix(base):
+    path = Path(base)/CONSTRAINED_SPLIT_DELTA[1]
+    with path.open('rb') as source:
+        prefix = source.read(CONSTRAINED_SPLIT_PREFIX['bytes'])
+        assert len(prefix) == CONSTRAINED_SPLIT_PREFIX['bytes'] and source.read(1), 'additive native module'
+    assert worker.sha(prefix) == CONSTRAINED_SPLIT_PREFIX['sha256'], 'unchanged native module prefix'
 
 
 def _hierarchical_archive_roster(base, commit, inventory, manifest_path):
     """Committed metadata only; CONFIG may be added by the subsequent freeze."""
-    assert HIERARCHICAL_CELLS and re.fullmatch('[0-9a-f]{40}', commit)
+    assert MINIMAL_ARCHIVE and re.fullmatch('[0-9a-f]{40}', commit)
     tree = subprocess.check_output([*ARCHIVE_GIT, 'ls-tree', '-rz', '--full-tree', commit], cwd=base)
     files = {}
     for entry in tree.split(b'\0'):
@@ -393,6 +478,10 @@ def qualify(base=Path('.')):
     body = (base/CONFIG).read_bytes()
     config = json.loads(body)
     assert config['controller_authority_pending'] is False, 'root authority freeze pending'
+    if CONSTRAINED_SPLIT:
+        validate_constrained_split_config(config)
+        assert set(config) == set(FIXED) | {'controller_authority_pending', 'controller_source_commit',
+            'controller_code_sha256', 'native_source_manifest', *ARCHIVE_FIELDS}, 'exact constrained split config'
     assert all(type(config[k]) is type(v) and config[k] == v for k,v in FIXED.items()), 'fixed execution protocol'
     code = config['controller_code_sha256']
     assert set(code) == set(CODE), 'exact transitive code roster'
@@ -403,15 +492,18 @@ def qualify(base=Path('.')):
     assert type(pointer['bytes']) is int and pointer['bytes'] > 0
     assert worker.artifact(base/path) == {key:pointer[key] for key in ('bytes','sha256')}, 'manifest authority'
     manifest = json.loads((base/path).read_bytes())
-    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
+    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
         assert re.fullmatch('[0-9a-f]{40}', config['controller_source_commit']), 'frozen controller commit'
-        assert manifest['schema'] == ('borsuk-hierarchical-cells-native-source-manifest-v1' if HIERARCHICAL_CELLS else 'borsuk-fixed48-native-source-manifest-v1' if FIXED48 else 'borsuk-bounded-publication-native-source-manifest-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
+        assert manifest['schema'] == ('borsuk-constrained-split-native-source-manifest-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-native-source-manifest-v1' if HIERARCHICAL_CELLS else 'borsuk-fixed48-native-source-manifest-v1' if FIXED48 else 'borsuk-bounded-publication-native-source-manifest-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
         assert manifest['candidate_qualification_pending'] is True, 'source authority is not completed assurance'
         assert type(manifest['candidate_delta_paths']) is list and manifest['candidate_delta_paths'] == list(NATIVE_DELTA), 'exact candidate native delta'
         if STARTUP_WAVE8:
             assert manifest['native_source_commit'] == STARTUP_WAVE8_COMMIT, 'fixed startup candidate commit'
             assert manifest['source_identity_sha256'] == STARTUP_WAVE8_IDENTITY, 'fixed startup candidate identity'
         assert re.fullmatch('[0-9a-f]{40}', manifest['control_native_source_commit'])
+        if CONSTRAINED_SPLIT:
+            assert manifest['control_native_source_commit'] == CONSTRAINED_SPLIT_CONTROL, 'exact original native control'
+            validate_constrained_split_prefix(base)
     inventory = worker.source_hashes(base)
     assert type(manifest['source_file_count']) is int and manifest['source_file_count'] == len(inventory) > 0
     assert manifest['source_sha256'] == inventory, 'full native source drift'
@@ -419,7 +511,7 @@ def qualify(base=Path('.')):
     assert identity == manifest['source_identity_sha256']
     assert SEMANTIC_1M or identity == SOURCE_IDENTITY, 'historical native source identity'
     assert re.fullmatch('[0-9a-f]{40}', manifest['native_source_commit'])
-    proof = dict(schema='borsuk-hierarchical-cells-implementation-gates-qualification-v2' if HIERARCHICAL_CELLS else 'borsuk-fixed48-implementation-gates-qualification-v1' if FIXED48 else 'borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
+    proof = dict(schema='borsuk-constrained-split-implementation-gates-qualification-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-implementation-gates-qualification-v2' if HIERARCHICAL_CELLS else 'borsuk-fixed48-implementation-gates-qualification-v1' if FIXED48 else 'borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
         config_path=str(CONFIG), config_sha256=worker.sha(body), campaign_schema=SCHEMA,
         source_sha256=inventory, source_identity_sha256=identity, source_file_count=len(inventory),
         native_source_commit=manifest['native_source_commit'], native_source_manifest=pointer,
@@ -432,17 +524,21 @@ def qualify(base=Path('.')):
         proof.update(execution_kind=FIXED['execution_kind'])
         if TEST_BUILD:
             proof.update(actual_workspace_test_build=False)
-    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
+    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
         proof.update(controller_source_commit=config['controller_source_commit'],
                      candidate_delta_paths=list(NATIVE_DELTA))
-    if HIERARCHICAL_CELLS:
+    if CONSTRAINED_SPLIT:
+        proof.update(mandatory_test_names_pending=False, mandatory_tests=config['mandatory_tests'],
+                     control_native_source_commit=CONSTRAINED_SPLIT_CONTROL,
+                     control_module_prefix=CONSTRAINED_SPLIT_PREFIX)
+    if MINIMAL_ARCHIVE:
         proof.update(validate_hierarchical_archive(config, inventory, pointer['path'], base))
     return proof
 
 
 def preflight(base=Path('.')):
     assert not subprocess.check_output(['git','status','--porcelain'], cwd=base, text=True).strip(), 'dirty source'
-    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
+    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
         proof = qualify(base)
         parents = subprocess.check_output(['git','rev-list','--parents','-n','1','HEAD'], cwd=base, text=True).split()
         assert len(parents) == 2, 'one source-bundle parent required'
@@ -457,7 +553,12 @@ def preflight(base=Path('.')):
             cwd=base, text=True).splitlines() == list(NATIVE_DELTA), 'exact candidate source bundle'
         for name in NATIVE_DELTA:
             assert worker.sha(subprocess.check_output(['git','show',proof['native_source_commit']+':'+name], cwd=base)) == proof['source_sha256'][name], 'candidate commit blob: '+name
-        if HIERARCHICAL_CELLS:
+        if CONSTRAINED_SPLIT:
+            assert subprocess.check_output(['git', 'diff', '--no-renames', '--name-only', CONSTRAINED_SPLIT_CONTROL,
+                proof['native_source_commit']], cwd=base, text=True).splitlines() == list(NATIVE_DELTA), 'additive candidate-only native commit'
+            original = subprocess.check_output(['git', 'show', CONSTRAINED_SPLIT_CONTROL+':'+NATIVE_DELTA[1]], cwd=base)
+            assert dict(bytes=len(original), sha256=worker.sha(original)) == CONSTRAINED_SPLIT_PREFIX, 'original native prefix authority'
+        if MINIMAL_ARCHIVE:
             committed = hierarchical_archive_authority(base, parents[0], proof['source_sha256'], proof['native_source_manifest']['path'])
             assert committed == {key:proof[key] for key in ARCHIVE_FIELDS}, 'committed minimal archive authority'
         return proof
@@ -469,8 +570,8 @@ def preflight(base=Path('.')):
 def stage(repo, out):
     repo, out = Path(repo).resolve(), Path(out).resolve()
     proof = qualify(repo)
-    if HIERARCHICAL_CELLS and any('BORSUK_HIERARCHICAL_'+key.upper() in os.environ for key in ARCHIVE_IDENTITIES):
-        assert all(os.environ.get('BORSUK_HIERARCHICAL_'+key.upper()) == str(proof[key]) for key in ARCHIVE_IDENTITIES), 'deployed archive roster binding'
+    if MINIMAL_ARCHIVE and any(archive_binding_prefix()+key.upper() in os.environ for key in ARCHIVE_IDENTITIES):
+        assert all(os.environ.get(archive_binding_prefix()+key.upper()) == str(proof[key]) for key in ARCHIVE_IDENTITIES), 'deployed archive roster binding'
     for name, body in (('source-qualification.json', encoded(proof)+b'\n'),
                        ('config.json', (repo/CONFIG).read_bytes()),
                        ('native-source-manifest.json', (repo/proof['native_source_manifest']['path']).read_bytes())):
@@ -479,13 +580,42 @@ def stage(repo, out):
     return proof
 
 
-def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cells=False):
+def record_constrained_split_stage(argv):
+    """Stage gate shared by the serial shell runner and bounded Python checks."""
+    required = constrained_split_required_tests()
+    stage, started, finished, status, log, log_status, *command = argv
+    assert dict(CONSTRAINED_SPLIT_STAGES)[stage] == command, 'exact stage argv'
+    tests = passes = None
+    failed = ignored = 0
+    if finished:
+        passes = dict.fromkeys(required.get(stage, ()), 0)
+        if stage not in ('release', 'clippy', 'test-build'):
+            tests = 0
+            with Path(log).open() as source:
+                for line in source:
+                    test = re.fullmatch(r'test (\S+) \.\.\. ok\n?', line)
+                    if test and test[1] in passes:
+                        passes[test[1]] += 1
+                    summary = re.fullmatch(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; \d+ filtered out;.*\n?', line)
+                    if summary:
+                        tests += int(summary[1]) + int(summary[2])
+                        failed += int(summary[2]); ignored += int(summary[3])
+    gate = (int(status) or int(log_status) or
+        (96 if tests == 0 or failed or ignored or any(count != 1 for count in passes.values()) else 0)) if finished else None
+    print(json.dumps(dict(schema=CONSTRAINED_SPLIT_STAGE_SCHEMA, stage=stage,
+        started_at=started, finished_at=finished or None, exit_status=int(status) if finished else None,
+        log_exit_status=int(log_status) if finished else None, gate_status=gate,
+        tests_run=tests, required_test_passes=passes, command=command), sort_keys=True), flush=True)
+    return gate or 0
+
+
+def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cells=False, constrained_split=False):
     from datetime import datetime
-    assert not (fixed48 and hierarchical_cells), 'mutually exclusive stage protocols'
-    stages = HIERARCHICAL_CELLS_STAGES if hierarchical_cells else FIXED48_STAGES if fixed48 else BOUNDED_PUBLICATION_STAGES
-    schema = HIERARCHICAL_CELLS_STAGE_SCHEMA if hierarchical_cells else FIXED48_STAGE_SCHEMA if fixed48 else BOUNDED_PUBLICATION_STAGE_SCHEMA
-    required = HIERARCHICAL_CELLS_REQUIRED_TESTS if hierarchical_cells else FIXED48_REQUIRED_TESTS
-    named_protocol = fixed48 or hierarchical_cells
+    assert sum((fixed48, hierarchical_cells, constrained_split)) <= 1, 'mutually exclusive stage protocols'
+    stages = CONSTRAINED_SPLIT_STAGES if constrained_split else HIERARCHICAL_CELLS_STAGES if hierarchical_cells else FIXED48_STAGES if fixed48 else BOUNDED_PUBLICATION_STAGES
+    schema = CONSTRAINED_SPLIT_STAGE_SCHEMA if constrained_split else HIERARCHICAL_CELLS_STAGE_SCHEMA if hierarchical_cells else FIXED48_STAGE_SCHEMA if fixed48 else BOUNDED_PUBLICATION_STAGE_SCHEMA
+    required = constrained_split_required_tests() if constrained_split else HIERARCHICAL_CELLS_REQUIRED_TESTS if hierarchical_cells else FIXED48_REQUIRED_TESTS
+    named_protocol = fixed48 or hierarchical_cells or constrained_split
     test_stage_count = len(stages) - 3
     named_stages = {test: index for index, (name, _) in enumerate(stages)
         for test in required.get(name, ())} if named_protocol else {BOUNDED_PUBLICATION_CAP_TEST: 1}
@@ -501,12 +631,13 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
                 assert len(records) == 2*named_stages[test]+1, 'named test in wrong stage: '+test
                 passes[test] += 1
             if named_protocol:
-                summary = re.fullmatch(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; \d+ ignored; \d+ measured; \d+ filtered out;.*\n?', line)
+                summary = re.fullmatch(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; \d+ filtered out;.*\n?', line)
                 if summary:
                     assert len(records) in range(1, 2*test_stage_count, 2), 'tests outside execution stages'
                     assert int(summary[2]) == 0, 'failed tests'
+                    assert not constrained_split or int(summary[3]) == 0, 'ignored tests forbidden'
                     test_counts[len(records)//2] += int(summary[1])
-            if hierarchical_cells and re.fullmatch(r'rust-test-build status=0 elapsed_seconds=\d+ jobs=1\n?', line):
+            if (hierarchical_cells or constrained_split) and re.fullmatch(r'rust-test-build status=0 elapsed_seconds=\d+ jobs=1\n?', line):
                 assert len(records) == 2*len(stages)-1, 'test-build proof in wrong stage'
                 test_builds += 1
             if not line.startswith('{'):
@@ -520,7 +651,7 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
                 assert len(records) <= 2*len(stages), 'extra gate stage records'
     assert len(records) == 2*len(stages), 'all completed stages required'
     assert all(count == 1 for count in passes.values()), 'named tests must pass exactly once'
-    assert not hierarchical_cells or test_builds == 1, 'actual unshimmed test-build completion'
+    assert not (hierarchical_cells or constrained_split) or test_builds == 1, 'actual unshimmed test-build completion'
     previous_finish = None
     for index, (name, command) in enumerate(stages):
         start, end = records[2*index:2*index+2]
@@ -528,6 +659,9 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
         test_field = 'required_test_passes' if named_protocol else 'publication_cap_test_passed'
         assert start['finished_at'] is start['exit_status'] is start['gate_status'] is start['tests_run'] is start[test_field] is None
         assert type(end['exit_status']) is type(end['gate_status']) is int and end['exit_status'] == end['gate_status'] == 0
+        if constrained_split:
+            assert start['log_exit_status'] is None
+            assert type(end['log_exit_status']) is int and end['log_exit_status'] == 0, 'stage log exit'
         assert start['started_at'] == end['started_at']
         assert datetime.fromisoformat(end['finished_at']) >= datetime.fromisoformat(start['started_at'])
         assert (type(end['tests_run']) is int and end['tests_run'] > 0) if index < test_stage_count else end['tests_run'] is None
@@ -547,10 +681,14 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
 def validate_receipt(out, proof):
     out = Path(out)
     assert proof['config_path'] == str(CONFIG) and proof['campaign_schema'] == SCHEMA, 'receipt mode'
-    if HIERARCHICAL_CELLS:
+    if CONSTRAINED_SPLIT:
+        validate_constrained_split_config(proof)
+    if MINIMAL_ARCHIVE:
         validate_hierarchical_archive(proof, proof['source_sha256'], proof['native_source_manifest']['path'])
     receipt = json.loads((out/'workspace-receipt.json').read_bytes())
     assert receipt['schema'] == RECEIPT_SCHEMA
+    if CONSTRAINED_SPLIT:
+        validate_constrained_split_config(receipt)
     assert type(receipt['exit_status']) is int and receipt['exit_status'] == 0
     assert type(receipt['gate_status']) is int and receipt['gate_status'] == 0
     assert receipt['qualified'] is receipt['command_started'] is receipt['command_completed'] is True
@@ -564,7 +702,7 @@ def validate_receipt(out, proof):
         assert receipt['command'][1:] == list(worker.COMMAND[1:]), 'exact full command'
     assert isinstance(receipt['command'][0], str) and receipt['command'][0]
     assert receipt['environment'] == FIXED['environment']
-    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
+    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
         assert all(receipt[key] == proof[key] for key in ('controller_source_commit','candidate_delta_paths')), 'receipt source bundle authority'
     assert receipt['source_sha256'] == proof['source_sha256']
     assert receipt['source_identity_sha256'] == worker.source_identity(receipt['source_sha256']) == proof['source_identity_sha256']
@@ -589,8 +727,8 @@ def validate_receipt(out, proof):
     assert worker.artifact(out/'native-source-manifest.json')['sha256'] == proof['native_source_manifest_sha256']
     for name in ('source-before.json','source-after.json'):
         assert json.loads((out/name).read_bytes()) == proof['source_sha256']
-    if BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
-        assert receipt['stages'] == validate_bounded_publication_stages(out/'test.log', fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS), 'actual stage receipt'
+    if BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
+        assert receipt['stages'] == validate_bounded_publication_stages(out/'test.log', fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS, constrained_split=CONSTRAINED_SPLIT), 'actual stage receipt'
     worker.validate_cgroup(json.loads((out/'workspace-cgroup.json').read_bytes()))
     return receipt
 
@@ -599,7 +737,9 @@ def user_data(commit, archive_sha, archive_key, prefix, qualification):
     assert re.fullmatch('[0-9a-f]{40}', commit) and re.fullmatch('[0-9a-f]{64}', archive_sha)
     assert re.fullmatch(re.escape(PREFIX)+r'a[0-9]{4}', prefix)
     assert qualification['campaign_schema'] == SCHEMA and qualification['config_path'] == str(CONFIG)
-    if HIERARCHICAL_CELLS:
+    if CONSTRAINED_SPLIT:
+        validate_constrained_split_config(qualification)
+    if MINIMAL_ARCHIVE:
         validate_hierarchical_archive(qualification, qualification['source_sha256'], qualification['native_source_manifest']['path'])
     # Keep only small terminal identities in the existing bootstrap. The full
     # full native map is regenerated from the authenticated archive on the worker.
@@ -628,8 +768,8 @@ for name in $ARTIFACT_NAMES; do
  if [ "$name" = run-closed.log ]; then test -s run.log; else test -s "$name"; fi
 done
 '''
-    if HIERARCHICAL_CELLS:
-        bindings = ' '.join('BORSUK_HIERARCHICAL_'+key.upper()+'='+str(qualification[key]) for key in ARCHIVE_IDENTITIES)
+    if MINIMAL_ARCHIVE:
+        bindings = ' '.join(archive_binding_prefix()+key.upper()+'='+str(qualification[key]) for key in ARCHIVE_IDENTITIES)
         command = command.replace('PYTHONPATH="$root/repo" python3.12 -m '+MODULE+flag+' --stage',
             bindings+' PYTHONPATH="$root/repo" python3.12 -m '+MODULE+flag+' --stage', 1)
     start, end = body.index('phase=install\n'), body.index('phase=complete\n')
@@ -661,6 +801,8 @@ def replay(out):
     terminal = json.loads((out/'aws-terminal.json').read_bytes())
     proof = reservation['qualification']
     assert proof['config_path'] == str(CONFIG) and proof['campaign_schema'] == SCHEMA, 'replay mode'
+    if CONSTRAINED_SPLIT:
+        validate_constrained_split_config(proof)
     assert closed['state'] == 'terminated'
     assert terminal['instance_id'] in {n['instance_id'] for n in closed['nodes'].values()}
     assert terminal['schema'] == reservation['schema'] == SCHEMA
@@ -668,7 +810,7 @@ def replay(out):
         assert terminal[key] == reservation[key], 'campaign source binding'
     for key in TERMINAL_IDENTITIES:
         assert terminal[key] == proof[key], 'terminal ' + key
-    if HIERARCHICAL_CELLS:
+    if MINIMAL_ARCHIVE:
         assert type(terminal['source_archive_file_count']) is int, 'terminal archive count type'
     assert set(proof['code_sha256']) == set(CODE)
     assert proof['code_identity_sha256'] == worker.sha(encoded(proof['code_sha256']))
@@ -678,7 +820,7 @@ def replay(out):
     assert type(proof['source_file_count']) is int and len(proof['source_sha256']) == proof['source_file_count'] > 0
     assert worker.source_identity(proof['source_sha256']) == proof['source_identity_sha256']
     assert SEMANTIC_1M or proof['source_identity_sha256'] == SOURCE_IDENTITY
-    if HIERARCHICAL_CELLS:
+    if MINIMAL_ARCHIVE:
         validate_hierarchical_archive(proof, proof['source_sha256'], proof['native_source_manifest']['path'])
     assert set(terminal['artifacts']) <= set(ARTIFACTS), 'unexpected artifact'
     for name, identity in terminal['artifacts'].items():
@@ -749,8 +891,10 @@ def _worker_self_check(proof, config_body, manifest_body):
     failures = ('success', 'exit17', 'timeout', 'source-drift', 'reclaim', 'oom', 'peak', 'orphan', 'log-fsync')
     if IMPLEMENTATION:
         failures += ('missing-binary', 'bad-binary', 'symlink-binary', 'copy-failure')
-    if BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
+    if BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
         failures += ('missing-stage', 'zero-stage-record', 'stage-order', 'stage-bool', 'missing-cap-proof')
+    if CONSTRAINED_SPLIT:
+        failures += ('gate-failure', 'tee-failure', 'ignored-tests')
     for failure in failures:
         with tempfile.TemporaryDirectory() as tmp:
             repo, out = Path(tmp)/'repo', Path(tmp)/'out'
@@ -788,33 +932,38 @@ def _worker_self_check(proof, config_body, manifest_body):
                     assert 'BORSUK_TEST_BUILD_COMMAND' not in kw['env']
                 assert not Path(kw['env']['CARGO_TARGET_DIR']).is_relative_to(repo)
                 kw['stdout'].write(b'full mocked cargo log\n')
-                if BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
-                    stages = list(HIERARCHICAL_CELLS_STAGES if HIERARCHICAL_CELLS else FIXED48_STAGES if FIXED48 else BOUNDED_PUBLICATION_STAGES)
+                if BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
+                    stages = list(CONSTRAINED_SPLIT_STAGES if CONSTRAINED_SPLIT else HIERARCHICAL_CELLS_STAGES if HIERARCHICAL_CELLS else FIXED48_STAGES if FIXED48 else BOUNDED_PUBLICATION_STAGES)
                     if failure == 'stage-order':
                         stages.reverse()
                     for index, (name, command) in enumerate(stages):
                         if failure == 'missing-stage' and index == len(stages)-1:
                             continue
-                        record = dict(schema=HIERARCHICAL_CELLS_STAGE_SCHEMA if HIERARCHICAL_CELLS else FIXED48_STAGE_SCHEMA if FIXED48 else BOUNDED_PUBLICATION_STAGE_SCHEMA, stage=name,
+                        record = dict(schema=CONSTRAINED_SPLIT_STAGE_SCHEMA if CONSTRAINED_SPLIT else HIERARCHICAL_CELLS_STAGE_SCHEMA if HIERARCHICAL_CELLS else FIXED48_STAGE_SCHEMA if FIXED48 else BOUNDED_PUBLICATION_STAGE_SCHEMA, stage=name,
                             command=command, started_at='2026-10-02T00:00:00Z',
                             finished_at=None, exit_status=None, gate_status=None, tests_run=None)
-                        field = 'required_test_passes' if FIXED48 or HIERARCHICAL_CELLS else 'publication_cap_test_passed'
+                        field = 'required_test_passes' if FIXED48 or MINIMAL_ARCHIVE else 'publication_cap_test_passed'
                         record[field] = None
+                        if CONSTRAINED_SPLIT:
+                            record['log_exit_status'] = None
                         kw['stdout'].write(encoded(record)+b'\n')
-                        named = (HIERARCHICAL_CELLS_REQUIRED_TESTS if HIERARCHICAL_CELLS else FIXED48_REQUIRED_TESTS).get(name, ()) if FIXED48 or HIERARCHICAL_CELLS else ()
-                        if FIXED48 or HIERARCHICAL_CELLS:
+                        named = (constrained_split_required_tests() if CONSTRAINED_SPLIT else HIERARCHICAL_CELLS_REQUIRED_TESTS if HIERARCHICAL_CELLS else FIXED48_REQUIRED_TESTS).get(name, ()) if FIXED48 or MINIMAL_ARCHIVE else ()
+                        if FIXED48 or MINIMAL_ARCHIVE:
                             if failure != 'missing-cap-proof':
                                 for test in named:
                                     kw['stdout'].write(('test '+test+' ... ok\n').encode())
                             if index < len(stages)-3:
-                                kw['stdout'].write(f'test result: ok. {max(1, len(named))} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s\n'.encode())
+                                kw['stdout'].write(f'test result: ok. {max(1, len(named))} passed; 0 failed; {int(failure == "ignored-tests")} ignored; 0 measured; 100 filtered out; finished in 0.00s\n'.encode())
                         elif index == 1 and failure != 'missing-cap-proof':
                             kw['stdout'].write(('test '+BOUNDED_PUBLICATION_CAP_TEST+' ... ok\n').encode())
-                        if HIERARCHICAL_CELLS and name == 'test-build':
+                        if MINIMAL_ARCHIVE and name == 'test-build':
                             kw['stdout'].write(b'rust-test-build status=0 elapsed_seconds=0 jobs=1\n')
                         record.update(finished_at=record['started_at'], exit_status=0, gate_status=0,
                             tests_run=(0 if failure == 'zero-stage-record' else False if failure == 'stage-bool' else max(1, len(named))) if index < len(stages)-3 else None)
-                        record[field] = {test: int(failure != 'missing-cap-proof') for test in named} if FIXED48 or HIERARCHICAL_CELLS else (failure != 'missing-cap-proof') if index == 1 else None
+                        if CONSTRAINED_SPLIT:
+                            record['gate_status'] = 96 if failure == 'gate-failure' else 0
+                            record['log_exit_status'] = 18 if failure == 'tee-failure' else 0
+                        record[field] = {test: int(failure != 'missing-cap-proof') for test in named} if FIXED48 or MINIMAL_ARCHIVE else (failure != 'missing-cap-proof') if index == 1 else None
                         kw['stdout'].write(encoded(record)+b'\n')
                 Path(args[args.index('-o')+1]).write_text('GNU time mocked resources\n')
                 if IMPLEMENTATION:
@@ -841,10 +990,10 @@ def _worker_self_check(proof, config_body, manifest_body):
                     contextlib.ExitStack() as patches:
                 if failure == 'copy-failure':
                     patches.enter_context(patch.object(worker.shutil, 'copyfileobj', side_effect=OSError('binary copy failed')))
-                previous = authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.HIERARCHICAL_CELLS, authority.CONFIG, authority.CODE, authority.FIXED
+                previous = authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.HIERARCHICAL_CELLS, authority.CONSTRAINED_SPLIT, authority.CONFIG, authority.CODE, authority.FIXED
                 result = worker.main('cargo' if TEST_BUILD or IMPLEMENTATION else 'fake-cargo', repo, out,
-                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION, startup_wave8=STARTUP_WAVE8, root_reuse=ROOT_REUSE, bounded_publication=BOUNDED_PUBLICATION, fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS)
-                assert previous == (authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.HIERARCHICAL_CELLS, authority.CONFIG, authority.CODE, authority.FIXED)
+                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION, startup_wave8=STARTUP_WAVE8, root_reuse=ROOT_REUSE, bounded_publication=BOUNDED_PUBLICATION, fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS, constrained_split=CONSTRAINED_SPLIT)
+                assert previous == (authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.HIERARCHICAL_CELLS, authority.CONSTRAINED_SPLIT, authority.CONFIG, authority.CODE, authority.FIXED)
             assert len(calls) == 1, 'full test repeated'
             assert type(result['exit_status']) is int
             assert result['exit_status'] == {'exit17':17, 'timeout':124}.get(failure,0)
@@ -882,13 +1031,19 @@ def _worker_self_check(proof, config_body, manifest_body):
                             (out/'workspace-receipt.json').write_bytes(encoded(altered))
                             rejected(lambda: validate_receipt(out, proof))
                             (out/'workspace-receipt.json').write_bytes(encoded(result))
-                    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
+                    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
                         for changed in (dict(controller_source_commit='0'*40), dict(candidate_delta_paths=[])):
                             (out/'workspace-receipt.json').write_bytes(encoded(dict(result, **changed)))
                             rejected(lambda:validate_receipt(out, proof))
                         (out/'workspace-receipt.json').write_bytes(encoded(result))
-                    if BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
-                        assert len(result['stages']) == (6 if HIERARCHICAL_CELLS else 7) and all(record['tests_run'] > 0 for record in result['stages'][:-3])
+                    if CONSTRAINED_SPLIT:
+                        for key,value in (('mandatory_test_names_pending', True), ('mandatory_tests', {}),
+                                          ('control_module_prefix', {}), ('control_native_source_commit', '0'*40)):
+                            (out/'workspace-receipt.json').write_bytes(encoded(dict(result, **{key:value})))
+                            rejected(lambda:validate_receipt(out, proof))
+                        (out/'workspace-receipt.json').write_bytes(encoded(result))
+                    if BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
+                        assert len(result['stages']) == (6 if MINIMAL_ARCHIVE else 7) and all(record['tests_run'] > 0 for record in result['stages'][:-3])
                         for stages in ([], result['stages'][:-1], list(reversed(result['stages']))):
                             (out/'workspace-receipt.json').write_bytes(encoded(dict(result, stages=stages)))
                             rejected(lambda:validate_receipt(out, proof))
@@ -946,8 +1101,8 @@ def _lifecycle_self_check(proof=None):
                     assert failure not in ('success','multi-ack')
                 else:
                     assert failure in ('success','multi-ack'), 'failure swallowed'
-            archive.assert_called_once_with('0'*40, proof['source_archive_paths']) if proof and HIERARCHICAL_CELLS else archive.assert_called_once_with('0'*40)
-            if proof and HIERARCHICAL_CELLS:
+            archive.assert_called_once_with('0'*40, proof['source_archive_paths']) if proof and MINIMAL_ARCHIVE else archive.assert_called_once_with('0'*40)
+            if proof and MINIMAL_ARCHIVE:
                 reserved = json.loads((Path(tmp)/'a0001/aws-reservation.json').read_bytes())
                 assert all(reserved['qualification'][key] == proof[key] for key in ARCHIVE_FIELDS)
             ec2.run_instances.assert_called_once()
@@ -983,6 +1138,13 @@ def _collection_self_check(proof, files, body):
                  **{PREFIX+'a0001/artifacts/'+name:data for name,data in files.items()}}
         s3 = Mock()
         s3.get_object.side_effect = lambda **kw: {'Body':io.BytesIO(store[kw['Key']])}
+        closed_body = (out/'aws-closeout.json').read_bytes()
+        for failed_cleanup in (dict(state='running', nodes={'0':dict(instance_id='i-owned')}),
+                               dict(state='terminated', nodes={'0':dict(instance_id='i-other')})):
+            (out/'aws-closeout.json').write_bytes(encoded(failed_cleanup))
+            rejected(lambda:collect(s3, PREFIX+'a0001', out, 'i-owned', '0'*40, '1'*64))
+            s3.get_object.assert_not_called()
+        (out/'aws-closeout.json').write_bytes(closed_body)
         collect(s3, PREFIX+'a0001', out, 'i-owned', '0'*40, '1'*64)
         replayed = replay(out)
         assert replayed['qualified'] is True
@@ -994,9 +1156,9 @@ def _collection_self_check(proof, files, body):
         mutations = [dict(terminal,config_sha256='0'*64), dict(terminal,instance_id='i-other'),
                      dict(terminal,source_archive_sha256='2'*64), dict(terminal,exit_code=False),
                      dict(terminal,artifacts={n:v for n,v in terminal['artifacts'].items() if n != 'test.log'})]
-        if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
+        if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
             mutations.extend((dict(terminal,controller_source_commit='0'*40),dict(terminal,candidate_delta_paths=[])))
-        if HIERARCHICAL_CELLS:
+        if MINIMAL_ARCHIVE:
             mutations.extend(dict(terminal, **{key: value}) for key,value in
                              (('source_archive_paths_sha256', '0'*64), ('source_archive_file_count', True),
                               ('source_archive_file_count', proof['source_archive_file_count']+1),
@@ -1568,14 +1730,16 @@ def _fixed48_protocol_self_check():
     assert previous == (CONFIG, PREFIX, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, NATIVE_DELTA, mode_flag())
 
 
-def _hierarchical_archive_self_check():
+def _hierarchical_archive_self_check(*, constrained_split=False):
     """Tiny committed closure; no production archive, native tools or network."""
     module = sys.modules[__name__]
-    with execution_mode(hierarchical_cells=True), tempfile.TemporaryDirectory() as tmp:
+    with execution_mode(hierarchical_cells=not constrained_split, constrained_split=constrained_split), tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp)/'repo'; repo.mkdir()
         code = ('scripts/controller.py',)
         manifest_path = ROOT/'native-source-manifest.json'
         bodies = {name: b'// native fixture\n' for name in NATIVE_DELTA}
+        if constrained_split:
+            bodies[NATIVE_DELTA[1]] = (Path(__file__).resolve().parents[1]/NATIVE_DELTA[1]).read_bytes()+b'// additive fixture\n'
         bodies.update({'Cargo.toml': b'[workspace]\n', '.cargo/config.toml': b'[build]\n',
             'README.md': b'build instructions\n', 'scripts/controller.py': b'pass\n',
             'crates/other/tests/fixtures/literal[1].json': b'{"fixture":1}\n',
@@ -1584,10 +1748,10 @@ def _hierarchical_archive_self_check():
         for name, body in bodies.items():
             path = repo/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(body)
         inventory = worker.source_hashes(repo)
-        manifest = dict(schema='borsuk-hierarchical-cells-native-source-manifest-v1',
+        manifest = dict(schema='borsuk-constrained-split-native-source-manifest-v1' if constrained_split else 'borsuk-hierarchical-cells-native-source-manifest-v1',
             source_sha256=inventory, source_file_count=len(inventory),
             source_identity_sha256=worker.source_identity(inventory), native_source_commit='7'*40,
-            controller_source_commit='4'*40, control_native_source_commit='8'*40,
+            controller_source_commit='4'*40, control_native_source_commit=CONSTRAINED_SPLIT_CONTROL if constrained_split else '8'*40,
             candidate_delta_paths=list(NATIVE_DELTA), candidate_qualification_pending=True)
         (repo/manifest_path).parent.mkdir(parents=True, exist_ok=True)
         (repo/manifest_path).write_bytes(encoded(manifest))
@@ -1666,7 +1830,7 @@ def _hierarchical_archive_self_check():
             with patch.object(subprocess, 'check_output', side_effect=AssertionError('remote Git forbidden')):
                 out = Path(tmp)/'stage'; out.mkdir()
                 assert stage(repo, out) == proof
-                bindings = {'BORSUK_HIERARCHICAL_'+key.upper():str(proof[key]) for key in ARCHIVE_IDENTITIES}
+                bindings = {archive_binding_prefix()+key.upper():str(proof[key]) for key in ARCHIVE_IDENTITIES}
                 with patch.dict(os.environ, bindings):
                     good = Path(tmp)/'bound-stage'; good.mkdir()
                     assert stage(repo, good) == proof
@@ -1714,7 +1878,7 @@ def _hierarchical_cells_protocol_self_check():
         assert ARTIFACTS == (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS) and len(ARTIFACTS) == 17
         assert FIXED == dict(FULL_FIXED, schema=CONFIG_SCHEMA, execution_kind='implementation-gates',
             command=FIXED['command'], environment=dict(worker.ENVIRONMENT, BORSUK_TEST_BUILD_JOBS='1', BORSUK_TEST_BUILD_COMMAND=None))
-        for mode in ('test_build', 'startup_wave8', 'root_reuse', 'bounded_publication', 'fixed48'):
+        for mode in ('test_build', 'startup_wave8', 'root_reuse', 'bounded_publication', 'fixed48', 'constrained_split'):
             rejected(lambda: configure(hierarchical_cells=True, **{mode: True}))
         rejected(lambda: configure(hierarchical_cells=1))
         with execution_mode(fixed48=True):
@@ -1727,19 +1891,74 @@ def _hierarchical_cells_protocol_self_check():
     assert previous == (CONFIG, CODE, FIXED, ARTIFACTS, NATIVE_DELTA, mode_flag())
 
 
-def _hierarchical_cells_script_self_check():
+def _constrained_split_self_check():
+    """Exact new protocol plus existing hierarchical lifecycle; all native work mocked."""
+    import inspect
+    module = sys.modules[__name__]
+    previous = CONFIG, CODE, FIXED, ARTIFACTS, NATIVE_DELTA, mode_flag()
+    for function in (configure, execution_mode, worker.main, self_check):
+        assert 'constrained_split' in inspect.signature(function).parameters
+    with execution_mode(constrained_split=True):
+        assert CONSTRAINED_SPLIT and MINIMAL_ARCHIVE and not HIERARCHICAL_CELLS
+        assert str(ROOT).endswith('semantic-1m/hierarchical-cells/constrained-split/implementation-gates')
+        assert mode_flag() == ' --constrained-split-implementation'
+        assert CONFIG_SCHEMA == FIXED['schema'] == 'borsuk-constrained-split-implementation-gates-v1'
+        assert SCHEMA == 'borsuk-constrained-split-implementation-gates-spot-v1'
+        assert RECEIPT_SCHEMA == 'borsuk-constrained-split-implementation-gates-receipt-v1'
+        assert CODE == (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_constrained_split_implementation.sh')
+        assert NATIVE_DELTA == CONSTRAINED_SPLIT_DELTA and list(NATIVE_DELTA) == sorted(NATIVE_DELTA)
+        assert RELEASE_ARTIFACTS == ('binaries/check_hierarchical_split_balance', 'binaries/hierarchical_semantic_cells', 'binaries/two_bit_http')
+        assert TERMINAL_IDENTITIES == (*FULL_TERMINAL_IDENTITIES, 'controller_source_commit', 'candidate_delta_paths', *ARCHIVE_IDENTITIES)
+        assert FIXED == dict(FULL_FIXED, schema=CONFIG_SCHEMA, execution_kind='implementation-gates',
+            command=['bash', 'scripts/check_constrained_split_implementation.sh'],
+            environment=dict(worker.ENVIRONMENT, BORSUK_TEST_BUILD_JOBS='1', BORSUK_TEST_BUILD_COMMAND=None),
+            mandatory_test_names_pending=False,
+            mandatory_tests={name:list(tests) for name,tests in constrained_split_required_tests().items()},
+            control_native_source_commit=CONSTRAINED_SPLIT_CONTROL, control_module_prefix=CONSTRAINED_SPLIT_PREFIX)
+        for mode in ('test_build', 'startup_wave8', 'root_reuse', 'bounded_publication', 'fixed48', 'hierarchical_cells'):
+            rejected(lambda:configure(constrained_split=True, **{mode:True}))
+        rejected(lambda:configure(constrained_split=1))
+        for field in ('CONSTRAINED_SPLIT_ADDITIVE_TESTS', 'CONSTRAINED_SPLIT_BIN_TESTS'):
+            with patch.object(module, field, ()):
+                rejected(constrained_split_required_tests)
+                rejected(lambda:record_constrained_split_stage(['release', 'start', '', '', '', '', *dict(CONSTRAINED_SPLIT_STAGES)['release']]))
+        for key,value in (('mandatory_test_names_pending', True), ('mandatory_tests', {}),
+                          ('control_module_prefix', {}), ('control_native_source_commit', '0'*40)):
+            rejected(lambda:validate_constrained_split_config(dict(FIXED, **{key:value})))
+        with execution_mode(hierarchical_cells=True):
+            assert not CONSTRAINED_SPLIT and MINIMAL_ARCHIVE
+        assert CONSTRAINED_SPLIT
+        _hierarchical_cells_script_self_check(constrained_split=True)
+        _fixed48_stages_self_check(constrained_split=True)
+        _startup_wave8_preflight_self_check(constrained_split=True)
+        _hierarchical_archive_self_check(constrained_split=True)
+        _self_check()
+    _hierarchical_cells_protocol_self_check()
+    _hierarchical_cells_script_self_check()
+    _fixed48_stages_self_check(hierarchical_cells=True)
+    _startup_wave8_preflight_self_check(hierarchical_cells=True)
+    self_check(hierarchical_cells=True)
+    assert previous == (CONFIG, CODE, FIXED, ARTIFACTS, NATIVE_DELTA, mode_flag())
+    print('PASS constrained split exact config/native prefix/test names; six serial gates/log exits; existing hierarchical mode preserved')
+
+
+def _hierarchical_cells_script_self_check(*, constrained_split=False):
     """Execute the real stage recorder as Python; never invoke Cargo or Bash."""
     from shlex import split
-    script = (Path(__file__).resolve().parent/'check_hierarchical_cells_implementation.sh').read_text()
+    script = (Path(__file__).resolve().parent/('check_constrained_split_implementation.sh' if constrained_split else 'check_hierarchical_cells_implementation.sh')).read_text()
     actual = tuple((args[1], args[2:]) for line in script.splitlines()
         if line.startswith('run_stage ') for args in (split(line),))
-    assert actual == HIERARCHICAL_CELLS_STAGES, 'exact shell stage commands'
-    recorder = script.split("python3 -c '", 1)[1].split("' \"$@\"", 1)[0]
+    stages = CONSTRAINED_SPLIT_STAGES if constrained_split else HIERARCHICAL_CELLS_STAGES
+    required = constrained_split_required_tests() if constrained_split else HIERARCHICAL_CELLS_REQUIRED_TESTS
+    assert actual == stages, 'exact shell stage commands'
+    assert 'set -euo pipefail' in script and 'return "$status"' in script and 'statuses=("${PIPESTATUS[@]}")' in script
+    assert 'env -u BORSUK_TEST_BUILD_COMMAND' in script
+    recorder = script.split('stage_record() {', 1)[1].split("python3 -c '", 1)[1].split("' \"$@\"", 1)[0]
     compile(recorder, '<stage-recorder>', 'exec')
     with tempfile.TemporaryDirectory() as tmp:
         log = Path(tmp)/'stage.log'
-        for index, (name, command) in enumerate(HIERARCHICAL_CELLS_STAGES):
-            names = HIERARCHICAL_CELLS_REQUIRED_TESTS.get(name, ())
+        for index, (name, command) in enumerate(stages):
+            names = required.get(name, ())
             lines = ['test '+test+' ... ok' for test in names]
             if index < 3:
                 lines.append(f'test result: ok. {max(1, len(names))} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s')
@@ -1747,6 +1966,8 @@ def _hierarchical_cells_script_self_check():
             cases = [(good, '0', '0', 0), (good, '17', '0', 17), (good, '0', '18', 18)]
             if index < 3:
                 cases.append(('', '0', '0', 96))
+                if constrained_split:
+                    cases.append((good.replace('0 ignored', '1 ignored'), '0', '0', 96))
             for test in names:
                 passed = 'test '+test+' ... ok'
                 for replacement in ('', passed.replace('ok', 'ignored'), passed+'\n'+passed):
@@ -1761,15 +1982,15 @@ def _hierarchical_cells_script_self_check():
                         assert result.code == expected
                 record = json.loads(output.getvalue())
                 assert record['gate_status'] == expected and record['command'] == command
-                assert record['schema'] == HIERARCHICAL_CELLS_STAGE_SCHEMA
+                assert record['schema'] == (CONSTRAINED_SPLIT_STAGE_SCHEMA if constrained_split else HIERARCHICAL_CELLS_STAGE_SCHEMA)
 
 
-def _fixed48_stages_self_check(*, hierarchical_cells=False):
+def _fixed48_stages_self_check(*, hierarchical_cells=False, constrained_split=False):
     import inspect
     assert 'fixed48' in inspect.signature(validate_bounded_publication_stages).parameters, 'fixed48 stage authentication missing'
-    stages = HIERARCHICAL_CELLS_STAGES if hierarchical_cells else FIXED48_STAGES
-    schema = HIERARCHICAL_CELLS_STAGE_SCHEMA if hierarchical_cells else FIXED48_STAGE_SCHEMA
-    required = HIERARCHICAL_CELLS_REQUIRED_TESTS if hierarchical_cells else FIXED48_REQUIRED_TESTS
+    stages = CONSTRAINED_SPLIT_STAGES if constrained_split else HIERARCHICAL_CELLS_STAGES if hierarchical_cells else FIXED48_STAGES
+    schema = CONSTRAINED_SPLIT_STAGE_SCHEMA if constrained_split else HIERARCHICAL_CELLS_STAGE_SCHEMA if hierarchical_cells else FIXED48_STAGE_SCHEMA
+    required = constrained_split_required_tests() if constrained_split else HIERARCHICAL_CELLS_REQUIRED_TESTS if hierarchical_cells else FIXED48_REQUIRED_TESTS
     with tempfile.TemporaryDirectory() as tmp:
         log = Path(tmp)/'test.log'
         lines = []
@@ -1777,30 +1998,34 @@ def _fixed48_stages_self_check(*, hierarchical_cells=False):
             record = dict(schema=schema, stage=name, command=command,
                 started_at='2026-10-02T00:00:00Z', finished_at=None,
                 exit_status=None, gate_status=None, tests_run=None, required_test_passes=None)
+            if constrained_split:
+                record['log_exit_status'] = None
             lines.append(encoded(record).decode())
             names = required.get(name, ())
             lines.extend('test '+test+' ... ok' for test in names)
             tests = max(1, len(names)) if index < len(stages)-3 else None
             if index < len(stages)-3:
                 lines.append(f'test result: ok. {tests} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s')
-            if hierarchical_cells and name == 'test-build':
+            if (hierarchical_cells or constrained_split) and name == 'test-build':
                 lines.append('rust-test-build status=0 elapsed_seconds=0 jobs=1')
             record.update(finished_at=record['started_at'], exit_status=0, gate_status=0,
                 tests_run=tests, required_test_passes={test: 1 for test in names})
+            if constrained_split:
+                record['log_exit_status'] = 0
             lines.append(encoded(record).decode())
         log.write_text('\n'.join(lines)+'\n')
-        records = validate_bounded_publication_stages(log, fixed48=not hierarchical_cells, hierarchical_cells=hierarchical_cells)
-        assert len(records) == len(stages) and [r['tests_run'] for r in records[:-3]] == ([len(HIERARCHICAL_CELLS_REQUIRED_TESTS['hierarchical-cell-tests']), len(HIERARCHICAL_CELLS_REQUIRED_TESTS['hierarchical-cell-bin-tests']), 1] if hierarchical_cells else [2, 2, 2, 1])
+        records = validate_bounded_publication_stages(log, fixed48=not (hierarchical_cells or constrained_split), hierarchical_cells=hierarchical_cells, constrained_split=constrained_split)
+        assert len(records) == len(stages) and [r['tests_run'] for r in records[:-3]] == [max(1,len(required.get(name, ()))) for name,_ in stages[:-3]]
         for names in required.values():
             for name in names:
                 passed = 'test '+name+' ... ok'
                 for replacement in ('', passed.replace('ok', 'ignored'), passed+'\n'+passed):
                     log.write_text('\n'.join(lines).replace(passed, replacement)+'\n')
-                    rejected(lambda: validate_bounded_publication_stages(log, fixed48=not hierarchical_cells, hierarchical_cells=hierarchical_cells))
+                    rejected(lambda: validate_bounded_publication_stages(log, fixed48=not (hierarchical_cells or constrained_split), hierarchical_cells=hierarchical_cells, constrained_split=constrained_split))
                 misplaced = [line for line in lines if line != passed]
                 misplaced.insert(0, passed)
                 log.write_text('\n'.join(misplaced)+'\n')
-                rejected(lambda: validate_bounded_publication_stages(log, fixed48=not hierarchical_cells, hierarchical_cells=hierarchical_cells))
+                rejected(lambda: validate_bounded_publication_stages(log, fixed48=not (hierarchical_cells or constrained_split), hierarchical_cells=hierarchical_cells, constrained_split=constrained_split))
         for index, line in enumerate(lines):
             if not line.startswith('{'):
                 continue
@@ -1809,6 +2034,8 @@ def _fixed48_stages_self_check(*, hierarchical_cells=False):
             if record['finished_at']:
                 changes += [('exit_status', 17), ('exit_status', False), ('gate_status', 96),
                             ('required_test_passes', {}), ('finished_at', '2026-10-01T00:00:00Z')]
+                if constrained_split:
+                    changes += [('log_exit_status', 18), ('log_exit_status', False)]
                 if record['tests_run'] is not None:
                     changes += [('tests_run', 0), ('tests_run', False), ('tests_run', 99)]
             else:
@@ -1819,24 +2046,24 @@ def _fixed48_stages_self_check(*, hierarchical_cells=False):
                 changed = list(lines)
                 changed[index] = encoded(dict(record, **{key: value})).decode()
                 log.write_text('\n'.join(changed)+'\n')
-                rejected(lambda: validate_bounded_publication_stages(log, fixed48=not hierarchical_cells, hierarchical_cells=hierarchical_cells))
-        if hierarchical_cells:
+                rejected(lambda: validate_bounded_publication_stages(log, fixed48=not (hierarchical_cells or constrained_split), hierarchical_cells=hierarchical_cells, constrained_split=constrained_split))
+        if hierarchical_cells or constrained_split:
             for replacement in ('', 'rust-test-build status=0 elapsed_seconds=0 jobs=2', 'rust-test-build status=0 elapsed_seconds=0 jobs=1\nrust-test-build status=0 elapsed_seconds=0 jobs=1'):
                 log.write_text('\n'.join(lines).replace('rust-test-build status=0 elapsed_seconds=0 jobs=1', replacement)+'\n')
-                rejected(lambda: validate_bounded_publication_stages(log, hierarchical_cells=True))
+                rejected(lambda: validate_bounded_publication_stages(log, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split))
         for changed in (lines[:-1], lines+lines[-2:], list(reversed(lines))):
             log.write_text('\n'.join(changed)+'\n')
-            rejected(lambda: validate_bounded_publication_stages(log, fixed48=not hierarchical_cells, hierarchical_cells=hierarchical_cells))
+            rejected(lambda: validate_bounded_publication_stages(log, fixed48=not (hierarchical_cells or constrained_split), hierarchical_cells=hierarchical_cells, constrained_split=constrained_split))
 
 
-def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False):
+def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False):
     controller, config_commit, bundle = '4'*40, '5'*40, '6'*40
     blob = b'mocked exact candidate blob'
-    with execution_mode(startup_wave8=not (root_reuse or bounded_publication or fixed48 or hierarchical_cells), root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells):
+    with execution_mode(startup_wave8=not (root_reuse or bounded_publication or fixed48 or hierarchical_cells or constrained_split), root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split):
         proof = dict(controller_source_commit=controller, candidate_delta_paths=list(NATIVE_DELTA),
-                     native_source_commit='7'*40 if hierarchical_cells else FIXED48_CHECK_COMMIT if fixed48 else BOUNDED_PUBLICATION_CHECK_COMMIT if bounded_publication else '7'*40 if root_reuse else STARTUP_WAVE8_COMMIT,
+                     native_source_commit='7'*40 if hierarchical_cells or constrained_split else FIXED48_CHECK_COMMIT if fixed48 else BOUNDED_PUBLICATION_CHECK_COMMIT if bounded_publication else '7'*40 if root_reuse else STARTUP_WAVE8_COMMIT,
                      source_sha256={name:worker.sha(blob) for name in NATIVE_DELTA})
-        if hierarchical_cells:
+        if hierarchical_cells or constrained_split:
             proof.update(source_archive_paths=[], source_archive_paths_sha256='0'*64,
                          source_archive_file_count=0, source_archive_support_sha256={},
                          native_source_manifest=dict(path=str(ROOT/'native-source-manifest.json')))
@@ -1848,11 +2075,17 @@ def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication
             ('diff','--no-renames','--name-only',controller,config_commit): str(CONFIG),
             ('diff','--no-renames','--name-only',config_commit,'HEAD'): '\n'.join(NATIVE_DELTA),
             **{('show',proof['native_source_commit']+':'+name):blob for name in NATIVE_DELTA}}
+        if constrained_split:
+            original = (Path(__file__).resolve().parents[1]/NATIVE_DELTA[1]).read_bytes()[:CONSTRAINED_SPLIT_PREFIX['bytes']]
+            answers[('diff','--no-renames','--name-only',CONSTRAINED_SPLIT_CONTROL,proof['native_source_commit'])] = '\n'.join(NATIVE_DELTA)
+            answers[('show',CONSTRAINED_SPLIT_CONTROL+':'+NATIVE_DELTA[1])] = original
         failures = ('success','dirty','merge-bundle','wrong-controller','unpublished-config','extra-config-delta','missing-native-delta','extra-native-delta','wrong-candidate-blob')
         if fixed48:
             failures += ('historical-two-path-bundle',)
-        if hierarchical_cells:
+        if hierarchical_cells or constrained_split:
             failures += ('wrong-archive-authority',)
+        if constrained_split:
+            failures += ('extra-original-delta', 'wrong-original-prefix')
         for failure in failures:
             changed = dict(answers)
             key, value = {
@@ -1866,7 +2099,9 @@ def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication
                 'missing-native-delta': (('diff','--no-renames','--name-only',config_commit,'HEAD'), NATIVE_DELTA[0]),
                 'extra-native-delta': (('diff','--no-renames','--name-only',config_commit,'HEAD'), '\n'.join((*NATIVE_DELTA,'other.rs'))),
                 'historical-two-path-bundle': (('diff','--no-renames','--name-only',config_commit,'HEAD'), '\n'.join(NATIVE_DELTA[1:])),
-                'wrong-candidate-blob': (('show',proof['native_source_commit']+':'+NATIVE_DELTA[0]), b'tampered')
+                'wrong-candidate-blob': (('show',proof['native_source_commit']+':'+NATIVE_DELTA[0]), b'tampered'),
+                'extra-original-delta': (('diff','--no-renames','--name-only',CONSTRAINED_SPLIT_CONTROL,proof['native_source_commit']), '\n'.join((*NATIVE_DELTA,'other.rs'))),
+                'wrong-original-prefix': (('show',CONSTRAINED_SPLIT_CONTROL+':'+NATIVE_DELTA[1]), b'tampered original')
             }[failure]
             changed[key] = value
             def git(args, **kwargs):
@@ -1875,15 +2110,15 @@ def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication
             with patch.object(sys.modules[__name__], 'qualify', return_value=proof), \
                     patch.object(subprocess,'check_output',side_effect=git), \
                     patch.object(sys.modules[__name__], 'hierarchical_archive_authority',
-                                 return_value={key: ('1'*64 if failure == 'wrong-archive-authority' and key == 'source_archive_paths_sha256' else proof[key]) for key in ARCHIVE_FIELDS} if hierarchical_cells else {}):
+                                 return_value={key: ('1'*64 if failure == 'wrong-archive-authority' and key == 'source_archive_paths_sha256' else proof[key]) for key in ARCHIVE_FIELDS} if hierarchical_cells or constrained_split else {}):
                 if failure == 'success':
                     assert preflight() == proof
                 else:
                     rejected(lambda:preflight())
 
 
-def self_check(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False):
-    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells):
+def self_check(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False):
+    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split):
         _self_check()
 
 
@@ -1893,15 +2128,15 @@ def _self_check():
     base = Path(__file__).resolve().parents[1]
     manifest = json.loads((base/semantic.ROOT/'metadata-waves/native-source-manifest.json').read_bytes())
     inventory = manifest['source_sha256']
-    if HIERARCHICAL_CELLS:
+    if MINIMAL_ARCHIVE:
         # Synthetic authority only: the root chooses the production candidate.
         inventory = worker.source_hashes(base)
         for name in NATIVE_DELTA:
             inventory.setdefault(name, worker.sha(b'// synthetic new native source\n'))
-        manifest = dict(schema='borsuk-hierarchical-cells-native-source-manifest-v1', source_sha256=inventory,
+        manifest = dict(schema='borsuk-constrained-split-native-source-manifest-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-native-source-manifest-v1', source_sha256=inventory,
             source_identity_sha256=worker.source_identity(inventory), source_file_count=len(inventory),
             native_source_commit='7'*40, candidate_delta_paths=list(NATIVE_DELTA),
-            candidate_qualification_pending=True, control_native_source_commit='8'*40)
+            candidate_qualification_pending=True, control_native_source_commit=CONSTRAINED_SPLIT_CONTROL if CONSTRAINED_SPLIT else '8'*40)
     elif FIXED48:
         inventory = worker.source_hashes(base)
         for name in NATIVE_DELTA:
@@ -1942,9 +2177,9 @@ def _self_check():
     config = dict(FIXED, controller_authority_pending=False,
         controller_code_sha256={n:worker.artifact(base/n)['sha256'] for n in CODE},
         native_source_manifest=dict(path=str(manifest_path),bytes=len(manifest_body),sha256=worker.sha(manifest_body)))
-    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
+    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
         config['controller_source_commit'] = '4'*40
-    if HIERARCHICAL_CELLS:
+    if MINIMAL_ARCHIVE:
         support = {'crates/fixture/tests/fixtures/runtime.json': worker.sha(b'fixture body\n')}
         paths = sorted(set(inventory) | set(CODE) | set(support) | {str(CONFIG), str(manifest_path)})
         config.update(source_archive_paths=paths, source_archive_paths_sha256=worker.sha(encoded(paths)),
@@ -1954,14 +2189,16 @@ def _self_check():
         repo.mkdir(); out.mkdir()
         for name in CODE:
             (repo/name).parent.mkdir(parents=True,exist_ok=True)
-            if HIERARCHICAL_CELLS:
+            if MINIMAL_ARCHIVE:
                 (repo/name).write_bytes((base/name).read_bytes())
             else:
                 (repo/name).symlink_to(base/name)
-        if HIERARCHICAL_CELLS:
+        if MINIMAL_ARCHIVE:
             for name in inventory:
                 (repo/name).parent.mkdir(parents=True, exist_ok=True)
                 (repo/name).write_bytes(b'// fixture native body; source hashes mocked\n')
+            if CONSTRAINED_SPLIT:
+                (repo/NATIVE_DELTA[1]).write_bytes((base/NATIVE_DELTA[1]).read_bytes() + b'// additive fixture\n')
             for name in support:
                 (repo/name).parent.mkdir(parents=True, exist_ok=True)
                 (repo/name).write_bytes(b'fixture body\n')
@@ -1984,13 +2221,28 @@ def _self_check():
                               ('native_source_manifest',dict(config['native_source_manifest'],sha256='0'*64))):
                 (repo/CONFIG).write_bytes(encoded(dict(config,**{key:value})))
                 rejected(lambda:qualify(repo))
-            if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
+            if CONSTRAINED_SPLIT:
+                for key,value in (('mandatory_test_names_pending', True), ('mandatory_tests', {}),
+                        ('mandatory_tests', {k:v[:-1] for k,v in config['mandatory_tests'].items()}),
+                        ('control_module_prefix', {}), ('control_native_source_commit', '0'*40),
+                        ('unexpected_config_key', True)):
+                    (repo/CONFIG).write_bytes(encoded(dict(config, **{key:value})))
+                    rejected(lambda:qualify(repo))
+                (repo/CONFIG).write_bytes(config_body)
+                module_path = repo/NATIVE_DELTA[1]
+                original_body = module_path.read_bytes()
+                module_path.write_bytes(b'X'+original_body[1:])
+                rejected(lambda:qualify(repo))
+                module_path.write_bytes(original_body[:CONSTRAINED_SPLIT_PREFIX['bytes']])
+                rejected(lambda:qualify(repo))
+                module_path.write_bytes(original_body)
+            if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
                 for value in ('not-a-commit', '4'*39):
                     (repo/CONFIG).write_bytes(encoded(dict(config,controller_source_commit=value)))
                     rejected(lambda:qualify(repo))
             bad_manifest = [('source_identity_sha256','0'*64), ('source_file_count',len(inventory)-1), ('source_file_count',True),
                             ('native_source_commit','not-a-commit')]
-            if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
+            if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
                 bad_manifest.extend((('candidate_delta_paths',[]),
                     ('candidate_delta_paths',dict.fromkeys(NATIVE_DELTA)),
                     ('candidate_delta_paths',list(reversed(NATIVE_DELTA))),
@@ -1998,6 +2250,8 @@ def _self_check():
                     ('schema','wrong-manifest-mode'),('control_native_source_commit','not-a-commit')))
                 if FIXED48:
                     bad_manifest.append(('candidate_delta_paths',list(FIXED48_DELTA[1:])))
+                if CONSTRAINED_SPLIT:
+                    bad_manifest.append(('control_native_source_commit', '0'*40))
                 if STARTUP_WAVE8:
                     bad_manifest.append(('native_source_commit','0'*40))
             for key,value in bad_manifest:
@@ -2025,7 +2279,7 @@ def _self_check():
             rejected(lambda:preflight(repo))
         body = user_data('0'*40,'1'*64,'sources/mock',PREFIX+'a0001',proof)
         assert len(CODE) == len(set(CODE)) == (24 if IMPLEMENTATION else 23 if TEST_BUILD else 22)
-        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == (17 if HIERARCHICAL_CELLS else 16 if FIXED48 else 14 if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION else 18 if IMPLEMENTATION else 13)
+        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == (16 if CONSTRAINED_SPLIT else 17 if HIERARCHICAL_CELLS else 16 if FIXED48 else 14 if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION else 18 if IMPLEMENTATION else 13)
         assert '--on-active=9000s' in body and 'RuntimeMaxSec=7260' in body
         assert all(k in body for k in ('MemoryMax=8G','MemorySwapMax=0','CPUQuota=200%','TasksMax=512'))
         assert 'build-essential' in body and 'python3-dev' in body
@@ -2049,29 +2303,32 @@ def _self_check():
         else:
             full_check()
         _collection_self_check(proof,files,body)
-    _lifecycle_self_check(proof if HIERARCHICAL_CELLS else None)
-    if semantic_1m and not HIERARCHICAL_CELLS:
+    _lifecycle_self_check(proof if MINIMAL_ARCHIVE else None)
+    if semantic_1m and not MINIMAL_ARCHIVE:
         _remote_self_check(manifest)
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024
-    print(f'PASS workspace {"implementation-gates" if IMPLEMENTATION else "test-build" if TEST_BUILD else "execution"} ({"hierarchical-cells" if HIERARCHICAL_CELLS else "fixed48" if FIXED48 else "bounded-publication" if BOUNDED_PUBLICATION else "root-reuse" if ROOT_REUSE else "startup-wave8" if STARTUP_WAVE8 else "semantic-1m" if semantic_1m else "metadata-waves"}): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli={semantic_1m and not HIERARCHICAL_CELLS}; code={len(CODE)} artifacts={len(ARTIFACTS)} release_copy={IMPLEMENTATION}; userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
+    print(f'PASS workspace {"implementation-gates" if IMPLEMENTATION else "test-build" if TEST_BUILD else "execution"} ({"constrained-split" if CONSTRAINED_SPLIT else "hierarchical-cells" if HIERARCHICAL_CELLS else "fixed48" if FIXED48 else "bounded-publication" if BOUNDED_PUBLICATION else "root-reuse" if ROOT_REUSE else "startup-wave8" if STARTUP_WAVE8 else "semantic-1m" if semantic_1m else "metadata-waves"}): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli={semantic_1m and not MINIMAL_ARCHIVE}; code={len(CODE)} artifacts={len(ARTIFACTS)} release_copy={IMPLEMENTATION}; userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
 
 
 if __name__ == '__main__':
     args = sys.argv[1:]
+    constrained_split = args[:1] == ['--constrained-split-implementation']
     hierarchical_cells = args[:1] == ['--hierarchical-cells-implementation']
     fixed48 = args[:1] == ['--fixed48-implementation']
     bounded_publication = args[:1] == ['--bounded-publication-implementation']
     root_reuse = args[:1] == ['--root-reuse-implementation']
     startup_wave8 = args[:1] == ['--startup-wave8-implementation']
-    implementation = hierarchical_cells or fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
+    implementation = constrained_split or hierarchical_cells or fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
     test_build = args[:1] == ['--semantic-1m-test-build']
     semantic_1m = implementation or test_build or args[:1] == ['--semantic-1m']
     if semantic_1m:
         args = args[1:]
-    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells)
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split)
     if args[:1] and args[0].startswith('--'):
         resource.setrlimit(resource.RLIMIT_AS, (200*1024**2,200*1024**2))
-    if args == ['--self-check']:
+    if args == ['--self-check'] and constrained_split:
+        _constrained_split_self_check()
+    elif args == ['--self-check']:
         with execution_mode():
             _test_build_protocol_self_check()
             _startup_wave8_protocol_self_check()
@@ -2090,7 +2347,7 @@ if __name__ == '__main__':
             _hierarchical_cells_script_self_check()
             _startup_wave8_preflight_self_check(hierarchical_cells=True)
             self_check(hierarchical_cells=True)
-        self_check(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells)
+        self_check(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split)
     elif args[:1] == ['--stage']:
         assert len(args) == 3
         stage(*args[1:])
@@ -2102,7 +2359,7 @@ if __name__ == '__main__':
         assert len(args) == 2
         print(json.dumps(replay(args[1]),sort_keys=True))
     else:
-        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation | --fixed48-implementation | --hierarchical-cells-implementation] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
+        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation | --fixed48-implementation | --hierarchical-cells-implementation | --constrained-split-implementation] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
         with open('/tmp/borsuk-native-workspace-execution-launch.lock','a+') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             main(args[0])
