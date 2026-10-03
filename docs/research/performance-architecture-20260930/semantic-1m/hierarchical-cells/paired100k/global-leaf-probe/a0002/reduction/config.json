@@ -1,0 +1,147 @@
+{
+  "closed_receipt": {
+    "bytes": 8717,
+    "path": "/data/orchestration/borsuk-global-leaf-reduction-a0002-20261003/closed-receipt.json",
+    "sha256": "03bb25f478353a8673d969bdc12d612f9d8b7f284013d7dfaaa04057c8389590"
+  },
+  "datasets": {
+    "cohere": {
+      "candidate_root": {
+        "bytes": 30435,
+        "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/a0002/screen/retained/cohere/manifest.json",
+        "sha256": "89aee41edba2f4bc447fc5fb66ecee3f470e4ff50627c6f294da6208fdbcb6b2"
+      },
+      "directories": {
+        "bytes": 5879576,
+        "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/a0002/screen/retained/cohere/directories.bin",
+        "sha256": "e934d25c4304927405e62d032facdde6da4c13fa7d2add64f5881d64e99371a2"
+      },
+      "nomination_config": {
+        "bytes": 644,
+        "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/a0002/screen/measurement/cohere-nominate.json",
+        "sha256": "33a0c54174d34fe8093410ee453a710c8509adb94bfe676aaa2203ffb876cf19"
+      },
+      "nominations": {
+        "bytes": 42180581,
+        "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/a0002/screen/measurement/cohere-nominations.jsonl",
+        "sha256": "361150c7070c7f85c9620fdacf07288d2f03b87061b9279df3cae8daebd03513"
+      },
+      "requests": {
+        "bytes": 983232,
+        "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/a0002/screen/retained/cohere/requests64",
+        "sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654"
+      },
+      "truth": {
+        "bytes": 25600,
+        "path": "/data/orchestration/borsuk-global-leaf-reduction-a0002-20261003/cohere-truth64",
+        "sha256": "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355"
+      },
+      "truth_id_space": "logical_source_ordinal_le_u32"
+    },
+    "relaion": {
+      "candidate_root": {
+        "bytes": 31479,
+        "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/a0002/screen/retained/relaion/manifest.json",
+        "sha256": "fec06fb0eee4a1380a42356af3ef43d38137a95b4bdb09d457b434b5369c076b"
+      },
+      "directories": {
+        "bytes": 6200518,
+        "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/a0002/screen/retained/relaion/directories.bin",
+        "sha256": "6e71ef57e17bd55667b48421cf90f812f79e962ae3bc7eed4a50b97397fd21f1"
+      },
+      "nomination_config": {
+        "bytes": 646,
+        "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/a0002/screen/measurement/relaion-nominate.json",
+        "sha256": "d0a8a414c5b5384b8d707a33651fba58f460280d8729302cbe0e2d244c707ab2"
+      },
+      "nominations": {
+        "bytes": 41357242,
+        "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/a0002/screen/measurement/relaion-nominations.jsonl",
+        "sha256": "c0eb835339249d951a0ee998f7a159f916de8b2a6cc19908b4c28d63a650d4b9"
+      },
+      "requests": {
+        "bytes": 937167,
+        "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/a0002/screen/retained/relaion/requests64",
+        "sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330"
+      },
+      "truth": {
+        "bytes": 25600,
+        "path": "/data/orchestration/borsuk-global-leaf-reduction-a0002-20261003/relaion-truth64",
+        "sha256": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c"
+      },
+      "truth_id_space": "logical_source_ordinal_le_u32"
+    }
+  },
+  "historical_audit": {
+    "bytes": 186248,
+    "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/independent-coverage-audit.json",
+    "sha256": "ed420f8a4562fe36b0343c66356cf5f573d6493a875e0621fd4ba1f230484e3e"
+  },
+  "historical_control": {
+    "datasets": {
+      "cohere": {
+        "diagnostic": {
+          "bytes": 6044638,
+          "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/screen/measurement/cohere-diagnostic.jsonl",
+          "sha256": "fc12f5e90917495f9c17e6b71172ec0b288e079083151bdc2fe51c2a55155746"
+        },
+        "diagnostic_config": {
+          "bytes": 1022,
+          "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/screen/measurement/cohere-diagnose.json",
+          "sha256": "0084493691b06ce167bd5ec19202830f0490b3c5bc588a59df3677a58ca093cc"
+        }
+      },
+      "relaion": {
+        "diagnostic": {
+          "bytes": 5825513,
+          "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/screen/measurement/relaion-diagnostic.jsonl",
+          "sha256": "af193458abe29522b126951a35df56d589a8b1c1f7aa536e895f638a2dd607e5"
+        },
+        "diagnostic_config": {
+          "bytes": 1025,
+          "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/screen/measurement/relaion-diagnose.json",
+          "sha256": "5c45c2819602e842f6ea84460b9462123e24f3c6a22f4167dba0abaf2e95bae6"
+        }
+      }
+    },
+    "terminal": {
+      "bytes": 4916,
+      "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/aws-terminal.json",
+      "sha256": "a0ca521980142f869e7be74b10802926459674cc06ec2e7bf6e11214c8065bf2"
+    }
+  },
+  "protocol": {
+    "bytes": 3707,
+    "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-routing-probe-preregistration.json",
+    "sha256": "2914b9bc79cb9cfaf77a270cca868c90398c20dd83149c6896dd7706ac7def04"
+  },
+  "schema": "borsuk-global-leaf-sealed-coverage-v1",
+  "source": {
+    "archive": {
+      "bytes": 12608329,
+      "path": "/data/orchestration/borsuk-global-leaf-reduction-a0002-20261003/archive",
+      "sha256": "1d374b4a9b5c484d4ed1d8e86357750369764213b26ffa0c4002d0748a4b7dac"
+    },
+    "binary_source": {
+      "bytes": 39480,
+      "path": "/data/orchestration/borsuk-global-leaf-reduction-a0002-20261003/binary_source",
+      "sha256": "074e97003e4be49c557c706df2f465651586861fbdbae8988a27d62fb794eacf"
+    },
+    "executable": {
+      "bytes": 4984048,
+      "path": "/data/orchestration/borsuk-global-leaf-reduction-a0002-20261003/executable",
+      "sha256": "782d3bccc8212724f883a00d5c1534011f913246089380deb69de191843f6aeb"
+    },
+    "module": {
+      "bytes": 115165,
+      "path": "/data/orchestration/borsuk-global-leaf-reduction-a0002-20261003/module",
+      "sha256": "f30ca0d0ae1e38f28988cf100aec4bdbc68f1ce4acb4f85f488efa83103b2a1f"
+    },
+    "reducer": {
+      "bytes": 85782,
+      "path": "/home/rb/worktrees/borsuk-prod-ready-v9/scripts/reduce_hierarchical_global_leaf_coverage.py",
+      "sha256": "31232bdde29353962bb88b7435ecc84dfb1f854a6d1e7a068254380e65878b3e"
+    },
+    "revision": "3dbf70e771516b45de62f8bf9dbe672952957589"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "absolute_output_replay_passed": true,
+  "all_six_native_stages_exit_zero": true,
+  "authenticated_artifact_count": 59,
+  "both_nominations_sealed": true,
+  "controller_error": "relative output path rejected by local replay: absolute artifact path",
+  "controller_exit_status": 2,
+  "controller_original_session": 74719,
+  "coverage_evaluation_pending": true,
+  "instance_id": "i-0dce93235d101f17c",
+  "physical_s3_query_measurement": false,
+  "same_instance_terminated_and_waited": true,
+  "schema": "borsuk-global-leaf-root-execution-verification-v1",
+  "status": "CLOSED_VALID",
+  "terminal": {
+    "bytes": 8865,
+    "sha256": "36fa651823c755f29ca238ea38b722f0fffedcd32129cd7bc7506310cbe22587"
+  },
+  "truth_opened": false,
+  "vendor_win": false,
+  "worker_original_exit_status": 0
+}
