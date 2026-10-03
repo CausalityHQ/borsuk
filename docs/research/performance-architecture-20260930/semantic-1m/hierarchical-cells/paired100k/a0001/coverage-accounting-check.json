@@ -1,0 +1,45 @@
+{
+  "schema": "borsuk-hierarchical-coverage-accounting-check-v1",
+  "scope": "Accounting-derived from authenticated closed native loss rows; independent exact-truth recount pending specialist audit",
+  "routing_redesign_required": true,
+  "perfect_fetched_row_scoring_cannot_pass_frozen_gate": true,
+  "no_new_ann_execution": true,
+  "datasets": {
+    "relaion": {
+      "primary_hits": {
+        "mean_hits_fraction": 0.67421875,
+        "nearest_rank_p05_hits": 19
+      },
+      "boundary_hits": {
+        "mean_hits_fraction": 0.86140625,
+        "nearest_rank_p05_hits": 55
+      },
+      "nomination_hits": {
+        "mean_hits_fraction": 0.649375,
+        "nearest_rank_p05_hits": 45
+      },
+      "returned_hits": {
+        "mean_hits_fraction": 0.649375,
+        "nearest_rank_p05_hits": 45
+      }
+    },
+    "cohere": {
+      "primary_hits": {
+        "mean_hits_fraction": 0.47953125,
+        "nearest_rank_p05_hits": 23
+      },
+      "boundary_hits": {
+        "mean_hits_fraction": 0.748125,
+        "nearest_rank_p05_hits": 51
+      },
+      "nomination_hits": {
+        "mean_hits_fraction": 0.68875,
+        "nearest_rank_p05_hits": 50
+      },
+      "returned_hits": {
+        "mean_hits_fraction": 0.68875,
+        "nearest_rank_p05_hits": 50
+      }
+    }
+  }
+}
