@@ -1,0 +1,25 @@
+{
+  "authenticated_terminal_artifacts": 11,
+  "controller_exit_status": 2,
+  "datasets_completed": 0,
+  "error": "InterruptedError: probe cumulative resource/deadline interruption",
+  "host_memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+  "host_memory_peak_bytes": 837427200,
+  "host_swap_peak_bytes": 0,
+  "instance_id": "i-0e32d70b7191dd9ab",
+  "next_gate": "Source/staging timeout diagnosis and bounded cheap reproducer; no scientific quality decision, no automatic paid retry.",
+  "original_controller_session": 6745,
+  "replay": {
+    "executed": false,
+    "scientific_qualification": false,
+    "truth_opened": false
+  },
+  "same_instance_terminated": true,
+  "schema": "borsuk-global-leaf-probe-root-verification-v1",
+  "scratch_bytes": 2738372098,
+  "stages_completed": 0,
+  "status": "INVALID",
+  "terminal_sha256": "6260404f610b15fe3e52a8222e0ad25e4bda7c5df9585d4b7e6f2317c4b9f03b",
+  "truth_opened": false,
+  "wall_seconds": 1766.846220387
+}

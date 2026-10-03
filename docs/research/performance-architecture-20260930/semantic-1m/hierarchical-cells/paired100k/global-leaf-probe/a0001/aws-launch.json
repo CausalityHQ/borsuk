@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0e32d70b7191dd9ab",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0e32d70b7191dd9ab"
+    }
+  },
+  "prefix": "research/hierarchical-cells/20261003/global-leaf-probe-a0001",
+  "source_commit": "af3b4c2c02f95a123794d28316a78c834ddd26af",
+  "source_archive_sha256": "a651ba3714b3fbdfbe3b0761bc88bd5776b9b947fe8fbf0f8bd1895f6a4d63b5"
+}
