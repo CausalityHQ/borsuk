@@ -566,11 +566,14 @@ def verify_pair(output, *, repo=None, config=None, config_pin=None, evidence=Non
 
 def archive_sources(archive, inventory, subset, destinations, check):
     """Verify all qualified native entries in the role's own archive, no exec."""
+    check()
     local.authenticate(archive, 1 << 30)
     seen = set()
     with positive.open_input(archive['path']) as stream, tarfile.open(fileobj=stream, mode='r|*') as tar:
         for entry in tar:
-            check()
+            # Tar traversal only reads. The monitor still inventories scratch
+            # every second; synchronous inventories bracket every file write.
+            check(scan=False)
             if entry.name not in inventory:
                 continue
             require(entry.isfile() and not entry.issparse() and entry.name not in seen, 'native archive regular unique entry')
@@ -581,6 +584,7 @@ def archive_sources(archive, inventory, subset, destinations, check):
             chunks = [] if entry.name in subset else None
             with source:
                 while True:
+                    check(scan=False)
                     chunk = source.read(65536)
                     if not chunk:
                         break
@@ -591,10 +595,13 @@ def archive_sources(archive, inventory, subset, destinations, check):
             exact(digest.hexdigest(), inventory[entry.name], 'role archive native source SHA')
             if chunks is not None:
                 exact(dict(bytes=size, sha256=digest.hexdigest()), body_pin(subset[entry.name]), 'role source size')
+                check()
                 copy_bytes(destinations[entry.name], b''.join(chunks))
+                check()
             seen.add(entry.name)
     exact(seen, set(inventory), 'all qualified archive-native/support files authenticated')
     local.authenticate(archive, 1 << 30)
+    check()
 
 
 def cgroup_snapshot(path, memory, cpu, tasks=512):
@@ -1074,6 +1081,64 @@ def synthetic_dataset(folder):
                 recovered=layout(root, build, dimensions, rows), events=events)
 
 
+def archive_staging_self_check():
+    """Read-only tar members must not each inventory the whole scratch tree."""
+    from scripts import launch_hierarchical_cells_100k_spot as launcher
+    def rejects(action):
+        try:
+            action()
+        except ValueError:
+            return
+        raise AssertionError('archive/resource violation accepted')
+    with tempfile.TemporaryDirectory(prefix='global-leaf-archive-') as tmp:
+        root = Path(tmp)/'worker'; scratch = root/'scratch'; scratch.mkdir(parents=True)
+        original = Path(tmp)/'original'; original.mkdir(); (original/'body').write_bytes(b'x'*65536)
+        for n in range(128):
+            (scratch/str(n)).write_bytes(b'scratch')
+        archive = root/'source.tar.gz'; inventory = {}
+        with tarfile.open(archive, 'w:gz', format=tarfile.USTAR_FORMAT) as tar:
+            for n in range(256):
+                name, body = 'support/'+str(n), b'qualified source'
+                entry = tarfile.TarInfo(name); entry.size = len(body)
+                tar.addfile(entry, io.BytesIO(body)); inventory[name] = local.sha(body)
+        scans, polls = 0, 0
+        peaks, errors = dict(scratch_bytes=0), []
+        baseline, deadline = shutil.disk_usage(root).used, time.monotonic()+30
+        def check(*, scan=True):
+            nonlocal scans, polls
+            scans += int(scan); polls += int(not scan)
+            launcher.probe_resource_check(root, baseline, 128 << 20, deadline, errors, peaks, scan=scan)
+        pin = local.identity(archive)
+        subset = {'support/0': dict(bytes=16, sha256=inventory['support/0'])}
+        destination = root/'extracted'
+        with patch.object(launcher.probe, 'ORIGINAL_ROOT', original):
+            archive_sources(pin, inventory, subset, {'support/0': destination}, check)
+            exact(destination.read_bytes(), b'qualified source', 'authenticated archive subset retained')
+            require(0 < scans <= 6 and polls >= 256, 'scratch scans bounded by archive/write boundaries, not tar member count')
+            require(peaks['scratch_bytes'] >= 65536 and peaks['scratch_scan_calls'] == scans,
+                    'separate original scratch charged and scan accounting retained')
+            # Check every support body, including entries outside the subset,
+            # and retain whole-archive, completeness and duplicate validation.
+            rejects(lambda: archive_sources(dict(pin, sha256='0'*64), inventory, {}, {}, check))
+            rejects(lambda: archive_sources(pin, dict(inventory, **{'support/255': '0'*64}), {}, {}, check))
+            rejects(lambda: archive_sources(pin, dict(inventory, missing='0'*64), {}, {}, check))
+            duplicate = root/'duplicate.tar.gz'
+            with tarfile.open(duplicate, 'w:gz', format=tarfile.USTAR_FORMAT) as tar:
+                for _ in range(2):
+                    entry = tarfile.TarInfo('support/0'); entry.size = 16
+                    tar.addfile(entry, io.BytesIO(b'qualified source'))
+            rejects(lambda: archive_sources(local.identity(duplicate), {'support/0': inventory['support/0']}, {}, {}, check))
+            for scan in (True, False):
+                rejects(lambda: launcher.probe_resource_check(root, baseline, 128 << 20, time.monotonic()-1,
+                                                               [], dict(scratch_bytes=0), scan=scan))
+                rejects(lambda: launcher.probe_resource_check(root, baseline, 128 << 20, deadline,
+                                                               ['monitor failure'], dict(scratch_bytes=0), scan=scan))
+            over = dict(scratch_bytes=0)
+            rejects(lambda: launcher.probe_resource_check(root, baseline, 1, deadline, [], over))
+            rejects(lambda: launcher.probe_resource_check(root, baseline, 1, deadline, [], over, scan=False))
+    print('PASS archive staging traversal falsifier; real gzip/tar/scratch, whole/support/subset/missing/duplicate authentication and scratch/deadline/monitor guards; no native/corpus/GT')
+
+
 def self_check():
     """Stdlib, mocked process boundaries, tiny format fixture; no native/corpus."""
     def rejects(action):
@@ -1082,6 +1147,7 @@ def self_check():
         except (ValueError, OSError, AssertionError, TimeoutError):
             return
         raise AssertionError('negative probe accepted')
+    archive_staging_self_check()
     with tempfile.TemporaryDirectory(prefix='global-leaf-synthetic-') as tmp:
         root = Path(tmp); fixture = synthetic_dataset(root/'dataset')
         def validate():

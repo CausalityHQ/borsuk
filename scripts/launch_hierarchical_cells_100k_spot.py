@@ -1627,6 +1627,23 @@ def probe_canary(config, evidence, client, calls, scratch, check, deadline):
         ann_queries=0, native_processes=0, truth_or_panel_body_reads=0, dataset_payload_gets=0)
 
 
+def probe_resource_check(root, baseline, scratch_cap, deadline, errors, peaks, *, scan=True):
+    """Check deadlines immediately; inventory scratch at writes and in monitor."""
+    def admitted(amount):
+        require(amount <= scratch_cap and time.monotonic() < deadline and not errors,
+                'probe whole-host scratch/deadline/monitor')
+    admitted(peaks['scratch_bytes'])
+    if scan:
+        started = time.monotonic()
+        amount = scratch_snapshot(root, baseline)
+        if probe.ORIGINAL_ROOT.exists():
+            amount += local.directory_bytes(probe.ORIGINAL_ROOT)
+        peaks['scratch_bytes'] = max(peaks['scratch_bytes'], amount)
+        peaks['scratch_scan_calls'] = peaks.get('scratch_scan_calls', 0)+1
+        peaks['scratch_scan_seconds'] = peaks.get('scratch_scan_seconds', 0)+time.monotonic()-started
+        admitted(amount)
+
+
 def probe_stage(repo, output, worker_root, *, canary=False):
     repo, out, root = map(lambda p: Path(p).resolve(), (repo, output, worker_root))
     require(out.is_relative_to(root) and repo == root/'probe-repo', 'probe orchestration root ownership')
@@ -1652,12 +1669,8 @@ def probe_stage(repo, output, worker_root, *, canary=False):
     def interrupted(*_):
         raise InterruptedError('probe cumulative resource/deadline interruption')
     signal.signal(signal.SIGALRM, interrupted); signal.signal(signal.SIGTERM, interrupted)
-    def check():
-        amount = scratch_snapshot(root, baseline)
-        if probe.ORIGINAL_ROOT.exists():
-            amount += local.directory_bytes(probe.ORIGINAL_ROOT)
-        peaks['scratch_bytes'] = max(peaks['scratch_bytes'], amount)
-        require(amount <= scratch_cap and time.monotonic() < deadline and not errors, 'probe whole-host scratch/deadline/monitor')
+    def check(*, scan=True):
+        probe_resource_check(root, baseline, scratch_cap, deadline, errors, peaks, scan=scan)
     def monitor():
         while not stopped.wait(1):
             try:
