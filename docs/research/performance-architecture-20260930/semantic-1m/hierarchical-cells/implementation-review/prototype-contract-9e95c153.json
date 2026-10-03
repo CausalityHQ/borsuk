@@ -1,0 +1,714 @@
+{
+  "algorithm": {
+    "cell_order": "distance to cell prototype then source ordinal",
+    "data_layout": "cells.bin unchanged: each cell ID+SQ2 records followed immediately by all unchanged SQ8 records in <=32-row blocks. Directory adds whole-cell exact offset/length/SHA in addition to unchanged source/block descriptors. No extra concatenation copy during whole digest construction.",
+    "directory": "Full directories.bin SHA authenticated once at admitted startup; every page SHA and every whole/source/refinement descriptor, topology/count/physical-coverage invariant validated before visibility, including unused pages. Parsed BTreeMap retained; no directory handle/path or lazy query fallback.",
+    "directory_authentication": "unused interior directory corruption rejected at open; even separately repinning whole-file hash cannot override unchanged child descriptor SHA",
+    "fetch_policy_change_causal_boundary": "Root prospectively chose one first real WholeCell arm before GT. Synthetic comparison differs only fetch_policy. cells.bin bytes/ordering unchanged by source construction; no runtime byte comparison or scientific result asserted by this child.",
+    "historical_falsifier": "unchanged old-closure reorder FAIL remains immutable; this implementation changes nomination geometry",
+    "nomination": "Native original-f32-query PreparedTwoBit.score arithmetic; unchanged maximum row score per local32-row block; select blocks_per_cell best blocks within each selected cell. No f32 pre-normalization before SQ2 query preparation.",
+    "partition": "source-only binary local partitions; deterministic bounded sample -> existing train_logical_cell_centroids with SquaredEuclidean, two centers, four iterations -> streamed per-node assignment",
+    "ranking": "Normalized query supplied to unchanged returned_sq8::rank_returned_ranges with bound low/step; score then source ordinal ID tie-break. Routing receives the same normalized query as before; SQ2 receives original input as native serving does.",
+    "refinement": "WholeCell reads exactly each complete contiguous cell extent once, borrows nominated SQ8 slices from retained buffers and ranks locally; all unnominated SQ8 is still fetched/charged. TwoStage synthetic reads exactly nominated blocks in second wave; no old256 closure/gap covering.",
+    "reused_apis": [
+      "train_logical_cell_centroids",
+      "VectorMetric::SquaredEuclidean.distance",
+      "RotatedTwoBitCodec::new/prepare_query",
+      "PreparedTwoBit::score",
+      "sq8_source::cosine_vector",
+      "returned_sq8::rank_returned_ranges"
+    ],
+    "seed_admission": "Same fixed20260923 domain as current native two_bit_source.rs428; no custom seed acceptance for v3 artifacts or research root. This is admission parity, not a quantizer change.",
+    "skew_rule": "if min child population < ceil(parent_rows/4), deterministic widest-coordinate source median; identical sampled geometry skips trainer and takes same median path; ordinal tie-breaks",
+    "trainer_failures": "nonidentical-sample trainer errors propagate; no refit retry or configuration sweep"
+  },
+  "api": {
+    "artifact_fields": {
+      "bytes": "usize, exact regular-file bytes",
+      "path": "PathBuf",
+      "sha256": "String, trusted lowercase SHA256"
+    },
+    "build_config_fields": {
+      "canonical": "Artifact",
+      "cell_rows": "usize",
+      "generation": "Artifact",
+      "max_build_payload_bytes": "usize",
+      "max_depth": "usize",
+      "max_output_bytes": "usize",
+      "mean": "Artifact",
+      "order": "Artifact",
+      "plane": "Artifact",
+      "records": "Artifact",
+      "sample_rows": "usize",
+      "schema": "String",
+      "sq8": "Artifact"
+    },
+    "build_schema": "borsuk-hierarchical-cells-build-v1",
+    "cell_metadata": {
+      "refinement": "Vec<Span> of unchanged SQ8 blocks, each <=32 rows",
+      "source": "Span of ID+unchanged SQ2 records",
+      "whole": "Span {offset,bytes,sha256}; authenticated exact contiguous SOURCE+all SQ8 extent",
+      "whole_extent_invariant": "whole.offset=source.offset; whole.bytes=rows*(record_bytes+D+20); SOURCE then all refinement spans cover whole contiguously with exact bounds"
+    },
+    "directory_admission_fields": {
+      "encoded_bytes": "actual full encoded directory length from authenticated root",
+      "modeled_parsed_payload_bytes": "4*encoded_bytes + 256*(pages+cells) + 8*65536",
+      "modeled_preload_peak_bytes": "encoded_bytes + modeled_parsed_payload_bytes; cap checked before directory file open/read/body allocation",
+      "parsed_owned_capacity_bytes": "tracked Vec/String capacities in parsed node prototypes, child/refinement vectors and SHA strings; checked <=4*encoded_bytes; maps/root/codec/traversal/parser covered by remaining model allowance; not RSS"
+    },
+    "fetch_policy": {
+      "default": null,
+      "diagnostic_runner": "whole_cell only; two_stage is synthetic comparison only",
+      "rust": "pub enum FetchPolicy { WholeCell, TwoStage }",
+      "serde_values": [
+        "whole_cell",
+        "two_stage"
+      ]
+    },
+    "input_bindings": [
+      "generation.plane_manifest_sha256 equals pinned plane SHA",
+      "generation.canonical SHA/exact bytes/rows/dimensions equal pinned canonical",
+      "generation.sq8_object_sha256 and plane.sq8_sha256 equal pinned SQ8 SHA",
+      "plane.source_order_sha256 equals pinned order SHA",
+      "plane.records_sha256 and plane.mean_sha256 equal pinned source records and mean SHA",
+      "low/step read unchanged from generation root; seed read unchanged from plane",
+      "order is a full ordinal permutation; every canonical and SQ8 ID equals order[physical]",
+      "canonical vectors validated normalized and finite; two-bit widths/scalars validated with current codec",
+      "Current native plane-v3 fixed seed must equal20260923; repinned other seeds rejected before mean/order/canonical/source/SQ8 body reads; research root seed also checked before directory preload/codec allocation"
+    ],
+    "input_generation_schema": "borsuk-two-bit-generation-v8",
+    "input_layouts": {
+      "canonical": "physical records: LE i64 source ordinal ID, then D LE f32 normalized coordinates",
+      "mean": "D LE f32 codec mean values",
+      "order": "one LE u64 source ordinal per original physical position",
+      "records": "unchanged current Rust-v1 packed two-bit record; D768 is 200 bytes",
+      "sq8": "unchanged physical records: LE i64 ordinal ID, LE f32 squared norm, D unsigned code bytes"
+    },
+    "input_plane_schema": "borsuk-two-bit-plane-v3",
+    "loss_claim_boundary": "stage coverage and boundary recovery, not independently identified causal estimates",
+    "loss_fields": [
+      "truth_count",
+      "primary_hits",
+      "boundary_hits",
+      "nomination_hits",
+      "returned_hits",
+      "router_misses",
+      "boundary_recovered",
+      "boundary_misses",
+      "local_nomination_misses",
+      "final_ranking_misses"
+    ],
+    "loss_identity": "truth_count = boundary_misses + local_nomination_misses + final_ranking_misses + returned_hits; router_misses is pre-boundary loss and is not separately additive",
+    "module": "borsuk::hierarchical_semantic_cells",
+    "native_codec_seed": 20260923,
+    "old_research_artifact_reader": false,
+    "prototype_public_startup_fields": {
+      "directory_admission": "DirectoryAdmission {encoded_bytes, modeled_parsed_payload_bytes, modeled_preload_peak_bytes, parsed_owned_capacity_bytes}",
+      "startup": "ReadStats, one bounded authenticated research root payload load",
+      "startup_directory": "ReadStats, one exact authenticated FULL directories.bin payload load"
+    },
+    "query_preparation_parity": {
+      "native_reference": "two_bit_generation.rs original-input prepare_query at1536-1546 and1586-1590; normalized discovery follows; raw codec inverse_query_norm unchanged",
+      "normalized_query": "cosine_vector(original_query) only for resident hierarchy route and unchanged returned_sq8 ranking",
+      "original_query": "Prototype::search input slice, retained without mutation or float renormalization for RotatedTwoBitCodec::prepare_query(query,400000)",
+      "preparation_allocation_admission": "existing query payload and selected-cell batch caps still precede SQ2 lookup preparation/body reads",
+      "regression": "Explicit asymmetric nonunit input, nonzero fixed mean, native original-query score bits differ from negative-control f32-prenormalized scores, and winning32row block differs; actual WholeCell nomination must equal original-query native reference. Synthetic source-only regression UNRUN."
+    },
+    "refinement_admission_population": {
+      "failure": "Admission or authentication failure is INVALID and keeps prior attempted/verified operation receipts; no partial quality result.",
+      "invariant": "Successful searches rank exactly all locally nominated blocks. WholeCell admits full selected-cell batch before fetching/nomination, so all nominated rows already reside in authenticated fetched buffers. TwoStage separately admits all nominated blocks before refinement fetches. No secondary truncation/widening.",
+      "limitation": "No separately named refinement_admitted_ids field; exact successful-query admitted population equals nominated_ids. Separate covered/population and whole overfetch operation receipt remain visible; an INVALID query cannot be interpreted as zero admission loss.",
+      "separate_operation_receipt": "WholeCell: accounting.whole_cell contains all SQ2+all SQ8 bytes, not just nominated SQ8; accounting.refinement zero. TwoStage: accounting.refinement.",
+      "success_roster_source": "SearchTrace.nominated_ids",
+      "success_rows": "SearchTrace.nominated_ids.len()"
+    },
+    "research_artifact_schema": "borsuk-hierarchical-cells-resident-v3",
+    "search_failure_fields": {
+      "accounting": "all attempted and verified operations up to failure",
+      "message": "String"
+    },
+    "search_options_fields": {
+      "blocks_per_cell": "usize",
+      "boundary_beam": "usize",
+      "fetch_policy": "FetchPolicy, required explicit snake_case value",
+      "max_cell_bytes": "usize, total full-cell payload cap including all overfetched SQ8",
+      "max_cell_gets": "usize, total WholeCell operation cap",
+      "max_cells": "usize, selected-cell union cap",
+      "max_query_payload_bytes": "usize",
+      "max_refinement_bytes": "usize, required field; applies to TwoStage only, never a WholeCell secondary cap",
+      "max_refinement_gets": "usize, required field; applies to TwoStage only, never a WholeCell secondary cap",
+      "max_source_bytes": "usize, required field; applies to TwoStage only, never a WholeCell secondary cap",
+      "max_source_gets": "usize, required field; applies to TwoStage only, never a WholeCell secondary cap",
+      "primary_beam": "usize"
+    },
+    "search_success_fields": {
+      "accounting": "Accounting {directory,whole_cell,source,refinement,waves,modeled_query_payload_bytes}; directory always zero. WholeCell: whole_cell only, one WholeCell wave, source/refinement zero. TwoStage synthetic: whole_cell zero, Source then Refinement waves.",
+      "covered_ids": "sorted unique source ordinals in union of primary and independent wider-beam cells",
+      "final_ranking": "StageTime",
+      "local_nomination": "StageTime",
+      "nominated_ids": "sorted unique source ordinals in complete selected cell-local refinement blocks",
+      "primary_ids": "sorted unique source ordinals in primary-beam cells",
+      "returned": "SQ8-ranked RankedRow {ordinal,id,score}; ordinal is candidate cell-concatenation physical position; id is unchanged source ordinal",
+      "routing": "StageTime"
+    },
+    "signatures": [
+      "pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>",
+      "pub fn build(config: &BuildConfig, output: &std::path::Path) -> Result<BuildReceipt>",
+      "pub fn Prototype::open(path: &std::path::Path, root_sha256: &str, max_resident_directory_payload_bytes: usize) -> Result<Prototype>",
+      "pub fn Prototype::rows(&self) -> usize",
+      "pub fn Prototype::dimensions(&self) -> usize",
+      "pub fn Prototype::search(&self, query: &[f32], top_k: usize, options: SearchOptions) -> std::result::Result<SearchTrace, SearchFailure>",
+      "pub fn decompose_loss(trace: &SearchTrace, truth: &[i64]) -> Result<LossDecomposition>",
+      "pub fn process_memory_snapshot() -> (Option<u64>, Option<u64>)",
+      "pub fn Artifact::read(&self, cap: usize) -> Result<Vec<u8>>"
+    ],
+    "strict_config_unknown_fields_rejected": true
+  },
+  "base_commit": "98695c53623aef7ca8972d7c41b772ef8ddfc243",
+  "branch": "devbox/hierarchical-cell-100k-prototype",
+  "claim_boundaries": [
+    "UNVERIFIED until exact-source external gates pass",
+    "synthetic fixtures are not real admission evidence",
+    "no measured quality/latency/RSS/network-cost or production-ready claim",
+    "no unchanged current 100k control claimed by this contract",
+    "no frozen benchmark threshold chosen by child"
+  ],
+  "commit": "9e95c1530431b1f15a5c69201f14bf506d6dbbbd",
+  "correction_base_commit": "7e79bf45a1470909f1629f235b52df81b3f8af1a",
+  "correction_scope": "Final assigned P1/P2/seed source-only candidate. P1 original-query SQ2 preserved from7e79, asymmetric nonunit/nonzero-mean score-bit+near-tie negative control explicit. P2 owned bin reserves4096 terminal bytes and routes every post-safe-creation diagnose Result error through fsynced INVALID closer, retaining frozen prefix and bounded query failure accounting. Fixed native-v3 seed20260923 enforced at build and open before payload read. Module registration unchanged; no further architecture/quantizer/route/beam/fetch-policy/schema/public-API/default change.",
+  "current_writer_admission_requirement": {
+    "native_fixtures_do_not_discharge_preparation_gate": true,
+    "no_legacyreader_or_historical_marker_relabel": true,
+    "owner": "parent current-writer preparation / separate authorized qualification lane",
+    "parity_failure": "INVALID for one-causal-layout-arm admission; do not silently relabel changed quantizer/scorer payload as the same layout arm",
+    "required_binding_checks": [
+      "authenticate both sides against pinned descriptors",
+      "same codec seed, dimensions and two-bit record scalar semantics",
+      "same low/step f32 bits",
+      "same physical order permutation and canonical/SQ8 source ordinal IDs",
+      "current-generation-v8/plane-v3 format admission on exact qualified source"
+    ],
+    "required_byte_comparisons": [
+      "current-writer mean.bin equals retained mean.bin byte for byte",
+      "current-writer records.bin equals retained records.bin byte for byte",
+      "current-writer SQ8 body equals retained SQ8 body byte for byte"
+    ],
+    "retained_sources": "100k plane-v2/root-v7 artifacts are historical immutable inputs; prototype has no reader for those schemas"
+  },
+  "executable": {
+    "binary_name": "hierarchical_semantic_cells",
+    "build_usage": "hierarchical_semantic_cells build CONFIG CONFIG_SHA256 NEW_DIRECTORY",
+    "diagnose_usage": "hierarchical_semantic_cells diagnose CONFIG CONFIG_SHA256 NEW_JSONL",
+    "diagnostic_config_fields": {
+      "candidate_root": "Artifact with path ending manifest.json",
+      "count": "usize",
+      "first": "usize",
+      "max_evaluator_payload_bytes": "usize",
+      "max_resident_directory_payload_bytes": "usize; explicit full-directory preload peak admission, <=512 MiB; no default",
+      "max_result_bytes": "usize,4096..=536870912;4096 reserved for terminal record",
+      "options": "SearchOptions with mandatory fetch_policy=whole_cell; max_cells/max_cell_gets <=32; max_cell_bytes <=16MiB. Inactive TwoStage fields remain explicit required fields.",
+      "requests": "Artifact",
+      "schema": "String",
+      "top_k": "usize",
+      "truth": "Option<Artifact>",
+      "truth_width": "usize, 0 if no truth; otherwise top_k..=100"
+    },
+    "diagnostic_policy_admission": {
+      "fetch_policy": "whole_cell only",
+      "max_cell_bytes": [
+        1,
+        16777216
+      ],
+      "max_cell_gets": [
+        1,
+        32
+      ],
+      "max_cells": [
+        1,
+        32
+      ],
+      "rejection": "before candidate/request body reads and query execution; no TwoStage real second arm/sweep"
+    },
+    "diagnostic_schema": "borsuk-hierarchical-cells-diagnostic-v3",
+    "execution_error": "Before safe create_new output: explicit stderrINVALID/exit2, no overwrite. After output creation: all ordinary diagnose Result failures enter reserved terminal closer, append fsynced INVALID complete=false, preserve prior frozen prefix and bounded error/last query accounting, and remain exit2. Successful work appends fsynced DIAGNOSTIC. Failure writing/syncing terminal remains explicit nonzero and cannot establish durable closure; no false partial quality/qualification status.",
+    "measured_claims": false,
+    "network_transport_present": false,
+    "output_phases": [
+      "identity",
+      "query_frozen",
+      "all_queries_frozen",
+      "loss_attribution (only if truth supplied)",
+      "terminal"
+    ],
+    "requests": "JSONL strict {ordinal: usize, query: Vec<f32>}, exactly count rows; ordinal is first+index; no truth/nominees fields",
+    "startup_identity_fields": [
+      "startup",
+      "startup_directory",
+      "directory_admission",
+      "max_resident_directory_payload_bytes"
+    ],
+    "success_statuses": [
+      "BUILT_UNQUALIFIED",
+      "DIAGNOSTIC"
+    ],
+    "terminal_closure": {
+      "created_output_policy": "create_new only; post-creation diagnose body entirely inside Events::run; one terminal after work success/error, sync_all before return/stdout; never overwrite prior traces",
+      "durability_boundary": "logical budget/authentication/roster failures close through reserved footer; terminal filesystem write/fsync errors remain nonzero, never a closed-success claim",
+      "error_message_max_unicode_chars": 256,
+      "late_truth_failures": "geometry/SHA/ordinal roster/frozen-prefix errors become terminalINVALID without re-running search or promoting partial attribution",
+      "normal_event_budget": "max_result_bytes-4096, admitted before each write",
+      "query_error_receipt": "terminal keeps ordinal, accounting and truth_opened=false; last successful-search receipt retained if its query_frozen event fails output admission, otherwise cleared to avoid duplicate query charge",
+      "terminal_reserved_bytes": 4096
+    },
+    "truth": "optional exact count * truth_width * 4 bytes of row-major LE u32 source ordinals; first top_k positions used for attribution",
+    "truth_open_order": "all query_frozen traces -> synced all_queries_frozen prefix-digest marker -> verify synced prefix digest -> open authenticated truth -> offline attribution",
+    "underfill": "explicit underfilled flag on each successful frozen query; returned roster length may be below top_k"
+  },
+  "execution_authority": {
+    "agent_complete_called": false,
+    "child": "borsuk/hierarchical-cell-100k-prototype",
+    "child_cargo_authorized": false,
+    "child_merge_push_or_pr_authorized": false,
+    "child_network_or_aws_authorized": false,
+    "child_paid_runs_consults_or_extra_children_authorized": false,
+    "child_real_data_reads_authorized": false,
+    "protocol_envelopes_panel_and_integration_owner": "borsuk/prod-ready-v9",
+    "remote_gates_owner": "parent-selected bounded remote qualifier worker; shared2 plus gate shell; no native overlap",
+    "retain_same_child": true
+  },
+  "git_author": "Roman Bartusiak <riomus@gmail.com>",
+  "historical_candidate": {
+    "commit": "b0c49ac6ca5e822039e594ad15480779ab53f4c6",
+    "contract": "/tmp/borsuk-hierarchical-cell-100k-prototype-contract-b0c49ac6.json",
+    "contract_sha256": "a5f2f36b5dbc004c52ac394d1281868d82edaa87de3d5f151ab2b992dd690cd3",
+    "static_review_disposition": "binary on-demand directory adds one query dependency per level; does not test intended low-query-wave architecture; replaced by resident policy before native/GT qualification",
+    "status": "UNVERIFIED_IMMUTABLE_HISTORY"
+  },
+  "historical_fixture_repair": {
+    "blocker": "query_inner normalized f32 query before codec.prepare_query, differing from native serving original-query preparation; can change SQ2 score bits and local nomination ties",
+    "commit": "01e87e1dac060355e6322ad9d0e0378eeeaadea7",
+    "contract": "/tmp/borsuk-hierarchical-cell-100k-prototype-contract-01e87e1d.json",
+    "contract_sha256": "f54900428266afb9b6abd93cefa6216d32ba1560420f384493952f02a61982cb",
+    "evidence_owner": "root independently traced after engineering-review partial; complete review awaited by root before external retry",
+    "native_rerun_by_child": false,
+    "status": "STATIC_SQ2_QUERY_PREPARATION_PARITY_BLOCKER_NO_QUALIFICATION_CLAIM"
+  },
+  "historical_partial_scorer_repair": {
+    "commit": "7e79bf45a1470909f1629f235b52df81b3f8af1a",
+    "contract": "/tmp/borsuk-hierarchical-cell-100k-prototype-contract-7e79bf45.json",
+    "contract_sha256": "d0f6884373bef59f13ef802db315ed2c180e93e06ff0e4a7d439a7de07b72411",
+    "native_execution": false,
+    "preserved": true,
+    "status": "UNVERIFIED_P1_ONLY_CHECKPOINT_P2_SEED_NOT_YET_APPLIED"
+  },
+  "historical_resident_repair": {
+    "commit": "0667ac84a0ec029f14286e750632b37c50d5d5b9",
+    "contract": "/tmp/borsuk-hierarchical-cell-100k-prototype-contract-0667ac84.json",
+    "contract_sha256": "f59ef3786e8d37836067dc95e7d38b474ff2cae67258494c329178dab4e58350",
+    "static_review_disposition": "resident preload correction preserved; real first-arm policy subsequently selected prospectively by parent as WholeCell",
+    "status": "UNVERIFIED_PRESERVED_DISTINCT_RESIDENT_TWO_STAGE_SOURCE"
+  },
+  "historical_whole_cell_candidate": {
+    "commit": "da80bb508a421cc7e61cb1ac2ef2caf9a3aa9c62",
+    "contract": "/tmp/borsuk-hierarchical-cell-100k-prototype-contract-da80bb50.json",
+    "contract_sha256": "349835c505a08458622604aff3fb08d2cdf6769d209a03ee9af85b7c6c57bde6",
+    "evidence_log": "/home/rb/worktrees/borsuk-hierarchical-cells-qualification/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/a0001/test.log",
+    "evidence_log_sha256": "2ccb5e97b5161e33bcb080a696313c75940e51626b01b7b61bd08e2669cabd1d",
+    "failure": "E0599 at fixture canonical-vector to_le_bytes on &{float}; Vec literal unconstrained before method lookup",
+    "first_remote_stage_receipt": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "hierarchical_semantic_cells::"
+      ],
+      "exit_status": 101,
+      "finished_at": "2026-10-03T05:37:57Z",
+      "gate_status": 101,
+      "required_test_passes": {
+        "hierarchical_semantic_cells::tests::cell_local_block_nomination_omits_other_blocks_even_for_tied_codes": 0,
+        "hierarchical_semantic_cells::tests::identical_geometry_is_bounded_and_reproducible_without_truth": 0,
+        "hierarchical_semantic_cells::tests::loss_receipt_separates_boundary_recovery_nomination_and_final_ranking": 0,
+        "hierarchical_semantic_cells::tests::resident_directory_preload_is_admitted_charged_and_has_no_query_reads": 0,
+        "hierarchical_semantic_cells::tests::resident_preload_rejects_corrupt_unused_interior_page": 0,
+        "hierarchical_semantic_cells::tests::semantic_cells_do_not_close_over_old_pages_and_keep_unchanged_ranking": 0,
+        "hierarchical_semantic_cells::tests::source_id_binding_budgets_and_corruption_fail_closed_with_charges": 0,
+        "hierarchical_semantic_cells::tests::whole_cell_matches_two_stage_with_one_wave_and_full_payload_charges": 0
+      },
+      "schema": "borsuk-hierarchical-cells-implementation-stage-v1",
+      "stage": "hierarchical-cell-tests",
+      "started_at": "2026-10-03T05:34:48Z",
+      "tests_run": 0
+    },
+    "other_gates": "not reached; no green/qualification claim",
+    "parent_reported_closeout": {
+      "elapsed_seconds": 296,
+      "execution": "6415",
+      "independent_child_cloud_actions": false,
+      "instance": "i-0ff1f4022c2bb0d51",
+      "source_map": "source401 cff2e3c2 before/after exact unchanged",
+      "state": "terminated and waited"
+    },
+    "status": "REMOTE_NATIVE_GATE_FAILURE_101_NOT_SCIENTIFIC_FAIL"
+  },
+  "mandatory_tests": {
+    "binary_names": [
+      "tests::configurations_reject_unknown_fields_and_truth_in_requests",
+      "tests::created_outputs_close_invalid_on_bad_truth_or_output_cap_without_overwrite"
+    ],
+    "binary_policy_assertions": "Existing binary configuration test rejects TwoStage and max_cell_gets33; strict unknown fields/truth-in-request rejection retained.",
+    "binary_target": "hierarchical_semantic_cells",
+    "fixed_seed_negative_in_existing_fixture": {
+      "build": "repin wrong-seed plane+generation SHA and displace mean file; reject fixed-seed domain before body read",
+      "name": "hierarchical_semantic_cells::tests::source_id_binding_budgets_and_corruption_fail_closed_with_charges",
+      "open": "repin wrong-seed research root SHA and displace directory file; reject fixed-seed domain before directory file open/body allocation",
+      "run_status": "AUTHORED_UNRUN"
+    },
+    "mandatory_evidence": "exact source archive/revision, command, bounded compiler environment, command exit status and log; parent qualifier owns gate shell and scheduling",
+    "module_names": [
+      "hierarchical_semantic_cells::tests::semantic_cells_do_not_close_over_old_pages_and_keep_unchanged_ranking",
+      "hierarchical_semantic_cells::tests::identical_geometry_is_bounded_and_reproducible_without_truth",
+      "hierarchical_semantic_cells::tests::source_id_binding_budgets_and_corruption_fail_closed_with_charges",
+      "hierarchical_semantic_cells::tests::loss_receipt_separates_boundary_recovery_nomination_and_final_ranking",
+      "hierarchical_semantic_cells::tests::cell_local_block_nomination_omits_other_blocks_even_for_tied_codes",
+      "hierarchical_semantic_cells::tests::resident_directory_preload_is_admitted_charged_and_has_no_query_reads",
+      "hierarchical_semantic_cells::tests::resident_preload_rejects_corrupt_unused_interior_page",
+      "hierarchical_semantic_cells::tests::whole_cell_matches_two_stage_with_one_wave_and_full_payload_charges",
+      "hierarchical_semantic_cells::tests::nonunit_query_nonzero_mean_preserves_native_sq2_scoring_and_nomination"
+    ],
+    "module_target": "borsuk library",
+    "original_query_parity_falsifier": {
+      "asymmetric_input_required": true,
+      "bounded_construction": "Native scores of two encoded basis rows derive score-tie direction; at most128fixed scales*5adjacent-f32 candidates build a nonunit rounding witness; no external queries/truth, native CLI, trainer retry or scientific parameter sweep",
+      "fixture": "65rows/D2, two unit basis source vectors, nonzero fixed codec mean[0.31,-0.17], cell cap512; one cell with different block populations",
+      "name": "hierarchical_semantic_cells::tests::nonunit_query_nonzero_mean_preserves_native_sq2_scoring_and_nomination",
+      "negative_control": "requires original-input and prenormalized-input native PreparedTwoBit score bits AND winning local-block indexes to differ, so broken pre-normalization would fail actual nomination equality",
+      "required_parity": "WholeCell covered IDs exactly0..64; nominated IDs exactly original-query native-score winning block, with unchanged earliest-block tie-break",
+      "resource_bound": "one65row/D2 synthetic build, one source body for reference, at most640pairs of tiny D2 scorer preparations, one WholeCell search; no N*D real input or native job",
+      "run_status": "AUTHORED_UNRUN"
+    },
+    "remote_commands_not_run_here": [
+      "cargo test --locked -p borsuk --lib hierarchical_semantic_cells::",
+      "cargo test --locked -p borsuk --bin hierarchical_semantic_cells",
+      "cargo build --locked --release -p borsuk --bin hierarchical_semantic_cells --example two_bit_http",
+      "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "bash scripts/check_rust_test_build.sh"
+    ],
+    "resident_falsifiers": [
+      "preload cap rejects before bodyread (directory file displaced)",
+      "startup_directory bytes equal actual whole directory size",
+      "successful repeated queries after removing directory file have directoryGET0/bytes0 and two waves",
+      "unused interior page corruption rejects at open under original whole-file SHA and after separately repinning whole-file SHA due unchanged child SHA"
+    ],
+    "same_fixture_tail_and_zero_query_assertions": {
+      "added_test_names": 0,
+      "fixture_rows": 257,
+      "required_ids": "exact0..256 in covered/nominated/returned rosters",
+      "short_tail_rows": 1,
+      "tail_payload_charge": "SOURCE=257*(8+record_bytes), SQ8=257*(12+2); no padded32row tail charge",
+      "test_name": "hierarchical_semantic_cells::tests::cell_local_block_nomination_omits_other_blocks_even_for_tied_codes",
+      "zero_query_cap": "All four receipts get0/requestedbytes0; waves empty; modeled_query_payload_bytes0"
+    },
+    "terminal_closure_falsifier": {
+      "assertions": [
+        "bad mock-truth hash after synced frozen marker ends with one fsyncedINVALID terminal",
+        "normal output budget refusal after same marker uses reserved terminal bytes and returnsErr",
+        "prior frozen prefix unchanged, total bytes match receipt and never exceed output cap",
+        "existing output cannot be overwritten",
+        "success closes withDIAGNOSTIC; too-small terminal cap rejects before file creation"
+      ],
+      "fixture": "tiny mock frozen-prefix JSONL and4byte bad-hash mock artifact; no corpus/truth/native execution here",
+      "name": "tests::created_outputs_close_invalid_on_bad_truth_or_output_cap_without_overwrite",
+      "run_status": "AUTHORED_UNRUN"
+    },
+    "total_authored_test_names": 11,
+    "whole_cell_falsifier": {
+      "assertions": [
+        "primary/covered/nominated source ID rosters equal",
+        "returned (logical ordinal, source ID, score bits) identical",
+        "nomination excludes at least one overfetched SQ8 row",
+        "WholeCell total charged bytes=covered rows*988, strictly more than synthetic two-stage bytes",
+        "WholeCell gets equal synthetic Source gets; exactly one WholeCell wave, directory/source/refinement query receipts zero",
+        "startup directory bytes unaffected by repeated query policies",
+        "complete WholeCell byte batch cap rejects before any operation/wave"
+      ],
+      "fixture": "same257row/D768 identical-geometry candidate, cell_rows64; same options except fetch_policy",
+      "name": "hierarchical_semantic_cells::tests::whole_cell_matches_two_stage_with_one_wave_and_full_payload_charges"
+    }
+  },
+  "one_wave_viability_report_separate": {
+    "D768_512row_full_cell_bytes": 505856,
+    "D768_512row_two_wave_one_32row_block_bytes": 131456,
+    "byte_ratio": 3.848101265822785,
+    "dependency_waves_after_preload": "1 versus 2",
+    "gets": "1 per selected cell versus 1+blocks_per_cell",
+    "limitation": "Full512row/one32rowblock geometry costs ~3.85x payload; no latency/RSS/dollar prediction. Parent prospectively selected one first real WholeCell arm with 32cells/32totalcellGET/16MiB; TwoStage synthetic comparison only, no second real arm/sweep.",
+    "minimal_idea": "fetch each entire contiguous cell SQ2+SQ8 extent in one GET; unchanged SQ2 nomination and rank only nominated SQ8 blocks from fetched buffer",
+    "status": "ARITHMETIC_VIABILITY_REPORTED_BEFORE_GT_THEN_ROOT_SELECTED_WHOLECELL_SOURCE_UNVERIFIED"
+  },
+  "owned_files": [
+    {
+      "bytes": 94229,
+      "ownership": "new research-only file",
+      "path": "crates/borsuk/src/hierarchical_semantic_cells.rs",
+      "sha256": "f14b86361ca7da229822a81016f0c5641ab48a850e19aa4c4257e125a003d6ad"
+    },
+    {
+      "bytes": 19547,
+      "ownership": "new research-only file",
+      "path": "crates/borsuk/src/bin/hierarchical_semantic_cells.rs",
+      "sha256": "99730faeea64fde6ba33dc6c05e99ee77cc07b48e4350bd089537a9fa672b686"
+    },
+    {
+      "bytes": 43201,
+      "ownership": "one module-registration line only",
+      "path": "crates/borsuk/src/lib.rs",
+      "sha256": "26748fb9b430ea4ab37eac79b23569f2845aa7b350e4a53d972465212622b3d4"
+    }
+  ],
+  "pending_test_coverage_review": {
+    "hold_history": "Optional ef1a6125 test-only commit parked before original remote terminal, restored clean da80, never amended failed candidate. Root subsequently authorized inclusion after authenticated a0001 gate failure; ef1 remains local historical reference, not integrated independently.",
+    "short_tail": "Existing cell_local_block_nomination_omits_other_blocks_even_for_tied_codes now admits every cell/block in same257row/D2 identical fixture, checks every source ID0..256, zero scores and exact SOURCE/SQ8 bytes, including final33row cell one-row SQ8 tail. Synthetic coverage only; no real second arm/sweep.",
+    "status": "AUTHORIZED_ASSERTIONS_AUTHORED_IN_EXACT_REPAIR_NOT_EXECUTED",
+    "zero_query_budget": "Same test max_query_payload_bytes1 now asserts all directory/whole/source/refinement gets+requestedbytes zero, no waves, modeled payload zero. Production cap location precedes query normalization/frontier/roster/codec/body allocation. Full-directory cap-before-open/body-allocation falsifier unchanged."
+  },
+  "prospective_panel_from_parent_only": {
+    "consumed_ordinals": [
+      0,
+      63
+    ],
+    "datasets": [
+      "ReLAION",
+      "CoHere"
+    ],
+    "dimensions": 768,
+    "held_out_claim": false,
+    "metric": "cosine",
+    "protocol_owner": "parent next100k-protocol-draft.md; not read or altered by child for contract",
+    "rows_per_dataset": 100000,
+    "top_k": 100
+  },
+  "repair_root_cause": "Prototype shadowed original query with cosine_vector output and supplied that f32-renormalized vector to prepare_query. Native serving supplies original f32 input and lets codec compute inverse_query_norm. This repair uses original borrowed slice for SQ2, normalized vector only for routing/SQ8; preserves arithmetic/mean/encoded records and all source policy.",
+  "repo": "/home/rb/worktrees/borsuk-hierarchical-cell-100k-prototype",
+  "resource_contract": {
+    "D768_cell_source_row_bytes": 208,
+    "D768_combined_whole_cell_row_bytes": 988,
+    "D768_new_cell_payload_for_100k_bytes": 98800000,
+    "D768_refinement_row_bytes": 780,
+    "D768_two_bit_record_bytes": 200,
+    "RSS_limitation": "Linux RSS end snapshot and lifetime HWM only; no independent stage peak, cgroup or simultaneous-generation claim; external remote monitor must measure peaks/build scratch",
+    "accepted_geometry_caps": {
+      "cell_rows": [
+        1,
+        512
+      ],
+      "dimensions": [
+        1,
+        768
+      ],
+      "max_depth": [
+        1,
+        32
+      ],
+      "rows": [
+        1,
+        100000
+      ],
+      "sample_rows": [
+        2,
+        1024
+      ]
+    },
+    "all_build_and_query_options_explicit_parent_frozen": true,
+    "build_output_admission": "each append reserves 65536 manifest bytes and enforces max_output_bytes; root installed last by no-replace rename; failure unpublished staging cleaned by tempfile",
+    "build_payload_admission": "must not exceed supplied max_build_payload_bytes before source geometry reads/allocations",
+    "build_payload_model_bytes": "96*N + 16*sample_rows*D + 64*max_depth*D + 4*cell_rows*(D+12+record_bytes+8) + 16*65536",
+    "build_scratch": "one temporary new output directory, complete artifact coexistence with pinned inputs; no N*D hydration; streamed canonical seeks, N-sized IDs/inverse/order, bounded sample/cell buffers and recursive prototypes",
+    "combined_whole_cell_accounting": "Accounting.whole_cell and one FetchStage::WholeCell wave charge every selected full-cell requested/verified byte, including all overfetched unnominated SQ8. Failed full-cell reads charged before rejection. SOURCE/refinement receipts stay zero; local subspan SHA and ID checks create no payload operation or duplicate byte charge.",
+    "dependency_waves": "WholeCell one selected-cell payload wave after admitted preload, then local nomination/ranking with no refinement payload read. Synthetic TwoStage two waves Source->Refinement. Resident binary traversal is CPU only. Serial local adapter cannot establish cloud concurrency, latency, QPS, wire bytes, or cost.",
+    "diagnostic_caps": {
+      "count": 1000,
+      "evaluator_payload_bytes": 268435456,
+      "event_bytes": 8388608,
+      "requests_bytes": 33554432,
+      "result_bytes": 536870912,
+      "result_bytes_minimum": 4096,
+      "terminal_error_message_max_unicode_chars": 256,
+      "terminal_reserve_bytes": 4096
+    },
+    "directory_fanout": 2,
+    "directory_preload_cap_bytes_upper_bound": 536870912,
+    "directory_preload_peak_model_bytes": "5*B + 256*(P+C) + 8*65536; B=actual encoded fullbytes, P=actual pages, C=actual cells",
+    "disk_charge": "BuildReceipt.input_bytes plus BuildReceipt.output_bytes, plus parent-owned source preparation, source archives, gate targets, runtime/page-cache/journal/upload costs if present; staging is renamed once and is not a second full output copy",
+    "evaluator_payload_model": "4*requests.bytes + 32*1024*1024; includes bounded request parsing and frozen-event attribution scratch, separate from query model",
+    "full_directory_scale_formula": {
+      "100M_boundary": "formula extensions are arithmetic only; source rejects N>100k; no 100M feasibility or bounded-resident-root claim, no upper-resident/lower-paged scalability mode implemented",
+      "cell_envelope": "for N>S, ceil(N/S) <= C <= floor(N/ceil((S+1)/4)); source-skew repair guarantees each terminal child at least ceil((S+1)/4) rows; for N<=S, C=1",
+      "descriptor_envelope": "ceil(N/32) <= K <= ceil(N/32)+C-1",
+      "encoded_growth": "B=O(P*D+P+C+K), B<=65536*P; actual coefficient depends on canonical float serialization and descriptor bytes",
+      "resident_growth": "4B+256(P+C)+524288; startup coexistence=5B+256(P+C)+524288",
+      "variables": "N rows, D dimensions, S maximum cell rows, C actual cells, P=max(1,C-1) pages, K=sum over cells ceil(n_cell/32), B=sum exact serialized page bytes"
+    },
+    "host_concurrency_and_pins": "CLI serial; library no host semaphore. Charge every distinct pinned full-directory/root resident allowance + C_active*per-query model + evaluator, caches, runtime/allocator/OS and source/generation overlap. Full-directory startup coexistence model separately charged.",
+    "parsed_capacity_bound_justification": [
+      "Builder canonical JSON emits f32 coordinates with at least four serialized bytes per coordinate including separator; Vec<f32> geometric capacity costs at most twice that encoded coordinate payload.",
+      "Inline node/Span vector capacities and owned 64-byte SHA strings fit remaining 4B allowance for canonical one/two-child pages; emitted shape bound is one/two children, <=768 coordinates, <=512 rows/cell and <=16 refinement descriptors/cell.",
+      "Startup explicitly measures all node-child Vec capacities, prototype Vec capacities, directory/whole/source SHA String capacities, refinement Vec<Span> capacities, and every refinement SHA String capacity; tracked total exceeding 4B is execution INVALID.",
+      "Topology BTreeMap/coverage/traversal containers use conservative 256*(P+C) allowance plus 8*ROOT_CAP for small-tree minimum allocations, root/codec, and one-page parser scratch; allocator/runtime/OS cache remain externally charged.",
+      "Whole encoded B coexists with parsed allowances during startup; the total admission check occurs before directory file open/read/body allocation. Source qualification must independently falsify this model with exact-source capacities/RSS and cannot treat it as measured memory feasibility.",
+      "resident-v3 adds whole Span inline node capacity and 64-byte whole SHA strings; parsed_owned_capacity_bytes includes both, and still rejects total owned Vec/String capacities >4*actual full encoded directory bytes. Existing 256*(P+C)+8*65536 container/root/parser allowance remains separate."
+    ],
+    "prospective_first_real_arm_from_parent": {
+      "D768_max_cell_rows": 512,
+      "arithmetic_max_payload_bytes": 16187392,
+      "arithmetic_only": true,
+      "fetch_policy": "whole_cell",
+      "maximum_cells": 32,
+      "maximum_total_cell_gets": 32,
+      "maximum_total_fetched_payload_bytes": 16777216,
+      "second_real_arm_or_sweep_authorized": false,
+      "source_of_policy": "root cross-agent authorization; selected prospectively before GT, not tuned to results"
+    },
+    "prospective_real_geometry": {
+      "dimensions": 768,
+      "metric": "cosine",
+      "rows": 100000
+    },
+    "query_batch_admission": "Selected union must fit max_cells; WholeCell complete exact whole spans must fit max_cell_gets/max_cell_bytes before any payload read. No narrowing/truncation. TwoStage source and subsequent nominated block batches separately admitted to synthetic tier caps.",
+    "query_caps": {
+      "blocks_per_cell": [
+        1,
+        16
+      ],
+      "boundary_beam": "primary_beam..=64",
+      "fetch_policy": [
+        "whole_cell",
+        "two_stage"
+      ],
+      "max_cell_bytes": "explicit total WholeCell fetched payload limit; runner enforces <=16777216",
+      "max_cell_gets": [
+        1,
+        128
+      ],
+      "max_cells": [
+        1,
+        128
+      ],
+      "max_query_payload_bytes_upper_bound": 536870912,
+      "max_refinement_gets": [
+        1,
+        2048
+      ],
+      "max_source_gets": [
+        1,
+        128
+      ],
+      "primary_beam": [
+        1,
+        64
+      ]
+    },
+    "query_codec_scratch_cap_bytes": 400000,
+    "query_directory_GETs_and_bytes": 0,
+    "query_payload_capacity_justification": "512 bytes per admitted covered row conservatively covers BTreeSet diagnostic rosters, expected-ID vectors, score/ordinal/hash rosters and selected descriptor/container storage; frontier allowance covers cloned Node/Vec/String capacities including whole SHA. WholeCell 3*bytecap covers retained full response buffers plus response/rank working headroom; SQ8 ranges borrow nominated slices with no body copy. Arithmetic model, not measured RSS; allocator/runtime/cache excluded and independently charged.",
+    "query_payload_model_bytes": "400000 + 512*max_cells*cell_rows + 8*(primary_beam+boundary_beam)*(4*D + 128*ceil(cell_rows/32) + 512) + responses; WholeCell responses=3*max_cell_bytes; synthetic TwoStage responses=2*max_source_bytes+3*max_refinement_bytes. Full startup/root resident allowance separate; overflow rejected before allocation.",
+    "query_total_operation_bound": "WholeCell query total=max actual selected cells <=min(max_cells,max_cell_gets), with directory/source/refinement operations zero. Runner hard envelope<=32total cell operations. Synthetic TwoStage total<=max_source_gets+max_refinement_gets, directory/whole_cell zero; 32/32 would mean64, not32. Startup root+full-directory operations charged separately.",
+    "read_stats": "submitted_gets/requested_bytes/verified_bytes/failed_gets count actual logical local positioned payload range reads, not network attempts, retries, wire bytes, latency or dollars; metadata syscalls excluded",
+    "refinement_block_rows": 32,
+    "resident_directory_payload_model_bytes": "4*B + 256*(P+C) + 8*65536",
+    "resident_directory_policy": "Complete authenticated directory for N<=100k, with whole/source/refinement descriptors, not size-independent root. Parsed metadata retained; encoded startup body dropped. WholeCell full data bodies on demand; TwoStage only synthetic.",
+    "root_config_and_directory_page_caps_bytes": 65536,
+    "stage_time_fields": [
+      "wall_ns",
+      "process_cpu_ns",
+      "rss_after_bytes",
+      "process_high_water_bytes"
+    ],
+    "startup": "research root payload load and exact full directory payload load separately reported; they form root->directory startup dependencies and are not free/amortized-away cold-service costs",
+    "terminal_memory_charge": "Bounded4096 terminal output and <=256character error plus small accounting/context Value are covered by existing separate32MiB evaluator working allowance; no real input hydration, public query model or operation/byte policy change."
+  },
+  "review_scope_and_gate_owner": {
+    "helper_wiring": "parent says new binary regression already wired; helper/recorders checks0, not native execution evidence",
+    "no_optional_expansion": true,
+    "parent_reported_gate_helper_commit": "96adb4a2",
+    "parent_reported_reviews": "both existing independent reviews CLOSED0; original-query parity and fixed seed confirmed; assigned P2 terminal closure also verified by root",
+    "repairs_only": [
+      "P1 original-query SQ2 and bounded asymmetric/nonzero-mean score+nomination regression",
+      "P2 post-created-output terminal closure and one tiny same-file mock-writer regression",
+      "native-v3 fixed seed admission and existing same-fixture refusal checks"
+    ],
+    "root_owns_next_external_gate": true
+  },
+  "root_prospective_parameter_draft_received": {
+    "build": {
+      "cell_rows": 512,
+      "max_depth": 32,
+      "sample_rows": 256
+    },
+    "claim_boundary": "parent draft/thresholds recorded, not selected or qualified by child; complete review/resource/protocol/source freeze owned by root before external retry/GT",
+    "independent_beam_union_upper_bound": 32,
+    "maximum_full_payload_arithmetic_bytes": 16187392,
+    "owner": "borsuk/prod-ready-v9",
+    "parent_prospective_one_arm_gate": {
+      "mean_R100_min": 0.98,
+      "p05_hits_min": 95,
+      "reuse": "explicit prospective V282 reuse for one arm only"
+    },
+    "query": {
+      "blocks_per_cell": 4,
+      "boundary_beam": 24,
+      "max_cell_bytes": 16777216,
+      "max_cell_gets": 32,
+      "max_cells": 32,
+      "primary_beam": 8
+    },
+    "recorded_from_authenticated_parent_message": true,
+    "source_payload_model_at_100k_D768": {
+      "build_bytes": 17390592,
+      "directory_root_host_evaluator_charge_separate": true,
+      "query_bytes": 60562048
+    },
+    "source_policy": "one real WholeCell arm only; TwoStage synthetic only"
+  },
+  "schema": "borsuk-hierarchical-cell-100k-prototype-contract-v3",
+  "source_mutated_for_this_contract": false,
+  "status": "UNVERIFIED_SOURCE_CANDIDATE_HELD_FOR_PARENT_QUALIFICATION",
+  "verification_completed": [
+    {
+      "command": "rustfmt --check --edition 2024 --config skip_children=true crates/borsuk/src/hierarchical_semantic_cells.rs crates/borsuk/src/bin/hierarchical_semantic_cells.rs crates/borsuk/src/lib.rs",
+      "exit_status": 0,
+      "source": "9e95c1530431b1f15a5c69201f14bf506d6dbbbd"
+    },
+    {
+      "command": "git diff --cached --check",
+      "exit_status": 0,
+      "source": "9e95c1530431b1f15a5c69201f14bf506d6dbbbd",
+      "timing": "before9e95c153 commit"
+    },
+    {
+      "command": "git status --short --branch",
+      "exit_status": 0,
+      "timing": "after9e95c153 commit",
+      "worktree_clean": true
+    },
+    {
+      "command": "owned3 SHA/Git-object/mandatory test-name authentication",
+      "exit_status": 0,
+      "result": "exact bytes and11 authored test names; no test execution",
+      "source": "9e95c1530431b1f15a5c69201f14bf506d6dbbbd"
+    }
+  ],
+  "verification_not_run": [
+    "Rust compilation",
+    "synthetic test execution",
+    "release/HTTP build",
+    "workspace Clippy",
+    "real workspace test compilation",
+    "real input admission",
+    "paired corpus diagnostic",
+    "network/cloud/performance experiment"
+  ]
+}
