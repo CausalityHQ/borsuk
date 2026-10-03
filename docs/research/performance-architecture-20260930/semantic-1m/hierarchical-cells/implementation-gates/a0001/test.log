@@ -1,0 +1,582 @@
+{"command": ["cargo", "test", "--locked", "-p", "borsuk", "--lib", "hierarchical_semantic_cells::"], "exit_status": null, "finished_at": null, "gate_status": null, "required_test_passes": null, "schema": "borsuk-hierarchical-cells-implementation-stage-v1", "stage": "hierarchical-cell-tests", "started_at": "2026-10-03T05:34:48Z", "tests_run": null}
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded rayon-core v1.13.0
+  Downloaded ahash v0.8.12
+  Downloaded rustc-hash v2.1.2
+  Downloaded rayon v1.12.0
+  Downloaded regex-syntax v0.8.11
+  Downloaded reqwest v0.13.4
+  Downloaded rustix v1.1.4
+  Downloaded rustls-native-certs v0.8.4
+  Downloaded rustls-pki-types v1.15.0
+  Downloaded regex v1.12.4
+  Downloaded thiserror v2.0.18
+  Downloaded try-lock v0.2.5
+  Downloaded zerofrom v0.1.8
+  Downloaded regex-automata v0.4.14
+  Downloaded rustversion v1.0.22
+  Downloaded rustls v0.23.45
+  Downloaded itoa v1.0.18
+  Downloaded ring v0.17.14
+  Downloaded simba v0.9.1
+  Downloaded lock_api v0.4.14
+  Downloaded signal-hook-registry v1.4.8
+  Downloaded socket2 v0.6.4
+  Downloaded litemap v0.8.2
+  Downloaded log v0.4.33
+  Downloaded snap v1.1.1
+  Downloaded tokio-macros v2.7.0
+  Downloaded approx v0.5.1
+  Downloaded arrayvec v0.7.7
+  Downloaded serde_urlencoded v0.7.1
+  Downloaded tiny-keccak v2.0.2
+  Downloaded tokio-util v0.7.18
+  Downloaded url v2.5.8
+  Downloaded itertools v0.13.0
+  Downloaded itertools v0.14.0
+  Downloaded itertools v0.15.0
+  Downloaded rustc_version v0.4.1
+  Downloaded serde v1.0.228
+  Downloaded mime v0.3.17
+  Downloaded quick-xml v0.41.0
+  Downloaded thrift v0.17.0
+  Downloaded tower-service v0.3.3
+  Downloaded anstyle v1.0.14
+  Downloaded lz4_flex v0.13.1
+  Downloaded sha2-asm v0.6.4
+  Downloaded sync_wrapper v1.0.2
+  Downloaded zerovec-derive v0.11.3
+  Downloaded jobserver v0.1.34
+  Downloaded synstructure v0.13.2
+  Downloaded base64 v0.22.1
+  Downloaded blake3 v1.8.5
+  Downloaded cfg_aliases v0.2.1
+  Downloaded rand_chacha v0.9.0
+  Downloaded rand_core v0.10.1
+  Downloaded paste v1.0.15
+  Downloaded semver v1.0.28
+  Downloaded uuid v1.23.4
+  Downloaded yoke v0.8.3
+  Downloaded once_cell v1.21.4
+  Downloaded same-file v1.0.6
+  Downloaded tinyvec_macros v0.1.1
+  Downloaded zerofrom-derive v0.1.7
+  Downloaded serde_path_to_error v0.1.20
+  Downloaded slab v0.4.12
+  Downloaded tempfile v3.27.0
+  Downloaded thiserror-impl v2.0.18
+  Downloaded subtle v2.6.1
+  Downloaded shlex v2.0.1
+  Downloaded stable_deref_trait v1.2.1
+  Downloaded tinystr v0.8.3
+  Downloaded untrusted v0.9.0
+  Downloaded utf8_iter v1.0.4
+  Downloaded zmij v1.0.21
+  Downloaded zstd v0.13.3
+  Downloaded tracing-core v0.1.36
+  Downloaded rustls-platform-verifier v0.7.0
+  Downloaded ciborium-ll v0.2.2
+  Downloaded sha2 v0.10.9
+  Downloaded simdutf8 v0.1.5
+  Downloaded tinytemplate v1.2.1
+  Downloaded walkdir v2.5.0
+  Downloaded seq-macro v0.3.6
+  Downloaded spin v0.10.1
+  Downloaded tinyvec v1.11.0
+  Downloaded tracing-attributes v0.1.31
+  Downloaded unicode-ident v1.0.24
+  Downloaded arrayref v0.3.9
+  Downloaded crypto-common v0.1.7
+  Downloaded dunce v1.0.5
+  Downloaded async-trait v0.1.89
+  Downloaded version_check v0.9.5
+  Downloaded alloc-no-stdlib v2.0.4
+  Downloaded alloc-stdlib v0.2.4
+  Downloaded crypto-common v0.2.2
+  Downloaded oorandom v11.1.5
+  Downloaded potential_utf v0.1.5
+  Downloaded scopeguard v1.2.0
+  Downloaded block-buffer v0.10.4
+  Downloaded cast v0.3.0
+  Downloaded cfg-if v1.0.4
+  Downloaded want v0.3.1
+  Downloaded zeroize v1.9.0
+  Downloaded cpufeatures v0.2.17
+  Downloaded wide v0.7.33
+  Downloaded integer-encoding v3.0.4
+  Downloaded mio v1.2.1
+  Downloaded twox-hash v2.1.2
+  Downloaded zstd-safe v7.2.4
+  Downloaded anes v0.1.6
+  Downloaded block-buffer v0.12.1
+  Downloaded crossbeam-epoch v0.9.20
+  Downloaded digest v0.11.3
+  Downloaded safe_arch v0.7.4
+  Downloaded tower-layer v0.3.3
+  Downloaded ipnet v2.12.0
+  Downloaded lru-slab v0.1.2
+  Downloaded nalgebra-macros v0.2.2
+  Downloaded num-integer v0.1.46
+  Downloaded num-traits v0.2.19
+  Downloaded openssl-probe v0.2.1
+  Downloaded rustls-webpki v0.103.15
+  Downloaded ryu v1.0.23
+  Downloaded serde_derive v1.0.228
+  Downloaded tokio-rustls v0.26.4
+  Downloaded tower v0.5.3
+  Downloaded writeable v0.6.3
+  Downloaded yoke-derive v0.8.2
+  Downloaded zerocopy-derive v0.8.52
+  Downloaded zerovec v0.11.6
+  Downloaded atomic-waker v1.1.2
+  Downloaded byteorder v1.5.0
+  Downloaded digest v0.10.7
+  Downloaded displaydoc v0.2.6
+  Downloaded equivalent v1.0.2
+  Downloaded fs_extra v1.3.0
+  Downloaded getrandom v0.2.17
+  Downloaded half v2.7.1
+  Downloaded icu_normalizer v2.2.0
+  Downloaded serde_core v1.0.228
+  Downloaded smallvec v1.15.2
+  Downloaded tower-http v0.6.11
+  Downloaded typenum v1.20.1
+  Downloaded zerotrie v0.2.4
+  Downloaded ciborium-io v0.2.2
+  Downloaded clap_lex v1.1.0
+  Downloaded cpufeatures v0.3.0
+  Downloaded crossbeam-utils v0.8.21
+  Downloaded crunchy v0.2.4
+  Downloaded futures v0.3.32
+  Downloaded futures-sink v0.3.32
+  Downloaded futures-task v0.3.32
+  Downloaded icu_properties v2.2.0
+  Downloaded idna v1.1.0
+  Downloaded serde_json v1.0.150
+  Downloaded crc-catalog v2.5.0
+  Downloaded either v1.16.0
+  Downloaded ordered-float v2.10.1
+  Downloaded pkg-config v0.3.33
+  Downloaded aho-corasick v1.1.4
+  Downloaded fastrand v2.4.1
+  Downloaded futures-util v0.3.32
+  Downloaded hashbrown v0.17.1
+  Downloaded hyper v1.10.1
+  Downloaded crc-fast v1.9.0
+  Downloaded form_urlencoded v1.2.2
+  Downloaded hybrid-array v0.4.13
+  Downloaded idna_adapter v1.2.2
+  Downloaded zlib-rs v0.6.5
+  Downloaded criterion-plot v0.6.0
+  Downloaded crossbeam-deque v0.8.6
+  Downloaded errno v0.3.14
+  Downloaded http v1.4.2
+  Downloaded iana-time-zone v0.1.65
+  Downloaded syn v2.0.118
+  Downloaded zerocopy v0.8.52
+  Downloaded icu_properties_data v2.2.0
+  Downloaded md-5 v0.11.0
+  Downloaded ppv-lite86 v0.2.21
+  Downloaded arrow-data v58.4.0
+  Downloaded constant_time_eq v0.4.2
+  Downloaded indexmap v2.14.0
+  Downloaded criterion v0.7.0
+  Downloaded hyper-rustls v0.27.9
+  Downloaded flatbuffers v25.12.19
+  Downloaded icu_locale_core v2.2.0
+  Downloaded hyper-util v0.1.20
+  Downloaded icu_provider v2.2.0
+  Downloaded tracing v0.1.44
+  Downloaded zstd-sys v2.0.16+zstd.1.5.7
+  Downloaded plotters-svg v0.3.7
+  Downloaded tokio v1.52.3
+  Downloaded const-random v0.1.18
+  Downloaded crc v3.3.0
+  Downloaded rand_core v0.9.5
+  Downloaded rawpointer v0.2.1
+  Downloaded generic-array v0.14.7
+  Downloaded memory-stats v1.2.0
+  Downloaded plotters-backend v0.3.7
+  Downloaded num-rational v0.4.2
+  Downloaded chacha20 v0.10.1
+  Downloaded cmake v0.1.58
+  Downloaded autocfg v1.5.1
+  Downloaded futures-core v0.3.32
+  Downloaded http-body v1.0.1
+  Downloaded fnv v1.0.7
+  Downloaded const-random-macro v0.1.16
+  Downloaded parking_lot v0.12.5
+  Downloaded futures-io v0.3.32
+  Downloaded futures-macro v0.3.32
+  Downloaded httpdate v1.0.3
+  Downloaded matrixmultiply v0.3.11
+  Downloaded num-complex v0.4.6
+  Downloaded percent-encoding v2.3.2
+  Downloaded axum-core v0.5.6
+  Downloaded find-msvc-tools v0.1.9
+  Downloaded quote v1.0.46
+  Downloaded http-body-util v0.1.3
+  Downloaded humantime v2.3.0
+  Downloaded cc v1.2.65
+  Downloaded matchit v0.8.4
+  Downloaded parking_lot_core v0.9.12
+  Downloaded pin-project-lite v0.2.17
+  Downloaded quinn-udp v0.5.14
+  Downloaded bitflags v2.13.0
+  Downloaded ciborium v0.2.2
+  Downloaded proc-macro2 v1.0.106
+  Downloaded arrow-schema v58.4.0
+  Downloaded bytemuck v1.25.1
+  Downloaded bytes v1.12.0
+  Downloaded clap v4.6.1
+  Downloaded futures-channel v0.3.32
+  Downloaded getrandom v0.3.4
+  Downloaded getrandom v0.4.3
+  Downloaded httparse v1.10.1
+  Downloaded rand v0.9.4
+  Downloaded flate2 v1.1.9
+  Downloaded icu_normalizer_data v2.2.0
+  Downloaded memchr v2.8.2
+  Downloaded quinn v0.11.11
+  Downloaded icu_collections v2.2.0
+  Downloaded rand v0.10.1
+  Downloaded num-bigint v0.4.6
+  Downloaded arrow-buffer v58.4.0
+  Downloaded libm v0.2.16
+  Downloaded axum v0.8.9
+  Downloaded arrow-select v58.4.0
+  Downloaded plotters v0.3.7
+  Downloaded clap_builder v4.6.0
+  Downloaded arrow-ipc v58.4.0
+  Downloaded chrono v0.4.45
+  Downloaded brotli-decompressor v5.0.3
+  Downloaded h2 v0.4.16
+  Downloaded object_store v0.13.2
+  Downloaded quinn-proto v0.11.15
+  Downloaded aws-lc-rs v1.18.1
+  Downloaded nix v0.31.3
+  Downloaded object_store v0.14.1
+  Downloaded arrow-array v58.4.0
+  Downloaded nalgebra v0.33.3
+  Downloaded brotli v8.0.4
+  Downloaded libc v0.2.186
+  Downloaded parquet v58.4.0
+  Downloaded linux-raw-sys v0.12.1
+  Downloaded aws-lc-sys v0.45.0
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling syn v2.0.118
+   Compiling libc v0.2.186
+   Compiling autocfg v1.5.1
+   Compiling jobserver v0.1.34
+   Compiling shlex v2.0.1
+   Compiling libm v0.2.16
+   Compiling find-msvc-tools v0.1.9
+   Compiling cc v1.2.65
+   Compiling num-traits v0.2.19
+   Compiling cfg-if v1.0.4
+   Compiling bytes v1.12.0
+   Compiling once_cell v1.21.4
+   Compiling synstructure v0.13.2
+   Compiling pkg-config v0.3.33
+   Compiling zerofrom-derive v0.1.7
+   Compiling serde_core v1.0.228
+   Compiling itoa v1.0.18
+   Compiling pin-project-lite v0.2.17
+   Compiling zerofrom v0.1.8
+   Compiling yoke-derive v0.8.2
+   Compiling stable_deref_trait v1.2.1
+   Compiling futures-core v0.3.32
+   Compiling memchr v2.8.2
+   Compiling yoke v0.8.3
+   Compiling zerovec-derive v0.11.3
+   Compiling version_check v0.9.5
+   Compiling zerovec v0.11.6
+   Compiling errno v0.3.14
+   Compiling displaydoc v0.2.6
+   Compiling smallvec v1.15.2
+   Compiling zerocopy v0.8.52
+   Compiling futures-sink v0.3.32
+   Compiling serde v1.0.228
+   Compiling signal-hook-registry v1.4.8
+   Compiling mio v1.2.1
+   Compiling socket2 v0.6.4
+   Compiling zerocopy-derive v0.8.52
+   Compiling tokio-macros v2.7.0
+   Compiling serde_derive v1.0.228
+   Compiling log v0.4.33
+   Compiling tokio v1.52.3
+   Compiling http v1.4.2
+   Compiling tracing-core v0.1.36
+   Compiling tracing-attributes v0.1.31
+   Compiling typenum v1.20.1
+   Compiling slab v0.4.12
+   Compiling tracing v0.1.44
+   Compiling futures-channel v0.3.32
+   Compiling tinystr v0.8.3
+   Compiling cmake v0.1.58
+   Compiling dunce v1.0.5
+   Compiling litemap v0.8.2
+   Compiling hashbrown v0.17.1
+   Compiling writeable v0.6.3
+   Compiling fs_extra v1.3.0
+   Compiling aws-lc-sys v0.45.0
+   Compiling icu_locale_core v2.2.0
+   Compiling zerotrie v0.2.4
+   Compiling potential_utf v0.1.5
+   Compiling futures-macro v0.3.32
+   Compiling futures-task v0.3.32
+   Compiling icu_properties_data v2.2.0
+   Compiling icu_normalizer_data v2.2.0
+   Compiling percent-encoding v2.3.2
+   Compiling futures-io v0.3.32
+   Compiling utf8_iter v1.0.4
+   Compiling icu_collections v2.2.0
+   Compiling futures-util v0.3.32
+   Compiling icu_provider v2.2.0
+   Compiling half v2.7.1
+   Compiling num-integer v0.1.46
+   Compiling aws-lc-rs v1.18.1
+   Compiling bitflags v2.13.0
+   Compiling either v1.16.0
+   Compiling zeroize v1.9.0
+   Compiling icu_normalizer v2.2.0
+   Compiling icu_properties v2.2.0
+   Compiling form_urlencoded v1.2.2
+   Compiling http-body v1.0.1
+   Compiling generic-array v0.14.7
+   Compiling idna_adapter v1.2.2
+   Compiling rustls-pki-types v1.15.0
+   Compiling zstd-sys v2.0.16+zstd.1.5.7
+   Compiling getrandom v0.3.4
+   Compiling zmij v1.0.21
+   Compiling equivalent v1.0.2
+   Compiling iana-time-zone v0.1.65
+   Compiling tower-service v0.3.3
+   Compiling crossbeam-utils v0.8.21
+   Compiling httparse v1.10.1
+   Compiling chrono v0.4.45
+   Compiling indexmap v2.14.0
+   Compiling idna v1.1.0
+   Compiling num-bigint v0.4.6
+   Compiling tokio-util v0.7.18
+   Compiling ahash v0.8.12
+   Compiling num-complex v0.4.6
+   Compiling crossbeam-epoch v0.9.20
+   Compiling semver v1.0.28
+   Compiling atomic-waker v1.1.2
+   Compiling base64 v0.22.1
+   Compiling untrusted v0.9.0
+   Compiling serde_json v1.0.150
+   Compiling rustls v0.23.45
+   Compiling try-lock v0.2.5
+   Compiling fnv v1.0.7
+   Compiling parking_lot_core v0.9.12
+   Compiling h2 v0.4.16
+   Compiling want v0.3.1
+   Compiling rustls-webpki v0.103.15
+   Compiling rustc_version v0.4.1
+   Compiling arrow-buffer v58.4.0
+   Compiling url v2.5.8
+   Compiling sync_wrapper v1.0.2
+   Compiling paste v1.0.15
+   Compiling getrandom v0.4.3
+   Compiling scopeguard v1.2.0
+   Compiling arrow-schema v58.4.0
+   Compiling subtle v2.6.1
+   Compiling thiserror v2.0.18
+   Compiling zstd-safe v7.2.4
+   Compiling httpdate v1.0.3
+   Compiling tower-layer v0.3.3
+   Compiling rand_core v0.10.1
+   Compiling hyper v1.10.1
+   Compiling arrow-data v58.4.0
+   Compiling lock_api v0.4.14
+   Compiling flatbuffers v25.12.19
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling hybrid-array v0.4.13
+   Compiling thiserror-impl v2.0.18
+   Compiling rayon-core v1.13.0
+   Compiling ipnet v2.12.0
+   Compiling alloc-no-stdlib v2.0.4
+   Compiling alloc-stdlib v0.2.4
+   Compiling hyper-util v0.1.20
+   Compiling digest v0.10.7
+   Compiling parking_lot v0.12.5
+   Compiling arrow-array v58.4.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling tower v0.5.3
+   Compiling http-body-util v0.1.3
+   Compiling async-trait v0.1.89
+   Compiling openssl-probe v0.2.1
+   Compiling bytemuck v1.25.1
+   Compiling rustversion v1.0.22
+   Compiling cpufeatures v0.3.0
+   Compiling cfg_aliases v0.2.1
+   Compiling snap v1.1.1
+   Compiling humantime v2.3.0
+   Compiling nix v0.31.3
+   Compiling safe_arch v0.7.4
+   Compiling rustls-native-certs v0.8.4
+   Compiling arrow-select v58.4.0
+   Compiling zstd v0.13.3
+   Compiling brotli-decompressor v5.0.3
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling tokio-rustls v0.26.4
+   Compiling itertools v0.14.0
+   Compiling aho-corasick v1.1.4
+   Compiling ordered-float v2.10.1
+   Compiling matrixmultiply v0.3.11
+   Compiling rustix v1.1.4
+   Compiling integer-encoding v3.0.4
+   Compiling ciborium-io v0.2.2
+   Compiling regex-syntax v0.8.11
+   Compiling clap_lex v1.1.0
+   Compiling twox-hash v2.1.2
+   Compiling crc-catalog v2.5.0
+   Compiling byteorder v1.5.0
+   Compiling ryu v1.0.23
+   Compiling same-file v1.0.6
+   Compiling zlib-rs v0.6.5
+   Compiling plotters-backend v0.3.7
+   Compiling anstyle v1.0.14
+   Compiling clap_builder v4.6.0
+   Compiling plotters-svg v0.3.7
+   Compiling flate2 v1.1.9
+   Compiling walkdir v2.5.0
+   Compiling serde_urlencoded v0.7.1
+   Compiling thrift v0.17.0
+   Compiling crc v3.3.0
+   Compiling lz4_flex v0.13.1
+   Compiling regex-automata v0.4.14
+   Compiling ciborium-ll v0.2.2
+   Compiling object_store v0.13.2
+   Compiling hyper-rustls v0.27.9
+   Compiling digest v0.11.3
+   Compiling brotli v8.0.4
+   Compiling arrow-ipc v58.4.0
+   Compiling rayon v1.12.0
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling wide v0.7.33
+   Compiling chacha20 v0.10.1
+   Compiling tower-http v0.6.11
+   Compiling itertools v0.13.0
+   Compiling futures v0.3.32
+   Compiling approx v0.5.1
+   Compiling blake3 v1.8.5
+   Compiling cpufeatures v0.2.17
+   Compiling mime v0.3.17
+   Compiling spin v0.10.1
+   Compiling cast v0.3.0
+   Compiling linux-raw-sys v0.12.1
+   Compiling simdutf8 v0.1.5
+   Compiling rawpointer v0.2.1
+   Compiling seq-macro v0.3.6
+   Compiling parquet v58.4.0
+   Compiling criterion-plot v0.6.0
+   Compiling crc-fast v1.9.0
+   Compiling axum-core v0.5.6
+   Compiling sha2 v0.10.9
+   Compiling simba v0.9.1
+   Compiling reqwest v0.13.4
+   Compiling rand v0.10.1
+   Compiling md-5 v0.11.0
+   Compiling ciborium v0.2.2
+   Compiling regex v1.12.4
+   Compiling plotters v0.3.7
+   Compiling clap v4.6.1
+   Compiling tinytemplate v1.2.1
+   Compiling itertools v0.15.0
+   Compiling num-rational v0.4.2
+   Compiling ppv-lite86 v0.2.21
+   Compiling quick-xml v0.41.0
+   Compiling serde_path_to_error v0.1.20
+   Compiling nalgebra-macros v0.2.2
+   Compiling matchit v0.8.4
+   Compiling rand_core v0.9.5
+   Compiling borsuk-fma v0.1.0 (/mnt/native-workspace-execution/repo/crates/borsuk-fma)
+   Compiling oorandom v11.1.5
+   Compiling anes v0.1.6
+   Compiling arrayvec v0.7.7
+   Compiling constant_time_eq v0.4.2
+   Compiling arrayref v0.3.9
+   Compiling fastrand v2.4.1
+   Compiling tempfile v3.27.0
+   Compiling criterion v0.7.0
+   Compiling borsuk-pq4 v0.1.0 (/mnt/native-workspace-execution/repo/crates/borsuk-pq4)
+   Compiling rand_chacha v0.9.0
+   Compiling axum v0.8.9
+   Compiling nalgebra v0.33.3
+   Compiling object_store v0.14.1
+   Compiling uuid v1.23.4
+   Compiling memory-stats v1.2.0
+   Compiling borsuk v0.1.0 (/mnt/native-workspace-execution/repo/crates/borsuk)
+warning: unused imports: `NativeAnnRef` and `native_ann_root_bytes`
+   --> crates/borsuk/src/index.rs:121:9
+    |
+121 |         NativeAnnRef, NativeBoundedAnnRef, native_ann_root_bytes, native_bounded_ann_root_bytes,
+    |         ^^^^^^^^^^^^                       ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary parentheses around `if` condition
+  --> crates/borsuk/src/physical_interval.rs:85:8
+   |
+85 |     if (geometry.page_count == 0
+   |        ^
+...
+91 |         || primary_pages.is_empty())
+   |                                    ^
+   |
+   = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+   |
+85 ~     if geometry.page_count == 0
+86 |         || geometry.full_page_units == 0
+...
+90 |         || geometry.max_gets == 0
+91 ~         || primary_pages.is_empty()
+   |
+
+warning: unnecessary parentheses around `if` condition
+   --> crates/borsuk/src/resident_fp16_tier.rs:614:12
+    |
+614 |         if (query.len() != self.dimensions
+    |            ^
+...
+617 |             || top_k > candidates.len())
+    |                                        ^
+    |
+help: remove these parentheses
+    |
+614 ~         if query.len() != self.dimensions
+615 |             || query.iter().any(|x| !x.is_finite())
+616 |             || top_k == 0
+617 ~             || top_k > candidates.len()
+    |
+
+error[E0599]: no method named `to_le_bytes` found for reference `&{float}` in the current scope
+    --> crates/borsuk/src/hierarchical_semantic_cells.rs:1663:52
+     |
+1663 |                 canonical.extend_from_slice(&value.to_le_bytes());
+     |                                                    ^^^^^^^^^^^
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `ToBytes` which provides `to_le_bytes` is implemented but not in scope; perhaps you want to import it
+     |
+1639 +     use num_traits::ops::bytes::ToBytes;
+     |
+help: there is a method `to_be_bytes` with a similar name
+     |
+1663 -                 canonical.extend_from_slice(&value.to_le_bytes());
+1663 +                 canonical.extend_from_slice(&value.to_be_bytes());
+     |
+
+For more information about this error, try `rustc --explain E0599`.
+warning: `borsuk` (lib test) generated 3 warnings
+error: could not compile `borsuk` (lib test) due to 1 previous error; 3 warnings emitted
+{"command": ["cargo", "test", "--locked", "-p", "borsuk", "--lib", "hierarchical_semantic_cells::"], "exit_status": 101, "finished_at": "2026-10-03T05:37:57Z", "gate_status": 101, "required_test_passes": {"hierarchical_semantic_cells::tests::cell_local_block_nomination_omits_other_blocks_even_for_tied_codes": 0, "hierarchical_semantic_cells::tests::identical_geometry_is_bounded_and_reproducible_without_truth": 0, "hierarchical_semantic_cells::tests::loss_receipt_separates_boundary_recovery_nomination_and_final_ranking": 0, "hierarchical_semantic_cells::tests::resident_directory_preload_is_admitted_charged_and_has_no_query_reads": 0, "hierarchical_semantic_cells::tests::resident_preload_rejects_corrupt_unused_interior_page": 0, "hierarchical_semantic_cells::tests::semantic_cells_do_not_close_over_old_pages_and_keep_unchanged_ranking": 0, "hierarchical_semantic_cells::tests::source_id_binding_budgets_and_corruption_fail_closed_with_charges": 0, "hierarchical_semantic_cells::tests::whole_cell_matches_two_stage_with_one_wave_and_full_payload_charges": 0}, "schema": "borsuk-hierarchical-cells-implementation-stage-v1", "stage": "hierarchical-cell-tests", "started_at": "2026-10-03T05:34:48Z", "tests_run": 0}
