@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-hierarchical-terminal-gate-check-v1",
+  "mandatory_test": "tests::created_outputs_close_invalid_on_bad_truth_or_output_cap_without_overwrite",
+  "gate_checks": {"invocation": "a72c3af33c1b4045b6ba55de0dd1fd24", "exit_status": 0, "runtime_ms": 345, "memory_peak": "40.4M", "scope": "Protocol, real Python stage recorder, log validator negatives, helper/controller exact roster equality"},
+  "preparation_self_check": {"invocation": "4165c97824f6416fb7fe7bd44cb5df2f", "exit_status": 0, "runtime_seconds": 3.652, "memory_peak": "27.5M", "scope": "Tiny synthetic assets and mocked executables in preserved qualification worktree; no native execution"},
+  "memory_max_bytes": 268435456,
+  "swap_max_bytes": 0,
+  "cpu_quota_percent": 100,
+  "cpu_affinity": [0],
+  "native_test_execution": false,
+  "native_candidate_qualified": false,
+  "full_workspace_test_execution": false
+}

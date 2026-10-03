@@ -21,7 +21,8 @@ required = {
         "resident_preload_rejects_corrupt_unused_interior_page",
         "whole_cell_matches_two_stage_with_one_wave_and_full_payload_charges",
         "nonunit_query_nonzero_mean_preserves_native_sq2_scoring_and_nomination")),
-    "hierarchical-cell-bin-tests": ("tests::configurations_reject_unknown_fields_and_truth_in_requests",)}
+    "hierarchical-cell-bin-tests": ("tests::configurations_reject_unknown_fields_and_truth_in_requests",
+        "tests::created_outputs_close_invalid_on_bad_truth_or_output_cap_without_overwrite"),}
 stage, started, finished, status, log, log_status = sys.argv[1:7]
 tests = None
 passes = None
