@@ -54,6 +54,62 @@
   "selected_cell_count_bound": "union <= primary8 + independent boundary24 =32, even without nesting",
   "source_freeze_pending": true,
   "status": "PROSPECTIVE_SOURCE_POLICY_SELECTED_BEFORE_TRUTH",
+  "unchanged_v282_reference": {
+    "baseline_graph": [
+      {
+        "arm": "graph",
+        "arm_role": "V282 centroid-graph routing",
+        "corpus_input_sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d",
+        "dataset": "relaion",
+        "first": 0,
+        "max_logical_ranges": 32,
+        "max_planned_bytes": 16698240,
+        "mean_fetched_gt_hits": 98.21875,
+        "mean_returned_recall_percent": 97.984375,
+        "p05_returned_hits": 94,
+        "performance_status": "stale-different-architecture-hardware",
+        "queries": 64,
+        "requests_sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0",
+        "returned_hits": 6271,
+        "status": "verified-historical-subset-not-new-measurement",
+        "truth_sha256": "4bd3ac79fce3919f85359ce3e305491663991f6cc0890ab91682cda34247a24e"
+      },
+      {
+        "arm": "graph",
+        "arm_role": "V282 centroid-graph routing",
+        "corpus_input_sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e",
+        "dataset": "cohere",
+        "first": 0,
+        "max_logical_ranges": 32,
+        "max_planned_bytes": 16773120,
+        "mean_fetched_gt_hits": 97.046875,
+        "mean_returned_recall_percent": 96.25,
+        "p05_returned_hits": 92,
+        "performance_status": "stale-different-architecture-hardware",
+        "queries": 64,
+        "requests_sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812",
+        "returned_hits": 6160,
+        "status": "verified-historical-subset-not-new-measurement",
+        "truth_sha256": "06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8"
+      }
+    ],
+    "held_out_claim": false,
+    "new_control_generation_role": "current-writer codec/ID parity admission only; it is not unchanged V282",
+    "paired_quality_scope": "retained unchanged V282 graph records, exact same corpus/request/truth identities and ordinals0..63; candidate must bind these identities before comparison",
+    "performance_comparison_status": "UNMEASURED matched latency/RSS/QPS/cost; historical local timings cannot establish a speedup",
+    "reference": {
+      "bytes": 3040,
+      "path": "docs/research/sequential-centroid-diversity-20260928/v282-reference/development64-reference.json",
+      "sha256": "f25899a7f50fb2ded49c68ca4c77839b65b96bda0f3868442c0fee4d407c0c25"
+    },
+    "source_archive_sha256": "3facfaf935a3e4921466281e79afe15f8cc945e30870a97806f814845972998d",
+    "source_commit": "e74d75acb40647f606b498023b11dec26701e4aa",
+    "verification": {
+      "bytes": 1280,
+      "path": "docs/research/sequential-centroid-diversity-20260928/v282-reference/verification.json",
+      "sha256": "aa697d195e1c1fbbe73fb35fa15be5021d3bfe4cc698cf62ad93002941e75f7d"
+    }
+  },
   "unmeasured": [
     "S3 physical requests/retries/wire bytes",
     "cold HTTP latency and offered QPS",
