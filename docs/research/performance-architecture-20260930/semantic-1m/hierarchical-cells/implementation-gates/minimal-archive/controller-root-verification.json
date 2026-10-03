@@ -1,0 +1,34 @@
+{
+  "archive_pilot": {
+    "exit_status": 0,
+    "invocation": "b246b34bada540959b2cd6ab70dee780",
+    "reported_peak_memory": "68.5M",
+    "root_result": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/archive-root-pilot.json",
+    "session": 55624,
+    "swap_bytes": 0
+  },
+  "controller_commit": "77203bc371b5bacd21a186f9df1bee091b0b756c",
+  "native_candidate_commit": "15323a1aca37c410561b4a38e964a1cdd86967f6",
+  "native_qualified": false,
+  "remaining": [
+    "freeze candidate source manifest and config from this verified controller",
+    "exact remote native tests/release/clippy/test-build",
+    "exact original layout recovery and paired truth-free selection freeze"
+  ],
+  "science_executed": false,
+  "self_check": {
+    "aws_and_cargo": "MOCKED",
+    "exit_status": 0,
+    "invocation": "3d4492b8c3ac4c1785986861e473776a",
+    "log": {
+      "bytes": 1575,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/controller-root-self-check.log",
+      "sha256": "8e41b4e1abfac6ca0317f4af8d120765e29cddd622f314e90c37359e0f37f4e4"
+    },
+    "reported_peak_memory": "60.3M",
+    "service_seconds": 3.329,
+    "session": 1109,
+    "swap_bytes": 0
+  },
+  "status": "CONTROLLER_AND_ARCHIVE_VERIFIED_NATIVE_PENDING"
+}

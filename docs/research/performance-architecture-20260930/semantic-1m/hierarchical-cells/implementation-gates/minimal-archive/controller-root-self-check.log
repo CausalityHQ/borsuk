@@ -1,0 +1,11 @@
+Running as unit: borsuk-global-leaf-controller-main-selfcheck-20261003.service; invocation ID: 3d4492b8c3ac4c1785986861e473776a
+PASS tiny committed archive closure/authentic bytes/gzip/literal paths/unsafe/missing/nonfile refusals/fullrepo default
+PASS hierarchical minimal archive/native docs/runtime fixture/tamper/no remote Git
+PASS actual committed archive metadata: commit=77203bc371b5bacd21a186f9df1bee091b0b756c nonresearch=2414 native=401 archive=2418 crate_test_files=82 roster_sha256=e42c5c35eb15a383773bc7b25827179b7a9030b0857fab6d3343afa274b0205a; production_authority_pending=True; no archive/data/native run
+PASS workspace implementation-gates (hierarchical-cells): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli=False; code=24 artifacts=17 release_copy=True; userdata=7498 peak_bytes=65024000; AWS/Cargo/cgroup MOCKED
+PASS workspace implementation-gates (hierarchical-cells): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli=False; code=24 artifacts=17 release_copy=True; userdata=7498 peak_bytes=69804032; AWS/Cargo/cgroup MOCKED
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 3.329s
+             CPU time consumed: 3.267s
+                   Memory peak: 60.3M (swap: 0B)
