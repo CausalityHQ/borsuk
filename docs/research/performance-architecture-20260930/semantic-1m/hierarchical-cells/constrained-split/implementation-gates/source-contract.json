@@ -1,0 +1,120 @@
+{
+  "schema": "borsuk-constrained-split-source-contract-v1",
+  "status": "UNVERIFIED_SOURCE_ONLY",
+  "base_revision": "8ec64936323aca63d6863351623eebd61c085187",
+  "api": {
+    "module": "hierarchical_semantic_cells::split_balance_diagnostic",
+    "exports": [
+      "Config",
+      "DatasetInputs",
+      "CONFIG_SCHEMA",
+      "REPORT_SCHEMA",
+      "check(&Config) -> Result<serde_json::Value>",
+      "execute(&Path, &str, &Path) -> Result<String>"
+    ],
+    "cli": "check_hierarchical_split_balance CONFIG SHA256 NEW_OUTPUT",
+    "config_schema": "borsuk-constrained-split-config-v1",
+    "dataset_keys": [
+      "cohere",
+      "relaion"
+    ],
+    "artifact_keys": [
+      "root",
+      "directories",
+      "cells",
+      "canonical",
+      "order"
+    ],
+    "hash_order_encoding": "raw32 root digest || LE u64 directory offset || optional LE u64 source ordinal"
+  },
+  "native_delta_files": {
+    "crates/borsuk/src/hierarchical_semantic_cells.rs": {
+      "sha256": "7793d7da5ab44e5c20f73723ad4e2dc02e6d9a253f891568d9a7b76253710a6e",
+      "bytes": 193648
+    },
+    "crates/borsuk/src/bin/check_hierarchical_split_balance.rs": {
+      "sha256": "7fe2eac32c6bc0ed5c034c66c0c7fcfcabf7aa7da5c5669acbcfb9de65650d62",
+      "bytes": 2878
+    }
+  },
+  "mandatory_library_tests": [
+    "hierarchical_semantic_cells::tests::nomination_global_finds_leaf_hidden_by_hierarchy_pruning",
+    "hierarchical_semantic_cells::tests::nomination_unpruned_parity_caps_source_binding_and_failure_charges",
+    "hierarchical_semantic_cells::tests::nonunit_query_nonzero_mean_preserves_native_sq2_scoring_and_nomination",
+    "hierarchical_semantic_cells::tests::whole_cell_matches_two_stage_with_one_wave_and_full_payload_charges",
+    "hierarchical_semantic_cells::tests::semantic_cells_do_not_close_over_old_pages_and_keep_unchanged_ranking",
+    "hierarchical_semantic_cells::tests::identical_geometry_is_bounded_and_reproducible_without_truth",
+    "hierarchical_semantic_cells::tests::source_id_binding_budgets_and_corruption_fail_closed_with_charges",
+    "hierarchical_semantic_cells::tests::loss_receipt_separates_boundary_recovery_nomination_and_final_ranking",
+    "hierarchical_semantic_cells::tests::cell_local_block_nomination_omits_other_blocks_even_for_tied_codes",
+    "hierarchical_semantic_cells::tests::resident_directory_preload_is_admitted_charged_and_has_no_query_reads",
+    "hierarchical_semantic_cells::tests::resident_preload_rejects_corrupt_unused_interior_page",
+    "hierarchical_semantic_cells::split_balance_diagnostic::tests::constrained_cost_matches_exhaustive_small_partitions",
+    "hierarchical_semantic_cells::split_balance_diagnostic::tests::successful_identical_and_degenerate_splits_are_unchanged",
+    "hierarchical_semantic_cells::split_balance_diagnostic::tests::learned_unbalanced_replay_preserves_centers_and_moves_minimum_population",
+    "hierarchical_semantic_cells::split_balance_diagnostic::tests::first_eight_candidate_hash_order_is_frozen_without_expansion",
+    "hierarchical_semantic_cells::split_balance_diagnostic::tests::deterministic_delta_ties_coordinate_ties_and_partial_panel",
+    "hierarchical_semantic_cells::split_balance_diagnostic::tests::original_membership_mismatch_is_invalid",
+    "hierarchical_semantic_cells::split_balance_diagnostic::tests::local_cosine_edges_reuse_same_rows_and_exclude_self",
+    "hierarchical_semantic_cells::split_balance_diagnostic::tests::canonical_order_nonfinite_and_post_authentication_tamper_fail_closed",
+    "hierarchical_semantic_cells::split_balance_diagnostic::tests::artifact_tamper_geometry_and_all_limits_fail_closed",
+    "hierarchical_semantic_cells::split_balance_diagnostic::tests::fifo_symlink_ancestors_and_missing_originals_fail_closed",
+    "hierarchical_semantic_cells::split_balance_diagnostic::tests::strict_config_and_created_output_terminal_no_overwrite",
+    "hierarchical_semantic_cells::split_balance_diagnostic::tests::output_cap_and_fsync_failure_cannot_return_pass"
+  ],
+  "mandatory_binary_tests": [
+    "tests::strict_source_only_cli"
+  ],
+  "gates": {
+    "affected_library": "cargo test --locked -p borsuk --lib hierarchical_semantic_cells::",
+    "affected_binary": "cargo test --locked -p borsuk --bin check_hierarchical_split_balance",
+    "generation_integration": "cargo test --locked -p borsuk --test two_bit_generation",
+    "release": "cargo build --release --locked -p borsuk --bin check_hierarchical_split_balance --bin hierarchical_semantic_cells --example two_bit_http",
+    "clippy": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "real_test_build": "env -u BORSUK_TEST_BUILD_COMMAND bash scripts/check_rust_test_build.sh jobs1"
+  },
+  "local_native_execution": "FORBIDDEN; no Cargo/rustc/native/corpus/query/GT/cloud/review/consult/children/push",
+  "production_prefix": {
+    "bytes": 115165,
+    "sha256": "f30ca0d0ae1e38f28988cf100aec4bdbc68f1ce4acb4f85f488efa83103b2a1f",
+    "byte_preserved": true
+  },
+  "completion": "Hold same child until parent external gates exit 0; parent owns integration/resources/scientific decision",
+  "method_authority": {
+    "revision": "375c55b1",
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-review/constrained-split-falsifier-preregistration-20261003.json",
+    "owner": "parent; no actual diagnostic run"
+  },
+  "authentication_read_budget": {
+    "cap_bytes": 1073741824,
+    "includes": [
+      "config",
+      "original roots",
+      "complete directories",
+      "complete cells",
+      "canonical FP32 stream",
+      "physical/source order",
+      "each verified canonical parent-row reread"
+    ],
+    "read_admission": "pre-admit each stream and complete replay batch before input read; cap is cumulative across both datasets",
+    "verified_counter": "increment only after stream SHA or per-row SHA plus ID verification; failed reads/proofs never increase verified bytes",
+    "report_fields": [
+      "resources.operations.admitted_authentication_read_bytes",
+      "resources.operations.cumulative_verified_input_read_bytes"
+    ],
+    "cgroup_poll": "canonical stream every256rows, replay every64rows, neighbor panel every4rows"
+  },
+  "local_checks": {
+    "isolated_additive_rustfmt": "exit0",
+    "new_binary_rustfmt": "exit0",
+    "git_diff_check": "exit0",
+    "base_prefix_byte_preservation": "115165 bytes unchanged; original SHA f30ca0d0ae1e38f28988cf100aec4bdbc68f1ce4acb4f85f488efa83103b2a1f",
+    "native_tests": "NOT RUN; all source-only tests UNVERIFIED"
+  },
+  "unresolved_blockers": [
+    "Parent remote affected tests, generation integration, release, Clippy and real test-build must all exit0 before worker completion",
+    "Parent owns authenticated originals and actual diagnostic launch; no source-neighborhood result exists"
+  ],
+  "commit": "297c2a1f025c05cbea0687c32b8a810a163e8d37",
+  "commit_parent": "8ec64936323aca63d6863351623eebd61c085187"
+}
