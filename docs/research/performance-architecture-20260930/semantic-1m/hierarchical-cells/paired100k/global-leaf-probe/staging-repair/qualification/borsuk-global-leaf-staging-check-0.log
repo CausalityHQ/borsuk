@@ -1,0 +1,5 @@
+PASS archive staging traversal falsifier; real gzip/tar/scratch, whole/support/subset/missing/duplicate authentication and scratch/deadline/monitor guards; no native/corpus/GT
+PASS tiny shuffled-source-ID/prototype/span/hash/query/control-parity/zero-read/full131/pending-role/config-drift/incomplete-pair/post-seal-tamper checks; no native/corpus/GT
+PASS real Python pipeline with mocked native boundary: dataset2 failure drains; both exact roots before queries; GT/old-panel/diagnose spies; both retained layouts/full seal replay and tamper
+PASS mocked native unit deadline/failure targets SAME unit, kill/stop/wait and verified drain; no process spawned
+PASS final receipt independently rejects host memory/swap/OOM/scratch/deadline/monitor/cleanup/retention violations

@@ -1,0 +1,105 @@
+{
+  "cgroup_after": {
+    "cpu.max": "100000 100000",
+    "cpu_affinity": [
+      0
+    ],
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+    "memory.max": "268435456",
+    "memory.peak": "161353728",
+    "memory.swap.max": "0",
+    "memory.swap.peak": "0",
+    "path": "/sys/fs/cgroup/borsuk.slice/borsuk-staging.slice/borsuk-staging-debug.slice/borsuk-global-leaf-staging-final-cli.service"
+  },
+  "cgroup_before": {
+    "cpu.max": "100000 100000",
+    "cpu_affinity": [
+      0
+    ],
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+    "memory.max": "268435456",
+    "memory.peak": "23109632",
+    "memory.swap.max": "0",
+    "memory.swap.peak": "0",
+    "path": "/sys/fs/cgroup/borsuk.slice/borsuk-staging.slice/borsuk-staging-debug.slice/borsuk-global-leaf-staging-final-cli.service"
+  },
+  "checks": [
+    {
+      "command": [
+        "/usr/bin/python3",
+        "scripts/run_hierarchical_global_leaf_probe.py",
+        "--self-check"
+      ],
+      "exit_status": 0,
+      "log": "/tmp/borsuk-global-leaf-staging-check-0.log"
+    },
+    {
+      "command": [
+        "/usr/bin/python3",
+        "scripts/launch_hierarchical_cells_100k_spot.py",
+        "--global-leaf-probe",
+        "--self-check"
+      ],
+      "exit_status": 0,
+      "log": "/tmp/borsuk-global-leaf-staging-check-1.log"
+    },
+    {
+      "command": [
+        "/usr/bin/python3",
+        "scripts/run_hierarchical_global_leaf_probe.py",
+        "--self-check-qualification",
+        "/home/rb/worktrees/borsuk-global-leaf-staging-timeout-fix"
+      ],
+      "exit_status": 0,
+      "log": "/tmp/borsuk-global-leaf-staging-check-2.log"
+    },
+    {
+      "command": [
+        "/usr/bin/python3",
+        "-m",
+        "py_compile",
+        "scripts/run_hierarchical_global_leaf_probe.py",
+        "scripts/launch_hierarchical_cells_100k_spot.py"
+      ],
+      "exit_status": 0,
+      "log": "/tmp/borsuk-global-leaf-staging-check-3.log"
+    },
+    {
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_status": 0,
+      "log": "/tmp/borsuk-global-leaf-staging-check-4.log"
+    }
+  ],
+  "frozen_metadata": {
+    "archive_or_binary_or_corpus_bodies_read": false,
+    "datasets": [
+      "cohere",
+      "relaion"
+    ],
+    "frozen_config": {
+      "bytes": 14093,
+      "path": "/home/rb/worktrees/borsuk-global-leaf-staging-timeout-fix/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/config.json",
+      "sha256": "7ba47facd62bcd7044217f451b861712a2753a8eec76f2d4f671b7593097b53a"
+    },
+    "network": false,
+    "roles": {
+      "nomination": {
+        "native_source_count": 401,
+        "source_commit": "3dbf70e771516b45de62f8bf9dbe672952957589",
+        "source_identity_sha256": "739913047741a2d278b6eabad090055b54897442cbdecfbb340da4bb7415dfb1",
+        "support_source_count": 2015
+      },
+      "original": {
+        "native_source_count": 401,
+        "source_commit": "2638caaec6e7ebd9b39620e497afa14bd64d402d",
+        "source_identity_sha256": "690a545e782b7f732acf9c78b71d2d40a465fd308011762a255d2b74f96742ce",
+        "support_source_count": 24
+      }
+    }
+  },
+  "frozen_source_drift_rejected": true
+}

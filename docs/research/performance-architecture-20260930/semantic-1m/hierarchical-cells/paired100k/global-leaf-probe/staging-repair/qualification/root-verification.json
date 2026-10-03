@@ -1,0 +1,62 @@
+{
+  "all_five_acceptance_checks_exit_zero": true,
+  "candidate_commit": "01847b394ddf49492a44fdb8f4269a466cabdd52",
+  "files": {
+    "borsuk-global-leaf-staging-after.json": {
+      "bytes": 863,
+      "sha256": "3d8a677eebd04ffcb00ca3294a0dc15c55972de466a56b82213dbdf2fbdff2c8"
+    },
+    "borsuk-global-leaf-staging-assurance.json": {
+      "bytes": 3302,
+      "sha256": "3c2b68496dff62bdfafc4a52aa7b784e39a6c663f07c31c4f079d16a598341ff"
+    },
+    "borsuk-global-leaf-staging-assurance.py": {
+      "bytes": 3185,
+      "sha256": "ac38f85aa88610e0f002e4e9c82ab43a82878841c09823708d7bca2e4c4cd7f3"
+    },
+    "borsuk-global-leaf-staging-check-0.log": {
+      "bytes": 773,
+      "sha256": "f0626ea1d3bc54802d0b9bf5302411b1ec3ab8c258a7929dd8ce4a3758fdf6ed"
+    },
+    "borsuk-global-leaf-staging-check-1.log": {
+      "bytes": 4737,
+      "sha256": "9ceb79721fd66110b718c3d6c58cd62e81d39ae0d7c4f47e76a64de1c9dbf60d"
+    },
+    "borsuk-global-leaf-staging-check-2.log": {
+      "bytes": 141,
+      "sha256": "6a392042267e82feeaa447ea87ad5378f812bb29d10eb2c9aa216d4e7211dab6"
+    },
+    "borsuk-global-leaf-staging-check-3.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "borsuk-global-leaf-staging-check-4.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "borsuk-global-leaf-staging-parent-cli-red-20261003.json": {
+      "bytes": 942,
+      "sha256": "e995c0c574d211cd00bd56c1ce1d8a2d5af5e349586132de51a315fbc07d6413"
+    },
+    "borsuk-global-leaf-staging-repro.py": {
+      "bytes": 3327,
+      "sha256": "c6e12415523c86e72196c6b82c01ae3dc97e53d2524d2683cf010ff0ca9ffde2"
+    },
+    "borsuk-global-leaf-staging-timeout-fix-contract.json": {
+      "bytes": 11065,
+      "sha256": "6e339d00521f8bc44ca824b40a013c0cd412bc7d291c7c9b9a3a5fd76e690cc6"
+    }
+  },
+  "schema": "borsuk-staging-repair-root-verification-v1",
+  "scope": "Python staging only; no native/scientific performance claim",
+  "source_files": {
+    "scripts/launch_hierarchical_cells_100k_spot.py": {
+      "bytes": 143694,
+      "sha256": "d0e4ce6d7b77e83f87083c5fd660d4e63062f59b414cc0896200b24d067e4c25"
+    },
+    "scripts/run_hierarchical_global_leaf_probe.py": {
+      "bytes": 102628,
+      "sha256": "6e3766df840c667400bc6d22f025a8176f7a0d22e8904ddfe26a95b9b75e56fe"
+    }
+  }
+}

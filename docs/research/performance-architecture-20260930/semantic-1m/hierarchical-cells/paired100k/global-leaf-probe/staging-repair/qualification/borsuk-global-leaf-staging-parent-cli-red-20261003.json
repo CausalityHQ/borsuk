@@ -1,0 +1,27 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "scripts/run_hierarchical_global_leaf_probe.py",
+    "--self-check"
+  ],
+  "cwd": "/home/rb/worktrees/borsuk-global-leaf-staging-timeout-fix",
+  "error": "separate original scratch charged and scan accounting retained",
+  "exit_status": 2,
+  "limits": {
+    "cpu_percent": 100,
+    "memory_bytes": 268435456,
+    "runtime_seconds": 120,
+    "swap_bytes": 0,
+    "tasks": 64
+  },
+  "native_or_corpus_execution": false,
+  "reported_memory_peak": "28.7M",
+  "reported_swap_peak": "0B",
+  "schema": "borsuk-staging-parent-cli-red-v1",
+  "service_runtime_ms": 205,
+  "source_sha256": {
+    "scripts/launch_hierarchical_cells_100k_spot.py": "d0e4ce6d7b77e83f87083c5fd660d4e63062f59b414cc0896200b24d067e4c25",
+    "scripts/run_hierarchical_global_leaf_probe.py": "35589c7c46966d94d1e0b1c740dc2eb66b69f1afa8c757284e42074528541ab7"
+  },
+  "unit": "borsuk-global-leaf-staging-parent-cli-20261003.service"
+}

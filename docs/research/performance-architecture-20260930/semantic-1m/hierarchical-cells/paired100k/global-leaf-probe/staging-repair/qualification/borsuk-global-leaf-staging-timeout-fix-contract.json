@@ -1,0 +1,290 @@
+{
+  "acceptance": {
+    "cgroup_after": {
+      "cpu.max": "100000 100000",
+      "cpu_affinity": [
+        0
+      ],
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+      "memory.max": "268435456",
+      "memory.peak": "161353728",
+      "memory.swap.max": "0",
+      "memory.swap.peak": "0",
+      "path": "/sys/fs/cgroup/borsuk.slice/borsuk-staging.slice/borsuk-staging-debug.slice/borsuk-global-leaf-staging-final-cli.service"
+    },
+    "cgroup_before": {
+      "cpu.max": "100000 100000",
+      "cpu_affinity": [
+        0
+      ],
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+      "memory.max": "268435456",
+      "memory.peak": "23109632",
+      "memory.swap.max": "0",
+      "memory.swap.peak": "0",
+      "path": "/sys/fs/cgroup/borsuk.slice/borsuk-staging.slice/borsuk-staging-debug.slice/borsuk-global-leaf-staging-final-cli.service"
+    },
+    "checks": [
+      {
+        "command": [
+          "/usr/bin/python3",
+          "scripts/run_hierarchical_global_leaf_probe.py",
+          "--self-check"
+        ],
+        "exit_status": 0,
+        "log": "/tmp/borsuk-global-leaf-staging-check-0.log"
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "scripts/launch_hierarchical_cells_100k_spot.py",
+          "--global-leaf-probe",
+          "--self-check"
+        ],
+        "exit_status": 0,
+        "log": "/tmp/borsuk-global-leaf-staging-check-1.log"
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "scripts/run_hierarchical_global_leaf_probe.py",
+          "--self-check-qualification",
+          "/home/rb/worktrees/borsuk-global-leaf-staging-timeout-fix"
+        ],
+        "exit_status": 0,
+        "log": "/tmp/borsuk-global-leaf-staging-check-2.log"
+      },
+      {
+        "command": [
+          "/usr/bin/python3",
+          "-m",
+          "py_compile",
+          "scripts/run_hierarchical_global_leaf_probe.py",
+          "scripts/launch_hierarchical_cells_100k_spot.py"
+        ],
+        "exit_status": 0,
+        "log": "/tmp/borsuk-global-leaf-staging-check-3.log"
+      },
+      {
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_status": 0,
+        "log": "/tmp/borsuk-global-leaf-staging-check-4.log"
+      }
+    ],
+    "frozen_metadata": {
+      "archive_or_binary_or_corpus_bodies_read": false,
+      "datasets": [
+        "cohere",
+        "relaion"
+      ],
+      "frozen_config": {
+        "bytes": 14093,
+        "path": "/home/rb/worktrees/borsuk-global-leaf-staging-timeout-fix/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/config.json",
+        "sha256": "7ba47facd62bcd7044217f451b861712a2753a8eec76f2d4f671b7593097b53a"
+      },
+      "network": false,
+      "roles": {
+        "nomination": {
+          "native_source_count": 401,
+          "source_commit": "3dbf70e771516b45de62f8bf9dbe672952957589",
+          "source_identity_sha256": "739913047741a2d278b6eabad090055b54897442cbdecfbb340da4bb7415dfb1",
+          "support_source_count": 2015
+        },
+        "original": {
+          "native_source_count": 401,
+          "source_commit": "2638caaec6e7ebd9b39620e497afa14bd64d402d",
+          "source_identity_sha256": "690a545e782b7f732acf9c78b71d2d40a465fd308011762a255d2b74f96742ce",
+          "support_source_count": 24
+        }
+      }
+    },
+    "frozen_source_drift_rejected": true
+  },
+  "author": "Roman Bartusiak <riomus@gmail.com>",
+  "base": "39472dc1ba71366b5ba267d5cc043c17834f095c",
+  "bounded_final_assurance_command": [
+    "sudo",
+    "-n",
+    "systemd-run",
+    "--unit=borsuk-global-leaf-staging-final-cli",
+    "--slice=borsuk-staging-debug.slice",
+    "--wait",
+    "--pipe",
+    "--property=MemoryMax=256M",
+    "--property=MemorySwapMax=0",
+    "--property=CPUQuota=100%",
+    "--property=TasksMax=64",
+    "--property=RuntimeMaxSec=120",
+    "--property=KillMode=control-group",
+    "--property=TimeoutStopSec=5",
+    "--property=User=rb",
+    "--property=WorkingDirectory=/home/rb/worktrees/borsuk-global-leaf-staging-timeout-fix",
+    "taskset",
+    "-c",
+    "0",
+    "python3",
+    "/tmp/borsuk-global-leaf-staging-assurance.py",
+    "/home/rb/worktrees/borsuk-global-leaf-staging-timeout-fix"
+  ],
+  "bounded_profile_before_command": [
+    "sudo",
+    "-n",
+    "systemd-run",
+    "--unit=borsuk-global-leaf-staging-repro-before",
+    "--slice=borsuk-staging-debug.slice",
+    "--wait",
+    "--pipe",
+    "--property=MemoryMax=256M",
+    "--property=MemorySwapMax=0",
+    "--property=CPUQuota=100%",
+    "--property=TasksMax=32",
+    "--property=RuntimeMaxSec=120",
+    "--property=KillMode=control-group",
+    "--property=TimeoutStopSec=5",
+    "--property=User=rb",
+    "taskset",
+    "-c",
+    "0",
+    "python3",
+    "/tmp/borsuk-global-leaf-staging-repro.py",
+    "/home/rb/worktrees/borsuk-global-leaf-staging-timeout-fix"
+  ],
+  "bounded_profile_final_command": [
+    "sudo",
+    "-n",
+    "systemd-run",
+    "--unit=borsuk-global-leaf-staging-final-repro",
+    "--slice=borsuk-staging-debug.slice",
+    "--wait",
+    "--pipe",
+    "--property=MemoryMax=256M",
+    "--property=MemorySwapMax=0",
+    "--property=CPUQuota=100%",
+    "--property=TasksMax=32",
+    "--property=RuntimeMaxSec=120",
+    "--property=KillMode=control-group",
+    "--property=TimeoutStopSec=5",
+    "--property=User=rb",
+    "taskset",
+    "-c",
+    "0",
+    "python3",
+    "/tmp/borsuk-global-leaf-staging-repro.py",
+    "/home/rb/worktrees/borsuk-global-leaf-staging-timeout-fix"
+  ],
+  "cause": "Read-only tar traversal synchronously inventories whole worker and original scratch trees for each archive member, concurrent with one-second monitor. cProfile dominated by directory_bytes/Path.stat, not gzip/tar.",
+  "change": "Per member/chunk deadline and monitor polling without filesystem traversal. Full scratch scans before/after archive authentication and every subset write, plus unchanged one-second monitor and existing staging/native boundaries. Record cumulative scratch scan calls/seconds.",
+  "cli_alias_red": {
+    "command": [
+      "/usr/bin/python3",
+      "scripts/run_hierarchical_global_leaf_probe.py",
+      "--self-check"
+    ],
+    "exit_status": 2,
+    "output": "INVALID: separate original scratch charged and scan accounting retained\n"
+  },
+  "commit": "01847b394ddf49492a44fdb8f4269a466cabdd52",
+  "final_assurance_command": "python3 /tmp/borsuk-global-leaf-staging-assurance.py /home/rb/worktrees/borsuk-global-leaf-staging-timeout-fix",
+  "final_profile_command": "python3 /tmp/borsuk-global-leaf-staging-repro.py /home/rb/worktrees/borsuk-global-leaf-staging-timeout-fix",
+  "guards_preserved": [
+    "source whole-body authentication before/after",
+    "all401 native plus qualified support body hashes",
+    "unique regular nonsparse native/support entries",
+    "inventory completeness and subset size/digest",
+    "scratch cap and one-second monitor",
+    "deadline signal plus immediate heartbeat",
+    "native owned-unit cleanup and final closure"
+  ],
+  "limits": {
+    "cpu_affinity": [
+      0
+    ],
+    "cpu_quota_percent": 100,
+    "memory_max_bytes": 268435456,
+    "memory_swap_max_bytes": 0,
+    "runtime_max_seconds": 120
+  },
+  "no_new_native_cargo_corpus_gt_aws_network_consultations_children_operator_push": true,
+  "original_config_and_receipts_immutable": true,
+  "parent_requested_alias_fix": "Reproduced standalone public CLI failure2 in /tmp/borsuk-global-leaf-staging-cli-red.log; patched launcher.probe.ORIGINAL_ROOT in selfcheck so both __main__ and imported modes patch the helper actual module. Final standalone and combined CLIs both exit0.",
+  "profile_before_script_note": "The script at this same path was subsequently updated to use the repaired resource helper, retain cgroup receipts and record heartbeat calls. The BEFORE run used the original full-scan check on base39472dc; raw result is retained in tool session14459 and synthetic_before.",
+  "red_regression": {
+    "command": "python3 -c 'from scripts.run_hierarchical_global_leaf_probe import archive_staging_self_check; archive_staging_self_check()'",
+    "exit_status": 1,
+    "failure": "scratch scans bounded by archive/write boundaries, not tar member count",
+    "unit": "borsuk-global-leaf-staging-regression-red"
+  },
+  "resource_wrapper": "sudo -n systemd-run --slice=borsuk-staging-debug.slice --wait --pipe --property=MemoryMax=256M --property=MemorySwapMax=0 --property=CPUQuota=100% --property=RuntimeMaxSec=120 --property=KillMode=control-group --property=TimeoutStopSec=5 --property=User=rb taskset -c 0",
+  "schema": "borsuk-global-leaf-staging-timeout-repair-contract-v1",
+  "scope": "Source-only repair. Synthetic profiling establishes this defect, not a guarantee that a real paid retry fits the frozen deadline. Parent owns integration, fresh source/config freeze, admission and any paid retry.",
+  "source_files": {
+    "scripts/launch_hierarchical_cells_100k_spot.py": {
+      "bytes": 143694,
+      "sha256": "d0e4ce6d7b77e83f87083c5fd660d4e63062f59b414cc0896200b24d067e4c25"
+    },
+    "scripts/run_hierarchical_global_leaf_probe.py": {
+      "bytes": 102628,
+      "sha256": "6e3766df840c667400bc6d22f025a8176f7a0d22e8904ddfe26a95b9b75e56fe"
+    }
+  },
+  "synthetic_after": {
+    "archive_bytes": 4479,
+    "archive_members": 512,
+    "cgroup_after": {
+      "cpu.max": "100000 100000",
+      "cpu_affinity": [
+        0
+      ],
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+      "memory.max": "268435456",
+      "memory.peak": "46084096",
+      "memory.swap.max": "0",
+      "memory.swap.peak": "0"
+    },
+    "cgroup_before": {
+      "cpu.max": "100000 100000",
+      "cpu_affinity": [
+        0
+      ],
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+      "memory.max": "268435456",
+      "memory.peak": "22257664",
+      "memory.swap.max": "0",
+      "memory.swap.peak": "0"
+    },
+    "checks": 2,
+    "guard_accounting": {
+      "scratch_bytes": 78207,
+      "scratch_scan_calls": 2,
+      "scratch_scan_seconds": 0.1358852090779692
+    },
+    "heartbeat_calls": 1536,
+    "max_rss_bytes": 38490112,
+    "scan_calls": 4,
+    "scan_file_entries": 8194,
+    "scan_ns": 135789971,
+    "wall_seconds": 0.20921451499452814
+  },
+  "synthetic_before": {
+    "archive_bytes": 4479,
+    "archive_members": 512,
+    "cgroup_memory_peak_bytes": 55402496,
+    "checks": 545,
+    "execution_session": 14459,
+    "exit_status": 1,
+    "failure": "full scratch traversal repeated per read-only archive member",
+    "max_rss_bytes": 46465024,
+    "original_small_files": 2048,
+    "scan_calls": 1090,
+    "scan_file_entries": 2232865,
+    "scan_ns": 43139705765,
+    "scan_time_note": "Cumulative time of both threads; overlapping scans can exceed wall time.",
+    "swap_peak_bytes": 0,
+    "wall_seconds": 38.630684069008566,
+    "worker_small_files": 2048
+  }
+}
