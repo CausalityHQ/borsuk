@@ -1,0 +1,48 @@
+{
+  "checks": [
+    "exact named23 library and1 binary test rosters",
+    "six serial stages and log/tee failures",
+    "pending/config/source-prefix rejection",
+    "minimal archive support authority",
+    "ACK/fsync ownership and wait before collection",
+    "existing hierarchical mode"
+  ],
+  "child_commit": "2a0569d3849d910c5bf2c86bfa6af4f1dd267324",
+  "cloud_execution": false,
+  "command": [
+    "python3",
+    "scripts/launch_native_workspace_execution_spot.py",
+    "--constrained-split-implementation",
+    "--self-check"
+  ],
+  "native_execution": false,
+  "native_qualification": false,
+  "observed_python_peak_bytes": 78827520,
+  "original_exec_session": 68466,
+  "original_exit_status": 0,
+  "resources": {
+    "cpu_quota_percent": 100,
+    "memory_max_bytes": 268435456,
+    "runtime_max_seconds": 120,
+    "swap_max_bytes": 0,
+    "tasks_max": 64
+  },
+  "schema": "borsuk-constrained-split-controller-root-check-v1",
+  "scientific_measurement": false,
+  "source_commit": "b52ee5411d654a06acf705c04c4ec61cc668bc38",
+  "source_sha256": {
+    "scripts/check_constrained_split_implementation.sh": {
+      "bytes": 1843,
+      "sha256": "7c404096c3dd4b098c6def7c2265564878fe68c1410c6a0f73719f5a9e9bf187"
+    },
+    "scripts/check_native_workspace_execution.py": {
+      "bytes": 13151,
+      "sha256": "37e7d14133e95cbda5b633f06d3d72e1c8355255c0eed48a165305c527739fe0"
+    },
+    "scripts/launch_native_workspace_execution_spot.py": {
+      "bytes": 173061,
+      "sha256": "1409141ce979785bdbdb0174843905ca7208283dadae7e1665b6e7f789ea19b2"
+    }
+  },
+  "unit": "borsuk-root-constrained-split-controller-check-20261003"
+}
