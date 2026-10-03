@@ -70,7 +70,7 @@ HIERARCHICAL_CELLS_STAGES = tuple((name, command.split()) for name, command in (
     ('hierarchical-cell-tests', 'cargo test --locked -p borsuk --lib hierarchical_semantic_cells::'),
     ('hierarchical-cell-bin-tests', 'cargo test --locked -p borsuk --bin hierarchical_semantic_cells'),
     ('generation-integration', 'cargo test --locked -p borsuk --test two_bit_generation'),
-    ('release', 'cargo build --release --locked -p borsuk --bin hierarchical_semantic_cells --example two_bit_http --bin build_two_bit_generation'),
+    ('release', 'cargo build --release --locked -p borsuk --bin hierarchical_semantic_cells --example two_bit_http --bin build_two_bit_generation --bin check_semantic_router_scorer'),
     ('clippy', 'cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious'),
     ('test-build', 'env -u BORSUK_TEST_BUILD_COMMAND bash scripts/check_rust_test_build.sh')))
 # Historical source fixture only; production authority is the root-frozen manifest.
@@ -186,7 +186,7 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
     FIXED48 = fixed48
     HIERARCHICAL_CELLS = hierarchical_cells
     NATIVE_DELTA = HIERARCHICAL_CELLS_DELTA if hierarchical_cells else FIXED48_DELTA if fixed48 else BOUNDED_PUBLICATION_DELTA if bounded_publication else ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
-    RELEASE_ARTIFACTS = ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation') if hierarchical_cells else ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
+    RELEASE_ARTIFACTS = ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation', 'binaries/check_semantic_router_scorer') if hierarchical_cells else ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
     TERMINAL_IDENTITIES = (*FULL_TERMINAL_IDENTITIES, 'controller_source_commit', 'candidate_delta_paths') if scoped else FULL_TERMINAL_IDENTITIES
     ARTIFACTS = (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS) if implementation else FULL_ARTIFACTS
     ROOT = (semantic.ROOT.parent/'semantic-1m' if semantic_1m else semantic.ROOT/'metadata-waves') / ('implementation-gates/remote-implementation' if implementation else 'implementation-gates/remote-test-build' if test_build else 'implementation-gates/remote-full')
@@ -1446,8 +1446,8 @@ def _hierarchical_cells_protocol_self_check():
         assert FIXED['command'] == ['bash', 'scripts/check_hierarchical_cells_implementation.sh']
         assert CODE == (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_hierarchical_cells_implementation.sh')
         assert NATIVE_DELTA == HIERARCHICAL_CELLS_DELTA and list(NATIVE_DELTA) == sorted(NATIVE_DELTA)
-        assert RELEASE_ARTIFACTS == ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation')
-        assert ARTIFACTS == (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS) and len(ARTIFACTS) == 16
+        assert RELEASE_ARTIFACTS == ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation', 'binaries/check_semantic_router_scorer')
+        assert ARTIFACTS == (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS) and len(ARTIFACTS) == 17
         assert FIXED == dict(FULL_FIXED, schema=CONFIG_SCHEMA, execution_kind='implementation-gates',
             command=FIXED['command'], environment=dict(worker.ENVIRONMENT, BORSUK_TEST_BUILD_JOBS='1', BORSUK_TEST_BUILD_COMMAND=None))
         for mode in ('test_build', 'startup_wave8', 'root_reuse', 'bounded_publication', 'fixed48'):
@@ -1733,7 +1733,7 @@ def _self_check():
             rejected(lambda:preflight(repo))
         body = user_data('0'*40,'1'*64,'sources/mock',PREFIX+'a0001',proof)
         assert len(CODE) == len(set(CODE)) == (24 if IMPLEMENTATION else 23 if TEST_BUILD else 22)
-        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == (16 if FIXED48 or HIERARCHICAL_CELLS else 14 if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION else 18 if IMPLEMENTATION else 13)
+        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == (17 if HIERARCHICAL_CELLS else 16 if FIXED48 else 14 if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION else 18 if IMPLEMENTATION else 13)
         assert '--on-active=9000s' in body and 'RuntimeMaxSec=7260' in body
         assert all(k in body for k in ('MemoryMax=8G','MemorySwapMax=0','CPUQuota=200%','TasksMax=512'))
         assert 'build-essential' in body and 'python3-dev' in body

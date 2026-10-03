@@ -64,6 +64,6 @@ run_stage() {
 run_stage hierarchical-cell-tests cargo test --locked -p borsuk --lib hierarchical_semantic_cells::
 run_stage hierarchical-cell-bin-tests cargo test --locked -p borsuk --bin hierarchical_semantic_cells
 run_stage generation-integration cargo test --locked -p borsuk --test two_bit_generation
-run_stage release cargo build --release --locked -p borsuk --bin hierarchical_semantic_cells --example two_bit_http --bin build_two_bit_generation
+run_stage release cargo build --release --locked -p borsuk --bin hierarchical_semantic_cells --example two_bit_http --bin build_two_bit_generation --bin check_semantic_router_scorer
 run_stage clippy cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
 run_stage test-build env -u BORSUK_TEST_BUILD_COMMAND bash scripts/check_rust_test_build.sh

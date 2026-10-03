@@ -1,11 +1,13 @@
 {
   "authority_pending": true,
+  "control_scorer": "crates/borsuk/src/bin/check_semantic_router_scorer.rs",
+  "control_scorer_contract": "config-v3, profile native100k, count64 first0 k100, truth-free frozen diagnostics; same raw/query/normalization/IDs",
   "items": [
     {
       "current_writer_config_draft": {
         "base_epoch": 0,
         "dimensions": 768,
-        "discovery": "graph",
+        "discovery": "semantic",
         "generation": 1,
         "low": [
           -0.11186065524816513,
@@ -784,7 +786,7 @@
         "raw": "/mnt/hierarchical-cells/inputs/relaion/source.f32",
         "raw_sha256": "0d55a09756f41361c89f0ca355a3bc98da6799b4dc7ea39ab34a905844a758c2",
         "rows": 100000,
-        "semantic_profile": null,
+        "semantic_profile": "native100k",
         "sq8": "/mnt/hierarchical-cells/inputs/relaion/sq8.bin",
         "sq8_etag": "\"232d675ebacc2f6182cd025820847ac8\"",
         "sq8_object_key": "research/native-union/20260928/locality-source-layout-a0001/data/relaion/objects/be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b",
@@ -1579,7 +1581,7 @@
       "current_writer_config_draft": {
         "base_epoch": 0,
         "dimensions": 768,
-        "discovery": "graph",
+        "discovery": "semantic",
         "generation": 1,
         "low": [
           -0.09260845929384232,
@@ -2358,7 +2360,7 @@
         "raw": "/mnt/hierarchical-cells/inputs/cohere/source.f32",
         "raw_sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e",
         "rows": 100000,
-        "semantic_profile": null,
+        "semantic_profile": "native100k",
         "sq8": "/mnt/hierarchical-cells/inputs/cohere/sq8.bin",
         "sq8_etag": "\"f669afd022ec8e25f4b4ccf30f3741cc\"",
         "sq8_object_key": "research/native-union/20260928/walk-source-http-a0001/data/cohere/objects/c16929252705c831c6846022eec46481fc004f521f0c0814a53d49fece8771e0",

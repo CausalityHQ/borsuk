@@ -1,0 +1,23 @@
+{
+  "actual_native_compilation_claim": false,
+  "added_release_binary": "check_semantic_router_scorer",
+  "artifact_count": 17,
+  "exit_status": 0,
+  "failure_cause": "mock expected artifact roster retained old three-binary count; assertions updated to actual four-binary roster",
+  "final_invocation_id": "2fcd99ba656546e4ae8a5608ae6c296e",
+  "final_session": 31238,
+  "final_unit": "borsuk-hierarchical-qualifier-control-selfcheck-final-20261003.service",
+  "preserved_failure_units": [
+    "borsuk-hierarchical-qualifier-control-selfcheck-20261003.service",
+    "borsuk-hierarchical-qualifier-control-selfcheck-green-20261003.service"
+  ],
+  "reason": "existing truth-free k100 diagnostic supports current native100k control",
+  "runtime_seconds": 1.23,
+  "schema": "borsuk-hierarchical-control-scorer-qualification-update-v1",
+  "source_sha256": {
+    "scripts/check_hierarchical_cells_implementation.sh": "9620f83427c4e9801d8c192a86f35b2610effccd64822b78035ec6114af45527",
+    "scripts/launch_native_workspace_execution_spot.py": "bcfd03a9bfe66cac272f0398c917fccbb918ade76e5027950afd26963caf7e2a"
+  },
+  "status": "PASS_PYTHON_QUALIFIER_ONLY",
+  "swap_peak_bytes": 0
+}
