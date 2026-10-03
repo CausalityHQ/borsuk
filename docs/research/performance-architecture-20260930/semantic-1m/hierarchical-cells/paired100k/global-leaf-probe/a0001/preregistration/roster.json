@@ -1,0 +1,32 @@
+{
+  "files": {
+    "canary-admission.json": {
+      "bytes": 613,
+      "sha256": "4cd227199ddc56f26bd4dd64dda039bff905705ebfe545ed646a6252eb875b2d"
+    },
+    "config.json": {
+      "bytes": 14093,
+      "sha256": "7ba47facd62bcd7044217f451b861712a2753a8eec76f2d4f671b7593097b53a"
+    },
+    "freeze-evidence.json": {
+      "bytes": 5252,
+      "sha256": "e76f1f97a75570a76debbcec41c4d9ac1084a5956d48b62160dd3b1aa2d1f532"
+    },
+    "real-input-admission-result.json": {
+      "bytes": 5081,
+      "sha256": "78397bf86f0eeec3096b9df0add64ee9ab939f906dd1296035522ea16f462a8d"
+    },
+    "real-input-admission.json": {
+      "bytes": 1548,
+      "sha256": "e3528a550fb5b9ed745992b3089ff54082ba980896e39c1b62cee6c25c685d79"
+    },
+    "release-review.json": {
+      "bytes": 47138,
+      "sha256": "b77fc0e490da677a09dc4680dfea231c26c0d3866683d71f10748ae01a888b07"
+    }
+  },
+  "historical_status": "INVALID",
+  "methodology_unchanged": true,
+  "schema": "borsuk-global-leaf-preregistration-archive-v1",
+  "source_commit": "af3b4c2c02f95a123794d28316a78c834ddd26af"
+}
