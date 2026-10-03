@@ -64,7 +64,9 @@ HIERARCHICAL_CELLS_REQUIRED_TESTS = {
         'identical_geometry_is_bounded_and_reproducible_without_truth',
         'source_id_binding_budgets_and_corruption_fail_closed_with_charges',
         'loss_receipt_separates_boundary_recovery_nomination_and_final_ranking',
-        'cell_local_block_nomination_omits_other_blocks_even_for_tied_codes')),
+        'cell_local_block_nomination_omits_other_blocks_even_for_tied_codes',
+        'resident_directory_preload_is_admitted_charged_and_has_no_query_reads',
+        'resident_preload_rejects_corrupt_unused_interior_page')),
     'hierarchical-cell-bin-tests': ('tests::configurations_reject_unknown_fields_and_truth_in_requests',)}
 HIERARCHICAL_CELLS_STAGES = tuple((name, command.split()) for name, command in (
     ('hierarchical-cell-tests', 'cargo test --locked -p borsuk --lib hierarchical_semantic_cells::'),
@@ -1522,7 +1524,7 @@ def _fixed48_stages_self_check(*, hierarchical_cells=False):
             lines.append(encoded(record).decode())
         log.write_text('\n'.join(lines)+'\n')
         records = validate_bounded_publication_stages(log, fixed48=not hierarchical_cells, hierarchical_cells=hierarchical_cells)
-        assert len(records) == len(stages) and [r['tests_run'] for r in records[:-3]] == ([5, 1, 1] if hierarchical_cells else [2, 2, 2, 1])
+        assert len(records) == len(stages) and [r['tests_run'] for r in records[:-3]] == ([len(HIERARCHICAL_CELLS_REQUIRED_TESTS['hierarchical-cell-tests']), 1, 1] if hierarchical_cells else [2, 2, 2, 1])
         for names in required.values():
             for name in names:
                 passed = 'test '+name+' ... ok'

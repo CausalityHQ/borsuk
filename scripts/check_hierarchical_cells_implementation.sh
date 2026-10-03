@@ -16,7 +16,9 @@ required = {
         "identical_geometry_is_bounded_and_reproducible_without_truth",
         "source_id_binding_budgets_and_corruption_fail_closed_with_charges",
         "loss_receipt_separates_boundary_recovery_nomination_and_final_ranking",
-        "cell_local_block_nomination_omits_other_blocks_even_for_tied_codes")),
+        "cell_local_block_nomination_omits_other_blocks_even_for_tied_codes",
+        "resident_directory_preload_is_admitted_charged_and_has_no_query_reads",
+        "resident_preload_rejects_corrupt_unused_interior_page")),
     "hierarchical-cell-bin-tests": ("tests::configurations_reject_unknown_fields_and_truth_in_requests",)}
 stage, started, finished, status, log, log_status = sys.argv[1:7]
 tests = None
