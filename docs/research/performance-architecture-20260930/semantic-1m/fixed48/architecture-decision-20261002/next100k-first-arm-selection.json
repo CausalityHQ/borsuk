@@ -1,0 +1,64 @@
+{
+  "build": {
+    "maximum_cell_rows": 512,
+    "maximum_depth": 32,
+    "training_sample_rows": 256
+  },
+  "datasets": [
+    "ReLAION first100k",
+    "CoHere first100k"
+  ],
+  "dimensions": 768,
+  "directory": {
+    "policy": "authenticated resident preload",
+    "query_directory_gets": 0,
+    "startup_payloads_charged_separately": true
+  },
+  "failure_disposition": {
+    "identity_format_resource": "INVALID; repair execution separately",
+    "scientific_gate": "Preserve FAIL and stage losses; redesign distinct arm without retroactive threshold change"
+  },
+  "gate_origin": "Explicit prospective reuse of V282 quality and query resource references for this one arm; not universal architecture limits",
+  "k": 100,
+  "latency_claim": false,
+  "measurements_required": [
+    "Startup and query operations/payload separately",
+    "Router/boundary/nomination/admitted/final GT populations",
+    "CPU/wall and RSS/cgroup peak",
+    "Build scratch and resident preload payload/model"
+  ],
+  "metric": "cosine",
+  "no_real_two_stage_sweep": true,
+  "panel_status": "consumed diagnostic; not independent qualification",
+  "query": {
+    "blocks_per_cell": 4,
+    "boundary_beam": 24,
+    "fetch_policy": "WholeCell",
+    "maximum_total_cell_gets": 32,
+    "maximum_total_cell_payload_bytes": 16777216,
+    "primary_beam": 8
+  },
+  "query_count": 64,
+  "query_ordinals": [
+    0,
+    63
+  ],
+  "required_synthetic_parity": "Identical nominations/admitted IDs/ordered final ranking for WholeCell and TwoStage using identical routing/nomination options",
+  "schema": "borsuk-hierarchical-cell-first-arm-selection-v1",
+  "scientific_gate": {
+    "mean_recall_at_100_minimum": 0.98,
+    "p05_hits_minimum": 95,
+    "total_cell_gets_maximum": 32,
+    "total_cell_payload_bytes_maximum": 16777216
+  },
+  "selected_cell_count_bound": "union <= primary8 + independent boundary24 =32, even without nesting",
+  "source_freeze_pending": true,
+  "status": "PROSPECTIVE_SOURCE_POLICY_SELECTED_BEFORE_TRUTH",
+  "unmeasured": [
+    "S3 physical requests/retries/wire bytes",
+    "cold HTTP latency and offered QPS",
+    "lifecycle and vendor matched dollars",
+    "10M/100M actual memory/build/maintenance"
+  ],
+  "worst_cell_only_query_payload_arithmetic_bytes": 16187392
+}
