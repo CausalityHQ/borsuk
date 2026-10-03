@@ -842,6 +842,73 @@ pub struct SearchOptions {
     /// Payload memory cap; root/runtime/allocator/OS cache are separate charges.
     pub max_query_payload_bytes: usize,
 }
+/// Fixed, routing-only interventions. Neither policy scores source/SQ8 records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NominationPolicy {
+    /// Actual union of the existing independent primary8 and wider24 routes.
+    Hierarchical8And24,
+    /// All resident leaves ranked by unchanged squared-L2, retaining top24.
+    GlobalTop24,
+}
+/// Source-range and scratch caps for the fixed routing-only probe.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NominationLimits {
+    /// At most 24 authenticated source-range reads per policy/request.
+    pub max_source_gets: usize,
+    /// At most 16 MiB of source payload per policy/request.
+    pub max_source_bytes: usize,
+    /// Modeled transient payload, separate from admitted resident directories.
+    pub max_query_payload_bytes: usize,
+}
+/// One selected leaf, with exact stored prototype bits and source-order roster.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NominatedCell {
+    /// Authenticated layout cell ID, never a source ordinal.
+    pub cell_id: usize,
+    /// Existing normalized-query squared-L2 to the unnormalized stored mean.
+    pub distance: f32,
+    /// Lossless representation of the distance for offline replay.
+    pub distance_bits: u32,
+    /// Membership in primary8 (global policy uses its first eight).
+    pub primary: bool,
+    /// Exact f32 bits of the stored arithmetic mean; never renormalized.
+    pub prototype_bits: Vec<u32>,
+    /// Concatenation position only, not a source-membership interval.
+    pub first_row: usize,
+    /// Exact source ordinal roster in stored row order.
+    pub source_ids: Vec<i64>,
+    /// Authenticated source range offset within cells.bin.
+    pub source_offset: usize,
+    /// Authenticated source range length.
+    pub source_bytes: usize,
+    /// Authenticated source range digest.
+    pub source_sha256: String,
+    /// Complete cell bytes for occupancy/fetch comparison; these are not read.
+    pub whole_cell_bytes: usize,
+}
+/// Truth-free routing coverage, without local block nomination or refinement.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NominationReceipt {
+    /// Fixed selection policy.
+    pub policy: NominationPolicy,
+    /// Total authenticated resident leaves considered available to routing.
+    pub resident_leaf_cells: usize,
+    /// Conservative count of routing distance calls (exact for global ranking).
+    pub routing_distance_evaluations_bound: usize,
+    /// Distance-call bound multiplied by source dimensions.
+    pub routing_coordinate_evaluations_bound: usize,
+    /// Selected cells ordered by distance.total_cmp, then ascending cell ID.
+    pub selected: Vec<NominatedCell>,
+    /// Primary8 source ordinals, sorted unique.
+    pub primary_ids: Vec<i64>,
+    /// All 24 cells' source ordinals, sorted unique.
+    pub covered_ids: Vec<i64>,
+    /// Actual source reads and bounded query scratch; all other reads are zero.
+    pub accounting: Accounting,
+}
+
 /// Measured stage wall/process CPU interval, excludes other stages.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StageTime {
@@ -1304,6 +1371,168 @@ impl Prototype {
         }
         Err("routing exceeded directory depth cap".into())
     }
+    /// Authenticated original build/source descriptors, without opening inputs.
+    pub fn source_identity(&self) -> &BuildConfig {
+        &self.manifest.input
+    }
+
+    fn nomination_inner(
+        &self,
+        query: &[f32],
+        policy: NominationPolicy,
+        limits: NominationLimits,
+        accounting: &mut Accounting,
+    ) -> Result<NominationReceipt> {
+        require(
+            query.len() == self.dimensions()
+                && (1..=24).contains(&limits.max_source_gets)
+                && (1..=16 * 1024 * 1024).contains(&limits.max_source_bytes)
+                && limits.max_query_payload_bytes <= 512 * 1024 * 1024,
+            "nomination geometry/limits",
+        )?;
+        // Existing route clones only bounded frontiers. Global ranking holds at
+        // most 25 score/ID pairs, never a copy of all resident leaf prototypes.
+        // Include output rosters/prototype bits, BTreeSet IDs, and source bytes.
+        let routing_scratch = 8 * (8 + 24)
+            * (self.dimensions() * 4
+                + self.manifest.input.cell_rows.div_ceil(BLOCK_ROWS) * 128 + 512);
+        let payload = routing_scratch + self.dimensions() * 16
+            + 24 * self.manifest.input.cell_rows * 128
+            + 2 * limits.max_source_bytes + 65536;
+        accounting.modeled_query_payload_bytes = payload;
+        require(payload <= limits.max_query_payload_bytes, "nomination payload admission")?;
+        let normalized = cosine_vector(query)?;
+        let mut primary_cells = BTreeSet::new();
+        let mut ranked = Vec::with_capacity(25);
+        let mut leaf_count = 0;
+        match policy {
+            NominationPolicy::Hierarchical8And24 => {
+                // Only beams are consulted by route; search configuration and
+                // its existing public behavior are deliberately unchanged.
+                let options = SearchOptions {
+                    fetch_policy: FetchPolicy::TwoStage,
+                    primary_beam: 8, boundary_beam: 24, blocks_per_cell: 4,
+                    max_cells: 24, max_cell_gets: 24, max_cell_bytes: 0,
+                    max_source_gets: limits.max_source_gets,
+                    max_source_bytes: limits.max_source_bytes,
+                    max_refinement_gets: 1, max_refinement_bytes: 0,
+                    max_query_payload_bytes: limits.max_query_payload_bytes,
+                };
+                let (primary, wider) = self.route(&normalized, options)?;
+                for node in &primary {
+                    let Target::Cell { cell } = &node.target else {
+                        return Err("unresolved primary nomination frontier".into());
+                    };
+                    primary_cells.insert(cell.id);
+                }
+                let mut selected = BTreeMap::new();
+                for node in primary.into_iter().chain(wider) {
+                    let Target::Cell { cell } = &node.target else {
+                        return Err("unresolved nomination frontier".into());
+                    };
+                    selected.insert(cell.id, node);
+                }
+                // Actual union cardinality is checked, never silently truncated.
+                require(selected.len() == 24 && primary_cells.len() == 8,
+                    "nomination requires actual hierarchy union24/primary8")?;
+                for (id, node) in selected {
+                    ranked.push((VectorMetric::SquaredEuclidean.distance(
+                        &normalized, &node.prototype)?, id));
+                }
+                leaf_count = self.manifest.build.cells;
+            }
+            NominationPolicy::GlobalTop24 => {
+                for page in self.directories.values() {
+                    for node in &page.children {
+                        if let Target::Cell { cell } = &node.target {
+                            leaf_count += 1;
+                            let distance = VectorMetric::SquaredEuclidean.distance(
+                                &normalized, &node.prototype)?;
+                            require(distance.is_finite(), "nomination finite leaf distance")?;
+                            ranked.push((distance, cell.id));
+                            ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+                            ranked.truncate(24);
+                        }
+                    }
+                }
+                require(leaf_count == self.manifest.build.cells && ranked.len() == 24,
+                    "nomination requires complete resident leaves/top24")?;
+            }
+        }
+        ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        require(ranked.iter().all(|v| v.0.is_finite()), "nomination finite distances")?;
+        if policy == NominationPolicy::GlobalTop24 {
+            primary_cells.extend(ranked.iter().take(8).map(|v| v.1));
+        }
+        // Reference only the selected resident leaves, in deterministic rank order.
+        let selected = ranked.iter().map(|&(distance, id)| {
+            let node = self.directories.values().flat_map(|page| &page.children)
+                .find(|node| matches!(&node.target, Target::Cell { cell } if cell.id == id))
+                .ok_or("selected resident leaf missing")?;
+            Ok((distance, node))
+        }).collect::<Result<Vec<_>>>()?;
+        let source_bytes = selected.iter().map(|(_, node)| match &node.target {
+            Target::Cell { cell } => cell.source.bytes,
+            _ => 0,
+        }).sum::<usize>();
+        require(selected.len() <= limits.max_source_gets && source_bytes <= limits.max_source_bytes,
+            "nomination selected source batch admission")?;
+        let routing_distance_evaluations_bound = match policy {
+            NominationPolicy::Hierarchical8And24 => 2 * (8 + 24) * (self.manifest.input.max_depth + 1) + 24,
+            NominationPolicy::GlobalTop24 => leaf_count,
+        };
+        let mut receipt = NominationReceipt {
+            policy, resident_leaf_cells: leaf_count,
+            routing_distance_evaluations_bound,
+            routing_coordinate_evaluations_bound: routing_distance_evaluations_bound * self.dimensions(),
+            selected: Vec::with_capacity(24),
+            primary_ids: Vec::new(), covered_ids: Vec::new(), accounting: Accounting::default(),
+        };
+        let mut primary_ids = BTreeSet::new();
+        let mut covered_ids = BTreeSet::new();
+        let wave = accounting.wave(FetchStage::Source);
+        for (distance, node) in selected {
+            let Target::Cell { cell } = &node.target else { unreachable!() };
+            let body = accounting.fetch(&self.cells, &cell.source, FetchStage::Source, wave,
+                (limits.max_source_gets, limits.max_source_bytes))?;
+            let mut source_ids = Vec::with_capacity(node.rows);
+            for record in body.chunks_exact(8 + self.codec.record_bytes()) {
+                let id = i64::from_le_bytes(record[..8].try_into()?);
+                require(id >= 0 && (id as usize) < self.rows() && covered_ids.insert(id),
+                    "nomination source ordinal roster/duplicate ID")?;
+                source_ids.push(id);
+            }
+            require(source_ids.len() == node.rows, "nomination exact source roster")?;
+            let primary = primary_cells.contains(&cell.id);
+            if primary { primary_ids.extend(source_ids.iter().copied()); }
+            receipt.selected.push(NominatedCell {
+                cell_id: cell.id, distance, distance_bits: distance.to_bits(), primary,
+                prototype_bits: node.prototype.iter().map(|v| v.to_bits()).collect(),
+                first_row: cell.first_row, source_ids, source_offset: cell.source.offset,
+                source_bytes: cell.source.bytes, source_sha256: cell.source.sha256.clone(),
+                whole_cell_bytes: cell.whole.bytes,
+            });
+        }
+        receipt.primary_ids = primary_ids.into_iter().collect();
+        receipt.covered_ids = covered_ids.into_iter().collect();
+        Ok(receipt)
+    }
+
+    /// Fixed truth-free routing probe on an admitted layout. Rejects underfilled
+    /// selections and non-24 hierarchy unions; never prepares/scores SQ2 or SQ8.
+    pub fn nominate(
+        &self,
+        query: &[f32],
+        policy: NominationPolicy,
+        limits: NominationLimits,
+    ) -> std::result::Result<NominationReceipt, SearchFailure> {
+        let mut accounting = Accounting::default();
+        match self.nomination_inner(query, policy, limits, &mut accounting) {
+            Ok(mut receipt) => { receipt.accounting = accounting; Ok(receipt) }
+            Err(error) => Err(SearchFailure { message: error.to_string(), accounting }),
+        }
+    }
+
     fn query_inner(
         &self,
         query: &[f32],
@@ -1762,6 +1991,165 @@ mod tests {
             max_refinement_gets: 4,
             max_refinement_bytes: 1024 * 1024,
             max_query_payload_bytes: 64 * 1024 * 1024,
+        }
+    }
+
+    fn nomination_limits() -> NominationLimits {
+        NominationLimits {
+            max_source_gets: 24,
+            max_source_bytes: 1024 * 1024,
+            max_query_payload_bytes: 64 * 1024 * 1024,
+        }
+    }
+
+    #[test]
+    fn nomination_global_finds_leaf_hidden_by_hierarchy_pruning() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = fixture(temp.path(), 64, 2, true);
+        config.cell_rows = 1;
+        let output = temp.path().join("candidate");
+        let built = build(&config, &output).unwrap();
+        let mut prototype = Prototype::open(&output, &built.root_sha256, 64 * 1024 * 1024).unwrap();
+        // Synthetic routing geometry only: 32 two-leaf subtrees. Propagate
+        // arithmetic means bottom-up, retaining the admitted topology/rosters.
+        let mut means = BTreeMap::<usize, Vec<f32>>::new();
+        let y = 0.75_f32.sqrt();
+        for (&offset, page) in &mut prototype.directories {
+            for node in &mut page.children {
+                node.prototype = match &node.target {
+                    Target::Directory { span } => means[&span.offset].clone(),
+                    Target::Cell { cell } => match cell.id {
+                        62 => vec![1., 0.],
+                        63 => vec![-1., 0.],
+                        id => vec![0.5, if id % 2 == 0 { y } else { -y }],
+                    },
+                };
+            }
+            assert_eq!(page.children.len(), 2);
+            means.insert(offset, (0..2).map(|axis|
+                (page.children[0].prototype[axis] + page.children[1].prototype[axis]) / 2.
+            ).collect());
+        }
+        // Resident routing must not load directories after admission.
+        fs::remove_file(output.join("directories.bin")).unwrap();
+        let query = [3., 0.];
+        let original_bits = query.map(f32::to_bits);
+        let hierarchical = prototype.nominate(&query, NominationPolicy::Hierarchical8And24, nomination_limits()).unwrap();
+        let global = prototype.nominate(&query, NominationPolicy::GlobalTop24, nomination_limits()).unwrap();
+        assert_eq!(query.map(f32::to_bits), original_bits);
+        assert_eq!(hierarchical.selected.len(), 24);
+        assert!(!hierarchical.selected.iter().any(|v| v.cell_id == 62));
+        assert_eq!(global.selected[0].cell_id, 62);
+        assert_eq!(global.selected[0].distance_bits, 0_f32.to_bits());
+        assert_eq!(global.routing_distance_evaluations_bound, 64);
+        assert_eq!(global.routing_coordinate_evaluations_bound, 128);
+        assert_eq!(global.selected.iter().skip(1).map(|v| v.cell_id).collect::<Vec<_>>(), (0..23).collect::<Vec<_>>());
+        assert_eq!(global.selected[1].prototype_bits, vec![0.5_f32.to_bits(), y.to_bits()]);
+        let normalized = prototype.nominate(&[1., 0.], NominationPolicy::GlobalTop24, nomination_limits()).unwrap();
+        assert_eq!(serde_json::to_value(&global).unwrap(), serde_json::to_value(normalized).unwrap());
+        for receipt in [&hierarchical, &global] {
+            assert_eq!(receipt.resident_leaf_cells, 64);
+            assert_eq!(receipt.primary_ids.len(), 8);
+            assert_eq!(receipt.covered_ids.len(), 24);
+            assert_eq!(receipt.accounting.source.submitted_gets, 24);
+            assert_eq!(receipt.accounting.source.verified_bytes,
+                receipt.selected.iter().map(|v| v.source_bytes).sum::<usize>());
+            assert_eq!(receipt.accounting.directory.submitted_gets, 0);
+            assert_eq!(receipt.accounting.whole_cell.submitted_gets, 0);
+            assert_eq!(receipt.accounting.refinement.submitted_gets, 0);
+            assert_eq!(receipt.accounting.waves.len(), 1);
+        }
+    }
+
+    #[test]
+    fn nomination_unpruned_parity_caps_source_binding_and_failure_charges() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = fixture(temp.path(), 32, 2, true);
+        config.cell_rows = 1;
+        let output = temp.path().join("candidate");
+        let built = build(&config, &output).unwrap();
+        let mut prototype = Prototype::open(&output, &built.root_sha256, 64 * 1024 * 1024).unwrap();
+        let hierarchy = prototype.nominate(&[1., 0.], NominationPolicy::Hierarchical8And24, nomination_limits()).unwrap();
+        let global = prototype.nominate(&[1., 0.], NominationPolicy::GlobalTop24, nomination_limits()).unwrap();
+        assert_eq!(serde_json::to_value(&hierarchy.selected).unwrap(), serde_json::to_value(&global.selected).unwrap());
+        assert_eq!(global.selected.iter().map(|v| v.cell_id).collect::<Vec<_>>(), (0..24).collect::<Vec<_>>());
+        let mut search_options = options();
+        search_options.primary_beam = 8;
+        search_options.boundary_beam = 24;
+        search_options.max_cells = 24;
+        search_options.max_source_gets = 24;
+        search_options.max_refinement_gets = 24;
+        search_options.blocks_per_cell = 4;
+        let search = prototype.search(&[1., 0.], 10, search_options).unwrap();
+        assert_eq!(hierarchy.covered_ids, search.covered_ids);
+        assert_eq!(hierarchy.primary_ids, search.primary_ids);
+        // Each cell has one block, so identical selections imply exact downstream
+        // nomination parity with unchanged search, without a probe scoring path.
+        assert_eq!(global.covered_ids, search.nominated_ids);
+        for limits in [
+            NominationLimits { max_source_gets: 23, ..nomination_limits() },
+            NominationLimits { max_source_bytes: 1, ..nomination_limits() },
+            NominationLimits { max_query_payload_bytes: 1, ..nomination_limits() },
+        ] {
+            let error = prototype.nominate(&[1., 0.], NominationPolicy::GlobalTop24, limits).unwrap_err();
+            assert_eq!(error.accounting.source.submitted_gets, 0);
+            assert!(error.accounting.modeled_query_payload_bytes > 0);
+        }
+        for query in [[0., 0.], [f32::NAN, 0.]] {
+            assert!(prototype.nominate(&query, NominationPolicy::GlobalTop24, nomination_limits()).is_err());
+        }
+        let selected = &global.selected[0];
+        let mut bytes = fs::read(output.join("cells.bin")).unwrap();
+        let original = bytes.clone();
+        bytes[selected.source_offset] ^= 1;
+        fs::write(output.join("cells.bin"), &bytes).unwrap();
+        let error = prototype.nominate(&[1., 0.], NominationPolicy::GlobalTop24, nomination_limits()).unwrap_err();
+        assert_eq!(error.accounting.source.submitted_gets, 1);
+        assert_eq!(error.accounting.source.failed_gets, 1);
+        assert_eq!(error.accounting.source.verified_bytes, 0);
+        assert_eq!(error.accounting.refinement.submitted_gets, 0);
+        // Even an authenticated range may not use out-of-domain source IDs.
+        bytes = original;
+        bytes[selected.source_offset..selected.source_offset + 8].copy_from_slice(&32_i64.to_le_bytes());
+        fs::write(output.join("cells.bin"), &bytes).unwrap();
+        for page in prototype.directories.values_mut() {
+            for node in &mut page.children {
+                if let Target::Cell { cell } = &mut node.target {
+                    if cell.id == selected.cell_id {
+                        cell.source.sha256 = hash(&bytes[cell.source.offset..cell.source.offset + cell.source.bytes]);
+                    }
+                }
+            }
+        }
+        let error = prototype.nominate(&[1., 0.], NominationPolicy::GlobalTop24, nomination_limits()).unwrap_err();
+        assert!(error.message.contains("source ordinal"));
+        assert_eq!(error.accounting.source.verified_bytes, selected.source_bytes);
+        assert_eq!(error.accounting.source.failed_gets, 0);
+        // A valid digest also cannot authorize duplicate source IDs across cells.
+        bytes[selected.source_offset..selected.source_offset + 8]
+            .copy_from_slice(&global.selected[1].source_ids[0].to_le_bytes());
+        fs::write(output.join("cells.bin"), &bytes).unwrap();
+        for page in prototype.directories.values_mut() {
+            for node in &mut page.children {
+                if let Target::Cell { cell } = &mut node.target {
+                    if cell.id == selected.cell_id {
+                        cell.source.sha256 = hash(&bytes[cell.source.offset..cell.source.offset + cell.source.bytes]);
+                    }
+                }
+            }
+        }
+        let error = prototype.nominate(&[1., 0.], NominationPolicy::GlobalTop24, nomination_limits()).unwrap_err();
+        assert!(error.message.contains("duplicate ID"));
+        assert_eq!(error.accounting.source.submitted_gets, 2);
+        assert_eq!(error.accounting.source.failed_gets, 0);
+
+        config.cell_rows = 8;
+        let small = temp.path().join("underfilled");
+        let built = build(&config, &small).unwrap();
+        let prototype = Prototype::open(&small, &built.root_sha256, 64 * 1024 * 1024).unwrap();
+        for policy in [NominationPolicy::Hierarchical8And24, NominationPolicy::GlobalTop24] {
+            let error = prototype.nominate(&[1., 0.], policy, nomination_limits()).unwrap_err();
+            assert_eq!(error.accounting.source.submitted_gets, 0);
         }
     }
 
