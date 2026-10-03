@@ -1,0 +1,24 @@
+{
+  "datasets": {
+    "cohere": {
+      "cells": 281,
+      "directories_sha256": "e934d25c4304927405e62d032facdde6da4c13fa7d2add64f5881d64e99371a2",
+      "max_squared_norm": 0.8058687705497167,
+      "mean_squared_norm": 0.731759002166478,
+      "median_squared_norm": 0.7308692006586982,
+      "min_squared_norm": 0.6537024168239863,
+      "root_sha256": "89aee41edba2f4bc447fc5fb66ecee3f470e4ff50627c6f294da6208fdbcb6b2"
+    },
+    "relaion": {
+      "cells": 291,
+      "directories_sha256": "6e71ef57e17bd55667b48421cf90f812f79e962ae3bc7eed4a50b97397fd21f1",
+      "max_squared_norm": 0.8401069819919263,
+      "mean_squared_norm": 0.5996613572925833,
+      "median_squared_norm": 0.6008629198540202,
+      "min_squared_norm": 0.34585839708522625,
+      "root_sha256": "fec06fb0eee4a1380a42356af3ef43d38137a95b4bdb09d457b434b5369c076b"
+    }
+  },
+  "schema": "borsuk-closed-cell-mean-norm-audit-v1",
+  "scope": "authenticated directory metadata only; no query/GT reads or rerouting"
+}
