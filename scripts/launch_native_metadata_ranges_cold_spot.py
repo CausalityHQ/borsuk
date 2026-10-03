@@ -208,9 +208,43 @@ def collect(s3, prefix, out, instance_id, commit, digest):
     return terminal
 
 
-def source_archive(commit):
+def validate_source_archive_paths(paths):
+    if type(paths) not in (list, tuple) or not paths:
+        raise ValueError('nonempty source archive file roster required')
+    for name in paths:
+        if (type(name) is not str or not name or name in ('.', '..') or '\\' in name or
+                any(ord(c) < 32 or ord(c) == 127 for c in name) or
+                Path(name).is_absolute() or str(Path(name)) != name or
+                any(p in ('.', '..') or p.startswith('-') for p in Path(name).parts)):
+            raise ValueError('unsafe source archive path: '+repr(name))
+    if len(paths) != len(set(paths)):
+        raise ValueError('duplicate source archive path')
+    return list(paths)
+
+
+def source_archive(commit, paths=None):
     """Return gzip bytes without buffering the uncompressed source tar."""
     command = ['git', 'archive', '--format=tar', commit]
+    if paths is not None:
+        paths = validate_source_archive_paths(paths)
+        if not re.fullmatch('[0-9a-f]{40}', commit):
+            raise ValueError('source archive commit identity')
+        tree = subprocess.check_output(['git', '--literal-pathspecs', 'ls-tree', '-rz',
+                                        '--full-tree', commit, '--', *paths])
+        files = {}
+        for entry in tree.split(b'\0'):
+            if entry:
+                metadata, name = entry.split(b'\t', 1)
+                files[os.fsdecode(name)] = metadata.split()[:2]
+        if set(files) != set(paths) or any(v not in ([b'100644', b'blob'], [b'100755', b'blob']) for v in files.values()):
+            raise ValueError('source archive roster requires exact committed regular files')
+        # Git's export attributes can omit or rewrite committed bytes. Refuse
+        # those paths rather than silently shipping a different file closure.
+        attrs = subprocess.check_output(['git', 'check-attr', '--source='+commit, '-z',
+                                         'export-ignore', 'export-subst', '--', *paths]).split(b'\0')
+        if any(v not in (b'unspecified', b'unset') for v in attrs[2::3]):
+            raise ValueError('source archive export attributes alter committed files')
+        command = ['git', '--literal-pathspecs', 'archive', '--format=tar', commit, '--', *paths]
     producer = subprocess.Popen(command, stdout=subprocess.PIPE)
     try:
         with io.BytesIO() as archive:
@@ -239,7 +273,15 @@ def main(attempt, campaign=None):
     assert re.fullmatch(r'[0-9a-f]{40}', commit)
     if 'source_archive_commit' in proof:
         subprocess.run(['git', 'merge-base', '--is-ancestor', commit, 'origin/main'], check=True)
-    archive = source_archive(commit)
+    if 'source_archive_paths' in proof:
+        paths = validate_source_archive_paths(proof['source_archive_paths'])
+        if paths != sorted(paths) or proof.get('source_archive_paths_sha256') != peer.sha(json.dumps(paths, separators=(',', ':')).encode()):
+            raise ValueError('source archive roster authentication')
+        archive = source_archive(commit, paths)
+    else:
+        if 'source_archive_paths_sha256' in proof:
+            raise ValueError('source archive roster authentication')
+        archive = source_archive(commit)
     digest = peer.sha(archive)
     key = 'research/native-library-check/sources/' + digest + '.tar.gz'
     prefix = getattr(campaign, 'PREFIX', 'research/native-union/20260930/metadata-ranges-cold-') + attempt
@@ -265,7 +307,7 @@ def main(attempt, campaign=None):
     else:
         assert peer.sha(s3.get_object(Bucket=peer.BUCKET, Key=key)['Body'].read()) == digest
     del archive
-    reservation = dict(schema=campaign.SCHEMA, source_commit=commit, source_archive_sha256=digest,
+    reservation = dict(schema=campaign.SCHEMA, source_commit=commit, source_archive_sha256=digest, source_archive_key=key,
         wall_seconds=campaign.WALL, instance_type=instance_type, image_id=image_id, root_device_name=root_device_name, availability_zone=az, subnet_id=subnet,
         spot_price_observed_usd_per_hour=quote['SpotPrice'], spot_quote_timestamp=quote['Timestamp'].isoformat(),
         spot_max_usd_per_hour=spot_max, compute_cap_usd=getattr(campaign, 'COMPUTE_CAP', .35), ebs_s3_allowance_usd=.15,
@@ -335,12 +377,91 @@ def main(attempt, campaign=None):
         signal.signal(signal.SIGTERM, previous_sigterm)
 
 
+def source_archive_self_check():
+    """Only a tiny committed repository; never archive production assets."""
+    import tarfile
+    import tempfile
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory(prefix='source-archive-check-') as tmp:
+        repo = Path(tmp)
+        bodies = {'config.json': b'committed config\n', 'scripts/worker.py': b'pass\n',
+                  'native/lib.rs': b'// committed native\n', 'authority.json': b'{}\n',
+                  'gate.log': b'completed\n', 'unselected-corpus': b'not deployed\n',
+                  'native/literal[1].rs': b'// literal path\n', 'native/literal1.rs': b'// other\n'}
+        for name, body in bodies.items():
+            path = repo/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(body)
+        (repo/'link').symlink_to('config.json')
+        def git(*args):
+            return subprocess.check_output(['git', *args], cwd=repo)
+        git('init', '-q'); git('add', '.')
+        git('-c', 'user.name=Roman Bartusiak', '-c', 'user.email=riomus@gmail.com', 'commit', '-qm', 'Synthetic archive fixture')
+        commit = git('rev-parse', 'HEAD').decode().strip()
+        roster = sorted(set(bodies)-{'unselected-corpus', 'native/literal1.rs'})
+        (repo/'config.json').write_bytes(b'worktree tamper\n')
+        before = Path.cwd()
+        real_popen = subprocess.Popen
+        def no_archive(command, **kwargs):
+            assert 'archive' not in command, 'unsafe archive producer'
+            return real_popen(command, **kwargs)
+        try:
+            os.chdir(repo)
+            archive = source_archive(commit, roster)
+            with tarfile.open(fileobj=io.BytesIO(gzip.decompress(archive))) as tar:
+                files = {m.name: tar.extractfile(m).read() for m in tar if m.isfile()}
+            assert files == {p: bodies[p] for p in roster}, 'archive omitted/added/regenerated required members'
+            assert archive[4:8] == b'\0'*4, 'non-deterministic gzip timestamp'
+            with tarfile.open(fileobj=io.BytesIO(gzip.decompress(source_archive(commit)))) as tar:
+                assert 'unselected-corpus' in tar.getnames(), 'historical fullrepo default changed'
+            for paths in ([], [''], ['.'], ['../escape'], ['/absolute'], ['./config.json'],
+                          ['native//lib.rs'], ['native/../config.json'], ['--output=escape'],
+                          ['native/-option.rs'], ['config.json\n'], ['config.json\0'],
+                          ['config.json', 'config.json'], ['missing'], ['native'], ['link'],
+                          ['native/*.rs'], 'config.json'):
+                with patch.object(subprocess, 'Popen', side_effect=no_archive):
+                    try:
+                        source_archive(commit, paths)
+                    except ValueError:
+                        pass
+                    else:
+                        raise AssertionError('invalid roster accepted: '+repr(paths))
+            for attr in ('export-ignore', 'export-subst'):
+                (repo/'.gitattributes').write_text('config.json '+attr+'\n')
+                git('add', '.gitattributes')
+                git('-c', 'user.name=Roman Bartusiak', '-c', 'user.email=riomus@gmail.com', 'commit', '-qm', 'Synthetic export attribute')
+                changed_commit = git('rev-parse', 'HEAD').decode().strip()
+                with patch.object(subprocess, 'Popen', side_effect=no_archive):
+                    try:
+                        source_archive(changed_commit, roster)
+                    except ValueError as error:
+                        assert 'export attributes' in str(error)
+                    else:
+                        raise AssertionError('altered committed bytes accepted')
+        finally:
+            os.chdir(before)
+    print('PASS tiny committed archive closure/authentic bytes/gzip/literal paths/unsafe/missing/nonfile refusals/fullrepo default')
+
+
 def self_check(lifecycle_only=False):
     """Mock AWS only: ACK ownership, transient observations, no replacement."""
     from unittest.mock import Mock, patch
     import tempfile
     from datetime import datetime, timezone
     module = sys.modules[__name__]
+    source_archive_self_check()
+    roster = ['scripts/worker.py']
+    roster_sha = peer.sha(b'["scripts/worker.py"]')
+    for proof in (dict(source_archive_paths=roster, source_archive_paths_sha256='0'*64),
+                  dict(source_archive_paths=roster), dict(source_archive_paths_sha256=roster_sha)):
+        with patch.object(subprocess, 'check_output', side_effect=['', 'a'*40]), \
+             patch.object(module, 'preflight', return_value=proof), \
+             patch.object(module, 'source_archive', side_effect=AssertionError('unauthenticated archive')), \
+             patch.object(boto3, 'Session', side_effect=AssertionError('cloud before roster authentication')):
+            try:
+                main('a0001')
+            except ValueError as error:
+                assert 'roster authentication' in str(error)
+            else:
+                raise AssertionError('unauthenticated roster accepted')
     # Unbounded reads, a failed producer, or an abandoned reader must not yield
     # an authenticated archive or leave the source producer running.
     for failure in ('success', 'producer', 'reader'):
@@ -406,7 +527,7 @@ def self_check(lifecycle_only=False):
         startup.terminate_owned(ec2, owned)
     assert ec2.terminate_instances.call_count == 2
     ec2.get_waiter.return_value.wait.assert_called_once_with(InstanceIds=['i-original'])
-    for failure in ('fsync', 'launch-upload', 'poll', 'interruption', 'interrupt', 'success', 'multi-ack', 'archive-source',
+    for failure in ('fsync', 'launch-upload', 'poll', 'interruption', 'interrupt', 'success', 'multi-ack', 'archive-source', 'archive-roster',
                     'sigterm-ack', 'sigterm-register', 'sigterm-fsync', 'fsync-sigterm', 'sigterm-poll', 'sigterm-cleanup', 'launch-reject'):
         with tempfile.TemporaryDirectory() as tmp:
             ec2, s3, session = Mock(), Mock(), Mock()
@@ -430,7 +551,7 @@ def self_check(lifecycle_only=False):
                 return {'Instances': ack_rows()}
             ec2.run_instances.side_effect = acknowledged
             writes = [None, None, OSError('upload')] if failure == 'launch-upload' else [None, None, None]
-            error = {'interruption': RuntimeError('worker interrupted'), 'interrupt': KeyboardInterrupt(), 'success': None, 'archive-source': None,
+            error = {'interruption': RuntimeError('worker interrupted'), 'interrupt': KeyboardInterrupt(), 'success': None, 'archive-source': None, 'archive-roster': None,
                      'sigterm-cleanup': None, 'sigterm-poll': lambda *args: signal.raise_signal(signal.SIGTERM)}.get(failure, ReadTimeoutError(endpoint_url='mock'))
             events = []
             def cleanup(event, **kwargs):
@@ -450,22 +571,32 @@ def self_check(lifecycle_only=False):
                 if failure in ('fsync', 'fsync-sigterm'):
                     raise OSError('persist')
             previous_sigterm = signal.getsignal(signal.SIGTERM)
-            with patch.object(module, 'ROOT', Path(tmp)), patch.object(boto3, 'Session', return_value=session), patch.object(subprocess, 'check_output', side_effect=['', '0'*40]), patch.object(module, 'source_archive', return_value=b'compressed archive') as archive_mock, patch.object(module, 'preflight', return_value=dict(config_sha256='1'*64, **({'source_archive_commit':'2'*40} if failure == 'archive-source' else {}))), patch.object(subprocess, 'run') as git_run, patch.object(module, 'user_data', return_value='mock'), patch.object(peer, 'missing', return_value=True), patch.object(peer, 'put_if_absent', side_effect=writes) as uploads, patch.object(os, 'fsync', side_effect=persisted) as fsync, patch.object(module, 'poll', side_effect=error) as polling, patch.object(module, 'collect', side_effect=collected):
+            launch_proof = dict(config_sha256='1'*64)
+            if failure == 'archive-source': launch_proof['source_archive_commit'] = '2'*40
+            if failure == 'archive-roster':
+                launch_proof.update(source_archive_paths=roster, source_archive_paths_sha256=roster_sha)
+            with patch.object(module, 'ROOT', Path(tmp)), patch.object(boto3, 'Session', return_value=session), patch.object(subprocess, 'check_output', side_effect=['', '0'*40]), patch.object(module, 'source_archive', return_value=b'compressed archive') as archive_mock, patch.object(module, 'preflight', return_value=launch_proof), patch.object(subprocess, 'run') as git_run, patch.object(module, 'user_data', return_value='mock'), patch.object(peer, 'missing', return_value=True), patch.object(peer, 'put_if_absent', side_effect=writes) as uploads, patch.object(os, 'fsync', side_effect=persisted) as fsync, patch.object(module, 'poll', side_effect=error) as polling, patch.object(module, 'collect', side_effect=collected):
                 try:
                     main('a0001')
                 except (OSError, ReadTimeoutError, RuntimeError, KeyboardInterrupt) as caught:
                     if failure.startswith('sigterm-'):
                         assert isinstance(caught, KeyboardInterrupt), 'SIGTERM did not interrupt the controller'
                 else:
-                    assert failure in ('success', 'archive-source'), 'failure swallowed'
+                    assert failure in ('success', 'archive-source', 'archive-roster'), 'failure swallowed'
             assert signal.getsignal(signal.SIGTERM) == previous_sigterm, 'SIGTERM handler leaked'
             if failure == 'archive-source':
                 archive_mock.assert_called_once_with('2'*40)
                 git_run.assert_called_once_with(['git', 'merge-base', '--is-ancestor', '2'*40, 'origin/main'], check=True)
                 assert json.loads((Path(tmp)/'metadata-ranges-cold/a0001/aws-reservation.json').read_text())['source_commit'] == '2'*40
             else:
-                archive_mock.assert_called_once_with('0'*40)
+                if failure == 'archive-roster':
+                    archive_mock.assert_called_once_with('0'*40, roster)
+                else:
+                    archive_mock.assert_called_once_with('0'*40)
                 git_run.assert_not_called()
+            reserved = json.loads((Path(tmp)/'metadata-ranges-cold/a0001/aws-reservation.json').read_bytes())
+            assert reserved['qualification'] == launch_proof
+            assert reserved['source_archive_key'] == 'research/native-library-check/sources/'+peer.sha(b'compressed archive')+'.tar.gz'
             ec2.run_instances.assert_called_once()
             assert ec2.run_instances.call_args.kwargs['BlockDeviceMappings'] == [{'DeviceName': '/dev/xvda', 'Ebs': {'DeleteOnTermination': True, 'Encrypted': True, 'VolumeSize': 80, 'VolumeType': 'gp3'}}]
             assert json.loads((Path(tmp)/'metadata-ranges-cold/a0001/aws-reservation.json').read_text())['root_device_name'] == '/dev/xvda'

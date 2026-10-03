@@ -41,11 +41,11 @@ require, exact, fields = local.require, local.exact, local.fields
 ROOT = Path('docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k')
 CONFIG, NAME = ROOT/'config.json', ''
 MODULE = 'scripts.launch_hierarchical_cells_100k_spot'
-SCHEMA = 'borsuk-hierarchical-100k-spot-v1'
+SCHEMA = 'borsuk-hierarchical-100k-spot-v2'
 PREFIX = 'research/hierarchical-cells/20261003/paired100k-'
 TOKEN_PREFIX, TAG = 'hierarchical-100k-', 'borsuk-hierarchical-100k'
 WALL, MEMORY, SCRATCH = 1800, 2 << 30, 16 << 30
-CANARY_SCHEMA = 'borsuk-hierarchical-100k-infrastructure-canary-v1'
+CANARY_SCHEMA = 'borsuk-hierarchical-100k-infrastructure-canary-v2'
 CANARY_PREFIX = 'research/hierarchical-cells/20261003/infrastructure-canary-'
 CANARY_WALL, CANARY_MEMORY, CANARY_SCRATCH = 480, 256 << 20, 4 << 30
 SDK_VERSIONS = dict(boto3='1.40.72', botocore='1.40.72')
@@ -98,7 +98,8 @@ CANARY_ARTIFACTS = ('test-resources.txt', 'run-closed.log', *('screen/'+n for n 
     'config.json', 'source-qualification.json', 'tool-versions.json',
     'canary.json', 'summary.json', 'resources.json', 'worker-cgroup.json', 'cleanup.json')))
 TERMINAL_IDENTITIES = ('config_sha256', 'code_identity_sha256', 'refs_identity_sha256',
-    'native_identity_sha256', 'artifact_roster_sha256', 'campaign_schema',
+    'native_identity_sha256', 'source_file_count', 'source_archive_paths_sha256',
+    'artifact_roster_sha256', 'campaign_schema',
     'awscli_version', 'awscli_sha256')
 
 
@@ -240,6 +241,22 @@ def qualification(config, repo):
     return values, identity
 
 
+def source_archive_roster(config, authorities, config_path):
+    # qualification has authenticated this exact full native manifest. The
+    # helper's retained_pins reads the same three EVIDENCE files in refs.
+    native = authorities['manifest']['source_sha256']
+    require(len(native) == 401, 'source archive requires all401 native files')
+    paths = sorted({config_path, *CODE, *native, *(p['path'] for p in config['refs'].values()),
+                    config['native']['gate_log']['path']})
+    for path in paths:
+        publication.relative(path)
+    require(set(local.SOURCE_FILES.values()) <= set(paths), 'required native helper sources')
+    require({p for p, _, _ in local.EVIDENCE} <= set(paths), 'required retained authority files')
+    cold = [config['native']['source_archive'], *config['native']['binaries'].values()]
+    require(not any(p['path'] in paths for p in cold), 'cold transport in source file roster')
+    return paths
+
+
 def qualify(base=Path('.'), *, native_files=False, canary=False):
     repo = Path(base).resolve()
     pin = local.identity(repo/CONFIG)
@@ -263,6 +280,8 @@ def qualify(base=Path('.'), *, native_files=False, canary=False):
     local.integer(config['scratch_reserve_bytes'], 1, SCRATCH, 'bootstrap/archive/install/log/canary reserve')
     local.integer(config['scratch_admission_bytes'], 1, SCRATCH, 'whole-worker prospective scratch')
     values, native_identity = qualification(config, repo)
+    config_path = str((repo/CONFIG).relative_to(repo))
+    paths = source_archive_roster(config, values, config_path)
     extra = sum(p['bytes'] for p in (config['native']['source_archive'], config['native']['gate_log'],
                                     *config['native']['binaries'].values()))
     require(config['scratch_admission_bytes'] >= 1975116322+extra+config['scratch_reserve_bytes'],
@@ -278,9 +297,10 @@ def qualify(base=Path('.'), *, native_files=False, canary=False):
             proof[roster] = {n: dict(body_pin(p), path=str(transport_path(repo, p['path']))) for n, p in proof[roster].items()}
         with tempfile.TemporaryDirectory(prefix='hierarchical-proof-') as tmp:
             local.validate_proof(local.write_json(Path(tmp)/'proof.json', proof))
-    proof = dict(config_path=str(CONFIG), config_sha256=pin['sha256'], campaign_schema=CANARY_SCHEMA if canary else SCHEMA,
+    proof = dict(config_path=config_path, config_sha256=pin['sha256'], campaign_schema=CANARY_SCHEMA if canary else SCHEMA,
         code_identity_sha256=ids.sha(ids.encoded(config['code_sha256'])),
         refs_identity_sha256=ids.sha(ids.encoded(config['refs'])), native_identity_sha256=native_identity,
+        source_file_count=401, source_archive_paths=paths, source_archive_paths_sha256=ids.sha(ids.encoded(paths)),
         artifact_roster_sha256=ids.sha(ids.encoded(CANARY_ARTIFACTS if canary else ARTIFACTS)),
         awscli_version=AWSCLI_VERSION, awscli_sha256=AWSCLI_SHA256)
     return config, proof, values
@@ -497,6 +517,8 @@ def stage(repo, output, worker_root, *, canary=False):
     require(not out.exists(), 'output exists')
     config, proof, authorities = qualify(repo, canary=canary)
     exact(proof['config_sha256'], os.environ.get('BORSUK_HIERARCHICAL_CONFIG_SHA256'), 'bootstrap config binding')
+    exact(proof['source_archive_paths_sha256'], os.environ.get('BORSUK_HIERARCHICAL_SOURCE_ARCHIVE_PATHS_SHA256'),
+          'bootstrap source file roster binding')
     remaining = int(os.environ['BORSUK_HIERARCHICAL_DEADLINE_EPOCH'])-time.time()
     wall, memory, scratch_cap = (CANARY_WALL, CANARY_MEMORY, CANARY_SCRATCH) if canary else (WALL, MEMORY, SCRATCH)
     cpu_quota, affinity = (100, [0]) if canary else (config['cpu_quota_percent'], config['cpu_affinity'])
@@ -659,6 +681,7 @@ test "$remaining" -gt 0
 systemd-run --unit={unit} --wait --pipe -p MemoryMax={memory} -p MemorySwapMax=0 -p CPUQuota={cpu}% -p TasksMax=512 -p RuntimeMaxSec="$remaining" -p WorkingDirectory="$root" \\
  --setenv=PYTHONPATH="$root/repo" --setenv=AWS_MAX_ATTEMPTS=1 --setenv=TMPDIR="$root" \\
  --setenv=BORSUK_HIERARCHICAL_CONFIG_SHA256={qualification['config_sha256']} \\
+ --setenv=BORSUK_HIERARCHICAL_SOURCE_ARCHIVE_PATHS_SHA256={qualification['source_archive_paths_sha256']} \\
  --setenv=BORSUK_HIERARCHICAL_DEADLINE_EPOCH="$BORSUK_HIERARCHICAL_DEADLINE_EPOCH" \\
  --setenv=BORSUK_HIERARCHICAL_SCRATCH_BASE_USED="$BORSUK_HIERARCHICAL_SCRATCH_BASE_USED" \\
  --setenv=OPENBLAS_NUM_THREADS={threads} --setenv=OMP_NUM_THREADS={threads} --setenv=MKL_NUM_THREADS={threads} --setenv=RAYON_NUM_THREADS={threads} \\
@@ -764,6 +787,13 @@ def replay(out, *, canary=False):
         exact(reservation['ebs_s3_allowance_usd'], .05, 'canary ancillary cap')
     for name in TERMINAL_IDENTITIES:
         exact(terminal[name], reservation['qualification'][name], 'terminal authority: '+name)
+    reserved = reservation['qualification']
+    paths = reserved['source_archive_paths']
+    shared, _ = ids.lifecycle()
+    shared.validate_source_archive_paths(paths)
+    exact(paths, sorted(paths), 'reserved source file roster order')
+    exact(ids.sha(ids.encoded(paths)), terminal['source_archive_paths_sha256'], 'reserved source file roster SHA')
+    exact(terminal['source_file_count'], 401, 'reserved native401 count')
     require(set(terminal['artifacts']) <= set(artifacts), 'terminal artifact roster')
     for name, pin in terminal['artifacts'].items():
         exact(body_pin(local.identity(out/name)), pin, 'collected body identity')
@@ -771,6 +801,8 @@ def replay(out, *, canary=False):
     if complete:
         exact(terminal['original_exit_code'], 0, 'original worker success')
         exact(set(terminal['artifacts']), set(artifacts), 'complete artifact roster')
+        exact(local.decode((out/'screen/source-qualification.json').read_bytes()), reserved,
+              'deployed source qualification ancestry')
         config = local.decode((out/'screen/config.json').read_bytes())
         cpu = 100 if canary else config['cpu_quota_percent']
         exact(local.sha((out/'screen/config.json').read_bytes()), terminal['config_sha256'], 'collected config')
@@ -845,13 +877,14 @@ def collect(s3, prefix, out, instance_id, commit, digest, *, canary=False):
 def require_canary(base, proof):
     pointer = local.read_json(local.identity(Path(base)/ROOT/'canary-admission.json'))
     fields(pointer, 'schema attempt config_sha256 code_identity_sha256 refs_identity_sha256 '
-           'native_identity_sha256 terminal_sha256', 'root canary admission')
-    exact(pointer['schema'], 'borsuk-hierarchical-100k-canary-admission-v1', 'root canary pointer')
+           'native_identity_sha256 source_archive_paths_sha256 terminal_sha256', 'root canary admission')
+    exact(pointer['schema'], 'borsuk-hierarchical-100k-canary-admission-v2', 'root canary pointer')
     require(re.fullmatch(r'a[0-9]{4}', pointer['attempt']), 'canary admission attempt')
     out = Path(base)/ROOT/'canary'/pointer['attempt']
     exact(local.identity(out/'aws-terminal.json')['sha256'], pointer['terminal_sha256'], 'selected canary terminal')
     terminal = local.decode((out/'aws-terminal.json').read_bytes())
-    for name in ('config_sha256', 'code_identity_sha256', 'refs_identity_sha256', 'native_identity_sha256'):
+    for name in ('config_sha256', 'code_identity_sha256', 'refs_identity_sha256', 'native_identity_sha256',
+                 'source_archive_paths_sha256'):
         exact(pointer[name], proof[name], 'canary admission current authority')
         exact(terminal[name], proof[name], 'canary terminal current authority')
     require(replay(out, canary=True)['executed'], 'terminated infrastructure canary GO required')
@@ -891,6 +924,20 @@ def main(attempt, *, canary=False):
         os.chdir(before)
 
 
+def metadata_fixture(repo, config):
+    """Test-only source/metadata copy; no cold archive, binary or dataset body."""
+    here = Path(__file__).resolve().parents[1]
+    manifest = read_ref(here, config['refs']['manifest'], 8 << 20)
+    for name in source_archive_roster(config, dict(manifest=manifest), str(CONFIG)):
+        if name == str(CONFIG):
+            continue
+        target = repo/name; target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(here/name, target)
+    target = repo/CONFIG; target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(local.canonical(config))
+    return target
+
+
 def canary_self_check():
     """Metadata/log only, actual imports/CLI; SDK/cloud operations mocked."""
     from contextlib import ExitStack
@@ -914,38 +961,34 @@ def canary_self_check():
         # modification to its pending draft or its immutable gate receipts.
         config['authority_pending'] = False
         config['code_sha256'] = {p: local.identity(here/p)['sha256'] for p in CODE}
-        controller = root/'metadata-controller.json'
-        local.write_json(controller, config)
+        metadata_repo = root/'metadata-repo'
+        controller = metadata_fixture(metadata_repo, config)
         cold_paths = {p['path'] for p in (config['native']['source_archive'], *config['native']['binaries'].values())}
         open_input = positive.open_input
         def metadata_only(path):
             require(not any(str(path).endswith('/'+p) for p in cold_paths), 'preflight opened cold native body')
             return open_input(path)
-        with patch.object(module, 'CONFIG', controller), patch.object(positive, 'open_input', side_effect=metadata_only):
-            validated, _, authorities = qualify(here)
+        with patch.object(positive, 'open_input', side_effect=metadata_only):
+            validated, proof, authorities = qualify(metadata_repo, canary=True)
             exact(validated, config, 'actual root draft metadata refresh')
-            rejects(lambda: qualify(here, native_files=True))
+            rejects(lambda: qualify(metadata_repo, native_files=True))
             for field, value in (('authority_pending', True), ('code_sha256', original['code_sha256'])):
                 damaged = dict(config, **{field: value}); controller.write_bytes(local.canonical(damaged))
-                rejects(lambda: qualify(here))
+                rejects(lambda: qualify(metadata_repo))
             for path in ('../escape', 'assets/../escape', 'assets//writer', 'assets/writer\n'):
                 damaged = copy.deepcopy(config); damaged['native']['binaries']['writer']['path'] = path
-                controller.write_bytes(local.canonical(damaged)); rejects(lambda: qualify(here))
+                controller.write_bytes(local.canonical(damaged)); rejects(lambda: qualify(metadata_repo))
         exact(local.decode(Path('/tmp/borsuk-hierarchical-100k-config-draft.json').read_bytes()), original,
               'root pending draft untouched')
         repo = root/'repo'; repo.mkdir()
         (repo/CONFIG).parent.mkdir(parents=True)
         config_pin = local.write_json(repo/CONFIG, config)
-        proof = dict(config_path=str(CONFIG), config_sha256=config_pin['sha256'], campaign_schema=CANARY_SCHEMA,
-            code_identity_sha256=ids.sha(ids.encoded(config['code_sha256'])),
-            refs_identity_sha256=ids.sha(ids.encoded(config['refs'])),
-            native_identity_sha256=source_identity(source_hashes(here)),
-            artifact_roster_sha256=ids.sha(ids.encoded(CANARY_ARTIFACTS)),
-            awscli_version=AWSCLI_VERSION, awscli_sha256=AWSCLI_SHA256)
+        exact(config_pin['sha256'], proof['config_sha256'], 'canary fixture config identity')
         model = botocore.session.get_session().get_service_model('s3')
         descriptors = {p['key']: p for p in canary_objects(config, authorities)}
         log = (here/config['native']['gate_log']['path']).read_bytes()
         env = dict(BORSUK_HIERARCHICAL_CONFIG_SHA256=proof['config_sha256'],
+            BORSUK_HIERARCHICAL_SOURCE_ARCHIVE_PATHS_SHA256=proof['source_archive_paths_sha256'],
             BORSUK_HIERARCHICAL_DEADLINE_EPOCH=str(int(time.time())+60),
             BORSUK_HIERARCHICAL_SCRATCH_BASE_USED=str(shutil.disk_usage(root).used))
         with ExitStack() as stack:
@@ -955,6 +998,9 @@ def canary_self_check():
                 for owner, name in ((local, 'prepare'), (local, 'validate_proof'), (local, 'run_stage'),
                     (positive, 'raw_blocks'), (positive, 'request_bodies'),
                     (module, 'panel_inputs'), (module, 'admission'))]
+            with patch.dict(os.environ, {'BORSUK_HIERARCHICAL_SOURCE_ARCHIVE_PATHS_SHA256': '0'*64}):
+                rejects(lambda: stage(repo, root/'wrong-roster', root, canary=True))
+            require(not (root/'wrong-roster').exists(), 'roster refusal before staging/SDK')
             for mode in ('valid', 'short-log', 'wrong-hash', 'head-length', 'scratch', 'cli-nonzero', 'sdk-model'):
                 client = Mock()
                 client.meta.service_model = model
@@ -1007,13 +1053,15 @@ def canary_self_check():
         close.write_bytes(local.canonical(dict(nodes=nodes, state='running')))
         sdk = Mock(); rejects(lambda: collect(sdk, CANARY_PREFIX+'a0001', out, 'i-canary', source['source_commit'], source['source_archive_sha256'], canary=True))
         sdk.get_object.assert_not_called(); close.write_bytes(original_close)
-        pointer = dict(schema='borsuk-hierarchical-100k-canary-admission-v1', attempt='a0001',
-            **{n: proof[n] for n in ('config_sha256', 'code_identity_sha256', 'refs_identity_sha256', 'native_identity_sha256')},
+        pointer = dict(schema='borsuk-hierarchical-100k-canary-admission-v2', attempt='a0001',
+            **{n: proof[n] for n in ('config_sha256', 'code_identity_sha256', 'refs_identity_sha256', 'native_identity_sha256',
+                                   'source_archive_paths_sha256')},
             terminal_sha256=local.identity(out/'aws-terminal.json')['sha256'])
         selected = root/ROOT/'canary/a0001'; selected.parent.mkdir(parents=True)
         shutil.copytree(out, selected); local.write_json(root/ROOT/'canary-admission.json', pointer)
         require_canary(root, proof)
         rejects(lambda: require_canary(root, dict(proof, config_sha256='0'*64)))
+        rejects(lambda: require_canary(root, dict(proof, source_archive_paths_sha256='0'*64)))
         (selected/'aws-terminal.json').write_bytes(b'{}\n'); rejects(lambda: require_canary(root, proof))
         shell = user_data('a'*40, 'b'*64, 'sources/mock', CANARY_PREFIX+'a0001', proof, canary=True)
         require(all(s in shell for s in ('MemoryMax=256M', 'CPUQuota=100%', '--stage-canary',
@@ -1042,9 +1090,11 @@ def canary_self_check():
         campaign.collect = collected
         with patch.object(shared, 'dict', canary_reservation, create=True), \
              patch.object(shared.boto3, 'Session', return_value=session), \
-             patch.object(subprocess, 'check_output', side_effect=['', 'a'*40, b'synthetic source archive']), \
+             patch.object(subprocess, 'check_output', side_effect=['', 'a'*40]), \
+             patch.object(shared, 'source_archive', return_value=b'synthetic source archive') as archive_mock, \
              patch.object(shared.peer, 'missing', return_value=True), patch.object(shared.peer, 'put_if_absent'):
             shared.main('a0001', campaign=campaign)
+        archive_mock.assert_called_once_with('a'*40, proof['source_archive_paths'])
         reserved = local.decode((campaign.ROOT/'canary/a0001/aws-reservation.json').read_bytes())
         exact(reserved['compute_cap_usd'], .12, 'actual canary reservation compute')
         exact(reserved['ebs_s3_allowance_usd'], .05, 'actual canary reservation ancillary')
@@ -1053,6 +1103,57 @@ def canary_self_check():
         ec2.terminate_instances.assert_called_once_with(InstanceIds=['i-canary'])
         ec2.get_waiter.return_value.wait.assert_called_once_with(InstanceIds=['i-canary'])
     print('PASS actual draft metadata-only preflight, real imports/SDK model/CLI, mocked HEAD18+logGET1, no-native/no-GT spies, negatives, replay/admission/shared canary lifecycle')
+
+
+def archive_roster_self_check():
+    """Roundtrip the whole file closure with tiny synthetic committed bodies."""
+    import gzip
+    import tarfile
+    shared, _ = ids.lifecycle()
+    native_paths = sorted({p for p in local.SOURCE_FILES.values() if p.endswith('.rs')} |
+                          {f'crates/fixture/src/f{i:03}.rs' for i in range(398)})
+    require(len(native_paths) == 401, 'synthetic native401 fixture')
+    config = dict(refs={n: dict(path=p) for n, p in REF_PATHS.items()}, native=dict(
+        sources={n: dict(path=p) for n, p in local.SOURCE_FILES.items()},
+        gate_log=dict(path='gate.log'), source_archive=dict(path='cold-source.tar.gz'),
+        binaries={n: dict(path='cold-'+n) for n in ('writer', 'cells')}))
+    expected = {str(CONFIG), *CODE, *native_paths, *REF_PATHS.values(), 'gate.log'}
+    bodies = {p: ('synthetic '+p+'\n').encode() for p in expected}
+    native_hashes = {p: local.sha(bodies[p]) for p in native_paths}
+    authorities = dict(manifest=dict(source_sha256=native_hashes))
+    roster = source_archive_roster(config, authorities, str(CONFIG))
+    exact(roster, sorted(expected), 'required file closure')
+    with tempfile.TemporaryDirectory(prefix='hierarchical-roster-check-') as tmp:
+        repo, deployed = Path(tmp)/'repo', Path(tmp)/'deployed'
+        repo.mkdir(); deployed.mkdir()
+        for p, body in dict(bodies, **{'unselected-corpus': b'not deployed\n'}).items():
+            target = repo/p; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(body)
+        def git(*args):
+            return subprocess.check_output(['git', *args], cwd=repo)
+        git('init', '-q'); git('add', '.')
+        git('-c', 'user.name=Roman Bartusiak', '-c', 'user.email=riomus@gmail.com', 'commit', '-qm', 'Synthetic hierarchical closure')
+        commit = git('rev-parse', 'HEAD').decode().strip()
+        before = Path.cwd()
+        try:
+            os.chdir(repo)
+            compressed = shared.source_archive(commit, roster)
+        finally:
+            os.chdir(before)
+        with tarfile.open(fileobj=io.BytesIO(gzip.decompress(compressed))) as tar:
+            files = {m.name: tar.extractfile(m).read() for m in tar if m.isfile()}
+        exact(files, bodies, 'authenticated minimal deployed members')
+        for p, body in files.items():
+            target = deployed/p; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(body)
+        exact(source_hashes(deployed), native_hashes, 'all401 deployed native hashes')
+        exact(source_identity(source_hashes(deployed)), source_identity(native_hashes), 'deployed native identity')
+        for mode in ('missing-native', 'tampered-native', 'extra-native'):
+            target = deployed/(native_paths[0] if mode != 'extra-native' else 'crates/fixture/extra.rs')
+            if mode == 'missing-native': target.unlink()
+            else: target.write_bytes(b'changed\n')
+            require(source_hashes(deployed) != native_hashes, 'native omission/tamper/extra accepted')
+            if mode == 'extra-native': target.unlink()
+            else: target.write_bytes(bodies[native_paths[0]])
+    print('PASS tiny required-member closure/source401 roundtrip/omission/tamper/extra native checks')
 
 
 def self_check():
@@ -1065,6 +1166,7 @@ def self_check():
     here = Path(__file__).resolve().parents[1]
     local.resource_snapshot(dict(memory_max_bytes=256 << 20, cpu_affinity=[0]))
     exact(sorted(os.sched_getaffinity(0)), [0], 'self-check CPU1')
+    archive_roster_self_check()
     def rejects(action, match=None):
         try:
             action()
@@ -1089,22 +1191,30 @@ def self_check():
             scratch_admission_bytes=12 << 30,
             refs={n: dict(path=p, **body_pin(local.identity(here/p))) for n, p in REF_PATHS.items()},
             code_sha256={p: local.identity(here/p)['sha256'] for p in CODE})
-        controller_path = base/'metadata-only-controller.json'
-        with patch.object(module, 'CONFIG', controller_path):
-            for mode in ('valid-static', 'pending', 'code-tamper', 'ref-tamper', 'archive-size'):
-                changed = copy.deepcopy(controller)
-                if mode == 'pending': changed['authority_pending'] = True
-                if mode == 'code-tamper': changed['code_sha256'][CODE[0]] = '0'*64
-                if mode == 'ref-tamper': changed['refs']['receipt']['sha256'] = '0'*64
-                if mode == 'archive-size': changed['native']['source_archive']['bytes'] = 1
-                controller_path.write_bytes(local.canonical(changed))
-                if mode == 'valid-static':
-                    qualify(here, native_files=False)
-                else:
-                    rejects(lambda: qualify(here, native_files=False))
-            controller_path.write_bytes(local.canonical(controller))
-            qualify(here)
-            rejects(lambda: qualify(here, native_files=True), 'UNSUPPLIED-real-archive')
+        metadata_repo = base/'metadata-repo'
+        controller_path = metadata_fixture(metadata_repo, controller)
+        for mode in ('valid-static', 'pending', 'code-tamper', 'ref-tamper', 'archive-size'):
+            changed = copy.deepcopy(controller)
+            if mode == 'pending': changed['authority_pending'] = True
+            if mode == 'code-tamper': changed['code_sha256'][CODE[0]] = '0'*64
+            if mode == 'ref-tamper': changed['refs']['receipt']['sha256'] = '0'*64
+            if mode == 'archive-size': changed['native']['source_archive']['bytes'] = 1
+            controller_path.write_bytes(local.canonical(changed))
+            if mode == 'valid-static':
+                _, authenticated, _ = qualify(metadata_repo, native_files=False)
+                require(len(authenticated['source_archive_paths']) >= 401 and authenticated['source_file_count'] == 401,
+                        'qualified native401 file roster')
+            else:
+                rejects(lambda: qualify(metadata_repo, native_files=False))
+        controller_path.write_bytes(local.canonical(controller))
+        qualify(metadata_repo)
+        rejects(lambda: qualify(metadata_repo, native_files=True), 'UNSUPPLIED-real-archive')
+        native_hashes = source_hashes(metadata_repo)
+        omitted = sorted(native_hashes)[0]
+        for changed in ({p: h for p, h in native_hashes.items() if p != omitted},
+                        dict(native_hashes, **{omitted: '0'*64}), dict(native_hashes, **{'extra.rs': '0'*64})):
+            with patch.object(module, 'source_hashes', return_value=changed):
+                rejects(lambda: qualify(metadata_repo), 'exact full qualified native source inventory')
         # Exercise the real helper with its own explicitly synthetic gate proof
         # and mock CLI; assert hook timing and INVALID cleanup before measurement.
         original_prepare = local.prepare
@@ -1240,6 +1350,8 @@ else:
         config_file = pin(base/'fixture-config.json', local.canonical(config))
         proof = {n: 'b'*64 for n in TERMINAL_IDENTITIES}
         proof.update(config_path=str(CONFIG), config_sha256=config_file['sha256'], campaign_schema=SCHEMA,
+                     source_file_count=401, source_archive_paths=[str(CONFIG)],
+                     source_archive_paths_sha256=ids.sha(ids.encoded([str(CONFIG)])),
                      awscli_version=AWSCLI_VERSION, awscli_sha256=AWSCLI_SHA256)
         dataset_bytes = sum(len(v) for k, v in bodies.items() if not k.startswith('native-'))
         original_panel = panel_inputs
@@ -1251,6 +1363,7 @@ else:
         fixture_limits = dict(LIMITS, memory_max_bytes=256 << 20, scratch_max_bytes=256 << 20,
                               max_result_bytes=1 << 20, max_log_bytes=1 << 20)
         env = dict(BORSUK_HIERARCHICAL_CONFIG_SHA256=proof['config_sha256'],
+            BORSUK_HIERARCHICAL_SOURCE_ARCHIVE_PATHS_SHA256=proof['source_archive_paths_sha256'],
             BORSUK_HIERARCHICAL_DEADLINE_EPOCH=str(int(time.time())+100),
             BORSUK_HIERARCHICAL_SCRATCH_BASE_USED=str(shutil.disk_usage(base).used))
         # Keep the original helper and adapter path; patch only authorities,
@@ -1296,6 +1409,23 @@ else:
                 return dict(Body=io.BytesIO(b))
             collect(Mock(get_object=fetch), host['prefix'], collected, host['instance_id'], host['source_commit'], host['source_archive_sha256'])
             require(replay(collected)['executed'], 'actual completed collection/replay')
+            reserved_path = collected/'aws-reservation.json'
+            saved_reservation = reserved_path.read_bytes()
+            damaged = local.decode(saved_reservation)
+            damaged['qualification']['source_archive_paths'].append('omitted-native.rs')
+            reserved_path.write_bytes(local.canonical(damaged))
+            rejects(lambda: replay(collected), 'reserved source file roster SHA')
+            reserved_path.write_bytes(saved_reservation)
+            qualification_path = collected/'screen/source-qualification.json'
+            saved_qualification = qualification_path.read_bytes()
+            damaged = local.decode(saved_qualification); damaged['source_archive_paths'] = ['omitted-native.rs']
+            qualification_path.write_bytes(local.canonical(damaged))
+            changed_terminal = copy.deepcopy(terminal)
+            changed_terminal['artifacts']['screen/source-qualification.json'] = body_pin(local.identity(qualification_path))
+            terminal_path = collected/'aws-terminal.json'; saved_terminal = terminal_path.read_bytes()
+            terminal_path.write_bytes(local.canonical(changed_terminal))
+            rejects(lambda: replay(collected), 'deployed source qualification ancestry')
+            qualification_path.write_bytes(saved_qualification); terminal_path.write_bytes(saved_terminal)
             diagnostic = collected/'screen/measurement/relaion-diagnostic.jsonl'
             original_body = diagnostic.read_bytes()
             diagnostic.write_bytes(original_body[:-1])
