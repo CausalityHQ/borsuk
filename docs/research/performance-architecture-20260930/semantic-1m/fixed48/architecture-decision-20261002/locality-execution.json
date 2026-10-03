@@ -1,0 +1,41 @@
+{
+  "all_required_rows_preserved": true,
+  "artifacts": {
+    "locality-result.json": {
+      "bytes": 593441,
+      "sha256": "2705f7b95a4e3e146d4b364e35b1278e1576722415a41d12aa1a1d285d982d7f"
+    },
+    "real-resources.txt": {
+      "bytes": 909,
+      "sha256": "921a83026cb6ac179dfe24010effc111d8442875ba5c13baf0c4d2cda1d10023"
+    },
+    "real.log": {
+      "bytes": 8221,
+      "sha256": "a3fdb2b63dc4c614bcb8feb262114a28d53fd982ea11f9afc5f489e72044c86d"
+    }
+  },
+  "cgroup_limits": {
+    "cpu_quota_percent": 100,
+    "memory_bytes": 536870912,
+    "swap_bytes": 0,
+    "tasks": 64,
+    "wall_seconds": 120
+  },
+  "cgroup_reported_peak": "50.9M",
+  "exit_status": 0,
+  "future_native_parity_pending": true,
+  "maximum_rss_kib_gnu_time": 64740,
+  "no_native_query_or_truth_execution": true,
+  "original_exec_session": 70532,
+  "schema": "borsuk-locality-root-execution-v1",
+  "scientific_status": "FAIL",
+  "script": {
+    "bytes": 51772,
+    "sha256": "5c9f8cf50caa7af00d80c43ecf8dd246537a0b6b70efb14331974647be19fbf3"
+  },
+  "source_commit": "c0b0946d04db284bccd177ae066bcd608d5554eb",
+  "swap_bytes": 0,
+  "unit": "borsuk-locality-real-20261003.service",
+  "wall_seconds_gnu_time": 1.17,
+  "worker_commit": "dfd91a58d77b2cdd724418818b2afff3a44625a3"
+}
