@@ -1,0 +1,33 @@
+{
+  "automatic_cloud_download_allowed": false,
+  "canonical_authentication_bytes_total": 616000000,
+  "items": {
+    "CoHere": {
+      "canonical": {
+        "bytes": 308000000,
+        "path": "/mnt/hierarchical-100k/screen/measurement/cohere-generation/canonical.bin",
+        "sha256": "38304c3b448f2f62b32da8b443bbe52f20ccc63f5472d0e7885d5c268dd7a6df"
+      },
+      "recorded_original_path_exists_now": false,
+      "retained_cell_directory": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/a0002/screen/retained/cohere",
+      "retained_cells_exist": true
+    },
+    "ReLAION": {
+      "canonical": {
+        "bytes": 308000000,
+        "path": "/mnt/hierarchical-100k/screen/measurement/relaion-generation/canonical.bin",
+        "sha256": "c260b7fe0b6a54de98dfba3f2599d272242f724421064ed5ca18c0cd63e6283d"
+      },
+      "recorded_original_path_exists_now": false,
+      "retained_cell_directory": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/a0002/screen/retained/relaion",
+      "retained_cells_exist": true
+    }
+  },
+  "known_local_canonical_body_available": false,
+  "next_action": "continue source-only implementation and native qualification; root separately recover exact originals using recorded qualified writer with unchanged inputs/byte hashes before actual source-neighborhood diagnostic",
+  "production_quality_disposition": "not evaluated; input absence is not an architecture failure",
+  "schema": "borsuk-constrained-split-original-input-availability-v1",
+  "scope": "exact recorded canonical paths and retained closed experiment bodies only; not exhaustive filesystem inventory",
+  "source_falsifier_requires_exact_originals": true,
+  "sq8_substitution_allowed": false
+}
