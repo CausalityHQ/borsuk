@@ -1,0 +1,31 @@
+{
+  "adapter_cpu_seconds": 10.149,
+  "adapter_log_sha256": "0d506b3ea56e394ea60a5b57b6a044f75f9212524610c1406ac8a5c1ba4c0c39",
+  "adapter_reported_memory_peak": "75M",
+  "adapter_wall_seconds": 12.302,
+  "canary_go": false,
+  "cpu_affinity": [
+    0
+  ],
+  "cpu_quota_percent": 100,
+  "earlier_root_check_failures": [
+    "missing required CPU affinity",
+    "TasksMax128 vs required512",
+    "unprovided synthetic Git archive fixture"
+  ],
+  "fixture_scope": "Only fake a*40 archive; real commands delegate to /usr/bin/git",
+  "integrated_adapter_exit_status": 0,
+  "memory_limit_bytes": 268435456,
+  "native_identity_sha256": "690a545e782b7f732acf9c78b71d2d40a465fd308011762a255d2b74f96742ce",
+  "new_config_sha256": "36ccb229fc8d3abe2b31580f2ec4848f84baf3310d954809630e7408ee1b9612",
+  "old_config_sha256": "6e23f6fe4039f99e7cab63bf0cb3be5d3fc0fb52ed65892e28a6a984269d3927",
+  "production_archive_pilot": "PENDING",
+  "schema": "borsuk-streamed-archive-controller-root-verification-v1",
+  "scientific_result_available": false,
+  "shared_lifecycle_exit_status": 0,
+  "shared_source_sha256": "1162284b399407b2443ebe332222e3c0d071f0ba103ecc8d72de592febbdeadf",
+  "source_commit": "f483b4892e54f1fcc3073c06e06c2fdee5fe03c7",
+  "swap_bytes": 0,
+  "synthetic_git_fixture": "/tmp/borsuk-bounded-controller-source-archive-fixtures/git",
+  "tasks_max": 512
+}
