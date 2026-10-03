@@ -22,6 +22,27 @@ first release, schema stability and backward compatibility are non-goals.
   pass. Run publication and large-scale comparison benchmarks from that exact
   frozen revision.
 
+## Current implementation priority
+
+- Prioritize the self-contained Rust ANN library: routing, index layout,
+  recall, p90/p95 latency, QPS, memory efficiency, threading and scalability.
+  Select each substantive change from measured stage timings and recall-loss
+  evidence; optimize SIMD only when profiling identifies a compute bottleneck.
+- Do not initiate Python or TypeScript features or controller milestones.
+  These languages may provide only minimal glue to run and verify an exact
+  native experiment. Preserve existing workers, original jobs and receipts.
+- Run a fast native correctness and recall falsifier before a long scale
+  benchmark. Qualification requires actual native execution on frozen source.
+- Preserve every historical arm's original protocol and GO/FAIL result.
+  Its memory, GET, byte and recall thresholds are specific to that arm,
+  not universal admission gates for a changed architecture. Preregister new
+  resource envelopes from measured stage RSS, scratch, resident bytes,
+  requests, generation pins, maintenance and concurrency. Keep host safety
+  limits unchanged; qualify larger candidates on a bounded remote host.
+- The product goal remains matched quality, end-to-end tail latency, QPS and
+  total lifecycle cost against both S3 Vectors and Turbopuffer. Published
+  results under different conditions do not establish a measured win.
+
 ## Delivery and evidence policy
 
 - Before handing off Rust implementation work, compile the affected test
