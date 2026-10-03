@@ -1,0 +1,40 @@
+{
+  "schema": "borsuk-layout-research-request-v1",
+  "state": "RUNNING",
+  "operator_request": "Investigate hierarchical layouts, hypergraphs and TurboQuant using deep research, the web and arXiv",
+  "consultation_id": "56d471ee829f478c",
+  "source_commit": "1b06849a41caa6cccde75813d5847d8eb596c0a7",
+  "requested_provider": "claude-fable-5-1",
+  "observed_active_provider": "gpt-6.1-sol",
+  "fallback_reason": "Fable and Opus OAuth sessions expired; the same consultation continued through its configured fallback",
+  "timeout_seconds": 1800,
+  "provider_attempt_budget_cap_usd": 6,
+  "primary_sources": [
+    "https://arxiv.org/abs/2504.19874",
+    "https://arxiv.org/abs/2405.12497",
+    "https://arxiv.org/abs/2409.09913",
+    "https://arxiv.org/abs/2111.08566",
+    "https://arxiv.org/abs/2410.14452",
+    "https://arxiv.org/abs/2608.22980",
+    "https://turbopuffer.com/blog/ann-v3"
+  ],
+  "questions": [
+    "Can a small resident hierarchy select physically contiguous cells with enough boundary coverage and bounded S3 fetch waves?",
+    "Does overlapping cell membership improve coverage enough to justify duplication and mutation cost?",
+    "Does TurboQuant or RaBitQ improve compressed scoring at the same candidate coverage and byte budget?",
+    "What are the full RAM, scratch, generation pinning, maintenance, concurrency and lifecycle cost formulas at 1M, 10M and 100M?",
+    "What is the cheapest decisive no-cloud falsifier before changing the format?"
+  ],
+  "initial_source_limitations": [
+    "Quantizer distortion guarantees do not establish routing coverage or end-to-end ANN recall",
+    "The hypergraph paper evaluates QQP and STS-B with D384 embeddings and relevant-pair Hit@10, not our D768 exact-neighbor recall@100 or S3 cold tails",
+    "Hypergraph candidate generation depends on embedding-coordinate activation distributions; combining it with a random rotation requires a separate selectivity and coverage test",
+    "Turbopuffer's published 100B architecture discussion includes SSD-resident deployments; it does not establish a matched fully cold S3 result",
+    "The current whole-directory resident prototype has no measured 100M admission or serving result"
+  ],
+  "required_output": "Primary-source evidence table, competing layouts and query DAGs, explicit scale and maintenance formulas, counterexamples, recommended decision and one cheap falsifier",
+  "frozen_experiment_changed": false,
+  "new_format_authorized_for_implementation_by_this_record": false,
+  "matched_vendor_win": false,
+  "research_result_received": false
+}
