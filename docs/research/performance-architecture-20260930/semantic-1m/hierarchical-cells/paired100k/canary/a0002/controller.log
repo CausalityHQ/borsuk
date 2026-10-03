@@ -1,0 +1,6 @@
+Running as unit: borsuk-hierarchical-infra-canary-controller-a0002.service; invocation ID: 783c9e820335414597270e36044b0a8e
+          Finished with result: oom-kill
+Main processes terminated with: code=killed, status=9/KILL
+               Service runtime: 41.580s
+             CPU time consumed: 40.869s
+                   Memory peak: 1G (swap: 0B)

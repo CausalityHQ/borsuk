@@ -1,0 +1,27 @@
+{
+  "aws_live_instance_audit": {
+    "exit_status": 0,
+    "filters": "tag Name borsuk-*; pending/running/stopping",
+    "instances": [],
+    "profile": "causality",
+    "region": "eu-central-1"
+  },
+  "canary_go": false,
+  "controller_log_sha256": "e918b4a5034f73a5bf59aabd85fc4ce3b20670e1efb13f0e9eaabae6ad73194d",
+  "controller_terminal_signal": 9,
+  "cpu_seconds": 40.869,
+  "local_launch_receipt_present": false,
+  "memory_limit_bytes": 1073741824,
+  "memory_peak_bytes": 1073741824,
+  "next_decision": "Reduce deployed source archive to explicit authenticated code/native/authority roster before another paid attempt",
+  "original_controller_session": 84250,
+  "root_cause_scope": "Full controller preparation exceeds archive-only 1GiB envelope; exact allocation stage not yet isolated",
+  "schema": "borsuk-hierarchical-infrastructure-invalid-attempt-v1",
+  "scientific_result_available": false,
+  "service_runtime_seconds": 41.58,
+  "source_commit": "5749b5f7",
+  "status": "INVALID",
+  "swap_bytes": 0,
+  "systemd_invocation": "783c9e820335414597270e36044b0a8e",
+  "unit_result": "oom-kill"
+}
