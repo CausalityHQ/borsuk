@@ -19,7 +19,8 @@ required = {
         "cell_local_block_nomination_omits_other_blocks_even_for_tied_codes",
         "resident_directory_preload_is_admitted_charged_and_has_no_query_reads",
         "resident_preload_rejects_corrupt_unused_interior_page",
-        "whole_cell_matches_two_stage_with_one_wave_and_full_payload_charges")),
+        "whole_cell_matches_two_stage_with_one_wave_and_full_payload_charges",
+        "nonunit_query_nonzero_mean_preserves_native_sq2_scoring_and_nomination")),
     "hierarchical-cell-bin-tests": ("tests::configurations_reject_unknown_fields_and_truth_in_requests",)}
 stage, started, finished, status, log, log_status = sys.argv[1:7]
 tests = None

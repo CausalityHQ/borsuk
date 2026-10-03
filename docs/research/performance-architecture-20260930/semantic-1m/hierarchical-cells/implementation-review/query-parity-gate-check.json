@@ -1,0 +1,15 @@
+{
+  "schema": "borsuk-hierarchical-query-parity-gate-check-v1",
+  "mandatory_test": "hierarchical_semantic_cells::tests::nonunit_query_nonzero_mean_preserves_native_sq2_scoring_and_nomination",
+  "checks": ["_hierarchical_cells_protocol_self_check", "_hierarchical_cells_script_self_check", "_fixed48_stages_self_check(hierarchical_cells=True)", "bash -n scripts/check_hierarchical_cells_implementation.sh", "git diff --check"],
+  "exit_status": 0,
+  "systemd_invocation": "74e9f494bb384f96b60eadee6e7002c4",
+  "memory_max_bytes": 268435456,
+  "swap_max_bytes": 0,
+  "cpu_quota_percent": 100,
+  "observed_memory_peak": "36.5M",
+  "runtime_ms": 343,
+  "setup_failure": {"systemd_invocation": "f463304bce2141babfb6ee3c4935a6f8", "exit_status": 1, "reason": "missing WorkingDirectory; no checks entered"},
+  "native_test_execution": false,
+  "native_candidate_qualified": false
+}
