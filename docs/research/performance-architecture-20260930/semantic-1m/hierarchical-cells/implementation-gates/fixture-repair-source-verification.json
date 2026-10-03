@@ -1,0 +1,18 @@
+{
+  "binary_source_byte_equal": true,
+  "changed_paths": [
+    "crates/borsuk/src/hierarchical_semantic_cells.rs"
+  ],
+  "failed_native_commit": "da80bb508a421cc7e61cb1ac2ef2caf9a3aa9c62",
+  "lib_registration_byte_equal": true,
+  "mandatory_test_names_changed": false,
+  "native_qualification_passed": false,
+  "native_tests_executed_on_repair": 0,
+  "paid_retry_started": false,
+  "production_module_prefix_byte_equal": true,
+  "repair_module_sha256": "4e0bbe3cee1c3e38cb8afe1af41605ae9a379aa8a289524b88edd16ad71c4923",
+  "repair_native_commit": "01e87e1dac060355e6322ad9d0e0378eeeaadea7",
+  "repair_scope": "Explicit f32 fixture scalar types and existing short-tail/budget refusal test assertions",
+  "review_group": "d43971430aa54f89",
+  "schema": "borsuk-hierarchical-fixture-repair-verification-v1"
+}
