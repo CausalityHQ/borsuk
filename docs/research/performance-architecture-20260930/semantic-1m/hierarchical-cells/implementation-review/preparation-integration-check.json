@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-hierarchical-preparation-integration-check-v1",
+  "helper_commit": "6a478cf58679ddad32a9318d1bb786201f5eb0f3",
+  "root_change": "Add required original-query SQ2 regression to completed-proof roster",
+  "command": "taskset -c 0 timeout 120s python3 -B scripts/prepare_hierarchical_cells_100k.py --self-check",
+  "cwd": "/home/rb/worktrees/borsuk-hierarchical-cells-qualification",
+  "fixture_native_revision": "da80bb508a421cc7e61cb1ac2ef2caf9a3aa9c62",
+  "fixture_scope": "Synthetic mocked binaries and tiny inputs only; no native execution",
+  "systemd_invocation": "841cca8710f84a2d9b6bab243c7d7883",
+  "exit_status": 0,
+  "memory_max_bytes": 268435456,
+  "swap_max_bytes": 0,
+  "cpu_quota_percent": 100,
+  "runtime_seconds": 3.633,
+  "observed_memory_peak": "27.5M",
+  "setup_failures": [
+    {"invocation": "a362875b1b054687b8d6913ef6374324", "exit_status": 2, "reason": "Required CPU affinity absent"},
+    {"invocation": "bfe8ae448f85437692d4ec9005b670cc", "exit_status": 2, "reason": "Root intentionally lacks unverified native module; checked in isolated fixture tree instead"}
+  ],
+  "native_qualification": false,
+  "real_corpus_execution": false
+}
