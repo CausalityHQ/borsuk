@@ -1,0 +1,198 @@
+{
+  "all_present_and_lengths_match": true,
+  "body_authentication_completed": false,
+  "observed_at": "2026-10-03T06:56:18.159121+00:00",
+  "payload_get_count": 0,
+  "query_or_truth_body_reads": 0,
+  "rows": [
+    {
+      "dataset": "relaion",
+      "etag": "\"8f8f4c766ff549b057abe4d96b90ad28-18\"",
+      "exit_status": 0,
+      "expected": {
+        "bytes": 145121661,
+        "key": "research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet",
+        "sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d"
+      },
+      "name": "source",
+      "observed_bytes": 145121661,
+      "size_matches": true
+    },
+    {
+      "dataset": "relaion",
+      "etag": "\"66cf3d6209633e9e384ed1f16807aea3-3\"",
+      "exit_status": 0,
+      "expected": {
+        "bytes": 17714558,
+        "key": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+        "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+      },
+      "name": "requests",
+      "observed_bytes": 17714558,
+      "size_matches": true
+    },
+    {
+      "dataset": "relaion",
+      "etag": "\"9090c55691dab1500cc83b2d190e57f7\"",
+      "exit_status": 0,
+      "expected": {
+        "bytes": 400000,
+        "key": "research/validation-loss-diagnostic/20260928/a0001/artifacts/diagnostic/truth.u32",
+        "sha256": "4bd3ac79fce3919f85359ce3e305491663991f6cc0890ab91682cda34247a24e"
+      },
+      "name": "truth",
+      "observed_bytes": 400000,
+      "size_matches": true
+    },
+    {
+      "dataset": "relaion",
+      "etag": "\"232d675ebacc2f6182cd025820847ac8\"",
+      "exit_status": 0,
+      "expected": {
+        "bytes": 78000000,
+        "key": "research/native-union/20260928/locality-source-layout-a0001/data/relaion/objects/be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b",
+        "sha256": "be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b"
+      },
+      "name": "sq8.bin",
+      "observed_bytes": 78000000,
+      "size_matches": true
+    },
+    {
+      "dataset": "relaion",
+      "etag": "\"2f6fe42dbd7e10dc32a5750c25c2747b-1\"",
+      "exit_status": 0,
+      "expected": {
+        "bytes": 3072,
+        "key": "research/native-union/20260928/walk-source-http-a0002/indexes/relaion/candidate/generations/577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b/plane/mean.bin",
+        "sha256": "197a8ead172a5a41e029c8f0c9d39b981150c69fc3b0367316fb89c920eb1beb"
+      },
+      "name": "control/plane/mean.bin",
+      "observed_bytes": 3072,
+      "size_matches": true
+    },
+    {
+      "dataset": "relaion",
+      "etag": "\"4a24ec4c11e42dd0e2062d5b433a9a19-3\"",
+      "exit_status": 0,
+      "expected": {
+        "bytes": 20000000,
+        "key": "research/native-union/20260928/walk-source-http-a0002/indexes/relaion/candidate/generations/577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b/plane/records.bin",
+        "sha256": "624e63de5905210bde24a4e7752573d6811d9fa5142e5b529ff0e9f65054ce83"
+      },
+      "name": "control/plane/records.bin",
+      "observed_bytes": 20000000,
+      "size_matches": true
+    },
+    {
+      "dataset": "relaion",
+      "etag": "\"88e677fadc833d94c35a8c6993581201\"",
+      "exit_status": 0,
+      "expected": {
+        "bytes": 800000,
+        "key": "research/native-union/20260928/locality-source-layout-a0001/artifacts/screen/relaion/order.u64",
+        "sha256": "22abeb087000ea2978c4fef8e85c2f7fda4e4b22c4e5126ba37a1c19816fab18"
+      },
+      "name": "order.u64",
+      "observed_bytes": 800000,
+      "size_matches": true
+    },
+    {
+      "dataset": "cohere",
+      "etag": "\"43f36864d5212e78978d861efbf1bbc0-37\"",
+      "exit_status": 0,
+      "expected": {
+        "bytes": 307200000,
+        "key": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/vectors.raw",
+        "sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e"
+      },
+      "name": "source",
+      "observed_bytes": 307200000,
+      "size_matches": true
+    },
+    {
+      "dataset": "cohere",
+      "etag": "\"5ba43190667ce30638737a394e130f94-2\"",
+      "exit_status": 0,
+      "expected": {
+        "bytes": 15369495,
+        "key": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+        "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+      },
+      "name": "requests",
+      "observed_bytes": 15369495,
+      "size_matches": true
+    },
+    {
+      "dataset": "cohere",
+      "etag": "\"617f6d627a4c217f0df1bb1626facfe4\"",
+      "exit_status": 0,
+      "expected": {
+        "bytes": 400000,
+        "key": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/truth.u32",
+        "sha256": "06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8"
+      },
+      "name": "truth",
+      "observed_bytes": 400000,
+      "size_matches": true
+    },
+    {
+      "dataset": "cohere",
+      "etag": "\"f669afd022ec8e25f4b4ccf30f3741cc\"",
+      "exit_status": 0,
+      "expected": {
+        "bytes": 78000000,
+        "key": "research/native-union/20260928/walk-source-http-a0001/data/cohere/objects/c16929252705c831c6846022eec46481fc004f521f0c0814a53d49fece8771e0",
+        "sha256": "c16929252705c831c6846022eec46481fc004f521f0c0814a53d49fece8771e0"
+      },
+      "name": "sq8.bin",
+      "observed_bytes": 78000000,
+      "size_matches": true
+    },
+    {
+      "dataset": "cohere",
+      "etag": "\"a5fee11b6ce37c82326f88da210400a9-1\"",
+      "exit_status": 0,
+      "expected": {
+        "bytes": 3072,
+        "key": "research/native-union/20260928/walk-source-http-a0002/indexes/cohere/candidate/generations/9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521/plane/mean.bin",
+        "sha256": "b50ffae3e16cc5e155ceee3adffcac0dc04d6812b0a1bb8fc01cbd259b58440a"
+      },
+      "name": "control/plane/mean.bin",
+      "observed_bytes": 3072,
+      "size_matches": true
+    },
+    {
+      "dataset": "cohere",
+      "etag": "\"e8ae7021b06f2e8b19f7f1769e91df3d-3\"",
+      "exit_status": 0,
+      "expected": {
+        "bytes": 20000000,
+        "key": "research/native-union/20260928/walk-source-http-a0002/indexes/cohere/candidate/generations/9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521/plane/records.bin",
+        "sha256": "f47e344a6a959bfe1e9fe301785410b06667cf07d2bc0386892f510c7f5c6cf8"
+      },
+      "name": "control/plane/records.bin",
+      "observed_bytes": 20000000,
+      "size_matches": true
+    },
+    {
+      "dataset": "cohere",
+      "etag": "\"a4bf1bbbd7fa87e98f4842a5b239fd90\"",
+      "exit_status": 0,
+      "expected": {
+        "bytes": 800000,
+        "key": "research/native-union/20260928/walk-source-http-a0001/artifacts/screen/cohere/order.u64",
+        "sha256": "e2314ca14f5aa6f08b02cc328b863c921e55b1461a413ad6d3d66e781ff42d50"
+      },
+      "name": "order.u64",
+      "observed_bytes": 800000,
+      "size_matches": true
+    }
+  ],
+  "schema": "borsuk-hierarchical-100k-input-head-presence-v1",
+  "sdk_head_count": 14,
+  "source_config": {
+    "bytes": 16015,
+    "path": "docs/research/native-union-20260928/source-completion-http-config.json",
+    "sha256": "06c52df531f8bdb7c30b746cd1a480830e1f2b074ab4d92e45a1c73199ee0a6e"
+  }
+}
