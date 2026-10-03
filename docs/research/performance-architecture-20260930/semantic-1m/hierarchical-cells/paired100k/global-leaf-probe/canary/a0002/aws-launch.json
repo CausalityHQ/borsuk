@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0229a07e166b7a0ee",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0229a07e166b7a0ee"
+    }
+  },
+  "prefix": "research/hierarchical-cells/20261003/global-leaf-probe-canary-a0002",
+  "source_commit": "b6aa90ddc760d00548bec8426a42dfa2a22d14b9",
+  "source_archive_sha256": "582369112b356d7adab6633cdf9ed9af843f6eff497518715b0aa8dd68402664"
+}

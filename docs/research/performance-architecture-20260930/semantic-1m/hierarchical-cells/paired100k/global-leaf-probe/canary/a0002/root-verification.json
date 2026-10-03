@@ -1,0 +1,28 @@
+{
+  "all_artifacts_authenticated": 10,
+  "ann_queries": 0,
+  "authenticated_log_gets": 2,
+  "config_sha256": "9ad80c5354e7501471388d3bdff81a4e5b147722bca68e31c9452f778dea12d9",
+  "head_calls": 15,
+  "host_memory_peak_bytes": 139931648,
+  "host_swap_peak_bytes": 0,
+  "instance_id": "i-0229a07e166b7a0ee",
+  "native_processes": 0,
+  "original_controller_session": 36038,
+  "original_exit_status": 0,
+  "replay": {
+    "executed": true,
+    "physical_s3_measured": false,
+    "scientific_qualification": false,
+    "truth_opened": false,
+    "vendor_win": false
+  },
+  "same_instance_terminated": true,
+  "schema": "borsuk-global-leaf-probe-canary-root-verification-v1",
+  "scratch_bytes": 1480019267,
+  "sdk_dispatch_calls": 17,
+  "status": "GO",
+  "terminal_sha256": "a08a9c9d944aed724a10ecd263eab04bec9a94fc72d6a577f13a3e443a7f0237",
+  "truth_or_panel_body_reads": 0,
+  "wall_seconds": 3.1086629469999707
+}
