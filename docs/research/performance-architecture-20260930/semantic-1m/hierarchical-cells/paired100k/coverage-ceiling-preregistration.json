@@ -1,0 +1,31 @@
+{
+  "schema": "borsuk-hierarchical-coverage-ceiling-preregistration-v1",
+  "state": "PREREGISTERED_NOT_EXECUTED",
+  "research_consultation": "56d471ee829f478c",
+  "datasets": ["ReLAION", "CoHere"],
+  "rows": 100000,
+  "dimensions": 768,
+  "metric": "cosine",
+  "k": 100,
+  "queries_per_dataset": 64,
+  "split": "already consumed historical first64; no fresh holdout claim",
+  "admission": "Only after the original paired diagnostic closes with authenticated complete query freeze, all terminal bodies, source/config identities, resource and cleanup admission",
+  "inputs": "Original immutable query_frozen traces and their authenticated exact truth; no ANN rerun, alternative routing or parameter sweep",
+  "unchanged_selection": {"primary_cells": 8, "boundary_cells": 24, "max_cells": 32, "blocks_per_cell": 4},
+  "per_query": {
+    "coverage_ceiling_hits": "cardinality(truth intersection covered_ids)",
+    "nomination_ceiling_hits": "cardinality(truth intersection nominated_ids)",
+    "returned_hits": "cardinality(truth intersection returned IDs)",
+    "invariants": "returned subset nominated subset covered; exact unique truth100; ordinals0..63 complete"
+  },
+  "aggregation": "Report mean hits/100 and nearest-rank p05 hits separately for each dataset, using the frozen diagnostic percentile convention",
+  "interpretation": [
+    "Coverage ceiling mean below0.98 or p05 below95 proves this frozen selection cannot meet its original quality gate even with perfect scoring",
+    "Adequate coverage but low nomination identifies a separate full-fetched-SQ8 scoring experiment as the next causal candidate",
+    "Adequate nomination but low returned quality requires original-f32 versus SQ8 on identical nominees before claiming quantization loss",
+    "No truth-selected cells or tuned beams; favorable consumed-panel ceilings do not establish fresh production recall"
+  ],
+  "changes_to_frozen_diagnostic": false,
+  "new_quality_or_performance_measurement_available": false,
+  "matched_vendor_claim": false
+}
