@@ -1,0 +1,28 @@
+{
+  "command": [
+    "python3",
+    "/home/rb/worktrees/borsuk-global-leaf-sealed-coverage-reducer/scripts/reduce_hierarchical_global_leaf_coverage.py",
+    "--self-check"
+  ],
+  "source_sha256": "31232bdde29353962bb88b7435ecc84dfb1f854a6d1e7a068254380e65878b3e",
+  "source_unchanged": true,
+  "exit_code": 0,
+  "wall_seconds": 78.20373255299637,
+  "cpu_affinity": [
+    0
+  ],
+  "cgroup": "/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service/app.slice/borsuk-sealed-correction-selfcheck-1.service",
+  "resources": {
+    "memory.max": "268435456",
+    "memory.peak": "70504448",
+    "memory.swap.max": "0",
+    "memory.swap.peak": "0",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+    "cpu.max": "100000 100000"
+  },
+  "log": {
+    "path": "/tmp/borsuk-global-leaf-sealed-coverage-reducer-correction-selfcheck.log",
+    "bytes": 3546,
+    "sha256": "f87721472afceeba65edf7fb6e82b94e181c638cbd9f0b3d4edf6c5a57866de2"
+  }
+}

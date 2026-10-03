@@ -1,0 +1,27 @@
+{
+  "schema": "borsuk-global-leaf-reducer-independent-review-v1",
+  "group_id": "10f4b8c656bc4ae3",
+  "status": "completed",
+  "reviewed_source_sha256": "31232bdde29353962bb88b7435ecc84dfb1f854a6d1e7a068254380e65878b3e",
+  "reviewers": [
+    {
+      "role": "research_critic",
+      "id": "53de40eb4ebf4071",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "status": "completed",
+      "exit_code": 0,
+      "result": "**GO for integration of frozen SHA `31232bdd…878b3e`, within its declared trusted-root contract. No integration blocker found.**\n\n- **Historical schemas match.** A read-only call to `original_control_parity()` passed against both actual terminal-bound configs and diagnostic traces. Both original prefix seals matched. The request-pin → ordinal → new f32-bit-hash binding correctly handles old traces lacking query hashes.\n- **Admission precedes truth.** The reducer requires exactly 131 events, 128 ordered selections, authenticated layout/query/source bindings, prefix seals, complete terminals, both closed receipts, and original primary/covered-ID parity before [opening either truth body](/tmp/borsuk-global-leaf-reducer-review-31232bdd/reduce_hierarchical_global_leaf_coverage.py:679).\n- **Reduction matches the frozen endpoint.** Logical LE-u32 64×100 intersections, paired deltas, fourth-lowest p05, baseline reproduction, 6272-hit/95 thresholds, and exclusive output creation are correct. The supplied self-check log authenticates **117 PASS checks**; it remains synthetic evidence.\n\nOne concrete **trust limit**: at [line 351](/tmp/borsuk-global-leaf-reducer-review-31232bdd/reduce_hierarchical_global_leaf_coverage.py:351), replacing an ID in a newly encountered global-only cell with unused in-domain `99999`, updating its union roster, and retaining its source SHA passes structural validation. I confirmed this in memory. Cross-cell ownership collisions and changed repeated-cell rosters are rejected.\n\nThat acceptance fits the explicit contract: the reducer does not decode source records or establish executable provenance. Before truth admission, the trusted root must substantiate the qualified source/archive/executable relationship, actual roster-producing executions, resource compliance, fsync ordering, and cleanup. Matching hashes and asserted receipt flags alone establish consistency.\n\nThis exhaustive leaf ranking tests the fixed pruning intervention; it does not establish optimal coverage. Results remain consumed-panel coverage evidence. Returned recall, S3 performance, vendor wins, and production promotion remain unsupported; historical **FAIL** remains unchanged.\n\nNo edits, native/Cargo execution, real truth-body reads, network, children, or consultations."
+    },
+    {
+      "role": "engineering_critic",
+      "id": "3d38497b7ec9436c",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "status": "completed",
+      "exit_code": 0,
+      "result": "**GO for integration of frozen SHA `31232bdd…878b3e`, with the stated trust limits.** No concrete blocker found.\n\n- **Historical schema/parity:** exercised [the parity validator](/tmp/borsuk-global-leaf-reducer-review-31232bdd/reduce_hierarchical_global_leaf_coverage.py:487) against both actual archived terminal/config/131-event traces, supplying their historical sets as identity controls. Passed without GT access. This verifies schema compatibility, not a new hierarchy replay.\n- **Admission:** [the stream validator](/tmp/borsuk-global-leaf-reducer-review-31232bdd/reduce_hierarchical_global_leaf_coverage.py:385) enforces 131 events, 128 ordered selections, query/source bindings, prefix seals and complete terminals. Both datasets, the closed receipt and historical parity precede truth opening.\n- **IDs/accounting:** twelve focused in-memory falsifiers were rejected, including cross-cell ownership collisions, changed membership, invalid ID types/ranges and incorrect source accounting. No acceptance hole found.\n- **Reduction:** LE-u32 logical intersections, fourth-lowest p05, paired deltas, frozen thresholds and exclusive output creation are consistent. Historical baselines independently matched `5513/55` and `4788/51`.\n\n**Root obligations remain:** qualification, archive→revision→executable correspondence, actual resource measurements, fsync chronology, cleanup and native source-record/distance correctness are trusted attestations—not independently established by this reducer. [The contract states that boundary](/tmp/borsuk-global-leaf-reducer-review-31232bdd/reduce_hierarchical_global_leaf_coverage.py:769).\n\nThe supplied full self-check receipt was reviewed, not rerun. No edits, native execution, real GT/corpus reads, network or delegation. Coverage remains consumed-panel routing coverage; it establishes no returned-recall, S3 or vendor win. Original historical **FAIL** remains."
+    }
+  ],
+  "reconciliation": "GO for integration only. Root must establish executable provenance, actual source-record ID membership, fsync ordering, resources and cleanup from producer execution and retained artifacts before authoring the closed evaluator bridge. No scientific result or production promotion."
+}

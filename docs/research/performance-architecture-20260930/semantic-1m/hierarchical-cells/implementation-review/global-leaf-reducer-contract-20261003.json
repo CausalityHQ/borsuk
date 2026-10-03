@@ -1,0 +1,277 @@
+{
+  "schema": "borsuk-global-leaf-sealed-coverage-v1-contract",
+  "cli": "python3 scripts/reduce_hierarchical_global_leaf_coverage.py CONFIG CONFIG_SHA256 NEW_OUTPUT",
+  "self_check": "python3 scripts/reduce_hierarchical_global_leaf_coverage.py --self-check",
+  "artifact": "{path:absolute_local_regular_file, bytes:positive_integer, sha256:lowercase64}; no symlink/FIFO; no gzip substitution",
+  "config": {
+    "schema": "borsuk-global-leaf-sealed-coverage-v1",
+    "protocol": "artifact pinned to PROTOCOL",
+    "historical_audit": "artifact pinned to AUDIT",
+    "historical_control": {
+      "terminal": "artifact pinned to original a0001 aws-terminal.json",
+      "datasets": {
+        "relaion": {
+          "diagnostic_config": "raw artifact of original terminal-bound screen/measurement/relaion-diagnose.json",
+          "diagnostic": "raw artifact of original terminal-bound screen/measurement/relaion-diagnostic.jsonl"
+        },
+        "cohere": {
+          "diagnostic_config": "raw artifact of original terminal-bound screen/measurement/cohere-diagnose.json",
+          "diagnostic": "raw artifact of original terminal-bound screen/measurement/cohere-diagnostic.jsonl"
+        }
+      }
+    },
+    "source": {
+      "revision": "full40 qualified current source revision",
+      "archive": "artifact; streamed <=1GiB",
+      "module": "artifact of current Rust module",
+      "binary_source": "artifact of current Rust CLI source",
+      "executable": "artifact of qualified executable; streamed <=1GiB",
+      "reducer": "artifact matching this running Python file"
+    },
+    "closed_receipt": "artifact of root-owned aggregate JSON (schema below)",
+    "datasets": {
+      "relaion": {
+        "candidate_root": "artifact; EXACT original manifest hash; restored body required",
+        "directories": "artifact; manifest directory_bytes/directory_sha256",
+        "requests": "artifact; EXACT original requests64 hash/bytes",
+        "nomination_config": "artifact; strict original native NominationConfig; root/requests bytes+SHA equal dataset descriptors; local copy paths may differ",
+        "nominations": "artifact; exact native sealed JSONL <=128MiB",
+        "truth": "artifact; EXACT original 25600-byte truth64",
+        "truth_id_space": "logical_source_ordinal_le_u32"
+      },
+      "cohere": {
+        "candidate_root": "artifact; EXACT original manifest hash; restored body required",
+        "directories": "artifact; manifest directory_bytes/directory_sha256",
+        "requests": "artifact; EXACT original requests64 hash/bytes",
+        "nomination_config": "artifact; strict original native NominationConfig; root/requests bytes+SHA equal dataset descriptors; local copy paths may differ",
+        "nominations": "artifact; exact native sealed JSONL <=128MiB",
+        "truth": "artifact; EXACT original 25600-byte truth64",
+        "truth_id_space": "logical_source_ordinal_le_u32"
+      }
+    }
+  },
+  "closed_receipt": {
+    "schema": "borsuk-global-leaf-sealed-coverage-v1-closed-receipt",
+    "status": "CLOSED_VALID",
+    "execution_exit_code": 0,
+    "source_qualified": true,
+    "resources_qualified": true,
+    "cleanup_complete": true,
+    "both_sealed_before_truth": true,
+    "truth_opened": false,
+    "protocol": "exact config.protocol descriptor",
+    "historical_audit": "exact config.historical_audit descriptor",
+    "historical_control": "exact config.historical_control object (terminal and both original diagnostic/config descriptors)",
+    "source": "exact config.source object",
+    "datasets": {
+      "relaion": {
+        "nomination_config": "exact dataset descriptor",
+        "nominations": "exact dataset descriptor",
+        "candidate_root": "exact dataset descriptor",
+        "directories": "exact dataset descriptor",
+        "requests": "exact dataset descriptor",
+        "prefix": "{bytes,sha256} computed from identity+128 selections INCLUDING newlines",
+        "source_identity_sha256": "Rust compact BuildConfig serialization SHA (declaration order)",
+        "execution_exit_code": 0,
+        "sealed_before_truth": true,
+        "fsynced": true,
+        "complete": true,
+        "resources": {
+          "memory_limit_bytes": "1..536870912",
+          "memory_peak_bytes": "1..memory_limit_bytes",
+          "swap_limit_bytes": 0,
+          "swap_peak_bytes": 0,
+          "cpu_count": 1,
+          "oom": 0,
+          "oom_kill": 0
+        }
+      },
+      "cohere": {
+        "nomination_config": "exact dataset descriptor",
+        "nominations": "exact dataset descriptor",
+        "candidate_root": "exact dataset descriptor",
+        "directories": "exact dataset descriptor",
+        "requests": "exact dataset descriptor",
+        "prefix": "{bytes,sha256} computed from identity+128 selections INCLUDING newlines",
+        "source_identity_sha256": "Rust compact BuildConfig serialization SHA (declaration order)",
+        "execution_exit_code": 0,
+        "sealed_before_truth": true,
+        "fsynced": true,
+        "complete": true,
+        "resources": {
+          "memory_limit_bytes": "1..536870912",
+          "memory_peak_bytes": "1..memory_limit_bytes",
+          "swap_limit_bytes": 0,
+          "swap_peak_bytes": 0,
+          "cpu_count": 1,
+          "oom": 0,
+          "oom_kill": 0
+        }
+      }
+    }
+  },
+  "pins": {
+    "protocol": {
+      "bytes": 3707,
+      "sha256": "2914b9bc79cb9cfaf77a270cca868c90398c20dd83149c6896dd7706ac7def04"
+    },
+    "historical_audit": {
+      "bytes": 186248,
+      "sha256": "ed420f8a4562fe36b0343c66356cf5f573d6493a875e0621fd4ba1f230484e3e"
+    },
+    "historical_terminal": {
+      "bytes": 4916,
+      "sha256": "a0ca521980142f869e7be74b10802926459674cc06ec2e7bf6e11214c8065bf2"
+    },
+    "roots": {
+      "relaion": "fec06fb0eee4a1380a42356af3ef43d38137a95b4bdb09d457b434b5369c076b",
+      "cohere": "89aee41edba2f4bc447fc5fb66ecee3f470e4ff50627c6f294da6208fdbcb6b2"
+    },
+    "requests": {
+      "relaion": {
+        "bytes": 937167,
+        "sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330"
+      },
+      "cohere": {
+        "bytes": 983232,
+        "sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654"
+      }
+    },
+    "truths": {
+      "relaion": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c",
+      "cohere": "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355"
+    }
+  },
+  "roster": [
+    "identity",
+    "128 selection_frozen: ordinal0..63, hierarchy then global",
+    "all_selections_frozen",
+    "terminal NOMINATIONS_FROZEN complete=true"
+  ],
+  "checks": [
+    "Strict fields/types/duplicate JSON rejection; all131 events, newline/line/body caps and full body pin",
+    "Both datasets: original layout, original query bytes, current source/binary bindings, prefix bytes/SHA and marker identities",
+    "Root receipt asserts exact source qualification and execution0/resources/cleanup/both-fsynced-before-truth; never inferred from marker",
+    "BEFORE GT: original a0001 terminal authenticates both diagnostic configs and bodies; exact64 hierarchy primary/covered source-ID set parity by ordinal",
+    "Old traces have no per-query query_sha256: original identity requests SHA -> terminal-bound diagnostic_config.requests -> same authenticated original request panel -> new arm f32 LE hashes",
+    "Original source identities are checked against historical audit source pins, separately from current qualified source/binary",
+    "All pretruth admission passes before either GT is opened; both truths pinned LEu32 64x100 unique logical IDs0..99999",
+    "Authenticated complete directory topology, source ranges/population/prototypes; selected24 unique primary8, total_cmp/cell-ID ordering",
+    "Source-ID roster disjointness, consistent per-cell membership across all selections; source-ID uniqueness and original source ordinal bounds",
+    "Native source-only Accounting exact payload/wave/counters; actual SOURCE bytes vs modeled WholeCell bytes",
+    "Independent primary/fetched truth intersections, paired per-query deltas and p05 fourth-lowest",
+    "Hierarchy reproduces original audit primary/fetched hits, covered counts and WholeCell bytes per query; frozen baseline and decision thresholds",
+    "Output deterministic and create-exclusive+fsynced; existing output refused before truth, invalid exit2"
+  ],
+  "limits": "No native execution, corpus replay, physical mapping, ranking, remote/S3/vendor claim; original consumed first64 explicit",
+  "trust": "Trusted CONFIG_SHA supplied out of band by root; aggregate receipt is root's attestation backed by its independently verified evidence. This reducer does not execute qualification gates or independently replay source records/distance arithmetic.",
+  "required_before_root_freeze": "Fill authenticated descriptors and closed receipt using actual qualified current source, executable, two sealed runs and cleanup; synthetic fixtures are not production evidence.",
+  "implementation": {
+    "path": "/home/rb/worktrees/borsuk-global-leaf-sealed-coverage-reducer/scripts/reduce_hierarchical_global_leaf_coverage.py",
+    "bytes": 85782,
+    "sha256": "31232bdde29353962bb88b7435ecc84dfb1f854a6d1e7a068254380e65878b3e",
+    "status": "VERIFIED_SYNTHETIC_AND_HISTORICAL_METADATA_ONLY",
+    "previous_commit": "1b32725339c96a11f044395d3d7d0e53ef7a1df4",
+    "protocol_revision": "e3926e41bd0656f839011bf8f930b3b9bd0c67f5",
+    "commit": "ed3051425f0f402dbd602b84cc7c28c91219c5a6"
+  },
+  "original_control_exact_body_pins": {
+    "relaion": {
+      "diagnostic_config": {
+        "bytes": 1025,
+        "sha256": "5c45c2819602e842f6ea84460b9462123e24f3c6a22f4167dba0abaf2e95bae6"
+      },
+      "diagnostic": {
+        "bytes": 5825513,
+        "sha256": "af193458abe29522b126951a35df56d589a8b1c1f7aa536e895f638a2dd607e5"
+      }
+    },
+    "cohere": {
+      "diagnostic_config": {
+        "bytes": 1022,
+        "sha256": "0084493691b06ce167bd5ec19202830f0490b3c5bc588a59df3677a58ca093cc"
+      },
+      "diagnostic": {
+        "bytes": 6044638,
+        "sha256": "fc12f5e90917495f9c17e6b71172ec0b288e079083151bdc2fe51c2a55155746"
+      }
+    }
+  },
+  "previous_evidence_preserved": [
+    "/tmp/borsuk-global-leaf-sealed-coverage-reducer-contract-1b327253.json",
+    "/tmp/borsuk-global-leaf-sealed-coverage-reducer-selfcheck-receipt-1b327253.json",
+    "/tmp/borsuk-global-leaf-sealed-coverage-reducer-selfcheck-1b327253.log"
+  ],
+  "verification": {
+    "narrow": {
+      "receipt": {
+        "path": "/tmp/borsuk-global-leaf-sealed-coverage-reducer-correction-narrow-receipt.json",
+        "bytes": 894,
+        "sha256": "da77532d4c20b9c8a25ef27691dc51c763d33ea6fb4366e8988461db944aa895"
+      },
+      "log": {
+        "path": "/tmp/borsuk-global-leaf-sealed-coverage-reducer-correction-narrow.log",
+        "bytes": 1244,
+        "sha256": "7a2c345017dfa43795485049f65c9991314700ceec8763a03978a01332f72a41"
+      },
+      "exit_code": 0,
+      "wall_seconds": 2.072064022999257,
+      "resources": {
+        "memory.max": "268435456",
+        "memory.peak": "105074688",
+        "memory.swap.max": "0",
+        "memory.swap.peak": "0",
+        "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+        "cpu.max": "100000 100000"
+      },
+      "cpu_affinity": [
+        0
+      ]
+    },
+    "selfcheck": {
+      "receipt": {
+        "path": "/tmp/borsuk-global-leaf-sealed-coverage-reducer-correction-selfcheck-receipt.json",
+        "bytes": 985,
+        "sha256": "4a8f1ab23b470056bb76070d46741a1a847e19b0ba1a8f32a91ea53813fc5cc2"
+      },
+      "log": {
+        "path": "/tmp/borsuk-global-leaf-sealed-coverage-reducer-correction-selfcheck.log",
+        "bytes": 3546,
+        "sha256": "f87721472afceeba65edf7fb6e82b94e181c638cbd9f0b3d4edf6c5a57866de2"
+      },
+      "exit_code": 0,
+      "wall_seconds": 78.20373255299637,
+      "resources": {
+        "memory.max": "268435456",
+        "memory.peak": "70504448",
+        "memory.swap.max": "0",
+        "memory.swap.peak": "0",
+        "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+        "cpu.max": "100000 100000"
+      },
+      "cpu_affinity": [
+        0
+      ]
+    },
+    "synthetic_checks": 117,
+    "git_diff_check_exit_code": 0,
+    "limits": "No real GT, native execution, corpus, network or cloud work; original closed diagnostic metadata read only."
+  },
+  "producer_alignment": {
+    "producer": "borsuk/global-leaf-exact-layout-staging",
+    "authority": "Root independently verifies producer paired-seal.json, execution-receipt.json and per-stage receipts, then authors reducer closed_receipt; producer matched:true alone is insufficient.",
+    "paired_seal_schema": "borsuk-global-leaf-paired-nomination-seal-v1",
+    "execution_receipt_schema": "borsuk-global-leaf-execution-receipt-v1",
+    "dataset_field_mapping": {
+      "nomination": "nominations",
+      "config": "nomination_config",
+      "root": "candidate_root",
+      "directories": "directories",
+      "requests": "requests"
+    },
+    "resource_mapping": "Use qualified nomination stage kernel cgroup memory.max/memory.peak, memory.swap.max/peak, CPU affinity/quota and zero OOM evidence for each reducer dataset.resources. Root also verifies stage exits, drained processes, source qualification and cleanup.",
+    "historical_control": "Original a0001 terminal + both terminal-bound raw diagnose.json and diagnostic.jsonl bodies, retained separately from new producer roles.",
+    "peer_ask": "immediate-1791024425887116095-1312788",
+    "status": "Root-owned bridge per parent immediate-1791024453696950532; no producer seal-only qualification shortcut."
+  }
+}
