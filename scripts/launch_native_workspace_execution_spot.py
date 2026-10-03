@@ -10,6 +10,7 @@ controller_code_sha256={every CODE path:SHA256}, native_source_manifest=
 --root-reuse-implementation qualifies a root-frozen authenticated-root candidate.
 --bounded-publication-implementation qualifies the exact bounded publisher candidate.
 --fixed48-implementation qualifies the source-only fixed48 routing candidate.
+--hierarchical-cells-implementation qualifies a root-frozen research prototype.
 CLI aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT.
 """
 import contextlib
@@ -52,6 +53,26 @@ STARTUP_WAVE8 = False
 ROOT_REUSE = False
 BOUNDED_PUBLICATION = False
 FIXED48 = False
+HIERARCHICAL_CELLS = False
+HIERARCHICAL_CELLS_DELTA = ('crates/borsuk/src/bin/hierarchical_semantic_cells.rs',
+                          'crates/borsuk/src/hierarchical_semantic_cells.rs',
+                          'crates/borsuk/src/lib.rs')
+HIERARCHICAL_CELLS_STAGE_SCHEMA = 'borsuk-hierarchical-cells-implementation-stage-v1'
+HIERARCHICAL_CELLS_REQUIRED_TESTS = {
+    'hierarchical-cell-tests': tuple('hierarchical_semantic_cells::tests::' + name for name in (
+        'semantic_cells_do_not_close_over_old_pages_and_keep_unchanged_ranking',
+        'identical_geometry_is_bounded_and_reproducible_without_truth',
+        'source_id_binding_budgets_and_corruption_fail_closed_with_charges',
+        'loss_receipt_separates_boundary_recovery_nomination_and_final_ranking',
+        'cell_local_block_nomination_omits_other_blocks_even_for_tied_codes')),
+    'hierarchical-cell-bin-tests': ('tests::configurations_reject_unknown_fields_and_truth_in_requests',)}
+HIERARCHICAL_CELLS_STAGES = tuple((name, command.split()) for name, command in (
+    ('hierarchical-cell-tests', 'cargo test --locked -p borsuk --lib hierarchical_semantic_cells::'),
+    ('hierarchical-cell-bin-tests', 'cargo test --locked -p borsuk --bin hierarchical_semantic_cells'),
+    ('generation-integration', 'cargo test --locked -p borsuk --test two_bit_generation'),
+    ('release', 'cargo build --release --locked -p borsuk --bin hierarchical_semantic_cells --example two_bit_http --bin build_two_bit_generation'),
+    ('clippy', 'cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious'),
+    ('test-build', 'env -u BORSUK_TEST_BUILD_COMMAND bash scripts/check_rust_test_build.sh')))
 # Historical source fixture only; production authority is the root-frozen manifest.
 FIXED48_CHECK_COMMIT = '5efb136e95956b0cea0aa38214299a42f4264684'
 FIXED48_CHECK_CONTROL = 'f86ee6a80ace374d6674c9b65ea9141fc4a7de36'
@@ -145,13 +166,13 @@ def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 
 
-def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False):
+def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False):
     """Select the protocol explicitly in every controller/worker process."""
-    global SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, NATIVE_DELTA, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
+    global SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, NATIVE_DELTA, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
     global SCHEMA, CONFIG_SCHEMA, RECEIPT_SCHEMA, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, TERMINAL_IDENTITIES
-    assert type(semantic_1m) is type(test_build) is type(implementation) is type(startup_wave8) is type(root_reuse) is type(bounded_publication) is type(fixed48) is bool
-    scoped = startup_wave8 or root_reuse or bounded_publication or fixed48
-    assert sum((startup_wave8, root_reuse, bounded_publication, fixed48)) <= 1 and not (scoped and test_build), 'mutually exclusive execution modes'
+    assert type(semantic_1m) is type(test_build) is type(implementation) is type(startup_wave8) is type(root_reuse) is type(bounded_publication) is type(fixed48) is type(hierarchical_cells) is bool
+    scoped = startup_wave8 or root_reuse or bounded_publication or fixed48 or hierarchical_cells
+    assert sum((startup_wave8, root_reuse, bounded_publication, fixed48, hierarchical_cells)) <= 1 and not (scoped and test_build), 'mutually exclusive execution modes'
     if scoped:
         semantic_1m = implementation = True
     assert not (test_build and implementation), 'mutually exclusive execution modes'
@@ -163,8 +184,9 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
     ROOT_REUSE = root_reuse
     BOUNDED_PUBLICATION = bounded_publication
     FIXED48 = fixed48
-    NATIVE_DELTA = FIXED48_DELTA if fixed48 else BOUNDED_PUBLICATION_DELTA if bounded_publication else ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
-    RELEASE_ARTIFACTS = ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
+    HIERARCHICAL_CELLS = hierarchical_cells
+    NATIVE_DELTA = HIERARCHICAL_CELLS_DELTA if hierarchical_cells else FIXED48_DELTA if fixed48 else BOUNDED_PUBLICATION_DELTA if bounded_publication else ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
+    RELEASE_ARTIFACTS = ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation') if hierarchical_cells else ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
     TERMINAL_IDENTITIES = (*FULL_TERMINAL_IDENTITIES, 'controller_source_commit', 'candidate_delta_paths') if scoped else FULL_TERMINAL_IDENTITIES
     ARTIFACTS = (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS) if implementation else FULL_ARTIFACTS
     ROOT = (semantic.ROOT.parent/'semantic-1m' if semantic_1m else semantic.ROOT/'metadata-waves') / ('implementation-gates/remote-implementation' if implementation else 'implementation-gates/remote-test-build' if test_build else 'implementation-gates/remote-full')
@@ -232,21 +254,32 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
         RECEIPT_SCHEMA = 'borsuk-fixed48-implementation-gates-receipt-v1'
         CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_fixed48_implementation.sh')
         FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_fixed48_implementation.sh'])
+    if hierarchical_cells:
+        ROOT = semantic.ROOT.parent/'semantic-1m/hierarchical-cells/implementation-gates'
+        CONFIG = ROOT/'config.json'
+        TOKEN_PREFIX = 'hierarchical-cells-implementation-'
+        PREFIX = 'research/semantic-router/20261003/' + TOKEN_PREFIX
+        TAG = 'borsuk-hierarchical-cells-implementation'
+        SCHEMA = 'borsuk-hierarchical-cells-implementation-gates-spot-v1'
+        CONFIG_SCHEMA = 'borsuk-hierarchical-cells-implementation-gates-v1'
+        RECEIPT_SCHEMA = 'borsuk-hierarchical-cells-implementation-gates-receipt-v1'
+        CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_hierarchical_cells_implementation.sh')
+        FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_hierarchical_cells_implementation.sh'])
 
 
 @contextlib.contextmanager
-def execution_mode(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False):
+def execution_mode(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False):
     """Restore the caller's protocol after a worker or synthetic check."""
-    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48
-    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48)
+    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells)
     try:
         yield
     finally:
-        configure(previous[0], test_build=previous[1], implementation=previous[2], startup_wave8=previous[3], root_reuse=previous[4], bounded_publication=previous[5], fixed48=previous[6])
+        configure(previous[0], test_build=previous[1], implementation=previous[2], startup_wave8=previous[3], root_reuse=previous[4], bounded_publication=previous[5], fixed48=previous[6], hierarchical_cells=previous[7])
 
 
 def mode_flag():
-    return ' --fixed48-implementation' if FIXED48 else ' --bounded-publication-implementation' if BOUNDED_PUBLICATION else ' --root-reuse-implementation' if ROOT_REUSE else ' --startup-wave8-implementation' if STARTUP_WAVE8 else ' --semantic-1m-implementation' if IMPLEMENTATION else ' --semantic-1m-test-build' if TEST_BUILD else ' --semantic-1m' if SEMANTIC_1M else ''
+    return ' --hierarchical-cells-implementation' if HIERARCHICAL_CELLS else ' --fixed48-implementation' if FIXED48 else ' --bounded-publication-implementation' if BOUNDED_PUBLICATION else ' --root-reuse-implementation' if ROOT_REUSE else ' --startup-wave8-implementation' if STARTUP_WAVE8 else ' --semantic-1m-implementation' if IMPLEMENTATION else ' --semantic-1m-test-build' if TEST_BUILD else ' --semantic-1m' if SEMANTIC_1M else ''
 
 
 def qualify(base=Path('.')):
@@ -265,9 +298,9 @@ def qualify(base=Path('.')):
     assert type(pointer['bytes']) is int and pointer['bytes'] > 0
     assert worker.artifact(base/path) == {key:pointer[key] for key in ('bytes','sha256')}, 'manifest authority'
     manifest = json.loads((base/path).read_bytes())
-    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
+    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
         assert re.fullmatch('[0-9a-f]{40}', config['controller_source_commit']), 'frozen controller commit'
-        assert manifest['schema'] == ('borsuk-fixed48-native-source-manifest-v1' if FIXED48 else 'borsuk-bounded-publication-native-source-manifest-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
+        assert manifest['schema'] == ('borsuk-hierarchical-cells-native-source-manifest-v1' if HIERARCHICAL_CELLS else 'borsuk-fixed48-native-source-manifest-v1' if FIXED48 else 'borsuk-bounded-publication-native-source-manifest-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
         assert manifest['candidate_qualification_pending'] is True, 'source authority is not completed assurance'
         assert type(manifest['candidate_delta_paths']) is list and manifest['candidate_delta_paths'] == list(NATIVE_DELTA), 'exact candidate native delta'
         if STARTUP_WAVE8:
@@ -275,15 +308,15 @@ def qualify(base=Path('.')):
             assert manifest['source_identity_sha256'] == STARTUP_WAVE8_IDENTITY, 'fixed startup candidate identity'
         assert re.fullmatch('[0-9a-f]{40}', manifest['control_native_source_commit'])
     inventory = worker.source_hashes(base)
-    assert type(manifest['source_file_count']) is int and manifest['source_file_count'] == len(inventory) == 399
+    assert type(manifest['source_file_count']) is int and manifest['source_file_count'] == len(inventory) > 0
     assert manifest['source_sha256'] == inventory, 'full native source drift'
     identity = worker.source_identity(inventory)
     assert identity == manifest['source_identity_sha256']
     assert SEMANTIC_1M or identity == SOURCE_IDENTITY, 'historical native source identity'
     assert re.fullmatch('[0-9a-f]{40}', manifest['native_source_commit'])
-    proof = dict(schema='borsuk-fixed48-implementation-gates-qualification-v1' if FIXED48 else 'borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
+    proof = dict(schema='borsuk-hierarchical-cells-implementation-gates-qualification-v1' if HIERARCHICAL_CELLS else 'borsuk-fixed48-implementation-gates-qualification-v1' if FIXED48 else 'borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
         config_path=str(CONFIG), config_sha256=worker.sha(body), campaign_schema=SCHEMA,
-        source_sha256=inventory, source_identity_sha256=identity, source_file_count=399,
+        source_sha256=inventory, source_identity_sha256=identity, source_file_count=len(inventory),
         native_source_commit=manifest['native_source_commit'], native_source_manifest=pointer,
         native_source_manifest_sha256=pointer['sha256'], code_sha256=code,
         code_identity_sha256=worker.sha(encoded(code)), artifact_roster_sha256=worker.sha(encoded(ARTIFACTS)),
@@ -294,7 +327,7 @@ def qualify(base=Path('.')):
         proof.update(execution_kind=FIXED['execution_kind'])
         if TEST_BUILD:
             proof.update(actual_workspace_test_build=False)
-    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
+    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
         proof.update(controller_source_commit=config['controller_source_commit'],
                      candidate_delta_paths=list(NATIVE_DELTA))
     return proof
@@ -302,7 +335,7 @@ def qualify(base=Path('.')):
 
 def preflight(base=Path('.')):
     assert not subprocess.check_output(['git','status','--porcelain'], cwd=base, text=True).strip(), 'dirty source'
-    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
+    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
         proof = qualify(base)
         parents = subprocess.check_output(['git','rev-list','--parents','-n','1','HEAD'], cwd=base, text=True).split()
         assert len(parents) == 2, 'one source-bundle parent required'
@@ -334,14 +367,19 @@ def stage(repo, out):
     return proof
 
 
-def validate_bounded_publication_stages(log, *, fixed48=False):
+def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cells=False):
     from datetime import datetime
-    stages = FIXED48_STAGES if fixed48 else BOUNDED_PUBLICATION_STAGES
-    schema = FIXED48_STAGE_SCHEMA if fixed48 else BOUNDED_PUBLICATION_STAGE_SCHEMA
+    assert not (fixed48 and hierarchical_cells), 'mutually exclusive stage protocols'
+    stages = HIERARCHICAL_CELLS_STAGES if hierarchical_cells else FIXED48_STAGES if fixed48 else BOUNDED_PUBLICATION_STAGES
+    schema = HIERARCHICAL_CELLS_STAGE_SCHEMA if hierarchical_cells else FIXED48_STAGE_SCHEMA if fixed48 else BOUNDED_PUBLICATION_STAGE_SCHEMA
+    required = HIERARCHICAL_CELLS_REQUIRED_TESTS if hierarchical_cells else FIXED48_REQUIRED_TESTS
+    named_protocol = fixed48 or hierarchical_cells
+    test_stage_count = len(stages) - 3
     named_stages = {test: index for index, (name, _) in enumerate(stages)
-        for test in FIXED48_REQUIRED_TESTS.get(name, ())} if fixed48 else {BOUNDED_PUBLICATION_CAP_TEST: 1}
+        for test in required.get(name, ())} if named_protocol else {BOUNDED_PUBLICATION_CAP_TEST: 1}
     passes = dict.fromkeys(named_stages, 0)
-    test_counts = [0]*4
+    test_counts = [0]*test_stage_count
+    test_builds = 0
     records = []
     with Path(log).open() as source:
         for line in source:
@@ -350,12 +388,15 @@ def validate_bounded_publication_stages(log, *, fixed48=False):
                 test = match[1]
                 assert len(records) == 2*named_stages[test]+1, 'named test in wrong stage: '+test
                 passes[test] += 1
-            if fixed48:
+            if named_protocol:
                 summary = re.fullmatch(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; \d+ ignored; \d+ measured; \d+ filtered out;.*\n?', line)
                 if summary:
-                    assert len(records) in (1, 3, 5, 7), 'tests outside the four execution stages'
+                    assert len(records) in range(1, 2*test_stage_count, 2), 'tests outside execution stages'
                     assert int(summary[2]) == 0, 'failed tests'
                     test_counts[len(records)//2] += int(summary[1])
+            if hierarchical_cells and re.fullmatch(r'rust-test-build status=0 elapsed_seconds=\d+ jobs=1\n?', line):
+                assert len(records) == 2*len(stages)-1, 'test-build proof in wrong stage'
+                test_builds += 1
             if not line.startswith('{'):
                 continue
             try:
@@ -365,21 +406,22 @@ def validate_bounded_publication_stages(log, *, fixed48=False):
             if isinstance(record, dict) and record.get('schema') == schema:
                 records.append(record)
                 assert len(records) <= 2*len(stages), 'extra gate stage records'
-    assert len(records) == 2*len(stages), 'seven completed stages required'
+    assert len(records) == 2*len(stages), 'all completed stages required'
     assert all(count == 1 for count in passes.values()), 'named tests must pass exactly once'
+    assert not hierarchical_cells or test_builds == 1, 'actual unshimmed test-build completion'
     previous_finish = None
     for index, (name, command) in enumerate(stages):
         start, end = records[2*index:2*index+2]
         assert start['stage'] == end['stage'] == name and start['command'] == end['command'] == command
-        test_field = 'required_test_passes' if fixed48 else 'publication_cap_test_passed'
+        test_field = 'required_test_passes' if named_protocol else 'publication_cap_test_passed'
         assert start['finished_at'] is start['exit_status'] is start['gate_status'] is start['tests_run'] is start[test_field] is None
         assert type(end['exit_status']) is type(end['gate_status']) is int and end['exit_status'] == end['gate_status'] == 0
         assert start['started_at'] == end['started_at']
         assert datetime.fromisoformat(end['finished_at']) >= datetime.fromisoformat(start['started_at'])
-        assert (type(end['tests_run']) is int and end['tests_run'] > 0) if index < 4 else end['tests_run'] is None
-        if fixed48:
-            assert index >= 4 or end['tests_run'] == test_counts[index], 'actual test count'
-            expected = {test: passes[test] for test in FIXED48_REQUIRED_TESTS.get(name, ())}
+        assert (type(end['tests_run']) is int and end['tests_run'] > 0) if index < test_stage_count else end['tests_run'] is None
+        if named_protocol:
+            assert index >= test_stage_count or end['tests_run'] == test_counts[index], 'actual test count'
+            expected = {test: passes[test] for test in required.get(name, ())}
             assert end[test_field] == expected and all(type(count) is int for count in end[test_field].values()), 'actual named test passes'
             started, finished = datetime.fromisoformat(start['started_at']), datetime.fromisoformat(end['finished_at'])
             assert started.utcoffset().total_seconds() == finished.utcoffset().total_seconds() == 0, 'UTC stage timestamps'
@@ -408,12 +450,13 @@ def validate_receipt(out, proof):
         assert receipt['command'][1:] == list(worker.COMMAND[1:]), 'exact full command'
     assert isinstance(receipt['command'][0], str) and receipt['command'][0]
     assert receipt['environment'] == FIXED['environment']
-    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
+    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
         assert all(receipt[key] == proof[key] for key in ('controller_source_commit','candidate_delta_paths')), 'receipt source bundle authority'
     assert receipt['source_sha256'] == proof['source_sha256']
     assert receipt['source_identity_sha256'] == worker.source_identity(receipt['source_sha256']) == proof['source_identity_sha256']
     assert SEMANTIC_1M or proof['source_identity_sha256'] == SOURCE_IDENTITY
-    assert type(receipt['source_file_count']) is int and receipt['source_file_count'] == 399
+    assert type(receipt['source_file_count']) is type(proof['source_file_count']) is int
+    assert receipt['source_file_count'] == proof['source_file_count'] == len(proof['source_sha256']) > 0
     for key in ('config_sha256','code_identity_sha256','campaign_schema','artifact_roster_sha256'):
         assert receipt[key] == proof[key], 'receipt ' + key
     assert receipt['qualification_sha256'] == worker.artifact(out/'source-qualification.json')['sha256']
@@ -432,8 +475,8 @@ def validate_receipt(out, proof):
     assert worker.artifact(out/'native-source-manifest.json')['sha256'] == proof['native_source_manifest_sha256']
     for name in ('source-before.json','source-after.json'):
         assert json.loads((out/name).read_bytes()) == proof['source_sha256']
-    if BOUNDED_PUBLICATION or FIXED48:
-        assert receipt['stages'] == validate_bounded_publication_stages(out/'test.log', fixed48=FIXED48), 'actual stage receipt'
+    if BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
+        assert receipt['stages'] == validate_bounded_publication_stages(out/'test.log', fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS), 'actual stage receipt'
     worker.validate_cgroup(json.loads((out/'workspace-cgroup.json').read_bytes()))
     return receipt
 
@@ -443,7 +486,7 @@ def user_data(commit, archive_sha, archive_key, prefix, qualification):
     assert re.fullmatch(re.escape(PREFIX)+r'a[0-9]{4}', prefix)
     assert qualification['campaign_schema'] == SCHEMA and qualification['config_path'] == str(CONFIG)
     # Keep only small terminal identities in the existing bootstrap. The full
-    # 399-file map is regenerated from the authenticated archive on the worker.
+    # full native map is regenerated from the authenticated archive on the worker.
     adapter = {key:qualification[key] for key in TERMINAL_IDENTITIES}
     adapter.update(config_path=str(CONFIG), native_binary={'key':'unused'}, native_publisher={'key':'unused'})
     with patch.multiple(semantic, WALL=WALL, SCHEMA=SCHEMA, ARTIFACTS=ARTIFACTS,
@@ -510,7 +553,7 @@ def replay(out):
     base = Path(__file__).resolve().parents[1]
     assert all(worker.artifact(base/name)['sha256'] == digest for name,digest in proof['code_sha256'].items())
     assert proof['artifact_roster_sha256'] == worker.sha(encoded(ARTIFACTS))
-    assert len(proof['source_sha256']) == proof['source_file_count'] == 399
+    assert type(proof['source_file_count']) is int and len(proof['source_sha256']) == proof['source_file_count'] > 0
     assert worker.source_identity(proof['source_sha256']) == proof['source_identity_sha256']
     assert SEMANTIC_1M or proof['source_identity_sha256'] == SOURCE_IDENTITY
     assert set(terminal['artifacts']) <= set(ARTIFACTS), 'unexpected artifact'
@@ -582,7 +625,7 @@ def _worker_self_check(proof, config_body, manifest_body):
     failures = ('success', 'exit17', 'timeout', 'source-drift', 'reclaim', 'oom', 'peak', 'orphan', 'log-fsync')
     if IMPLEMENTATION:
         failures += ('missing-binary', 'bad-binary', 'symlink-binary', 'copy-failure')
-    if BOUNDED_PUBLICATION or FIXED48:
+    if BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
         failures += ('missing-stage', 'zero-stage-record', 'stage-order', 'stage-bool', 'missing-cap-proof')
     for failure in failures:
         with tempfile.TemporaryDirectory() as tmp:
@@ -621,31 +664,33 @@ def _worker_self_check(proof, config_body, manifest_body):
                     assert 'BORSUK_TEST_BUILD_COMMAND' not in kw['env']
                 assert not Path(kw['env']['CARGO_TARGET_DIR']).is_relative_to(repo)
                 kw['stdout'].write(b'full mocked cargo log\n')
-                if BOUNDED_PUBLICATION or FIXED48:
-                    stages = list(FIXED48_STAGES if FIXED48 else BOUNDED_PUBLICATION_STAGES)
+                if BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
+                    stages = list(HIERARCHICAL_CELLS_STAGES if HIERARCHICAL_CELLS else FIXED48_STAGES if FIXED48 else BOUNDED_PUBLICATION_STAGES)
                     if failure == 'stage-order':
                         stages.reverse()
                     for index, (name, command) in enumerate(stages):
-                        if failure == 'missing-stage' and index == 6:
+                        if failure == 'missing-stage' and index == len(stages)-1:
                             continue
-                        record = dict(schema=FIXED48_STAGE_SCHEMA if FIXED48 else BOUNDED_PUBLICATION_STAGE_SCHEMA, stage=name,
+                        record = dict(schema=HIERARCHICAL_CELLS_STAGE_SCHEMA if HIERARCHICAL_CELLS else FIXED48_STAGE_SCHEMA if FIXED48 else BOUNDED_PUBLICATION_STAGE_SCHEMA, stage=name,
                             command=command, started_at='2026-10-02T00:00:00Z',
                             finished_at=None, exit_status=None, gate_status=None, tests_run=None)
-                        field = 'required_test_passes' if FIXED48 else 'publication_cap_test_passed'
+                        field = 'required_test_passes' if FIXED48 or HIERARCHICAL_CELLS else 'publication_cap_test_passed'
                         record[field] = None
                         kw['stdout'].write(encoded(record)+b'\n')
-                        named = FIXED48_REQUIRED_TESTS.get(name, ()) if FIXED48 else ()
-                        if FIXED48:
+                        named = (HIERARCHICAL_CELLS_REQUIRED_TESTS if HIERARCHICAL_CELLS else FIXED48_REQUIRED_TESTS).get(name, ()) if FIXED48 or HIERARCHICAL_CELLS else ()
+                        if FIXED48 or HIERARCHICAL_CELLS:
                             if failure != 'missing-cap-proof':
                                 for test in named:
                                     kw['stdout'].write(('test '+test+' ... ok\n').encode())
-                            if index < 4:
+                            if index < len(stages)-3:
                                 kw['stdout'].write(f'test result: ok. {max(1, len(named))} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s\n'.encode())
                         elif index == 1 and failure != 'missing-cap-proof':
                             kw['stdout'].write(('test '+BOUNDED_PUBLICATION_CAP_TEST+' ... ok\n').encode())
+                        if HIERARCHICAL_CELLS and name == 'test-build':
+                            kw['stdout'].write(b'rust-test-build status=0 elapsed_seconds=0 jobs=1\n')
                         record.update(finished_at=record['started_at'], exit_status=0, gate_status=0,
-                            tests_run=(0 if failure == 'zero-stage-record' else False if failure == 'stage-bool' else max(1, len(named))) if index < 4 else None)
-                        record[field] = {test: int(failure != 'missing-cap-proof') for test in named} if FIXED48 else (failure != 'missing-cap-proof') if index == 1 else None
+                            tests_run=(0 if failure == 'zero-stage-record' else False if failure == 'stage-bool' else max(1, len(named))) if index < len(stages)-3 else None)
+                        record[field] = {test: int(failure != 'missing-cap-proof') for test in named} if FIXED48 or HIERARCHICAL_CELLS else (failure != 'missing-cap-proof') if index == 1 else None
                         kw['stdout'].write(encoded(record)+b'\n')
                 Path(args[args.index('-o')+1]).write_text('GNU time mocked resources\n')
                 if IMPLEMENTATION:
@@ -672,10 +717,10 @@ def _worker_self_check(proof, config_body, manifest_body):
                     contextlib.ExitStack() as patches:
                 if failure == 'copy-failure':
                     patches.enter_context(patch.object(worker.shutil, 'copyfileobj', side_effect=OSError('binary copy failed')))
-                previous = authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.CONFIG, authority.CODE, authority.FIXED
+                previous = authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.HIERARCHICAL_CELLS, authority.CONFIG, authority.CODE, authority.FIXED
                 result = worker.main('cargo' if TEST_BUILD or IMPLEMENTATION else 'fake-cargo', repo, out,
-                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION, startup_wave8=STARTUP_WAVE8, root_reuse=ROOT_REUSE, bounded_publication=BOUNDED_PUBLICATION, fixed48=FIXED48)
-                assert previous == (authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.CONFIG, authority.CODE, authority.FIXED)
+                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION, startup_wave8=STARTUP_WAVE8, root_reuse=ROOT_REUSE, bounded_publication=BOUNDED_PUBLICATION, fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS)
+                assert previous == (authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.HIERARCHICAL_CELLS, authority.CONFIG, authority.CODE, authority.FIXED)
             assert len(calls) == 1, 'full test repeated'
             assert type(result['exit_status']) is int
             assert result['exit_status'] == {'exit17':17, 'timeout':124}.get(failure,0)
@@ -713,13 +758,13 @@ def _worker_self_check(proof, config_body, manifest_body):
                             (out/'workspace-receipt.json').write_bytes(encoded(altered))
                             rejected(lambda: validate_receipt(out, proof))
                             (out/'workspace-receipt.json').write_bytes(encoded(result))
-                    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
+                    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
                         for changed in (dict(controller_source_commit='0'*40), dict(candidate_delta_paths=[])):
                             (out/'workspace-receipt.json').write_bytes(encoded(dict(result, **changed)))
                             rejected(lambda:validate_receipt(out, proof))
                         (out/'workspace-receipt.json').write_bytes(encoded(result))
-                    if BOUNDED_PUBLICATION or FIXED48:
-                        assert len(result['stages']) == 7 and all(record['tests_run'] > 0 for record in result['stages'][:4])
+                    if BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
+                        assert len(result['stages']) == (6 if HIERARCHICAL_CELLS else 7) and all(record['tests_run'] > 0 for record in result['stages'][:-3])
                         for stages in ([], result['stages'][:-1], list(reversed(result['stages']))):
                             (out/'workspace-receipt.json').write_bytes(encoded(dict(result, stages=stages)))
                             rejected(lambda:validate_receipt(out, proof))
@@ -820,7 +865,7 @@ def _collection_self_check(proof, files, body):
         mutations = [dict(terminal,config_sha256='0'*64), dict(terminal,instance_id='i-other'),
                      dict(terminal,source_archive_sha256='2'*64), dict(terminal,exit_code=False),
                      dict(terminal,artifacts={n:v for n,v in terminal['artifacts'].items() if n != 'test.log'})]
-        if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
+        if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
             mutations.extend((dict(terminal,controller_source_commit='0'*40),dict(terminal,candidate_delta_paths=[])))
         if IMPLEMENTATION:
             downloaded = out/'downloaded'
@@ -1389,38 +1434,105 @@ def _fixed48_protocol_self_check():
     assert previous == (CONFIG, PREFIX, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, NATIVE_DELTA, mode_flag())
 
 
-def _fixed48_stages_self_check():
+def _hierarchical_cells_protocol_self_check():
+    previous = CONFIG, CODE, FIXED, ARTIFACTS, NATIVE_DELTA, mode_flag()
+    with execution_mode(hierarchical_cells=True):
+        assert str(ROOT).endswith('semantic-1m/hierarchical-cells/implementation-gates')
+        assert mode_flag() == ' --hierarchical-cells-implementation'
+        assert PREFIX == 'research/semantic-router/20261003/hierarchical-cells-implementation-'
+        assert CONFIG_SCHEMA == FIXED['schema'] == 'borsuk-hierarchical-cells-implementation-gates-v1'
+        assert SCHEMA == 'borsuk-hierarchical-cells-implementation-gates-spot-v1'
+        assert RECEIPT_SCHEMA == 'borsuk-hierarchical-cells-implementation-gates-receipt-v1'
+        assert FIXED['command'] == ['bash', 'scripts/check_hierarchical_cells_implementation.sh']
+        assert CODE == (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_hierarchical_cells_implementation.sh')
+        assert NATIVE_DELTA == HIERARCHICAL_CELLS_DELTA and list(NATIVE_DELTA) == sorted(NATIVE_DELTA)
+        assert RELEASE_ARTIFACTS == ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation')
+        assert ARTIFACTS == (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS) and len(ARTIFACTS) == 16
+        assert FIXED == dict(FULL_FIXED, schema=CONFIG_SCHEMA, execution_kind='implementation-gates',
+            command=FIXED['command'], environment=dict(worker.ENVIRONMENT, BORSUK_TEST_BUILD_JOBS='1', BORSUK_TEST_BUILD_COMMAND=None))
+        for mode in ('test_build', 'startup_wave8', 'root_reuse', 'bounded_publication', 'fixed48'):
+            rejected(lambda: configure(hierarchical_cells=True, **{mode: True}))
+        rejected(lambda: configure(hierarchical_cells=1))
+        with execution_mode(fixed48=True):
+            assert not HIERARCHICAL_CELLS
+        assert HIERARCHICAL_CELLS
+    assert previous == (CONFIG, CODE, FIXED, ARTIFACTS, NATIVE_DELTA, mode_flag())
+
+
+def _hierarchical_cells_script_self_check():
+    """Execute the real stage recorder as Python; never invoke Cargo or Bash."""
+    from shlex import split
+    script = (Path(__file__).resolve().parent/'check_hierarchical_cells_implementation.sh').read_text()
+    actual = tuple((args[1], args[2:]) for line in script.splitlines()
+        if line.startswith('run_stage ') for args in (split(line),))
+    assert actual == HIERARCHICAL_CELLS_STAGES, 'exact shell stage commands'
+    recorder = script.split("python3 -c '", 1)[1].split("' \"$@\"", 1)[0]
+    compile(recorder, '<stage-recorder>', 'exec')
+    with tempfile.TemporaryDirectory() as tmp:
+        log = Path(tmp)/'stage.log'
+        for index, (name, command) in enumerate(HIERARCHICAL_CELLS_STAGES):
+            names = HIERARCHICAL_CELLS_REQUIRED_TESTS.get(name, ())
+            lines = ['test '+test+' ... ok' for test in names]
+            if index < 3:
+                lines.append(f'test result: ok. {max(1, len(names))} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s')
+            good = '\n'.join(lines)+'\n'
+            cases = [(good, '0', '0', 0), (good, '17', '0', 17), (good, '0', '18', 18)]
+            if index < 3:
+                cases.append(('', '0', '0', 96))
+            for test in names:
+                passed = 'test '+test+' ... ok'
+                for replacement in ('', passed.replace('ok', 'ignored'), passed+'\n'+passed):
+                    cases.append((good.replace(passed, replacement), '0', '0', 96))
+            for body, status, log_status, expected in cases:
+                log.write_text(body)
+                argv = ['recorder', name, '2026-10-03T00:00:00Z', '2026-10-03T00:00:00Z', status, str(log), log_status, *command]
+                with patch.object(sys, 'argv', argv), contextlib.redirect_stdout(io.StringIO()) as output:
+                    try:
+                        exec(recorder, {})
+                    except SystemExit as result:
+                        assert result.code == expected
+                record = json.loads(output.getvalue())
+                assert record['gate_status'] == expected and record['command'] == command
+                assert record['schema'] == HIERARCHICAL_CELLS_STAGE_SCHEMA
+
+
+def _fixed48_stages_self_check(*, hierarchical_cells=False):
     import inspect
     assert 'fixed48' in inspect.signature(validate_bounded_publication_stages).parameters, 'fixed48 stage authentication missing'
+    stages = HIERARCHICAL_CELLS_STAGES if hierarchical_cells else FIXED48_STAGES
+    schema = HIERARCHICAL_CELLS_STAGE_SCHEMA if hierarchical_cells else FIXED48_STAGE_SCHEMA
+    required = HIERARCHICAL_CELLS_REQUIRED_TESTS if hierarchical_cells else FIXED48_REQUIRED_TESTS
     with tempfile.TemporaryDirectory() as tmp:
         log = Path(tmp)/'test.log'
         lines = []
-        for index, (name, command) in enumerate(FIXED48_STAGES):
-            record = dict(schema=FIXED48_STAGE_SCHEMA, stage=name, command=command,
+        for index, (name, command) in enumerate(stages):
+            record = dict(schema=schema, stage=name, command=command,
                 started_at='2026-10-02T00:00:00Z', finished_at=None,
                 exit_status=None, gate_status=None, tests_run=None, required_test_passes=None)
             lines.append(encoded(record).decode())
-            names = FIXED48_REQUIRED_TESTS.get(name, ())
+            names = required.get(name, ())
             lines.extend('test '+test+' ... ok' for test in names)
-            tests = max(1, len(names)) if index < 4 else None
-            if index < 4:
+            tests = max(1, len(names)) if index < len(stages)-3 else None
+            if index < len(stages)-3:
                 lines.append(f'test result: ok. {tests} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s')
+            if hierarchical_cells and name == 'test-build':
+                lines.append('rust-test-build status=0 elapsed_seconds=0 jobs=1')
             record.update(finished_at=record['started_at'], exit_status=0, gate_status=0,
                 tests_run=tests, required_test_passes={test: 1 for test in names})
             lines.append(encoded(record).decode())
         log.write_text('\n'.join(lines)+'\n')
-        records = validate_bounded_publication_stages(log, fixed48=True)
-        assert len(records) == 7 and [r['tests_run'] for r in records[:4]] == [2, 2, 2, 1]
-        for names in FIXED48_REQUIRED_TESTS.values():
+        records = validate_bounded_publication_stages(log, fixed48=not hierarchical_cells, hierarchical_cells=hierarchical_cells)
+        assert len(records) == len(stages) and [r['tests_run'] for r in records[:-3]] == ([5, 1, 1] if hierarchical_cells else [2, 2, 2, 1])
+        for names in required.values():
             for name in names:
                 passed = 'test '+name+' ... ok'
                 for replacement in ('', passed.replace('ok', 'ignored'), passed+'\n'+passed):
                     log.write_text('\n'.join(lines).replace(passed, replacement)+'\n')
-                    rejected(lambda: validate_bounded_publication_stages(log, fixed48=True))
+                    rejected(lambda: validate_bounded_publication_stages(log, fixed48=not hierarchical_cells, hierarchical_cells=hierarchical_cells))
                 misplaced = [line for line in lines if line != passed]
                 misplaced.insert(0, passed)
                 log.write_text('\n'.join(misplaced)+'\n')
-                rejected(lambda: validate_bounded_publication_stages(log, fixed48=True))
+                rejected(lambda: validate_bounded_publication_stages(log, fixed48=not hierarchical_cells, hierarchical_cells=hierarchical_cells))
         for index, line in enumerate(lines):
             if not line.startswith('{'):
                 continue
@@ -1439,18 +1551,22 @@ def _fixed48_stages_self_check():
                 changed = list(lines)
                 changed[index] = encoded(dict(record, **{key: value})).decode()
                 log.write_text('\n'.join(changed)+'\n')
-                rejected(lambda: validate_bounded_publication_stages(log, fixed48=True))
+                rejected(lambda: validate_bounded_publication_stages(log, fixed48=not hierarchical_cells, hierarchical_cells=hierarchical_cells))
+        if hierarchical_cells:
+            for replacement in ('', 'rust-test-build status=0 elapsed_seconds=0 jobs=2', 'rust-test-build status=0 elapsed_seconds=0 jobs=1\nrust-test-build status=0 elapsed_seconds=0 jobs=1'):
+                log.write_text('\n'.join(lines).replace('rust-test-build status=0 elapsed_seconds=0 jobs=1', replacement)+'\n')
+                rejected(lambda: validate_bounded_publication_stages(log, hierarchical_cells=True))
         for changed in (lines[:-1], lines+lines[-2:], list(reversed(lines))):
             log.write_text('\n'.join(changed)+'\n')
-            rejected(lambda: validate_bounded_publication_stages(log, fixed48=True))
+            rejected(lambda: validate_bounded_publication_stages(log, fixed48=not hierarchical_cells, hierarchical_cells=hierarchical_cells))
 
 
-def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication=False, fixed48=False):
+def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False):
     controller, config_commit, bundle = '4'*40, '5'*40, '6'*40
     blob = b'mocked exact candidate blob'
-    with execution_mode(startup_wave8=not (root_reuse or bounded_publication or fixed48), root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48):
+    with execution_mode(startup_wave8=not (root_reuse or bounded_publication or fixed48 or hierarchical_cells), root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells):
         proof = dict(controller_source_commit=controller, candidate_delta_paths=list(NATIVE_DELTA),
-                     native_source_commit=FIXED48_CHECK_COMMIT if fixed48 else BOUNDED_PUBLICATION_CHECK_COMMIT if bounded_publication else '7'*40 if root_reuse else STARTUP_WAVE8_COMMIT,
+                     native_source_commit='7'*40 if hierarchical_cells else FIXED48_CHECK_COMMIT if fixed48 else BOUNDED_PUBLICATION_CHECK_COMMIT if bounded_publication else '7'*40 if root_reuse else STARTUP_WAVE8_COMMIT,
                      source_sha256={name:worker.sha(blob) for name in NATIVE_DELTA})
         answers = {
             ('status','--porcelain'): '',
@@ -1489,8 +1605,8 @@ def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication
                     rejected(lambda:preflight())
 
 
-def self_check(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False):
-    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48):
+def self_check(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False):
+    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells):
         _self_check()
 
 
@@ -1500,7 +1616,16 @@ def _self_check():
     base = Path(__file__).resolve().parents[1]
     manifest = json.loads((base/semantic.ROOT/'metadata-waves/native-source-manifest.json').read_bytes())
     inventory = manifest['source_sha256']
-    if FIXED48:
+    if HIERARCHICAL_CELLS:
+        # Synthetic authority only: the root chooses the production candidate.
+        inventory = worker.source_hashes(base)
+        for name in NATIVE_DELTA:
+            inventory.setdefault(name, worker.sha(b'// synthetic new native source\n'))
+        manifest = dict(schema='borsuk-hierarchical-cells-native-source-manifest-v1', source_sha256=inventory,
+            source_identity_sha256=worker.source_identity(inventory), source_file_count=len(inventory),
+            native_source_commit='7'*40, candidate_delta_paths=list(NATIVE_DELTA),
+            candidate_qualification_pending=True, control_native_source_commit='8'*40)
+    elif FIXED48:
         inventory = worker.source_hashes(base)
         for name in NATIVE_DELTA:
             inventory[name] = worker.sha(subprocess.check_output(['git','show',FIXED48_CHECK_COMMIT+':'+name], cwd=base))
@@ -1540,7 +1665,7 @@ def _self_check():
     config = dict(FIXED, controller_authority_pending=False,
         controller_code_sha256={n:worker.artifact(base/n)['sha256'] for n in CODE},
         native_source_manifest=dict(path=str(manifest_path),bytes=len(manifest_body),sha256=worker.sha(manifest_body)))
-    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
+    if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
         config['controller_source_commit'] = '4'*40
     with tempfile.TemporaryDirectory() as tmp:
         repo, out = Path(tmp)/'repo', Path(tmp)/'out'
@@ -1567,13 +1692,13 @@ def _self_check():
                               ('native_source_manifest',dict(config['native_source_manifest'],sha256='0'*64))):
                 (repo/CONFIG).write_bytes(encoded(dict(config,**{key:value})))
                 rejected(lambda:qualify(repo))
-            if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
+            if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
                 for value in ('not-a-commit', '4'*39):
                     (repo/CONFIG).write_bytes(encoded(dict(config,controller_source_commit=value)))
                     rejected(lambda:qualify(repo))
-            bad_manifest = [('source_identity_sha256','0'*64), ('source_file_count',398),
+            bad_manifest = [('source_identity_sha256','0'*64), ('source_file_count',len(inventory)-1), ('source_file_count',True),
                             ('native_source_commit','not-a-commit')]
-            if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48:
+            if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
                 bad_manifest.extend((('candidate_delta_paths',[]),
                     ('candidate_delta_paths',dict.fromkeys(NATIVE_DELTA)),
                     ('candidate_delta_paths',list(reversed(NATIVE_DELTA))),
@@ -1608,7 +1733,7 @@ def _self_check():
             rejected(lambda:preflight(repo))
         body = user_data('0'*40,'1'*64,'sources/mock',PREFIX+'a0001',proof)
         assert len(CODE) == len(set(CODE)) == (24 if IMPLEMENTATION else 23 if TEST_BUILD else 22)
-        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == (16 if FIXED48 else 14 if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION else 18 if IMPLEMENTATION else 13)
+        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == (16 if FIXED48 or HIERARCHICAL_CELLS else 14 if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION else 18 if IMPLEMENTATION else 13)
         assert '--on-active=9000s' in body and 'RuntimeMaxSec=7260' in body
         assert all(k in body for k in ('MemoryMax=8G','MemorySwapMax=0','CPUQuota=200%','TasksMax=512'))
         assert 'build-essential' in body and 'python3-dev' in body
@@ -1633,24 +1758,25 @@ def _self_check():
             full_check()
         _collection_self_check(proof,files,body)
     _lifecycle_self_check()
-    if semantic_1m:
+    if semantic_1m and not HIERARCHICAL_CELLS:
         _remote_self_check(manifest)
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024
-    print(f'PASS workspace {"implementation-gates" if IMPLEMENTATION else "test-build" if TEST_BUILD else "execution"} ({"fixed48" if FIXED48 else "bounded-publication" if BOUNDED_PUBLICATION else "root-reuse" if ROOT_REUSE else "startup-wave8" if STARTUP_WAVE8 else "semantic-1m" if semantic_1m else "metadata-waves"}): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli={semantic_1m}; code={len(CODE)} artifacts={len(ARTIFACTS)} release_copy={IMPLEMENTATION}; userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
+    print(f'PASS workspace {"implementation-gates" if IMPLEMENTATION else "test-build" if TEST_BUILD else "execution"} ({"hierarchical-cells" if HIERARCHICAL_CELLS else "fixed48" if FIXED48 else "bounded-publication" if BOUNDED_PUBLICATION else "root-reuse" if ROOT_REUSE else "startup-wave8" if STARTUP_WAVE8 else "semantic-1m" if semantic_1m else "metadata-waves"}): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli={semantic_1m and not HIERARCHICAL_CELLS}; code={len(CODE)} artifacts={len(ARTIFACTS)} release_copy={IMPLEMENTATION}; userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
 
 
 if __name__ == '__main__':
     args = sys.argv[1:]
+    hierarchical_cells = args[:1] == ['--hierarchical-cells-implementation']
     fixed48 = args[:1] == ['--fixed48-implementation']
     bounded_publication = args[:1] == ['--bounded-publication-implementation']
     root_reuse = args[:1] == ['--root-reuse-implementation']
     startup_wave8 = args[:1] == ['--startup-wave8-implementation']
-    implementation = fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
+    implementation = hierarchical_cells or fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
     test_build = args[:1] == ['--semantic-1m-test-build']
     semantic_1m = implementation or test_build or args[:1] == ['--semantic-1m']
     if semantic_1m:
         args = args[1:]
-    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48)
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells)
     # ponytail: shared launch archives the repository in memory; stream it in
     # the shared launcher if root's launch resource gate proves insufficient.
     if args[:1] and args[0].startswith('--'):
@@ -1667,7 +1793,11 @@ if __name__ == '__main__':
             _fixed48_protocol_self_check()
             _fixed48_stages_self_check()
             _startup_wave8_preflight_self_check(fixed48=True)
-        self_check(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48)
+            _hierarchical_cells_protocol_self_check()
+            _fixed48_stages_self_check(hierarchical_cells=True)
+            _hierarchical_cells_script_self_check()
+            _startup_wave8_preflight_self_check(hierarchical_cells=True)
+        self_check(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells)
     elif args[:1] == ['--stage']:
         assert len(args) == 3
         stage(*args[1:])
@@ -1679,7 +1809,7 @@ if __name__ == '__main__':
         assert len(args) == 2
         print(json.dumps(replay(args[1]),sort_keys=True))
     else:
-        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation | --fixed48-implementation] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
+        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation | --fixed48-implementation | --hierarchical-cells-implementation] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
         with open('/tmp/borsuk-native-workspace-execution-launch.lock','a+') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             main(args[0])

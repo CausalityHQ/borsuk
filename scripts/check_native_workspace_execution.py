@@ -74,9 +74,9 @@ def _write(path, value):
         os.fsync(output.fileno())
 
 
-def main(cargo, repo, out, *, semantic_1m=False, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False):
+def main(cargo, repo, out, *, semantic_1m=False, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False):
     from scripts import launch_native_workspace_execution_spot as controller
-    with controller.execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48):
+    with controller.execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells):
         return _execute(cargo, repo, out, controller)
 
 
@@ -115,7 +115,7 @@ def _execute(cargo, repo, out, controller):
         environment=environment, fresh_target=str(target), artifacts={})
     if controller.TEST_BUILD or controller.IMPLEMENTATION:
         report.update(execution_kind=controller.FIXED['execution_kind'], actual_full_workspace_execution=False)
-    if controller.STARTUP_WAVE8 or controller.ROOT_REUSE or controller.BOUNDED_PUBLICATION or controller.FIXED48:
+    if controller.STARTUP_WAVE8 or controller.ROOT_REUSE or controller.BOUNDED_PUBLICATION or controller.FIXED48 or controller.HIERARCHICAL_CELLS:
         report.update(controller_source_commit=proof['controller_source_commit'],
                       candidate_delta_paths=proof['candidate_delta_paths'])
     # Bound the Python orchestrator, while restoring Cargo's original address space limit.
@@ -171,8 +171,8 @@ def _execute(cargo, repo, out, controller):
             assert report['source_unchanged'], 'source changed during execution'
             assert controller.qualify(repo) == proof, 'config/code authority changed during execution'
             assert report['command_completed'] and type(report['exit_status']) is int
-            if (controller.BOUNDED_PUBLICATION or controller.FIXED48) and report['exit_status'] == report['gate_status'] == 0:
-                report['stages'] = controller.validate_bounded_publication_stages(out/'test.log', fixed48=controller.FIXED48)
+            if (controller.BOUNDED_PUBLICATION or controller.FIXED48 or controller.HIERARCHICAL_CELLS) and report['exit_status'] == report['gate_status'] == 0:
+                report['stages'] = controller.validate_bounded_publication_stages(out/'test.log', fixed48=controller.FIXED48, hierarchical_cells=controller.HIERARCHICAL_CELLS)
             report['qualified'] = report['exit_status'] == report['gate_status'] == 0
         except BaseException as error:
             report['validation_error'] = dict(type=type(error).__name__, message=str(error))
@@ -187,16 +187,17 @@ def _execute(cargo, repo, out, controller):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
+    hierarchical_cells = args[:1] == ['--hierarchical-cells-implementation']
     fixed48 = args[:1] == ['--fixed48-implementation']
     bounded_publication = args[:1] == ['--bounded-publication-implementation']
     root_reuse = args[:1] == ['--root-reuse-implementation']
     startup_wave8 = args[:1] == ['--startup-wave8-implementation']
-    implementation = fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
+    implementation = hierarchical_cells or fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
     test_build = args[:1] == ['--semantic-1m-test-build']
     semantic_1m = implementation or test_build or args[:1] == ['--semantic-1m']
     if semantic_1m:
         args = args[1:]
-    assert len(args) == 3, 'usage: check_native_workspace_execution.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation | --fixed48-implementation] CARGO REPO OUTPUT'
-    result = main(*args, semantic_1m=semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48)
+    assert len(args) == 3, 'usage: check_native_workspace_execution.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation | --fixed48-implementation | --hierarchical-cells-implementation] CARGO REPO OUTPUT'
+    result = main(*args, semantic_1m=semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells)
     print(json.dumps(result, sort_keys=True))
     sys.exit(result['gate_status'] if result['gate_status'] >= 0 else 128-result['gate_status'])
