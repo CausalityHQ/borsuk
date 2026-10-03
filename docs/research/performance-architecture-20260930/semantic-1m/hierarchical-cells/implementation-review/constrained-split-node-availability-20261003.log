@@ -1,0 +1,175 @@
+Running as unit: borsuk-split-node-availability-20261003.service; invocation ID: 8c09bcadc60548dbbc5c966b4df66517
+{
+  "datasets": {
+    "cohere": {
+      "directory_sha256": "e934d25c4304927405e62d032facdde6da4c13fa7d2add64f5881d64e99371a2",
+      "eligible_equal_population_nodes": 71,
+      "fallback_replay_not_yet_verified": true,
+      "first8_prospective_byte_encoding": [
+        {
+          "child_rows": [
+            478,
+            479
+          ],
+          "hash_order_key": "07e0e4b7b2e7c9aa13fd4ea9d7605f1e1415b0fcc367a2d337776dc7dbcb2a44",
+          "offset": 5696121,
+          "rows": 957
+        },
+        {
+          "child_rows": [
+            360,
+            360
+          ],
+          "hash_order_key": "123ca6cfdb794bb5ae043b8e1f43ccd4d5b4bd780dcb93d7cb50d1423a9561a3",
+          "offset": 445608,
+          "rows": 720
+        },
+        {
+          "child_rows": [
+            719,
+            720
+          ],
+          "hash_order_key": "14316a2023e870ef1933c00f6b702182a95b098b0f8438b3910b63fc6c9b1e25",
+          "offset": 403534,
+          "rows": 1439
+        },
+        {
+          "child_rows": [
+            957,
+            957
+          ],
+          "hash_order_key": "1b1b9ad3e1a756d157e48c9daf34dcb1e354e5a2da0c397b5beb5e567bad4fd2",
+          "offset": 5742644,
+          "rows": 1914
+        },
+        {
+          "child_rows": [
+            609,
+            610
+          ],
+          "hash_order_key": "1cd72aed81a5951691576f2cab4ebc9d9237d58beb67f74adab650578a5cffab",
+          "offset": 3744517,
+          "rows": 1219
+        },
+        {
+          "child_rows": [
+            901,
+            902
+          ],
+          "hash_order_key": "1d14cb93846f552b03cd0e5e06f43dfd4e9096fab0b955d84ccd15f49a09d1f2",
+          "offset": 5128634,
+          "rows": 1803
+        },
+        {
+          "child_rows": [
+            478,
+            479
+          ],
+          "hash_order_key": "2c0c227826a2f7f8c82377476cdc5e235a2ffe43510184bddf44d4a7d98931ec",
+          "offset": 5653308,
+          "rows": 957
+        },
+        {
+          "child_rows": [
+            719,
+            720
+          ],
+          "hash_order_key": "2d8e76679e7037dcb75a6a600b7d7c8fe5107f6e64c5ec726760531ca3492c68",
+          "offset": 468083,
+          "rows": 1439
+        }
+      ],
+      "internal_nodes": 280,
+      "root_sha256": "89aee41edba2f4bc447fc5fb66ecee3f470e4ff50627c6f294da6208fdbcb6b2"
+    },
+    "relaion": {
+      "directory_sha256": "6e71ef57e17bd55667b48421cf90f812f79e962ae3bc7eed4a50b97397fd21f1",
+      "eligible_equal_population_nodes": 43,
+      "fallback_replay_not_yet_verified": true,
+      "first8_prospective_byte_encoding": [
+        {
+          "child_rows": [
+            371,
+            372
+          ],
+          "hash_order_key": "02684b1f6129b98923c877819cffa935699b87a1b5fb20542a537d4fe50641d8",
+          "offset": 4922372,
+          "rows": 743
+        },
+        {
+          "child_rows": [
+            295,
+            295
+          ],
+          "hash_order_key": "059f1de417a2cf3df2a44a084e0116581ed7b45c57bd8acc7cb2a33dcaaa5bdc",
+          "offset": 4432033,
+          "rows": 590
+        },
+        {
+          "child_rows": [
+            470,
+            470
+          ],
+          "hash_order_key": "0a5758539a8de10b445aace6946a71b38b8ed8dbfd4a53516a256dfc249601c0",
+          "offset": 3525085,
+          "rows": 940
+        },
+        {
+          "child_rows": [
+            264,
+            264
+          ],
+          "hash_order_key": "115d9bda81e5ee5e77895956b831b213b03509d6e139d192e17d1bd2c85fc330",
+          "offset": 3852551,
+          "rows": 528
+        },
+        {
+          "child_rows": [
+            590,
+            590
+          ],
+          "hash_order_key": "24c6459adb08010f8a1d3caa264a04a33f94cd1ff474898a4334d4efc8b4086c",
+          "offset": 4454452,
+          "rows": 1180
+        },
+        {
+          "child_rows": [
+            289,
+            290
+          ],
+          "hash_order_key": "25704a525d33f004618f5f2fac8ea125428145f4f10c43b1e5a9b7d7cb434690",
+          "offset": 730644,
+          "rows": 579
+        },
+        {
+          "child_rows": [
+            273,
+            274
+          ],
+          "hash_order_key": "27c26bcc6e879219759854c078103ce3867e18f9e1c0ede1272a73adfcc25b17",
+          "offset": 1727714,
+          "rows": 547
+        },
+        {
+          "child_rows": [
+            394,
+            395
+          ],
+          "hash_order_key": "29c341a6af51e4adf2748bc66d3df1dfd2da97986930626cf813edd311a63db6",
+          "offset": 2006665,
+          "rows": 789
+        }
+      ],
+      "internal_nodes": 290,
+      "root_sha256": "fec06fb0eee4a1380a42356af3ef43d38137a95b4bdb09d457b434b5369c076b"
+    }
+  },
+  "query_or_truth_opened": false,
+  "schema": "borsuk-constrained-split-node-availability-v1",
+  "selection_encoding": "root SHA raw32 bytes concatenated LEu64 directory offset; prospective, final native contract must match"
+}
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 202ms
+             CPU time consumed: 188ms
+                   Memory peak: 18.5M (swap: 0B)
