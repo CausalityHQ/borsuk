@@ -1,0 +1,28 @@
+{
+  "actual_archived_datasets": [
+    "relaion",
+    "cohere"
+  ],
+  "actual_original_queries_compared": 128,
+  "audit_sha256": "ed420f8a4562fe36b0343c66356cf5f573d6493a875e0621fd4ba1f230484e3e",
+  "exit_status": 0,
+  "nomination_execution": false,
+  "original_schema_admission": true,
+  "reported_memory_peak": "113.3M",
+  "same_size_control_mutation_rejected": "pretruth original hierarchy covered-ID parity",
+  "schema": "borsuk-global-leaf-real-original-control-admission-v1",
+  "scope": "real archived control schema and pretruth parity; new rows copied from originals; no new nomination or quality result",
+  "scope_limits": {
+    "cpu_quota_percent": 100,
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "tasks_max": 64,
+    "timeout_seconds": 60
+  },
+  "service_seconds": 0.874,
+  "source_sha256": "31232bdde29353962bb88b7435ecc84dfb1f854a6d1e7a068254380e65878b3e",
+  "swap_peak_bytes": 0,
+  "synthetic_new_rows_copied_from_authenticated_original": true,
+  "truth_body_opens": 0,
+  "wall_seconds": 0.5583867619861849
+}
