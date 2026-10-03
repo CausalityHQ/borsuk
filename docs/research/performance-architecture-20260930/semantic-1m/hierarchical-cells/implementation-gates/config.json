@@ -8,7 +8,7 @@
   "compute_cap_usd": 1.25,
   "controller_authority_pending": false,
   "controller_code_sha256": {
-    "scripts/check_hierarchical_cells_implementation.sh": "ecba346d00f3900e27b6daa07370464eb7f414449360216e20dc660c6b01dcf2",
+    "scripts/check_hierarchical_cells_implementation.sh": "d472fc37c2295535181448a8dda3b3bf49eded54a2b1a9edc93e3964fcc9f04d",
     "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
     "scripts/check_native_semantic_router_stats.py": "d1fb970c0ab6ec98ec5311204a54277180631116d48a29a564ed3bbd68e5c5c2",
     "scripts/check_native_startup_build.py": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52",
@@ -19,7 +19,7 @@
     "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
     "scripts/launch_native_semantic_router_cold_spot.py": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180",
     "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
-    "scripts/launch_native_workspace_execution_spot.py": "aeb3c552a1a67113cad7b29e1773d1d793cdd99d7141e89b5625dd03ad30f627",
+    "scripts/launch_native_workspace_execution_spot.py": "5d184100d37a9ffc5941825a1517afc237d3927b9fe2c57b570d8c398275bae5",
     "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b",
     "scripts/launch_v174_relaid_bind_compile_spot.py": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a",
     "scripts/package_semantic_native_generation.py": "cb6a540c810e3a75381d22339eb72f00382b0972a2d3ee687bbb1d97d5a1b594",
@@ -33,7 +33,7 @@
     "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
     "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6"
   },
-  "controller_source_commit": "3fda72c61cefdffb369df3a4661a96da36ec451d",
+  "controller_source_commit": "7e3019c1749117c40ca18e80510b8e343e5ebcdc",
   "cpu_quota_percent": 200,
   "ebs_s3_allowance_usd": 0.15,
   "environment": {
@@ -54,7 +54,7 @@
   "native_source_manifest": {
     "bytes": 44457,
     "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/native-source-manifest.json",
-    "sha256": "4ae41f41af3183cf6b047662fe61752ef1f732efce1ed221e2136789ef53dfc7"
+    "sha256": "01dbc6e3dd975451fe3e530bb1154382a5cd1868c991605d8cd6cc61fe0fa84f"
   },
   "region": "eu-central-1",
   "root_device_name": "/dev/sda1",
