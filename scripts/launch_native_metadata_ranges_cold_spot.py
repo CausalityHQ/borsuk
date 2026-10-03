@@ -1,9 +1,11 @@
 """One reviewed metadata-range build and direct ABBA cold Spot campaign."""
 import fcntl
 import gzip
+import io
 import json
 import os
 import re
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -206,6 +208,26 @@ def collect(s3, prefix, out, instance_id, commit, digest):
     return terminal
 
 
+def source_archive(commit):
+    """Return gzip bytes without buffering the uncompressed source tar."""
+    command = ['git', 'archive', '--format=tar', commit]
+    producer = subprocess.Popen(command, stdout=subprocess.PIPE)
+    try:
+        with io.BytesIO() as archive:
+            with gzip.GzipFile(fileobj=archive, mode='wb', mtime=0) as compressed:
+                while chunk := producer.stdout.read(65536):
+                    compressed.write(chunk)
+            status = producer.wait()
+            if status:
+                raise subprocess.CalledProcessError(status, command)
+            return archive.getvalue()
+    finally:
+        producer.stdout.close()
+        if producer.poll() is None:
+            producer.kill()
+        producer.wait()
+
+
 def main(attempt, campaign=None):
     campaign = sys.modules[__name__] if campaign is None else campaign
     assert len(attempt) == 5 and attempt[0] == 'a' and attempt[1:].isdigit()
@@ -217,7 +239,7 @@ def main(attempt, campaign=None):
     assert re.fullmatch(r'[0-9a-f]{40}', commit)
     if 'source_archive_commit' in proof:
         subprocess.run(['git', 'merge-base', '--is-ancestor', commit, 'origin/main'], check=True)
-    archive = gzip.compress(subprocess.check_output(['git', 'archive', '--format=tar', commit]), mtime=0)
+    archive = source_archive(commit)
     digest = peer.sha(archive)
     key = 'research/native-library-check/sources/' + digest + '.tar.gz'
     prefix = getattr(campaign, 'PREFIX', 'research/native-union/20260930/metadata-ranges-cold-') + attempt
@@ -258,39 +280,59 @@ def main(attempt, campaign=None):
     peer.put_if_absent(prefix + '/reservation.json', json.dumps(reservation, sort_keys=True).encode())
     nodes = {}
     started = time.monotonic()
+    sigterm_pending, defer_sigterm = False, True
+    def on_sigterm(signum, frame):
+        nonlocal sigterm_pending
+        sigterm_pending = True
+        if not defer_sigterm:
+            raise KeyboardInterrupt('controller received SIGTERM')
+    previous_sigterm = signal.signal(signal.SIGTERM, on_sigterm)
     try:
-        receipt = ec2.run_instances(ClientToken=token_prefix + peer.sha(prefix.encode())[:min(48, 64-len(token_prefix))], ImageId=image_id,
-            InstanceType=instance_type, MinCount=1, MaxCount=1, IamInstanceProfile={'Arn': peer.PROFILE_ARN},
-            NetworkInterfaces=[{'AssociatePublicIpAddress': True, 'DeviceIndex': 0, 'Groups': [peer.SECURITY_GROUP], 'SubnetId': subnet}],
-            InstanceMarketOptions={'MarketType': 'spot', 'SpotOptions': {'InstanceInterruptionBehavior': 'terminate', 'SpotInstanceType': 'one-time', 'MaxPrice': f'{spot_max:.2f}'}},
-            InstanceInitiatedShutdownBehavior='terminate', BlockDeviceMappings=[{'DeviceName': root_device_name, 'Ebs': {'DeleteOnTermination': True, 'Encrypted': True, 'VolumeSize': 80, 'VolumeType': 'gp3'}}],
-            TagSpecifications=[{'ResourceType': 'instance', 'Tags': [{'Key': 'Name', 'Value': getattr(campaign, 'TAG', 'borsuk-metadata-ranges-cold')}]}], UserData=body)
-        # Record all ACKed IDs before receipt persistence can fail.
-        for index, row in enumerate(receipt['Instances']):
-            nodes[str(index)] = dict(instance_id=row['InstanceId'])
-        node = next(iter(nodes.values()))
-        launch = dict(**node, nodes=nodes, prefix=prefix, source_commit=commit, source_archive_sha256=digest)
-        with (out / 'aws-launch.json').open('x') as receipt_file:
-            receipt_file.write(json.dumps(launch, indent=2) + '\n')
-            receipt_file.flush()
-            os.fsync(receipt_file.fileno())
-        peer.put_if_absent(prefix + '/launch.json', json.dumps(launch, sort_keys=True).encode())
-        print(json.dumps(launch), flush=True)
-        campaign.poll(ec2, s3, prefix, node['instance_id'], started)
+        try:
+            if sigterm_pending:
+                raise KeyboardInterrupt('controller received SIGTERM')
+            receipt = ec2.run_instances(ClientToken=token_prefix + peer.sha(prefix.encode())[:min(48, 64-len(token_prefix))], ImageId=image_id,
+                InstanceType=instance_type, MinCount=1, MaxCount=1, IamInstanceProfile={'Arn': peer.PROFILE_ARN},
+                NetworkInterfaces=[{'AssociatePublicIpAddress': True, 'DeviceIndex': 0, 'Groups': [peer.SECURITY_GROUP], 'SubnetId': subnet}],
+                InstanceMarketOptions={'MarketType': 'spot', 'SpotOptions': {'InstanceInterruptionBehavior': 'terminate', 'SpotInstanceType': 'one-time', 'MaxPrice': f'{spot_max:.2f}'}},
+                InstanceInitiatedShutdownBehavior='terminate', BlockDeviceMappings=[{'DeviceName': root_device_name, 'Ebs': {'DeleteOnTermination': True, 'Encrypted': True, 'VolumeSize': 80, 'VolumeType': 'gp3'}}],
+                TagSpecifications=[{'ResourceType': 'instance', 'Tags': [{'Key': 'Name', 'Value': getattr(campaign, 'TAG', 'borsuk-metadata-ranges-cold')}]}], UserData=body)
+            # Defer SIGTERM through ACK registration and local receipt fsync.
+            for index, row in enumerate(receipt['Instances']):
+                nodes[str(index)] = dict(instance_id=row['InstanceId'])
+            node = next(iter(nodes.values()))
+            launch = dict(**node, nodes=nodes, prefix=prefix, source_commit=commit, source_archive_sha256=digest)
+            with (out / 'aws-launch.json').open('x') as receipt_file:
+                receipt_file.write(json.dumps(launch, indent=2) + '\n')
+                receipt_file.flush()
+                os.fsync(receipt_file.fileno())
+            defer_sigterm = False
+            if sigterm_pending:
+                raise KeyboardInterrupt('controller received SIGTERM')
+            peer.put_if_absent(prefix + '/launch.json', json.dumps(launch, sort_keys=True).encode())
+            print(json.dumps(launch), flush=True)
+            campaign.poll(ec2, s3, prefix, node['instance_id'], started)
+        finally:
+            # Further stop requests must not interrupt terminate+wait.
+            defer_sigterm = True
+            failure = sys.exc_info()[0] is not None
+            startup.terminate_owned(ec2, nodes)
+            close = dict(nodes=nodes, state='terminated', observed_elapsed_s=round(time.monotonic() - started))
+            (out / 'aws-closeout.json').write_text(json.dumps(close, indent=2) + '\n')
+            if (failure or sigterm_pending) and nodes:
+                try:
+                    campaign.collect(s3, prefix, out, node['instance_id'], commit, digest)
+                except Exception as error:
+                    (out / 'collection-error.json').write_text(json.dumps(dict(error_type=type(error).__name__, error=str(error))) + '\n')
+        defer_sigterm = False
+        if sigterm_pending:
+            raise KeyboardInterrupt('controller received SIGTERM')
+        terminal = campaign.collect(s3, prefix, out, node['instance_id'], commit, digest)
+        assert terminal['status'] == terminal['phase'] == 'complete' and terminal['exit_code'] == 0
+        assert set(terminal['artifacts']) == set(campaign.ARTIFACTS)
+        print(json.dumps(dict(complete=True, instance_id=node['instance_id'], state='terminated')), flush=True)
     finally:
-        failure = sys.exc_info()[0] is not None
-        startup.terminate_owned(ec2, nodes)
-        close = dict(nodes=nodes, state='terminated', observed_elapsed_s=round(time.monotonic() - started))
-        (out / 'aws-closeout.json').write_text(json.dumps(close, indent=2) + '\n')
-        if failure and nodes:
-            try:
-                campaign.collect(s3, prefix, out, node['instance_id'], commit, digest)
-            except Exception as error:
-                (out / 'collection-error.json').write_text(json.dumps(dict(error_type=type(error).__name__, error=str(error))) + '\n')
-    terminal = campaign.collect(s3, prefix, out, node['instance_id'], commit, digest)
-    assert terminal['status'] == terminal['phase'] == 'complete' and terminal['exit_code'] == 0
-    assert set(terminal['artifacts']) == set(campaign.ARTIFACTS)
-    print(json.dumps(dict(complete=True, instance_id=node['instance_id'], state='terminated')), flush=True)
+        signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 def self_check(lifecycle_only=False):
@@ -299,6 +341,40 @@ def self_check(lifecycle_only=False):
     import tempfile
     from datetime import datetime, timezone
     module = sys.modules[__name__]
+    # Unbounded reads, a failed producer, or an abandoned reader must not yield
+    # an authenticated archive or leave the source producer running.
+    for failure in ('success', 'producer', 'reader'):
+        raw = b'synthetic archive\n' * 10000
+        reads = []
+        class BoundedReader(io.BytesIO):
+            def read(self, size=-1):
+                assert 0 < size <= 65536, 'archive read was unbounded'
+                reads.append(size)
+                if failure == 'reader' and len(reads) == 2:
+                    raise OSError('synthetic reader failure')
+                return super().read(size)
+        producer = Mock(stdout=BoundedReader(raw))
+        producer.poll.return_value = None if failure == 'reader' else (23 if failure == 'producer' else 0)
+        producer.wait.return_value = 23 if failure == 'producer' else 0
+        with patch.object(subprocess, 'Popen', return_value=producer) as popen, \
+             patch.object(subprocess, 'check_output', side_effect=AssertionError('eager archive')):
+            try:
+                archive = module.source_archive('a'*40)
+            except subprocess.CalledProcessError as error:
+                assert failure == 'producer' and error.returncode == 23
+                assert error.cmd == ['git', 'archive', '--format=tar', 'a'*40]
+            except OSError as error:
+                assert failure == 'reader' and str(error) == 'synthetic reader failure'
+            else:
+                assert failure == 'success', 'archive failure swallowed'
+                assert gzip.decompress(archive) == raw and len(reads) > 2
+                assert archive[4:8] == b'\0'*4
+        popen.assert_called_once_with(['git', 'archive', '--format=tar', 'a'*40], stdout=subprocess.PIPE)
+        assert producer.stdout.closed and producer.wait.called
+        if failure == 'reader':
+            producer.kill.assert_called_once()
+        else:
+            producer.kill.assert_not_called()
     ec2, s3 = Mock(), Mock()
     ec2.describe_instances.side_effect = [ReadTimeoutError(endpoint_url='mock'),
         {'Reservations': [{'Instances': [{'State': {'Name': 'running'}}]}]}]
@@ -330,7 +406,8 @@ def self_check(lifecycle_only=False):
         startup.terminate_owned(ec2, owned)
     assert ec2.terminate_instances.call_count == 2
     ec2.get_waiter.return_value.wait.assert_called_once_with(InstanceIds=['i-original'])
-    for failure in ('fsync', 'launch-upload', 'poll', 'interruption', 'interrupt', 'success', 'multi-ack', 'archive-source'):
+    for failure in ('fsync', 'launch-upload', 'poll', 'interruption', 'interrupt', 'success', 'multi-ack', 'archive-source',
+                    'sigterm-ack', 'sigterm-register', 'sigterm-fsync', 'fsync-sigterm', 'sigterm-poll', 'sigterm-cleanup', 'launch-reject'):
         with tempfile.TemporaryDirectory() as tmp:
             ec2, s3, session = Mock(), Mock(), Mock()
             session.client.side_effect = [ec2, s3]
@@ -338,43 +415,80 @@ def self_check(lifecycle_only=False):
             ec2.describe_subnets.return_value = {'Subnets': [{'AvailabilityZone': 'mock-az'}]}
             ec2.describe_spot_price_history.return_value = {'SpotPriceHistory': [
                 {'SpotPrice': '0.1', 'Timestamp': datetime.now(timezone.utc)}]}
-            instance_ids = ['i-original','i-extra'] if failure == 'multi-ack' else ['i-original']
+            instance_ids = ['i-original','i-extra'] if failure in ('multi-ack', 'sigterm-ack', 'sigterm-register', 'sigterm-cleanup') else ['i-original']
             expected_owned = {str(i):dict(instance_id=node) for i,node in enumerate(instance_ids)}
-            ec2.run_instances.return_value = {'Instances': [{'InstanceId': node} for node in instance_ids]}
+            def ack_rows():
+                for index, instance_id in enumerate(instance_ids):
+                    yield dict(InstanceId=instance_id)
+                    if failure == 'sigterm-register' and index == 0:
+                        signal.raise_signal(signal.SIGTERM)
+            def acknowledged(**kwargs):
+                if failure == 'launch-reject':
+                    raise RuntimeError('launch rejected without ACK')
+                if failure == 'sigterm-ack':
+                    signal.raise_signal(signal.SIGTERM)
+                return {'Instances': ack_rows()}
+            ec2.run_instances.side_effect = acknowledged
             writes = [None, None, OSError('upload')] if failure == 'launch-upload' else [None, None, None]
-            error = {'interruption': RuntimeError('worker interrupted'), 'interrupt': KeyboardInterrupt(), 'success': None, 'archive-source': None}.get(failure, ReadTimeoutError(endpoint_url='mock'))
+            error = {'interruption': RuntimeError('worker interrupted'), 'interrupt': KeyboardInterrupt(), 'success': None, 'archive-source': None,
+                     'sigterm-cleanup': None, 'sigterm-poll': lambda *args: signal.raise_signal(signal.SIGTERM)}.get(failure, ReadTimeoutError(endpoint_url='mock'))
             events = []
-            ec2.terminate_instances.side_effect = lambda **kw: events.append('terminate')
-            ec2.get_waiter.return_value.wait.side_effect = lambda **kw: events.append('wait')
+            def cleanup(event, **kwargs):
+                events.append(event)
+                if failure == 'sigterm-cleanup':
+                    signal.raise_signal(signal.SIGTERM)
+            ec2.terminate_instances.side_effect = lambda **kw: cleanup('terminate', **kw)
+            ec2.get_waiter.return_value.wait.side_effect = lambda **kw: cleanup('wait', **kw)
             def collected(*args):
                 assert events == ['terminate', 'wait']
                 events.append('collect')
                 return dict(status='complete', phase='complete', exit_code=0,
                     artifacts={name: {} for name in ARTIFACTS})
-            with patch.object(module, 'ROOT', Path(tmp)), patch.object(boto3, 'Session', return_value=session), patch.object(subprocess, 'check_output', side_effect=['', '0'*40, b'archive']), patch.object(module, 'preflight', return_value=dict(config_sha256='1'*64, **({'source_archive_commit':'2'*40} if failure == 'archive-source' else {}))), patch.object(subprocess, 'run') as git_run, patch.object(module, 'user_data', return_value='mock'), patch.object(peer, 'missing', return_value=True), patch.object(peer, 'put_if_absent', side_effect=writes), patch.object(os, 'fsync', side_effect=OSError('persist') if failure == 'fsync' else None), patch.object(module, 'poll', side_effect=error), patch.object(module, 'collect', side_effect=collected):
+            def persisted(fd):
+                if failure in ('sigterm-fsync', 'fsync-sigterm'):
+                    signal.raise_signal(signal.SIGTERM)
+                if failure in ('fsync', 'fsync-sigterm'):
+                    raise OSError('persist')
+            previous_sigterm = signal.getsignal(signal.SIGTERM)
+            with patch.object(module, 'ROOT', Path(tmp)), patch.object(boto3, 'Session', return_value=session), patch.object(subprocess, 'check_output', side_effect=['', '0'*40]), patch.object(module, 'source_archive', return_value=b'compressed archive') as archive_mock, patch.object(module, 'preflight', return_value=dict(config_sha256='1'*64, **({'source_archive_commit':'2'*40} if failure == 'archive-source' else {}))), patch.object(subprocess, 'run') as git_run, patch.object(module, 'user_data', return_value='mock'), patch.object(peer, 'missing', return_value=True), patch.object(peer, 'put_if_absent', side_effect=writes) as uploads, patch.object(os, 'fsync', side_effect=persisted) as fsync, patch.object(module, 'poll', side_effect=error) as polling, patch.object(module, 'collect', side_effect=collected):
                 try:
                     main('a0001')
-                except (OSError, ReadTimeoutError, RuntimeError, KeyboardInterrupt):
-                    pass
+                except (OSError, ReadTimeoutError, RuntimeError, KeyboardInterrupt) as caught:
+                    if failure.startswith('sigterm-'):
+                        assert isinstance(caught, KeyboardInterrupt), 'SIGTERM did not interrupt the controller'
                 else:
                     assert failure in ('success', 'archive-source'), 'failure swallowed'
+            assert signal.getsignal(signal.SIGTERM) == previous_sigterm, 'SIGTERM handler leaked'
             if failure == 'archive-source':
+                archive_mock.assert_called_once_with('2'*40)
                 git_run.assert_called_once_with(['git', 'merge-base', '--is-ancestor', '2'*40, 'origin/main'], check=True)
                 assert json.loads((Path(tmp)/'metadata-ranges-cold/a0001/aws-reservation.json').read_text())['source_commit'] == '2'*40
             else:
+                archive_mock.assert_called_once_with('0'*40)
                 git_run.assert_not_called()
             ec2.run_instances.assert_called_once()
             assert ec2.run_instances.call_args.kwargs['BlockDeviceMappings'] == [{'DeviceName': '/dev/xvda', 'Ebs': {'DeleteOnTermination': True, 'Encrypted': True, 'VolumeSize': 80, 'VolumeType': 'gp3'}}]
             assert json.loads((Path(tmp)/'metadata-ranges-cold/a0001/aws-reservation.json').read_text())['root_device_name'] == '/dev/xvda'
+            if failure == 'launch-reject':
+                ec2.terminate_instances.assert_not_called()
+                ec2.get_waiter.assert_not_called()
+                assert events == []
+                assert json.loads((Path(tmp)/'metadata-ranges-cold/a0001/aws-closeout.json').read_text())['nodes'] == {}
+                continue
             ec2.terminate_instances.assert_called_once_with(InstanceIds=instance_ids)
             ec2.get_waiter.return_value.wait.assert_called_once_with(InstanceIds=instance_ids)
-            persisted = json.loads((Path(tmp)/'metadata-ranges-cold/a0001/aws-launch.json').read_bytes())
-            assert persisted['nodes'] == expected_owned
+            launch_path = Path(tmp)/'metadata-ranges-cold/a0001/aws-launch.json'
+            launch = json.loads(launch_path.read_bytes())
+            assert launch['nodes'] == expected_owned
+            fsync.assert_called_once()
+            if failure in ('sigterm-ack', 'sigterm-register', 'sigterm-fsync', 'fsync', 'fsync-sigterm'):
+                assert uploads.call_count == 2, 'launch uploaded after stop or failed fsync'
+                polling.assert_not_called()
             close = json.loads((Path(tmp)/'metadata-ranges-cold/a0001/aws-closeout.json').read_text())
             assert close['state'] == 'terminated' and close['nodes'] == expected_owned
             assert events == ['terminate', 'wait', 'collect']
     if lifecycle_only:
-        print('PASS shared ACK persistence/fsync/multi-ACK/cleanup-before-collection')
+        print('PASS bounded archive/chunk/producer/reader and shared ACK/fsync/multi-ACK/SIGTERM/cleanup-before-collection')
         return
     with tempfile.TemporaryDirectory() as tmp, patch.object(module, 'CONFIG', Path(tmp)/'config.json'):
         CONFIG.write_text('{}')
@@ -438,7 +552,6 @@ def self_check(lifecycle_only=False):
         from scripts import check_native_metadata_ranges_build as build
         from scripts import launch_native_metadata_ranges_cold_spot as build_controller
         import contextlib
-        import io
         with tempfile.TemporaryDirectory() as tmp:
             repo, out = Path(tmp)/'repo', Path(tmp)/'out'
             out.mkdir()
