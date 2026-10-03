@@ -1,0 +1,98 @@
+{
+  "admission": {
+    "fsync_error_requires_INVALID_and_native_exit_status": 2,
+    "hard_timeout_and_OOM_enforced_by_supervisor": true,
+    "matching_native_exit_and_supervisor_resource_cleanup_receipt_required": true,
+    "pass_requires_native_exit_status": 0,
+    "report_alone_is_terminal_authority": false
+  },
+  "authority_pending": true,
+  "caps": {
+    "automatic_download": false,
+    "canonical_rereads_included": true,
+    "cpu_count": 1,
+    "cumulative_authenticated_input_read_bytes": 1073741824,
+    "memory_bytes": 536870912,
+    "output_bytes": 2097152,
+    "parent_rows_total": 32768,
+    "retraining_sweep": false,
+    "seconds": 180,
+    "swap_bytes": 0
+  },
+  "datasets": [
+    "relaion",
+    "cohere"
+  ],
+  "intervention": {
+    "change": "only balance repair of existing learned separator; compare old coordinate fallback",
+    "control": "original median fallback reproduced; additional same-coordinate ordering cut at exact proposed nA, with identical source-ID tie order",
+    "crossings": "one identical local cosine16 graph traversal counted for original median, population-matched coordinate baseline and proposed separator",
+    "delta": "d2(x,a)-d2(x,b)",
+    "distance": "unchanged native squared_euclidean",
+    "identical_or_degenerate_separator": "original deterministic fallback",
+    "left_rows": "clamp(count(delta<=0),ceil(m/4),m-ceil(m/4))",
+    "matched_population_baseline": "same widest-coordinate projection as original fallback; select first proposed_left_rows using coordinate.total_cmp then source ordinal",
+    "minimum_child_rows": "ceil(parent_rows/4)",
+    "ordering": "delta.total_cmp then source ordinal",
+    "successful_unconstrained_split": "unchanged",
+    "trainer_samples_and_max_iterations": "unchanged original sample;4"
+  },
+  "native_qualification_completed": false,
+  "purpose": "isolate learned-separator neighborhood geometry from changed split population before any real diagnostic",
+  "real_source_diagnostic_executed": false,
+  "remaining_authorities": [
+    "new exact native repair commit and contract preserving old source",
+    "completed affected/release/Clippy/workspace-test-compile receipts",
+    "exact original input recovery using original qualified writer only",
+    "source-bound complete native fixture and distinct no-GT infrastructure canary before real diagnostic"
+  ],
+  "scale_disposition": "unchanged resident-directory prototype is not qualified at100M; this quality mechanism does not resolve directory residency, maintenance or matched lifecycle cost",
+  "schema": "borsuk-constrained-semantic-split-falsifier-preregistration-v2",
+  "scientific_confound": {
+    "balanced_to_quarter_population_expected_reduction_fraction": 0.25,
+    "interpretation": "mathematical null expectation, not observed corpus behavior; old raw10% gate cannot isolate separator geometry",
+    "random_membership_expected_crossing_fraction": "2*a*(m-a)/(m*(m-1))"
+  },
+  "scope": "original100k D768 canonical originals; no benchmark query or GT access; no descendant rebuild or index promotion",
+  "screening": {
+    "acceptance_aggregate_nodes": "only genuinely changed nondegenerate measured nodes; unchanged/degenerate receipts retained separately",
+    "aggregate_cross_child_edge_reduction_min_fraction": 0.1,
+    "authentication_original_membership_resource_error": "INVALID",
+    "both_datasets_required": true,
+    "fewer_than_four_genuinely_changed_nondegenerate_measured_nodes": "INCONCLUSIVE; no expansion",
+    "fewer_than_four_verified_measured_nodes": "INCONCLUSIVE; no expansion",
+    "membership_complete_unique_balance_required": true,
+    "missing_original_inputs": "INPUT_UNAVAILABLE",
+    "pass_claim": "source-neighborhood diagnostic only; not returned recall, coldS3, vendor parity or100M feasibility",
+    "primary_comparison": "constrained vs population-matched coordinate baseline; >=10% aggregate crossing reduction and worst tested changed-node fraction no increase",
+    "report_all_fallbacks": true,
+    "secondary_required_guard": "retain original-median >=10% aggregate reduction and worst-fraction nonincrease on SAME genuinely changed measured nodes",
+    "valid_mechanism_gate_failure": "REJECT this mechanism only",
+    "worst_node_definition": "maximum fraction over the frozen changed measured node set for each compared policy; does not claim every node improves",
+    "worst_tested_node_cut_fraction_must_not_increase": true
+  },
+  "selection": {
+    "eligible_rows_max": 2048,
+    "eligible_rows_min": 513,
+    "equal_child_rows_tolerance": 1,
+    "exclude_self": true,
+    "exclude_trainer_sample": true,
+    "expansion_allowed": false,
+    "local_cosine_neighbors": 16,
+    "minimum_genuinely_changed_nondegenerate_measured_nodes_per_dataset": 4,
+    "minimum_verified_measured_fallback_nodes_per_dataset": 4,
+    "node_key": "SHA256(raw32 root digest || LEu64 directory offset)",
+    "node_order": "ascending digest then offset",
+    "nodes_frozen_per_dataset": 8,
+    "panel_key": "SHA256(raw32 root digest || LEu64 directory offset || LEu64 source ordinal)",
+    "panel_rows_per_node": 128
+  },
+  "source_bindings": "exact original roots/directories/cells/canonical/order from terminal-bound paired100k controls; original memberships replayed before diagnostic",
+  "supersedes": {
+    "bytes": 3270,
+    "historical_native_candidate": "297c2a1f025c05cbea0687c32b8a810a163e8d37",
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-review/constrained-split-falsifier-preregistration-20261003.json",
+    "real_diagnostic_executed": false,
+    "sha256": "e7f9c997883350693cbdcccc7d5d0fb4f121f75dc34335fc0a3e68c6edbffb43"
+  }
+}
