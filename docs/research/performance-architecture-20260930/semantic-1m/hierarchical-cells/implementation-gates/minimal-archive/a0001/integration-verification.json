@@ -1,0 +1,208 @@
+{
+  "actual_full_workspace_execution": false,
+  "all_current_native_files_match": true,
+  "all_terminal_bodies_authenticated": true,
+  "cleanup": {
+    "nodes": {
+      "0": {
+        "instance_id": "i-016360b5d2636c0a2"
+      }
+    },
+    "observed_elapsed_s": 1870,
+    "state": "terminated"
+  },
+  "code_sha256": {
+    "scripts/check_hierarchical_cells_implementation.sh": "66448eb8c9772b81c603ddd4f9adf40622bf33f61817e30e0b2d7c070758f304",
+    "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
+    "scripts/check_native_semantic_router_stats.py": "d1fb970c0ab6ec98ec5311204a54277180631116d48a29a564ed3bbd68e5c5c2",
+    "scripts/check_native_startup_build.py": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52",
+    "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+    "scripts/check_native_workspace_execution.py": "0f9b8c1069645c322f121a20fd9e7c38ed0b62663ace45a4860d216f8bdebc69",
+    "scripts/check_rust_test_build.sh": "a41d6498d84a26816a868ff96b93aae36c329fcf0630fbfc8438471ef28ba681",
+    "scripts/launch_native_metadata_ranges_cold_spot.py": "f1dfdb56d08f864594c4dadbdbae593b61d5285f60703712e91865ebd0a9d0e2",
+    "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
+    "scripts/launch_native_semantic_router_cold_spot.py": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180",
+    "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
+    "scripts/launch_native_workspace_execution_spot.py": "d507c943d4a7601322a69a35b3ba7a20a1f2c89f74f39537f7946c82b83d2259",
+    "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b",
+    "scripts/launch_v174_relaid_bind_compile_spot.py": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a",
+    "scripts/package_semantic_native_generation.py": "cb6a540c810e3a75381d22339eb72f00382b0972a2d3ee687bbb1d97d5a1b594",
+    "scripts/prepare_native_semantic_publication.py": "2d3a9270f5ad847981d9d89fea8ead9e9295f742369fa1b9fd9cf3e7c7e2c7e4",
+    "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+    "scripts/run_native_cold_first_query.py": "b4afffd43df8e2ab617749a50fd099fd279e57631e0dcb749b75169ad269a99f",
+    "scripts/run_native_metadata_ranges_cold.py": "1322fe19b705caeab275bce69ea6b4a9f2ed84cb6505dcbfe01b25301fdb71b8",
+    "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+    "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+    "scripts/run_native_semantic_router_cold.py": "9fe9e968d99a926bdfc15fae0fc0fadd15d44ed1242b6d4fa2e391c1a3b95f88",
+    "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+    "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6"
+  },
+  "instance_id": "i-016360b5d2636c0a2",
+  "instance_terminated": true,
+  "integrated_commit": "87f2685ff9927e92f5db7501cd78ac44b3a9589b",
+  "integrated_native_map_matches_qualified": true,
+  "memory_peak_bytes": 8589934592,
+  "native_source_identity_sha256": "739913047741a2d278b6eabad090055b54897442cbdecfbb340da4bb7415dfb1",
+  "oom_events": 0,
+  "oom_kills": 0,
+  "qualified": true,
+  "qualified_source_bundle": "3dbf70e771516b45de62f8bf9dbe672952957589",
+  "remaining": [
+    "exact original layout recovery",
+    "paired truth-free selection seal and execution closure",
+    "independent original control ID-set parity before truth",
+    "offline coverage comparison; no returned recall or vendor claim"
+  ],
+  "schema": "borsuk-global-leaf-native-root-verification-v1",
+  "scientific_probe_executed": false,
+  "source_archive_sha256": "1d374b4a9b5c484d4ed1d8e86357750369764213b26ffa0c4002d0748a4b7dac",
+  "source_before_after_equal": true,
+  "source_file_count": 401,
+  "source_qualification_sha256": "0e861e7caf461a09c7a7aa4b9b3c5c9c07e384d86b4d48aadf15e2c830641519",
+  "stages": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "hierarchical_semantic_cells::"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-03T10:04:10Z",
+      "gate_status": 0,
+      "required_test_passes": {
+        "hierarchical_semantic_cells::tests::cell_local_block_nomination_omits_other_blocks_even_for_tied_codes": 1,
+        "hierarchical_semantic_cells::tests::identical_geometry_is_bounded_and_reproducible_without_truth": 1,
+        "hierarchical_semantic_cells::tests::loss_receipt_separates_boundary_recovery_nomination_and_final_ranking": 1,
+        "hierarchical_semantic_cells::tests::nomination_global_finds_leaf_hidden_by_hierarchy_pruning": 1,
+        "hierarchical_semantic_cells::tests::nomination_unpruned_parity_caps_source_binding_and_failure_charges": 1,
+        "hierarchical_semantic_cells::tests::nonunit_query_nonzero_mean_preserves_native_sq2_scoring_and_nomination": 1,
+        "hierarchical_semantic_cells::tests::resident_directory_preload_is_admitted_charged_and_has_no_query_reads": 1,
+        "hierarchical_semantic_cells::tests::resident_preload_rejects_corrupt_unused_interior_page": 1,
+        "hierarchical_semantic_cells::tests::semantic_cells_do_not_close_over_old_pages_and_keep_unchanged_ranking": 1,
+        "hierarchical_semantic_cells::tests::source_id_binding_budgets_and_corruption_fail_closed_with_charges": 1,
+        "hierarchical_semantic_cells::tests::whole_cell_matches_two_stage_with_one_wave_and_full_payload_charges": 1
+      },
+      "schema": "borsuk-hierarchical-cells-implementation-stage-v1",
+      "stage": "hierarchical-cell-tests",
+      "started_at": "2026-10-03T09:59:59Z",
+      "tests_run": 11
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "hierarchical_semantic_cells"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-03T10:05:15Z",
+      "gate_status": 0,
+      "required_test_passes": {
+        "tests::configurations_reject_unknown_fields_and_truth_in_requests": 1,
+        "tests::created_outputs_close_invalid_on_bad_truth_or_output_cap_without_overwrite": 1,
+        "tests::nomination_cli_full64_freezes_prefix_and_both_policies_without_truth": 1,
+        "tests::nomination_cli_rejects_truth_fields_incomplete_panels_and_tampering": 1,
+        "tests::nomination_freeze_reserve_and_synced_prefix_tamper_close_invalid": 1,
+        "tests::nomination_prefix_rejects_fifo_and_symlink_without_blocking": 1
+      },
+      "schema": "borsuk-hierarchical-cells-implementation-stage-v1",
+      "stage": "hierarchical-cell-bin-tests",
+      "started_at": "2026-10-03T10:04:10Z",
+      "tests_run": 6
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--test",
+        "two_bit_generation"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-03T10:05:53Z",
+      "gate_status": 0,
+      "required_test_passes": {},
+      "schema": "borsuk-hierarchical-cells-implementation-stage-v1",
+      "stage": "generation-integration",
+      "started_at": "2026-10-03T10:05:15Z",
+      "tests_run": 2
+    },
+    {
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "hierarchical_semantic_cells",
+        "--example",
+        "two_bit_http",
+        "--bin",
+        "build_two_bit_generation",
+        "--bin",
+        "check_semantic_router_scorer"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-03T10:19:39Z",
+      "gate_status": 0,
+      "required_test_passes": {},
+      "schema": "borsuk-hierarchical-cells-implementation-stage-v1",
+      "stage": "release",
+      "started_at": "2026-10-03T10:05:53Z",
+      "tests_run": null
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-03T10:23:45Z",
+      "gate_status": 0,
+      "required_test_passes": {},
+      "schema": "borsuk-hierarchical-cells-implementation-stage-v1",
+      "stage": "clippy",
+      "started_at": "2026-10-03T10:19:39Z",
+      "tests_run": null
+    },
+    {
+      "command": [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-03T10:29:31Z",
+      "gate_status": 0,
+      "required_test_passes": {},
+      "schema": "borsuk-hierarchical-cells-implementation-stage-v1",
+      "stage": "test-build",
+      "started_at": "2026-10-03T10:23:45Z",
+      "tests_run": null
+    }
+  ],
+  "status": "NATIVE_IMPLEMENTATION_QUALIFIED_SCIENCE_NOT_EXECUTED",
+  "swap_peak_bytes": 0,
+  "terminal_sha256": "97f0c440ac625e7185ea4fe02ab51e9cf1839a50356a429187eed66fa3d928cc"
+}

@@ -1,0 +1,83 @@
+{
+  "authority_pending": false,
+  "native": {
+    "binaries": {
+      "cells": {
+        "bytes": 4984048,
+        "key": "research/semantic-router/20261003/hierarchical-cells-minimal-archive-implementation-a0001/artifacts/binaries/hierarchical_semantic_cells",
+        "path": "assets/nomination-cells",
+        "sha256": "782d3bccc8212724f883a00d5c1534011f913246089380deb69de191843f6aeb"
+      }
+    },
+    "gate_log": {
+      "bytes": 687591,
+      "key": "research/semantic-router/20261003/hierarchical-cells-minimal-archive-implementation-a0001/artifacts/test.log",
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0001/test.log",
+      "sha256": "33f969d5677c78a2421f9120c1e3315b2d82d0fbfc267af3cbaa78208ab4a44d"
+    },
+    "schema": "borsuk-hierarchical-local-native-proof-v1",
+    "source_archive": {
+      "bytes": 12608329,
+      "key": "research/native-library-check/sources/1d374b4a9b5c484d4ed1d8e86357750369764213b26ffa0c4002d0748a4b7dac.tar.gz",
+      "path": "assets/nomination-source.tar.gz",
+      "sha256": "1d374b4a9b5c484d4ed1d8e86357750369764213b26ffa0c4002d0748a4b7dac"
+    },
+    "source_commit": "3dbf70e771516b45de62f8bf9dbe672952957589",
+    "sources": {
+      "binary": {
+        "bytes": 39480,
+        "path": "crates/borsuk/src/bin/hierarchical_semantic_cells.rs",
+        "sha256": "074e97003e4be49c557c706df2f465651586861fbdbae8988a27d62fb794eacf"
+      },
+      "gates": {
+        "bytes": 4309,
+        "path": "scripts/check_hierarchical_cells_implementation.sh",
+        "sha256": "66448eb8c9772b81c603ddd4f9adf40622bf33f61817e30e0b2d7c070758f304"
+      },
+      "module": {
+        "bytes": 115165,
+        "path": "crates/borsuk/src/hierarchical_semantic_cells.rs",
+        "sha256": "f30ca0d0ae1e38f28988cf100aec4bdbc68f1ce4acb4f85f488efa83103b2a1f"
+      },
+      "writer": {
+        "bytes": 5808,
+        "path": "crates/borsuk/src/bin/build_two_bit_generation.rs",
+        "sha256": "5c1e49e9e0b9d0a8c674548d04e8c08b8c1174bb16a823c58f5994c1d07867e8"
+      }
+    }
+  },
+  "refs": {
+    "closeout": {
+      "bytes": 136,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0001/aws-closeout.json",
+      "sha256": "b3ce6ed87d626e201030843414698be71e5b93cdba2b9f46d426415bdd3d18d6"
+    },
+    "launch": {
+      "bytes": 384,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0001/aws-launch.json",
+      "sha256": "9228b46aefa5980a54309da500c3c7fac8ed6287f423f3dcca9f66823a93cfde"
+    },
+    "manifest": {
+      "bytes": 44430,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0001/native-source-manifest.json",
+      "sha256": "7e6bcbe199e187db57c4441dda9fe889c13ffaa04dee22fdde435fefac9b1a08"
+    },
+    "receipt": {
+      "bytes": 50805,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0001/workspace-receipt.json",
+      "sha256": "0e950a23101fda981963348d90ae611854385735d187f2e97a442c188482cfe8"
+    },
+    "terminal": {
+      "bytes": 3497,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0001/aws-terminal.json",
+      "sha256": "97f0c440ac625e7185ea4fe02ab51e9cf1839a50356a429187eed66fa3d928cc"
+    },
+    "verification": {
+      "bytes": 9323,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0001/integration-verification.json",
+      "sha256": "07311a744ed54beee5c525017c95a3b3109d1401b141413249248b340def40b4"
+    }
+  },
+  "role": "nomination",
+  "schema": "borsuk-global-leaf-binary-authority-v1"
+}
