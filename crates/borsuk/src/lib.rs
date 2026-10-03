@@ -30,6 +30,7 @@ pub mod graph_generation_resources;
 pub mod graph_serving_generation;
 mod group_commit;
 pub mod hard_priced_interval;
+pub mod hierarchical_semantic_cells;
 mod index;
 mod lane_log;
 mod late_interaction;

@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0f712ae46be84de7f",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0f712ae46be84de7f"
+    }
+  },
+  "prefix": "research/semantic-router/20261003/hierarchical-cells-implementation-a0002",
+  "source_commit": "2638caaec6e7ebd9b39620e497afa14bd64d402d",
+  "source_archive_sha256": "a611901fd0a38ac48c62675efbaa9e3b7a100f902b318c1ad0e88f115855c998"
+}

@@ -1,0 +1,157 @@
+{
+  "actual_full_workspace_execution": false,
+  "all_current_native_files_match": true,
+  "all_terminal_bodies_authenticated": true,
+  "corpus_measurement_completed": false,
+  "instance_id": "i-0f712ae46be84de7f",
+  "instance_terminated": true,
+  "memory_max_events": 5689,
+  "native_source_commit": "9e95c1530431b1f15a5c69201f14bf506d6dbbbd",
+  "oom_events": 0,
+  "qualified": true,
+  "research_only": true,
+  "resource_peak_bytes": 8589934592,
+  "schema": "borsuk-hierarchical-cells-root-integration-v1",
+  "source_file_count": 401,
+  "source_identity_sha256": "690a545e782b7f732acf9c78b71d2d40a465fd308011762a255d2b74f96742ce",
+  "stages": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "hierarchical_semantic_cells::"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-03T06:22:52Z",
+      "gate_status": 0,
+      "required_test_passes": {
+        "hierarchical_semantic_cells::tests::cell_local_block_nomination_omits_other_blocks_even_for_tied_codes": 1,
+        "hierarchical_semantic_cells::tests::identical_geometry_is_bounded_and_reproducible_without_truth": 1,
+        "hierarchical_semantic_cells::tests::loss_receipt_separates_boundary_recovery_nomination_and_final_ranking": 1,
+        "hierarchical_semantic_cells::tests::nonunit_query_nonzero_mean_preserves_native_sq2_scoring_and_nomination": 1,
+        "hierarchical_semantic_cells::tests::resident_directory_preload_is_admitted_charged_and_has_no_query_reads": 1,
+        "hierarchical_semantic_cells::tests::resident_preload_rejects_corrupt_unused_interior_page": 1,
+        "hierarchical_semantic_cells::tests::semantic_cells_do_not_close_over_old_pages_and_keep_unchanged_ranking": 1,
+        "hierarchical_semantic_cells::tests::source_id_binding_budgets_and_corruption_fail_closed_with_charges": 1,
+        "hierarchical_semantic_cells::tests::whole_cell_matches_two_stage_with_one_wave_and_full_payload_charges": 1
+      },
+      "schema": "borsuk-hierarchical-cells-implementation-stage-v1",
+      "stage": "hierarchical-cell-tests",
+      "started_at": "2026-10-03T06:18:38Z",
+      "tests_run": 9
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "hierarchical_semantic_cells"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-03T06:23:56Z",
+      "gate_status": 0,
+      "required_test_passes": {
+        "tests::configurations_reject_unknown_fields_and_truth_in_requests": 1,
+        "tests::created_outputs_close_invalid_on_bad_truth_or_output_cap_without_overwrite": 1
+      },
+      "schema": "borsuk-hierarchical-cells-implementation-stage-v1",
+      "stage": "hierarchical-cell-bin-tests",
+      "started_at": "2026-10-03T06:22:52Z",
+      "tests_run": 2
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--test",
+        "two_bit_generation"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-03T06:24:34Z",
+      "gate_status": 0,
+      "required_test_passes": {},
+      "schema": "borsuk-hierarchical-cells-implementation-stage-v1",
+      "stage": "generation-integration",
+      "started_at": "2026-10-03T06:23:56Z",
+      "tests_run": 2
+    },
+    {
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "hierarchical_semantic_cells",
+        "--example",
+        "two_bit_http",
+        "--bin",
+        "build_two_bit_generation",
+        "--bin",
+        "check_semantic_router_scorer"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-03T06:38:22Z",
+      "gate_status": 0,
+      "required_test_passes": {},
+      "schema": "borsuk-hierarchical-cells-implementation-stage-v1",
+      "stage": "release",
+      "started_at": "2026-10-03T06:24:34Z",
+      "tests_run": null
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-03T06:42:32Z",
+      "gate_status": 0,
+      "required_test_passes": {},
+      "schema": "borsuk-hierarchical-cells-implementation-stage-v1",
+      "stage": "clippy",
+      "started_at": "2026-10-03T06:38:22Z",
+      "tests_run": null
+    },
+    {
+      "command": [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-03T06:48:21Z",
+      "gate_status": 0,
+      "required_test_passes": {},
+      "schema": "borsuk-hierarchical-cells-implementation-stage-v1",
+      "stage": "test-build",
+      "started_at": "2026-10-03T06:42:32Z",
+      "tests_run": null
+    }
+  ],
+  "swap_peak_bytes": 0,
+  "terminal_body_count": 17,
+  "terminal_sha256": "762aaa44d5d9bca13aab745ccdcd681576ec455d3a9abd1af6de3ef28e7d052b"
+}
