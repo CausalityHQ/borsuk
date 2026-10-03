@@ -1,0 +1,10 @@
+{
+  "attempt": "a0003",
+  "code_identity_sha256": "dc9e3c13350166bf21ad95a0c71568566f89cefe11f634f8d2c3cdcde7da5e38",
+  "config_sha256": "f4908db3124b74e7136cd03b053411447a776b0ccf78e49bdf4842123759c1db",
+  "native_identity_sha256": "690a545e782b7f732acf9c78b71d2d40a465fd308011762a255d2b74f96742ce",
+  "refs_identity_sha256": "f79918e940a842d4223934891432a3fdd3239b00ae73e9a71c0fc8d15be287d1",
+  "schema": "borsuk-hierarchical-100k-canary-admission-v2",
+  "source_archive_paths_sha256": "74222f7bbbeb6277e8208d3c90e2ca0dd85778a054feeb64a5e7cc5cbe0606ca",
+  "terminal_sha256": "79ecf5b30660d7b8d557d292343a099b6cffa51d8a6ebdd824eefccefe4bd230"
+}

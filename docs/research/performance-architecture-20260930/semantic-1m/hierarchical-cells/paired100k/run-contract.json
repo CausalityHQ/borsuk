@@ -35,17 +35,19 @@
       "state": "PASS"
     },
     {
+      "admission": "canary-admission.json",
       "ann_queries": 0,
       "compute_cap_usd": 0.12,
       "dataset_payload_gets": 0,
       "ebs_s3_allowance_usd": 0.05,
+      "evidence": "canary/a0003/root-decision.json",
       "gate": "disposable_infrastructure_canary",
       "required": "Same frozen controller source and authorities; actual imports, SDK model, CLI admission, HEAD every declared S3 key, authenticate one small non-scientific body, close and terminate owned instance",
       "scientific_measurement": false,
       "scratch_bytes_max": 4294967296,
       "selected_body_max_bytes": 1048576,
       "source_bootstrap_is_separately_charged": true,
-      "state": "PENDING",
+      "state": "PASS",
       "truth_or_panel_body_reads": 0,
       "wall_seconds_max": 480
     },

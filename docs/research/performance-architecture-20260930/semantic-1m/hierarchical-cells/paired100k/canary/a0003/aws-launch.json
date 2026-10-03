@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0fe5c8f426d85a3f4",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0fe5c8f426d85a3f4"
+    }
+  },
+  "prefix": "research/hierarchical-cells/20261003/infrastructure-canary-a0003",
+  "source_commit": "369773123ce73264a6b2caa23fafae9a7a8c1a34",
+  "source_archive_sha256": "4f4482b1cee21ee58a5b331a098ac62ad54ae0268567a045e3eebc081132fa6e"
+}
