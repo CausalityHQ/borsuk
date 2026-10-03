@@ -1,0 +1,23 @@
+{
+  "actor": "root",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0289990175ae2c9d8"
+    }
+  },
+  "reason": "Original controller stopped under archive-induced host pressure; launch ACK arrived during stop; root terminated and waited exact owned instance",
+  "state": "terminated",
+  "terminate_command": [
+    "aws",
+    "--profile",
+    "causality",
+    "--region",
+    "eu-central-1",
+    "ec2",
+    "terminate-instances",
+    "--instance-ids",
+    "i-0289990175ae2c9d8"
+  ],
+  "terminate_exit_status": 0,
+  "wait_exit_status": 0
+}

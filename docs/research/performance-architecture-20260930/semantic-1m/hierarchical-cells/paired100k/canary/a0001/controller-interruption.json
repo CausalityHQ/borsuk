@@ -1,0 +1,27 @@
+{
+  "canary_go": false,
+  "cause": "Shared launcher eagerly materializes complete uncompressed git archive before compression",
+  "controller_terminal_signal": 15,
+  "cpu_seconds": 45.818,
+  "instance_id": "i-0289990175ae2c9d8",
+  "instance_terminated": true,
+  "memory_peak_bytes": 2739204096,
+  "next_gate": "Stream source archive and verify SIGTERM ownership cleanup before a separately frozen canary attempt",
+  "observed_host_memory_psi_full_avg10_percent": 4.52,
+  "original_controller_session": 90639,
+  "schema": "borsuk-hierarchical-infrastructure-invalid-attempt-v1",
+  "scientific_result_available": false,
+  "service_runtime_seconds": 97.844,
+  "source_archive_sha256": "4166e0fb499b7faaf6df997b7869d6d7f0f5e0c2f2319e637e8e3e53bd086505",
+  "source_commit": "fcd0020d82cee7707758d57c29a092336e1e8a79",
+  "status": "INVALID",
+  "swap_bytes": 0,
+  "systemd_invocation": "112ac885fb3b4bd4a850d54d283f3582",
+  "terminal_object_observation": {
+    "exit_status": 254,
+    "http_status": 404,
+    "key": "research/hierarchical-cells/20261003/infrastructure-canary-a0001/terminal.json",
+    "observed_after_instance_termination": true,
+    "operation": "HeadObject"
+  }
+}

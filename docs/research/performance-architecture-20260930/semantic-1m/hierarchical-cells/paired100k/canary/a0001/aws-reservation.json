@@ -1,0 +1,31 @@
+{
+  "schema": "borsuk-hierarchical-100k-infrastructure-canary-v1",
+  "source_commit": "fcd0020d82cee7707758d57c29a092336e1e8a79",
+  "source_archive_sha256": "4166e0fb499b7faaf6df997b7869d6d7f0f5e0c2f2319e637e8e3e53bd086505",
+  "wall_seconds": 480,
+  "instance_type": "c7i.2xlarge",
+  "image_id": "ami-0b8a830d6339a9758",
+  "root_device_name": "/dev/sda1",
+  "availability_zone": "eu-central-1a",
+  "subnet_id": "subnet-034528fbd6977848f",
+  "spot_price_observed_usd_per_hour": "0.216100",
+  "spot_quote_timestamp": "2026-10-03T06:00:00+00:00",
+  "spot_max_usd_per_hour": 0.5,
+  "compute_cap_usd": 0.12,
+  "ebs_s3_allowance_usd": 0.05,
+  "total_cost_measured": false,
+  "cost_scope": "480s at capped Spot rate; boot/termination overhead and EBS/S3 allowance estimated",
+  "qualification": {
+    "config_path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/config.json",
+    "config_sha256": "6e23f6fe4039f99e7cab63bf0cb3be5d3fc0fb52ed65892e28a6a984269d3927",
+    "campaign_schema": "borsuk-hierarchical-100k-infrastructure-canary-v1",
+    "code_identity_sha256": "d23537b6e961f1967d25f74a68e38f60a7acd18eab6d92839e7d5331e20b2b44",
+    "refs_identity_sha256": "f79918e940a842d4223934891432a3fdd3239b00ae73e9a71c0fc8d15be287d1",
+    "native_identity_sha256": "690a545e782b7f732acf9c78b71d2d40a465fd308011762a255d2b74f96742ce",
+    "artifact_roster_sha256": "367f917978b06cb18559e2188426f645507cc6d914a747f73d3383785aad9039",
+    "awscli_version": "2.36.11",
+    "awscli_sha256": "50fbb7a2f44a78eab4a210088040e8f0bc4b9937cac8043c2354269d58614df6"
+  },
+  "config_sha256": "6e23f6fe4039f99e7cab63bf0cb3be5d3fc0fb52ed65892e28a6a984269d3927",
+  "interruption_policy": "Discard interrupted worker; no automatic replacement"
+}
