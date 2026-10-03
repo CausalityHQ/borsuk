@@ -1,0 +1,27 @@
+{
+  "config_not_production_frozen": true,
+  "exit_status": 0,
+  "files": {
+    "borsuk-global-leaf-staging-repair-real-input-20261003.py": {
+      "bytes": 3556,
+      "sha256": "2acc1ef4fe49a6a510348a1655e40fa9944139c1dd0b25306f46aeda27205d15"
+    },
+    "config-draft.json": {
+      "bytes": 13849,
+      "sha256": "a9a283bac537cd85a8915362d18220ad15e465b2861f825bcdddcb754156af19"
+    },
+    "result.json": {
+      "bytes": 5083,
+      "sha256": "17cc7cedee563e0eebc7c62915dd00113a026771a342cf354983426baf12d8ea"
+    }
+  },
+  "native_processes": 0,
+  "original_session": 29130,
+  "requests": 128,
+  "schema": "borsuk-staging-repair-real-input-receipt-v1",
+  "source_commit": "01847b394ddf49492a44fdb8f4269a466cabdd52",
+  "status": "ADMITTED",
+  "truth_opens": 0,
+  "unit": "borsuk-global-leaf-staging-repair-real-input-20261003.service",
+  "wall_seconds": 0.8384498269879259
+}
