@@ -1,0 +1,31 @@
+{
+  "actual_native_compilation_claim": false,
+  "aws_mocked": true,
+  "cargo_mocked": true,
+  "cgroup_mocked": true,
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "-m",
+    "scripts.launch_native_workspace_execution_spot",
+    "--hierarchical-cells-implementation",
+    "--self-check"
+  ],
+  "cpu_seconds": 1.146,
+  "exit_status": 0,
+  "final_native_source_freeze_pending": true,
+  "invocation_id": "eba6d6e21d7e42828686fa813ea94625",
+  "mandatory_new_fixture_names_pending": true,
+  "memory_peak_display": "54.2M",
+  "original_session": 49974,
+  "runtime_seconds": 5.978,
+  "schema": "borsuk-hierarchical-cell-qualifier-root-selfcheck-v1",
+  "source_commit": "96729181",
+  "source_sha256": {
+    "scripts/check_hierarchical_cells_implementation.sh": "b7730513342e8dedaf75fb74f904d401ef1f3189696b1fe6e738b7918a6315e2",
+    "scripts/check_native_workspace_execution.py": "0f9b8c1069645c322f121a20fd9e7c38ed0b62663ace45a4860d216f8bdebc69",
+    "scripts/launch_native_workspace_execution_spot.py": "908fd600e9ea9fe65a6973c6fd3514316f051c02f8b00846513f510b7557052d"
+  },
+  "swap_peak_bytes": 0,
+  "unit": "borsuk-hierarchical-qualifier-root-selfcheck-20261003.service"
+}
