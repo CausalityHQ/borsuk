@@ -1,0 +1,63 @@
+{
+  "canonical_bytes_streamed_for_authentication": true,
+  "canonical_vectors_interpreted": false,
+  "current_format_admission_tested": false,
+  "datasets": [
+    {
+      "all_canonical_ids_equal_order": true,
+      "canonical": {
+        "bytes": 308000000,
+        "path": "/tmp/borsuk-semantic-native-paired-relaion-a0002/graph/canonical.bin",
+        "sha256": "c260b7fe0b6a54de98dfba3f2599d272242f724421064ed5ca18c0cd63e6283d"
+      },
+      "canonical_authenticated": true,
+      "canonical_id_sequence_sha256": "22abeb087000ea2978c4fef8e85c2f7fda4e4b22c4e5126ba37a1c19816fab18",
+      "dataset": "relaion",
+      "dimensions": 768,
+      "order_authenticated": true,
+      "order_bijection": true,
+      "order_descriptor": {
+        "bytes": 800000,
+        "path": "/tmp/borsuk-semantic-router-inputs/relaion/order.u64",
+        "sha256": "22abeb087000ea2978c4fef8e85c2f7fda4e4b22c4e5126ba37a1c19816fab18"
+      },
+      "packaging_metadata": {
+        "bytes": 5950,
+        "path": "docs/research/performance-architecture-20260930/semantic-native-packaging-relaion-a0002.json",
+        "sha256": "c60e7aac2dd598cb84357e8d6e6eecb43c4e6853e4ddf7ed54c26738dbcd60ef"
+      },
+      "rows": 100000
+    },
+    {
+      "all_canonical_ids_equal_order": true,
+      "canonical": {
+        "bytes": 308000000,
+        "path": "/tmp/borsuk-semantic-native-paired-cohere-a0001/graph/canonical.bin",
+        "sha256": "38304c3b448f2f62b32da8b443bbe52f20ccc63f5472d0e7885d5c268dd7a6df"
+      },
+      "canonical_authenticated": true,
+      "canonical_id_sequence_sha256": "e2314ca14f5aa6f08b02cc328b863c921e55b1461a413ad6d3d66e781ff42d50",
+      "dataset": "cohere",
+      "dimensions": 768,
+      "order_authenticated": true,
+      "order_bijection": true,
+      "order_descriptor": {
+        "bytes": 800000,
+        "path": "/tmp/borsuk-semantic-router-inputs/cohere/order.u64",
+        "sha256": "e2314ca14f5aa6f08b02cc328b863c921e55b1461a413ad6d3d66e781ff42d50"
+      },
+      "packaging_metadata": {
+        "bytes": 5945,
+        "path": "docs/research/performance-architecture-20260930/semantic-native-packaging-cohere-a0001.json",
+        "sha256": "eabcadb572690e478cab05f3def6a52da4870c70c7ad9fb1a3c0cb7632cd6525"
+      },
+      "rows": 100000
+    }
+  ],
+  "original_stable_id_translation_tested": false,
+  "quality_or_performance_claim": false,
+  "query_or_truth_bodies_opened": false,
+  "schema": "borsuk-next100k-id-admission-v1",
+  "source_commit": "f0de4b0ae2f75fefc3a584491663637277d081a1",
+  "status": "PASS_ID_BINDING_ONLY"
+}

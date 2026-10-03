@@ -1,0 +1,38 @@
+{
+  "artifacts": {
+    "id-admission-check.py": {
+      "bytes": 2738,
+      "sha256": "e6566bfa7f5ca310dd2d07149b0246e7f2ad845dcaeb0d2a97edbc7834d56d89"
+    },
+    "id-admission-resources.txt": {
+      "bytes": 807,
+      "sha256": "fb26e7bdee74b18d928e48c96383fc24afb453c81bc3b4ac7bab8d0e454939e2"
+    },
+    "id-admission.json": {
+      "bytes": 2542,
+      "sha256": "e5fb5d7fbda17393527aa54056ff73b11a52db34771f4743db46a77ec6bd25c6"
+    },
+    "id-admission.log": {
+      "bytes": 414,
+      "sha256": "d59d17ab30ec49fc87ea6f7c4dd752b949bb16f50bf631c3d8c01719b1355f4e"
+    }
+  },
+  "exit_status": 0,
+  "invocation": "778e0cdc73ca4005940cc22fce5c5b78",
+  "limits": {
+    "cpu_percent": 100,
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "tasks": 64,
+    "wall_seconds": 60
+  },
+  "maximum_rss_kib": 27208,
+  "original_session": 34475,
+  "quality_latency_or_current_format_admission_claim": false,
+  "reported_cgroup_peak": "256M",
+  "result": "PASS_ID_BINDING_ONLY",
+  "schema": "borsuk-next100k-id-admission-execution-v1",
+  "swap_bytes": 0,
+  "unit": "borsuk-next100k-id-admission-20261003.service",
+  "wall_seconds": 15.87
+}
