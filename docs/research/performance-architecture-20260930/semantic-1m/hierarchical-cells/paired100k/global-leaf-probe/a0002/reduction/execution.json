@@ -1,0 +1,17 @@
+{
+  "config_sha256": "e91498495206945948882e3413016da6d88b24973fdc66715ce9cac9538be55e",
+  "cpu_quota_percent": 100,
+  "exit_status": 0,
+  "memory_max_bytes": 536870912,
+  "original_session": 44060,
+  "result_sha256": "1c47df8629aa8ff57227ca1d2bbe1e7d2f6475f350879d1014fa2d42f6cdbae4",
+  "runtime_max_seconds": 180,
+  "schema": "borsuk-global-leaf-offline-reducer-execution-v1",
+  "scope": "consumed64 coverage ceiling only; not returned ranking, cold S3 or vendor parity",
+  "swap_max_bytes": 0,
+  "systemd_reported_memory_peak": "140.2M",
+  "systemd_reported_runtime_seconds": 4.747,
+  "systemd_reported_swap_peak": "0B",
+  "tasks_max": 64,
+  "unit": "borsuk-global-leaf-coverage-a0002-20261003.service"
+}
