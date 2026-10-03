@@ -1,0 +1,20 @@
+{
+  "ann_queries": 0,
+  "datasets": [
+    "relaion",
+    "cohere"
+  ],
+  "exact_original_request_bytes": true,
+  "exit_status": 0,
+  "final_source_gate_pending": true,
+  "function": "run_hierarchical_global_leaf_probe.request_hashes",
+  "function_ast_sha256": "2889c47f03c6f9d4cc00cfebc0be7adff4b5c77ea1ae4e5382aca088278d060a",
+  "queries": 128,
+  "reported_peak_memory": "20.6M",
+  "schema": "borsuk-global-leaf-real-runtime-request-admission-v1",
+  "service_seconds": 0.197,
+  "source_sha256": "3f3f5108cf304277bed585a7dd556206d5ef610c880095f49ff0845b95c74677",
+  "swap_peak_bytes": 0,
+  "truth_opens": 0,
+  "wall_seconds": 0.04344286100240424
+}

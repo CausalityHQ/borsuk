@@ -1,0 +1,59 @@
+{
+  "ann_queries": 0,
+  "converter_scope": "stdlib f32 serialization required to byte-match original; NumPy converter unavailable locally",
+  "datasets": [
+    {
+      "dataset": "relaion",
+      "dimensions": 768,
+      "exact_original_request_body": true,
+      "query_count": 64,
+      "query_f32_sha256": "b9f8f64df92e27fc87f104110a53f8a6320705468f017395f5de23a961c88976",
+      "requests": {
+        "bytes": 937167,
+        "path": "/data/orchestration/borsuk-global-leaf-real-request-fixture-20261003/relaion-requests64.jsonl",
+        "sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330"
+      },
+      "source": {
+        "bytes": 17714558,
+        "key": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+        "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+      }
+    },
+    {
+      "dataset": "cohere",
+      "dimensions": 768,
+      "exact_original_request_body": true,
+      "query_count": 64,
+      "query_f32_sha256": "dec9119b4d0b5869d74ccce403283982a095375d0da9acf6c890453f7de63792",
+      "requests": {
+        "bytes": 983232,
+        "path": "/data/orchestration/borsuk-global-leaf-real-request-fixture-20261003/cohere-requests64.jsonl",
+        "sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654"
+      },
+      "source": {
+        "bytes": 15369495,
+        "key": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+        "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+      }
+    }
+  ],
+  "exit_status": 0,
+  "hidden_retries_configured": false,
+  "http_cli_dispatches": 2,
+  "reducer_sha256": "31232bdde29353962bb88b7435ecc84dfb1f854a6d1e7a068254380e65878b3e",
+  "reported_peak_memory": "88.2M",
+  "schema": "borsuk-global-leaf-real-request-fixture-v1",
+  "scope": "actual request identity/admission only; not native or scientific result",
+  "service_seconds": 1.224,
+  "setup_failure": {
+    "ann_queries": 0,
+    "exit_status": 1,
+    "reason": "missing NumPy before conversion after first authenticated request download",
+    "truth_reads": 0
+  },
+  "setup_failure_preserved": "initial service exited1 missing NumPy after first authenticated GET",
+  "source_helper_sha256": "99599d83c091c68661b5347ce568a92145695e420d8c9a3d61e7e0d6b84e884f",
+  "swap_peak_bytes": 0,
+  "truth_downloads": 0,
+  "wall_seconds": 1.1616267270292155
+}

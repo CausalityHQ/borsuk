@@ -1,0 +1,6 @@
+import pathlib,sys,json,importlib.util,hashlib,time
+root=pathlib.Path('/home/rb/worktrees/borsuk-prod-ready-v9');sys.path.insert(0,str(root));script=pathlib.Path('/home/rb/worktrees/borsuk-global-leaf-exact-layout-staging/scripts/run_hierarchical_global_leaf_probe.py');body=script.read_bytes();spec=importlib.util.spec_from_file_location('staging_request_check',script);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+p=pathlib.Path('/data/orchestration/borsuk-global-leaf-real-request-fixture-20261003');receipt=json.loads((p/'receipt.json').read_text());start=time.monotonic()
+for d in receipt['datasets']:
+ expected=json.loads((root/'docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/screen/measurement'/f"{d['dataset']}-diagnose.json").read_text())['requests'];hashes,aggregate=m.request_hashes(d['requests'],expected);assert len(hashes)==64 and aggregate==d['query_f32_sha256']
+result=dict(schema='borsuk-global-leaf-real-runtime-request-admission-v1',source_sha256=hashlib.sha256(body).hexdigest(),function='run_hierarchical_global_leaf_probe.request_hashes',queries=128,datasets=['relaion','cohere'],exact_original_request_bytes=True,truth_opens=0,ann_queries=0,wall_seconds=time.monotonic()-start);(p/'runtime-admission.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
