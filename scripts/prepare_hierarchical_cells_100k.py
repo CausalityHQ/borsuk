@@ -501,7 +501,7 @@ def validate_diagnostic(pin, config, config_pin, proof, limits):
     authenticate(pin, limits['max_result_bytes'])
 
 
-def prepare(config, config_identity, output, geometry=GEOMETRY):
+def prepare(config, config_identity, output, geometry=GEOMETRY, before_diagnostics=None):
     output = regular_path(output)
     require(not os.path.lexists(output), "output exists")
     validate_config(config, geometry)
@@ -588,6 +588,12 @@ def prepare(config, config_identity, output, geometry=GEOMETRY):
             diagnostic_plans.append((dataset, diagnostic, pin, target))
         # Every builder and query configuration is sealed before the first GT open.
         receipt['diagnostic_configs'] = {dataset: pin for dataset, _, pin, _ in diagnostic_plans}
+        if before_diagnostics is not None:
+            before_diagnostics(copy.deepcopy(diagnostic_plans), copy.deepcopy(proof),
+                               copy.deepcopy(limits), deadline, receipt)
+            # Admission may create disposable evidence, but cannot change the arm.
+            for _, diagnostic, pin, _ in diagnostic_plans:
+                require(read_json(pin) == diagnostic, "admission changed sealed diagnostic")
         for dataset, diagnostic, pin, target in diagnostic_plans:
             run_stage(dataset+'-diagnose', [proof['binaries']['cells']['path'], 'diagnose', pin['path'], pin['sha256'],
                                            str(target)], proof['binaries']['cells'], pin,
