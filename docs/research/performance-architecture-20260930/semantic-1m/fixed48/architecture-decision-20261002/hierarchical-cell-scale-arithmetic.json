@@ -1,0 +1,53 @@
+{
+  "cell_only_query_bytes_target": 16777216,
+  "cell_only_query_get_target": 32,
+  "dimensions": 768,
+  "limitations": [
+    "Full binary tree assumption; actual skew increases cell count and must be measured",
+    "Prototype f32 bytes exclude JSON encoding/parsed directory structures/maps and allocator overhead",
+    "Single-wave full-cell option is proposed, not implemented or qualified",
+    "Root/head/startup operations are separate and still require accounting",
+    "No recall, CPU, cold tails, QPS or dollar result follows from arithmetic",
+    "100M resident/build/pinned generation budgets remain prospective; choose from measured Pareto rather than arbitrary historical caps"
+  ],
+  "maximum_cell_rows": 512,
+  "refinement_bytes_per_row": 780,
+  "rows": [
+    {
+      "cell_only_32_get_worst_bytes": 16187392,
+      "cell_payload_bytes": 98800000,
+      "minimum_child_prototype_entries": 390,
+      "minimum_f32_prototype_bytes": 1198080,
+      "minimum_leaf_count": 196,
+      "rows": 100000
+    },
+    {
+      "cell_only_32_get_worst_bytes": 16187392,
+      "cell_payload_bytes": 988000000,
+      "minimum_child_prototype_entries": 3906,
+      "minimum_f32_prototype_bytes": 11999232,
+      "minimum_leaf_count": 1954,
+      "rows": 1000000
+    },
+    {
+      "cell_only_32_get_worst_bytes": 16187392,
+      "cell_payload_bytes": 9880000000,
+      "minimum_child_prototype_entries": 39062,
+      "minimum_f32_prototype_bytes": 119998464,
+      "minimum_leaf_count": 19532,
+      "rows": 10000000
+    },
+    {
+      "cell_only_32_get_worst_bytes": 16187392,
+      "cell_payload_bytes": 98800000000,
+      "minimum_child_prototype_entries": 390624,
+      "minimum_f32_prototype_bytes": 1199996928,
+      "minimum_leaf_count": 195313,
+      "rows": 100000000
+    }
+  ],
+  "schema": "borsuk-hierarchical-cell-prospective-scale-arithmetic-v1",
+  "source_bytes_per_row": 208,
+  "source_candidate": "b0c49ac6ca5e822039e594ad15480779ab53f4c6",
+  "status": "SOURCE_DERIVED_ARITHMETIC_NOT_FEASIBILITY_OR_RSS"
+}
