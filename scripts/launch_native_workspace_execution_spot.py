@@ -10,13 +10,17 @@ controller_code_sha256={every CODE path:SHA256}, native_source_manifest=
 --root-reuse-implementation qualifies a root-frozen authenticated-root candidate.
 --bounded-publication-implementation qualifies the exact bounded publisher candidate.
 --fixed48-implementation qualifies the source-only fixed48 routing candidate.
---hierarchical-cells-implementation qualifies a root-frozen research prototype.
+--hierarchical-cells-implementation uses a separate minimal-archive v2 root.
+Its config additionally carries hierarchical_archive_authority(...)'s four
+ARCHIVE_FIELDS, derived from the committed controller tree before config freeze.
+The config itself is excluded from support hashes to avoid a self-hash cycle.
 CLI aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT.
 """
 import contextlib
 import copy
 import fcntl
 import gzip
+import hashlib
 import io
 import json
 import os
@@ -158,6 +162,10 @@ TERMINAL_IDENTITIES = ('config_sha256', 'code_identity_sha256', 'campaign_schema
     'source_identity_sha256', 'source_file_count', 'native_source_manifest_sha256',
     'native_source_commit', 'artifact_roster_sha256', 'awscli_version', 'awscli_sha256')
 FULL_TERMINAL_IDENTITIES = TERMINAL_IDENTITIES
+ARCHIVE_FIELDS = ('source_archive_paths', 'source_archive_paths_sha256',
+                  'source_archive_file_count', 'source_archive_support_sha256')
+ARCHIVE_IDENTITIES = ('source_archive_paths_sha256', 'source_archive_file_count')
+ARCHIVE_GIT = ('git', '-c', 'core.packedGitWindowSize=16m', '-c', 'core.packedGitLimit=32m')
 FIXED = dict(schema=CONFIG_SCHEMA, architecture='x86_64', region=peer.REGION, bucket=peer.BUCKET,
     instance_type=INSTANCE_TYPE, image_id=IMAGE_ID, root_device_name=ROOT_DEVICE_NAME,
     subnet_id=SUBNET, spot_max_usd_per_hour=SPOT_MAX_USD_PER_HOUR, compute_cap_usd=COMPUTE_CAP,
@@ -193,6 +201,8 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
     NATIVE_DELTA = HIERARCHICAL_CELLS_DELTA if hierarchical_cells else FIXED48_DELTA if fixed48 else BOUNDED_PUBLICATION_DELTA if bounded_publication else ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
     RELEASE_ARTIFACTS = ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation', 'binaries/check_semantic_router_scorer') if hierarchical_cells else ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
     TERMINAL_IDENTITIES = (*FULL_TERMINAL_IDENTITIES, 'controller_source_commit', 'candidate_delta_paths') if scoped else FULL_TERMINAL_IDENTITIES
+    if hierarchical_cells:
+        TERMINAL_IDENTITIES += ARCHIVE_IDENTITIES
     ARTIFACTS = (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS) if implementation else FULL_ARTIFACTS
     ROOT = (semantic.ROOT.parent/'semantic-1m' if semantic_1m else semantic.ROOT/'metadata-waves') / ('implementation-gates/remote-implementation' if implementation else 'implementation-gates/remote-test-build' if test_build else 'implementation-gates/remote-full')
     CONFIG = ROOT/'config.json'
@@ -260,14 +270,14 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
         CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_fixed48_implementation.sh')
         FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_fixed48_implementation.sh'])
     if hierarchical_cells:
-        ROOT = semantic.ROOT.parent/'semantic-1m/hierarchical-cells/implementation-gates'
+        ROOT = semantic.ROOT.parent/'semantic-1m/hierarchical-cells/implementation-gates/minimal-archive'
         CONFIG = ROOT/'config.json'
-        TOKEN_PREFIX = 'hierarchical-cells-implementation-'
+        TOKEN_PREFIX = 'hierarchical-cells-minimal-archive-implementation-'
         PREFIX = 'research/semantic-router/20261003/' + TOKEN_PREFIX
-        TAG = 'borsuk-hierarchical-cells-implementation'
-        SCHEMA = 'borsuk-hierarchical-cells-implementation-gates-spot-v1'
-        CONFIG_SCHEMA = 'borsuk-hierarchical-cells-implementation-gates-v1'
-        RECEIPT_SCHEMA = 'borsuk-hierarchical-cells-implementation-gates-receipt-v1'
+        TAG = 'borsuk-hierarchical-cells-minimal-archive-implementation'
+        SCHEMA = 'borsuk-hierarchical-cells-implementation-gates-spot-v2'
+        CONFIG_SCHEMA = 'borsuk-hierarchical-cells-implementation-gates-v2'
+        RECEIPT_SCHEMA = 'borsuk-hierarchical-cells-implementation-gates-receipt-v2'
         CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_hierarchical_cells_implementation.sh')
         FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_hierarchical_cells_implementation.sh'])
 
@@ -285,6 +295,91 @@ def execution_mode(semantic_1m=False, *, test_build=False, implementation=False,
 
 def mode_flag():
     return ' --hierarchical-cells-implementation' if HIERARCHICAL_CELLS else ' --fixed48-implementation' if FIXED48 else ' --bounded-publication-implementation' if BOUNDED_PUBLICATION else ' --root-reuse-implementation' if ROOT_REUSE else ' --startup-wave8-implementation' if STARTUP_WAVE8 else ' --semantic-1m-implementation' if IMPLEMENTATION else ' --semantic-1m-test-build' if TEST_BUILD else ' --semantic-1m' if SEMANTIC_1M else ''
+
+
+def _hierarchical_archive_roster(base, commit, inventory, manifest_path):
+    """Committed metadata only; CONFIG may be added by the subsequent freeze."""
+    assert HIERARCHICAL_CELLS and re.fullmatch('[0-9a-f]{40}', commit)
+    tree = subprocess.check_output([*ARCHIVE_GIT, 'ls-tree', '-rz', '--full-tree', commit], cwd=base)
+    files = {}
+    for entry in tree.split(b'\0'):
+        if entry:
+            metadata, name = entry.split(b'\t', 1)
+            files[os.fsdecode(name)] = metadata.split()
+    required = set(inventory) | set(CODE) | {str(CONFIG), str(manifest_path)}
+    paths = sorted({n for n in files if not n.startswith('docs/research/')} | required)
+    shared.validate_source_archive_paths(paths)
+    for name in paths:
+        # The config's own hash is bound by qualification, avoiding a hash cycle.
+        if name == str(CONFIG) and name not in files:
+            continue
+        assert name in files and files[name][:2] in ([b'100644', b'blob'], [b'100755', b'blob']), 'committed regular archive file: '+name
+    attribute_paths = sorted(set(paths) | {str(parent) for name in paths for parent in Path(name).parents if parent != Path('.')})
+    attrs = subprocess.check_output([*ARCHIVE_GIT, 'check-attr', '--source='+commit, '-z',
+        'export-ignore', 'export-subst', '--', *attribute_paths], cwd=base).split(b'\0')
+    assert all(v in (b'unspecified', b'unset') for v in attrs[2::3]), 'archive export attributes'
+    return paths, files
+
+
+def hierarchical_archive_authority(base, commit, inventory, manifest_path):
+    """Root-only config input from a full committed tree, before config freeze.
+
+    The returned support hashes cover compiler/runtime fixtures; native and
+    controller bytes already have independent manifests. No archive is built.
+    """
+    paths, files = _hierarchical_archive_roster(base, commit, inventory, manifest_path)
+    support = sorted(set(paths) - set(inventory) - set(CODE) - {str(CONFIG), str(manifest_path)})
+    hashes = {}
+    producer = subprocess.Popen([*ARCHIVE_GIT, 'cat-file', '--batch'], cwd=base,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    try:
+        for name in support:
+            oid = files[name][2]
+            producer.stdin.write(oid+b'\n'); producer.stdin.flush()
+            header = producer.stdout.readline().split()
+            assert len(header) == 3 and header[:2] == [oid, b'blob'], 'committed archive blob: '+name
+            remaining = int(header[2]); digest = hashlib.sha256()
+            while remaining:
+                chunk = producer.stdout.read(min(65536, remaining))
+                assert chunk, 'truncated archive blob: '+name
+                digest.update(chunk); remaining -= len(chunk)
+            assert producer.stdout.read(1) == b'\n', 'archive blob framing'
+            hashes[name] = digest.hexdigest()
+        producer.stdin.close()
+        assert producer.wait() == 0, 'committed archive blob reader'
+    finally:
+        if not producer.stdin.closed:
+            producer.stdin.close()
+        producer.stdout.close()
+        if producer.poll() is None:
+            producer.kill()
+        producer.wait()
+    return dict(source_archive_paths=paths, source_archive_paths_sha256=worker.sha(encoded(paths)),
+                source_archive_file_count=len(paths), source_archive_support_sha256=hashes)
+
+
+def validate_hierarchical_archive(authority, inventory, manifest_path, base=None):
+    """Portable supplied closure; Git authentication is exclusive to preflight."""
+    assert set(ARCHIVE_FIELDS) <= set(authority), 'complete archive authority'
+    paths = authority['source_archive_paths']
+    assert type(paths) is list and shared.validate_source_archive_paths(paths) == sorted(paths), 'sorted exact archive roster'
+    assert authority['source_archive_paths_sha256'] == worker.sha(encoded(paths)), 'archive roster SHA'
+    assert type(authority['source_archive_file_count']) is int and authority['source_archive_file_count'] == len(paths), 'archive roster count'
+    support = authority['source_archive_support_sha256']
+    required = set(inventory) | set(CODE) | {str(CONFIG), str(manifest_path)}
+    assert type(support) is dict and not set(support).intersection(required), 'distinct archive support files'
+    assert all(type(n) is str and type(digest) is str and not n.startswith('docs/research/') and re.fullmatch('[0-9a-f]{64}', digest)
+               for n, digest in support.items()), 'archive support authority'
+    assert set(paths) == set(support) | required, 'exact archive file closure'
+    if base is not None:
+        for name in paths:
+            path = Path(base)
+            for part in Path(name).parts:
+                path /= part
+                assert not path.is_symlink(), 'archive symlink: '+name
+            assert path.is_file(), 'archive regular file: '+name
+        assert all(worker.artifact(Path(base)/name)['sha256'] == digest for name,digest in support.items()), 'archive support drift'
+    return {key: authority[key] for key in ARCHIVE_FIELDS}
 
 
 def qualify(base=Path('.')):
@@ -319,7 +414,7 @@ def qualify(base=Path('.')):
     assert identity == manifest['source_identity_sha256']
     assert SEMANTIC_1M or identity == SOURCE_IDENTITY, 'historical native source identity'
     assert re.fullmatch('[0-9a-f]{40}', manifest['native_source_commit'])
-    proof = dict(schema='borsuk-hierarchical-cells-implementation-gates-qualification-v1' if HIERARCHICAL_CELLS else 'borsuk-fixed48-implementation-gates-qualification-v1' if FIXED48 else 'borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
+    proof = dict(schema='borsuk-hierarchical-cells-implementation-gates-qualification-v2' if HIERARCHICAL_CELLS else 'borsuk-fixed48-implementation-gates-qualification-v1' if FIXED48 else 'borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
         config_path=str(CONFIG), config_sha256=worker.sha(body), campaign_schema=SCHEMA,
         source_sha256=inventory, source_identity_sha256=identity, source_file_count=len(inventory),
         native_source_commit=manifest['native_source_commit'], native_source_manifest=pointer,
@@ -335,6 +430,8 @@ def qualify(base=Path('.')):
     if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
         proof.update(controller_source_commit=config['controller_source_commit'],
                      candidate_delta_paths=list(NATIVE_DELTA))
+    if HIERARCHICAL_CELLS:
+        proof.update(validate_hierarchical_archive(config, inventory, pointer['path'], base))
     return proof
 
 
@@ -355,6 +452,9 @@ def preflight(base=Path('.')):
             cwd=base, text=True).splitlines() == list(NATIVE_DELTA), 'exact candidate source bundle'
         for name in NATIVE_DELTA:
             assert worker.sha(subprocess.check_output(['git','show',proof['native_source_commit']+':'+name], cwd=base)) == proof['source_sha256'][name], 'candidate commit blob: '+name
+        if HIERARCHICAL_CELLS:
+            committed = hierarchical_archive_authority(base, parents[0], proof['source_sha256'], proof['native_source_manifest']['path'])
+            assert committed == {key:proof[key] for key in ARCHIVE_FIELDS}, 'committed minimal archive authority'
         return proof
     assert subprocess.check_output(['git','for-each-ref','--contains=HEAD','--format=%(refname)',
         'refs/remotes/origin/'], cwd=base, text=True).strip(), 'source commit not on an origin ref'
@@ -364,6 +464,8 @@ def preflight(base=Path('.')):
 def stage(repo, out):
     repo, out = Path(repo).resolve(), Path(out).resolve()
     proof = qualify(repo)
+    if HIERARCHICAL_CELLS and any('BORSUK_HIERARCHICAL_'+key.upper() in os.environ for key in ARCHIVE_IDENTITIES):
+        assert all(os.environ.get('BORSUK_HIERARCHICAL_'+key.upper()) == str(proof[key]) for key in ARCHIVE_IDENTITIES), 'deployed archive roster binding'
     for name, body in (('source-qualification.json', encoded(proof)+b'\n'),
                        ('config.json', (repo/CONFIG).read_bytes()),
                        ('native-source-manifest.json', (repo/proof['native_source_manifest']['path']).read_bytes())):
@@ -440,6 +542,8 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
 def validate_receipt(out, proof):
     out = Path(out)
     assert proof['config_path'] == str(CONFIG) and proof['campaign_schema'] == SCHEMA, 'receipt mode'
+    if HIERARCHICAL_CELLS:
+        validate_hierarchical_archive(proof, proof['source_sha256'], proof['native_source_manifest']['path'])
     receipt = json.loads((out/'workspace-receipt.json').read_bytes())
     assert receipt['schema'] == RECEIPT_SCHEMA
     assert type(receipt['exit_status']) is int and receipt['exit_status'] == 0
@@ -490,6 +594,8 @@ def user_data(commit, archive_sha, archive_key, prefix, qualification):
     assert re.fullmatch('[0-9a-f]{40}', commit) and re.fullmatch('[0-9a-f]{64}', archive_sha)
     assert re.fullmatch(re.escape(PREFIX)+r'a[0-9]{4}', prefix)
     assert qualification['campaign_schema'] == SCHEMA and qualification['config_path'] == str(CONFIG)
+    if HIERARCHICAL_CELLS:
+        validate_hierarchical_archive(qualification, qualification['source_sha256'], qualification['native_source_manifest']['path'])
     # Keep only small terminal identities in the existing bootstrap. The full
     # full native map is regenerated from the authenticated archive on the worker.
     adapter = {key:qualification[key] for key in TERMINAL_IDENTITIES}
@@ -517,6 +623,10 @@ for name in $ARTIFACT_NAMES; do
  if [ "$name" = run-closed.log ]; then test -s run.log; else test -s "$name"; fi
 done
 '''
+    if HIERARCHICAL_CELLS:
+        bindings = ' '.join('BORSUK_HIERARCHICAL_'+key.upper()+'='+str(qualification[key]) for key in ARCHIVE_IDENTITIES)
+        command = command.replace('PYTHONPATH="$root/repo" python3.12 -m '+MODULE+flag+' --stage',
+            bindings+' PYTHONPATH="$root/repo" python3.12 -m '+MODULE+flag+' --stage', 1)
     start, end = body.index('phase=install\n'), body.index('phase=complete\n')
     body = body[:start]+command+body[end:]
     if IMPLEMENTATION:
@@ -553,6 +663,8 @@ def replay(out):
         assert terminal[key] == reservation[key], 'campaign source binding'
     for key in TERMINAL_IDENTITIES:
         assert terminal[key] == proof[key], 'terminal ' + key
+    if HIERARCHICAL_CELLS:
+        assert type(terminal['source_archive_file_count']) is int, 'terminal archive count type'
     assert set(proof['code_sha256']) == set(CODE)
     assert proof['code_identity_sha256'] == worker.sha(encoded(proof['code_sha256']))
     base = Path(__file__).resolve().parents[1]
@@ -561,6 +673,8 @@ def replay(out):
     assert type(proof['source_file_count']) is int and len(proof['source_sha256']) == proof['source_file_count'] > 0
     assert worker.source_identity(proof['source_sha256']) == proof['source_identity_sha256']
     assert SEMANTIC_1M or proof['source_identity_sha256'] == SOURCE_IDENTITY
+    if HIERARCHICAL_CELLS:
+        validate_hierarchical_archive(proof, proof['source_sha256'], proof['native_source_manifest']['path'])
     assert set(terminal['artifacts']) <= set(ARTIFACTS), 'unexpected artifact'
     for name, identity in terminal['artifacts'].items():
         assert worker.artifact(out/name) == identity, 'terminal artifact: ' + name
@@ -790,7 +904,7 @@ def rejected(call):
     raise AssertionError('tampered or failed authority accepted')
 
 
-def _lifecycle_self_check():
+def _lifecycle_self_check(proof=None):
     from datetime import datetime, timezone
     from unittest.mock import Mock
     module = sys.modules[__name__]
@@ -811,11 +925,12 @@ def _lifecycle_self_check():
                 assert events == ['terminate','wait'], 'collection before termination waiter'
                 events.append('collect')
                 return dict(status='complete',phase='complete',exit_code=0,artifacts={n:{} for n in ARTIFACTS})
-            with patch.object(module,'ROOT',Path(tmp)), patch.object(module,'preflight',return_value={'config_sha256':'a'*64}), \
+            with patch.object(module,'ROOT',Path(tmp)), patch.object(module,'preflight',return_value=proof or {'config_sha256':'a'*64}), \
                     patch.object(module,'user_data',return_value='mock'), patch.object(module,'collect',side_effect=collected), \
                     patch.object(module,'poll',side_effect=KeyboardInterrupt() if failure == 'interrupt' else None), \
                     patch.object(shared.boto3,'Session',return_value=session), \
-                    patch.object(subprocess,'check_output',side_effect=['','0'*40,b'archive']), \
+                    patch.object(subprocess,'check_output',side_effect=['','0'*40]), \
+                    patch.object(shared,'source_archive',return_value=b'mocked archive') as archive, \
                     patch.object(peer,'missing',return_value=True), \
                     patch.object(peer,'put_if_absent',side_effect=[None,None,OSError('upload')] if failure == 'upload' else [None]*3), \
                     patch.object(os,'fsync',side_effect=OSError('persist') if failure.endswith('fsync') else None), \
@@ -826,6 +941,10 @@ def _lifecycle_self_check():
                     assert failure not in ('success','multi-ack')
                 else:
                     assert failure in ('success','multi-ack'), 'failure swallowed'
+            archive.assert_called_once_with('0'*40, proof['source_archive_paths']) if proof and HIERARCHICAL_CELLS else archive.assert_called_once_with('0'*40)
+            if proof and HIERARCHICAL_CELLS:
+                reserved = json.loads((Path(tmp)/'a0001/aws-reservation.json').read_bytes())
+                assert all(reserved['qualification'][key] == proof[key] for key in ARCHIVE_FIELDS)
             ec2.run_instances.assert_called_once()
             ec2.terminate_instances.assert_called_once_with(InstanceIds=ids)
             ec2.get_waiter.return_value.wait.assert_called_once_with(InstanceIds=ids)
@@ -872,6 +991,11 @@ def _collection_self_check(proof, files, body):
                      dict(terminal,artifacts={n:v for n,v in terminal['artifacts'].items() if n != 'test.log'})]
         if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
             mutations.extend((dict(terminal,controller_source_commit='0'*40),dict(terminal,candidate_delta_paths=[])))
+        if HIERARCHICAL_CELLS:
+            mutations.extend(dict(terminal, **{key: value}) for key,value in
+                             (('source_archive_paths_sha256', '0'*64), ('source_archive_file_count', True),
+                              ('source_archive_file_count', proof['source_archive_file_count']+1),
+                              ('source_archive_file_count', float(proof['source_archive_file_count']))))
         if IMPLEMENTATION:
             downloaded = out/'downloaded'
             downloaded.mkdir()
@@ -1439,16 +1563,146 @@ def _fixed48_protocol_self_check():
     assert previous == (CONFIG, PREFIX, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, NATIVE_DELTA, mode_flag())
 
 
+def _hierarchical_archive_self_check():
+    """Tiny committed closure; no production archive, native tools or network."""
+    module = sys.modules[__name__]
+    with execution_mode(hierarchical_cells=True), tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)/'repo'; repo.mkdir()
+        code = ('scripts/controller.py',)
+        manifest_path = ROOT/'native-source-manifest.json'
+        bodies = {name: b'// native fixture\n' for name in NATIVE_DELTA}
+        bodies.update({'Cargo.toml': b'[workspace]\n', '.cargo/config.toml': b'[build]\n',
+            'README.md': b'build instructions\n', 'scripts/controller.py': b'pass\n',
+            'crates/other/tests/fixtures/literal[1].json': b'{"fixture":1}\n',
+            'docs/research/native-script.rs': b'// required native docs fixture\n',
+            'docs/research/old-binary.gz': b'historical body must stay out\n'})
+        for name, body in bodies.items():
+            path = repo/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(body)
+        inventory = worker.source_hashes(repo)
+        manifest = dict(schema='borsuk-hierarchical-cells-native-source-manifest-v1',
+            source_sha256=inventory, source_file_count=len(inventory),
+            source_identity_sha256=worker.source_identity(inventory), native_source_commit='7'*40,
+            controller_source_commit='4'*40, control_native_source_commit='8'*40,
+            candidate_delta_paths=list(NATIVE_DELTA), candidate_qualification_pending=True)
+        (repo/manifest_path).parent.mkdir(parents=True, exist_ok=True)
+        (repo/manifest_path).write_bytes(encoded(manifest))
+        support = {n: worker.sha(b) for n,b in bodies.items()
+                   if not n.startswith('docs/research/') and n not in inventory and n not in code}
+        paths = sorted(set(support) | set(inventory) | set(code) | {str(CONFIG), str(manifest_path)})
+        authority = dict(source_archive_paths=paths, source_archive_paths_sha256=worker.sha(encoded(paths)),
+                         source_archive_file_count=len(paths), source_archive_support_sha256=support)
+        config = dict(FIXED, controller_authority_pending=False, controller_source_commit='4'*40,
+            controller_code_sha256={n: worker.sha(bodies[n]) for n in code},
+            native_source_manifest=dict(path=str(manifest_path), **worker.artifact(repo/manifest_path)), **authority)
+        (repo/CONFIG).write_bytes(encoded(config))
+        with patch.object(module, 'CODE', code):
+            proof = qualify(repo)
+            assert set(authority) <= set(proof), 'hierarchical qualification must bind the minimal archive roster'
+            assert {k: proof[k] for k in authority} == authority
+            assert 'docs/research/native-script.rs' in paths and 'docs/research/old-binary.gz' not in paths
+            assert 'crates/other/tests/fixtures/literal[1].json' in paths
+            def git(*args):
+                return subprocess.check_output(['git', *args], cwd=repo)
+            git('init', '-q'); git('add', '.')
+            git('-c', 'user.name=Roman Bartusiak', '-c', 'user.email=riomus@gmail.com',
+                'commit', '-qm', 'Synthetic qualification archive fixture')
+            commit = git('rev-parse', 'HEAD').decode().strip()
+            assert hierarchical_archive_authority(repo, commit, inventory, str(manifest_path)) == authority
+            # Committed bytes, rather than worktree bytes, define the support map.
+            fixture = repo/'crates/other/tests/fixtures/literal[1].json'
+            fixture.write_bytes(b'uncommitted fixture drift')
+            assert hierarchical_archive_authority(repo, commit, inventory, str(manifest_path)) == authority
+            fixture.write_bytes(bodies[str(fixture.relative_to(repo))])
+            # A self-consistent omitted support file still fails committed preflight.
+            omitted = dict(authority, source_archive_support_sha256={n:v for n,v in support.items() if n != 'README.md'})
+            omitted['source_archive_paths'] = [n for n in paths if n != 'README.md']
+            omitted['source_archive_paths_sha256'] = worker.sha(encoded(omitted['source_archive_paths']))
+            omitted['source_archive_file_count'] -= 1
+            assert hierarchical_archive_authority(repo, commit, inventory, str(manifest_path)) != omitted
+            for invalid in (dict(inventory, **{'missing.rs': '0'*64}),
+                            dict(inventory, **{'docs/research': '0'*64})):
+                rejected(lambda: hierarchical_archive_authority(repo, commit, invalid, str(manifest_path)))
+            for name, attr in (('README.md', 'export-ignore'), ('README.md', 'export-subst'),
+                               ('docs', 'export-ignore'), ('crates', 'export-ignore')):
+                (repo/'.gitattributes').write_text(name+' '+attr+'\n')
+                git('add', '.gitattributes')
+                git('-c', 'user.name=Roman Bartusiak', '-c', 'user.email=riomus@gmail.com',
+                    'commit', '-qm', 'Synthetic export refusal')
+                changed_commit = git('rev-parse', 'HEAD').decode().strip()
+                rejected(lambda: hierarchical_archive_authority(repo, changed_commit, inventory, str(manifest_path)))
+            (repo/'.gitattributes').unlink()
+            (repo/'link').symlink_to('README.md'); git('add', '-A')
+            git('-c', 'user.name=Roman Bartusiak', '-c', 'user.email=riomus@gmail.com',
+                'commit', '-qm', 'Synthetic nonregular refusal')
+            changed_commit = git('rev-parse', 'HEAD').decode().strip()
+            rejected(lambda: hierarchical_archive_authority(repo, changed_commit, inventory, str(manifest_path)))
+            fixture = repo/'crates/other/tests/fixtures/literal[1].json'
+            fixture.write_bytes(b'tampered runtime fixture')
+            rejected(lambda: qualify(repo))
+            fixture.write_bytes(bodies[str(fixture.relative_to(repo))])
+            for key, value in (('source_archive_paths', paths[:-1]),
+                    ('source_archive_paths', list(reversed(paths))),
+                    ('source_archive_paths', paths+[paths[0]]),
+                    ('source_archive_paths', sorted(paths+['docs/research/old-binary.gz'])),
+                    ('source_archive_paths_sha256', '0'*64), ('source_archive_file_count', True),
+                    ('source_archive_support_sha256', dict(support, **{'docs/research/old-binary.gz': '0'*64})),
+                    ('source_archive_support_sha256', dict(support, **{'README.md': None})),
+                    ('source_archive_support_sha256', {n:v for n,v in support.items() if n != 'README.md'})):
+                changed = dict(config, **{key:value})
+                (repo/CONFIG).write_bytes(encoded(changed))
+                rejected(lambda: qualify(repo))
+            for key in ARCHIVE_FIELDS:
+                (repo/CONFIG).write_bytes(encoded({k:v for k,v in config.items() if k != key}))
+                rejected(lambda: qualify(repo))
+            (repo/CONFIG).write_bytes(encoded(config))
+            fixture.unlink(); fixture.symlink_to(repo/'README.md')
+            rejected(lambda: qualify(repo))
+            fixture.unlink(); fixture.write_bytes(bodies[str(fixture.relative_to(repo))])
+            with patch.object(subprocess, 'check_output', side_effect=AssertionError('remote Git forbidden')):
+                out = Path(tmp)/'stage'; out.mkdir()
+                assert stage(repo, out) == proof
+                bindings = {'BORSUK_HIERARCHICAL_'+key.upper():str(proof[key]) for key in ARCHIVE_IDENTITIES}
+                with patch.dict(os.environ, bindings):
+                    good = Path(tmp)/'bound-stage'; good.mkdir()
+                    assert stage(repo, good) == proof
+                    for key in bindings:
+                        with patch.dict(os.environ, {key: '0'}):
+                            bad = Path(tmp)/('bad-'+key); bad.mkdir()
+                            rejected(lambda: stage(repo, bad))
+                            assert not list(bad.iterdir()), 'binding refusal before artifact writes'
+    shared.source_archive_self_check()
+    print('PASS hierarchical minimal archive/native docs/runtime fixture/tamper/no remote Git')
+
+
+def _hierarchical_archive_metadata_self_check():
+    """Actual local Git metadata only, including every crate's test fixtures."""
+    base = Path(__file__).resolve().parents[1]
+    commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=base, text=True).strip()
+    manifest_path = semantic.ROOT.parent/'semantic-1m/hierarchical-cells/implementation-gates/native-source-manifest.json'
+    manifest = json.loads((base/manifest_path).read_bytes())
+    with execution_mode(hierarchical_cells=True):
+        paths, tree = _hierarchical_archive_roster(base, commit, manifest['source_sha256'], str(manifest_path))
+        nonresearch = {n for n in tree if not n.startswith('docs/research/')}
+        expected = nonresearch | set(manifest['source_sha256']) | set(CODE) | {str(CONFIG), str(manifest_path)}
+        assert set(paths) == expected and set(manifest['source_sha256']) <= set(paths)
+        fixtures = {n for n in tree if n.startswith('crates/') and ('/tests/' in n or '/fixtures/' in n)}
+        assert fixtures and fixtures <= set(paths), 'all committed Rust test fixtures retained'
+        assert {n for n in paths if n.startswith('docs/research/')} == expected - nonresearch, 'no historical research bodies'
+        pending = not (base/CONFIG).exists()
+        print(f'PASS actual committed archive metadata: commit={commit} nonresearch={len(nonresearch)} native={len(manifest["source_sha256"])} archive={len(paths)} crate_test_files={len(fixtures)} roster_sha256={worker.sha(encoded(paths))}; production_authority_pending={pending}; no archive/data/native run')
+
+
 def _hierarchical_cells_protocol_self_check():
     previous = CONFIG, CODE, FIXED, ARTIFACTS, NATIVE_DELTA, mode_flag()
     with execution_mode(hierarchical_cells=True):
-        assert str(ROOT).endswith('semantic-1m/hierarchical-cells/implementation-gates')
+        assert str(ROOT).endswith('semantic-1m/hierarchical-cells/implementation-gates/minimal-archive')
         assert mode_flag() == ' --hierarchical-cells-implementation'
-        assert PREFIX == 'research/semantic-router/20261003/hierarchical-cells-implementation-'
-        assert CONFIG_SCHEMA == FIXED['schema'] == 'borsuk-hierarchical-cells-implementation-gates-v1'
-        assert SCHEMA == 'borsuk-hierarchical-cells-implementation-gates-spot-v1'
-        assert RECEIPT_SCHEMA == 'borsuk-hierarchical-cells-implementation-gates-receipt-v1'
+        assert PREFIX == 'research/semantic-router/20261003/hierarchical-cells-minimal-archive-implementation-'
+        assert CONFIG_SCHEMA == FIXED['schema'] == 'borsuk-hierarchical-cells-implementation-gates-v2'
+        assert SCHEMA == 'borsuk-hierarchical-cells-implementation-gates-spot-v2'
+        assert RECEIPT_SCHEMA == 'borsuk-hierarchical-cells-implementation-gates-receipt-v2'
         assert FIXED['command'] == ['bash', 'scripts/check_hierarchical_cells_implementation.sh']
+        assert TERMINAL_IDENTITIES == (*FULL_TERMINAL_IDENTITIES, 'controller_source_commit', 'candidate_delta_paths', *ARCHIVE_IDENTITIES)
         assert CODE == (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_hierarchical_cells_implementation.sh')
         assert NATIVE_DELTA == HIERARCHICAL_CELLS_DELTA and list(NATIVE_DELTA) == sorted(NATIVE_DELTA)
         assert RELEASE_ARTIFACTS == ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation', 'binaries/check_semantic_router_scorer')
@@ -1461,6 +1715,10 @@ def _hierarchical_cells_protocol_self_check():
         with execution_mode(fixed48=True):
             assert not HIERARCHICAL_CELLS
         assert HIERARCHICAL_CELLS
+    for kwargs in ({}, {'semantic_1m':True}, {'semantic_1m':True, 'test_build':True}, {'semantic_1m':True, 'implementation':True},
+                   {'startup_wave8':True}, {'root_reuse':True}, {'bounded_publication':True}, {'fixed48':True}):
+        with execution_mode(**kwargs):
+            assert not set(ARCHIVE_IDENTITIES).intersection(TERMINAL_IDENTITIES), 'old modes retain full archive protocol'
     assert previous == (CONFIG, CODE, FIXED, ARTIFACTS, NATIVE_DELTA, mode_flag())
 
 
@@ -1573,6 +1831,10 @@ def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication
         proof = dict(controller_source_commit=controller, candidate_delta_paths=list(NATIVE_DELTA),
                      native_source_commit='7'*40 if hierarchical_cells else FIXED48_CHECK_COMMIT if fixed48 else BOUNDED_PUBLICATION_CHECK_COMMIT if bounded_publication else '7'*40 if root_reuse else STARTUP_WAVE8_COMMIT,
                      source_sha256={name:worker.sha(blob) for name in NATIVE_DELTA})
+        if hierarchical_cells:
+            proof.update(source_archive_paths=[], source_archive_paths_sha256='0'*64,
+                         source_archive_file_count=0, source_archive_support_sha256={},
+                         native_source_manifest=dict(path=str(ROOT/'native-source-manifest.json')))
         answers = {
             ('status','--porcelain'): '',
             ('rev-list','--parents','-n','1','HEAD'): bundle+' '+config_commit,
@@ -1584,10 +1846,13 @@ def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication
         failures = ('success','dirty','merge-bundle','wrong-controller','unpublished-config','extra-config-delta','missing-native-delta','extra-native-delta','wrong-candidate-blob')
         if fixed48:
             failures += ('historical-two-path-bundle',)
+        if hierarchical_cells:
+            failures += ('wrong-archive-authority',)
         for failure in failures:
             changed = dict(answers)
             key, value = {
                 'success': (('status','--porcelain'), ''),
+                'wrong-archive-authority': (('status','--porcelain'), ''),
                 'dirty': (('status','--porcelain'), 'dirty'),
                 'merge-bundle': (('rev-list','--parents','-n','1','HEAD'), bundle+' '+config_commit+' '+controller),
                 'wrong-controller': (('rev-list','--parents','-n','1',config_commit), config_commit+' '+'7'*40),
@@ -1603,7 +1868,9 @@ def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication
                 assert args[0] == 'git' and tuple(args[1:]) in changed, args
                 return changed[tuple(args[1:])]
             with patch.object(sys.modules[__name__], 'qualify', return_value=proof), \
-                    patch.object(subprocess,'check_output',side_effect=git):
+                    patch.object(subprocess,'check_output',side_effect=git), \
+                    patch.object(sys.modules[__name__], 'hierarchical_archive_authority',
+                                 return_value={key: ('1'*64 if failure == 'wrong-archive-authority' and key == 'source_archive_paths_sha256' else proof[key]) for key in ARCHIVE_FIELDS} if hierarchical_cells else {}):
                 if failure == 'success':
                     assert preflight() == proof
                 else:
@@ -1672,12 +1939,27 @@ def _self_check():
         native_source_manifest=dict(path=str(manifest_path),bytes=len(manifest_body),sha256=worker.sha(manifest_body)))
     if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or HIERARCHICAL_CELLS:
         config['controller_source_commit'] = '4'*40
+    if HIERARCHICAL_CELLS:
+        support = {'crates/fixture/tests/fixtures/runtime.json': worker.sha(b'fixture body\n')}
+        paths = sorted(set(inventory) | set(CODE) | set(support) | {str(CONFIG), str(manifest_path)})
+        config.update(source_archive_paths=paths, source_archive_paths_sha256=worker.sha(encoded(paths)),
+                      source_archive_file_count=len(paths), source_archive_support_sha256=support)
     with tempfile.TemporaryDirectory() as tmp:
         repo, out = Path(tmp)/'repo', Path(tmp)/'out'
         repo.mkdir(); out.mkdir()
         for name in CODE:
             (repo/name).parent.mkdir(parents=True,exist_ok=True)
-            (repo/name).symlink_to(base/name)
+            if HIERARCHICAL_CELLS:
+                (repo/name).write_bytes((base/name).read_bytes())
+            else:
+                (repo/name).symlink_to(base/name)
+        if HIERARCHICAL_CELLS:
+            for name in inventory:
+                (repo/name).parent.mkdir(parents=True, exist_ok=True)
+                (repo/name).write_bytes(b'// fixture native body; source hashes mocked\n')
+            for name in support:
+                (repo/name).parent.mkdir(parents=True, exist_ok=True)
+                (repo/name).write_bytes(b'fixture body\n')
         (repo/manifest_path).parent.mkdir(parents=True,exist_ok=True)
         (repo/manifest_path).write_bytes(manifest_body)
         (repo/CONFIG).parent.mkdir(parents=True,exist_ok=True)
@@ -1762,7 +2044,7 @@ def _self_check():
         else:
             full_check()
         _collection_self_check(proof,files,body)
-    _lifecycle_self_check()
+    _lifecycle_self_check(proof if HIERARCHICAL_CELLS else None)
     if semantic_1m and not HIERARCHICAL_CELLS:
         _remote_self_check(manifest)
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024
@@ -1782,8 +2064,6 @@ if __name__ == '__main__':
     if semantic_1m:
         args = args[1:]
     configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells)
-    # ponytail: shared launch archives the repository in memory; stream it in
-    # the shared launcher if root's launch resource gate proves insufficient.
     if args[:1] and args[0].startswith('--'):
         resource.setrlimit(resource.RLIMIT_AS, (200*1024**2,200*1024**2))
     if args == ['--self-check']:
@@ -1798,10 +2078,13 @@ if __name__ == '__main__':
             _fixed48_protocol_self_check()
             _fixed48_stages_self_check()
             _startup_wave8_preflight_self_check(fixed48=True)
+            _hierarchical_archive_self_check()
+            _hierarchical_archive_metadata_self_check()
             _hierarchical_cells_protocol_self_check()
             _fixed48_stages_self_check(hierarchical_cells=True)
             _hierarchical_cells_script_self_check()
             _startup_wave8_preflight_self_check(hierarchical_cells=True)
+            self_check(hierarchical_cells=True)
         self_check(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells)
     elif args[:1] == ['--stage']:
         assert len(args) == 3
