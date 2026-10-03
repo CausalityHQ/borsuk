@@ -1,0 +1,205 @@
+{
+  "admission": {
+    "kind": "one_query_per_dataset",
+    "negative_truth_hash": true,
+    "timeout_seconds": 120
+  },
+  "architecture": "x86_64",
+  "authority_pending": false,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "code_sha256": {
+    "scripts/audit_v36_ranked_physical_ids.py": "67af40bf3d505d45979f269218f4bfd426aaaa5f1e6705b6947bd32831d8bb2b",
+    "scripts/benchmark_with_resources.py": "5b46cd201dfc8491b3dd024bcabcbc8269d41fe9ca699b7e3a3e03fcccc146c4",
+    "scripts/check_hierarchical_cells_implementation.sh": "d472fc37c2295535181448a8dda3b3bf49eded54a2b1a9edc93e3964fcc9f04d",
+    "scripts/check_native_metadata_ranges_build.py": "da48c53562220026c8024ba2400dca2ba897aa12d49c3e27c3c2fb40b9f0770e",
+    "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
+    "scripts/check_native_semantic_concurrency.py": "9cb0f018689496f6c2bea48d993a99e64f3f3c9b3850a899ef2c927b75ba83e5",
+    "scripts/check_native_semantic_router_stats.py": "d1fb970c0ab6ec98ec5311204a54277180631116d48a29a564ed3bbd68e5c5c2",
+    "scripts/check_native_startup_build.py": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52",
+    "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+    "scripts/check_semantic_router_coverage.py": "221695c725d79dfbc7f0ac3c2a4bd4e46445fc32628a1fd989eb328270356ff3",
+    "scripts/launch_hierarchical_cells_100k_spot.py": "cc9cfcecb6f97a00038aa9a738fcbdbf916ea71f01a2d4c3ae8a46bbbc17a12d",
+    "scripts/launch_native_metadata_ranges_cold_spot.py": "f1dfdb56d08f864594c4dadbdbae593b61d5285f60703712e91865ebd0a9d0e2",
+    "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
+    "scripts/launch_native_semantic_panel_ids_spot.py": "e232d6433b9a8e4efd233bf45206b15dcffc87c96a75d2b4e85997ecced7b387",
+    "scripts/launch_native_semantic_router_cold_spot.py": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180",
+    "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
+    "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b",
+    "scripts/launch_v174_relaid_bind_compile_spot.py": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a",
+    "scripts/package_semantic_native_generation.py": "cb6a540c810e3a75381d22339eb72f00382b0972a2d3ee687bbb1d97d5a1b594",
+    "scripts/prepare_hierarchical_cells_100k.py": "0878f2d02285ae678e15c04862d76b5b0066f68d67bb786453f55d73ba40b724",
+    "scripts/prepare_native_semantic_publication.py": "2d3a9270f5ad847981d9d89fea8ead9e9295f742369fa1b9fd9cf3e7c7e2c7e4",
+    "scripts/prepare_semantic_positive_inputs.py": "99599d83c091c68661b5347ce568a92145695e420d8c9a3d61e7e0d6b84e884f",
+    "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+    "scripts/run_native_cold_first_query.py": "b4afffd43df8e2ab617749a50fd099fd279e57631e0dcb749b75169ad269a99f",
+    "scripts/run_native_cold_offered.py": "bcd4bbee7d14870489503f9d4e1ec17c53176ef97f0ce851a2f9e8189aa40dfb",
+    "scripts/run_native_metadata_ranges_cold.py": "1322fe19b705caeab275bce69ea6b4a9f2ed84cb6505dcbfe01b25301fdb71b8",
+    "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+    "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+    "scripts/run_native_semantic_router_cold.py": "9fe9e968d99a926bdfc15fae0fc0fadd15d44ed1242b6d4fa2e391c1a3b95f88",
+    "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+    "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6",
+    "scripts/select_v36_rank16_fresh_ids.py": "6388e274ba128d770bbadd8b02833af4f685214bc1f78c9796fd778471d30399"
+  },
+  "compute_cap_usd": 0.25,
+  "consumed": true,
+  "count": 64,
+  "cpu_affinity": [
+    0,
+    1
+  ],
+  "cpu_quota_percent": 200,
+  "delete_on_termination": true,
+  "dimensions": 768,
+  "encrypted": true,
+  "first": 0,
+  "held_out": false,
+  "image_id": "ami-0b8a830d6339a9758",
+  "instance_type": "c7i.2xlarge",
+  "k": 100,
+  "mean_recall_minimum": 0.98,
+  "memory_bytes": 2147483648,
+  "metric": "cosine",
+  "native": {
+    "binaries": {
+      "cells": {
+        "bytes": 4837336,
+        "key": "research/semantic-router/20261003/hierarchical-cells-implementation-a0002/artifacts/binaries/hierarchical_semantic_cells",
+        "path": "assets/cells",
+        "sha256": "a2d88fb01d02b94ca888819d1a006ae780f50b0f15526b65a6c718c965c63dbb"
+      },
+      "writer": {
+        "bytes": 4293168,
+        "key": "research/semantic-router/20261003/hierarchical-cells-implementation-a0002/artifacts/binaries/build_two_bit_generation",
+        "path": "assets/writer",
+        "sha256": "adde84b81925b22a91e046e50266a648b65cef37414c493c14e4058be1d1612d"
+      }
+    },
+    "gate_log": {
+      "bytes": 682941,
+      "key": "research/semantic-router/20261003/hierarchical-cells-implementation-a0002/artifacts/test.log",
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/a0002/test.log",
+      "sha256": "70780ffb1542a01f57b8d059a9801ae60e372866c333b3e8f4b7d212daa59086"
+    },
+    "schema": "borsuk-hierarchical-local-native-proof-v1",
+    "source_archive": {
+      "bytes": 602279909,
+      "key": "research/native-library-check/sources/a611901fd0a38ac48c62675efbaa9e3b7a100f902b318c1ad0e88f115855c998.tar.gz",
+      "path": "assets/qualified-source.tar.gz",
+      "sha256": "a611901fd0a38ac48c62675efbaa9e3b7a100f902b318c1ad0e88f115855c998"
+    },
+    "source_commit": "2638caaec6e7ebd9b39620e497afa14bd64d402d",
+    "sources": {
+      "binary": {
+        "bytes": 19547,
+        "path": "crates/borsuk/src/bin/hierarchical_semantic_cells.rs",
+        "sha256": "99730faeea64fde6ba33dc6c05e99ee77cc07b48e4350bd089537a9fa672b686"
+      },
+      "gates": {
+        "bytes": 3829,
+        "path": "scripts/check_hierarchical_cells_implementation.sh",
+        "sha256": "d472fc37c2295535181448a8dda3b3bf49eded54a2b1a9edc93e3964fcc9f04d"
+      },
+      "module": {
+        "bytes": 94229,
+        "path": "crates/borsuk/src/hierarchical_semantic_cells.rs",
+        "sha256": "f14b86361ca7da229822a81016f0c5641ab48a850e19aa4c4257e125a003d6ad"
+      },
+      "writer": {
+        "bytes": 5808,
+        "path": "crates/borsuk/src/bin/build_two_bit_generation.rs",
+        "sha256": "5c1e49e9e0b9d0a8c674548d04e8c08b8c1174bb16a823c58f5994c1d07867e8"
+      }
+    }
+  },
+  "p05_hits_minimum": 95,
+  "physical_s3_measured": false,
+  "policy": {
+    "blocks_per_cell": 4,
+    "boundary_beam": 24,
+    "fetch_policy": "whole_cell",
+    "max_cell_bytes": 16777216,
+    "max_cell_gets": 32,
+    "max_cells": 32,
+    "max_refinement_bytes": 0,
+    "max_refinement_gets": 1,
+    "max_source_bytes": 0,
+    "max_source_gets": 1,
+    "primary_beam": 8
+  },
+  "refs": {
+    "closeout": {
+      "bytes": 136,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/a0002/aws-closeout.json",
+      "sha256": "b2f4ea30d3323a515e8a47483c69344f388522e60a790ddcc769f904be3d392f"
+    },
+    "inventory": {
+      "bytes": 3445,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/architecture-decision-20261002/next100k-codec-input-inventory.json",
+      "sha256": "4153107bd812d45c0a5b8210abab468c1ee9d9f507b3794a86f1387e36cc84ee"
+    },
+    "launch": {
+      "bytes": 368,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/a0002/aws-launch.json",
+      "sha256": "65660b95b2415ad3d4ff0a1c34b6776c668a113515854ca4a798fc3fa232ee37"
+    },
+    "manifest": {
+      "bytes": 44457,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/a0002/native-source-manifest.json",
+      "sha256": "01dbc6e3dd975451fe3e530bb1154382a5cd1868c991605d8cd6cc61fe0fa84f"
+    },
+    "preparation": {
+      "bytes": 103958,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fixed48/architecture-decision-20261002/next100k-control-preparation-draft.json",
+      "sha256": "1d141feeca62476c8cc96db3f01af51ef6b0cb5fd72f226154db2528b5982a36"
+    },
+    "receipt": {
+      "bytes": 50318,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/a0002/workspace-receipt.json",
+      "sha256": "48e9d07e195d6cd5f01039b2c6543448c6710bbf25c8a36254c68c73e59bd3f4"
+    },
+    "sources": {
+      "bytes": 16015,
+      "path": "docs/research/native-union-20260928/source-completion-http-config.json",
+      "sha256": "06c52df531f8bdb7c30b746cd1a480830e1f2b074ab4d92e45a1c73199ee0a6e"
+    },
+    "staging_authority": {
+      "bytes": 4422,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/qualified-staging-authority.json",
+      "sha256": "a575f925a897f2e7837799c30fd50ded3b347b4f71877ce988e599cd3a8b164d"
+    },
+    "terminal": {
+      "bytes": 3391,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/a0002/aws-terminal.json",
+      "sha256": "762aaa44d5d9bca13aab745ccdcd681576ec455d3a9abd1af6de3ef28e7d052b"
+    },
+    "verification": {
+      "bytes": 5118,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/a0002/integration-verification.json",
+      "sha256": "c4c438ef7108efc137493d24237ff70c1a250f7a7fb23aeac476327a598213ca"
+    }
+  },
+  "region": "eu-central-1",
+  "retune_allowed": false,
+  "root_device_name": "/dev/sda1",
+  "rows": 100000,
+  "schema": "borsuk-hierarchical-100k-staging-v1",
+  "scientific_qualification": false,
+  "scratch_admission_bytes": 8589934592,
+  "scratch_bytes": 17179869184,
+  "scratch_reserve_bytes": 3221225472,
+  "source_encoded_bytes": 683811858,
+  "source_object_count": 14,
+  "spot_max_usd_per_hour": 0.5,
+  "subnet_id": "subnet-034528fbd6977848f",
+  "swap_bytes": 0,
+  "tasks_max": 512,
+  "vendor_win": false,
+  "versions": {
+    "numpy": "2.3.3",
+    "pyarrow": "24.0.0"
+  },
+  "volume_gib": 80,
+  "volume_type": "gp3",
+  "wall_seconds": 1800
+}

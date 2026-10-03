@@ -1,0 +1,38 @@
+{
+  "schema": "borsuk-hierarchical-paired100k-root-decision-v1",
+  "execution": "CLOSED_VALID",
+  "scientific_gate": "FAIL",
+  "instance_id": "i-0097df71ced109493",
+  "instance_state_independently_verified": "terminated",
+  "offline_replay": "PASS",
+  "split": "historical consumed first64,100k,D768,cosine,k100",
+  "matched_vendor_win": false,
+  "physical_s3_ann_measured": false,
+  "next_gate": "preregistered coverage ceiling audit; no ANN rerun or parameter sweep",
+  "datasets": {
+    "cohere": {
+      "mean_recall_at_100": 0.68875,
+      "p05_hits": 50,
+      "losses": {
+        "boundary_misses": 1612,
+        "boundary_recovered": 1719,
+        "final_ranking_misses": 0,
+        "local_nomination_misses": 380,
+        "router_misses": 3331
+      },
+      "returned_hits": 4408
+    },
+    "relaion": {
+      "mean_recall_at_100": 0.649375,
+      "p05_hits": 45,
+      "losses": {
+        "boundary_misses": 887,
+        "boundary_recovered": 1198,
+        "final_ranking_misses": 0,
+        "local_nomination_misses": 1357,
+        "router_misses": 2085
+      },
+      "returned_hits": 4156
+    }
+  }
+}

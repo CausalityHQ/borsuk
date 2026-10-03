@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0097df71ced109493",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0097df71ced109493"
+    }
+  },
+  "prefix": "research/hierarchical-cells/20261003/paired100k-a0001",
+  "source_commit": "ead2019c99c41a82e84af22f550cbfdd86c9a575",
+  "source_archive_sha256": "dce291a15a28fceec58edf7d8d42b3822c3af6ae96a47250c5c3810d2a58895c"
+}
