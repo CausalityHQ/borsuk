@@ -38,7 +38,7 @@
     "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
     "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6"
   },
-  "controller_source_commit": "ccd7a831eeede2eed693e9c6a9dfac0ade7dd8d0",
+  "controller_source_commit": "a5cb933547300e16b302a97943f32159334ce466",
   "cpu_quota_percent": 200,
   "ebs_s3_allowance_usd": 0.15,
   "environment": {
@@ -90,7 +90,7 @@
   "native_source_manifest": {
     "bytes": 47022,
     "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/constrained-split/implementation-gates/native-source-manifest.json",
-    "sha256": "f54d79a97f498af079954e50138cd5041424ec6e2a5495f6c80120cd3adc3aea"
+    "sha256": "9915e6fc425d4ff9d3ab7dadd96b7b3784cde57d21904a168f77da331b14b79f"
   },
   "region": "eu-central-1",
   "root_device_name": "/dev/sda1",
