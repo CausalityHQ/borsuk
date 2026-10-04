@@ -1,0 +1,15 @@
+{
+  "schema": "borsuk-closed-replay-path-repair-v1",
+  "native_job_rerun": false,
+  "scope": "local closed receipt path normalization only",
+  "old_error": "absolute artifact path for relative collector output",
+  "change": "verify_execution resolves output directory before rebuilding authenticated absolute local descriptors",
+  "actual_closed_relative_output_verification_exit_status": 0,
+  "actual_closed_relative_output_status": "PASS",
+  "self_check_exit_status": 0,
+  "self_check_memory_peak_bytes": 54542336,
+  "self_check_swap_peak_bytes": 0,
+  "truth_opened": false,
+  "report_and_terminal_bytes_unchanged": true,
+  "source_sha256": "a41482a99b2b2b9a144729ae3e3455b489dd5b65cbdafae612f8e278ae0bf3d5"
+}

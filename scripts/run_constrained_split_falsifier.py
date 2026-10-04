@@ -448,7 +448,7 @@ def verify_recovery(out, *, repo=None, config=None, config_pin=None, evidence=No
 
 
 def verify_execution(out, config, receipt, evidence):
-    out = Path(out); final = local.read_json(local.identity(out/'execution-receipt.json'))
+    out = Path(out).resolve(); final = local.read_json(local.identity(out/'execution-receipt.json'))
     exact({k: v for k, v in final.items() if k not in ('native_execution', 'worker_closure')}, receipt, 'final/native receipt binding')
     exact(final['complete'], True, 'completed execution')
     exact(final['truth_opened'], False, 'source-only execution')
