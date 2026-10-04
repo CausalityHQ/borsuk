@@ -1444,19 +1444,22 @@ PAIR_ROLES = ('original', 'partitioner')
 PAIR_RESOURCES = {k: v for k, v in CAPS.items() if not k.startswith('nomination_')}
 PAIR_SEAL_SCHEMA = 'borsuk-capacity-partitioner-four-layout-seal-v1'
 PAIR_RECEIPT_SCHEMA = 'borsuk-capacity-partitioner-execution-receipt-v1'
+PAIR_ADMISSION_SCHEMA = 'borsuk-capacity-partitioner-inline-admission-v1'
+PAIR_ADMISSION_STAGES = tuple(d+'-'+r+'-admission' for r in PAIR_ROLES for d in DATASETS) + ('relaion-original-negative-admission',)
 PAIR_STAGES = (tuple(d+'-writer' for d in DATASETS)
     + tuple(d+'-'+r+'-build' for r in PAIR_ROLES for d in DATASETS)
+    + PAIR_ADMISSION_STAGES
     + tuple(d+'-'+r+'-diagnose' for r in PAIR_ROLES for d in DATASETS))
 
 
 def pair_limits(config):
     exact(config['resources'], PAIR_RESOURCES, 'matched pair resource envelope')
-    fields(config['phase_seconds'], 'writer build diagnose', 'ten serial phase budget')
+    fields(config['phase_seconds'], 'writer build admission diagnose', 'fifteen serial phase budget')
     for n, seconds in config['phase_seconds'].items():
         local.integer(seconds, 10, 1669, 'pair phase seconds: '+n)
     require(2*config['phase_seconds']['writer']+4*config['phase_seconds']['build']
-        +4*config['phase_seconds']['diagnose']+120 <= config['wall_seconds'] == 1800,
-        'ten serial phases plus bootstrap/cleanup reserve fit whole deadline')
+        +5*config['phase_seconds']['admission']+4*config['phase_seconds']['diagnose']+120 <= config['wall_seconds'] == 1800,
+        'fifteen serial phases plus bootstrap/cleanup reserve fit whole deadline')
     return {k: v for k, v in PAIR_RESOURCES.items() if k != 'swap_bytes'}
 
 
@@ -1543,6 +1546,154 @@ def pair_reduce(path, diagnostic, config_pin, native, limits, item):
     return result
 
 
+def pair_admission_identity(config, config_pin, roles):
+    from scripts import launch_native_semantic_panel_ids_spot as ids
+    return dict(config_sha256=config_pin['sha256'], code_identity_sha256=ids.sha(ids.encoded(config['code_sha256'])),
+        refs_identity_sha256=ids.sha(ids.encoded(dict(evidence=config['evidence'], pair_evidence=config['pair_evidence'],
+            roles={r: config['roles'][r]['refs'] for r in PAIR_ROLES}))),
+        native_identity_sha256=ids.sha(ids.encoded(roles)))
+
+
+def pair_admission_configs(out, config_pin, seal_pin, plans):
+    """Seal exact ordinal0 request bytes and opaque100 truth IDs for every role."""
+    checks = {}
+    for name in PAIR_ADMISSION_STAGES[:-1]:
+        cell = name.removesuffix('-admission'); diagnostic, _, _, item = plans[cell]
+        hashes, aggregate = request_hashes(diagnostic['requests'], item['inputs']['requests'])
+        exact(aggregate, item['query_f32_sha256'], 'admission original query bits')
+        with positive.open_input(diagnostic['requests']['path']) as stream:
+            line = stream.readline(65537)
+        require(0 < len(line) <= 65536 and line.endswith(b'\n'), 'first complete request line')
+        exact(local.decode(line)['ordinal'], 0, 'admission ordinal0')
+        local.authenticate(diagnostic['truth'], 25600)
+        with positive.open_input(diagnostic['truth']['path']) as stream:
+            truth = stream.read(400)
+        exact(len(truth), 400, 'opaque original100 GT IDs')
+        request_pin = copy_bytes(out/'measurement'/(name+'-request.jsonl'), line)
+        truth_pin = copy_bytes(out/'measurement'/(name+'-truth.u32'), truth)
+        one = dict(diagnostic, count=1, requests=request_pin, truth=truth_pin)
+        pin = local.write_json(out/'measurement'/(name+'-config.json'), one)
+        checks[name] = dict(cell=cell, config=pin, runtime_config=pin, requests=request_pin, truth=truth_pin, query_f32_sha256=hashes[0])
+    name = PAIR_ADMISSION_STAGES[-1]; first_check = checks[PAIR_ADMISSION_STAGES[0]]
+    negative = local.read_json(first_check['config'], 65536); negative['truth']['sha256'] = '0'*64
+    pin = local.write_json(out/'measurement'/(name+'-config.json'), negative)
+    checks[name] = dict(cell=first_check['cell'], config=pin, runtime_config=pin)
+    for check in checks.values():
+        for n in ('config', 'requests', 'truth'):
+            if n in check:
+                fsync_file(check[n]['path'])
+                check[n] = dict(check[n], path=str(Path(check[n]['path']).relative_to(out)))
+    pin = local.write_json(out/'admission-seal.json', dict(schema=PAIR_ADMISSION_SCHEMA, status='CONFIGS_SEALED',
+        complete=True, config=config_pin, paired_seal=seal_pin, checks=checks, diagnose_started=False))
+    fsync_dir(out/'measurement'); fsync_dir(out)
+    return pin
+
+
+def pair_verify_admission_checks(out, config, seal, admission):
+    """Replay actual output identities and freezes; losses never select a policy."""
+    limits = pair_limits(config); out = Path(out)
+    exact(admission['schema'], PAIR_ADMISSION_SCHEMA, 'inline admission schema')
+    exact(admission['status'], 'CONFIGS_SEALED', 'admission sealed before ANN')
+    exact(admission['complete'], True, 'all admission configs'); exact(admission['diagnose_started'], False, 'pre-ANN config seal')
+    exact(body_pin(admission['config']), body_pin(seal['config']), 'same immutable job config')
+    exact(body_pin(admission['paired_seal']), body_pin(local.identity(out/'paired-seal.json')), 'same four-layout seal')
+    exact(set(admission['checks']), set(PAIR_ADMISSION_STAGES), 'four positive one negative')
+    def read(pin, cap=65536):
+        publication.relative(pin['path'])
+        return local.read_json(dict(pin, path=str(out/pin['path'])), cap)
+    for name in PAIR_ADMISSION_STAGES:
+        check = admission['checks'][name]; cell = seal['cells'][check['cell']]
+        measured = read(cell['config']); one = read(check['config']); negative = name == PAIR_ADMISSION_STAGES[-1]
+        exact(check['cell'], 'relaion-original' if negative else name.removesuffix('-admission'), 'exact admission role/dataset')
+        for n, cap in (('requests', 32 << 20), ('truth', 25600)):
+            publication.relative(cell[n]['path'])
+            local.authenticate(dict(cell[n], path=str(out/cell[n]['path'])), cap)
+        exact(check['config']['path'], 'measurement/'+name+'-config.json', 'sealed admission config path')
+        exact(body_pin(check['config']), body_pin(check['runtime_config']), 'runtime/sealed admission config')
+        if negative:
+            expected = read(admission['checks'][PAIR_ADMISSION_STAGES[0]]['config'])
+            expected['truth']['sha256'] = '0'*64
+            exact(one, expected, 'negative replaces only truth SHA')
+        else:
+            runtime = Path(check['runtime_config']['path']).parent
+            exact(one, dict(measured, count=1,
+                requests=dict(check['requests'], path=str(runtime/(name+'-request.jsonl'))),
+                truth=dict(check['truth'], path=str(runtime/(name+'-truth.u32')))), 'same role/root/policy admission')
+            exact(check['requests']['path'], 'measurement/'+name+'-request.jsonl', 'sealed request path')
+            exact(check['truth']['path'], 'measurement/'+name+'-truth.u32', 'sealed truth path')
+            with positive.open_input(out/cell['requests']['path']) as stream:
+                line = stream.readline(65537)
+            with positive.open_input(out/cell['truth']['path']) as stream:
+                truth = stream.read(400)
+            exact(local.authenticate(dict(check['requests'], path=str(out/check['requests']['path'])), 65536, read=True), line, 'unchanged ordinal0 request bytes')
+            exact(local.authenticate(dict(check['truth'], path=str(out/check['truth']['path'])), 400, read=True), truth, 'unchanged opaque GT bytes')
+            query = local.decode(line); exact(query['ordinal'], 0, 'admission first0')
+            exact(local.sha(struct.pack('<'+str(len(query['query']))+'f', *query['query'])), check['query_f32_sha256'], 'exact query f32 bits')
+        path = out/'measurement'/(name+'-diagnostic.jsonl'); pin = local.identity(path)
+        native = config['roles'][cell['role']]['native']
+        if not negative:
+            local.validate_diagnostic(pin, one, check['config'], native, limits)
+        else:
+            body = local.authenticate(pin, limits['max_result_bytes'], read=True); lines = body.splitlines(keepends=True)
+            require(len(lines) == 4 and all(line.endswith(b'\n') and len(line) <= 8 << 20 for line in lines), 'negative complete four-event JSONL')
+            events = [local.decode(line) for line in lines]
+            exact([e['phase'] for e in events], ['identity', 'query_frozen', 'all_queries_frozen', 'terminal'], 'negative freeze before INVALID')
+            identity = events[0]
+            for n, expected in dict(schema=one['schema'], config_sha256=check['config']['sha256'],
+                    candidate_root_sha256=one['candidate_root']['sha256'], requests_sha256=one['requests']['sha256'],
+                    module_source_sha256=native['sources']['module']['sha256'], binary_source_sha256=native['sources']['binary']['sha256'],
+                    first=0, count=1, top_k=100, options=one['options']).items():
+                exact(identity.get(n), expected, 'negative source/config identity')
+            exact(events[1].get('ordinal'), 0, 'negative ordinal0'); exact(events[1].get('truth_opened'), False, 'negative truth-free query')
+            for n, expected in dict(first=0, count=1, truth_opened=False, trace_prefix_bytes=len(lines[0]+lines[1]),
+                    trace_prefix_sha256=local.sha(lines[0]+lines[1])).items():
+                exact(events[2].get(n), expected, 'negative synced freeze')
+            exact(events[3]['status'], 'INVALID', 'bad truth INVALID'); exact(events[3]['complete'], False, 'bad truth incomplete')
+    return admission
+
+
+def pair_inline_admission(out, config, config_pin, roles, plans, receipt, evidence, check, deadline):
+    seal = local.read_json(receipt['paired_seal'], 8 << 20)
+    admission_pin = pair_admission_configs(out, config_pin, receipt['paired_seal'], plans)
+    admission = local.read_json(admission_pin, 1 << 20)
+    for name in PAIR_ADMISSION_STAGES:
+        entry = admission['checks'][name]; cfg = dict(entry['config'], path=str(out/entry['config']['path']))
+        binary = plans[entry['cell']][2]['binaries']['cells']
+        path = out/'measurement'/(name+'-diagnostic.jsonl'); negative = name == PAIR_ADMISSION_STAGES[-1]
+        try:
+            native_stage(name, [binary['path'], 'diagnose', cfg['path'], cfg['sha256'], str(path)], binary, cfg,
+                out/'measurement', dict(pair_limits(config), timeout_seconds=config['phase_seconds']['admission']),
+                config['phase_seconds']['admission'], deadline, receipt['stages'], check)
+        except ValueError:
+            if not negative:
+                raise
+            # Expected bad-truth exit2 is independently verified below against
+            # the original unit/native receipts, including false success flags.
+        else:
+            require(not negative, 'bad truth unexpectedly accepted')
+        receipt['truth_opened'] = True
+    pair_verify_admission_checks(out, config, seal, admission)
+    pair_verify_stages(out, config, seal, evidence, receipt['stages'], admission)
+    check()
+    artifacts = {}
+    for name in PAIR_ADMISSION_STAGES:
+        artifacts[name] = {}
+        for n, filename in dict(result=name+'-diagnostic.jsonl', stage=name+'-stage.json',
+                receipt=name+'-stage-receipt.json', closure=name+'-closure.json', log=name+'.log', unit_log=name+'-unit.log').items():
+            path = out/'measurement'/filename; fsync_file(path)
+            artifacts[name][n] = dict(local.identity(path), path=str(path.relative_to(out)))
+    fsync_dir(out/'measurement'); check()
+    marker = dict(schema=PAIR_ADMISSION_SCHEMA, status='ADMITTED', complete=True,
+        **pair_admission_identity(config, config_pin, roles), paired_seal=receipt['paired_seal'], admission_seal=admission_pin,
+        evidence=artifacts, normal_native_exits=4, corrupted_truth_exit_status=2, synced_freezes_verified=True,
+        resource_gate_passed=True, cleanup_complete=True, native_units_drained=True, quality_promotion=False,
+        excluded_from_measurement=True)
+    marker['premeasurement_closures'] = {s['name']: dict(local.identity(out/'measurement'/(s['name']+'-closure.json')),
+        path='measurement/'+s['name']+'-closure.json') for s in receipt['stages']}
+    pin = local.write_json(out/'inline-admission.json', marker); fsync_dir(out)
+    return pin
+
+
 def pair_execute(config, config_pin, repo, out, download, check, deadline):
     out, repo = Path(out), Path(repo); limits = pair_limits(config)
     roles = {r: qualify_role(r, config['roles'][r], repo) for r in PAIR_ROLES}
@@ -1609,6 +1760,7 @@ def pair_execute(config, config_pin, repo, out, download, check, deadline):
                 plans[name] = (diagnostic, cfg, natives[role], item)
                 check()
         receipt['paired_seal'] = pair_seal(out, config_pin, roles, cells)
+        receipt['inline_admission'] = pair_inline_admission(out, config, config_pin, roles, plans, receipt, evidence, check, deadline)
         for role in PAIR_ROLES:
             for d in DATASETS:
                 name = d+'-'+role; diagnostic, cfg, native, item = plans[name]; binary = native['binaries']['cells']
@@ -1649,6 +1801,7 @@ def pair_verify_seal(output, *, repo=None, config=None, config_pin=None, evidenc
     exact(body_pin(seal['config']), body_pin(config_pin), 'sealed pair config')
     exact(seal['roles'], {r: qualify_role(r, config['roles'][r], repo) for r in PAIR_ROLES}, 'sealed qualified binary roles')
     exact(set(seal['cells']), {d+'-'+r for r in PAIR_ROLES for d in DATASETS}, 'four-cell roster')
+    pair_verify_inline_admission(out, config, seal, evidence)
     for name, cell in seal['cells'].items():
         d, role = cell['dataset'], cell['role']; exact(name, d+'-'+role, 'role dataset cell name')
         pins = {}
@@ -1690,19 +1843,37 @@ def pair_verify_execution(output, config, seal, evidence):
     exact(receipt['roles'], seal['roles'], 'execution source authorities')
     require(0 < receipt['wall_seconds'] <= 1800 and receipt['remaining_deadline_seconds'] > 0, 'whole execution deadline')
     exact(receipt['cleanup'], dict(original_root_removed=True, native_units_drained=True, native_processes_concurrent_max=1), 'exact serial/drained cleanup')
-    exact([s['name'] for s in receipt['stages']], list(PAIR_STAGES), 'ten serial native calls')
-    for record in receipt['stages']:
+    admission = pair_verify_inline_admission(out, config, seal, evidence)
+    exact(body_pin(receipt['inline_admission']), body_pin(local.identity(out/'inline-admission.json')), 'runtime admission marker')
+    pair_verify_stages(out, config, seal, evidence, receipt['stages'], admission)
+    exact(receipt['cells'], {n: dict(root_sha256=c['root']['sha256'], retained=True) for n, c in seal['cells'].items()}, 'four completed retained layouts')
+    exact(receipt['control_status'], {d: receipt['results'][d+'-original']['status'] for d in DATASETS}, 'control FAIL separately')
+    exact(receipt['candidate_status'], 'PASS' if all(receipt['results'][d+'-partitioner']['status'] == 'PASS' for d in DATASETS) else 'FAIL', 'candidate scientific gate')
+    return receipt
+
+
+def pair_verify_stages(output, config, seal, evidence, stages, admission):
+    out = Path(output).resolve()
+    runtime_measurement = Path(admission['checks'][PAIR_ADMISSION_STAGES[0]]['runtime_config']['path']).parent
+    exact([s['name'] for s in stages], list(PAIR_STAGES[:len(stages)]), 'serial native call order')
+    require(len(stages) in (11, 15), 'premeasurement or complete stage roster')
+    for record in stages:
         name = record['name']; parts = name.split('-'); d, phase = parts[0], parts[-1]
         role = 'original' if phase == 'writer' else parts[1]
+        negative = name == PAIR_ADMISSION_STAGES[-1]
         binary = config['roles'][role]['native']['binaries']['writer' if phase == 'writer' else 'cells']
-        for n, expected in dict(exit_status=0, closed=True, unit_drained=True, cgroup_drained=True, resource_gate_passed=True).items():
+        expected_exit = 2 if negative else 0
+        expected_success = not negative
+        closure = local.read_json(local.identity(out/'measurement'/(name+'-closure.json')), 1 << 20)
+        exact(closure, record, 'original retained stage closure')
+        for n, expected in dict(exit_status=expected_exit, closed=True, unit_drained=True, cgroup_drained=True, resource_gate_passed=expected_success).items():
             exact(record[n], expected, 'actual native/drain closure')
         exact(record['unit_closeout']['MainPID'], '0', 'no native PID')
         require(record['unit_closeout']['ActiveState'] in ('inactive', 'failed'), 'native unit inactive')
         body = local.read_json(dict(body_pin(record['native_receipt']), path=str(out/'measurement'/(name+'-stage-receipt.json'))), 1 << 20)
-        exact(body['status'], 'CLOSED', 'actual native complete'); exact(body['complete'], True, 'actual native receipt')
+        exact(body['status'], 'INVALID' if negative else 'CLOSED', 'original native outcome'); exact(body['complete'], expected_success, 'actual native receipt')
         exact(len(body['stages']), 1, 'one native per unit'); stage = body['stages'][0]
-        for n, expected in dict(exit_status=0, cleanup_complete=True, resource_gate_passed=True).items():
+        for n, expected in dict(exit_status=expected_exit, cleanup_complete=True, resource_gate_passed=expected_success).items():
             exact(stage[n], expected, 'actual normal native exit/resources')
         exact(stage['command'], record['command'], 'observed native invocation')
         exact(body_pin(stage['binary']), body_pin(binary), 'qualified binary role cannot swap')
@@ -1712,7 +1883,15 @@ def pair_verify_execution(output, config, seal, evidence):
             require(0 < int(snapshot['memory.max']) <= 2 << 30 and int(snapshot['memory.peak']) <= 2 << 30, 'native memory cap')
             exact(snapshot['memory.swap.max'], '0', 'native noSwap'); exact(int(snapshot['memory.swap.peak']), 0, 'native no swap peak')
             exact(snapshot['cpu_affinity'], [0, 1], 'matched native CPU2')
-        require(stage['wall_seconds'] <= config['phase_seconds'][phase], 'phase wall deadline')
+        require(0 <= stage['wall_seconds'] <= record['wall_seconds'] <= config['phase_seconds'][phase], 'phase wall deadline')
+        for n, cap in (('sampled_peak_scratch_bytes', 16 << 30), ('sampled_peak_rss_bytes', 2 << 30)):
+            local.integer(stage[n], 0, cap, 'native sampled resource cap')
+        spec = local.read_json(local.identity(out/'measurement'/(name+'-stage.json')), 65536)
+        exact(spec['schema'], 'borsuk-global-leaf-owned-stage-v1', 'original owned spec')
+        for n, expected in dict(name=name, command=record['command'], binary=stage['binary'], config=stage['config'],
+                output=str(runtime_measurement), resources=dict(pair_limits(config), timeout_seconds=config['phase_seconds'][phase])).items():
+            exact(spec[n], expected, 'original owned stage spec')
+        require(0 < spec['timeout_seconds'] <= config['phase_seconds'][phase], 'owned timeout cap')
         item = evidence['items'][d]; cell = seal['cells'][d+'-'+role]
         if phase == 'writer' or (phase == 'build' and role == 'original'):
             old = item['recovery']; cfg = str(ORIGINAL_ROOT/'screen/measurement'/f'{d}-{phase}.json')
@@ -1720,18 +1899,42 @@ def pair_verify_execution(output, config, seal, evidence):
             expected = [bp['path'], cfg, old['original_writer_config']['sha256'], '67108864', str(ORIGINAL_ROOT/'screen/measurement'/(d+'-generation'))] if phase == 'writer' else [bp['path'], 'build', cfg, old['original_build_config']['sha256'], old['output_cell_path']]
             exact(record['command'], expected, 'original exact command/config/flags')
         else:
-            cfg = cell['config'] if phase == 'diagnose' else cell['build']
-            exact(record['command'][1], phase, 'role command'); exact(record['command'][3], cfg['sha256'], 'sealed config invoked')
-            exact(Path(record['command'][2]).name, d+'-'+role+'-'+phase+'.json', 'fixed role config filename')
-            expected_output = cell['runtime_root']['path'].removesuffix('/manifest.json') if phase == 'build' else str(Path(stage['config']['path']).parent/(d+'-'+role+'-diagnostic.jsonl'))
+            cfg = admission['checks'][name]['config'] if phase == 'admission' else cell['config'] if phase == 'diagnose' else cell['build']
+            exact(record['command'][1], 'diagnose' if phase == 'admission' else phase, 'role command'); exact(record['command'][3], cfg['sha256'], 'sealed config invoked')
+            exact(Path(record['command'][2]).name, name+'-config.json' if phase == 'admission' else d+'-'+role+'-'+phase+'.json', 'fixed role config filename')
+            exact(Path(record['command'][2]).parent, runtime_measurement, 'runtime config location')
+            expected_output = cell['runtime_root']['path'].removesuffix('/manifest.json') if phase == 'build' else str(runtime_measurement/(name+'-diagnostic.jsonl' if phase == 'admission' else d+'-'+role+'-diagnostic.jsonl'))
             exact(record['command'][4], expected_output, 'fixed role output path')
-        exact(body_pin(stage['config']), body_pin(cell['writer'] if phase == 'writer' else cell['build'] if phase == 'build' else cell['config']), 'retained sealed stage config')
+        exact(body_pin(stage['config']), body_pin(cell['writer'] if phase == 'writer' else cell['build'] if phase == 'build' else admission['checks'][name]['config'] if phase == 'admission' else cell['config']), 'retained sealed stage config')
         for filename, pin in ((name+'.log', stage['log']), (name+'.log', record['native_log']), (name+'-unit.log', record['log'])):
             exact(body_pin(local.identity(out/'measurement'/filename)), body_pin(pin), 'observed retained log')
-    exact(receipt['cells'], {n: dict(root_sha256=c['root']['sha256'], retained=True) for n, c in seal['cells'].items()}, 'four completed retained layouts')
-    exact(receipt['control_status'], {d: receipt['results'][d+'-original']['status'] for d in DATASETS}, 'control FAIL separately')
-    exact(receipt['candidate_status'], 'PASS' if all(receipt['results'][d+'-partitioner']['status'] == 'PASS' for d in DATASETS) else 'FAIL', 'candidate scientific gate')
-    return receipt
+
+
+def pair_verify_inline_admission(out, config, seal, evidence):
+    marker = local.read_json(local.identity(out/'inline-admission.json'), 1 << 20)
+    for n, expected in dict(schema=PAIR_ADMISSION_SCHEMA, status='ADMITTED', complete=True, normal_native_exits=4,
+            corrupted_truth_exit_status=2, synced_freezes_verified=True, resource_gate_passed=True, cleanup_complete=True,
+            native_units_drained=True, quality_promotion=False, excluded_from_measurement=True,
+            **pair_admission_identity(config, seal['config'], seal['roles'])).items():
+        exact(marker[n], expected, 'actual inline marker binding')
+    exact(body_pin(marker['paired_seal']), body_pin(local.identity(out/'paired-seal.json')), 'marker four-layout binding')
+    exact(body_pin(marker['admission_seal']), body_pin(local.identity(out/'admission-seal.json')), 'marker pre-ANN admission binding')
+    exact(set(marker['evidence']), set(PAIR_ADMISSION_STAGES), 'marker actual native checks')
+    for name, pins in marker['evidence'].items():
+        for n, suffix in dict(result='-diagnostic.jsonl', stage='-stage.json', receipt='-stage-receipt.json',
+                closure='-closure.json', log='.log', unit_log='-unit.log').items():
+            exact(pins[n]['path'], 'measurement/'+name+suffix, 'fixed admission artifact')
+            local.authenticate(dict(pins[n], path=str(out/pins[n]['path'])), (128 if n == 'result' else 16) << 20)
+    admission = local.read_json(local.identity(out/'admission-seal.json'), 1 << 20)
+    pair_verify_admission_checks(out, config, seal, admission)
+    exact(set(marker['premeasurement_closures']), set(PAIR_STAGES[:11]), 'marker all original premeasurement stages')
+    stages = []
+    for name in PAIR_STAGES[:11]:
+        pin = marker['premeasurement_closures'][name]
+        exact(pin['path'], 'measurement/'+name+'-closure.json', 'fixed original closure path')
+        stages.append(local.read_json(dict(pin, path=str(out/pin['path'])), 1 << 20))
+    pair_verify_stages(out, config, seal, evidence, stages, admission)
+    return admission
 
 
 
@@ -1872,8 +2075,15 @@ def pair_self_check():
                     output_cell_path=str(original_root/'screen/measurement'/(d+'-cells')), build_inputs={},
                     expected_cell_root_sha256=root_pin['sha256']))
         evidence = dict(proof=proof, items=items, sources=dict(items=[dict(name=d) for d in DATASETS]))
-        config = dict(resources=copy.deepcopy(PAIR_RESOURCES), phase_seconds=dict(writer=30, build=30, diagnose=30), wall_seconds=1800,
-                      roles={r: dict(native=native[r]) for r in PAIR_ROLES})
+        config = dict(resources=copy.deepcopy(PAIR_RESOURCES), phase_seconds=dict(writer=30, build=30, admission=30, diagnose=30), wall_seconds=1800,
+                      roles={r: dict(native=native[r], refs={}) for r in PAIR_ROLES}, code_sha256={}, evidence={}, pair_evidence={})
+        pair_limits(dict(config, phase_seconds=dict(writer=90, build=210, admission=30, diagnose=90)))
+        try:
+            pair_limits(dict(config, phase_seconds=dict(writer=90, build=210, admission=61, diagnose=90)))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('five admission phases omitted from whole deadline')
         role_ids = {r: dict(source_sha256={}, source_archive_support_sha256={}) for r in PAIR_ROLES}
         calls, fault = [], [None]
         group = {'path':'/mock-native-group', 'memory.max':str(2 << 30), 'memory.peak':'1000',
@@ -1887,12 +2097,23 @@ def pair_self_check():
             exact(resources['memory_max_bytes'], 2 << 30, 'matched diagnostic memory'); exact(resources['cpu_affinity'], [0, 1], 'matched diagnostic CPU')
             log = copy_bytes(out/(name+'.log'), b'mock-native-output\n')
             unit_log = copy_bytes(out/(name+'-unit.log'), b'mock-supervisor-output\n')
-            stage = dict(command=command, binary=binary, config=cfg, exit_status=0, cleanup_complete=True,
-                resource_gate_passed=True, cgroup_before=group, cgroup_after=group, wall_seconds=.001, log=log)
-            inner = local.write_json(out/(name+'-stage-receipt.json'), dict(status='CLOSED', complete=True, stages=[stage], cgroup=group))
-            stages.append(dict(name=name, command=command, exit_status=0, closed=True, cgroup_drained=True,
-                unit_drained=not (fault[0] == 'drain' and name.endswith('-diagnose')), resource_gate_passed=True,
-                unit_closeout=dict(MainPID='0', ActiveState='inactive'), native_receipt=inner, native_log=log, log=unit_log))
+            negative = name == 'relaion-original-negative-admission'
+            kind = fault[0][1] if isinstance(fault[0], tuple) and fault[0][0] == name else None
+            exit_status = (0 if negative else 7) if kind == 'exit' else 2 if negative else 0
+            snapshot = copy.deepcopy(group)
+            if kind == 'cap': snapshot['memory.peak'] = str((2 << 30)+1)
+            if kind == 'swap': snapshot['memory.swap.peak'] = '1'
+            stage = dict(command=command, binary=binary, config=cfg, exit_status=exit_status, cleanup_complete=kind != 'cleanup',
+                resource_gate_passed=exit_status == 0, cgroup_before=group, cgroup_after=snapshot, wall_seconds=.001, log=log,
+                sampled_peak_rss_bytes=1000, sampled_peak_scratch_bytes=1000)
+            inner = local.write_json(out/(name+'-stage-receipt.json'), dict(status='INVALID' if exit_status else 'CLOSED', complete=exit_status == 0, stages=[stage], cgroup=snapshot))
+            record = dict(name=name, command=command, exit_status=exit_status, closed=True, cgroup_drained=kind != 'drain', wall_seconds=.002,
+                unit_drained=not (kind == 'drain' or (fault[0] == 'drain' and name.endswith('-diagnose'))), resource_gate_passed=exit_status == 0,
+                unit_closeout=dict(MainPID='0', ActiveState='inactive'), native_receipt=inner, native_log=log, log=unit_log)
+            stages.append(record)
+            local.write_json(out/(name+'-stage.json'), dict(schema='borsuk-global-leaf-owned-stage-v1', name=name,
+                command=command, binary=binary, config=cfg, output=str(out), resources=resources, timeout_seconds=25))
+            local.write_json(out/(name+'-closure.json'), record)
             if name == 'cohere-partitioner-build' and fault[0] == 'build2':
                 raise ValueError('mock candidate build2 failure')
             if name.endswith('-build'):
@@ -1904,7 +2125,35 @@ def pair_self_check():
                     manifest.update(schema='borsuk-hierarchical-cells-resident-v4', input=local.read_json(cfg))
                     manifest['build']['semantic_repairs'] = 1; (target/'manifest.json').unlink()
                     local.write_json(target/'manifest.json', manifest)
+            if name.endswith('-admission'):
+                require(not (out.parent/'inline-admission.json').exists(), 'marker written only after all admission checks')
+                preseal = local.read_json(local.identity(out.parent/'admission-seal.json'))
+                exact(len(preseal['checks']), 5, 'all admission configs sealed before first ANN')
+                measured = local.read_json(local.identity(out.parent/'paired-seal.json'))
+                for cell in measured['cells'].values():
+                    exact(local.read_json(local.identity(out.parent/cell['config']['path']))['count'], 64, 'measured64 immutable before admission')
+                one = local.read_json(cfg); exact(one['count'], 1, 'admission count1 only')
+                events = [dict(phase='identity', schema=one['schema'], config_sha256=cfg['sha256'],
+                    candidate_root_sha256=one['candidate_root']['sha256'], requests_sha256=one['requests']['sha256'],
+                    module_source_sha256='c'*64, binary_source_sha256='d'*64, first=0, count=1, top_k=100, options=one['options']),
+                    dict(phase='query_frozen', ordinal=0, truth_opened=False, trace={})]
+                prefix = b''.join(local.canonical(e) for e in events)
+                events.append(dict(phase='all_queries_frozen', first=0, count=1, truth_opened=False,
+                    trace_prefix_bytes=len(prefix), trace_prefix_sha256='0'*64 if kind == 'freeze' else local.sha(prefix)))
+                if negative:
+                    events.append(dict(phase='terminal', status='INVALID', complete=False))
+                else:
+                    events += [dict(phase='loss_attribution', ordinal=0, truth_sha256=one['truth']['sha256'], loss={}),
+                        dict(phase='terminal', status='DIAGNOSTIC', complete=True, queries=1, truth_opened=True,
+                            scientific_qualification=False, quality_or_performance_claim=False)]
+                copy_bytes(command[-1], b''.join(local.canonical(e) for e in events))
+                if kind == 'config':
+                    Path(cfg['path']).write_bytes(local.canonical(dict(one, count=2)))
+                if exit_status:
+                    raise ValueError('mock native exit '+str(exit_status))
             if name.endswith('-diagnose'):
+                admission = local.read_json(local.identity(out.parent/'inline-admission.json'))
+                exact(admission['status'], 'ADMITTED', 'no measured64 before actual inline admission')
                 seal = local.read_json(local.identity(out.parent/'paired-seal.json'))
                 exact(len(seal['cells']), 4, 'no diagnose before four sealed configs/layouts')
                 exact(calls[:6], list(PAIR_STAGES[:6]), 'all two writers/four builds before first diagnose')
@@ -1948,7 +2197,10 @@ def pair_self_check():
             require(not (failed/'paired-seal.json').exists() and not original_root.exists(), 'partial pair invalid/clean')
             exact(len(list((failed/'retained').glob('*/*/cells.bin'))), 3, 'three completed layouts survive fourth build failure')
             fault[0] = None; out, receipt = run('complete')
-            exact(calls, list(PAIR_STAGES), 'exact ten native calls')
+            exact(calls, ['relaion-writer', 'cohere-writer', 'relaion-original-build', 'cohere-original-build',
+                'relaion-partitioner-build', 'cohere-partitioner-build', 'relaion-original-admission', 'cohere-original-admission',
+                'relaion-partitioner-admission', 'cohere-partitioner-admission', 'relaion-original-negative-admission',
+                'relaion-original-diagnose', 'cohere-original-diagnose', 'relaion-partitioner-diagnose', 'cohere-partitioner-diagnose'], 'exact15 native calls')
             exact(receipt['status'], 'DIAGNOSTIC', 'control scientific FAIL not INVALID')
             exact(receipt['candidate_status'], 'PASS', 'candidate arm distinct'); exact(set(receipt['control_status'].values()), {'FAIL'}, 'control separately FAIL')
             seal = pair_verify_seal(out, repo=root)
@@ -1976,6 +2228,46 @@ def pair_self_check():
             else:
                 raise AssertionError('independent replay accepted forged drain claims')
             final_receipt(receipt)
+            relocated = root/'replayed'; shutil.copytree(out, relocated)
+            replayed_seal = pair_verify_seal(relocated, repo=root)
+            pair_verify_execution(relocated, config, replayed_seal, evidence)
+            marker_path = relocated/'inline-admission.json'; original_marker = marker_path.read_bytes()
+            marker = local.decode(original_marker); marker['native_identity_sha256'] = '0'*64
+            marker_path.write_bytes(local.canonical(marker))
+            try:
+                pair_verify_seal(relocated, repo=root)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('replay accepted changed inline native identity')
+            marker_path.write_bytes(original_marker)
+            original_closure = relocated/'measurement/relaion-original-negative-admission-closure.json'
+            forged_closure = local.decode(original_closure.read_bytes()); forged_closure['unit_drained'] = False
+            original_closure.write_bytes(local.canonical(forged_closure))
+            try:
+                pair_verify_seal(relocated, repo=root)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('replay accepted changed original admission drain receipt')
+            for name in PAIR_ADMISSION_STAGES:
+                for kind in ('exit', 'freeze', 'drain', 'cap', 'swap', 'cleanup', 'config'):
+                    fault[0] = (name, kind); failed_name = name+'-'+kind
+                    try:
+                        run(failed_name)
+                    except ValueError:
+                        pass
+                    else:
+                        raise AssertionError('bad inline admission accepted: '+failed_name)
+                    failed = root/failed_name
+                    require(not any(n.endswith('-diagnose') for n in calls), 'no measured64 after any bad admission')
+                    require(not (failed/'inline-admission.json').exists(), 'bad admission never promoted')
+                    failed_receipt = local.read_json(local.identity(failed/'native-execution-receipt.json'))
+                    exact(failed_receipt['status'], 'INVALID', 'execution INVALID separate from science')
+                    exact(failed_receipt['complete'], False, 'admission failure incomplete')
+                    require(all((failed/'retained'/d/r/'cells.bin').exists() for d in DATASETS for r in PAIR_ROLES), 'bad admission retains all four layouts')
+                    require(not original_root.exists(), 'bad admission original scratch cleaned')
+            fault[0] = None
             # One query bit mutation with a newly valid body SHA still fails the
             # historical consumed-panel pin (not merely a transport checksum).
             cell = local.read_json(local.identity(out/'paired-seal.json'))['cells']['relaion-partitioner']
@@ -2007,7 +2299,7 @@ def pair_self_check():
             require(all((root/'forged-drain/retained'/d/r/'cells.bin').exists() for d in DATASETS for r in PAIR_ROLES), 'all layouts survive diagnose/drain failure')
     # Shared owned-unit and worker closure negatives use mocked process/kernel snapshots.
     owned_failure_self_check(); worker_closure_self_check()
-    print('PASS source-only pair: actual synthetic18 vs mandatory16; missing pass/proof/footer; four-cell seal order; swapped binaries/query-bit/build2/drain negatives; partial layouts retained. Native/AWS/truth evaluation mocked.')
+    print('PASS source-only pair: all15 calls; four measured64 and five admission configs sealed before ANN; marker last; every admission exit/freeze/drain/cap/swap/cleanup/config tamper refuses64 and retains4; relocated replay verifies original marker/receipts; swapped binaries/query-bit/build2/drain negatives. Native/AWS/truth evaluation mocked.')
 
 
 if __name__ == '__main__':

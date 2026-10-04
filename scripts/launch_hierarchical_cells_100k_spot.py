@@ -2062,15 +2062,17 @@ PAIR_FIXED = {n: PROBE_FIXED[n] for n in PROBE_FIXED if n not in
 PAIR_FIXED.update(schema='borsuk-capacity-partitioner-paired100k-staging-v1', no_truth_body_access=False,
     reduction_enabled=True, policy=local.POLICY, mean_recall_minimum=.98, p05_hits_minimum=95,
     complete_query_latency='complete-query-unmeasured')
-PAIR_EVIDENCE = ('method', 'candidate_manifest', 'original_authority', 'retained_seal',
+PAIR_EVIDENCE = ('method', 'inline_method', 'candidate_manifest', 'original_authority', 'retained_seal',
                  'retained_terminal', 'retained_launch', 'retained_closeout')
 PAIR_OUTPUTS = ('config.json', 'source-qualification.json', 'tool-versions.json', 'staging.json',
-    'paired-seal.json', 'native-execution-receipt.json', 'execution-receipt.json', 'summary.json',
+    'paired-seal.json', 'admission-seal.json', 'inline-admission.json', 'native-execution-receipt.json', 'execution-receipt.json', 'summary.json',
     'resources.json', 'worker-cgroup.json', 'cleanup.json',
     *(f'measurement/{n}{suffix}' for n in probe.PAIR_STAGES for suffix in
         ('-stage.json', '-stage-receipt.json', '-closure.json', '.log', '-unit.log')),
     *(f'measurement/{d}-partitioner-build.json' for d in probe.DATASETS),
     *(f'measurement/{d}-{r}-{n}' for r in probe.PAIR_ROLES for d in probe.DATASETS for n in ('diagnose.json', 'diagnostic.jsonl')),
+    *(f'measurement/{n}{suffix}' for n in probe.PAIR_ADMISSION_STAGES for suffix in ('-config.json', '-diagnostic.jsonl')),
+    *(f'measurement/{n}{suffix}' for n in probe.PAIR_ADMISSION_STAGES[:-1] for suffix in ('-request.jsonl', '-truth.u32')),
     *(f'retained/{d}/{r}/{n}' for r in probe.PAIR_ROLES for d in probe.DATASETS for n in
         ('manifest.json', 'directories.bin', 'cells.bin', 'requests64', 'truth64', 'build.json', 'original-writer.json')))
 PAIR_ARTIFACTS = ('test-resources.txt', 'run-closed.log', *('screen/'+n for n in PAIR_OUTPUTS))
@@ -2094,11 +2096,9 @@ def pair_scratch_roster(config, evidence, paths, repo):
     native = [p for r in probe.PAIR_ROLES for p in
         (config['roles'][r]['native']['source_archive'], config['roles'][r]['native']['gate_log'],
          *config['roles'][r]['native']['binaries'].values())]
-    admission_path = config['admission']['receipt']['path']
     bounded_refs = {str(PAIR_CONFIG): 512 << 10}
     roster = [dict(name='bootstrap-archives-and-unpacked-controller', max_bytes=2*sum(
-                  bounded_refs[p] if p in bounded_refs else local.identity(repo/p)['bytes'] for p in paths if p != admission_path)),
-              dict(name='root-real-admission-evidence-reserve', max_bytes=2*(8 << 20)),
+                  bounded_refs[p] if p in bounded_refs else local.identity(repo/p)['bytes'] for p in paths)),
               dict(name='qualified-native-archives-logs-binaries', max_bytes=sum(p['bytes'] for p in native))]
     for source in evidence['sources']['items']:
         d = source['name']; item = evidence['items'][d]
@@ -2115,7 +2115,8 @@ def pair_scratch_roster(config, evidence, paths, repo):
     for n in probe.PAIR_STAGES:
         roster.append(dict(name=n+'-logs-spec-and-receipts', max_bytes=(32 << 20)+(2 << 20)))
     roster += [dict(name='four-diagnostic-outputs', max_bytes=4*(128 << 20)),
-               dict(name='real-admission-disposable-reserve', max_bytes=128 << 20),
+               dict(name='inline-admission-panels-configs-seals-marker', max_bytes=(1 << 20)+2*(8 << 20)),
+               dict(name='five-inline-admission-outputs', max_bytes=5*(128 << 20)),
                dict(name='cleanup-and-runtime-reserve', max_bytes=config['scratch_reserve_bytes'])]
     return roster
 
@@ -2136,6 +2137,8 @@ def pair_qualify(base=Path('.'), *, canary=False):
     values = {n: probe.ref(repo, p, 128 << 10 if n == 'candidate_manifest' else 8 << 20)
               for n, p in config['pair_evidence'].items()}
     exact(config['pair_evidence']['method']['path'], str(PAIR_ROOT/'prospective-method.json'), 'prospective method path')
+    exact(config['pair_evidence']['inline_method']['path'], str(PAIR_ROOT/'prospective-inline-admission-amendment.json'), 'inline method path')
+    pair_inline_method(config, values['inline_method'])
     exact(config['pair_evidence']['candidate_manifest']['path'], str(probe.PARTITIONER_MANIFEST), 'candidate402 source path')
     method = values['method']
     for n, expected in dict(schema='borsuk-capacity-constrained-partitioner-paired100k-method-v1',
@@ -2176,11 +2179,7 @@ def pair_qualify(base=Path('.'), *, canary=False):
     paths.update(str(probe.OLD/n) for n in evidence['values']['original_terminal']['artifacts'] if n.startswith('screen/'))
     old_config = local.read_json(local.identity(repo/probe.OLD/'screen/config.json'))
     paths.update(p['path'] for p in old_config['refs'].values())
-    # A pending receipt never enters the metadata-only canary archive. Completed
-    # receipts are packaged for worker-side authentication; their reserved size
-    # above is fixed so their own hash/length cannot create a config cycle.
-    if config['admission']['authority_pending'] is False:
-        paths.add(config['admission']['receipt']['path'])
+    # Admission is produced inside this immutable job after layouts exist.
     paths = sorted(paths)
     for p in paths:
         publication.relative(p); repo_path(repo, p)
@@ -2197,30 +2196,38 @@ def pair_qualify(base=Path('.'), *, canary=False):
         source_archive_paths=paths, source_archive_paths_sha256=ids.sha(ids.encoded(paths)),
         artifact_roster_sha256=ids.sha(ids.encoded(PROBE_CANARY_ARTIFACTS if canary else PAIR_ARTIFACTS)),
         awscli_version=AWSCLI_VERSION, awscli_sha256=AWSCLI_SHA256)
-    pair_require_admission(config, proof, repo, canary=canary)
+    pair_require_admission(config)
     return config, proof, evidence
 
 
-def pair_require_admission(config, proof, repo, *, canary=False):
+def pair_inline_method(config, method):
+    """Authenticate the parent's preregistered protocol through pair_evidence."""
+    expected = dict(schema='borsuk-capacity-partitioner-inline-admission-method-v1',
+        methodology_frozen_before_run=True, native_candidate=probe.PARTITIONER_COMMIT,
+        parent_method=config['pair_evidence']['method'],
+        native_calls=dict(original_writers=2, layout_builds=4, one_query_positive_admissions=4,
+            corrupted_truth_negative_admissions=1, measured_64_query_diagnoses=4, total=15),
+        admission_query='Consumed ordinal0 unchanged f32 bytes and original100 truth IDs per dataset/role; no quality threshold/promotion/tuning from admission.',
+        failure_disposition='Any admission/identity/resource/durability/cleanup error stops before measured64 as execution INVALID, never architecture quality KILL.',
+        measurement_limits=dict(cache_state='samehost filesystem cache after builds and symmetric admission; report local stage timing, not object-store cold performance',
+            complete_query_latency='UNMEASURED; stage sums explicitly labelled', generalization='consumed historical panels; no fresh held-out claim',
+            physical_s3_query_latency_or_vendor_parity=False),
+        unchanged=['two datasets100kD768cosinek100 and their64 consumed query panels',
+            'original401 and qualified candidate402 separate binary/source authorities',
+            'cell512/sample256/depth32/primary8/boundary24/blocks4',
+            'WholeCell32GET/16MiB and frozen .98 mean recall@100/p05 hits95 arm',
+            'SQ2/SQ8 arithmetic and query preparation',
+            'host2GiB/noSwap/CPU2/Tasks512/scratch16GiB/deadline1800s',
+            'separate metadata-only canary with zeroANN/GT reads'])
+    for n, value in expected.items():
+        exact(method[n], value, 'preregistered inline method: '+n)
+
+
+def pair_require_admission(config):
     admission = config['admission']
-    fields(admission, 'schema authority_pending config_sha256 code_identity_sha256 refs_identity_sha256 '
-           'native_identity_sha256 receipt', 'root real four-cell admission')
-    exact(admission['schema'], 'borsuk-capacity-partitioner-real-admission-v1', 'pair admission schema')
-    if canary and admission['authority_pending'] is True:
-        return  # No ANN/truth/native calls in infrastructure qualification.
-    exact(admission['authority_pending'], False, 'real native four-cell admission pending')
-    exact(admission['config_sha256'], local.sha(local.canonical({k: v for k, v in config.items() if k != 'admission'})), 'admitted prospective config')
-    for n in ('code_identity_sha256', 'refs_identity_sha256', 'native_identity_sha256'):
-        exact(admission[n], proof[n], 'real admission source/config')
-    receipt = read_ref(repo, admission['receipt'], 8 << 20)
-    for n, expected in dict(schema='borsuk-capacity-partitioner-real-admission-receipt-v1', status='ADMITTED', complete=True,
-            normal_native_exits=4, queries=4, corrupted_truth_exit_status=2, corrupted_truth_status='INVALID',
-            synced_freezes_verified=True, source_bound_real_diagnostic=True, resource_gate_passed=True,
-            cleanup_complete=True, native_units_drained=True, quality_promotion=False).items():
-        exact(receipt[n], expected, 'real diagnostic admission receipt')
-    for n in ('config_sha256', 'code_identity_sha256', 'refs_identity_sha256', 'native_identity_sha256'):
-        exact(receipt[n], admission[n], 'root admission receipt binding')
-    exact(receipt['cells'], [d+'-'+r for r in probe.PAIR_ROLES for d in probe.DATASETS], 'four role-specific real diagnostics')
+    exact(admission, dict(schema=probe.PAIR_ADMISSION_SCHEMA, kind='inline_native',
+        positive_count=4, negative_truth_sha256=True, measured_requires_admitted=True,
+        quality_promotion=False), 'immutable inline native admission policy')
 
 
 def pair_profile():
@@ -2254,17 +2261,35 @@ def pair_profile():
 
 def pair_launcher_self_check():
     """No credentials/native bodies: generated shell, CLI and namespace only."""
-    pending = dict(schema='borsuk-capacity-partitioner-real-admission-v1', authority_pending=True,
-        config_sha256=None, code_identity_sha256=None, refs_identity_sha256=None, native_identity_sha256=None,
-        receipt=dict(path='pending-real-admission.json', bytes=None, sha256=None))
-    with patch.object(sys.modules[__name__], 'read_ref', side_effect=AssertionError('pending canary read future admission')):
-        pair_require_admission(dict(admission=pending), {}, Path('.'), canary=True)
+    method_path = PAIR_ROOT/'prospective-inline-admission-amendment.json'
+    fixture = method_path if method_path.exists() else Path(os.environ.get('BORSUK_INLINE_METHOD_FIXTURE', ''))
+    require(fixture.is_file(), 'parent inline amendment or exact temporary fixture required')
+    with tempfile.TemporaryDirectory(prefix='pair-inline-method-mock-') as tmp:
+        repo = Path(tmp); path = repo/method_path; path.parent.mkdir(parents=True)
+        shutil.copyfile(fixture, path)
+        pin = dict(local.identity(path), path=str(method_path))
+        method = probe.ref(repo, pin)
+        cfg = dict(pair_evidence=dict(method=method['parent_method'], inline_method=pin))
+        pair_inline_method(cfg, method)
+        for n, value in (('native_candidate', '0'*40), ('native_calls', dict(method['native_calls'], total=10)),
+                ('unchanged', []), ('measurement_limits', dict(method['measurement_limits'], physical_s3_query_latency_or_vendor_parity=True)),
+                ('parent_method', dict(method['parent_method'], sha256='0'*64))):
+            try:
+                pair_inline_method(cfg, dict(method, **{n: value}))
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('changed frozen inline method accepted: '+n)
+    inline = dict(schema=probe.PAIR_ADMISSION_SCHEMA, kind='inline_native', positive_count=4,
+        negative_truth_sha256=True, measured_requires_admitted=True, quality_promotion=False)
+    with patch.object(sys.modules[__name__], 'read_ref', side_effect=AssertionError('read future admission')):
+        pair_require_admission(dict(admission=inline))
     try:
-        pair_require_admission(dict(admission=pending), {}, Path('.'))
+        pair_require_admission(dict(admission=dict(inline, receipt='future.json')))
     except ValueError:
         pass
     else:
-        raise AssertionError('science accepted pending real native admission')
+        raise AssertionError('immutable config accepted future external admission')
     with tempfile.TemporaryDirectory(prefix='pair-import-closure-') as tmp:
         for name in PAIR_CODE:
             path = Path(tmp)/name; path.parent.mkdir(parents=True, exist_ok=True)
@@ -2288,7 +2313,7 @@ def pair_launcher_self_check():
     cli = subprocess.run([sys.executable, '-B', '-m', MODULE, '--partitioner-pair'], capture_output=True, text=True, timeout=10)
     require(cli.returncode == 2 and 'INVALID:' in cli.stderr and 'CLI:' in cli.stderr and not cli.stdout, 'pending pair CLI exits2 before any launch')
     exact(probe.ROLE_NAMES, ('original', 'nomination'), 'historical namespace restored')
-    print('PASS source-only exact packaged import closure, prospective bootstrap shell syntax/terminal-last/limits, actual CLI exit2, scoped historical namespace restoration; no cloud/native bodies.')
+    print('PASS authenticated parent inline amendment/candidate15calls/unchanged science/resources; exact packaged import closure, bootstrap shell syntax/terminal-last/limits, actual CLI exit2, scoped historical namespace restoration; no cloud/native bodies.')
 
 def pair_cli(args):
     require(args, 'CLI: --partitioner-pair aNNNN | --canary aNNNN | --stage[-canary] REPO OUTPUT ROOT | --replay[-canary] OUTPUT | --self-check')
