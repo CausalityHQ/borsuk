@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-056fd77c58b55837d",
+  "nodes": {
+    "0": {
+      "instance_id": "i-056fd77c58b55837d"
+    }
+  },
+  "prefix": "research/semantic-router/20261003/hierarchical-cells-minimal-archive-implementation-a0002",
+  "source_commit": "0a741559b1b0461adb295405a8d163b5fd65571e",
+  "source_archive_sha256": "785f7f70c0a894a4ba3653ab1bedc81bf0dfc9d1812240b6777b509a42ced6aa"
+}
