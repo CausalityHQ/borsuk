@@ -4590,7 +4590,7 @@ pub mod split_balance_diagnostic {
             let ([a, _, b], _) =
                 cuts(&ids, &rows, &panel, &old, &old, &old, &mut budget()).unwrap();
             assert_eq!(a, b);
-            let mut changed = rows;
+            let mut changed = rows.clone();
             changed[100][0] = f32::NAN;
             assert!(cuts(&ids, &changed, &panel, &old, &old, &old, &mut budget()).is_err());
             // Identical source vectors have deterministic neighbor ties. A
