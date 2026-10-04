@@ -1,0 +1,65 @@
+{
+  "config": {
+    "bytes": 28262,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/config.json",
+    "sha256": "d7203261f7e7b9c660aeb55f562a62fbff97d3254981406d70eed1a015455189"
+  },
+  "final_exact_config_qualification_exit_status": 0,
+  "initial_config_preflight_failure": "wrong PROBE_CODE roster in root draft builder; repaired to exact PAIR_CODE before freeze",
+  "measurement_status": "NOT_RUN",
+  "native_files": 402,
+  "native_mismatches": [],
+  "no_cloud": true,
+  "no_native_ann_execution": true,
+  "original_harness_terminal_observations": {
+    "exact_config_preflight": {
+      "exit_status": 0,
+      "invocation_id": "4f0171c10d854c8fa823949b07d0b8e2",
+      "reported_memory_peak": "113.6M",
+      "runtime_seconds": 0.659,
+      "swap_bytes": 0
+    },
+    "root_selfcheck": {
+      "exit_status": 0,
+      "invocation_id": "557f8ed4a3c7411d91c4c877f02273f6",
+      "reported_memory_peak": "99.1M",
+      "runtime_seconds": 3.44,
+      "swap_bytes": 0
+    }
+  },
+  "phase_reserved_seconds": 1650,
+  "requested_controls": {
+    "cpu_percent": 100,
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "tasks_max": 128
+  },
+  "resource_evidence_limit": "Successful units unloaded before independent kernel-property capture; original systemd-run terminal reports retained as harness observations. No extra execution was run.",
+  "schema": "borsuk-capacity-partitioner-inline-root-preflight-v1",
+  "scratch_admission_bytes": 6482146477,
+  "source_check_exit_status": 0,
+  "source_commit": "9fad12ba9b4b8350e546c5bea0845cb9dd52ae63",
+  "source_only_checks": true,
+  "units": {
+    "borsuk-partitioner-inline-final-preflight-20261004.service": {
+      "CPUQuotaPerSecUSec": "1s",
+      "ExecMainStatus": "1",
+      "InvocationID": "327cff4b417a41d88c596c52818e4d50",
+      "MemoryMax": "268435456",
+      "MemoryPeak": "37941248",
+      "MemorySwapMax": "0",
+      "MemorySwapPeak": "0",
+      "Result": "exit-code",
+      "TasksMax": "128"
+    },
+    "borsuk-partitioner-inline-final-preflight2-20261004.service": {
+      "post_unload_systemctl_defaults_not_evidence": true,
+      "unit_unloaded_after_terminal": true
+    },
+    "borsuk-partitioner-inline-root-check-20261004.service": {
+      "post_unload_systemctl_defaults_not_evidence": true,
+      "unit_unloaded_after_terminal": true
+    }
+  },
+  "worker_commit": "0c710aba56d42728ef7cdb718e8ed589a05ed033"
+}
