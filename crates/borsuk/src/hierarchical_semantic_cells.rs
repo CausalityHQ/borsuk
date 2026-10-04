@@ -2651,9 +2651,9 @@ pub mod split_balance_diagnostic {
     use std::{fmt, os::unix::fs::MetadataExt, path::Component};
 
     /// Exact diagnostic configuration, with all numerical controls frozen here.
-    pub const CONFIG_SCHEMA: &str = "borsuk-constrained-split-config-v1";
+    pub const CONFIG_SCHEMA: &str = "borsuk-constrained-split-config-v2";
     /// Terminal report marker; a PASS is not ANN recall or product qualification.
-    pub const REPORT_SCHEMA: &str = "borsuk-constrained-split-diagnostic-v1";
+    pub const REPORT_SCHEMA: &str = "borsuk-constrained-split-diagnostic-v2";
     const AUTH_CAP: usize = 1024 * 1024 * 1024;
     const MEMORY_CAP: usize = 512 * 1024 * 1024;
     const DIRECTORY_CAP: usize = 16 * 1024 * 1024;
@@ -2690,6 +2690,53 @@ pub mod split_balance_diagnostic {
         pub schema: String,
         /// Exactly `cohere` and `relaion`, in this deterministic map order.
         pub datasets: BTreeMap<String, DatasetInputs>,
+    }
+
+    /// Separately authenticated supervisor authority, never supplied by the
+    /// diagnostic body itself. The caller owns the immutable run and closure.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct SupervisorReceipt {
+        /// Immutable expected supervisor run identity.
+        pub run_id: String,
+        /// SHA256 of this run's authenticated configuration.
+        pub config_sha256: String,
+        /// SHA256 of the exact report bytes collected after process exit.
+        pub report_sha256: String,
+        /// Original process's observed exit code, not its claimed body status.
+        pub process_exit_code: i32,
+        /// Original supervisor completed the resource/error/cleanup closure.
+        pub resources_closed: bool,
+    }
+
+    /// Admit a PASS only with an independently authenticated matching original
+    /// supervisor receipt. The report is never standalone terminal authority.
+    pub fn admit_pass(
+        report_bytes: &[u8],
+        expected_run_id: &str,
+        supervisor: &SupervisorReceipt,
+    ) -> Result<()> {
+        require(
+            !report_bytes.is_empty() && report_bytes.len() <= OUTPUT_CAP,
+            "diagnostic supervisor report byte cap",
+        )?;
+        let report: Value = serde_json::from_slice(report_bytes)?;
+        require(
+            report["schema"] == REPORT_SCHEMA
+                && report["status"] == "PASS"
+                && report["requires_matching_supervisor_exit_receipt"] == true
+                && report["durability"]["standalone_authority"] == false
+                && report["durability"]["status"] == "SUPERVISOR_EXIT_RECEIPT_REQUIRED"
+                && !expected_run_id.is_empty()
+                && supervisor.run_id == expected_run_id
+                && valid_sha(&supervisor.report_sha256)
+                && supervisor.report_sha256 == hash(report_bytes)
+                && valid_sha(&supervisor.config_sha256)
+                && report["config_sha256"] == supervisor.config_sha256
+                && supervisor.process_exit_code == 0
+                && supervisor.resources_closed,
+            "diagnostic PASS requires matching supervisor exit-zero/resource closure receipt",
+        )
     }
 
     #[derive(Debug)]
@@ -2768,6 +2815,33 @@ pub mod split_balance_diagnostic {
             directory = fd;
         }
         Err("diagnostic empty path".into())
+    }
+
+    fn create_output(directory: &File, output: &Path) -> Result<File> {
+        // Resolve only the basename against the parent that will be fsynced.
+        // A rename/replacement of its absolute pathname cannot redirect this.
+        require(
+            output.is_absolute() && output.as_os_str().len() <= 4096,
+            "diagnostic absolute bounded new output",
+        )?;
+        let name = output.file_name().ok_or("diagnostic output basename")?;
+        require(
+            directory.metadata()?.is_dir(),
+            "diagnostic pinned output parent",
+        )?;
+        let file = File::from(rustix::fs::openat(
+            directory,
+            name,
+            rustix::fs::OFlags::WRONLY
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::EXCL
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        )?);
+        require(file.metadata()?.is_file(), "diagnostic regular new output")?;
+        Ok(file)
     }
 
     // Keep the descriptor and stat identity. Per-row digests bind later source
@@ -2849,6 +2923,7 @@ pub mod split_balance_diagnostic {
         admitted_bytes: usize,
         auth_bytes: usize,
         canonical_auth_rows: usize,
+        canonical_stream_read_bytes: usize,
         canonical_replay_rows: usize,
         parent_rows: usize,
         trainer_calls: usize,
@@ -2996,6 +3071,7 @@ pub mod split_balance_diagnostic {
                     "admitted_authentication_read_bytes":self.counts.admitted_bytes,
                     "canonical_rereads_charged_to_same_limit":true,
                     "canonical_authentication_rows":self.counts.canonical_auth_rows,
+                    "canonical_stream_underlying_read_bytes":self.counts.canonical_stream_read_bytes,
                     "canonical_replay_rows":self.counts.canonical_replay_rows,
                     "parent_rows":self.counts.parent_rows,"trainer_calls":self.counts.trainer_calls,
                     "trainer_requested_max_iterations":4,
@@ -3042,14 +3118,20 @@ pub mod split_balance_diagnostic {
         )
     }
 
-    fn geometry(manifest: &Manifest, inputs: &DatasetInputs) -> Result<()> {
+    const PRODUCTION_GEOMETRY: (usize, usize) = (100_000, 768);
+    fn geometry(
+        manifest: &Manifest,
+        inputs: &DatasetInputs,
+        expected: (usize, usize),
+    ) -> Result<()> {
         let rows = manifest.rows;
         let dimensions = manifest.dimensions;
         require(
             manifest.schema == SCHEMA
                 && manifest.input.schema == BUILD_SCHEMA
-                && rows == 100_000
-                && dimensions == 768
+                && (rows, dimensions) == expected
+                && (1..=100_000).contains(&rows)
+                && (1..=768).contains(&dimensions)
                 && manifest.seed == NATIVE_CODEC_SEED
                 && (1..=512).contains(&manifest.input.cell_rows)
                 && (2..=1024).contains(&manifest.input.sample_rows)
@@ -3095,6 +3177,20 @@ pub mod split_balance_diagnostic {
         width: usize,
         dimensions: usize,
     }
+    struct CountedReader<R> {
+        inner: R,
+        bytes: usize,
+    }
+    impl<R: Read> Read for CountedReader<R> {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let count = self.inner.read(buffer)?;
+            self.bytes = self
+                .bytes
+                .checked_add(count)
+                .ok_or_else(|| std::io::Error::other("canonical stream read count overflow"))?;
+            Ok(count)
+        }
+    }
     fn vector(body: &[u8], dimensions: usize) -> Result<Vec<f32>> {
         require(
             body.len() == 8 + 4 * dimensions,
@@ -3123,6 +3219,15 @@ pub mod split_balance_diagnostic {
             dimensions: usize,
             budget: &mut Budget,
         ) -> Result<Self> {
+            Self::authenticate_with(inputs, rows, dimensions, budget, |_| Ok(()))
+        }
+        fn authenticate_with(
+            inputs: &DatasetInputs,
+            rows: usize,
+            dimensions: usize,
+            budget: &mut Budget,
+            after_open: impl FnOnce(&File) -> Result<()>,
+        ) -> Result<Self> {
             let order = Pinned::small(&inputs.order, rows * 8, budget)?;
             let mut inverse = filled(rows, usize::MAX)?;
             for (physical, word) in order.chunks_exact(8).enumerate() {
@@ -3135,31 +3240,47 @@ pub mod split_balance_diagnostic {
             }
             let pin = Pinned::open(&inputs.canonical, inputs.canonical.bytes)?;
             budget.admit(inputs.canonical.bytes)?;
+            after_open(&pin.file)?;
             let width = 8 + 4 * dimensions;
             let mut row_hashes = filled(rows, [0_u8; 32])?;
             let mut body = filled(width, 0_u8)?;
             let mut digest = Sha256::new();
-            let mut reader = std::io::BufReader::with_capacity(65536, &pin.file);
-            for physical in 0..rows {
-                reader.read_exact(&mut body)?;
-                let id = usize::try_from(i64::from_le_bytes(body[..8].try_into()?))?;
-                require(
-                    id < rows && inverse[id] == physical,
-                    "diagnostic canonical/source order ID binding",
-                )?;
-                vector(&body, dimensions)?;
-                digest.update(&body);
-                row_hashes[id] = Sha256::digest(&body).into();
-                budget.counts.canonical_auth_rows += 1;
-                if physical % 256 == 0 {
-                    budget.poll()?;
-                }
+            // Limit the underlying read, not just the row loop: buffering and
+            // the EOF probe cannot consume growth beyond the admitted length.
+            let bounded = CountedReader {
+                inner: &pin.file,
+                bytes: 0,
             }
-            require(
-                reader.read(&mut [0])? == 0
-                    && format!("{:x}", digest.finalize()) == inputs.canonical.sha256,
-                "diagnostic original canonical SHA256/EOF",
-            )?;
+            .take(inputs.canonical.bytes as u64);
+            let mut reader = std::io::BufReader::with_capacity(65536, bounded);
+            let streamed = (|| -> Result<()> {
+                for physical in 0..rows {
+                    reader.read_exact(&mut body)?;
+                    let id = usize::try_from(i64::from_le_bytes(body[..8].try_into()?))?;
+                    require(
+                        id < rows && inverse[id] == physical,
+                        "diagnostic canonical/source order ID binding",
+                    )?;
+                    vector(&body, dimensions)?;
+                    digest.update(&body);
+                    row_hashes[id] = Sha256::digest(&body).into();
+                    budget.counts.canonical_auth_rows += 1;
+                    if physical % 256 == 0 {
+                        budget.poll()?;
+                    }
+                }
+                require(
+                    reader.read(&mut [0])? == 0
+                        && format!("{:x}", digest.finalize()) == inputs.canonical.sha256,
+                    "diagnostic original canonical SHA256/EOF",
+                )
+            })();
+            budget.counts.canonical_stream_read_bytes = budget
+                .counts
+                .canonical_stream_read_bytes
+                .checked_add(reader.get_ref().get_ref().bytes)
+                .ok_or("canonical stream count overflow")?;
+            streamed?;
             budget.verified(inputs.canonical.bytes)?;
             budget.poll()?;
             pin.unchanged()?;
@@ -3393,8 +3514,19 @@ pub mod split_balance_diagnostic {
     }
 
     fn coordinate_split(ids: &[usize], rows: &[Vec<f32>]) -> Result<Vec<bool>> {
+        coordinate_partition(ids, rows, ids.len() / 2)
+    }
+    fn coordinate_partition(
+        ids: &[usize],
+        rows: &[Vec<f32>],
+        left_rows: usize,
+    ) -> Result<Vec<bool>> {
         require(
-            ids.len() == rows.len() && rows.len() >= 2 && !rows[0].is_empty(),
+            ids.len() == rows.len()
+                && rows.len() >= 2
+                && !rows[0].is_empty()
+                && left_rows > 0
+                && left_rows < ids.len(),
             "diagnostic coordinate geometry",
         )?;
         let dimensions = rows[0].len();
@@ -3432,7 +3564,7 @@ pub mod split_balance_diagnostic {
         );
         projected.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         let mut left = filled(ids.len(), false)?;
-        for item in &projected[..ids.len() / 2] {
+        for item in &projected[..left_rows] {
             left[item.2] = true;
         }
         Ok(left)
@@ -3631,18 +3763,19 @@ pub mod split_balance_diagnostic {
         rows: &[Vec<f32>],
         panel: &[usize],
         old: &[bool],
+        matched: &[bool],
         new: &[bool],
         budget: &mut Budget,
-    ) -> Result<(usize, usize, String)> {
+    ) -> Result<([usize; 3], String)> {
         require(
             panel.len() == PANEL
                 && ids.len() == rows.len()
                 && old.len() == ids.len()
+                && matched.len() == ids.len()
                 && new.len() == ids.len(),
             "diagnostic exact 128-row panel",
         )?;
-        let mut old_cut = 0;
-        let mut new_cut = 0;
+        let mut crossings = [0_usize; 3];
         let mut edges = Sha256::new();
         let mut neighbors = reserved(ids.len() - 1)?;
         for (ordinal, &slot) in panel.iter().enumerate() {
@@ -3659,8 +3792,9 @@ pub mod split_balance_diagnostic {
             }
             neighbors.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
             for &(distance, id, other) in &neighbors[..NEIGHBORS] {
-                old_cut += usize::from(old[slot] != old[other]);
-                new_cut += usize::from(new[slot] != new[other]);
+                for (count, membership) in crossings.iter_mut().zip([old, matched, new]) {
+                    *count += usize::from(membership[slot] != membership[other]);
+                }
                 edges.update((ids[slot] as u64).to_le_bytes());
                 edges.update((id as u64).to_le_bytes());
                 edges.update(distance.to_le_bytes());
@@ -3669,13 +3803,47 @@ pub mod split_balance_diagnostic {
                 budget.poll()?;
             }
         }
-        Ok((old_cut, new_cut, format!("{:x}", edges.finalize())))
+        Ok((crossings, format!("{:x}", edges.finalize())))
     }
 
-    fn dataset(inputs: &DatasetInputs, budget: &mut Budget) -> Result<Value> {
+    #[derive(Default)]
+    struct Screening {
+        nodes: usize,
+        sums: [usize; 3],
+        worst: [usize; 3],
+    }
+    impl Screening {
+        fn add(&mut self, crossings: [usize; 3]) {
+            self.nodes += 1;
+            for index in 0..3 {
+                self.sums[index] += crossings[index];
+                self.worst[index] = self.worst[index].max(crossings[index]);
+            }
+        }
+        fn guard(&self, baseline: usize) -> bool {
+            self.sums[baseline] > 0
+                && self.sums[2] * 10 <= self.sums[baseline] * 9
+                && self.worst[2] <= self.worst[baseline]
+        }
+        fn status(&self) -> &'static str {
+            if self.nodes < MIN_VERIFIED {
+                "INCONCLUSIVE"
+            } else if self.guard(0) && self.guard(1) {
+                "PASS"
+            } else {
+                "REJECT"
+            }
+        }
+    }
+
+    fn dataset(
+        inputs: &DatasetInputs,
+        budget: &mut Budget,
+        expected: (usize, usize),
+    ) -> Result<Value> {
         let root_body = Pinned::small(&inputs.root, ROOT_CAP, budget)?;
         let manifest: Manifest = serde_json::from_slice(&root_body)?;
-        geometry(&manifest, inputs)?;
+        geometry(&manifest, inputs, expected)?;
         let codec = RotatedTwoBitCodec::new(&manifest.mean, manifest.seed)?;
         require(
             codec.record_bytes() == manifest.input.records.bytes / manifest.rows,
@@ -3739,10 +3907,10 @@ pub mod split_balance_diagnostic {
         let mut reports = reserved(selected.len())?;
         let mut measured = 0;
         let mut verified_fallbacks = 0;
-        let mut old_sum = 0;
-        let mut new_sum = 0;
-        let mut old_worst = 0;
-        let mut new_worst = 0;
+        let mut nondegenerate_fallbacks = 0;
+        let mut changed_fallbacks = 0;
+        let mut all_measured = Screening::default();
+        let mut acceptance = Screening::default();
         for &offset in &selected {
             budget.poll()?;
             let page = &prototype.directories[&offset];
@@ -3761,18 +3929,30 @@ pub mod split_balance_diagnostic {
             let rows = source.rows(&ids, budget)?;
             let replay = replay(&ids, &rows, prototype.manifest.input.sample_rows, budget)?;
             verify_membership(&ids, &replay.original, &left, &right)?;
+            let proposed_left = replay.proposed.iter().filter(|v| **v).count();
+            let median = coordinate_split(&ids, &rows)?;
+            let matched = coordinate_partition(&ids, &rows, proposed_left)?;
+            let changed =
+                replay.fallback && !replay.degenerate && replay.proposed != replay.original;
             let slots = panel(&ids, &replay.sample, &inputs.root.sha256, offset)?;
             let mut report = json!({"directory_offset":offset,"selection_hash":node_key(&inputs.root.sha256,offset).iter()
                     .map(|byte| format!("{byte:02x}")).collect::<String>(),
                 "rows":ids.len(),"original_membership_verified":true,
                 "original_fallback":replay.fallback,"identical_sample":replay.identical,
                 "degenerate_separator":replay.degenerate,
+                "changed_nondegenerate_fallback":changed,
                 "parent_source_ordinals_sha256":id_hash(ids.iter().copied()),
                 "original_left_sha256":id_hash(ids.iter().zip(&replay.original).filter_map(|(&id,&a)| a.then_some(id))),
                 "original_right_sha256":id_hash(ids.iter().zip(&replay.original).filter_map(|(&id,&a)| (!a).then_some(id))),
                 "proposed_left_sha256":id_hash(ids.iter().zip(&replay.proposed).filter_map(|(&id,&a)| a.then_some(id))),
                 "proposed_right_sha256":id_hash(ids.iter().zip(&replay.proposed).filter_map(|(&id,&a)| (!a).then_some(id))),
-                "proposed_left_rows":replay.proposed.iter().filter(|v| **v).count(),
+                "coordinate_median_left_sha256":id_hash(ids.iter().zip(&median).filter_map(|(&id,&a)| a.then_some(id))),
+                "coordinate_median_right_sha256":id_hash(ids.iter().zip(&median).filter_map(|(&id,&a)| (!a).then_some(id))),
+                "matched_coordinate_left_sha256":id_hash(ids.iter().zip(&matched).filter_map(|(&id,&a)| a.then_some(id))),
+                "matched_coordinate_right_sha256":id_hash(ids.iter().zip(&matched).filter_map(|(&id,&a)| (!a).then_some(id))),
+                "coordinate_median_left_rows":ids.len()/2,"coordinate_median_right_rows":ids.len()-ids.len()/2,
+                "matched_coordinate_left_rows":proposed_left,"matched_coordinate_right_rows":ids.len()-proposed_left,
+                "proposed_left_rows":proposed_left,"proposed_right_rows":ids.len()-proposed_left,
                 "source_fp32_sha256":float_hash(rows.iter().flatten().copied()),
                 "trainer_source_ordinals":replay.sample.iter().map(|&slot| ids[slot]).collect::<Vec<_>>(),
                 "trainer_max_iterations":4,"trainer_metric":"squared_euclidean",
@@ -3784,40 +3964,44 @@ pub mod split_balance_diagnostic {
                 report["status"] = json!("SKIPPED_SUCCESSFUL_UNCONSTRAINED");
             } else {
                 verified_fallbacks += 1;
+                nondegenerate_fallbacks += usize::from(!replay.degenerate);
+                changed_fallbacks += usize::from(changed);
                 if slots.len() < PANEL {
                     report["status"] = json!("INSUFFICIENT_NONTRAINING_ROWS");
                 } else {
-                    let (old, new, edge_sha) = cuts(
+                    let (crossings, edge_sha) = cuts(
                         &ids,
                         &rows,
                         &slots,
-                        &replay.original,
+                        &median,
+                        &matched,
                         &replay.proposed,
                         budget,
                     )?;
                     measured += 1;
-                    old_sum += old;
-                    new_sum += new;
-                    old_worst = old_worst.max(old);
-                    new_worst = new_worst.max(new);
+                    all_measured.add(crossings);
+                    if changed {
+                        acceptance.add(crossings);
+                    }
                     report["status"] = json!("MEASURED");
+                    report["included_in_acceptance"] = json!(changed);
                     report["local_directed_edges"] = json!(PANEL * NEIGHBORS);
                     report["local_cosine16_edges_sha256"] = json!(edge_sha);
-                    report["coordinate_crossing_edges"] = json!(old);
-                    report["constrained_crossing_edges"] = json!(new);
-                    report["coordinate_cut_fraction"] =
-                        json!(old as f64 / (PANEL * NEIGHBORS) as f64);
-                    report["constrained_cut_fraction"] =
-                        json!(new as f64 / (PANEL * NEIGHBORS) as f64);
+                    for (name, count) in ["coordinate_median", "matched_coordinate", "constrained"]
+                        .into_iter()
+                        .zip(crossings)
+                    {
+                        report[format!("{name}_crossing_edges")] = json!(count);
+                        report[format!("{name}_cut_fraction")] =
+                            json!(count as f64 / (PANEL * NEIGHBORS) as f64);
+                    }
                 }
             }
             reports.push(report);
         }
         source.pin.unchanged()?;
         cell_pin.unchanged()?;
-        let enough = measured >= MIN_VERIFIED;
-        let passed = enough && old_sum > 0 && new_sum * 10 <= old_sum * 9 && new_worst <= old_worst;
-        let edges = measured * PANEL * NEIGHBORS;
+        let edges = acceptance.nodes * PANEL * NEIGHBORS;
         let fraction = |count| {
             if edges == 0 {
                 Value::Null
@@ -3825,32 +4009,50 @@ pub mod split_balance_diagnostic {
                 json!(count as f64 / edges as f64)
             }
         };
-        Ok(
-            json!({"input_pins":inputs,"selected_directory_offsets":selected,"nodes":reports,
+        let mut report = json!({"input_pins":inputs,"selected_directory_offsets":selected,"nodes":reports,
             "verified_fallback_nodes":verified_fallbacks,"measured_nodes":measured,
-            "status":if !enough {"INCONCLUSIVE"} else if passed {"PASS"} else {"REJECT"},
-            "local_directed_edges":edges,"coordinate_crossing_edges":old_sum,"constrained_crossing_edges":new_sum,
-            "coordinate_aggregate_cut_fraction":fraction(old_sum),"constrained_aggregate_cut_fraction":fraction(new_sum),
-            "coordinate_worst_node_cut_fraction":if enough {json!(old_worst as f64 / (PANEL*NEIGHBORS) as f64)} else {Value::Null},
-            "constrained_worst_node_cut_fraction":if enough {json!(new_worst as f64 / (PANEL*NEIGHBORS) as f64)} else {Value::Null},
-            "ten_percent_aggregate_and_no_worse_worst_node":passed}),
-        )
+            "nondegenerate_fallback_nodes":nondegenerate_fallbacks,
+            "changed_fallback_nodes":changed_fallbacks,"unchanged_fallback_nodes":verified_fallbacks-changed_fallbacks,
+            "changed_nondegenerate_measured_nodes":acceptance.nodes,
+            "acceptance_scope":"changed nondegenerate measured fallback nodes only",
+            "status":acceptance.status(),"acceptance_directed_edges":edges,
+            "all_measured_crossing_edges_median_matched_constrained":all_measured.sums,
+            "old_median_ten_percent_and_worst_guard":acceptance.guard(0),
+            "matched_coordinate_ten_percent_and_worst_guard":acceptance.guard(1)});
+        for (index, name) in ["coordinate_median", "matched_coordinate", "constrained"]
+            .into_iter()
+            .enumerate()
+        {
+            report[format!("{name}_crossing_edges")] = json!(acceptance.sums[index]);
+            report[format!("{name}_aggregate_cut_fraction")] = fraction(acceptance.sums[index]);
+            report[format!("{name}_worst_node_cut_fraction")] = if acceptance.nodes == 0 {
+                Value::Null
+            } else {
+                json!(acceptance.worst[index] as f64 / (PANEL * NEIGHBORS) as f64)
+            };
+        }
+        Ok(report)
     }
 
     /// Check exact originals under the caller's CPU1/512Mi/noSwap cgroup.
     /// Structural/authentication/control/resource failures return an error;
-    /// insufficient nodes close INCONCLUSIVE without expanding the first eight.
+    /// Fewer than four genuinely changed, nondegenerate measured fallback nodes
+    /// close INCONCLUSIVE without expanding the first eight.
     /// The returned JSON measures source-neighborhood cuts, never ANN recall.
     pub fn check(config: &Config) -> Result<Value> {
         descriptors(config)?;
         let mut budget = Budget::new(true)?;
-        check_with_budget(config, &mut budget)
+        check_with_budget(config, &mut budget, PRODUCTION_GEOMETRY)
     }
-    fn check_with_budget(config: &Config, budget: &mut Budget) -> Result<Value> {
+    fn check_with_budget(
+        config: &Config,
+        budget: &mut Budget,
+        expected: (usize, usize),
+    ) -> Result<Value> {
         descriptors(config)?;
         let mut datasets = serde_json::Map::new();
         for (name, inputs) in &config.datasets {
-            datasets.insert(name.clone(), dataset(inputs, budget)?);
+            datasets.insert(name.clone(), dataset(inputs, budget, expected)?);
         }
         let status = if datasets.values().any(|d| d["status"] == "INCONCLUSIVE") {
             "INCONCLUSIVE"
@@ -3862,6 +4064,8 @@ pub mod split_balance_diagnostic {
         budget.poll()?;
         Ok(json!({"schema":REPORT_SCHEMA,"status":status,
             "scope":"source-neighborhood diagnostic; not recall or product quality",
+            "requires_matching_supervisor_exit_receipt":true,
+            "durability":{"status":"SUPERVISOR_EXIT_RECEIPT_REQUIRED","standalone_authority":false},
             "query_or_truth_used":false,"descendant_rebuilds":0,"retraining_sweeps":0,
             "selection":"first8 SHA256(raw32 root digest || LE u64 directory offset); no expansion",
             "panel":"first128 SHA256(raw32 root digest || LE u64 directory offset || LE u64 source ordinal), excluding trainer sample",
@@ -3872,6 +4076,8 @@ pub mod split_balance_diagnostic {
     /// Creates the output exclusively before admitting config or originals, so
     /// subsequent failures leave a terminal INVALID or INPUT_UNAVAILABLE report.
     /// Returns the report status; errors are reserved for output creation/sync.
+    /// A body alone has no terminal authority; matching original supervisor
+    /// exit/resource closure is required even after these sync calls succeed.
     pub fn execute(config_path: &Path, sha: &str, output: &Path) -> Result<String> {
         execute_with_budget(config_path, sha, output, Budget::new(true))
     }
@@ -3885,11 +4091,7 @@ pub mod split_balance_diagnostic {
             output.parent().ok_or("diagnostic output parent")?,
             rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY,
         )?;
-        let mut file = secure_open(
-            output,
-            rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CREATE | rustix::fs::OFlags::EXCL,
-        )?;
-        require(file.metadata()?.is_file(), "diagnostic regular new output")?;
+        let mut file = create_output(&directory, output)?;
         let result = (|| -> Result<Value> {
             let budget = budget
                 .as_mut()
@@ -3911,7 +4113,7 @@ pub mod split_balance_diagnostic {
             budget.verified(bytes)?;
             pin.unchanged()?;
             let config: Config = serde_json::from_slice(&body)?;
-            let mut report = check_with_budget(&config, budget)?;
+            let mut report = check_with_budget(&config, budget, PRODUCTION_GEOMETRY)?;
             report["config_sha256"] = json!(sha);
             Ok(report)
         })();
@@ -3929,10 +4131,42 @@ pub mod split_balance_diagnostic {
     }
 
     fn seal_terminal(file: &mut File, directory: &File, report: &mut Value) -> Result<String> {
+        seal_terminal_with(file, directory, report, File::sync_all, File::sync_all)
+    }
+    fn seal_terminal_with(
+        file: &mut File,
+        directory: &File,
+        report: &mut Value,
+        mut sync_file: impl FnMut(&File) -> std::io::Result<()>,
+        mut sync_directory: impl FnMut(&File) -> std::io::Result<()>,
+    ) -> Result<String> {
+        report["requires_matching_supervisor_exit_receipt"] = json!(true);
+        report["durability"] =
+            json!({"status":"SUPERVISOR_EXIT_RECEIPT_REQUIRED","standalone_authority":false});
         let body = terminal_body(report)?;
-        file.write_all(&body)?;
-        file.sync_all()?;
-        directory.sync_all()?;
+        let sealed = (|| -> Result<()> {
+            file.write_all(&body)?;
+            sync_file(file)?;
+            sync_directory(directory)?;
+            Ok(())
+        })();
+        if let Err(error) = sealed {
+            report["status"] = json!("INVALID");
+            report["error"] = json!(error.to_string().chars().take(1024).collect::<String>());
+            report["durability"] = json!({"status":"FAILED_OR_UNCONFIRMED","standalone_authority":false,
+                "best_effort_invalid_rewrite":true,"rewrite_durability_confirmed":false});
+            // This attempt is diagnostic only. Its success does not repair the
+            // failed barrier; the original call always fails and CLI exits 2.
+            if let Ok(invalid) = terminal_body(report) {
+                let _ = file
+                    .seek(SeekFrom::Start(0))
+                    .and_then(|_| file.write_all(&invalid))
+                    .and_then(|_| file.set_len(invalid.len() as u64))
+                    .and_then(|_| sync_file(file));
+                let _ = sync_directory(directory);
+            }
+            return Err(error);
+        }
         Ok(report["status"]
             .as_str()
             .ok_or("diagnostic terminal status")?
@@ -3961,7 +4195,8 @@ pub mod split_balance_diagnostic {
         let mut buffer = TerminalBuffer(reserved(OUTPUT_CAP)?);
         if serde_json::to_writer(&mut buffer, &*report).is_err() {
             *report = json!({"schema":REPORT_SCHEMA,"status":"INVALID","error":"diagnostic output cap",
-                "query_or_truth_used":false});
+                "query_or_truth_used":false,"requires_matching_supervisor_exit_receipt":true,
+                "durability":{"status":"SUPERVISOR_EXIT_RECEIPT_REQUIRED","standalone_authority":false}});
             buffer.0.clear();
             serde_json::to_writer(&mut buffer, &*report)?;
         }
@@ -4007,6 +4242,124 @@ pub mod split_balance_diagnostic {
             inputs.canonical = artifact(&dir.join("canonical"), &canonical);
             inputs.order = artifact(&dir.join("order"), &order);
             inputs
+        }
+
+        fn pipeline_fixture(dir: &Path) -> DatasetInputs {
+            const ROWS: usize = 4096;
+            let codec = RotatedTwoBitCodec::new(&[0., 0.], NATIVE_CODEC_SEED).unwrap();
+            let mut canonical = Vec::new();
+            let mut codes = Vec::new();
+            let mut sq8 = Vec::new();
+            let mut order = Vec::new();
+            for id in (0..ROWS).rev() {
+                // Four source clusters give balanced upper nodes. Within each
+                // 1024-row cluster, 1/8 of rows occupy a distinct nearby mode;
+                // the real original builder must use its coordinate fallback.
+                let base = [-20_f64, 20., 160., 200.][id / 1024];
+                let angle = if id % 256 < 32 {
+                    base + if id / 1024 % 2 == 0 { 5. } else { -5. }
+                } else {
+                    base
+                };
+                let (sine, cosine) = angle.to_radians().sin_cos();
+                let row = [cosine as f32, sine as f32];
+                order.extend_from_slice(&(id as u64).to_le_bytes());
+                canonical.extend_from_slice(&(id as i64).to_le_bytes());
+                for value in row {
+                    canonical.extend_from_slice(&value.to_le_bytes());
+                }
+                codes.extend(codec.encode(&row).unwrap());
+                sq8.extend_from_slice(&(id as i64).to_le_bytes());
+                sq8.extend_from_slice(&1_f32.to_le_bytes());
+                sq8.extend(row.iter().map(|value| ((value + 1.) * 127.5).round() as u8));
+            }
+            let canonical = artifact(&dir.join("canonical"), &canonical);
+            let order = artifact(&dir.join("order"), &order);
+            let records = artifact(&dir.join("records"), &codes);
+            let sq8 = artifact(&dir.join("sq8"), &sq8);
+            let unused = artifact(
+                &dir.join("unused-admission"),
+                b"synthetic builder-node fixture only",
+            );
+            let mean = artifact(&dir.join("mean"), &[0; 8]);
+            let config = BuildConfig {
+                schema: BUILD_SCHEMA.into(),
+                generation: unused.clone(),
+                plane: unused,
+                canonical: canonical.clone(),
+                order: order.clone(),
+                records: records.clone(),
+                mean,
+                sq8: sq8.clone(),
+                cell_rows: 512,
+                sample_rows: 32,
+                max_depth: 24,
+                max_build_payload_bytes: 64 * 1024 * 1024,
+                max_output_bytes: 16 * 1024 * 1024,
+            };
+            let directory_path = dir.join("directories");
+            let cells_path = dir.join("cells");
+            let mut builder = Builder {
+                config: &config,
+                canonical: secure_open(&canonical.path, rustix::fs::OFlags::RDONLY).unwrap(),
+                records: secure_open(&records.path, rustix::fs::OFlags::RDONLY).unwrap(),
+                sq8: secure_open(&sq8.path, rustix::fs::OFlags::RDONLY).unwrap(),
+                directories: new_file(&directory_path).unwrap(),
+                cells: new_file(&cells_path).unwrap(),
+                inverse: (0..ROWS).rev().collect(),
+                dimensions: 2,
+                record_bytes: codec.record_bytes(),
+                directory_bytes: 0,
+                directory_digest: Sha256::new(),
+                cell_bytes: 0,
+                next_row: 0,
+                receipt: BuildReceipt::default(),
+            };
+            // Exercise the byte-preserved real builder/trainer, rather than
+            // fabricate child memberships with the diagnostic under test.
+            let node = builder.node((0..ROWS).collect(), 1).unwrap();
+            let Target::Directory { span } = node.target else {
+                panic!("fixture has no hierarchy")
+            };
+            assert_eq!(builder.next_row, ROWS);
+            assert_eq!(builder.receipt.geometry_fallbacks, 4);
+            builder.directories.sync_all().unwrap();
+            builder.cells.sync_all().unwrap();
+            let mut manifest = Manifest {
+                schema: SCHEMA.into(),
+                input: config.clone(),
+                rows: ROWS,
+                dimensions: 2,
+                seed: NATIVE_CODEC_SEED,
+                mean: vec![0.; 2],
+                low: vec![-1.; 2],
+                step: vec![2. / 255.; 2],
+                root_directory: span,
+                directory_bytes: builder.directory_bytes,
+                directory_sha256: format!("{:x}", builder.directory_digest.finalize()),
+                cell_bytes: builder.cell_bytes,
+                build: builder.receipt,
+            };
+            let mut body = Vec::new();
+            for _ in 0..8 {
+                body = serde_json::to_vec(&manifest).unwrap();
+                let bytes = manifest.directory_bytes + manifest.cell_bytes + body.len();
+                if manifest.build.output_bytes == bytes {
+                    break;
+                }
+                manifest.build.output_bytes = bytes;
+            }
+            assert_eq!(
+                manifest.build.output_bytes,
+                manifest.directory_bytes + manifest.cell_bytes + body.len()
+            );
+            DatasetInputs {
+                root: artifact(&dir.join("root"), &body),
+                directories: artifact(&directory_path, &fs::read(&directory_path).unwrap()),
+                cells: artifact(&cells_path, &fs::read(&cells_path).unwrap()),
+                canonical,
+                order,
+            }
         }
 
         #[test]
@@ -4214,8 +4567,10 @@ pub mod split_balance_diagnostic {
             let panel = (0..128).collect::<Vec<_>>();
             let old = (0..160).map(|slot| slot < 80).collect::<Vec<_>>();
             let new = vec![true; 160];
-            let (a, b, sha) = cuts(&ids, &rows, &panel, &old, &new, &mut budget()).unwrap();
+            let ([a, matched, b], sha) =
+                cuts(&ids, &rows, &panel, &old, &old, &new, &mut budget()).unwrap();
             assert_eq!(a, 48 * 16);
+            assert_eq!(matched, a);
             assert_eq!(b, 0);
             let mut expected = Sha256::new();
             for &source in &panel {
@@ -4228,15 +4583,51 @@ pub mod split_balance_diagnostic {
             assert_eq!(sha, format!("{:x}", expected.finalize()));
             assert_eq!(
                 sha,
-                cuts(&ids, &rows, &panel, &old, &new, &mut budget())
+                cuts(&ids, &rows, &panel, &old, &old, &new, &mut budget())
                     .unwrap()
-                    .2
+                    .1
             );
-            let (a, b, _) = cuts(&ids, &rows, &panel, &old, &old, &mut budget()).unwrap();
+            let ([a, _, b], _) =
+                cuts(&ids, &rows, &panel, &old, &old, &old, &mut budget()).unwrap();
             assert_eq!(a, b);
             let mut changed = rows;
             changed[100][0] = f32::NAN;
-            assert!(cuts(&ids, &changed, &panel, &old, &old, &mut budget()).is_err());
+            assert!(cuts(&ids, &changed, &panel, &old, &old, &old, &mut budget()).is_err());
+            // Identical source vectors have deterministic neighbor ties. A
+            // 25/75 coordinate population alone appears to beat the old median
+            // by 10% here; the proposed partition equals the matched control.
+            let median = coordinate_split(&ids, &rows).unwrap();
+            let matched = coordinate_partition(&ids, &rows, 120).unwrap();
+            let (counts, _) = cuts(
+                &ids,
+                &rows,
+                &panel,
+                &median,
+                &matched,
+                &matched,
+                &mut budget(),
+            )
+            .unwrap();
+            assert!(counts[2] * 10 <= counts[0] * 9);
+            assert_eq!(counts[1], counts[2]);
+            let mut screening = Screening::default();
+            for _ in 0..4 {
+                screening.add(counts);
+            }
+            assert!(screening.guard(0));
+            assert!(!screening.guard(1));
+            assert_eq!(screening.status(), "REJECT");
+            // A worst-node regression must reject an aggregate improvement.
+            let mut worse = Screening::default();
+            worse.add([200, 200, 160]);
+            for _ in 0..3 {
+                worse.add([1000, 1000, 200]);
+            }
+            assert_eq!(worse.status(), "PASS");
+            worse.worst[2] = 1001;
+            assert_eq!(worse.status(), "REJECT");
+            screening.nodes = 3;
+            assert_eq!(screening.status(), "INCONCLUSIVE");
         }
 
         #[test]
@@ -4262,6 +4653,26 @@ pub mod split_balance_diagnostic {
             body[8..12].copy_from_slice(&f32::NAN.to_le_bytes());
             inputs.canonical = artifact(&inputs.canonical.path, &body);
             assert!(Source::authenticate(&inputs, 3, 2, &mut budget()).is_err());
+            inputs = source_fixture(dir.path());
+            let mut growth = budget();
+            assert!(
+                Source::authenticate_with(&inputs, 3, 2, &mut growth, |_| {
+                    OpenOptions::new()
+                        .append(true)
+                        .open(&inputs.canonical.path)?
+                        .write_all(&[0; 65536])?;
+                    Ok(())
+                })
+                .is_err()
+            );
+            assert_eq!(
+                growth.counts.canonical_stream_read_bytes,
+                inputs.canonical.bytes
+            );
+            assert_eq!(
+                growth.counts.admitted_bytes,
+                inputs.order.bytes + inputs.canonical.bytes
+            );
             inputs = source_fixture(dir.path());
             inputs.order = artifact(&inputs.order.path, &[0_u8; 24]);
             assert!(Source::authenticate(&inputs, 3, 2, &mut budget()).is_err());
@@ -4320,6 +4731,48 @@ pub mod split_balance_diagnostic {
             ] {
                 assert!(cgroup_controls(cpu, memory, swap).is_err());
             }
+            let first = dir.path().join("pipeline-cohere");
+            fs::create_dir(&first).unwrap();
+            let second = dir.path().join("pipeline-relaion");
+            fs::create_dir(&second).unwrap();
+            let config = Config {
+                schema: CONFIG_SCHEMA.into(),
+                datasets: BTreeMap::from([
+                    ("cohere".into(), pipeline_fixture(&first)),
+                    ("relaion".into(), pipeline_fixture(&second)),
+                ]),
+            };
+            let mut accounting = budget();
+            let report = check_with_budget(&config, &mut accounting, (4096, 2)).unwrap();
+            assert!(matches!(report["status"].as_str(), Some("PASS" | "REJECT")));
+            for dataset in report["datasets"].as_object().unwrap().values() {
+                assert_eq!(dataset["measured_nodes"], 4);
+                assert_eq!(dataset["changed_nondegenerate_measured_nodes"], 4);
+                assert_eq!(dataset["unchanged_fallback_nodes"], 0);
+                assert_eq!(
+                    dataset["selected_directory_offsets"]
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    6
+                );
+                for node in dataset["nodes"].as_array().unwrap() {
+                    assert_eq!(node["original_membership_verified"], true);
+                    assert_eq!(
+                        node["matched_coordinate_left_rows"],
+                        node["proposed_left_rows"]
+                    );
+                }
+            }
+            assert_eq!(accounting.counts.parent_rows, 16384);
+            assert!(accounting.counts.admitted_bytes < AUTH_CAP);
+            assert_eq!(
+                accounting.counts.auth_bytes,
+                accounting.counts.admitted_bytes
+            );
+            // The synthetic geometry seam is private; normal production
+            // admission rejects this otherwise complete source-bound fixture.
+            assert!(check_with_budget(&config, &mut budget(), PRODUCTION_GEOMETRY).is_err());
         }
 
         #[test]
@@ -4368,6 +4821,9 @@ pub mod split_balance_diagnostic {
                 ]),
             };
             descriptors(&config).unwrap();
+            let mut obsolete = config.clone();
+            obsolete.schema = "borsuk-constrained-split-config-v1".into();
+            assert!(descriptors(&obsolete).is_err());
             let value = serde_json::to_value(&config).unwrap();
             for key in [
                 "query",
@@ -4456,6 +4912,108 @@ pub mod split_balance_diagnostic {
             let mut socket = File::from(std::os::fd::OwnedFd::from(sender));
             let mut report = json!({"schema":REPORT_SCHEMA,"status":"PASS"});
             assert!(seal_terminal(&mut socket, &parent, &mut report).is_err());
+            for failed in ["file", "directory"] {
+                let path = dir.path().join(format!("failed-{failed}"));
+                let mut file = create_output(&parent, &path).unwrap();
+                let mut report =
+                    json!({"schema":REPORT_SCHEMA,"status":"PASS","config_sha256":"a".repeat(64)});
+                let result = seal_terminal_with(
+                    &mut file,
+                    &parent,
+                    &mut report,
+                    |file| {
+                        if failed == "file" {
+                            Err(std::io::Error::other("injected file sync failure"))
+                        } else {
+                            file.sync_all()
+                        }
+                    },
+                    |directory| {
+                        if failed == "directory" {
+                            Err(std::io::Error::other("injected directory sync failure"))
+                        } else {
+                            directory.sync_all()
+                        }
+                    },
+                );
+                assert!(result.is_err());
+                let body = fs::read(&path).unwrap();
+                let readback: Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(readback["status"], "INVALID");
+                assert_eq!(readback["requires_matching_supervisor_exit_receipt"], true);
+                assert_eq!(
+                    readback["durability"]["rewrite_durability_confirmed"],
+                    false
+                );
+                let supervisor = SupervisorReceipt {
+                    run_id: "original-run".into(),
+                    config_sha256: "a".repeat(64),
+                    report_sha256: hash(&body),
+                    process_exit_code: 2,
+                    resources_closed: true,
+                };
+                assert!(admit_pass(&body, "original-run", &supervisor).is_err());
+            }
+            let path = dir.path().join("pass-looking-body");
+            let mut file = create_output(&parent, &path).unwrap();
+            let mut report =
+                json!({"schema":REPORT_SCHEMA,"status":"PASS","config_sha256":"a".repeat(64)});
+            seal_terminal(&mut file, &parent, &mut report).unwrap();
+            let body = fs::read(&path).unwrap();
+            let mut supervisor = SupervisorReceipt {
+                run_id: "original-run".into(),
+                config_sha256: "a".repeat(64),
+                report_sha256: hash(&body),
+                process_exit_code: 2,
+                resources_closed: true,
+            };
+            assert!(admit_pass(&body, "original-run", &supervisor).is_err());
+            supervisor.process_exit_code = 0;
+            admit_pass(&body, "original-run", &supervisor).unwrap();
+            supervisor.resources_closed = false;
+            assert!(admit_pass(&body, "original-run", &supervisor).is_err());
+            supervisor.resources_closed = true;
+            assert!(admit_pass(&body, "different-run", &supervisor).is_err());
+            supervisor.report_sha256 = "b".repeat(64);
+            assert!(admit_pass(&body, "original-run", &supervisor).is_err());
+
+            let original = dir.path().join("parent");
+            fs::create_dir(&original).unwrap();
+            let pinned = secure_open(
+                &original,
+                rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY,
+            )
+            .unwrap();
+            let identity = (
+                pinned.metadata().unwrap().dev(),
+                pinned.metadata().unwrap().ino(),
+            );
+            let moved = dir.path().join("moved-parent");
+            fs::rename(&original, &moved).unwrap();
+            fs::create_dir(&original).unwrap();
+            let intended = original.join("result");
+            let mut file = create_output(&pinned, &intended).unwrap();
+            let mut report = json!({"schema":REPORT_SCHEMA,"status":"INCONCLUSIVE"});
+            seal_terminal_with(
+                &mut file,
+                &pinned,
+                &mut report,
+                File::sync_all,
+                |directory| {
+                    assert_eq!(
+                        (directory.metadata()?.dev(), directory.metadata()?.ino()),
+                        identity
+                    );
+                    directory.sync_all()
+                },
+            )
+            .unwrap();
+            assert!(!intended.exists());
+            assert_eq!(
+                serde_json::from_slice::<Value>(&fs::read(moved.join("result")).unwrap()).unwrap(),
+                report
+            );
+            assert!(create_output(&pinned, &intended).is_err());
         }
     }
 }
