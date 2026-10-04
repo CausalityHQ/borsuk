@@ -1,0 +1,33 @@
+{
+  "schema": "borsuk-constrained-split-prelaunch-review-v1",
+  "id": "b959ea615ab9402d",
+  "status": "completed",
+  "reviewed_commit": "a8f8f59c9332f2ba10735f3f46879b7522bc067d",
+  "reviewers": [
+    {
+      "id": "ad4b11d8aafb4f83",
+      "role": "research_critic",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "exit_code": 0,
+      "result": "No new evidenced **MUST_FIX** defects found in the glue at `a8f8f59c`.\n\nThe known freeze requirement remains: authenticate and archive all six **raw** retained-layout inputs. The archive helper requires committed files; the runner opens raw layout paths, so archiving only `.gz` copies would fail.\n\nThe recorded self-check supports mocked glue and metadata validation only. Freeze, source-bound admission, and disposable canary remain root-owned launch gates.",
+      "providers_used": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "id": "c909ba4c89974b68",
+      "role": "engineering_critic",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "exit_code": 0,
+      "result": "No evidenced **MUST_FIX** code defects found at `a8f8f59c`.\n\nThe untracked layout bodies still require authenticated inclusion in the frozen archive; source admission and disposable canary remain pending root-owned gates. This review does not clear those gates.\n\nRead-only inspection and syntax/hash checks only; no corpus, native, network, or AWS execution.",
+      "providers_used": [
+        "codex"
+      ]
+    }
+  ],
+  "root_disposition": "No evidenced code defect; raw-layout archive membership addressed by 77878743. Configuration/source admission frozen separately. Disposable canary and scientific execution still pending.",
+  "scientific_result": false
+}
