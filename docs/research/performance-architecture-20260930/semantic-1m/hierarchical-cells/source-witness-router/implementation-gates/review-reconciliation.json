@@ -1,0 +1,21 @@
+{
+  "candidate_commit": "25d62fe56f31a4defba869df30167b9f5a598ffa",
+  "contract": {
+    "bytes": 16194,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/implementation-gates/native-source-contract.json",
+    "sha256": "af85d1edd1f0ecbd3d0031a7b5e6d178c0b79ba5c473361bb81b2853aff825cd"
+  },
+  "native_compilation_verified": false,
+  "native_tests_verified": false,
+  "original_candidate_commit": "22d6c4c1fde0c5e59d7f60b1232d4bab966e4a77",
+  "quality_or_performance_verified": false,
+  "repairs": [
+    "Bind full truth Artifact (path, bytes, SHA256) and truth_width across coverage identity/freeze/terminal and selected diagnostic arm before layout/query reads.",
+    "GT read attempted sets truth_opened=null; successful authenticated read sets true before parsing/replay/attribution, retained in every later INVALID.",
+    "Incremental actual root/directory startup snapshots survive read/hash rejection; completed layout/sidecar stats survive later sidecar/request failures.",
+    "Extend same mandatory tests with truth-only mismatch, post-GT output-cap/ID-invalid openness, startup failures, and 512-row sixteen-block plus33-row tail fixture and independent returned-range rank oracle; four-block request rejects before cell reads."
+  ],
+  "review_id": "c652aa073b1747f3",
+  "root_static_inspection": true,
+  "schema": "borsuk-source-witness-review-reconciliation-v1"
+}

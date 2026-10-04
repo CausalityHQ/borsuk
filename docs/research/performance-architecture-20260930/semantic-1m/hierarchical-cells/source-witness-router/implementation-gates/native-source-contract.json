@@ -1,0 +1,229 @@
+{
+  "schema": "borsuk-source-witness-native-router-contract-v1",
+  "status": "SOURCE_ONLY_UNVERIFIED_AWAITING_PARENT_DISPOSITION",
+  "base": "3a8c2ecc76bc040a4d425bf10650aeaea7ecda4e",
+  "commit": "25d62fe56f31a4defba869df30167b9f5a598ffa",
+  "owned_files": [
+    "crates/borsuk/src/hierarchical_semantic_cells.rs",
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs"
+  ],
+  "source_sha256": {
+    "crates/borsuk/src/hierarchical_semantic_cells.rs": "3d342fc39f6a2d70a3a8ee377314a4a8e3539d7526c6d097bf72f1cc92753f7f",
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs": "9ec90ae907a7dea662c76db1c16651026d37c464139b7f7cfa181ef1d776d3d7"
+  },
+  "frozen_method": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/prospective-method.json",
+  "no_policy_changes": true,
+  "no_local_cargo_rustc_native_realdata_truth_network_consults_reviews_children_push": true,
+  "verification": {
+    "new_fragments_rustfmt": true,
+    "complete_files_rustfmt_syntax_parse": true,
+    "git_diff_check": true,
+    "legacy_route_query_loss_tests_verbatim": true,
+    "compiled": false,
+    "tests_executed": false,
+    "last_constrained_unit": "borsuk-source-witness-repair-format-20261004d.service",
+    "cpu_max": "100000 100000",
+    "memory_max": 268435456,
+    "memory_swap_max": 0,
+    "observed_memory_peak": "23.6M",
+    "observed_swap_peak": 0,
+    "repair_legacy_and_query_algorithm_verbatim": true,
+    "repair_commit_exact_parent_and_clean": true
+  },
+  "apis": {
+    "Prototype::open_for_source_probes": "(&Artifact, max_resident_directory_payload_bytes:usize) -> Result<Prototype>; exact trusted manifest descriptor, final-component NOFOLLOW/NONBLOCK regular root/directories/cells; legacy open defaults unchanged",
+    "read_source_probe_artifact": "(&Artifact, cap:usize) -> Result<Vec<u8>>; bounded exact SHA/EOF regular NOFOLLOW/NONBLOCK input",
+    "build_source_probes": "(&Prototype, output:&Path) -> Result<SourceProbeBuildReceipt,SourceProbeFailure>; no requests or truth; artifact + actual whole-cell accounting + complete timer + modeled peak",
+    "SourceProbeRouter::open": "(&Prototype,&Artifact,max_payload_bytes:usize) -> Result<SourceProbeRouter,SourceProbeFailure>; admission before sidecar open/body/allocation; trusted hash + root/policy/codec/ID binding",
+    "SourceProbeRouter::select": "(&self,query:&[f32]) -> Result<Vec<usize>>; exactly24 ordered cellIDs; zero I/O; use nominate for timer/actual accounting",
+    "SourceProbeRouter::nominate": "(&self,query:&[f32],SourceProbeLimits) -> Result<SourceProbeNomination,SourceProbeFailure>; resident rosters + descriptors, zero payload query reads; complete timer",
+    "Prototype::search_probed": "(&self,&SourceProbeRouter,query:&[f32],top_k:usize,SearchOptions) -> Result<SourceProbeSearchTrace,SourceProbeFailure>; separately admitted all16 whole-cell path + complete timer",
+    "SourceProbeFailure": "message + Accounting + startup ReadStats + complete StageTime; actual submitted attempts and failed reads retained; all errors INVALID",
+    "SourceProbeSearchTrace": "nomination + legacy-shaped SearchTrace + complete StageTime (one measured interval; no stage sum)",
+    "Prototype::open_for_source_probes_traced": "(&Artifact, cap:usize, &mut SourceProbeLayoutStartup) -> Result<Prototype>; resets/retains actual root+directory body attempts and admissions including startup timer on every failure; original open API delegates without changing legacy defaults",
+    "SourceProbeLayoutStartup": "root:ReadStats, directory:ReadStats, admission:Option<DirectoryAdmission>, complete:StageTime; incremental observed input-read snapshot, metadata opens submit no body read",
+    "read_source_probe_artifact_tracked": "(&Artifact, cap:usize, &mut ReadStats) -> Result<Vec<u8>>; same bounded secure exact read; actual submission/failed counters before body read, verification only after SHA/EOF; caller supplies fresh snapshot"
+  },
+  "sidecar": {
+    "schema": "borsuk-source-witness-router-v1",
+    "marker_ascii": "BSWP0001",
+    "packed_binary": true,
+    "header": [
+      "8 marker bytes",
+      "64 ASCII admitted rootSHA bytes",
+      "u64LE rows/dimensions/cells/fixed16",
+      "low f32LE[D]",
+      "step f32LE[D]"
+    ],
+    "per_cell": [
+      "u64LE cellID/rows in ascending cellID order",
+      "i64LE sourceID[rows] in actual source roster order",
+      "min(16,rows) entries: u64LE local ordinal, then unmodified D+12 SQ8 bytes (i64LE ID, f32LE stored norm, u8 codes[D])"
+    ],
+    "byte_formula": "B=104+8D+8N+16C+(D+20)*W; W=sum(min(16,cell_rows)); B<=128MiB",
+    "authentication": "Builder authenticates whole/source/all refinement spans and source/SQ8 ID identity before representative selection. SHA over complete sidecar externally pinned plus root/codec/fixed policy binding. Serving never claims source membership proof from rootSHA alone.",
+    "representatives": "Smallest sourceID first; decode low+f32(code)*step in f32; squared norm sum in f64; reject zero/nonfinite; divide by f64 sqrt, cast f32; farthest nearest squared Euclidean summed f64 over f32 normalized coordinates, ties ascending sourceID; raw records preserved.",
+    "routing": "Every cell scored via exact_sq8_nominee::score_nominees on original SQ8 norm/codes and unchanged cosine_vector query preparation; min witness score; total_cmp then cellID top24. No hierarchy/widening/tuning.",
+    "residency": "Packed records, bounded cell/source/witness ordinal metadata and codec coefficients only; no per-query file/path handles or decoded allN vectors; coverage CLI drops Prototype handle before first query."
+  },
+  "models": {
+    "resident_probe": "2B + 4096C + 8*65536; owned Vec/String capacity separately tracked",
+    "probe_preload": "3B + 4096C + 8*65536",
+    "builder": "B + 64N + 512*(8D+4096), <=256MiB; plus parsed directory <=512MiB; configured directory +256MiB admitted before root body",
+    "coverage_query": "Q=256W+128N+16D+65536; bounded against max_query_payload_bytes; resident router + configured query cap <=512MiB",
+    "full_query": "Old conservative query model plus Q; bounded before cell payload reads; parsed directory + resident probes + configured query cap <=512MiB",
+    "configured_aggregate": "Before any layout/sidecar/gate body: directory cap + probe cap + evaluator cap + query cap checked <=512MiB; startup excludes query cap; explicit charged identity events.",
+    "actual_aggregate": "After startup: d_preload+p_preload+evaluator <=512MiB; running d_parsed+p_resident+evaluator+query_cap <=512MiB. Conservative even when coverage drops directory.",
+    "interpretation": "Payload arithmetic excludes process/runtime/allocator/cache overhead; independent original supervisor actual resource closure remains mandatory."
+  },
+  "cli": {
+    "invocation": "hierarchical_semantic_cells MODE CONFIG CONFIG_SHA256 NEW_JSONL; all new modes strict deny_unknown_fields; nooverwrite output; parent-directory creation fsync, prefix/marker/terminal fsync; 4096 terminal reserve",
+    "build-probes": {
+      "schema": "borsuk-source-witness-build-v1",
+      "fields": [
+        "schema",
+        "candidate_root:Artifact",
+        "probe_output:PathBuf",
+        "max_resident_directory_payload_bytes",
+        "max_result_bytes"
+      ],
+      "status": "SOURCE_PROBES_SEALED (source-only, unqualified); terminal artifact descriptor; requests/truth rejected by strict parsing"
+    },
+    "nominate-probes": {
+      "schema": "borsuk-source-witness-nomination-v1",
+      "fields": [
+        "schema",
+        "dataset:relaion|cohere",
+        "candidate_root",
+        "probes",
+        "requests",
+        "first:0",
+        "count:64",
+        "limits:SourceProbeLimits",
+        "max_resident_directory_payload_bytes",
+        "max_resident_probe_payload_bytes",
+        "max_evaluator_payload_bytes",
+        "max_result_bytes",
+        "truth:Option<Artifact>",
+        "truth_width:0|100"
+      ],
+      "limits": {
+        "max_cells": 24,
+        "max_cell_gets": 24,
+        "max_cell_bytes": "1..16MiB",
+        "max_query_payload_bytes": "explicit checked bound"
+      },
+      "flow": "identity ->64 selection_frozen -> fsync + verify prefix -> all_selections_frozen + fsync -> optional truth open/coverage_attribution -> terminal",
+      "status": [
+        "SELECTIONS_FROZEN (no truth)",
+        "COVERAGE_PASS (body only; independent supervisor still required)",
+        "FAIL (quality)",
+        "INVALID (execution/auth/admission)"
+      ],
+      "quality": "mean_selected_cell_coverage >=.98 and p05_hits>=95; p05 floor((64-1)*.05)=index3; k100 width100 unique in-range sourceIDs"
+    },
+    "diagnose-probes": {
+      "schema": "borsuk-source-witness-diagnostic-v1",
+      "fields": [
+        "schema",
+        "dataset",
+        "candidate_root",
+        "probes",
+        "requests",
+        "coverage_gate:Artifact",
+        "first:0",
+        "count:64",
+        "top_k:100",
+        "options:SearchOptions",
+        "max_resident_directory_payload_bytes",
+        "max_resident_probe_payload_bytes",
+        "max_evaluator_payload_bytes",
+        "max_result_bytes",
+        "truth:Artifact",
+        "truth_width:100"
+      ],
+      "fixed_options": {
+        "fetch_policy": "whole_cell",
+        "primary_beam": 8,
+        "boundary_beam": 24,
+        "blocks_per_cell": 16,
+        "max_cells": 24,
+        "max_cell_gets": 24,
+        "max_cell_bytes": "<=16MiB"
+      },
+      "flow": "configured aggregate -> authenticate paired external gate -> preload ->64 selection_frozen(full traces) -> durable freeze -> truth -> decompose_loss, nomination loss==0, final ranking remeasured -> terminal",
+      "status": [
+        "RETURNED_DIAGNOSTIC_PASS (unqualified body only)",
+        "FAIL",
+        "INVALID"
+      ]
+    },
+    "startup_query_io": "Root/directory/probe/request input stats are separate from zero coverage query payload stats. selected_fetch_gets/bytes are descriptors only. Full trace Accounting counts actual local cell reads, never S3; reporting prefix/GT/gate reads occur outside query timer.",
+    "truth_failure_context": "Before read: truth_read_attempted=true and truth_opened=null (unknown). After authenticated read: truth_opened=true and truth_read_complete=true before GT ID validation, replay and attribution. Post-GT INVALID retains true; pre-admission rejection retains false.",
+    "startup_failure_context": "startup_root/startup_directory/startup_layout attached immediately when layout attempt returns, including failed root/directory reads; startup_probes attached before request admission; startup_requests tracked before propagating read/hash failure. No success stats invented on rejected reads."
+  },
+  "coverage_gate": {
+    "schema": "borsuk-source-witness-paired-coverage-admission-v1",
+    "shape": {
+      "schema": "borsuk-source-witness-paired-coverage-admission-v1",
+      "relaion": {
+        "run_id": "original-supervisor-run-id",
+        "result": "Artifact for exact original exit-collected nominate-probes result bytes",
+        "supervisor": "separately authenticated Artifact"
+      },
+      "cohere": "same shape"
+    },
+    "supervisor_schema": "borsuk-source-witness-coverage-supervisor-v1",
+    "supervisor_shape": {
+      "schema": "borsuk-source-witness-coverage-supervisor-v1",
+      "closure": {
+        "run_id": "same original runID",
+        "config_sha256": "same coverage configSHA",
+        "report_sha256": "exact exit-collected resultSHA",
+        "process_exit_code": 0,
+        "resources_closed": true
+      },
+      "resources_passed": true,
+      "drain_closed": true,
+      "cleanup_complete": true
+    },
+    "authority": "Only parent external supervisor constructs/pins these receipts after original exit/resource/drain/cleanup. CLI cannot mint them. Reuses split_balance_diagnostic::SupervisorReceipt for original run/config/result/exit/resource closure. Pinned PASS body alone rejected; either dataset failure rejects before query.",
+    "binding": "Both COVERAGE_PASS terminals require64/k100 quality gate, configSHA + original supervisor reportSHA/runID, prefix digest, durable all64 freeze marker and current exact module/binary sourceSHA. Diagnostic selected dataset also binds same root/probes/requests. Coverage identity, freeze marker and terminal bind full truth Artifact and width100; selected diagnostic dataset must match exact truth path/bytes/SHA and width before layout or selection."
+  },
+  "mandatory_new_tests": {
+    "library": [
+      "source_probe_greedy_matches_independent_oracle_ties_shortcell_and_numeric_guards",
+      "source_probe_raw_identity_native_score_top24_and_no_query_io",
+      "source_probe_cap_binding_tamper_missing_id_fifo_and_symlink_fail_closed",
+      "source_probe_shortcell_builder_and_original_span_tamper"
+    ],
+    "binary": [
+      "source_probe_cli_actual_full_pipeline_freezes_before_truth_and_closes_invalid",
+      "source_probe_cli_coverage_fifo_truth_and_output_cap_close_invalid"
+    ],
+    "coverage": "Independent greedy oracle/ties/shortcell/numeric; original packed record identity; native rank+score bits incl nonunit/nonzero mean/low independent f32 oracle; top24 tie oracle; missing cap before open/read; no query I/O after deleting all inputs; binding/tamper/negative ID/FIFO/symlink; real entrypoint tiny64 source-only build+paired coverage+fullSQ8+INVALID freeze; original exit2/both-dataset/resource/drain/cleanup/wrong identities/body-only gate rejection; pre-body aggregate rejection including query scratch. Repair negatives: truth-only SHA/bytes/path changes and width rejected before selection; unchanged missing GT freezes64 then reports unknown openness; authenticated bad GT IDs and post-GT coverage/full result caps report true openness; root/directory/probe/request authentication failures retain actual incremental stats; 32-cell fixture includes512-row16block and33-row2block tail, all selected IDs nominated, original range/native rank oracle ID+scorebits,4blocks rejected before cell GET."
+  },
+  "parent_remaining": [
+    "Remote affected Rust tests and mandatory new named-pass assertions (all tests remain unexecuted here)",
+    "Remote release binaries, workspace correctness/suspicious Clippy, actual workspace test compilation on exact frozen source archive",
+    "Resolve any compile/test feedback on SAME worker; no agent_complete before parent disposition",
+    "Exact retained100k D768 root/requests/source inventories and authenticated builder/sidecar seals; no local real data or GT",
+    "Native CPU1/512MiB/noSwap/600s per dataset and16GiB scratch original process/resource/drain closure before paid coverage admission",
+    "Freeze all64 rosters for both datasets before truth attribution; stop arm if either coverage gate fails; only then separately admit full16 SQ8 diagnostic",
+    "Offline comparison of recovered/newly lost truth positions against immutable retained control; native final ranking loss remeasurement",
+    "Root owns integration and push; child holds branch and must not merge/push master",
+    "Held-out/scalability/vendor/S3 qualification remains outside this representation falsifier"
+  ],
+  "original_candidate_commit": "22d6c4c1fde0c5e59d7f60b1232d4bab966e4a77",
+  "repair_parent": "22d6c4c1fde0c5e59d7f60b1232d4bab966e4a77",
+  "repair_review_messages": [
+    "1791147942615006899-2054090",
+    "1791147980597101805-2054090"
+  ],
+  "repair_summary": [
+    "Bind full truth Artifact (path, bytes, SHA256) and truth_width across coverage identity/freeze/terminal and selected diagnostic arm before layout/query reads.",
+    "GT read attempted sets truth_opened=null; successful authenticated read sets true before parsing/replay/attribution, retained in every later INVALID.",
+    "Incremental actual root/directory startup snapshots survive read/hash rejection; completed layout/sidecar stats survive later sidecar/request failures.",
+    "Extend same mandatory tests with truth-only mismatch, post-GT output-cap/ID-invalid openness, startup failures, and 512-row sixteen-block plus33-row tail fixture and independent returned-range rank oracle; four-block request rejects before cell reads."
+  ]
+}
