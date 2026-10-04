@@ -1,0 +1,49 @@
+{
+  "binary_source_sha256": "9ec90ae907a7dea662c76db1c16651026d37c464139b7f7cfa181ef1d776d3d7",
+  "helper_sha256": "0878f2d02285ae678e15c04862d76b5b0066f68d67bb786453f55d73ba40b724",
+  "module_sha256": "3d342fc39f6a2d70a3a8ee377314a4a8e3539d7526c6d097bf72f1cc92753f7f",
+  "native_runtime_request_admission_proven": false,
+  "native_search_executed": false,
+  "original_process": {
+    "cpu_quota_percent": 100,
+    "exit_status": 0,
+    "invocation_id": "4b6c5de5251746b6b98e4cabe88a08c6",
+    "memory_max_bytes": 268435456,
+    "reported_memory_peak": "12.9M",
+    "reported_swap_peak": "0B",
+    "runtime_max_seconds": 30,
+    "service_wall_seconds": 0.241,
+    "swap_max_bytes": 0,
+    "tasks_max": 512,
+    "unit": "borsuk-source-witness-real-request-preflight-20261004.service"
+  },
+  "results": {
+    "cohere": {
+      "authenticated": true,
+      "dimensions": 768,
+      "pin": {
+        "bytes": 983232,
+        "path": "/home/rb/worktrees/borsuk-partitioner-paired-science-a0001-frozen/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/a0001/screen/retained/cohere/partitioner/requests64",
+        "sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654"
+      },
+      "requests": 64,
+      "strict_schema_passed": true
+    },
+    "relaion": {
+      "authenticated": true,
+      "dimensions": 768,
+      "pin": {
+        "bytes": 937167,
+        "path": "/home/rb/worktrees/borsuk-partitioner-paired-science-a0001-frozen/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/a0001/screen/retained/relaion/partitioner/requests64",
+        "sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330"
+      },
+      "requests": 64,
+      "strict_schema_passed": true
+    }
+  },
+  "schema": "borsuk-source-witness-real-request-preflight-v1",
+  "scientific_measurement": false,
+  "truth_opened": false,
+  "vectors_renormalized": false,
+  "wall_seconds": 0.14902387594338506
+}
