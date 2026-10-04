@@ -45,8 +45,8 @@ use std::{
 /// Fallible research build and admission operations.
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 /// Exact build configuration marker.
-pub const BUILD_SCHEMA: &str = "borsuk-hierarchical-cells-build-v1";
-const SCHEMA: &str = "borsuk-hierarchical-cells-resident-v3";
+pub const BUILD_SCHEMA: &str = "borsuk-hierarchical-cells-build-v2";
+const SCHEMA: &str = "borsuk-hierarchical-cells-resident-v4";
 const ROOT_CAP: usize = 65536;
 const PAGE_CAP: usize = 65536;
 const BLOCK_ROWS: usize = 32;
@@ -223,7 +223,9 @@ pub struct BuildReceipt {
     pub max_cell_rows: usize,
     /// Largest directory dependency depth.
     pub max_depth: usize,
-    /// Source-only median splits when sampling could not give a balanced split.
+    /// Nondegenerate skewed sampled splits repaired with fixed-center capacities.
+    pub semantic_repairs: usize,
+    /// Deterministic coordinate medians for identical samples/degenerate centers.
     pub geometry_fallbacks: usize,
     /// Actual canonical row reads during admission/training/assignment/layout.
     pub canonical_row_reads: usize,
@@ -242,6 +244,39 @@ fn read_at(file: &File, offset: usize, bytes: usize) -> Result<Vec<u8>> {
 }
 fn new_file(path: &Path) -> Result<File> {
     Ok(OpenOptions::new().write(true).create_new(true).open(path)?)
+}
+
+// Fixed-center cost is sum(d_right) + sum(left delta). The unconstrained
+// count clamped to [ceil(N/4), N-ceil(N/4)] minimizes that cost; sorting selects
+// its cheapest rows. Balanced sampled assignments keep their exact membership.
+// Only compact (margin, source ordinal, slot) scratch is allocated, never vectors.
+fn capacity_partition(ids: &[usize], delta: &[f32], left: &mut [bool]) -> Result<bool> {
+    require(
+        ids.len() >= 2
+            && ids.len() == delta.len()
+            && ids.len() == left.len()
+            && delta.iter().all(|v| v.is_finite())
+            && left.iter().zip(delta).all(|(&a, &d)| a == (d <= 0.)),
+        "capacity partition geometry/nonfinite/assignment",
+    )?;
+    let lower = ids.len().div_ceil(4);
+    let count = left.iter().filter(|v| **v).count();
+    if count.min(ids.len() - count) >= lower {
+        return Ok(false);
+    }
+    let count = count.clamp(lower, ids.len() - lower);
+    let mut order = Vec::new();
+    order.try_reserve_exact(ids.len())?;
+    order.extend(delta.iter().enumerate().map(|(slot, &d)| {
+        // Both signed zeros are the same assignment cost/ID tie.
+        (if d == 0. { 0. } else { d }, ids[slot], slot)
+    }));
+    order.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    left.fill(false);
+    for item in &order[..count] {
+        left[item.2] = true;
+    }
+    Ok(true)
 }
 
 struct Builder<'a> {
@@ -399,45 +434,96 @@ impl Builder<'_> {
             sample.push(self.vector(ids[slot * rows / sample_count])?);
         }
         let identical_sample = sample.iter().all(|v| v == &sample[0]);
-        let mut left = Vec::new();
-        let mut right = Vec::new();
+        let mut assigned = Vec::new();
+        assigned.try_reserve_exact(rows)?;
+        assigned.resize(rows, false);
+        let mut delta = Vec::new();
+        let mut degenerate = identical_sample;
         if !identical_sample {
-            // Trainer failures propagate. No retraining/configuration sweep.
+            // Same two sampled centers/distances; failures propagate, no sweep.
             let centers =
                 train_logical_cell_centroids(&sample, VectorMetric::SquaredEuclidean, 2, 4)?;
-            for &id in &ids {
+            require(
+                centers.len() == 2
+                    && centers.iter().all(|center| {
+                        center.len() == self.dimensions && center.iter().all(|v| v.is_finite())
+                    }),
+                "sampled center geometry/nonfinite",
+            )?;
+            let separation = VectorMetric::SquaredEuclidean.distance(&centers[0], &centers[1])?;
+            require(separation.is_finite(), "nonfinite sampled separator")?;
+            degenerate = separation <= 0.;
+            drop(sample);
+            delta.try_reserve_exact(rows)?;
+            for (slot, &id) in ids.iter().enumerate() {
                 let vector = self.vector(id)?;
-                if VectorMetric::SquaredEuclidean.distance(&vector, &centers[0])?
-                    <= VectorMetric::SquaredEuclidean.distance(&vector, &centers[1])?
-                {
-                    left.push(id);
-                } else {
-                    right.push(id);
+                let a = VectorMetric::SquaredEuclidean.distance(&vector, &centers[0])?;
+                let b = VectorMetric::SquaredEuclidean.distance(&vector, &centers[1])?;
+                let margin = a - b;
+                require(
+                    a.is_finite() && b.is_finite() && margin.is_finite(),
+                    "nonfinite sampled assignment",
+                )?;
+                assigned[slot] = a <= b;
+                delta.push(margin);
+            }
+        } else {
+            drop(sample);
+        }
+        let count = assigned.iter().filter(|v| **v).count();
+        if count.min(rows - count) < rows.div_ceil(4) {
+            if degenerate {
+                self.receipt.geometry_fallbacks += 1;
+                require(
+                    minimum
+                        .iter()
+                        .zip(&maximum)
+                        .all(|(a, b)| (b - a).is_finite()),
+                    "coordinate range overflow",
+                )?;
+                let coordinate = (0..self.dimensions)
+                    .max_by(|&a, &b| {
+                        (maximum[a] - minimum[a])
+                            .total_cmp(&(maximum[b] - minimum[b]))
+                            .then(b.cmp(&a))
+                    })
+                    .ok_or("empty coordinate geometry")?;
+                let mut projected = Vec::new();
+                projected.try_reserve_exact(rows)?;
+                for &id in &ids {
+                    projected.push((self.vector(id)?[coordinate], id));
                 }
+                projected.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+                // Preserve the original projected child order: node sums its
+                // prototype before sorting IDs, so floating-point order matters.
+                for (slot, item) in projected.iter().enumerate() {
+                    ids[slot] = item.1;
+                    assigned[slot] = slot < rows / 2;
+                }
+            } else if capacity_partition(&ids, &delta, &mut assigned)? {
+                self.receipt.semantic_repairs += 1;
             }
         }
-        drop(sample);
-        // Guarantee logarithmic depth even for highly skewed source geometry.
-        // ponytail: balanced widest-coordinate median replaces pathological
-        // sampled splits; a better source-only split needs measured evidence.
-        if left.len().min(right.len()) < rows.div_ceil(4) {
-            self.receipt.geometry_fallbacks += 1;
-            let coordinate = (0..self.dimensions)
-                .max_by(|&a, &b| {
-                    (maximum[a] - minimum[a])
-                        .total_cmp(&(maximum[b] - minimum[b]))
-                        .then(b.cmp(&a))
-                })
-                .unwrap();
-            let mut projected = Vec::with_capacity(rows);
-            for &id in &ids {
-                projected.push((self.vector(id)?[coordinate], id));
+        drop(delta);
+        drop(minimum);
+        drop(maximum);
+        drop(sums);
+        let count = assigned.iter().filter(|v| **v).count();
+        require(
+            count.min(rows - count) >= rows.div_ceil(4),
+            "complete capacity-bounded partition",
+        )?;
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        left.try_reserve_exact(count)?;
+        right.try_reserve_exact(rows - count)?;
+        for (id, a) in ids.into_iter().zip(assigned) {
+            if a {
+                left.push(id);
+            } else {
+                right.push(id);
             }
-            projected.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-            left = projected[..rows / 2].iter().map(|v| v.1).collect();
-            right = projected[rows / 2..].iter().map(|v| v.1).collect();
         }
-        drop(ids);
         let children = vec![self.node(left, depth + 1)?, self.node(right, depth + 1)?];
         let body = serde_json::to_vec(&Directory { children })?;
         require(body.len() <= PAGE_CAP, "directory page cap")?;
@@ -505,9 +591,12 @@ pub fn build(config: &BuildConfig, output: &Path) -> Result<BuildReceipt> {
             && root.step.iter().all(|v| v.is_finite() && *v > 0.),
         "SQ8 coefficients",
     )?;
-    // IDs, samples/normalization/trainer clones, recursive prototypes, bounded
-    // cell buffers and serializer scratch. Host overhead remains an external charge.
-    let modeled = rows * 96
+    // 128 bytes/row covers inverse/recursive ID rosters, assignment flags and
+    // margins, plus the explicitly reserved 24-byte margin/ID/slot sort scratch.
+    // Partition scratch is dropped before recursion. Samples/trainer clones,
+    // prototypes, cell buffers and serialization are separate terms below;
+    // runtime/allocator/cache overhead remains an external charge.
+    let modeled = rows * 128
         + config.sample_rows * dimensions * 16
         + config.max_depth * dimensions * 64
         + config.cell_rows * (dimensions + 12 + plane.record_bytes + 8) * 4
@@ -1895,20 +1984,32 @@ mod tests {
         identical: bool,
         mean: &[f32],
     ) -> BuildConfig {
-        assert_eq!(mean.len(), dimensions);
+        let vectors = (0..rows)
+            .map(|id| {
+                let mut vector = vec![0_f32; dimensions];
+                vector[if identical { 0 } else { id % 2 }] = 1.;
+                vector
+            })
+            .collect::<Vec<_>>();
+        fixture_with_vectors(dir, &vectors, mean)
+    }
+
+    fn fixture_with_vectors(dir: &Path, vectors: &[Vec<f32>], mean: &[f32]) -> BuildConfig {
+        let rows = vectors.len();
+        let dimensions = mean.len();
+        assert!(vectors.iter().all(|v| v.len() == dimensions));
         let codec = RotatedTwoBitCodec::new(mean, 20260923).unwrap();
         let order = (0..rows).rev().collect::<Vec<_>>();
         let mut canonical = Vec::new();
         let mut codes = Vec::new();
         let mut sq8 = Vec::new();
         for &id in &order {
-            let mut vector = vec![0_f32; dimensions];
-            vector[if identical { 0 } else { id % 2 }] = 1_f32;
+            let vector = &vectors[id];
             canonical.extend_from_slice(&(id as i64).to_le_bytes());
-            for value in &vector {
+            for value in vector {
                 canonical.extend_from_slice(&value.to_le_bytes());
             }
-            codes.extend_from_slice(&codec.encode(&vector).unwrap());
+            codes.extend_from_slice(&codec.encode(vector).unwrap());
             sq8.extend_from_slice(&(id as i64).to_le_bytes());
             sq8.extend_from_slice(&1_f32.to_le_bytes());
             sq8.extend(vector.iter().map(|&v| v as u8));
@@ -2000,6 +2101,265 @@ mod tests {
             max_source_bytes: 1024 * 1024,
             max_query_payload_bytes: 64 * 1024 * 1024,
         }
+    }
+
+    #[test]
+    fn capacity_partition_matches_exhaustive_cost_capacity_and_id_ties() {
+        // An inverted cost sort, a rounded-down lower bound, or slot-based
+        // ties must lose to this independently enumerated feasible optimum.
+        for rows in 2_usize..=6 {
+            let ids = (0..rows).rev().collect::<Vec<_>>();
+            let lower = rows.div_ceil(4);
+            for pattern in 0..3_usize.pow(rows as u32) {
+                let mut word = pattern;
+                let delta = (0..rows)
+                    .map(|_| {
+                        let value = (word % 3) as f32 - 1.;
+                        word /= 3;
+                        value
+                    })
+                    .collect::<Vec<_>>();
+                let mut left = delta.iter().map(|d| *d <= 0.).collect::<Vec<_>>();
+                let original = left.clone();
+                let count = left.iter().filter(|v| **v).count();
+                let repaired = capacity_partition(&ids, &delta, &mut left).unwrap();
+                assert_eq!(repaired, count.min(rows - count) < lower);
+                assert_eq!(
+                    left.iter().filter(|v| **v).count(),
+                    count.clamp(lower, rows - lower)
+                );
+                if !repaired {
+                    assert_eq!(left, original);
+                }
+                let cost = left
+                    .iter()
+                    .zip(&delta)
+                    .filter_map(|(&a, &d)| a.then_some(d))
+                    .sum::<f32>();
+                let optimum = (0..1_usize << rows)
+                    .filter(|mask| (lower..=rows - lower).contains(&(mask.count_ones() as usize)))
+                    .map(|mask| {
+                        delta
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(slot, &d)| ((mask >> slot) & 1 == 1).then_some(d))
+                            .sum::<f32>()
+                    })
+                    .min_by(f32::total_cmp)
+                    .unwrap();
+                assert_eq!(cost, optimum, "rows={rows} pattern={pattern}");
+            }
+        }
+        let ids = [60, 10, 40, 30, 20, 70, 50];
+        for (delta, expected) in [
+            ([1.; 7], vec![10, 20]),
+            ([-1.; 7], vec![10, 20, 30, 40, 50]),
+            ([0.; 7], vec![10, 20, 30, 40, 50]),
+            ([0., -0., 0., -0., 0., -0., 0.], vec![10, 20, 30, 40, 50]),
+        ] {
+            let mut left = delta.iter().map(|d| *d <= 0.).collect::<Vec<_>>();
+            assert!(capacity_partition(&ids, &delta, &mut left).unwrap());
+            let mut actual = ids
+                .iter()
+                .zip(left)
+                .filter_map(|(&id, a)| a.then_some(id))
+                .collect::<Vec<_>>();
+            actual.sort_unstable();
+            assert_eq!(actual, expected);
+        }
+        let mut left = [true, false];
+        assert!(capacity_partition(&[0, 1], &[f32::NAN, 1.], &mut left).is_err());
+        assert!(capacity_partition(&[0, 1], &[f32::INFINITY, 1.], &mut left).is_err());
+        assert!(capacity_partition(&[0, 1], &[0.], &mut left).is_err());
+    }
+
+    #[test]
+    fn balanced_and_identical_builder_memberships_are_unchanged() {
+        for identical in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut config = fixture(temp.path(), 64, 2, identical);
+            config.sample_rows = 64;
+            let output = temp.path().join("candidate");
+            let built = build(&config, &output).unwrap();
+            assert_eq!(built.semantic_repairs, 0);
+            assert_eq!(built.geometry_fallbacks, usize::from(identical));
+            let prototype = Prototype::open(&output, &built.root_sha256, 64 * 1024 * 1024).unwrap();
+            let page = &prototype.directories[&prototype.manifest.root_directory.offset];
+            let memberships = page
+                .children
+                .iter()
+                .map(|node| {
+                    let Target::Cell { cell } = &node.target else {
+                        panic!("expected 32-row leaf")
+                    };
+                    read_at(&prototype.cells, cell.source.offset, cell.source.bytes)
+                        .unwrap()
+                        .chunks_exact(8 + prototype.codec.record_bytes())
+                        .map(|row| i64::from_le_bytes(row[..8].try_into().unwrap()))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<BTreeSet<_>>();
+            let expected = if identical {
+                BTreeSet::from([(0..32).collect::<Vec<_>>(), (32..64).collect::<Vec<_>>()])
+            } else {
+                BTreeSet::from([
+                    (0..64).step_by(2).collect::<Vec<_>>(),
+                    (1..64).step_by(2).collect::<Vec<_>>(),
+                ])
+            };
+            assert_eq!(memberships, expected);
+        }
+    }
+
+    #[test]
+    fn identical_sample_fallback_preserves_projected_child_sum_order() {
+        // The two sampled rows are identical, but the complete node is not.
+        // ID-order y sums erase the tiny term (1 + tiny - 1), while the old
+        // coordinate order cancels first and retains it. Median membership
+        // alone cannot protect prototype bytes from this rounding regression.
+        let temp = tempfile::tempdir().unwrap();
+        let mut vectors = vec![vec![1., 0.]; 11];
+        vectors[1] = vec![0., 1.];
+        vectors[2] = vec![1., 1e-20];
+        vectors[3] = vec![0., -1.];
+        vectors[4] = vec![-1., 0.];
+        let mut config = fixture_with_vectors(temp.path(), &vectors, &[0., 0.]);
+        config.sample_rows = 2;
+        config.cell_rows = 6;
+        let output = temp.path().join("candidate");
+        let built = build(&config, &output).unwrap();
+        assert_eq!((built.semantic_repairs, built.geometry_fallbacks), (0, 1));
+        let prototype = Prototype::open(&output, &built.root_sha256, 64 * 1024 * 1024).unwrap();
+        let page = &prototype.directories[&prototype.manifest.root_directory.offset];
+        assert_eq!(page.children[0].rows, 5);
+        assert_eq!(page.children[1].rows, 6);
+        assert_eq!(page.children[0].prototype[0].to_bits(), 0.2_f32.to_bits());
+        let preserved = (f64::from(1e-20_f32) / 5.) as f32;
+        assert_eq!(page.children[0].prototype[1].to_bits(), preserved.to_bits());
+        assert_ne!(preserved, 0.);
+    }
+
+    #[test]
+    fn skewed_builder_is_lossless_deterministic_and_preserves_sq2_sq8_tail_ranking() {
+        let temp = tempfile::tempdir().unwrap();
+        let vectors = (0..1025)
+            .map(|id| {
+                if id % 257 < 32 {
+                    vec![0., 1.]
+                } else {
+                    vec![1., 0.]
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut config = fixture_with_vectors(temp.path(), &vectors, &[0., 0.]);
+        config.cell_rows = 512;
+        let a = temp.path().join("a");
+        let b = temp.path().join("b");
+        let first = build(&config, &a).unwrap();
+        let second = build(&config, &b).unwrap();
+        assert_eq!(first.root_sha256, second.root_sha256);
+        for name in ["manifest.json", "directories.bin", "cells.bin"] {
+            assert_eq!(
+                fs::read(a.join(name)).unwrap(),
+                fs::read(b.join(name)).unwrap()
+            );
+        }
+        assert_eq!(first.semantic_repairs, 1);
+        assert_eq!(first.geometry_fallbacks, 1);
+        assert_eq!(first.cells, 3);
+        assert!(first.max_cell_rows <= 512 && first.max_depth <= config.max_depth);
+        let prototype = Prototype::open(&a, &first.root_sha256, 64 * 1024 * 1024).unwrap();
+        let root = &prototype.directories[&prototype.manifest.root_directory.offset];
+        let mut counts = root.children.iter().map(|v| v.rows).collect::<Vec<_>>();
+        counts.sort_unstable();
+        assert_eq!(counts, vec![257, 768]); // ceil(1025/4), not coordinate median.
+        let codes = fs::read(&config.records.path).unwrap();
+        let sq8 = fs::read(&config.sq8.path).unwrap();
+        let mut seen = BTreeSet::new();
+        let mut tail = false;
+        for page in prototype.directories.values() {
+            for node in &page.children {
+                let Target::Cell { cell } = &node.target else {
+                    continue;
+                };
+                let source =
+                    read_at(&prototype.cells, cell.source.offset, cell.source.bytes).unwrap();
+                let refinement = cell
+                    .refinement
+                    .iter()
+                    .flat_map(|span| read_at(&prototype.cells, span.offset, span.bytes).unwrap())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    source.len(),
+                    node.rows * (8 + prototype.codec.record_bytes())
+                );
+                assert_eq!(refinement.len(), node.rows * 14);
+                tail |= cell.refinement.last().unwrap().bytes == 14;
+                for (record, exact) in source
+                    .chunks_exact(8 + prototype.codec.record_bytes())
+                    .zip(refinement.chunks_exact(14))
+                {
+                    let id = i64::from_le_bytes(record[..8].try_into().unwrap());
+                    assert!(seen.insert(id));
+                    let physical = 1024 - id as usize; // independent reversed input permutation.
+                    assert_eq!(
+                        &record[8..],
+                        &codes[physical * prototype.codec.record_bytes()
+                            ..(physical + 1) * prototype.codec.record_bytes()]
+                    );
+                    assert_eq!(exact, &sq8[physical * 14..(physical + 1) * 14]);
+                }
+            }
+        }
+        assert_eq!(seen, (0..1025_i64).collect::<BTreeSet<_>>());
+        assert!(tail); // the 257-row constrained child ends with one SQ8 row.
+        let mut all = options();
+        all.boundary_beam = 8;
+        all.blocks_per_cell = 16;
+        all.max_cells = 8;
+        all.max_source_gets = 8;
+        all.max_refinement_gets = 64;
+        let two_stage = prototype.search(&[1., 0.], 1025, all).unwrap();
+        all.fetch_policy = FetchPolicy::WholeCell;
+        all.max_cell_gets = 8;
+        let whole = prototype.search(&[1., 0.], 1025, all).unwrap();
+        let expected = (0..1025_i64)
+            .filter(|id| id % 257 >= 32)
+            .chain((0..1025_i64).filter(|id| id % 257 < 32))
+            .collect::<Vec<_>>();
+        for trace in [&two_stage, &whole] {
+            assert_eq!(trace.covered_ids, (0..1025_i64).collect::<Vec<_>>());
+            assert_eq!(trace.nominated_ids, trace.covered_ids);
+            assert_eq!(
+                trace.returned.iter().map(|r| r.id).collect::<Vec<_>>(),
+                expected
+            );
+            for row in &trace.returned {
+                assert_eq!(row.score, if row.id % 257 < 32 { 1. } else { 0. });
+            }
+        }
+        assert_eq!(two_stage.accounting.refinement.verified_bytes, 1025 * 14);
+    }
+
+    #[test]
+    fn partition_format_and_receipt_reject_obsolete_or_incomplete_artifacts() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = fixture(temp.path(), 4, 2, false);
+        let mut obsolete = config.clone();
+        obsolete.schema = "borsuk-hierarchical-cells-build-v1".into();
+        assert!(build(&obsolete, &temp.path().join("obsolete")).is_err());
+        let output = temp.path().join("candidate");
+        build(&config, &output).unwrap();
+        let path = output.join("manifest.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        manifest["schema"] = json!("borsuk-hierarchical-cells-resident-v3");
+        let body = serde_json::to_vec(&manifest).unwrap();
+        fs::write(&path, &body).unwrap();
+        assert!(Prototype::open(&output, &hash(&body), 64 * 1024 * 1024).is_err());
+        let mut receipt = serde_json::to_value(BuildReceipt::default()).unwrap();
+        receipt.as_object_mut().unwrap().remove("semantic_repairs");
+        assert!(serde_json::from_value::<BuildReceipt>(receipt).is_err());
     }
 
     #[test]
@@ -2391,6 +2751,7 @@ mod tests {
         assert!(first.max_cell_rows <= 32);
         assert!(first.max_depth <= config.max_depth);
         assert!(first.geometry_fallbacks > 0);
+        assert_eq!(first.semantic_repairs, 0);
         let prototype = Prototype::open(&a, &first.root_sha256, 64 * 1024 * 1024).unwrap();
         let trace = prototype.search(&[1., 0.], 10, options()).unwrap();
         assert!(trace.returned.windows(2).all(|w| w[0].id < w[1].id));
@@ -3593,23 +3954,8 @@ pub mod split_balance_diagnostic {
         } else if degenerate {
             left.extend_from_slice(fallback);
         } else {
-            let n_a = delta
-                .iter()
-                .filter(|v| **v <= 0.)
-                .count()
-                .clamp(lower, ids.len() - lower);
-            let mut order = reserved(ids.len())?;
-            order.extend(
-                delta
-                    .iter()
-                    .enumerate()
-                    .map(|(slot, value)| (*value, ids[slot], slot)),
-            );
-            order.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-            left.resize(ids.len(), false);
-            for item in &order[..n_a] {
-                left[item.2] = true;
-            }
+            left.extend_from_slice(original);
+            capacity_partition(ids, delta, &mut left)?;
         }
         let count = left.iter().filter(|v| **v).count();
         require(
@@ -4254,7 +4600,7 @@ pub mod split_balance_diagnostic {
             for id in (0..ROWS).rev() {
                 // Four source clusters give balanced upper nodes. Within each
                 // 1024-row cluster, 1/8 of rows occupy a distinct nearby mode;
-                // the real original builder must use its coordinate fallback.
+                // the candidate builder repairs that split to 1/4..3/4 capacity.
                 let base = [-20_f64, 20., 160., 200.][id / 1024];
                 let angle = if id % 256 < 32 {
                     base + if id / 1024 % 2 == 0 { 5. } else { -5. }
@@ -4315,13 +4661,14 @@ pub mod split_balance_diagnostic {
                 next_row: 0,
                 receipt: BuildReceipt::default(),
             };
-            // Exercise the byte-preserved real builder/trainer, rather than
-            // fabricate child memberships with the diagnostic under test.
+            // Exercise the real candidate builder/trainer. This is current
+            // synthetic geometry, never a replacement for archived original data.
             let node = builder.node((0..ROWS).collect(), 1).unwrap();
             let Target::Directory { span } = node.target else {
                 panic!("fixture has no hierarchy")
             };
             assert_eq!(builder.next_row, ROWS);
+            assert_eq!(builder.receipt.semantic_repairs, 4);
             assert_eq!(builder.receipt.geometry_fallbacks, 4);
             builder.directories.sync_all().unwrap();
             builder.cells.sync_all().unwrap();
@@ -4744,11 +5091,13 @@ pub mod split_balance_diagnostic {
             };
             let mut accounting = budget();
             let report = check_with_budget(&config, &mut accounting, (4096, 2)).unwrap();
-            assert!(matches!(report["status"].as_str(), Some("PASS" | "REJECT")));
+            // Repairs are no longer old median-fallback nodes. The remaining
+            // selected identical nodes cannot establish a new semantic gain.
+            assert_eq!(report["status"], "INCONCLUSIVE");
             for dataset in report["datasets"].as_object().unwrap().values() {
                 assert_eq!(dataset["measured_nodes"], 4);
-                assert_eq!(dataset["changed_nondegenerate_measured_nodes"], 4);
-                assert_eq!(dataset["unchanged_fallback_nodes"], 0);
+                assert_eq!(dataset["changed_nondegenerate_measured_nodes"], 0);
+                assert_eq!(dataset["unchanged_fallback_nodes"], 4);
                 assert_eq!(
                     dataset["selected_directory_offsets"]
                         .as_array()
@@ -4764,7 +5113,7 @@ pub mod split_balance_diagnostic {
                     );
                 }
             }
-            assert_eq!(accounting.counts.parent_rows, 16384);
+            assert_eq!(accounting.counts.parent_rows, 14336);
             assert!(accounting.counts.admitted_bytes < AUTH_CAP);
             assert_eq!(
                 accounting.counts.auth_bytes,

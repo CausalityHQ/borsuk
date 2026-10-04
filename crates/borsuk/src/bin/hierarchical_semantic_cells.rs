@@ -570,8 +570,8 @@ mod tests {
             }).collect();
         }
         let descriptor = json!({"path":"unused-synthetic-input","bytes":1,"sha256":"a".repeat(64)});
-        let root = json!({"schema":"borsuk-hierarchical-cells-resident-v3",
-            "input":{"schema":"borsuk-hierarchical-cells-build-v1",
+        let root = json!({"schema":"borsuk-hierarchical-cells-resident-v4",
+            "input":{"schema":"borsuk-hierarchical-cells-build-v2",
                 "generation":descriptor,"plane":descriptor,"canonical":descriptor,
                 "order":descriptor,"records":descriptor,"mean":descriptor,"sq8":descriptor,
                 "cell_rows":1,"sample_rows":32,"max_depth":24,
