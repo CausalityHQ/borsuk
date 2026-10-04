@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0c2f75657f7e9ca48",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0c2f75657f7e9ca48"
+    }
+  },
+  "prefix": "research/hierarchical-cells/20261004/constrained-split-falsifier-a0002",
+  "source_commit": "85d425b4b9e1933722d4474524609a66ff69ae6c",
+  "source_archive_sha256": "c754e2fe16b2053cdf462dc18947f8ada395b9c29bf169408d43301b2183baed"
+}

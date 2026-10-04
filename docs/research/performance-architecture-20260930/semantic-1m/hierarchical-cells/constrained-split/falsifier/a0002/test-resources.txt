@@ -1,0 +1,23 @@
+	Command being timed: "timeout --signal=TERM --kill-after=5 1765 taskset -c 0,1 /mnt/hierarchical-constrained-split-falsifier/venv/bin/python -m scripts.launch_hierarchical_cells_100k_spot --constrained-split-falsifier --stage /mnt/hierarchical-constrained-split-falsifier/probe-repo /mnt/hierarchical-constrained-split-falsifier/screen /mnt/hierarchical-constrained-split-falsifier"
+	User time (seconds): 71.41
+	System time (seconds): 18.49
+	Percent of CPU this job got: 82%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:48.84
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 150224
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 7
+	Minor (reclaiming a frame) page faults: 44968
+	Voluntary context switches: 1800885
+	Involuntary context switches: 2459
+	Swaps: 0
+	File system inputs: 704312
+	File system outputs: 4221464
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

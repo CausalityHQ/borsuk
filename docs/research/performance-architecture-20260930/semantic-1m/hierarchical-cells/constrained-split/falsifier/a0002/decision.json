@@ -1,0 +1,40 @@
+{
+  "schema": "borsuk-constrained-split-mechanism-decision-v1",
+  "status": "PASS",
+  "scope": "source-neighborhood mechanism only; no ANN recall/latency/scale/vendor claim",
+  "instance_id": "i-0c2f75657f7e9ca48",
+  "instance_state": "terminated",
+  "terminal_exit_status": 0,
+  "controller_exit_status": 2,
+  "controller_error": "relative collector output rejected by absolute descriptor guard",
+  "offline_replay_exit_status": 0,
+  "offline_replay_used_original_source": true,
+  "offline_replay_absolute_output": true,
+  "authenticated_terminal_artifact_count": 39,
+  "truth_opened": false,
+  "native_exit_status": 0,
+  "original_supervisor_exit_status": 0,
+  "native_wall_seconds": 5.621821847000007,
+  "native_child_hwm_bytes": 36429824,
+  "diagnostic_cgroup_peak_bytes": 260980736,
+  "swap_bytes": 0,
+  "datasets": {
+    "cohere": {
+      "measured_nodes": 8,
+      "changed_nondegenerate_measured_nodes": 8,
+      "coordinate_median_crossing_edges": 6960,
+      "matched_coordinate_crossing_edges": 5302,
+      "constrained_crossing_edges": 3427,
+      "relative_reduction_vs_matched": 0.35364013579781217
+    },
+    "relaion": {
+      "measured_nodes": 8,
+      "changed_nondegenerate_measured_nodes": 8,
+      "coordinate_median_crossing_edges": 5256,
+      "matched_coordinate_crossing_edges": 3987,
+      "constrained_crossing_edges": 2889,
+      "relative_reduction_vs_matched": 0.27539503386004516
+    }
+  },
+  "next_native_change": "Replace nondegenerate skewed median fallback with deterministic minimum-cost capacity-constrained semantic assignment; retain balanced sampled splits and identical-source fallback; paired ANN quality gate before scale."
+}
