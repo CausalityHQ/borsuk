@@ -1,0 +1,49 @@
+{
+  "admission_query": "Consumed ordinal0 unchanged f32 bytes and original100 truth IDs per dataset/role; no quality threshold/promotion/tuning from admission.",
+  "failure_disposition": "Any admission/identity/resource/durability/cleanup error stops before measured64 as execution INVALID, never architecture quality KILL.",
+  "measurement_limits": {
+    "cache_state": "samehost filesystem cache after builds and symmetric admission; report local stage timing, not object-store cold performance",
+    "complete_query_latency": "UNMEASURED; stage sums explicitly labelled",
+    "generalization": "consumed historical panels; no fresh held-out claim",
+    "physical_s3_query_latency_or_vendor_parity": false
+  },
+  "methodology_frozen_before_run": true,
+  "native_calls": {
+    "corrupted_truth_negative_admissions": 1,
+    "layout_builds": 4,
+    "measured_64_query_diagnoses": 4,
+    "one_query_positive_admissions": 4,
+    "original_writers": 2,
+    "total": 15
+  },
+  "native_candidate": "ee1fbdd96c6a64725521c60ac2f7da2127314243",
+  "order": [
+    "authenticate fixed sources/binaries/input bodies",
+    "two original writer invocations",
+    "four role-specific layout builds",
+    "seal all four layouts and measured diagnostic configs",
+    "seal four one-query admission configs",
+    "four positives and one expected-exit2 failure test",
+    "authenticate native exits, synced freezes, kernel resources and SAME unit drain; publish immutable ADMITTED marker last",
+    "four measured64 diagnoses only after ADMITTED",
+    "close resources and retain layouts; terminate before collection"
+  ],
+  "paid_job_started": false,
+  "parent_method": {
+    "bytes": 3403,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/prospective-method.json",
+    "sha256": "c90990fca40b782fc06bf338e2036544e6a05f67da133b519192e9c8534c07ca"
+  },
+  "phase_admission": "2*writer +4*build +5*admission +4*diagnose +120 cleanup reserve <=1800 seconds",
+  "reason": "Candidate layouts must exist before real native admission; run admission conditionally within one frozen paired job, avoiding external receipt/config/canary cycle.",
+  "schema": "borsuk-capacity-partitioner-inline-admission-method-v1",
+  "unchanged": [
+    "two datasets100kD768cosinek100 and their64 consumed query panels",
+    "original401 and qualified candidate402 separate binary/source authorities",
+    "cell512/sample256/depth32/primary8/boundary24/blocks4",
+    "WholeCell32GET/16MiB and frozen .98 mean recall@100/p05 hits95 arm",
+    "SQ2/SQ8 arithmetic and query preparation",
+    "host2GiB/noSwap/CPU2/Tasks512/scratch16GiB/deadline1800s",
+    "separate metadata-only canary with zeroANN/GT reads"
+  ]
+}
