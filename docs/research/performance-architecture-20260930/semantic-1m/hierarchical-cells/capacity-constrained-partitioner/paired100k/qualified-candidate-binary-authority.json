@@ -1,0 +1,89 @@
+{
+  "authority_pending": false,
+  "native": {
+    "binaries": {
+      "cells": {
+        "bytes": 5172704,
+        "key": "research/semantic-router/20261003/hierarchical-cells-minimal-archive-implementation-a0003/artifacts/binaries/hierarchical_semantic_cells",
+        "path": "assets/partitioner-cells",
+        "sha256": "d04ce357f3b83337539e624e7cb813e665846bde7aae970d00d352d505e79bc1"
+      },
+      "writer": {
+        "bytes": 4339936,
+        "key": "research/semantic-router/20261003/hierarchical-cells-minimal-archive-implementation-a0003/artifacts/binaries/build_two_bit_generation",
+        "path": "assets/partitioner-writer",
+        "sha256": "24f9557f9f048b05701d58b5ee3644403d674ba0ecc1767540523f2d52be8a29"
+      }
+    },
+    "gate_log": {
+      "bytes": 695441,
+      "key": "research/semantic-router/20261003/hierarchical-cells-minimal-archive-implementation-a0003/artifacts/test.log",
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0003/test.log",
+      "sha256": "f55e630c5fc6d6c33a188c414a67dab8440a485dda4855a69981d956b6be9805"
+    },
+    "schema": "borsuk-hierarchical-local-native-proof-v1",
+    "source_archive": {
+      "bytes": 12718998,
+      "key": "research/native-library-check/sources/594696c54d8b369aa55f91cee57640c7673ed1fdfe08bb31df1b2a3c7b816a55.tar.gz",
+      "path": "assets/partitioner-qualified-source.tar.gz",
+      "sha256": "594696c54d8b369aa55f91cee57640c7673ed1fdfe08bb31df1b2a3c7b816a55"
+    },
+    "source_commit": "c1235f513b6f6352954601573c77ffb55964d80e",
+    "sources": {
+      "binary": {
+        "bytes": 39480,
+        "path": "crates/borsuk/src/bin/hierarchical_semantic_cells.rs",
+        "sha256": "34aec0ce5515663e32a2ea332401c1a65d01c596246c9d099c8ad849ede0652d"
+      },
+      "gates": {
+        "bytes": 4692,
+        "path": "scripts/check_hierarchical_cells_implementation.sh",
+        "sha256": "6fae6bc392272fb3ccd4afc2fbfe9e19b0d5dd02ecfc3083db7a8847492f7727"
+      },
+      "module": {
+        "bytes": 247294,
+        "path": "crates/borsuk/src/hierarchical_semantic_cells.rs",
+        "sha256": "b1cbc52d548dff101ba29799112b0ac86824d8d8fe8065d0744dc6192f8cb636"
+      },
+      "writer": {
+        "bytes": 5808,
+        "path": "crates/borsuk/src/bin/build_two_bit_generation.rs",
+        "sha256": "5c1e49e9e0b9d0a8c674548d04e8c08b8c1174bb16a823c58f5994c1d07867e8"
+      }
+    }
+  },
+  "refs": {
+    "closeout": {
+      "bytes": 136,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0003/aws-closeout.json",
+      "sha256": "64120f585155e0935a8610711867c50517737cc9a3d41a9033631c7ddcd0607b"
+    },
+    "launch": {
+      "bytes": 384,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0003/aws-launch.json",
+      "sha256": "90d54384883452198f6cbfc38b4cf9030d8edbf881e15269fc2376cfc214b4eb"
+    },
+    "manifest": {
+      "bytes": 44557,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0003/native-source-manifest.json",
+      "sha256": "693f5e555bc99baf2e71a2f45ed4a581dae5f39897bc762622d7adc115c7d007"
+    },
+    "receipt": {
+      "bytes": 51460,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0003/workspace-receipt.json",
+      "sha256": "6f6dc6c5ad856860ecc215773a41d1ab143bceb8a71fcd8f4a9cd0e96b4dd1c8"
+    },
+    "terminal": {
+      "bytes": 3497,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0003/aws-terminal.json",
+      "sha256": "21eca71d61e1e6638669f2a3c85019d49b235a3e98a0ebb7a7074cc6fa332685"
+    },
+    "verification": {
+      "bytes": 2219,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0003/integration-verification.json",
+      "sha256": "6568b1f65c14173bf2f267c323edccf8b787bf5e6058a533515c3c05ae146526"
+    }
+  },
+  "role": "partitioner",
+  "schema": "borsuk-global-leaf-binary-authority-v1"
+}

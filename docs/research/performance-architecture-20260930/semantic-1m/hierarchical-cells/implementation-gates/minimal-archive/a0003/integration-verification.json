@@ -1,4 +1,5 @@
 {
+  "all_current_native_files_match": true,
   "all_current_native_files_match_qualified": true,
   "all_terminal_bodies_authenticated": true,
   "ann_quality_or_performance_measured": false,
@@ -44,18 +45,22 @@
     }
   ],
   "instance_id": "i-058e49960c6233d44",
+  "instance_terminated": true,
   "integrated_commit": "44527acf55c3649461cd125ca2512b5fbf182ec7",
   "memory_peak_bytes": 8589934592,
   "native_source_candidate": "ee1fbdd96c6a64725521c60ac2f7da2127314243",
+  "native_source_identity_sha256": "2a6d2eb76820dbf240cbfb0d0d8230777e457e01ec2ede4cca6bd15917a4cbaa",
   "observed_elapsed_seconds": 1906,
   "oom_events": 0,
   "original_exec": 35039,
   "qualified": true,
   "replay_exit_status": 0,
+  "schema": "borsuk-capacity-partitioner-native-root-verification-v1",
   "scope": "exact native compiler/test qualification only; paired ANN pending",
   "source_file_count": 402,
   "source_identity_sha256": "2a6d2eb76820dbf240cbfb0d0d8230777e457e01ec2ede4cca6bd15917a4cbaa",
   "swap_peak_bytes": 0,
   "terminal_artifact_count": 17,
+  "terminal_sha256": "21eca71d61e1e6638669f2a3c85019d49b235a3e98a0ebb7a7074cc6fa332685",
   "terminated": true
 }
