@@ -1,0 +1,34 @@
+{
+  "ann_queries": 0,
+  "authenticated_terminal_artifacts": 10,
+  "config_sha256": "d7203261f7e7b9c660aeb55f562a62fbff97d3254981406d70eed1a015455189",
+  "controller_runtime_seconds": 132.588,
+  "controller_swap_bytes": 0,
+  "dataset_payload_gets": 0,
+  "instance_id": "i-0d0edbb27406fe2c5",
+  "instance_terminated": true,
+  "local_prelaunch_failures": [
+    {
+      "exit_status": 2,
+      "reason": "root wrapper could not open rb-owned sticky-directory lock; no cloud action",
+      "unit": "borsuk-partitioner-pair-canary-a0001-20261004"
+    },
+    {
+      "exit_status": 2,
+      "reason": "source checkout had preserved untracked artifacts; no cloud action",
+      "unit": "borsuk-partitioner-pair-canary-a0001-r1-20261004"
+    }
+  ],
+  "native_processes": 0,
+  "original_controller_exit_status": 0,
+  "original_controller_invocation": "9e0529d805e84339853ea727a740d32f",
+  "original_controller_session": 20985,
+  "relocated_admission_check_exit_status": 0,
+  "repair": "same frozen commit in clean launch checkout under rb; one actual Spot launch, no replacement",
+  "replay_exit_status": 0,
+  "replay_invocation": "14c2bfaf1d0f4520951b124aadb5ab6f",
+  "reported_controller_peak": "171.5M",
+  "schema": "borsuk-capacity-partitioner-canary-root-verification-v1",
+  "scientific_qualification": false,
+  "terminal_sha256": "b9162853f4b973521bb546b9404e11e9eac87b2527f8ba86df3b03e0bfef98d9"
+}

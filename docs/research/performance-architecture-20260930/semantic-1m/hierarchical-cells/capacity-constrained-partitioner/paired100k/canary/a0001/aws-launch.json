@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0d0edbb27406fe2c5",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0d0edbb27406fe2c5"
+    }
+  },
+  "prefix": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-canary-a0001",
+  "source_commit": "e05f01768db48baa187dc6ccff78526e604f09e2",
+  "source_archive_sha256": "e7e0be4c25824e6d3fee5364517f786e743330e604a4b36f20767d2cf2b96261"
+}

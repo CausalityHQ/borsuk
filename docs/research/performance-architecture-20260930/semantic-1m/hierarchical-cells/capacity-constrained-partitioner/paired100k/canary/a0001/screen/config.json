@@ -1,0 +1,652 @@
+{
+  "admission": {
+    "kind": "inline_native",
+    "measured_requires_admitted": true,
+    "negative_truth_sha256": true,
+    "positive_count": 4,
+    "quality_promotion": false,
+    "schema": "borsuk-capacity-partitioner-inline-admission-v1"
+  },
+  "architecture": "x86_64",
+  "authority_pending": false,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "code_sha256": {
+    "scripts/audit_v36_ranked_physical_ids.py": "67af40bf3d505d45979f269218f4bfd426aaaa5f1e6705b6947bd32831d8bb2b",
+    "scripts/benchmark_with_resources.py": "5b46cd201dfc8491b3dd024bcabcbc8269d41fe9ca699b7e3a3e03fcccc146c4",
+    "scripts/check_hierarchical_cells_implementation.sh": "6fae6bc392272fb3ccd4afc2fbfe9e19b0d5dd02ecfc3083db7a8847492f7727",
+    "scripts/check_native_metadata_ranges_build.py": "da48c53562220026c8024ba2400dca2ba897aa12d49c3e27c3c2fb40b9f0770e",
+    "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
+    "scripts/check_native_semantic_concurrency.py": "9cb0f018689496f6c2bea48d993a99e64f3f3c9b3850a899ef2c927b75ba83e5",
+    "scripts/check_native_semantic_router_stats.py": "d1fb970c0ab6ec98ec5311204a54277180631116d48a29a564ed3bbd68e5c5c2",
+    "scripts/check_native_startup_build.py": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52",
+    "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+    "scripts/check_native_workspace_execution.py": "37e7d14133e95cbda5b633f06d3d72e1c8355255c0eed48a165305c527739fe0",
+    "scripts/check_semantic_router_coverage.py": "221695c725d79dfbc7f0ac3c2a4bd4e46445fc32628a1fd989eb328270356ff3",
+    "scripts/launch_hierarchical_cells_100k_spot.py": "0aa164fd2a310324f657f8db041286c87dcb214ccee35da9b3ed74579e569683",
+    "scripts/launch_native_metadata_ranges_cold_spot.py": "f1dfdb56d08f864594c4dadbdbae593b61d5285f60703712e91865ebd0a9d0e2",
+    "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
+    "scripts/launch_native_semantic_panel_ids_spot.py": "e232d6433b9a8e4efd233bf45206b15dcffc87c96a75d2b4e85997ecced7b387",
+    "scripts/launch_native_semantic_router_cold_spot.py": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180",
+    "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
+    "scripts/launch_native_workspace_execution_spot.py": "686651d9dfb84c80f71e818f8e7b45d7a6d85fa09f795469e591bd9b40cb2d59",
+    "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b",
+    "scripts/launch_v174_relaid_bind_compile_spot.py": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a",
+    "scripts/package_semantic_native_generation.py": "cb6a540c810e3a75381d22339eb72f00382b0972a2d3ee687bbb1d97d5a1b594",
+    "scripts/prepare_hierarchical_cells_100k.py": "0878f2d02285ae678e15c04862d76b5b0066f68d67bb786453f55d73ba40b724",
+    "scripts/prepare_native_semantic_publication.py": "2d3a9270f5ad847981d9d89fea8ead9e9295f742369fa1b9fd9cf3e7c7e2c7e4",
+    "scripts/prepare_semantic_positive_inputs.py": "99599d83c091c68661b5347ce568a92145695e420d8c9a3d61e7e0d6b84e884f",
+    "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+    "scripts/run_hierarchical_global_leaf_probe.py": "c7ca903a2441dea220be8dd134f83cfcaec3f8979825e210950f233ce1df562f",
+    "scripts/run_native_cold_first_query.py": "b4afffd43df8e2ab617749a50fd099fd279e57631e0dcb749b75169ad269a99f",
+    "scripts/run_native_cold_offered.py": "bcd4bbee7d14870489503f9d4e1ec17c53176ef97f0ce851a2f9e8189aa40dfb",
+    "scripts/run_native_metadata_ranges_cold.py": "1322fe19b705caeab275bce69ea6b4a9f2ed84cb6505dcbfe01b25301fdb71b8",
+    "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+    "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+    "scripts/run_native_semantic_router_cold.py": "9fe9e968d99a926bdfc15fae0fc0fadd15d44ed1242b6d4fa2e391c1a3b95f88",
+    "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+    "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6",
+    "scripts/select_v36_rank16_fresh_ids.py": "6388e274ba128d770bbadd8b02833af4f685214bc1f78c9796fd778471d30399"
+  },
+  "complete_query_latency": "complete-query-unmeasured",
+  "compute_cap_usd": 0.25,
+  "consumed": true,
+  "count": 64,
+  "cpu_quota_percent": 200,
+  "delete_on_termination": true,
+  "dimensions": 768,
+  "encrypted": true,
+  "evidence": {
+    "original_closeout": {
+      "bytes": 135,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/aws-closeout.json",
+      "sha256": "b72a14426e80eecc659c776191623630596c673815f2ebfe2f3ebca68a26fe0c"
+    },
+    "original_launch": {
+      "bytes": 348,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/aws-launch.json",
+      "sha256": "5e201469b045a061d480e8225a1540e659c7aeeda16ad1b812245df5070adbc6"
+    },
+    "original_terminal": {
+      "bytes": 4916,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/aws-terminal.json",
+      "sha256": "a0ca521980142f869e7be74b10802926459674cc06ec2e7bf6e11214c8065bf2"
+    },
+    "preregistration": {
+      "bytes": 3707,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-routing-probe-preregistration.json",
+      "sha256": "2914b9bc79cb9cfaf77a270cca868c90398c20dd83149c6896dd7706ac7def04"
+    },
+    "recovery": {
+      "bytes": 8511,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-layout-recovery-admission.json",
+      "sha256": "82bbb9daf01d9a2677943b225c27beb99e9c9005840e048081678f17509f131c"
+    }
+  },
+  "first": 0,
+  "held_out": false,
+  "image_id": "ami-0b8a830d6339a9758",
+  "instance_type": "c7i.2xlarge",
+  "k": 100,
+  "mean_recall_minimum": 0.98,
+  "memory_bytes": 2147483648,
+  "metric": "cosine",
+  "no_truth_body_access": false,
+  "object_roster": [
+    {
+      "bytes": 602279909,
+      "key": "research/native-library-check/sources/a611901fd0a38ac48c62675efbaa9e3b7a100f902b318c1ad0e88f115855c998.tar.gz",
+      "sha256": "a611901fd0a38ac48c62675efbaa9e3b7a100f902b318c1ad0e88f115855c998"
+    },
+    {
+      "bytes": 682941,
+      "key": "research/semantic-router/20261003/hierarchical-cells-implementation-a0002/artifacts/test.log",
+      "sha256": "70780ffb1542a01f57b8d059a9801ae60e372866c333b3e8f4b7d212daa59086"
+    },
+    {
+      "bytes": 4837336,
+      "key": "research/semantic-router/20261003/hierarchical-cells-implementation-a0002/artifacts/binaries/hierarchical_semantic_cells",
+      "sha256": "a2d88fb01d02b94ca888819d1a006ae780f50b0f15526b65a6c718c965c63dbb"
+    },
+    {
+      "bytes": 4293168,
+      "key": "research/semantic-router/20261003/hierarchical-cells-implementation-a0002/artifacts/binaries/build_two_bit_generation",
+      "sha256": "adde84b81925b22a91e046e50266a648b65cef37414c493c14e4058be1d1612d"
+    },
+    {
+      "bytes": 12718998,
+      "key": "research/native-library-check/sources/594696c54d8b369aa55f91cee57640c7673ed1fdfe08bb31df1b2a3c7b816a55.tar.gz",
+      "sha256": "594696c54d8b369aa55f91cee57640c7673ed1fdfe08bb31df1b2a3c7b816a55"
+    },
+    {
+      "bytes": 695441,
+      "key": "research/semantic-router/20261003/hierarchical-cells-minimal-archive-implementation-a0003/artifacts/test.log",
+      "sha256": "f55e630c5fc6d6c33a188c414a67dab8440a485dda4855a69981d956b6be9805"
+    },
+    {
+      "bytes": 5172704,
+      "key": "research/semantic-router/20261003/hierarchical-cells-minimal-archive-implementation-a0003/artifacts/binaries/hierarchical_semantic_cells",
+      "sha256": "d04ce357f3b83337539e624e7cb813e665846bde7aae970d00d352d505e79bc1"
+    },
+    {
+      "bytes": 4339936,
+      "key": "research/semantic-router/20261003/hierarchical-cells-minimal-archive-implementation-a0003/artifacts/binaries/build_two_bit_generation",
+      "sha256": "24f9557f9f048b05701d58b5ee3644403d674ba0ecc1767540523f2d52be8a29"
+    },
+    {
+      "bytes": 145121661,
+      "key": "research/v85-pq16-page-nomination/24383d853474a19702d18d2de700bee3618167f5/100k-a0023/attempt/inputs/source-100k.parquet",
+      "sha256": "a199e151b89a496ed20e39fdd951591bbfb4817d682e9111ebe2e1cab7ae550d"
+    },
+    {
+      "bytes": 800000,
+      "key": "research/native-union/20260928/locality-source-layout-a0001/artifacts/screen/relaion/order.u64",
+      "sha256": "22abeb087000ea2978c4fef8e85c2f7fda4e4b22c4e5126ba37a1c19816fab18"
+    },
+    {
+      "bytes": 78000000,
+      "key": "research/native-union/20260928/locality-source-layout-a0001/data/relaion/objects/be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b",
+      "sha256": "be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b"
+    },
+    {
+      "bytes": 17714558,
+      "key": "research/v114-exact-local/3443d7674432e281e6709bbb5ecee30f96b54a1e/runs/v114-100k-20260923T215331Z/a0001/artifacts/requests.jsonl",
+      "sha256": "b2485629b919614bf46877a779b16d678cd1690d1872b7d4f9c9cbe6ddd94eb0"
+    },
+    {
+      "bytes": 400000,
+      "key": "research/validation-loss-diagnostic/20260928/a0001/artifacts/diagnostic/truth.u32",
+      "sha256": "4bd3ac79fce3919f85359ce3e305491663991f6cc0890ab91682cda34247a24e"
+    },
+    {
+      "bytes": 307200000,
+      "key": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/vectors.raw",
+      "sha256": "0f3631d71c105e5ea3d701c96033b362c2f84bd43002a9c8a5c70040801be06e"
+    },
+    {
+      "bytes": 800000,
+      "key": "research/native-union/20260928/walk-source-http-a0001/artifacts/screen/cohere/order.u64",
+      "sha256": "e2314ca14f5aa6f08b02cc328b863c921e55b1461a413ad6d3d66e781ff42d50"
+    },
+    {
+      "bytes": 78000000,
+      "key": "research/native-union/20260928/walk-source-http-a0001/data/cohere/objects/c16929252705c831c6846022eec46481fc004f521f0c0814a53d49fece8771e0",
+      "sha256": "c16929252705c831c6846022eec46481fc004f521f0c0814a53d49fece8771e0"
+    },
+    {
+      "bytes": 15369495,
+      "key": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/requests.jsonl",
+      "sha256": "86d9406486a2bb27aa2e603f019e078dd3ecaed47f79ec685558ba3536433812"
+    },
+    {
+      "bytes": 400000,
+      "key": "research/v248-cohere-transfer-100k/7b66f9f7d306a0f1febc2091783de68a6ece72c7/runs/a0001/artifacts/truth.u32",
+      "sha256": "06cd59b31962d4190367b54d7abf24dd4e018d3c4ac8da0b2b528d21a5a7cbb8"
+    }
+  ],
+  "original_root": "/mnt/hierarchical-100k",
+  "p05_hits_minimum": 95,
+  "pair_evidence": {
+    "candidate_manifest": {
+      "bytes": 44557,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/qualification/native-source-manifest.json",
+      "sha256": "693f5e555bc99baf2e71a2f45ed4a581dae5f39897bc762622d7adc115c7d007"
+    },
+    "inline_method": {
+      "bytes": 2753,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/prospective-inline-admission-amendment.json",
+      "sha256": "a4c096a60eeeb32ef8a7c45d99b6155619660d2016d5c8f71f9e5d125fee8519"
+    },
+    "method": {
+      "bytes": 3403,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/prospective-method.json",
+      "sha256": "c90990fca40b782fc06bf338e2036544e6a05f67da133b519192e9c8534c07ca"
+    },
+    "original_authority": {
+      "bytes": 4081,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/qualified-original-binary-authority.json",
+      "sha256": "72888141c95c91403cb92dfd109a294caaaf71a4484b6a0db76b4bd580d61901"
+    },
+    "retained_closeout": {
+      "bytes": 135,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/a0002/aws-closeout.json",
+      "sha256": "0b8a11707668f967d4a1fa373292ede5083ea510a13aef1b6babddcd2899f096"
+    },
+    "retained_launch": {
+      "bytes": 355,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/a0002/aws-launch.json",
+      "sha256": "d1083df544696b54b29836104a9a0a7e80aebb019aa1a2727f1d690f1d7c2d30"
+    },
+    "retained_seal": {
+      "bytes": 388831,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/a0002/screen/paired-seal.json",
+      "sha256": "010ed217b0e7a983868e03a83bf52cc96659960514611a9e624966792baea705"
+    },
+    "retained_terminal": {
+      "bytes": 8865,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/global-leaf-probe/a0002/aws-terminal.json",
+      "sha256": "36fa651823c755f29ca238ea38b722f0fffedcd32129cd7bc7506310cbe22587"
+    }
+  },
+  "phase_seconds": {
+    "admission": 30,
+    "build": 210,
+    "diagnose": 90,
+    "writer": 90
+  },
+  "physical_s3_measured": false,
+  "policy": {
+    "blocks_per_cell": 4,
+    "boundary_beam": 24,
+    "fetch_policy": "whole_cell",
+    "max_cell_bytes": 16777216,
+    "max_cell_gets": 32,
+    "max_cells": 32,
+    "max_refinement_bytes": 0,
+    "max_refinement_gets": 1,
+    "max_source_bytes": 0,
+    "max_source_gets": 1,
+    "primary_beam": 8
+  },
+  "reduction_enabled": true,
+  "region": "eu-central-1",
+  "resources": {
+    "build_max_output_bytes": 268435456,
+    "build_max_payload_bytes": 67108864,
+    "cpu_affinity": [
+      0,
+      1
+    ],
+    "max_evaluator_payload_bytes": 134217728,
+    "max_log_bytes": 16777216,
+    "max_query_payload_bytes": 134217728,
+    "max_resident_directory_payload_bytes": 402653184,
+    "max_result_bytes": 134217728,
+    "memory_max_bytes": 2147483648,
+    "scratch_max_bytes": 17179869184,
+    "swap_bytes": 0,
+    "writer_max_memory_bytes": 67108864
+  },
+  "retune_allowed": false,
+  "roles": {
+    "original": {
+      "authority_pending": false,
+      "native": {
+        "binaries": {
+          "cells": {
+            "bytes": 4837336,
+            "key": "research/semantic-router/20261003/hierarchical-cells-implementation-a0002/artifacts/binaries/hierarchical_semantic_cells",
+            "path": "assets/cells",
+            "sha256": "a2d88fb01d02b94ca888819d1a006ae780f50b0f15526b65a6c718c965c63dbb"
+          },
+          "writer": {
+            "bytes": 4293168,
+            "key": "research/semantic-router/20261003/hierarchical-cells-implementation-a0002/artifacts/binaries/build_two_bit_generation",
+            "path": "assets/writer",
+            "sha256": "adde84b81925b22a91e046e50266a648b65cef37414c493c14e4058be1d1612d"
+          }
+        },
+        "gate_log": {
+          "bytes": 682941,
+          "key": "research/semantic-router/20261003/hierarchical-cells-implementation-a0002/artifacts/test.log",
+          "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/a0002/test.log",
+          "sha256": "70780ffb1542a01f57b8d059a9801ae60e372866c333b3e8f4b7d212daa59086"
+        },
+        "schema": "borsuk-hierarchical-local-native-proof-v1",
+        "source_archive": {
+          "bytes": 602279909,
+          "key": "research/native-library-check/sources/a611901fd0a38ac48c62675efbaa9e3b7a100f902b318c1ad0e88f115855c998.tar.gz",
+          "path": "assets/qualified-source.tar.gz",
+          "sha256": "a611901fd0a38ac48c62675efbaa9e3b7a100f902b318c1ad0e88f115855c998"
+        },
+        "source_commit": "2638caaec6e7ebd9b39620e497afa14bd64d402d",
+        "sources": {
+          "binary": {
+            "bytes": 19547,
+            "path": "crates/borsuk/src/bin/hierarchical_semantic_cells.rs",
+            "sha256": "99730faeea64fde6ba33dc6c05e99ee77cc07b48e4350bd089537a9fa672b686"
+          },
+          "gates": {
+            "bytes": 3829,
+            "path": "scripts/check_hierarchical_cells_implementation.sh",
+            "sha256": "d472fc37c2295535181448a8dda3b3bf49eded54a2b1a9edc93e3964fcc9f04d"
+          },
+          "module": {
+            "bytes": 94229,
+            "path": "crates/borsuk/src/hierarchical_semantic_cells.rs",
+            "sha256": "f14b86361ca7da229822a81016f0c5641ab48a850e19aa4c4257e125a003d6ad"
+          },
+          "writer": {
+            "bytes": 5808,
+            "path": "crates/borsuk/src/bin/build_two_bit_generation.rs",
+            "sha256": "5c1e49e9e0b9d0a8c674548d04e8c08b8c1174bb16a823c58f5994c1d07867e8"
+          }
+        }
+      },
+      "refs": {
+        "closeout": {
+          "bytes": 136,
+          "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/a0002/aws-closeout.json",
+          "sha256": "b2f4ea30d3323a515e8a47483c69344f388522e60a790ddcc769f904be3d392f"
+        },
+        "launch": {
+          "bytes": 368,
+          "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/a0002/aws-launch.json",
+          "sha256": "65660b95b2415ad3d4ff0a1c34b6776c668a113515854ca4a798fc3fa232ee37"
+        },
+        "manifest": {
+          "bytes": 44457,
+          "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/a0002/native-source-manifest.json",
+          "sha256": "01dbc6e3dd975451fe3e530bb1154382a5cd1868c991605d8cd6cc61fe0fa84f"
+        },
+        "receipt": {
+          "bytes": 50318,
+          "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/a0002/workspace-receipt.json",
+          "sha256": "48e9d07e195d6cd5f01039b2c6543448c6710bbf25c8a36254c68c73e59bd3f4"
+        },
+        "terminal": {
+          "bytes": 3391,
+          "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/a0002/aws-terminal.json",
+          "sha256": "762aaa44d5d9bca13aab745ccdcd681576ec455d3a9abd1af6de3ef28e7d052b"
+        },
+        "verification": {
+          "bytes": 5118,
+          "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/a0002/integration-verification.json",
+          "sha256": "c4c438ef7108efc137493d24237ff70c1a250f7a7fb23aeac476327a598213ca"
+        }
+      },
+      "role": "original",
+      "schema": "borsuk-global-leaf-binary-authority-v1"
+    },
+    "partitioner": {
+      "authority_pending": false,
+      "native": {
+        "binaries": {
+          "cells": {
+            "bytes": 5172704,
+            "key": "research/semantic-router/20261003/hierarchical-cells-minimal-archive-implementation-a0003/artifacts/binaries/hierarchical_semantic_cells",
+            "path": "assets/partitioner-cells",
+            "sha256": "d04ce357f3b83337539e624e7cb813e665846bde7aae970d00d352d505e79bc1"
+          },
+          "writer": {
+            "bytes": 4339936,
+            "key": "research/semantic-router/20261003/hierarchical-cells-minimal-archive-implementation-a0003/artifacts/binaries/build_two_bit_generation",
+            "path": "assets/partitioner-writer",
+            "sha256": "24f9557f9f048b05701d58b5ee3644403d674ba0ecc1767540523f2d52be8a29"
+          }
+        },
+        "gate_log": {
+          "bytes": 695441,
+          "key": "research/semantic-router/20261003/hierarchical-cells-minimal-archive-implementation-a0003/artifacts/test.log",
+          "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0003/test.log",
+          "sha256": "f55e630c5fc6d6c33a188c414a67dab8440a485dda4855a69981d956b6be9805"
+        },
+        "schema": "borsuk-hierarchical-local-native-proof-v1",
+        "source_archive": {
+          "bytes": 12718998,
+          "key": "research/native-library-check/sources/594696c54d8b369aa55f91cee57640c7673ed1fdfe08bb31df1b2a3c7b816a55.tar.gz",
+          "path": "assets/partitioner-qualified-source.tar.gz",
+          "sha256": "594696c54d8b369aa55f91cee57640c7673ed1fdfe08bb31df1b2a3c7b816a55"
+        },
+        "source_commit": "c1235f513b6f6352954601573c77ffb55964d80e",
+        "sources": {
+          "binary": {
+            "bytes": 39480,
+            "path": "crates/borsuk/src/bin/hierarchical_semantic_cells.rs",
+            "sha256": "34aec0ce5515663e32a2ea332401c1a65d01c596246c9d099c8ad849ede0652d"
+          },
+          "gates": {
+            "bytes": 4692,
+            "path": "scripts/check_hierarchical_cells_implementation.sh",
+            "sha256": "6fae6bc392272fb3ccd4afc2fbfe9e19b0d5dd02ecfc3083db7a8847492f7727"
+          },
+          "module": {
+            "bytes": 247294,
+            "path": "crates/borsuk/src/hierarchical_semantic_cells.rs",
+            "sha256": "b1cbc52d548dff101ba29799112b0ac86824d8d8fe8065d0744dc6192f8cb636"
+          },
+          "writer": {
+            "bytes": 5808,
+            "path": "crates/borsuk/src/bin/build_two_bit_generation.rs",
+            "sha256": "5c1e49e9e0b9d0a8c674548d04e8c08b8c1174bb16a823c58f5994c1d07867e8"
+          }
+        }
+      },
+      "refs": {
+        "closeout": {
+          "bytes": 136,
+          "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0003/aws-closeout.json",
+          "sha256": "64120f585155e0935a8610711867c50517737cc9a3d41a9033631c7ddcd0607b"
+        },
+        "launch": {
+          "bytes": 384,
+          "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0003/aws-launch.json",
+          "sha256": "90d54384883452198f6cbfc38b4cf9030d8edbf881e15269fc2376cfc214b4eb"
+        },
+        "manifest": {
+          "bytes": 44557,
+          "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0003/native-source-manifest.json",
+          "sha256": "693f5e555bc99baf2e71a2f45ed4a581dae5f39897bc762622d7adc115c7d007"
+        },
+        "receipt": {
+          "bytes": 51460,
+          "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0003/workspace-receipt.json",
+          "sha256": "6f6dc6c5ad856860ecc215773a41d1ab143bceb8a71fcd8f4a9cd0e96b4dd1c8"
+        },
+        "terminal": {
+          "bytes": 3497,
+          "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0003/aws-terminal.json",
+          "sha256": "21eca71d61e1e6638669f2a3c85019d49b235a3e98a0ebb7a7074cc6fa332685"
+        },
+        "verification": {
+          "bytes": 2219,
+          "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0003/integration-verification.json",
+          "sha256": "6568b1f65c14173bf2f267c323edccf8b787bf5e6058a533515c3c05ae146526"
+        }
+      },
+      "role": "partitioner",
+      "schema": "borsuk-global-leaf-binary-authority-v1"
+    }
+  },
+  "root_device_name": "/dev/sda1",
+  "rows": 100000,
+  "run_id": "a0001",
+  "schema": "borsuk-capacity-partitioner-paired100k-staging-v1",
+  "scientific_qualification": false,
+  "scratch_admission_bytes": 6482146477,
+  "scratch_bytes": 17179869184,
+  "scratch_reserve_bytes": 134217728,
+  "scratch_roster": [
+    {
+      "max_bytes": 33481878,
+      "name": "bootstrap-archives-and-unpacked-controller"
+    },
+    {
+      "max_bytes": 635020433,
+      "name": "qualified-native-archives-logs-binaries"
+    },
+    {
+      "max_bytes": 145121661,
+      "name": "relaion-input-source"
+    },
+    {
+      "max_bytes": 800000,
+      "name": "relaion-input-order.u64"
+    },
+    {
+      "max_bytes": 78000000,
+      "name": "relaion-input-sq8.bin"
+    },
+    {
+      "max_bytes": 17714558,
+      "name": "relaion-input-requests"
+    },
+    {
+      "max_bytes": 400000,
+      "name": "relaion-input-truth"
+    },
+    {
+      "max_bytes": 307200000,
+      "name": "relaion-decoded-raw"
+    },
+    {
+      "max_bytes": 962767,
+      "name": "relaion-consumed-panels"
+    },
+    {
+      "max_bytes": 406838353,
+      "name": "relaion-generation"
+    },
+    {
+      "max_bytes": 268435456,
+      "name": "relaion-original-layout"
+    },
+    {
+      "max_bytes": 269594831,
+      "name": "relaion-original-retained-layout-panels-configs"
+    },
+    {
+      "max_bytes": 268435456,
+      "name": "relaion-partitioner-layout"
+    },
+    {
+      "max_bytes": 269594831,
+      "name": "relaion-partitioner-retained-layout-panels-configs"
+    },
+    {
+      "max_bytes": 307200000,
+      "name": "cohere-input-source"
+    },
+    {
+      "max_bytes": 800000,
+      "name": "cohere-input-order.u64"
+    },
+    {
+      "max_bytes": 78000000,
+      "name": "cohere-input-sq8.bin"
+    },
+    {
+      "max_bytes": 15369495,
+      "name": "cohere-input-requests"
+    },
+    {
+      "max_bytes": 400000,
+      "name": "cohere-input-truth"
+    },
+    {
+      "max_bytes": 0,
+      "name": "cohere-decoded-raw"
+    },
+    {
+      "max_bytes": 1008832,
+      "name": "cohere-consumed-panels"
+    },
+    {
+      "max_bytes": 406838390,
+      "name": "cohere-generation"
+    },
+    {
+      "max_bytes": 268435456,
+      "name": "cohere-original-layout"
+    },
+    {
+      "max_bytes": 269640896,
+      "name": "cohere-original-retained-layout-panels-configs"
+    },
+    {
+      "max_bytes": 268435456,
+      "name": "cohere-partitioner-layout"
+    },
+    {
+      "max_bytes": 269640896,
+      "name": "cohere-partitioner-retained-layout-panels-configs"
+    },
+    {
+      "max_bytes": 35651584,
+      "name": "relaion-writer-logs-spec-and-receipts"
+    },
+    {
+      "max_bytes": 35651584,
+      "name": "cohere-writer-logs-spec-and-receipts"
+    },
+    {
+      "max_bytes": 35651584,
+      "name": "relaion-original-build-logs-spec-and-receipts"
+    },
+    {
+      "max_bytes": 35651584,
+      "name": "cohere-original-build-logs-spec-and-receipts"
+    },
+    {
+      "max_bytes": 35651584,
+      "name": "relaion-partitioner-build-logs-spec-and-receipts"
+    },
+    {
+      "max_bytes": 35651584,
+      "name": "cohere-partitioner-build-logs-spec-and-receipts"
+    },
+    {
+      "max_bytes": 35651584,
+      "name": "relaion-original-admission-logs-spec-and-receipts"
+    },
+    {
+      "max_bytes": 35651584,
+      "name": "cohere-original-admission-logs-spec-and-receipts"
+    },
+    {
+      "max_bytes": 35651584,
+      "name": "relaion-partitioner-admission-logs-spec-and-receipts"
+    },
+    {
+      "max_bytes": 35651584,
+      "name": "cohere-partitioner-admission-logs-spec-and-receipts"
+    },
+    {
+      "max_bytes": 35651584,
+      "name": "relaion-original-negative-admission-logs-spec-and-receipts"
+    },
+    {
+      "max_bytes": 35651584,
+      "name": "relaion-original-diagnose-logs-spec-and-receipts"
+    },
+    {
+      "max_bytes": 35651584,
+      "name": "cohere-original-diagnose-logs-spec-and-receipts"
+    },
+    {
+      "max_bytes": 35651584,
+      "name": "relaion-partitioner-diagnose-logs-spec-and-receipts"
+    },
+    {
+      "max_bytes": 35651584,
+      "name": "cohere-partitioner-diagnose-logs-spec-and-receipts"
+    },
+    {
+      "max_bytes": 536870912,
+      "name": "four-diagnostic-outputs"
+    },
+    {
+      "max_bytes": 17825792,
+      "name": "inline-admission-panels-configs-seals-marker"
+    },
+    {
+      "max_bytes": 671088640,
+      "name": "five-inline-admission-outputs"
+    },
+    {
+      "max_bytes": 134217728,
+      "name": "cleanup-and-runtime-reserve"
+    }
+  ],
+  "spot_max_usd_per_hour": 0.5,
+  "subnet_id": "subnet-034528fbd6977848f",
+  "swap_bytes": 0,
+  "tasks_max": 512,
+  "vendor_win": false,
+  "versions": {
+    "numpy": "2.3.3",
+    "pyarrow": "24.0.0"
+  },
+  "volume_gib": 80,
+  "volume_type": "gp3",
+  "wall_seconds": 1800
+}

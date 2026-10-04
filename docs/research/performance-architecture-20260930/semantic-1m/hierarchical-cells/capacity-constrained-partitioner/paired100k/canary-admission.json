@@ -1,0 +1,10 @@
+{
+  "attempt": "a0001",
+  "code_identity_sha256": "8b3f46e0b1266c793169098731fc6ae5d38f6ab02ea762603bd185ab92420db1",
+  "config_sha256": "d7203261f7e7b9c660aeb55f562a62fbff97d3254981406d70eed1a015455189",
+  "native_identity_sha256": "8e7c178906b4115f8a178d1c1f65cff399bc27a13503c78d748eba3398d54902",
+  "refs_identity_sha256": "a25d007f6bbffea55b487aaf437b27e061bee8872124a4384d3ea24314183bb9",
+  "schema": "borsuk-capacity-partitioner-canary-admission-v1",
+  "source_archive_paths_sha256": "6bac897f435aa94d23139060589ab24e3d9c93ef1a8f756e5de0d568c5927a70",
+  "terminal_sha256": "b9162853f4b973521bb546b9404e11e9eac87b2527f8ba86df3b03e0bfef98d9"
+}
