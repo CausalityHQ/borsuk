@@ -1,0 +1,61 @@
+{
+  "all_current_native_files_match_qualified": true,
+  "all_terminal_bodies_authenticated": true,
+  "ann_quality_or_performance_measured": false,
+  "artifact_whitespace_check": {
+    "affected_paths": [
+      "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0003/run-closed.log",
+      "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-gates/minimal-archive/a0003/test.log"
+    ],
+    "exit_status": 2,
+    "reason": "immutable authenticated compiler/terminal log whitespace preserved; not source whitespace"
+  },
+  "full_workspace_test_execution": false,
+  "gates": [
+    {
+      "exit_status": 0,
+      "stage": "hierarchical-cell-tests",
+      "tests_run": 28
+    },
+    {
+      "exit_status": 0,
+      "stage": "hierarchical-cell-bin-tests",
+      "tests_run": 6
+    },
+    {
+      "exit_status": 0,
+      "stage": "generation-integration",
+      "tests_run": 2
+    },
+    {
+      "exit_status": 0,
+      "stage": "release",
+      "tests_run": null
+    },
+    {
+      "exit_status": 0,
+      "stage": "clippy",
+      "tests_run": null
+    },
+    {
+      "exit_status": 0,
+      "stage": "test-build",
+      "tests_run": null
+    }
+  ],
+  "instance_id": "i-058e49960c6233d44",
+  "integrated_commit": "44527acf55c3649461cd125ca2512b5fbf182ec7",
+  "memory_peak_bytes": 8589934592,
+  "native_source_candidate": "ee1fbdd96c6a64725521c60ac2f7da2127314243",
+  "observed_elapsed_seconds": 1906,
+  "oom_events": 0,
+  "original_exec": 35039,
+  "qualified": true,
+  "replay_exit_status": 0,
+  "scope": "exact native compiler/test qualification only; paired ANN pending",
+  "source_file_count": 402,
+  "source_identity_sha256": "2a6d2eb76820dbf240cbfb0d0d8230777e457e01ec2ede4cca6bd15917a4cbaa",
+  "swap_peak_bytes": 0,
+  "terminal_artifact_count": 17,
+  "terminated": true
+}
