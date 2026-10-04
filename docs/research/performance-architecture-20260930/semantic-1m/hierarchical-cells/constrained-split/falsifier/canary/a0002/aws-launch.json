@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-091425fcd95e28df0",
+  "nodes": {
+    "0": {
+      "instance_id": "i-091425fcd95e28df0"
+    }
+  },
+  "prefix": "research/hierarchical-cells/20261004/constrained-split-falsifier-canary-a0002",
+  "source_commit": "65f8e66fc08161d7c2b8f59c2a32b33db069d077",
+  "source_archive_sha256": "ae00401dd8773d3277b5e6ddf78593246e1df1c9d037fec3ba99f18ed58311d4"
+}
