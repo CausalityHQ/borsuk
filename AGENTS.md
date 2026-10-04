@@ -28,6 +28,11 @@ first release, schema stability and backward compatibility are non-goals.
   recall, p90/p95 latency, QPS, memory efficiency, threading and scalability.
   Select each substantive change from measured stage timings and recall-loss
   evidence; optimize SIMD only when profiling identifies a compute bottleneck.
+- Optimize Rust design for measured runtime performance. Long compilation
+  times and substantial build resources are acceptable; advanced Rust features
+  are allowed when they improve the runtime. Compilation time is not a product
+  acceptance metric or a reason to reject a runtime improvement. Keep build
+  resource safety limits and qualify expensive builds on bounded remote hosts.
 - Do not initiate Python or TypeScript features or controller milestones.
   These languages may provide only minimal glue to run and verify an exact
   native experiment. Preserve existing workers, original jobs and receipts.
