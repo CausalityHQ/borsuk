@@ -1,0 +1,36 @@
+{
+  "artifacts": {
+    "aws-launch.json": {
+      "bytes": 371,
+      "sha256": "fa226b7503b4a19c9cf64b0e7e96ab321d0fb38871de36da61b701deb715e02e"
+    },
+    "aws-reservation.json": {
+      "bytes": 442012,
+      "sha256": "28e9d852604b90a8531d2b9cef0842b7d94ea1bf10d299b76d769cf23589b1dd"
+    },
+    "aws-user-data.sh": {
+      "bytes": 7571,
+      "sha256": "2f6be32c1828a9bc97dfbddecb215315b091022ef5167058c96951aa4f0db4f5"
+    }
+  },
+  "automatic_retry": false,
+  "bundle_commit": "e6ca447948110956691c0980644d4a3b80c4cad4",
+  "candidate_commit": "25d62fe56f31a4defba869df30167b9f5a598ffa",
+  "cheap_preflight": {
+    "exit_status": 0,
+    "memory_peak": "80.8M",
+    "original_session": 88125,
+    "runtime_seconds": 3.885,
+    "swap_bytes": 0
+  },
+  "controller_invocation": "08eb29bf6457422d94b7bc27b9f3ce6b",
+  "controller_unit": "borsuk-source-witness-native-qualification-a0001-20261004.service",
+  "instance_id": "i-0f5926e55de063bca",
+  "native_tests_qualified": false,
+  "original_session": 97902,
+  "quality_or_performance_claim": false,
+  "schema": "borsuk-source-witness-native-qualification-launch-checkpoint-v1",
+  "source_file_count": 402,
+  "source_identity_sha256": "2e8145e3639b3c4bf93f363dca110ff16f374bee4057e8426738fc02dc51941f",
+  "status": "RUNNING_UNQUALIFIED"
+}

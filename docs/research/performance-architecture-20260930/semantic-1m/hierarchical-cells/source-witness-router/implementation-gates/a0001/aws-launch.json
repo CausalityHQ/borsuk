@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0f5926e55de063bca",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0f5926e55de063bca"
+    }
+  },
+  "prefix": "research/semantic-router/20261004/source-witness-router-implementation-a0001",
+  "source_commit": "e6ca447948110956691c0980644d4a3b80c4cad4",
+  "source_archive_sha256": "ece4ea5c71298ddaa3a4078e3726b4942e6a7476f0603ac4bb1fca516033abc6"
+}
