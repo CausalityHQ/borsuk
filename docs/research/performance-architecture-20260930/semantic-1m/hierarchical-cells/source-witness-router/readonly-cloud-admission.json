@@ -1,0 +1,119 @@
+{
+  "active_borsuk_instances": 0,
+  "architecture": "x86_64",
+  "availability_zone": "eu-central-1a",
+  "heads": [
+    {
+      "bytes": 98800000,
+      "dataset": "cohere",
+      "etag": "\"4970b84d2d9882215702486302e48a79-12\"",
+      "expected_sha256": "647491734c13391be7ff682a8d8c125e69d317e87b31cd8e7d1ebb9eebee0ef0",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/cohere/partitioner/cells.bin",
+      "name": "cells.bin",
+      "whole_body_verified_now": false
+    },
+    {
+      "bytes": 6410540,
+      "dataset": "cohere",
+      "etag": "\"f036c5cf071047fa8ba2a4e054fd4b69\"",
+      "expected_sha256": "f0df6a5900d6a66263389dfa353167790b18c2b819e09c288d6f218457dbf865",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/cohere/partitioner/directories.bin",
+      "name": "directories.bin",
+      "whole_body_verified_now": false
+    },
+    {
+      "bytes": 30456,
+      "dataset": "cohere",
+      "etag": "\"921d191a67f0139ced1d4adc0be16838\"",
+      "expected_sha256": "c2bf337290f7713139903f398ac6b4007ed01faf47ff093e7e397b2715b7b4fc",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/cohere/partitioner/manifest.json",
+      "name": "manifest.json",
+      "whole_body_verified_now": false
+    },
+    {
+      "bytes": 983232,
+      "dataset": "cohere",
+      "etag": "\"6f99e6eac3dba55c10f272cba62416f0\"",
+      "expected_sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/cohere/partitioner/requests64",
+      "name": "requests64",
+      "whole_body_verified_now": false
+    },
+    {
+      "bytes": 25600,
+      "dataset": "cohere",
+      "etag": "\"158acc9634c25990a450412c14bad15b\"",
+      "expected_sha256": "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/cohere/partitioner/truth64",
+      "name": "truth64",
+      "whole_body_verified_now": false
+    },
+    {
+      "bytes": 98800000,
+      "dataset": "relaion",
+      "etag": "\"1e26204665217db80a827c9f0467f69c-12\"",
+      "expected_sha256": "6bb1c1259c3686ec7dfea1100e9162b45ad898c504b261f82979b974aedbf8ae",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/relaion/partitioner/cells.bin",
+      "name": "cells.bin",
+      "whole_body_verified_now": false
+    },
+    {
+      "bytes": 6397659,
+      "dataset": "relaion",
+      "etag": "\"8a64cfbf0a952166f605d366c8be4f4c\"",
+      "expected_sha256": "93c0d23d067d4929d44d1111159c3c46ac74800aba621a344a3cfd3fa8d5fe89",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/relaion/partitioner/directories.bin",
+      "name": "directories.bin",
+      "whole_body_verified_now": false
+    },
+    {
+      "bytes": 31500,
+      "dataset": "relaion",
+      "etag": "\"6fbf9cd6164a9b8fb2cf33ebfe39e425\"",
+      "expected_sha256": "3244e7bbd5e27eb1f3fe52cbddc450d08d45d25256eec98dc942ba42cf2808f1",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/relaion/partitioner/manifest.json",
+      "name": "manifest.json",
+      "whole_body_verified_now": false
+    },
+    {
+      "bytes": 937167,
+      "dataset": "relaion",
+      "etag": "\"a8f1c54a019e57830a79848cb9523d67\"",
+      "expected_sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/relaion/partitioner/requests64",
+      "name": "requests64",
+      "whole_body_verified_now": false
+    },
+    {
+      "bytes": 25600,
+      "dataset": "relaion",
+      "etag": "\"422bc51922d69a915512d6894fcd88ff\"",
+      "expected_sha256": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/relaion/partitioner/truth64",
+      "name": "truth64",
+      "whole_body_verified_now": false
+    },
+    {
+      "bytes": 5721952,
+      "etag": "\"6b4a85a83e2716cd86042ffccb1e2ee8\"",
+      "expected_sha256": "6b697b09fc6e709b5127ce81290950d37aa5fde892a8e0d053e4c9ca824ff297",
+      "key": "research/semantic-router/20261004/source-witness-router-implementation-a0001/artifacts/binaries/hierarchical_semantic_cells",
+      "name": "binaries/hierarchical_semantic_cells",
+      "whole_body_verified_now": false
+    }
+  ],
+  "image_id": "ami-0b8a830d6339a9758",
+  "infrastructure_keys_present": true,
+  "instance_type": "c7i.large",
+  "launches": 0,
+  "native_scientific_execution": false,
+  "observed_at_utc": "2026-10-04T22:23:40.921254+00:00",
+  "payload_gets": 0,
+  "profile": "causality",
+  "region": "eu-central-1",
+  "retry_max_attempts": 0,
+  "schema": "borsuk-source-witness-readonly-cloud-admission-v1",
+  "spot_quote_time": "2026-10-04T19:00:00+00:00",
+  "spot_quote_usd_per_hour": "0.045900",
+  "subnet_id": "subnet-034528fbd6977848f"
+}

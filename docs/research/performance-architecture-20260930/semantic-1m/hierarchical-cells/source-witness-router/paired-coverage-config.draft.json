@@ -1,0 +1,82 @@
+{
+  "authority": {
+    "bytes": 3711,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/retained-input-authority.json",
+    "sha256": "93a6f221e895d400ff217e57cc5188d0aa475146ba94cd68876e41325b02a743"
+  },
+  "binary": {
+    "bytes": 5721952,
+    "path": "/mnt/source-witness/assets/hierarchical_semantic_cells",
+    "sha256": "6b697b09fc6e709b5127ce81290950d37aa5fde892a8e0d053e4c9ca824ff297"
+  },
+  "diagnostics": true,
+  "inputs": {
+    "cohere": {
+      "cells.bin": {
+        "bytes": 98800000,
+        "path": "/mnt/source-witness/assets/cohere/cells.bin",
+        "sha256": "647491734c13391be7ff682a8d8c125e69d317e87b31cd8e7d1ebb9eebee0ef0"
+      },
+      "directories.bin": {
+        "bytes": 6410540,
+        "path": "/mnt/source-witness/assets/cohere/directories.bin",
+        "sha256": "f0df6a5900d6a66263389dfa353167790b18c2b819e09c288d6f218457dbf865"
+      },
+      "manifest.json": {
+        "bytes": 30456,
+        "path": "/mnt/source-witness/assets/cohere/manifest.json",
+        "sha256": "c2bf337290f7713139903f398ac6b4007ed01faf47ff093e7e397b2715b7b4fc"
+      },
+      "requests64": {
+        "bytes": 983232,
+        "path": "/mnt/source-witness/assets/cohere/requests64",
+        "sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654"
+      },
+      "truth64": {
+        "bytes": 25600,
+        "path": "/mnt/source-witness/assets/cohere/truth64",
+        "sha256": "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355"
+      }
+    },
+    "relaion": {
+      "cells.bin": {
+        "bytes": 98800000,
+        "path": "/mnt/source-witness/assets/relaion/cells.bin",
+        "sha256": "6bb1c1259c3686ec7dfea1100e9162b45ad898c504b261f82979b974aedbf8ae"
+      },
+      "directories.bin": {
+        "bytes": 6397659,
+        "path": "/mnt/source-witness/assets/relaion/directories.bin",
+        "sha256": "93c0d23d067d4929d44d1111159c3c46ac74800aba621a344a3cfd3fa8d5fe89"
+      },
+      "manifest.json": {
+        "bytes": 31500,
+        "path": "/mnt/source-witness/assets/relaion/manifest.json",
+        "sha256": "3244e7bbd5e27eb1f3fe52cbddc450d08d45d25256eec98dc942ba42cf2808f1"
+      },
+      "requests64": {
+        "bytes": 937167,
+        "path": "/mnt/source-witness/assets/relaion/requests64",
+        "sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330"
+      },
+      "truth64": {
+        "bytes": 25600,
+        "path": "/mnt/source-witness/assets/relaion/truth64",
+        "sha256": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c"
+      }
+    }
+  },
+  "resources": {
+    "cpu_affinity": [
+      0
+    ],
+    "max_log_bytes": 16777216,
+    "memory_max_bytes": 536870912,
+    "per_dataset_seconds": 600,
+    "scratch_max_bytes": 17179869184,
+    "swap_bytes": 0,
+    "tasks_max": 512
+  },
+  "run_id": "source-witness-paired100k-a0001",
+  "schema": "borsuk-source-witness-paired-coverage-v1"
+}
