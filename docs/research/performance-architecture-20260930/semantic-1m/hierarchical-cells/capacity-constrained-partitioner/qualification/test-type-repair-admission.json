@@ -1,0 +1,13 @@
+{
+  "native_candidate": "ee1fbdd96c6a64725521c60ac2f7da2127314243",
+  "source_fix": "test-only cosine_vector(...).unwrap().into_owned(); no production behavior change",
+  "previous_original_gate": "minimal-archive/a0002",
+  "previous_worker_exit_status": 101,
+  "previous_controller_exit_status": 1,
+  "previous_test_count": 0,
+  "new_native_qualification": "PENDING",
+  "original_artifact_whitespace_check": {
+    "exit_status": 2,
+    "scope": "Original run-closed.log contains terminal CR progress lines. Preserve raw/gzip SHA-bound bodies; no source whitespace defect."
+  }
+}
