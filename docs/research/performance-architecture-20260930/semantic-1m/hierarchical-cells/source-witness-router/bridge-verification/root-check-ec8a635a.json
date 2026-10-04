@@ -1,0 +1,35 @@
+{
+  "schema": "borsuk-source-witness-bridge-root-check-v1",
+  "source_commit": "a2e815d9989a65d2ac941ac771c50af1217cc946",
+  "source_sha256": "2a0c135a54121fc583fb54e66dbbd7f403666f5e567d18236831b16e18127410",
+  "command": [
+    "python3",
+    "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/campaign.py",
+    "--self-check"
+  ],
+  "original_session": 54162,
+  "unit": "borsuk-source-witness-bridge-root-check-20261004.service",
+  "invocation_id": "7b283b9eae5a4dcea4568ccf961c0ab6",
+  "exit_status": 0,
+  "wall_seconds": 5.96,
+  "cpu_seconds": 5.319,
+  "reported_memory_peak": "117.6M",
+  "swap_peak_bytes": 0,
+  "limits": {
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "cpu_percent": 100,
+    "tasks": 512,
+    "runtime_seconds": 120
+  },
+  "unit_closure": {
+    "active_state": "inactive",
+    "main_pid": 0,
+    "control_group": ""
+  },
+  "negative_checks": 44,
+  "native_cloud_cgroups": "MOCKED",
+  "actual_ann_execution": false,
+  "real_corpus_or_truth_opened": false,
+  "release_admission": "REPAIR_REQUIRED; see release-review.json"
+}
