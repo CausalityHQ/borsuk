@@ -1,0 +1,69 @@
+{
+  "schema": "borsuk-capacity-constrained-partitioner-paired100k-method-v1",
+  "status": "PROSPECTIVE_SOURCE_PENDING",
+  "scope": "one Rust partitioner causal change; paired100k mechanism-to-ANN test, not vendor/100M qualification",
+  "evidence": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/constrained-split/falsifier/a0002/decision.json",
+  "datasets": [
+    "relaion",
+    "cohere"
+  ],
+  "rows": 100000,
+  "dimensions": 768,
+  "metric": "cosine",
+  "k": 100,
+  "queries_per_dataset": 64,
+  "query_split": "same consumed historical paired100k panels; no fresh-panel/generalization claim",
+  "change": "nondegenerate skewed sampled split uses minimum-cost semantic assignment with ceil(N/4) through N-ceil(N/4) capacities; unchanged balanced sampled and degenerate fallback behavior",
+  "constants": {
+    "cell_rows": 512,
+    "sample_rows": 256,
+    "max_depth": 32,
+    "primary_beam": 8,
+    "boundary_beam": 24,
+    "blocks_per_cell": 4,
+    "fetch_policy": "whole_cell",
+    "max_selected_cells": 32,
+    "max_total_cell_gets": 32,
+    "max_cell_bytes": 16777216
+  },
+  "invariants": [
+    "same original canonical/order and SQ2 mean/coefficient/seed/SQ8 bytes",
+    "same query f32 bits and query preparation",
+    "same SQ2 nomination and SQ8 scoring/ties",
+    "control and candidate matched same host and resource limits",
+    "both diagnostic configs sealed before execution; all query traces frozen before each truth evaluation",
+    "retain both layouts, actual source/binary identities and observed exit/resource/cleanup receipts"
+  ],
+  "gate_order": [
+    "source-only candidate and format/ownership review",
+    "fast native partition optimum/capacity/tie/determinism/lossless/unchanged scoring falsifiers",
+    "remote affected module/bin/generation tests then release then locked Clippy correctness/suspicious then actual shim-unset workspace test compilation",
+    "exact real sealed fixture/CLI/import/resource admission using current native binary",
+    "separate infrastructure canary without ANN or truth",
+    "one matched control/candidate paired100k diagnostic; no tuning/retry based on partial output",
+    "inspect only closed complete receipts and decompose losses"
+  ],
+  "measurements": [
+    "primary routing GT coverage",
+    "selected-cell GT coverage",
+    "local SQ2 nomination GT coverage",
+    "returned SQ8 recall@100 mean and p05",
+    "route/nomination/ranking CPU and wall separately",
+    "total complete-query p50/p90/p95/p99 local latency; explicitly no S3 cold latency claim",
+    "actual local cell GET/verified bytes/dependency waves",
+    "charged RSS/cache/pins/cgroup peaks/swap/OOM and whole build scratch",
+    "build wall/CPU/source reads and estimated versus measured cost labels"
+  ],
+  "frozen_arm_quality": {
+    "mean_recall_at_100": 0.98,
+    "p05_hits_out_of_100": 95
+  },
+  "interpretation": {
+    "quality_fail": "retain FAIL for this arm; no claim universal architecture KILL; no scale run from weak arm",
+    "protocol_or_resource_error": "INVALID, preserve original receipt; never quality/performance failure",
+    "success": "candidate must satisfy frozen arm quality/resource gates before fresh1M cold benchmark; no vendor parity from local100k",
+    "mechanism_only": "partition diagnostic PASS does not prove ANN recall or latency"
+  },
+  "source_pending": true,
+  "paid_job_started": false
+}
