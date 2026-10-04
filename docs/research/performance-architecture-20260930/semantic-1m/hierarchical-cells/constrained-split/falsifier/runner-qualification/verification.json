@@ -1,0 +1,29 @@
+{
+  "actual_cloud_execution": false,
+  "actual_native_execution": false,
+  "artifacts": {
+    "self-check.log": {
+      "bytes": 510,
+      "sha256": "368fa967c2accd97755acd71e514a6583716051fe6c13bbb91cb43e6ea5d81ec"
+    },
+    "self-check.time.txt": {
+      "bytes": 783,
+      "sha256": "81768693a70366a84934933edcf983c988e55999bf51be48dde1767ab98def3a"
+    },
+    "source-contract.json": {
+      "bytes": 18390,
+      "sha256": "3077443b2278481466ca86f442db6fb4c760a5460dff22ad2cb26063bf3646ff"
+    }
+  },
+  "child_commit": "5c90e52f488b02e0e3c7011e9bc5bb8306927b8b",
+  "command": "systemd-run --user --scope --quiet -p MemoryMax=256M -p MemorySwapMax=0 -p CPUQuota=100% taskset -c 0 timeout --signal=TERM --kill-after=5 120 /usr/bin/time -v python3 -m scripts.run_constrained_split_falsifier --self-check",
+  "elapsed_seconds": 0.7,
+  "independent_prelaunch_review_pending": true,
+  "integrated_commit": "a8f8f59c9332f2ba10735f3f46879b7522bc067d",
+  "maximum_resident_set_kib": 60948,
+  "original_exit_status": 0,
+  "owned_source_hashes_match_contract": true,
+  "reported_swaps": 0,
+  "schema": "borsuk-constrained-split-runner-source-verification-v1",
+  "scientific_result": false
+}
