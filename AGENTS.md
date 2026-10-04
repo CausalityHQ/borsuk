@@ -77,6 +77,6 @@ first release, schema stability and backward compatibility are non-goals.
 
 Before each new paid cold or performance experiment:
 
-1. Run a bounded local source-bound admission check on the exact authenticated real requests, records and truth through the shared runtime validator. Synthetic checks alone are insufficient.
+1. Run a bounded source-bound admission check on the experiment's exact authenticated inputs through its runtime validator. For ANN measurements this includes real requests, records and truth; a preregistered query-free source-neighborhood diagnostic must keep requests and truth unopened and check its source/layout pins instead. Synthetic checks alone are insufficient.
 2. Pass a separate disposable staging/canary smoke covering imports, SDK, asset admission, CLI, exit status and cleanup. Declare which operations are real and which are mocked; canary output is not scientific performance evidence.
 3. Freeze source/configuration and run the measured experiment only after both gates pass. Record commands, source identities, runtime and terminal receipts. Code, protocol or resource errors are execution INVALID, never a performance KILL. Preserve frozen historical dispositions.
