@@ -1,0 +1,33 @@
+{
+  "status": "INVALID",
+  "scientific_result_admitted": false,
+  "cause": "supervisor scratch scanner received JSON str instead of Path after native exit0",
+  "instance_id": "i-004a2d9dc8459c495",
+  "instance_state_rechecked": "terminated",
+  "controller_exit_status": 2,
+  "native_exit_status": 0,
+  "native_report_status": "PASS",
+  "retained_canonical_directory": "/home/rb/worktrees/borsuk-constrained-split-frozen-launch/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/constrained-split/falsifier/a0001/screen/retained",
+  "historical_report_sha256": "85480aea7a4ddff60cc4aa6748e1505a1f1b04a53f6827aae7c21dccc629955f",
+  "provisional_unadmitted_mechanism": {
+    "cohere": {
+      "measured_nodes": 8,
+      "changed_nondegenerate_measured_nodes": 8,
+      "coordinate_median_crossing_edges": 6960,
+      "matched_coordinate_crossing_edges": 5302,
+      "constrained_crossing_edges": 3427
+    },
+    "relaion": {
+      "measured_nodes": 8,
+      "changed_nondegenerate_measured_nodes": 8,
+      "coordinate_median_crossing_edges": 5256,
+      "matched_coordinate_crossing_edges": 3987,
+      "constrained_crossing_edges": 2889
+    }
+  },
+  "ann_recall_or_latency_measured": false,
+  "repair": "Path(spec[output]) before existing scratch scanner; regression reaches actual scanner after mocked native closure",
+  "repair_self_check_exit_status": 0,
+  "repair_self_check_memory_peak_bytes": 58626048,
+  "repair_self_check_swap_peak_bytes": 0
+}

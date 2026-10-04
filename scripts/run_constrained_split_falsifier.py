@@ -343,7 +343,7 @@ def owned_diagnostic(spec_pin, receipt_path):
         for p in (spec['binary'], spec['config']):
             local.authenticate(p, 256 << 20 if p == spec['binary'] else 65536)
         exact(stage['cleanup_complete'], True, 'actual native descendants waited')
-        require(stage['wall_seconds'] <= spec['timeout_seconds'] and local.directory_bytes(spec['output']) <= limits['scratch_max_bytes'], 'actual diagnostic deadline/scratch')
+        require(stage['wall_seconds'] <= spec['timeout_seconds'] and local.directory_bytes(Path(spec['output'])) <= limits['scratch_max_bytes'], 'actual diagnostic deadline/scratch')
         for snapshot in (stage['cgroup_before'], stage['cgroup_after']):
             require(0 < int(snapshot['memory.max']) <= 512 << 20 and int(snapshot['memory.peak']) <= 512 << 20, 'actual diagnostic memory')
             exact(snapshot['memory.swap.max'], '0', 'actual diagnostic noSwap'); exact(int(snapshot['memory.swap.peak']), 0, 'actual diagnostic swap')
@@ -824,12 +824,36 @@ def metadata_self_check():
           'decision without state accepted; wrong termination instance rejected; no archive/layout hydration')
 
 
+def owned_diagnostic_path_self_check():
+    """JSON output paths reach the real scratch scanner after native closure."""
+    with tempfile.TemporaryDirectory(prefix='split-owned-path-') as tmp:
+        root = Path(tmp); output = root/'output'; output.mkdir()
+        binary = root/'binary'; binary.write_bytes(b'fixture')
+        config = root/'config'; config.write_bytes(b'{}')
+        snapshot = {'memory.max':str(512 << 20), 'memory.peak':'1',
+            'memory.swap.max':'0', 'memory.swap.peak':'0', 'cpu_affinity':[0],
+            'memory.events':'oom 0\noom_kill 0\n', 'path':str(root/'group')}
+        spec = dict(resources={'scratch_max_bytes':1024}, command=['fixture'],
+            binary=local.identity(binary), config=local.identity(config),
+            output=str(output), timeout_seconds=180)
+        pin = local.write_json(root/'spec.json', spec)
+        def observed(*args):
+            args[-1].append(dict(exit_status=0, cleanup_complete=True, wall_seconds=1,
+                cgroup_before=dict(snapshot), cgroup_after=dict(snapshot)))
+        with patch.object(local, 'run_stage', side_effect=observed), patch.object(probe,
+                'cgroup_snapshot', return_value=dict(snapshot, **{'cgroup.procs':str(os.getpid())})):
+            result = owned_diagnostic(pin, root/'receipt.json')
+        exact(result['status'], 'CLOSED', 'string JSON path scratch closure')
+        exact(result['complete'], True, 'owned diagnostic receipt closed')
+
+
 def self_check():
     """Catches forbidden-flow entry, config/input drift, writer failure and false PASS."""
     require(hasattr(probe, 'restore_writer_inputs') and hasattr(probe, 'reconstruct_writer_command'),
             'writer-only helpers missing')
     module = sys.modules[__name__]
     require(hasattr(module, 'admit_report'), 'independent supervisor admission missing')
+    owned_diagnostic_path_self_check()
     check_limits = dict(memory_max_bytes=256 << 20, cpu_affinity=[0])
     local.resource_snapshot(check_limits)
     with tempfile.TemporaryDirectory(prefix='split-runner-') as tmp, ExitStack() as stack:

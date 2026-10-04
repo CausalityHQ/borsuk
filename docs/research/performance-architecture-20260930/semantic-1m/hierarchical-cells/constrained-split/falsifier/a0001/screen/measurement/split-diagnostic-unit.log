@@ -1,0 +1,8 @@
+Running as unit: borsuk-global-leaf-2220-split-diagnostic.service
+INVALID: 'str' object has no attribute 'exists'
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=2
+Service runtime: 6.317s
+CPU time consumed: 4.914s
+Memory peak: 1.9M
+Memory swap peak: 0B
