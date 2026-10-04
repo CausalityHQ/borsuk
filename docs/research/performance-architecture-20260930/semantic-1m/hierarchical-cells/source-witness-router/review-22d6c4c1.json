@@ -1,0 +1,793 @@
+{
+  "id": "c652aa073b1747f3",
+  "status": "completed",
+  "started_at": 1791147421,
+  "agent": "borsuk/prod-ready-v9",
+  "force_reason": "Distinct newly frozen source-witness Rust implementation22d6c4c1 (2692 inserted lines, new sidecar/router/CLI) has not received dual review. Earlier review concerned capacity partitioner and its paired experiment. This bounded source-only review is required before first remote qualification; no duplicate review or live consultation exists for this candidate.",
+  "rolling_6h_count": 3,
+  "prompt_preview": "Read-only review of NEW source-witness Rust candidate22d6c4c1fde0c5e59d7f60b1232d4bab966e4a77 in /home/rb/worktrees/borsuk-source-witness-native-router, parent3a8c2ecc. Owned2: crates/borsuk/src/hierarchical_semantic_cells.rs and src/bin/hierarchical_semantic_cells.rs (both under crates/borsuk). Contract /tmp/borsuk-source-witness-native-router-contract.json SHA5c8a493cede2f602d91af8505319159244d718f38ef27079ca558cc43f9a5647. Frozen method docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/prospective-method.json; failed paired decision under capacity-constrained-partitioner/paired100k/a0001 in same research tree. Review correctness, FPS vs rawSQ8 scoring parity, top24, authentication/trusted supervisor boundary, checked aggregate memory before body reads, zero-query-I/O coverage, errors/FIFO/symlink/fsync/nooverwrite, freeze-beforeGT, complete-query timer and meaningful tests. Old query arithmetic remains unchanged. Witness16/sourceonly, consumed historical64, selectedcoverage98/p05>=95 before optional full16blocks. No product/vendor/100M feasibility claim. Concrete must-fix bugs and minimal repairs only; distinguish stated research limitation. NO edits/Cargo/rustc/native/data/GT/network/cloud/children/additional consultations. Root owns actual remote gates.",
+  "prompt_sha256": "dc29a8864fe5c904270b8cc7b09c2cbb4012b1e593073eeaab219d1417cd5170",
+  "prompt_bytes": 1329,
+  "fingerprint": "cdb1ab6a5eb8c37a5c64a08e964945d22abba4efc9d799c6cae37b38ae8d7aba",
+  "evidence": {
+    "git_commit": "6a7c4f5a373faa5c2fac0cf0c5b891623afb06e9",
+    "git_branch": "devbox/prod-ready-v9",
+    "git_dirty": true,
+    "git_status_sha256": "654f6c4f755774c60c1de632a66dbbc964dc45c456cece7435a6291e6591ff55",
+    "worktree_sha256": "d1d12671cd11a4da9cd0b930ec39f036458adf44e7554fe9aaf038941514b897",
+    "worktree_evidence_truncated": true,
+    "active_goal": {
+      "id": "goal-1790540483-1790540483843307105-2322852",
+      "agent": "borsuk/prod-ready-v9",
+      "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+      "status": "queued",
+      "revision": 4,
+      "actor": "devbox",
+      "note": "re-apply delivery failed; prior goal state restored",
+      "created_at": 1790540483,
+      "updated_at": 1790781535
+    }
+  },
+  "reviewers": [
+    {
+      "role": "research_critic",
+      "id": "d45de989dff248dc",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "fallbacks": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "effort": "",
+      "agent": "borsuk/prod-ready-v9",
+      "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+      "status": "completed",
+      "runner_started": true,
+      "started_at": 1791147421,
+      "timeout_seconds": 1200,
+      "deadline_at": 1791148621,
+      "budget_usd": null,
+      "prompt_preview": "Act as the independent research and first-principles critic. Challenge assumptions, compare alternatives and prior art, and identify missing evidence. Do not edit files.\n\nMaterial to critique:\nRead-only review of NEW source-witness Rust candidate22d6c4c1fde0c5e59d7f60b1232d4bab966e4a77 in /home/rb/worktrees/borsuk-source-witness-native-router, parent3a8c2ecc. Owned2: crates/borsuk/src/hierarchical_semantic_cells.rs and src/bin/hierarchical_semantic_cells.rs (both under crates/borsuk). Contract /tmp/borsuk-source-witness-native-router-contract.json SHA5c8a493cede2f602d91af8505319159244d718f38ef27079ca558cc43f9a5647. Frozen method docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/prospective-method.json; failed paired decision under capacity-constrained-partitioner/paired100k/a0001 in same research tree. Review correctness, FPS vs rawSQ8 scoring parity, top24, authentication/trusted supervisor boundary, checked aggregate memory before body reads, zero-query-I/O coverage, errors/FIFO/symlink/fsync/nooverwrite, freeze-beforeGT, complete-query timer and meaningful tests. Old query arithmetic remains unchanged. Witness16/sourceonly, consumed historical64, selectedcoverage98/p05>=95 before optional full16blocks. No product/vendor/100M feasibility claim. Concrete must-fix bugs and minimal repairs only; distinguish stated research limitation. NO edits/Cargo/rustc/native/data/GT/network/cloud/children/additional consultations. Root owns actual remote gates.",
+      "prompt_sha256": "1f5c5640bab623cbbd2ccaba72062c116b21e1231d09aade161b77beaae7f3da",
+      "prompt_bytes": 1713,
+      "fingerprint": "ae838c2ae92cc40ed2f7260292d3d112f487ecf284742231501150fb561b8aaf",
+      "evidence": {
+        "git_commit": "6a7c4f5a373faa5c2fac0cf0c5b891623afb06e9",
+        "git_branch": "devbox/prod-ready-v9",
+        "git_dirty": true,
+        "git_status_sha256": "654f6c4f755774c60c1de632a66dbbc964dc45c456cece7435a6291e6591ff55",
+        "worktree_sha256": "d1d12671cd11a4da9cd0b930ec39f036458adf44e7554fe9aaf038941514b897",
+        "worktree_evidence_truncated": true,
+        "active_goal": {
+          "id": "goal-1790540483-1790540483843307105-2322852",
+          "agent": "borsuk/prod-ready-v9",
+          "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+          "status": "queued",
+          "revision": 4,
+          "actor": "devbox",
+          "note": "re-apply delivery failed; prior goal state restored",
+          "created_at": 1790540483,
+          "updated_at": 1790781535
+        }
+      },
+      "previous_fingerprint": "84fab920b318e8164a601bbb685f488c96f58f7334776cadd06e6e34b99e1c8e",
+      "reused": false,
+      "critique_id": "c652aa073b1747f3",
+      "critique_role": "research_critic",
+      "systemd_unit": "devbox-consult-d45de989dff248dc.service",
+      "pid": 170669,
+      "pgid": 170669,
+      "attempt": 2,
+      "attempts": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "attempt_history": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5",
+          "budget_usd": 4,
+          "timeout_seconds": 1200,
+          "started_at": 1791147421,
+          "effort": "xhigh",
+          "effort_source": "jev"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol",
+          "budget_usd": null,
+          "timeout_seconds": 1191,
+          "started_at": 1791147430
+        }
+      ],
+      "exit_code": 0,
+      "finished_at": 1791147938,
+      "event_cursor": 123,
+      "events": [
+        {
+          "seq": 100,
+          "at": 1791147727,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 101,
+          "at": 1791147727,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 102,
+          "at": 1791147727,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 103,
+          "at": 1791147727,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 104,
+          "at": 1791147727,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 105,
+          "at": 1791147760,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 106,
+          "at": 1791147760,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 107,
+          "at": 1791147760,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 108,
+          "at": 1791147760,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 109,
+          "at": 1791147760,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 110,
+          "at": 1791147760,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 111,
+          "at": 1791147858,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 112,
+          "at": 1791147866,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 113,
+          "at": 1791147866,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 114,
+          "at": 1791147866,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 115,
+          "at": 1791147866,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 116,
+          "at": 1791147866,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 117,
+          "at": 1791147866,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 118,
+          "at": 1791147866,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 119,
+          "at": 1791147866,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 120,
+          "at": 1791147866,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 121,
+          "at": 1791147866,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 122,
+          "at": 1791147936,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 123,
+          "at": 1791147937,
+          "provider": "codex",
+          "kind": "phase",
+          "label": "Consultation completed",
+          "detail": "exit 0"
+        }
+      ],
+      "events_truncated": true,
+      "provider_events": {
+        "claude": [
+          {
+            "seq": 1,
+            "at": 1791147421,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Claude consultation attempt",
+            "detail": "claude-opus-5-5 \u00b7 $4 cap \u00b7 1200s remaining"
+          },
+          {
+            "seq": 2,
+            "at": 1791147424,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Reviewer thinking applied",
+            "detail": "claude-opus-5-5 / xhigh (jev)",
+            "effort": "xhigh",
+            "model": "claude-opus-5-5",
+            "source": "jev"
+          },
+          {
+            "seq": 3,
+            "at": 1791147424,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Claude consultation started"
+          },
+          {
+            "seq": 4,
+            "at": 1791147428,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider reported an error",
+            "detail": "success"
+          },
+          {
+            "seq": 5,
+            "at": 1791147429,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider attempt exited",
+            "detail": "exit 1"
+          },
+          {
+            "seq": 6,
+            "at": 1791147430,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider unavailable; switching fallback",
+            "detail": "codex"
+          }
+        ],
+        "codex": [
+          {
+            "seq": 116,
+            "at": 1791147866,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 117,
+            "at": 1791147866,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 118,
+            "at": 1791147866,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 119,
+            "at": 1791147866,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 120,
+            "at": 1791147866,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 121,
+            "at": 1791147866,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 122,
+            "at": 1791147936,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 123,
+            "at": 1791147937,
+            "provider": "codex",
+            "kind": "phase",
+            "label": "Consultation completed",
+            "detail": "exit 0"
+          }
+        ]
+      },
+      "partial_result": "Reviewed `22d6c4c1`; source and contract hashes match. **Hold for two repairs and one test gap before qualification.**\n\n1. **P1 \u2014 Coverage admission does not bind the diagnostic truth.** The [gate check](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:1008) matches root, probes, and requests, but ignores truth identity. A valid coverage PASS against truth A therefore authorizes full16 execution against different, valid truth B\u2014even if B would fail coverage. Minimal repair: include truth SHA and width in the coverage terminal and compare them with the diagnostic config before queries. Add a changed-truth rejection test that observes zero cell reads.\n\n2. **P2 \u2014 Startup failures lose actual read accounting.** The [directory startup path](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/hierarchical_semantic_cells.rs:1272) creates its statistics only after authentication succeeds. A failed directory read/hash check returns an ordinary error without attempted-read statistics. Later sidecar/request failures also omit already completed root/directory reads because identity emission happens afterward. Minimal repair: preserve attempted startup statistics on failure and attach completed startup statistics immediately. Test bad root/directory hashes and a request failure after successful preload.\n\n3. **P2 \u2014 New tests do not exercise all16 blocks.** The [CLI fixture](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:1214) has five rows per cell; the new library fixture caps cells at 32 rows. Both exercise one refinement block. Reducing the new path to four blocks could escape these tests. Minimal repair: add a bounded fixture containing a 512-row cell, verify every selected row is nominated, and check ranking against independently assembled ranges. Include a short final block.\n\nI found no source-level defect in deterministic farthest-first selection, preservation of raw SQ8 records, native scorer reuse, or ordered top24 selection. The configured aggregate check precedes layout/sidecar/gate bodies; coverage routing retains no input handles; freeze/fsync precedes that panel\u2019s truth read; complete-query timing surrounds the full search rather than summing stages.\n\nThe research limitation remains substantive: geometric spread under normalized decoded vectors does not guarantee top100 coverage under raw SQ8 scoring. Consumed64 success would support further qualification only. Sidecar provenance, both-panel freeze ordering, and original supervisor closure remain external authority obligations.\n\nNo edits, builds, native execution, data/GT reads, network, or consultations were performed. Compilation, executed tests, resource closure, and empirical quality remain unverified.",
+      "partial_result_truncated": false,
+      "provider_partials": {
+        "claude": "Failed to authenticate: OAuth session expired and could not be refreshed",
+        "codex": "Reviewed `22d6c4c1`; source and contract hashes match. **Hold for two repairs and one test gap before qualification.**\n\n1. **P1 \u2014 Coverage admission does not bind the diagnostic truth.** The [gate check](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:1008) matches root, probes, and requests, but ignores truth identity. A valid coverage PASS against truth A therefore authorizes full16 execution against different, valid truth B\u2014even if B would fail coverage. Minimal repair: include truth SHA and width in the coverage terminal and compare them with the diagnostic config before queries. Add a changed-truth rejection test that observes zero cell reads.\n\n2. **P2 \u2014 Startup failures lose actual read accounting.** The [directory startup path](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/hierarchical_semantic_cells.rs:1272) creates its statistics only after authentication succeeds. A failed directory read/hash check returns an ordinary error without attempted-read statistics. Later sidecar/request failures also omit already completed root/directory reads because identity emission happens afterward. Minimal repair: preserve attempted startup statistics on failure and attach completed startup statistics immediately. Test bad root/directory hashes and a request failure after successful preload.\n\n3. **P2 \u2014 New tests do not exercise all16 blocks.** The [CLI fixture](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:1214) has five rows per cell; the new library fixture caps cells at 32 rows. Both exercise one refinement block. Reducing the new path to four blocks could escape these tests. Minimal repair: add a bounded fixture containing a 512-row cell, verify every selected row is nominated, and check ranking against independently assembled ranges. Include a short final block.\n\nI found no source-level defect in deterministic farthest-first selection, preservation of raw SQ8 records, native scorer reuse, or ordered top24 selection. The configured aggregate check precedes layout/sidecar/gate bodies; coverage routing retains no input handles; freeze/fsync precedes that panel\u2019s truth read; complete-query timing surrounds the full search rather than summing stages.\n\nThe research limitation remains substantive: geometric spread under normalized decoded vectors does not guarantee top100 coverage under raw SQ8 scoring. Consumed64 success would support further qualification only. Sidecar provenance, both-panel freeze ordering, and original supervisor closure remain external authority obligations.\n\nNo edits, builds, native execution, data/GT reads, network, or consultations were performed. Compilation, executed tests, resource closure, and empirical quality remain unverified."
+      },
+      "providers_used": [
+        "claude",
+        "codex"
+      ],
+      "active_provider": "codex",
+      "phase": "Consultation completed",
+      "input_bytes": 1713,
+      "output_bytes": 2856,
+      "elapsed_seconds": 517,
+      "progress": "devbox-consult-stream: provider result success\nReading additional input from stdin...\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)\ndevbox-ask: codex consult still running (4m 30s)\ndevbox-ask: codex consult still running (5m 00s)\ndevbox-ask: codex consult still running (5m 30s)\ndevbox-ask: codex consult still running (6m 00s)\ndevbox-ask: codex consult still running (6m 30s)\ndevbox-ask: codex consult still running (7m 00s)\ndevbox-ask: codex consult still running (7m 30s)\ndevbox-ask: codex consult still running (8m 00s)",
+      "progress_truncated": false,
+      "result": "Reviewed `22d6c4c1`; source and contract hashes match. **Hold for two repairs and one test gap before qualification.**\n\n1. **P1 \u2014 Coverage admission does not bind the diagnostic truth.** The [gate check](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:1008) matches root, probes, and requests, but ignores truth identity. A valid coverage PASS against truth A therefore authorizes full16 execution against different, valid truth B\u2014even if B would fail coverage. Minimal repair: include truth SHA and width in the coverage terminal and compare them with the diagnostic config before queries. Add a changed-truth rejection test that observes zero cell reads.\n\n2. **P2 \u2014 Startup failures lose actual read accounting.** The [directory startup path](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/hierarchical_semantic_cells.rs:1272) creates its statistics only after authentication succeeds. A failed directory read/hash check returns an ordinary error without attempted-read statistics. Later sidecar/request failures also omit already completed root/directory reads because identity emission happens afterward. Minimal repair: preserve attempted startup statistics on failure and attach completed startup statistics immediately. Test bad root/directory hashes and a request failure after successful preload.\n\n3. **P2 \u2014 New tests do not exercise all16 blocks.** The [CLI fixture](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:1214) has five rows per cell; the new library fixture caps cells at 32 rows. Both exercise one refinement block. Reducing the new path to four blocks could escape these tests. Minimal repair: add a bounded fixture containing a 512-row cell, verify every selected row is nominated, and check ranking against independently assembled ranges. Include a short final block.\n\nI found no source-level defect in deterministic farthest-first selection, preservation of raw SQ8 records, native scorer reuse, or ordered top24 selection. The configured aggregate check precedes layout/sidecar/gate bodies; coverage routing retains no input handles; freeze/fsync precedes that panel\u2019s truth read; complete-query timing surrounds the full search rather than summing stages.\n\nThe research limitation remains substantive: geometric spread under normalized decoded vectors does not guarantee top100 coverage under raw SQ8 scoring. Consumed64 success would support further qualification only. Sidecar provenance, both-panel freeze ordering, and original supervisor closure remain external authority obligations.\n\nNo edits, builds, native execution, data/GT reads, network, or consultations were performed. Compilation, executed tests, resource closure, and empirical quality remain unverified.",
+      "result_truncated": false
+    },
+    {
+      "role": "engineering_critic",
+      "id": "326e1b47174142d3",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "fallbacks": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "effort": "",
+      "agent": "borsuk/prod-ready-v9",
+      "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+      "status": "completed",
+      "runner_started": true,
+      "started_at": 1791147421,
+      "timeout_seconds": 1200,
+      "deadline_at": 1791148621,
+      "budget_usd": null,
+      "prompt_preview": "Act as the independent adversarial engineering and release critic. Inspect correctness, failure modes, security, operability, tests, and UX. Prioritize concrete findings with evidence. Do not edit files.\n\nMaterial to critique:\nRead-only review of NEW source-witness Rust candidate22d6c4c1fde0c5e59d7f60b1232d4bab966e4a77 in /home/rb/worktrees/borsuk-source-witness-native-router, parent3a8c2ecc. Owned2: crates/borsuk/src/hierarchical_semantic_cells.rs and src/bin/hierarchical_semantic_cells.rs (both under crates/borsuk). Contract /tmp/borsuk-source-witness-native-router-contract.json SHA5c8a493cede2f602d91af8505319159244d718f38ef27079ca558cc43f9a5647. Frozen method docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/prospective-method.json; failed paired decision under capacity-constrained-partitioner/paired100k/a0001 in same research tree. Review correctness, FPS vs rawSQ8 scoring parity, top24, authentication/trusted supervisor boundary, checked aggregate memory before body reads, zero-query-I/O coverage, errors/FIFO/symlink/fsync/nooverwrite, freeze-beforeGT, complete-query timer and meaningful tests. Old query arithmetic remains unchanged. Witness16/sourceonly, consumed historical64, selectedcoverage98/p05>=95 before optional full16blocks. No product/vendor/100M feasibility claim. Concrete must-fix bugs and minimal repairs only; distinguish stated research limitation. NO edits/Cargo/rustc/native/data/GT/network/cloud/children/additional consultations. Root owns actual remote gates.",
+      "prompt_sha256": "ab7ea7b61df685925666c34fba57c8c2248dd3c103a097df4324075cd2432013",
+      "prompt_bytes": 1747,
+      "fingerprint": "59db24fa4a8d662f87688eb170fade9bdeaec17d12d452f7a637117f4eceb6fe",
+      "evidence": {
+        "git_commit": "6a7c4f5a373faa5c2fac0cf0c5b891623afb06e9",
+        "git_branch": "devbox/prod-ready-v9",
+        "git_dirty": true,
+        "git_status_sha256": "654f6c4f755774c60c1de632a66dbbc964dc45c456cece7435a6291e6591ff55",
+        "worktree_sha256": "d1d12671cd11a4da9cd0b930ec39f036458adf44e7554fe9aaf038941514b897",
+        "worktree_evidence_truncated": true,
+        "active_goal": {
+          "id": "goal-1790540483-1790540483843307105-2322852",
+          "agent": "borsuk/prod-ready-v9",
+          "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+          "status": "queued",
+          "revision": 4,
+          "actor": "devbox",
+          "note": "re-apply delivery failed; prior goal state restored",
+          "created_at": 1790540483,
+          "updated_at": 1790781535
+        }
+      },
+      "previous_fingerprint": "ae838c2ae92cc40ed2f7260292d3d112f487ecf284742231501150fb561b8aaf",
+      "reused": false,
+      "critique_id": "c652aa073b1747f3",
+      "critique_role": "engineering_critic",
+      "systemd_unit": "devbox-consult-326e1b47174142d3.service",
+      "pid": 170927,
+      "pgid": 170927,
+      "attempt": 1,
+      "attempts": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "attempt_history": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra",
+          "budget_usd": null,
+          "timeout_seconds": 1200,
+          "started_at": 1791147421
+        }
+      ],
+      "exit_code": 0,
+      "finished_at": 1791147819,
+      "event_cursor": 98,
+      "events": [
+        {
+          "seq": 75,
+          "at": 1791147604,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 76,
+          "at": 1791147604,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 77,
+          "at": 1791147604,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 143"
+        },
+        {
+          "seq": 78,
+          "at": 1791147641,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 79,
+          "at": 1791147641,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 80,
+          "at": 1791147641,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 81,
+          "at": 1791147641,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 82,
+          "at": 1791147641,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 83,
+          "at": 1791147642,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 84,
+          "at": 1791147698,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 85,
+          "at": 1791147700,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 86,
+          "at": 1791147700,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 87,
+          "at": 1791147700,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 88,
+          "at": 1791147763,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 89,
+          "at": 1791147771,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 90,
+          "at": 1791147771,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 91,
+          "at": 1791147771,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 92,
+          "at": 1791147771,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 93,
+          "at": 1791147771,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 94,
+          "at": 1791147771,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 95,
+          "at": 1791147771,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 96,
+          "at": 1791147771,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 97,
+          "at": 1791147818,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 98,
+          "at": 1791147818,
+          "provider": "codex",
+          "kind": "phase",
+          "label": "Consultation completed",
+          "detail": "exit 0"
+        }
+      ],
+      "events_truncated": true,
+      "provider_events": {
+        "codex": [
+          {
+            "seq": 91,
+            "at": 1791147771,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 92,
+            "at": 1791147771,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 93,
+            "at": 1791147771,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 94,
+            "at": 1791147771,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 95,
+            "at": 1791147771,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 96,
+            "at": 1791147771,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 97,
+            "at": 1791147818,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 98,
+            "at": 1791147818,
+            "provider": "codex",
+            "kind": "phase",
+            "label": "Consultation completed",
+            "detail": "exit 0"
+          }
+        ]
+      },
+      "partial_result": "Two fixes are needed before admission:\n\n1. **[P1] Coverage admission does not bind the truth panel.**  \n   [admit_probe_coverage](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:1008) matches root, probes and requests, but never compares truth identity. A legitimate, supervisor-authenticated coverage PASS using truth A therefore admits a diagnostic using truth B. Authentication remains intact, but the coverage gate no longer establishes admission for the ranking evaluation being performed.  \n   **Minimal repair:** include `truth_sha256` in the coverage terminal and require equality with `config.truth.sha256` before diagnostic queries. Add a test changing only the truth descriptor and requiring rejection before selection.\n\n2. **[P2] Post-truth failures incorrectly report `truth_opened: false`.**  \n   Both [nomination](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:844) and [diagnosis](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:1064) retain that initial value after successfully reading GT. A later attribution output-cap or replay failure copies it into the INVALID terminal. This makes the failure receipt inaccurate.  \n   **Minimal repair:** clear the definite \u201cunopened\u201d assertion before attempting GT, then record `true` after successful reading. Test an output-cap failure after freeze and successful GT loading.\n\nStatic inspection found no additional must-fix defect in FPS selection, raw-SQ8 scoring parity, top24 ordering, coverage query I/O, or complete-query timer placement. Trusted sidecar/supervisor authority and the consumed64, scalability and vendor limitations are explicitly stated research boundaries.\n\nCandidate source and contract hashes matched. No files were edited; no compilation, native tests, data/GT access, network activity or consultations were performed. Remote qualification remains outstanding.",
+      "partial_result_truncated": false,
+      "provider_partials": {
+        "codex": "Two fixes are needed before admission:\n\n1. **[P1] Coverage admission does not bind the truth panel.**  \n   [admit_probe_coverage](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:1008) matches root, probes and requests, but never compares truth identity. A legitimate, supervisor-authenticated coverage PASS using truth A therefore admits a diagnostic using truth B. Authentication remains intact, but the coverage gate no longer establishes admission for the ranking evaluation being performed.  \n   **Minimal repair:** include `truth_sha256` in the coverage terminal and require equality with `config.truth.sha256` before diagnostic queries. Add a test changing only the truth descriptor and requiring rejection before selection.\n\n2. **[P2] Post-truth failures incorrectly report `truth_opened: false`.**  \n   Both [nomination](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:844) and [diagnosis](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:1064) retain that initial value after successfully reading GT. A later attribution output-cap or replay failure copies it into the INVALID terminal. This makes the failure receipt inaccurate.  \n   **Minimal repair:** clear the definite \u201cunopened\u201d assertion before attempting GT, then record `true` after successful reading. Test an output-cap failure after freeze and successful GT loading.\n\nStatic inspection found no additional must-fix defect in FPS selection, raw-SQ8 scoring parity, top24 ordering, coverage query I/O, or complete-query timer placement. Trusted sidecar/supervisor authority and the consumed64, scalability and vendor limitations are explicitly stated research boundaries.\n\nCandidate source and contract hashes matched. No files were edited; no compilation, native tests, data/GT access, network activity or consultations were performed. Remote qualification remains outstanding."
+      },
+      "providers_used": [
+        "codex"
+      ],
+      "active_provider": "codex",
+      "phase": "Consultation completed",
+      "input_bytes": 1747,
+      "output_bytes": 2031,
+      "elapsed_seconds": 398,
+      "progress": "Reading additional input from stdin...\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)\ndevbox-ask: codex consult still running (4m 30s)\ndevbox-ask: codex consult still running (5m 00s)\ndevbox-ask: codex consult still running (5m 30s)\ndevbox-ask: codex consult still running (6m 00s)\ndevbox-ask: codex consult still running (6m 30s)",
+      "progress_truncated": false,
+      "result": "Two fixes are needed before admission:\n\n1. **[P1] Coverage admission does not bind the truth panel.**  \n   [admit_probe_coverage](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:1008) matches root, probes and requests, but never compares truth identity. A legitimate, supervisor-authenticated coverage PASS using truth A therefore admits a diagnostic using truth B. Authentication remains intact, but the coverage gate no longer establishes admission for the ranking evaluation being performed.  \n   **Minimal repair:** include `truth_sha256` in the coverage terminal and require equality with `config.truth.sha256` before diagnostic queries. Add a test changing only the truth descriptor and requiring rejection before selection.\n\n2. **[P2] Post-truth failures incorrectly report `truth_opened: false`.**  \n   Both [nomination](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:844) and [diagnosis](/home/rb/worktrees/borsuk-source-witness-native-router/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:1064) retain that initial value after successfully reading GT. A later attribution output-cap or replay failure copies it into the INVALID terminal. This makes the failure receipt inaccurate.  \n   **Minimal repair:** clear the definite \u201cunopened\u201d assertion before attempting GT, then record `true` after successful reading. Test an output-cap failure after freeze and successful GT loading.\n\nStatic inspection found no additional must-fix defect in FPS selection, raw-SQ8 scoring parity, top24 ordering, coverage query I/O, or complete-query timer placement. Trusted sidecar/supervisor authority and the consumed64, scalability and vendor limitations are explicitly stated research boundaries.\n\nCandidate source and contract hashes matched. No files were edited; no compilation, native tests, data/GT access, network activity or consultations were performed. Remote qualification remains outstanding.",
+      "result_truncated": false
+    }
+  ],
+  "reused": false,
+  "finished_at": 1791147962,
+  "elapsed_seconds": 517,
+  "input_bytes": 1329,
+  "output_bytes": 4887
+}
