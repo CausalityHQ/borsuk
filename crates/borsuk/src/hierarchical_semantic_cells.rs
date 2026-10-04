@@ -246,9 +246,10 @@ fn new_file(path: &Path) -> Result<File> {
     Ok(OpenOptions::new().write(true).create_new(true).open(path)?)
 }
 
-// Fixed-center cost is sum(d_right) + sum(left delta). The unconstrained
-// count clamped to [ceil(N/4), N-ceil(N/4)] minimizes that cost; sorting selects
-// its cheapest rows. Balanced sampled assignments keep their exact membership.
+// Minimize the sum of selected rounded f32 margins (d_left - d_right),
+// not exact-real distance differences. The unconstrained count clamped to
+// [ceil(N/4), N-ceil(N/4)] minimizes that objective; sorting selects its
+// cheapest rows. Balanced sampled assignments keep their exact membership.
 // Only compact (margin, source ordinal, slot) scratch is allocated, never vectors.
 fn capacity_partition(ids: &[usize], delta: &[f32], left: &mut [bool]) -> Result<bool> {
     require(
@@ -1991,10 +1992,15 @@ mod tests {
                 vector
             })
             .collect::<Vec<_>>();
-        fixture_with_vectors(dir, &vectors, mean)
+        fixture_with_vectors(dir, &vectors, mean, false)
     }
 
-    fn fixture_with_vectors(dir: &Path, vectors: &[Vec<f32>], mean: &[f32]) -> BuildConfig {
+    fn fixture_with_vectors(
+        dir: &Path,
+        vectors: &[Vec<f32>],
+        mean: &[f32],
+        quantized_sq8: bool,
+    ) -> BuildConfig {
         let rows = vectors.len();
         let dimensions = mean.len();
         assert!(vectors.iter().all(|v| v.len() == dimensions));
@@ -2011,8 +2017,27 @@ mod tests {
             }
             codes.extend_from_slice(&codec.encode(vector).unwrap());
             sq8.extend_from_slice(&(id as i64).to_le_bytes());
-            sq8.extend_from_slice(&1_f32.to_le_bytes());
-            sq8.extend(vector.iter().map(|&v| v as u8));
+            if quantized_sq8 {
+                // Native [0,1] SQ8 span: f32 ties-even codes and sequential
+                // f32 reconstructed squared norm, matching stored rank inputs.
+                let encoded = vector
+                    .iter()
+                    .map(|&v| (v * 255.).round_ties_even().clamp(0., 255.) as u8)
+                    .collect::<Vec<_>>();
+                let mut norm = 0_f32;
+                for &code in &encoded {
+                    let decoded = f32::from(code) * (1. / 255.);
+                    norm += decoded * decoded;
+                }
+                assert!(norm.is_finite() && norm > 0.);
+                sq8.extend_from_slice(&norm.to_le_bytes());
+                sq8.extend(encoded);
+            } else {
+                // Preserve the existing binary fixture. Negative cancellation
+                // rows are prototype-order evidence only, never ranking inputs.
+                sq8.extend_from_slice(&1_f32.to_le_bytes());
+                sq8.extend(vector.iter().map(|&v| v as u8));
+            }
         }
         let canonical = artifact(&dir.join("canonical"), &canonical);
         let records = artifact(&dir.join("codes"), &codes);
@@ -2059,7 +2084,8 @@ mod tests {
             "sq8_object_sha256": sq8.sha256, "sq8_object_key":format!("objects/{}",sq8.sha256), "sq8_etag":"fixture",
             "canonical": {"rows":rows,"dimensions":dimensions,"bytes":canonical.bytes,
                 "sha256":canonical.sha256,"object_key":format!("objects/{}",canonical.sha256)},
-            "low":vec![0_f32;dimensions], "step":vec![1_f32;dimensions]
+            "low":vec![0_f32;dimensions],
+            "step":vec![if quantized_sq8 { 1_f32 / 255. } else { 1. };dimensions]
         })).unwrap());
         BuildConfig {
             schema: BUILD_SCHEMA.into(),
@@ -2167,6 +2193,31 @@ mod tests {
             actual.sort_unstable();
             assert_eq!(actual, expected);
         }
+        // Near one ULP, unequal exact-real margins can round to the same
+        // f32 delta. Capacity ties must use IDs, not the lost low-order bits.
+        let ids = [30, 10, 40, 20, 50, 60, 70];
+        let right = [
+            2_f32.powi(-26),
+            2_f32.powi(-27),
+            2_f32.powi(-26),
+            2_f32.powi(-27),
+            0.,
+            0.,
+            0.,
+        ];
+        let delta = right.map(|b| 1_f32 - b);
+        assert_eq!(delta, [1.; 7]);
+        assert!(1_f64 - f64::from(right[0]) < 1_f64 - f64::from(right[1]));
+        let mut left = [false; 7];
+        assert!(capacity_partition(&ids, &delta, &mut left).unwrap());
+        assert_eq!(
+            ids.iter()
+                .zip(left)
+                .filter_map(|(&id, a)| a.then_some(id))
+                .collect::<Vec<_>>(),
+            vec![10, 20]
+        );
+
         let mut left = [true, false];
         assert!(capacity_partition(&[0, 1], &[f32::NAN, 1.], &mut left).is_err());
         assert!(capacity_partition(&[0, 1], &[f32::INFINITY, 1.], &mut left).is_err());
@@ -2223,7 +2274,7 @@ mod tests {
         vectors[2] = vec![1., 1e-20];
         vectors[3] = vec![0., -1.];
         vectors[4] = vec![-1., 0.];
-        let mut config = fixture_with_vectors(temp.path(), &vectors, &[0., 0.]);
+        let mut config = fixture_with_vectors(temp.path(), &vectors, &[0., 0.], false);
         config.sample_rows = 2;
         config.cell_rows = 6;
         let output = temp.path().join("candidate");
@@ -2251,7 +2302,7 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
-        let mut config = fixture_with_vectors(temp.path(), &vectors, &[0., 0.]);
+        let mut config = fixture_with_vectors(temp.path(), &vectors, &[0., 0.], false);
         config.cell_rows = 512;
         let a = temp.path().join("a");
         let b = temp.path().join("b");
@@ -2335,10 +2386,210 @@ mod tests {
                 expected
             );
             for row in &trace.returned {
-                assert_eq!(row.score, if row.id % 257 < 32 { 1. } else { 0. });
+                // Unchanged SQ8 score is squared L2: orthogonal unit rows cost 2.
+                assert_eq!(row.score, if row.id % 257 < 32 { 2. } else { 0. });
             }
         }
         assert_eq!(two_stage.accounting.refinement.verified_bytes, 1025 * 14);
+
+        // With one block/cell, tied major-mode codes choose block zero. The
+        // repaired mixed cell has IDs 32..160, and the 768 remaining major IDs
+        // split at 384; those three independently derived first blocks follow.
+        let expected_nominees = (32..64_i64)
+            .chain(161..193)
+            .chain(609..641)
+            .collect::<Vec<_>>();
+        let mut restricted = all;
+        restricted.fetch_policy = FetchPolicy::TwoStage;
+        restricted.blocks_per_cell = 1;
+        let selective_two = prototype.search(&[1., 0.], 1025, restricted).unwrap();
+        restricted.fetch_policy = FetchPolicy::WholeCell;
+        let selective_whole = prototype.search(&[1., 0.], 1025, restricted).unwrap();
+        for trace in [&selective_two, &selective_whole] {
+            assert_eq!(trace.nominated_ids, expected_nominees);
+            assert!(trace.nominated_ids.len() < trace.covered_ids.len());
+            assert_eq!(
+                trace.returned.iter().map(|r| r.id).collect::<Vec<_>>(),
+                expected_nominees
+            );
+            assert!(trace.returned.iter().all(|r| r.score == 0.));
+        }
+        let ranking = |trace: &SearchTrace| {
+            trace
+                .returned
+                .iter()
+                .map(|r| (r.ordinal, r.id, r.score.to_bits()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ranking(&selective_two), ranking(&selective_whole));
+        assert_eq!(selective_two.accounting.refinement.verified_bytes, 96 * 14);
+
+        // Distinct normalized rows produce nonconstant margins. Minority rows
+        // at either end of the full trainer sample exercise either center.
+        // This oracle repairs by single cheapest exchanges, never calling the
+        // partition helper or sorting its full delta permutation.
+        for minority_first in [true, false] {
+            let case = tempfile::tempdir().unwrap();
+            let vectors = (0..129)
+                .map(|id| {
+                    let minority = if minority_first { id < 8 } else { id >= 121 };
+                    let angle = if minority {
+                        1.15 + (id % 8) as f64 * 0.002
+                    } else {
+                        0.10 + id as f64 * 0.0005
+                    };
+                    let (y, x) = angle.sin_cos();
+                    cosine_vector(&[x as f32, y as f32]).unwrap()
+                })
+                .collect::<Vec<_>>();
+            assert!(vectors.windows(2).all(|w| w[0] != w[1]));
+            let centers =
+                train_logical_cell_centroids(&vectors, VectorMetric::SquaredEuclidean, 2, 4)
+                    .unwrap();
+            assert_eq!(centers[0][0] < 0.6, minority_first);
+            let delta = vectors
+                .iter()
+                .map(|row| {
+                    VectorMetric::SquaredEuclidean
+                        .distance(row, &centers[0])
+                        .unwrap()
+                        - VectorMetric::SquaredEuclidean
+                            .distance(row, &centers[1])
+                            .unwrap()
+                })
+                .collect::<Vec<_>>();
+            assert!(delta.windows(2).any(|w| w[0] != w[1]));
+            let mut expected_left = delta.iter().map(|d| *d <= 0.).collect::<Vec<_>>();
+            let count = expected_left.iter().filter(|a| **a).count();
+            assert_eq!(count, if minority_first { 8 } else { 121 });
+            let target: usize = if minority_first { 33 } else { 96 };
+            for _ in target.min(count)..target.max(count) {
+                let id = if count < target {
+                    (0..129)
+                        .filter(|&id| !expected_left[id])
+                        .min_by(|&a, &b| delta[a].total_cmp(&delta[b]).then(a.cmp(&b)))
+                        .unwrap()
+                } else {
+                    (0..129)
+                        .filter(|&id| expected_left[id])
+                        .max_by(|&a, &b| delta[a].total_cmp(&delta[b]).then(a.cmp(&b)))
+                        .unwrap()
+                };
+                expected_left[id] = count < target;
+            }
+            let expected_left = expected_left
+                .iter()
+                .enumerate()
+                .filter_map(|(id, &a)| a.then_some(id))
+                .collect::<BTreeSet<_>>();
+            assert_eq!(expected_left.len(), target);
+            assert!(expected_left.iter().all(|&a| {
+                (0..129)
+                    .filter(|b| !expected_left.contains(b))
+                    .all(|b| delta[a] <= delta[b])
+            }));
+            let mut config = fixture_with_vectors(case.path(), &vectors, &[0., 0.], true);
+            config.cell_rows = 64;
+            config.sample_rows = 129;
+            let output = case.path().join("candidate");
+            let built = build(&config, &output).unwrap();
+            assert!(built.semantic_repairs > 0 && built.max_cell_rows <= 64);
+            let candidate = Prototype::open(&output, &built.root_sha256, 64 * 1024 * 1024).unwrap();
+            let root = &candidate.directories[&candidate.manifest.root_directory.offset];
+            assert_eq!(root.children[0].rows, target);
+            let mut actual_left = BTreeSet::new();
+            let mut pending = vec![&root.children[0]];
+            while let Some(node) = pending.pop() {
+                match &node.target {
+                    Target::Directory { span } => {
+                        pending.extend(&candidate.directories[&span.offset].children)
+                    }
+                    Target::Cell { cell } => {
+                        let source =
+                            read_at(&candidate.cells, cell.source.offset, cell.source.bytes)
+                                .unwrap();
+                        actual_left.extend(
+                            source
+                                .chunks_exact(8 + candidate.codec.record_bytes())
+                                .map(|r| i64::from_le_bytes(r[..8].try_into().unwrap()) as usize),
+                        );
+                    }
+                }
+            }
+            assert_eq!(actual_left, expected_left);
+
+            let query = [1., 0.];
+            let prepared = candidate.codec.prepare_query(&query, 400_000).unwrap();
+            let mut expected_nominees = BTreeSet::new();
+            let mut partial = false;
+            for page in candidate.directories.values() {
+                for node in &page.children {
+                    let Target::Cell { cell } = &node.target else {
+                        continue;
+                    };
+                    let source =
+                        read_at(&candidate.cells, cell.source.offset, cell.source.bytes).unwrap();
+                    let records = source
+                        .chunks_exact(8 + candidate.codec.record_bytes())
+                        .collect::<Vec<_>>();
+                    // The best individual SQ2 row picks the maximum-score block;
+                    // row-order ties independently choose the earlier block.
+                    let (best, _) = records
+                        .iter()
+                        .enumerate()
+                        .map(|(row, record)| (row, prepared.score(&record[8..]).unwrap()))
+                        .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)))
+                        .unwrap();
+                    let first = best / BLOCK_ROWS * BLOCK_ROWS;
+                    expected_nominees.extend(
+                        records[first..(first + BLOCK_ROWS).min(records.len())]
+                            .iter()
+                            .map(|r| i64::from_le_bytes(r[..8].try_into().unwrap())),
+                    );
+                    partial |= records.len() > BLOCK_ROWS;
+                }
+            }
+            assert!(partial && expected_nominees.len() < 129);
+            let mut restricted = options();
+            restricted.boundary_beam = 8;
+            restricted.max_cells = 8;
+            restricted.max_source_gets = 8;
+            restricted.max_refinement_gets = 8;
+            let two = candidate.search(&query, 129, restricted).unwrap();
+            restricted.fetch_policy = FetchPolicy::WholeCell;
+            restricted.max_cell_gets = 8;
+            let whole = candidate.search(&query, 129, restricted).unwrap();
+            let encoded = fs::read(&config.sq8.path).unwrap();
+            let mut expected_ranking = Vec::new();
+            for row in encoded.chunks_exact(14) {
+                let id = i64::from_le_bytes(row[..8].try_into().unwrap());
+                let norm = f32::from_le_bytes(row[8..12].try_into().unwrap());
+                let x = f32::from(row[12]) * (1_f32 / 255.);
+                let y = f32::from(row[13]) * (1_f32 / 255.);
+                assert_eq!(norm.to_bits(), (x * x + y * y).to_bits());
+                if expected_nominees.contains(&id) {
+                    expected_ranking.push((id, norm - 2. * (x - 0.5)));
+                }
+            }
+            expected_ranking.sort_unstable_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+            let expected_nominees = expected_nominees.into_iter().collect::<Vec<_>>();
+            for trace in [&two, &whole] {
+                assert_eq!(trace.covered_ids, (0..129_i64).collect::<Vec<_>>());
+                assert_eq!(trace.nominated_ids, expected_nominees);
+                assert_eq!(
+                    trace
+                        .returned
+                        .iter()
+                        .map(|r| (r.id, r.score.to_bits()))
+                        .collect::<Vec<_>>(),
+                    expected_ranking
+                        .iter()
+                        .map(|&(id, score)| (id, score.to_bits()))
+                        .collect::<Vec<_>>()
+                );
+            }
+            assert_eq!(ranking(&two), ranking(&whole));
+        }
     }
 
     #[test]
