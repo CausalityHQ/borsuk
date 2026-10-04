@@ -1,0 +1,143 @@
+{
+  "authority_pending": true,
+  "native_config_serialization": "sorted compact JSON plus newline; SHA256 exact bytes passed to native CLI",
+  "ranking_admission": "both original supervised COVERAGE_PASS runs; mean>=.98 and p05hits>=95; then fixed whole-cell24/all16 diagnostic only",
+  "reason": "execution lifecycle binding and actual sidecar descriptors must be sealed before launch/query respectively",
+  "resource_envelope": {
+    "limits_are_prospective_not_measured": true,
+    "native_cpu_quota_percent": 100,
+    "native_memory_max_bytes": 536870912,
+    "native_swap_max_bytes": 0,
+    "per_dataset_limit_seconds": 600,
+    "scratch_limit_bytes": 17179869184,
+    "tasks_max": 512
+  },
+  "schema": "borsuk-source-witness-native-execution-template-v1",
+  "source_qualification": {
+    "bytes": 8442,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/implementation-gates/a0001/verification.json",
+    "sha256": "5f9862ea6d0a8eb429c0273d407829234432a312cd86fb03c51350a27e794f45"
+  },
+  "stages": [
+    {
+      "config": {
+        "candidate_root": {
+          "bytes": 31500,
+          "path": "/mnt/source-witness/inputs/relaion/manifest.json",
+          "sha256": "3244e7bbd5e27eb1f3fe52cbddc450d08d45d25256eec98dc942ba42cf2808f1"
+        },
+        "max_resident_directory_payload_bytes": 67108864,
+        "max_result_bytes": 16777216,
+        "probe_output": "/mnt/source-witness/screen/relaion/probes.bin",
+        "schema": "borsuk-source-witness-build-v1"
+      },
+      "dataset": "relaion",
+      "mode": "build-probes",
+      "requests_available_to_builder": false,
+      "truth_available_to_builder": false
+    },
+    {
+      "config": {
+        "candidate_root": {
+          "bytes": 30456,
+          "path": "/mnt/source-witness/inputs/cohere/manifest.json",
+          "sha256": "c2bf337290f7713139903f398ac6b4007ed01faf47ff093e7e397b2715b7b4fc"
+        },
+        "max_resident_directory_payload_bytes": 67108864,
+        "max_result_bytes": 16777216,
+        "probe_output": "/mnt/source-witness/screen/cohere/probes.bin",
+        "schema": "borsuk-source-witness-build-v1"
+      },
+      "dataset": "cohere",
+      "mode": "build-probes",
+      "requests_available_to_builder": false,
+      "truth_available_to_builder": false
+    },
+    {
+      "config": {
+        "candidate_root": {
+          "bytes": 31500,
+          "path": "/mnt/source-witness/inputs/relaion/manifest.json",
+          "sha256": "3244e7bbd5e27eb1f3fe52cbddc450d08d45d25256eec98dc942ba42cf2808f1"
+        },
+        "count": 64,
+        "dataset": "relaion",
+        "first": 0,
+        "limits": {
+          "max_cell_bytes": 16777216,
+          "max_cell_gets": 24,
+          "max_cells": 24,
+          "max_query_payload_bytes": 67108864
+        },
+        "max_evaluator_payload_bytes": 67108864,
+        "max_resident_directory_payload_bytes": 67108864,
+        "max_resident_probe_payload_bytes": 67108864,
+        "max_result_bytes": 16777216,
+        "probes": {
+          "bytes": null,
+          "path": "/mnt/source-witness/screen/relaion/probes.bin",
+          "sha256": null
+        },
+        "requests": {
+          "bytes": 937167,
+          "path": "/mnt/source-witness/inputs/relaion/requests64",
+          "sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330"
+        },
+        "schema": "borsuk-source-witness-nomination-v1",
+        "truth": {
+          "bytes": 25600,
+          "path": "/mnt/source-witness/inputs/relaion/truth64",
+          "sha256": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c"
+        },
+        "truth_width": 100
+      },
+      "configured_aggregate_payload_bytes": 268435456,
+      "dataset": "relaion",
+      "derived_descriptor": "bytes/SHA must equal source-only builder terminal and authenticated actual sidecar before config seal",
+      "mode": "nominate-probes"
+    },
+    {
+      "config": {
+        "candidate_root": {
+          "bytes": 30456,
+          "path": "/mnt/source-witness/inputs/cohere/manifest.json",
+          "sha256": "c2bf337290f7713139903f398ac6b4007ed01faf47ff093e7e397b2715b7b4fc"
+        },
+        "count": 64,
+        "dataset": "cohere",
+        "first": 0,
+        "limits": {
+          "max_cell_bytes": 16777216,
+          "max_cell_gets": 24,
+          "max_cells": 24,
+          "max_query_payload_bytes": 67108864
+        },
+        "max_evaluator_payload_bytes": 67108864,
+        "max_resident_directory_payload_bytes": 67108864,
+        "max_resident_probe_payload_bytes": 67108864,
+        "max_result_bytes": 16777216,
+        "probes": {
+          "bytes": null,
+          "path": "/mnt/source-witness/screen/cohere/probes.bin",
+          "sha256": null
+        },
+        "requests": {
+          "bytes": 983232,
+          "path": "/mnt/source-witness/inputs/cohere/requests64",
+          "sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654"
+        },
+        "schema": "borsuk-source-witness-nomination-v1",
+        "truth": {
+          "bytes": 25600,
+          "path": "/mnt/source-witness/inputs/cohere/truth64",
+          "sha256": "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355"
+        },
+        "truth_width": 100
+      },
+      "configured_aggregate_payload_bytes": 268435456,
+      "dataset": "cohere",
+      "derived_descriptor": "bytes/SHA must equal source-only builder terminal and authenticated actual sidecar before config seal",
+      "mode": "nominate-probes"
+    }
+  ]
+}
