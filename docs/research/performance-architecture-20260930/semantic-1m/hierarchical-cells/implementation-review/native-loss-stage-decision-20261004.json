@@ -1,0 +1,120 @@
+{
+  "current_job": {
+    "original_exec": 93314,
+    "prefix": "constrained-split-implementation-a0002",
+    "purpose": "native qualification only; no ANN measurement"
+  },
+  "decision": "First falsify the partition repair; selected-cell coverage is below the frozen 98-percent floor on both datasets. Full-cell SQ8 scanning is the next local candidate because fetched SQ8 blocks are already present and local nomination loses additional hits. It cannot alone pass the unchanged coverage floor.",
+  "followup_native_candidate": "Use existing all-block SearchOptions only after a separately frozen matched arm; consider skipping redundant SQ2 scoring when all cell blocks are selected. Do not rewrite formats or claim CPU/recall gains before native parity and matched measurements.",
+  "items": {
+    "cohere": {
+      "corpus_rows": 100000,
+      "counts": {
+        "boundary_hits": 4788,
+        "boundary_misses": 1612,
+        "boundary_recovered": 1719,
+        "final_ranking_misses": 0,
+        "local_nomination_misses": 380,
+        "nomination_hits": 4408,
+        "primary_hits": 3069,
+        "returned_hits": 4408,
+        "router_misses": 3331,
+        "truth_count": 6400
+      },
+      "dimensions": 768,
+      "final_ranking_loss_percentage_points": 0.0,
+      "k": 100,
+      "local_nomination_loss_percentage_points": 5.9375,
+      "metric": "cosine",
+      "original_diagnostic": {
+        "bytes": 6044638,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/screen/measurement/cohere-diagnostic.jsonl",
+        "sha256": "fc12f5e90917495f9c17e6b71172ec0b288e079083151bdc2fe51c2a55155746"
+      },
+      "primary_coverage_percent": 47.953125,
+      "queries": 64,
+      "returned_recall_percent": 68.875,
+      "selected_cell_coverage_percent": 74.8125,
+      "split": "historical consumed 64-query panel",
+      "status": "authenticated closed research measurement; stale for any changed source/layout",
+      "timings": {
+        "final_ranking": {
+          "mean_process_cpu_ms": 3.243469796875,
+          "p95_process_cpu_ms": 3.271463,
+          "scope": "local file research trace; includes measured stage CPU; not S3/HTTP latency"
+        },
+        "local_nomination": {
+          "mean_process_cpu_ms": 9.459601484375,
+          "p95_process_cpu_ms": 10.106137,
+          "scope": "local file research trace; includes measured stage CPU; not S3/HTTP latency"
+        },
+        "routing": {
+          "mean_process_cpu_ms": 0.50964534375,
+          "p95_process_cpu_ms": 0.582141,
+          "scope": "local file research trace; includes measured stage CPU; not S3/HTTP latency"
+        }
+      }
+    },
+    "relaion": {
+      "corpus_rows": 100000,
+      "counts": {
+        "boundary_hits": 5513,
+        "boundary_misses": 887,
+        "boundary_recovered": 1198,
+        "final_ranking_misses": 0,
+        "local_nomination_misses": 1357,
+        "nomination_hits": 4156,
+        "primary_hits": 4315,
+        "returned_hits": 4156,
+        "router_misses": 2085,
+        "truth_count": 6400
+      },
+      "dimensions": 768,
+      "final_ranking_loss_percentage_points": 0.0,
+      "k": 100,
+      "local_nomination_loss_percentage_points": 21.203125,
+      "metric": "cosine",
+      "original_diagnostic": {
+        "bytes": 5825513,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/screen/measurement/relaion-diagnostic.jsonl",
+        "sha256": "af193458abe29522b126951a35df56d589a8b1c1f7aa536e895f638a2dd607e5"
+      },
+      "primary_coverage_percent": 67.421875,
+      "queries": 64,
+      "returned_recall_percent": 64.9375,
+      "selected_cell_coverage_percent": 86.140625,
+      "split": "historical consumed 64-query panel",
+      "status": "authenticated closed research measurement; stale for any changed source/layout",
+      "timings": {
+        "final_ranking": {
+          "mean_process_cpu_ms": 3.228289640625,
+          "p95_process_cpu_ms": 3.24963,
+          "scope": "local file research trace; includes measured stage CPU; not S3/HTTP latency"
+        },
+        "local_nomination": {
+          "mean_process_cpu_ms": 9.104514765625,
+          "p95_process_cpu_ms": 9.996386,
+          "scope": "local file research trace; includes measured stage CPU; not S3/HTTP latency"
+        },
+        "routing": {
+          "mean_process_cpu_ms": 0.517499453125,
+          "p95_process_cpu_ms": 0.596728,
+          "scope": "local file research trace; includes measured stage CPU; not S3/HTTP latency"
+        }
+      }
+    }
+  },
+  "ownership_reason": "Root owns final architecture decision and protocol selection; this is a direct recount of closed source-bound receipts, with no new implementation child or experiment.",
+  "schema": "borsuk-native-next-bottleneck-decision-v1",
+  "scientific_limits": [
+    "Full-cell scanning may admit new SQ8 false positives; current zero final-ranking loss does not prove zero loss in that arm.",
+    "No matched S3 Vectors/Turbopuffer performance win is established.",
+    "Old PASS/FAIL and thresholds are unchanged."
+  ],
+  "simd_decision": "Defer. Total local stage CPU bounds possible compute savings, but no compute-only SQ2 kernel profile or current cold-S3 critical-path measurement exists.",
+  "terminal": {
+    "bytes": 4916,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/paired100k/a0001/aws-terminal.json",
+    "sha256": "a0ca521980142f869e7be74b10802926459674cc06ec2e7bf6e11214c8065bf2"
+  }
+}
