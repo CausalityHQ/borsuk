@@ -1,0 +1,7 @@
+Running as unit: borsuk-source-witness-glue-final.service; invocation ID: 17c54092e0094339892eee0d1e57ef83
+PASS actual orchestration/replay with synthetic native subprocesses: six serial calls, both builders before panels, canonical paired seals, original supervisor gate, mean/p05/returned FAIL exit0; identity/config/resources/freeze/timeout/partial/drain/cleanup/tamper/nooverwrite negatives. Native algorithms/systemd resources are mocked; no real corpus/GT/native binary used.
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 8.388s
+             CPU time consumed: 5.983s
+                   Memory peak: 46.1M (swap: 0B)

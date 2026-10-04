@@ -1,0 +1,320 @@
+{
+  "api": {
+    "execute": "python3 scripts/run_source_witness_paired_coverage.py CONFIG CONFIG_SHA256 REPO NEW_OUTPUT",
+    "network_or_launcher": false,
+    "replay": "python3 scripts/run_source_witness_paired_coverage.py --replay CONFIG CONFIG_SHA256 REPO OUTPUT",
+    "self_check": "python3 scripts/run_source_witness_paired_coverage.py --self-check"
+  },
+  "authority": {
+    "bytes": 3711,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/retained-input-authority.json",
+    "sha256": "93a6f221e895d400ff217e57cc5188d0aa475146ba94cd68876e41325b02a743"
+  },
+  "base": "c28d9a2c6f2c60b951d24945cdd3eb029d7537b9",
+  "commit": "e15aeeaaffe1db0737e91c14168c34b72c7c56d8",
+  "conditional_order": [
+    "relaion-diagnose-probes",
+    "cohere-diagnose-probes"
+  ],
+  "config": {
+    "authority": {
+      "bytes": 3711,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/retained-input-authority.json",
+      "sha256": "93a6f221e895d400ff217e57cc5188d0aa475146ba94cd68876e41325b02a743"
+    },
+    "binary": "absolute Artifact {path,bytes,sha256}; uncompressed qualified native binary",
+    "diagnostics": "boolean, root decides before launch",
+    "inputs": {
+      "cohere": {
+        "cells.bin": "absolute Artifact {path,bytes,sha256}; exact authority body identity",
+        "directories.bin": "absolute Artifact {path,bytes,sha256}; exact authority body identity",
+        "manifest.json": "absolute Artifact {path,bytes,sha256}; exact authority body identity",
+        "requests64": "absolute Artifact {path,bytes,sha256}; exact authority body identity",
+        "truth64": "absolute Artifact {path,bytes,sha256}; exact authority body identity"
+      },
+      "relaion": {
+        "cells.bin": "absolute Artifact {path,bytes,sha256}; exact authority body identity",
+        "directories.bin": "absolute Artifact {path,bytes,sha256}; exact authority body identity",
+        "manifest.json": "absolute Artifact {path,bytes,sha256}; exact authority body identity",
+        "requests64": "absolute Artifact {path,bytes,sha256}; exact authority body identity",
+        "truth64": "absolute Artifact {path,bytes,sha256}; exact authority body identity"
+      }
+    },
+    "resources": {
+      "cpu_affinity": [
+        0
+      ],
+      "max_log_bytes": 16777216,
+      "memory_max_bytes": 536870912,
+      "per_dataset_seconds": 600,
+      "scratch_max_bytes": 17179869184,
+      "swap_bytes": 0,
+      "tasks_max": 512
+    },
+    "run_id": "root-frozen safe slug, unique attempt ID",
+    "schema": "borsuk-source-witness-paired-coverage-v1"
+  },
+  "config_schema": "borsuk-source-witness-paired-coverage-v1",
+  "frozen_native_source_count": 402,
+  "frozen_native_source_identity": "2e8145e3639b3c4bf93f363dca110ff16f374bee4057e8426738fc02dc51941f",
+  "internal_api": {
+    "owned_stage": "--owned-stage SPEC SPEC_SHA256 NEW_RECEIPT, called only by reused native_stage",
+    "reason": "Qualified source-witness modes are silent on success; permit only empty native stdout after original exit0/resources/cleanup, preserving existing owned-stage receipt/resource framework."
+  },
+  "invalid_exit": 2,
+  "native_diagnostic_options": {
+    "blocks_per_cell": 16,
+    "boundary_beam": 24,
+    "fetch_policy": "whole_cell",
+    "max_cell_bytes": 16777216,
+    "max_cell_gets": 24,
+    "max_cells": 24,
+    "max_query_payload_bytes": 134217728,
+    "max_refinement_bytes": 16777216,
+    "max_refinement_gets": 384,
+    "max_source_bytes": 16777216,
+    "max_source_gets": 24,
+    "primary_beam": 8
+  },
+  "native_nomination_limits": {
+    "max_cell_bytes": 16777216,
+    "max_cell_gets": 24,
+    "max_cells": 24,
+    "max_query_payload_bytes": 134217728
+  },
+  "native_order": [
+    "relaion-build-probes",
+    "cohere-build-probes",
+    "relaion-nominate-probes",
+    "cohere-nominate-probes"
+  ],
+  "native_schemas": {
+    "build-probes": "borsuk-source-witness-build-v1",
+    "diagnose-probes": "borsuk-source-witness-diagnostic-v1",
+    "nominate-probes": "borsuk-source-witness-nomination-v1"
+  },
+  "native_source_unchanged_identity": "2e8145e3639b3c4bf93f363dca110ff16f374bee4057e8426738fc02dc51941f",
+  "notes": [
+    "Native per-dataset freeze-before-GT; no all128 barrier claimed.",
+    "Runner does not launch, download, build layouts, evaluate GT, or promote production.",
+    "Retains partial outputs and INVALID terminal; refuses preexisting output.",
+    "Source-only native builder requests/truth unopened; opaque transport may exist externally. Raw panels staged outside layout only after both builds. No OS sandbox/adversarial isolation claim.",
+    "Reuse existing global_leaf native_stage unchanged, including cgroup/exit/drain cleanup.",
+    "NEW_OUTPUT must be outside /mnt/hierarchical-100k, which is shared helper legacy scratch. Replay supports relocated collected output without rewriting original native configs."
+  ],
+  "original_supervisor": "coverage supervisor derived only after original native_stage exit0, actual cgroup/RSS/scratch/thread CPU1/512MiB/noSwap closure, exact report/config/run IDs and inactive drained unit; exact native coverage gate schema",
+  "output_roster": [
+    "config.json",
+    "authority/authority.json",
+    "authority/workspace.json",
+    "authority/qualification.json",
+    "authority/method.json",
+    "authority/historical_terminal.json",
+    "authority/current-source.json",
+    "binary/hierarchical_semantic_cells",
+    "execution-receipt.json",
+    "terminal.json (last)",
+    "inputs/relaion/manifest.json",
+    "inputs/relaion/directories.bin",
+    "inputs/relaion/cells.bin",
+    "inputs/cohere/manifest.json",
+    "inputs/cohere/directories.bin",
+    "inputs/cohere/cells.bin",
+    "panels/relaion/requests64",
+    "panels/relaion/truth64",
+    "panels/cohere/requests64",
+    "panels/cohere/truth64",
+    "probes/relaion.bin",
+    "probes/cohere.bin",
+    "nomination-seal.json",
+    "coverage/relaion-supervisor.json",
+    "coverage/cohere-supervisor.json",
+    "coverage/gate.json (only both coverage PASS)",
+    "diagnostic-seal.json (only admitted diagnostics)",
+    "measurement/relaion-build-probes-config.json",
+    "measurement/relaion-build-probes-stage.json",
+    "measurement/relaion-build-probes-stage-receipt.json",
+    "measurement/relaion-build-probes-closure.json",
+    "measurement/relaion-build-probes-report.jsonl",
+    "measurement/relaion-build-probes.log",
+    "measurement/relaion-build-probes-unit.log",
+    "measurement/cohere-build-probes-config.json",
+    "measurement/cohere-build-probes-stage.json",
+    "measurement/cohere-build-probes-stage-receipt.json",
+    "measurement/cohere-build-probes-closure.json",
+    "measurement/cohere-build-probes-report.jsonl",
+    "measurement/cohere-build-probes.log",
+    "measurement/cohere-build-probes-unit.log",
+    "measurement/relaion-nominate-probes-config.json",
+    "measurement/relaion-nominate-probes-stage.json",
+    "measurement/relaion-nominate-probes-stage-receipt.json",
+    "measurement/relaion-nominate-probes-closure.json",
+    "measurement/relaion-nominate-probes-report.jsonl",
+    "measurement/relaion-nominate-probes.log",
+    "measurement/relaion-nominate-probes-unit.log",
+    "measurement/cohere-nominate-probes-config.json",
+    "measurement/cohere-nominate-probes-stage.json",
+    "measurement/cohere-nominate-probes-stage-receipt.json",
+    "measurement/cohere-nominate-probes-closure.json",
+    "measurement/cohere-nominate-probes-report.jsonl",
+    "measurement/cohere-nominate-probes.log",
+    "measurement/cohere-nominate-probes-unit.log",
+    "measurement/relaion-diagnose-probes-config.json",
+    "measurement/relaion-diagnose-probes-stage.json",
+    "measurement/relaion-diagnose-probes-stage-receipt.json",
+    "measurement/relaion-diagnose-probes-closure.json",
+    "measurement/relaion-diagnose-probes-report.jsonl",
+    "measurement/relaion-diagnose-probes.log",
+    "measurement/relaion-diagnose-probes-unit.log",
+    "measurement/cohere-diagnose-probes-config.json",
+    "measurement/cohere-diagnose-probes-stage.json",
+    "measurement/cohere-diagnose-probes-stage-receipt.json",
+    "measurement/cohere-diagnose-probes-closure.json",
+    "measurement/cohere-diagnose-probes-report.jsonl",
+    "measurement/cohere-diagnose-probes.log",
+    "measurement/cohere-diagnose-probes-unit.log"
+  ],
+  "owned_files": [
+    "scripts/run_source_witness_paired_coverage.py"
+  ],
+  "owned_script": {
+    "bytes": 60038,
+    "path": "scripts/run_source_witness_paired_coverage.py",
+    "sha256": "a0033b2e1b05026ab8162cdc7a7e8084f5fde57faa2cd96f051f8b1d9f77993d"
+  },
+  "partial_roster": "INVALID retains exactly all created outputs; four mandatory calls / six admitted calls for complete terminal; no resume.",
+  "remaining_root_pins": [
+    "final execution config SHA and run_id",
+    "clean integrated glue revision / exact transport script roster",
+    "root-owned BORSUK_GLOBAL_LEAF_SLICE and outer host cgroup/lifecycle/16Gi scratch closure",
+    "absolute retained transport paths and qualified decompressed binary path",
+    "source archive identity all402=2e8145e3639b3c4bf93f363dca110ff16f374bee4057e8426738fc02dc51941f",
+    "authority and native-source qualification retained verbatim",
+    "diagnostics boolean; consumed64 not heldout"
+  ],
+  "resources": {
+    "cpu_affinity": [
+      0
+    ],
+    "max_log_bytes": 16777216,
+    "memory_max_bytes": 536870912,
+    "per_dataset_seconds": 600,
+    "scratch_max_bytes": 17179869184,
+    "swap_bytes": 0,
+    "tasks_max": 512
+  },
+  "schema": "borsuk-source-witness-native-experiment-glue-contract-v1",
+  "scientific_fail_exit": 0,
+  "status": "COMMITTED_VERIFIED_READY_FOR_ROOT_INTEGRATION",
+  "transport_python_pins": {
+    "scripts/benchmark_with_resources.py": {
+      "bytes": 12230,
+      "sha256": "5b46cd201dfc8491b3dd024bcabcbc8269d41fe9ca699b7e3a3e03fcccc146c4"
+    },
+    "scripts/check_native_semantic_router_stats.py": {
+      "bytes": 33088,
+      "sha256": "d1fb970c0ab6ec98ec5311204a54277180631116d48a29a564ed3bbd68e5c5c2"
+    },
+    "scripts/check_native_startup_build.py": {
+      "bytes": 12001,
+      "sha256": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52"
+    },
+    "scripts/check_native_startup_stats.py": {
+      "bytes": 2667,
+      "sha256": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29"
+    },
+    "scripts/check_semantic_router_coverage.py": {
+      "bytes": 41100,
+      "sha256": "221695c725d79dfbc7f0ac3c2a4bd4e46445fc32628a1fd989eb328270356ff3"
+    },
+    "scripts/package_semantic_native_generation.py": {
+      "bytes": 20103,
+      "sha256": "cb6a540c810e3a75381d22339eb72f00382b0972a2d3ee687bbb1d97d5a1b594"
+    },
+    "scripts/prepare_hierarchical_cells_100k.py": {
+      "bytes": 55611,
+      "sha256": "0878f2d02285ae678e15c04862d76b5b0066f68d67bb786453f55d73ba40b724"
+    },
+    "scripts/prepare_native_semantic_publication.py": {
+      "bytes": 52270,
+      "sha256": "2d3a9270f5ad847981d9d89fea8ead9e9295f742369fa1b9fd9cf3e7c7e2c7e4"
+    },
+    "scripts/prepare_semantic_positive_inputs.py": {
+      "bytes": 27544,
+      "sha256": "99599d83c091c68661b5347ce568a92145695e420d8c9a3d61e7e0d6b84e884f"
+    },
+    "scripts/rest_coexistence_load.py": {
+      "bytes": 25100,
+      "sha256": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd"
+    },
+    "scripts/run_hierarchical_global_leaf_probe.py": {
+      "bytes": 171250,
+      "sha256": "c7ca903a2441dea220be8dd134f83cfcaec3f8979825e210950f233ce1df562f"
+    },
+    "scripts/run_native_cold_first_query.py": {
+      "bytes": 18809,
+      "sha256": "b4afffd43df8e2ab617749a50fd099fd279e57631e0dcb749b75169ad269a99f"
+    },
+    "scripts/run_native_peer_1m_worker.py": {
+      "bytes": 10729,
+      "sha256": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3"
+    },
+    "scripts/run_native_peer_offered_http.py": {
+      "bytes": 4155,
+      "sha256": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b"
+    },
+    "scripts/run_native_semantic_router_cold.py": {
+      "bytes": 131731,
+      "sha256": "9fe9e968d99a926bdfc15fae0fc0fadd15d44ed1242b6d4fa2e391c1a3b95f88"
+    },
+    "scripts/run_native_union_http.py": {
+      "bytes": 10532,
+      "sha256": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880"
+    },
+    "scripts/run_native_union_offered_http.py": {
+      "bytes": 8999,
+      "sha256": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6"
+    },
+    "scripts/run_source_witness_paired_coverage.py": {
+      "bytes": 60038,
+      "sha256": "a0033b2e1b05026ab8162cdc7a7e8084f5fde57faa2cd96f051f8b1d9f77993d"
+    }
+  },
+  "transport_python_roster": [
+    "scripts/benchmark_with_resources.py",
+    "scripts/check_native_semantic_router_stats.py",
+    "scripts/check_native_startup_build.py",
+    "scripts/check_native_startup_stats.py",
+    "scripts/check_semantic_router_coverage.py",
+    "scripts/package_semantic_native_generation.py",
+    "scripts/prepare_hierarchical_cells_100k.py",
+    "scripts/prepare_native_semantic_publication.py",
+    "scripts/prepare_semantic_positive_inputs.py",
+    "scripts/rest_coexistence_load.py",
+    "scripts/run_hierarchical_global_leaf_probe.py",
+    "scripts/run_native_cold_first_query.py",
+    "scripts/run_native_peer_1m_worker.py",
+    "scripts/run_native_peer_offered_http.py",
+    "scripts/run_native_semantic_router_cold.py",
+    "scripts/run_native_union_http.py",
+    "scripts/run_native_union_offered_http.py",
+    "scripts/run_source_witness_paired_coverage.py"
+  ],
+  "verification": {
+    "command": "systemd-run --user --wait --pipe --property=MemoryMax=268435456 --property=MemorySwapMax=0 --property=CPUQuota=100% --property=RuntimeMaxSec=120 taskset -c 0 env PYTHONDONTWRITEBYTECODE=1 python3 scripts/run_source_witness_paired_coverage.py --self-check",
+    "cpu_seconds": 5.983,
+    "exit_status": 0,
+    "git_diff_check": "PASS",
+    "log": "/tmp/borsuk-source-witness-native-experiment-glue-self-check.log",
+    "memory_peak_reported": "46.1M",
+    "native_and_systemd_fixture_only": true,
+    "silent_native_adapter_exercised": true,
+    "swap_peak_bytes": 0,
+    "wall_seconds": 8.388
+  },
+  "workspace_receipt": {
+    "bytes": 52056,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/implementation-gates/a0001/workspace-receipt.json",
+    "sha256": "064f19872eb2239b04e859487a17c3685a169728ab84b536fb34429fc2c18966"
+  }
+}

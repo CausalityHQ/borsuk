@@ -1,0 +1,45 @@
+{
+  "caps": {
+    "cpu_percent": 100,
+    "memory_bytes": 268435456,
+    "runtime_seconds": 120,
+    "swap_bytes": 0,
+    "tasks": 512
+  },
+  "checks": [
+    "actual orchestration with synthetic native subprocesses",
+    "silent successful subprocess with original shared resource framework",
+    "paired seal and conditional diagnosis",
+    "scientific FAIL execution0",
+    "identity/resource/cleanup/timeout/tamper negatives",
+    "relocated replay"
+  ],
+  "closure": {
+    "ActiveState": "inactive",
+    "ControlGroup": "",
+    "MainPID": 0
+  },
+  "cpu_seconds": 5.804,
+  "exit_status": 0,
+  "invocation_id": "28f78625339d4164baf06b098de98620",
+  "limits": {
+    "ground_truth_read": false,
+    "native_algorithms_and_systemd_fixture_mocked": true,
+    "paid_run": false,
+    "real_corpus_read": false,
+    "recall_or_latency_result": false
+  },
+  "next_gate": "Authenticate staging and execute one frozen paired source-witness coverage experiment; do not infer ANN quality from harness fixtures.",
+  "original_unit": "borsuk-source-witness-glue-root-check-20261004.service",
+  "reported_memory_peak": "54.9M",
+  "schema": "borsuk-source-witness-runner-root-verification-v1",
+  "source": {
+    "bytes": 60038,
+    "path": "scripts/run_source_witness_paired_coverage.py",
+    "sha256": "a0033b2e1b05026ab8162cdc7a7e8084f5fde57faa2cd96f051f8b1d9f77993d"
+  },
+  "source_commit": "6dd91336",
+  "specialist_commit": "e15aeeaaffe1db0737e91c14168c34b72c7c56d8",
+  "swap_peak_bytes": 0,
+  "wall_seconds": 8.01
+}
