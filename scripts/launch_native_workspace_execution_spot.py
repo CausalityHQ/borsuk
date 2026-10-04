@@ -84,7 +84,8 @@ HIERARCHICAL_CELLS_REQUIRED_TESTS = {
         'partition_format_and_receipt_reject_obsolete_or_incomplete_artifacts',
         'source_probe_greedy_matches_independent_oracle_ties_shortcell_and_numeric_guards',
         'source_probe_raw_identity_native_score_top24_and_no_query_io',
-        'source_probe_cap_binding_tamper_missing_id_fifo_and_symlink_fail_closed')),
+        'source_probe_cap_binding_tamper_missing_id_fifo_and_symlink_fail_closed',
+        'source_probe_shortcell_builder_and_original_span_tamper')),
     'hierarchical-cell-bin-tests': ('tests::configurations_reject_unknown_fields_and_truth_in_requests',
         'tests::created_outputs_close_invalid_on_bad_truth_or_output_cap_without_overwrite',
         'tests::nomination_cli_full64_freezes_prefix_and_both_policies_without_truth',
@@ -331,11 +332,11 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
         CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_fixed48_implementation.sh')
         FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_fixed48_implementation.sh'])
     if hierarchical_cells:
-        ROOT = semantic.ROOT.parent/'semantic-1m/hierarchical-cells/implementation-gates/minimal-archive'
+        ROOT = semantic.ROOT.parent/'semantic-1m/hierarchical-cells/source-witness-router/implementation-gates'
         CONFIG = ROOT/'config.json'
-        TOKEN_PREFIX = 'hierarchical-cells-minimal-archive-implementation-'
-        PREFIX = 'research/semantic-router/20261003/' + TOKEN_PREFIX
-        TAG = 'borsuk-hierarchical-cells-minimal-archive-implementation'
+        TOKEN_PREFIX = 'source-witness-router-implementation-'
+        PREFIX = 'research/semantic-router/20261004/' + TOKEN_PREFIX
+        TAG = 'borsuk-source-witness-router-implementation'
         SCHEMA = 'borsuk-hierarchical-cells-implementation-gates-spot-v2'
         CONFIG_SCHEMA = 'borsuk-hierarchical-cells-implementation-gates-v2'
         RECEIPT_SCHEMA = 'borsuk-hierarchical-cells-implementation-gates-receipt-v2'
@@ -1884,9 +1885,9 @@ def _hierarchical_archive_metadata_self_check():
 def _hierarchical_cells_protocol_self_check():
     previous = CONFIG, CODE, FIXED, ARTIFACTS, NATIVE_DELTA, mode_flag()
     with execution_mode(hierarchical_cells=True):
-        assert str(ROOT).endswith('semantic-1m/hierarchical-cells/implementation-gates/minimal-archive')
+        assert str(ROOT).endswith('semantic-1m/hierarchical-cells/source-witness-router/implementation-gates')
         assert mode_flag() == ' --hierarchical-cells-implementation'
-        assert PREFIX == 'research/semantic-router/20261003/hierarchical-cells-minimal-archive-implementation-'
+        assert PREFIX == 'research/semantic-router/20261004/source-witness-router-implementation-'
         assert CONFIG_SCHEMA == FIXED['schema'] == 'borsuk-hierarchical-cells-implementation-gates-v2'
         assert SCHEMA == 'borsuk-hierarchical-cells-implementation-gates-spot-v2'
         assert RECEIPT_SCHEMA == 'borsuk-hierarchical-cells-implementation-gates-receipt-v2'

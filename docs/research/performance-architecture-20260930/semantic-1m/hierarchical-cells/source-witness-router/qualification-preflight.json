@@ -1,0 +1,49 @@
+{
+  "candidate_commit": "22d6c4c1fde0c5e59d7f60b1232d4bab966e4a77",
+  "code_sha256": {
+    "scripts/check_hierarchical_cells_implementation.sh": "a5661189747c41e3627065246b8a47f8efdadf5a1f263183265513a2e3d85882",
+    "scripts/launch_native_workspace_execution_spot.py": "bb3f6b18d5d82febc4c56ab087679f54e0d8f35f44bc1f2a762b98e2054bb5cd"
+  },
+  "command": [
+    "python3",
+    "scripts/launch_native_workspace_execution_spot.py",
+    "--hierarchical-cells-implementation",
+    "--self-check"
+  ],
+  "exit_status": 0,
+  "failed_setup_checks": [
+    {
+      "attempt": "initial",
+      "exit": 1,
+      "reason": "stale historical ROOT selfcheck assertion"
+    },
+    {
+      "attempt": "r2",
+      "exit": 1,
+      "reason": "root edit indentation error; repaired before gate"
+    },
+    {
+      "attempt": "r3",
+      "exit": 1,
+      "reason": "stale historical PREFIX selfcheck assertion"
+    }
+  ],
+  "invocation": "c7e8695fef144c3ab3deda528abc2628",
+  "limits": {
+    "cpu_percent": 100,
+    "limit_seconds": 120,
+    "memory_bytes": 268435456,
+    "tasks": 128
+  },
+  "native_compilation_verified": false,
+  "native_or_cloud_execution": false,
+  "observed_peak": "103.8M",
+  "required_binary_tests": 8,
+  "required_library_tests": 20,
+  "runtime_seconds": 72.266,
+  "schema": "borsuk-source-witness-qualification-preflight-v1",
+  "scope": "existing mocked qualification lifecycle and archive source checks only",
+  "source_review_pending": true,
+  "swap_bytes": 0,
+  "unit": "borsuk-source-witness-qualification-preflight-r4-20261004.service"
+}
