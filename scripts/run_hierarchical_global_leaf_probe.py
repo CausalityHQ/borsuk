@@ -2,6 +2,7 @@
 """Exact original-layout reconstruction and paired truth-free nomination.
 
 CLI: CONFIG CONFIG_SHA256 NEW_OUTPUT | --verify OUTPUT | --self-check
+     --partitioner-pair (launcher CLI, including --self-check)
 There is deliberately no reducer. A paired seal binds complete files; the
 execution receipt additionally requires actual exits, resource closure and
 retained layout bytes before original scratch is removed. Root supplies the
@@ -111,6 +112,14 @@ def fsync_dir(path):
 def gate_log(body, stages, role):
     """Require actual named passes, counts and the unshimmed test-build footer."""
     require(body.endswith(b'\n'), 'completed gate log newline')
+    if role == 'partitioner':
+        from scripts.launch_native_workspace_execution_spot import validate_bounded_publication_stages
+        # This validator binds transcript totals, independently of mandatory names.
+        with tempfile.TemporaryDirectory(prefix='partitioner-gates-') as tmp:
+            path = Path(tmp)/'test.log'; copy_bytes(path, body)
+            exact(validate_bounded_publication_stages(path, hierarchical_cells=True), stages,
+                  'actual six candidate gates/summary totals')
+        return
     events, passed, summaries, builds = [], {}, [], 0
     tests = NEW_TESTS if role == 'nomination' else local.TESTS
     for line in body.splitlines():
@@ -180,17 +189,24 @@ def qualify_role(role, authority, repo):
     exact(launch['source_archive_sha256'], terminal['source_archive_sha256'], 'launch archive SHA')
     manifest, receipt, verified = (values[n] for n in ('manifest', 'receipt', 'verification'))
     inventory = manifest['source_sha256']
-    require(len(inventory) == 401 and inventory == receipt['source_sha256'], 'full401 inventory')
+    count = 402 if role == 'partitioner' else 401
+    require(len(inventory) == count and inventory == receipt['source_sha256'], 'full role inventory')
+    if role == 'partitioner':
+        expected = local.read_json(local.identity(Path(repo)/PARTITIONER_MANIFEST), 128 << 10)
+        exact(expected['source_file_count'], count, 'prospective full source count')
+        exact(inventory, expected['source_sha256'], 'exact prospective full402 source map')
+        exact(terminal['native_source_commit'], PARTITIONER_COMMIT, 'qualified native candidate revision')
     identity = source_identity(inventory)
     for value in (manifest, receipt, terminal):
         exact(value['source_identity_sha256'], identity, 'role native source identity')
-        exact(value['source_file_count'], 401, 'role source count')
-    if role == 'nomination':
-        exact(verified['schema'], 'borsuk-global-leaf-native-root-verification-v1', 'new root verification schema')
+        exact(value['source_file_count'], count, 'role source count')
+    if role in ('nomination', 'partitioner'):
+        expected_schema = 'borsuk-capacity-partitioner-native-root-verification-v1' if role == 'partitioner' else 'borsuk-global-leaf-native-root-verification-v1'
+        exact(verified['schema'], expected_schema, 'new root verification schema')
         exact(verified['native_source_identity_sha256'], identity, 'new root native identity')
     else:
         exact(verified['source_identity_sha256'], identity, 'original root native identity')
-    exact(verified['source_file_count'], 401, 'verified native401')
+    exact(verified['source_file_count'], count, 'verified native inventory')
     for k in ('qualified', 'command_started', 'command_completed', 'source_unchanged'):
         exact(receipt[k], True, 'completed role receipt')
     for k in ('exit_status', 'gate_status'):
@@ -217,7 +233,7 @@ def qualify_role(role, authority, repo):
     for n, p in native['sources'].items():
         exact(p['path'], local.SOURCE_FILES[n], 'qualified source filename')
         exact(p['sha256'], (inventory if n != 'gates' else support)[p['path']], 'qualified native/support source pin')
-    fields(native['binaries'], 'writer cells' if role == 'original' else 'cells', 'binary roles')
+    fields(native['binaries'], 'writer cells' if role in ('original', 'partitioner') else 'cells', 'binary roles')
     for n, p in native['binaries'].items():
         filename = 'build_two_bit_generation' if n == 'writer' else 'hierarchical_semantic_cells'
         exact(body_pin(p), terminal['artifacts']['binaries/'+filename], 'terminal-bound binary')
@@ -340,9 +356,12 @@ def read_range(stream, span, total):
     return body
 
 
-def layout(root_pin, build, dimensions=768, rows=100000):
+def layout(root_pin, build, dimensions=768, rows=100000, *, partitioner=False):
     manifest = local.read_json(root_pin, 65536)
-    exact(manifest['schema'], 'borsuk-hierarchical-cells-resident-v3', 'original resident format')
+    exact(manifest['schema'], 'borsuk-hierarchical-cells-resident-v4' if partitioner else 'borsuk-hierarchical-cells-resident-v3', 'role resident format')
+    if partitioner:
+        exact(build['schema'], 'borsuk-hierarchical-cells-build-v2', 'candidate build format')
+        local.integer(manifest['build']['semantic_repairs'], 0, rows, 'mandatory candidate semantic repairs')
     exact(manifest['input'], build, 'original BuildConfig in recovered root')
     exact(manifest['rows'], rows, 'root rows'); exact(manifest['dimensions'], dimensions, 'root dimensions')
     folder = Path(root_pin['path']).parent
@@ -1417,10 +1436,587 @@ def worker_closure_self_check():
     print('PASS final receipt independently rejects host memory/swap/OOM/scratch/deadline/monitor/cleanup/retention violations')
 
 
+# Fixed prospective experiment, separate from the sealed historical probe.
+PARTITIONER_ROOT = BASE.parent/'capacity-constrained-partitioner/paired100k'
+PARTITIONER_MANIFEST = PARTITIONER_ROOT.parent/'qualification/native-source-manifest.json'
+PARTITIONER_COMMIT = 'ee1fbdd96c6a64725521c60ac2f7da2127314243'
+PAIR_ROLES = ('original', 'partitioner')
+PAIR_RESOURCES = {k: v for k, v in CAPS.items() if not k.startswith('nomination_')}
+PAIR_SEAL_SCHEMA = 'borsuk-capacity-partitioner-four-layout-seal-v1'
+PAIR_RECEIPT_SCHEMA = 'borsuk-capacity-partitioner-execution-receipt-v1'
+PAIR_STAGES = (tuple(d+'-writer' for d in DATASETS)
+    + tuple(d+'-'+r+'-build' for r in PAIR_ROLES for d in DATASETS)
+    + tuple(d+'-'+r+'-diagnose' for r in PAIR_ROLES for d in DATASETS))
+
+
+def pair_limits(config):
+    exact(config['resources'], PAIR_RESOURCES, 'matched pair resource envelope')
+    fields(config['phase_seconds'], 'writer build diagnose', 'ten serial phase budget')
+    for n, seconds in config['phase_seconds'].items():
+        local.integer(seconds, 10, 1669, 'pair phase seconds: '+n)
+    require(2*config['phase_seconds']['writer']+4*config['phase_seconds']['build']
+        +4*config['phase_seconds']['diagnose']+120 <= config['wall_seconds'] == 1800,
+        'ten serial phases plus bootstrap/cleanup reserve fit whole deadline')
+    return {k: v for k, v in PAIR_RESOURCES.items() if k != 'swap_bytes'}
+
+
+def pair_build(old):
+    exact(old['schema'], 'borsuk-hierarchical-cells-build-v1', 'original build schema')
+    for n, expected in dict(cell_rows=512, sample_rows=256, max_depth=32,
+            max_build_payload_bytes=64 << 20, max_output_bytes=256 << 20).items():
+        exact(old[n], expected, 'fixed build: '+n)
+    return dict(old, schema='borsuk-hierarchical-cells-build-v2')
+
+
+def pair_diagnostic(old, root):
+    exact(old['schema'], 'borsuk-hierarchical-cells-diagnostic-v3', 'shared native diagnostic')
+    exact(old['count'], 64, 'consumed64'); exact(old['first'], 0, 'consumed first0')
+    exact(old['top_k'], 100, 'cosine k100'); exact(old['truth_width'], 100, 'truth100')
+    exact(old['options'], dict(local.POLICY, max_query_payload_bytes=128 << 20), 'unchanged SQ2/SQ8/fetch policy')
+    for n in ('max_resident_directory_payload_bytes', 'max_evaluator_payload_bytes', 'max_result_bytes'):
+        exact(old[n], PAIR_RESOURCES[n], 'matched diagnostic payload caps')
+    return dict(old, candidate_root=root)
+
+
+def pair_restore_panel(original, item, folder, download, check):
+    restore_panel(original, item, folder, download, check)
+    # Opaque truth bytes are staged once. Only native opens them after freeze.
+    check(); source = original['artifacts']['truth']; path = folder/'full-truth'
+    download(source, path); local.authenticate(dict(body_pin(source), path=str(path)), 64 << 20)
+    with positive.open_input(path) as stream:
+        before = positive.stamp(stream); body = stream.read(64*100*4)
+        exact(len(body), 25600, 'consumed truth prefix geometry')
+        exact(positive.stamp(stream), before, 'truth input stable')
+    pin = copy_bytes(folder/'truth64', body)
+    exact(pin, item['diagnostic']['truth'], 'same original truth bytes/path')
+
+
+def pair_retain(out, dataset, role, recovered, item, build):
+    target = out/'retained'/dataset/role; target.mkdir(parents=True)
+    pins = {}
+    for n, original in dict(root=recovered['root'], directories=recovered['directories'],
+            cells=recovered['cells'], requests=item['inputs']['requests'], truth=item['diagnostic']['truth']).items():
+        destination = target/dict(root='manifest.json', directories='directories.bin', cells='cells.bin',
+                                  requests='requests64', truth='truth64')[n]
+        with positive.open_input(original['path']) as stream:
+            publication.transfer(stream, body_pin(original), destination)
+        pins[n] = local.identity(destination)
+        exact(body_pin(pins[n]), body_pin(original), 'retained pair body')
+    pins['build'] = copy_bytes(target/'build.json', item['build_bytes'] if role == 'original' else local.canonical(build))
+    pins['writer'] = copy_bytes(target/'original-writer.json', item['writer_bytes'])
+    fsync_dir(target)
+    return pins
+
+
+def pair_seal(out, config_pin, roles, cells):
+    exact(set(cells), {d+'-'+r for r in PAIR_ROLES for d in DATASETS}, 'all four layouts/configs before diagnose')
+    for value in cells.values():
+        for n in ('root', 'directories', 'cells', 'requests', 'truth', 'build', 'writer', 'config'):
+            pin = value[n]; fsync_file(pin['path'])
+            exact(body_pin(local.identity(pin['path'])), body_pin(pin), 'four-layout seal stable')
+            value[n] = dict(pin, path=str(Path(pin['path']).relative_to(out)))
+    pin = local.write_json(out/'paired-seal.json', dict(schema=PAIR_SEAL_SCHEMA, status='LAYOUTS_SEALED',
+        complete=True, config=config_pin, roles=roles, cells=cells, diagnose_started=False,
+        complete_query_latency='complete-query-unmeasured', physical_s3_measured=False))
+    fsync_dir(out)
+    return pin
+
+
+def pair_reduce(path, diagnostic, config_pin, native, limits, item):
+    from scripts import launch_hierarchical_cells_100k_spot as launcher
+    _, aggregate = request_hashes(diagnostic['requests'], item['inputs']['requests'])
+    exact(aggregate, item['query_f32_sha256'], 'same role/dataset consumed query f32 bits')
+    result = launcher.reduce_diagnostic(path, diagnostic, config_pin, native, limits)
+    times = []
+    with positive.open_input(path) as stream:
+        for line in stream:
+            event = local.decode(line)
+            if event['phase'] == 'query_frozen':
+                stages = {n: event['trace'][n] for n in ('routing', 'local_nomination', 'final_ranking')}
+                for value in stages.values():
+                    for n in ('wall_ns', 'process_cpu_ns'):
+                        local.integer(value[n], 0, 1800*10**9, 'measured stage timer')
+                times.append(dict(stages=stages, stage_sum_wall_ns=sum(v['wall_ns'] for v in stages.values())))
+    result.update(latency_measurement='stage-sum only', complete_query_latency='complete-query-unmeasured',
+                  per_query_stage_times=times,
+                  retained_reference='original401 matched hierarchical control; consumed historical panels; local stage timers only')
+    return result
+
+
+def pair_execute(config, config_pin, repo, out, download, check, deadline):
+    out, repo = Path(out), Path(repo); limits = pair_limits(config)
+    roles = {r: qualify_role(r, config['roles'][r], repo) for r in PAIR_ROLES}
+    evidence = original_evidence(repo, config)
+    require(not ORIGINAL_ROOT.exists() and not ORIGINAL_ROOT.is_symlink(), 'original scratch path occupied')
+    require(out.is_absolute() and out.is_dir() and not out.is_symlink(), 'owned pair output')
+    measurement = out/'measurement'; measurement.mkdir(); (out/'retained').mkdir()
+    scratch = out/'scratch'; require(scratch.is_dir(), 'pair scratch owner')
+    receipt = dict(schema=PAIR_RECEIPT_SCHEMA, status='INVALID', complete=False, config=config_pin,
+        roles=roles, stages=[], cells={}, cleanup={}, truth_opened=False, scientific_qualification=False,
+        quality_or_performance_claim=False, physical_s3_measured=False, complete_query_latency='complete-query-unmeasured')
+    owned, failure, started = False, None, time.monotonic()
+    try:
+        ORIGINAL_ROOT.mkdir(); owned = True; proof = copy.deepcopy(evidence['proof']); natives = {}
+        for role in PAIR_ROLES:
+            native = config['roles'][role]['native']; target = ORIGINAL_ROOT/'screen/scratch' if role == 'original' else scratch/'partitioner'
+            target.mkdir(parents=True, exist_ok=True); natives[role] = copy.deepcopy(native)
+            for n, p in [('source_archive', native['source_archive']), ('gate_log', native['gate_log']), *native['binaries'].items()]:
+                check(); path = target/('native-'+n); download(p, path); pin = local.identity(path)
+                exact(body_pin(pin), body_pin(p), 'qualified pair body')
+                if n in native['binaries']:
+                    path.chmod(0o700); natives[role]['binaries'][n] = pin
+                if role == 'original':
+                    exact(pin, proof['binaries'][n] if n in native['binaries'] else proof[n], 'original exact cold geometry')
+            subset = {p['path']: p for p in native['sources'].values()}
+            destinations = {n: ORIGINAL_ROOT/'repo'/n if role == 'original' else target/'sources'/n for n in subset}
+            archive_sources(dict(body_pin(native['source_archive']), path=str(target/'native-source_archive')),
+                dict(roles[role]['source_sha256'], **roles[role]['source_archive_support_sha256']), subset, destinations, check)
+        for original in evidence['sources']['items']:
+            d = original['name']; item = evidence['items'][d]
+            pair_restore_panel(original, item, ORIGINAL_ROOT/'screen/scratch'/d, download, check)
+            copy_bytes(ORIGINAL_ROOT/'screen/measurement'/f'{d}-writer.json', item['writer_bytes'])
+            copy_bytes(ORIGINAL_ROOT/'screen/measurement'/f'{d}-build.json', item['build_bytes'])
+        commands = {d: reconstruct_command(evidence['items'][d], proof) for d in DATASETS}
+        builds = {d: pair_build(evidence['items'][d]['build']) for d in DATASETS}
+        for d in DATASETS:
+            name, command, binary, pin = commands[d][0]
+            native_stage(name, command, binary, pin, measurement, dict(limits, timeout_seconds=config['phase_seconds']['writer']),
+                         config['phase_seconds']['writer'], deadline, receipt['stages'], check)
+            for p in evidence['items'][d]['recovery']['build_inputs'].values():
+                local.authenticate(p, 1 << 30)
+        cells, plans = {}, {}
+        for role in PAIR_ROLES:
+            for d in DATASETS:
+                item = evidence['items'][d]; name = d+'-'+role; build = item['build'] if role == 'original' else builds[d]
+                if role == 'original':
+                    _, command, binary, pin = commands[d][1]; target = Path(item['recovery']['output_cell_path'])
+                else:
+                    binary = natives[role]['binaries']['cells']; pin = local.write_json(measurement/(name+'-build.json'), build)
+                    target = scratch/(name+'-cells'); command = [binary['path'], 'build', pin['path'], pin['sha256'], str(target)]
+                native_stage(name+'-build', command, binary, pin, measurement, dict(limits, timeout_seconds=config['phase_seconds']['build']),
+                             config['phase_seconds']['build'], deadline, receipt['stages'], check)
+                root = local.identity(target/'manifest.json')
+                if role == 'original':
+                    exact(body_pin(root), body_pin(item['diagnostic']['candidate_root']), 'exact historical control root')
+                recovered = layout(root, build, partitioner=role == 'partitioner')
+                pins = pair_retain(out, d, role, recovered, item, build)
+                # Persist each completed layout before the next build can fail.
+                receipt['cells'][name] = dict(root_sha256=root['sha256'], retained=True)
+                diagnostic = pair_diagnostic(item['diagnostic'], root)
+                cfg = local.write_json(measurement/(name+'-diagnose.json'), diagnostic)
+                cells[name] = dict(pins, config=cfg, dataset=d, role=role, runtime_root=root,
+                                   query_f32_sha256=item['query_f32_sha256'])
+                plans[name] = (diagnostic, cfg, natives[role], item)
+                check()
+        receipt['paired_seal'] = pair_seal(out, config_pin, roles, cells)
+        for role in PAIR_ROLES:
+            for d in DATASETS:
+                name = d+'-'+role; diagnostic, cfg, native, item = plans[name]; binary = native['binaries']['cells']
+                path = measurement/(name+'-diagnostic.jsonl')
+                native_stage(name+'-diagnose', [binary['path'], 'diagnose', cfg['path'], cfg['sha256'], str(path)], binary, cfg,
+                    measurement, dict(limits, timeout_seconds=config['phase_seconds']['diagnose']),
+                    config['phase_seconds']['diagnose'], deadline, receipt['stages'], check)
+                receipt['truth_opened'] = True
+                receipt.setdefault('results', {})[name] = pair_reduce(path, diagnostic, cfg, native, limits, item)
+        receipt.update(status='DIAGNOSTIC', complete=True,
+            candidate_status='PASS' if all(receipt['results'][d+'-partitioner']['status'] == 'PASS' for d in DATASETS) else 'FAIL',
+            control_status={d: receipt['results'][d+'-original']['status'] for d in DATASETS})
+    except BaseException as error:
+        failure = error; receipt['error'] = type(error).__name__+': '+str(error)
+    finally:
+        if owned:
+            shutil.rmtree(ORIGINAL_ROOT)
+        receipt['cleanup'] = dict(original_root_removed=owned and not ORIGINAL_ROOT.exists(),
+            native_units_drained=bool(receipt['stages']) and all(s['closed'] and s['unit_drained'] for s in receipt['stages']),
+            native_processes_concurrent_max=1 if receipt['stages'] else 0)
+        receipt.update(wall_seconds=time.monotonic()-started, remaining_deadline_seconds=deadline-time.monotonic())
+        if not all(receipt['cleanup'][n] for n in ('original_root_removed', 'native_units_drained')) or receipt['remaining_deadline_seconds'] <= 0:
+            receipt.update(status='INVALID', complete=False)
+        local.write_json(out/'native-execution-receipt.json', receipt); fsync_dir(out)
+    if failure:
+        raise failure
+    require(receipt['complete'], 'closed pair execution')
+    return receipt
+
+
+def pair_verify_seal(output, *, repo=None, config=None, config_pin=None, evidence=None):
+    out = Path(output).resolve(); repo = Path(repo or Path(__file__).resolve().parents[1])
+    config_pin = config_pin or local.identity(out/'config.json'); config = config or local.read_json(config_pin, 512 << 10)
+    limits = pair_limits(config); evidence = evidence or original_evidence(repo, config)
+    seal = local.read_json(local.identity(out/'paired-seal.json'), 8 << 20)
+    exact(seal['schema'], PAIR_SEAL_SCHEMA, 'four-layout seal schema'); exact(seal['status'], 'LAYOUTS_SEALED', 'sealed before diagnose')
+    exact(seal['complete'], True, 'complete layout seal'); exact(seal['diagnose_started'], False, 'seal precedes every diagnose')
+    exact(body_pin(seal['config']), body_pin(config_pin), 'sealed pair config')
+    exact(seal['roles'], {r: qualify_role(r, config['roles'][r], repo) for r in PAIR_ROLES}, 'sealed qualified binary roles')
+    exact(set(seal['cells']), {d+'-'+r for r in PAIR_ROLES for d in DATASETS}, 'four-cell roster')
+    for name, cell in seal['cells'].items():
+        d, role = cell['dataset'], cell['role']; exact(name, d+'-'+role, 'role dataset cell name')
+        pins = {}
+        for n in ('root', 'directories', 'cells', 'requests', 'truth', 'build', 'writer', 'config'):
+            publication.relative(cell[n]['path']); pins[n] = dict(cell[n], path=str(out/cell[n]['path']))
+            local.authenticate(pins[n], 256 << 20)
+        item = evidence['items'][d]; build = local.read_json(pins['build'], 65536)
+        exact(build, item['build'] if role == 'original' else pair_build(item['build']), 'one build schema causal change')
+        exact(body_pin(pins['writer']), dict(bytes=len(item['writer_bytes']), sha256=local.sha(item['writer_bytes'])), 'original writer bytes')
+        recovered = layout(pins['root'], build, partitioner=role == 'partitioner')
+        for n in ('root', 'directories', 'cells'):
+            exact(body_pin(recovered[n]), body_pin(pins[n]), 'retained role layout')
+        if role == 'original':
+            exact(body_pin(pins['root']), body_pin(item['diagnostic']['candidate_root']), 'historical root identity')
+        exact(body_pin(cell['runtime_root']), body_pin(pins['root']), 'runtime/retained root')
+        diagnostic = local.read_json(pins['config'], 65536)
+        exact(diagnostic, pair_diagnostic(item['diagnostic'], cell['runtime_root']), 'sealed unchanged requests/truth/options')
+        exact(body_pin(pins['truth']), body_pin(item['diagnostic']['truth']), 'retained same truth')
+        _, aggregate = request_hashes(pins['requests'], item['inputs']['requests'])
+        exact(aggregate, cell['query_f32_sha256'], 'sealed query f32 bits')
+        rebound = dict(diagnostic, candidate_root=pins['root'], requests=pins['requests'], truth=pins['truth'])
+        result = pair_reduce(out/'measurement'/(name+'-diagnostic.jsonl'), rebound, pins['config'], config['roles'][role]['native'], limits, item)
+        # The closed receipt binds the reducer; the seal itself binds prequery inputs.
+        receipt = local.read_json(local.identity(out/'native-execution-receipt.json'), 8 << 20)
+        exact(result, receipt['results'][name], 'replayed diagnostic science/stage-sum only')
+    return seal
+
+
+def pair_verify_execution(output, config, seal, evidence):
+    out = Path(output).resolve(); limits = pair_limits(config)
+    receipt = local.read_json(local.identity(out/'execution-receipt.json'), 8 << 20)
+    exact(receipt['schema'], PAIR_RECEIPT_SCHEMA, 'pair execution schema')
+    exact(receipt['status'], 'DIAGNOSTIC', 'scientific FAIL still completed execution'); exact(receipt['complete'], True, 'closed pair')
+    native = local.read_json(dict(body_pin(receipt['native_execution']), path=str(out/'native-execution-receipt.json')), 8 << 20)
+    exact({k: v for k, v in receipt.items() if k not in ('native_execution', 'worker_closure')}, native, 'pair final/native receipt')
+    verify_worker_closure(out, receipt['worker_closure'], config)
+    exact(body_pin(receipt['paired_seal']), body_pin(local.identity(out/'paired-seal.json')), 'prequery seal pin')
+    exact(body_pin(receipt['config']), body_pin(seal['config']), 'execution config pin')
+    exact(receipt['roles'], seal['roles'], 'execution source authorities')
+    require(0 < receipt['wall_seconds'] <= 1800 and receipt['remaining_deadline_seconds'] > 0, 'whole execution deadline')
+    exact(receipt['cleanup'], dict(original_root_removed=True, native_units_drained=True, native_processes_concurrent_max=1), 'exact serial/drained cleanup')
+    exact([s['name'] for s in receipt['stages']], list(PAIR_STAGES), 'ten serial native calls')
+    for record in receipt['stages']:
+        name = record['name']; parts = name.split('-'); d, phase = parts[0], parts[-1]
+        role = 'original' if phase == 'writer' else parts[1]
+        binary = config['roles'][role]['native']['binaries']['writer' if phase == 'writer' else 'cells']
+        for n, expected in dict(exit_status=0, closed=True, unit_drained=True, cgroup_drained=True, resource_gate_passed=True).items():
+            exact(record[n], expected, 'actual native/drain closure')
+        exact(record['unit_closeout']['MainPID'], '0', 'no native PID')
+        require(record['unit_closeout']['ActiveState'] in ('inactive', 'failed'), 'native unit inactive')
+        body = local.read_json(dict(body_pin(record['native_receipt']), path=str(out/'measurement'/(name+'-stage-receipt.json'))), 1 << 20)
+        exact(body['status'], 'CLOSED', 'actual native complete'); exact(body['complete'], True, 'actual native receipt')
+        exact(len(body['stages']), 1, 'one native per unit'); stage = body['stages'][0]
+        for n, expected in dict(exit_status=0, cleanup_complete=True, resource_gate_passed=True).items():
+            exact(stage[n], expected, 'actual normal native exit/resources')
+        exact(stage['command'], record['command'], 'observed native invocation')
+        exact(body_pin(stage['binary']), body_pin(binary), 'qualified binary role cannot swap')
+        exact(stage['binary']['path'], record['command'][0], 'invoked binary path')
+        validate_cgroup(body['cgroup'], 2 << 30, 200); no_oom(stage['cgroup_before'], stage['cgroup_after'])
+        for snapshot in (stage['cgroup_before'], stage['cgroup_after']):
+            require(0 < int(snapshot['memory.max']) <= 2 << 30 and int(snapshot['memory.peak']) <= 2 << 30, 'native memory cap')
+            exact(snapshot['memory.swap.max'], '0', 'native noSwap'); exact(int(snapshot['memory.swap.peak']), 0, 'native no swap peak')
+            exact(snapshot['cpu_affinity'], [0, 1], 'matched native CPU2')
+        require(stage['wall_seconds'] <= config['phase_seconds'][phase], 'phase wall deadline')
+        item = evidence['items'][d]; cell = seal['cells'][d+'-'+role]
+        if phase == 'writer' or (phase == 'build' and role == 'original'):
+            old = item['recovery']; cfg = str(ORIGINAL_ROOT/'screen/measurement'/f'{d}-{phase}.json')
+            bp = evidence['proof']['binaries']['writer' if phase == 'writer' else 'cells']
+            expected = [bp['path'], cfg, old['original_writer_config']['sha256'], '67108864', str(ORIGINAL_ROOT/'screen/measurement'/(d+'-generation'))] if phase == 'writer' else [bp['path'], 'build', cfg, old['original_build_config']['sha256'], old['output_cell_path']]
+            exact(record['command'], expected, 'original exact command/config/flags')
+        else:
+            cfg = cell['config'] if phase == 'diagnose' else cell['build']
+            exact(record['command'][1], phase, 'role command'); exact(record['command'][3], cfg['sha256'], 'sealed config invoked')
+            exact(Path(record['command'][2]).name, d+'-'+role+'-'+phase+'.json', 'fixed role config filename')
+            expected_output = cell['runtime_root']['path'].removesuffix('/manifest.json') if phase == 'build' else str(Path(stage['config']['path']).parent/(d+'-'+role+'-diagnostic.jsonl'))
+            exact(record['command'][4], expected_output, 'fixed role output path')
+        exact(body_pin(stage['config']), body_pin(cell['writer'] if phase == 'writer' else cell['build'] if phase == 'build' else cell['config']), 'retained sealed stage config')
+        for filename, pin in ((name+'.log', stage['log']), (name+'.log', record['native_log']), (name+'-unit.log', record['log'])):
+            exact(body_pin(local.identity(out/'measurement'/filename)), body_pin(pin), 'observed retained log')
+    exact(receipt['cells'], {n: dict(root_sha256=c['root']['sha256'], retained=True) for n, c in seal['cells'].items()}, 'four completed retained layouts')
+    exact(receipt['control_status'], {d: receipt['results'][d+'-original']['status'] for d in DATASETS}, 'control FAIL separately')
+    exact(receipt['candidate_status'], 'PASS' if all(receipt['results'][d+'-partitioner']['status'] == 'PASS' for d in DATASETS) else 'FAIL', 'candidate scientific gate')
+    return receipt
+
+
+
+def pair_gate_self_check():
+    from scripts import launch_native_workspace_execution_spot as workspace
+    from datetime import datetime, timedelta, timezone
+    body, stages = bytearray(), []
+    now = datetime(2026, 10, 4, tzinfo=timezone.utc)
+    for i, (name, command) in enumerate(workspace.HIERARCHICAL_CELLS_STAGES):
+        required = workspace.HIERARCHICAL_CELLS_REQUIRED_TESTS.get(name, ())
+        start = dict(schema='borsuk-hierarchical-cells-implementation-stage-v1', stage=name, command=command,
+            started_at=(now+timedelta(seconds=2*i)).isoformat(), finished_at=None, exit_status=None,
+            gate_status=None, tests_run=None, required_test_passes=None)
+        body.extend(local.canonical(start))
+        if i < 3:
+            tests = list(required)+(['extra::summary_case0', 'extra::summary_case1'] if i == 0 else ['generation::case'] if i == 2 else [])
+            for n in tests:
+                body.extend(('test '+n+' ... ok\n').encode())
+            body.extend(('test result: ok. '+str(len(tests))+' passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;\n').encode())
+        if i == 5:
+            body.extend(b'rust-test-build status=0 elapsed_seconds=1 jobs=1\n')
+        end = dict(start, finished_at=(now+timedelta(seconds=2*i+1)).isoformat(), exit_status=0,
+            gate_status=0, tests_run=len(tests) if i < 3 else None, required_test_passes=dict.fromkeys(required, 1))
+        body.extend(local.canonical(end)); stages.append(end)
+    gate_log(bytes(body), stages, 'partitioner')
+    exact(stages[0]['tests_run'], 18, 'actual total differs from16 mandatory')
+    for bad_body, bad_stages in (
+        (bytes(body).replace(('test '+workspace.HIERARCHICAL_CELLS_REQUIRED_TESTS['hierarchical-cell-tests'][-1]+' ... ok\n').encode(), b''), stages),
+        (bytes(body).replace(b'rust-test-build status=0 elapsed_seconds=1 jobs=1\n', b''), stages),
+        (bytes(body).replace(b'18 passed;', b'16 passed;'), stages),
+        (bytes(body), stages[:-1])):
+        try:
+            gate_log(bad_body, bad_stages, 'partitioner')
+        except (AssertionError, ValueError):
+            pass
+        else:
+            raise AssertionError('missing named pass/footer/gate or invented total accepted')
+    try:
+        qualify_role('partitioner', dict(schema='borsuk-global-leaf-binary-authority-v1', role='partitioner',
+                     authority_pending=True, native={}, refs={}), Path('.'))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('pending candidate authority accepted')
+
+
+
+def pair_diagnostic_self_check():
+    """Exercise the real v3 validator/reducer on explicitly synthetic events."""
+    with tempfile.TemporaryDirectory(prefix='pair-diagnostic-mock-') as tmp:
+        folder = Path(tmp); fixture = synthetic_dataset(folder/'layout')
+        truth = copy_bytes(folder/'truth64', bytes(25600))
+        diagnostic = dict(schema='borsuk-hierarchical-cells-diagnostic-v3', candidate_root=fixture['config']['candidate_root'],
+            requests=fixture['evidence']['inputs']['requests'], truth=truth, first=0, count=64, top_k=100, truth_width=100,
+            options=dict(local.POLICY, max_query_payload_bytes=128 << 20),
+            max_resident_directory_payload_bytes=384 << 20, max_evaluator_payload_bytes=128 << 20, max_result_bytes=128 << 20)
+        cfg = local.write_json(folder/'diagnose.json', diagnostic)
+        identity = dict(phase='identity', schema=diagnostic['schema'], config_sha256=cfg['sha256'],
+            candidate_root_sha256=diagnostic['candidate_root']['sha256'], requests_sha256=diagnostic['requests']['sha256'],
+            module_source_sha256='c'*64, binary_source_sha256='d'*64, first=0, count=64, top_k=100,
+            options=diagnostic['options'], **{n: fixture['events'][0][n] for n in ('startup', 'startup_directory', 'directory_admission')})
+        zero = dict(failed_gets=0, requested_bytes=0, submitted_gets=0, verified_bytes=0)
+        trace = dict(accounting=dict(directory=zero, source=zero, refinement=zero,
+            whole_cell=dict(failed_gets=0, requested_bytes=1104, submitted_gets=24, verified_bytes=1104)),
+            **{n: dict(wall_ns=2, process_cpu_ns=1, rss_after_bytes=123, process_high_water_bytes=456)
+               for n in ('routing', 'local_nomination', 'final_ranking')})
+        events = [identity]+[dict(phase='query_frozen', ordinal=i, truth_opened=False, trace=trace) for i in range(64)]
+        prefix = b''.join(local.canonical(e) for e in events)
+        events.append(dict(phase='all_queries_frozen', count=64, first=0, trace_prefix_bytes=len(prefix),
+                           trace_prefix_sha256=local.sha(prefix), truth_opened=False))
+        loss = dict(truth_count=100, primary_hits=70, boundary_hits=75, nomination_hits=70, returned_hits=64,
+                    router_misses=30, boundary_recovered=5, boundary_misses=25, local_nomination_misses=5, final_ranking_misses=6)
+        events += [dict(phase='loss_attribution', ordinal=i, truth_sha256=truth['sha256'], loss=loss) for i in range(64)]
+        events.append(dict(phase='terminal', status='DIAGNOSTIC', complete=True, queries=64, truth_opened=True,
+                           scientific_qualification=False, quality_or_performance_claim=False))
+        target = folder/'diagnostic.jsonl'; copy_bytes(target, b''.join(local.canonical(e) for e in events))
+        real_hashes = request_hashes
+        with patch.object(sys.modules[__name__], 'request_hashes', side_effect=lambda p, e: real_hashes(p, e, dimensions=2)):
+            result = pair_reduce(target, diagnostic, cfg, fixture['native'], PAIR_RESOURCES, fixture['evidence'])
+            exact(result['status'], 'FAIL', 'synthetic scientific FAIL still valid v3 completion')
+            exact(result['per_query_stage_times'][0]['stage_sum_wall_ns'], 6, 'explicit stage sum')
+            exact(result['complete_query_latency'], 'complete-query-unmeasured', 'no complete-query latency inference')
+            require(not any('p90' in n for n in result), 'stage sum never labelled complete-query p90')
+            for suffix, mutate in (
+                ('early-truth', lambda v: v.insert(1, v[66])),
+                ('forged-prefix', lambda v: v[65].update(trace_prefix_sha256='0'*64)),
+                ('swapped-source', lambda v: v[0].update(module_source_sha256='0'*64))):
+                bad = copy.deepcopy(events); mutate(bad)
+                path = folder/(suffix+'.jsonl'); copy_bytes(path, b''.join(local.canonical(e) for e in bad))
+                try:
+                    pair_reduce(path, diagnostic, cfg, fixture['native'], PAIR_RESOURCES, fixture['evidence'])
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError('invalid diagnostic admitted: '+suffix)
+
+def pair_self_check():
+    """Tiny synthetic bytes; native/cloud/qualification boundary remains mocked."""
+    from contextlib import ExitStack
+    from scripts import launch_hierarchical_cells_100k_spot as launcher
+    pair_gate_self_check(); pair_diagnostic_self_check()
+    with tempfile.TemporaryDirectory(prefix='partitioner-pair-mock-') as tmp:
+        root = Path(tmp); fixtures = {d: synthetic_dataset(root/d) for d in DATASETS}
+        original_root = root/'original'; module = sys.modules[__name__]
+        original_body, candidate_body = b'mock-original-qualified', b'mock-prospective-candidate'
+        def transport(path, key, body):
+            return dict(path=str(path), key=key, bytes=len(body), sha256=local.sha(body))
+        native = {}
+        for role, content in (('original', original_body), ('partitioner', candidate_body)):
+            native[role] = dict(sources={n: dict(path=p, bytes=1, sha256=fixtures['relaion']['native']['sources'].get(n, {}).get('sha256', 'a'*64)) for n, p in local.SOURCE_FILES.items()},
+                source_archive=transport(original_root/'screen/scratch/native-source_archive' if role == 'original' else 'candidate-archive', role+'-archive', content),
+                gate_log=transport(original_root/'screen/scratch/native-gate_log' if role == 'original' else 'candidate-log', role+'-log', content),
+                binaries={n: transport(original_root/'screen/scratch'/('native-'+n) if role == 'original' else 'candidate-cells', role+'-'+n, content)
+                          for n in (('writer', 'cells') if role == 'original' else ('cells',))})
+        proof = copy.deepcopy(native['original'])
+        for n in ('source_archive', 'gate_log'):
+            proof[n].pop('key')
+        for p in proof['binaries'].values():
+            p.pop('key')
+        items = {}
+        for d, f in fixtures.items():
+            build = dict(f['evidence']['build'], cell_rows=512, sample_rows=256, max_depth=32)
+            manifest = local.read_json(local.identity(root/d/'manifest.json')); manifest['input'] = build
+            (root/d/'manifest.json').unlink()
+            root_pin = local.write_json(root/d/'manifest.json', manifest)
+            truth = copy_bytes(root/d/'truth64', bytes(25600))
+            diagnostic = dict(schema='borsuk-hierarchical-cells-diagnostic-v3', candidate_root=dict(root_pin,
+                path=str(original_root/'screen/measurement'/(d+'-cells')/'manifest.json')),
+                requests=f['evidence']['inputs']['requests'], truth=truth, first=0, count=64, top_k=100, truth_width=100,
+                options=dict(local.POLICY, max_query_payload_bytes=128 << 20),
+                max_resident_directory_payload_bytes=384 << 20, max_evaluator_payload_bytes=128 << 20, max_result_bytes=128 << 20)
+            writer_bytes = local.canonical(dict(schema='mock-original-writer'))
+            build_bytes = local.canonical(build)
+            items[d] = dict(f['evidence'], build=build, build_bytes=build_bytes, writer_bytes=writer_bytes,
+                writer=local.decode(writer_bytes), diagnostic=diagnostic,
+                recovery=dict(original_build_config=dict(bytes=len(build_bytes), sha256=local.sha(build_bytes)),
+                    original_writer_config=dict(bytes=len(writer_bytes), sha256=local.sha(writer_bytes)),
+                    output_cell_path=str(original_root/'screen/measurement'/(d+'-cells')), build_inputs={},
+                    expected_cell_root_sha256=root_pin['sha256']))
+        evidence = dict(proof=proof, items=items, sources=dict(items=[dict(name=d) for d in DATASETS]))
+        config = dict(resources=copy.deepcopy(PAIR_RESOURCES), phase_seconds=dict(writer=30, build=30, diagnose=30), wall_seconds=1800,
+                      roles={r: dict(native=native[r]) for r in PAIR_ROLES})
+        role_ids = {r: dict(source_sha256={}, source_archive_support_sha256={}) for r in PAIR_ROLES}
+        calls, fault = [], [None]
+        group = {'path':'/mock-native-group', 'memory.max':str(2 << 30), 'memory.peak':'1000',
+            'memory.swap.max':'0', 'memory.swap.peak':'0', 'memory.events':'oom 0\noom_kill 0\noom_group_kill 0',
+            'cpu.max':'200000 100000', 'pids.max':'512', 'cgroup.procs':'1', 'cpu_affinity':[0, 1]}
+        def simulated_stage(name, command, binary, cfg, out, resources, phase, deadline, stages, check):
+            calls.append(name)
+            role = 'partitioner' if '-partitioner-' in name else 'original'
+            expected_body = candidate_body if role == 'partitioner' else original_body
+            exact(body_pin(binary), dict(bytes=len(expected_body), sha256=local.sha(expected_body)), 'mock actual binary role')
+            exact(resources['memory_max_bytes'], 2 << 30, 'matched diagnostic memory'); exact(resources['cpu_affinity'], [0, 1], 'matched diagnostic CPU')
+            log = copy_bytes(out/(name+'.log'), b'mock-native-output\n')
+            unit_log = copy_bytes(out/(name+'-unit.log'), b'mock-supervisor-output\n')
+            stage = dict(command=command, binary=binary, config=cfg, exit_status=0, cleanup_complete=True,
+                resource_gate_passed=True, cgroup_before=group, cgroup_after=group, wall_seconds=.001, log=log)
+            inner = local.write_json(out/(name+'-stage-receipt.json'), dict(status='CLOSED', complete=True, stages=[stage], cgroup=group))
+            stages.append(dict(name=name, command=command, exit_status=0, closed=True, cgroup_drained=True,
+                unit_drained=not (fault[0] == 'drain' and name.endswith('-diagnose')), resource_gate_passed=True,
+                unit_closeout=dict(MainPID='0', ActiveState='inactive'), native_receipt=inner, native_log=log, log=unit_log))
+            if name == 'cohere-partitioner-build' and fault[0] == 'build2':
+                raise ValueError('mock candidate build2 failure')
+            if name.endswith('-build'):
+                d = name.split('-')[0]; target = Path(command[-1]); target.mkdir()
+                for n in ('manifest.json', 'directories.bin', 'cells.bin'):
+                    shutil.copyfile(root/d/n, target/n)
+                if role == 'partitioner':
+                    manifest = local.read_json(local.identity(target/'manifest.json'))
+                    manifest.update(schema='borsuk-hierarchical-cells-resident-v4', input=local.read_json(cfg))
+                    manifest['build']['semantic_repairs'] = 1; (target/'manifest.json').unlink()
+                    local.write_json(target/'manifest.json', manifest)
+            if name.endswith('-diagnose'):
+                seal = local.read_json(local.identity(out.parent/'paired-seal.json'))
+                exact(len(seal['cells']), 4, 'no diagnose before four sealed configs/layouts')
+                exact(calls[:6], list(PAIR_STAGES[:6]), 'all two writers/four builds before first diagnose')
+                for value in seal['cells'].values():
+                    for n in ('root', 'directories', 'cells', 'config'):
+                        require((out.parent/value[n]['path']).exists(), 'all seals retained before diagnose')
+                copy_bytes(command[-1], b'mock-native-diagnostic-boundary\n')
+        real_layout, real_hashes = layout, request_hashes
+        def simulated_reduce(path, diagnostic, pin, proof, limits, item):
+            _, aggregate = real_hashes(diagnostic['requests'], item['inputs']['requests'], dimensions=2)
+            exact(aggregate, item['query_f32_sha256'], 'mock changed query bit rejected')
+            return dict(status='FAIL' if proof['binaries']['cells']['sha256'] == local.sha(original_body) else 'PASS',
+                        latency_measurement='stage-sum only', complete_query_latency='complete-query-unmeasured')
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(module, 'ORIGINAL_ROOT', original_root))
+            stack.enter_context(patch.object(module, 'qualify_role', side_effect=lambda r, *_: role_ids[r]))
+            stack.enter_context(patch.object(module, 'original_evidence', return_value=evidence))
+            stack.enter_context(patch.object(module, 'archive_sources'))
+            stack.enter_context(patch.object(module, 'pair_restore_panel'))
+            stack.enter_context(patch.object(module, 'native_stage', side_effect=simulated_stage))
+            stack.enter_context(patch.object(module, 'layout', side_effect=lambda p, b, **kw: real_layout(p, b, 2, 48, **kw)))
+            stack.enter_context(patch.object(module, 'request_hashes', side_effect=lambda p, e: real_hashes(p, e, dimensions=2)))
+            stack.enter_context(patch.object(module, 'pair_reduce', side_effect=simulated_reduce))
+            stack.enter_context(patch.object(publication, 'sdk_client', side_effect=AssertionError('no live cloud')))
+            stack.enter_context(patch.object(local, 'run_stage', side_effect=AssertionError('no live native')))
+            def run(name):
+                out = root/name; out.mkdir(); (out/'scratch').mkdir(); cfg = local.write_json(out/'config.json', config)
+                calls.clear()
+                def download(pin, path):
+                    copy_bytes(path, original_body if pin['key'].startswith('original') else candidate_body)
+                return out, pair_execute(config, cfg, root, out, download, lambda: None, time.monotonic()+90)
+            fault[0] = 'build2'
+            try:
+                run('failed-build2')
+            except ValueError as error:
+                require('build2' in str(error), 'expected build2 failure')
+            else:
+                raise AssertionError('build2 failure accepted')
+            failed = root/'failed-build2'
+            require(not any(n.endswith('-diagnose') for n in calls), 'no diagnose on partial layouts')
+            require(not (failed/'paired-seal.json').exists() and not original_root.exists(), 'partial pair invalid/clean')
+            exact(len(list((failed/'retained').glob('*/*/cells.bin'))), 3, 'three completed layouts survive fourth build failure')
+            fault[0] = None; out, receipt = run('complete')
+            exact(calls, list(PAIR_STAGES), 'exact ten native calls')
+            exact(receipt['status'], 'DIAGNOSTIC', 'control scientific FAIL not INVALID')
+            exact(receipt['candidate_status'], 'PASS', 'candidate arm distinct'); exact(set(receipt['control_status'].values()), {'FAIL'}, 'control separately FAIL')
+            seal = pair_verify_seal(out, repo=root)
+            host = dict(group, path='/mock-host', cpu_max='200000 100000', tasks_max='512')
+            closure = dict(cgroup=dict(before=host, after=host, host_before=host, host_after=host, closed=True),
+                resources=dict(scratch_bytes=1000, wall_seconds=1.0, deadline_seconds=10.0, monitor_errors=[]),
+                cleanup=dict(scratch_removed=True, monitor_stopped=True, sdk_client_closed=True, original_root_removed=True,
+                    retained_layouts_preserved=True, native_processes_concurrent_max=1))
+            closure_pins = {n: local.write_json(out/('worker-cgroup.json' if n == 'cgroup' else n+'.json'), v) for n, v in closure.items()}
+            def final_receipt(value):
+                native_path = out/'native-execution-receipt.json'; native_path.unlink()
+                pin = local.write_json(native_path, value)
+                final = dict(value, native_execution=pin, worker_closure=closure_pins)
+                path = out/'execution-receipt.json'
+                if path.exists():
+                    path.unlink()
+                local.write_json(path, final)
+            final_receipt(receipt); pair_verify_execution(out, config, seal, evidence)
+            forged = copy.deepcopy(receipt); forged['stages'][-1]['cgroup_drained'] = False
+            final_receipt(forged)
+            try:
+                pair_verify_execution(out, config, seal, evidence)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('independent replay accepted forged drain claims')
+            final_receipt(receipt)
+            # One query bit mutation with a newly valid body SHA still fails the
+            # historical consumed-panel pin (not merely a transport checksum).
+            cell = local.read_json(local.identity(out/'paired-seal.json'))['cells']['relaion-partitioner']
+            request = out/cell['requests']['path']; changed = request.read_bytes().replace(b'1.0', b'2.0', 1)
+            request.write_bytes(changed)
+            try:
+                real_hashes(local.identity(request), items['relaion']['inputs']['requests'], dimensions=2)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('changed query bit accepted')
+            # Swap role body at the native transport boundary.
+            old = copy.deepcopy(config['roles']['partitioner']['native']['binaries']['cells'])
+            config['roles']['partitioner']['native']['binaries']['cells'] = copy.deepcopy(config['roles']['original']['native']['binaries']['cells'])
+            try:
+                run('swapped')
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('swapped binary accepted')
+            config['roles']['partitioner']['native']['binaries']['cells'] = old
+            fault[0] = 'drain'
+            try:
+                run('forged-drain')
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('forged drain accepted')
+            require(all((root/'forged-drain/retained'/d/r/'cells.bin').exists() for d in DATASETS for r in PAIR_ROLES), 'all layouts survive diagnose/drain failure')
+    # Shared owned-unit and worker closure negatives use mocked process/kernel snapshots.
+    owned_failure_self_check(); worker_closure_self_check()
+    print('PASS source-only pair: actual synthetic18 vs mandatory16; missing pass/proof/footer; four-cell seal order; swapped binaries/query-bit/build2/drain negatives; partial layouts retained. Native/AWS/truth evaluation mocked.')
+
+
 if __name__ == '__main__':
     try:
         args = sys.argv[1:]
-        if args == ['--self-check']:
+        if args[:1] == ['--partitioner-pair']:
+            from scripts import launch_hierarchical_cells_100k_spot as launcher
+            launcher.pair_cli(args[1:])
+        elif args == ['--self-check']:
             self_check(); pipeline_self_check(); owned_failure_self_check(); worker_closure_self_check()
         elif len(args) == 2 and args[0] == '--self-check-qualification':
             self_check_qualification(args[1])

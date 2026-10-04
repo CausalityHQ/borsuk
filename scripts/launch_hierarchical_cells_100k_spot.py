@@ -4,6 +4,7 @@
 CLI: aNNNN | --canary aNNNN | --stage[-canary] REPO NEW_OUTPUT WORKER_ROOT
      --replay[-canary] OUTPUT | --self-check.
 Explicit --global-leaf-probe prefix selects the separate nomination campaign.
+Explicit --partitioner-pair selects the fixed original401/candidate402 test.
 Missing/pending authority closes before cloud. The native proof is supplied by
 the root, never inferred from a binary name or a synthetic test transcript.
 Quality FAIL is a completed diagnostic; identity/execution/resource errors are
@@ -1607,7 +1608,8 @@ def probe_canary(config, evidence, client, calls, scratch, check, deadline):
     require('IfNoneMatch' in model.operation_model('PutObject').input_shape.members, 'probe conditional SDK model')
     for operation in ('HeadObject', 'GetObject'):
         require({'Bucket', 'Key'} <= set(model.operation_model(operation).input_shape.members), 'probe SDK read model')
-    cli = subprocess.run([sys.executable, '-m', MODULE, '--global-leaf-probe'], capture_output=True, text=True,
+    selector = '--partitioner-pair' if config.get('schema') == PAIR_FIXED['schema'] else '--global-leaf-probe'
+    cli = subprocess.run([sys.executable, '-m', MODULE, selector], capture_output=True, text=True,
         timeout=min(30, max(.001, deadline-time.monotonic())), env=dict(os.environ, OPENBLAS_NUM_THREADS='1', OMP_NUM_THREADS='1'))
     require(cli.returncode == 2 and 'INVALID:' in cli.stderr and 'CLI:' in cli.stderr and not cli.stdout, 'probe actual CLI exit2')
     for p in probe_objects(config, evidence):
@@ -1699,8 +1701,9 @@ def probe_stage(repo, output, worker_root, *, canary=False):
             for call, pin in zip(calls, expected):
                 exact(call['operation'], 'get_object', 'probe staged GET'); exact(call['key'], pin['key'], 'probe staged key')
                 exact(call['verified_bytes'], pin['bytes'], 'probe staged bytes'); exact(call['verified_sha256'], pin['sha256'], 'probe staged SHA')
+            paired = config.get('schema') == PAIR_FIXED['schema']
             local.write_json(out/'staging.json', dict(schema='borsuk-global-leaf-probe-staging-receipt-v1',
-                sdk_calls=calls, truth_body_reads=0, old_panel_producer_called=False, diagnose_called=False))
+                sdk_calls=calls, truth_body_reads=2 if paired else 0, old_panel_producer_called=False, diagnose_called=paired))
     except BaseException as error:
         failure = error; result.update(status='INVALID', complete=False, error=type(error).__name__+': '+str(error))
     finally:
@@ -1865,7 +1868,8 @@ def probe_replay(out, *, canary=False, repo=None):
                 exact(call[n], expected, 'probe staged authenticated GET')
         staging = local.decode((out/'screen/staging.json').read_bytes())
         exact(staging['sdk_calls'], calls, 'probe staging SDK closure')
-        for n, expected in dict(truth_body_reads=0, old_panel_producer_called=False, diagnose_called=False).items():
+        paired = config.get('schema') == PAIR_FIXED['schema']
+        for n, expected in dict(truth_body_reads=2 if paired else 0, old_panel_producer_called=False, diagnose_called=paired).items():
             exact(staging[n], expected, 'probe bypass old truth/diagnose path')
     return dict(executed=True, truth_opened=False, physical_s3_measured=False, vendor_win=False, scientific_qualification=False)
 
@@ -1883,7 +1887,8 @@ def probe_require_canary(base, proof):
     pointer = local.read_json(local.identity(Path(base)/PROBE_ROOT/'canary-admission.json'))
     fields(pointer, 'schema attempt config_sha256 code_identity_sha256 refs_identity_sha256 native_identity_sha256 '
            'source_archive_paths_sha256 terminal_sha256', 'probe canary pointer')
-    exact(pointer['schema'], 'borsuk-global-leaf-probe-canary-admission-v1', 'probe canary admission')
+    expected_schema = 'borsuk-capacity-partitioner-canary-admission-v1' if PROBE_SCHEMA == PAIR_SCHEMA else 'borsuk-global-leaf-probe-canary-admission-v1'
+    exact(pointer['schema'], expected_schema, 'probe canary admission')
     require(re.fullmatch(r'a[0-9]{4}', pointer['attempt']), 'probe canary attempt')
     out = Path(base)/PROBE_ROOT/'canary'/pointer['attempt']; terminal = local.decode((out/'aws-terminal.json').read_bytes())
     exact(local.identity(out/'aws-terminal.json')['sha256'], pointer['terminal_sha256'], 'probe admitted canary terminal')
@@ -2045,9 +2050,259 @@ def probe_self_check(metadata_repo=None):
     print('PASS probe metadata/actual botocore model+CLI/cleanup; mocked SDK transport and NumPy/Arrow imports; shared owned lifecycle negatives; shell syntax/fsync/terminal-last/caps. No network/native/corpus/GT.')
 
 
+PAIR_ROOT = probe.PARTITIONER_ROOT
+PAIR_CONFIG = PAIR_ROOT/'config.json'
+PAIR_SCHEMA = 'borsuk-capacity-partitioner-paired100k-spot-v1'
+PAIR_CANARY_SCHEMA = 'borsuk-capacity-partitioner-infrastructure-canary-v1'
+PAIR_PREFIX = 'research/hierarchical-cells/20261004/capacity-partitioner-paired100k-'
+PAIR_CODE = tuple(sorted((*PROBE_CODE, 'scripts/launch_native_workspace_execution_spot.py',
+                         'scripts/check_native_workspace_execution.py')))
+PAIR_FIXED = {n: PROBE_FIXED[n] for n in PROBE_FIXED if n not in
+    ('schema', 'source_object_count', 'native_object_count', 'no_truth_body_access', 'reduction_enabled')}
+PAIR_FIXED.update(schema='borsuk-capacity-partitioner-paired100k-staging-v1', no_truth_body_access=False,
+    reduction_enabled=True, policy=local.POLICY, mean_recall_minimum=.98, p05_hits_minimum=95,
+    complete_query_latency='complete-query-unmeasured')
+PAIR_EVIDENCE = ('method', 'candidate_manifest', 'original_authority', 'retained_seal',
+                 'retained_terminal', 'retained_launch', 'retained_closeout')
+PAIR_OUTPUTS = ('config.json', 'source-qualification.json', 'tool-versions.json', 'staging.json',
+    'paired-seal.json', 'native-execution-receipt.json', 'execution-receipt.json', 'summary.json',
+    'resources.json', 'worker-cgroup.json', 'cleanup.json',
+    *(f'measurement/{n}{suffix}' for n in probe.PAIR_STAGES for suffix in
+        ('-stage.json', '-stage-receipt.json', '-closure.json', '.log', '-unit.log')),
+    *(f'measurement/{d}-partitioner-build.json' for d in probe.DATASETS),
+    *(f'measurement/{d}-{r}-{n}' for r in probe.PAIR_ROLES for d in probe.DATASETS for n in ('diagnose.json', 'diagnostic.jsonl')),
+    *(f'retained/{d}/{r}/{n}' for r in probe.PAIR_ROLES for d in probe.DATASETS for n in
+        ('manifest.json', 'directories.bin', 'cells.bin', 'requests64', 'truth64', 'build.json', 'original-writer.json')))
+PAIR_ARTIFACTS = ('test-resources.txt', 'run-closed.log', *('screen/'+n for n in PAIR_OUTPUTS))
+
+
+def pair_objects(config, evidence):
+    pins = []
+    for r in probe.PAIR_ROLES:
+        native = config['roles'][r]['native']
+        pins.extend([native['source_archive'], native['gate_log'], *native['binaries'].values()])
+    pins.extend(i['artifacts'][n] for i in evidence['sources']['items']
+                for n in ('source', 'order.u64', 'sq8.bin', 'requests', 'truth'))
+    pins = [{k: p[k] for k in ('key', 'bytes', 'sha256')} for p in pins]
+    require(len({p['key'] for p in pins}) == len(pins), 'distinct exact pair object roster')
+    for pin in pins:
+        publication.object_identity(pin)
+    return pins
+
+
+def pair_scratch_roster(config, evidence, paths, repo):
+    native = [p for r in probe.PAIR_ROLES for p in
+        (config['roles'][r]['native']['source_archive'], config['roles'][r]['native']['gate_log'],
+         *config['roles'][r]['native']['binaries'].values())]
+    admission_path = config['admission']['receipt']['path']
+    bounded_refs = {str(PAIR_CONFIG): 512 << 10}
+    roster = [dict(name='bootstrap-archives-and-unpacked-controller', max_bytes=2*sum(
+                  bounded_refs[p] if p in bounded_refs else local.identity(repo/p)['bytes'] for p in paths if p != admission_path)),
+              dict(name='root-real-admission-evidence-reserve', max_bytes=2*(8 << 20)),
+              dict(name='qualified-native-archives-logs-binaries', max_bytes=sum(p['bytes'] for p in native))]
+    for source in evidence['sources']['items']:
+        d = source['name']; item = evidence['items'][d]
+        roster.extend(dict(name=d+'-input-'+n, max_bytes=source['artifacts'][n]['bytes'])
+                      for n in ('source', 'order.u64', 'sq8.bin', 'requests', 'truth'))
+        roster.append(dict(name=d+'-decoded-raw', max_bytes=100000*768*4 if d == 'relaion' else 0))
+        roster.append(dict(name=d+'-consumed-panels', max_bytes=item['inputs']['requests']['bytes']+25600))
+        unique = {p['path']: p['bytes'] for p in item['recovery']['build_inputs'].values()}
+        roster.append(dict(name=d+'-generation', max_bytes=sum(unique.values())))
+        for r in probe.PAIR_ROLES:
+            # Native max_output_bytes includes staging. Retained copies coexist.
+            roster.append(dict(name=d+'-'+r+'-layout', max_bytes=256 << 20))
+            roster.append(dict(name=d+'-'+r+'-retained-layout-panels-configs', max_bytes=(256 << 20)+item['inputs']['requests']['bytes']+25600+(192 << 10)))
+    for n in probe.PAIR_STAGES:
+        roster.append(dict(name=n+'-logs-spec-and-receipts', max_bytes=(32 << 20)+(2 << 20)))
+    roster += [dict(name='four-diagnostic-outputs', max_bytes=4*(128 << 20)),
+               dict(name='real-admission-disposable-reserve', max_bytes=128 << 20),
+               dict(name='cleanup-and-runtime-reserve', max_bytes=config['scratch_reserve_bytes'])]
+    return roster
+
+
+def pair_qualify(base=Path('.'), *, canary=False):
+    repo = Path(base).resolve(); pin = local.identity(repo/PAIR_CONFIG); config = local.read_json(pin, 512 << 10)
+    fields(config, ' '.join(PAIR_FIXED)+' authority_pending run_id code_sha256 evidence pair_evidence roles resources '
+           'phase_seconds object_roster scratch_roster scratch_admission_bytes scratch_reserve_bytes admission', 'fixed pair config')
+    exact(config['authority_pending'], False, 'root pair freeze pending')
+    require(re.fullmatch(r'a[0-9]{4}', config['run_id']), 'immutable pair runID')
+    for n, expected in PAIR_FIXED.items():
+        exact(config[n], expected, 'fixed prospective policy: '+n)
+    probe.pair_limits(config); fields(config['roles'], 'original partitioner', 'two binary layout authorities')
+    exact(set(config['code_sha256']), set(PAIR_CODE), 'pair existing controller/qualification-validator roster')
+    for n, digest in config['code_sha256'].items():
+        exact(local.identity(repo_path(repo, n))['sha256'], digest, 'pair code drift')
+    fields(config['pair_evidence'], ' '.join(PAIR_EVIDENCE), 'prospective/historical evidence roster')
+    values = {n: probe.ref(repo, p, 128 << 10 if n == 'candidate_manifest' else 8 << 20)
+              for n, p in config['pair_evidence'].items()}
+    exact(config['pair_evidence']['method']['path'], str(PAIR_ROOT/'prospective-method.json'), 'prospective method path')
+    exact(config['pair_evidence']['candidate_manifest']['path'], str(probe.PARTITIONER_MANIFEST), 'candidate402 source path')
+    method = values['method']
+    for n, expected in dict(schema='borsuk-capacity-constrained-partitioner-paired100k-method-v1',
+            rows=100000, dimensions=768, metric='cosine', k=100, queries_per_dataset=64,
+            datasets=list(probe.DATASETS), constants=dict(cell_rows=512, sample_rows=256, max_depth=32,
+            primary_beam=8, boundary_beam=24, blocks_per_cell=4, fetch_policy='whole_cell',
+            max_selected_cells=32, max_total_cell_gets=32, max_cell_bytes=16 << 20),
+            frozen_arm_quality=dict(mean_recall_at_100=.98, p05_hits_out_of_100=95)).items():
+        exact(method[n], expected, 'prospective frozen method')
+    exact(config['pair_evidence']['original_authority']['path'], str(ROOT/'qualified-original-binary-authority.json'), 'historical control authority path')
+    exact(values['original_authority'], config['roles']['original'], 'historical original401 authority unchanged')
+    roles = {r: probe.qualify_role(r, config['roles'][r], repo) for r in probe.PAIR_ROLES}
+    evidence = probe.original_evidence(repo, config)
+    retained_root = ROOT/'global-leaf-probe/a0002'
+    for n, filename in dict(retained_seal='screen/paired-seal.json', retained_terminal='aws-terminal.json',
+            retained_launch='aws-launch.json', retained_closeout='aws-closeout.json').items():
+        exact(config['pair_evidence'][n]['path'], str(retained_root/filename), 'retained a0002 authority path')
+    terminal, launch, close = (values[n] for n in ('retained_terminal', 'retained_launch', 'retained_closeout'))
+    exact(close['state'], 'terminated', 'retained host closed'); exact(close['nodes'], launch['nodes'], 'retained SAME IDs')
+    require(terminal['instance_id'] == launch['instance_id'] in {n['instance_id'] for n in close['nodes'].values()}, 'retained owned host')
+    exact(terminal['phase'], 'complete', 'retained completed terminal'); exact(terminal['original_exit_code'], 0, 'retained actual exit0')
+    exact(terminal['exit_code'], 0, 'retained supervisor exit0')
+    seal = values['retained_seal']; exact(seal['schema'], probe.SEAL_SCHEMA, 'retained historical seal')
+    exact(seal['complete'], True, 'retained seal complete'); exact(seal['truth_opened'], False, 'retained noGT')
+    exact(body_pin(config['pair_evidence']['retained_seal']), terminal['artifacts']['screen/paired-seal.json'], 'terminal-bound retained seal')
+    exact(seal['roles']['original'], roles['original'], 'retained qualified original native authority')
+    for d in probe.DATASETS:
+        exact(seal['datasets'][d]['root']['sha256'], evidence['items'][d]['recovery']['expected_cell_root_sha256'], 'retained historical control root')
+        for n, filename in dict(root='manifest.json', directories='directories.bin', cells='cells.bin').items():
+            exact(body_pin(seal['datasets'][d][n]), terminal['artifacts'][f'screen/retained/{d}/{filename}'], 'terminal-bound retained layout')
+    objects = pair_objects(config, evidence); exact(config['object_roster'], objects, 'frozen exact transport roster')
+    paths = {str(PAIR_CONFIG), *PAIR_CODE, *(p['path'] for p in config['evidence'].values()),
+             *(p['path'] for p in config['pair_evidence'].values())}
+    for r in probe.PAIR_ROLES:
+        paths.update(p['path'] for p in config['roles'][r]['refs'].values())
+        qpath = roles[r]['source_qualification']['path']; paths.add(qpath if (repo/qpath).exists() else qpath+'.gz')
+        paths.add(config['roles'][r]['native']['gate_log']['path'])
+    paths.update(str(probe.OLD/n) for n in evidence['values']['original_terminal']['artifacts'] if n.startswith('screen/'))
+    old_config = local.read_json(local.identity(repo/probe.OLD/'screen/config.json'))
+    paths.update(p['path'] for p in old_config['refs'].values())
+    # A pending receipt never enters the metadata-only canary archive. Completed
+    # receipts are packaged for worker-side authentication; their reserved size
+    # above is fixed so their own hash/length cannot create a config cycle.
+    if config['admission']['authority_pending'] is False:
+        paths.add(config['admission']['receipt']['path'])
+    paths = sorted(paths)
+    for p in paths:
+        publication.relative(p); repo_path(repo, p)
+    local.integer(config['scratch_reserve_bytes'], 1, SCRATCH, 'whole pair scratch reserve')
+    roster = pair_scratch_roster(config, evidence, paths, repo)
+    exact(config['scratch_roster'], roster, 'static exact whole-scratch roster')
+    require(sum(p['max_bytes'] for p in roster) <= config['scratch_admission_bytes'] <= SCRATCH, 'all coexisting scratch fits16GiB')
+    proof = dict(config_path=str(PAIR_CONFIG), config_sha256=pin['sha256'],
+        campaign_schema=PAIR_CANARY_SCHEMA if canary else PAIR_SCHEMA,
+        code_identity_sha256=ids.sha(ids.encoded(config['code_sha256'])),
+        refs_identity_sha256=ids.sha(ids.encoded(dict(evidence=config['evidence'], pair_evidence=config['pair_evidence'],
+            roles={r: config['roles'][r]['refs'] for r in probe.PAIR_ROLES}))),
+        native_identity_sha256=ids.sha(ids.encoded(roles)), source_file_count=402,
+        source_archive_paths=paths, source_archive_paths_sha256=ids.sha(ids.encoded(paths)),
+        artifact_roster_sha256=ids.sha(ids.encoded(PROBE_CANARY_ARTIFACTS if canary else PAIR_ARTIFACTS)),
+        awscli_version=AWSCLI_VERSION, awscli_sha256=AWSCLI_SHA256)
+    pair_require_admission(config, proof, repo, canary=canary)
+    return config, proof, evidence
+
+
+def pair_require_admission(config, proof, repo, *, canary=False):
+    admission = config['admission']
+    fields(admission, 'schema authority_pending config_sha256 code_identity_sha256 refs_identity_sha256 '
+           'native_identity_sha256 receipt', 'root real four-cell admission')
+    exact(admission['schema'], 'borsuk-capacity-partitioner-real-admission-v1', 'pair admission schema')
+    if canary and admission['authority_pending'] is True:
+        return  # No ANN/truth/native calls in infrastructure qualification.
+    exact(admission['authority_pending'], False, 'real native four-cell admission pending')
+    exact(admission['config_sha256'], local.sha(local.canonical({k: v for k, v in config.items() if k != 'admission'})), 'admitted prospective config')
+    for n in ('code_identity_sha256', 'refs_identity_sha256', 'native_identity_sha256'):
+        exact(admission[n], proof[n], 'real admission source/config')
+    receipt = read_ref(repo, admission['receipt'], 8 << 20)
+    for n, expected in dict(schema='borsuk-capacity-partitioner-real-admission-receipt-v1', status='ADMITTED', complete=True,
+            normal_native_exits=4, queries=4, corrupted_truth_exit_status=2, corrupted_truth_status='INVALID',
+            synced_freezes_verified=True, source_bound_real_diagnostic=True, resource_gate_passed=True,
+            cleanup_complete=True, native_units_drained=True, quality_promotion=False).items():
+        exact(receipt[n], expected, 'real diagnostic admission receipt')
+    for n in ('config_sha256', 'code_identity_sha256', 'refs_identity_sha256', 'native_identity_sha256'):
+        exact(receipt[n], admission[n], 'root admission receipt binding')
+    exact(receipt['cells'], [d+'-'+r for r in probe.PAIR_ROLES for d in probe.DATASETS], 'four role-specific real diagnostics')
+
+
+def pair_profile():
+    """Reuse existing lifecycle/canary, with a fixed prospective role roster."""
+    from contextlib import ExitStack
+    stack = ExitStack(); module = sys.modules[__name__]
+    old_user_data, old_replay = probe_user_data, probe_replay
+    def user_data_pair(*args, **kwargs):
+        if not kwargs.get('canary'):
+            cfg = local.read_json(local.identity(PAIR_CONFIG), 512 << 10)
+            exact(args[3], PAIR_PREFIX+cfg['run_id'], 'one immutable measured pair run')
+        return old_user_data(*args, **kwargs).replace('--global-leaf-probe', '--partitioner-pair').replace(
+            '/mnt/hierarchical-global-leaf-probe', '/mnt/hierarchical-capacity-partitioner-pair').replace('phase=paired-nomination', 'phase=partitioner-pair')
+    def replay_pair(out, *, canary=False, repo=None):
+        result = old_replay(out, canary=canary, repo=repo)
+        if not canary and result['executed']:
+            receipt = local.read_json(local.identity(Path(out)/'screen/summary.json'), 8 << 20)
+            result.update(truth_opened=True, status='DIAGNOSTIC', candidate_status=receipt['candidate_status'],
+                          control_status=receipt['control_status'], complete_query_latency='complete-query-unmeasured')
+        return result
+    helper = SimpleNamespace(**vars(probe))
+    helper.execute, helper.verify_pair, helper.verify_execution = probe.pair_execute, probe.pair_verify_seal, probe.pair_verify_execution
+    helper.ROLE_NAMES = probe.PAIR_ROLES
+    stack.enter_context(patch.multiple(module, PROBE_ROOT=PAIR_ROOT, PROBE_CONFIG=PAIR_CONFIG, PROBE_SCHEMA=PAIR_SCHEMA,
+        PROBE_CANARY_SCHEMA=PAIR_CANARY_SCHEMA, PROBE_PREFIX=PAIR_PREFIX, PROBE_CANARY_PREFIX=PAIR_PREFIX+'canary-',
+        PROBE_CODE=PAIR_CODE, PROBE_ARTIFACTS=PAIR_ARTIFACTS, probe=helper, probe_qualify=pair_qualify, probe_objects=pair_objects,
+        probe_user_data=user_data_pair, probe_replay=replay_pair))
+    return stack
+
+
+
+def pair_launcher_self_check():
+    """No credentials/native bodies: generated shell, CLI and namespace only."""
+    pending = dict(schema='borsuk-capacity-partitioner-real-admission-v1', authority_pending=True,
+        config_sha256=None, code_identity_sha256=None, refs_identity_sha256=None, native_identity_sha256=None,
+        receipt=dict(path='pending-real-admission.json', bytes=None, sha256=None))
+    with patch.object(sys.modules[__name__], 'read_ref', side_effect=AssertionError('pending canary read future admission')):
+        pair_require_admission(dict(admission=pending), {}, Path('.'), canary=True)
+    try:
+        pair_require_admission(dict(admission=pending), {}, Path('.'))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('science accepted pending real native admission')
+    with tempfile.TemporaryDirectory(prefix='pair-import-closure-') as tmp:
+        for name in PAIR_CODE:
+            path = Path(tmp)/name; path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(name, path)
+        subprocess.run([sys.executable, '-B', '-c',
+            'from scripts import run_hierarchical_global_leaf_probe as p; p.pair_gate_self_check()'],
+            cwd=tmp, timeout=10, check=True, env=dict(os.environ, PYTHONPATH=tmp))
+    with tempfile.TemporaryDirectory(prefix='pair-bootstrap-mock-') as tmp:
+        cfg_path = Path(tmp)/'config.json'; local.write_json(cfg_path, dict(run_id='a0001'))
+        proof = {n: '0'*64 for n in TERMINAL_IDENTITIES}
+        proof.update(config_path=str(cfg_path), source_file_count=402, campaign_schema=PAIR_SCHEMA,
+                     awscli_version=AWSCLI_VERSION, awscli_sha256=AWSCLI_SHA256)
+        with patch.object(sys.modules[__name__], 'PAIR_CONFIG', cfg_path), pair_profile():
+            for canary in (False, True):
+                body = probe_user_data('a'*40, 'b'*64, 'source/mock', PAIR_PREFIX+('canary-' if canary else '')+'a0001', proof, canary=canary)
+                require('--partitioner-pair --stage' in body and 'sync -f terminal.json' in body
+                        and 'MemorySwapMax=0' in body and '/mnt/hierarchical-capacity-partitioner-pair' in body,
+                        'shared terminal-last prospective shell/selector/resource boundary')
+                require('CPUQuota='+('100' if canary else '200')+'%' in body, 'pair/bootstrap CPU envelope')
+                exact(probe.ROLE_NAMES, ('original', 'partitioner'), 'scoped role roster')
+    cli = subprocess.run([sys.executable, '-B', '-m', MODULE, '--partitioner-pair'], capture_output=True, text=True, timeout=10)
+    require(cli.returncode == 2 and 'INVALID:' in cli.stderr and 'CLI:' in cli.stderr and not cli.stdout, 'pending pair CLI exits2 before any launch')
+    exact(probe.ROLE_NAMES, ('original', 'nomination'), 'historical namespace restored')
+    print('PASS source-only exact packaged import closure, prospective bootstrap shell syntax/terminal-last/limits, actual CLI exit2, scoped historical namespace restoration; no cloud/native bodies.')
+
+def pair_cli(args):
+    require(args, 'CLI: --partitioner-pair aNNNN | --canary aNNNN | --stage[-canary] REPO OUTPUT ROOT | --replay[-canary] OUTPUT | --self-check')
+    if args == ['--self-check']:
+        probe.pair_self_check(); pair_launcher_self_check(); return
+    with pair_profile():
+        probe_cli(args)
+
+
 if __name__ == '__main__':
     try:
-        if sys.argv[1:2] == ['--constrained-split-falsifier']:
+        if sys.argv[1:2] == ['--partitioner-pair']:
+            pair_cli(sys.argv[2:])
+        elif sys.argv[1:2] == ['--constrained-split-falsifier']:
             from scripts import run_constrained_split_falsifier as split
             split.cli(sys.argv[2:])
         elif sys.argv[1:2] == ['--global-leaf-probe']:
