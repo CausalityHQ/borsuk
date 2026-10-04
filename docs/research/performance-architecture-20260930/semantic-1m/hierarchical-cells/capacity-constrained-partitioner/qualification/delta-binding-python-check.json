@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-native-gate-delta-binding-check-v1",
+  "scope": "minimal test glue for exact upcoming Rust candidate, not native qualification",
+  "reason": "partitioner changes only allowed module/bin subset; avoid unrelated lib edit",
+  "source_sha256": "81ea32a98d90819da5ceb0fad5f8315c14c9da68726dc5674164027115d88cfc",
+  "checks": {
+    "nonempty_exact_hierarchical_subset": 0,
+    "empty_duplicate_unknown_wrong_order_wrong_type_rejection": 0,
+    "fixed_constrained_mode_subset_rejection": 0,
+    "existing_hierarchical_cli_self_check": 0
+  },
+  "resource_envelope": {
+    "memory_max_bytes": 268435456,
+    "swap_max_bytes": 0,
+    "cpu": 1
+  },
+  "mocked_aws_cargo": true,
+  "native_runs": 0,
+  "paid_jobs": 0
+}

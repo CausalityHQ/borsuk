@@ -472,6 +472,16 @@ def validate_hierarchical_archive(authority, inventory, manifest_path, base=None
     return {key: authority[key] for key in ARCHIVE_FIELDS}
 
 
+def validate_candidate_delta(paths):
+    """Bind the exact native subset for a subsequent hierarchical increment."""
+    assert type(paths) is list and paths and all(type(path) is str for path in paths), 'candidate native delta list'
+    if HIERARCHICAL_CELLS:
+        assert paths == sorted(set(paths)) and set(paths) <= set(NATIVE_DELTA), 'exact admitted hierarchical native subset'
+    else:
+        assert paths == list(NATIVE_DELTA), 'exact candidate native delta'
+    return paths
+
+
 def qualify(base=Path('.')):
     """Portable source/config/code qualification, without Git or completed assurance."""
     base = Path(base).resolve()
@@ -496,7 +506,7 @@ def qualify(base=Path('.')):
         assert re.fullmatch('[0-9a-f]{40}', config['controller_source_commit']), 'frozen controller commit'
         assert manifest['schema'] == ('borsuk-constrained-split-native-source-manifest-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-native-source-manifest-v1' if HIERARCHICAL_CELLS else 'borsuk-fixed48-native-source-manifest-v1' if FIXED48 else 'borsuk-bounded-publication-native-source-manifest-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
         assert manifest['candidate_qualification_pending'] is True, 'source authority is not completed assurance'
-        assert type(manifest['candidate_delta_paths']) is list and manifest['candidate_delta_paths'] == list(NATIVE_DELTA), 'exact candidate native delta'
+        validate_candidate_delta(manifest['candidate_delta_paths'])
         if STARTUP_WAVE8:
             assert manifest['native_source_commit'] == STARTUP_WAVE8_COMMIT, 'fixed startup candidate commit'
             assert manifest['source_identity_sha256'] == STARTUP_WAVE8_IDENTITY, 'fixed startup candidate identity'
@@ -526,7 +536,7 @@ def qualify(base=Path('.')):
             proof.update(actual_workspace_test_build=False)
     if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
         proof.update(controller_source_commit=config['controller_source_commit'],
-                     candidate_delta_paths=list(NATIVE_DELTA))
+                     candidate_delta_paths=manifest['candidate_delta_paths'])
     if CONSTRAINED_SPLIT:
         proof.update(mandatory_test_names_pending=False, mandatory_tests=config['mandatory_tests'],
                      control_native_source_commit=CONSTRAINED_SPLIT_CONTROL,
@@ -550,8 +560,8 @@ def preflight(base=Path('.')):
         assert subprocess.check_output(['git','diff','--no-renames','--name-only',controller,config_commit],
             cwd=base, text=True).splitlines() == [str(CONFIG)], 'config-only authority freeze'
         assert subprocess.check_output(['git','diff','--no-renames','--name-only',config_commit,'HEAD'],
-            cwd=base, text=True).splitlines() == list(NATIVE_DELTA), 'exact candidate source bundle'
-        for name in NATIVE_DELTA:
+            cwd=base, text=True).splitlines() == proof['candidate_delta_paths'], 'exact candidate source bundle'
+        for name in proof['candidate_delta_paths']:
             assert worker.sha(subprocess.check_output(['git','show',proof['native_source_commit']+':'+name], cwd=base)) == proof['source_sha256'][name], 'candidate commit blob: '+name
         if CONSTRAINED_SPLIT:
             assert subprocess.check_output(['git', 'diff', '--no-renames', '--name-only', CONSTRAINED_SPLIT_CONTROL,
