@@ -1,0 +1,37 @@
+{
+  "actual_asset_bodies_opened": false,
+  "authority_refs_authenticated": 5,
+  "caps": {
+    "cpu_percent": 100,
+    "memory_bytes": 268435456,
+    "runtime_seconds": 60,
+    "swap_bytes": 0,
+    "tasks": 512
+  },
+  "closure": {
+    "ActiveState": "inactive",
+    "ControlGroup": "",
+    "MainPID": 0
+  },
+  "config_sha256": "a9f759102d139bddaf3a0a62cb409d215d4b8af7aaaf1225641018d38ba09aa8",
+  "cpu_seconds": 0.853,
+  "datasets": [
+    "ReLAION",
+    "CoHere"
+  ],
+  "exit_status": 0,
+  "infrastructure_staging_passed": false,
+  "invocation_id": "6be5ebceb1b4460ebd3020731fe8a31b",
+  "limits": "Metadata/source admission only; remote asset/SDK/staging and scientific coverage remain pending.",
+  "native_execution": false,
+  "query_or_ground_truth_read": false,
+  "reported_memory_peak": "50.8M",
+  "retained_dataset_descriptors": 10,
+  "schema": "borsuk-source-witness-production-metadata-admission-v1",
+  "source_file_count": 402,
+  "source_identity_sha256": "2e8145e3639b3c4bf93f363dca110ff16f374bee4057e8426738fc02dc51941f",
+  "swap_peak_bytes": 0,
+  "unit": "borsuk-source-witness-production-metadata-check-20261004.service",
+  "validation_wall_seconds": 22.96451974194497,
+  "wall_seconds": 23.149
+}
