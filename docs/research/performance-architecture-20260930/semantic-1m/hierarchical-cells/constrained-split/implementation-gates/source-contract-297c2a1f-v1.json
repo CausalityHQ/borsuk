@@ -1,6 +1,6 @@
 {
-  "schema": "borsuk-constrained-split-source-contract-v2",
-  "status": "UNVERIFIED_SOURCE_ONLY_REPAIR",
+  "schema": "borsuk-constrained-split-source-contract-v1",
+  "status": "UNVERIFIED_SOURCE_ONLY",
   "base_revision": "8ec64936323aca63d6863351623eebd61c085187",
   "api": {
     "module": "hierarchical_semantic_cells::split_balance_diagnostic",
@@ -10,12 +10,10 @@
       "CONFIG_SCHEMA",
       "REPORT_SCHEMA",
       "check(&Config) -> Result<serde_json::Value>",
-      "execute(&Path, &str, &Path) -> Result<String>",
-      "SupervisorReceipt",
-      "admit_pass(&[u8], &str, &SupervisorReceipt) -> Result<()>"
+      "execute(&Path, &str, &Path) -> Result<String>"
     ],
     "cli": "check_hierarchical_split_balance CONFIG SHA256 NEW_OUTPUT",
-    "config_schema": "borsuk-constrained-split-config-v2",
+    "config_schema": "borsuk-constrained-split-config-v1",
     "dataset_keys": [
       "cohere",
       "relaion"
@@ -27,29 +25,16 @@
       "canonical",
       "order"
     ],
-    "hash_order_encoding": "raw32 root digest || LE u64 directory offset || optional LE u64 source ordinal",
-    "report_schema": "borsuk-constrained-split-diagnostic-v2",
-    "supervisor_receipt_fields": [
-      "run_id",
-      "config_sha256",
-      "report_sha256",
-      "process_exit_code",
-      "resources_closed"
-    ],
-    "production_geometry": {
-      "rows": 100000,
-      "dimensions": 768,
-      "public_override": false
-    }
+    "hash_order_encoding": "raw32 root digest || LE u64 directory offset || optional LE u64 source ordinal"
   },
   "native_delta_files": {
     "crates/borsuk/src/hierarchical_semantic_cells.rs": {
-      "sha256": "42037cbbf3739d8b1817ce717d6aa71f33e9e373bbd73b03d40f0c2d3f0f8b34",
-      "bytes": 219120
+      "sha256": "7793d7da5ab44e5c20f73723ad4e2dc02e6d9a253f891568d9a7b76253710a6e",
+      "bytes": 193648
     },
     "crates/borsuk/src/bin/check_hierarchical_split_balance.rs": {
-      "sha256": "9ac017f570260632e5b42ab56df77dab5e6702e9d770b788b344cb173201e12a",
-      "bytes": 3321
+      "sha256": "7fe2eac32c6bc0ed5c034c66c0c7fcfcabf7aa7da5c5669acbcfb9de65650d62",
+      "bytes": 2878
     }
   },
   "mandatory_library_tests": [
@@ -96,21 +81,9 @@
   },
   "completion": "Hold same child until parent external gates exit 0; parent owns integration/resources/scientific decision",
   "method_authority": {
-    "revision": "d5c387934508af42517577384a47c5f1ac161b38",
-    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-review/constrained-split-falsifier-preregistration-v2-20261003.json",
-    "bytes": 5694,
-    "sha256": "c67890296a07d18c5a928af4329537a854048842f86241ea5e0c7013486d8147",
-    "owner": "parent",
-    "prospective_v2_amendment_pending": false,
-    "prospective_method_preregistered": true,
-    "authority_pending": true,
-    "native_qualification_completed": false,
-    "real_source_diagnostic_executed": false,
-    "superseded_v1": {
-      "revision": "375c55b1",
-      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-review/constrained-split-falsifier-preregistration-20261003.json",
-      "status": "historical; source 297 and v1 snapshot preserved"
-    }
+    "revision": "375c55b1",
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/implementation-review/constrained-split-falsifier-preregistration-20261003.json",
+    "owner": "parent; no actual diagnostic run"
   },
   "authentication_read_budget": {
     "cap_bytes": 1073741824,
@@ -129,77 +102,19 @@
       "resources.operations.admitted_authentication_read_bytes",
       "resources.operations.cumulative_verified_input_read_bytes"
     ],
-    "cgroup_poll": "canonical stream every256rows, replay every64rows, neighbor panel every4rows",
-    "canonical_stream": "CountedReader(file).take(admitted_len) INSIDE BufReader; EOF probe cannot read beyond declared admission; final stat identity check rejects growth",
-    "maxcap_math": {
-      "two_dataset_descriptor_upper_bound_bytes": 848885504,
-      "config_cap_bytes": 65536,
-      "parent_reread_upper_bound_bytes": 100925440,
-      "cumulative_upper_bound_bytes": 949876480,
-      "cap_bytes": 1073741824,
-      "headroom_bytes": 123865344
-    }
+    "cgroup_poll": "canonical stream every256rows, replay every64rows, neighbor panel every4rows"
   },
   "local_checks": {
     "isolated_additive_rustfmt": "exit0",
     "new_binary_rustfmt": "exit0",
     "git_diff_check": "exit0",
-    "base_prefix_byte_preservation": "original115165B prefix unchanged",
-    "same_native_test_roster": "old11 + diagnostic12 + bin1 exactly unchanged",
-    "cap_math": "949876480B < 1073741824B",
-    "native_tests": "NOT RUN; source and tests remain UNVERIFIED"
+    "base_prefix_byte_preservation": "115165 bytes unchanged; original SHA f30ca0d0ae1e38f28988cf100aec4bdbc68f1ce4acb4f85f488efa83103b2a1f",
+    "native_tests": "NOT RUN; all source-only tests UNVERIFIED"
   },
   "unresolved_blockers": [
     "Parent remote affected tests, generation integration, release, Clippy and real test-build must all exit0 before worker completion",
     "Parent owns authenticated originals and actual diagnostic launch; no source-neighborhood result exists"
   ],
-  "commit": "073bb3c829bc20ff4badea8026c0c4f27fb3aabf",
-  "commit_parent": "297c2a1f025c05cbea0687c32b8a810a163e8d37",
-  "repair_base_revision": "297c2a1f025c05cbea0687c32b8a810a163e8d37",
-  "preserved_v1_contract": {
-    "path": "/tmp/borsuk-constrained-semantic-split-falsifier-contract-297c2a1f-v1.json",
-    "sha256": "eea1b83edeaa2654ce26e2109068e3a12ca2e3be602c5426e95220a452cb1c83"
-  },
-  "scientific_v2": {
-    "controls": [
-      "old coordinate median",
-      "coordinate partition at identical proposed left population",
-      "constrained learned separator"
-    ],
-    "shared_cosine_edge_traversals_per_measured_node": 1,
-    "acceptance_scope": "genuinely changed nondegenerate measured fallback nodes only",
-    "minimum_acceptance_nodes_per_dataset": 4,
-    "both_datasets_require": "at least10% fewer aggregate crossing edges versus matched coordinate plus no worse matched worst-node cut; retain same median aggregate10% and worst-node guards",
-    "unchanged": "first8 raw32 hash nodes; exact original trainer/sample/rows; same128 nontraining source panel; exact local cosine16 excluding self; no expansion"
-  },
-  "durability_v2": {
-    "creation": "openat EXCL|NOFOLLOW|NONBLOCK basename against pinned parentFD; sameFD synced after rename/replacement",
-    "standalone_body_authority": false,
-    "report_flag": "requires_matching_supervisor_exit_receipt=true",
-    "normal_body_durability_status": "SUPERVISOR_EXIT_RECEIPT_REQUIRED",
-    "sync_failure": "Err and CLI2; bounded best-effort INVALID rewrite with FAILED_OR_UNCONFIRMED and rewrite_durability_confirmed=false",
-    "admission": "independently authenticated original supervisor must match expected runID, exact configSHA and reportSHA, original process exit0 and resource closure"
-  },
-  "extended_same_test_roster": {
-    "output_cap_and_fsync_failure_cannot_return_pass": [
-      "both injected sync failures/readback INVALID",
-      "PASS-looking body with supervisor exit2 rejected",
-      "matching supervisor positive and mismatched run/SHA/resource closure negatives",
-      "rename and replace parent before basename creation and sync; nooverwrite"
-    ],
-    "artifact_tamper_geometry_and_all_limits_fail_closed": [
-      "complete4096D2 source-bound fixture from byte-preserved actual Builder.node",
-      "both datasets full auth/replay/4 changed measured fallback nodes",
-      "public geometry stays100kD768; rejects tiny fixture"
-    ],
-    "local_cosine_edges_reuse_same_rows_and_exclude_self": [
-      "one traversal all3 partitions",
-      "population-only apparent median improvement versus identical proposed/matched must REJECT",
-      "aggregate improvement plus worse worst-node cut must REJECT",
-      "fewer4 changed nodes INCONCLUSIVE"
-    ],
-    "canonical_order_nonfinite_and_post_authentication_tamper_fail_closed": [
-      "growth after stat; bounded underlying read counter proves declared cap; final stamp fails"
-    ]
-  }
+  "commit": "297c2a1f025c05cbea0687c32b8a810a163e8d37",
+  "commit_parent": "8ec64936323aca63d6863351623eebd61c085187"
 }
