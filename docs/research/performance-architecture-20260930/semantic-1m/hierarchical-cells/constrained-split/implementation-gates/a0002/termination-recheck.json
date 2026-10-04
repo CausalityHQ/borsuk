@@ -1,0 +1,29 @@
+{
+  "checked_at": "2026-10-04T15:48:33.917722+00:00",
+  "command": [
+    "aws",
+    "--profile",
+    "causality",
+    "--region",
+    "eu-central-1",
+    "ec2",
+    "describe-instances",
+    "--instance-ids",
+    "i-0b0928633fa493375",
+    "--query",
+    "Reservations[].Instances[].{instance_id:InstanceId,state:State.Name}",
+    "--output",
+    "json"
+  ],
+  "exit_status": 0,
+  "instances": [
+    {
+      "instance_id": "i-0b0928633fa493375",
+      "state": "terminated"
+    }
+  ],
+  "profile": "causality",
+  "region": "eu-central-1",
+  "schema": "borsuk-native-gate-termination-recheck-v1",
+  "scientific_result": false
+}
