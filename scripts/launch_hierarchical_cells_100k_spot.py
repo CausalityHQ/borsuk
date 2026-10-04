@@ -1695,7 +1695,7 @@ def probe_stage(repo, output, worker_root, *, canary=False):
                 check(); publication.download(client, calls, BUCKET, {k: pin[k] for k in ('key', 'bytes', 'sha256')}, path); check()
             result = probe.execute(config, local.identity(out/'config.json'), repo, out, download, check, deadline)
             expected = probe_objects(config, evidence)
-            exact(len(calls), 15, 'probe closed fifteen-body GET roster')
+            exact(len(calls), len(expected), 'closed delegated body GET roster')
             for call, pin in zip(calls, expected):
                 exact(call['operation'], 'get_object', 'probe staged GET'); exact(call['key'], pin['key'], 'probe staged key')
                 exact(call['verified_bytes'], pin['bytes'], 'probe staged bytes'); exact(call['verified_sha256'], pin['sha256'], 'probe staged SHA')
@@ -1841,13 +1841,14 @@ def probe_replay(out, *, canary=False, repo=None):
         exact(receipt['config_sha256'], proof['config_sha256'], 'probe canary config')
         require('INVALID:' in receipt['cli_stderr'] and 'CLI:' in receipt['cli_stderr'], 'probe canary actual CLI')
         exact(receipt['sdk_calls'], calls, 'probe canary SDK receipt')
-        exact(len(calls), 17, 'probe HEAD15/GET2')
-        for call, pin in zip(calls[:15], objects):
+        exact(len(calls), len(objects)+2, 'delegated HEAD roster plus two log GETs')
+        for call, pin in zip(calls[:len(objects)], objects):
             for n, expected in dict(operation='head_object', key=pin['key'], declared_bytes=pin['bytes'], outcome='returned').items():
                 exact(call[n], expected, 'probe canary HEAD metadata')
             require('verified_sha256' not in call, 'HEAD cannot prove body SHA')
-        logs = [config['roles'][r]['native']['gate_log'] for r in probe.ROLE_NAMES]
-        for call, pin in zip(calls[15:], logs):
+        logs = [dict(bytes=p['bytes'], sha256=p['sha256'], key=p['key']) for p in
+                (objects[1], objects[4])] if schema == 'borsuk-constrained-split-falsifier-infrastructure-canary-v1' else [config['roles'][r]['native']['gate_log'] for r in probe.ROLE_NAMES]
+        for call, pin in zip(calls[len(objects):], logs):
             for n, expected in dict(operation='get_object', key=pin['key'], verified_bytes=pin['bytes'], verified_sha256=pin['sha256'], outcome='returned').items():
                 exact(call[n], expected, 'probe canary authenticated small log')
         exact(receipt['authenticated_logs'], [body_pin(p) for p in logs], 'probe two gate-log roles')
@@ -1858,7 +1859,7 @@ def probe_replay(out, *, canary=False, repo=None):
         probe.verify_execution(out/'screen', config, seal, evidence)
         exact(clean['native_processes_concurrent_max'], 1, 'probe serial native ownership')
         exact(clean['retained_layouts_preserved'], True, 'probe retained layouts before cleanup')
-        exact(len(calls), 15, 'probe body GET roster')
+        exact(len(calls), len(objects), 'delegated body GET roster')
         for call, pin in zip(calls, objects):
             for n, expected in dict(operation='get_object', key=pin['key'], verified_bytes=pin['bytes'], verified_sha256=pin['sha256'], outcome='returned').items():
                 exact(call[n], expected, 'probe staged authenticated GET')
@@ -2046,7 +2047,10 @@ def probe_self_check(metadata_repo=None):
 
 if __name__ == '__main__':
     try:
-        if sys.argv[1:2] == ['--global-leaf-probe']:
+        if sys.argv[1:2] == ['--constrained-split-falsifier']:
+            from scripts import run_constrained_split_falsifier as split
+            split.cli(sys.argv[2:])
+        elif sys.argv[1:2] == ['--global-leaf-probe']:
             probe_cli(sys.argv[2:])
         elif sys.argv[1:] == ['--self-check']:
             self_check()

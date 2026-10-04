@@ -752,30 +752,37 @@ def native_stage(name, command, binary, config_pin, out, resources, phase_second
     return record
 
 
-def reconstruct_command(item, role):
-    """Frozen role/path/flags admission happens before any invocation."""
+def reconstruct_writer_command(item, role):
+    """Authenticate exact original writer bytes without touching build/query inputs."""
     old = item['recovery']; proof = role
     exact(proof['binaries']['writer']['path'], str(ORIGINAL_ROOT/'screen/scratch/native-writer'), 'original writer path')
-    exact(proof['binaries']['cells']['path'], str(ORIGINAL_ROOT/'screen/scratch/native-cells'), 'original cells path')
     stem = Path(old['output_cell_path']).name.removesuffix('-cells')
     folder = ORIGINAL_ROOT/'screen/measurement'
     writer = dict(path=str(folder/(stem+'-writer.json')), **body_pin(old['original_writer_config']))
-    build = dict(path=str(folder/(stem+'-build.json')), **body_pin(old['original_build_config']))
-    local.authenticate(writer, 65536); local.authenticate(build, 65536)
     exact(local.decode(local.authenticate(writer, 65536, read=True)), item['writer'], 'original writer bytes/config')
+    return (stem+'-writer', [proof['binaries']['writer']['path'], writer['path'], writer['sha256'], '67108864',
+        str(folder/(stem+'-generation'))], proof['binaries']['writer'], writer)
+
+
+def reconstruct_command(item, role):
+    """Frozen role/path/flags admission happens before any invocation."""
+    writer_command = reconstruct_writer_command(item, role)
+    old = item['recovery']; proof = role
+    exact(proof['binaries']['cells']['path'], str(ORIGINAL_ROOT/'screen/scratch/native-cells'), 'original cells path')
+    stem = Path(old['output_cell_path']).name.removesuffix('-cells')
+    build = dict(path=str(ORIGINAL_ROOT/'screen/measurement'/(stem+'-build.json')), **body_pin(old['original_build_config']))
     exact(local.decode(local.authenticate(build, 65536, read=True)), item['build'], 'original build bytes/config')
-    return [(stem+'-writer', [proof['binaries']['writer']['path'], writer['path'], writer['sha256'], '67108864',
-        str(folder/(stem+'-generation'))], proof['binaries']['writer'], writer),
+    return [writer_command,
         (stem+'-build', [proof['binaries']['cells']['path'], 'build', build['path'], build['sha256'], old['output_cell_path']],
          proof['binaries']['cells'], build)]
 
 
-def restore_panel(original, consumed, folder, download, check):
-    """Only raw/order/SQ8 and requests; historical truth stays opaque metadata."""
+def restore_writer_inputs(original, consumed, folder, download, check):
+    """Restore exact source/order/SQ8 only, including original Parquet conversion."""
     folder.mkdir(parents=True)
     pins = {}
-    for name in ('source', 'order.u64', 'sq8.bin', 'requests'):
-        check(); path = folder/dict(source='source', **{'order.u64':'order', 'sq8.bin':'sq8', 'requests':'full-requests'})[name]
+    for name in ('source', 'order.u64', 'sq8.bin'):
+        check(); path = folder/dict(source='source', **{'order.u64':'order', 'sq8.bin':'sq8'})[name]
         download(original['artifacts'][name], path); pins[name] = local.identity(path)
         exact(body_pin(pins[name]), body_pin(original['artifacts'][name]), 'original source asset')
     if original['name'] == 'relaion':
@@ -791,6 +798,15 @@ def restore_panel(original, consumed, folder, download, check):
         exact(body_pin(staged), body_pin(consumed['inputs'][n]), 'exact writer input bytes')
         # CoHere originally consumed source directly; ReLAION consumed raw.
         exact(staged['path'], consumed['inputs'][n]['path'], 'original consumed input path')
+    return pins
+
+
+def restore_panel(original, consumed, folder, download, check):
+    """Only raw/order/SQ8 and requests; historical truth stays opaque metadata."""
+    pins = restore_writer_inputs(original, consumed, folder, download, check)
+    check(); path = folder/'full-requests'
+    download(original['artifacts']['requests'], path); pins['requests'] = local.identity(path)
+    exact(body_pin(pins['requests']), body_pin(original['artifacts']['requests']), 'original source asset')
     with positive.open_input(pins['requests']['path']) as stream:
         before = positive.stamp(stream); lines = [stream.readline(65537) for _ in range(64)]
         require(all(0 < len(l) <= 65536 and l.endswith(b'\n') for l in lines), 'original consumed prefix64')
