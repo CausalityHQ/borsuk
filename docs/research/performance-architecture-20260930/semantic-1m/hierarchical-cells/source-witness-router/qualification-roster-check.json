@@ -1,0 +1,22 @@
+{
+  "candidate_source_frozen": false,
+  "checks": {
+    "bash_syntax_exit": 0,
+    "diff_whitespace_exit": 0,
+    "launcher_and_shell_mandatory_rosters_equal": true,
+    "required_binary_names": 8,
+    "required_library_names": 19,
+    "synthetic_complete_library_log_exit": 0,
+    "synthetic_missing_new_test_log_exit": 96
+  },
+  "code_sha256": {
+    "scripts/check_hierarchical_cells_implementation.sh": "37bc138501c2727affe467345827f31b1fdce34757de9d1bd18c6233428d864e",
+    "scripts/launch_native_workspace_execution_spot.py": "762ebac1fc8c852386663f7d8e8650a254ce5c04c9d0fa9749f5e1a5be10d0ed"
+  },
+  "native_compilation_verified": false,
+  "native_test_execution": false,
+  "root_owned_reason": "Append exact mandatory tests to existing shared gate; no new controller or execution path.",
+  "schema": "borsuk-source-witness-qualification-roster-check-v1",
+  "scope": "minimal qualification assertions only",
+  "status": "PASS"
+}

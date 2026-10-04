@@ -81,13 +81,18 @@ HIERARCHICAL_CELLS_REQUIRED_TESTS = {
         'balanced_and_identical_builder_memberships_are_unchanged',
         'identical_sample_fallback_preserves_projected_child_sum_order',
         'skewed_builder_is_lossless_deterministic_and_preserves_sq2_sq8_tail_ranking',
-        'partition_format_and_receipt_reject_obsolete_or_incomplete_artifacts')),
+        'partition_format_and_receipt_reject_obsolete_or_incomplete_artifacts',
+        'source_probe_greedy_matches_independent_oracle_ties_shortcell_and_numeric_guards',
+        'source_probe_raw_identity_native_score_top24_and_no_query_io',
+        'source_probe_cap_binding_tamper_missing_id_fifo_and_symlink_fail_closed')),
     'hierarchical-cell-bin-tests': ('tests::configurations_reject_unknown_fields_and_truth_in_requests',
         'tests::created_outputs_close_invalid_on_bad_truth_or_output_cap_without_overwrite',
         'tests::nomination_cli_full64_freezes_prefix_and_both_policies_without_truth',
         'tests::nomination_cli_rejects_truth_fields_incomplete_panels_and_tampering',
         'tests::nomination_prefix_rejects_fifo_and_symlink_without_blocking',
-        'tests::nomination_freeze_reserve_and_synced_prefix_tamper_close_invalid'),}
+        'tests::nomination_freeze_reserve_and_synced_prefix_tamper_close_invalid',
+        'tests::source_probe_cli_actual_full_pipeline_freezes_before_truth_and_closes_invalid',
+        'tests::source_probe_cli_coverage_fifo_truth_and_output_cap_close_invalid'),}
 HIERARCHICAL_CELLS_STAGES = tuple((name, command.split()) for name, command in (
     ('hierarchical-cell-tests', 'cargo test --locked -p borsuk --lib hierarchical_semantic_cells::'),
     ('hierarchical-cell-bin-tests', 'cargo test --locked -p borsuk --bin hierarchical_semantic_cells'),
