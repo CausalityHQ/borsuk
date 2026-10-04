@@ -1,0 +1,28 @@
+{
+  "arguments": [],
+  "control_group_after": "",
+  "cpu_quota_percent": 100,
+  "cpu_usage_ns": 8657000,
+  "dataset_query_truth_opened": false,
+  "exit_status": 2,
+  "expected_exit_status": 2,
+  "invocation_id": "b06d52675baa4b7999aaedb3b9f023b9",
+  "main_pid_after": 0,
+  "memory_max_bytes": 268435456,
+  "memory_peak_bytes": 1835008,
+  "native_binary": {
+    "bytes": 5721952,
+    "sha256": "6b697b09fc6e709b5127ce81290950d37aa5fde892a8e0d053e4c9ca824ff297"
+  },
+  "remote_staging_qualified": false,
+  "runtime_max_seconds": 15,
+  "schema": "borsuk-source-witness-qualified-cli-smoke-v1",
+  "scientific_measurement": false,
+  "stderr": "INVALID: usage: hierarchical_semantic_cells build|diagnose|nominate|build-probes|nominate-probes|diagnose-probes CONFIG CONFIG_SHA256 NEW_OUTPUT",
+  "swap_max_bytes": 0,
+  "swap_peak_bytes": 0,
+  "tasks_max": 512,
+  "unit": "borsuk-source-witness-qualified-cli-smoke-20261004.service",
+  "wall_seconds": 0.02,
+  "whole_binary_authenticated": true
+}
