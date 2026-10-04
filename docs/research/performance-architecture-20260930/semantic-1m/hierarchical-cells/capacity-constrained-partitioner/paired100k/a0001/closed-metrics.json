@@ -1,0 +1,226 @@
+{
+  "complete_query_latency_measured": false,
+  "datasets": [
+    "ReLAION FIRST100k",
+    "CoHere FIRST100k"
+  ],
+  "physical_s3_query_performance_measured": false,
+  "results": {
+    "cohere-original": {
+      "local_bytes": {
+        "maximum": 9475908,
+        "mean": 8653228.1875,
+        "p90": 9208160,
+        "p95": 9284236
+      },
+      "local_gets": {
+        "maximum": 24,
+        "mean": 24.0,
+        "p90": 24,
+        "p95": 24
+      },
+      "losses": {
+        "boundary_misses": 1612,
+        "boundary_recovered": 1719,
+        "final_ranking_misses": 0,
+        "local_nomination_misses": 380,
+        "router_misses": 3331
+      },
+      "mean_recall_at_100": 0.68875,
+      "p05_hits": 50,
+      "query_hwm_bytes": 18063360,
+      "selected_gt_ceiling_recall_at_100": 0.748125,
+      "stage_cpu_ms": {
+        "final_ranking": {
+          "maximum": 3.359352,
+          "mean": 3.24101859375,
+          "p90": 3.249442,
+          "p95": 3.252635
+        },
+        "local_nomination": {
+          "maximum": 11.290007,
+          "mean": 9.436869625,
+          "p90": 10.152055,
+          "p95": 10.198709
+        },
+        "routing": {
+          "maximum": 0.630448,
+          "mean": 0.499907828125,
+          "p90": 0.562262,
+          "p95": 0.566516
+        }
+      },
+      "stage_sum_ms": {
+        "maximum": 31.062915,
+        "mean": 14.34554821875,
+        "p90": 17.938969,
+        "p95": 20.522266
+      },
+      "status": "FAIL"
+    },
+    "cohere-partitioner": {
+      "local_bytes": {
+        "maximum": 9040200,
+        "mean": 7939120.3125,
+        "p90": 8371324,
+        "p95": 8466172
+      },
+      "local_gets": {
+        "maximum": 24,
+        "mean": 24.0,
+        "p90": 24,
+        "p95": 24
+      },
+      "losses": {
+        "boundary_misses": 1441,
+        "boundary_recovered": 1654,
+        "final_ranking_misses": 0,
+        "local_nomination_misses": 535,
+        "router_misses": 3095
+      },
+      "mean_recall_at_100": 0.69125,
+      "p05_hits": 50,
+      "query_hwm_bytes": 17989632,
+      "selected_gt_ceiling_recall_at_100": 0.77484375,
+      "stage_cpu_ms": {
+        "final_ranking": {
+          "maximum": 3.319899,
+          "mean": 3.238641265625,
+          "p90": 3.259337,
+          "p95": 3.262604
+        },
+        "local_nomination": {
+          "maximum": 12.561784,
+          "mean": 9.064180765625,
+          "p90": 9.997497,
+          "p95": 10.895234
+        },
+        "routing": {
+          "maximum": 0.729128,
+          "mean": 0.62587334375,
+          "p90": 0.697616,
+          "p95": 0.707728
+        }
+      },
+      "stage_sum_ms": {
+        "maximum": 63.033882,
+        "mean": 18.929820203125,
+        "p90": 33.639969,
+        "p95": 39.143507
+      },
+      "status": "FAIL"
+    },
+    "relaion-original": {
+      "local_bytes": {
+        "maximum": 9227920,
+        "mean": 8293287.4375,
+        "p90": 8785296,
+        "p95": 9040200
+      },
+      "local_gets": {
+        "maximum": 24,
+        "mean": 24.0,
+        "p90": 24,
+        "p95": 24
+      },
+      "losses": {
+        "boundary_misses": 887,
+        "boundary_recovered": 1198,
+        "final_ranking_misses": 0,
+        "local_nomination_misses": 1357,
+        "router_misses": 2085
+      },
+      "mean_recall_at_100": 0.649375,
+      "p05_hits": 45,
+      "query_hwm_bytes": 18165760,
+      "selected_gt_ceiling_recall_at_100": 0.86140625,
+      "stage_cpu_ms": {
+        "final_ranking": {
+          "maximum": 3.366718,
+          "mean": 3.227787734375,
+          "p90": 3.247395,
+          "p95": 3.25317
+        },
+        "local_nomination": {
+          "maximum": 11.262671,
+          "mean": 9.091443484375,
+          "p90": 9.896027,
+          "p95": 10.120302
+        },
+        "routing": {
+          "maximum": 0.621596,
+          "mean": 0.511122109375,
+          "p90": 0.581044,
+          "p95": 0.591747
+        }
+      },
+      "stage_sum_ms": {
+        "maximum": 37.273026,
+        "mean": 14.34885221875,
+        "p90": 17.142913,
+        "p95": 20.814381
+      },
+      "status": "FAIL"
+    },
+    "relaion-partitioner": {
+      "local_bytes": {
+        "maximum": 9064900,
+        "mean": 8258367.8125,
+        "p90": 8704280,
+        "p95": 8841612
+      },
+      "local_gets": {
+        "maximum": 24,
+        "mean": 24.0,
+        "p90": 24,
+        "p95": 24
+      },
+      "losses": {
+        "boundary_misses": 825,
+        "boundary_recovered": 1166,
+        "final_ranking_misses": 0,
+        "local_nomination_misses": 1413,
+        "router_misses": 1991
+      },
+      "mean_recall_at_100": 0.6503125,
+      "p05_hits": 47,
+      "query_hwm_bytes": 17821696,
+      "selected_gt_ceiling_recall_at_100": 0.87109375,
+      "stage_cpu_ms": {
+        "final_ranking": {
+          "maximum": 3.339335,
+          "mean": 3.231517859375,
+          "p90": 3.256487,
+          "p95": 3.268668
+        },
+        "local_nomination": {
+          "maximum": 12.237275,
+          "mean": 9.383853296875,
+          "p90": 10.767436,
+          "p95": 11.165071
+        },
+        "routing": {
+          "maximum": 0.737452,
+          "mean": 0.56464628125,
+          "p90": 0.674891,
+          "p95": 0.708801
+        }
+      },
+      "stage_sum_ms": {
+        "maximum": 71.603597,
+        "mean": 20.723741859375,
+        "p90": 38.168048,
+        "p95": 45.686986
+      },
+      "status": "FAIL"
+    }
+  },
+  "schema": "borsuk-capacity-partitioner-closed-metrics-v1",
+  "source_summary": {
+    "bytes": 500546,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/a0001/screen/summary.json",
+    "sha256": "8db7c1679f712e78f67d8354be000ecb325f43d9f44cb0f9d49b7519c9fb8b42"
+  },
+  "split": "same64 consumed historical queries ordinal0..63; cosine k100 D768",
+  "vendor_parity": false
+}

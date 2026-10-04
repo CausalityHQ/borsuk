@@ -1,0 +1,38 @@
+{
+  "all_terminal_artifacts": 146,
+  "artifact_whitespace_check": {
+    "exception_paths": [
+      "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/a0001/run-closed.log"
+    ],
+    "exit_status": 2,
+    "reason": "Immutable original terminal log CR characters preserved; no normalized replacement."
+  },
+  "closed_replay_exit_status": 0,
+  "closed_replay_invocation": "20a479d71ec9481587324f441f37a4b9",
+  "complete_query_latency_measured": false,
+  "controller_swap_bytes": 0,
+  "independently_authenticated_small_bodies": 138,
+  "inline_admission_status": "ADMITTED",
+  "instance_id": "i-0d126c38954c396db",
+  "instance_observed_elapsed_seconds": 342,
+  "large_layouts_original_collector_and_replay_authenticated": 8,
+  "native_calls": 15,
+  "original_controller_exit_status": 0,
+  "original_controller_runtime_seconds": 458.669,
+  "original_session": 75841,
+  "physical_s3_query_measured": false,
+  "remote_host_memory_peak_bytes": 2147483648,
+  "remote_host_swap_peak_bytes": 0,
+  "remote_memory_events": "low 0\nhigh 0\nmax 1704\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+  "reported_controller_peak": "287.2M",
+  "requested_local_memory_bytes": 268435456,
+  "resource_limit_note": "Original systemd terminal reported peak above requested MemoryMax; successful unit unloaded before independent final kernel snapshot. Report both without claiming peak was below cap.",
+  "schema": "borsuk-capacity-partitioner-paired-root-verification-v1",
+  "scientific_status": "FAIL",
+  "scratch_limit_bytes": 17179869184,
+  "scratch_model_underestimated_observed": true,
+  "scratch_monitor_errors": [],
+  "scratch_observed_bytes": 7748316866,
+  "scratch_preregistered_admission_model_bytes": 6482146477,
+  "terminated": true
+}

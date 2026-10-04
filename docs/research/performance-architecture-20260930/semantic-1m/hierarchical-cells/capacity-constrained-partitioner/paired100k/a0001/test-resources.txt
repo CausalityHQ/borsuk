@@ -1,0 +1,23 @@
+	Command being timed: "timeout --signal=TERM --kill-after=5 1767 taskset -c 0,1 /mnt/hierarchical-capacity-partitioner-pair/venv/bin/python -m scripts.launch_hierarchical_cells_100k_spot --partitioner-pair --stage /mnt/hierarchical-capacity-partitioner-pair/probe-repo /mnt/hierarchical-capacity-partitioner-pair/screen /mnt/hierarchical-capacity-partitioner-pair"
+	User time (seconds): 117.16
+	System time (seconds): 30.91
+	Percent of CPU this job got: 85%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:53.24
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 268436
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 7
+	Minor (reclaiming a frame) page faults: 91474
+	Voluntary context switches: 2743359
+	Involuntary context switches: 7768
+	Swaps: 0
+	File system inputs: 433296
+	File system outputs: 3944512
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

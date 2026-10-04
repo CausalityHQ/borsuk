@@ -1,0 +1,56 @@
+{
+  "artifacts": {
+    "screen/retained/cohere/original/cells.bin": {
+      "bytes": 98800000,
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/cohere/original/cells.bin",
+      "local_retained_path": "/home/rb/worktrees/borsuk-partitioner-paired-science-a0001-frozen/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/a0001/screen/retained/cohere/original/cells.bin",
+      "sha256": "e4c2ce203728c0a3f0ca9028672729442cd20c9f0db971a0c5ccf5a46afefca0"
+    },
+    "screen/retained/cohere/original/directories.bin": {
+      "bytes": 5879576,
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/cohere/original/directories.bin",
+      "local_retained_path": "/home/rb/worktrees/borsuk-partitioner-paired-science-a0001-frozen/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/a0001/screen/retained/cohere/original/directories.bin",
+      "sha256": "e934d25c4304927405e62d032facdde6da4c13fa7d2add64f5881d64e99371a2"
+    },
+    "screen/retained/cohere/partitioner/cells.bin": {
+      "bytes": 98800000,
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/cohere/partitioner/cells.bin",
+      "local_retained_path": "/home/rb/worktrees/borsuk-partitioner-paired-science-a0001-frozen/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/a0001/screen/retained/cohere/partitioner/cells.bin",
+      "sha256": "647491734c13391be7ff682a8d8c125e69d317e87b31cd8e7d1ebb9eebee0ef0"
+    },
+    "screen/retained/cohere/partitioner/directories.bin": {
+      "bytes": 6410540,
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/cohere/partitioner/directories.bin",
+      "local_retained_path": "/home/rb/worktrees/borsuk-partitioner-paired-science-a0001-frozen/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/a0001/screen/retained/cohere/partitioner/directories.bin",
+      "sha256": "f0df6a5900d6a66263389dfa353167790b18c2b819e09c288d6f218457dbf865"
+    },
+    "screen/retained/relaion/original/cells.bin": {
+      "bytes": 98800000,
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/relaion/original/cells.bin",
+      "local_retained_path": "/home/rb/worktrees/borsuk-partitioner-paired-science-a0001-frozen/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/a0001/screen/retained/relaion/original/cells.bin",
+      "sha256": "b971d20f93247559a05fa5c3964413d9118ddf0e6d6a2c99601f8fc0f8bb1e2c"
+    },
+    "screen/retained/relaion/original/directories.bin": {
+      "bytes": 6200518,
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/relaion/original/directories.bin",
+      "local_retained_path": "/home/rb/worktrees/borsuk-partitioner-paired-science-a0001-frozen/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/a0001/screen/retained/relaion/original/directories.bin",
+      "sha256": "6e71ef57e17bd55667b48421cf90f812f79e962ae3bc7eed4a50b97397fd21f1"
+    },
+    "screen/retained/relaion/partitioner/cells.bin": {
+      "bytes": 98800000,
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/relaion/partitioner/cells.bin",
+      "local_retained_path": "/home/rb/worktrees/borsuk-partitioner-paired-science-a0001-frozen/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/a0001/screen/retained/relaion/partitioner/cells.bin",
+      "sha256": "6bb1c1259c3686ec7dfea1100e9162b45ad898c504b261f82979b974aedbf8ae"
+    },
+    "screen/retained/relaion/partitioner/directories.bin": {
+      "bytes": 6397659,
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/relaion/partitioner/directories.bin",
+      "local_retained_path": "/home/rb/worktrees/borsuk-partitioner-paired-science-a0001-frozen/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/a0001/screen/retained/relaion/partitioner/directories.bin",
+      "sha256": "93c0d23d067d4929d44d1111159c3c46ac74800aba621a344a3cfd3fa8d5fe89"
+    }
+  },
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "original_collector_and_closed_replay_authenticated": true,
+  "schema": "borsuk-terminal-bound-retained-layouts-v1",
+  "terminal_sha256": "597173881cc39644403748abc08e8f65281339ae24c37b6797b940fc48bff235"
+}

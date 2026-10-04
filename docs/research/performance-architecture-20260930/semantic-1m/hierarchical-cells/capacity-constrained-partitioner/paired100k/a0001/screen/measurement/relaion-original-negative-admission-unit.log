@@ -1,0 +1,8 @@
+Running as unit: borsuk-global-leaf-2186-relaion-original-negative-admission.service
+INVALID: relaion-original-negative-admission exit 2
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=2
+Service runtime: 196ms
+CPU time consumed: 179ms
+Memory peak: 3.2M
+Memory swap peak: 0B
