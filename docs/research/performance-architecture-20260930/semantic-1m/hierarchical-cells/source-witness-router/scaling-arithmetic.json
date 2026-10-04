@@ -1,0 +1,88 @@
+{
+  "assumptions": {
+    "actual_retained_100k_cell_counts": {
+      "cohere": 308,
+      "relaion": 301
+    },
+    "actual_witness_counts_not_yet_measured": true,
+    "all_cells_full_except_tail": true,
+    "dimensions": 768,
+    "directory_residency_runtime_allocator_old_generation_pins_excluded": true,
+    "hypothetical_cell_rows": 512,
+    "witnesses_per_cell": 16
+  },
+  "classification": "projection only, no RSS/latency/cost/quality measurements",
+  "decision": {
+    "current_100m_feasibility": "NOT established. Fixed current experimental cap refusal is not a universal product or future architecture limit.",
+    "current_arm": "Only run the frozen paired100k representation falsifier; keep its caps and historical verdicts immutable.",
+    "if_coverage_fails": "Reject this frozen representation arm and select one causal Rust routing/representation redesign from measured loss.",
+    "if_coverage_passes": "Measure actual complete route CPU and owned/RSS residency, then qualify bounded resident witness search and incremental generations before fresh scale runs.",
+    "simd": "No speedup claim or kernel priority until measured complete CPU critical path supports it.",
+    "vendor_parity": "UNMEASURED; no matched comparison inferred."
+  },
+  "root_owned_reason": "Frozen architecture/resource decision and final verification stay with root; no independent implementation task.",
+  "scenarios": [
+    {
+      "encoded_sidecar_admitted_under_current_cap": true,
+      "encoded_sidecar_bytes": 3280552,
+      "hypothetical_full_cell_count": 196,
+      "modeled_probe_preload_peak_bytes": 11168760,
+      "modeled_probe_resident_bytes": 7888208,
+      "modeled_query_scratch_bytes": 13680640,
+      "rows": 100000,
+      "scored_coordinate_terms_per_query": 2408448,
+      "witnesses": 3136
+    },
+    {
+      "encoded_sidecar_admitted_under_current_cap": true,
+      "encoded_sidecar_bytes": 32673544,
+      "hypothetical_full_cell_count": 1954,
+      "modeled_probe_preload_peak_bytes": 106548504,
+      "modeled_probe_resident_bytes": 73874960,
+      "modeled_query_scratch_bytes": 136081408,
+      "rows": 1000000,
+      "scored_coordinate_terms_per_query": 24010752,
+      "witnesses": 31264
+    },
+    {
+      "encoded_sidecar_admitted_under_current_cap": false,
+      "encoded_sidecar_bytes": 326578216,
+      "hypothetical_full_cell_count": 19532,
+      "modeled_probe_preload_peak_bytes": 1060262008,
+      "modeled_probe_resident_bytes": 733683792,
+      "modeled_query_scratch_bytes": 1360080896,
+      "rows": 10000000,
+      "scored_coordinate_terms_per_query": 240009216,
+      "witnesses": 312512
+    },
+    {
+      "encoded_sidecar_admitted_under_current_cap": false,
+      "encoded_sidecar_bytes": 3265637560,
+      "hypothetical_full_cell_count": 195313,
+      "modeled_probe_preload_peak_bytes": 10597439016,
+      "modeled_probe_resident_bytes": 7331801456,
+      "modeled_query_scratch_bytes": 13600079872,
+      "rows": 100000000,
+      "scored_coordinate_terms_per_query": 2400006144,
+      "witnesses": 3125008
+    }
+  ],
+  "schema": "borsuk-source-witness-source-bound-scaling-arithmetic-v1",
+  "source": {
+    "path": "crates/borsuk/src/hierarchical_semantic_cells.rs",
+    "sha256": "3d342fc39f6a2d70a3a8ee377314a4a8e3539d7526c6d097bf72f1cc92753f7f"
+  },
+  "source_formulas": {
+    "encoded": "104+8D+8N+16C+W*(D+20)",
+    "preload_peak": "probe_resident+encoded",
+    "probe_resident": "2*encoded+4096*C+8*65536",
+    "query_scratch": "256W+128N+16D+65536",
+    "route_work": "W*D native SQ8 coordinate terms; all cells scored",
+    "source_methods": [
+      "probe_encoded_bytes",
+      "probe_admission",
+      "SourceProbeRouter::scratch",
+      "SourceProbeRouter::ranked_cells"
+    ]
+  }
+}
