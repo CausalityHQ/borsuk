@@ -1,0 +1,17 @@
+{
+  "status": "PASS",
+  "scope": "Python gate recorder only; Rust remains UNVERIFIED",
+  "candidate_reviewed": "d66a9e8117039e74b214f085a3fcd64063b4ba5f",
+  "mandatory_new_test_count": 5,
+  "command": "python3 -m scripts.launch_native_workspace_execution_spot --hierarchical-cells-implementation --self-check",
+  "unit": "borsuk-capacity-test-roster-check-20261004.service",
+  "invocation_id": "d110d2ca2c41473daf97174bd4963b3f",
+  "exit_status": 0,
+  "service_seconds": 3.439,
+  "reported_memory_peak": "60.6M",
+  "swap_bytes": 0,
+  "memory_max_bytes": 268435456,
+  "cpu_quota_percent": 100,
+  "aws_cargo_cgroup_checks": "MOCKED",
+  "native_execution": false
+}
