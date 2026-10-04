@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-09d33c6fa8e3cf6bb",
+  "nodes": {
+    "0": {
+      "instance_id": "i-09d33c6fa8e3cf6bb"
+    }
+  },
+  "prefix": "research/semantic-router/20261003/constrained-split-implementation-a0001",
+  "source_commit": "c2c871d4cdbc2f45c79e0a24f42c17f81dfb7d4f",
+  "source_archive_sha256": "667d9cbf05470020519d3d49e83c795cbb127e96c3eedad3905cbbc5ed930aa6"
+}
