@@ -1139,6 +1139,7 @@ fn page_owned_capacity(page: &Directory) -> usize {
 /// Root and the complete parsed directory are pinned; queries have no directory
 /// file handle/path, lazy loader, or shared directory cache fallback.
 pub struct Prototype {
+    admitted_root_sha256: String,
     manifest: Manifest,
     directories: BTreeMap<usize, Directory>,
     cells: File,
@@ -1180,13 +1181,67 @@ impl Prototype {
         root_sha256: &str,
         max_resident_directory_payload_bytes: usize,
     ) -> Result<Self> {
-        let bytes = usize::try_from(fs::metadata(path.join("manifest.json"))?.len())?;
-        let body = Artifact {
+        Self::open_inner(
+            path,
+            root_sha256,
+            max_resident_directory_payload_bytes,
+            None,
+            None,
+        )
+    }
+    /// New-mode entrypoint: exact trusted root descriptor and regular
+    /// NOFOLLOW/NONBLOCK root/directory/cell inputs; legacy open is unchanged.
+    pub fn open_for_source_probes(root: &Artifact, cap: usize) -> Result<Self> {
+        Self::open_for_source_probes_traced(root, cap, &mut SourceProbeLayoutStartup::default())
+    }
+    /// Preserve each actual startup operation on failure as well as success.
+    /// The supplied snapshot is reset for this one root/directory open attempt.
+    pub fn open_for_source_probes_traced(
+        root: &Artifact,
+        cap: usize,
+        startup: &mut SourceProbeLayoutStartup,
+    ) -> Result<Self> {
+        *startup = SourceProbeLayoutStartup::default();
+        let started = (Instant::now(), cpu_ns());
+        let result = (|| {
+            require(
+                root.path.file_name().is_some_and(|v| v == "manifest.json"),
+                "probe root filename",
+            )?;
+            Self::open_inner(
+                root.path.parent().ok_or("probe root parent")?,
+                &root.sha256,
+                cap,
+                Some(root),
+                Some(&mut *startup),
+            )
+        })();
+        startup.complete = probe_elapsed(started);
+        result
+    }
+    fn open_inner(
+        path: &Path,
+        root_sha256: &str,
+        max_resident_directory_payload_bytes: usize,
+        secure_root: Option<&Artifact>,
+        mut startup_trace: Option<&mut SourceProbeLayoutStartup>,
+    ) -> Result<Self> {
+        let bytes = match secure_root {
+            Some(root) => root.bytes,
+            None => usize::try_from(fs::metadata(path.join("manifest.json"))?.len())?,
+        };
+        let descriptor = Artifact {
             path: path.join("manifest.json"),
             bytes,
             sha256: root_sha256.into(),
-        }
-        .read(ROOT_CAP)?;
+        };
+        let body = if let Some(startup) = startup_trace.as_deref_mut() {
+            read_source_probe_artifact_tracked(&descriptor, ROOT_CAP, &mut startup.root)?
+        } else if secure_root.is_some() {
+            read_source_probe_artifact(&descriptor, ROOT_CAP)?
+        } else {
+            descriptor.read(ROOT_CAP)?
+        };
         let manifest: Manifest = serde_json::from_slice(&body)?;
         require(manifest.seed == NATIVE_CODEC_SEED, "current fixed SQ2 seed")?;
         require(
@@ -1218,20 +1273,44 @@ impl Prototype {
             manifest.build.directories,
             manifest.build.cells,
         )?;
+        if let Some(startup) = startup_trace.as_deref_mut() {
+            startup.admission = Some(admission.clone());
+        }
         require(
             max_resident_directory_payload_bytes <= 512 * 1024 * 1024
                 && admission.modeled_preload_peak_bytes <= max_resident_directory_payload_bytes,
             "resident directory payload admission",
         )?;
         let codec = RotatedTwoBitCodec::new(&manifest.mean, manifest.seed)?;
-        let directories = regular_file(&path.join("directories.bin"), manifest.directory_bytes)?;
-        let cells = regular_file(&path.join("cells.bin"), manifest.cell_bytes)?;
-        let directory_body = read_at(&directories, 0, manifest.directory_bytes)?;
-        require(
-            hash(&directory_body) == manifest.directory_sha256,
-            "whole directory SHA256",
-        )?;
+        let open_file = if secure_root.is_some() {
+            probe_file
+        } else {
+            regular_file
+        };
+        let directories = open_file(&path.join("directories.bin"), manifest.directory_bytes)?;
+        let cells = open_file(&path.join("cells.bin"), manifest.cell_bytes)?;
+        let directory_body = if let Some(startup) = startup_trace.as_deref_mut() {
+            startup.directory.submitted_gets = 1;
+            startup.directory.requested_bytes = manifest.directory_bytes;
+            startup.directory.failed_gets = 1;
+            let body = read_at(&directories, 0, manifest.directory_bytes)?;
+            require(
+                hash(&body) == manifest.directory_sha256,
+                "whole directory SHA256",
+            )?;
+            startup.directory.verified_bytes = body.len();
+            startup.directory.failed_gets = 0;
+            body
+        } else {
+            let body = read_at(&directories, 0, manifest.directory_bytes)?;
+            require(
+                hash(&body) == manifest.directory_sha256,
+                "whole directory SHA256",
+            )?;
+            body
+        };
         let mut prototype = Self {
+            admitted_root_sha256: root_sha256.into(),
             manifest,
             directories: BTreeMap::new(),
             cells,
@@ -1251,9 +1330,11 @@ impl Prototype {
             directory_admission: admission,
         };
         prototype.preload(&directory_body)?;
+        if let Some(startup) = startup_trace {
+            startup.admission = Some(prototype.directory_admission.clone());
+        }
         Ok(prototype)
     }
-
     fn preload(&mut self, body: &[u8]) -> Result<()> {
         let mut pending = vec![(self.manifest.root_directory.clone(), self.rows())];
         let mut page_spans = BTreeMap::new();
@@ -1898,6 +1979,1146 @@ impl Prototype {
     }
 }
 
+/// Fresh packed source-witness artifact marker; resident-v4 layout is unchanged.
+pub const SOURCE_PROBE_SCHEMA: &str = "borsuk-source-witness-router-v1";
+const PROBE_MARKER: &[u8; 8] = b"BSWP0001";
+const PROBE_COUNT: usize = 16;
+const PROBE_CELLS: usize = 24;
+const PROBE_CAP: usize = 128 * 1024 * 1024;
+
+// Instrumentation deliberately does not open /proc or any file during routing.
+fn probe_elapsed(start: (Instant, i128)) -> StageTime {
+    StageTime {
+        wall_ns: start.0.elapsed().as_nanos(),
+        process_cpu_ns: cpu_ns() - start.1,
+        rss_after_bytes: None,
+        process_high_water_bytes: None,
+    }
+}
+fn probe_reserved<T>(count: usize) -> Result<Vec<T>> {
+    require(
+        count
+            .checked_mul(std::mem::size_of::<T>())
+            .is_some_and(|n| n <= PROBE_CAP),
+        "probe allocation bound",
+    )?;
+    let mut values = Vec::new();
+    values.try_reserve_exact(count)?;
+    Ok(values)
+}
+fn probe_file(path: &Path, bytes: usize) -> Result<File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags((rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOFOLLOW).bits() as i32)
+        .open(path)?;
+    require(
+        file.metadata()?.is_file() && file.metadata()?.len() == bytes as u64,
+        "probe regular file/exact length",
+    )?;
+    Ok(file)
+}
+/// Secure exact-descriptor read used by the new modes. Cap rejection precedes
+/// file open/body allocation; final symlinks and nonregular/FIFO inputs fail.
+pub fn read_source_probe_artifact(artifact: &Artifact, cap: usize) -> Result<Vec<u8>> {
+    read_source_probe_artifact_tracked(artifact, cap, &mut ReadStats::default())
+}
+/// Exact secure read, retaining actual submitted/verified/failed bytes on errors.
+/// The caller supplies an initially empty snapshot for this operation.
+pub fn read_source_probe_artifact_tracked(
+    artifact: &Artifact,
+    cap: usize,
+    stats: &mut ReadStats,
+) -> Result<Vec<u8>> {
+    require(
+        artifact.bytes > 0
+            && artifact.bytes <= cap
+            && cap <= PROBE_CAP
+            && valid_sha(&artifact.sha256),
+        "probe artifact descriptor/cap",
+    )?;
+    let mut file = probe_file(&artifact.path, artifact.bytes)?;
+    let mut body = probe_reserved(artifact.bytes)?;
+    body.resize(artifact.bytes, 0);
+    stats.submitted_gets += 1;
+    stats.requested_bytes += artifact.bytes;
+    stats.failed_gets += 1;
+    let result = (|| -> Result<()> {
+        file.read_exact(&mut body)?;
+        require(
+            file.read(&mut [0])? == 0 && hash(&body) == artifact.sha256,
+            "probe artifact SHA256/EOF",
+        )
+    })();
+    if result.is_ok() {
+        stats.failed_gets -= 1;
+        stats.verified_bytes += body.len();
+    }
+    result?;
+    Ok(body)
+}
+/// Incremental root/directory startup snapshot, populated before each I/O and
+/// retained by the caller on rejection. Metadata opens submit no body read.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SourceProbeLayoutStartup {
+    /// Actual root descriptor body authentication attempts.
+    pub root: ReadStats,
+    /// Actual full directory body authentication attempts.
+    pub directory: ReadStats,
+    /// Derived preload model when a valid root exposes it, even on cap rejection.
+    pub admission: Option<DirectoryAdmission>,
+    /// Complete startup wall/process CPU including failed reads/authentication.
+    pub complete: StageTime,
+}
+/// Execution rejection with actual submitted I/O and a complete attempt timer.
+#[derive(Debug, Serialize)]
+pub struct SourceProbeFailure {
+    /// Admission, authentication, numeric or execution failure (INVALID).
+    pub message: String,
+    /// Actual cell reads, including failed submitted operations.
+    pub accounting: Accounting,
+    /// Actual sidecar startup read, including failures after submission.
+    pub startup: ReadStats,
+    /// One complete wall/process CPU interval; never a sum of stage timers.
+    pub complete: StageTime,
+}
+impl std::fmt::Display for SourceProbeFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+impl Error for SourceProbeFailure {}
+/// Bounded sidecar startup and retained ownership arithmetic (not measured RSS).
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceProbeAdmission {
+    /// Exact packed sidecar bytes authenticated at open.
+    pub encoded_bytes: usize,
+    /// Conservative resident packed records/rosters/descriptors/codec allowance.
+    pub modeled_resident_bytes: usize,
+    /// Resident allowance plus the complete encoded startup buffer.
+    pub modeled_preload_peak_bytes: usize,
+    /// Tracked actual owned capacities, excluding map/allocator/runtime overhead.
+    pub owned_capacity_bytes: usize,
+}
+/// Source-only construction receipt; source inputs are authenticated cell spans.
+#[derive(Debug, Serialize)]
+pub struct SourceProbeBuildReceipt {
+    /// Externally authenticate this descriptor before serving it.
+    pub artifact: Artifact,
+    /// Original whole-cell reads; subspan authentication does not submit reads.
+    pub accounting: Accounting,
+    /// Complete build CPU/wall, including authentication/output/fsync.
+    pub complete: StageTime,
+    /// Conservative output, roster and one-cell decoded working-set allowance.
+    pub modeled_peak_payload_bytes: usize,
+}
+#[derive(Debug)]
+struct ProbeCell {
+    cell: Cell,
+    source_ids: Vec<i64>,
+    local_ordinals: Vec<usize>,
+    start: usize,
+}
+/// Packed original witnesses and bounded rosters/descriptors only. No retained
+/// file, path, lazy loader, f32 corpus copy or per-query filesystem operation.
+/// Builder proves source membership by reads. Serving trusts the externally
+/// authenticated sidecar SHA plus root binding; root SHA alone is not a proof
+/// of any witness's source membership.
+pub struct SourceProbeRouter {
+    root_sha256: String,
+    rows: usize,
+    dimensions: usize,
+    low: Vec<f32>,
+    step: Vec<f32>,
+    cells: Vec<ProbeCell>,
+    packed: Vec<u8>,
+    /// Actual one sidecar body read at startup, distinct from layout startup.
+    pub startup: ReadStats,
+    /// Complete sidecar open/authentication/validation CPU/wall.
+    pub startup_time: StageTime,
+    /// Admitted peak and tracked retained capacity.
+    pub admission: SourceProbeAdmission,
+}
+fn probe_leaves(layout: &Prototype) -> Result<Vec<&Node>> {
+    let mut leaves = probe_reserved(layout.manifest.build.cells)?;
+    for node in layout.directories.values().flat_map(|p| &p.children) {
+        if matches!(node.target, Target::Cell { .. }) {
+            leaves.push(node);
+        }
+    }
+    leaves.sort_unstable_by_key(|node| match &node.target {
+        Target::Cell { cell } => cell.id,
+        _ => unreachable!(),
+    });
+    require(
+        leaves.len() == layout.manifest.build.cells,
+        "probe complete resident leaves",
+    )?;
+    Ok(leaves)
+}
+fn probe_encoded_bytes(layout: &Prototype) -> Result<usize> {
+    let witnesses = probe_leaves(layout)?
+        .iter()
+        .map(|node| node.rows.min(PROBE_COUNT))
+        .sum::<usize>();
+    104_usize
+        .checked_add(
+            layout
+                .dimensions()
+                .checked_mul(8)
+                .ok_or("probe geometry overflow")?,
+        )
+        .and_then(|n| n.checked_add(layout.rows().checked_mul(8)?))
+        .and_then(|n| n.checked_add(layout.manifest.build.cells.checked_mul(16)?))
+        .and_then(|n| n.checked_add(witnesses.checked_mul(layout.dimensions().checked_add(20)?)?))
+        .filter(|n| *n <= PROBE_CAP)
+        .ok_or_else(|| "probe encoded byte overflow/cap".into())
+}
+fn probe_admission(layout: &Prototype, encoded: usize) -> Result<SourceProbeAdmission> {
+    let resident = encoded
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(layout.manifest.build.cells.checked_mul(4096)?))
+        .and_then(|n| n.checked_add(8 * ROOT_CAP))
+        .ok_or("probe resident overflow")?;
+    Ok(SourceProbeAdmission {
+        encoded_bytes: encoded,
+        modeled_resident_bytes: resident,
+        modeled_preload_peak_bytes: resident
+            .checked_add(encoded)
+            .ok_or("probe preload overflow")?,
+        owned_capacity_bytes: 0,
+    })
+}
+// Decode f32 coordinates first, accumulate norm in f64, divide in f64 and cast
+// normalized coordinates to f32. Never normalize or rewrite stored SQ8 bytes.
+fn probe_normalized(record: &[u8], low: &[f32], step: &[f32]) -> Result<Vec<f32>> {
+    require(
+        record.len() == low.len() + 12 && step.len() == low.len(),
+        "probe decoded geometry",
+    )?;
+    let norm = f32::from_le_bytes(record[8..12].try_into()?);
+    require(norm.is_finite(), "probe stored norm finite")?;
+    let mut vector = probe_reserved(low.len())?;
+    let mut squared = 0_f64;
+    for d in 0..low.len() {
+        let value = low[d] + f32::from(record[d + 12]) * step[d];
+        require(value.is_finite(), "probe nonfinite decoded coordinate")?;
+        squared += f64::from(value) * f64::from(value);
+        vector.push(value);
+    }
+    require(
+        squared.is_finite() && squared > 0.,
+        "probe zero/nonfinite decoded norm",
+    )?;
+    let length = squared.sqrt();
+    for value in &mut vector {
+        *value = (f64::from(*value) / length) as f32;
+    }
+    Ok(vector)
+}
+fn probe_greedy(records: &[u8], ids: &[i64], low: &[f32], step: &[f32]) -> Result<Vec<usize>> {
+    let width = low.len() + 12;
+    require(
+        !ids.is_empty() && ids.len() <= 512 && records.len() == ids.len() * width,
+        "probe greedy cell geometry",
+    )?;
+    // At most one cell's decoded vectors; never all-N f32 resident copies.
+    let vectors = records
+        .chunks_exact(width)
+        .map(|r| probe_normalized(r, low, step))
+        .collect::<Result<Vec<_>>>()?;
+    let mut selected = probe_reserved(ids.len().min(PROBE_COUNT))?;
+    let mut nearest = vec![f64::INFINITY; ids.len()];
+    let mut used = vec![false; ids.len()];
+    let first = (0..ids.len())
+        .min_by_key(|&i| ids[i])
+        .ok_or("empty probe cell")?;
+    selected.push(first);
+    used[first] = true;
+    while selected.len() < ids.len().min(PROBE_COUNT) {
+        let last = *selected.last().ok_or("empty probe selection")?;
+        for row in 0..ids.len() {
+            let distance = vectors[row]
+                .iter()
+                .zip(&vectors[last])
+                .map(|(&a, &b)| {
+                    let delta = f64::from(a) - f64::from(b);
+                    delta * delta
+                })
+                .sum::<f64>();
+            require(distance.is_finite(), "probe nonfinite nearest distance")?;
+            nearest[row] = nearest[row].min(distance);
+        }
+        let next = (0..ids.len())
+            .filter(|&i| !used[i])
+            .max_by(|&a, &b| nearest[a].total_cmp(&nearest[b]).then(ids[b].cmp(&ids[a])))
+            .ok_or("probe missing next witness")?;
+        used[next] = true;
+        selected.push(next);
+    }
+    Ok(selected)
+}
+/// Build fixed16 source-only probes. No requests/truth parameter or reader.
+/// Authenticates whole/source/refinement spans and exact source/SQ8 ID binding
+/// before selecting witnesses, writes a fresh no-overwrite artifact and fsyncs
+/// it and its parent. Failure reports actual submitted cell reads.
+pub fn build_source_probes(
+    layout: &Prototype,
+    output: &Path,
+) -> std::result::Result<SourceProbeBuildReceipt, SourceProbeFailure> {
+    let started = (Instant::now(), cpu_ns());
+    let mut accounting = Accounting::default();
+    let work = (|| -> Result<(Artifact, usize)> {
+        require(
+            fs::symlink_metadata(output).is_err(),
+            "probe output already exists/no overwrite",
+        )?;
+        let bytes = probe_encoded_bytes(layout)?;
+        let modeled = bytes
+            .checked_add(
+                layout
+                    .rows()
+                    .checked_mul(64)
+                    .ok_or("probe build overflow")?,
+            )
+            .and_then(|n| n.checked_add(512 * (layout.dimensions() * 8 + 4096)))
+            .ok_or("probe build payload overflow")?;
+        require(
+            modeled <= 256 * 1024 * 1024
+                && modeled
+                    .checked_add(layout.directory_admission.modeled_parsed_payload_bytes)
+                    .is_some_and(|n| n <= 512 * 1024 * 1024),
+            "probe build payload/resident aggregate admission",
+        )?;
+        accounting.modeled_query_payload_bytes = modeled;
+        let mut body = probe_reserved(bytes)?;
+        body.extend_from_slice(PROBE_MARKER);
+        body.extend_from_slice(layout.admitted_root_sha256.as_bytes());
+        for value in [
+            layout.rows(),
+            layout.dimensions(),
+            layout.manifest.build.cells,
+            PROBE_COUNT,
+        ] {
+            body.extend_from_slice(&(value as u64).to_le_bytes());
+        }
+        for values in [&layout.manifest.low, &layout.manifest.step] {
+            for value in values {
+                body.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        let mut seen = vec![false; layout.rows()];
+        let wave = accounting.wave(FetchStage::WholeCell);
+        for node in probe_leaves(layout)? {
+            let Target::Cell { cell } = &node.target else {
+                unreachable!()
+            };
+            let whole = accounting.fetch(
+                &layout.cells,
+                &cell.whole,
+                FetchStage::WholeCell,
+                wave,
+                (layout.manifest.build.cells, layout.manifest.cell_bytes),
+            )?;
+            let source = &whole[..cell.source.bytes];
+            require(
+                hash(source) == cell.source.sha256,
+                "probe source span SHA256",
+            )?;
+            let ids = source
+                .chunks_exact(8 + layout.codec.record_bytes())
+                .map(|record| i64::from_le_bytes(record[..8].try_into().unwrap()))
+                .collect::<Vec<_>>();
+            require(ids.len() == node.rows, "probe exact source roster")?;
+            let mut records = probe_reserved(node.rows * (layout.dimensions() + 12))?;
+            for span in &cell.refinement {
+                let start = span
+                    .offset
+                    .checked_sub(cell.whole.offset)
+                    .ok_or("probe block offset")?;
+                let block = whole
+                    .get(start..start + span.bytes)
+                    .ok_or("probe block extent")?;
+                require(hash(block) == span.sha256, "probe refinement SHA256")?;
+                records.extend_from_slice(block);
+            }
+            require(
+                records.len() == node.rows * (layout.dimensions() + 12),
+                "probe SQ8 exact extent",
+            )?;
+            for (&id, record) in ids
+                .iter()
+                .zip(records.chunks_exact(layout.dimensions() + 12))
+            {
+                require(
+                    id >= 0
+                        && (id as usize) < seen.len()
+                        && !seen[id as usize]
+                        && i64::from_le_bytes(record[..8].try_into()?) == id,
+                    "probe complete unique source/SQ8 ID binding",
+                )?;
+                seen[id as usize] = true;
+            }
+            let selected =
+                probe_greedy(&records, &ids, &layout.manifest.low, &layout.manifest.step)?;
+            body.extend_from_slice(&(cell.id as u64).to_le_bytes());
+            body.extend_from_slice(&(node.rows as u64).to_le_bytes());
+            for id in &ids {
+                body.extend_from_slice(&id.to_le_bytes());
+            }
+            for ordinal in selected {
+                body.extend_from_slice(&(ordinal as u64).to_le_bytes());
+                let start = ordinal * (layout.dimensions() + 12);
+                body.extend_from_slice(&records[start..start + layout.dimensions() + 12]);
+            }
+        }
+        require(
+            seen.iter().all(|v| *v) && body.len() == bytes,
+            "probe complete source IDs/output geometry",
+        )?;
+        let parent = output
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let mut file = new_file(output)?;
+        file.write_all(&body)?;
+        file.sync_all()?;
+        File::open(parent)?.sync_all()?;
+        Ok((
+            Artifact {
+                path: output.into(),
+                bytes: body.len(),
+                sha256: hash(&body),
+            },
+            modeled,
+        ))
+    })();
+    match work {
+        Ok((artifact, modeled)) => Ok(SourceProbeBuildReceipt {
+            artifact,
+            accounting,
+            complete: probe_elapsed(started),
+            modeled_peak_payload_bytes: modeled,
+        }),
+        Err(error) => Err(SourceProbeFailure {
+            message: error.to_string(),
+            accounting,
+            startup: ReadStats::default(),
+            complete: probe_elapsed(started),
+        }),
+    }
+}
+struct ProbeCursor<'a> {
+    body: &'a [u8],
+    offset: usize,
+}
+impl<'a> ProbeCursor<'a> {
+    fn take(&mut self, bytes: usize) -> Result<&'a [u8]> {
+        let end = self
+            .offset
+            .checked_add(bytes)
+            .ok_or("probe cursor overflow")?;
+        let value = self
+            .body
+            .get(self.offset..end)
+            .ok_or("probe truncated sidecar")?;
+        self.offset = end;
+        Ok(value)
+    }
+    fn usize(&mut self) -> Result<usize> {
+        Ok(usize::try_from(u64::from_le_bytes(
+            self.take(8)?.try_into()?,
+        ))?)
+    }
+}
+/// Fixed whole-cell descriptor caps. Descriptor totals are reported separately
+/// from actual zero-I/O coverage selection, with no implied payload fetch.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceProbeLimits {
+    /// Must equal24, with no hierarchy or widening.
+    pub max_cells: usize,
+    /// At most24 selected whole-cell descriptors.
+    pub max_cell_gets: usize,
+    /// At most16MiB selected whole-cell descriptor bytes.
+    pub max_cell_bytes: usize,
+    /// Bounded resident scoring and roster scratch, excluding router residency.
+    pub max_query_payload_bytes: usize,
+}
+/// Selected source roster and hypothetical whole-cell fetch descriptor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceProbeSelection {
+    /// Actual resident layout cell ID.
+    pub cell_id: usize,
+    /// Minimum native SQ8 witness score, ordered then by cell ID.
+    pub score: f32,
+    /// Lossless score for replay.
+    pub score_bits: u32,
+    /// Authenticated source roster retained at sidecar preload.
+    pub source_ids: Vec<i64>,
+    /// Concatenation position, never source membership interval.
+    pub first_row: usize,
+    /// Whole-cell fetch offset, not read during coverage.
+    pub whole_offset: usize,
+    /// Whole-cell fetch bytes, not read during coverage.
+    pub whole_bytes: usize,
+    /// Whole-cell fetch SHA256, not independently verified during coverage.
+    pub whole_sha256: String,
+}
+/// I/O-free source-witness coverage receipt, frozen before truth attribution.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SourceProbeNomination {
+    /// All cells scored, never prefiltered by a hierarchy.
+    pub resident_cells: usize,
+    /// Exact count of native witness scores.
+    pub witness_scores: usize,
+    /// Ordered fixed top24 selection and retained source rosters.
+    pub selected: Vec<SourceProbeSelection>,
+    /// Sorted unique selected source IDs.
+    pub covered_ids: Vec<i64>,
+    /// Hypothetical selected whole-cell GETs; actual query GETs remain zero.
+    pub selected_fetch_gets: usize,
+    /// Hypothetical selected whole-cell bytes; actual query reads remain zero.
+    pub selected_fetch_bytes: usize,
+    /// Actual query reads (zero) and admitted scoring/roster scratch.
+    pub accounting: Accounting,
+    /// Complete selection wall/CPU includes query preparation and rosters.
+    pub complete: StageTime,
+}
+/// Separately admitted all16-block full-SQ8 diagnostic.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SourceProbeSearchTrace {
+    /// Frozen source-witness selection; separate descriptor totals and actual I/O.
+    pub nomination: SourceProbeNomination,
+    /// Actual full-cell read, SQ2 nomination and unchanged SQ8 rank trace.
+    pub trace: SearchTrace,
+    /// One complete query timer including routing/read/auth/nomination/ranking.
+    pub complete: StageTime,
+}
+impl SourceProbeRouter {
+    /// Authenticate a trusted fresh sidecar and root binding before serving.
+    /// Admission and exact encoded geometry precede body open/read/allocation.
+    pub fn open(
+        layout: &Prototype,
+        artifact: &Artifact,
+        max_payload_bytes: usize,
+    ) -> std::result::Result<Self, SourceProbeFailure> {
+        let started = (Instant::now(), cpu_ns());
+        let mut startup = ReadStats::default();
+        let work = (|| -> Result<Self> {
+            let bytes = probe_encoded_bytes(layout)?;
+            let mut admission = probe_admission(layout, bytes)?;
+            require(
+                artifact.bytes == bytes
+                    && valid_sha(&artifact.sha256)
+                    && max_payload_bytes <= 512 * 1024 * 1024
+                    && admission.modeled_preload_peak_bytes <= max_payload_bytes
+                    && max_payload_bytes
+                        .checked_add(layout.directory_admission.modeled_parsed_payload_bytes)
+                        .is_some_and(|n| n <= 512 * 1024 * 1024),
+                "probe sidecar exact geometry/preload aggregate admission",
+            )?;
+            // File open/type errors submit no body read. Once admitted/opened,
+            // every read attempt, including authentication failure, is charged.
+            let mut file = probe_file(&artifact.path, artifact.bytes)?;
+            let mut body = probe_reserved(bytes)?;
+            body.resize(bytes, 0);
+            startup.submitted_gets = 1;
+            startup.requested_bytes = bytes;
+            startup.failed_gets = 1;
+            file.read_exact(&mut body)?;
+            require(
+                file.read(&mut [0])? == 0 && hash(&body) == artifact.sha256,
+                "probe sidecar SHA256/EOF",
+            )?;
+            startup.failed_gets = 0;
+            startup.verified_bytes = bytes;
+            let mut cursor = ProbeCursor {
+                body: &body,
+                offset: 0,
+            };
+            require(
+                cursor.take(8)? == PROBE_MARKER
+                    && cursor.take(64)? == layout.admitted_root_sha256.as_bytes()
+                    && cursor.usize()? == layout.rows()
+                    && cursor.usize()? == layout.dimensions()
+                    && cursor.usize()? == layout.manifest.build.cells
+                    && cursor.usize()? == PROBE_COUNT,
+                "probe fresh marker/root/geometry/fixed16 binding",
+            )?;
+            for values in [&layout.manifest.low, &layout.manifest.step] {
+                for value in values {
+                    require(
+                        cursor.take(4)? == value.to_le_bytes(),
+                        "probe exact codec bits",
+                    )?;
+                }
+            }
+            let mut cells = probe_reserved(layout.manifest.build.cells)?;
+            let mut packed = probe_reserved(bytes)?;
+            let mut seen = vec![false; layout.rows()];
+            for node in probe_leaves(layout)? {
+                let Target::Cell { cell } = &node.target else {
+                    unreachable!()
+                };
+                require(
+                    cursor.usize()? == cell.id && cursor.usize()? == node.rows,
+                    "probe cell ID/rows binding",
+                )?;
+                let mut ids = probe_reserved(node.rows)?;
+                for _ in 0..node.rows {
+                    let id = i64::from_le_bytes(cursor.take(8)?.try_into()?);
+                    require(
+                        id >= 0 && (id as usize) < seen.len() && !seen[id as usize],
+                        "probe unique complete source IDs",
+                    )?;
+                    seen[id as usize] = true;
+                    ids.push(id);
+                }
+                let mut ordinals = probe_reserved(node.rows.min(PROBE_COUNT))?;
+                let start = packed.len() / (layout.dimensions() + 12);
+                for _ in 0..node.rows.min(PROBE_COUNT) {
+                    let ordinal = cursor.usize()?;
+                    let record = cursor.take(layout.dimensions() + 12)?;
+                    require(
+                        ordinal < ids.len()
+                            && !ordinals.contains(&ordinal)
+                            && i64::from_le_bytes(record[..8].try_into()?) == ids[ordinal],
+                        "probe witness local ordinal/source ID binding",
+                    )?;
+                    // Validate numeric guards without retaining decoded vectors.
+                    drop(probe_normalized(
+                        record,
+                        &layout.manifest.low,
+                        &layout.manifest.step,
+                    )?);
+                    ordinals.push(ordinal);
+                    packed.extend_from_slice(record);
+                }
+                require(
+                    ids[ordinals[0]] == *ids.iter().min().ok_or("probe empty roster")?,
+                    "probe first witness smallest ID",
+                )?;
+                cells.push(ProbeCell {
+                    cell: cell.clone(),
+                    source_ids: ids,
+                    local_ordinals: ordinals,
+                    start,
+                });
+            }
+            require(
+                cursor.offset == bytes && seen.iter().all(|v| *v),
+                "probe complete sidecar/source roster",
+            )?;
+            let low = layout.manifest.low.clone();
+            let step = layout.manifest.step.clone();
+            admission.owned_capacity_bytes = packed.capacity()
+                + (low.capacity() + step.capacity()) * 4
+                + cells.capacity() * std::mem::size_of::<ProbeCell>()
+                + cells
+                    .iter()
+                    .map(|c| {
+                        c.source_ids.capacity() * 8
+                            + c.local_ordinals.capacity() * 8
+                            + c.cell.refinement.capacity() * std::mem::size_of::<Span>()
+                            + c.cell.whole.sha256.capacity()
+                            + c.cell.source.sha256.capacity()
+                            + c.cell
+                                .refinement
+                                .iter()
+                                .map(|s| s.sha256.capacity())
+                                .sum::<usize>()
+                    })
+                    .sum::<usize>()
+                + 64;
+            require(
+                admission.owned_capacity_bytes <= admission.modeled_resident_bytes,
+                "probe owned capacity model",
+            )?;
+            Ok(Self {
+                root_sha256: layout.admitted_root_sha256.clone(),
+                rows: layout.rows(),
+                dimensions: layout.dimensions(),
+                low,
+                step,
+                cells,
+                packed,
+                startup: ReadStats::default(),
+                startup_time: StageTime::default(),
+                admission,
+            })
+        })();
+        match work {
+            Ok(mut router) => {
+                router.startup = startup;
+                router.startup_time = probe_elapsed(started);
+                Ok(router)
+            }
+            Err(error) => Err(SourceProbeFailure {
+                message: error.to_string(),
+                accounting: Accounting::default(),
+                startup,
+                complete: probe_elapsed(started),
+            }),
+        }
+    }
+    fn ranked_cells(&self, query: &[f32]) -> Result<Vec<(f32, usize)>> {
+        require(
+            query.len() == self.dimensions && self.cells.len() >= PROBE_CELLS,
+            "probe query dimensions/at least24 cells",
+        )?;
+        let normalized = cosine_vector(query)?;
+        let count = self.packed.len() / (self.dimensions + 12);
+        let ordinals = (0..count).collect::<Vec<_>>();
+        let scores = crate::exact_sq8_nominee::score_nominees(
+            &self.packed,
+            Sq8Geometry {
+                rows: count,
+                dimensions: self.dimensions,
+            },
+            &ordinals,
+            &normalized,
+            &self.low,
+            &self.step,
+        )
+        .map_err(|error| format!("probe unchanged native SQ8: {error:?}"))?;
+        let mut ranked = probe_reserved(PROBE_CELLS + 1)?;
+        for cell in &self.cells {
+            let score = scores[cell.start..cell.start + cell.local_ordinals.len()]
+                .iter()
+                .map(|v| v.score)
+                .min_by(f32::total_cmp)
+                .ok_or("probe empty witness set")?;
+            ranked.push((score, cell.cell.id));
+            ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            ranked.truncate(PROBE_CELLS);
+        }
+        Ok(ranked)
+    }
+    fn scratch(&self) -> Result<usize> {
+        let witnesses = self.packed.len() / (self.dimensions + 12);
+        witnesses
+            .checked_mul(256)
+            .and_then(|n| n.checked_add(self.rows.checked_mul(128)?))
+            .and_then(|n| n.checked_add(self.dimensions * 16 + 65536))
+            .ok_or_else(|| "probe query scratch overflow".into())
+    }
+    /// I/O-free fixed all-cell native min-witness top24, ties ascending cell ID.
+    pub fn select(&self, query: &[f32]) -> Result<Vec<usize>> {
+        require(self.scratch()? <= PROBE_CAP, "probe selection scratch cap")?;
+        Ok(self.ranked_cells(query)?.into_iter().map(|v| v.1).collect())
+    }
+    /// Coverage-only nomination. Every source roster is already resident;
+    /// selected fetch descriptors are capped but no cell payload is fetched.
+    pub fn nominate(
+        &self,
+        query: &[f32],
+        limits: SourceProbeLimits,
+    ) -> std::result::Result<SourceProbeNomination, SourceProbeFailure> {
+        let started = (Instant::now(), cpu_ns());
+        let mut accounting = Accounting::default();
+        let work = (|| -> Result<SourceProbeNomination> {
+            let scratch = self.scratch()?;
+            require(
+                limits.max_cells == PROBE_CELLS
+                    && limits.max_cell_gets == PROBE_CELLS
+                    && limits.max_cell_bytes > 0
+                    && limits.max_cell_bytes <= 16 * 1024 * 1024
+                    && limits.max_query_payload_bytes <= 512 * 1024 * 1024
+                    && scratch <= limits.max_query_payload_bytes
+                    && limits
+                        .max_query_payload_bytes
+                        .checked_add(self.admission.modeled_resident_bytes)
+                        .is_some_and(|n| n <= 512 * 1024 * 1024),
+                "probe fixed24 descriptor/query scratch aggregate admission",
+            )?;
+            accounting.modeled_query_payload_bytes = scratch;
+            let ranked = self.ranked_cells(query)?;
+            let bytes = ranked
+                .iter()
+                .map(|v| self.cells[v.1].cell.whole.bytes)
+                .sum::<usize>();
+            require(
+                bytes <= limits.max_cell_bytes,
+                "probe selected whole-cell descriptor admission",
+            )?;
+            let selected = ranked
+                .into_iter()
+                .map(|(score, id)| {
+                    let cell = &self.cells[id];
+                    SourceProbeSelection {
+                        cell_id: id,
+                        score,
+                        score_bits: score.to_bits(),
+                        source_ids: cell.source_ids.clone(),
+                        first_row: cell.cell.first_row,
+                        whole_offset: cell.cell.whole.offset,
+                        whole_bytes: cell.cell.whole.bytes,
+                        whole_sha256: cell.cell.whole.sha256.clone(),
+                    }
+                })
+                .collect::<Vec<_>>();
+            let covered_ids = selected
+                .iter()
+                .flat_map(|c| c.source_ids.iter().copied())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            Ok(SourceProbeNomination {
+                resident_cells: self.cells.len(),
+                witness_scores: self.packed.len() / (self.dimensions + 12),
+                selected,
+                covered_ids,
+                selected_fetch_gets: PROBE_CELLS,
+                selected_fetch_bytes: bytes,
+                accounting: Accounting::default(),
+                complete: StageTime::default(),
+            })
+        })();
+        match work {
+            Ok(mut receipt) => {
+                receipt.accounting = accounting;
+                receipt.complete = probe_elapsed(started);
+                Ok(receipt)
+            }
+            Err(error) => Err(SourceProbeFailure {
+                message: error.to_string(),
+                accounting,
+                startup: ReadStats::default(),
+                complete: probe_elapsed(started),
+            }),
+        }
+    }
+}
+
+impl Prototype {
+    fn query_probed_inner(
+        &self,
+        router: &SourceProbeRouter,
+        nomination: &SourceProbeNomination,
+        query: &[f32],
+        top_k: usize,
+        options: SearchOptions,
+        accounting: &mut Accounting,
+    ) -> Result<SearchTrace> {
+        require(
+            router.root_sha256 == self.admitted_root_sha256
+                && top_k > 0
+                && top_k <= self.rows()
+                && options.fetch_policy == FetchPolicy::WholeCell
+                && options.blocks_per_cell == 16
+                && options.primary_beam == 8
+                && options.boundary_beam == 24
+                && options.max_cells == 24
+                && options.max_cell_gets == 24
+                && options.max_cell_bytes > 0
+                && options.max_cell_bytes <= 16 * 1024 * 1024
+                && options.max_query_payload_bytes <= 512 * 1024 * 1024,
+            "probe full-SQ8 fixed24/all16 options/root binding",
+        )?;
+        let frontier_cells = options.primary_beam + options.boundary_beam;
+        let rows = options.max_cells * self.manifest.input.cell_rows;
+        // Root and full directory were admitted once at open. Only cloned
+        // routing frontiers, diagnostic rosters and actual response/rank buffers
+        // are multiplied by concurrent queries; host/runtime charges are external.
+        let routing_scratch = 8
+            * frontier_cells
+            * (self.dimensions() * 4
+                + self.manifest.input.cell_rows.div_ceil(BLOCK_ROWS) * 128
+                + 512);
+        let responses = match options.fetch_policy {
+            FetchPolicy::WholeCell => options.max_cell_bytes.checked_mul(3),
+            FetchPolicy::TwoStage => options
+                .max_source_bytes
+                .checked_mul(2)
+                .and_then(|n| n.checked_add(options.max_refinement_bytes.checked_mul(3)?)),
+        }
+        .ok_or("query memory overflow")?;
+        let payload = (routing_scratch + 400_000 + rows * 512)
+            .checked_add(responses)
+            .ok_or("query memory overflow")?;
+        require(
+            payload <= options.max_query_payload_bytes,
+            "query payload/scratch admission",
+        )?;
+        accounting.modeled_query_payload_bytes = payload;
+
+        let combined = payload
+            .checked_add(router.scratch()?)
+            .ok_or("probe full-query memory overflow")?;
+        require(
+            combined <= options.max_query_payload_bytes
+                && options
+                    .max_query_payload_bytes
+                    .checked_add(self.directory_admission.modeled_parsed_payload_bytes)
+                    .and_then(|n| n.checked_add(router.admission.modeled_resident_bytes))
+                    .is_some_and(|n| n <= 512 * 1024 * 1024),
+            "probe full-query combined payload/resident aggregate admission",
+        )?;
+        accounting.modeled_query_payload_bytes = combined;
+        let normalized_query = cosine_vector(query)?;
+        let routing = nomination.complete.clone();
+        let mut selected = BTreeMap::new();
+        for choice in &nomination.selected {
+            let node = self
+                .directories
+                .values()
+                .flat_map(|p| &p.children)
+                .find(|n| matches!(&n.target, Target::Cell { cell } if cell.id == choice.cell_id))
+                .ok_or("probe selected resident leaf missing")?;
+            selected.insert(choice.cell_id, node.clone());
+        }
+        require(selected.len() == 24, "probe actual full24 selected cells")?;
+        let primary_cells = nomination
+            .selected
+            .iter()
+            .take(8)
+            .map(|c| c.cell_id)
+            .collect::<BTreeSet<_>>();
+        let (stage, fetch_cap) = match options.fetch_policy {
+            FetchPolicy::WholeCell => (
+                FetchStage::WholeCell,
+                (options.max_cell_gets, options.max_cell_bytes),
+            ),
+            FetchPolicy::TwoStage => (
+                FetchStage::Source,
+                (options.max_source_gets, options.max_source_bytes),
+            ),
+        };
+        require(
+            selected.len() <= options.max_cells
+                && selected.len() <= fetch_cap.0
+                && selected
+                    .values()
+                    .map(|n| match &n.target {
+                        Target::Cell { cell } => match options.fetch_policy {
+                            FetchPolicy::WholeCell => cell.whole.bytes,
+                            FetchPolicy::TwoStage => cell.source.bytes,
+                        },
+                        _ => 0,
+                    })
+                    .sum::<usize>()
+                    <= fetch_cap.1,
+            "selected cell batch admission",
+        )?;
+        let started = (Instant::now(), cpu_ns());
+        // Match native serving: preserve original f32 input for SQ2 preparation;
+        // f32 prenormalization can perturb lookup scores and block ties.
+        let prepared = self.codec.prepare_query(query, 400_000)?;
+        let mut primary_ids = BTreeSet::new();
+        let mut covered_ids = BTreeSet::new();
+        let mut nominated_ids = BTreeSet::new();
+        let mut refinements = Vec::new();
+        let mut whole_bodies = BTreeMap::new();
+        let cell_wave = accounting.wave(stage);
+        for node in selected.values() {
+            let Target::Cell { cell } = &node.target else {
+                unreachable!()
+            };
+            let span = match options.fetch_policy {
+                FetchPolicy::WholeCell => &cell.whole,
+                FetchPolicy::TwoStage => &cell.source,
+            };
+            let body = accounting.fetch(&self.cells, span, stage, cell_wave, fetch_cap)?;
+            let source = &body[..cell.source.bytes];
+            if options.fetch_policy == FetchPolicy::WholeCell {
+                require(
+                    hash(source) == cell.source.sha256,
+                    "cell source SHA256 mismatch",
+                )?;
+            }
+            let mut ids = Vec::with_capacity(node.rows);
+            let mut maxima = vec![f64::NEG_INFINITY; node.rows.div_ceil(BLOCK_ROWS)];
+            for (row, record) in source
+                .chunks_exact(8 + self.codec.record_bytes())
+                .enumerate()
+            {
+                let id = i64::from_le_bytes(record[..8].try_into()?);
+                require(
+                    id >= 0 && (id as usize) < self.rows() && covered_ids.insert(id),
+                    "cell ordinal roster/duplicate ID",
+                )?;
+                if primary_cells.contains(&cell.id) {
+                    primary_ids.insert(id);
+                }
+                ids.push(id);
+                maxima[row / BLOCK_ROWS] =
+                    maxima[row / BLOCK_ROWS].max(prepared.score(&record[8..])?);
+            }
+            let mut blocks = (0..maxima.len()).collect::<Vec<_>>();
+            blocks.sort_unstable_by(|&a, &b| maxima[b].total_cmp(&maxima[a]).then(a.cmp(&b)));
+            for block in blocks.into_iter().take(options.blocks_per_cell) {
+                let expected =
+                    ids[block * BLOCK_ROWS..((block + 1) * BLOCK_ROWS).min(ids.len())].to_vec();
+                nominated_ids.extend(expected.iter().copied());
+                refinements.push((
+                    cell.first_row + block * BLOCK_ROWS,
+                    cell.refinement[block].clone(),
+                    expected,
+                    cell.whole.offset,
+                ));
+            }
+            if options.fetch_policy == FetchPolicy::WholeCell {
+                whole_bodies.insert(cell.whole.offset, body);
+            }
+        }
+        let local_nomination = probe_elapsed(started);
+        if options.fetch_policy == FetchPolicy::TwoStage {
+            require(
+                refinements.len() <= options.max_refinement_gets
+                    && refinements.iter().map(|v| v.1.bytes).sum::<usize>()
+                        <= options.max_refinement_bytes,
+                "refinement batch admission",
+            )?;
+        }
+        refinements.sort_unstable_by_key(|v| v.0);
+        let started = (Instant::now(), cpu_ns());
+        let mut bodies = Vec::with_capacity(refinements.len());
+        if options.fetch_policy == FetchPolicy::TwoStage {
+            let wave = accounting.wave(FetchStage::Refinement);
+            for (_, span, expected, _) in &refinements {
+                let body = accounting.fetch(
+                    &self.cells,
+                    span,
+                    FetchStage::Refinement,
+                    wave,
+                    (options.max_refinement_gets, options.max_refinement_bytes),
+                )?;
+                require(
+                    body.chunks_exact(self.dimensions() + 12)
+                        .zip(expected)
+                        .all(|(row, id)| i64::from_le_bytes(row[..8].try_into().unwrap()) == *id),
+                    "refinement/source ordinal binding",
+                )?;
+                bodies.push(body);
+            }
+        }
+        let mut ranges = Vec::with_capacity(refinements.len());
+        for (index, (first, span, expected, whole_offset)) in refinements.iter().enumerate() {
+            let body = match options.fetch_policy {
+                FetchPolicy::TwoStage => bodies[index].as_slice(),
+                FetchPolicy::WholeCell => {
+                    let retained = whole_bodies
+                        .get(whole_offset)
+                        .ok_or("whole-cell buffer missing")?;
+                    let start = span
+                        .offset
+                        .checked_sub(*whole_offset)
+                        .ok_or("whole-cell block offset")?;
+                    retained
+                        .get(start..start + span.bytes)
+                        .ok_or("whole-cell block extent")?
+                }
+            };
+            if options.fetch_policy == FetchPolicy::WholeCell {
+                require(hash(body) == span.sha256, "refinement SHA256 mismatch")?;
+                require(
+                    body.chunks_exact(self.dimensions() + 12)
+                        .zip(expected)
+                        .all(|(row, id)| i64::from_le_bytes(row[..8].try_into().unwrap()) == *id),
+                    "refinement/source ordinal binding",
+                )?;
+            }
+            ranges.push(ReturnedRange {
+                start: first * (self.dimensions() + 12),
+                bytes: body,
+            });
+        }
+        let count = top_k.min(nominated_ids.len());
+        let ranked = rank_returned_ranges(
+            Sq8Geometry {
+                rows: self.rows(),
+                dimensions: self.dimensions(),
+            },
+            &ranges,
+            &normalized_query,
+            &self.manifest.low,
+            &self.manifest.step,
+            count,
+            match options.fetch_policy {
+                FetchPolicy::WholeCell => options.max_cell_bytes,
+                FetchPolicy::TwoStage => options.max_refinement_bytes,
+            },
+        )
+        .map_err(|error| format!("unchanged SQ8 ranking: {error:?}"))?;
+        let returned = ranked
+            .into_iter()
+            .map(|v| RankedRow {
+                ordinal: v.ordinal,
+                id: v.id,
+                score: v.score,
+            })
+            .collect();
+        let final_ranking = probe_elapsed(started);
+        Ok(SearchTrace {
+            primary_ids: primary_ids.into_iter().collect(),
+            covered_ids: covered_ids.into_iter().collect(),
+            nominated_ids: nominated_ids.into_iter().collect(),
+            returned,
+            accounting: Accounting::default(),
+            routing,
+            local_nomination,
+            final_ranking,
+        })
+    }
+
+    /// Separately admitted full-SQ8 path. The caller must establish the paired
+    /// coverage gate first. All16 blocks admitted; native query preparation and
+    /// ranking arithmetic match the old path exactly, including nonunit inputs.
+    pub fn search_probed(
+        &self,
+        router: &SourceProbeRouter,
+        query: &[f32],
+        top_k: usize,
+        options: SearchOptions,
+    ) -> std::result::Result<SourceProbeSearchTrace, SourceProbeFailure> {
+        let started = (Instant::now(), cpu_ns());
+        let nomination = router.nominate(
+            query,
+            SourceProbeLimits {
+                max_cells: options.max_cells,
+                max_cell_gets: options.max_cell_gets,
+                max_cell_bytes: options.max_cell_bytes,
+                max_query_payload_bytes: options.max_query_payload_bytes,
+            },
+        );
+        let nomination = match nomination {
+            Ok(value) => value,
+            Err(mut error) => {
+                error.complete = probe_elapsed(started);
+                return Err(error);
+            }
+        };
+        let mut accounting = Accounting::default();
+        match self.query_probed_inner(router, &nomination, query, top_k, options, &mut accounting) {
+            Ok(mut trace) => {
+                trace.accounting = accounting;
+                require(
+                    trace.covered_ids == nomination.covered_ids
+                        && trace.nominated_ids == trace.covered_ids,
+                    "probe all-block/source roster binding",
+                )
+                .map_err(|error| SourceProbeFailure {
+                    message: error.to_string(),
+                    accounting: trace.accounting.clone(),
+                    startup: ReadStats::default(),
+                    complete: probe_elapsed(started),
+                })?;
+                Ok(SourceProbeSearchTrace {
+                    nomination,
+                    trace,
+                    complete: probe_elapsed(started),
+                })
+            }
+            Err(error) => Err(SourceProbeFailure {
+                message: error.to_string(),
+                accounting,
+                startup: ReadStats::default(),
+                complete: probe_elapsed(started),
+            }),
+        }
+    }
+}
+
 /// Descriptive stage coverage on an externally frozen panel, not independent
 /// causal estimates or a qualification threshold. Primary misses can be
 /// recovered by boundary expansion; only remaining boundary misses are additive.
@@ -1963,6 +3184,577 @@ pub fn decompose_loss(trace: &SearchTrace, truth: &[i64]) -> Result<LossDecompos
 mod tests {
     use super::*;
     use serde_json::json;
+    fn source_probe_limits() -> SourceProbeLimits {
+        SourceProbeLimits {
+            max_cells: 24,
+            max_cell_gets: 24,
+            max_cell_bytes: 16 * 1024 * 1024,
+            max_query_payload_bytes: 128 * 1024 * 1024,
+        }
+    }
+    fn source_probe_fixture(dir: &Path, rows: usize) -> Prototype {
+        let vectors = (0..rows)
+            .map(|i| {
+                let theta = (i % 97) as f64 / 96. * std::f64::consts::FRAC_PI_2;
+                vec![theta.cos() as f32, theta.sin() as f32]
+            })
+            .collect::<Vec<_>>();
+        let config = fixture_with_vectors(dir, &vectors, &[0.2, 0.1], true);
+        let path = dir.join("layout-probes");
+        let receipt = build(&config, &path).unwrap();
+        Prototype::open_for_source_probes(
+            &Artifact {
+                path: path.join("manifest.json"),
+                bytes: fs::metadata(path.join("manifest.json")).unwrap().len() as usize,
+                sha256: receipt.root_sha256,
+            },
+            128 * 1024 * 1024,
+        )
+        .unwrap()
+    }
+    #[test]
+    fn source_probe_greedy_matches_independent_oracle_ties_shortcell_and_numeric_guards() {
+        let ids = (0..21).map(|i| 100 - i).collect::<Vec<i64>>();
+        let low = [-0.5_f32, 0.125];
+        let step = [1. / 255., 1. / 255.];
+        let mut records = Vec::new();
+        for (i, id) in ids.iter().enumerate() {
+            records.extend_from_slice(&id.to_le_bytes());
+            records.extend_from_slice(&1_f32.to_le_bytes());
+            records
+                .extend_from_slice(&[if i % 3 == 0 { 200 } else { 40 }, (i % 3 * 40 + 40) as u8]);
+        }
+        // Independent oracle recomputes each candidate's nearest distance from
+        // scratch on every iteration; no production helper or incremental state.
+        let points = records
+            .chunks_exact(14)
+            .map(|r| {
+                let xy = [
+                    low[0] + f32::from(r[12]) * step[0],
+                    low[1] + f32::from(r[13]) * step[1],
+                ];
+                let norm = (f64::from(xy[0]).powi(2) + f64::from(xy[1]).powi(2)).sqrt();
+                [
+                    (f64::from(xy[0]) / norm) as f32,
+                    (f64::from(xy[1]) / norm) as f32,
+                ]
+            })
+            .collect::<Vec<_>>();
+        let mut oracle = vec![20];
+        while oracle.len() < 16 {
+            let mut candidates = (0..ids.len())
+                .filter(|i| !oracle.contains(i))
+                .map(|i| {
+                    let nearest = oracle
+                        .iter()
+                        .map(|&j| {
+                            let x = f64::from(points[i][0]) - f64::from(points[j][0]);
+                            let y = f64::from(points[i][1]) - f64::from(points[j][1]);
+                            x * x + y * y
+                        })
+                        .min_by(f64::total_cmp)
+                        .unwrap();
+                    (nearest, ids[i], i)
+                })
+                .collect::<Vec<_>>();
+            candidates.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+            oracle.push(candidates[0].2);
+        }
+        assert_eq!(probe_greedy(&records, &ids, &low, &step).unwrap(), oracle);
+        let short = [9_i64, 2, 5];
+        let tied = short
+            .iter()
+            .flat_map(|id| {
+                let mut r = id.to_le_bytes().to_vec();
+                r.extend_from_slice(&1_f32.to_le_bytes());
+                r.extend_from_slice(&[1, 0]);
+                r
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            probe_greedy(&tied, &short, &[0., 0.], &[1., 1.]).unwrap(),
+            vec![1, 2, 0]
+        );
+        let mut zero = tied[..14].to_vec();
+        zero[12..].fill(0);
+        assert!(probe_greedy(&zero, &[9], &[0., 0.], &[1., 1.]).is_err());
+        zero[12] = 1;
+        zero[8..12].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(probe_greedy(&zero, &[9], &[0., 0.], &[1., 1.]).is_err());
+        assert!(probe_greedy(&tied[..14], &[9], &[f32::INFINITY, 0.], &[1., 1.]).is_err());
+    }
+    #[test]
+    fn source_probe_raw_identity_native_score_top24_and_no_query_io() {
+        let temp = tempfile::tempdir().unwrap();
+        let layout = source_probe_fixture(temp.path(), 1024);
+        let output = temp.path().join("probes.bin");
+        let build = build_source_probes(&layout, &output).unwrap();
+        assert_eq!(
+            build.accounting.whole_cell.submitted_gets,
+            layout.manifest.build.cells
+        );
+        assert_eq!(
+            build.accounting.whole_cell.verified_bytes,
+            layout.manifest.cell_bytes
+        );
+        let second = build_source_probes(&layout, &temp.path().join("probes-again.bin")).unwrap();
+        assert_eq!(build.artifact.sha256, second.artifact.sha256);
+        assert!(build_source_probes(&layout, &output).is_err());
+        let router = SourceProbeRouter::open(&layout, &build.artifact, 128 * 1024 * 1024).unwrap();
+        for probe in &router.cells {
+            let node = probe_leaves(&layout).unwrap().into_iter().find(|node|
+                matches!(&node.target, Target::Cell { cell } if cell.id == probe.cell.id)).unwrap();
+            assert_eq!(probe.local_ordinals.len(), node.rows.min(16));
+            let whole = read_at(
+                &layout.cells,
+                probe.cell.whole.offset,
+                probe.cell.whole.bytes,
+            )
+            .unwrap();
+            for (slot, &local) in probe.local_ordinals.iter().enumerate() {
+                let raw = probe.cell.source.bytes + local * (layout.dimensions() + 12);
+                let packed = (probe.start + slot) * (layout.dimensions() + 12);
+                assert_eq!(&router.packed[packed..packed + 14], &whole[raw..raw + 14]);
+                assert_eq!(
+                    i64::from_le_bytes(router.packed[packed..packed + 8].try_into().unwrap()),
+                    probe.source_ids[local]
+                );
+            }
+        }
+        let query = [3.125_f32, 0.875];
+        let normalized = cosine_vector(&query).unwrap();
+        let ordinals = (0..router.packed.len() / 14).collect::<Vec<_>>();
+        let scores = crate::exact_sq8_nominee::score_nominees(
+            &router.packed,
+            Sq8Geometry {
+                rows: ordinals.len(),
+                dimensions: 2,
+            },
+            &ordinals,
+            &normalized,
+            &layout.manifest.low,
+            &layout.manifest.step,
+        )
+        .unwrap();
+        let mut oracle = router
+            .cells
+            .iter()
+            .map(|cell| {
+                let score = scores[cell.start..cell.start + cell.local_ordinals.len()]
+                    .iter()
+                    .map(|s| s.score)
+                    .min_by(f32::total_cmp)
+                    .unwrap();
+                (score, cell.cell.id)
+            })
+            .collect::<Vec<_>>();
+        oracle.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        oracle.truncate(24);
+        let options = SearchOptions {
+            fetch_policy: FetchPolicy::WholeCell,
+            primary_beam: 8,
+            boundary_beam: 24,
+            blocks_per_cell: 16,
+            max_cells: 24,
+            max_cell_gets: 24,
+            max_cell_bytes: 16 * 1024 * 1024,
+            max_source_gets: 24,
+            max_source_bytes: 16 * 1024 * 1024,
+            max_refinement_gets: 384,
+            max_refinement_bytes: 16 * 1024 * 1024,
+            max_query_payload_bytes: 128 * 1024 * 1024,
+        };
+        let mut capped = options;
+        capped.max_cell_bytes = 1;
+        let error = layout
+            .search_probed(&router, &query, 100, capped)
+            .err()
+            .unwrap();
+        assert_eq!(error.accounting.whole_cell.submitted_gets, 0);
+        assert_eq!(error.accounting.source.submitted_gets, 0);
+        assert!(error.complete.wall_ns > 0);
+        let full = layout.search_probed(&router, &query, 100, options).unwrap();
+        assert_eq!(full.trace.covered_ids, full.trace.nominated_ids);
+        assert_eq!(full.trace.accounting.whole_cell.submitted_gets, 24);
+        assert_eq!(full.trace.accounting.source.submitted_gets, 0);
+        let mut all_ranges = Vec::new();
+        for selected in &full.nomination.selected {
+            let probe = &router.cells[selected.cell_id];
+            let records = read_at(
+                &layout.cells,
+                probe.cell.source.offset + probe.cell.source.bytes,
+                probe.source_ids.len() * 14,
+            )
+            .unwrap();
+            all_ranges.push((probe.cell.first_row * 14, records));
+        }
+        all_ranges.sort_by_key(|v| v.0);
+        let ranges = all_ranges
+            .iter()
+            .map(|(start, bytes)| ReturnedRange {
+                start: *start,
+                bytes,
+            })
+            .collect::<Vec<_>>();
+        let native = rank_returned_ranges(
+            Sq8Geometry {
+                rows: layout.rows(),
+                dimensions: 2,
+            },
+            &ranges,
+            &normalized,
+            &layout.manifest.low,
+            &layout.manifest.step,
+            100,
+            16 * 1024 * 1024,
+        )
+        .unwrap();
+        assert_eq!(
+            full.trace
+                .returned
+                .iter()
+                .map(|r| (r.id, r.score.to_bits()))
+                .collect::<Vec<_>>(),
+            native
+                .iter()
+                .map(|r| (r.id, r.score.to_bits()))
+                .collect::<Vec<_>>()
+        );
+        assert!(full.complete.wall_ns >= full.nomination.complete.wall_ns);
+        drop(layout);
+        // Remove every source input, layout and the sidecar. The resident router
+        // still routes/scores/returns rosters without any surviving file handle.
+        for entry in fs::read_dir(temp.path()).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                fs::remove_dir_all(path).unwrap();
+            } else {
+                fs::remove_file(path).unwrap();
+            }
+        }
+        let nominated = router.nominate(&query, source_probe_limits()).unwrap();
+        assert_eq!(
+            router.select(&query).unwrap(),
+            oracle.iter().map(|v| v.1).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            nominated
+                .selected
+                .iter()
+                .map(|v| (v.score_bits, v.cell_id))
+                .collect::<Vec<_>>(),
+            oracle
+                .iter()
+                .map(|v| (v.0.to_bits(), v.1))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(nominated.accounting.whole_cell.submitted_gets, 0);
+        assert_eq!(nominated.accounting.source.submitted_gets, 0);
+        assert!(nominated.accounting.waves.is_empty());
+        assert_eq!(nominated.selected_fetch_gets, 24);
+    }
+    #[test]
+    fn source_probe_cap_binding_tamper_missing_id_fifo_and_symlink_fail_closed() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut layout = source_probe_fixture(temp.path(), 1024);
+        let artifact = build_source_probes(&layout, &temp.path().join("probes.bin"))
+            .unwrap()
+            .artifact;
+        let missing = Artifact {
+            path: temp.path().join("absent"),
+            ..artifact.clone()
+        };
+        let error = SourceProbeRouter::open(&layout, &missing, 1).err().unwrap();
+        assert_eq!(error.startup.submitted_gets, 0);
+        let body = fs::read(&artifact.path).unwrap();
+        let mut changed = body.clone();
+        changed[0] ^= 1;
+        fs::write(&artifact.path, &changed).unwrap();
+        let error = SourceProbeRouter::open(&layout, &artifact, 128 * 1024 * 1024)
+            .err()
+            .unwrap();
+        assert_eq!(error.startup.submitted_gets, 1);
+        assert_eq!(error.startup.failed_gets, 1);
+        let changed_artifact = Artifact {
+            sha256: hash(&changed),
+            ..artifact.clone()
+        };
+        assert!(SourceProbeRouter::open(&layout, &changed_artifact, 128 * 1024 * 1024).is_err());
+        changed = body.clone();
+        let roster = 104 + layout.dimensions() * 8 + 16;
+        changed[roster..roster + 8].copy_from_slice(&(-1_i64).to_le_bytes());
+        fs::write(&artifact.path, &changed).unwrap();
+        assert!(
+            SourceProbeRouter::open(
+                &layout,
+                &Artifact {
+                    sha256: hash(&changed),
+                    ..artifact.clone()
+                },
+                128 * 1024 * 1024
+            )
+            .is_err()
+        );
+        fs::write(&artifact.path, &body).unwrap();
+        layout.admitted_root_sha256 = "0".repeat(64);
+        assert!(SourceProbeRouter::open(&layout, &artifact, 128 * 1024 * 1024).is_err());
+        let link = temp.path().join("probe-link");
+        std::os::unix::fs::symlink(&artifact.path, &link).unwrap();
+        assert!(
+            read_source_probe_artifact(
+                &Artifact {
+                    path: link,
+                    ..artifact.clone()
+                },
+                PROBE_CAP
+            )
+            .is_err()
+        );
+        let fifo = temp.path().join("probe-fifo");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            read_source_probe_artifact(
+                &Artifact {
+                    path: fifo,
+                    ..artifact
+                },
+                PROBE_CAP
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn source_probe_shortcell_builder_and_original_span_tamper() {
+        let temp = tempfile::tempdir().unwrap();
+        let layout = source_probe_fixture(temp.path(), 3);
+        let built = build_source_probes(&layout, &temp.path().join("short.bin")).unwrap();
+        let router = SourceProbeRouter::open(&layout, &built.artifact, 128 * 1024 * 1024).unwrap();
+        assert_eq!(router.cells.len(), 1);
+        assert_eq!(router.cells[0].local_ordinals.len(), 3);
+        assert!(router.select(&[3.125, 0.875]).is_err());
+        let path = temp.path().join("layout-probes/cells.bin");
+        let mut bytes = fs::read(&path).unwrap();
+        bytes[0] ^= 1;
+        fs::write(path, bytes).unwrap();
+        let rejected = temp.path().join("tampered-source.bin");
+        let error = build_source_probes(&layout, &rejected).err().unwrap();
+        assert_eq!(error.accounting.whole_cell.submitted_gets, 1);
+        assert_eq!(error.accounting.whole_cell.failed_gets, 1);
+        assert_eq!(error.accounting.whole_cell.verified_bytes, 0);
+        assert!(!rejected.exists());
+        // Explicit sixteen-block cells catch accidental retention of the old
+        // four-block nominee arm. Keep this in the existing mandatory test.
+        let multi = temp.path().join("sixteen-block");
+        fs::create_dir(&multi).unwrap();
+        let mut config = fixture_with_mean(&multi, 31 * 512 + 33, 2, true, &[0.2, 0.1]);
+        config.cell_rows = 512;
+        let output = multi.join("layout");
+        fs::create_dir(&output).unwrap();
+        let codec = RotatedTwoBitCodec::new(&[0.2, 0.1], NATIVE_CODEC_SEED).unwrap();
+        let code = codec.encode(&[1., 0.]).unwrap();
+        let mut cell_body = Vec::new();
+        let mut nodes = Vec::new();
+        let mut first = 0;
+        let append = |body: &mut Vec<u8>, bytes: &[u8]| {
+            let span = Span {
+                offset: body.len(),
+                bytes: bytes.len(),
+                sha256: hash(bytes),
+            };
+            body.extend_from_slice(bytes);
+            span
+        };
+        for id in 0..32 {
+            let rows = if id == 1 { 33 } else { 512 };
+            let mut source = Vec::new();
+            let mut raw = Vec::new();
+            for ordinal in first..first + rows {
+                source.extend_from_slice(&(ordinal as i64).to_le_bytes());
+                source.extend_from_slice(&code);
+                raw.extend_from_slice(&(ordinal as i64).to_le_bytes());
+                raw.extend_from_slice(&1_f32.to_le_bytes());
+                raw.extend_from_slice(&[1, 0]);
+            }
+            let mut whole = source.clone();
+            whole.extend_from_slice(&raw);
+            let whole = Span {
+                offset: cell_body.len(),
+                bytes: whole.len(),
+                sha256: hash(&whole),
+            };
+            let source = append(&mut cell_body, &source);
+            let refinement = raw
+                .chunks(BLOCK_ROWS * 14)
+                .map(|b| append(&mut cell_body, b))
+                .collect();
+            nodes.push(Node {
+                rows,
+                prototype: vec![1., 0.],
+                target: Target::Cell {
+                    cell: Cell {
+                        id,
+                        first_row: first,
+                        whole,
+                        source,
+                        refinement,
+                    },
+                },
+            });
+            first += rows;
+        }
+        let mut directories = Vec::new();
+        let mut pages = 0;
+        while nodes.len() > 1 {
+            nodes = nodes
+                .chunks(2)
+                .map(|children| {
+                    pages += 1;
+                    let body = serde_json::to_vec(&Directory {
+                        children: children.to_vec(),
+                    })
+                    .unwrap();
+                    Node {
+                        rows: children.iter().map(|n| n.rows).sum(),
+                        prototype: vec![1., 0.],
+                        target: Target::Directory {
+                            span: append(&mut directories, &body),
+                        },
+                    }
+                })
+                .collect();
+        }
+        let Target::Directory {
+            span: root_directory,
+        } = nodes.pop().unwrap().target
+        else {
+            unreachable!()
+        };
+        let manifest = Manifest {
+            schema: SCHEMA.into(),
+            input: config,
+            rows: first,
+            dimensions: 2,
+            seed: NATIVE_CODEC_SEED,
+            mean: vec![0.2, 0.1],
+            low: vec![0., 0.],
+            step: vec![1., 1.],
+            root_directory,
+            directory_bytes: directories.len(),
+            directory_sha256: hash(&directories),
+            cell_bytes: cell_body.len(),
+            build: BuildReceipt {
+                cells: 32,
+                directories: pages,
+                max_cell_rows: 512,
+                max_depth: 5,
+                ..Default::default()
+            },
+        };
+        fs::write(output.join("cells.bin"), cell_body).unwrap();
+        fs::write(output.join("directories.bin"), directories).unwrap();
+        let root = serde_json::to_vec(&manifest).unwrap();
+        fs::write(output.join("manifest.json"), &root).unwrap();
+        let descriptor = Artifact {
+            path: output.join("manifest.json"),
+            bytes: root.len(),
+            sha256: hash(&root),
+        };
+        let layout = Prototype::open_for_source_probes(&descriptor, 128 * 1024 * 1024).unwrap();
+        let probes = build_source_probes(&layout, &multi.join("probes.bin"))
+            .unwrap()
+            .artifact;
+        let router = SourceProbeRouter::open(&layout, &probes, 128 * 1024 * 1024).unwrap();
+        assert_eq!(router.cells.len(), 32);
+        assert_eq!(router.cells[0].cell.refinement.len(), 16);
+        assert_eq!(router.cells[1].cell.refinement.len(), 2);
+        assert_eq!(router.cells[1].cell.refinement[1].bytes, 14);
+        let options = SearchOptions {
+            fetch_policy: FetchPolicy::WholeCell,
+            primary_beam: 8,
+            boundary_beam: 24,
+            blocks_per_cell: 16,
+            max_cells: 24,
+            max_cell_gets: 24,
+            max_cell_bytes: 16 * 1024 * 1024,
+            max_source_gets: 24,
+            max_source_bytes: 16 * 1024 * 1024,
+            max_refinement_gets: 384,
+            max_refinement_bytes: 16 * 1024 * 1024,
+            max_query_payload_bytes: 128 * 1024 * 1024,
+        };
+        let trace = layout
+            .search_probed(&router, &[3.125, 0.875], 100, options)
+            .unwrap();
+        assert_eq!(trace.trace.accounting.whole_cell.submitted_gets, 24);
+        assert_eq!(trace.trace.accounting.refinement.submitted_gets, 0);
+        assert_eq!(trace.trace.covered_ids.len(), 23 * 512 + 33);
+        assert_eq!(trace.trace.nominated_ids, trace.trace.covered_ids);
+        let normalized = cosine_vector(&[3.125, 0.875]).unwrap().into_owned();
+        let mut original = trace
+            .nomination
+            .selected
+            .iter()
+            .map(|choice| {
+                let cell = &router.cells[choice.cell_id];
+                (
+                    cell.cell.first_row * 14,
+                    read_at(
+                        &layout.cells,
+                        cell.cell.source.offset + cell.cell.source.bytes,
+                        cell.source_ids.len() * 14,
+                    )
+                    .unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        original.sort_by_key(|v| v.0);
+        let ranges = original
+            .iter()
+            .map(|(start, bytes)| ReturnedRange {
+                start: *start,
+                bytes,
+            })
+            .collect::<Vec<_>>();
+        let independent = rank_returned_ranges(
+            Sq8Geometry {
+                rows: layout.rows(),
+                dimensions: 2,
+            },
+            &ranges,
+            &normalized,
+            &layout.manifest.low,
+            &layout.manifest.step,
+            100,
+            16 * 1024 * 1024,
+        )
+        .unwrap();
+        assert_eq!(
+            trace
+                .trace
+                .returned
+                .iter()
+                .map(|r| (r.id, r.score.to_bits()))
+                .collect::<Vec<_>>(),
+            independent
+                .iter()
+                .map(|r| (r.id, r.score.to_bits()))
+                .collect::<Vec<_>>()
+        );
+        let mut old = options;
+        old.blocks_per_cell = 4;
+        let error = layout
+            .search_probed(&router, &[3.125, 0.875], 100, old)
+            .err()
+            .unwrap();
+        assert_eq!(error.accounting.whole_cell.submitted_gets, 0);
+    }
 
     fn artifact(path: &Path, bytes: &[u8]) -> Artifact {
         std::fs::write(path, bytes).unwrap();
@@ -4458,6 +6250,7 @@ pub mod split_balance_diagnostic {
             "diagnostic directory payload admission",
         )?;
         let mut prototype = Prototype {
+            admitted_root_sha256: inputs.root.sha256.clone(),
             manifest,
             directories: BTreeMap::new(),
             cells: cell_pin.file.try_clone()?,
