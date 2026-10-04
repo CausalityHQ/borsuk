@@ -1,0 +1,39 @@
+{
+  "checked_at": "2026-10-04T17:42:09.644165+00:00",
+  "native_status": "UNVERIFIED; source-only test repair underway",
+  "local_rust_compilation": false,
+  "paid_job_launched": false,
+  "sdk_model": {
+    "boto3": "1.40.72",
+    "botocore": "1.40.72",
+    "put_object_if_none_match": true,
+    "network_calls": 0,
+    "unit": "borsuk-capacity-sdk-preflight-20261004.service",
+    "invocation_id": "ff8b44114b944d698ebe05231f04c373",
+    "exit_status": 0,
+    "service_seconds": 0.413,
+    "reported_memory_peak": "50.5M",
+    "swap_bytes": 0
+  },
+  "control_native_inventory": {
+    "file_count": 402,
+    "source_identity_sha256": "62297f047f170fba8475c2f89db4f7308d28ef0370140880bc1ecd72d90fd098",
+    "service_seconds": 0.454,
+    "exit_status": 0
+  },
+  "qualification_checkout": {
+    "path": "/home/rb/worktrees/borsuk-capacity-partitioner-qualification-20261004",
+    "sparse": true,
+    "clean_control_inventory_matches": true,
+    "compiler_baseline_executed": false
+  },
+  "aws_read_only_check": {
+    "profile": "causality",
+    "region": "eu-central-1",
+    "tag_filter": "borsuk-*",
+    "pending_running_stopping_instances": 0,
+    "stopped_instances": 3,
+    "instance_actions": 0
+  },
+  "historical_authorities": "Original minimal-archive config is preserved byte-identically in a0001/config.json.gz. Original artifacts and source revisions remain immutable."
+}
