@@ -1,0 +1,127 @@
+{
+  "actual_full_workspace_execution": false,
+  "affected_tests_passed": 26,
+  "authenticated_terminal_bodies": 16,
+  "controller_exit_status": 0,
+  "cost_estimate_scope": "quote times controller lifetime; excludes EBS/S3/billing reconciliation",
+  "elapsed_seconds": 2093,
+  "history_rule": "a0001 compiler failure retained; no post-hoc method or threshold change",
+  "instance_id": "i-0b0928633fa493375",
+  "integrated_commit": "7b0c83373bdb8e36a54071719d405c6cbd686aef",
+  "memory_events": "low 0\nhigh 0\nmax 4718\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n",
+  "memory_peak_bytes": 8589934592,
+  "native_exit_status": 0,
+  "native_source_commit": "4e3604ae338331ac175b2992ea36ff7e3a68336b",
+  "next_action": "recover exact original canonical streams and run the preregistered source-neighborhood falsifier; no ANN-quality claim from native gates",
+  "original_exec_session": 93314,
+  "qualified": true,
+  "quote_based_compute_estimate_usd": 0.12627766666666668,
+  "schema": "borsuk-constrained-split-native-gate-decision-v1",
+  "scientific_result": false,
+  "source_archive_sha256": "825c0cd6430f3f85204f3345a48d074b3f2665a9e67ef37f0e6040d4b10a81f5",
+  "source_file_count": 402,
+  "source_identity_sha256": "62297f047f170fba8475c2f89db4f7308d28ef0370140880bc1ecd72d90fd098",
+  "source_unchanged": true,
+  "spot_quote_usd_per_hour": "0.217200",
+  "stage_results": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "hierarchical_semantic_cells::"
+      ],
+      "exit_status": 0,
+      "gate_status": 0,
+      "stage": "hierarchical-cell-tests",
+      "tests_run": 23
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "check_hierarchical_split_balance"
+      ],
+      "exit_status": 0,
+      "gate_status": 0,
+      "stage": "split-balance-bin-tests",
+      "tests_run": 1
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--test",
+        "two_bit_generation"
+      ],
+      "exit_status": 0,
+      "gate_status": 0,
+      "stage": "generation-integration",
+      "tests_run": 2
+    },
+    {
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "check_hierarchical_split_balance",
+        "--bin",
+        "hierarchical_semantic_cells",
+        "--example",
+        "two_bit_http"
+      ],
+      "exit_status": 0,
+      "gate_status": 0,
+      "stage": "release",
+      "tests_run": null
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "exit_status": 0,
+      "gate_status": 0,
+      "stage": "clippy",
+      "tests_run": null
+    },
+    {
+      "command": [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ],
+      "exit_status": 0,
+      "gate_status": 0,
+      "stage": "test-build",
+      "tests_run": null
+    }
+  ],
+  "state": "terminated",
+  "swap_peak_bytes": 0,
+  "total_cost_measured": false
+}
