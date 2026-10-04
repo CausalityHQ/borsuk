@@ -1,0 +1,10 @@
+{
+  "schema": "borsuk-constrained-split-falsifier-canary-admission-v1",
+  "attempt": "a0001",
+  "terminal_sha256": "ab9f765be6fd1f271b978aba4b6a94157badb2690f40b3ed0f97e6b070866f2f",
+  "config_sha256": "0c029065ece84f6b74d9d569f32cd22210bb27422961d387c2488e33228e6084",
+  "code_identity_sha256": "df2e23db7d4d4cdc393fe4b3b744663885c037784d674fc840f999de7b0b1684",
+  "refs_identity_sha256": "9113ef999544a2f33b50eca2a53cfc6f6b808801169baaf49a7acae983b13879",
+  "native_identity_sha256": "a05cccfc0bce54d324347bcd0b67dbde10ae34c8258b520d01fd0c81598c5890",
+  "source_archive_paths_sha256": "11ab0474f3a03327f0660a95620cc858302ff597450915c49a27a6eb5eb9fdc3"
+}
