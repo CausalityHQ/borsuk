@@ -2439,7 +2439,7 @@ mod tests {
                         0.10 + id as f64 * 0.0005
                     };
                     let (y, x) = angle.sin_cos();
-                    cosine_vector(&[x as f32, y as f32]).unwrap()
+                    cosine_vector(&[x as f32, y as f32]).unwrap().into_owned()
                 })
                 .collect::<Vec<_>>();
             assert!(vectors.windows(2).all(|w| w[0] != w[1]));
