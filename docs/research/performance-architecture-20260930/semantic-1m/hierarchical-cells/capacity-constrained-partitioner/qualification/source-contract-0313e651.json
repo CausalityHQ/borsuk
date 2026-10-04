@@ -1,0 +1,196 @@
+{
+  "acceptance_context": {
+    "commit": "b1d0b1ff374c554fec6b6b450eddcf55c22a1883",
+    "generalization": "Applying the rule to Builder nodes outside the measured 513..2048 row range is UNQUALIFIED pending the full paired100k gate.",
+    "historical_diagnostic": "Historical a0002 acceptance remains bound to its archived original source/layout and raw evidence. Current-format fixtures are never relabelled as historical old-median proof; their remaining degenerate selected nodes yield INCONCLUSIVE.",
+    "measured_mechanism_node_rows": [
+      513,
+      2048
+    ],
+    "mechanism_claim_limits": "Historical PASS is aggregate source-neighborhood evidence. ReLAION node R940 has constrained 455 crossings versus matched-coordinate 395 (old median 587); matched control uses one coordinate orientation. No every-node dominance claim.",
+    "paired_panel": "Historical consumed 64-query panels per dataset; no fresh-panel generalization claim.",
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/prospective-method.json",
+    "quality": "No 98% ANN recall or latency conclusion follows from source-neighborhood cuts. The prospective 0.98 mean recall / 95 p05 hits thresholds remain frozen arm acceptance gates, not measured candidate results.",
+    "sha256": "c90990fca40b782fc06bf338e2036544e6a05f67da133b519192e9c8534c07ca",
+    "status": "PROSPECTIVE_ONLY; parent-owned remote gates NOT_RUN_IN_CHILD"
+  },
+  "api": {
+    "build_config_schema": "borsuk-hierarchical-cells-build-v2",
+    "build_receipt_geometry_fallbacks": "identical-sample or degenerate-separator coordinate median count",
+    "build_receipt_new_required_field": "semantic_repairs: usize",
+    "cost_objective_scope": "Minimum combinatorial cost for the rounded f32 d_left-d_right margins; no exact-real-distance optimum claim. Near-ULP unequal real margins rounding to equal f32 deltas follow source-ID ties.",
+    "degenerate_order": "The existing node computes f64 prototype sums before ID sorting. Projected coordinate order is preserved before recursing, with an actual Builder rounding falsifier.",
+    "diagnostic": "Existing source-neighborhood protocol and raw evidence are immutable; constrained() now calls the same compact core. Current synthetic pipeline expects INCONCLUSIVE because remaining median candidates are degenerate.",
+    "id_semantics": "IDs are source ordinals bound to stored record IDs; inverse[id] selects physical file position. Tie by the ID, never file position or input slot.",
+    "old_artifacts": "Old experimental build-v1/resident-v3 artifacts are rejected. No legacy reader, old-builder mode or duplicate writer was added. Frozen historical replay remains bound to its original source archive.",
+    "partition_core": "private capacity_partition(ids: &[usize], delta: &[f32], left: &mut [bool]) -> Result<bool>",
+    "partition_rule": "Use the same two sampled centers, squared-Euclidean distances and four-iteration training call; only skewed nondegenerate assignments sort d_left-d_right with source ordinal ties and choose clamp(count(delta<=0), ceil(N/4), N-ceil(N/4)).",
+    "resident_manifest_schema": "borsuk-hierarchical-cells-resident-v4",
+    "unchanged_assignments": "Balanced sampled memberships and child order; identical/degenerate median memberships AND projected child order; all SQ2/SQ8 payload bytes and rank/query code."
+  },
+  "base_commit": "2e2e9f2c88d6b99e854acbdb7721d85fe955b6af",
+  "base_source_blobs": {
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs": "593a5a624e54fe50a7d7d98a7057cee323270113",
+    "crates/borsuk/src/hierarchical_semantic_cells.rs": "34f52f39f4b133807f04e5c3da83bb09cef3b20f"
+  },
+  "candidate_commit": "0313e65117b3cc52140a63d118d2a531db84085c",
+  "candidate_tree": "426e5451fc131b453699e8b937ce6346073b81e0",
+  "commit_identity": "Configured Roman Bartusiak <riomus@gmail.com>; no AI attribution/trailers; commit hooks disabled to enforce no native/network execution.",
+  "evidence_files": {
+    "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/constrained-split/falsifier/a0002/aws-terminal.json": {
+      "bytes": 6112,
+      "sha256": "d2d66b59e6a68cbc9870e11ac814ddb767e3d9328ce021f3b421a1be408ec71d"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/constrained-split/falsifier/a0002/decision.json": {
+      "bytes": 1669,
+      "sha256": "7a50a7bf6ab667f4c3947213a2b98afc79053bfaed5b1a1080dfe95edff771a1"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/constrained-split/falsifier/a0002/screen/measurement/split-report.json": {
+      "bytes": 602098,
+      "sha256": "9b4e3485cdab029e813169b54b6c2683f4df56a61f5c2393cb471b10686c92e0"
+    },
+    "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/constrained-split/falsifier/a0002/screen/supervisor-receipt.json": {
+      "bytes": 231,
+      "sha256": "147c86a04f27d9a7d6c692215c3709db1c3ae74329d369bc513f78b2b3cc0443"
+    }
+  },
+  "followup": {
+    "bounded_tests": "Existing 1025-row binary repaired-tree test plus two 129-row geometry cases; no local fixture execution, data reads, native jobs, cloud, new reviews or retraining sweep.",
+    "corrected_previous_expectation": "Orthogonal unit SQ8 rows under query [1,0] have squared-L2 score 2, not 1; only test literal corrected, scoring code unchanged.",
+    "correction_message_ids": [
+      "1791134720568020095-2054090",
+      "1791134839835063087-2054090"
+    ],
+    "distinct_geometry": "Two 129-row positive, distinct normalized synthetic cases; either learned center can be the 8-row minority; nonconstant margins; root left capacities 33/96; independent single-cheapest-exchange oracle validates actual subtree membership.",
+    "preserved_mandatory_test_names": [
+      "hierarchical_semantic_cells::tests::capacity_partition_matches_exhaustive_cost_capacity_and_id_ties",
+      "hierarchical_semantic_cells::tests::balanced_and_identical_builder_memberships_are_unchanged",
+      "hierarchical_semantic_cells::tests::identical_sample_fallback_preserves_projected_child_sum_order",
+      "hierarchical_semantic_cells::tests::skewed_builder_is_lossless_deterministic_and_preserves_sq2_sq8_tail_ranking",
+      "hierarchical_semantic_cells::tests::partition_format_and_receipt_reject_obsolete_or_incomplete_artifacts"
+    ],
+    "scope": "Test-only plus partition objective comment; production code and diagnostic suffix byte-identical to d66a; no architecture/API/policy change.",
+    "selective_binary_nominees": "One block/cell, independently derived IDs 32..63, 161..192, 609..640; exact (ordinal, ID, score bits) WholeCell/TwoStage parity.",
+    "selective_distinct_nomination": "Independent best individual SQ2 row selects its block, preserving earlier-block ties; query nomination algorithm is not reused. Partial block budgets yield fewer nominees than covered IDs and exact fetch-path rank parity.",
+    "valid_sq8": "Native [0,1] span uses f32 ties-even codes and sequential reconstructed f32 squared norms; norms checked against decoded coefficients and scores/ranks derived from original SQ8 records. Negative-coordinate cancellation fixture remains prototype-order-only."
+  },
+  "followup_commit": "0313e65117b3cc52140a63d118d2a531db84085c",
+  "gate_commands": [
+    {
+      "command": "git rev-parse HEAD # must equal 0313e65117b3cc52140a63d118d2a531db84085c",
+      "owner": "parent",
+      "status": "NOT_RUN_IN_CHILD"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib hierarchical_semantic_cells:: -- --test-threads=1",
+      "owner": "parent",
+      "status": "NOT_RUN_IN_CHILD"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin hierarchical_semantic_cells -- --test-threads=1",
+      "owner": "parent",
+      "status": "NOT_RUN_IN_CHILD"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "owner": "parent",
+      "status": "NOT_RUN_IN_CHILD"
+    },
+    {
+      "command": "BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "owner": "parent",
+      "status": "NOT_RUN_IN_CHILD"
+    }
+  ],
+  "implementation_commit": "d66a9e8117039e74b214f085a3fcd64063b4ba5f",
+  "lifecycle": "HOLD SAME child pending parent remote gates/disposition; do not call agent_complete yet.",
+  "local_checks": [
+    {
+      "command": "rustfmt --edition 2024 --config skip_children=true --emit stdout < crates/borsuk/src/hierarchical_semantic_cells.rs",
+      "exit_status": 0,
+      "scope": "Syntax/format parsing only; rustfmt applied to edited regions; existing unrelated formatting retained."
+    },
+    {
+      "command": "rustfmt --edition 2024 --config skip_children=true --emit stdout < crates/borsuk/src/bin/hierarchical_semantic_cells.rs",
+      "exit_status": 0,
+      "scope": "Syntax/format parsing only; fixture marker changes only."
+    },
+    {
+      "command": "git diff --check",
+      "exit_status": 0
+    },
+    {
+      "command": "git status --porcelain",
+      "exit_status": 0,
+      "result": "clean"
+    },
+    {
+      "command": "rustfmt --edition 2024 --config skip_children=true --emit stdout < crates/borsuk/src/hierarchical_semantic_cells.rs",
+      "exit_status": 0,
+      "revision": "0313e65117b3cc52140a63d118d2a531db84085c",
+      "scope": "Fresh follow-up syntax/format parse only; edited regions formatted."
+    },
+    {
+      "command": "git diff --check HEAD^ HEAD; git status --porcelain",
+      "exit_status": 0,
+      "result": "No whitespace defects; clean detached worktree.",
+      "revision": "0313e65117b3cc52140a63d118d2a531db84085c"
+    }
+  ],
+  "new_test_names": [
+    "hierarchical_semantic_cells::tests::capacity_partition_matches_exhaustive_cost_capacity_and_id_ties",
+    "hierarchical_semantic_cells::tests::balanced_and_identical_builder_memberships_are_unchanged",
+    "hierarchical_semantic_cells::tests::identical_sample_fallback_preserves_projected_child_sum_order",
+    "hierarchical_semantic_cells::tests::skewed_builder_is_lossless_deterministic_and_preserves_sq2_sq8_tail_ranking",
+    "hierarchical_semantic_cells::tests::partition_format_and_receipt_reject_obsolete_or_incomplete_artifacts"
+  ],
+  "preserved_original_candidate": {
+    "commit": "d66a9e8117039e74b214f085a3fcd64063b4ba5f",
+    "source_files": {
+      "crates/borsuk/src/bin/hierarchical_semantic_cells.rs": {
+        "bytes": 39480,
+        "sha256": "34aec0ce5515663e32a2ea332401c1a65d01c596246c9d099c8ad849ede0652d"
+      },
+      "crates/borsuk/src/hierarchical_semantic_cells.rs": {
+        "bytes": 235308,
+        "sha256": "790d2f5c186a0f9e69f3d122a7087deee36c4d2258e4326de21d7849c140b602"
+      }
+    },
+    "status": "UNVERIFIED; immutable original candidate preserved as follow-up parent"
+  },
+  "qualification": "No native compilation/test success, ANN quality, latency, scale or vendor claim. Parent owns exact-source remote assurance, paired recall, frozen protocols, integration and push.",
+  "relevant_existing_test_names": [
+    "hierarchical_semantic_cells::tests::identical_geometry_is_bounded_and_reproducible_without_truth",
+    "hierarchical_semantic_cells::tests::whole_cell_matches_two_stage_with_one_wave_and_full_payload_charges",
+    "hierarchical_semantic_cells::tests::cell_local_block_nomination_omits_other_blocks_even_for_tied_codes",
+    "hierarchical_semantic_cells::split_balance_diagnostic::tests::constrained_cost_matches_exhaustive_small_partitions",
+    "hierarchical_semantic_cells::split_balance_diagnostic::tests::successful_identical_and_degenerate_splits_are_unchanged",
+    "hierarchical_semantic_cells::split_balance_diagnostic::tests::learned_unbalanced_replay_preserves_centers_and_moves_minimum_population",
+    "hierarchical_semantic_cells::split_balance_diagnostic::tests::artifact_tamper_geometry_and_all_limits_fail_closed"
+  ],
+  "resources": {
+    "build_payload_model": "128*N + sample_rows*D*16 + max_depth*D*64 + cell_rows*(D+12+record_bytes+8)*4 + 16*65536; excludes allocator/runtime/cache.",
+    "compact_scratch": "try_reserve_exact for assignment flags, FP32 deltas, margin/ID/slot ordering (24 bytes/row on 64-bit), degenerate projections, child ID buffers; partition scratch dropped before recursion; no retained full source vectors.",
+    "enforcement": "systemd-run --user --scope -p MemoryMax=256M -p MemorySwapMax=0 -p CPUQuota=100% taskset -c 0",
+    "local_cpu_count": 1,
+    "local_cpu_max": "100000 100000",
+    "local_memory_max_bytes": 268435456,
+    "local_operations": "Source/evidence inspection, source edits, Git and rustfmt only. NO Cargo/rustc/native execution, datasets, network, AWS, consultations, reviews, children or push.",
+    "local_swap_max_bytes": 0,
+    "remote_gate_resources": "Parent-owned frozen bounded host/protocol; not authorized in this child."
+  },
+  "schema": "borsuk-capacity-constrained-native-partitioner-contract-v1",
+  "source_files": {
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs": {
+      "bytes": 39480,
+      "sha256": "34aec0ce5515663e32a2ea332401c1a65d01c596246c9d099c8ad849ede0652d"
+    },
+    "crates/borsuk/src/hierarchical_semantic_cells.rs": {
+      "bytes": 247281,
+      "sha256": "be2e99e03dc98aedf28e928a8f40672934208c2d6fe91f3befaf31ebaba85a3b"
+    }
+  },
+  "status": "UNVERIFIED",
+  "worker": "borsuk/capacity-constrained-native-partitioner",
+  "worktree": "/home/rb/worktrees/borsuk-capacity-constrained-native-partitioner"
+}
