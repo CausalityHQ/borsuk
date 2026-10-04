@@ -1,0 +1,43 @@
+{
+  "architecture": "x86_64",
+  "authority_pending": true,
+  "compute_cap_usd": 0.1,
+  "cost_is_bound_not_measurement": true,
+  "ebs_s3_allowance_usd": 0.15,
+  "execution": "qualified native binary only; no Cargo/rustup/compiler installation",
+  "instance_market": "spot",
+  "instance_type": "c7i.large",
+  "interruption": "preserve original receipts, INVALID incomplete cell; no automatic replacement",
+  "lifecycle": "existing launch_native_metadata_ranges_cold_spot.main(campaign=...) owns conditional reservation/exclusive active-borsuk check/durableACK/terminate+wait/collection",
+  "machine_limit_seconds": 2400,
+  "native_calls_maximum": 6,
+  "native_calls_minimum": 4,
+  "native_cpu_quota_percent": 100,
+  "native_memory_max_bytes": 536870912,
+  "native_per_dataset_cumulative_seconds": 600,
+  "native_swap_max_bytes": 0,
+  "native_tasks_max": 512,
+  "observed_spot_quote_required_before_launch": true,
+  "pending": [
+    "final runner contract/config/code roster",
+    "cheap actual metadata and native CLI refusal preflight",
+    "SDK/bootstrap/asset/cleanup smoke",
+    "root frozen campaign adapter and exact S3 keys"
+  ],
+  "region": "eu-central-1",
+  "root_volume": {
+    "delete_on_termination": true,
+    "encrypted": true,
+    "size_gib": 80,
+    "volume_type": "gp3"
+  },
+  "schema": "borsuk-source-witness-paired-coverage-infrastructure-envelope-v1",
+  "scientific_failure": {
+    "coverage": "closed execution0/armFAIL; no ranking if either fails",
+    "identity_resource_durability_cleanup": "INVALID/nonzero; retain original failure"
+  },
+  "scope": "consumed64 representation falsifier; no vendor win/current cold-S3 latency or100M feasibility claim",
+  "scratch_limit_bytes": 17179869184,
+  "source_only_builds_before_queries": true,
+  "spot_max_usd_per_hour": 0.15
+}
