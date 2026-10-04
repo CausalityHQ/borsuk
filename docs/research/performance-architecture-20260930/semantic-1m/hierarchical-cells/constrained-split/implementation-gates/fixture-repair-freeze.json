@@ -1,0 +1,11 @@
+{
+  "actual_diagnostic_executed": false,
+  "diff": "one synthetic fixture rows.clone(); production unchanged",
+  "native_qualification_passed": false,
+  "native_source_commit": "4e3604ae338331ac175b2992ea36ff7e3a68336b",
+  "prior_failed_candidate": "073bb3c829bc20ff4badea8026c0c4f27fb3aabf",
+  "schema": "borsuk-constrained-split-fixture-repair-freeze-v1",
+  "source_contract_sha256": "7853ffe9d9abc3e92106c1ba741f9813a2016e9dc5529f53b759f3c34c94d23f",
+  "source_file_count": 402,
+  "source_identity_sha256": "62297f047f170fba8475c2f89db4f7308d28ef0370140880bc1ecd72d90fd098"
+}

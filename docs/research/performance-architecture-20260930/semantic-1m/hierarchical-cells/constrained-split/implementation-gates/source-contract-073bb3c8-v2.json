@@ -44,8 +44,8 @@
   },
   "native_delta_files": {
     "crates/borsuk/src/hierarchical_semantic_cells.rs": {
-      "sha256": "7345ed415d37a29c5439a2e7fec54bb597fa188255e94e3c6a3ffede89a7deec",
-      "bytes": 219128
+      "sha256": "42037cbbf3739d8b1817ce717d6aa71f33e9e373bbd73b03d40f0c2d3f0f8b34",
+      "bytes": 219120
     },
     "crates/borsuk/src/bin/check_hierarchical_split_balance.rs": {
       "sha256": "9ac017f570260632e5b42ab56df77dab5e6702e9d770b788b344cb173201e12a",
@@ -147,17 +147,15 @@
     "base_prefix_byte_preservation": "original115165B prefix unchanged",
     "same_native_test_roster": "old11 + diagnostic12 + bin1 exactly unchanged",
     "cap_math": "949876480B < 1073741824B",
-    "native_tests": "NOT RUN locally; prior073 remote compilation failed E0382; new revision remains UNVERIFIED pending parent qualification",
-    "test_only_delta": "exactly rows -> rows.clone(); all production and binary bytes unchanged versus073",
-    "static_ownership_audit": "no analogous test move followed by reuse found"
+    "native_tests": "NOT RUN; source and tests remain UNVERIFIED"
   },
   "unresolved_blockers": [
     "Parent remote affected tests, generation integration, release, Clippy and real test-build must all exit0 before worker completion",
     "Parent owns authenticated originals and actual diagnostic launch; no source-neighborhood result exists"
   ],
-  "commit": "4e3604ae338331ac175b2992ea36ff7e3a68336b",
-  "commit_parent": "073bb3c829bc20ff4badea8026c0c4f27fb3aabf",
-  "repair_base_revision": "073bb3c829bc20ff4badea8026c0c4f27fb3aabf",
+  "commit": "073bb3c829bc20ff4badea8026c0c4f27fb3aabf",
+  "commit_parent": "297c2a1f025c05cbea0687c32b8a810a163e8d37",
+  "repair_base_revision": "297c2a1f025c05cbea0687c32b8a810a163e8d37",
   "preserved_v1_contract": {
     "path": "/tmp/borsuk-constrained-semantic-split-falsifier-contract-297c2a1f-v1.json",
     "sha256": "eea1b83edeaa2654ce26e2109068e3a12ca2e3be602c5426e95220a452cb1c83"
@@ -203,28 +201,5 @@
     "canonical_order_nonfinite_and_post_authentication_tamper_fail_closed": [
       "growth after stat; bounded underlying read counter proves declared cap; final stamp fails"
     ]
-  },
-  "scientific_repair_base_revision": "297c2a1f025c05cbea0687c32b8a810a163e8d37",
-  "preserved_v2_contract": {
-    "path": "/tmp/borsuk-constrained-semantic-split-falsifier-contract-073bb3c8-v2.json",
-    "sha256": "b52d54e9fcdb651de44ceb5ffa212c3999c23228a942d63dea820942b88f8022",
-    "commit": "073bb3c829bc20ff4badea8026c0c4f27fb3aabf"
-  },
-  "fixture_ownership_repair": {
-    "test": "hierarchical_semantic_cells::split_balance_diagnostic::tests::local_cosine_edges_reuse_same_rows_and_exclude_self",
-    "change": "Clone the tiny rows fixture before injecting NaN; the untouched rows remain available to the population-matched control.",
-    "scope": "single test-only line; binary and all production bytes unchanged",
-    "static_ownership_audit": "No analogous move followed by reuse found in additive inline fixtures; other direct assignments copy usize or consume config after last use."
-  },
-  "prior_native_qualification": {
-    "source_commit": "073bb3c829bc20ff4badea8026c0c4f27fb3aabf",
-    "attempt": "a0001",
-    "terminal": "FAILED",
-    "native_exit_status": 101,
-    "failed_stage": "affected library compilation",
-    "error": "E0382: rows moved into changed then reused at coordinate_split",
-    "tests_run": 0,
-    "closed_log": "/home/rb/worktrees/borsuk-constrained-split-qualification-073/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/constrained-split/implementation-gates/a0001/test.log",
-    "closure": "Parent reports controller1/native101 and exact instance terminated and waited; no child cloud actions."
   }
 }
