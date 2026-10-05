@@ -4,6 +4,8 @@ CLI: aNNNN | --self-check | --replay OUT. Remote --remote is bootstrap-only.
 --sq4 explicitly selects the root-frozen native SQ4 experiment.
 --histogram-sq4 selects the separate learned-codebook experiment.
 --corrected-four-bit selects the separately qualified direction codec.
+--corrected-four-bit --canary aNNNN runs only disposable infrastructure admission.
+--remote-canary is bootstrap-only; --replay-canary OUT authenticates its closure.
 No compiler, query runner, packing algorithm, retries or replacement instances.
 """
 import argparse
@@ -93,6 +95,9 @@ CGROUP_FILES = ('memory.max', 'memory.peak', 'memory.swap.max', 'memory.swap.pea
 SQ4 = False
 HISTOGRAM_SQ4 = False
 CORRECTED_FOUR_BIT = False
+CANARY = False
+SCIENCE_STATE = {}
+CANARY_BINARY_PIN = dict(bytes=10608320, sha256='1cba6503a6a51fad193110b2c2dd6cee324b1cdb8f4235761a9afa6c4b24d00c')
 CORRECTED_ROOT = ROOT.parent/'sq4-refinement/corrected-rabitq'
 CORRECTED_EVIDENCE = (
     ('source-contract-4ec11b94.json', 9072, 'ad8fcb1fbaae99102497128ea6656fd1ab871fd8995d04df9297ccfa4605607d'),
@@ -206,12 +211,118 @@ def configure_sq4(*, histogram=False, corrected=False):
                         CORRECTED_EVIDENCE[-1][1], CORRECTED_EVIDENCE[-1][2]),)
     ARTIFACTS = tuple(n for n in ARTIFACTS if not n.startswith('screen/')) + (
         'scratch.json', *(f'qualification/{n}' for n in SQ4_RECEIPTS), *SQ4_OUTPUTS)
+    if corrected:
+        ARTIFACTS += ('canary-admission.json',)
     ROSTER_SHA = sha(json.dumps(ARTIFACTS, separators=(',', ':')).encode())
 
 
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def configure_canary():
+    """Reuse the corrected lifecycle with an independent, metadata-only roster."""
+    global CANARY, ROOT, CONFIG, SCHEMA, PREFIX, TOKEN_PREFIX, TAG, REMOTE_ROOT
+    global CAPS, FIXED, WALL, COMPUTE_CAP, SQ4_SCRATCH_CAP, SQ4_OUTPUTS, ARTIFACTS, ROSTER_SHA
+    global CORRECTED_SUPERVISOR_SECONDS
+    require(CORRECTED_FOUR_BIT and not CANARY, 'canary requires corrected mode once')
+    SCIENCE_STATE.update({n:globals()[n] for n in ('ROOT','CONFIG','SCHEMA','CAPS','FIXED','WALL',
+        'COMPUTE_CAP','SPOT_MAX_USD_PER_HOUR','NATIVE_COMMIT','SOURCE_ID','SQ4_SCRATCH_CAP',
+        'ARTIFACTS','ROSTER_SHA','PREFIX','TOKEN_PREFIX','TAG','REMOTE_ROOT','CORRECTED_SUPERVISOR_SECONDS','SQ4_OUTPUTS')})
+    CANARY = True
+    ROOT = CORRECTED_ROOT/'infrastructure-canary'; CONFIG = ROOT/'config.json'
+    SCHEMA = 'borsuk-corrected-four-bit-infrastructure-canary-v1'
+    PREFIX = 'research/hierarchical-cells/20261005/corrected-four-bit-canary-'
+    TOKEN_PREFIX, TAG = 'corrected-four-bit-canary-', 'borsuk-corrected-four-bit-canary'
+    REMOTE_ROOT = Path('/mnt/corrected-four-bit-canary')
+    WALL, COMPUTE_CAP, CORRECTED_SUPERVISOR_SECONDS = 480, .12, 120
+    SQ4_SCRATCH_CAP = 4*1024**3
+    CAPS = dict(cpu_threads=1, memory_bytes=256*1024**2, swap_bytes=0,
+        deadline_seconds=120, operations=128, output_bytes=2*1024**2)
+    FIXED = dict(FIXED, machine_limit_seconds=WALL, compute_cap_usd=COMPUTE_CAP,
+        ebs_s3_allowance_usd=.15, native_caps=CAPS)
+    SQ4_OUTPUTS = ()
+    ARTIFACTS = ('config.json','science-config.json','native-config.json','source-qualification.json',
+        'imports.json','sentinels.json','stage-receipt.json','native-exit.json','resources.json','cleanup.json',
+        'scratch.json','cpu.txt','runtime-abi.json','run-closed.log','native.log',BINARY_NAME,
+        'metadata/closed-populations.json',*(f'qualification/{n}' for n in SQ4_RECEIPTS))
+    ROSTER_SHA = sha(json.dumps(ARTIFACTS,separators=(',',':')).encode())
+
+
+def science_binding(config):
+    """Pending metadata admission may freeze the same eventual science authorities."""
+    return {k:config[k] for k in ('fixed','native_config','native_config_sha256','binary','inputs',
+        'native_source','native_qualification','code_sha256')}
+
+
+def validate_canary_config(config, base=None):
+    global NATIVE_COMMIT, SOURCE_ID
+    require(config['schema'] == SCHEMA and config['authority_pending'] is False
+        and set(config) == set(config['canary']['science_config'])|{'canary'}, 'frozen canary authority')
+    admission = config['canary']; science = admission['science_config']
+    require(set(admission) == {'science_authority','science_config','metadata_only_admission'}
+        and type(admission['metadata_only_admission']) is bool, 'explicit metadata-only admission')
+    ref = admission['science_authority']
+    require(set(ref) == {'path','bytes','sha256'} and ref['bytes'] > 0, 'science authority reference')
+    object_key(ref['path']); body_pin({k:ref[k] for k in ('bytes','sha256')})
+    require(ref['path'] in (str(SCIENCE_STATE['CONFIG']),str(SCIENCE_STATE['ROOT']/'config-draft.json'))
+        and (science['authority_pending'] is False or admission['metadata_only_admission'] is True),
+        'pending science needs explicit canary metadata-only admission')
+    checked = dict(science, authority_pending=False)
+    require('canary_admission' not in checked, 'canary precedes science admission')
+    saved = {n:globals()[n] for n in SCIENCE_STATE}
+    try:
+        globals().update(SCIENCE_STATE)
+        validate_sq4_config(checked, base)
+    finally:
+        globals().update(saved)
+    for k,v in science.items():
+        if k not in ('schema','authority_pending','fixed','source_archive_paths','source_archive_paths_sha256'):
+            require(config[k] == v, 'canary science authority drift: '+k)
+    fixed = config['fixed']; scratch = fixed['scratch']
+    require(set(fixed) == set(FIXED)|{'scratch'} and all(encoded(fixed[k]) == encoded(v) for k,v in FIXED.items()),
+        'canary CPU1/256MiB/swap0/480s/128/.12+.15 caps')
+    require(set(scratch) == {'input_bytes','native_output_bytes','binary_bytes','source_archive_bytes',
+        'bootstrap_bytes','auxiliary_bytes','cap_bytes'} and all(type(n) is int and n > 0 for n in scratch.values())
+        and scratch['input_bytes'] == 175929 and scratch['binary_bytes'] == CANARY_BINARY_PIN['bytes']
+        and scratch['native_output_bytes'] == CAPS['output_bytes']
+        and sum(n for k,n in scratch.items() if k!='cap_bytes') <= scratch['cap_bytes'] == SQ4_SCRATCH_CAP,
+        'canary whole scratch admission')
+    require({k:config['binary'][k] for k in ('bytes','sha256')} == CANARY_BINARY_PIN
+        and config['binary']['bytes'] <= 16*1024**2, 'canary exact qualified usage executable')
+    paths = sorted([str(CONFIG),ref['path'],str(SQ4_ROOT/'prospective-input-roster.json'),*CODE,
+        *(r['path'] for r in config['native_qualification']),*(str(CORRECTED_ROOT/n) for n,_,_ in CORRECTED_EVIDENCE)])
+    require(config['source_archive_paths'] == paths and config['source_archive_paths_sha256'] == sha(
+        json.dumps(paths,separators=(',',':')).encode()), 'canary exact archive roster')
+    if base is not None:
+        raw = read(Path(base)/ref['path'])
+        require(pin(raw) == {k:ref[k] for k in ('bytes','sha256')} and decode(raw) == science,
+            'canary original science authority bytes')
+    globals()['FIXED'] = fixed
+    NATIVE_COMMIT, SOURCE_ID = science['native_source']['commit'],science['native_source']['source_identity_sha256']
+    return config['native_config']
+
+
+def validate_canary_admission(config, base, collected=False):
+    """A root-pinned receipt is emitted only after full GO replay and termination."""
+    ref = config.get('canary_admission', {})
+    require(set(ref) == {'path','bytes','sha256'} and ref['bytes'] > 0, 'science requires terminated GO canary admission')
+    object_key(ref['path']); body_pin({k:ref[k] for k in ('bytes','sha256')})
+    raw = read(Path(base)/('canary-admission.json' if collected else ref['path']))
+    require(pin(raw) == {k:ref[k] for k in ('bytes','sha256')}, 'science canary admission drift')
+    receipt = decode(raw)
+    require(receipt['schema'] == 'borsuk-corrected-four-bit-canary-admission-v1'
+        and receipt['status'] == 'GO' and receipt['binding'] == science_binding(config)
+        and receipt['original_exit_code'] == 2 and receipt['closeout']['state'] == 'terminated'
+        and receipt['closeout']['nodes'] == {'0':{'instance_id':receipt['instance_id']}}
+        and receipt['canary_schema'] == 'borsuk-corrected-four-bit-infrastructure-canary-v1'
+        and re.fullmatch(r'research/hierarchical-cells/20261005/corrected-four-bit-canary-a[0-9]{4}',receipt['prefix'])
+        and re.fullmatch('[0-9a-f]{40}',receipt['source_commit']), 'unchanged science/native/CODE/refs and terminated GO')
+    for k in ('terminal','reservation','launch','config','source_qualification'):
+        body_pin(receipt[k]); require(receipt[k]['bytes'] > 0, 'canary original receipt pin')
+    body_pin(dict(bytes=0,sha256=receipt['source_archive_sha256']))
+    return receipt
 
 
 def encoded(value):
@@ -377,6 +488,7 @@ def validate_sq4_config(config, base=None):
     global FIXED, WALL, COMPUTE_CAP, SPOT_MAX_USD_PER_HOUR, NATIVE_COMMIT, SOURCE_ID
     require(set(config) == {'schema','authority_pending','fixed','native_config','native_config_sha256',
         'binary','inputs','native_source','native_qualification','code_sha256','source_archive_paths','source_archive_paths_sha256'}
+        | ({'canary_admission'} if CORRECTED_FOUR_BIT and 'canary_admission' in config else set())
         and config['schema'] == SCHEMA and config['authority_pending'] is False, 'SQ4 frozen root authority')
     fixed = config['fixed']
     require(set(fixed) == set(FIXED)|{'scratch'} and encoded(fixed['native_caps']) == encoded(CAPS)
@@ -431,7 +543,8 @@ def validate_sq4_config(config, base=None):
         require(set(r) == {'path','bytes','sha256'} and r['bytes'] > 0, 'SQ4 qualification descriptor')
         object_key(r['path']); body_pin({k:r[k] for k in ('bytes','sha256')})
     paths = sorted([str(CONFIG), str(SQ4_ROOT/'prospective-input-roster.json'), *CODE, *(r['path'] for r in receipts),
-                    *(str(CORRECTED_ROOT/n) for n,_,_ in CORRECTED_EVIDENCE if CORRECTED_FOUR_BIT)])
+                    *(str(CORRECTED_ROOT/n) for n,_,_ in CORRECTED_EVIDENCE if CORRECTED_FOUR_BIT),
+                    *([config['canary_admission']['path']] if CORRECTED_FOUR_BIT and 'canary_admission' in config else [])])
     require(config['source_archive_paths'] == paths and config['source_archive_paths_sha256'] == sha(
         json.dumps(paths,separators=(',',':')).encode()) and set(config['code_sha256']) == set(CODE), 'SQ4 minimal source archive')
     for name,digest in config['code_sha256'].items():
@@ -488,6 +601,8 @@ def scratch_room(root, growth):
 
 
 def validate_config(config, base=None):
+    if CANARY:
+        return validate_canary_config(config, base)
     if SQ4:
         return validate_sq4_config(config, base)
     require(set(config) == {'schema', 'authority_pending', 'fixed', 'native_config',
@@ -541,6 +656,8 @@ def preflight(base=Path('.')):
     raw = read(base/CONFIG)
     config = decode(raw)
     validate_config(config, base)
+    if CORRECTED_FOUR_BIT and not CANARY:
+        validate_canary_admission(config, base)
     proof = dict(config_path=str(CONFIG), config_sha256=sha(raw), campaign_schema=SCHEMA,
                 artifact_roster_sha256=ROSTER_SHA, native_config_sha256=config['native_config_sha256'],
                 binary=config['binary'], native_source_commit=NATIVE_COMMIT, source_identity_sha256=SOURCE_ID,
@@ -549,6 +666,11 @@ def preflight(base=Path('.')):
                 source_archive_paths_sha256=config['source_archive_paths_sha256'])
     if SQ4:
         proof['scratch'] = config['fixed']['scratch']
+    if CANARY:
+        proof['canary'] = config['canary']
+        proof['science_binding'] = science_binding(config['canary']['science_config'])
+    elif CORRECTED_FOUR_BIT:
+        proof['canary_admission'] = config['canary_admission']
     return proof
 
 
@@ -662,17 +784,35 @@ PY
 systemd-run --unit={SUPERVISOR_UNIT} --wait --pipe {supervisor_options}-p 'Delegate=cpu memory pids' -p DelegateSubgroup=supervisor -p RuntimeMaxSec={WALL} -p WorkingDirectory="$root" \\
  --setenv=PYTHONPATH="$root/repo" --setenv=AWS_MAX_ATTEMPTS=1 --setenv=AWS_RETRY_MODE=standard \\
  {('--setenv=TMPDIR="$TMPDIR" --setenv=TMP="$TMP" --setenv=TEMP="$TEMP" --setenv=PYTHONPYCACHEPREFIX="$PYTHONPYCACHEPREFIX" '+chr(92)) if SQ4 else chr(92)}
- "$python" -m {MODULE} {'--corrected-four-bit ' if CORRECTED_FOUR_BIT else '--histogram-sq4 ' if HISTOGRAM_SQ4 else '--sq4 ' if SQ4 else ''}--remote "$root/repo" "$root" '{commit}' '{archive_sha}' '{prefix}' '{qualification['config_sha256']}'
+ "$python" -m {MODULE} {'--corrected-four-bit ' if CORRECTED_FOUR_BIT else '--histogram-sq4 ' if HISTOGRAM_SQ4 else '--sq4 ' if SQ4 else ''}{'--remote-canary' if CANARY else '--remote'} "$root/repo" "$root" '{commit}' '{archive_sha}' '{prefix}' '{qualification['config_sha256']}'
 '''
+    if CANARY:
+        # The existing bootstrap and supervisor each get an observed kernel cap.
+        body = body.replace('systemd-run --unit=fine-pack-stop', '''if test "${BORSUK_CANARY_BOOTSTRAP_CAPPED:-0}" != 1; then
+ exec systemd-run --unit=fine-pack-canary-bootstrap --wait --pipe -p MemoryMax=256M -p MemorySwapMax=0 -p CPUQuota=100% -p TasksMax=128 -p RuntimeMaxSec=480 --setenv=BORSUK_CANARY_BOOTSTRAP_CAPPED=1 /bin/bash "$0"
+fi
+systemd-run --unit=fine-pack-stop''',1)
+        body = body.replace('-p RuntimeMaxSec='+str(WALL)+' -p WorkingDirectory=',
+            '-p MemoryMax=256M -p MemorySwapMax=0 -p CPUQuota=100% -p TasksMax=128 -p RuntimeMaxSec='+str(WALL)+' -p WorkingDirectory=',1)
+        # Authenticate the extraction roster before any imported code can run.
+        paths = qualification['source_archive_paths']
+        body = body.replace("    archive.extractall('repo',filter='data')", "    assert sorted(m.name for m in archive.getmembers() if m.isfile()) == "+repr(paths)+", 'canary source archive roster'\n    assert all(m.isfile() or m.isdir() for m in archive.getmembers()), 'canary archive regular files'\n    archive.extractall('repo',filter='data')")
     subprocess.run(['bash', '-n'], input=body, text=True, check=True)
     require(len(body.encode()) < 16384, 'EC2 userdata cap')
     return body
 
 
 def download(s3, descriptor, destination):
+    if CANARY:
+        allowed = (dict(CANARY_BINARY_PIN, key=descriptor.get('key')), dict(
+            destination=str(SQ4_INPUT_ROOT/'corrected-four-bit-closed-populations.json'),
+            bytes=CORRECTED_EVIDENCE[-1][1],sha256=CORRECTED_EVIDENCE[-1][2],key=descriptor.get('key')))
+        require(descriptor in allowed and (str(destination).endswith('/'+BINARY_NAME) if 'destination' not in descriptor
+            else Path(destination).name == 'closed-populations.json'), 'canary forbids dataset body GET before dispatch')
+        body_pin({k:descriptor[k] for k in ('bytes','sha256')},max_bytes=16*1024**2)
     limit = 64*1024**2
     if SQ4 and 'destination' in descriptor:
-        require(descriptor['destination'] == str(destination) and
+        require((CANARY or descriptor['destination'] == str(destination)) and
                 (descriptor['destination'],descriptor['bytes'],descriptor['sha256']) in INPUT_PINS, 'SQ4 exact retained download descriptor')
         limit = descriptor['bytes']
     response = s3.get_object(Bucket=BUCKET, Key=descriptor['key'])
@@ -709,6 +849,44 @@ def runtime_abi():
                 libc=list(platform.libc_ver()), sdk=sdk_guard())
 
 
+def canary_imports(repo, config):
+    import importlib
+    imported = {}
+    for name in CODE:
+        module = sys.modules[__name__] if name == 'scripts/launch_fine_pack_diagnostic.py' else importlib.import_module(name[:-3].replace('/','.'))
+        path = Path(module.__file__).absolute()
+        require(path.resolve() == (Path(repo)/name).resolve() and file_pin(path)['sha256'] == config['code_sha256'][name],
+            'canary actual import origin: '+name)
+        imported[name] = config['code_sha256'][name]
+    return imported
+
+
+def canary_sentinels():
+    """Any Python panel/GT open fails immediately; native gets usage-only argv."""
+    def forbid(event, args):
+        if event == 'open' and isinstance(args[0], (str,bytes,os.PathLike)):
+            path = Path(os.fsdecode(args[0])).absolute()
+            require(path != SQ4_INPUT_ROOT and SQ4_INPUT_ROOT not in path.parents, 'canary forbids panel/GT opens')
+    sys.addaudithook(forbid)
+    return dict(panel_gt_root=str(SQ4_INPUT_ROOT),fail_fast_open_sentinel=True,native_usage_only=True)
+
+
+def canary_transport(s3, config, prefix):
+    from types import SimpleNamespace
+    attempts = dict(dispatch_attempts=0,limit=128,scope='wrapped-worker-s3-sdk-dispatches')
+    selected = {config['binary']['key'],config['inputs'][-1]['key']}
+    heads = {d['key'] for d in (*config['inputs'],config['binary'])}
+    def call(method, **kwargs):
+        key = kwargs['Key']
+        own = key == prefix+'/terminal.json' or key.startswith(prefix+'/artifacts/') and key[len(prefix+'/artifacts/'):] in ARTIFACTS
+        require(kwargs['Bucket'] == BUCKET and (key in heads if method=='head_object' else key in selected or own if method=='get_object' else own),
+            'canary transport refuses dataset GET or foreign object before dispatch')
+        require(attempts['dispatch_attempts'] < attempts['limit'], 'canary 128 dispatch cap')
+        attempts['dispatch_attempts'] += 1
+        return getattr(s3,method)(**kwargs)
+    return SimpleNamespace(**{n:(lambda method=n,**kw:call(method,**kw)) for n in ('get_object','head_object','put_object')},canary_attempts=attempts)
+
+
 def validate_abi(abi):
     require(abi == dict(machine='x86_64', python=[3,12], os=dict(ID='ubuntu',VERSION_ID='24.04'),
         libc=['glibc','2.39'], sdk=dict(boto3='1.40.72',botocore='1.40.72',put_object_if_none_match=True)), 'selected x86 Ubuntu/Python/native ABI and SDK')
@@ -716,6 +894,9 @@ def validate_abi(abi):
 
 def stage(s3, config, root):
     validate_config(config)
+    if CANARY:
+        require(all(not os.path.lexists(root/n) for n in (BINARY_NAME,'native-config.json','metadata/closed-populations.json','stage-receipt.json')),
+            'canary one original staging attempt; no overwrite')
     scratch = None
     if SQ4:
         reserve = config['fixed']['scratch']
@@ -740,20 +921,32 @@ def stage(s3, config, root):
             reserve=reserve, charged_bytes=charged, free_bytes_before=available,
             projected_peak_bytes=observation['whole_scratch_bytes']+remaining,
             source_archive_observed_bytes=source_bytes, bootstrap_observed_bytes=bootstrap_bytes, bootstrap=bootstrap)
+    heads = []
+    if CANARY:
+        for descriptor in (*config['inputs'],config['binary']):
+            response = s3.head_object(Bucket=BUCKET,Key=descriptor['key'])
+            require(type(response['ContentLength']) is int and response['ContentLength'] == descriptor['bytes'], 'canary HEAD size/key')
+            if 'sha256' in response.get('Metadata',{}):
+                require(response['Metadata']['sha256'] == descriptor['sha256'], 'canary HEAD digest')
+            heads.append(dict(key=descriptor['key'],bytes=response['ContentLength'],sha256=descriptor['sha256'],
+                etag=response.get('ETag'),version_id=response.get('VersionId')))
     download(s3, config['binary'], root/BINARY_NAME)
     (root/BINARY_NAME).chmod(0o500)
     write(root/'native-config.json', encoded(config['native_config']))
-    for descriptor in config['inputs']:
+    selected = config['inputs'][-1:] if CANARY else config['inputs']
+    for descriptor in selected:
         if SQ4:
             require(scratch_observation(root)['whole_scratch_bytes']+descriptor['bytes'] <= SQ4_SCRATCH_CAP, 'SQ4 scratch before input write')
-        download(s3, descriptor, descriptor['destination'])
+        download(s3, descriptor, root/'metadata/closed-populations.json' if CANARY else descriptor['destination'])
     result = dict(binary=file_pin(root/BINARY_NAME), native_config=file_pin(root/'native-config.json'),
-                  inputs={d['destination']:file_pin(d['destination']) for d in config['inputs']},
+                  inputs={d['destination']:file_pin(root/'metadata/closed-populations.json' if CANARY else d['destination']) for d in selected},
                   exact_six_inputs=True, compiler_used=False)
     if SQ4:
         del result['exact_six_inputs']
-        result['exact_nineteen_inputs' if CORRECTED_FOUR_BIT else 'exact_eighteen_inputs'] = True
+        result['canary_metadata_only' if CANARY else 'exact_nineteen_inputs' if CORRECTED_FOUR_BIT else 'exact_eighteen_inputs'] = True
         result['scratch'] = scratch
+    if CANARY:
+        result.update(heads=heads,dataset_body_gets=0,selected_get_keys=[config['binary']['key'],selected[0]['key']])
     write(root/'stage-receipt.json', encoded(result))
     return result
 
@@ -852,6 +1045,8 @@ def supervise(config, root, *, run_id):
     """Popen owns the original executable; the observer stays outside its cap."""
     command = [str(root/BINARY_NAME), SQ4_CLI if SQ4 else 'check-fine-pack', str(root/'native-config.json'),
                config['native_config_sha256'], str(root/'screen/report.json')]
+    if CANARY:
+        command = [str(root/BINARY_NAME),SQ4_CLI]  # Strict wrong argc returns usage before any data open.
     (root/'screen').mkdir(exist_ok=False)
     receipt = dict(command=command, process_exit_code=None, process_started=False,
                    config_sha256=config['native_config_sha256'], binary=config['binary'], run_id=run_id)
@@ -984,6 +1179,8 @@ def supervise(config, root, *, run_id):
 
 def validate_sq4_result(root, config):
     validate_config(config)
+    if CORRECTED_FOUR_BIT:
+        validate_canary_admission(config,root,collected=True)
     sq4_qualification(config, root, collected=True)
     validate_abi(decode(read(root/'runtime-abi.json')))
     binary = {k:config['binary'][k] for k in ('bytes','sha256')}
@@ -1254,6 +1451,8 @@ def validate_corrected_outputs(root, config, original, report, body):
 
 
 def validate_result(root, config):
+    if CANARY:
+        return validate_canary_result(root, config)
     if SQ4:
         return validate_sq4_result(root, config)
     validate_config(config)
@@ -1336,6 +1535,61 @@ def validate_result(root, config):
                 per_panel_passes=passes, per_panel_max_bytes=maxima, quality_or_performance_claim=False)
 
 
+def validate_canary_result(root, config):
+    validate_config(config)
+    sq4_qualification(config,root,collected=True)
+    validate_abi(decode(read(root/'runtime-abi.json')))
+    ref = config['canary']['science_authority']; raw = read(root/'science-config.json')
+    require(pin(raw) == {k:ref[k] for k in ('bytes','sha256')} and decode(raw) == config['canary']['science_config'], 'canary science reference replay')
+    require(decode(read(root/'imports.json')) == config['code_sha256']
+        and decode(read(root/'sentinels.json')) == dict(panel_gt_root=str(SQ4_INPUT_ROOT),fail_fast_open_sentinel=True,native_usage_only=True),
+        'canary real imports and no-panel/GT sentinel')
+    require(file_pin(root/BINARY_NAME) == CANARY_BINARY_PIN
+        and file_pin(root/'native-config.json') == pin(encoded(config['native_config']))
+        and file_pin(root/'metadata/closed-populations.json') == dict(bytes=175929,sha256=CORRECTED_EVIDENCE[-1][2]), 'canary executed/staged exact bytes')
+    receipt,resource,cleanup,scratch,stage_receipt = (decode(read(root/n)) for n in
+        ('native-exit.json','resources.json','cleanup.json','scratch.json','stage-receipt.json'))
+    command = receipt['command']; original = Path(command[0]).parent.parent
+    require(original.is_absolute() and command == [str(original/BINARY_NAME),SQ4_CLI]
+        and receipt['binary'] == config['binary'] and receipt['config_sha256'] == config['native_config_sha256']
+        and receipt['process_started'] is True and type(receipt['process_exit_code']) is int and receipt['process_exit_code'] == 2
+        and 'error' not in receipt, 'canary original exact usage CLI/exit2')
+    log = read(root/'native.log',2*1024**2)
+    require(b'usage: hierarchical_semantic_cells check-fine-corrected-four-bit CONFIG CONFIG_SHA256 NEW_REPORT_JSON' in log,
+        'canary actual loader and usage diagnostic')
+    require(not (root/'screen').exists() or not any((root/'screen').iterdir()), 'canary forbids native science output')
+    validate_resources(resource)
+    require(all(cleanup.get(k) is True for k in ('drain_complete','cleanup_complete','output_durable')), 'canary cleanup/durability')
+    expected = [dict(key=d['key'],bytes=d['bytes'],sha256=d['sha256']) for d in (*config['inputs'],config['binary'])]
+    require([{k:h[k] for k in ('key','bytes','sha256')} for h in stage_receipt['heads']] == expected
+        and stage_receipt['canary_metadata_only'] is True and stage_receipt['dataset_body_gets'] == 0
+        and stage_receipt['selected_get_keys'] == [config['binary']['key'],config['inputs'][-1]['key']]
+        and stage_receipt['binary'] == CANARY_BINARY_PIN and stage_receipt['compiler_used'] is False
+        and stage_receipt['native_config'] == pin(encoded(config['native_config']))
+        and stage_receipt['inputs'] == {config['inputs'][-1]['destination']:dict(bytes=175929,sha256=CORRECTED_EVIDENCE[-1][2])}, 'canary HEAD20/GET2/noGT transport')
+    admission = stage_receipt['scratch']; reserve = config['fixed']['scratch']
+    require(scratch['closed'] is True and scratch['cap_exceeded'] is False and 'error' not in scratch
+        and scratch['run_id'] == receipt['run_id'] and scratch['process_exit_code'] == 2
+        and scratch['config_sha256'] == config['native_config_sha256'] and scratch['cap_bytes'] == SQ4_SCRATCH_CAP
+        and scratch['admission'] == admission and admission['reserve'] == reserve
+        and admission['config_sha256'] == config['native_config_sha256']
+        and admission['charged_bytes'] == sum(v for k,v in reserve.items() if k!='cap_bytes') <= admission['free_bytes_before']
+        and admission['projected_peak_bytes'] <= SQ4_SCRATCH_CAP
+        and admission['source_archive_observed_bytes'] <= reserve['source_archive_bytes']
+        and admission['bootstrap_observed_bytes'] <= reserve['bootstrap_bytes']
+        and admission['bootstrap']['closed'] is True and admission['bootstrap']['cap_exceeded'] is False
+        and admission['bootstrap']['reserve'] == reserve and admission['bootstrap']['sample_count'] >= 2
+        and scratch['sample_count'] >= 2 and scratch['interval_seconds'] == 1
+        and scratch['closure_reserve_bytes'] == SQ4_CLOSURE_RESERVE
+        and scratch['projected_closure_peak_bytes'] == scratch['last']['whole_scratch_bytes']+SQ4_CLOSURE_RESERVE <= SQ4_SCRATCH_CAP
+        and 0 <= scratch['last']['whole_scratch_bytes'] <= scratch['peak_bytes'] <= SQ4_SCRATCH_CAP
+        and set(scratch['last']['roots']) == {str(original),str(SQ4_INPUT_ROOT)}
+        and sum(scratch['last']['roots'].values()) == scratch['last']['whole_scratch_bytes'], 'canary observed whole scratch closure')
+    return dict(status='GO',valid_diagnostic=True,infrastructure_only=True,original_exit_code=2,
+        native_config_sha256=config['native_config_sha256'],binary=CANARY_BINARY_PIN,
+        binding=science_binding(config['canary']['science_config']),quality_or_performance_claim=False)
+
+
 def publish(s3, root, prefix, terminal):
     """Retain every present raw body, read back, then publish the terminal."""
     if SQ4:
@@ -1357,6 +1611,10 @@ def publish(s3, root, prefix, terminal):
         observation = scratch_room(root, 4*1024**2)
         terminal['scratch_closure'] = dict(before=observation, cap_bytes=SQ4_SCRATCH_CAP,
             reserve_bytes=4*1024**2, projected_peak_bytes=observation['whole_scratch_bytes']+4*1024**2)
+    if CANARY:
+        terminal['transport'] = dict(s3.canary_attempts,dispatch_attempts=s3.canary_attempts['dispatch_attempts']+1,
+            unobserved_scopes=['bootstrap','root_ec2','root_control','wire_requests','billed_requests'],automatic_retry=False)
+        require(terminal['transport']['dispatch_attempts'] <= 128, 'canary worker S3 dispatch/closure reserve')
     raw = encoded(terminal)
     if SQ4:
         require(len(raw)+4096 <= 4*1024**2, 'SQ4 terminal closure reserve')
@@ -1397,6 +1655,13 @@ def remote(repo, root, commit, archive_sha, prefix, config_sha):
         if SQ4:
             for r in config['native_qualification']:
                 write(root/'qualification'/Path(r['path']).name, read(repo/r['path']))
+        if CANARY:
+            write(root/'science-config.json',read(repo/config['canary']['science_authority']['path']))
+            write(root/'imports.json',encoded(canary_imports(repo,config)))
+            write(root/'sentinels.json',encoded(canary_sentinels()))
+            s3 = canary_transport(s3,config,prefix)
+        elif CORRECTED_FOUR_BIT:
+            write(root/'canary-admission.json',read(repo/config['canary_admission']['path']))
         write(root/'cpu.txt', subprocess.check_output(['lscpu']))
         stage(s3, config, root)
         receipt = supervise(config, root, run_id=prefix+'/'+instance_id)
@@ -1413,6 +1678,9 @@ def remote(repo, root, commit, archive_sha, prefix, config_sha):
         if SQ4:
             scratch_room(root, SQ4_CLOSURE_RESERVE)
         write(root/'run-closed.log', closed_log)
+        if CANARY and not hasattr(s3,'canary_attempts'):
+            # Early ABI/config/import refusal may publish only this attempt's receipts.
+            s3 = canary_transport(s3,dict(binary=dict(key='refused/binary'),inputs=[dict(key='refused/metadata')]),prefix)
         publish(s3, root, prefix, terminal)
     return terminal['exit_code']
 
@@ -1440,13 +1708,19 @@ def replay(out):
         return dict(valid_diagnostic=False, status='INVALID', original_exit_code=terminal['original_exit_code'])
     require(terminal['phase'] == 'complete' and type(terminal['exit_code']) is int
             and type(terminal['original_exit_code']) is int
-            and terminal['exit_code'] == terminal['original_exit_code'] == 0
+            and terminal['exit_code'] == 0 and terminal['original_exit_code'] == (2 if CANARY else 0)
             and set(terminal['artifacts']) == set(ARTIFACTS), 'complete original terminal/roster')
     if SQ4:
         closure = terminal['scratch_closure']
         require(closure['cap_bytes'] == SQ4_SCRATCH_CAP and closure['reserve_bytes'] == 4*1024**2
                 and closure['projected_peak_bytes'] == closure['before']['whole_scratch_bytes']+closure['reserve_bytes'] <= SQ4_SCRATCH_CAP
                 and sum(closure['before']['roots'].values()) == closure['before']['whole_scratch_bytes'], 'SQ4 final terminal scratch closure')
+    if CANARY:
+        transport = terminal['transport']
+        require(transport['limit'] == 128 and type(transport['dispatch_attempts']) is int
+            and 0 < transport['dispatch_attempts'] <= 128 and transport['scope'] == 'wrapped-worker-s3-sdk-dispatches'
+            and transport['unobserved_scopes'] == ['bootstrap','root_ec2','root_control','wire_requests','billed_requests']
+            and transport['automatic_retry'] is False, 'canary one attempt worker S3 dispatch cap/scope')
     raw = read(out/'config.json')
     require(sha(raw) == terminal['config_sha256'], 'collected config hash')
     config = decode(raw); validate_config(config)
@@ -1461,6 +1735,10 @@ def replay(out):
 
 
 def collect(s3, prefix, out, instance_id, commit, digest):
+    if CANARY:
+        launch,close = (decode(read(out/n)) for n in ('aws-launch.json','aws-closeout.json'))
+        require(close['state'] == 'terminated' and close['nodes'] == launch['nodes'] == {'0':{'instance_id':instance_id}}
+            and launch['instance_id'] == instance_id, 'canary collection requires SAME acknowledged ID terminated/waited')
     response = s3.get_object(Bucket=BUCKET, Key=prefix+'/terminal.json')
     with response['Body'] as source:
         raw = source.read(4*1024**2+1)
@@ -1479,6 +1757,13 @@ def collect(s3, prefix, out, instance_id, commit, digest):
         write(out/name, body); write(out/(name+'.gz'), gzip.compress(body, mtime=0))
     result = replay(out)
     write(out/'collection-replay.json', encoded(result))
+    if CANARY and result['status'] == 'GO':
+        write(out/'canary-admission.json',encoded(dict(schema='borsuk-corrected-four-bit-canary-admission-v1',
+            status='GO',binding=result['binding'],original_exit_code=2,instance_id=instance_id,prefix=prefix,
+            canary_schema=SCHEMA,source_commit=commit,source_archive_sha256=digest,
+            closeout=decode(read(out/'aws-closeout.json')),terminal=file_pin(out/'aws-terminal.json'),
+            reservation=file_pin(out/'aws-reservation.json'),launch=file_pin(out/'aws-launch.json'),
+            config=file_pin(out/'config.json'),source_qualification=file_pin(out/'source-qualification.json'))))
     return terminal
 
 
@@ -2521,6 +2806,235 @@ for summary in d['summaries']:
         print('PASS '+SQ4_NAME+' mock-native: exact'+str(15 if corrected else 14)+' argv/mandatory owning-stage passes/positive test counts/serial UTC; generated Bash/bootstrap observer; charged external-temp fault; near-cap closure; exact CLI; silent exit0; REJECT; late exit2; deadline; config/output drift; no overwrite; scratch; cleanup; full raw/gzip collection/replay; byte-exact report/qualification. Cgroup/SDK transport/AWS/qualification metadata SYNTHETIC; no native science.')
 
 
+def canary_self_check():
+    """Source-only checks; transport and usage process are synthetic."""
+    assert callable(globals().get('configure_canary')), 'missing corrected infrastructure canary entry'
+    import copy
+    import io
+    import tempfile
+    from contextlib import ExitStack
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    module = sys.modules[__name__]
+    repo = Path(__file__).resolve().parents[1]
+    if not CANARY:
+        configure_sq4(corrected=True); configure_canary()
+    def refused(call):
+        try:call()
+        except (ValueError,OSError,KeyError,AssertionError,ImportError):return
+        raise AssertionError('unsafe canary accepted')
+    sdk_guard()  # Actual installed 1.40.72 service model; never create a client.
+    import botocore.session
+    old_model = SimpleNamespace(get_service_model=lambda _:SimpleNamespace(operation_model=lambda _:
+        SimpleNamespace(input_shape=SimpleNamespace(members={}))))
+    with patch.object(botocore.session,'get_session',return_value=old_model):refused(sdk_guard)
+    import boto3
+    with patch.object(boto3,'__version__','wrong'):refused(sdk_guard)
+    setup_self_check()
+    science = decode(read(repo/SCIENCE_STATE['ROOT']/'config-draft.json'))
+    science['code_sha256'] = {n:file_pin(repo/n)['sha256'] for n in CODE}
+    require(canary_imports(repo,science) == science['code_sha256'],'actual local import closure')
+    refused(lambda:canary_imports(repo/'wrong-origin',science))
+    import importlib
+    with patch.object(importlib,'import_module',side_effect=ImportError('missing import')):refused(lambda:canary_imports(repo,science))
+    sentinel_hooks = []
+    with patch.object(sys,'addaudithook',side_effect=sentinel_hooks.append):canary_sentinels()
+    refused(lambda:sentinel_hooks[0]('open',(str(SQ4_INPUT_ROOT/'screen/retained/cohere/truth64'),'r',0)))
+    probe = subprocess.run([sys.executable,'-c',
+        'from pathlib import Path; from scripts import launch_fine_pack_diagnostic as m; '
+        'm.SQ4_INPUT_ROOT=Path("/tmp/canary-forbidden-probe"); m.canary_sentinels(); '
+        '(m.SQ4_INPUT_ROOT/"panel-truth").open("rb")'],capture_output=True,text=True)
+    require(probe.returncode != 0 and 'canary forbids panel/GT opens' in probe.stderr, 'actual audit hook before panel/GT open')
+    usage = b'#!/usr/bin/env python3\nimport sys\nassert sys.argv[1:]==["check-fine-corrected-four-bit"]\nprint("usage: hierarchical_semantic_cells check-fine-corrected-four-bit CONFIG CONFIG_SHA256 NEW_REPORT_JSON")\nsys.exit(2)\n'
+    with tempfile.TemporaryDirectory(prefix='corrected-canary-check-') as tmp, ExitStack() as stack:
+        base = Path(tmp); input_root = base/'forbidden'; input_root.mkdir()
+        stack.enter_context(patch.object(module,'SQ4_INPUT_ROOT',input_root))
+        pins = tuple((p.replace('/mnt/hierarchical-100k',str(input_root)),n,h) for p,n,h in INPUT_PINS)
+        stack.enter_context(patch.object(module,'INPUT_PINS',pins))
+        science = decode(encoded(science).replace(b'/mnt/hierarchical-100k',str(input_root).encode()))
+        science['native_config_sha256'] = sha(encoded(science['native_config']))
+        for n in (*CODE,str(SQ4_ROOT/'prospective-input-roster.json'),*(str(CORRECTED_ROOT/n) for n,_,_ in CORRECTED_EVIDENCE)):
+            write(base/n,read(repo/n))
+        for r in science['native_qualification']:write(base/r['path'],read(repo/r['path']))
+        # First authenticate the actual completed all405/all15 metadata receipts.
+        sq4_qualification(science,base)
+        # Only the usage executable and its qualification artifact bindings become synthetic.
+        synthetic_pin = pin(usage)
+        stack.enter_context(patch.object(module,'CANARY_BINARY_PIN',synthetic_pin))
+        science['binary'].update(synthetic_pin)
+        science['fixed']['scratch']['binary_bytes'] = synthetic_pin['bytes']
+        receipts = {Path(r['path']).name:decode(read(base/r['path'])) for r in science['native_qualification']}
+        receipts['workspace-receipt.json']['artifacts'][BINARY_NAME] = synthetic_pin
+        receipts['aws-terminal.json']['artifacts'][BINARY_NAME] = synthetic_pin
+        receipts['aws-terminal.json']['artifacts']['workspace-receipt.json'] = pin(encoded(receipts['workspace-receipt.json']))
+        receipts['parent-verification.json']['binary'] = synthetic_pin
+        for r in science['native_qualification']:
+            raw = encoded(receipts[Path(r['path']).name]); (base/r['path']).write_bytes(raw); r.update(pin(raw))
+        ref_path = SCIENCE_STATE['ROOT']/'config-draft.json'; science_raw = encoded(science); write(base/ref_path,science_raw)
+        config = copy.deepcopy(science)
+        config.update(schema=SCHEMA,authority_pending=False,fixed=dict(FIXED,scratch=dict(
+            input_bytes=175929,native_output_bytes=CAPS['output_bytes'],binary_bytes=synthetic_pin['bytes'],
+            source_archive_bytes=32*1024**2,bootstrap_bytes=1024**3,auxiliary_bytes=32*1024**2,cap_bytes=SQ4_SCRATCH_CAP)),
+            canary=dict(science_authority=dict(path=str(ref_path),**pin(science_raw)),science_config=copy.deepcopy(science),metadata_only_admission=True))
+        paths = sorted([str(CONFIG),str(ref_path),str(SQ4_ROOT/'prospective-input-roster.json'),*CODE,
+            *(r['path'] for r in config['native_qualification']),*(str(CORRECTED_ROOT/n) for n,_,_ in CORRECTED_EVIDENCE)])
+        config.update(source_archive_paths=paths,source_archive_paths_sha256=sha(json.dumps(paths,separators=(',',':')).encode()))
+        write(base/CONFIG,encoded(config)); proof = preflight(base)
+        for alter in (lambda c:c.update(authority_pending=True),
+            lambda c:c['canary'].update(metadata_only_admission=False),
+            lambda c:c['native_source'].update(commit='0'*40),
+            lambda c:c['fixed']['native_caps'].update(memory_bytes=1024**3),
+            lambda c:c['inputs'][0].update(key='wrong/key'),
+            lambda c:c['binary'].update(sha256='0'*64)):
+            bad = copy.deepcopy(config); alter(bad); refused(lambda:validate_config(bad,base))
+        p = base/config['native_qualification'][2]['path']; saved = read(p)
+        bad = decode(saved); bad['mandatory_test_names_pending'] = True; p.write_bytes(encoded(bad))
+        bad_config = copy.deepcopy(config);bad_config['native_qualification'][2].update(file_pin(p))
+        refused(lambda:sq4_qualification(bad_config,base));p.write_bytes(saved)
+        p = base/CODE[0];saved = read(p);p.write_bytes(saved+b' ');refused(lambda:preflight(base));p.write_bytes(saved)
+        generated = user_data('a'*40,'b'*64,'mock/archive',PREFIX+'a0001',proof)
+        require('--remote-canary' in generated and '--remote "' not in generated
+            and 'MemoryMax=256M' in generated and 'canary source archive roster' in generated,'bounded generated bootstrap')
+        fake_bin = base/'bin';fake_bin.mkdir()
+        write(fake_bin/'systemd-run',('#!'+sys.executable+'\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n').encode());(fake_bin/'systemd-run').chmod(0o500)
+        opening = generated.split('\nroot=',1)[0]
+        env = dict(os.environ,PATH=str(fake_bin)+':'+os.environ['PATH'],BORSUK_CANARY_BOOTSTRAP_CAPPED='0')
+        invoked = subprocess.run(['bash','-c',opening],env=env,capture_output=True,text=True,check=True)
+        commands = [decode(line) for line in invoked.stdout.splitlines()]
+        require(len(commands)==1 and '--unit=fine-pack-canary-bootstrap' in commands[0], 'bootstrap cap before exactly one shutdown timer')
+        compile(generated.split("<<'WATCH'\n",1)[1].split('\nWATCH\n',1)[0],'canary-bootstrap-watch','exec')
+        metadata = read(repo/CORRECTED_ROOT/'closed-populations.json')
+        gets,heads,objects = [],[],{}
+        def get(**kw):
+            key = kw['Key'];gets.append(key)
+            if key in objects:body = objects[key]
+            elif key == config['binary']['key']:body = usage
+            elif key == config['inputs'][-1]['key']:body = metadata
+            else:raise AssertionError('dataset body GET')
+            return dict(Body=io.BytesIO(body),ContentLength=len(body))
+        def head(**kw):
+            key = kw['Key'];heads.append(key)
+            d = next(d for d in (*config['inputs'],config['binary']) if d['key']==key)
+            return dict(ContentLength=d['bytes'],Metadata=dict(sha256=d['sha256']))
+        def put(**kw):
+            require(kw['IfNoneMatch']=='*' and kw['Key'] not in objects,'immutable canary output')
+            objects[kw['Key']] = kw['Body']
+        transport = SimpleNamespace(get_object=get,head_object=head,put_object=put)
+        def prepare(name):
+            root = base/name;root.mkdir();(root/'bootstrap/tmp').mkdir(parents=True)
+            write(root/'bootstrap/scratch.json',encoded(dict(closed=True,cap_exceeded=False,interval_seconds=1,
+                sample_count=2,peak_bytes=0,reserve=config['fixed']['scratch'])))
+            return root
+        for fault in ('missing','head-size','body-sha'):
+            root = prepare(fault); before = len(gets)
+            with ExitStack() as faults:
+                if fault=='missing':faults.enter_context(patch.object(transport,'head_object',side_effect=KeyError('missing key')))
+                if fault=='head-size':faults.enter_context(patch.object(transport,'head_object',return_value=dict(ContentLength=0)))
+                if fault=='body-sha':faults.enter_context(patch.object(transport,'get_object',return_value=dict(Body=io.BytesIO(b'x'),ContentLength=175929)))
+                refused(lambda:stage(canary_transport(transport,config,PREFIX+'a0001'),config,root))
+            if fault!='body-sha':require(len(gets)==before and not (root/BINARY_NAME).exists(),'HEAD refusal before any body GET')
+        root = prepare('original'); s3 = canary_transport(transport,config,PREFIX+'a0001')
+        descriptor = config['inputs'][0];before = len(gets)
+        refused(lambda:download(s3,descriptor,root/'unsafe'))
+        refused(lambda:s3.get_object(Bucket=BUCKET,Key=config['inputs'][7]['key']))
+        require(len(gets)==before,'no panel/GT GET reaches transport')
+        denied = prepare('scratch-refusal')
+        with (denied/'temporary').open('xb') as f:f.truncate(SQ4_SCRATCH_CAP)
+        before=len(gets);refused(lambda:stage(s3,config,denied));require(len(gets)==before,'scratch refusal before transport')
+        stage(s3,config,root)
+        require(heads[-20:] == [d['key'] for d in (*config['inputs'],config['binary'])]
+            and gets[-2:] == [config['binary']['key'],config['inputs'][-1]['key']],'HEAD every19+binary; GET metadata+usage only')
+        previous_heads=len(heads);refused(lambda:stage(s3,config,root));require(len(heads)==previous_heads,'one original staging attempt before dispatch')
+        with patch.object(transport,'get_object',return_value=dict(Body=io.BytesIO(b'x'*175929),ContentLength=175929)):
+            refused(lambda:download(s3,config['inputs'][-1],base/'wrong-sha/closed-populations.json'))
+        write(root/'config.json',encoded(config));write(root/'science-config.json',science_raw)
+        write(root/'source-qualification.json',encoded(proof));write(root/'run-closed.log',b'');write(root/'cpu.txt',b'mock')
+        write(root/'imports.json',encoded(config['code_sha256']))
+        write(root/'sentinels.json',encoded(dict(panel_gt_root=str(input_root),fail_fast_open_sentinel=True,native_usage_only=True)))
+        write(root/'runtime-abi.json',encoded(dict(machine='x86_64',python=[3,12],os=dict(ID='ubuntu',VERSION_ID='24.04'),
+            libc=['glibc','2.39'],sdk=dict(boto3='1.40.72',botocore='1.40.72',put_object_if_none_match=True))))
+        for r in config['native_qualification']:write(root/'qualification'/Path(r['path']).name,read(base/r['path']))
+        parent = base/(SUPERVISOR_UNIT+'.service');parent.mkdir();group = parent/'native'
+        files = dict(zip(CGROUP_FILES,(str(CAPS['memory_bytes']),'4096','0','0',
+            'oom 0\noom_kill 0\noom_group_kill 0\n','high 0\nmax 0\nfail 0\n','100000 100000',
+            'usage_usec 1\nuser_usec 1\nsystem_usec 0\n',str(FIXED['tasks_max']),'0','max 0\n','','populated 0\nfrozen 0\n')))
+        def delegate(record):
+            record.update(unit=SUPERVISOR_UNIT+'.service',parent=str(parent),observer=str(parent/'supervisor'),observer_pid=os.getpid(),
+                available=sorted(CONTROLLERS),enabled=sorted(CONTROLLERS),parent_process_ids=[],observer_process_ids=[os.getpid()],parent_type='domain')
+            return group
+        original_popen = subprocess.Popen
+        def spawn(command,**kw):
+            require(command==[str(root/BINARY_NAME),SQ4_CLI],'usage-only command before spawn')
+            kw.pop('preexec_fn');kw.pop('pass_fds');return original_popen(command,**kw)
+        with ExitStack() as mocks:
+            for method,fn in (('delegated_group',delegate),('create_group',lambda g:(g/'cgroup.procs').write_text('')),
+                ('cgroup_snapshot',lambda g:dict(path=str(g),observer_pid=os.getpid(),files=copy.deepcopy(files))),
+                ('drain_group',lambda g:(g/'cgroup.procs').unlink())):
+                mocks.enter_context(patch.object(module,method,side_effect=fn))
+            mocks.enter_context(patch.object(subprocess,'Popen',side_effect=spawn))
+            receipt = supervise(config,root,run_id=PREFIX+'a0001/i-original')
+        require(receipt['process_exit_code']==2 and not group.exists(),'observed original usage exit2 and cleanup')
+        denied = prepare('pre-exec-cpu-refusal');stage(canary_transport(transport,config,PREFIX+'a0001'),config,denied)
+        files['cpu.max'] = '200000 100000'
+        with ExitStack() as mocks:
+            for method,fn in (('delegated_group',delegate),('create_group',lambda g:(g/'cgroup.procs').write_text('')),
+                ('cgroup_snapshot',lambda g:dict(path=str(g),observer_pid=os.getpid(),files=copy.deepcopy(files))),
+                ('drain_group',lambda g:(g/'cgroup.procs').unlink())):
+                mocks.enter_context(patch.object(module,method,side_effect=fn))
+            mocks.enter_context(patch.object(subprocess,'Popen',side_effect=AssertionError('exec before resource admission')))
+            denied_receipt = supervise(config,denied,run_id='refused')
+        require(denied_receipt['process_started'] is False and not (denied/'native.log').exists(),'kernel CPU mismatch before exec')
+        files['cpu.max'] = '100000 100000'
+        result = validate_result(root,config);require(result['status']=='GO','metadata/usage GO')
+        for name,change in (('native-exit.json',lambda d:d.update(process_exit_code=0)),
+            ('cleanup.json',lambda d:d.update(cleanup_complete=False)),
+            ('resources.json',lambda d:d['after']['files'].update(**{'cpu.max':'200000 100000'})),
+            ('resources.json',lambda d:d['after']['files'].update(**{'memory.swap.peak':'1'})),
+            ('scratch.json',lambda d:d.update(closed=False)),('imports.json',lambda d:d.update({CODE[0]:'0'*64}))):
+            p = root/name;saved = read(p);bad = decode(saved);change(bad);p.write_bytes(encoded(bad))
+            refused(lambda:validate_result(root,config));p.write_bytes(saved)
+        p = root/'native.log';saved = read(p);p.write_bytes(b'loader failure');refused(lambda:validate_result(root,config));p.write_bytes(saved)
+        write(root/'screen/forbidden-science',b'x');refused(lambda:validate_result(root,config));(root/'screen/forbidden-science').unlink()
+        prefix = PREFIX+'a0001';terminal = dict(schema=SCHEMA,source_commit='a'*40,source_archive_sha256='b'*64,
+            instance_id='i-original',prefix=prefix,config_sha256=sha(encoded(config)),status='complete',phase='complete',
+            exit_code=0,original_exit_code=2,disposition='GO',artifact_roster_sha256=ROSTER_SHA,qualification=proof,result=result)
+        publish(s3,root,prefix,terminal)
+        out = base/'collected';out.mkdir()
+        write(out/'aws-reservation.json',encoded(dict(schema=SCHEMA,source_commit='a'*40,source_archive_sha256='b'*64,
+            config_sha256=terminal['config_sha256'],qualification=proof)))
+        write(out/'aws-launch.json',encoded(dict(instance_id='i-original',nodes={'0':{'instance_id':'i-original'}},prefix=prefix,
+            source_commit='a'*40,source_archive_sha256='b'*64)))
+        write(out/'aws-closeout.json',encoded(dict(state='running',nodes={'0':{'instance_id':'i-original'}})))
+        before = len(gets);refused(lambda:collect(transport,prefix,out,'i-original','a'*40,'b'*64));require(len(gets)==before,'no collection before terminate/wait')
+        (out/'aws-closeout.json').write_bytes(encoded(dict(state='terminated',nodes={'0':{'instance_id':'i-other'}})))
+        refused(lambda:collect(transport,prefix,out,'i-original','a'*40,'b'*64))
+        (out/'aws-closeout.json').write_bytes(encoded(dict(state='terminated',nodes={'0':{'instance_id':'i-original'}})))
+        collect(transport,prefix,out,'i-original','a'*40,'b'*64)
+        require(replay(out)==result,'full original artifact/raw/gzip GO replay')
+        gate = dict(science,authority_pending=False,canary_admission=dict(path=str((out/'canary-admission.json').relative_to(base)),**file_pin(out/'canary-admission.json')))
+        validate_canary_admission(gate,base)
+        with patch.dict(globals(),SCIENCE_STATE), patch.object(module,'CANARY',False):
+            pending_science = dict(science,authority_pending=False)
+            write(base/CONFIG,encoded(pending_science));refused(lambda:preflight(base))
+            gate['source_archive_paths'] = sorted([*gate['source_archive_paths'],gate['canary_admission']['path']])
+            gate['source_archive_paths_sha256'] = sha(json.dumps(gate['source_archive_paths'],separators=(',',':')).encode())
+            (base/CONFIG).write_bytes(encoded(gate));science_proof=preflight(base)
+            require(science_proof['canary_admission']==gate['canary_admission'],'science preflight requires authenticated terminated GO')
+        for change in (lambda c:c['code_sha256'].update({CODE[0]:'0'*64}),lambda c:c['native_config'].update(rotation_seed=[0]*32),
+            lambda c:c['inputs'][0].update(key='drift/key'),lambda c:c['native_source'].update(commit='0'*40)):
+            bad=copy.deepcopy(gate);change(bad);refused(lambda:validate_canary_admission(bad,base))
+        p=out/'aws-terminal.json';saved=read(p)
+        for change in (lambda d:d.update(original_exit_code=0),lambda d:d.update(instance_id='i-other'),
+            lambda d:d.update(artifact_roster_sha256='0'*64)):
+            bad=decode(saved);change(bad);p.write_bytes(encoded(bad));refused(lambda:replay(out))
+        bad=decode(saved);bad.update(status='failed',phase='execution',exit_code=96,disposition='INVALID')
+        p.write_bytes(encoded(bad));require(replay(out)['status']=='INVALID','infrastructure INVALID distinct from scientific REJECT');p.write_bytes(saved)
+        refused(lambda:collect(transport,prefix,out,'i-original','a'*40,'b'*64))
+        s3.canary_attempts['dispatch_attempts']=128;before=len(gets)
+        refused(lambda:s3.get_object(Bucket=BUCKET,Key=config['binary']['key']));require(len(gets)==before,'dispatch cap before transport')
+    print('PASS corrected canary source-only: actual all405/all15 metadata and real imports/SDK; synthetic usage exit2; HEAD20/GET2; pending/drift/SHA/noGT/resource/cleanup/ACK/collection/replay/GO mismatch refusals. No AWS/network/native science.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('attempt', nargs='?')
@@ -2528,23 +3042,34 @@ def main():
     parser.add_argument('--sq4', action='store_true', help='opt in to the frozen native SQ4 experiment')
     parser.add_argument('--histogram-sq4', action='store_true', help='opt in to the frozen native histogram SQ4 experiment')
     parser.add_argument('--corrected-four-bit', action='store_true', help='opt in to the separately qualified corrected direction codec')
+    parser.add_argument('--canary',action='store_true',help='corrected metadata/usage infrastructure admission only')
+    parser.add_argument('--remote-canary',nargs=6)
+    parser.add_argument('--replay-canary',type=Path)
     parser.add_argument('--replay', type=Path)
     parser.add_argument('--remote', nargs=6)
     args = parser.parse_args()
     require(sum((args.sq4,args.histogram_sq4,args.corrected_four_bit)) <= 1, 'one SQ4 experiment')
     if args.sq4 or args.histogram_sq4 or args.corrected_four_bit:
         configure_sq4(histogram=args.histogram_sq4, corrected=args.corrected_four_bit)
-    require(sum((args.attempt is not None, args.self_check, args.replay is not None, args.remote is not None)) == 1, 'one CLI mode')
+    require(not (args.canary or args.remote_canary or args.replay_canary) or args.corrected_four_bit, 'canary only in corrected mode')
+    require(not args.canary or args.attempt is not None or args.self_check, 'canary launch or self-check')
+    require(not args.canary or not (args.remote_canary or args.replay_canary), 'one canary entry')
+    if args.canary or args.remote_canary or args.replay_canary:
+        configure_canary()
+    require(sum((args.attempt is not None,args.self_check,args.replay is not None,args.remote is not None,
+        args.remote_canary is not None,args.replay_canary is not None)) == 1, 'one CLI mode')
     if args.self_check:
-        if SQ4:
+        if CANARY:
+            canary_self_check()
+        elif SQ4:
             sq4_self_check(histogram=HISTOGRAM_SQ4, corrected=CORRECTED_FOUR_BIT)
         else:
             self_check(real_cgroup=os.environ.get('BORSUK_FINE_PACK_REAL_CGROUP')=='1')
         return 0
-    if args.replay:
-        print(json.dumps(replay(args.replay), sort_keys=True)); return 0
-    if args.remote:
-        repo, root, commit, digest, prefix, config_sha = args.remote
+    if args.replay or args.replay_canary:
+        print(json.dumps(replay(args.replay or args.replay_canary), sort_keys=True)); return 0
+    if args.remote or args.remote_canary:
+        repo, root, commit, digest, prefix, config_sha = args.remote or args.remote_canary
         return remote(Path(repo), Path(root), commit, digest, prefix, config_sha)
     require(re.fullmatch(r'a[0-9]{4}', args.attempt), 'attempt must be aNNNN')
     sdk_guard()
