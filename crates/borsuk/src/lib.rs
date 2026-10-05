@@ -77,6 +77,7 @@ mod positioned_candidate;
 mod positioned_log;
 mod positioned_materializer;
 pub mod pq64_nominee;
+pub mod fine_sq8_groups;
 pub mod pq64_router_artifact;
 mod quantizer_sidecar;
 mod record;

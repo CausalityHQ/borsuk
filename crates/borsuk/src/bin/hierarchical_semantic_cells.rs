@@ -46,6 +46,167 @@ use std::{
     time::Instant,
 };
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FinePanel { dataset:String, root:Artifact, requests:Artifact, truth:Artifact, truth_width:usize }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FinePairedConfig {
+    schema:String, panels:[FinePanel;2], source_identity_sha256:String,
+    limits:borsuk::fine_sq8_groups::ResidentLimits,
+    max_evaluator_payload_bytes:usize, max_result_bytes:usize,
+    #[cfg(test)] #[serde(skip)] test_geometry:Option<(usize,usize)>,
+    #[cfg(test)] #[serde(skip)] fail_sync_at:Option<usize>,
+}
+fn fine_source_identity() -> String {
+    let mut digest = Sha256::new();
+    for (name, bytes) in [
+        ("fine_sq8_groups.rs", include_bytes!("../fine_sq8_groups.rs").as_slice()),
+        ("pq64_nominee.rs", include_bytes!("../pq64_nominee.rs").as_slice()),
+        ("resident_vector_graph.rs", include_bytes!("../resident_vector_graph.rs").as_slice()),
+        ("hierarchical_semantic_cells.rs", include_bytes!("../hierarchical_semantic_cells.rs").as_slice()),
+        ("budgeted_page_rank.rs", include_bytes!("../budgeted_page_rank.rs").as_slice()),
+        ("sq8_page_authority.rs", include_bytes!("../sq8_page_authority.rs").as_slice()),
+        ("returned_sq8.rs", include_bytes!("../returned_sq8.rs").as_slice()),
+        ("exact_sq8_nominee.rs", include_bytes!("../exact_sq8_nominee.rs").as_slice()),
+        ("centroid_hnsw.rs", include_bytes!("../centroid_hnsw.rs").as_slice()),
+        ("sq8_source.rs", include_bytes!("../sq8_source.rs").as_slice()),
+        ("bin/hierarchical_semantic_cells.rs", include_bytes!("hierarchical_semantic_cells.rs").as_slice()),
+        ("lib.rs", include_bytes!("../lib.rs").as_slice()),
+    ] {
+        digest.update((name.len() as u64).to_le_bytes()); digest.update(name.as_bytes());
+        digest.update((bytes.len() as u64).to_le_bytes()); digest.update(bytes);
+    }
+    format!("{:x}",digest.finalize())
+}
+fn paired_fine(config:FinePairedConfig, config_sha:&str, output:&Path) -> Result<()> {
+    use borsuk::fine_sq8_groups::{FineSq8Index, MAX_BYTES};
+    let mut events = Events::new(output, config.max_result_bytes.max(TERMINAL_CAP))?;
+    events.error_context = json!({"schema":"borsuk-fine-sq8-paired-v1","config_sha256":config_sha});
+    #[cfg(test)] { events.fail_sync_at = config.fail_sync_at; }
+    let outcome = events.run(|events| {
+        let (rows, dimensions) = (100_000,768);
+        #[cfg(test)] let (rows,dimensions) = config.test_geometry.unwrap_or((rows,dimensions));
+        let worker_ok = borsuk::configured_cpu_threads() == 1;
+        #[cfg(test)] let worker_ok = worker_ok || config.test_geometry.is_some();
+        require(config.schema == "borsuk-fine-sq8-paired-v1" && config.source_identity_sha256 == fine_source_identity()
+            && worker_ok
+            && config.panels[0].dataset == "relaion" && config.panels[1].dataset == "cohere"
+            && config.limits.active_queries == 1 && config.limits.delta_bytes == 0
+            && config.limits.max_peak_payload_bytes <= 512 * 1024 * 1024
+            && config.max_evaluator_payload_bytes <= 512 * 1024 * 1024
+            && (TERMINAL_CAP..=128 * 1024 * 1024).contains(&config.max_result_bytes), "fine paired frozen schema/geometry/resources")?;
+        let mut evaluator = 128usize.checked_mul(rows.min(MAX_BYTES/(dimensions+12)) * 16 + 1024 * 256 + dimensions * 4)
+            .ok_or("fine evaluator roster overflow")?;
+        for panel in &config.panels {
+            require(panel.truth_width == 100 && panel.truth.bytes == 64 * 100 * 4
+                && panel.requests.bytes <= REQUEST_CAP, "fine fixed consumed64 panel")?;
+            evaluator = evaluator.checked_add(panel.requests.bytes.checked_mul(8).ok_or("fine request overflow")?)
+                .and_then(|v| v.checked_add(panel.truth.bytes)).ok_or("fine evaluator overflow")?;
+        }
+        require(evaluator <= config.max_evaluator_payload_bytes, "fine evaluator admission")?;
+        let seal_path = output.with_extension("fine-seal.json");
+        require(fs::symlink_metadata(&seal_path).is_err(), "fine seal exists")?;
+        let mut limits = config.limits.clone();
+        limits.runtime_bytes = limits.runtime_bytes.checked_add(evaluator).ok_or("fine evaluator aggregate overflow")?;
+        // Both metadata admissions precede either graph/PQ/hash/body allocation.
+        let admissions = config.panels.iter().map(|p| FineSq8Index::admission(&p.root,&limits)).collect::<Result<Vec<_>>>()?;
+        let total_pins = admissions.iter().try_fold(limits.pinned_generation_bytes,|sum,a| sum.checked_add(a.resident_bytes).ok_or("fine pin overflow"))?;
+        for (panel,admission) in config.panels.iter().zip(&admissions) {
+            let mut bound = limits.clone(); bound.pinned_generation_bytes = total_pins - admission.resident_bytes;
+            FineSq8Index::admission(&panel.root,&bound)?;
+        }
+        let mut indexes = Vec::new();
+        for (panel,admission) in config.panels.iter().zip(&admissions) {
+            let mut bound = limits.clone(); bound.pinned_generation_bytes = total_pins - admission.resident_bytes;
+            let timer = (Instant::now(),cpu_ns());
+            let index = FineSq8Index::open(&panel.root,&bound)?;
+            require(index.rows() == rows && index.dimensions() == dimensions, "fine paired exact runtime geometry")?;
+            events.emit(&json!({"phase":"startup","dataset":panel.dataset,"root":panel.root,
+                "resources":index.resources,"build":index.build_receipt(),"truth_opened":false,
+                "wall_ns":timer.0.elapsed().as_nanos(),"process_cpu_ns":cpu_ns()-timer.1}))?;
+            indexes.push(index);
+        }
+        let mut all_queries = Vec::new(); let mut all_plans = Vec::new();
+        for (panel,index) in config.panels.iter().zip(&indexes) {
+            let body = read_source_probe_artifact(&panel.requests,REQUEST_CAP)?;
+            let mut queries = Vec::new(); let mut plans = Vec::new(); let mut workspace = index.new_workspace()?;
+            for (ordinal,line) in std::str::from_utf8(&body)?.lines().enumerate() {
+                require(ordinal < 64, "fine exactly64 request cap")?;
+                let request:Request = serde_json::from_str(line)?;
+                require(request.ordinal == ordinal && request.query.len() == dimensions, "fine request ordinal/dimensions")?;
+                let timer = (Instant::now(),cpu_ns());
+                let plan = index.plan(&request.query,&mut workspace)?;
+                events.emit(&json!({"phase":"fine_plan","dataset":panel.dataset,"ordinal":ordinal,
+                    "plan":plan,"truth_opened":false,"wall_ns":timer.0.elapsed().as_nanos(),"process_cpu_ns":cpu_ns()-timer.1}))?;
+                queries.push(request.query); plans.push(plan);
+            }
+            require(plans.len() == 64, "fine exactly64 complete plans")?;
+            all_queries.push(queries); all_plans.push(plans);
+        }
+        events.sync()?;
+        let identity = json!({"schema":"borsuk-fine-sq8-seal-v1","config_sha256":config_sha,
+            "source_identity_sha256":fine_source_identity(),"prefix_bytes":events.bytes,
+            "prefix_sha256":format!("{:x}",events.digest.clone().finalize()),"plans_per_panel":64,
+            "panels":config.panels.iter().map(|p| json!({"dataset":p.dataset,"root":p.root,"requests":p.requests})).collect::<Vec<_>>(),
+            "truth_opened":false});
+        verify_nomination_prefix(output,events.bytes,identity["prefix_sha256"].as_str().unwrap())?;
+        let sealed = serde_json::to_vec(&identity)?;
+        require(sealed.len() <= FREEZE_CAP, "fine seal cap")?;
+        let mut seal = OpenOptions::new().write(true).create_new(true).open(&seal_path)?;
+        seal.write_all(&sealed)?; seal.sync_all()?;
+        File::open(output.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")))?.sync_all()?;
+        events.emit(&json!({"phase":"fine_seal","identity":identity,"sha256":hash(&sealed),"truth_opened":false}))?;
+        events.sync()?;
+        if all_plans.iter().flatten().any(|p| !p.feasible()) {
+            return Ok(json!({"phase":"terminal","status":"FAIL","complete":true,"reason":"infeasible unchanged-shortlist cover",
+                "truth_opened":false,"scientific_qualification":false,"quality_or_performance_claim":false}));
+        }
+        // Score before truth too. Keep only bounded audit rosters and top100.
+        let mut traces = Vec::new();
+        for panel in 0..2 {
+            let mut scored = Vec::new();
+            for ordinal in 0..64 {
+                let timer = (Instant::now(),cpu_ns());
+                let trace = indexes[panel].search(&all_plans[panel][ordinal],&all_queries[panel][ordinal],100)
+                    .map_err(|e| { events.error_context["accounting"] = json!(e.accounting); e.error })?;
+                events.emit(&json!({"phase":"fine_scored","dataset":config.panels[panel].dataset,"ordinal":ordinal,
+                    "nominee_ids":trace.nominee_ids,"fetched_ids":trace.fetched_ids,
+                    "ranked":trace.ranked.iter().map(|s| json!({"id":s.id,"ordinal":s.ordinal,"score_bits":s.score.to_bits()})).collect::<Vec<_>>(),
+                    "accounting":trace.accounting,"underfill":trace.ranked.len()<100,"truth_opened":false,
+                    "wall_ns":timer.0.elapsed().as_nanos(),"process_cpu_ns":cpu_ns()-timer.1}))?;
+                scored.push(trace);
+            }
+            traces.push(scored);
+        }
+        events.sync()?;
+        let mut summaries = Vec::new(); let mut passed = true;
+        for (panel,scored) in config.panels.iter().zip(&traces) {
+            let truth = read_source_probe_artifact(&panel.truth,64*100*4)?;
+            let mut containment = Vec::new(); let mut coverage = Vec::new(); let mut recall = Vec::new();
+            for (ordinal,trace) in scored.iter().enumerate() {
+                let gt = truth[ordinal*400..(ordinal+1)*400].chunks_exact(4)
+                    .map(|v| i64::from(u32::from_le_bytes(v.try_into().unwrap()))).collect::<std::collections::BTreeSet<_>>();
+                require(gt.len() == 100 && gt.iter().all(|&id| id >= 0 && (id as usize) < rows), "fine truth exact unique IDs")?;
+                containment.push(trace.nominee_ids.iter().filter(|id| gt.contains(id)).count());
+                coverage.push(trace.fetched_ids.iter().filter(|id| gt.contains(id)).count());
+                recall.push(trace.ranked.iter().filter(|s| gt.contains(&s.id)).count());
+                events.emit(&json!({"phase":"fine_metrics","dataset":panel.dataset,"ordinal":ordinal,
+                    "containment_hits":containment[ordinal],"coverage_hits":coverage[ordinal],"returned_hits":recall[ordinal]}))?;
+            }
+            let summarize = |hits:&mut Vec<usize>| { hits.sort_unstable(); json!({"mean_hits":hits.iter().sum::<usize>() as f64/64.,"p05_hits":hits[3]}) };
+            let c = summarize(&mut containment); let f = summarize(&mut coverage); let r = summarize(&mut recall);
+            passed &= coverage.iter().sum::<usize>() >= 6272 && recall.iter().sum::<usize>() >= 6272 && coverage[3] >= 95 && recall[3] >= 95;
+            summaries.push(json!({"dataset":panel.dataset,"containment":c,"coverage":f,"returned":r}));
+        }
+        Ok(json!({"phase":"terminal","status":if passed {"SURVIVED_CONSUMED_PANELS"} else {"FAIL"},
+            "complete":true,"summaries":summaries,"scientific_qualification":false,"quality_or_performance_claim":false,
+            "scope":"consumed64 FIRST100k falsifier only; no fresh generalization,100M,maintenance,S3 or vendor qualification"}))
+    });
+    File::open(output.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")))?.sync_all()?;
+    outcome
+}
+
 const CONFIG_CAP: usize = 65536;
 const REQUEST_CAP: usize = 32 * 1024 * 1024;
 const EVENT_CAP: usize = 8 * 1024 * 1024;
@@ -1486,9 +1647,9 @@ fn execute_args(args: &[String]) -> Result<()> {
     )?;
     let probe_mode = matches!(
         args[1].as_str(),
-        "build-probes" | "nominate-probes" | "diagnose-probes" | "build-overlap" | "paired-overlap"
+        "build-probes" | "nominate-probes" | "diagnose-probes" | "build-overlap" | "paired-overlap" | "build-fine" | "paired-fine"
     );
-    let invalid_output = if args[1] == "build-overlap" { Path::new(&args[4]).with_extension("build.jsonl") }
+    let invalid_output = if matches!(args[1].as_str(), "build-overlap" | "build-fine") { Path::new(&args[4]).with_extension("build.jsonl") }
         else { Path::new(&args[4]).to_path_buf() };
     let path = Path::new(&args[2]);
     let metadata = if probe_mode {
@@ -1518,6 +1679,21 @@ fn execute_args(args: &[String]) -> Result<()> {
         descriptor.read(CONFIG_CAP)?
     };
     match args[1].as_str() {
+        "build-fine" => {
+            let config: borsuk::fine_sq8_groups::FineBuildConfig = probe_config(&body, &args[3], &invalid_output)?;
+            let mut events = Events::new(&invalid_output,65536)?;
+            File::open(invalid_output.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")))?.sync_all()?;
+            events.error_context = json!({"schema":borsuk::fine_sq8_groups::BUILD_SCHEMA,"config_sha256":args[3]});
+            events.run(|_| {
+                require(borsuk::configured_cpu_threads() <= 2, "fine BORSUK build worker bound")?;
+                let timer = (Instant::now(),cpu_ns());
+                let root = borsuk::fine_sq8_groups::FineSq8Index::build(&config,Path::new(&args[4]))?;
+                Ok(json!({"phase":"terminal","status":"BUILT_UNVERIFIED","complete":true,"root":root,
+                    "source_identity_sha256":fine_source_identity(),"scientific_qualification":false,"quality_or_performance_claim":false,
+                    "wall_ns":timer.0.elapsed().as_nanos(),"process_cpu_ns":cpu_ns()-timer.1}))
+            })
+        }
+        "paired-fine" => paired_fine(probe_config(&body,&args[3],&invalid_output)?,&args[3],Path::new(&args[4])),
         "build-overlap" => {
             let config: OverlapBuildConfig = probe_config(&body, &args[3], &invalid_output)?;
             let mut events = Events::new(&invalid_output, 65536)?;
@@ -1589,6 +1765,124 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn tiny_fine_primary(dir: &Path) -> Artifact {
+        let codec = borsuk::rotated_two_bit::RotatedTwoBitCodec::new(&[0., 0.], 20260923).unwrap();
+        let mut canonical = Vec::new(); let mut records = Vec::new(); let mut sq8 = Vec::new(); let mut order = Vec::new();
+        for id in (0..135_i64).rev() {
+            let vector = if id % 2 == 0 { [1_f32, 0.] } else { [0_f32, 1.] };
+            canonical.extend_from_slice(&id.to_le_bytes());
+            for value in vector { canonical.extend_from_slice(&value.to_le_bytes()); }
+            records.extend_from_slice(&codec.encode(&vector).unwrap());
+            sq8.extend_from_slice(&id.to_le_bytes()); sq8.extend_from_slice(&1_f32.to_le_bytes());
+            sq8.extend(vector.map(|value| value as u8)); order.extend_from_slice(&(id as u64).to_le_bytes());
+        }
+        let canonical = probe_artifact(&dir.join("pair-canonical"), &canonical);
+        let records = probe_artifact(&dir.join("pair-codes"), &records);
+        let sq8 = probe_artifact(&dir.join("pair-sq8"), &sq8);
+        let order = probe_artifact(&dir.join("pair-order"), &order);
+        let mean = probe_artifact(&dir.join("pair-mean"), &[0; 8]);
+        let plane = probe_artifact(&dir.join("pair-plane.json"), &serde_json::to_vec(&borsuk::two_bit_source::SourcePlaneReceipt {
+            schema:"borsuk-two-bit-plane-v3".into(), rows:135, dimensions:2, seed:20260923, record_bytes:codec.record_bytes(),
+            source_sha256:"0".repeat(64), sq8_sha256:sq8.sha256.clone(), source_order_sha256:order.sha256.clone(),
+            mean_sha256:mean.sha256.clone(), records_sha256:records.sha256.clone(), page_rows:32,
+            page_digest_sha256:"0".repeat(64), query_or_truth_used:false,
+        }).unwrap());
+        let generation = probe_artifact(&dir.join("pair-generation.json"), &serde_json::to_vec(&json!({
+            "schema":"borsuk-two-bit-generation-v8","generation":1,"base_epoch":0,
+            "plane_manifest_sha256":plane.sha256,"page_manifest_sha256":"0".repeat(64),
+            "discovery":{"mode":"graph","centroids_sha256":"0".repeat(64),"graph_sha256":"0".repeat(64),
+                "graph_resident_bytes":1,"diverse_graph_sha256":"0".repeat(64),"diverse_graph_resident_bytes":1},
+            "sq8_object_sha256":sq8.sha256,"sq8_object_key":format!("objects/{}",sq8.sha256),"sq8_etag":"fixture",
+            "canonical":{"rows":135,"dimensions":2,"bytes":canonical.bytes,"sha256":canonical.sha256,
+                "object_key":format!("objects/{}",canonical.sha256)},"low":[0.,0.],"step":[1.,1.]
+        })).unwrap());
+        let original = BuildConfig { schema:borsuk::hierarchical_semantic_cells::BUILD_SCHEMA.into(),
+            generation, plane, canonical, order, records, mean, sq8, cell_rows:32, sample_rows:32, max_depth:24,
+            max_build_payload_bytes:64 * 1024 * 1024, max_output_bytes:16 * 1024 * 1024 };
+        let primary = dir.join("pair-primary");
+        let receipt = build(&original, &primary).unwrap();
+        let root = Artifact { path:primary.join("manifest.json"), bytes:fs::metadata(primary.join("manifest.json")).unwrap().len() as usize,
+            sha256:receipt.root_sha256 };
+        root
+    }
+    #[test]
+    fn fine_real_source_pipeline_seals_both_panels_before_gt_and_is_durable() {
+        use borsuk::fine_sq8_groups::{FineSq8Index,FineBuildConfig,ResidentLimits};
+        let temp=tempfile::tempdir().unwrap(); let primary=tiny_fine_primary(temp.path());
+        let cfg=FineBuildConfig {schema:borsuk::fine_sq8_groups::BUILD_SCHEMA.into(),primary_root:primary,
+            max_build_payload_bytes:128*1024*1024,max_output_bytes:16*1024*1024};
+        let a=FineSq8Index::build(&cfg,&temp.path().join("fine-a")).unwrap();
+        let b=FineSq8Index::build(&cfg,&temp.path().join("fine-b")).unwrap();
+        assert!(FineSq8Index::build(&cfg,&temp.path().join("fine-a")).is_err());
+        let primary_manifest:Value=serde_json::from_slice(&fs::read(&cfg.primary_root.path).unwrap()).unwrap();
+        let retained=Prototype::open_for_source_probes(&cfg.primary_root,128*1024*1024).unwrap();
+        let mut expected=Vec::new();
+        for cell in 0..primary_manifest["build"]["cells"].as_u64().unwrap() as usize {expected.extend(retained.primary_cell_sq8(cell).unwrap());}
+        assert_eq!(fs::read(a.path.parent().unwrap().join("records.bin")).unwrap(),expected);
+        drop(retained);
+        for field in ["generation","plane","canonical","order","records","mean","sq8"] {
+            fs::remove_file(primary_manifest["input"][field]["path"].as_str().unwrap()).unwrap();
+        }
+        fs::remove_dir_all(cfg.primary_root.path.parent().unwrap()).unwrap();
+        let fresh=std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact","tests::fine_fresh_process_plane_free_open","--nocapture"])
+            .env("BORSUK_FINE_TEST_ROOT",serde_json::to_string(&a).unwrap()).status().unwrap();
+        assert!(fresh.success());
+        let requests=(0..64).map(|ordinal| format!("{}\n",json!({"ordinal":ordinal,"query":[3.125,0.875]}))).collect::<String>();
+        let requests=probe_artifact(&temp.path().join("fine-requests"),requests.as_bytes());
+        let truth_body=(0..64).flat_map(|_|(0..100u32).flat_map(u32::to_le_bytes)).collect::<Vec<_>>();
+        let valid=probe_artifact(&temp.path().join("fine-truth"),&truth_body);
+        let missing=Artifact {path:temp.path().join("absent-truth"),..valid.clone()};
+        let config=|truth:Artifact| FinePairedConfig {schema:"borsuk-fine-sq8-paired-v1".into(),
+            panels:[FinePanel {dataset:"relaion".into(),root:a.clone(),requests:requests.clone(),truth:truth.clone(),truth_width:100},
+                FinePanel {dataset:"cohere".into(),root:b.clone(),requests:requests.clone(),truth,truth_width:100}],
+            source_identity_sha256:fine_source_identity(), limits:ResidentLimits {max_peak_payload_bytes:256*1024*1024,
+                pinned_generation_bytes:0,active_queries:1,delta_bytes:0,maintenance_bytes:0,runtime_bytes:0},
+            max_evaluator_payload_bytes:128*1024*1024,max_result_bytes:16*1024*1024,test_geometry:Some((135,2)),fail_sync_at:None};
+        for (case,truth) in [("missing",missing.clone()),("valid",valid.clone())] {
+            let out=temp.path().join(format!("fine-{case}.jsonl"));
+            let result=paired_fine(config(truth),&"a".repeat(64),&out);
+            if case=="valid" { result.unwrap(); } else { assert!(result.is_err()); }
+            let body=fs::read(&out).unwrap();
+            let rows=std::str::from_utf8(&body).unwrap().lines().map(|line|serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+            let seal=rows.iter().position(|r|r["phase"]=="fine_seal").unwrap();
+            assert_eq!(rows[..seal].iter().filter(|r|r["phase"]=="fine_plan").count(),128);
+            assert!(rows[..=seal].iter().all(|r|r["truth_opened"]==false));
+            let frozen:Value=serde_json::from_slice(&fs::read(out.with_extension("fine-seal.json")).unwrap()).unwrap();
+            assert_eq!(frozen["prefix_sha256"],hash(&body[..frozen["prefix_bytes"].as_u64().unwrap() as usize]));
+            assert_eq!(rows.iter().filter(|r|r["phase"]=="fine_scored").count(),128);
+            if case=="missing" { assert_eq!(rows.last().unwrap()["status"],"INVALID"); }
+            else { assert_eq!(rows.last().unwrap()["complete"],true); }
+            assert!(paired_fine(config(valid.clone()),&"a".repeat(64),&out).is_err());
+            assert_eq!(fs::read(&out).unwrap(),body);
+        }
+        for case in ["cap","sync","geometry","aggregate","unknown-fields"] {
+            let mut cfg=config(missing.clone()); let out=temp.path().join(format!("fine-{case}.jsonl"));
+            match case {
+                "cap"=>cfg.max_result_bytes=TERMINAL_CAP+100,
+                "sync"=>cfg.fail_sync_at=Some(1),
+                "geometry"=>cfg.test_geometry=None,
+                "aggregate"=>cfg.limits.max_peak_payload_bytes=1024,
+                _=> { let body=br#"{"schema":"borsuk-fine-sq8-paired-v1","extra":true}"#;
+                    assert!(probe_config::<FinePairedConfig>(body,&"a".repeat(64),&out).is_err());
+                    assert_eq!(probe_terminal(&out)["status"],"INVALID"); continue; }
+            }
+            assert!(paired_fine(cfg,&"a".repeat(64),&out).is_err());
+            assert_eq!(probe_terminal(&out)["status"],"INVALID");
+            assert!(!out.with_extension("fine-seal.json").exists());
+        }
+    }
+    #[test]
+    fn fine_fresh_process_plane_free_open() {
+        let Ok(encoded)=std::env::var("BORSUK_FINE_TEST_ROOT") else {return;};
+        let root:Artifact=serde_json::from_str(&encoded).unwrap();
+        let limits=borsuk::fine_sq8_groups::ResidentLimits {max_peak_payload_bytes:256*1024*1024,
+            pinned_generation_bytes:0,active_queries:1,delta_bytes:0,maintenance_bytes:0,runtime_bytes:0};
+        let index=borsuk::fine_sq8_groups::FineSq8Index::open(&root,&limits).unwrap();
+        let query=[3.125,0.875]; let plan=index.plan(&query,&mut index.new_workspace().unwrap()).unwrap();
+        assert_eq!(index.search(&plan,&query,100).unwrap().ranked.len(),100);
+    }
+
     #[test]
     fn overlap_pair_seal_precedes_truth() {
         let dir = tempfile::tempdir().unwrap();

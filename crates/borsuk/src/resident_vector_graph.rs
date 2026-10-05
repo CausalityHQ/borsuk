@@ -17,7 +17,7 @@ use crate::{
         build_reachable_hnsw_adjacency_batched_diverse,
         build_reachable_hnsw_adjacency_batched_diverse_reverse_extra,
     },
-    pq64_nominee::{Pq64CosineView, Pq64Router},
+    pq64_nominee::{Pq64Codes, Pq64CosineView, Pq64Router},
     resident_fp16_tier::{ResidentFp16Error, ResidentFp16Tier},
 };
 
@@ -866,15 +866,29 @@ impl ResidentVectorGraph {
         &self,
         ef: usize,
         workspace: &mut GraphSearchWorkspace,
-        mut score: impl FnMut(u32) -> Result<f64, ResidentFp16Error>,
+        score: impl FnMut(u32) -> Result<f64, ResidentFp16Error>,
         start: Option<u32>,
     ) -> Result<(Vec<Visit>, usize), ResidentFp16Error> {
+        let (rows, visits, _) = self.navigate_capped(ef, workspace, score, start, usize::MAX, &mut 0)?;
+        Ok((rows, visits))
+    }
+
+    fn navigate_capped(
+        &self, ef: usize, workspace: &mut GraphSearchWorkspace,
+        mut raw_score: impl FnMut(u32) -> Result<f64, ResidentFp16Error>,
+        start: Option<u32>, max_evaluations: usize, evaluations: &mut usize,
+    ) -> Result<(Vec<Visit>, usize, bool), ResidentFp16Error> {
         if workspace.marks.len() != self.neighbours.len() {
             return Err(ResidentFp16Error::Invalid("graph workspace geometry"));
         }
+        let mut score = |node| {
+            if *evaluations == max_evaluations { return Ok(None); }
+            *evaluations += 1; // Includes failed scores and all upper-layer repeats.
+            raw_score(node).map(Some)
+        };
         workspace.next();
         let mut current = start.unwrap_or(self.entry);
-        let mut current_distance = score(current)?;
+        let Some(mut current_distance) = score(current)? else { return Ok((Vec::new(), 0, true)); };
         let top = if start.is_some() {
             0
         } else {
@@ -886,7 +900,10 @@ impl ResidentVectorGraph {
                 for &neighbor in &self.neighbours[current as usize]
                     [top_level_index(&self.neighbours[current as usize], layer)]
                 {
-                    let distance = score(neighbor)?;
+                    let Some(distance) = score(neighbor)? else {
+                        let node = better.map_or(current, |(node, _)| node);
+                        return Ok((vec![Visit { node, distance: current_distance }], 0, true));
+                    };
                     if distance < current_distance {
                         better = Some((neighbor, distance));
                         current_distance = distance;
@@ -900,7 +917,10 @@ impl ResidentVectorGraph {
             }
         }
         let first = Visit {
-            distance: score(current)?,
+            distance: match score(current)? {
+                Some(distance) => distance,
+                None => return Ok((vec![Visit { node: current, distance: current_distance }], 0, true)),
+            },
             node: current,
         };
         let mut candidates = BinaryHeap::from([Reverse(first)]);
@@ -916,9 +936,10 @@ impl ResidentVectorGraph {
                 if !workspace.mark(neighbor as usize) {
                     continue;
                 }
+                let Some(distance) = score(neighbor)? else { return Ok((results.into_vec(), visits, true)); };
                 visits += 1;
                 let visit = Visit {
-                    distance: score(neighbor)?,
+                    distance,
                     node: neighbor,
                 };
                 if results.len() < ef || visit < *results.peek().unwrap() {
@@ -930,7 +951,187 @@ impl ResidentVectorGraph {
                 }
             }
         }
-        Ok((results.into_vec(), visits))
+        Ok((results.into_vec(), visits, false))
+    }
+}
+
+/// Plane-independent source/layout/PQ identity authenticated by the new root.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PqGraphIdentity {
+    pub generation: u64,
+    pub rows: usize,
+    pub dimensions: usize,
+    pub source: [u8; 32],
+    pub layout: [u8; 32],
+    pub pq: [u8; 32],
+}
+
+/// New format only. Legacy FP16 graphs retain their existing format and API.
+pub struct PqVectorGraph {
+    graph: ResidentVectorGraph,
+    identity: PqGraphIdentity,
+    construction_capacity_bytes: Option<usize>,
+}
+#[derive(Debug, serde::Serialize)]
+pub struct PqNomination {
+    pub ordinals: Vec<usize>,
+    pub evaluations: usize,
+    pub base_visits: usize,
+    pub exhausted: bool,
+}
+#[derive(Debug)]
+pub struct PqNominationFailure {
+    pub error: ResidentFp16Error,
+    pub evaluations: usize,
+}
+impl PqVectorGraph {
+    /// Fixed bounded source build; no query, GT or serving FP16 plane.
+    pub fn build(mut source: Vec<Vec<f32>>, identity: PqGraphIdentity) -> Result<Self, ResidentFp16Error> {
+        if source.len() != identity.rows || !(2..=100_000).contains(&identity.rows)
+            || identity.generation == 0 || !(1..=768).contains(&identity.dimensions) {
+            return Err(ResidentFp16Error::Invalid("PQ graph build geometry"));
+        }
+        for row in &mut source {
+            if row.len() != identity.dimensions || row.iter().any(|v| !v.is_finite()) {
+                return Err(ResidentFp16Error::Invalid("PQ graph source"));
+            }
+            let norm = row.iter().fold(0.0f64, |s, &x| s + f64::from(x) * f64::from(x)).sqrt();
+            if !norm.is_finite() || norm <= 0.0 { return Err(ResidentFp16Error::Invalid("PQ graph norm")); }
+            for value in row { *value = (f64::from(*value) / norm) as f32; }
+        }
+        let built = build_reachable_hnsw_adjacency(&source, 32, 64, 128, 128)
+            .ok_or(ResidentFp16Error::Invalid("PQ graph build"))?;
+        let mut graph = ResidentVectorGraph { neighbours: built.neighbours, entry: built.entry,
+            generation: identity.generation, source_sha256: identity.source, plane_sha256: identity.layout };
+        let construction_capacity_bytes = Some(graph.heap_bytes());
+        for tower in &mut graph.neighbours {
+            for edges in tower.iter_mut() { edges.shrink_to_fit(); }
+            tower.shrink_to_fit();
+        }
+        graph.neighbours.shrink_to_fit();
+        if graph.heap_bytes() > identity.rows * 512 { return Err(ResidentFp16Error::Invalid("PQ graph heap cap")); }
+        Ok(Self { graph, identity, construction_capacity_bytes })
+    }
+    pub fn heap_bytes(&self) -> usize { self.graph.heap_bytes() }
+    pub fn identity(&self) -> &PqGraphIdentity { &self.identity }
+    /// Construction allocation before compaction; absent for a reopened graph.
+    pub fn construction_capacity_bytes(&self) -> Option<usize> { self.construction_capacity_bytes }
+
+    pub fn write_authenticated(&self, path: &Path) -> Result<String, ResidentFp16Error> {
+        let mut out = BufWriter::new(std::fs::OpenOptions::new().write(true).create_new(true).open(path)?);
+        out.write_all(b"BORSVG02")?;
+        for value in [self.identity.generation, self.identity.rows as u64, self.identity.dimensions as u64] {
+            out.write_all(&value.to_le_bytes())?;
+        }
+        for hash in [&self.identity.source, &self.identity.layout, &self.identity.pq] { out.write_all(hash)?; }
+        out.write_all(&self.graph.entry.to_le_bytes())?;
+        for tower in &self.graph.neighbours {
+            out.write_all(&[tower.len() as u8])?;
+            for edges in tower {
+                out.write_all(&(edges.len() as u16).to_le_bytes())?;
+                for node in edges { out.write_all(&node.to_le_bytes())?; }
+            }
+        }
+        out.flush()?;
+        out.get_ref().sync_all()?;
+        graph_digest(path)
+    }
+
+    /// Caller admits aggregate coexistence before this secure authenticated read.
+    /// Each nested graph allocation is charged before reserve and checked by capacity.
+    pub fn open_authenticated(artifact: &crate::hierarchical_semantic_cells::Artifact,
+        identity: &PqGraphIdentity) -> crate::hierarchical_semantic_cells::Result<Self>
+    {
+        use crate::hierarchical_semantic_cells::read_source_probe_artifact;
+        if !(2..=100_000).contains(&identity.rows) || !(1..=768).contains(&identity.dimensions)
+            || identity.generation == 0 { return Err("PQ graph identity".into()); }
+        let cap = identity.rows.checked_mul(512).ok_or("PQ graph cap overflow")?;
+        let body = read_source_probe_artifact(artifact, cap)?;
+        let mut input = std::io::Cursor::new(&body);
+        let mut header = [0u8; 132];
+        input.read_exact(&mut header)?;
+        if &header[..8] != b"BORSVG02"
+            || u64::from_le_bytes(header[8..16].try_into()?) != identity.generation
+            || u64::from_le_bytes(header[16..24].try_into()?) != identity.rows as u64
+            || u64::from_le_bytes(header[24..32].try_into()?) != identity.dimensions as u64
+            || header[32..64] != identity.source || header[64..96] != identity.layout
+            || header[96..128] != identity.pq { return Err("PQ graph generation binding".into()); }
+        let entry = u32::from_le_bytes(header[128..132].try_into()?);
+        if entry as usize >= identity.rows { return Err("PQ graph entry".into()); }
+        let mut neighbours = Vec::new();
+        neighbours.try_reserve_exact(identity.rows)?;
+        let mut used = neighbours.capacity() * std::mem::size_of::<Vec<Vec<u32>>>();
+        for node in 0..identity.rows {
+            let mut count = [0u8]; input.read_exact(&mut count)?;
+            let count = usize::from(count[0]);
+            if !(1..=17).contains(&count) || used + count * std::mem::size_of::<Vec<u32>>() > cap {
+                return Err("PQ graph tower admission".into());
+            }
+            let mut tower = Vec::new(); tower.try_reserve_exact(count)?;
+            used += tower.capacity() * std::mem::size_of::<Vec<u32>>();
+            for layer in 0..count {
+                let mut degree = [0u8; 2]; input.read_exact(&mut degree)?;
+                let degree = usize::from(u16::from_le_bytes(degree));
+                // The reused reachable builder may add backbone/indegree repair
+                // edges after m0=64 pruning; its hard base ceiling is 256.
+                if degree > if layer + 1 == count { 256 } else { 32 } || used + degree * 4 > cap {
+                    return Err("PQ graph edge admission".into());
+                }
+                let mut edges = Vec::new(); edges.try_reserve_exact(degree)?;
+                used += edges.capacity() * 4;
+                if used > cap { return Err("PQ graph capacity admission".into()); }
+                for _ in 0..degree {
+                    let mut word = [0u8; 4]; input.read_exact(&mut word)?;
+                    let edge = u32::from_le_bytes(word);
+                    if edge as usize >= identity.rows || edge as usize == node || edges.contains(&edge) {
+                        return Err("PQ graph edge".into());
+                    }
+                    edges.push(edge);
+                }
+                tower.push(edges);
+            }
+            neighbours.push(tower);
+        }
+        if input.position() != body.len() as u64 { return Err("PQ graph trailing bytes".into()); }
+        for tower in &neighbours {
+            for (index, edges) in tower.iter().enumerate() {
+                let layer = tower.len() - index - 1;
+                if edges.iter().any(|&edge| neighbours[edge as usize].len() <= layer) {
+                    return Err("PQ graph edge layer".into());
+                }
+            }
+        }
+        let graph = ResidentVectorGraph { neighbours, entry, generation: identity.generation,
+            source_sha256: identity.source, plane_sha256: identity.layout };
+        if graph.structural_stats().reachable != identity.rows { return Err("PQ graph unreachable rows".into()); }
+        Ok(Self { graph, identity: identity.clone(), construction_capacity_bytes:None })
+    }
+
+    pub fn nominate_pq(&self, query: &[f32], pq: &Pq64Codes, workspace: &mut GraphSearchWorkspace)
+        -> Result<PqNomination, PqNominationFailure>
+    {
+        self.nominate_capped(query, pq, workspace, 65_536)
+    }
+    pub(crate) fn nominate_capped(&self, query: &[f32], pq: &Pq64Codes, workspace: &mut GraphSearchWorkspace, cap: usize)
+        -> Result<PqNomination, PqNominationFailure>
+    {
+        let mut evaluations = 0;
+        let result = (|| {
+            if pq.rows() != self.identity.rows || pq.dimensions() != self.identity.dimensions
+                || pq.artifact_digest() != self.identity.pq {
+                return Err(ResidentFp16Error::Invalid("PQ graph query binding"));
+            }
+            let prepared = pq.prepare_query(query).map_err(|_| ResidentFp16Error::Invalid("PQ graph query"))?;
+            let (mut rows, base_visits, exhausted) = self.graph.navigate_capped(
+                4096.min(pq.rows()), workspace, |node| prepared.score_row(node as usize)
+                    .map(|score| -f64::from(score)).map_err(|_| ResidentFp16Error::Invalid("PQ graph score")),
+                None, cap, &mut evaluations)?;
+            rows.sort_unstable();
+            Ok(PqNomination { ordinals: rows.into_iter().take(1024).map(|row| row.node as usize).collect(),
+                evaluations, base_visits, exhausted })
+        })();
+        result.map_err(|error| PqNominationFailure { error, evaluations })
     }
 }
 
@@ -1370,5 +1571,78 @@ mod tests {
             ResidentFp16Tier::open_authenticated(&other_path, &other_digest, SOURCE, 4, 2, 214, 48)
                 .unwrap();
         assert!(graph.search(&[1.0, 0.0], &other, 2, 4).is_err());
+    }
+}
+
+#[cfg(test)]
+mod bounded_pq_tests {
+    use super::*;
+    #[test]
+    fn repaired_producer_above_m0_reopens_and_decoded_allocations_are_bounded() {
+        let mut books=vec![0.;64*256]; books[0]=1.;
+        let pq=Pq64Codes::new(128,64,books,vec![0;128*64]).unwrap();
+        let identity=PqGraphIdentity {generation:1,rows:128,dimensions:64,source:[1;32],layout:[2;32],pq:pq.artifact_digest()};
+        let graph=PqVectorGraph::build(vec![vec![1.;64];128],identity.clone()).unwrap();
+        assert!(graph.graph.structural_stats().max_degree>64);
+        let tmp=tempfile::tempdir().unwrap(); let path=tmp.path().join("graph.bin");
+        let sha=graph.write_authenticated(&path).unwrap();
+        let descriptor=crate::hierarchical_semantic_cells::Artifact {path:path.clone(),bytes:path.metadata().unwrap().len() as usize,sha256:sha};
+        let opened=PqVectorGraph::open_authenticated(&descriptor,&identity).unwrap();
+        assert_eq!(opened.nominate_pq(&vec![1.;64],&pq,&mut GraphSearchWorkspace::new(128).unwrap()).unwrap().ordinals.len(),128);
+        let mut body=std::fs::read(&path).unwrap();body[133..135].copy_from_slice(&257u16.to_le_bytes());
+        std::fs::write(&path,&body).unwrap();
+        let malformed=crate::hierarchical_semantic_cells::Artifact {sha256:format!("{:x}",Sha256::digest(&body)),..descriptor};
+        assert!(PqVectorGraph::open_authenticated(&malformed,&identity).is_err());
+        let identity=PqGraphIdentity {rows:3,..identity};
+        let mut body=b"BORSVG02".to_vec();
+        for v in [1u64,3,64] {body.extend_from_slice(&v.to_le_bytes());}
+        for h in [&identity.source,&identity.layout,&identity.pq] {body.extend_from_slice(h);}
+        body.extend_from_slice(&0u32.to_le_bytes());
+        for node in 0..3u32 {
+            body.push(17);
+            for _ in 0..17 {
+                body.extend_from_slice(&2u16.to_le_bytes());
+                for other in 0..3u32 {if other!=node {body.extend_from_slice(&other.to_le_bytes());}}
+            }
+        }
+        assert!(body.len()<3*512); // Encoded admission alone is insufficient.
+        std::fs::write(&path,&body).unwrap();
+        let inflated=crate::hierarchical_semantic_cells::Artifact {path,bytes:body.len(),sha256:format!("{:x}",Sha256::digest(&body))};
+        assert!(PqVectorGraph::open_authenticated(&inflated,&identity).err().unwrap().to_string().contains("admission"));
+    }
+
+    #[test]
+    fn total_budget_counts_upper_layers_and_reports_partial_ties() {
+        let mut books=vec![0.;64*256]; books[0]=1.;
+        let pq=Pq64Codes::new(5,64,books,vec![0;5*64]).unwrap();
+        let identity=PqGraphIdentity {generation:1,rows:5,dimensions:64,source:[1;32],layout:[2;32],pq:pq.artifact_digest()};
+        let graph=PqVectorGraph { graph:ResidentVectorGraph {
+            neighbours:vec![vec![vec![1],vec![1,2,3,4]],vec![vec![0],vec![0,2,3,4]],
+                vec![vec![0,1,3,4]],vec![vec![0,1,2,4]],vec![vec![0,1,2,3]]],
+            entry:0,generation:1,source_sha256:[1;32],plane_sha256:[2;32]},identity,construction_capacity_bytes:None };
+        let q=vec![1.;64]; let mut workspace=GraphSearchWorkspace::new(5).unwrap();
+        for cap in 0..=6 {
+            let mut invocations=0;
+            let mut evaluations=0;
+            let (_,_,exhausted)=graph.graph.navigate_capped(5,&mut workspace,|_| {invocations+=1;Ok(0.0)},None,cap,&mut evaluations).unwrap();
+            assert!(exhausted); assert_eq!(invocations,cap); assert_eq!(evaluations,cap);
+            let result=graph.nominate_capped(&q,&pq,&mut workspace,cap).unwrap();
+            assert!(result.exhausted); assert_eq!(result.evaluations,cap);
+        }
+        let result=graph.nominate_capped(&q,&pq,&mut workspace,7).unwrap();
+        assert!(!result.exhausted); assert_eq!(result.evaluations,7); assert_eq!(result.base_visits,5);
+        assert_eq!(result.ordinals,vec![0,1,2,3,4]);
+        let mut bad_books=vec![0.;64*256]; bad_books[0]=2.;
+        let other=Pq64Codes::new(5,64,bad_books,vec![0;5*64]).unwrap();
+        assert_eq!(graph.nominate_pq(&q,&other,&mut workspace).unwrap_err().evaluations,0);
+        let tmp=tempfile::tempdir().unwrap(); let path=tmp.path().join("graph.bin");
+        let sha=graph.write_authenticated(&path).unwrap();
+        let descriptor=crate::hierarchical_semantic_cells::Artifact {path:path.clone(),bytes:path.metadata().unwrap().len() as usize,sha256:sha};
+        let opened=PqVectorGraph::open_authenticated(&descriptor,&graph.identity).unwrap();
+        assert_eq!(opened.nominate_pq(&q,&pq,&mut workspace).unwrap().ordinals,result.ordinals);
+        let mut stale=graph.identity.clone(); stale.layout[0]^=1;
+        assert!(PqVectorGraph::open_authenticated(&descriptor,&stale).is_err());
+        let mut bytes=std::fs::read(&path).unwrap(); bytes[100]^=1; std::fs::write(&path,bytes).unwrap();
+        assert!(PqVectorGraph::open_authenticated(&descriptor,&graph.identity).is_err());
     }
 }

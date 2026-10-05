@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use sha2::{Digest, Sha256};
 
 /// Invalid source-only router geometry, coefficients or request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +47,135 @@ pub struct Pq64CosinePreparedQuery<'a> {
     inverse_query_norm: f32,
 }
 
+fn prepare_cosine<'a>(router: &'a Pq64Router, inverse_norms: &'a [f32], query: &[f32])
+    -> Result<Pq64CosinePreparedQuery<'a>, Pq64Error>
+{
+    if query.len() != router.dimensions || query.iter().any(|x| !x.is_finite()) {
+        return Err(Pq64Error::InvalidQuery);
+    }
+    let norm = query.iter().fold(0.0f64, |s, &x| s + f64::from(x) * f64::from(x)).sqrt();
+    if !norm.is_finite() || norm <= 0.0 { return Err(Pq64Error::InvalidQuery); }
+    let mut dots = vec![0.0f32; 64 * 256];
+    for subspace in 0..64 {
+        let first = subspace * router.dimensions / 64;
+        let last = (subspace + 1) * router.dimensions / 64;
+        for word in 0..256 {
+            let mut dot = 0.0f32;
+            for coordinate in 0..last - first {
+                dot += query[first + coordinate]
+                    * router.books[(subspace * 256 + word) * router.width + coordinate];
+            }
+            dots[subspace * 256 + word] = dot;
+        }
+    }
+    Ok(Pq64CosinePreparedQuery { router, inverse_norms, dots, inverse_query_norm: (1.0 / norm) as f32 })
+}
+
+/// Source-only codes and reconstruction norms. No cell summaries or FP16 plane.
+pub struct Pq64Codes {
+    router: Pq64Router,
+    inverse_norms: Vec<f32>,
+    artifact_digest: [u8; 32],
+}
+impl Pq64Codes {
+    pub fn new(rows: usize, dimensions: usize, books: Vec<f32>, codes: Vec<u8>) -> Result<Self, Pq64Error> {
+        let width = dimensions.div_ceil(64);
+        if rows == 0 || dimensions == 0
+            || rows.checked_mul(64) != Some(codes.len())
+            || width.checked_mul(64 * 256) != Some(books.len())
+            || books.iter().any(|v| !v.is_finite()) {
+            return Err(Pq64Error::InvalidPlane);
+        }
+        let router = Pq64Router { rows, dimensions, page_rows: rows, blocks_per_page: 0,
+            width, summaries: Vec::new(), summary_norms: Vec::new(), books, codes };
+        let inverse_norms = router.cosine_view()?.inverse_norms;
+        let mut h = Sha256::new();
+        h.update(b"BORSPQ01"); h.update((rows as u64).to_le_bytes()); h.update((dimensions as u64).to_le_bytes());
+        for value in &router.books { h.update(value.to_le_bytes()); }
+        h.update(&router.codes);
+        Ok(Self { router, inverse_norms, artifact_digest:h.finalize().into() })
+    }
+    pub fn rows(&self) -> usize { self.router.rows }
+    pub fn dimensions(&self) -> usize { self.router.dimensions }
+    pub fn prepare_query(&self, query: &[f32]) -> Result<Pq64CosinePreparedQuery<'_>, Pq64Error> {
+        let normalized = crate::sq8_source::cosine_vector(query).map_err(|_| Pq64Error::InvalidQuery)?;
+        prepare_cosine(&self.router, &self.inverse_norms, &normalized)
+    }
+    pub fn resident_bytes(&self) -> usize {
+        self.router.books.capacity() * 4 + self.router.codes.capacity() + self.inverse_norms.capacity() * 4
+    }
+    pub(crate) fn books(&self) -> &[f32] { &self.router.books }
+    pub(crate) fn codes(&self) -> &[u8] { &self.router.codes }
+    pub(crate) fn artifact_digest(&self) -> [u8; 32] { self.artifact_digest }
+}
+
+/// Fixed source-only PQ64 fit. Ordinals are an authenticated bijection supplied
+/// by the generation builder; sampling is independent of physical placement.
+/// ponytail: bounded resident source/training at <=100k; a streaming builder is
+/// required before scale promotion. Empty clusters retain their prior word.
+pub fn fit_source_codes(source: &[Vec<f32>], ordinals: &[usize]) -> Result<Pq64Codes, Pq64Error> {
+    let rows = source.len();
+    let dimensions = source.first().map_or(0, Vec::len);
+    if rows == 0 || rows > 100_000 || dimensions == 0 || dimensions > 768 || ordinals.len() != rows {
+        return Err(Pq64Error::InvalidGeometry);
+    }
+    let mut physical = vec![usize::MAX; rows];
+    let mut norms = Vec::with_capacity(rows);
+    for (row, (vector, &ordinal)) in source.iter().zip(ordinals).enumerate() {
+        if ordinal >= rows || physical[ordinal] != usize::MAX || vector.len() != dimensions
+            || vector.iter().any(|x| !x.is_finite()) { return Err(Pq64Error::InvalidPlane); }
+        physical[ordinal] = row;
+        let norm = vector.iter().fold(0.0f64, |s, &x| s + f64::from(x) * f64::from(x)).sqrt();
+        if !norm.is_finite() || norm <= 0.0 { return Err(Pq64Error::InvalidPlane); }
+        norms.push(norm);
+    }
+    let count = rows.min(16_384);
+    let sample = (0..count).map(|slot| physical[slot * rows / count]).collect::<Vec<_>>();
+    let width = dimensions.div_ceil(64);
+    let mut books = vec![0.0f32; 64 * 256 * width];
+    let mut codes = vec![0u8; rows * 64];
+    for subspace in 0..64 {
+        let first = subspace * dimensions / 64;
+        let len = (subspace + 1) * dimensions / 64 - first;
+        let book = &mut books[subspace * 256 * width..(subspace + 1) * 256 * width];
+        let value = |row: usize, axis: usize| (f64::from(source[row][first + axis]) / norms[row]) as f32;
+        for word in 0..256 {
+            let row = sample[word * count / 256];
+            for axis in 0..len { book[word * width + axis] = value(row, axis); }
+        }
+        let nearest = |book: &[f32], row: usize| {
+            let mut best = (f32::INFINITY, 0);
+            for word in 0..256 {
+                let mut distance = 0.0f32;
+                for axis in 0..len {
+                    let delta = value(row, axis) - book[word * width + axis];
+                    distance += delta * delta;
+                }
+                if distance < best.0 { best = (distance, word); }
+            }
+            best.1
+        };
+        for _ in 0..4 {
+            let mut sums = vec![0.0f64; 256 * width];
+            let mut counts = [0usize; 256];
+            for &row in &sample {
+                let word = nearest(book, row);
+                counts[word] += 1;
+                for axis in 0..len { sums[word * width + axis] += f64::from(value(row, axis)); }
+            }
+            for word in 0..256 {
+                if counts[word] > 0 {
+                    for axis in 0..len {
+                        book[word * width + axis] = (sums[word * width + axis] / counts[word] as f64) as f32;
+                    }
+                }
+            }
+        }
+        for row in 0..rows { codes[row * 64 + subspace] = nearest(book, row) as u8; }
+    }
+    Pq64Codes::new(rows, dimensions, books, codes)
+}
+
 impl Pq64CosineView<'_> {
     pub(crate) fn router(&self) -> &Pq64Router {
         self.router
@@ -67,36 +197,7 @@ impl Pq64CosineView<'_> {
 
     /// Prepare one query for cosine scores of source PQ reconstructions.
     pub fn prepare_query(&self, query: &[f32]) -> Result<Pq64CosinePreparedQuery<'_>, Pq64Error> {
-        if query.len() != self.router.dimensions || query.iter().any(|x| !x.is_finite()) {
-            return Err(Pq64Error::InvalidQuery);
-        }
-        let norm = query
-            .iter()
-            .fold(0.0f64, |sum, &x| sum + f64::from(x) * f64::from(x))
-            .sqrt();
-        if !norm.is_finite() || norm <= 0.0 {
-            return Err(Pq64Error::InvalidQuery);
-        }
-        let mut dots = vec![0.0f32; 64 * 256];
-        for subspace in 0..64 {
-            let first = subspace * self.router.dimensions / 64;
-            let last = (subspace + 1) * self.router.dimensions / 64;
-            for word in 0..256 {
-                let mut dot = 0.0f32;
-                for coordinate in 0..last - first {
-                    dot += query[first + coordinate]
-                        * self.router.books
-                            [(subspace * 256 + word) * self.router.width + coordinate];
-                }
-                dots[subspace * 256 + word] = dot;
-            }
-        }
-        Ok(Pq64CosinePreparedQuery {
-            router: self.router,
-            inverse_norms: &self.inverse_norms,
-            dots,
-            inverse_query_norm: (1.0 / norm) as f32,
-        })
+        prepare_cosine(self.router, &self.inverse_norms, query)
     }
 
     /// Exhaustive PQ cosine candidates for a small-corpus representation
@@ -631,5 +732,24 @@ mod tests {
             vec![4.0, 1.0, 0.0]
         );
         assert_eq!(router.nominate(&[0.0; 64], 1, 3).unwrap(), vec![2, 1, 0]);
+    }
+}
+
+#[cfg(test)]
+mod source_codes_tests {
+    use super::*;
+    #[test]
+    fn source_fit_is_ordinal_deterministic_and_codes_only() {
+        let rows = vec![vec![3.,4.],vec![0.,7.],vec![8.,0.]];
+        let a = fit_source_codes(&rows,&[2,0,1]).unwrap();
+        let b = fit_source_codes(&[rows[1].clone(),rows[2].clone(),rows[0].clone()],&[0,1,2]).unwrap();
+        assert_eq!(a.books(),b.books());
+        assert_eq!(&a.codes()[..64],&b.codes()[128..]);
+        assert!(a.router.summaries.is_empty() && a.router.summary_norms.is_empty());
+        assert_eq!(a.prepare_query(&[6.,8.]).unwrap().score_row(0).unwrap().to_bits(),
+            a.prepare_query(&[3.,4.]).unwrap().score_row(0).unwrap().to_bits());
+        assert!(fit_source_codes(&rows,&[0,0,1]).is_err());
+        assert!(fit_source_codes(&[vec![0.,0.]],&[0]).is_err());
+        assert!(a.prepare_query(&[f32::NAN,0.]).is_err());
     }
 }
