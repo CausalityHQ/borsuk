@@ -150,5 +150,15 @@
       "bytes": 407,
       "sha256": "c83ae4ec4346345385494c88daffad2df9bde20dc9ff31b63d4549574c045ecb"
     }
+  },
+  "collected_original_terminal": {
+    "unit": "borsuk-overlap-real-native-smoke-a0001-r1.service",
+    "invocation_id": "4e74a77797234bdeb0bb0874415a31e4",
+    "exit_status": 0,
+    "runtime_seconds": 4.637,
+    "cpu_seconds": 3.9,
+    "memory_peak_display": "232.1M",
+    "swap_peak_display": "0B",
+    "source": "original systemd-run --wait --pipe terminal collected in exec17539; properties expired after unit garbage collection; displayed memory not exact-byte measurement"
   }
 }
