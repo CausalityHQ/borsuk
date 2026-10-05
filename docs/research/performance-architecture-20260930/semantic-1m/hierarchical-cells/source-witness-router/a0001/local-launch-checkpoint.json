@@ -1,0 +1,25 @@
+{
+  "schema": "borsuk-source-witness-native-launch-checkpoint-v1",
+  "status": "RUNNING_UNQUALIFIED",
+  "attempt": "a0001",
+  "instance_id": "i-094c252c6d18eebc3",
+  "prefix": "research/hierarchical-cells/20261004/source-witness-paired100k-a0001",
+  "original_exec_session": 67050,
+  "controller_unit": "borsuk-source-witness-science-controller-a0001-20261005.service",
+  "controller_invocation_id": "1c3a027a90dc46878ae191475f65c62d",
+  "controller_source_commit": "d136cf8d",
+  "admitted_source_archive_commit": "d92099ecc06dbcd378959039da17713ca8c1bab4",
+  "source_archive_sha256": "e02c1ec57050e2f7ac7eb1ac8f9e0b80947ca9d71500869118ebca4c0f2c7eb9",
+  "local_entry_sha256": "5910cbc2ae187bb2662e05308812df8d24b55793a49a6da81d3e3b7c0024c1dd",
+  "local_entry_scope": "Select absolute campaign output ROOT for existing shared.main. Frozen code/config/remote worker unchanged.",
+  "controller_limits": {
+    "memory_bytes": 536870912,
+    "swap_bytes": 0,
+    "cpu_percent": 100,
+    "tasks": 512,
+    "runtime_seconds": 3300
+  },
+  "measurement_read": false,
+  "launch_authority": "terminated admitted infrastructure GO canary a0001",
+  "no_duplicate": true
+}
