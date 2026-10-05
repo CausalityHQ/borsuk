@@ -896,6 +896,15 @@ def fine_inputs(config, repo, *, headers=None, retained=None):
                 max_build_payload_bytes=64 << 20, max_output_bytes=256 << 20).items(): exact(root['input'][name], value, 'unchanged original build policy')
 
 
+def fine_layout_bound():
+    # Unchanged FineSq8Index::build output_bound / 2. Records/order/groups
+    # consume N*(D+12+8+2); PQ codes N*64. The graph's heap cap bounds encoded
+    # edges by N*512 (+132 header bytes). PQ books/header, group rounding and
+    # the <=64KiB manifest fit the 4MiB remainder. Publication hard-links one
+    # staging copy; the caller charges two retained layouts plus that copy.
+    return ROWS*(DIMENSIONS+12+512+64+8+2)+(4 << 20)
+
+
 def fine_build_config(root):
     return dict(schema='borsuk-fine-sq8-build-v1', primary_root=root, max_build_payload_bytes=8 << 30, max_output_bytes=512 << 20)
 
@@ -1118,6 +1127,8 @@ def fine_self_check():
     exact(len(sources),404,'real qualified404 metadata'); source_id = fine_source_identity(repo)
     print('PASS exact real404 qualification metadata/57-test recorded gate; native include_bytes identity '+source_id+'; binary/corpus/GT bodies unopened.')
     from contextlib import ExitStack
+    from scripts import launch_hierarchical_cells_100k_spot as launcher
+    import shutil
     module = sys.modules[__name__]; compile(FINE_FIXTURE, '<fine-tiny-python-child>', 'exec')
     def rejects(fn):
         try: fn()
@@ -1154,10 +1165,18 @@ def fine_self_check():
         def no_gt(path):
             require(Path(path).name != 'truth64','Python GT access forbidden'); return original_open(path)
         stack.enter_context(patch.object(positive,'open_input',side_effect=no_gt))
-        actual_popen = subprocess.Popen; processes = {}; calls = []; scenario = ''
+        actual_popen = subprocess.Popen; processes = {}; calls = []; scenario = ''; scratch_checks = []; scratch_roots = {}
         def popen(command, **kwargs):
             exact(command[0],'systemd-run','shared owned supervisor only'); pos = command.index('--owned-stage'); spec_path,_,receipt_path = command[pos+1:pos+4]
             spec = local.read_json(local.identity(spec_path)); calls.append(spec['name']); require(spec['command'][1] in ('build-fine','paired-fine'),'only native fine CLI')
+            if launcher.probe is not probe:
+                exact(launcher.probe.ORIGINAL_ROOT,worker,'launcher copy frozen throughout actual invoke/native_stage')
+                exact(probe.ORIGINAL_ROOT,Path(spec['output']),'actual helper invoke patch active')
+                peaks = dict(scratch_bytes=0)
+                launcher.probe_resource_check(worker,shutil.disk_usage(worker).total,8 << 30,time.monotonic()+30,[],peaks)
+                exact(peaks['scratch_bytes'],local.directory_bytes(worker),'actual native-stage boundary one root charge')
+                scratch_checks.append(dict(name=spec['name'],copied_root=str(launcher.probe.ORIGINAL_ROOT),
+                    helper_root=str(probe.ORIGINAL_ROOT),charge=peaks['scratch_components']))
             process = actual_popen([sys.executable,str(native),'supervise',spec_path,receipt_path],env=dict(os.environ,OVERLAP_PAIR_FIXTURE=scenario),**kwargs)
             unit = next(c.removeprefix('--unit=') for c in command if c.startswith('--unit='))+'.service'; processes[unit] = process; return process
         def run(command, **kwargs):
@@ -1173,7 +1192,18 @@ def fine_self_check():
             scenario = fault; calls.clear(); cfg = copy.deepcopy(config)
             if change: change(cfg)
             pin = local.write_json(worker/(label+'-config.json'),cfg); out = worker/'screen'/label
-            terminal = fine_execute(pin['path'],pin['sha256'],repo,out)
+            with ExitStack() as profile:
+                if label == 'pass':
+                    profile.enter_context(patch.object(probe,'ORIGINAL_ROOT',worker))
+                    profile.enter_context(launcher.fine_profile())
+                    require(launcher.probe is not probe,'actual fine_profile copy before helper execution')
+                    scratch_roots['before'] = dict(copied_root=str(launcher.probe.ORIGINAL_ROOT),helper_root=str(probe.ORIGINAL_ROOT))
+                terminal = fine_execute(pin['path'],pin['sha256'],repo,out)
+                if label == 'pass':
+                    exact(probe.ORIGINAL_ROOT,worker,'helper patch restored after native stages')
+                    scratch_roots['after'] = dict(copied_root=str(launcher.probe.ORIGINAL_ROOT),helper_root=str(probe.ORIGINAL_ROOT))
+                    exact(scratch_roots['after'],scratch_roots['before'],'both roots preserved after actual invoke')
+                    exact([s['name'] for s in scratch_checks],list(FINE_ORDER),'all three real invoke/native_stage boundaries observed')
             if terminal['status'] != expected:
                 receipt = local.read_json(local.identity(out/'execution-receipt.json'),8 << 20)
                 raise AssertionError('fine '+label+': '+str(receipt.get('error'))+'\n'+'\n'.join(p.read_text() for p in (out/'measurement').glob('*.log')))
@@ -1219,7 +1249,8 @@ def fine_self_check():
         closed = local.read_json(local.identity(folder/'receipt.json')); exact(closed['complete'],True,'silent supervisor closed')
         exact(closed['stages'][0]['log']['path'],str(folder/'silent.log'),'fine log stays in owned measurement')
         exact(closed['stages'][0]['log']['bytes'],0,'fine silent stdout preserved')
-    print('PASS fine synthetic: exact3 serial calls, strict native configs, scientific FAIL/no-GT infeasible FAIL, both requests preauthenticated, original paths/nooverwrite/raw bytes, prefix/seal/exit/resource/cleanup faults, relocated closure replay. Tiny Python children only; no ANN/GT/network/native qualification.')
+    print('PASS fine synthetic: exact3 serial calls, actual fine_profile/invoke/native_stage scratch checks, strict native configs, scientific FAIL/no-GT infeasible FAIL, both requests preauthenticated, original paths/nooverwrite/raw bytes, prefix/seal/exit/resource/cleanup faults, relocated closure replay. Tiny Python children only; no ANN/GT/network/native qualification.')
+    return dict(scratch_roots,during=scratch_checks)
 
 
 def main(args):

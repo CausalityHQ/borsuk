@@ -317,12 +317,15 @@ def preflight(base=Path('.'), *, canary=False):
     return proof
 
 
-def scratch_snapshot(root, baseline):
+def scratch_snapshot(root, baseline, *, components=None):
     # Directory charge includes archives, extraction, venv, inputs and outputs.
     # Filesystem growth also charges installation/cache writes outside the root;
     # double counting inside-root growth is intentional conservative admission.
     usage = shutil.disk_usage(root)
-    return local.directory_bytes(root)+max(0, usage.used-baseline)
+    directory, growth = local.directory_bytes(root), max(0, usage.used-baseline)
+    if components is not None:
+        components.update(directory_bytes=directory, filesystem_growth_bytes=growth)
+    return directory+growth
 
 
 def panel_inputs(folder, original, planned, calls, client, check, geometry=local.GEOMETRY):
@@ -1638,10 +1641,15 @@ def probe_resource_check(root, baseline, scratch_cap, deadline, errors, peaks, *
     admitted(peaks['scratch_bytes'])
     if scan:
         started = time.monotonic()
-        amount = scratch_snapshot(root, baseline)
-        if probe.ORIGINAL_ROOT.exists():
-            amount += local.directory_bytes(probe.ORIGINAL_ROOT)
-        peaks['scratch_bytes'] = max(peaks['scratch_bytes'], amount)
+        worker, original = Path(root).resolve(), probe.ORIGINAL_ROOT.resolve()
+        require(original == worker or not worker.is_relative_to(original), 'unexpected original root ancestor')
+        components = {}
+        amount = scratch_snapshot(worker, baseline, components=components)
+        extra = local.directory_bytes(original) if not original.is_relative_to(worker) else 0
+        amount += extra
+        components.update(extra_root_bytes=extra, total_bytes=amount)
+        if amount >= peaks['scratch_bytes']:
+            peaks.update(scratch_bytes=amount, scratch_components=components)
         peaks['scratch_scan_calls'] = peaks.get('scratch_scan_calls', 0)+1
         peaks['scratch_scan_seconds'] = peaks.get('scratch_scan_seconds', 0)+time.monotonic()-started
         admitted(amount)
@@ -2852,6 +2860,7 @@ def overlap_self_check():
             helper_source=Path('scripts/run_cell_overlap_pair.py')
             if not helper_source.exists():helper_source=Path(os.environ['BORSUK_OVERLAP_HELPER_FIXTURE'])
             probe.copy_bytes(repo/'scripts/run_cell_overlap_pair.py',helper_source.read_bytes())
+            metadata_stack.enter_context(patch.object(module,'OVERLAP_HELPER_SHA',local.identity(helper_source)['sha256']))
             from importlib import util as import_util
             spec=import_util.spec_from_file_location('synthetic_overlap_helper',helper_source);descriptor_helper=import_util.module_from_spec(spec);spec.loader.exec_module(descriptor_helper)
             fake.SCHEMA=descriptor_helper.SCHEMA;fake.ORIGINALS=originals;fake.LAYOUT=layout;fake.RESOURCES=descriptor_helper.RESOURCES;fake.descriptor=descriptor_helper.descriptor
@@ -2913,7 +2922,7 @@ def overlap_self_check():
 
 # Fine mode only adapts the existing direct-body transport and owned lifecycle.
 FINE_ROOT = ROOT.parent.parent/'fine-sq8-groups/paired100k'
-FINE_CONFIG = FINE_ROOT/'config.json'
+FINE_CONFIG = FINE_ROOT/'config-scratch-v2.json'
 FINE_GATE = FINE_ROOT.parent/'implementation-gates/a0001'
 FINE_SCHEMA = 'borsuk-fine-sq8-paired100k-spot-v1'
 FINE_CANARY_SCHEMA = 'borsuk-fine-sq8-infrastructure-canary-v1'
@@ -2954,14 +2963,29 @@ def fine_scratch_roster(config, paths, repo):
         dict(name='direct-staged-originals-layouts-panels', max_bytes=sum(p['bytes'] for p in overlap_objects(config))+sum(p['bytes'] for v in config['headers'].values() for p in v.values())),
         dict(name='restored-retained-native14-and-executable', max_bytes=3*assurance),
         dict(name='helper-retained-originals-and-layouts', max_bytes=originals),
-        dict(name='two-fine-layouts-and-one-active-staging', max_bytes=3*(512 << 20)),
+        dict(name='two-fine-layouts-and-one-active-staging', max_bytes=3*helper.fine_layout_bound()),
         dict(name='native-both-panel-output', max_bytes=128 << 20), dict(name='three-native-logs-specs-seal-receipts', max_bytes=3*(34 << 20)),
         dict(name='retained-request-panels', max_bytes=sum(incoming[d]['requests64']['bytes'] for d in probe.DATASETS))]
 
 
+def fine_scratch_admission(config):
+    # Reserve is additional positive filesystem growth: outside-root bootstrap
+    # writes, block/metadata overhead and deleted temporary files. It is charged
+    # within the same cap, even when the worker's logical files are sparse.
+    reserve = config['scratch_filesystem_reserve_bytes']
+    local.integer(reserve, 256 << 20, 8 << 30, 'outside-root/bootstrap filesystem reserve')
+    local.integer(config['scratch_admission_bytes'], 1, 8 << 30, 'fine scratch admission cap')
+    directory = sum(p['max_bytes'] for p in config['scratch_roster'])
+    charge = dict(directory_bytes=directory, filesystem_growth_bytes=directory+reserve,
+                  extra_root_bytes=0, total_bytes=2*directory+reserve)
+    require(charge['total_bytes'] <= config['scratch_admission_bytes'] <= 8 << 30,
+            'whole fine scratch directory+filesystem-growth exceeds admission/8GiB')
+    return charge
+
+
 def fine_qualify(base=Path('.'), *, canary=False):
     repo = Path(base).resolve(); pin = local.identity(repo/FINE_CONFIG); config = local.read_json(pin, 512 << 10); helper = overlap_helper()
-    fields(config, 'schema authority_pending run_id code_sha256 execution qualification_transport assets native_assets headers canary_object machine scratch_reserve_bytes scratch_roster scratch_admission_bytes', 'root frozen fine launcher')
+    fields(config, 'schema authority_pending run_id code_sha256 execution qualification_transport assets native_assets headers canary_object machine scratch_reserve_bytes scratch_filesystem_reserve_bytes scratch_roster scratch_admission_bytes', 'root frozen fine launcher')
     exact(config['schema'], FINE_SCHEMA, 'fine launcher schema'); exact(config['authority_pending'], False, 'parent freeze required')
     require(type(config['run_id']) is str and re.fullmatch(r'a[0-9]{4}', config['run_id']), 'fine attempt'); exact(config['machine'], FINE_MACHINE, 'fine prospective5000s/$0.75')
     cfg = config['execution']; exact(cfg['run_id'], 'fine-sq8-paired100k-'+config['run_id'], 'one immutable fine run')
@@ -3009,12 +3033,13 @@ def fine_qualify(base=Path('.'), *, canary=False):
     paths = sorted(paths)
     for n in paths: publication.relative(n); repo_path(repo,n)
     local.integer(config['scratch_reserve_bytes'], 256 << 20, 8 << 30, 'whole-runtime scratch reserve')
-    exact(config['scratch_roster'], fine_scratch_roster(config,paths,repo), 'all coexisting physical scratch components')
-    require(sum(p['max_bytes'] for p in config['scratch_roster']) <= config['scratch_admission_bytes'] <= 8 << 30, 'whole fine scratch fits8GiB')
+    exact(config['scratch_roster'], fine_scratch_roster(config,paths,repo), 'all coexisting logical scratch components')
+    scratch_charge = fine_scratch_admission(config)
     proof = dict(config_path=str(FINE_CONFIG), config_sha256=pin['sha256'], campaign_schema=FINE_CANARY_SCHEMA if canary else FINE_SCHEMA,
         code_identity_sha256=ids.sha(ids.encoded(config['code_sha256'])), refs_identity_sha256=ids.sha(ids.encoded({n:config[n] for n in ('execution','qualification_transport','assets','native_assets','headers','canary_object','machine')})),
         native_identity_sha256=helper.FINE_FULL_SOURCE_ID, source_file_count=404, source_archive_paths=paths, source_archive_paths_sha256=ids.sha(ids.encoded(paths)),
-        artifact_roster_sha256=ids.sha(ids.encoded(PROBE_CANARY_ARTIFACTS if canary else FINE_ARTIFACTS)), awscli_version=AWSCLI_VERSION, awscli_sha256=AWSCLI_SHA256)
+        artifact_roster_sha256=ids.sha(ids.encoded(PROBE_CANARY_ARTIFACTS if canary else FINE_ARTIFACTS)), awscli_version=AWSCLI_VERSION, awscli_sha256=AWSCLI_SHA256,
+        scratch_charge=scratch_charge)
     return config, proof, {}
 
 
@@ -3066,7 +3091,14 @@ def fine_profile():
         overlap_qualify=fine_qualify, overlap_execute=fine_execute, overlap_verify_pair=fine_verify_pair, overlap_verify_execution=fine_verify_execution))
     stack.enter_context(overlap_profile()); userdata,replay = probe_user_data,probe_replay
     def fine_userdata(*args, **kwargs):
+        import inspect
         result = userdata(*args, **kwargs).replace('--cell-overlap-pair','--fine-sq8-pair').replace('import OVERLAP_ARTIFACTS','import FINE_ARTIFACTS').replace('join(OVERLAP_ARTIFACTS)','join(FINE_ARTIFACTS)')
+        # Bootstrap precedes source extraction: embed the same logical-name
+        # scan, including both hard-link names, without importing the checkout.
+        result = result.replace(' rooted=$(du -sb "$root" | cut -f1)',
+            ' rooted=$(python3 - "$root" <<\'PY_SCRATCH\'\nimport os, sys\nfrom pathlib import Path\n'+
+            inspect.getsource(local.directory_bytes)+'\nprint(directory_bytes(Path(sys.argv[1])))\nPY_SCRATCH\n)')
+        require(len(result.encode()) < 16384, 'fine bootstrap16KiB cap')
         subprocess.run(['bash','-n'], input=result,text=True,check=True); return result
     def fine_collected(*args, **kwargs):
         result = replay(*args, **kwargs)
@@ -3080,10 +3112,130 @@ def fine_profile():
 def fine_cli(args):
     require(args, 'CLI: --fine-sq8-pair aNNNN | --canary aNNNN | --stage[-canary] REPO OUTPUT ROOT | --replay[-canary] OUTPUT | --preflight | --self-check')
     if args == ['--self-check']:
-        overlap_helper().fine_self_check(); fine_launcher_self_check(); return
+        fine_scratch_self_check(); overlap_helper().fine_self_check(); fine_launcher_self_check(); return
     with fine_profile():
         if args == ['--preflight']: print(json.dumps(fine_qualify()[1])); return
         probe_cli(args)
+
+
+def fine_scratch_self_check():
+    """Source accounting only: sparse committed lengths, never native/data/GT."""
+    import shlex
+    module = sys.modules[__name__]; repo = Path(__file__).resolve().parents[1]
+    archived_config = repo/FINE_ROOT/'a0001/screen/config.json'
+    config = local.read_json(local.identity(archived_config), 512 << 10)
+    archived = local.read_json(local.identity(repo/FINE_ROOT/'a0001/screen/fine/execution-receipt.json'), 8 << 20)
+    proof = local.read_json(local.identity(repo/FINE_ROOT/'a0001/screen/source-qualification.json'), 512 << 10)
+    exact(local.identity(archived_config)['sha256'],proof['config_sha256'],'committed config authority')
+    def rejects(fn, message):
+        try: fn()
+        except ValueError as error: require(message in str(error), str(error)); return
+        raise AssertionError('scratch rejection missing: '+message)
+    # Use a private TMPDIR filesystem for deterministic positive-growth tests;
+    # the separate source view stays on the repository device for hard links.
+    with tempfile.TemporaryDirectory(prefix='fine-scratch-check-') as tmp, tempfile.TemporaryDirectory(prefix='fine-source-check-', dir=repo.parent) as source_tmp:
+        worker = Path(tmp)/'worker'; worker.mkdir(); extra = Path(tmp)/'extra'; extra.mkdir()
+        # Both independently retained copies are charged even when SHA-equal.
+        retained = 0
+        for d in probe.DATASETS:
+            for category in ('original','layout'):
+                for n,p in config['execution']['inputs'][d][category].items():
+                    exact(body_pin(p),body_pin(archived['inputs'][d][category][n]),'committed retained pin')
+                    for path in (worker/Path(p['path']).relative_to(FINE_WORKER), worker/'screen/fine/inputs'/d/category/n):
+                        path.parent.mkdir(parents=True,exist_ok=True)
+                        with path.open('xb') as stream: stream.truncate(p['bytes'])
+                        retained += p['bytes']
+        exact(retained,2048293796,'both committed original/layout copies')
+        with (worker/'allocated').open('xb') as stream:
+            stream.write(b'x'*(1 << 20)); stream.flush(); os.fsync(stream.fileno())
+        os.link(worker/'allocated',worker/'allocated-link')
+        deadline = time.monotonic()+60; baseline = shutil.disk_usage(worker).total
+        def scan(cap=8 << 30, base=baseline):
+            peaks = dict(scratch_bytes=0)
+            probe_resource_check(worker,base,cap,deadline,[],peaks)
+            return peaks
+        original = probe
+        with patch.object(original,'ORIGINAL_ROOT',worker), fine_profile():
+            with patch.object(module,'FINE_CONFIG',archived_config), patch.object(module,'OVERLAP_CONFIG',archived_config), patch.object(module,'PROBE_CONFIG',archived_config):
+                shell = probe_user_data('a'*40,'b'*64,'source/mock',FINE_PREFIX+config['run_id'],dict(proof,config_path=str(archived_config)))
+            watchdog = shell.split('(while kill -0 "$scratch_owner" 2>/dev/null; do\n',1)[1].split(' sleep 1\n',1)[0]
+            def bootstrap(base):
+                script = 'set -eu\nroot='+shlex.quote(str(worker))+'\nBORSUK_HIERARCHICAL_SCRATCH_BASE_USED='+str(base)+'\nscratch_owner=$$\ntrap "exit 73" TERM\n'+watchdog+'printf "%s %s" "$rooted" "$growth"\n'
+                return subprocess.run(['bash','-c',script],capture_output=True,text=True,timeout=10)
+            require(probe is not original,'actual fine namespace is copied')
+            exact(probe.ORIGINAL_ROOT,worker,'captured whole worker root')
+            with patch.object(original,'ORIGINAL_ROOT',worker/'screen/fine/measurement'):
+                with patch.object(local,'directory_bytes',wraps=local.directory_bytes) as scans:
+                    first = scan()
+                    exact(scans.call_count,1,'equal root only one directory scan')
+                exact(first['scratch_bytes'],local.directory_bytes(worker),'equal root must be scanned once')
+                exact(int(bootstrap(baseline).stdout.split()[0]),first['scratch_bytes'],'watchdog counts both hard-link names')
+                exact(probe.ORIGINAL_ROOT,worker,'helper patch cannot change captured root')
+            for alias in (worker,worker/'screen'):
+                with patch.object(probe,'ORIGINAL_ROOT',alias):
+                    with patch.object(local,'directory_bytes',wraps=local.directory_bytes) as scans:
+                        exact(scan()['scratch_bytes'],first['scratch_bytes'],'descendant alias charged once')
+                        exact(scans.call_count,1,'descendant only one directory scan')
+            with (extra/'allocated').open('xb') as stream:
+                stream.write(b'x'*(1 << 20)); stream.flush(); os.fsync(stream.fileno())
+            with patch.object(probe,'ORIGINAL_ROOT',extra):
+                separate = scan()
+                exact(separate['scratch_bytes'],first['scratch_bytes']+(1 << 20),'disjoint original charged')
+                exact(separate['scratch_components']['extra_root_bytes'],1 << 20,'extra component receipt')
+            with patch.object(probe,'ORIGINAL_ROOT',worker.parent): rejects(scan,'ancestor')
+            os.sync(); used = shutil.disk_usage(worker).used
+            with (extra/'outside-growth').open('xb') as stream:
+                stream.write(b'x'*(4 << 20)); stream.flush(); os.fsync(stream.fileno())
+            grown = scan(base=used)['scratch_components']
+            require(grown['filesystem_growth_bytes'] >= 4 << 20,'synced outside-root allocation charged')
+            exact(grown['total_bytes'],sum(grown[k] for k in ('directory_bytes','filesystem_growth_bytes','extra_root_bytes')),'sum, never max')
+            watched = bootstrap(used); exact(watched.returncode,0,'generated watchdog below cap')
+            require(int(watched.stdout.split()[1]) >= 4 << 20,'watchdog outside growth')
+            directory = sum(p['max_bytes'] for p in config['scratch_roster'])
+            with (worker/'old-envelope').open('xb') as stream: stream.truncate(directory-local.directory_bytes(worker))
+            # A synthetic baseline exercises the old envelope's full growth
+            # without allocating GiBs; only the outside-growth test allocates.
+            envelope_baseline = shutil.disk_usage(worker).used-directory
+            rejects(lambda:scan(base=envelope_baseline),'scratch/deadline/monitor')
+            exact(bootstrap(envelope_baseline).returncode,73,'watchdog rejects old envelope too')
+            (worker/'old-envelope').unlink()
+            with (worker/'boundary').open('xb') as stream: stream.truncate((8 << 30)-local.directory_bytes(worker))
+            exact(scan()['scratch_bytes'],8 << 30,'unchanged inclusive8GiB boundary')
+            watched = bootstrap(baseline); exact(watched.returncode,0,'watchdog inclusive boundary')
+            exact(watched.stdout,str(8 << 30)+' 0','watchdog matches logical-name runtime scan')
+            with (worker/'boundary').open('ab') as stream: stream.write(b'x')
+            rejects(scan,'scratch/deadline/monitor')
+            exact(bootstrap(baseline).returncode,73,'generated watchdog rejects same overflow')
+        # The old coexistence sum fits, but its runtime sum cannot be admitted.
+        directory = sum(p['max_bytes'] for p in config['scratch_roster'])
+        require(directory < 8 << 30 < 2*directory,'historical envelope mismatch reproduced')
+        rejects(lambda:fine_scratch_admission(dict(config,scratch_filesystem_reserve_bytes=256 << 20)),'scratch')
+        # Real metadata preflight in an isolated source view. Hard links avoid
+        # duplicating the source archive; the cold binary is a sparse stub and
+        # must never be authenticated/opened by metadata admission.
+        shadow = Path(source_tmp); prospective = copy.deepcopy(config)
+        paths = sorted((set(proof['source_archive_paths'])-{proof['config_path']})|{str(FINE_CONFIG)})
+        binary = config['qualification_transport']['binaries/hierarchical_semantic_cells']['path']
+        for name in paths:
+            target = shadow/name; target.parent.mkdir(parents=True,exist_ok=True)
+            if name == str(FINE_CONFIG): continue
+            if name == binary:
+                with target.open('xb') as stream: stream.truncate((repo/name).stat().st_size)
+            else: os.link(repo/name,target)
+        prospective['code_sha256'] = {n:local.identity(repo/n)['sha256'] for n in FINE_CODE}
+        prospective['scratch_filesystem_reserve_bytes'] = 256 << 20
+        prospective['scratch_roster'] = fine_scratch_roster(prospective,paths,shadow)
+        local.write_json(shadow/FINE_CONFIG,prospective)
+        admitted = fine_qualify(shadow)[1]['scratch_charge']
+        exact(admitted,fine_scratch_admission(prospective),'actual preflight same component formula')
+        prospective['scratch_filesystem_reserve_bytes'] = 8 << 30
+        (shadow/FINE_CONFIG).write_bytes(local.canonical(prospective))
+        rejects(lambda:fine_qualify(shadow),'scratch')
+    print('PASS fine scratch: real profile copy, aliases/disjoint/ancestor, two sparse committed copies, synced outside growth,8GiB runtime/generated-watchdog boundary, real preflight components/rejection; no native/data/GT hydration.')
+    return dict(retained_sparse_logical_bytes=retained, equal=first, disjoint=separate,
+        outside_growth=grown, old_directory_envelope_bytes=directory,
+        old_minimum_runtime_charge_bytes=2*directory, prospective_preflight=admitted,
+        inclusive_cap_bytes=8 << 30, generated_watchdog_checked=True)
 
 
 def fine_launcher_self_check():
@@ -3167,20 +3319,28 @@ def fine_launcher_self_check():
         require(closed,'SDK client closed')
         # Science retains the exact screen/scratch originals while removing
         # only the disposable infrastructure scratch. No native work is run.
+        monitored = threading.Event(); real_check = probe_resource_check
+        def observed_check(*args,**kwargs):
+            real_check(*args,**kwargs)
+            if threading.current_thread() is not threading.main_thread(): monitored.set()
         def staged(config,pin,repo,out,download,check,deadline):
             (out/'retained').mkdir()
             for i,p in enumerate((*config['assets'],*config['native_assets'])): download(p,out/'retained'/str(i))
             probe.copy_bytes(out/'scratch/relaion/order',b'opaque original order'); probe.copy_bytes(out/'scratch/relaion/sq8',b'opaque original SQ8')
+            require(monitored.wait(3),'actual probe_stage monitor sampled fine namespace')
             native_terminal = dict(status='FAIL',complete=True,execution_exit_code=0)
             result = dict(schema=FINE_SCHEMA+'-execution',config=pin,status='FAIL',complete=True,fine_terminal=native_terminal,
                 truth_opened=False,scientific_qualification=False,physical_s3_measured=False)
             local.write_json(out/'native-execution-receipt.json',result); return result
         science_counters = dict(counters,**{'memory.max':str(8 << 30),'cpu.max':'200000 100000','cpu_affinity':[0,1]})
         (group/'cpu.max').write_text('200000 100000')
-        with patch.object(module,'fine_execute',side_effect=staged),patch.object(probe,'ORIGINAL_ROOT',root),patch.object(client,'get_object',side_effect=lambda **_:dict(ContentLength=1,Body=io.BytesIO(b'x'))):
+        with patch.object(module,'probe_resource_check',side_effect=observed_check),patch.object(module,'fine_execute',side_effect=staged),patch.object(probe,'ORIGINAL_ROOT',root),patch.object(client,'get_object',side_effect=lambda **_:dict(ContentLength=1,Body=io.BytesIO(b'x'))):
             with patch.object(local,'resource_snapshot',return_value=science_counters),patch.object(probe,'cgroup_snapshot',return_value=dict(science_counters,path=str(group.parent))),fine_profile():
                 result = probe_stage(repo,root/'science-screen',root)
                 exact(result['status'],'FAIL','closed scientific FAIL remains valid')
+                charged = local.read_json(local.identity(root/'science-screen/resources.json'))
+                exact(charged['scratch_bytes'],charged['scratch_components']['total_bytes'],'coherent monitor peak receipt')
+                exact(charged['scratch_components']['extra_root_bytes'],0,'actual fine monitor skips captured worker alias')
                 clean = local.read_json(local.identity(root/'science-screen/cleanup.json'))
                 require(clean['scratch_removed'] and not clean['original_root_removed'],'infrastructure scratch removed; originals retained')
                 exact((root/'science-screen/scratch/relaion/order').read_bytes(),b'opaque original order','original order preserved through cleanup')
