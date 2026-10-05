@@ -1,0 +1,19 @@
+{
+  "AWS_or_native_execution": false,
+  "actual_sdk_guard_passed": true,
+  "admitted_archive_reserve_bytes": 33554432,
+  "all_archive_files_independently_match": true,
+  "archive_bytes": 262583,
+  "archive_key": "research/native-library-check/sources/ed4a56e152e2f01472c7367ff0b12bb57830dd46af3c76944873e5d5c21f2f18.tar.gz",
+  "archive_members": 35,
+  "archive_sha256": "ed4a56e152e2f01472c7367ff0b12bb57830dd46af3c76944873e5d5c21f2f18",
+  "coexistence_charge_bytes": 1291460,
+  "config_sha256": "8a2efaac8e97e42eab9365cf0443d944e31190e9efe006ffecf87d9dedc9f1cb",
+  "generated_shell_bytes": 6289,
+  "native_config_sha256": "5a983a7c2ce29142fb36ce8e64256ac92afa25e695646d017114517224d693b2",
+  "schema": "borsuk-sq4-original-archive-admission-v1",
+  "source_archive_file_count": 24,
+  "source_closure_clean": true,
+  "source_commit": "f68aee38ea5017eba17785d4adf917fa4e7a911a",
+  "unpacked_bytes": 885517
+}
