@@ -20,4 +20,3 @@ The smallest useful additions are test corrections, not an architecture change:
 `admit_survival` intentionally accepts synthetic fixture reports. External admission must therefore verify the strict CLI invocation, exact executable/configuration, and companion artifact hashes—not treat that helper alone as frozen-input qualification.
 
 **Unverified:** compilation, seven authored tests, Clippy, native prefix replay, RSS and deadline closure. No files were edited; no Cargo, native, cloud or large-body execution occurred. Recall and broader product requirements remain open.
-
