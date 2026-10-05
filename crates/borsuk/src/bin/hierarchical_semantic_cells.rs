@@ -1641,6 +1641,12 @@ fn execute() -> Result<()> {
     execute_args(&std::env::args().collect::<Vec<_>>())
 }
 fn execute_args(args: &[String]) -> Result<()> {
+    if args.get(1).is_some_and(|action| action == "check-fine-histogram-sq4") {
+        require(args.len() == 5, "usage: hierarchical_semantic_cells check-fine-histogram-sq4 CONFIG CONFIG_SHA256 NEW_REPORT_JSON")?;
+        return borsuk::fine_sq8_groups::histogram_sq4_diagnostic::check_fine_histogram_sq4(
+            Path::new(&args[2]), &args[3], Path::new(&args[4]),
+        );
+    }
     if args.get(1).is_some_and(|action| action == "check-fine-sq4") {
         require(
             args.len() == 5,
@@ -1783,6 +1789,264 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fine_histogram_sq4_strict_cli_dispatch_and_schema_identity() {
+        use borsuk::fine_sq8_groups::histogram_sq4_diagnostic as histogram;
+        let tmp = tempfile::tempdir().unwrap();
+        let pin = probe_artifact(
+            &tmp.path().join("config.json"),
+            br#"{"schema":"borsuk-histogram-sq4-config-v1","unknown":true}"#,
+        );
+        let output = tmp.path().join("report.json");
+        let args = vec![
+            "hierarchical_semantic_cells".into(),
+            "check-fine-histogram-sq4".into(),
+            pin.path.display().to_string(),
+            pin.sha256,
+            output.display().to_string(),
+        ];
+        assert!(execute_args(&args[..4]).is_err());
+        assert!(!output.exists());
+        assert!(execute_args(&args).is_err());
+        let body = fs::read(&output).unwrap();
+        let report: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(report["schema"], histogram::REPORT_SCHEMA);
+        assert_eq!(report["codec"], histogram::CODEC);
+        assert_eq!(report["status"], "INVALID");
+        assert_eq!(
+            report["source_identity_sha256"],
+            histogram::source_identity()
+        );
+        assert_ne!(
+            histogram::source_identity(),
+            borsuk::fine_sq8_groups::sq4_diagnostic::source_identity()
+        );
+        assert!(execute_args(&args).is_err());
+        assert_eq!(fs::read(&output).unwrap(), body);
+    }
+    #[test]
+    fn fine_histogram_sq4_real_native_builder_paired_pipeline_all128_full_rosters_late_invalid() {
+        use borsuk::fine_sq8_groups::{
+            FineBuildConfig, FineSq8Index, ResidentLimits, histogram_sq4_diagnostic as histogram,
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tiny_fine_primary(tmp.path());
+        let build = FineBuildConfig {
+            schema: borsuk::fine_sq8_groups::BUILD_SCHEMA.into(),
+            primary_root: primary,
+            max_build_payload_bytes: 128 * 1024 * 1024,
+            max_output_bytes: 16 * 1024 * 1024,
+        };
+        let roots = ["relaion", "cohere"]
+            .map(|name| FineSq8Index::build(&build, &tmp.path().join(name)).unwrap());
+        let requests = (0..64)
+            .map(|ordinal| format!("{}\n", json!({"ordinal":ordinal,"query":[3.125,0.875]})))
+            .collect::<String>();
+        let request = probe_artifact(&tmp.path().join("requests"), requests.as_bytes());
+        let truth_bytes = (0..64)
+            .flat_map(|_| (0..100u32).flat_map(u32::to_le_bytes))
+            .collect::<Vec<_>>();
+        let truth = probe_artifact(&tmp.path().join("truth"), &truth_bytes);
+        let original = tmp.path().join("original.jsonl");
+        paired_fine(
+            FinePairedConfig {
+                schema: "borsuk-fine-sq8-paired-v1".into(),
+                panels: std::array::from_fn(|i| FinePanel {
+                    dataset: ["relaion", "cohere"][i].into(),
+                    root: roots[i].clone(),
+                    requests: request.clone(),
+                    truth: truth.clone(),
+                    truth_width: 100,
+                }),
+                source_identity_sha256: fine_source_identity(),
+                limits: ResidentLimits {
+                    max_peak_payload_bytes: 256 * 1024 * 1024,
+                    pinned_generation_bytes: 0,
+                    active_queries: 1,
+                    delta_bytes: 0,
+                    maintenance_bytes: 0,
+                    runtime_bytes: 0,
+                },
+                max_evaluator_payload_bytes: 128 * 1024 * 1024,
+                max_result_bytes: 16 * 1024 * 1024,
+                test_geometry: Some((135, 2)),
+                fail_sync_at: None,
+            },
+            &"a".repeat(64),
+            &original,
+        )
+        .unwrap();
+        let seal_path = original.with_extension("fine-seal.json");
+        let seal_body = fs::read(&seal_path).unwrap();
+        let seal: Value = serde_json::from_slice(&seal_body).unwrap();
+        let cfg = histogram::Config {
+            schema: histogram::CONFIG_SCHEMA.into(),
+            source_identity_sha256: histogram::source_identity(),
+            panels: std::array::from_fn(|i| histogram::Panel {
+                dataset: ["relaion", "cohere"][i].into(),
+                root: roots[i].clone(),
+                requests: request.clone(),
+                truth: truth.clone(),
+                truth_width: 100,
+            }),
+            original_seal: Artifact {
+                path: seal_path,
+                bytes: seal_body.len(),
+                sha256: hash(&seal_body),
+            },
+            prefix: Artifact {
+                path: original,
+                bytes: seal["prefix_bytes"].as_u64().unwrap() as usize,
+                sha256: seal["prefix_sha256"].as_str().unwrap().into(),
+            },
+            caps: histogram::Caps {
+                memory_bytes: 256 * 1024 * 1024,
+                output_bytes: 128 * 1024 * 1024,
+                deadline_seconds: 600,
+                operations: 20_000_000_000,
+                cpu_threads: 1,
+                swap_bytes: 0,
+            },
+        };
+        let manifests = roots
+            .each_ref()
+            .map(|r| serde_json::from_slice::<Value>(&fs::read(&r.path).unwrap()).unwrap());
+        let sources = manifests
+            .each_ref()
+            .map(|m| fs::read(m["records"]["path"].as_str().unwrap()).unwrap());
+        for case in [
+            "valid",
+            "missing",
+            "tampered",
+            "late-invalid",
+            "query",
+            "binding",
+            "output-cap",
+            "memory",
+            "source",
+            "old-schema",
+        ] {
+            let mut config = cfg.clone();
+            match case {
+                "missing" => config.panels[1].truth.path = tmp.path().join("missing"),
+                "tampered" => fs::write(&truth.path, vec![0; truth.bytes]).unwrap(),
+                "late-invalid" => {
+                    let mut invalid = truth_bytes.clone();
+                    invalid[63 * 400..63 * 400 + 4].copy_from_slice(&999u32.to_le_bytes());
+                    let pin = probe_artifact(&tmp.path().join("late-truth"), &invalid);
+                    config.panels[1].truth = pin;
+                }
+                "query" => fs::write(&request.path, b"tampered").unwrap(),
+                "binding" => config.panels[0].requests.sha256 = "0".repeat(64),
+                "output-cap" => config.caps.output_bytes = 8192,
+                "memory" => config.caps.memory_bytes = 64 * 1024 * 1024,
+                "source" => config.source_identity_sha256 = "0".repeat(64),
+                "old-schema" => {
+                    config.schema = borsuk::fine_sq8_groups::sq4_diagnostic::CONFIG_SCHEMA.into()
+                }
+                _ => {}
+            }
+            let output = tmp.path().join(format!("histogram-{case}.json"));
+            let result = histogram::diagnose(&config, &"b".repeat(64), &output);
+            let body = fs::read(&output).unwrap();
+            let report: Value = serde_json::from_slice(&body).unwrap();
+            if case == "valid" {
+                result.unwrap();
+                assert_eq!(report["complete"], true);
+                assert_eq!(report["queries"], 128);
+            } else {
+                assert!(result.is_err());
+                assert_eq!(report["status"], "INVALID");
+            }
+            let frozen = output.with_extension("histogram-sq4-freeze.json");
+            if ["valid", "missing", "tampered", "late-invalid"].contains(&case) {
+                let freeze: Value = serde_json::from_slice(&fs::read(&frozen).unwrap()).unwrap();
+                assert_eq!(freeze["results"].as_array().unwrap().len(), 128);
+                assert_eq!(freeze["truth_opened"], false);
+                assert_eq!(report["queries"], 128);
+                for (i, payload) in freeze["payloads"].as_array().unwrap().iter().enumerate() {
+                    let generation = &payload["histogram_generation"];
+                    let book_pin: Artifact =
+                        serde_json::from_value(generation["book"].clone()).unwrap();
+                    let generation_pin: Artifact =
+                        serde_json::from_value(generation["root"].clone()).unwrap();
+                    for pin in [&book_pin, &generation_pin] {
+                        assert_eq!(hash(&fs::read(&pin.path).unwrap()), pin.sha256);
+                    }
+                    let root: Value =
+                        serde_json::from_slice(&fs::read(&generation_pin.path).unwrap()).unwrap();
+                    assert_eq!(root["schema"], histogram::ROOT_SCHEMA);
+                    assert_eq!(root["original_root"]["sha256"], roots[i].sha256);
+                    assert_eq!(
+                        root["original_records"]["sha256"],
+                        manifests[i]["records"]["sha256"]
+                    );
+                    assert!(book_pin.bytes <= histogram::BOOK_CAP);
+                    assert_eq!(generation["retained_book_capacity_bytes"], 130);
+                }
+                for (index, item) in freeze["results"].as_array().unwrap().iter().enumerate() {
+                    let pin: Artifact = serde_json::from_value(item.clone()).unwrap();
+                    let bytes = fs::read(&pin.path).unwrap();
+                    assert_eq!(hash(&bytes), pin.sha256);
+                    let result: Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(result["truth_opened"], false);
+                    let ranges: Vec<std::ops::Range<usize>> =
+                        serde_json::from_value(result["plan"]["row_ranges"].clone()).unwrap();
+                    let expected = ranges
+                        .iter()
+                        .flat_map(|r| r.clone())
+                        .map(|row| {
+                            i64::from_le_bytes(
+                                sources[index / 64][row * 14..row * 14 + 8]
+                                    .try_into()
+                                    .unwrap(),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(result["sq4"]["fetched_ids"], json!(expected));
+                    assert_eq!(
+                        result["sq4"]["fetched_ids"],
+                        result["sq8_reference"]["fetched_ids"]
+                    );
+                    assert_eq!(result["sq4"]["ranked"].as_array().unwrap().len(), 100);
+                    assert_eq!(result["sq4"]["expanded_capacity_peak"], 0);
+                    assert!(result["nominees_retained"].as_bool().unwrap());
+                    assert_eq!(
+                        result["sq4"]["histogram_metrics"]["total_cold_get_claim"],
+                        false
+                    );
+                }
+            } else {
+                assert!(!frozen.exists());
+            }
+            if case == "query" {
+                assert!(
+                    output
+                        .with_extension("histogram-sq4-payloads.json")
+                        .exists()
+                );
+            }
+            if ["output-cap", "memory", "source", "old-schema"].contains(&case) {
+                assert!(!output.with_extension("histogram-sq4-0.bin").exists());
+            }
+            assert!(histogram::diagnose(&config, &"b".repeat(64), &output).is_err());
+            assert_eq!(fs::read(&output).unwrap(), body);
+            fs::write(&truth.path, &truth_bytes).unwrap();
+            fs::write(&request.path, requests.as_bytes()).unwrap();
+        }
+        let pin = probe_artifact(
+            &tmp.path().join("histogram-config.json"),
+            &serde_json::to_vec(&cfg).unwrap(),
+        );
+        assert!(
+            histogram::check_fine_histogram_sq4(
+                &pin.path,
+                &pin.sha256,
+                &tmp.path().join("strict.json")
+            )
+            .is_err()
+        );
+    }
     #[test]
     fn fine_sq4_strict_cli_dispatch() {
         let temp = tempfile::tempdir().unwrap();

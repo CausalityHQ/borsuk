@@ -26,6 +26,7 @@ use std::{
 
 pub const BUILD_SCHEMA: &str = "borsuk-fine-sq8-build-v1";
 pub use pack_diagnostic::sq4_diagnostic;
+pub use pack_diagnostic::sq4_diagnostic::histogram as histogram_sq4_diagnostic;
 pub const SCHEMA: &str = "borsuk-fine-sq8-v1";
 pub const GROUP_ROWS: usize = 16;
 pub const MAX_GETS: usize = 256;
@@ -1911,12 +1912,23 @@ pub mod pack_diagnostic {
         guard.tick(0)?;
         Ok(body)
     }
+    #[derive(Serialize)]
+    struct UnsealedOutput {
+        path: PathBuf,
+        attempted_bytes: usize,
+        written_bytes: Option<usize>,
+    }
     struct Outputs {
         parent: File,
         output: PathBuf,
         report: File,
         bytes: usize,
+        published_bytes: usize,
+        unsealed: Option<UnsealedOutput>,
+        written_unknown: bool,
         cap: usize,
+        #[cfg(test)]
+        fail_write: Option<usize>,
         #[cfg(test)]
         fail_sync: Option<usize>,
         #[cfg(test)]
@@ -1934,7 +1946,12 @@ pub mod pack_diagnostic {
                 output: output.into(),
                 report,
                 bytes: 0,
+                published_bytes: 0,
+                unsealed: None,
+                written_unknown: false,
                 cap: OUTPUT_CAP,
+                #[cfg(test)]
+                fail_write: None,
                 #[cfg(test)]
                 fail_sync: None,
                 #[cfg(test)]
@@ -1984,14 +2001,67 @@ pub mod pack_diagnostic {
             let path = self.output.with_extension(extension);
             require(path != self.output, "pack output companion collision")?;
             let mut file = Self::create_at(&self.parent, &path)?;
-            file.write_all(body)?;
-            self.bytes += body.len();
+            self.write_owned(&mut file, &path, body)?;
             self.sync(&file)?;
+            self.seal_written(body.len())?;
             Ok(Artifact {
                 path,
                 bytes: body.len(),
                 sha256: hash(body),
             })
+        }
+        fn write_owned(&mut self, file: &mut File, path: &Path, body: &[u8]) -> Result<()> {
+            require(
+                sum(&[self.bytes, body.len(), 8192])? <= self.cap,
+                "pack output cap before chunk",
+            )?;
+            #[cfg(test)]
+            let fail_write = self.fail_write.take();
+            let pending = self.unsealed.get_or_insert_with(|| UnsealedOutput {
+                path: path.into(),
+                attempted_bytes: 0,
+                written_bytes: Some(0),
+            });
+            require(pending.path.as_path() == path, "pack owned output accounting path")?;
+            let before = pending
+                .written_bytes
+                .ok_or("pack unknown prior write length")?;
+            pending.attempted_bytes = sum(&[pending.attempted_bytes, body.len()])?;
+            let result = (|| -> std::io::Result<()> {
+                #[cfg(test)]
+                if let Some(n) = fail_write {
+                    file.write_all(&body[..n.min(body.len())])?;
+                    return Err(std::io::Error::other("pack injected partial write failure"));
+                }
+                file.write_all(body)
+            })();
+            let after = if result.is_ok() {
+                Some(sum(&[before, body.len()])?)
+            } else {
+                // Inspect the already-owned FD, including bytes from a short write.
+                // Failed metadata preserves the known lower bound plus explicit unknown.
+                file.metadata()
+                    .ok()
+                    .and_then(|m| usize::try_from(m.len()).ok())
+                    .filter(|&n| n >= before)
+            };
+            pending.written_bytes = after;
+            if let Some(n) = after {
+                self.bytes = sum(&[self.bytes, n - before])?;
+            } else {
+                self.written_unknown = true;
+            }
+            result?;
+            Ok(())
+        }
+        fn seal_written(&mut self, bytes: usize) -> Result<()> {
+            require(
+                self.unsealed.as_ref().and_then(|p| p.written_bytes) == Some(bytes),
+                "pack sealed write length",
+            )?;
+            self.published_bytes = sum(&[self.published_bytes, bytes])?;
+            self.unsealed = None;
+            Ok(())
         }
         fn finish(&mut self, value: &Value) -> Result<()> {
             let body = serde_json::to_vec(value)?;
@@ -2011,7 +2081,9 @@ pub mod pack_diagnostic {
                 config_sha,
                 "INVALID",
                 false,
-                json!({"error":error.to_string().chars().take(512).collect::<String>()}),
+                json!({"error":error.to_string().chars().take(512).collect::<String>(),
+                    "published_bytes":self.published_bytes,"written_bytes":if self.written_unknown {None} else {Some(self.bytes)},
+                    "known_written_bytes":self.bytes,"unsealed_output":self.unsealed}),
             ))
             .unwrap_or_default();
             // Only our owned inode is rewritten after failure. The exit remains
@@ -2729,9 +2801,18 @@ pub mod pack_diagnostic {
             format!("{:x}", h.finalize())
         }
 
+        #[cfg(test)]
         fn terminal(config_sha: &str, status: &str, complete: bool, details: Value) -> Value {
-            json!({"schema":REPORT_SCHEMA,"codec":CODEC,"status":status,"complete":complete,
-                "config_sha256":config_sha,"source_identity_sha256":source_identity(),"details":details,
+            terminal_for(config_sha, status, complete, details, false)
+        }
+        fn identity(learned: bool) -> (&'static str, &'static str, &'static str, String) {
+            if learned { (histogram::CONFIG_SCHEMA, histogram::REPORT_SCHEMA, histogram::CODEC, histogram::source_identity()) }
+            else { (CONFIG_SCHEMA, REPORT_SCHEMA, CODEC, source_identity()) }
+        }
+        fn terminal_for(config_sha: &str, status: &str, complete: bool, details: Value, learned: bool) -> Value {
+            let (_, schema, codec, source) = identity(learned);
+            json!({"schema":schema,"codec":codec,"status":status,"complete":complete,
+                "config_sha256":config_sha,"source_identity_sha256":source,"details":details,
                 "queries":if complete {128} else {0},"standalone_authority":false,
                 "requires_matching_supervisor_exit_receipt":true,"quality_or_performance_claim":false,
                 "scope":"consumed64 FIRST100k only; no fresh quality, S3, lifecycle, or 100M RAM claim"})
@@ -2741,23 +2822,36 @@ pub mod pack_diagnostic {
             stage: &'static str,
             scored_queries: usize,
             truth_opened: bool,
+            truth_body_read_attempted: bool,
             freeze: Option<Artifact>,
             operations: u64,
         }
+        #[cfg(test)]
         fn invalidate(
             output: &mut Outputs,
             sha: &str,
             error: &dyn std::fmt::Display,
             progress: &Progress,
         ) {
-            let mut value = terminal(
+            invalidate_for(output, sha, error, progress, false)
+        }
+        fn invalidate_for(
+            output: &mut Outputs,
+            sha: &str,
+            error: &dyn std::fmt::Display,
+            progress: &Progress,
+            learned: bool,
+        ) {
+            let mut value = terminal_for(
                 sha,
                 "INVALID",
                 false,
                 json!({"error":error.to_string().chars().take(512).collect::<String>(),
                     "stage":progress.stage,"scored_queries":progress.scored_queries,
-                    "truth_opened":progress.truth_opened,"freeze":progress.freeze,
-                    "published_bytes":output.bytes,"operations":progress.operations}),
+                    "truth_opened":progress.truth_opened,"truth_body_read_attempted":progress.truth_body_read_attempted,"freeze":progress.freeze,
+                    "published_bytes":output.published_bytes,"written_bytes":if output.written_unknown {None} else {Some(output.bytes)},
+                    "known_written_bytes":output.bytes,"unsealed_output":output.unsealed,"operations":progress.operations}),
+                learned,
             );
             value["queries"] = json!(progress.scored_queries);
             if let Ok(body) = serde_json::to_vec(&value) {
@@ -2771,10 +2865,11 @@ pub mod pack_diagnostic {
             }
         }
 
-        fn config_valid(config: &Config) -> Result<()> {
+        fn config_valid_for(config: &Config, learned: bool) -> Result<()> {
+            let (schema, _, _, source) = identity(learned);
             require(
-                config.schema == CONFIG_SCHEMA
-                    && config.source_identity_sha256 == source_identity()
+                config.schema == schema
+                    && config.source_identity_sha256 == source
                     && config.panels[0].dataset == "relaion"
                     && config.panels[1].dataset == "cohere"
                     && (FIXED..=1024 * 1024 * 1024).contains(&config.caps.memory_bytes)
@@ -2802,6 +2897,20 @@ pub mod pack_diagnostic {
             digest(&config.prefix.sha256)?;
             digest(&config.original_seal.sha256)?;
             Ok(())
+        }
+        fn terminal_admission(config: &Config, output: &Path, learned: bool) -> Result<()> {
+            let name = if learned { "histogram-sq4" } else { "sq4" };
+            // 4096 bounds the remaining fixed keys/numbers, two 64-loss summaries,
+            // and the worst escaped 512-character INVALID error. Serialize actual
+            // paths, including both possible late-failure output descriptors, so
+            // JSON escaping cannot turn legal paths into a late reserve refusal.
+            let metadata = json!({"truth":config.panels.each_ref().map(|p| &p.truth),
+                "freeze":Artifact {path:output.with_extension(format!("{name}-freeze.json")), bytes:usize::MAX, sha256:"f".repeat(64)},
+                "unsealed_output":UnsealedOutput {path:output.with_extension(format!("{name}-1.bin-groups.bin")), attempted_bytes:usize::MAX, written_bytes:Some(usize::MAX)}});
+            require(
+                sum(&[serde_json::to_vec(&metadata)?.len(), 4096])? <= RESERVE,
+                "SQ4 terminal metadata/path reserve before bodies",
+            )
         }
         fn allocation_model(config: &Config, n: usize, d: usize) -> Result<usize> {
             require(
@@ -2837,8 +2946,18 @@ pub mod pack_diagnostic {
             )
         }
         fn descriptor(a: &Artifact, prefix: bool) -> Result<File> {
+            descriptor_acquired(a, prefix, None)
+        }
+        fn descriptor_acquired(
+            a: &Artifact,
+            prefix: bool,
+            acquired: Option<&mut bool>,
+        ) -> Result<File> {
             digest(&a.sha256)?;
             let file = secure_open(&a.path, rustix::fs::OFlags::RDONLY)?;
+            if let Some(acquired) = acquired {
+                *acquired = true;
+            }
             let meta = file.metadata()?;
             require(
                 meta.is_file()
@@ -2892,6 +3011,8 @@ pub mod pack_diagnostic {
             for (i, part) in body.chunks_mut(65536).enumerate() {
                 guard.tick(part.len() as u64)?;
                 file.read_exact_at(part, (i * 65536) as u64)?;
+                #[cfg(test)]
+                super::READS.with(|reads| reads.borrow_mut().push((a.path.clone(), part.len())));
             }
             require(hash(&body) == a.sha256, "SQ4 pinned SHA256")?;
             // The historical trace intentionally has an unread tail. All other
@@ -2919,6 +3040,1364 @@ pub mod pack_diagnostic {
             )?;
             exact_eof(&file, a.bytes)?;
             Ok(file)
+        }
+
+        /// Corpus-only histogram training and immutable generation mapping.
+        /// This diagnostic does not integrate updates or garbage collection.
+        pub mod histogram {
+            use super::*;
+            pub use super::{Caps, Config, Panel, SupervisorReceipt};
+
+            pub const CONFIG_SCHEMA: &str = "borsuk-histogram-sq4-config-v1";
+            pub const REPORT_SCHEMA: &str = "borsuk-histogram-sq4-report-v1";
+            pub const CODEC: &str = "borsuk-sq4-histogram16-original-coefficients-v1";
+            pub const ROOT_SCHEMA: &str = "borsuk-histogram-sq4-generation-v1";
+            pub const TRAINER: &str =
+                "occupied-u8-weighted-contiguous-f64-dp-smallest-predecessor-v1";
+            pub const BOOK_CAP: usize = 65536;
+            const HEADER: usize = 144;
+            // Preregistered literal-f32 SSE allowance, not a recall bound.
+            pub const SSE_RELATIVE_ALLOWANCE: f64 = 128. * f32::EPSILON as f64;
+            pub const SSE_ENERGY_ALLOWANCE: f64 =
+                128. * (f32::EPSILON as f64 * f32::EPSILON as f64);
+            pub const INTERVAL_CANCELLATION_ULPS: f64 = 64.;
+            #[cfg(test)]
+            thread_local! {
+                pub(super) static TAMPER_SECOND_PASS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+            }
+
+            pub fn source_identity() -> String {
+                hash(format!("{CODEC}\n{TRAINER}\n{}", super::source_identity()).as_bytes())
+            }
+            pub(super) fn coefficients(low: &[f32], step: &[f32]) -> Result<[u8; 32]> {
+                require(
+                    (1..=768).contains(&low.len())
+                        && step.len() == low.len()
+                        && low.iter().all(|v| v.is_finite())
+                        && step.iter().all(|v| v.is_finite() && *v > 0.),
+                    "histogram coefficients",
+                )?;
+                let mut h = Sha256::new();
+                h.update((low.len() as u32).to_le_bytes());
+                for values in [low, step] {
+                    for v in values {
+                        h.update(v.to_le_bytes());
+                    }
+                }
+                Ok(h.finalize().into())
+            }
+            fn count_sum(h: &[u32; 256], rows: usize) -> Result<()> {
+                let total = h.iter().try_fold(0u64, |n, &v| {
+                    n.checked_add(u64::from(v))
+                        .ok_or("histogram count overflow")
+                })?;
+                require(
+                    rows > 0 && u32::try_from(rows).is_ok() && total == u64::try_from(rows)?,
+                    "histogram admitted row counts",
+                )
+            }
+            fn nearest(centers: &[f32; 16], bin: u8) -> u8 {
+                let mut best = 0;
+                let mut distance = f64::INFINITY;
+                for (i, &center) in centers.iter().enumerate() {
+                    let candidate = (f64::from(bin) - f64::from(center)).abs();
+                    if candidate < distance {
+                        distance = candidate;
+                        best = i as u8;
+                    }
+                }
+                best
+            }
+            /// Conservative simultaneous training/encoding workspace, with
+            /// histogram, maps, centers, stack prefixes and one group buffer.
+            pub fn training_bytes(d: usize) -> Result<usize> {
+                require((1..=768).contains(&d), "histogram dimensions")?;
+                sum(&[
+                    d * 256 * 4,
+                    d * 256,
+                    d * 65,
+                    256 * 256 * 8,
+                    2 * 257 * 8,
+                    17 * 257 * 2,
+                    3 * 257 * 8,
+                    512,
+                    16 * (12 + d + 12 + d.div_ceil(2)),
+                    BOOK_CAP * 2,
+                ])
+            }
+            #[derive(Clone, Debug, Serialize, Deserialize)]
+            #[serde(deny_unknown_fields)]
+            pub struct FitReceipt {
+                pub histogram_capacity_bytes: usize,
+                pub center_capacity_bytes: usize,
+                pub scratch_capacity_bytes: usize,
+                pub admitted_training_bytes: usize,
+                pub histogram_sha256: String,
+                pub literal_f32_sse: f64,
+                pub uniform17_literal_f32_sse: f64,
+                pub sse_allowance: f64,
+                pub literal_f32_source_energy: f64,
+                pub sse_relative_allowance: f64,
+                pub sse_energy_allowance: f64,
+                pub interval_cancellation_ulps: f64,
+                pub operations: u64,
+            }
+            /// Bin-coordinate centers are immutable after construction. Fit
+            /// accepts original SQ8 histograms only, never SQ4 reconstructions.
+            pub struct Codebook {
+                centers: Vec<[f32; 16]>,
+                active: Vec<u8>,
+                rows: usize,
+                source: [u8; 32],
+                coefficients: [u8; 32],
+                pub(super) histogram: [u8; 32],
+            }
+            /// One normalized query; score rows directly without SQ8 expansion.
+            pub struct PackedQuery {
+                weights: Vec<f32>,
+                shift: f32,
+                coefficients: [u8; 32],
+            }
+            impl Codebook {
+                pub fn dimensions(&self) -> usize {
+                    self.centers.len()
+                }
+                pub fn centers(&self) -> &[[f32; 16]] {
+                    &self.centers
+                }
+                pub fn retained_bytes(&self) -> usize {
+                    self.centers.capacity() * 64 + self.active.capacity()
+                }
+                fn validate(&self) -> Result<()> {
+                    require(
+                        (1..=768).contains(&self.dimensions())
+                            && self.rows > 0
+                            && u32::try_from(self.rows).is_ok()
+                            && self.active.len() == self.dimensions(),
+                        "histogram book geometry",
+                    )?;
+                    for (c, &k) in self.centers.iter().zip(&self.active) {
+                        let k = usize::from(k);
+                        require(
+                            (1..=16).contains(&k)
+                                && c.iter().all(|v| v.is_finite() && (0. ..=255.).contains(v))
+                                && c[..k].windows(2).all(|v| v[0] < v[1])
+                                && c[k..].iter().all(|v| v.to_bits() == c[k - 1].to_bits()),
+                            "histogram ordered centers/padding",
+                        )?;
+                    }
+                    Ok(())
+                }
+                /// Checked bounded fit; calls the same guarded trainer used by
+                /// the paired builder. The caller owns histogram authentication.
+                pub fn fit(
+                    histograms: &[[u32; 256]],
+                    rows: usize,
+                    low: &[f32],
+                    step: &[f32],
+                    source: [u8; 32],
+                    caps: &Caps,
+                ) -> Result<(Self, FitReceipt)> {
+                    let mut guard = Guard::new(caps);
+                    Self::fit_guarded(histograms, rows, low, step, source, caps, &mut guard)
+                }
+                pub(super) fn fit_guarded(
+                    histograms: &[[u32; 256]],
+                    rows: usize,
+                    low: &[f32],
+                    step: &[f32],
+                    source: [u8; 32],
+                    caps: &Caps,
+                    guard: &mut Guard,
+                ) -> Result<(Self, FitReceipt)> {
+                    let coefficient_hash = coefficients(low, step)?;
+                    let d = low.len();
+                    require(
+                        histograms.len() == d && caps.cpu_threads == 1 && caps.swap_bytes == 0,
+                        "histogram fit contract",
+                    )?;
+                    let admitted = memory(caps, &[training_bytes(d)?])?;
+                    let start_ops = guard.operations;
+                    let mut histogram_hash = Sha256::new();
+                    for h in histograms {
+                        count_sum(h, rows)?;
+                        guard.tick(256)?;
+                        for &count in h {
+                            histogram_hash.update(count.to_le_bytes());
+                        }
+                    }
+                    let histogram_hash: [u8; 32] = histogram_hash.finalize().into();
+                    let mut centers = reserved(d)?;
+                    let mut active = reserved(d)?;
+                    let mut costs = filled(256 * 256, 0_f64)?;
+                    let mut previous = filled(257, f64::INFINITY)?;
+                    let mut next = filled(257, f64::INFINITY)?;
+                    let mut back = filled(17 * 257, 0u16)?;
+                    let scratch = sum(&[
+                        costs.capacity() * 8,
+                        previous.capacity() * 8,
+                        next.capacity() * 8,
+                        back.capacity() * 2,
+                        3 * 257 * 8,
+                        512,
+                    ])?;
+                    let mut learned_sse = 0_f64;
+                    let mut uniform_sse = 0_f64;
+                    let mut source_energy = 0_f64;
+                    for (axis, h) in histograms.iter().enumerate() {
+                        let (c, k) = fit_axis(
+                            h,
+                            rows,
+                            16,
+                            &mut costs,
+                            &mut previous,
+                            &mut next,
+                            &mut back,
+                            guard,
+                        )?;
+                        centers.push(c);
+                        active.push(k as u8);
+                        guard.tick(256 * 16)?;
+                        for (bin, &count) in h.iter().enumerate() {
+                            if count == 0 {
+                                continue;
+                            }
+                            let original = low[axis] + bin as f32 * step[axis];
+                            let learned =
+                                low[axis] + c[usize::from(nearest(&c, bin as u8))] * step[axis];
+                            let uniform = low[axis] + (((bin + 8) / 17) * 17) as f32 * step[axis];
+                            require(
+                                original.is_finite() && learned.is_finite() && uniform.is_finite(),
+                                "histogram literal reconstruction",
+                            )?;
+                            let a = f64::from(original) - f64::from(learned);
+                            let b = f64::from(original) - f64::from(uniform);
+                            learned_sse += f64::from(count) * a * a;
+                            uniform_sse += f64::from(count) * b * b;
+                            source_energy +=
+                                f64::from(count) * f64::from(original) * f64::from(original);
+                        }
+                    }
+                    let allowance = SSE_RELATIVE_ALLOWANCE * uniform_sse
+                        + SSE_ENERGY_ALLOWANCE * source_energy.max(1.);
+                    require(
+                        learned_sse.is_finite()
+                            && uniform_sse.is_finite()
+                            && allowance.is_finite()
+                            && learned_sse <= uniform_sse + allowance,
+                        "histogram literal f32 distortion allowance",
+                    )?;
+                    let book = Self {
+                        centers,
+                        active,
+                        rows,
+                        source,
+                        coefficients: coefficient_hash,
+                        histogram: histogram_hash,
+                    };
+                    book.validate()?;
+                    let receipt = FitReceipt {
+                        histogram_capacity_bytes: d * 256 * 4,
+                        center_capacity_bytes: book.retained_bytes(),
+                        scratch_capacity_bytes: scratch,
+                        admitted_training_bytes: admitted,
+                        histogram_sha256: histogram_hash
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect(),
+                        literal_f32_sse: learned_sse,
+                        uniform17_literal_f32_sse: uniform_sse,
+                        sse_allowance: allowance,
+                        literal_f32_source_energy: source_energy,
+                        sse_relative_allowance: SSE_RELATIVE_ALLOWANCE,
+                        sse_energy_allowance: SSE_ENERGY_ALLOWANCE,
+                        interval_cancellation_ulps: INTERVAL_CANCELLATION_ULPS,
+                        operations: guard.operations - start_ops,
+                    };
+                    Ok((book, receipt))
+                }
+                pub fn encoding_map(&self) -> Result<Vec<[u8; 256]>> {
+                    self.validate()?;
+                    let mut maps = reserved(self.dimensions())?;
+                    for c in &self.centers {
+                        maps.push(std::array::from_fn(|b| nearest(c, b as u8)));
+                    }
+                    Ok(maps)
+                }
+                /// Frozen-generation mapping from an original D+12 SQ8 row.
+                /// No fitting, and no interpretation of a packed row as SQ8.
+                pub fn encode_sq8_row(
+                    &self,
+                    row: &[u8],
+                    low: &[f32],
+                    step: &[f32],
+                    out: &mut [u8],
+                ) -> Result<()> {
+                    require(
+                        coefficients(low, step)? == self.coefficients,
+                        "histogram encode coefficient binding",
+                    )?;
+                    self.encode_row(row, low, step, None, out)
+                }
+                pub(super) fn encode_row(
+                    &self,
+                    row: &[u8],
+                    low: &[f32],
+                    step: &[f32],
+                    maps: Option<&[[u8; 256]]>,
+                    out: &mut [u8],
+                ) -> Result<()> {
+                    let d = self.dimensions();
+                    require(
+                        row.len() == 12 + d
+                            && out.len() == 12 + d.div_ceil(2)
+                            && low.len() == d
+                            && step.len() == d
+                            && maps.is_none_or(|m| m.len() == d),
+                        "histogram row geometry",
+                    )?;
+                    require(
+                        f32::from_le_bytes(row[8..12].try_into()?).is_finite(),
+                        "histogram original norm",
+                    )?;
+                    out.fill(0);
+                    out[..8].copy_from_slice(&row[..8]);
+                    let mut norm = 0_f32;
+                    for axis in 0..d {
+                        let bin = row[12 + axis];
+                        let code = maps.map_or_else(
+                            || nearest(&self.centers[axis], bin),
+                            |m| m[axis][usize::from(bin)],
+                        );
+                        require(code < 16, "histogram encoding map")?;
+                        out[12 + axis / 2] |= code << (4 * (axis % 2));
+                        let value = low[axis] + self.centers[axis][usize::from(code)] * step[axis];
+                        norm += value * value;
+                    }
+                    require(norm.is_finite(), "histogram reconstructed norm")?;
+                    out[8..12].copy_from_slice(&norm.to_le_bytes());
+                    Ok(())
+                }
+                pub fn prepare_query(
+                    &self,
+                    query: &[f32],
+                    low: &[f32],
+                    step: &[f32],
+                ) -> Result<PackedQuery> {
+                    require(
+                        coefficients(low, step)? == self.coefficients
+                            && query.len() == self.dimensions(),
+                        "histogram query binding",
+                    )?;
+                    let q = cosine_vector(query)?;
+                    let mut weights = reserved(self.dimensions())?;
+                    let mut shift = 0_f32;
+                    let mut qnorm = 0_f32;
+                    for axis in 0..self.dimensions() {
+                        shift += q[axis] * low[axis];
+                        qnorm += q[axis] * q[axis];
+                        weights.push(q[axis] * step[axis]);
+                    }
+                    shift -= qnorm / 2.;
+                    require(
+                        shift.is_finite() && weights.iter().all(|v| v.is_finite()),
+                        "histogram prepared query finite",
+                    )?;
+                    Ok(PackedQuery {
+                        weights,
+                        shift,
+                        coefficients: self.coefficients,
+                    })
+                }
+                pub fn to_bytes(&self) -> Result<Vec<u8>> {
+                    self.validate()?;
+                    let bytes = HEADER + self.dimensions() * 65;
+                    require(bytes <= BOOK_CAP, "histogram binary book cap")?;
+                    let mut body = reserved(bytes)?;
+                    body.extend_from_slice(b"BORSH401");
+                    body.extend_from_slice(&u32::try_from(self.dimensions())?.to_le_bytes());
+                    body.extend_from_slice(&u32::try_from(self.rows)?.to_le_bytes());
+                    for sha in [
+                        self.source,
+                        self.coefficients,
+                        self.histogram,
+                        Sha256::digest(TRAINER.as_bytes()).into(),
+                    ] {
+                        body.extend_from_slice(&sha);
+                    }
+                    for (c, k) in self.centers.iter().zip(&self.active) {
+                        body.push(*k);
+                        for v in c {
+                            body.extend_from_slice(&v.to_le_bytes());
+                        }
+                    }
+                    Ok(body)
+                }
+                /// Caller authenticates bytes first. Admission includes encoded
+                /// and decoded capacities before any center allocation.
+                pub fn from_bytes(
+                    body: &[u8],
+                    rows: usize,
+                    low: &[f32],
+                    step: &[f32],
+                    source: [u8; 32],
+                    histogram: [u8; 32],
+                    cap: usize,
+                ) -> Result<Self> {
+                    let coefficient_hash = coefficients(low, step)?;
+                    let d = low.len();
+                    require(
+                        sum(&[body.len(), d * 65])? <= cap,
+                        "histogram book coexistence admission",
+                    )?;
+                    require(
+                        body.len() == HEADER + d * 65
+                            && body.len() <= BOOK_CAP
+                            && &body[..8] == b"BORSH401"
+                            && u32::from_le_bytes(body[8..12].try_into()?) as usize == d
+                            && u32::from_le_bytes(body[12..16].try_into()?) as usize == rows
+                            && body[16..48] == source
+                            && body[48..80] == coefficient_hash
+                            && body[80..112] == histogram
+                            && body[112..144] == Sha256::digest(TRAINER.as_bytes())[..],
+                        "histogram book header/binding",
+                    )?;
+                    let mut centers = reserved(d)?;
+                    let mut active = reserved(d)?;
+                    for axis in body[HEADER..].chunks_exact(65) {
+                        active.push(axis[0]);
+                        let mut c = [0_f32; 16];
+                        for (v, b) in c.iter_mut().zip(axis[1..].chunks_exact(4)) {
+                            *v = f32::from_le_bytes(b.try_into()?);
+                        }
+                        centers.push(c);
+                    }
+                    let book = Self {
+                        centers,
+                        active,
+                        rows,
+                        source,
+                        coefficients: coefficient_hash,
+                        histogram,
+                    };
+                    book.validate()?;
+                    Ok(book)
+                }
+            }
+            impl PackedQuery {
+                pub fn capacity_bytes(&self) -> usize {
+                    self.weights.capacity() * 4
+                }
+                pub fn score_row(
+                    &self,
+                    book: &Codebook,
+                    row: &[u8],
+                    ordinal: usize,
+                ) -> Result<ScoredNominee> {
+                    let d = book.dimensions();
+                    require(
+                        self.weights.len() == d
+                            && self.coefficients == book.coefficients
+                            && row.len() == 12 + d.div_ceil(2)
+                            && (d % 2 == 0 || row[row.len() - 1] & 0xf0 == 0),
+                        "histogram packed score geometry/padding",
+                    )?;
+                    let norm = f32::from_le_bytes(row[8..12].try_into()?);
+                    require(norm.is_finite() && norm >= 0., "histogram packed norm")?;
+                    let mut inner = 0_f32;
+                    for axis in 0..d {
+                        let code = (row[12 + axis / 2] >> (4 * (axis % 2))) & 15;
+                        inner += book.centers[axis][usize::from(code)] * self.weights[axis];
+                    }
+                    let score = norm - 2. * (inner + self.shift);
+                    require(score.is_finite(), "histogram packed score finite")?;
+                    Ok(ScoredNominee {
+                        ordinal,
+                        id: i64::from_le_bytes(row[..8].try_into()?),
+                        score,
+                    })
+                }
+            }
+            fn fit_axis(
+                h: &[u32; 256],
+                rows: usize,
+                clusters: usize,
+                costs: &mut [f64],
+                previous: &mut [f64],
+                next: &mut [f64],
+                back: &mut [u16],
+                guard: &mut Guard,
+            ) -> Result<([f32; 16], usize)> {
+                count_sum(h, rows)?;
+                require((1..=16).contains(&clusters), "histogram cluster count")?;
+                let mut bins = [0u8; 256];
+                let mut occupied = 0;
+                let mut w = [0u64; 257];
+                let mut m = [0u64; 257];
+                let mut v = [0u64; 257];
+                for (bin, &count) in h.iter().enumerate() {
+                    if count == 0 {
+                        continue;
+                    }
+                    bins[occupied] = bin as u8;
+                    let count = u64::from(count);
+                    let bin = bin as u64;
+                    w[occupied + 1] = w[occupied]
+                        .checked_add(count)
+                        .ok_or("histogram weight overflow")?;
+                    m[occupied + 1] = m[occupied]
+                        .checked_add(count.checked_mul(bin).ok_or("histogram moment overflow")?)
+                        .ok_or("histogram moment sum overflow")?;
+                    v[occupied + 1] = v[occupied]
+                        .checked_add(
+                            count
+                                .checked_mul(bin * bin)
+                                .ok_or("histogram variance overflow")?,
+                        )
+                        .ok_or("histogram variance sum overflow")?;
+                    occupied += 1;
+                }
+                guard.tick(256)?;
+                let k = clusters.min(occupied);
+                let mut centers = [0_f32; 16];
+                if k == occupied {
+                    for i in 0..k {
+                        centers[i] = f32::from(bins[i]);
+                    }
+                } else {
+                    for a in 0..occupied {
+                        guard.tick((occupied - a) as u64)?;
+                        for z in a..occupied {
+                            let weight = (w[z + 1] - w[a]) as f64;
+                            let moment = (m[z + 1] - m[a]) as f64;
+                            let variance = (v[z + 1] - v[a]) as f64;
+                            let term = moment * moment / weight;
+                            let cost = variance - term;
+                            let tolerance = INTERVAL_CANCELLATION_ULPS
+                                * f64::EPSILON
+                                * (variance.abs() + term.abs()).max(1.);
+                            require(
+                                cost.is_finite() && cost >= -tolerance,
+                                "histogram interval cancellation bound",
+                            )?;
+                            costs[a * 256 + z] = cost.max(0.);
+                        }
+                    }
+                    previous.fill(f64::INFINITY);
+                    previous[0] = 0.;
+                    for t in 1..=k {
+                        next.fill(f64::INFINITY);
+                        for end in t..=occupied {
+                            guard.tick((end - t + 1) as u64)?;
+                            let mut best = f64::INFINITY;
+                            let mut split = t - 1;
+                            for start in t - 1..end {
+                                let candidate = previous[start] + costs[start * 256 + end - 1];
+                                // Ascending starts: exact f64 ties choose the
+                                // smallest predecessor, with no epsilon ranking.
+                                if candidate < best {
+                                    best = candidate;
+                                    split = start;
+                                }
+                            }
+                            require(best.is_finite(), "histogram DP finite")?;
+                            next[end] = best;
+                            back[t * 257 + end] = split as u16;
+                        }
+                        previous.copy_from_slice(next);
+                    }
+                    let mut end = occupied;
+                    for t in (1..=k).rev() {
+                        let start = usize::from(back[t * 257 + end]);
+                        require(start < end, "histogram DP backpointer")?;
+                        centers[t - 1] =
+                            ((m[end] - m[start]) as f64 / (w[end] - w[start]) as f64) as f32;
+                        end = start;
+                    }
+                    require(end == 0, "histogram full partition")?;
+                }
+                for i in k..16 {
+                    centers[i] = centers[k - 1];
+                }
+                Ok((centers, k))
+            }
+            #[derive(Serialize, Deserialize)]
+            #[serde(deny_unknown_fields)]
+            pub(super) struct GenerationRoot {
+                pub(super) schema: String,
+                pub(super) codec: String,
+                pub(super) trainer: String,
+                pub(super) source_identity_sha256: String,
+                pub(super) config_sha256: String,
+                pub(super) original_root: Artifact,
+                pub(super) original_records: Artifact,
+                pub(super) coefficients_sha256: String,
+                pub(super) histogram_sha256: String,
+                pub(super) rows: usize,
+                pub(super) dimensions: usize,
+                pub(super) book: Artifact,
+                pub(super) payload: Artifact,
+                pub(super) group_hashes: Artifact,
+                pub(super) fit: FitReceipt,
+            }
+            pub(super) struct Generation {
+                pub(super) book: Codebook,
+                pub(super) book_pin: Artifact,
+                pub(super) root_pin: Artifact,
+                pub(super) group_pin: Artifact,
+                pub(super) fit: FitReceipt,
+                pub(super) build_wall_ns: u128,
+                pub(super) startup_bytes: usize,
+                pub(super) startup_wall_ns: u128,
+            }
+            impl Generation {
+                pub(super) fn reopen(
+                    root_pin: Artifact,
+                    expected: &GenerationRoot,
+                    manifest: &Manifest,
+                    caps: &Caps,
+                    guard: &mut Guard,
+                    build_wall_ns: u128,
+                ) -> Result<Self> {
+                    let startup_start = Instant::now();
+                    require(
+                        expected.schema == ROOT_SCHEMA
+                            && expected.codec == CODEC
+                            && expected.trainer == TRAINER
+                            && expected.source_identity_sha256 == source_identity()
+                            && expected.rows == manifest.identity.rows
+                            && expected.dimensions == manifest.identity.dimensions
+                            && same_artifact(&expected.original_records, &manifest.records)
+                            && expected.book.bytes <= BOOK_CAP
+                            && expected.book.bytes == HEADER + expected.dimensions * 65
+                            && expected.payload.bytes == expected.rows * (12 + expected.dimensions.div_ceil(2))
+                            && expected.group_hashes.bytes == expected.rows.div_ceil(16) * 32,
+                        "histogram generation metadata binding",
+                    )?;
+                    memory(
+                        caps,
+                        &[
+                            FIXED,
+                            expected.rows * 64,
+                            root_pin.bytes * 16,
+                            expected.book.bytes + expected.dimensions * 65,
+                            expected.group_hashes.bytes,
+                        ],
+                    )?;
+                    let body = read_pinned(&root_pin, ROOT_CAP, false, guard)?;
+                    require(
+                        body == serde_json::to_vec(expected)?,
+                        "histogram generation exact root binding",
+                    )?;
+                    let root: GenerationRoot = serde_json::from_slice(&body)?;
+                    drop(body);
+                    let encoded = read_pinned(&root.book, BOOK_CAP, false, guard)?;
+                    let book = Codebook::from_bytes(
+                        &encoded,
+                        root.rows,
+                        &manifest.low,
+                        &manifest.step,
+                        digest(&manifest.records.sha256)?,
+                        digest(&root.histogram_sha256)?,
+                        BOOK_CAP * 2,
+                    )?;
+                    drop(encoded);
+                    let groups = read_pinned(
+                        &root.group_hashes,
+                        root.rows.div_ceil(16) * 32,
+                        false,
+                        guard,
+                    )?;
+                    drop(groups);
+                    let startup_bytes =
+                        sum(&[root_pin.bytes, root.book.bytes, root.group_hashes.bytes])?;
+                    Ok(Self {
+                        book,
+                        book_pin: root.book,
+                        root_pin,
+                        group_pin: root.group_hashes,
+                        fit: expected.fit.clone(),
+                        build_wall_ns,
+                        startup_bytes,
+                        startup_wall_ns: startup_start.elapsed().as_nanos(),
+                    })
+                }
+            }
+            pub fn check_fine_histogram_sq4(
+                config_path: &Path,
+                sha: &str,
+                path: &Path,
+            ) -> Result<()> {
+                super::check_impl(config_path, sha, path, true)
+            }
+            pub fn diagnose(config: &Config, sha: &str, path: &Path) -> Result<()> {
+                super::diagnose_impl(config, sha, path, true)
+            }
+            pub fn admit_survival(
+                body: &[u8],
+                run_id: &str,
+                receipt: &SupervisorReceipt,
+            ) -> Result<()> {
+                super::admit_impl(body, run_id, receipt, true)
+            }
+            #[cfg(test)]
+            mod tests {
+                use super::*;
+                fn caps() -> Caps {
+                    Caps {
+                        memory_bytes: 256 * 1024 * 1024,
+                        output_bytes: 128 * 1024 * 1024,
+                        deadline_seconds: 600,
+                        operations: 20_000_000_000,
+                        cpu_threads: 1,
+                        swap_bytes: 0,
+                    }
+                }
+                // Independent exhaustive partitions, using direct deviations,
+                // without prefixes, V-M²/W, DP or the production interval table.
+                fn oracle(points: &[(u8, u32)], k: usize) -> (f64, Vec<usize>, Vec<f64>) {
+                    fn enumerate(
+                        p: &[(u8, u32)],
+                        left: usize,
+                        start: usize,
+                        cuts: &mut Vec<usize>,
+                        best: &mut (f64, Vec<usize>, Vec<f64>),
+                    ) {
+                        if left == 0 {
+                            if start != p.len() {
+                                return;
+                            }
+                            let mut cost = 0.;
+                            let mut means = Vec::new();
+                            let mut first = 0;
+                            for &end in cuts.iter() {
+                                let weight: f64 =
+                                    p[first..end].iter().map(|v| f64::from(v.1)).sum();
+                                let mean = p[first..end]
+                                    .iter()
+                                    .map(|v| f64::from(v.0) * f64::from(v.1))
+                                    .sum::<f64>()
+                                    / weight;
+                                cost += p[first..end]
+                                    .iter()
+                                    .map(|v| f64::from(v.1) * (f64::from(v.0) - mean).powi(2))
+                                    .sum::<f64>();
+                                means.push(mean);
+                                first = end;
+                            }
+                            if cost < best.0
+                                || (cost == best.0
+                                    && cuts.iter().rev().cmp(best.1.iter().rev()).is_lt())
+                            {
+                                *best = (cost, cuts.clone(), means);
+                            }
+                            return;
+                        }
+                        for end in start + 1..=p.len() - left + 1 {
+                            cuts.push(end);
+                            enumerate(p, left - 1, end, cuts, best);
+                            cuts.pop();
+                        }
+                    }
+                    let mut best = (f64::INFINITY, Vec::new(), Vec::new());
+                    enumerate(points, k, 0, &mut Vec::new(), &mut best);
+                    best
+                }
+                fn axis(h: &[u32; 256], rows: usize, k: usize) -> ([f32; 16], usize) {
+                    fit_axis(
+                        h,
+                        rows,
+                        k,
+                        &mut vec![0.; 256 * 256],
+                        &mut vec![0.; 257],
+                        &mut vec![0.; 257],
+                        &mut vec![0; 17 * 257],
+                        &mut Guard::new(&caps()),
+                    )
+                    .unwrap()
+                }
+                #[test]
+                fn fine_histogram_sq4_dp_independent_brute_partitions_and_deviations() {
+                    for points in [
+                        vec![(0, 1), (2, 1), (4, 1)],
+                        vec![(1, 2), (3, 9), (17, 1), (91, 3), (255, 4000)],
+                        (0..18)
+                            .map(|i| ((i * 13 + 1) as u8, (i * i % 7 + 1) as u32))
+                            .collect(),
+                    ] {
+                        let mut h = [0; 256];
+                        for &(bin, count) in &points {
+                            h[usize::from(bin)] = count;
+                        }
+                        let rows = points.iter().map(|v| v.1 as usize).sum();
+                        for k in [1, 2, 3, 16].into_iter().filter(|&k| k <= points.len()) {
+                            // Keep enumeration small: the 18-bin case exercises
+                            // the actual K16 production problem (136 partitions).
+                            if points.len() == 18 && k != 16 {
+                                continue;
+                            }
+                            let (c, used) = axis(&h, rows, k);
+                            assert_eq!(used, k);
+                            let (optimal, _, means) = oracle(&points, k);
+                            let actual = points
+                                .iter()
+                                .map(|&(b, w)| {
+                                    let error = c[..k]
+                                        .iter()
+                                        .map(|&v| (f64::from(b) - f64::from(v)).powi(2))
+                                        .fold(f64::INFINITY, f64::min);
+                                    f64::from(w) * error
+                                })
+                                .sum::<f64>();
+                            let rounded = points
+                                .iter()
+                                .map(|&(b, w)| {
+                                    f64::from(w)
+                                        * means
+                                            .iter()
+                                            .map(|&m| (f64::from(b) - f64::from(m as f32)).powi(2))
+                                            .fold(f64::INFINITY, f64::min)
+                                })
+                                .sum::<f64>();
+                            assert!(
+                                (actual - rounded).abs() <= 1e-6 * (1. + optimal),
+                                "{points:?} K{k}: {actual} vs {rounded}"
+                            );
+                            assert!(c[k..].iter().all(|v| v.to_bits() == c[k - 1].to_bits()));
+                        }
+                    }
+                    let mut ties = [0; 256];
+                    for b in [0, 2, 4] {
+                        ties[b] = 1;
+                    }
+                    assert_eq!(&axis(&ties, 3, 2).0[..2], &[0., 3.]); // smallest final predecessor
+                    let mut skew = [0; 256];
+                    skew[253] = 99_998;
+                    skew[254] = 1;
+                    skew[255] = 1;
+                    let (c, _) = axis(&skew, 100_000, 1);
+                    let direct = (253. * 99_998. + 254. + 255.) / 100_000.;
+                    assert_eq!(c[0], direct as f32);
+                    let mut overflow = [0; 256];
+                    overflow[0] = u32::MAX;
+                    overflow[255] = u32::MAX;
+                    assert!(count_sum(&overflow, 100_000).is_err());
+                    assert!(count_sum(&[0; 256], 1).is_err());
+                }
+                fn uniform(low: &[f32], step: &[f32]) -> Codebook {
+                    Codebook {
+                        centers: vec![std::array::from_fn(|i| (17 * i) as f32); low.len()],
+                        active: vec![16; low.len()],
+                        rows: 256,
+                        source: [1; 32],
+                        coefficients: coefficients(low, step).unwrap(),
+                        histogram: [2; 32],
+                    }
+                }
+                #[test]
+                fn fine_histogram_sq4_interval_cancellation_against_direct_deviations() {
+                    let mut h = [0u32; 256];
+                    h[237] = 99_983;
+                    for count in &mut h[238..=254] {
+                        *count = 1;
+                    }
+                    let mut costs = vec![0.; 256 * 256];
+                    fit_axis(
+                        &h,
+                        100_000,
+                        16,
+                        &mut costs,
+                        &mut vec![0.; 257],
+                        &mut vec![0.; 257],
+                        &mut vec![0; 17 * 257],
+                        &mut Guard::new(&caps()),
+                    )
+                    .unwrap();
+                    let points = (237..=254)
+                        .map(|b| (b as f64, f64::from(h[b])))
+                        .collect::<Vec<_>>();
+                    for a in 0..points.len() {
+                        for z in a..points.len() {
+                            let part = &points[a..=z];
+                            let w = part.iter().map(|v| v.1).sum::<f64>();
+                            let mean = part.iter().map(|v| v.0 * v.1).sum::<f64>() / w;
+                            let direct =
+                                part.iter().map(|v| v.1 * (v.0 - mean).powi(2)).sum::<f64>();
+                            let energy = part.iter().map(|v| v.1 * v.0 * v.0).sum::<f64>();
+                            assert!(costs[a * 256 + z] >= 0.);
+                            assert!(
+                                (costs[a * 256 + z] - direct).abs()
+                                    <= 128. * f64::EPSILON * energy.max(1.)
+                            );
+                        }
+                    }
+                }
+                #[test]
+                fn fine_histogram_sq4_exhaustive256_mapping_ties_and_uniform_bitwise_parity() {
+                    let low = [0.137, -2.3, -0.];
+                    let step = [0.0317, 0.0071, 0.13];
+                    let book = uniform(&low, &step);
+                    let maps = book.encoding_map().unwrap();
+                    for axis in 0..3 {
+                        for b in 0..256 {
+                            let expected = (0..16)
+                                .min_by(|&a, &c| {
+                                    (b as f64 - f64::from(book.centers[axis][a]))
+                                        .abs()
+                                        .total_cmp(
+                                            &(b as f64 - f64::from(book.centers[axis][c])).abs(),
+                                        )
+                                        .then(a.cmp(&c))
+                                })
+                                .unwrap();
+                            assert_eq!(maps[axis][b] as usize, expected);
+                            assert_eq!(maps[axis][b] as usize, (b + 8) / 17);
+                        }
+                    }
+                    assert_eq!(
+                        nearest(
+                            &[
+                                0., 2., 4., 6., 8., 10., 12., 14., 16., 18., 20., 22., 24., 26.,
+                                28., 30.
+                            ],
+                            1
+                        ),
+                        0
+                    );
+                    for query in [[3.125, -2., 0.875], [1., 0., -0.], [0., -1., 0.]] {
+                        let prepared = book.prepare_query(&query, &low, &step).unwrap();
+                        let normalized = cosine_vector(&query).unwrap();
+                        for b in 0..256 {
+                            let mut source = vec![0; 15];
+                            source[..8].copy_from_slice(&(255 - b as i64).to_le_bytes());
+                            source[8..12].copy_from_slice(&999_f32.to_le_bytes());
+                            source[12..].copy_from_slice(&[
+                                b as u8,
+                                (255 - b) as u8,
+                                ((b * 73) % 256) as u8,
+                            ]);
+                            let mut old = [0; 14];
+                            super::super::encode(&source, &low, &step, &mut old).unwrap();
+                            let mut packed = [0; 14];
+                            book.encode_sq8_row(&source, &low, &step, &mut packed)
+                                .unwrap();
+                            assert_eq!(packed, old);
+                            assert_eq!(packed[13] & 0xf0, 0);
+                            let mut expanded = [0; 15];
+                            super::super::expand(&old, 3, &mut expanded).unwrap();
+                            let expected = score_nominees(
+                                &expanded,
+                                Sq8Geometry {
+                                    rows: 1,
+                                    dimensions: 3,
+                                },
+                                &[0],
+                                &normalized,
+                                &low,
+                                &step,
+                            )
+                            .unwrap()[0];
+                            let score = prepared.score_row(&book, &packed, 0).unwrap();
+                            assert_eq!(score.score.to_bits(), expected.score.to_bits());
+                            assert_eq!(score.id, expected.id);
+                        }
+                    }
+                    let low = vec![0.137_f32; 768];
+                    let step = vec![0.0017_f32; 768];
+                    let book = uniform(&low, &step);
+                    let query = (0..768)
+                        .map(|i| if i % 2 == 0 { 3.125_f32 } else { -0.875 })
+                        .collect::<Vec<_>>();
+                    let normalized = cosine_vector(&query).unwrap();
+                    let prepared = book.prepare_query(&query, &low, &step).unwrap();
+                    for b in 0..256 {
+                        let mut row = vec![0; 780];
+                        row[8..12].copy_from_slice(&99_f32.to_le_bytes());
+                        for axis in 0..768 {
+                            row[12 + axis] = ((b + axis * 73) % 256) as u8;
+                        }
+                        let mut packed = vec![0; 396];
+                        book.encode_sq8_row(&row, &low, &step, &mut packed).unwrap();
+                        let mut old = vec![0; 396];
+                        super::super::encode(&row, &low, &step, &mut old).unwrap();
+                        assert_eq!(packed, old);
+                        let mut expanded = vec![0; 780];
+                        super::super::expand(&old, 768, &mut expanded).unwrap();
+                        let score = score_nominees(
+                            &expanded,
+                            Sq8Geometry {
+                                rows: 1,
+                                dimensions: 768,
+                            },
+                            &[0],
+                            &normalized,
+                            &low,
+                            &step,
+                        )
+                        .unwrap()[0];
+                        assert_eq!(
+                            prepared
+                                .score_row(&book, &packed, 0)
+                                .unwrap()
+                                .score
+                                .to_bits(),
+                            score.score.to_bits()
+                        );
+                    }
+                }
+                #[test]
+                fn fine_histogram_sq4_scalar_scores_odd_tail_zero_nonunit_near_ties() {
+                    fn normalized(query: &[f32]) -> Vec<f32> {
+                        let mut squared = 0_f64;
+                        for &v in query {
+                            squared += f64::from(v) * f64::from(v);
+                        }
+                        assert!(squared.is_finite() && squared > 0.);
+                        if (squared - 1.).abs() <= 1e-6 {
+                            query.to_vec()
+                        } else {
+                            let length = squared.sqrt();
+                            query
+                                .iter()
+                                .map(|&v| (f64::from(v) / length) as f32)
+                                .collect()
+                        }
+                    }
+                    // Read only stored bytes/centers; do not use either production query
+                    // preparation or scoring to compute expected scores and rank order.
+                    fn scalar(
+                        centers: &[[f32; 16]],
+                        row: &[u8],
+                        query: &[f32],
+                        low: &[f32],
+                        step: &[f32],
+                    ) -> (i64, f32, f64) {
+                        let q = normalized(query);
+                        let mut shift = 0_f32;
+                        let mut qnorm = 0_f32;
+                        let mut weights = Vec::new();
+                        for j in 0..q.len() {
+                            shift += q[j] * low[j];
+                            qnorm += q[j] * q[j];
+                            weights.push(q[j] * step[j]);
+                        }
+                        shift -= qnorm / 2.;
+                        let mut squared = 0_f32;
+                        let mut inner = 0_f32;
+                        let mut direct = 0_f64;
+                        for j in 0..q.len() {
+                            let code = if j % 2 == 0 {
+                                row[12 + j / 2] & 15
+                            } else {
+                                row[12 + j / 2] / 16
+                            };
+                            let center = centers[j][usize::from(code)];
+                            let value = low[j] + center * step[j];
+                            squared += value * value;
+                            inner += center * weights[j];
+                            let delta = f64::from(value) - f64::from(q[j]);
+                            direct += delta * delta;
+                        }
+                        let stored = f32::from_le_bytes(row[8..12].try_into().unwrap());
+                        assert_eq!(stored.to_bits(), squared.to_bits());
+                        (
+                            i64::from_le_bytes(row[..8].try_into().unwrap()),
+                            stored - 2. * (inner + shift),
+                            direct,
+                        )
+                    }
+                    let low = [0.137, -2.3, -0.];
+                    let step = [0.0317, 0.0071, 0.13];
+                    let h = [[1u32; 256]; 3];
+                    let (book, receipt) =
+                        Codebook::fit(&h, 256, &low, &step, [3; 32], &caps()).unwrap();
+                    assert!(
+                        receipt.literal_f32_sse
+                            <= receipt.uniform17_literal_f32_sse + receipt.sse_allowance
+                    );
+                    let borrowed_query = [1. + f32::EPSILON, 0., -0.];
+                    assert_eq!(
+                        normalized(&borrowed_query)[0].to_bits(),
+                        borrowed_query[0].to_bits()
+                    );
+                    assert_ne!(normalized(&borrowed_query)[0].to_bits(), 1_f32.to_bits());
+                    assert_eq!(normalized(&borrowed_query)[2].to_bits(), (-0_f32).to_bits());
+                    for query in [[3.125, -2., 0.875], borrowed_query] {
+                        let prepared = book.prepare_query(&query, &low, &step).unwrap();
+                        let mut scores = Vec::new();
+                        let mut expected = Vec::new();
+                        for i in 0..19 {
+                            let mut row = [0; 15];
+                            row[..8].copy_from_slice(&(18 - i as i64).to_le_bytes());
+                            row[8..12].copy_from_slice(&777_f32.to_le_bytes());
+                            row[12..].copy_from_slice(&[127 + (i % 2) as u8, 80, 3]);
+                            let mut packed = [0; 14];
+                            book.encode_sq8_row(&row, &low, &step, &mut packed).unwrap();
+                            let (id, score, direct) =
+                                scalar(&book.centers, &packed, &query, &low, &step);
+                            assert_eq!(id, 18 - i as i64);
+                            let s = prepared.score_row(&book, &packed, i).unwrap();
+                            assert_eq!((s.id, s.score.to_bits()), (id, score.to_bits()));
+                            assert!(
+                                (f64::from(s.score) - direct).abs()
+                                    <= 64. * f64::from(f32::EPSILON) * (1. + direct)
+                            );
+                            expected.push((id, score));
+                            scores.push(s);
+                            packed[13] |= 0x10;
+                            assert!(prepared.score_row(&book, &packed, i).is_err());
+                        }
+                        expected.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+                        scores.sort_by(|a, b| a.score.total_cmp(&b.score).then(a.id.cmp(&b.id)));
+                        assert_eq!(
+                            scores
+                                .iter()
+                                .map(|s| (s.id, s.score.to_bits()))
+                                .collect::<Vec<_>>(),
+                            expected
+                                .iter()
+                                .map(|&(id, score)| (id, score.to_bits()))
+                                .collect::<Vec<_>>()
+                        );
+                        assert!(
+                            expected
+                                .windows(2)
+                                .any(|s| s[0].1.to_bits() == s[1].1.to_bits() && s[0].0 < s[1].0)
+                        );
+                    }
+                    let mut zeros = [0u32; 256];
+                    zeros[0] = 1;
+                    let (zero, _) =
+                        Codebook::fit(&[zeros], 1, &[-0.], &[0.13], [0; 32], &caps()).unwrap();
+                    let mut source = [0u8; 13];
+                    source[8..12].copy_from_slice(&1_f32.to_le_bytes());
+                    let mut packed = [0u8; 13];
+                    zero.encode_sq8_row(&source, &[-0.], &[0.13], &mut packed)
+                        .unwrap();
+                    assert_eq!(&packed[8..12], &0_f32.to_le_bytes());
+                    assert_eq!(
+                        zero.prepare_query(&[2.], &[-0.], &[0.13])
+                            .unwrap()
+                            .score_row(&zero, &packed, 0)
+                            .unwrap()
+                            .score,
+                        1.
+                    );
+                    assert!(book.prepare_query(&[0.; 3], &low, &step).is_err());
+                    assert!(
+                        book.prepare_query(&[f32::NAN, 1., 1.], &low, &step)
+                            .is_err()
+                    );
+                    assert!(
+                        book.encode_sq8_row(&source, &low, &step, &mut packed)
+                            .is_err()
+                    );
+                    // Uniformly occupied input bins train genuinely fractional centers.
+                    // Distinct decoded vectors straddle a one-to-four-ULP score gap;
+                    // duplicates of each vector separately exercise exact-score ID ties.
+                    let low = [0., 0.];
+                    let step = [1. / 1024., 1. / 8.];
+                    let (near, _) =
+                        Codebook::fit(&[[1u32; 256]; 2], 256, &low, &step, [9; 32], &caps())
+                            .unwrap();
+                    assert_eq!(near.centers[0][0].to_bits(), 7.5_f32.to_bits());
+                    assert_eq!(near.centers[0][1].to_bits(), 23.5_f32.to_bits());
+                    let query = [31_f32 / 2048. + 1. / 65536., -1.];
+                    let prepared = near.prepare_query(&query, &low, &step).unwrap();
+                    let mut expected = Vec::new();
+                    let mut scores = Vec::new();
+                    for (ordinal, (id, bin)) in [(9i64, 0u8), (8, 16), (3, 0), (2, 16)]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        let mut row = [0u8; 14];
+                        row[..8].copy_from_slice(&id.to_le_bytes());
+                        row[8..12].copy_from_slice(&777_f32.to_le_bytes());
+                        row[12] = bin;
+                        let mut packed = [0u8; 13];
+                        near.encode_sq8_row(&row, &low, &step, &mut packed).unwrap();
+                        assert_eq!(packed[12], if bin == 0 { 0 } else { 1 });
+                        let (expected_id, score, direct) =
+                            scalar(&near.centers, &packed, &query, &low, &step);
+                        assert_eq!(expected_id, id);
+                        assert!(score.is_finite() && score > 0.);
+                        assert!(
+                            (f64::from(score) - direct).abs()
+                                <= 64. * f64::from(f32::EPSILON) * (1. + direct)
+                        );
+                        expected.push((id, score));
+                        scores.push(prepared.score_row(&near, &packed, ordinal).unwrap());
+                    }
+                    expected.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+                    assert_eq!(
+                        expected.iter().map(|s| s.0).collect::<Vec<_>>(),
+                        [2, 8, 3, 9]
+                    );
+                    let gap_ulps = expected[0].1.to_bits().abs_diff(expected[2].1.to_bits());
+                    assert!(
+                        (1..=4).contains(&gap_ulps),
+                        "fractional-center gap {gap_ulps} ULPs"
+                    );
+                    assert_eq!(expected[0].1.to_bits(), expected[1].1.to_bits());
+                    assert_eq!(expected[2].1.to_bits(), expected[3].1.to_bits());
+                    scores.sort_by(|a, b| a.score.total_cmp(&b.score).then(a.id.cmp(&b.id)));
+                    assert_eq!(
+                        scores
+                            .iter()
+                            .map(|s| (s.id, s.score.to_bits()))
+                            .collect::<Vec<_>>(),
+                        expected
+                            .iter()
+                            .map(|&(id, score)| (id, score.to_bits()))
+                            .collect::<Vec<_>>()
+                    );
+                }
+                #[test]
+                fn fine_histogram_sq4_book_binding_padding_counts_caps_and_numeric_negatives() {
+                    let low = [-0., 0.2];
+                    let step = [0.13, 0.0071];
+                    let mut h = [0; 256];
+                    h[7] = 3;
+                    h[255] = 1;
+                    let (book, _) =
+                        Codebook::fit(&[h, h], 4, &low, &step, [7; 32], &caps()).unwrap();
+                    let body = book.to_bytes().unwrap();
+                    let decode = |b: &[u8]| {
+                        Codebook::from_bytes(
+                            b,
+                            4,
+                            &low,
+                            &step,
+                            [7; 32],
+                            book.histogram,
+                            BOOK_CAP * 2,
+                        )
+                    };
+                    assert_eq!(decode(&body).unwrap().to_bytes().unwrap(), body);
+                    for offset in [0, 8, 12, 16, 48, 80, 112, HEADER] {
+                        let mut bad = body.clone();
+                        bad[offset] ^= 1;
+                        assert!(decode(&bad).is_err(), "offset {offset}");
+                    }
+                    for value in [f32::NAN, f32::INFINITY, -1., 256.] {
+                        let mut bad = body.clone();
+                        bad[HEADER + 1..HEADER + 5].copy_from_slice(&value.to_le_bytes());
+                        assert!(decode(&bad).is_err());
+                    }
+                    let mut bad = body.clone();
+                    bad[HEADER + 1 + 2 * 4..HEADER + 1 + 3 * 4]
+                        .copy_from_slice(&254_f32.to_le_bytes());
+                    assert!(decode(&bad).is_err());
+                    assert!(decode(&body[..body.len() - 1]).is_err());
+                    let mut grown = body.clone();
+                    grown.push(0);
+                    assert!(decode(&grown).is_err());
+                    assert!(
+                        Codebook::from_bytes(
+                            &body,
+                            4,
+                            &[0., 0.2],
+                            &step,
+                            [7; 32],
+                            book.histogram,
+                            BOOK_CAP * 2
+                        )
+                        .is_err()
+                    ); // signed-zero coefficient identity
+                    assert!(
+                        Codebook::from_bytes(
+                            &body,
+                            4,
+                            &low,
+                            &step,
+                            [7; 32],
+                            book.histogram,
+                            body.len() + book.retained_bytes() - 1
+                        )
+                        .is_err()
+                    );
+                    let mut tiny = caps();
+                    tiny.memory_bytes = training_bytes(2).unwrap() - 1;
+                    assert!(Codebook::fit(&[h, h], 4, &low, &step, [7; 32], &tiny).is_err());
+                    let mut short = h;
+                    short[7] -= 1;
+                    assert!(Codebook::fit(&[short, h], 4, &low, &step, [7; 32], &caps()).is_err());
+                    assert!(Codebook::fit(&[h, h], 4, &low, &[0., 0.1], [7; 32], &caps()).is_err());
+                    assert!(
+                        Codebook::fit(&[h, h], 4, &[f32::MAX; 2], &[f32::MAX; 2], [7; 32], &caps())
+                            .is_err()
+                    );
+                    let mut limited = caps();
+                    limited.operations = 1;
+                    assert!(Codebook::fit(&[h, h], 4, &low, &step, [7; 32], &limited).is_err());
+                    // Core counts are not the strict FIRST100k diagnostic protocol.
+                    // This histogram-only roundtrip allocates no corpus rows.
+                    let large = [390_625u32; 256];
+                    let (large_book, receipt) =
+                        Codebook::fit(&[large, large], 100_000_000, &low, &step, [8; 32], &caps())
+                            .unwrap();
+                    assert_eq!(receipt.admitted_training_bytes, training_bytes(2).unwrap());
+                    let encoded = large_book.to_bytes().unwrap();
+                    assert_eq!(
+                        u32::from_le_bytes(encoded[12..16].try_into().unwrap()),
+                        100_000_000
+                    );
+                    assert_eq!(
+                        Codebook::from_bytes(
+                            &encoded,
+                            100_000_000,
+                            &low,
+                            &step,
+                            [8; 32],
+                            large_book.histogram,
+                            BOOK_CAP * 2
+                        )
+                        .unwrap()
+                        .to_bytes()
+                        .unwrap(),
+                        encoded
+                    );
+                    assert!(
+                        Codebook::fit(&[large, large], 100_000_000, &low, &step, [8; 32], &tiny)
+                            .is_err()
+                    );
+                    let mut max = [0u32; 256];
+                    max[7] = u32::MAX;
+                    let (max_book, _) = Codebook::fit(
+                        &[max],
+                        u32::MAX as usize,
+                        &low[..1],
+                        &step[..1],
+                        [8; 32],
+                        &caps(),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        u32::from_le_bytes(
+                            max_book.to_bytes().unwrap()[12..16].try_into().unwrap()
+                        ),
+                        u32::MAX
+                    );
+                    max[8] = 1;
+                    assert!(
+                        Codebook::fit(
+                            &[max],
+                            u32::MAX as usize,
+                            &low[..1],
+                            &step[..1],
+                            [8; 32],
+                            &caps()
+                        )
+                        .is_err()
+                    );
+                    if let Some(over) = (u32::MAX as usize).checked_add(1) {
+                        assert!(
+                            Codebook::fit(&[max], over, &low[..1], &step[..1], [8; 32], &caps())
+                                .is_err()
+                        );
+                    }
+                }
+            }
         }
 
         fn encode(row: &[u8], low: &[f32], step: &[f32], out: &mut [u8]) -> Result<()> {
@@ -2978,8 +4457,10 @@ pub mod pack_diagnostic {
             sq4: File,
             payload: Artifact,
             sq4_hashes: Vec<[u8; 32]>,
+            histogram: Option<histogram::Generation>,
         }
         impl Plane {
+            #[cfg(test)]
             fn transcode(
                 root: &Artifact,
                 output: &mut Outputs,
@@ -2988,11 +4469,19 @@ pub mod pack_diagnostic {
                 d: usize,
                 guard: &mut Guard,
             ) -> Result<Self> {
+                Self::transcode_impl(root, output, extension, n, d, guard, None)
+            }
+            fn transcode_impl(root: &Artifact, output: &mut Outputs, extension: &str, n: usize, d: usize, guard: &mut Guard, training: Option<(&Caps, &str)>) -> Result<Self> {
+                let build_start = Instant::now();
                 let width = 12 + d.div_ceil(2);
                 let old = 12 + d;
                 let bytes = n.checked_mul(width).ok_or("SQ4 payload overflow")?;
+                let extra = if let Some((caps, _)) = training {
+                    memory(caps, &[FIXED, histogram::training_bytes(d)?, n.checked_mul(64).ok_or("histogram metadata overflow")?])?;
+                    2 * ROOT_CAP + n.div_ceil(16) * 32
+                } else { 0 };
                 require(
-                    sum(&[output.bytes, bytes, RESERVE])? <= output.cap,
+                    sum(&[output.bytes, bytes, extra, RESERVE])? <= output.cap,
                     "SQ4 output cap before transcode",
                 )?;
                 let manifest: Manifest =
@@ -3020,12 +4509,56 @@ pub mod pack_diagnostic {
                 drop(seen);
                 let groups = read_pinned(&manifest.groups, n.div_ceil(16) * 32, false, guard)?;
                 let original = descriptor(&manifest.records, false)?;
+                let mut input = filled(16 * old, 0u8)?;
+                let learned = if let Some((caps, _)) = training {
+                    let mut histograms = filled(d, [0u32; 256])?;
+                    let mut source_hash = Sha256::new();
+                    for first in (0..n).step_by(16) {
+                        let count = (n - first).min(16);
+                        let source = &mut input[..count * old];
+                        guard.tick((source.len() + count * d) as u64)?;
+                        original.read_exact_at(source, (first * old) as u64)?;
+                        require(Sha256::digest(&*source).as_slice() == &groups[first / 16 * 32..(first / 16 + 1) * 32], "histogram training group authentication")?;
+                        source_hash.update(&*source);
+                        for (slot, row) in source.chunks_exact(old).enumerate() {
+                            require(i64::from_le_bytes(row[..8].try_into()?) == ids[first + slot]
+                                && f32::from_le_bytes(row[8..12].try_into()?).is_finite(), "histogram training ID/norm binding")?;
+                            for (axis, &bin) in row[12..].iter().enumerate() {
+                                let count = &mut histograms[axis][usize::from(bin)];
+                                *count = count.checked_add(1).ok_or("histogram increment overflow")?;
+                            }
+                        }
+                    }
+                    require(format!("{:x}", source_hash.finalize()) == manifest.records.sha256, "histogram training whole SHA256")?;
+                    exact_eof(&original, manifest.records.bytes)?;
+                    let result = histogram::Codebook::fit_guarded(&histograms, n, &manifest.low, &manifest.step, digest(&manifest.records.sha256)?, caps, guard)?;
+                    drop(histograms);
+                    Some(result)
+                } else { None };
+                let maps = if let Some((book, _)) = &learned {
+                    guard.tick((d * 256 * 16) as u64)?;
+                    Some(book.encoding_map()?)
+                } else { None };
+                #[cfg(test)]
+                if training.is_some() {
+                    histogram::TAMPER_SECOND_PASS.with(|v| -> Result<()> {
+                        if let Some(group) = v.take() {
+                            require(group < n.div_ceil(16), "histogram injected group bound")?;
+                            let source = OpenOptions::new().read(true).write(true).open(&manifest.records.path)?;
+                            let offset = (group * 16 * old) as u64;
+                            let mut byte = [0];
+                            source.read_exact_at(&mut byte, offset)?;
+                            byte[0] ^= 0x80;
+                            source.write_all_at(&byte, offset)?;
+                        }
+                        Ok(())
+                    })?;
+                }
                 let path = output.output.with_extension(extension);
                 require(path != output.output, "SQ4 payload path collision")?;
                 let mut file = Outputs::create_at(&output.parent, &path)?;
-                let mut input = filled(16 * old, 0u8)?;
                 let mut packed = filled(16 * width, 0u8)?;
-                let mut sq4_hashes = reserved(n.div_ceil(16))?;
+                let mut sq4_hashes = reserved::<[u8; 32]>(n.div_ceil(16))?;
                 let mut input_hash = Sha256::new();
                 let mut payload_hash = Sha256::new();
                 for first in (0..n).step_by(16) {
@@ -3049,9 +4582,11 @@ pub mod pack_diagnostic {
                             i64::from_le_bytes(row[..8].try_into()?) == ids[first + slot],
                             "SQ4 original row ID binding",
                         )?;
-                        encode(row, &manifest.low, &manifest.step, target)?;
+                        if let Some((book, _)) = &learned {
+                            book.encode_row(row, &manifest.low, &manifest.step, maps.as_deref(), target)?;
+                        } else { encode(row, &manifest.low, &manifest.step, target)?; }
                     }
-                    file.write_all(destination)?;
+                    output.write_owned(&mut file, &path, destination)?;
                     payload_hash.update(&*destination);
                     sq4_hashes.push(Sha256::digest(&*destination).into());
                 }
@@ -3060,8 +4595,8 @@ pub mod pack_diagnostic {
                     "SQ4 original whole payload authentication",
                 )?;
                 exact_eof(&original, manifest.records.bytes)?;
-                output.bytes += bytes;
                 output.sync(&file)?;
+                output.seal_written(bytes)?;
                 drop(file);
                 let payload = Artifact {
                     path,
@@ -3069,6 +4604,33 @@ pub mod pack_diagnostic {
                     sha256: format!("{:x}", payload_hash.finalize()),
                 };
                 let sq4 = descriptor(&payload, false)?;
+                drop(maps);
+                let histogram = if let Some((book, fit)) = learned {
+                    let encoded = book.to_bytes()?;
+                    guard.tick(encoded.len() as u64)?;
+                    let book_pin = output.publish(&format!("{extension}-book.bin"), &encoded)?;
+                    drop(book); drop(encoded);
+                    let mut group_body = reserved(n.div_ceil(16) * 32)?;
+                    for sha in &sq4_hashes { group_body.extend_from_slice(sha); }
+                    require(group_body.capacity() == n.div_ceil(16) * 32, "histogram group capacity")?;
+                    guard.tick(group_body.len() as u64)?;
+                    let group_pin = output.publish(&format!("{extension}-groups.bin"), &group_body)?;
+                    drop(group_body);
+                    let expected = histogram::GenerationRoot {
+                        schema: histogram::ROOT_SCHEMA.into(), codec: histogram::CODEC.into(), trainer: histogram::TRAINER.into(),
+                        source_identity_sha256: histogram::source_identity(), config_sha256: training.ok_or("histogram config")?.1.into(),
+                        original_root: root.clone(), original_records: manifest.records.clone(),
+                        coefficients_sha256: histogram::coefficients(&manifest.low, &manifest.step)?.iter().map(|b| format!("{b:02x}")).collect(),
+                        histogram_sha256: fit.histogram_sha256.clone(), rows: n, dimensions: d,
+                        book: book_pin.clone(), payload: payload.clone(), group_hashes: group_pin.clone(), fit: fit.clone(),
+                    };
+                    let root_body = serde_json::to_vec(&expected)?;
+                    require(root_body.len() <= ROOT_CAP, "histogram generation root cap")?;
+                    guard.tick(root_body.len() as u64)?;
+                    let root_pin = output.publish(&format!("{extension}-root.json"), &root_body)?;
+                    Some(histogram::Generation::reopen(root_pin, &expected, &manifest,
+                        training.ok_or("histogram caps")?.0, guard, build_start.elapsed().as_nanos())?)
+                } else { None };
                 Ok(Self {
                     root: root.clone(),
                     manifest,
@@ -3078,6 +4640,7 @@ pub mod pack_diagnostic {
                     sq4,
                     payload,
                     sq4_hashes,
+                    histogram,
                 })
             }
         }
@@ -3146,6 +4709,8 @@ pub mod pack_diagnostic {
             range_payload_capacity_peak: usize,
             expanded_capacity_peak: usize,
             coexisting_score_allocation_bound: usize,
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            histogram_metrics: Option<Value>,
         }
         fn score(
             plane: &Plane,
@@ -3154,10 +4719,14 @@ pub mod pack_diagnostic {
             packed: bool,
             guard: &mut Guard,
         ) -> Result<Scored> {
+            let score_start = Instant::now();
             let n = plane.ids.len();
             let d = plane.manifest.identity.dimensions;
             let width = if packed { 12 + d.div_ceil(2) } else { 12 + d };
             let normalized = cosine_vector(query)?;
+            let prepared = if packed {
+                plane.histogram.as_ref().map(|h| h.book.prepare_query(query, &plane.manifest.low, &plane.manifest.step)).transpose()?
+            } else { None };
             let total = ranges.iter().try_fold(0usize, |sum, r| {
                 sum.checked_add(r.len()).ok_or("SQ4 range overflow")
             })?;
@@ -3186,7 +4755,7 @@ pub mod pack_diagnostic {
                 )?;
                 // Every live allocation was admitted before the body read. Exact
                 // reservation checks allocator capacity, including expanded bytes.
-                let mut expansion = if packed {
+                let mut expansion = if packed && prepared.is_none() {
                     filled(
                         r.len()
                             .checked_mul(12 + d)
@@ -3196,9 +4765,9 @@ pub mod pack_diagnostic {
                 } else {
                     Vec::new()
                 };
-                let ordinals = (0..r.len()).collect::<Vec<_>>();
+                let ordinals = if prepared.is_some() { Vec::new() } else { (0..r.len()).collect::<Vec<_>>() };
                 require(
-                    ordinals.capacity() == r.len(),
+                    ordinals.capacity() == if prepared.is_some() { 0 } else { r.len() },
                     "SQ4 ordinal actual capacity",
                 )?;
                 let actual = sum(&[
@@ -3218,6 +4787,7 @@ pub mod pack_diagnostic {
                     r.len()
                         .checked_mul(192)
                         .ok_or("SQ4 native scorer workspace overflow")?,
+                    prepared.as_ref().map_or(0, |q| q.capacity_bytes()),
                 ])?;
                 require(
                     actual
@@ -3244,6 +4814,16 @@ pub mod pack_diagnostic {
                     )?;
                 }
                 verified += body.len();
+                if let Some(q) = &prepared {
+                    let h = plane.histogram.as_ref().ok_or("histogram prepared book")?;
+                    for (slot, row) in body.chunks_exact(width).enumerate() {
+                        let s = q.score_row(&h.book, row, r.start + slot)?;
+                        require(s.id == plane.ids[r.start + slot], "histogram fetched order binding")?;
+                        fetched.push(s.id); all.push(s);
+                    }
+                    prior = r.end;
+                    continue;
+                }
                 let expanded = if packed {
                     expand(&body, d, &mut expansion)?;
                     &expansion[..]
@@ -3273,6 +4853,7 @@ pub mod pack_diagnostic {
                 }
                 prior = r.end;
             }
+            if plane.histogram.is_some() { guard.tick((total * (usize::BITS - total.max(1).leading_zeros()) as usize) as u64)?; }
             all.sort_unstable_by(|a, b| a.score.total_cmp(&b.score).then(a.id.cmp(&b.id)));
             let ranked = all
                 .iter()
@@ -3291,6 +4872,18 @@ pub mod pack_diagnostic {
                 range_payload_capacity_peak: range_peak,
                 expanded_capacity_peak: expansion_peak,
                 coexisting_score_allocation_bound: score_peak,
+                histogram_metrics: plane.histogram.as_ref().map(|h| json!({
+                    "direct_packed":packed,"score_wall_ns":score_start.elapsed().as_nanos(),
+                    "retained_book_capacity_bytes":h.book.retained_bytes(),
+                    "query_prepare_capacity_bytes":prepared.as_ref().map_or(0, |q| q.capacity_bytes()),
+                    "rank100_score_bits":all.get(99).map(|v|v.score.to_bits()),
+                    "rank101_score_bits":all.get(100).map(|v|v.score.to_bits()),
+                    "rank_boundary_gap":all.get(99).zip(all.get(100)).map(|(a,b)| f64::from(b.score)-f64::from(a.score)),
+                    "startup_book_reads":1,"startup_book_bytes":h.book_pin.bytes,
+                    "startup_generation_reads":3,"startup_generation_bytes":h.startup_bytes,
+                    "startup_generation_wall_ns":h.startup_wall_ns,
+                    "payload_ranges_exclude_startup":true,"total_cold_get_claim":false
+                })),
             })
         }
         #[derive(Deserialize)]
@@ -3335,6 +4928,7 @@ pub mod pack_diagnostic {
             Ok(required)
         }
 
+        #[cfg(test)]
         fn run(
             config: &Config,
             sha: &str,
@@ -3344,9 +4938,17 @@ pub mod pack_diagnostic {
             strict: bool,
             progress: &mut Progress,
         ) -> Result<Value> {
+            run_impl(config, sha, output, protocol, guard, strict, progress, false)
+        }
+        fn run_impl(config: &Config, sha: &str, output: &mut Outputs, protocol: &Protocol, guard: &mut Guard, strict: bool, progress: &mut Progress, learned: bool) -> Result<Value> {
             progress.stage = "validation";
-            config_valid(config)?;
+            config_valid_for(config, learned)?;
             digest(sha)?;
+            progress.stage = "terminal admission";
+            terminal_admission(config, &output.output, learned)?;
+            progress.stage = "validation";
+            let (_, _, codec, compiled_source) = identity(learned);
+            let name = if learned { "histogram-sq4" } else { "sq4" };
             if strict {
                 require(
                     archived_truth(config.panels.each_ref().map(|p| &p.truth)),
@@ -3357,6 +4959,7 @@ pub mod pack_diagnostic {
             let n = protocol.rows;
             let d = protocol.dimensions;
             let modeled = allocation_model(config, n, d)?;
+            let modeled = if learned { memory(&config.caps, &[modeled, histogram::training_bytes(d)?, 2 * d * 65])? } else { modeled };
             require(
                 config.prefix.bytes == protocol.prefix_bytes
                     && config.prefix.sha256 == protocol.prefix_sha
@@ -3427,6 +5030,11 @@ pub mod pack_diagnostic {
             }
             require(plans.len() == 128, "SQ4 all128 plans")?;
             let modeled_output = output_admission(config, &plans, n, d)?;
+            let modeled_output = if learned {
+                let bytes = sum(&[modeled_output, 2 * (ROOT_CAP + histogram::BOOK_CAP + n.div_ceil(16) * 32)])?;
+                require(bytes <= output.cap, "histogram pair books/roots/groups output admission")?;
+                bytes
+            } else { modeled_output };
             let immutable_source_bytes = manifests.iter().try_fold(0usize, |total, m| {
                 sum(&[
                     total,
@@ -3441,29 +5049,43 @@ pub mod pack_diagnostic {
             progress.stage = "transcode";
             let mut planes = reserved(2)?;
             for (i, panel) in config.panels.iter().enumerate() {
-                planes.push(Plane::transcode(
+                planes.push(Plane::transcode_impl(
                     &panel.root,
                     output,
-                    &format!("sq4-{i}.bin"),
+                    &format!("{name}-{i}.bin"),
                     n,
                     d,
                     guard,
+                    learned.then_some((&config.caps, sha)),
                 )?);
             }
-            let payloads=planes.iter().map(|p|json!({"payload":p.payload,"original_root":p.root,
+            let payloads=planes.iter().map(|p| {
+                let mut value = json!({"payload":p.payload,"original_root":p.root,
                 "original_records":p.manifest.records,"original_router":p.manifest.identity,
-                "codec":CODEC,"dimensions":d,"rows":n,"row_bytes":12+d.div_ceil(2),
+                "codec":codec,"dimensions":d,"rows":n,"row_bytes":12+d.div_ceil(2),
                 "group_rows":16,"low_bits":p.manifest.low.iter().map(|v|v.to_bits()).collect::<Vec<_>>(),
                 "step_bits":p.manifest.step.iter().map(|v|v.to_bits()).collect::<Vec<_>>(),
-                "group_hashes_sha256":hash(&p.sq4_hashes.iter().flatten().copied().collect::<Vec<_>>())})).collect::<Vec<_>>();
+                "group_hashes_sha256":hash(&p.sq4_hashes.iter().flatten().copied().collect::<Vec<_>>())});
+                if let Some(h) = &p.histogram { value["histogram_generation"] = json!({
+                    "root":h.root_pin,"book":h.book_pin,"groups":h.group_pin,"fit":h.fit,
+                    "build_wall_ns":h.build_wall_ns,"retained_book_capacity_bytes":h.book.retained_bytes(),
+                    "startup_book_reads":1,"startup_book_bytes":h.book_pin.bytes,
+                    "startup_generation_reads":3,"startup_generation_bytes":h.startup_bytes,
+                    "startup_generation_wall_ns":h.startup_wall_ns,
+                    "trainer":histogram::TRAINER,"sse_relative_allowance":histogram::SSE_RELATIVE_ALLOWANCE,
+                    "sse_energy_allowance":histogram::SSE_ENERGY_ALLOWANCE,
+                    "mse_implies_recall":false,"updates_gc_integrated":false
+                }); }
+                value
+            }).collect::<Vec<_>>();
             let payload_seal = output.publish(
-                "sq4-payloads.json",
+                &format!("{name}-payloads.json"),
                 &serde_json::to_vec(&json!({
-                "schema":"borsuk-fixed-sq4-payload-seal-v1","config_sha256":sha,"codec":CODEC,
-                "source_identity_sha256":source_identity(),"original_seal":config.original_seal,
+                "schema":if learned {"borsuk-histogram-sq4-payload-seal-v1"} else {"borsuk-fixed-sq4-payload-seal-v1"},"config_sha256":sha,"codec":codec,
+                "source_identity_sha256":compiled_source,"original_seal":config.original_seal,
                 "payloads":payloads,"queries_opened":false,"truth_opened":false}))?,
             )?;
-            let prefix_pin = output.publish("sq4-prefix.jsonl", &prefix)?;
+            let prefix_pin = output.publish(&format!("{name}-prefix.jsonl"), &prefix)?;
             progress.stage = "scoring";
             let mut results = reserved(128)?;
             let mut envelope = true;
@@ -3512,14 +5134,22 @@ pub mod pack_diagnostic {
                     )?;
                     envelope &= plan.envelope_fits;
                     progress.scored_queries += 1;
-                    let result = json!({"schema":"borsuk-fixed-sq4-query-v1","dataset":panel.dataset,"ordinal":ordinal,
+                    let mut result = json!({"schema":if learned {"borsuk-histogram-sq4-query-v1"} else {"borsuk-fixed-sq4-query-v1"},"dataset":panel.dataset,"ordinal":ordinal,
                         "plan":plan,"nominee_ids":plan.nominees.iter().map(|&i|planes[panel_index].ids[i]).collect::<Vec<_>>(),
                         "nominees_retained":true,"original_cover_contained":true,"sq4":sq4,"sq8_reference":reference,
                         "original256_baseline":baseline,"sq8_reference_serving_eligible":false,"truth_opened":false});
+                    if learned {
+                        let a = reference.ranked.iter().map(|v|v.id).collect::<BTreeSet<_>>();
+                        let b = sq4.ranked.iter().map(|v|v.id).collect::<BTreeSet<_>>();
+                        result["pretruth_replacements"] = json!({"sq8_top100_removed":a.difference(&b).copied().collect::<Vec<_>>(),
+                            "candidate_top100_added":b.difference(&a).copied().collect::<Vec<_>>(),
+                            "replacement_count":a.difference(&b).count(),"sufficient_bound_only":true,"reject_by_itself":false});
+                    }
                     let encoded = serde_json::to_vec(&result)?;
+                    if learned { guard.tick(encoded.len() as u64)?; }
                     require(encoded.len() <= RESULT_CAP, "SQ4 result serialization cap")?;
                     results.push(output.publish(
-                        &format!("sq4-result-{}.json", panel_index * 64 + ordinal),
+                        &format!("{name}-result-{}.json", panel_index * 64 + ordinal),
                         &encoded,
                     )?);
                     count += 1;
@@ -3528,8 +5158,8 @@ pub mod pack_diagnostic {
             }
             require(results.len() == 128, "SQ4 all128 results before truth")?;
             progress.stage = "freeze";
-            let freeze=output.publish("sq4-freeze.json",&serde_json::to_vec(&json!({
-                "schema":"borsuk-fixed-sq4-freeze-v1","config_sha256":sha,"source_identity_sha256":source_identity(),
+            let freeze=output.publish(&format!("{name}-freeze.json"),&serde_json::to_vec(&json!({
+                "schema":if learned {"borsuk-histogram-sq4-freeze-v1"} else {"borsuk-fixed-sq4-freeze-v1"},"config_sha256":sha,"source_identity_sha256":compiled_source,
                 "payload_seal":payload_seal,"payloads":payloads,"original_seal":config.original_seal,
                 "truth":config.panels.each_ref().map(|p|&p.truth),
                 "nomination_prefix":prefix_pin,"results":results,"truth_opened":false}))?)?;
@@ -3560,6 +5190,10 @@ pub mod pack_diagnostic {
             for plane in &planes {
                 authenticate(&plane.payload, guard)?;
                 exact_eof(&plane.original, plane.manifest.records.bytes)?;
+                if let Some(h) = &plane.histogram {
+                    for pin in [&h.root_pin, &h.book_pin, &h.group_pin, &plane.root, &plane.manifest.records,
+                        &plane.manifest.groups, &plane.manifest.order] { authenticate(pin, guard)?; }
+                }
             }
             require(
                 sum(&[output.bytes, RESERVE])? <= modeled_output,
@@ -3572,8 +5206,10 @@ pub mod pack_diagnostic {
             for (p, panel) in config.panels.iter().enumerate() {
                 // Both payloads, all128 complete plans and ranked outputs are
                 // immutable and durably sealed before acquiring any truth FD.
-                let truth_file = descriptor(&panel.truth, false)?;
-                progress.truth_opened = true;
+                let truth_file = descriptor_acquired(
+                    &panel.truth, false, Some(&mut progress.truth_opened),
+                )?;
+                progress.truth_body_read_attempted = true;
                 let truth = read_descriptor(&panel.truth, &truth_file, false, guard)?;
                 let mut nominee_hits = Vec::new();
                 let mut coverage_hits = Vec::new();
@@ -3636,7 +5272,24 @@ pub mod pack_diagnostic {
                     "sq4_vs_same_population_sq8_loss_hits":loss,"mean_recall_loss":loss.iter().sum::<i64>() as f64/6400.}));
             }
             guard.tick(0)?;
-            Ok(terminal(
+            let mut details = json!({"freeze":freeze,"summaries":summaries,"all128_envelopes_fit":envelope,"modeled_peak_bytes":modeled,
+                    "modeled_output_bytes":modeled_output,"durable_output_bytes_before_terminal":output.bytes,
+                    "immutable_source_artifact_bytes":immutable_source_bytes,"pair_payload_bytes":2*n*(12+d.div_ceil(2)),
+                    "rows":n,"dimensions":d,"truth":config.panels.each_ref().map(|p|&p.truth),
+                    "frozen_original_authority":strict && n==100_000 && d==768 && config.prefix.bytes==PREFIX_BYTES
+                        && config.prefix.sha256==PREFIX_SHA && config.original_seal.sha256==SEAL_SHA
+                        && archived_truth(config.panels.each_ref().map(|p|&p.truth)),
+                    "caps":config.caps,"operations":guard.operations,"whole_process_supervisor_required":true});
+            if learned {
+                details["histogram_resources"] = json!({"training_peak_payload_bound":histogram::training_bytes(d)?,
+                    "pair_retained_book_capacity_bytes":planes.iter().filter_map(|p|p.histogram.as_ref()).map(|h|h.book.retained_bytes()).sum::<usize>(),
+                    "startup_book_reads":2,"startup_book_bytes":planes.iter().filter_map(|p|p.histogram.as_ref()).map(|h|h.book_pin.bytes).sum::<usize>(),
+                    "startup_generation_reads":6,"startup_generation_bytes":planes.iter().filter_map(|p|p.histogram.as_ref()).map(|h|h.startup_bytes).sum::<usize>(),
+                    "payload_ranges_exclude_startup":true,"total_cold_get_claim":false,"packed_row_bytes":12+d.div_ceil(2),
+                    "100m_packed_body_bytes_per_generation":100_000_000u64*(12+d.div_ceil(2)) as u64,
+                    "router_pins_runtime_additional":true,"kernel_peak_requires_supervisor":true});
+            }
+            Ok(terminal_for(
                 sha,
                 if quality && envelope {
                     "SURVIVED_CONSUMED_PANELS"
@@ -3644,20 +5297,16 @@ pub mod pack_diagnostic {
                     "REJECT"
                 },
                 true,
-                json!({"freeze":freeze,"summaries":summaries,"all128_envelopes_fit":envelope,"modeled_peak_bytes":modeled,
-                    "modeled_output_bytes":modeled_output,"durable_output_bytes_before_terminal":output.bytes,
-                    "immutable_source_artifact_bytes":immutable_source_bytes,"pair_payload_bytes":2*n*(12+d.div_ceil(2)),
-                    "rows":n,"dimensions":d,"truth":config.panels.each_ref().map(|p|&p.truth),
-                    "frozen_original_authority":strict && n==100_000 && d==768 && config.prefix.bytes==PREFIX_BYTES
-                        && config.prefix.sha256==PREFIX_SHA && config.original_seal.sha256==SEAL_SHA
-                        && archived_truth(config.panels.each_ref().map(|p|&p.truth)),
-                    "caps":config.caps,"operations":guard.operations,"whole_process_supervisor_required":true}),
+                details, learned,
             ))
         }
 
         /// Strict historical geometry, prefix and seal. Supervisor admission is
         /// external; successful exit alone never establishes a quality PASS.
         pub fn check_fine_sq4(config_path: &Path, config_sha: &str, path: &Path) -> Result<()> {
+            check_impl(config_path, config_sha, path, false)
+        }
+        fn check_impl(config_path: &Path, config_sha: &str, path: &Path, learned: bool) -> Result<()> {
             let mut output = Outputs::create(path)?;
             let mut progress = Progress {
                 stage: "config",
@@ -3676,9 +5325,9 @@ pub mod pack_diagnostic {
                 exact_eof(&file, body.len())?;
                 require(hash(&body) == config_sha, "SQ4 config SHA256")?;
                 let config: Config = serde_json::from_slice(&body)?;
-                config_valid(&config)?;
+                config_valid_for(&config, learned)?;
                 let mut guard = Guard::new(&config.caps);
-                let result = run(
+                let result = run_impl(
                     &config,
                     config_sha,
                     &mut output,
@@ -3686,6 +5335,7 @@ pub mod pack_diagnostic {
                     &mut guard,
                     true,
                     &mut progress,
+                    learned,
                 );
                 progress.operations = guard.operations;
                 let report = result?;
@@ -3698,13 +5348,16 @@ pub mod pack_diagnostic {
                 guard.tick(0)
             })();
             if let Err(error) = &result {
-                invalidate(&mut output, config_sha, error, &progress);
+                invalidate_for(&mut output, config_sha, error, &progress, learned);
             }
             result
         }
         /// Explicit caller-authenticated tiny/source fixture API. The command
         /// above alone enforces the frozen FIRST100k/D768 historical authority.
         pub fn diagnose(config: &Config, sha: &str, path: &Path) -> Result<()> {
+            diagnose_impl(config, sha, path, false)
+        }
+        fn diagnose_impl(config: &Config, sha: &str, path: &Path, learned: bool) -> Result<()> {
             let mut output = Outputs::create(path)?;
             let mut guard = Guard::new(&config.caps);
             let mut progress = Progress {
@@ -3712,7 +5365,10 @@ pub mod pack_diagnostic {
                 ..Progress::default()
             };
             let result = (|| {
-                config_valid(config)?;
+                config_valid_for(config, learned)?;
+                progress.stage = "terminal admission";
+                terminal_admission(config, &output.output, learned)?;
+                progress.stage = "fixture metadata";
                 let manifest: Manifest = serde_json::from_slice(&read_pinned(
                     &config.panels[0].root,
                     ROOT_CAP,
@@ -3726,7 +5382,7 @@ pub mod pack_diagnostic {
                     prefix_sha: config.prefix.sha256.clone(),
                     seal_sha: config.original_seal.sha256.clone(),
                 };
-                let result = run(
+                let result = run_impl(
                     config,
                     sha,
                     &mut output,
@@ -3734,6 +5390,7 @@ pub mod pack_diagnostic {
                     &mut guard,
                     false,
                     &mut progress,
+                    learned,
                 );
                 progress.operations = guard.operations;
                 let report = result?;
@@ -3747,7 +5404,7 @@ pub mod pack_diagnostic {
             })();
             progress.operations = guard.operations;
             if let Err(error) = &result {
-                invalidate(&mut output, sha, error, &progress);
+                invalidate_for(&mut output, sha, error, &progress, learned);
             }
             result
         }
@@ -4358,8 +6015,7 @@ pub mod pack_diagnostic {
                 assert!(Outputs::create(&output.output).is_err());
             }
 
-            #[test]
-            fn fine_sq4_full_pipeline_failure_order_and_sync() {
+            fn paired_fixture() -> (tempfile::TempDir, Config, Protocol) {
                 let tmp = tempfile::tempdir().unwrap();
                 let roots = [root(&tmp.path().join("a")), root(&tmp.path().join("b"))];
                 let request = write_body(
@@ -4442,6 +6098,14 @@ pub mod pack_diagnostic {
                     prefix_sha: prefix.sha256.clone(),
                     seal_sha: seal.sha256,
                 };
+                (tmp, config, protocol)
+            }
+            #[test]
+            fn fine_sq4_full_pipeline_failure_order_and_sync() {
+                let (tmp, config, protocol) = paired_fixture();
+                let roots = config.panels.each_ref().map(|p| p.root.clone());
+                let request = config.panels[0].requests.clone();
+                let truth = config.panels[0].truth.clone();
                 // Each publish performs file and directory syncs. Failure at the
                 // all128 freeze (call265) must leave truth unopened; terminal
                 // sync failure must replace the owned report with INVALID.
@@ -4565,6 +6229,434 @@ pub mod pack_diagnostic {
                     assert!(super::super::OPENS.with(|v| v.borrow().is_empty()));
                 }
             }
+
+            #[test]
+            fn fine_histogram_sq4_full128_pipeline_books_requests_truth_closure_and_late_invalid() {
+                let (tmp, mut config, protocol) = paired_fixture();
+                config.schema = histogram::CONFIG_SCHEMA.into();
+                config.source_identity_sha256 = histogram::source_identity();
+                let truth = config.panels[0].truth.clone();
+                let request = config.panels[0].requests.clone();
+                for case in [
+                    "valid",
+                    "closure",
+                    "growth0",
+                    "growth1",
+                    "second-pass",
+                    "late-second-pass",
+                    "truth-length",
+                    "freeze-sync",
+                    "terminal-sync",
+                    "operation-cap",
+                ] {
+                    super::super::OPENS.with(|v| v.borrow_mut().clear());
+                    super::super::READS.with(|v| v.borrow_mut().clear());
+                    let path = tmp.path().join(format!("histogram-{case}.json"));
+                    let mut out = Outputs::create(&path).unwrap();
+                    out.fail_sync = match case {
+                        "freeze-sync" => Some(277),
+                        "terminal-sync" => Some(279),
+                        _ => None,
+                    };
+                    TAMPER_CLOSURE.with(|v| v.set(case == "closure"));
+                    APPEND_AFTER_TRANSCODE.with(|v| {
+                        v.set(match case {
+                            "growth0" => Some(0),
+                            "growth1" => Some(1),
+                            _ => None,
+                        })
+                    });
+                    histogram::TAMPER_SECOND_PASS.with(|v| {
+                        v.set(match case {
+                            "second-pass" => Some(0),
+                            "late-second-pass" => Some(1),
+                            _ => None,
+                        })
+                    });
+                    let truth_body = fs::read(&truth.path).unwrap();
+                    if case == "truth-length" {
+                        fs::write(&truth.path, &truth_body[..truth_body.len() - 1]).unwrap();
+                    }
+                    let manifests = config.panels.each_ref().map(|p| {
+                        serde_json::from_slice::<Manifest>(&fs::read(&p.root.path).unwrap())
+                            .unwrap()
+                    });
+                    let originals = manifests
+                        .each_ref()
+                        .map(|m| fs::read(&m.records.path).unwrap());
+                    let mut caps = config.caps.clone();
+                    if case == "operation-cap" {
+                        caps.operations = 1;
+                    }
+                    let mut guard = Guard::new(&caps);
+                    let mut progress = Progress::default();
+                    let result = run_impl(
+                        &config,
+                        &hash(b"histogram config"),
+                        &mut out,
+                        &protocol,
+                        &mut guard,
+                        false,
+                        &mut progress,
+                        true,
+                    )
+                    .and_then(|v| {
+                        progress.stage = "terminal";
+                        out.finish(&v)?;
+                        Ok(v)
+                    });
+                    progress.operations = guard.operations;
+                    if let Err(e) = &result {
+                        invalidate_for(&mut out, &hash(b"histogram config"), e, &progress, true);
+                    }
+                    let report: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                    let opened = super::super::OPENS.with(|v| v.borrow().clone());
+                    if case == "valid" {
+                        result.unwrap();
+                        assert_eq!(report["complete"], true);
+                        assert_eq!(report["queries"], 128);
+                        let first_request = opened.iter().position(|p| p == &request.path).unwrap();
+                        for i in 0..2 {
+                            for suffix in [
+                                format!("histogram-sq4-{i}.bin"),
+                                format!("histogram-sq4-{i}.bin-book.bin"),
+                            ] {
+                                assert!(
+                                    opened
+                                        .iter()
+                                        .position(|p| p == &path.with_extension(&suffix))
+                                        .unwrap()
+                                        < first_request
+                                );
+                            }
+                        }
+                        let freeze: Value = serde_json::from_slice(
+                            &fs::read(path.with_extension("histogram-sq4-freeze.json")).unwrap(),
+                        )
+                        .unwrap();
+                        assert_eq!(freeze["results"].as_array().unwrap().len(), 128);
+                        assert_eq!(freeze["truth_opened"], false);
+                        let first_truth = opened.iter().position(|p| p == &truth.path).unwrap();
+                        for pin in freeze["results"].as_array().unwrap() {
+                            let pin: Artifact = serde_json::from_value(pin.clone()).unwrap();
+                            assert!(
+                                opened.iter().position(|p| p == &pin.path).unwrap() < first_truth
+                            );
+                            let result: Value =
+                                serde_json::from_slice(&fs::read(&pin.path).unwrap()).unwrap();
+                            assert_eq!(result["sq4"]["expanded_capacity_peak"], 0);
+                            assert_eq!(
+                                result["sq4"]["fetched_ids"],
+                                result["sq8_reference"]["fetched_ids"]
+                            );
+                            assert_eq!(result["sq4"]["fetched_ids"].as_array().unwrap().len(), 23);
+                            assert!(
+                                result["pretruth_replacements"]["replacement_count"].is_number()
+                            );
+                        }
+                    } else {
+                        assert!(result.is_err());
+                        assert_eq!(report["status"], "INVALID");
+                        if case == "truth-length" {
+                            assert_eq!(report["queries"], 128);
+                            assert_eq!(report["details"]["truth_opened"], true);
+                            assert_eq!(report["details"]["truth_body_read_attempted"], false);
+                            assert!(opened.contains(&truth.path));
+                            assert!(
+                                !super::super::READS
+                                    .with(|v| v.borrow().iter().any(|(p, _)| p == &truth.path))
+                            );
+                            let freeze: Value = serde_json::from_slice(
+                                &fs::read(path.with_extension("histogram-sq4-freeze.json"))
+                                    .unwrap(),
+                            )
+                            .unwrap();
+                            assert_eq!(freeze["results"].as_array().unwrap().len(), 128);
+                            assert_eq!(freeze["truth_opened"], false);
+                        } else if case == "terminal-sync" {
+                            assert_eq!(report["queries"], 128);
+                            assert_eq!(report["details"]["truth_opened"], true);
+                        } else {
+                            assert!(!opened.contains(&truth.path));
+                            assert_eq!(report["details"]["truth_opened"], false);
+                        }
+                        if ["closure", "growth0", "growth1", "freeze-sync"].contains(&case) {
+                            assert_eq!(report["queries"], 128);
+                        }
+                        if ["second-pass", "late-second-pass"].contains(&case) {
+                            assert!(!opened.contains(&request.path));
+                            assert_eq!(report["queries"], 0);
+                            assert!(!path.with_extension("histogram-sq4-payloads.json").exists());
+                        }
+                        if case == "late-second-pass" {
+                            let partial = path.with_extension("histogram-sq4-0.bin");
+                            let bytes = 16 * (12 + protocol.dimensions.div_ceil(2));
+                            assert_eq!(fs::metadata(&partial).unwrap().len(), bytes as u64);
+                            assert_eq!(report["details"]["published_bytes"], 0);
+                            assert_eq!(report["details"]["written_bytes"], bytes);
+                            assert_eq!(
+                                report["details"]["unsealed_output"]["written_bytes"],
+                                bytes
+                            );
+                            assert_eq!(
+                                report["details"]["unsealed_output"]["attempted_bytes"],
+                                bytes
+                            );
+                            assert_eq!(
+                                report["details"]["unsealed_output"]["path"],
+                                json!(partial)
+                            );
+                            assert_eq!(report["details"]["stage"], "transcode");
+                        }
+                    }
+                    fs::write(&truth.path, truth_body).unwrap();
+                    for (m, b) in manifests.iter().zip(&originals) {
+                        fs::write(&m.records.path, b).unwrap();
+                    }
+                }
+            }
+            #[test]
+            fn fine_histogram_sq4_source_reauthentication_eof_prebody_caps_and_sync() {
+                let tmp = tempfile::tempdir().unwrap();
+                let root = root(&tmp.path().join("source"));
+                let manifest: Manifest =
+                    serde_json::from_slice(&fs::read(&root.path).unwrap()).unwrap();
+                let original = fs::read(&manifest.records.path).unwrap();
+                let root_body = fs::read(&root.path).unwrap();
+                let group_body = fs::read(&manifest.groups.path).unwrap();
+                let caps = Caps {
+                    memory_bytes: 256 * 1024 * 1024,
+                    output_bytes: 128 * 1024 * 1024,
+                    deadline_seconds: 600,
+                    operations: 20_000_000_000,
+                    cpu_threads: 1,
+                    swap_bytes: 0,
+                };
+                for case in [
+                    "valid",
+                    "cap",
+                    "memory",
+                    "growth",
+                    "second-pass",
+                    "sync",
+                    "bad-id",
+                    "bad-norm",
+                    "bad-coefficient",
+                ] {
+                    let mut source_root = root.clone();
+                    if ["bad-id", "bad-norm", "bad-coefficient"].contains(&case) {
+                        let mut bound: Manifest = serde_json::from_slice(&root_body).unwrap();
+                        if case == "bad-coefficient" {
+                            bound.low[0] += 1.;
+                        } else {
+                            let mut body = original.clone();
+                            if case == "bad-id" {
+                                body[..8].copy_from_slice(&999_i64.to_le_bytes());
+                            } else {
+                                body[8..12].copy_from_slice(&f32::NAN.to_le_bytes());
+                            }
+                            fs::write(&bound.records.path, &body).unwrap();
+                            bound.records.sha256 = hash(&body);
+                            let groups = body
+                                .chunks(16 * 15)
+                                .flat_map(|b| Sha256::digest(b).to_vec())
+                                .collect::<Vec<_>>();
+                            fs::write(&bound.groups.path, &groups).unwrap();
+                            bound.groups.sha256 = hash(&groups);
+                            bound.identity.layout = layout_identity(
+                                &bound.primary_root,
+                                &bound.records,
+                                &bound.order,
+                                &bound.low,
+                                &bound.step,
+                            )
+                            .unwrap();
+                        }
+                        let body = serde_json::to_vec(&bound).unwrap();
+                        fs::write(&root.path, &body).unwrap();
+                        source_root.bytes = body.len();
+                        source_root.sha256 = hash(&body);
+                    }
+                    let mut out =
+                        Outputs::create(&tmp.path().join(format!("book-{case}.json"))).unwrap();
+                    out.cap = if case == "cap" {
+                        RESERVE
+                    } else {
+                        caps.output_bytes
+                    };
+                    out.fail_sync = if case == "sync" { Some(3) } else { None }; // first book file sync
+                    let mut limit = caps.clone();
+                    if case == "memory" {
+                        limit.memory_bytes = histogram::training_bytes(3).unwrap() - 1;
+                    }
+                    if case == "growth" {
+                        APPEND_ON_OPEN
+                            .with(|v| *v.borrow_mut() = Some(manifest.records.path.clone()));
+                    }
+                    histogram::TAMPER_SECOND_PASS
+                        .with(|v| v.set((case == "second-pass").then_some(0)));
+                    super::super::OPENS.with(|v| v.borrow_mut().clear());
+                    let result = Plane::transcode_impl(
+                        &source_root,
+                        &mut out,
+                        "payload",
+                        135,
+                        3,
+                        &mut Guard::new(&caps),
+                        Some((&limit, &hash(b"config"))),
+                    );
+                    if case == "valid" {
+                        let plane = result.unwrap();
+                        let h = plane.histogram.as_ref().unwrap();
+                        assert_eq!(out.bytes, out.published_bytes);
+                        assert!(out.unsealed.is_none());
+                        assert!(h.book_pin.bytes <= histogram::BOOK_CAP);
+                        assert_eq!(h.book.retained_bytes(), 3 * 65);
+                        let book_body = fs::read(&h.book_pin.path).unwrap();
+                        super::super::OPENS.with(|v| v.borrow_mut().clear());
+                        assert!(
+                            read_pinned(
+                                &h.book_pin,
+                                h.book_pin.bytes - 1,
+                                false,
+                                &mut Guard::new(&caps)
+                            )
+                            .is_err()
+                        );
+                        assert!(super::super::OPENS.with(|v| v.borrow().is_empty()));
+                        APPEND_ON_OPEN.with(|v| *v.borrow_mut() = Some(h.book_pin.path.clone()));
+                        assert!(
+                            read_pinned(
+                                &h.book_pin,
+                                histogram::BOOK_CAP,
+                                false,
+                                &mut Guard::new(&caps)
+                            )
+                            .unwrap_err()
+                            .to_string()
+                            .contains("EOF/growth")
+                        );
+                        fs::write(&h.book_pin.path, &book_body).unwrap();
+                        let root_body = fs::read(&h.root_pin.path).unwrap();
+                        let expected: histogram::GenerationRoot =
+                            serde_json::from_slice(&root_body).unwrap();
+                        let mut changed: Value = serde_json::from_slice(&root_body).unwrap();
+                        changed["coefficients_sha256"] = json!("0".repeat(64));
+                        let changed = serde_json::to_vec(&changed).unwrap();
+                        fs::write(&h.root_pin.path, &changed).unwrap();
+                        let changed_pin = Artifact {
+                            bytes: changed.len(),
+                            sha256: hash(&changed),
+                            ..h.root_pin.clone()
+                        };
+                        super::super::OPENS.with(|v| v.borrow_mut().clear());
+                        assert!(
+                            histogram::Generation::reopen(
+                                changed_pin,
+                                &expected,
+                                &plane.manifest,
+                                &caps,
+                                &mut Guard::new(&caps),
+                                0
+                            )
+                            .is_err()
+                        );
+                        assert!(
+                            !super::super::OPENS.with(|v| v.borrow().contains(&h.book_pin.path))
+                        );
+                        fs::write(&h.root_pin.path, root_body).unwrap();
+                        let mut bad = fs::read(&h.book_pin.path).unwrap();
+                        bad[144 + 1] ^= 0xff;
+                        fs::write(&h.book_pin.path, bad).unwrap();
+                        assert!(authenticate(&h.book_pin, &mut Guard::new(&caps)).is_err());
+                    } else {
+                        assert!(result.is_err());
+                        if ["cap", "memory"].contains(&case) {
+                            assert!(super::super::OPENS.with(|v| v.borrow().is_empty()));
+                        }
+                    }
+                    fs::write(&manifest.records.path, &original).unwrap();
+                    fs::write(&root.path, &root_body).unwrap();
+                    fs::write(&manifest.groups.path, &group_body).unwrap();
+                }
+                // The shared publisher also records an OS-style short write on
+                // its owned FD, without inventing a durably published artifact.
+                let partial_path = tmp.path().join("partial-publish.json");
+                let mut out = Outputs::create(&partial_path).unwrap();
+                out.fail_write = Some(3);
+                let error = out.publish("partial.bin", b"abcdef").unwrap_err();
+                let pending_path = partial_path.with_extension("partial.bin");
+                assert_eq!(fs::metadata(&pending_path).unwrap().len(), 3);
+                assert_eq!(out.bytes, 3);
+                assert_eq!(out.published_bytes, 0);
+                let progress = Progress {
+                    stage: "publication",
+                    ..Progress::default()
+                };
+                invalidate_for(&mut out, &hash(b"config"), &error, &progress, true);
+                let report: Value =
+                    serde_json::from_slice(&fs::read(&partial_path).unwrap()).unwrap();
+                assert_eq!(report["details"]["written_bytes"], 3);
+                assert_eq!(report["details"]["published_bytes"], 0);
+                assert_eq!(report["details"]["unsealed_output"]["attempted_bytes"], 6);
+                assert_eq!(report["details"]["unsealed_output"]["written_bytes"], 3);
+                assert_eq!(
+                    report["details"]["unsealed_output"]["path"],
+                    json!(pending_path)
+                );
+
+                // Every component is legal and the full paths fit secure_open's
+                // 4096-byte limit. JSON escaping still consumes terminal reserve.
+                for escaped in [false, true] {
+                    let (fixture, mut config, _) = paired_fixture();
+                    config.schema = histogram::CONFIG_SCHEMA.into();
+                    config.source_identity_sha256 = histogram::source_identity();
+                    let component = if escaped {
+                        "\\\"".repeat(75)
+                    } else {
+                        "x".repeat(150)
+                    };
+                    let mut directory = fixture.path().to_path_buf();
+                    for _ in 0..20 {
+                        directory.push(&component);
+                    }
+                    fs::create_dir_all(&directory).unwrap();
+                    for (i, panel) in config.panels.iter_mut().enumerate() {
+                        panel.truth.path = directory.join(format!("truth-{i}.ivecs"));
+                        assert!(panel.truth.path.as_os_str().len() <= 4096);
+                    }
+                    let path = directory.join("terminal.json");
+                    let config_body = serde_json::to_vec(&config).unwrap();
+                    assert!(config_body.len() <= ROOT_CAP);
+                    super::super::OPENS.with(|v| v.borrow_mut().clear());
+                    super::super::READS.with(|v| v.borrow_mut().clear());
+                    assert!(histogram::diagnose(&config, &hash(&config_body), &path).is_err());
+                    let body = fs::read(&path).unwrap();
+                    assert!(body.len() <= RESERVE);
+                    let report: Value = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(report["status"], "INVALID");
+                    assert_eq!(report["queries"], 0);
+                    assert_eq!(report["details"]["stage"], "terminal admission");
+                    assert_eq!(report["details"]["truth_opened"], false);
+                    assert_eq!(report["details"]["truth_body_read_attempted"], false);
+                    assert!(
+                        report["details"]["error"]
+                            .as_str()
+                            .unwrap()
+                            .contains("terminal metadata/path reserve before bodies")
+                    );
+                    assert!(super::super::READS.with(|v| v.borrow().is_empty()));
+                    let opened = super::super::OPENS.with(|v| v.borrow().clone());
+                    assert!(!opened.contains(&config.original_seal.path));
+                    assert!(!opened.contains(&config.prefix.path));
+                    for panel in &config.panels {
+                        for pin in [&panel.root, &panel.requests, &panel.truth] {
+                            assert!(!opened.contains(&pin.path));
+                        }
+                    }
+                    assert!(!path.with_extension("histogram-sq4-0.bin").exists());
+                }
+            }
         }
 
         /// Requires an independently authenticated original supervisor receipt.
@@ -4574,6 +6666,10 @@ pub mod pack_diagnostic {
             run_id: &str,
             receipt: &SupervisorReceipt,
         ) -> Result<()> {
+            admit_impl(body, run_id, receipt, false)
+        }
+        fn admit_impl(body: &[u8], run_id: &str, receipt: &SupervisorReceipt, learned: bool) -> Result<()> {
+            let (_, schema, codec, source) = identity(learned);
             require(body.len() <= RESERVE, "SQ4 terminal cap")?;
             let report: Value = serde_json::from_slice(body)?;
             let truth: [Artifact; 2] = serde_json::from_value(report["details"]["truth"].clone())?;
@@ -4588,9 +6684,9 @@ pub mod pack_diagnostic {
                     && receipt.resource_limits_observed
                     && receipt.drain_complete
                     && receipt.cleanup_complete
-                    && report["schema"] == REPORT_SCHEMA
-                    && report["codec"] == CODEC
-                    && report["source_identity_sha256"] == source_identity()
+                    && report["schema"] == schema
+                    && report["codec"] == codec
+                    && report["source_identity_sha256"] == source
                     && report["details"]["rows"] == 100_000
                     && report["details"]["dimensions"] == 768
                     && report["details"]["frozen_original_authority"] == true
