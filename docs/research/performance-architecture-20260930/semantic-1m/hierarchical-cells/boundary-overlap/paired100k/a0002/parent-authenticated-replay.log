@@ -1,0 +1,30 @@
+Running as unit: borsuk-overlap-a0002-body-view-replay-r1.service; invocation ID: 81efb78b5f064666888e15649305fca2
+{"executed": true, "truth_opened": true, "physical_s3_measured": false, "vendor_win": false, "scientific_qualification": false, "status": "FAIL", "complete_query_latency": "complete-query-unmeasured"}
+	Command being timed: "python3 scripts/launch_hierarchical_cells_100k_spot.py --cell-overlap-pair --replay /home/rb/worktrees/borsuk-overlap-a0002-native-body-view"
+	User time (seconds): 37.71
+	System time (seconds): 1.72
+	Percent of CPU this job got: 47%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:22.30
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 94888
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 34723
+	Voluntary context switches: 1124
+	Involuntary context switches: 3014
+	Swaps: 0
+	File system inputs: 10015960
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 1min 22.314s
+             CPU time consumed: 39.450s
+                   Memory peak: 256M (swap: 0B)

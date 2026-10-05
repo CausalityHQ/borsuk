@@ -1,0 +1,7 @@
+Running as unit: borsuk-global-leaf-2183-relaion-control-build-overlap.service; invocation ID: 5e7816d2d0834160898a0bb0114b4aae
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 11.236s
+CPU time consumed: 12.533s
+Memory peak: 512.0K
+Memory swap peak: 0B

@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0a426b9f38b2d6b35",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0a426b9f38b2d6b35"
+    }
+  },
+  "prefix": "research/hierarchical-cells/20261005/cell-overlap-paired100k-a0002",
+  "source_commit": "644df11a4630f1579cc49a4945d9d29959b67011",
+  "source_archive_sha256": "30ee692aabc95f014aec98d47338dddb71b36f01a557b0d6978b2e342013de5d"
+}

@@ -1,0 +1,7 @@
+Running as unit: borsuk-global-leaf-2183-cohere-paired-overlap.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 3.927s
+CPU time consumed: 3.863s
+Memory peak: 2.4M
+Memory swap peak: 0B

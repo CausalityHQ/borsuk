@@ -1,0 +1,75 @@
+{
+  "status": "SCIENTIFIC_FAIL",
+  "controller_original_exit": 2,
+  "controller_failure": "post-collection relative qualification directory",
+  "absolute_replay_first_exit": 2,
+  "absolute_replay_failure": "gzip transport copies in exact native inventory",
+  "raw_body_view_replay_exit": 0,
+  "raw_body_view": "hardlinks on same filesystem; only compressed transport wrappers excluded; original bodies unchanged",
+  "same_instance": "i-0a426b9f38b2d6b35",
+  "terminated": true,
+  "physical_s3_query_measured": false,
+  "vendor_win": false,
+  "datasets": {
+    "relaion": {
+      "control": {
+        "coverage_mean": 0.87109375,
+        "coverage_p05_hits": 60,
+        "denominator_per_query": 100,
+        "p05_sorted_index": 3,
+        "pass": false,
+        "queries": 64,
+        "recall_mean": 0.87,
+        "recall_p05_hits": 60,
+        "mean_local_gets": 24,
+        "max_local_gets": 24,
+        "mean_verified_payload_bytes": 6521300.0625,
+        "max_verified_payload_bytes": 7158036
+      },
+      "candidate": {
+        "coverage_mean": 0.89453125,
+        "coverage_p05_hits": 64,
+        "denominator_per_query": 100,
+        "p05_sorted_index": 3,
+        "pass": false,
+        "queries": 64,
+        "recall_mean": 0.8934375,
+        "recall_p05_hits": 64,
+        "mean_local_gets": 24,
+        "max_local_gets": 24,
+        "mean_verified_payload_bytes": 8328279.75,
+        "max_verified_payload_bytes": 9243756
+      }
+    },
+    "cohere": {
+      "control": {
+        "coverage_mean": 0.77484375,
+        "coverage_p05_hits": 51,
+        "denominator_per_query": 100,
+        "p05_sorted_index": 3,
+        "pass": false,
+        "queries": 64,
+        "recall_mean": 0.774375,
+        "recall_p05_hits": 51,
+        "mean_local_gets": 24,
+        "max_local_gets": 24,
+        "mean_verified_payload_bytes": 6269262.5625,
+        "max_verified_payload_bytes": 7138536
+      },
+      "candidate": {
+        "coverage_mean": 0.80765625,
+        "coverage_p05_hits": 61,
+        "denominator_per_query": 100,
+        "p05_sorted_index": 3,
+        "pass": false,
+        "queries": 64,
+        "recall_mean": 0.80703125,
+        "recall_p05_hits": 61,
+        "mean_local_gets": 24,
+        "max_local_gets": 24,
+        "mean_verified_payload_bytes": 8003251.3125,
+        "max_verified_payload_bytes": 9117396
+      }
+    }
+  }
+}

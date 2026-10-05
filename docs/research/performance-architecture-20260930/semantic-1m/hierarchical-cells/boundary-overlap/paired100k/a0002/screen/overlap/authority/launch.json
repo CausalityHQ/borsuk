@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0739ef9dca24d086e",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0739ef9dca24d086e"
+    }
+  },
+  "prefix": "research/semantic-router/20261005/boundary-overlap-implementation-a0001",
+  "source_commit": "2b3f683a9783945c994b3f99059df4dccbd0235d",
+  "source_archive_sha256": "a82f1c7eea25f14cfc06e7a8e101a1c86d9d5151c28cf152fa2693a397da8f0a"
+}
