@@ -1,0 +1,18 @@
+{
+  "changed_paths": [
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs"
+  ],
+  "commit": "2f98b3faac0064e314553216ce89f2712da048ce",
+  "file_bytes": 235234,
+  "file_sha256": "4681a2739880b54f074a7a41a6a4bfc3bf5d4df8f2c18e1d391d8ac73a53d5e3",
+  "native_compilation": "UNRUN",
+  "native_tests": "UNRUN",
+  "original_checkpoint_preserved": true,
+  "parent": "23e93cf251c82ba1b155189d72ca372ab7433d31",
+  "production_change": false,
+  "repair": "Use existing public normalize_two_bit_diagnostic_query instead of inaccessible pub(crate) cosine_vector in one binary test; identical delegated arithmetic.",
+  "schema": "borsuk-corrected-four-bit-test-repair-source-v1",
+  "source_file_count": 405,
+  "source_identity_sha256": "b872f6eeb19fe4b0db8a6c9cd8906b2825c5c25a30eff0a26eaeeb9e5c2a20b4",
+  "test_roster_change": false
+}
