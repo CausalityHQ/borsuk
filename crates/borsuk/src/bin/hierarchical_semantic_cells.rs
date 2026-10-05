@@ -1641,6 +1641,17 @@ fn execute() -> Result<()> {
     execute_args(&std::env::args().collect::<Vec<_>>())
 }
 fn execute_args(args: &[String]) -> Result<()> {
+    if args.get(1).is_some_and(|action| action == "check-fine-sq4") {
+        require(
+            args.len() == 5,
+            "usage: hierarchical_semantic_cells check-fine-sq4 CONFIG CONFIG_SHA256 NEW_REPORT_JSON",
+        )?;
+        return borsuk::fine_sq8_groups::sq4_diagnostic::check_fine_sq4(
+            Path::new(&args[2]),
+            &args[3],
+            Path::new(&args[4]),
+        );
+    }
     execute_args_with_pack(args, borsuk::fine_sq8_groups::pack_diagnostic::check_fine_pack)
 }
 fn execute_args_with_pack(args: &[String], check_pack: fn(&Path, &str, &Path) -> Result<()>) -> Result<()> {
@@ -1772,6 +1783,649 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fine_sq4_strict_cli_dispatch() {
+        let temp = tempfile::tempdir().unwrap();
+        let pin = probe_artifact(
+            &temp.path().join("config.json"),
+            br#"{"schema":"borsuk-fixed-sq4-config-v1","unknown":true}"#,
+        );
+        let output = temp.path().join("result.json");
+        let args = vec![
+            "hierarchical_semantic_cells".into(),
+            "check-fine-sq4".into(),
+            pin.path.display().to_string(),
+            pin.sha256,
+            output.display().to_string(),
+        ];
+        assert!(execute_args(&args[..4]).is_err());
+        assert!(!output.exists());
+        assert!(execute_args(&args).is_err());
+        let body = fs::read(&output).unwrap();
+        let report: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(report["schema"], "borsuk-fixed-sq4-report-v1");
+        assert_eq!(report["status"], "INVALID");
+        assert!(execute_args(&args).is_err());
+        assert_eq!(fs::read(&output).unwrap(), body);
+
+        use borsuk::fine_sq8_groups::sq4_diagnostic as sq4;
+        let absent = Artifact {
+            path: temp.path().join("must-not-open"),
+            bytes: 1,
+            sha256: "1".repeat(64),
+        };
+        let truth_sha = [
+            "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c",
+            "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355",
+        ];
+        let config = sq4::Config {
+            schema: sq4::CONFIG_SCHEMA.into(),
+            source_identity_sha256: sq4::source_identity(),
+            panels: std::array::from_fn(|i| sq4::Panel {
+                dataset: ["relaion", "cohere"][i].into(),
+                root: absent.clone(),
+                requests: absent.clone(),
+                truth: Artifact {
+                    path: temp.path().join(format!("relocated-truth-{i}")),
+                    bytes: 25_600,
+                    sha256: truth_sha[i].into(),
+                },
+                truth_width: 100,
+            }),
+            original_seal: absent.clone(),
+            prefix: absent,
+            caps: sq4::Caps {
+                memory_bytes: 1024 * 1024 * 1024,
+                output_bytes: 128 * 1024 * 1024,
+                deadline_seconds: 600,
+                operations: 20_000_000_000,
+                cpu_threads: 1,
+                swap_bytes: 0,
+            },
+        };
+        for panel in 0..2 {
+            let mut alternate = config.clone();
+            alternate.panels[panel].truth.sha256 = "0".repeat(64);
+            let pin = probe_artifact(
+                &temp.path().join(format!("alternate-{panel}.json")),
+                &serde_json::to_vec(&alternate).unwrap(),
+            );
+            let output = temp.path().join(format!("rejected-{panel}.json"));
+            let args = vec![
+                "hierarchical_semantic_cells".into(),
+                "check-fine-sq4".into(),
+                pin.path.display().to_string(),
+                pin.sha256,
+                output.display().to_string(),
+            ];
+            let error = execute_args(&args).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("archived truth descriptor binding")
+            );
+            let report: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+            assert_eq!(report["status"], "INVALID");
+            assert!(!output.with_extension("sq4-0.bin").exists());
+        }
+    }
+
+    #[test]
+    fn fine_sq4_real_native_pipeline_128_seal_before_truth() {
+        use borsuk::fine_sq8_groups::{
+            FineBuildConfig, FineSq8Index, ResidentLimits, sq4_diagnostic as sq4,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let primary = tiny_fine_primary(temp.path());
+        let build = FineBuildConfig {
+            schema: borsuk::fine_sq8_groups::BUILD_SCHEMA.into(),
+            primary_root: primary,
+            max_build_payload_bytes: 128 * 1024 * 1024,
+            max_output_bytes: 16 * 1024 * 1024,
+        };
+        let roots = ["relaion", "cohere"]
+            .map(|name| FineSq8Index::build(&build, &temp.path().join(name)).unwrap());
+        let request = probe_artifact(
+            &temp.path().join("requests"),
+            (0..64)
+                .map(|ordinal| format!("{}\n", json!({"ordinal":ordinal,"query":[3.125,0.875]})))
+                .collect::<String>()
+                .as_bytes(),
+        );
+        let truth = probe_artifact(
+            &temp.path().join("truth"),
+            &(0..64)
+                .flat_map(|_| (0..100u32).flat_map(u32::to_le_bytes))
+                .collect::<Vec<_>>(),
+        );
+        let original = temp.path().join("original.jsonl");
+        paired_fine(
+            FinePairedConfig {
+                schema: "borsuk-fine-sq8-paired-v1".into(),
+                panels: [
+                    FinePanel {
+                        dataset: "relaion".into(),
+                        root: roots[0].clone(),
+                        requests: request.clone(),
+                        truth: truth.clone(),
+                        truth_width: 100,
+                    },
+                    FinePanel {
+                        dataset: "cohere".into(),
+                        root: roots[1].clone(),
+                        requests: request.clone(),
+                        truth: truth.clone(),
+                        truth_width: 100,
+                    },
+                ],
+                source_identity_sha256: fine_source_identity(),
+                limits: ResidentLimits {
+                    max_peak_payload_bytes: 256 * 1024 * 1024,
+                    pinned_generation_bytes: 0,
+                    active_queries: 1,
+                    delta_bytes: 0,
+                    maintenance_bytes: 0,
+                    runtime_bytes: 0,
+                },
+                max_evaluator_payload_bytes: 128 * 1024 * 1024,
+                max_result_bytes: 16 * 1024 * 1024,
+                test_geometry: Some((135, 2)),
+                fail_sync_at: None,
+            },
+            &"a".repeat(64),
+            &original,
+        )
+        .unwrap();
+        let seal_path = original.with_extension("fine-seal.json");
+        let seal_body = fs::read(&seal_path).unwrap();
+        let seal: Value = serde_json::from_slice(&seal_body).unwrap();
+        let cfg = sq4::Config {
+            schema: sq4::CONFIG_SCHEMA.into(),
+            source_identity_sha256: sq4::source_identity(),
+            panels: ["relaion", "cohere"].map(|name| sq4::Panel {
+                dataset: name.into(),
+                root: roots[usize::from(name == "cohere")].clone(),
+                requests: request.clone(),
+                truth: truth.clone(),
+                truth_width: 100,
+            }),
+            original_seal: Artifact {
+                path: seal_path,
+                bytes: seal_body.len(),
+                sha256: hash(&seal_body),
+            },
+            prefix: Artifact {
+                path: original,
+                bytes: seal["prefix_bytes"].as_u64().unwrap() as usize,
+                sha256: seal["prefix_sha256"].as_str().unwrap().into(),
+            },
+            caps: sq4::Caps {
+                memory_bytes: 256 * 1024 * 1024,
+                output_bytes: 128 * 1024 * 1024,
+                deadline_seconds: 600,
+                operations: 20_000_000_000,
+                cpu_threads: 1,
+                swap_bytes: 0,
+            },
+        };
+        for case in [
+            "valid", "missing", "tampered", "query", "binding", "cap", "pair-cap", "memory",
+            "source",
+        ] {
+            let mut config = cfg.clone();
+            if case == "missing" {
+                config.panels[1].truth.path = temp.path().join("missing");
+            }
+            if case == "tampered" {
+                fs::write(&truth.path, vec![0; truth.bytes]).unwrap();
+            }
+            if case == "query" {
+                fs::write(&request.path, b"tampered").unwrap();
+            }
+            if case == "binding" {
+                config.panels[0].requests.sha256 = "0".repeat(64);
+            }
+            if case == "cap" {
+                config.caps.output_bytes = 8192;
+            }
+            if case == "pair-cap" {
+                config.caps.output_bytes = 135 * 13 + 8192;
+            }
+            if case == "memory" {
+                config.caps.memory_bytes = 64 * 1024 * 1024;
+            }
+            if case == "source" {
+                config.source_identity_sha256 = "0".repeat(64);
+            }
+            let output = temp.path().join(format!("sq4-{case}.json"));
+            let result = sq4::diagnose(&config, &"b".repeat(64), &output);
+            let body = fs::read(&output).unwrap();
+            let report: Value = serde_json::from_slice(&body).unwrap();
+            if case == "valid" {
+                result.unwrap();
+                assert_eq!(report["complete"], true);
+                assert_eq!(report["queries"], 128);
+                let receipt = sq4::SupervisorReceipt {
+                    run_id: "tiny".into(),
+                    config_sha256: "b".repeat(64),
+                    report_sha256: hash(&body),
+                    process_exit_code: 0,
+                    resource_limits_observed: true,
+                    drain_complete: true,
+                    cleanup_complete: true,
+                };
+                assert!(sq4::admit_survival(&body, "tiny", &receipt).is_err());
+            } else {
+                assert!(result.is_err());
+                assert_eq!(report["status"], "INVALID");
+            }
+            let frozen = output.with_extension("sq4-freeze.json");
+            if ["valid", "missing", "tampered"].contains(&case) {
+                let freeze: Value = serde_json::from_slice(&fs::read(&frozen).unwrap()).unwrap();
+                assert_eq!(freeze["results"].as_array().unwrap().len(), 128);
+                assert_eq!(freeze["truth_opened"], false);
+                assert_eq!(freeze["payloads"].as_array().unwrap().len(), 2);
+                for item in freeze["results"].as_array().unwrap() {
+                    let artifact: Artifact = serde_json::from_value(item.clone()).unwrap();
+                    let bytes = fs::read(&artifact.path).unwrap();
+                    assert_eq!(hash(&bytes), artifact.sha256);
+                    let scored: Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(scored["nominees_retained"], true);
+                    assert_eq!(scored["original_cover_contained"], true);
+                    assert_eq!(scored["sq8_reference_serving_eligible"], false);
+                    assert_eq!(scored["sq4"]["ranked"].as_array().unwrap().len(), 100);
+                }
+            } else {
+                assert!(!frozen.exists());
+            }
+            if case == "query" {
+                assert!(output.with_extension("sq4-payloads.json").exists());
+            }
+            if ["cap", "pair-cap"].contains(&case) {
+                assert!(!output.with_extension("sq4-0.bin").exists());
+                assert!(!output.with_extension("sq4-1.bin").exists());
+            }
+            assert!(sq4::diagnose(&config, &"b".repeat(64), &output).is_err());
+            assert_eq!(fs::read(&output).unwrap(), body);
+            if case == "tampered" {
+                fs::write(
+                    &truth.path,
+                    (0..64)
+                        .flat_map(|_| (0..100u32).flat_map(u32::to_le_bytes))
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap();
+            }
+            if case == "query" {
+                fs::write(
+                    &request.path,
+                    (0..64)
+                        .map(|ordinal| {
+                            format!("{}\n", json!({"ordinal":ordinal,"query":[3.125,0.875]}))
+                        })
+                        .collect::<String>(),
+                )
+                .unwrap();
+            }
+        }
+        let config = probe_artifact(
+            &temp.path().join("sq4-config.json"),
+            &serde_json::to_vec(&cfg).unwrap(),
+        );
+        // Tiny geometry is available only through the explicit fixture API; the real CLI is fixed.
+        assert!(
+            sq4::check_fine_sq4(
+                &config.path,
+                &config.sha256,
+                &temp.path().join("strict.json")
+            )
+            .is_err()
+        );
+
+        // Real builders supply the records/router/PQ. Controlled, separately
+        // sealed fixture nominations force 34 separated group16 extents, so
+        // this pipeline must bridge two gaps to reach exactly 32 ranges.
+        let dispersed = temp.path().join("dispersed");
+        fs::create_dir(&dispersed).unwrap();
+        let n = 1063usize; // 66 complete groups and a seven-row tail.
+        let codec = borsuk::rotated_two_bit::RotatedTwoBitCodec::new(&[0.; 3], 20260923).unwrap();
+        let low = [-1_f32; 3];
+        let step = [0.01_f32; 3];
+        let mut canonical = Vec::new();
+        let mut records = Vec::new();
+        let mut sq8_body = Vec::new();
+        let mut order = Vec::new();
+        for id in (0..n).rev() {
+            let angle = id as f32 * 0.31;
+            let height = ((id * 37) % n) as f32 / n as f32 * 1.8 - 0.9;
+            let radius = (1. - height * height).sqrt();
+            let vector = [radius * angle.cos(), radius * angle.sin(), height];
+            canonical.extend((id as i64).to_le_bytes());
+            canonical.extend(vector.into_iter().flat_map(f32::to_le_bytes));
+            records.extend(codec.encode(&vector).unwrap());
+            let codes = vector.map(|v| ((v + 1.) / 0.01).round() as u8);
+            let mut norm = 0_f32;
+            for axis in 0..3 {
+                let value = low[axis] + f32::from(codes[axis]) * step[axis];
+                norm += value * value;
+            }
+            sq8_body.extend((id as i64).to_le_bytes());
+            sq8_body.extend(norm.to_le_bytes());
+            sq8_body.extend(codes);
+            order.extend((id as u64).to_le_bytes());
+        }
+        let canonical = probe_artifact(&dispersed.join("canonical"), &canonical);
+        let records = probe_artifact(&dispersed.join("codes"), &records);
+        let sq8_source = probe_artifact(&dispersed.join("sq8"), &sq8_body);
+        let order = probe_artifact(&dispersed.join("order"), &order);
+        let mean = probe_artifact(&dispersed.join("mean"), &[0; 12]);
+        let plane = probe_artifact(
+            &dispersed.join("plane"),
+            &serde_json::to_vec(&borsuk::two_bit_source::SourcePlaneReceipt {
+                schema: "borsuk-two-bit-plane-v3".into(),
+                rows: n,
+                dimensions: 3,
+                seed: 20260923,
+                record_bytes: codec.record_bytes(),
+                source_sha256: "0".repeat(64),
+                sq8_sha256: sq8_source.sha256.clone(),
+                source_order_sha256: order.sha256.clone(),
+                mean_sha256: mean.sha256.clone(),
+                records_sha256: records.sha256.clone(),
+                page_rows: 32,
+                page_digest_sha256: "0".repeat(64),
+                query_or_truth_used: false,
+            })
+            .unwrap(),
+        );
+        let generation = probe_artifact(&dispersed.join("generation"), &serde_json::to_vec(&json!({
+            "schema":"borsuk-two-bit-generation-v8","generation":1,"base_epoch":0,
+            "plane_manifest_sha256":plane.sha256,"page_manifest_sha256":"0".repeat(64),
+            "discovery":{"mode":"graph","centroids_sha256":"0".repeat(64),"graph_sha256":"0".repeat(64),
+                "graph_resident_bytes":1,"diverse_graph_sha256":"0".repeat(64),"diverse_graph_resident_bytes":1},
+            "sq8_object_sha256":sq8_source.sha256,"sq8_object_key":format!("objects/{}",sq8_source.sha256),"sq8_etag":"fixture",
+            "canonical":{"rows":n,"dimensions":3,"bytes":canonical.bytes,"sha256":canonical.sha256,
+                "object_key":format!("objects/{}",canonical.sha256)},"low":low,"step":step
+        })).unwrap());
+        let primary_path = dispersed.join("primary");
+        let receipt = borsuk::hierarchical_semantic_cells::build(
+            &BuildConfig {
+                schema: borsuk::hierarchical_semantic_cells::BUILD_SCHEMA.into(),
+                generation,
+                plane,
+                canonical,
+                order,
+                records,
+                mean,
+                sq8: sq8_source,
+                cell_rows: 32,
+                sample_rows: 32,
+                max_depth: 24,
+                max_build_payload_bytes: 64 * 1024 * 1024,
+                max_output_bytes: 16 * 1024 * 1024,
+            },
+            &primary_path,
+        )
+        .unwrap();
+        let primary_root = Artifact {
+            path: primary_path.join("manifest.json"),
+            bytes: fs::metadata(primary_path.join("manifest.json"))
+                .unwrap()
+                .len() as usize,
+            sha256: receipt.root_sha256,
+        };
+        let roots = ["relaion", "cohere"].map(|name| {
+            FineSq8Index::build(
+                &FineBuildConfig {
+                    schema: borsuk::fine_sq8_groups::BUILD_SCHEMA.into(),
+                    primary_root: primary_root.clone(),
+                    max_build_payload_bytes: 128 * 1024 * 1024,
+                    max_output_bytes: 16 * 1024 * 1024,
+                },
+                &dispersed.join(name),
+            )
+            .unwrap()
+        });
+        let manifests = roots
+            .each_ref()
+            .map(|root| serde_json::from_slice::<Value>(&fs::read(&root.path).unwrap()).unwrap());
+        let sources = manifests
+            .each_ref()
+            .map(|m| fs::read(m["records"]["path"].as_str().unwrap()).unwrap());
+        let queries = (0..64)
+            .map(|ordinal| {
+                std::array::from_fn::<_, 3, _>(|axis| {
+                    let value = low[axis] + f32::from(sources[0][16 * 15 + 12 + axis]) * step[axis];
+                    value * (2. + ordinal as f32 * 0.01)
+                        + if axis == 1 {
+                            ordinal as f32 * 0.001
+                        } else {
+                            0.
+                        }
+                })
+            })
+            .collect::<Vec<_>>();
+        let request = probe_artifact(
+            &dispersed.join("requests"),
+            (0..64)
+                .map(|ordinal| format!("{}\n", json!({"ordinal":ordinal,"query":queries[ordinal]})))
+                .collect::<String>()
+                .as_bytes(),
+        );
+        let truth = probe_artifact(
+            &dispersed.join("truth"),
+            &(0..64)
+                .flat_map(|_| (0..100u32).flat_map(u32::to_le_bytes))
+                .collect::<Vec<_>>(),
+        );
+        let original_ranges = (0..=66usize)
+            .step_by(2)
+            .map(|g| g * 16..((g + 1) * 16).min(n))
+            .collect::<Vec<_>>();
+        let nominees = original_ranges
+            .iter()
+            .map(|r| r.end - 1)
+            .collect::<Vec<_>>();
+        // Equal-size gaps break ties on their left positions: merge groups0,2,4.
+        let expected_ranges = std::iter::once(0..80)
+            .chain(original_ranges.iter().skip(3).cloned())
+            .collect::<Vec<_>>();
+        let candidate_rows = expected_ranges
+            .iter()
+            .flat_map(|r| r.clone())
+            .collect::<Vec<_>>();
+        let baseline_rows = original_ranges
+            .iter()
+            .flat_map(|r| r.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            (
+                original_ranges.len(),
+                expected_ranges.len(),
+                candidate_rows.len(),
+                baseline_rows.len()
+            ),
+            (34, 32, 567, 535)
+        );
+        let mut prefix = String::new();
+        for panel in 0..2 {
+            prefix += &format!(
+                "{}\n",
+                json!({"phase":"startup","dataset":(["relaion","cohere"][panel]),
+                "root":roots[panel],"resources":borsuk::fine_sq8_groups::ResourceReceipt::default(),
+                "build":manifests[panel]["build"],"truth_opened":false,"wall_ns":0,"process_cpu_ns":0})
+            );
+        }
+        for panel in 0..2 {
+            for (ordinal, query) in queries.iter().enumerate() {
+                let query_sha = hash(
+                    &query
+                        .iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .collect::<Vec<_>>(),
+                );
+                prefix += &format!(
+                    "{}\n",
+                    json!({"phase":"fine_plan","dataset":(["relaion","cohere"][panel]),
+                    "ordinal":ordinal,"truth_opened":false,"wall_ns":0,"process_cpu_ns":0,"plan":{
+                    "root_sha256":roots[panel].sha256,"query_sha256":query_sha,"revision":0,"mutation_sha256":"",
+                    "nominees":nominees,"ranges":original_ranges.iter().map(|r|r.start*15..r.end*15).collect::<Vec<_>>(),
+                    "planned_bytes":535*15,"feasible":true,"exhausted":false,"converged":true,
+                    "actual_shortlist_rows":34,"evaluations":n,"base_visits":n,"old_page_gets":1,"old_page_bytes":n*15}})
+                );
+            }
+        }
+        let prefix = probe_artifact(&dispersed.join("prefix"), prefix.as_bytes());
+        let seal = probe_artifact(&dispersed.join("seal"), &serde_json::to_vec(&json!({
+            "schema":"borsuk-fine-sq8-seal-v1","config_sha256":hash(b"controlled dispersed fixture"),
+            "source_identity_sha256":fine_source_identity(),"prefix_bytes":prefix.bytes,"prefix_sha256":prefix.sha256,
+            "plans_per_panel":64,"truth_opened":false,"panels":(0..2).map(|i|json!({
+                "dataset":(["relaion","cohere"][i]),"root":roots[i],"requests":request})).collect::<Vec<_>>()
+        })).unwrap());
+        let config = sq4::Config {
+            original_seal: seal,
+            prefix,
+            panels: std::array::from_fn(|i| sq4::Panel {
+                dataset: ["relaion", "cohere"][i].into(),
+                root: roots[i].clone(),
+                requests: request.clone(),
+                truth: truth.clone(),
+                truth_width: 100,
+            }),
+            ..cfg
+        };
+        let output = dispersed.join("report.json");
+        sq4::diagnose(&config, &"c".repeat(64), &output).unwrap();
+        let freeze: Value =
+            serde_json::from_slice(&fs::read(output.with_extension("sq4-freeze.json")).unwrap())
+                .unwrap();
+        assert_eq!(freeze["results"].as_array().unwrap().len(), 128);
+        assert_eq!(freeze["truth_opened"], false);
+        for panel in 0..2 {
+            let packed = fs::read(output.with_extension(format!("sq4-{panel}.bin"))).unwrap();
+            assert_eq!(packed.len(), n * 14);
+            assert!(packed.chunks_exact(14).all(|row| row[13] & 0xf0 == 0));
+            let codes = packed
+                .chunks_exact(14)
+                .flat_map(|row| [row[12] & 15, row[12] >> 4, row[13]])
+                .collect::<std::collections::BTreeSet<_>>();
+            assert!(codes.len() > 4);
+        }
+        let mut incidental_ranked = false;
+        for (index, pin) in freeze["results"].as_array().unwrap().iter().enumerate() {
+            let artifact: Artifact = serde_json::from_value(pin.clone()).unwrap();
+            let body = fs::read(&artifact.path).unwrap();
+            assert_eq!(hash(&body), artifact.sha256);
+            let result: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(result["truth_opened"], false);
+            assert_eq!(result["plan"]["row_ranges"], json!(expected_ranges));
+            assert_eq!(
+                result["plan"]["original_row_ranges"],
+                json!(original_ranges)
+            );
+            assert_eq!(result["plan"]["candidate_bytes"], 567 * 14);
+            let query = queries[index % 64];
+            let length = query
+                .iter()
+                .map(|&v| f64::from(v) * f64::from(v))
+                .sum::<f64>()
+                .sqrt();
+            let query = query.map(|v| (f64::from(v) / length) as f32);
+            let mut shift = 0_f32;
+            let mut qnorm = 0_f32;
+            for axis in 0..3 {
+                shift += query[axis] * low[axis];
+                qnorm += query[axis] * query[axis];
+            }
+            shift -= qnorm / 2.;
+            for (key, rows, quantized) in [
+                ("sq4", &candidate_rows, true),
+                ("sq8_reference", &candidate_rows, false),
+                ("original256_baseline", &baseline_rows, false),
+            ] {
+                let mut expected = Vec::new();
+                let mut fetched = Vec::new();
+                for &physical in rows {
+                    let row = &sources[index / 64][physical * 15..(physical + 1) * 15];
+                    let id = i64::from_le_bytes(row[..8].try_into().unwrap());
+                    let mut norm = 0_f32;
+                    let mut inner = 0_f32;
+                    for axis in 0..3 {
+                        let original = row[12 + axis];
+                        let code = if quantized {
+                            (0..=15u8)
+                                .min_by_key(|&n| i32::from(original).abs_diff(17 * i32::from(n)))
+                                .unwrap()
+                                * 17
+                        } else {
+                            original
+                        };
+                        let value = low[axis] + f32::from(code) * step[axis];
+                        norm += value * value;
+                        let weight = query[axis] * step[axis];
+                        inner += f32::from(code) * weight;
+                    }
+                    if !quantized {
+                        assert_eq!(
+                            norm.to_bits(),
+                            u32::from_le_bytes(row[8..12].try_into().unwrap())
+                        );
+                    }
+                    expected.push((norm - 2. * (inner + shift), id, physical));
+                    fetched.push(id);
+                }
+                expected.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+                assert_eq!(result[key]["ranked"].as_array().unwrap().len(), 100);
+                assert_eq!(result[key]["fetched_ids"], json!(fetched));
+                assert_eq!(
+                    result[key]["range_reads"],
+                    if key == "original256_baseline" {
+                        34
+                    } else {
+                        32
+                    }
+                );
+                assert_eq!(
+                    result[key]["verified_bytes"],
+                    rows.len() * if quantized { 14 } else { 15 }
+                );
+                for (actual, expected) in result[key]["ranked"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .zip(expected.iter().take(100))
+                {
+                    assert_eq!(actual["id"], expected.1);
+                    assert_eq!(actual["ordinal"], expected.2);
+                    assert_eq!(actual["score_bits"], expected.0.to_bits());
+                    incidental_ranked |= key == "sq4"
+                        && ((16..32).contains(&expected.2) || (48..64).contains(&expected.2));
+                }
+            }
+            assert_eq!(
+                result["sq4"]["fetched_ids"],
+                result["sq8_reference"]["fetched_ids"]
+            );
+            assert_eq!(result["sq8_reference_serving_eligible"], false);
+        }
+        assert!(incidental_ranked);
+        let mut missing = config.clone();
+        for panel in &mut missing.panels {
+            panel.truth.path = dispersed.join("unopened-missing-truth");
+        }
+        let output = dispersed.join("missing.json");
+        assert!(sq4::diagnose(&missing, &"d".repeat(64), &output).is_err());
+        let invalid: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+        assert_eq!(invalid["status"], "INVALID");
+        assert_eq!(invalid["queries"], 128);
+        assert_eq!(invalid["details"]["truth_opened"], false);
+        let freeze: Value =
+            serde_json::from_slice(&fs::read(output.with_extension("sq4-freeze.json")).unwrap())
+                .unwrap();
+        assert_eq!(freeze["results"].as_array().unwrap().len(), 128);
+        assert_eq!(freeze["truth_opened"], false);
+    }
+
     #[test]
     fn fine_pack_strict_cli_real_tiny_pipeline() {
         use borsuk::fine_sq8_groups::{

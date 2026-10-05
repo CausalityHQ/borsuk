@@ -25,6 +25,7 @@ use std::{
 };
 
 pub const BUILD_SCHEMA: &str = "borsuk-fine-sq8-build-v1";
+pub use pack_diagnostic::sq4_diagnostic;
 pub const SCHEMA: &str = "borsuk-fine-sq8-v1";
 pub const GROUP_ROWS: usize = 16;
 pub const MAX_GETS: usize = 256;
@@ -2620,6 +2621,1989 @@ pub mod pack_diagnostic {
             outputs.invalidate(config_sha, error);
         }
         result
+    }
+
+    /// Fixed SQ4 falsifier; deliberately separate from the serving index.
+    pub mod sq4_diagnostic {
+        use super::*;
+        pub use super::{Caps, SupervisorReceipt};
+
+        pub const CONFIG_SCHEMA: &str = "borsuk-fixed-sq4-config-v1";
+        pub const REPORT_SCHEMA: &str = "borsuk-fixed-sq4-report-v1";
+        const CODEC: &str = "borsuk-sq4-nearest17-original-coefficients-v1";
+        const RESERVE: usize = 8192;
+        const FIXED: usize = 64 * 1024 * 1024;
+        const REQUEST_CAP: usize = 4 * 1024 * 1024;
+        const RESULT_CAP: usize = 8 * 1024 * 1024;
+        // paired100k/a0002/screen/fine/measurement/paired-fine-config.json,
+        // independently corroborated by the archived aws-terminal.json roster.
+        const TRUTH_SHA256: [&str; 2] = [
+            "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c",
+            "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355",
+        ];
+        fn archived_truth(truth: [&Artifact; 2]) -> bool {
+            truth
+                .into_iter()
+                .zip(TRUTH_SHA256)
+                .all(|(a, sha)| a.bytes == 25_600 && a.sha256 == sha)
+        }
+        #[cfg(test)]
+        thread_local! {
+            static APPEND_ON_OPEN: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+            static TAMPER_CLOSURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+            static APPEND_AFTER_TRANSCODE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+        }
+
+        #[derive(Clone, Debug, Serialize, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        pub struct Panel {
+            pub dataset: String,
+            pub root: Artifact,
+            pub requests: Artifact,
+            pub truth: Artifact,
+            pub truth_width: usize,
+        }
+        #[derive(Clone, Debug, Serialize, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        pub struct Config {
+            pub schema: String,
+            pub source_identity_sha256: String,
+            pub panels: [Panel; 2],
+            pub original_seal: Artifact,
+            pub prefix: Artifact,
+            pub caps: Caps,
+        }
+
+        /// Source closure for this diagnostic, including the unchanged scorer.
+        pub fn source_identity() -> String {
+            let mut h = Sha256::new();
+            for (name, body) in [
+                (
+                    "fine_sq8_groups.rs",
+                    include_bytes!("fine_sq8_groups.rs").as_slice(),
+                ),
+                (
+                    "bin/hierarchical_semantic_cells.rs",
+                    include_bytes!("bin/hierarchical_semantic_cells.rs").as_slice(),
+                ),
+                (
+                    "budgeted_page_rank.rs",
+                    include_bytes!("budgeted_page_rank.rs").as_slice(),
+                ),
+                (
+                    "exact_sq8_nominee.rs",
+                    include_bytes!("exact_sq8_nominee.rs").as_slice(),
+                ),
+                (
+                    "returned_sq8.rs",
+                    include_bytes!("returned_sq8.rs").as_slice(),
+                ),
+                ("sq8_source.rs", include_bytes!("sq8_source.rs").as_slice()),
+                (
+                    "sq8_page_authority.rs",
+                    include_bytes!("sq8_page_authority.rs").as_slice(),
+                ),
+                (
+                    "resident_vector_graph.rs",
+                    include_bytes!("resident_vector_graph.rs").as_slice(),
+                ),
+                (
+                    "pq64_nominee.rs",
+                    include_bytes!("pq64_nominee.rs").as_slice(),
+                ),
+                (
+                    "hierarchical_semantic_cells.rs",
+                    include_bytes!("hierarchical_semantic_cells.rs").as_slice(),
+                ),
+                ("lib.rs", include_bytes!("lib.rs").as_slice()),
+                (
+                    "centroid_hnsw.rs",
+                    include_bytes!("centroid_hnsw.rs").as_slice(),
+                ),
+            ] {
+                h.update((name.len() as u64).to_le_bytes());
+                h.update(name.as_bytes());
+                h.update((body.len() as u64).to_le_bytes());
+                h.update(body);
+            }
+            format!("{:x}", h.finalize())
+        }
+
+        fn terminal(config_sha: &str, status: &str, complete: bool, details: Value) -> Value {
+            json!({"schema":REPORT_SCHEMA,"codec":CODEC,"status":status,"complete":complete,
+                "config_sha256":config_sha,"source_identity_sha256":source_identity(),"details":details,
+                "queries":if complete {128} else {0},"standalone_authority":false,
+                "requires_matching_supervisor_exit_receipt":true,"quality_or_performance_claim":false,
+                "scope":"consumed64 FIRST100k only; no fresh quality, S3, lifecycle, or 100M RAM claim"})
+        }
+        #[derive(Default)]
+        struct Progress {
+            stage: &'static str,
+            scored_queries: usize,
+            truth_opened: bool,
+            freeze: Option<Artifact>,
+            operations: u64,
+        }
+        fn invalidate(
+            output: &mut Outputs,
+            sha: &str,
+            error: &dyn std::fmt::Display,
+            progress: &Progress,
+        ) {
+            let mut value = terminal(
+                sha,
+                "INVALID",
+                false,
+                json!({"error":error.to_string().chars().take(512).collect::<String>(),
+                    "stage":progress.stage,"scored_queries":progress.scored_queries,
+                    "truth_opened":progress.truth_opened,"freeze":progress.freeze,
+                    "published_bytes":output.bytes,"operations":progress.operations}),
+            );
+            value["queries"] = json!(progress.scored_queries);
+            if let Ok(body) = serde_json::to_vec(&value) {
+                // Only the inode created by this run is rewritten. A failed sync
+                // always leaves the process unsuccessful, even if retry succeeds.
+                let _ = output.report.set_len(0);
+                let _ = output.report.seek(SeekFrom::Start(0));
+                let _ = output.report.write_all(&body);
+                let _ = output.report.sync_all();
+                let _ = output.parent.sync_all();
+            }
+        }
+
+        fn config_valid(config: &Config) -> Result<()> {
+            require(
+                config.schema == CONFIG_SCHEMA
+                    && config.source_identity_sha256 == source_identity()
+                    && config.panels[0].dataset == "relaion"
+                    && config.panels[1].dataset == "cohere"
+                    && (FIXED..=1024 * 1024 * 1024).contains(&config.caps.memory_bytes)
+                    && (RESERVE..=256 * 1024 * 1024).contains(&config.caps.output_bytes)
+                    && (1..=600).contains(&config.caps.deadline_seconds)
+                    && (1..=20_000_000_000).contains(&config.caps.operations)
+                    && config.caps.cpu_threads == 1
+                    && config.caps.swap_bytes == 0
+                    && config.original_seal.bytes <= 4096
+                    && config.prefix.bytes <= 2 * 1024 * 1024,
+                "SQ4 fixed config/code/resource contract",
+            )?;
+            for panel in &config.panels {
+                require(
+                    panel.root.bytes <= ROOT_CAP
+                        && panel.requests.bytes <= REQUEST_CAP
+                        && panel.truth_width == 100
+                        && panel.truth.bytes == 64 * 100 * 4,
+                    "SQ4 root/request/truth geometry caps",
+                )?;
+                for a in [&panel.root, &panel.requests, &panel.truth] {
+                    digest(&a.sha256)?;
+                }
+            }
+            digest(&config.prefix.sha256)?;
+            digest(&config.original_seal.sha256)?;
+            Ok(())
+        }
+        fn allocation_model(config: &Config, n: usize, d: usize) -> Result<usize> {
+            require(
+                (100..=100_000).contains(&n) && (1..=768).contains(&d),
+                "SQ4 bounded geometry",
+            )?;
+            // Fixed reserve covers JSON trees/serialization, manifests, two
+            // metadata sets and allocator/runtime overhead. Variable terms cover
+            // simultaneous prefix/decoded plans, request parser, and one range's
+            // compressed bytes + expanded bytes + native scorer + full ranking.
+            // Original-SQ8 and SQ4 reads run sequentially, never coexist.
+            memory(
+                &config.caps,
+                &[
+                    FIXED,
+                    config
+                        .prefix
+                        .bytes
+                        .checked_mul(16)
+                        .ok_or("SQ4 prefix model overflow")?,
+                    config
+                        .panels
+                        .iter()
+                        .map(|p| p.requests.bytes)
+                        .max()
+                        .unwrap_or(0)
+                        .checked_mul(16)
+                        .ok_or("SQ4 request model overflow")?,
+                    n.checked_mul(64).ok_or("SQ4 resident model overflow")?,
+                    n.checked_mul(12 + d.div_ceil(2) + 12 + d + 256)
+                        .ok_or("SQ4 scoring model overflow")?,
+                ],
+            )
+        }
+        fn descriptor(a: &Artifact, prefix: bool) -> Result<File> {
+            digest(&a.sha256)?;
+            let file = secure_open(&a.path, rustix::fs::OFlags::RDONLY)?;
+            let meta = file.metadata()?;
+            require(
+                meta.is_file()
+                    && if prefix {
+                        meta.len() >= a.bytes as u64
+                    } else {
+                        meta.len() == a.bytes as u64
+                    },
+                "SQ4 regular exact descriptor",
+            )?;
+            #[cfg(test)]
+            APPEND_ON_OPEN.with(|path| -> Result<()> {
+                if path.borrow().as_ref() == Some(&a.path) {
+                    path.borrow_mut().take();
+                    OpenOptions::new()
+                        .append(true)
+                        .open(&a.path)?
+                        .write_all(b"growth")?;
+                }
+                Ok(())
+            })?;
+            Ok(file)
+        }
+        fn exact_eof(file: &File, bytes: usize) -> Result<()> {
+            require(
+                file.metadata()?.len() == bytes as u64
+                    && file.read_at(&mut [0u8; 1], bytes as u64)? == 0,
+                "SQ4 exact descriptor EOF/growth",
+            )
+        }
+        fn read_pinned(
+            a: &Artifact,
+            cap: usize,
+            prefix: bool,
+            guard: &mut Guard,
+        ) -> Result<Vec<u8>> {
+            require(
+                a.bytes > 0 && a.bytes <= cap,
+                "SQ4 input cap before allocation",
+            )?;
+            let file = descriptor(a, prefix)?;
+            read_descriptor(a, &file, prefix, guard)
+        }
+        fn read_descriptor(
+            a: &Artifact,
+            file: &File,
+            prefix: bool,
+            guard: &mut Guard,
+        ) -> Result<Vec<u8>> {
+            let mut body = filled(a.bytes, 0u8)?;
+            for (i, part) in body.chunks_mut(65536).enumerate() {
+                guard.tick(part.len() as u64)?;
+                file.read_exact_at(part, (i * 65536) as u64)?;
+            }
+            require(hash(&body) == a.sha256, "SQ4 pinned SHA256")?;
+            // The historical trace intentionally has an unread tail. All other
+            // descriptors must still end at the declared body after the read.
+            if !prefix {
+                exact_eof(file, a.bytes)?;
+            }
+            Ok(body)
+        }
+        fn authenticate(a: &Artifact, guard: &mut Guard) -> Result<File> {
+            let file = descriptor(a, false)?;
+            let mut h = Sha256::new();
+            let mut buffer = [0u8; 65536];
+            let mut offset = 0;
+            while offset < a.bytes {
+                let count = buffer.len().min(a.bytes - offset);
+                guard.tick(count as u64)?;
+                file.read_exact_at(&mut buffer[..count], offset as u64)?;
+                h.update(&buffer[..count]);
+                offset += count;
+            }
+            require(
+                format!("{:x}", h.finalize()) == a.sha256,
+                "SQ4 streamed original SHA256",
+            )?;
+            exact_eof(&file, a.bytes)?;
+            Ok(file)
+        }
+
+        fn encode(row: &[u8], low: &[f32], step: &[f32], out: &mut [u8]) -> Result<()> {
+            let d = low.len();
+            require(
+                d > 0
+                    && step.len() == d
+                    && row.len() == 12 + d
+                    && out.len() == 12 + d.div_ceil(2)
+                    && low.iter().all(|v| v.is_finite())
+                    && step.iter().all(|v| v.is_finite() && *v > 0.),
+                "SQ4 codec geometry",
+            )?;
+            require(
+                f32::from_le_bytes(row[8..12].try_into()?).is_finite(),
+                "SQ4 original norm",
+            )?;
+            out.fill(0);
+            out[..8].copy_from_slice(&row[..8]);
+            let mut norm = 0_f32;
+            for axis in 0..d {
+                let nibble = ((u16::from(row[12 + axis]) + 8) / 17) as u8;
+                out[12 + axis / 2] |= nibble << (4 * (axis % 2));
+                // Same ordered f32 reconstruction and accumulation as sq8_source.
+                let value = low[axis] + f32::from(17 * nibble) * step[axis];
+                norm += value * value;
+            }
+            require(norm.is_finite(), "SQ4 reconstructed norm")?;
+            out[8..12].copy_from_slice(&norm.to_le_bytes());
+            Ok(())
+        }
+        fn expand(body: &[u8], d: usize, out: &mut [u8]) -> Result<()> {
+            let width = 12 + d.div_ceil(2);
+            let old = 12 + d;
+            require(
+                d > 0 && body.len() % width == 0 && out.len() == body.len() / width * old,
+                "SQ4 expansion geometry",
+            )?;
+            for (packed, row) in body.chunks_exact(width).zip(out.chunks_exact_mut(old)) {
+                require(
+                    d % 2 == 0 || packed[width - 1] & 0xf0 == 0,
+                    "SQ4 unused high nibble",
+                )?;
+                row[..12].copy_from_slice(&packed[..12]);
+                for axis in 0..d {
+                    row[12 + axis] = 17 * ((packed[12 + axis / 2] >> (4 * (axis % 2))) & 15);
+                }
+            }
+            Ok(())
+        }
+        struct Plane {
+            root: Artifact,
+            manifest: Manifest,
+            ids: Vec<i64>,
+            original: File,
+            groups: Vec<u8>,
+            sq4: File,
+            payload: Artifact,
+            sq4_hashes: Vec<[u8; 32]>,
+        }
+        impl Plane {
+            fn transcode(
+                root: &Artifact,
+                output: &mut Outputs,
+                extension: &str,
+                n: usize,
+                d: usize,
+                guard: &mut Guard,
+            ) -> Result<Self> {
+                let width = 12 + d.div_ceil(2);
+                let old = 12 + d;
+                let bytes = n.checked_mul(width).ok_or("SQ4 payload overflow")?;
+                require(
+                    sum(&[output.bytes, bytes, RESERVE])? <= output.cap,
+                    "SQ4 output cap before transcode",
+                )?;
+                let manifest: Manifest =
+                    serde_json::from_slice(&read_pinned(root, ROOT_CAP, false, guard)?)?;
+                validate_manifest(&manifest, root)?;
+                require(
+                    manifest.identity.rows == n && manifest.identity.dimensions == d,
+                    "SQ4 exact paired geometry",
+                )?;
+                // Authenticate the unchanged router artifacts without decoding or rebuilding them.
+                authenticate(&manifest.graph, guard)?;
+                authenticate(&manifest.pq, guard)?;
+                let order = read_pinned(&manifest.order, n * 8, false, guard)?;
+                let mut ids = reserved::<i64>(n)?;
+                let mut seen = filled(n, false)?;
+                for word in order.chunks_exact(8) {
+                    let id = usize::try_from(u64::from_le_bytes(word.try_into()?))?;
+                    require(
+                        id < n && !std::mem::replace(&mut seen[id], true),
+                        "SQ4 order bijection",
+                    )?;
+                    ids.push(id as i64);
+                }
+                drop(order);
+                drop(seen);
+                let groups = read_pinned(&manifest.groups, n.div_ceil(16) * 32, false, guard)?;
+                let original = descriptor(&manifest.records, false)?;
+                let path = output.output.with_extension(extension);
+                require(path != output.output, "SQ4 payload path collision")?;
+                let mut file = Outputs::create_at(&output.parent, &path)?;
+                let mut input = filled(16 * old, 0u8)?;
+                let mut packed = filled(16 * width, 0u8)?;
+                let mut sq4_hashes = reserved(n.div_ceil(16))?;
+                let mut input_hash = Sha256::new();
+                let mut payload_hash = Sha256::new();
+                for first in (0..n).step_by(16) {
+                    let count = (n - first).min(16);
+                    let source = &mut input[..count * old];
+                    let destination = &mut packed[..count * width];
+                    guard.tick((source.len() + count * d) as u64)?;
+                    original.read_exact_at(source, (first * old) as u64)?;
+                    require(
+                        Sha256::digest(&*source).as_slice()
+                            == &groups[first / 16 * 32..(first / 16 + 1) * 32],
+                        "SQ4 original group authentication",
+                    )?;
+                    input_hash.update(&*source);
+                    for (slot, (row, target)) in source
+                        .chunks_exact(old)
+                        .zip(destination.chunks_exact_mut(width))
+                        .enumerate()
+                    {
+                        require(
+                            i64::from_le_bytes(row[..8].try_into()?) == ids[first + slot],
+                            "SQ4 original row ID binding",
+                        )?;
+                        encode(row, &manifest.low, &manifest.step, target)?;
+                    }
+                    file.write_all(destination)?;
+                    payload_hash.update(&*destination);
+                    sq4_hashes.push(Sha256::digest(&*destination).into());
+                }
+                require(
+                    format!("{:x}", input_hash.finalize()) == manifest.records.sha256,
+                    "SQ4 original whole payload authentication",
+                )?;
+                exact_eof(&original, manifest.records.bytes)?;
+                output.bytes += bytes;
+                output.sync(&file)?;
+                drop(file);
+                let payload = Artifact {
+                    path,
+                    bytes,
+                    sha256: format!("{:x}", payload_hash.finalize()),
+                };
+                let sq4 = descriptor(&payload, false)?;
+                Ok(Self {
+                    root: root.clone(),
+                    manifest,
+                    ids,
+                    original,
+                    groups,
+                    sq4,
+                    payload,
+                    sq4_hashes,
+                })
+            }
+        }
+        #[derive(Serialize)]
+        struct Plan {
+            query_sha256: String,
+            nominees: Vec<usize>,
+            row_ranges: Vec<Range<usize>>,
+            original_row_ranges: Vec<Range<usize>>,
+            candidate_bytes: usize,
+            envelope_fits: bool,
+        }
+        fn plan(original: FrozenPlan, n: usize, d: usize) -> Result<Plan> {
+            let selected = original
+                .nominees
+                .iter()
+                .map(|i| i / 16)
+                .collect::<BTreeSet<_>>();
+            let width = 12 + d.div_ceil(2);
+            let (ranges, bytes) = cover_pages(&selected, n, width, 16, 32)
+                .map_err(|e| format!("SQ4 cover: {e:?}"))?;
+            let row_ranges = ranges
+                .into_iter()
+                .map(|r| r.start / width..r.end / width)
+                .collect::<Vec<_>>();
+            let original_row_ranges = original
+                .ranges
+                .iter()
+                .map(|r| r.start / (d + 12)..r.end / (d + 12))
+                .collect::<Vec<_>>();
+            require(
+                original
+                    .nominees
+                    .iter()
+                    .all(|id| row_ranges.iter().any(|r| r.contains(id)))
+                    && original_row_ranges.iter().all(|old| {
+                        row_ranges
+                            .iter()
+                            .any(|new| new.start <= old.start && new.end >= old.end)
+                    }),
+                "SQ4 complete nominees and original256 cover containment",
+            )?;
+            Ok(Plan {
+                query_sha256: original.query_sha256,
+                nominees: original.nominees,
+                row_ranges,
+                original_row_ranges,
+                candidate_bytes: bytes,
+                envelope_fits: bytes <= MAX_BYTES,
+            })
+        }
+        #[derive(Serialize, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Score {
+            id: i64,
+            ordinal: usize,
+            score_bits: u32,
+        }
+        #[derive(Serialize, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Scored {
+            ranked: Vec<Score>,
+            fetched_ids: Vec<i64>,
+            range_reads: usize,
+            verified_bytes: usize,
+            range_payload_capacity_peak: usize,
+            expanded_capacity_peak: usize,
+            coexisting_score_allocation_bound: usize,
+        }
+        fn score(
+            plane: &Plane,
+            ranges: &[Range<usize>],
+            query: &[f32],
+            packed: bool,
+            guard: &mut Guard,
+        ) -> Result<Scored> {
+            let n = plane.ids.len();
+            let d = plane.manifest.identity.dimensions;
+            let width = if packed { 12 + d.div_ceil(2) } else { 12 + d };
+            let normalized = cosine_vector(query)?;
+            let total = ranges.iter().try_fold(0usize, |sum, r| {
+                sum.checked_add(r.len()).ok_or("SQ4 range overflow")
+            })?;
+            require(total <= n, "SQ4 fetched row cap")?;
+            let mut all = reserved::<ScoredNominee>(total)?;
+            let mut fetched = reserved::<i64>(total)?;
+            let mut prior = 0;
+            let mut verified = 0;
+            let mut range_peak = 0;
+            let mut expansion_peak = 0;
+            let mut score_peak = 0;
+            for r in ranges {
+                require(
+                    r.start >= prior
+                        && r.start < r.end
+                        && r.end <= n
+                        && r.start % 16 == 0
+                        && (r.end == n || r.end % 16 == 0),
+                    "SQ4 range geometry",
+                )?;
+                let mut body = filled(
+                    r.len()
+                        .checked_mul(width)
+                        .ok_or("SQ4 range bytes overflow")?,
+                    0u8,
+                )?;
+                // Every live allocation was admitted before the body read. Exact
+                // reservation checks allocator capacity, including expanded bytes.
+                let mut expansion = if packed {
+                    filled(
+                        r.len()
+                            .checked_mul(12 + d)
+                            .ok_or("SQ4 expansion overflow")?,
+                        0u8,
+                    )?
+                } else {
+                    Vec::new()
+                };
+                let ordinals = (0..r.len()).collect::<Vec<_>>();
+                require(
+                    ordinals.capacity() == r.len(),
+                    "SQ4 ordinal actual capacity",
+                )?;
+                let actual = sum(&[
+                    body.capacity(),
+                    expansion.capacity(),
+                    all.capacity()
+                        .checked_mul(std::mem::size_of::<ScoredNominee>())
+                        .ok_or("SQ4 score capacity overflow")?,
+                    fetched
+                        .capacity()
+                        .checked_mul(8)
+                        .ok_or("SQ4 fetched capacity overflow")?,
+                    ordinals
+                        .capacity()
+                        .checked_mul(8)
+                        .ok_or("SQ4 ordinal capacity overflow")?,
+                    r.len()
+                        .checked_mul(192)
+                        .ok_or("SQ4 native scorer workspace overflow")?,
+                ])?;
+                require(
+                    actual
+                        <= n.checked_mul(12 + d.div_ceil(2) + 12 + d + 256)
+                            .ok_or("SQ4 coexistence overflow")?,
+                    "SQ4 actual coexistence before read/expansion",
+                )?;
+                range_peak = range_peak.max(body.capacity());
+                expansion_peak = expansion_peak.max(expansion.capacity());
+                score_peak = score_peak.max(actual);
+                guard.tick((body.len() + r.len() * d) as u64)?;
+                let file = if packed { &plane.sq4 } else { &plane.original };
+                file.read_exact_at(&mut body, (r.start * width) as u64)?;
+                for (group, chunk) in body.chunks(16 * width).enumerate() {
+                    let index = r.start / 16 + group;
+                    let expected = if packed {
+                        &plane.sq4_hashes[index][..]
+                    } else {
+                        &plane.groups[index * 32..(index + 1) * 32]
+                    };
+                    require(
+                        Sha256::digest(chunk).as_slice() == expected,
+                        "SQ4 fetched group authentication",
+                    )?;
+                }
+                verified += body.len();
+                let expanded = if packed {
+                    expand(&body, d, &mut expansion)?;
+                    &expansion[..]
+                } else {
+                    &body[..]
+                };
+                for (slot, row) in expanded.chunks_exact(12 + d).enumerate() {
+                    let id = i64::from_le_bytes(row[..8].try_into()?);
+                    require(id == plane.ids[r.start + slot], "SQ4 fetched order binding")?;
+                    fetched.push(id);
+                }
+                let local = score_nominees(
+                    expanded,
+                    Sq8Geometry {
+                        rows: r.len(),
+                        dimensions: d,
+                    },
+                    &ordinals,
+                    &normalized,
+                    &plane.manifest.low,
+                    &plane.manifest.step,
+                )
+                .map_err(|e| format!("SQ4 native scorer: {e:?}"))?;
+                for mut s in local {
+                    s.ordinal += r.start;
+                    all.push(s);
+                }
+                prior = r.end;
+            }
+            all.sort_unstable_by(|a, b| a.score.total_cmp(&b.score).then(a.id.cmp(&b.id)));
+            let ranked = all
+                .iter()
+                .take(100)
+                .map(|s| Score {
+                    id: s.id,
+                    ordinal: s.ordinal,
+                    score_bits: s.score.to_bits(),
+                })
+                .collect();
+            Ok(Scored {
+                ranked,
+                fetched_ids: fetched,
+                range_reads: ranges.len(),
+                verified_bytes: verified,
+                range_payload_capacity_peak: range_peak,
+                expanded_capacity_peak: expansion_peak,
+                coexisting_score_allocation_bound: score_peak,
+            })
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Request {
+            ordinal: usize,
+            query: Vec<f32>,
+        }
+
+        fn output_admission(config: &Config, plans: &[Plan], n: usize, d: usize) -> Result<usize> {
+            let payloads = n
+                .checked_mul(12 + d.div_ceil(2))
+                .and_then(|v| v.checked_mul(2))
+                .ok_or("SQ4 pair payload overflow")?;
+            // Two MiB covers the payload seal, 128 bounded-path result pins in
+            // the freeze, and terminal reserve. Immutable source inputs remain
+            // separate; there is no second staging copy of either payload.
+            let mut required = sum(&[payloads, config.prefix.bytes, 2 * 1024 * 1024, RESERVE])?;
+            let digits = (n - 1).to_string().len() + 1; // decimal ID plus delimiter
+            for plan in plans {
+                let candidate = plan.row_ranges.iter().map(|r| r.len()).sum::<usize>();
+                let original = plan
+                    .original_row_ranges
+                    .iter()
+                    .map(|r| r.len())
+                    .sum::<usize>();
+                let ids = candidate
+                    .checked_mul(2)
+                    .and_then(|v| v.checked_add(original))
+                    .and_then(|v| v.checked_add(plan.nominees.len()))
+                    .and_then(|v| v.checked_mul(digits))
+                    .ok_or("SQ4 output roster overflow")?;
+                // 300 top-k score records, counters, schema and scalar fields
+                // fit 32KiB. The exact serialized plan and all fetched IDs are
+                // charged separately, before either payload output is created.
+                required = sum(&[required, ids, serde_json::to_vec(plan)?.len(), 32768])?;
+            }
+            require(
+                required <= config.caps.output_bytes,
+                "SQ4 paired payload/results/closure output admission",
+            )?;
+            Ok(required)
+        }
+
+        fn run(
+            config: &Config,
+            sha: &str,
+            output: &mut Outputs,
+            protocol: &Protocol,
+            guard: &mut Guard,
+            strict: bool,
+            progress: &mut Progress,
+        ) -> Result<Value> {
+            progress.stage = "validation";
+            config_valid(config)?;
+            digest(sha)?;
+            if strict {
+                require(
+                    archived_truth(config.panels.each_ref().map(|p| &p.truth)),
+                    "SQ4 archived truth descriptor binding",
+                )?;
+                require(crate::configured_cpu_threads() == 1, "SQ4 requires CPU1")?;
+            }
+            let n = protocol.rows;
+            let d = protocol.dimensions;
+            let modeled = allocation_model(config, n, d)?;
+            require(
+                config.prefix.bytes == protocol.prefix_bytes
+                    && config.prefix.sha256 == protocol.prefix_sha
+                    && config.original_seal.sha256 == protocol.seal_sha,
+                "SQ4 original frozen authority",
+            )?;
+            output.cap = config.caps.output_bytes;
+            let seal_body = read_pinned(&config.original_seal, 4096, false, guard)?;
+            let seal: OriginalSeal = serde_json::from_slice(&seal_body)?;
+            digest(&seal.config_sha256)?;
+            digest(&seal.source_identity_sha256)?;
+            require(
+                seal.schema == "borsuk-fine-sq8-seal-v1"
+                    && !seal.truth_opened
+                    && seal.plans_per_panel == 64
+                    && seal.prefix_bytes == config.prefix.bytes
+                    && seal.prefix_sha256 == config.prefix.sha256,
+                "SQ4 original seal binding",
+            )?;
+            for (old, panel) in seal.panels.iter().zip(&config.panels) {
+                require(
+                    old.dataset == panel.dataset
+                        && same_artifact(&old.root, &panel.root)
+                        && same_artifact(&old.requests, &panel.requests),
+                    "SQ4 sealed root/request binding",
+                )?;
+            }
+            let mut manifests = reserved(2)?;
+            for panel in &config.panels {
+                let manifest: Manifest =
+                    serde_json::from_slice(&read_pinned(&panel.root, ROOT_CAP, false, guard)?)?;
+                validate_manifest(&manifest, &panel.root)?;
+                require(
+                    manifest.identity.rows == n && manifest.identity.dimensions == d,
+                    "SQ4 paired root geometry before bodies",
+                )?;
+                manifests.push(manifest);
+            }
+            // Original nominations are already frozen. Their covers permit an
+            // exact paired scratch/output bound before either payload is written.
+            // Actual query vectors stay unopened until both payloads are sealed.
+            let prefix = read_pinned(&config.prefix, 2 * 1024 * 1024, true, guard)?;
+            let replay_config = super::Config {
+                schema: super::CONFIG_SCHEMA.into(),
+                original_seal: config.original_seal.clone(),
+                prefix: config.prefix.clone(),
+                caps: config.caps.clone(),
+                panels: std::array::from_fn(|i| super::Panel {
+                    dataset: config.panels[i].dataset.clone(),
+                    root: config.panels[i].root.clone(),
+                    graph: manifests[i].graph.clone(),
+                    identity: manifests[i].identity.clone(),
+                }),
+            };
+            let maps = [
+                (0..n.div_ceil(16) as u32).collect(),
+                (0..n.div_ceil(16) as u32).collect(),
+            ];
+            // Reuse the exact strict historical parser and every original cover/
+            // generation/query/nominee validation, with an identity permutation.
+            super::replay(&prefix, &replay_config, &maps, guard)?;
+            let mut plans = reserved(128)?;
+            for line in std::str::from_utf8(&prefix)?.lines().skip(2) {
+                let FrozenEvent::Plan { plan: original, .. } = serde_json::from_str(line)? else {
+                    return Err("SQ4 plan event".into());
+                };
+                plans.push(plan(original, n, d)?);
+            }
+            require(plans.len() == 128, "SQ4 all128 plans")?;
+            let modeled_output = output_admission(config, &plans, n, d)?;
+            let immutable_source_bytes = manifests.iter().try_fold(0usize, |total, m| {
+                sum(&[
+                    total,
+                    m.records.bytes,
+                    m.groups.bytes,
+                    m.order.bytes,
+                    m.graph.bytes,
+                    m.pq.bytes,
+                ])
+            })?;
+            drop(manifests);
+            progress.stage = "transcode";
+            let mut planes = reserved(2)?;
+            for (i, panel) in config.panels.iter().enumerate() {
+                planes.push(Plane::transcode(
+                    &panel.root,
+                    output,
+                    &format!("sq4-{i}.bin"),
+                    n,
+                    d,
+                    guard,
+                )?);
+            }
+            let payloads=planes.iter().map(|p|json!({"payload":p.payload,"original_root":p.root,
+                "original_records":p.manifest.records,"original_router":p.manifest.identity,
+                "codec":CODEC,"dimensions":d,"rows":n,"row_bytes":12+d.div_ceil(2),
+                "group_rows":16,"low_bits":p.manifest.low.iter().map(|v|v.to_bits()).collect::<Vec<_>>(),
+                "step_bits":p.manifest.step.iter().map(|v|v.to_bits()).collect::<Vec<_>>(),
+                "group_hashes_sha256":hash(&p.sq4_hashes.iter().flatten().copied().collect::<Vec<_>>())})).collect::<Vec<_>>();
+            let payload_seal = output.publish(
+                "sq4-payloads.json",
+                &serde_json::to_vec(&json!({
+                "schema":"borsuk-fixed-sq4-payload-seal-v1","config_sha256":sha,"codec":CODEC,
+                "source_identity_sha256":source_identity(),"original_seal":config.original_seal,
+                "payloads":payloads,"queries_opened":false,"truth_opened":false}))?,
+            )?;
+            let prefix_pin = output.publish("sq4-prefix.jsonl", &prefix)?;
+            progress.stage = "scoring";
+            let mut results = reserved(128)?;
+            let mut envelope = true;
+            for (panel_index, panel) in config.panels.iter().enumerate() {
+                let body = read_pinned(&panel.requests, REQUEST_CAP, false, guard)?;
+                let mut count = 0;
+                for (ordinal, line) in std::str::from_utf8(&body)?.lines().enumerate() {
+                    require(
+                        ordinal < 64 && line.len() <= ROOT_CAP,
+                        "SQ4 request line cap",
+                    )?;
+                    let request: Request = serde_json::from_str(line)?;
+                    let plan = &plans[panel_index * 64 + ordinal];
+                    require(
+                        request.ordinal == ordinal
+                            && request.query.len() == d
+                            && query_digest(&request.query) == plan.query_sha256,
+                        "SQ4 original query binding",
+                    )?;
+                    let sq4 = score(
+                        &planes[panel_index],
+                        &plan.row_ranges,
+                        &request.query,
+                        true,
+                        guard,
+                    )?;
+                    let reference = score(
+                        &planes[panel_index],
+                        &plan.row_ranges,
+                        &request.query,
+                        false,
+                        guard,
+                    )?;
+                    let baseline = score(
+                        &planes[panel_index],
+                        &plan.original_row_ranges,
+                        &request.query,
+                        false,
+                        guard,
+                    )?;
+                    require(
+                        sq4.fetched_ids == reference.fetched_ids
+                            && sq4.verified_bytes == plan.candidate_bytes
+                            && sq4.range_reads <= 32,
+                        "SQ4 same-population accounting",
+                    )?;
+                    envelope &= plan.envelope_fits;
+                    progress.scored_queries += 1;
+                    let result = json!({"schema":"borsuk-fixed-sq4-query-v1","dataset":panel.dataset,"ordinal":ordinal,
+                        "plan":plan,"nominee_ids":plan.nominees.iter().map(|&i|planes[panel_index].ids[i]).collect::<Vec<_>>(),
+                        "nominees_retained":true,"original_cover_contained":true,"sq4":sq4,"sq8_reference":reference,
+                        "original256_baseline":baseline,"sq8_reference_serving_eligible":false,"truth_opened":false});
+                    let encoded = serde_json::to_vec(&result)?;
+                    require(encoded.len() <= RESULT_CAP, "SQ4 result serialization cap")?;
+                    results.push(output.publish(
+                        &format!("sq4-result-{}.json", panel_index * 64 + ordinal),
+                        &encoded,
+                    )?);
+                    count += 1;
+                }
+                require(count == 64, "SQ4 complete consumed64 requests")?;
+            }
+            require(results.len() == 128, "SQ4 all128 results before truth")?;
+            progress.stage = "freeze";
+            let freeze=output.publish("sq4-freeze.json",&serde_json::to_vec(&json!({
+                "schema":"borsuk-fixed-sq4-freeze-v1","config_sha256":sha,"source_identity_sha256":source_identity(),
+                "payload_seal":payload_seal,"payloads":payloads,"original_seal":config.original_seal,
+                "truth":config.panels.each_ref().map(|p|&p.truth),
+                "nomination_prefix":prefix_pin,"results":results,"truth_opened":false}))?)?;
+            progress.freeze = Some(freeze.clone());
+            progress.stage = "pretruth authentication";
+            #[cfg(test)]
+            if let Some(panel) = APPEND_AFTER_TRANSCODE.with(|v| v.take()) {
+                OpenOptions::new()
+                    .append(true)
+                    .open(&planes[panel].manifest.records.path)?
+                    .write_all(b"growth")?;
+            }
+            #[cfg(test)]
+            if TAMPER_CLOSURE.with(|v| v.replace(false)) {
+                OpenOptions::new()
+                    .write(true)
+                    .open(&results[0].path)?
+                    .write_all(b"!")?;
+            }
+            // Verify the entire published closure before acquiring even the
+            // first truth descriptor. Later per-result reads authenticate again.
+            for pin in [&freeze, &payload_seal, &prefix_pin]
+                .into_iter()
+                .chain(results.iter())
+            {
+                authenticate(pin, guard)?;
+            }
+            for plane in &planes {
+                authenticate(&plane.payload, guard)?;
+                exact_eof(&plane.original, plane.manifest.records.bytes)?;
+            }
+            require(
+                sum(&[output.bytes, RESERVE])? <= modeled_output,
+                "SQ4 actual durable output exceeds pre-admission",
+            )?;
+            guard.tick(0)?;
+            let mut summaries = Vec::new();
+            let mut quality = true;
+            progress.stage = "truth";
+            for (p, panel) in config.panels.iter().enumerate() {
+                // Both payloads, all128 complete plans and ranked outputs are
+                // immutable and durably sealed before acquiring any truth FD.
+                let truth_file = descriptor(&panel.truth, false)?;
+                progress.truth_opened = true;
+                let truth = read_descriptor(&panel.truth, &truth_file, false, guard)?;
+                let mut nominee_hits = Vec::new();
+                let mut coverage_hits = Vec::new();
+                let mut returned_hits = Vec::new();
+                let mut reference_hits = Vec::new();
+                let mut baseline_hits = Vec::new();
+                for ordinal in 0..64 {
+                    let gt = truth[ordinal * 400..(ordinal + 1) * 400]
+                        .chunks_exact(4)
+                        .map(|v| i64::from(u32::from_le_bytes(v.try_into().unwrap())))
+                        .collect::<BTreeSet<_>>();
+                    require(
+                        gt.len() == 100 && gt.iter().all(|&id| id >= 0 && (id as usize) < n),
+                        "SQ4 truth unique source IDs",
+                    )?;
+                    let result: Value = serde_json::from_slice(&read_pinned(
+                        &results[p * 64 + ordinal],
+                        RESULT_CAP,
+                        false,
+                        guard,
+                    )?)?;
+                    let hits = |key: &str| -> Result<usize> {
+                        let scored: Scored = serde_json::from_value(result[key].clone())?;
+                        Ok(scored.ranked.iter().filter(|s| gt.contains(&s.id)).count())
+                    };
+                    nominee_hits.push(
+                        plans[p * 64 + ordinal]
+                            .nominees
+                            .iter()
+                            .filter(|&&i| gt.contains(&planes[p].ids[i]))
+                            .count(),
+                    );
+                    coverage_hits.push(
+                        plans[p * 64 + ordinal]
+                            .row_ranges
+                            .iter()
+                            .flat_map(|r| r.clone())
+                            .filter(|&i| gt.contains(&planes[p].ids[i]))
+                            .count(),
+                    );
+                    returned_hits.push(hits("sq4")?);
+                    reference_hits.push(hits("sq8_reference")?);
+                    baseline_hits.push(hits("original256_baseline")?);
+                }
+                let summary = |values: &[usize]| {
+                    let mut sorted = values.to_vec();
+                    sorted.sort_unstable();
+                    json!({"mean_recall":sorted.iter().sum::<usize>() as f64/6400.,"p05_hits":sorted[3]})
+                };
+                let returned = summary(&returned_hits);
+                quality &= returned_hits.iter().sum::<usize>() >= 6272
+                    && returned["p05_hits"].as_u64().unwrap() >= 95;
+                let loss = reference_hits
+                    .iter()
+                    .zip(&returned_hits)
+                    .map(|(a, b)| *a as i64 - *b as i64)
+                    .collect::<Vec<_>>();
+                summaries.push(json!({"dataset":panel.dataset,"nominee_containment":summary(&nominee_hits),"fetched_coverage":summary(&coverage_hits),
+                    "sq4_returned":returned,"same_population_sq8_returned":summary(&reference_hits),"original256_returned":summary(&baseline_hits),
+                    "sq4_vs_same_population_sq8_loss_hits":loss,"mean_recall_loss":loss.iter().sum::<i64>() as f64/6400.}));
+            }
+            guard.tick(0)?;
+            Ok(terminal(
+                sha,
+                if quality && envelope {
+                    "SURVIVED_CONSUMED_PANELS"
+                } else {
+                    "REJECT"
+                },
+                true,
+                json!({"freeze":freeze,"summaries":summaries,"all128_envelopes_fit":envelope,"modeled_peak_bytes":modeled,
+                    "modeled_output_bytes":modeled_output,"durable_output_bytes_before_terminal":output.bytes,
+                    "immutable_source_artifact_bytes":immutable_source_bytes,"pair_payload_bytes":2*n*(12+d.div_ceil(2)),
+                    "rows":n,"dimensions":d,"truth":config.panels.each_ref().map(|p|&p.truth),
+                    "frozen_original_authority":strict && n==100_000 && d==768 && config.prefix.bytes==PREFIX_BYTES
+                        && config.prefix.sha256==PREFIX_SHA && config.original_seal.sha256==SEAL_SHA
+                        && archived_truth(config.panels.each_ref().map(|p|&p.truth)),
+                    "caps":config.caps,"operations":guard.operations,"whole_process_supervisor_required":true}),
+            ))
+        }
+
+        /// Strict historical geometry, prefix and seal. Supervisor admission is
+        /// external; successful exit alone never establishes a quality PASS.
+        pub fn check_fine_sq4(config_path: &Path, config_sha: &str, path: &Path) -> Result<()> {
+            let mut output = Outputs::create(path)?;
+            let mut progress = Progress {
+                stage: "config",
+                ..Progress::default()
+            };
+            let result = (|| {
+                digest(config_sha)?;
+                let file = secure_open(config_path, rustix::fs::OFlags::RDONLY)?;
+                let meta = file.metadata()?;
+                require(
+                    meta.is_file() && meta.len() <= ROOT_CAP as u64,
+                    "SQ4 config regular/cap",
+                )?;
+                let mut body = filled(meta.len() as usize, 0u8)?;
+                (&file).take(ROOT_CAP as u64).read_exact(&mut body)?;
+                exact_eof(&file, body.len())?;
+                require(hash(&body) == config_sha, "SQ4 config SHA256")?;
+                let config: Config = serde_json::from_slice(&body)?;
+                config_valid(&config)?;
+                let mut guard = Guard::new(&config.caps);
+                let result = run(
+                    &config,
+                    config_sha,
+                    &mut output,
+                    &Protocol::frozen(),
+                    &mut guard,
+                    true,
+                    &mut progress,
+                );
+                progress.operations = guard.operations;
+                let report = result?;
+                progress.stage = "terminal";
+                require(
+                    serde_json::to_vec(&report)?.len() <= RESERVE,
+                    "SQ4 fixed terminal reserve",
+                )?;
+                output.finish(&report)?;
+                guard.tick(0)
+            })();
+            if let Err(error) = &result {
+                invalidate(&mut output, config_sha, error, &progress);
+            }
+            result
+        }
+        /// Explicit caller-authenticated tiny/source fixture API. The command
+        /// above alone enforces the frozen FIRST100k/D768 historical authority.
+        pub fn diagnose(config: &Config, sha: &str, path: &Path) -> Result<()> {
+            let mut output = Outputs::create(path)?;
+            let mut guard = Guard::new(&config.caps);
+            let mut progress = Progress {
+                stage: "fixture metadata",
+                ..Progress::default()
+            };
+            let result = (|| {
+                config_valid(config)?;
+                let manifest: Manifest = serde_json::from_slice(&read_pinned(
+                    &config.panels[0].root,
+                    ROOT_CAP,
+                    false,
+                    &mut guard,
+                )?)?;
+                let protocol = Protocol {
+                    rows: manifest.identity.rows,
+                    dimensions: manifest.identity.dimensions,
+                    prefix_bytes: config.prefix.bytes,
+                    prefix_sha: config.prefix.sha256.clone(),
+                    seal_sha: config.original_seal.sha256.clone(),
+                };
+                let result = run(
+                    config,
+                    sha,
+                    &mut output,
+                    &protocol,
+                    &mut guard,
+                    false,
+                    &mut progress,
+                );
+                progress.operations = guard.operations;
+                let report = result?;
+                progress.stage = "terminal";
+                require(
+                    serde_json::to_vec(&report)?.len() <= RESERVE,
+                    "SQ4 fixed terminal reserve",
+                )?;
+                output.finish(&report)?;
+                guard.tick(0)
+            })();
+            progress.operations = guard.operations;
+            if let Err(error) = &result {
+                invalidate(&mut output, sha, error, &progress);
+            }
+            result
+        }
+        #[cfg(test)]
+        mod tests {
+            use super::*;
+            use std::fs;
+
+            #[test]
+            fn fine_sq4_all_codes_numeric_oracle_odd_tail_nonunit_ties() {
+                let low = [-2.25_f32, 0.125, -0.75];
+                let step = [0.03125_f32, 0.25, 0.0625];
+                let mut packed = Vec::new();
+                let mut vectors = Vec::new();
+                for code in 0..=255u8 {
+                    let codes = [code, 255 - code, code];
+                    let mut row = (code as i64).to_le_bytes().to_vec();
+                    row.extend_from_slice(&1234_f32.to_le_bytes());
+                    row.extend(codes);
+                    let mut encoded = [0u8; 14];
+                    encode(&row, &low, &step, &mut encoded).unwrap();
+                    // Independent nearest-center search over all sixteen levels.
+                    let levels = codes.map(|c| {
+                        (0..16u8)
+                            .min_by_key(|&n| i32::from(c).abs_diff(i32::from(n) * 17))
+                            .unwrap()
+                    });
+                    assert_eq!(encoded[12], levels[0] + 16 * levels[1]);
+                    assert_eq!(encoded[13], levels[2]);
+                    let decoded = std::array::from_fn::<_, 3, _>(|i| {
+                        low[i] + step[i] * (levels[i] as f32 * 17.)
+                    });
+                    let mut norm = 0_f32;
+                    for value in decoded {
+                        norm += value * value;
+                    }
+                    assert_eq!(&encoded[8..12], &norm.to_le_bytes());
+                    assert_ne!(&encoded[8..12], &1234_f32.to_le_bytes());
+                    vectors.push(decoded);
+                    packed.extend(encoded);
+                }
+                let mut expanded = vec![0; 256 * 15];
+                expand(&packed, 3, &mut expanded).unwrap();
+                for (row, vector) in expanded.chunks_exact(15).zip(&vectors) {
+                    for axis in 0..3 {
+                        assert_eq!(
+                            low[axis] + step[axis] * f32::from(row[12 + axis]),
+                            vector[axis]
+                        );
+                    }
+                }
+                let query = [3.125_f32, -2., 0.875];
+                let actual = score_nominees(
+                    &expanded,
+                    Sq8Geometry {
+                        rows: 256,
+                        dimensions: 3,
+                    },
+                    &(0..256).collect::<Vec<_>>(),
+                    &query,
+                    &low,
+                    &step,
+                )
+                .unwrap();
+                for (score, v) in actual.iter().zip(&vectors) {
+                    let oracle = (0..3)
+                        .map(|i| (f64::from(v[i]) - f64::from(query[i])).powi(2))
+                        .sum::<f64>();
+                    assert!((f64::from(score.score) - oracle).abs() < 0.002);
+                    let bytes = &packed[score.ordinal * 14..(score.ordinal + 1) * 14];
+                    let mut norm = 0_f32;
+                    let mut shift = 0_f32;
+                    let mut qnorm = 0_f32;
+                    let mut inner = 0_f32;
+                    for axis in 0..3 {
+                        let nibble = if axis % 2 == 0 {
+                            bytes[12 + axis / 2] & 15
+                        } else {
+                            bytes[12 + axis / 2] >> 4
+                        };
+                        let code = f32::from(nibble) * 17.;
+                        let value = low[axis] + code * step[axis];
+                        norm += value * value;
+                        shift += query[axis] * low[axis];
+                        qnorm += query[axis] * query[axis];
+                        let weight = query[axis] * step[axis];
+                        inner += code * weight;
+                    }
+                    shift -= qnorm / 2.;
+                    assert_eq!(
+                        score.score.to_bits(),
+                        (norm - 2. * (inner + shift)).to_bits()
+                    );
+                }
+                // A 17-row range has a short final group. Stable ID tie order is
+                // checked independently of the original reversed physical order.
+                let mut tied = Vec::new();
+                for id in (0..17_i64).rev() {
+                    tied.extend(id.to_le_bytes());
+                    tied.extend(0_f32.to_le_bytes());
+                    tied.extend([0, 0, 0]);
+                }
+                let mut scores = score_nominees(
+                    &tied,
+                    Sq8Geometry {
+                        rows: 17,
+                        dimensions: 3,
+                    },
+                    &(0..17).collect::<Vec<_>>(),
+                    &query,
+                    &[0.; 3],
+                    &[1.; 3],
+                )
+                .unwrap();
+                scores.sort_by(|a, b| a.score.total_cmp(&b.score).then(a.id.cmp(&b.id)));
+                assert_eq!(
+                    scores.iter().map(|s| s.id).collect::<Vec<_>>(),
+                    (0..17).collect::<Vec<_>>()
+                );
+                packed[13] |= 0xf0;
+                assert!(expand(&packed, 3, &mut expanded).is_err());
+
+                // Exercise the complete wrapper. Expected decoding, independent
+                // cosine normalization and sequential f32 arithmetic use no
+                // production codec, normalization helper or scoring call.
+                let temp = tempfile::tempdir().unwrap();
+                let root = root(&temp.path().join("source"));
+                let caps = Caps {
+                    memory_bytes: 256 * 1024 * 1024,
+                    output_bytes: 128 * 1024 * 1024,
+                    deadline_seconds: 600,
+                    operations: 20_000_000_000,
+                    cpu_threads: 1,
+                    swap_bytes: 0,
+                };
+                let mut guard = Guard::new(&caps);
+                let mut output = Outputs::create(&temp.path().join("oracle.json")).unwrap();
+                let plane =
+                    Plane::transcode(&root, &mut output, "payload", 135, 3, &mut guard).unwrap();
+                let bytes = fs::read(&plane.payload.path).unwrap();
+                // A non-dyadic witness rejects both wider reconstruction and
+                // wider norm accumulation, even when cast back to f32.
+                let witness_low = [0.1_f32, 0.2, 0.3];
+                let witness_step = [0.01_f32, 0.02, 0.03];
+                let witness_codes = [17_f32, 34., 51.];
+                let mut sequential = 0_f32;
+                let mut wider = 0_f64;
+                let mut wider_sum = 0_f64;
+                for axis in 0..3 {
+                    let decoded = witness_low[axis] + witness_codes[axis] * witness_step[axis];
+                    sequential += decoded * decoded;
+                    wider_sum += f64::from(decoded) * f64::from(decoded);
+                    let decoded = f64::from(witness_low[axis])
+                        + f64::from(witness_codes[axis]) * f64::from(witness_step[axis]);
+                    wider += decoded * decoded;
+                }
+                assert_eq!(sequential.to_bits(), 0x40864744);
+                assert_eq!((wider as f32).to_bits(), 0x40864745);
+                assert_eq!((wider_sum as f32).to_bits(), 0x40864745);
+                assert_eq!(
+                    u32::from_le_bytes(bytes[8..12].try_into().unwrap()),
+                    0x40864744
+                );
+                assert_eq!(&bytes[12..14], &[0x21, 0x03]);
+                for query in [[3.125_f32, -2., 0.875], [-0., 4., 0.], [1., 0., 0.]] {
+                    let mut squared = 0_f64;
+                    for x in query {
+                        squared += f64::from(x) * f64::from(x);
+                    }
+                    let q = query.map(|x| {
+                        if (squared - 1.).abs() <= 1e-6 {
+                            x
+                        } else {
+                            (f64::from(x) / squared.sqrt()) as f32
+                        }
+                    });
+                    let mut shift = 0_f32;
+                    let mut qnorm = 0_f32;
+                    let mut weights = [0_f32; 3];
+                    for axis in 0..3 {
+                        shift += q[axis] * plane.manifest.low[axis];
+                        qnorm += q[axis] * q[axis];
+                        weights[axis] = q[axis] * plane.manifest.step[axis];
+                    }
+                    shift -= qnorm / 2.;
+                    let mut expected = Vec::new();
+                    for (ordinal, row) in bytes.chunks_exact(14).enumerate() {
+                        let id = i64::from_le_bytes(row[..8].try_into().unwrap());
+                        let mut norm = 0_f32;
+                        let mut inner = 0_f32;
+                        for axis in 0..3 {
+                            let nibble = if axis % 2 == 0 {
+                                row[12 + axis / 2] & 15
+                            } else {
+                                row[12 + axis / 2] >> 4
+                            };
+                            let code = f32::from(nibble) * 17.;
+                            let decoded =
+                                plane.manifest.low[axis] + code * plane.manifest.step[axis];
+                            norm += decoded * decoded;
+                            inner += code * weights[axis];
+                        }
+                        assert_eq!(
+                            norm.to_bits(),
+                            f32::from_le_bytes(row[8..12].try_into().unwrap()).to_bits()
+                        );
+                        expected.push((norm - 2. * (inner + shift), id, ordinal));
+                    }
+                    expected.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+                    let actual = score(
+                        &plane,
+                        std::slice::from_ref(&(0..135)),
+                        &query,
+                        true,
+                        &mut guard,
+                    )
+                    .unwrap();
+                    assert!(actual.ranked.iter().any(|score| score.ordinal == 0));
+                    for (actual, expected) in actual.ranked.iter().zip(expected.iter().take(100)) {
+                        assert_eq!(
+                            (actual.score_bits, actual.id, actual.ordinal),
+                            (expected.0.to_bits(), expected.1, expected.2)
+                        );
+                    }
+                }
+                let mut original = 7_i64.to_le_bytes().to_vec();
+                original.extend(3_f32.to_le_bytes());
+                original.extend([1, 1, 1]);
+                let mut zero = [0u8; 14];
+                encode(&original, &[-0., 0., 0.], &[1.; 3], &mut zero).unwrap();
+                assert_eq!(&zero[8..12], &0_f32.to_le_bytes());
+                assert_eq!(&zero[12..], &[0, 0]);
+                let mut expanded = [0u8; 15];
+                expand(&zero, 3, &mut expanded).unwrap();
+                let retained = score_nominees(
+                    &expanded,
+                    Sq8Geometry {
+                        rows: 1,
+                        dimensions: 3,
+                    },
+                    &[0],
+                    &[-0., 1., 0.],
+                    &[-0., 0., 0.],
+                    &[1.; 3],
+                )
+                .unwrap();
+                assert_eq!(retained[0].id, 7);
+                assert_eq!(retained[0].score.to_bits(), 1_f32.to_bits());
+                assert!(encode(&original, &[f32::NAN, 0., 0.], &[1.; 3], &mut zero).is_err());
+                assert!(encode(&original, &[0.; 3], &[0., 1., 1.], &mut zero).is_err());
+            }
+
+            fn frozen(n: usize, d: usize, nominees: Vec<usize>) -> FrozenPlan {
+                let pages = nominees.iter().map(|i| i / 16).collect();
+                let (ranges, bytes) = cover_pages(&pages, n, d + 12, 16, 256).unwrap();
+                let coarse = nominees.iter().map(|i| i / 256).collect();
+                let (old, old_bytes) = cover_pages(&coarse, n, d + 12, 256, 256).unwrap();
+                FrozenPlan {
+                    root_sha256: hash(b"root"),
+                    query_sha256: hash(b"query"),
+                    revision: 0,
+                    mutation_sha256: String::new(),
+                    actual_shortlist_rows: nominees.len(),
+                    nominees,
+                    ranges,
+                    planned_bytes: bytes,
+                    feasible: bytes <= MAX_BYTES,
+                    exhausted: false,
+                    converged: true,
+                    evaluations: 1024,
+                    base_visits: 100,
+                    old_page_gets: old.len(),
+                    old_page_bytes: old_bytes,
+                }
+            }
+            #[test]
+            fn fine_sq4_exact_cover_superset_and_binding() {
+                // Brute-force minimum byte covers, including a short tail.
+                for wanted in 1usize..64 {
+                    let selected = (0..6)
+                        .filter(|i| wanted & (1 << i) != 0)
+                        .collect::<BTreeSet<_>>();
+                    for cap in 1..=3 {
+                        let (_, bytes) = cover_pages(&selected, 83, 14, 16, cap).unwrap();
+                        let expected = (0usize..64)
+                            .filter(|m| m & wanted == wanted)
+                            .filter(|m| {
+                                (0..6)
+                                    .filter(|i| {
+                                        m & (1 << i) != 0 && (*i == 0 || m & (1 << (i - 1)) == 0)
+                                    })
+                                    .count()
+                                    <= cap
+                            })
+                            .map(|m| {
+                                (0..6)
+                                    .filter(|i| m & (1 << i) != 0)
+                                    .map(|i| (83usize - 16 * i).min(16) * 14)
+                                    .sum::<usize>()
+                            })
+                            .min()
+                            .unwrap();
+                        assert_eq!(bytes, expected);
+                    }
+                }
+                let p = plan(
+                    frozen(100_000, 768, (0..600).map(|i| i * 160).collect()),
+                    100_000,
+                    768,
+                )
+                .unwrap();
+                assert_eq!(p.row_ranges.len(), 32);
+                assert!(p.original_row_ranges.iter().all(|r| {
+                    p.row_ranges
+                        .iter()
+                        .any(|c| c.start <= r.start && c.end >= r.end)
+                }));
+                assert!(
+                    p.nominees
+                        .iter()
+                        .all(|i| p.row_ranges.iter().any(|r| r.contains(i)))
+                );
+                assert!(!p.envelope_fits);
+                let mut invalid = frozen(135, 3, vec![0, 134]);
+                invalid.ranges = std::iter::once(0..135 * 15).collect();
+                assert!(plan(invalid, 135, 3).is_err());
+                let report = terminal(
+                    &hash(b"config"),
+                    "SURVIVED_CONSUMED_PANELS",
+                    true,
+                    json!({"rows":100_000,"dimensions":768,"frozen_original_authority":true,
+                        "truth":TRUTH_SHA256.map(|sha|Artifact {path:"/relocated/truth".into(),bytes:25_600,sha256:sha.into()})}),
+                );
+                let body = serde_json::to_vec(&report).unwrap();
+                let mut receipt = SupervisorReceipt {
+                    run_id: "original".into(),
+                    config_sha256: hash(b"config"),
+                    report_sha256: hash(&body),
+                    process_exit_code: 0,
+                    resource_limits_observed: true,
+                    drain_complete: true,
+                    cleanup_complete: true,
+                };
+                admit_survival(&body, "original", &receipt).unwrap();
+                for panel in 0..2 {
+                    for field in ["sha256", "bytes"] {
+                        let mut bad = report.clone();
+                        bad["details"]["truth"][panel][field] = if field == "sha256" {
+                            json!("0".repeat(64))
+                        } else {
+                            json!(25_599)
+                        };
+                        let bad = serde_json::to_vec(&bad).unwrap();
+                        let mut bound = receipt.clone();
+                        bound.report_sha256 = hash(&bad);
+                        assert!(admit_survival(&bad, "original", &bound).is_err());
+                    }
+                }
+                receipt.process_exit_code = 2;
+                assert!(admit_survival(&body, "original", &receipt).is_err());
+                receipt.process_exit_code = 0;
+                receipt.drain_complete = false;
+                assert!(admit_survival(&body, "original", &receipt).is_err());
+                receipt.drain_complete = true;
+                receipt.cleanup_complete = false;
+                assert!(admit_survival(&body, "original", &receipt).is_err());
+                receipt.cleanup_complete = true;
+                receipt.resource_limits_observed = false;
+                assert!(admit_survival(&body, "original", &receipt).is_err());
+            }
+            fn root(dir: &Path) -> Artifact {
+                fs::create_dir(dir).unwrap();
+                let n = 135usize;
+                let d = 3usize;
+                let mut records = Vec::new();
+                for id in (0..n as i64).rev() {
+                    records.extend(id.to_le_bytes());
+                    records.extend(999_f32.to_le_bytes());
+                    records.extend(if id == 134 {
+                        [17, 34, 51]
+                    } else {
+                        [id as u8, 17, 255]
+                    });
+                }
+                let rec = write_body(dir, dir, "records.bin", &records).unwrap();
+                let groups = write_body(
+                    dir,
+                    dir,
+                    "groups.bin",
+                    &records
+                        .chunks(16 * (d + 12))
+                        .flat_map(|b| Sha256::digest(b).to_vec())
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap();
+                let order = write_body(
+                    dir,
+                    dir,
+                    "order.bin",
+                    &(0..n as u64)
+                        .rev()
+                        .flat_map(u64::to_le_bytes)
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap();
+                let pq =
+                    write_body(dir, dir, "pq.bin", &vec![0; 24 + 64 * 256 * 4 + n * 64]).unwrap();
+                let graph =
+                    write_body(dir, dir, "graph.bin", b"source-only authentication fixture")
+                        .unwrap();
+                let primary = Artifact {
+                    path: dir.join("absent-primary"),
+                    bytes: 1,
+                    sha256: hash(b"source"),
+                };
+                let original = BuildConfig {
+                    schema: crate::hierarchical_semantic_cells::BUILD_SCHEMA.into(),
+                    generation: primary.clone(),
+                    plane: primary.clone(),
+                    canonical: primary.clone(),
+                    order: primary.clone(),
+                    records: primary.clone(),
+                    mean: primary.clone(),
+                    sq8: primary.clone(),
+                    cell_rows: 16,
+                    sample_rows: 16,
+                    max_depth: 24,
+                    max_build_payload_bytes: 1,
+                    max_output_bytes: 1,
+                };
+                let low = vec![0.1, 0.2, 0.3];
+                let step = vec![0.01, 0.02, 0.03];
+                let manifest = Manifest {
+                    schema: SCHEMA.into(),
+                    identity: PqGraphIdentity {
+                        generation: 1,
+                        rows: n,
+                        dimensions: d,
+                        source: digest(&primary.sha256).unwrap(),
+                        layout: layout_identity(&primary, &rec, &order, &low, &step).unwrap(),
+                        pq: digest(&pq.sha256).unwrap(),
+                    },
+                    primary_root: primary,
+                    original,
+                    low,
+                    step,
+                    pq,
+                    graph,
+                    records: rec,
+                    groups,
+                    order,
+                    build: FineBuildReceipt {
+                        modeled_build_payload_bytes: 1,
+                        modeled_output_and_staging_bytes: 1,
+                        actual_graph_capacity_bytes: 1,
+                        construction_graph_capacity_bytes: 1,
+                        actual_pq_capacity_bytes: 1,
+                        source_rows: n,
+                        sq8_body_bytes: records.len(),
+                    },
+                };
+                write_body(
+                    dir,
+                    dir,
+                    "manifest.json",
+                    &serde_json::to_vec(&manifest).unwrap(),
+                )
+                .unwrap()
+            }
+            #[test]
+            fn fine_sq4_auth_fifo_corruption_caps_and_durability() {
+                let tmp = tempfile::tempdir().unwrap();
+                let root = root(&tmp.path().join("source"));
+                let caps = Caps {
+                    memory_bytes: 256 * 1024 * 1024,
+                    output_bytes: 128 * 1024 * 1024,
+                    deadline_seconds: 600,
+                    operations: 20_000_000_000,
+                    cpu_threads: 1,
+                    swap_bytes: 0,
+                };
+                let mut output = Outputs::create(&tmp.path().join("out.json")).unwrap();
+                output.cap = caps.output_bytes;
+                let mut guard = Guard::new(&caps);
+                let plane =
+                    Plane::transcode(&root, &mut output, "sq4.bin", 135, 3, &mut guard).unwrap();
+                assert_eq!(plane.payload.bytes, 135 * 14);
+                assert_eq!(plane.sq4_hashes.len(), 9);
+                let scored = score(
+                    &plane,
+                    std::slice::from_ref(&(0..135)),
+                    &[3.125, -2., 0.875],
+                    true,
+                    &mut guard,
+                )
+                .unwrap();
+                assert_eq!(scored.verified_bytes, 135 * 14);
+                assert_eq!(scored.fetched_ids.len(), 135);
+                let payload = fs::read(&plane.payload.path).unwrap();
+                let mut corrupt = payload.clone();
+                corrupt[16 * 14 + 12] ^= 1;
+                fs::write(&plane.payload.path, &corrupt).unwrap();
+                assert!(
+                    score(
+                        &plane,
+                        std::slice::from_ref(&(0..135)),
+                        &[3.125, -2., 0.875],
+                        true,
+                        &mut guard
+                    )
+                    .is_err()
+                );
+                fs::write(&plane.payload.path, &payload).unwrap();
+                let original = fs::read(&plane.manifest.records.path).unwrap();
+                let mut bad = original.clone();
+                bad[20] ^= 1;
+                fs::write(&plane.manifest.records.path, &bad).unwrap();
+                assert!(
+                    score(
+                        &plane,
+                        std::slice::from_ref(&(0..135)),
+                        &[3.125, -2., 0.875],
+                        false,
+                        &mut guard
+                    )
+                    .is_err()
+                );
+                let mut corrupt_out = Outputs::create(&tmp.path().join("bad.json")).unwrap();
+                assert!(
+                    Plane::transcode(&root, &mut corrupt_out, "payload", 135, 3, &mut guard)
+                        .is_err()
+                );
+                fs::write(&plane.manifest.records.path, &original).unwrap();
+                APPEND_ON_OPEN
+                    .with(|p| *p.borrow_mut() = Some(plane.manifest.records.path.clone()));
+                let mut growth = Outputs::create(&tmp.path().join("growth.json")).unwrap();
+                let error = Plane::transcode(&root, &mut growth, "payload", 135, 3, &mut guard)
+                    .err()
+                    .unwrap();
+                assert!(error.to_string().contains("EOF/growth"));
+                fs::write(&plane.manifest.records.path, &original).unwrap();
+                let graph = fs::read(&plane.manifest.graph.path).unwrap();
+                APPEND_ON_OPEN.with(|p| *p.borrow_mut() = Some(plane.manifest.graph.path.clone()));
+                assert!(
+                    authenticate(&plane.manifest.graph, &mut guard)
+                        .err()
+                        .unwrap()
+                        .to_string()
+                        .contains("EOF/growth")
+                );
+                fs::write(&plane.manifest.graph.path, &graph).unwrap();
+                APPEND_ON_OPEN.with(|p| *p.borrow_mut() = Some(plane.payload.path.clone()));
+                assert!(
+                    read_pinned(&plane.payload, RESULT_CAP, false, &mut guard)
+                        .unwrap_err()
+                        .to_string()
+                        .contains("EOF/growth")
+                );
+                let before = guard.operations;
+                assert_eq!(
+                    read_pinned(&plane.payload, RESULT_CAP, true, &mut guard).unwrap(),
+                    payload
+                );
+                assert_eq!(guard.operations - before, plane.payload.bytes as u64);
+                fs::write(&plane.payload.path, &payload).unwrap();
+                let mut cap = Outputs::create(&tmp.path().join("cap.json")).unwrap();
+                cap.cap = RESERVE;
+                assert!(Plane::transcode(&root, &mut cap, "payload", 135, 3, &mut guard).is_err());
+                assert!(!tmp.path().join("cap.payload").exists());
+                for at in [1, 2] {
+                    let mut out =
+                        Outputs::create(&tmp.path().join(format!("sync-{at}.json"))).unwrap();
+                    out.fail_sync = Some(at);
+                    let error = Plane::transcode(&root, &mut out, "payload", 135, 3, &mut guard)
+                        .err()
+                        .unwrap();
+                    invalidate(&mut out, &hash(b"config"), &error, &Progress::default());
+                    let report: Value =
+                        serde_json::from_slice(&fs::read(&out.output).unwrap()).unwrap();
+                    assert_eq!(report["status"], "INVALID");
+                }
+                let fifo = tmp.path().join("fifo");
+                assert!(
+                    std::process::Command::new("mkfifo")
+                        .arg(&fifo)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+                let fake = Artifact {
+                    path: fifo,
+                    bytes: 0,
+                    sha256: hash(b""),
+                };
+                assert!(descriptor(&fake, false).is_err());
+                let linked = tmp.path().join("linked");
+                std::os::unix::fs::symlink(&plane.payload.path, &linked).unwrap();
+                assert!(
+                    descriptor(
+                        &Artifact {
+                            path: linked,
+                            ..plane.payload.clone()
+                        },
+                        false
+                    )
+                    .is_err()
+                );
+                assert!(Outputs::create(&output.output).is_err());
+            }
+
+            #[test]
+            fn fine_sq4_full_pipeline_failure_order_and_sync() {
+                let tmp = tempfile::tempdir().unwrap();
+                let roots = [root(&tmp.path().join("a")), root(&tmp.path().join("b"))];
+                let request = write_body(
+                    tmp.path(),
+                    tmp.path(),
+                    "requests",
+                    (0..64)
+                        .map(|ordinal| {
+                            format!("{}\n", json!({"ordinal":ordinal,"query":[3.125,-2.,0.875]}))
+                        })
+                        .collect::<String>()
+                        .as_bytes(),
+                )
+                .unwrap();
+                let truth = write_body(
+                    tmp.path(),
+                    tmp.path(),
+                    "truth",
+                    &(0..64)
+                        .flat_map(|_| (0..100u32).flat_map(u32::to_le_bytes))
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap();
+                let mut prefix = String::new();
+                for (i, root) in roots.iter().enumerate() {
+                    let m: Manifest =
+                        serde_json::from_slice(&fs::read(&root.path).unwrap()).unwrap();
+                    prefix += &format!(
+                        "{}\n",
+                        json!({"phase":"startup","dataset":(["relaion","cohere"][i]),"root":root,
+                        "resources":ResourceReceipt::default(),"build":m.build,"truth_opened":false,"wall_ns":0,"process_cpu_ns":0})
+                    );
+                }
+                for (i, root) in roots.iter().enumerate() {
+                    for ordinal in 0..64 {
+                        let p = frozen(135, 3, vec![0, 134]);
+                        prefix += &format!(
+                            "{}\n",
+                            json!({"phase":"fine_plan","dataset":(["relaion","cohere"][i]),"ordinal":ordinal,
+                            "truth_opened":false,"wall_ns":0,"process_cpu_ns":0,"plan":{
+                            "root_sha256":root.sha256,"query_sha256":query_digest(&[3.125,-2.,0.875]),"revision":0,"mutation_sha256":"",
+                            "nominees":p.nominees,"ranges":p.ranges,"planned_bytes":p.planned_bytes,"feasible":p.feasible,
+                            "exhausted":false,"converged":true,"actual_shortlist_rows":2,"evaluations":135,"base_visits":135,
+                            "old_page_gets":p.old_page_gets,"old_page_bytes":p.old_page_bytes}})
+                        );
+                    }
+                }
+                let prefix =
+                    write_body(tmp.path(), tmp.path(), "prefix", prefix.as_bytes()).unwrap();
+                let seal=write_body(tmp.path(),tmp.path(),"seal",&serde_json::to_vec(&json!({
+                    "schema":"borsuk-fine-sq8-seal-v1","config_sha256":hash(b"original config"),"source_identity_sha256":hash(b"original source"),
+                    "prefix_bytes":prefix.bytes,"prefix_sha256":prefix.sha256,"plans_per_panel":64,"truth_opened":false,
+                    "panels":roots.iter().enumerate().map(|(i,r)|json!({"dataset":(["relaion","cohere"][i]),"root":r,"requests":request})).collect::<Vec<_>>()
+                })).unwrap()).unwrap();
+                let config = Config {
+                    schema: CONFIG_SCHEMA.into(),
+                    source_identity_sha256: source_identity(),
+                    panels: std::array::from_fn(|i| Panel {
+                        dataset: ["relaion", "cohere"][i].into(),
+                        root: roots[i].clone(),
+                        requests: request.clone(),
+                        truth: truth.clone(),
+                        truth_width: 100,
+                    }),
+                    original_seal: seal.clone(),
+                    prefix: prefix.clone(),
+                    caps: Caps {
+                        memory_bytes: 256 * 1024 * 1024,
+                        output_bytes: 128 * 1024 * 1024,
+                        deadline_seconds: 600,
+                        operations: 20_000_000_000,
+                        cpu_threads: 1,
+                        swap_bytes: 0,
+                    },
+                };
+                let protocol = Protocol {
+                    rows: 135,
+                    dimensions: 3,
+                    prefix_bytes: prefix.bytes,
+                    prefix_sha: prefix.sha256.clone(),
+                    seal_sha: seal.sha256,
+                };
+                // Each publish performs file and directory syncs. Failure at the
+                // all128 freeze (call265) must leave truth unopened; terminal
+                // sync failure must replace the owned report with INVALID.
+                for fail_at in [
+                    None,
+                    Some(0),
+                    Some(1),
+                    Some(2),
+                    Some(5),
+                    Some(265),
+                    Some(267),
+                ] {
+                    super::super::OPENS.with(|v| v.borrow_mut().clear());
+                    let path = tmp.path().join(format!("sync-{fail_at:?}.json"));
+                    let mut out = Outputs::create(&path).unwrap();
+                    out.fail_sync = fail_at.filter(|v| *v > 2);
+                    TAMPER_CLOSURE.with(|v| v.set(fail_at == Some(0)));
+                    APPEND_AFTER_TRANSCODE
+                        .with(|v| v.set(fail_at.filter(|v| (1..=2).contains(v)).map(|v| v - 1)));
+                    let mut guard = Guard::new(&config.caps);
+                    let mut progress = Progress::default();
+                    let result = run(
+                        &config,
+                        &hash(b"config"),
+                        &mut out,
+                        &protocol,
+                        &mut guard,
+                        false,
+                        &mut progress,
+                    );
+                    progress.operations = guard.operations;
+                    let result = result.and_then(|report| {
+                        progress.stage = "terminal";
+                        require(
+                            serde_json::to_vec(&report)?.len() <= RESERVE,
+                            "SQ4 terminal reserve",
+                        )?;
+                        out.finish(&report)?;
+                        Ok(report)
+                    });
+                    if let Err(error) = &result {
+                        invalidate(&mut out, &hash(b"config"), error, &progress);
+                    }
+                    let report: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                    let opened = super::super::OPENS.with(|v| v.borrow().clone());
+                    if let Some(at) = fail_at {
+                        assert!(result.is_err());
+                        assert_eq!(report["status"], "INVALID");
+                        if at <= 265 {
+                            assert!(!opened.contains(&truth.path));
+                            assert_eq!(report["details"]["truth_opened"], false);
+                        }
+                        if at == 267 {
+                            assert_eq!(report["queries"], 128);
+                            assert_eq!(report["details"]["scored_queries"], 128);
+                            assert_eq!(report["details"]["truth_opened"], true);
+                            assert_eq!(report["details"]["stage"], "terminal");
+                            assert!(report["details"]["freeze"]["sha256"].is_string());
+                            assert!(report["details"]["published_bytes"].as_u64().unwrap() > 0);
+                            assert!(report["details"]["operations"].as_u64().unwrap() > 0);
+                        }
+                        if (1..=2).contains(&at) {
+                            assert!(result.unwrap_err().to_string().contains("EOF/growth"));
+                            assert_eq!(report["queries"], 128);
+                            assert_eq!(report["details"]["stage"], "pretruth authentication");
+                            let manifest: Manifest =
+                                serde_json::from_slice(&fs::read(&roots[at - 1].path).unwrap())
+                                    .unwrap();
+                            OpenOptions::new()
+                                .write(true)
+                                .open(&manifest.records.path)
+                                .unwrap()
+                                .set_len(manifest.records.bytes as u64)
+                                .unwrap();
+                        }
+                    } else {
+                        assert!(result.is_ok());
+                        assert_eq!(report["status"], "REJECT"); // Only23 incidental rows; no early resource/error exit.
+                        assert_eq!(report["queries"], 128);
+                        assert_eq!(report["details"]["frozen_original_authority"], false);
+                        let query_open = opened.iter().position(|p| p == &request.path).unwrap();
+                        for i in 0..2 {
+                            let payload = path.with_extension(format!("sq4-{i}.bin"));
+                            assert!(
+                                opened.iter().position(|p| p == &payload).unwrap() < query_open
+                            );
+                        }
+                        assert_eq!(opened.iter().filter(|p| *p == &truth.path).count(), 2);
+                    }
+                }
+                // The strict mode must refuse an alternate same-size truth
+                // descriptor before acquiring any data FD, including root/seal.
+                let mut archived = config.clone();
+                for (panel, sha) in archived.panels.iter_mut().zip(TRUTH_SHA256) {
+                    panel.truth.sha256 = sha.into();
+                    panel.truth.path = tmp.path().join(format!("relocated-{}", panel.dataset));
+                }
+                assert!(archived_truth(archived.panels.each_ref().map(|p| &p.truth)));
+                for panel in 0..2 {
+                    let mut bad = archived.clone();
+                    bad.panels[panel].truth.sha256 = "0".repeat(64);
+                    let mut out =
+                        Outputs::create(&tmp.path().join(format!("truth-binding-{panel}.json")))
+                            .unwrap();
+                    super::super::OPENS.with(|v| v.borrow_mut().clear());
+                    let error = run(
+                        &bad,
+                        &hash(b"config"),
+                        &mut out,
+                        &Protocol::frozen(),
+                        &mut Guard::new(&bad.caps),
+                        true,
+                        &mut Progress::default(),
+                    )
+                    .unwrap_err();
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("archived truth descriptor binding")
+                    );
+                    assert!(super::super::OPENS.with(|v| v.borrow().is_empty()));
+                }
+            }
+        }
+
+        /// Requires an independently authenticated original supervisor receipt.
+        /// The caller owns receipt provenance, process drain and cleanup checks.
+        pub fn admit_survival(
+            body: &[u8],
+            run_id: &str,
+            receipt: &SupervisorReceipt,
+        ) -> Result<()> {
+            require(body.len() <= RESERVE, "SQ4 terminal cap")?;
+            let report: Value = serde_json::from_slice(body)?;
+            let truth: [Artifact; 2] = serde_json::from_value(report["details"]["truth"].clone())?;
+            digest(&receipt.config_sha256)?;
+            digest(&receipt.report_sha256)?;
+            require(
+                !run_id.is_empty()
+                    && receipt.run_id == run_id
+                    && receipt.report_sha256 == hash(body)
+                    && report["config_sha256"] == receipt.config_sha256
+                    && receipt.process_exit_code == 0
+                    && receipt.resource_limits_observed
+                    && receipt.drain_complete
+                    && receipt.cleanup_complete
+                    && report["schema"] == REPORT_SCHEMA
+                    && report["codec"] == CODEC
+                    && report["source_identity_sha256"] == source_identity()
+                    && report["details"]["rows"] == 100_000
+                    && report["details"]["dimensions"] == 768
+                    && report["details"]["frozen_original_authority"] == true
+                    && archived_truth(truth.each_ref())
+                    && report["queries"] == 128
+                    && report["status"] == "SURVIVED_CONSUMED_PANELS"
+                    && report["complete"] == true
+                    && report["standalone_authority"] == false
+                    && report["quality_or_performance_claim"] == false
+                    && report["requires_matching_supervisor_exit_receipt"] == true,
+                "SQ4 survival requires original exit-zero/resource/drain/cleanup",
+            )
+        }
     }
 
     #[cfg(test)]
