@@ -1,0 +1,37 @@
+{
+  "binary_source_sha256": "ebd214e4dede0c79c14dbacbb92757120bb35dc413eef749823950c247268a4d",
+  "datasets": {
+    "cohere": {
+      "dimensions": 768,
+      "finite_f32": true,
+      "query_f32_sha256": "dec9119b4d0b5869d74ccce403283982a095375d0da9acf6c890453f7de63792",
+      "requests": {
+        "bytes": 983232,
+        "path": "/data/orchestration/borsuk-source-witness-closed-audit-a0001/native/panels/cohere/requests64",
+        "sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654"
+      },
+      "rows": 64,
+      "strict_ordinal_query_fields": true
+    },
+    "relaion": {
+      "dimensions": 768,
+      "finite_f32": true,
+      "query_f32_sha256": "b9f8f64df92e27fc87f104110a53f8a6320705468f017395f5de23a961c88976",
+      "requests": {
+        "bytes": 937167,
+        "path": "/data/orchestration/borsuk-source-witness-closed-audit-a0001/native/panels/relaion/requests64",
+        "sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330"
+      },
+      "rows": 64,
+      "strict_ordinal_query_fields": true
+    }
+  },
+  "elapsed_seconds": 0.15178765798918903,
+  "native_runtime_executed": false,
+  "native_source_commit": "afd58b557d01cafc307e650d9c29f381dbf24c41",
+  "quality_or_performance_claim": false,
+  "request_authority_sha256": "93a6f221e895d400ff217e57cc5188d0aa475146ba94cd68876e41325b02a743",
+  "same_native_validator_execution_proven": false,
+  "schema": "borsuk-overlap-real-request-shape-preflight-v1",
+  "truth_body_opened": false
+}
