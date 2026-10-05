@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-corrected-canary-independent-closeout-v1",
+  "original_controller_exit": 0,
+  "original_native_usage_exit": 2,
+  "instance_id": "i-00dabf82fc34bf8a6",
+  "terminated_same_instance": true,
+  "raw_artifacts_independently_authenticated": 22,
+  "native_usage_memory_peak_bytes": 524288,
+  "native_usage_elapsed_seconds": 0.12651676000000123,
+  "swap_bytes": 0,
+  "head_count": 20,
+  "selected_body_gets": 2,
+  "dataset_body_gets": 0,
+  "scientific_queries": 0,
+  "disposition": "GO",
+  "terminal_sha256": "a2a15fab3a2598466d02093f7fdd7123c154cef1baa37c284a09036b566f2188",
+  "measured_total_cost": false
+}
