@@ -11,3 +11,14 @@ Root inspected the active child draft on2026-10-05 before source freeze or Cargo
 Draft public `nominate_pq` checks only PQ rows/dimensions. Same-geometry codebooks must not be substituted for the graph's authenticated PQ identity. The API must prove the exact PQ binding or restrict access through an opaque already-validated binding. Include swapped same-size codebook/codes negative.
 
 Both requirements were sent to SAME child in durable message1791181524115668685-2054090; no new child, review, compiler or experiment was started. Independently completed engineering critic68079a4e6c114408 already requires authenticated aggregate identity and actual builder capacity accounting.
+
+## Subsequent draft inspection
+
+The live draft now admits repaired base degrees up to256 and checks the exact PQ artifact digest. These are source observations; compilation and regression execution remain pending.
+
+Two additional findings were sent to the same worker before freeze:
+
+- `FineSq8Index::search_excluding` and the paired CLI reject evaluation exhaustion. The prospective method requires scoring the already-collected bounded shortlist, recording exhaustion separately from convergence and retaining denominator100 and underfill. An algorithmic cap is not an authentication INVALID. Messages1791181948487949477-2054090 and1791182070781501175-2054090 identify both sites.
+- Plans bind only a numeric mutation revision. Two divergent snapshots created from one parent can share that revision, allowing a plan to cross snapshots. Bind exact immutable snapshot content, and test same-revision divergence, old-generation pinning and mutation ID-domain rejection. Message1791181969615253285-2054090 identifies this finding.
+
+The paired draft freezes and syncs all128 plans before either dataset truth body is opened. This source ordering still needs the actual native pipeline negative tests and external resource closure; it is not scientific qualification.
