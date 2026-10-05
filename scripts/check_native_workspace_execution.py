@@ -74,9 +74,9 @@ def _write(path, value):
         os.fsync(output.fileno())
 
 
-def main(cargo, repo, out, *, semantic_1m=False, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False):
+def main(cargo, repo, out, *, semantic_1m=False, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False):
     from scripts import launch_native_workspace_execution_spot as controller
-    with controller.execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap):
+    with controller.execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8):
         return _execute(cargo, repo, out, controller)
 
 
@@ -121,7 +121,7 @@ def _execute(cargo, repo, out, controller):
     if controller.CONSTRAINED_SPLIT:
         report.update({key:proof[key] for key in ('mandatory_test_names_pending', 'mandatory_tests',
             'control_native_source_commit', 'control_module_prefix')})
-    if controller.CELL_OVERLAP:
+    if controller.CELL_OVERLAP or controller.FINE_SQ8:
         report.update({key:proof[key] for key in ('mandatory_test_names_pending', 'mandatory_tests')})
     # Bound the Python orchestrator, while restoring Cargo's original address space limit.
     original_limit = resource.getrlimit(resource.RLIMIT_AS)
@@ -177,7 +177,7 @@ def _execute(cargo, repo, out, controller):
             assert controller.qualify(repo) == proof, 'config/code authority changed during execution'
             assert report['command_completed'] and type(report['exit_status']) is int
             if (controller.BOUNDED_PUBLICATION or controller.FIXED48 or controller.MINIMAL_ARCHIVE) and report['exit_status'] == report['gate_status'] == 0:
-                report['stages'] = controller.validate_bounded_publication_stages(out/'test.log', fixed48=controller.FIXED48, hierarchical_cells=controller.HIERARCHICAL_CELLS, constrained_split=controller.CONSTRAINED_SPLIT, cell_overlap=controller.CELL_OVERLAP)
+                report['stages'] = controller.validate_bounded_publication_stages(out/'test.log', fixed48=controller.FIXED48, hierarchical_cells=controller.HIERARCHICAL_CELLS, constrained_split=controller.CONSTRAINED_SPLIT, cell_overlap=controller.CELL_OVERLAP, fine_sq8=controller.FINE_SQ8)
             report['qualified'] = report['exit_status'] == report['gate_status'] == 0
         except BaseException as error:
             report['validation_error'] = dict(type=type(error).__name__, message=str(error))
@@ -192,6 +192,7 @@ def _execute(cargo, repo, out, controller):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
+    fine_sq8 = args[:1] == ['--fine-sq8-implementation']
     cell_overlap = args[:1] == ['--cell-overlap-implementation']
     constrained_split = args[:1] == ['--constrained-split-implementation']
     hierarchical_cells = args[:1] == ['--hierarchical-cells-implementation']
@@ -199,12 +200,12 @@ if __name__ == '__main__':
     bounded_publication = args[:1] == ['--bounded-publication-implementation']
     root_reuse = args[:1] == ['--root-reuse-implementation']
     startup_wave8 = args[:1] == ['--startup-wave8-implementation']
-    implementation = cell_overlap or constrained_split or hierarchical_cells or fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
+    implementation = fine_sq8 or cell_overlap or constrained_split or hierarchical_cells or fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
     test_build = args[:1] == ['--semantic-1m-test-build']
     semantic_1m = implementation or test_build or args[:1] == ['--semantic-1m']
     if semantic_1m:
         args = args[1:]
-    assert len(args) == 3, 'usage: check_native_workspace_execution.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation | --fixed48-implementation | --hierarchical-cells-implementation | --constrained-split-implementation | --cell-overlap-implementation] CARGO REPO OUTPUT'
-    result = main(*args, semantic_1m=semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap)
+    assert len(args) == 3, 'usage: check_native_workspace_execution.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation | --fixed48-implementation | --hierarchical-cells-implementation | --constrained-split-implementation | --cell-overlap-implementation | --fine-sq8-implementation] CARGO REPO OUTPUT'
+    result = main(*args, semantic_1m=semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8)
     print(json.dumps(result, sort_keys=True))
     sys.exit(result['gate_status'] if result['gate_status'] >= 0 else 128-result['gate_status'])
