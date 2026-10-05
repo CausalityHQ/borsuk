@@ -1,0 +1,69 @@
+{
+  "schema": "borsuk-histogram-sq4-source-review-v1",
+  "critique_id": "8da4f59851ac46c3",
+  "source_commit": "499efa02ee9513f34740b9bf11d96fedf77e2e4c",
+  "native_execution_performed": false,
+  "qualification_passed": false,
+  "reviewers": [
+    {
+      "role": "research",
+      "id": "3ab0057f21b14d7e",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "status": "completed",
+      "exit_code": 0,
+      "started_at": 1791225007,
+      "finished_at": 1791225632,
+      "attempt_history": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5",
+          "budget_usd": 4,
+          "timeout_seconds": 1200,
+          "started_at": 1791225007,
+          "effort": "xhigh",
+          "effort_source": "jev"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol",
+          "budget_usd": null,
+          "timeout_seconds": 1194,
+          "started_at": 1791225013
+        }
+      ],
+      "providers_used": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "role": "engineering",
+      "id": "ffc4cc9579a244c9",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "status": "completed",
+      "exit_code": 0,
+      "started_at": 1791225007,
+      "finished_at": 1791225373,
+      "attempt_history": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra",
+          "budget_usd": null,
+          "timeout_seconds": 1199,
+          "started_at": 1791225008
+        }
+      ],
+      "providers_used": [
+        "codex"
+      ]
+    }
+  ],
+  "root_verified_findings": [
+    "Partial transcode output is not included in INVALID bytes; shared publication partial writes also need accounting",
+    "Truth FD may be acquired before length-validation failure while truth_opened stays false",
+    "Terminal descriptor/path size admission occurs after scoring and truth"
+  ],
+  "disposition": "Repair on same source worker; no source freeze or native qualification claim"
+}
