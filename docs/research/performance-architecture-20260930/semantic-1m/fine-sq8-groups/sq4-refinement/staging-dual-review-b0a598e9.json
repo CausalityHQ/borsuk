@@ -1,0 +1,793 @@
+{
+  "id": "6475917af0114a7c",
+  "status": "completed",
+  "started_at": 1791217296,
+  "agent": "borsuk/prod-ready-v9",
+  "force_reason": "New necessary release scope: exact SQ4 experiment staging/qualification/resource/collection logic in b0a598e9 was not covered by prior native SQ4 arithmetic/source review e6c97af66a40437f. Review gates first paid science; no duplicate native review or experiment.",
+  "rolling_6h_count": 4,
+  "prompt_preview": "Read-only release review, no edits/tests/cloud/native/children/consults. Repo /home/rb/worktrees/borsuk-prod-ready-v9 root1d93036a. SAME isolated worker /home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue frozen b0a598e9625941c3f23b978679b68d74a55a9a3d; file scripts/launch_fine_pack_diagnostic.py SHA9bb181008c315cb63d993c572b4a4624d2603e915fbe878d9883d720406d642e bytes121489. Diff from d1cb91fe18730218a7d8e43407ead528b1eacd43 limited own1 via e4ed9f91+b0a598e9. Focus additive --sq4 path, preserve historical packing. Native method frozen docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/preregister.md; prospective18-input roster229614200B and config/source/enclosure-c2d233d6.json atsame root. Science: exact retained FIRST100k D768 cosine k100 consumed64 ReLAION+CoHere, one SQ4 codec intervention,32ranges16MiB/mean>=.98/p05>=95, complete128 frozen before GT; no measured cold/QPS/vendor win. Native source c2d233d6 qualification ORIGINAL exec33227/instancei-0f484ec1159d1e744 LIVE, do NOT interact with it or incomplete results. Frozen native full4041689c53...; all14 REQUIRED Clippy FIRST; no completed source/binary authority yet. All future receipt/binary/config/Spot/code/source/scratch pins must remain root pending. Root independently checked exact current CLI --sq4 --self-check exit0/8.294s/256Mpeak/swap0 and old --self-check exit0/.833s/57.5M; actual SDK model, real fake-native/fsync/stream/no-overwrite; cloud/cgroup/native science mocked. Examine: actual18-body admission including78M records streaming, qualification14 exact exit0/terminal/fullsource/binary/same-instance termination, secret truth freeze and complete133/134 roster, PASS-lookingbodyexit2INVALID, genuine completedREJECT preserved, delegated cgroup before-exec caps/no orphan, whole4Gi scratch includes source/archive/SDK/static/input/output/temp with admission+1Hz+closure; SDK/CLI/conditionalPUT/bootstrap/collector paths and config/hash cycle. Report ONLY concrete blockers with file/line, actual causal counterexample and smallest correction/cheap falsifier, plus whether in-scope science can proceed once native authority/cheap actual fixture/SDK gates pass. Do not invent vendor parity or require new Python framework/extra canary product. Keep review bounded to these paths and relevant imported existing authority/lifecycle helpers.",
+  "prompt_sha256": "389ddb6b169f3f8ae59903402f17030abde8e7381b7bfaf1d4cb3c7ce0fdcd28",
+  "prompt_bytes": 2384,
+  "fingerprint": "3df56bac80935e3373c713f3e7abec192885499f88ec355482a7dca25987e4b7",
+  "evidence": {
+    "git_commit": "1d93036a5721c3b1e7d1182d5f52a3de094db0e1",
+    "git_branch": "devbox/prod-ready-v9",
+    "git_dirty": true,
+    "git_status_sha256": "7f911640d3897b79f5b7ac1bc3e7239794cfc8e579d238c5fc8989cb66b79d7d",
+    "worktree_sha256": "59391be552d6a2d21a941fb157fa4cc0ec24d67fa5ad66c9872dacc6885882ab",
+    "worktree_evidence_truncated": true,
+    "active_goal": {
+      "id": "goal-1790540483-1790540483843307105-2322852",
+      "agent": "borsuk/prod-ready-v9",
+      "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+      "status": "queued",
+      "revision": 4,
+      "actor": "devbox",
+      "note": "re-apply delivery failed; prior goal state restored",
+      "created_at": 1790540483,
+      "updated_at": 1790781535
+    }
+  },
+  "reviewers": [
+    {
+      "role": "research_critic",
+      "id": "f05674237a7d4135",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "fallbacks": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "effort": "",
+      "agent": "borsuk/prod-ready-v9",
+      "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+      "status": "completed",
+      "runner_started": true,
+      "started_at": 1791217296,
+      "timeout_seconds": 1200,
+      "deadline_at": 1791218496,
+      "budget_usd": null,
+      "prompt_preview": "Act as the independent research and first-principles critic. Challenge assumptions, compare alternatives and prior art, and identify missing evidence. Do not edit files.\n\nMaterial to critique:\nRead-only release review, no edits/tests/cloud/native/children/consults. Repo /home/rb/worktrees/borsuk-prod-ready-v9 root1d93036a. SAME isolated worker /home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue frozen b0a598e9625941c3f23b978679b68d74a55a9a3d; file scripts/launch_fine_pack_diagnostic.py SHA9bb181008c315cb63d993c572b4a4624d2603e915fbe878d9883d720406d642e bytes121489. Diff from d1cb91fe18730218a7d8e43407ead528b1eacd43 limited own1 via e4ed9f91+b0a598e9. Focus additive --sq4 path, preserve historical packing. Native method frozen docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/preregister.md; prospective18-input roster229614200B and config/source/enclosure-c2d233d6.json atsame root. Science: exact retained FIRST100k D768 cosine k100 consumed64 ReLAION+CoHere, one SQ4 codec intervention,32ranges16MiB/mean>=.98/p05>=95, complete128 frozen before GT; no measured cold/QPS/vendor win. Native source c2d233d6 qualification ORIGINAL exec33227/instancei-0f484ec1159d1e744 LIVE, do NOT interact with it or incomplete results. Frozen native full4041689c53...; all14 REQUIRED Clippy FIRST; no completed source/binary authority yet. All future receipt/binary/config/Spot/code/source/scratch pins must remain root pending. Root independently checked exact current CLI --sq4 --self-check exit0/8.294s/256Mpeak/swap0 and old --self-check exit0/.833s/57.5M; actual SDK model, real fake-native/fsync/stream/no-overwrite; cloud/cgroup/native science mocked. Examine: actual18-body admission including78M records streaming, qualification14 exact exit0/terminal/fullsource/binary/same-instance termination, secret truth freeze and complete133/134 roster, PASS-lookingbodyexit2INVALID, genuine completedREJECT preserved, delegated cgroup before-exec caps/no orphan, whole4Gi scratch includes source/archive/SDK/static/input/output/temp with admission+1Hz+closure; SDK/CLI/conditionalPUT/bootstrap/collector paths and config/hash cycle. Report ONLY concrete blockers with file/line, actual causal counterexample and smallest correction/cheap falsifier, plus whether in-scope science can proceed once native authority/cheap actual fixture/SDK gates pass. Do not invent vendor parity or require new Python framework/extra canary product. Keep review bounded to these paths and relevant imported existing authority/lifecycle helpers.",
+      "prompt_sha256": "cf20a15af7ac2b83788ae3efeec248962041393acf8a6b96e8eaf817f608bad5",
+      "prompt_bytes": 2768,
+      "fingerprint": "1b83e39256aa915d4a887905edee01601f2a29511d96236f14d5d5e1f209b0a0",
+      "evidence": {
+        "git_commit": "1d93036a5721c3b1e7d1182d5f52a3de094db0e1",
+        "git_branch": "devbox/prod-ready-v9",
+        "git_dirty": true,
+        "git_status_sha256": "7f911640d3897b79f5b7ac1bc3e7239794cfc8e579d238c5fc8989cb66b79d7d",
+        "worktree_sha256": "59391be552d6a2d21a941fb157fa4cc0ec24d67fa5ad66c9872dacc6885882ab",
+        "worktree_evidence_truncated": true,
+        "active_goal": {
+          "id": "goal-1790540483-1790540483843307105-2322852",
+          "agent": "borsuk/prod-ready-v9",
+          "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+          "status": "queued",
+          "revision": 4,
+          "actor": "devbox",
+          "note": "re-apply delivery failed; prior goal state restored",
+          "created_at": 1790540483,
+          "updated_at": 1790781535
+        }
+      },
+      "previous_fingerprint": "c43c6283a9fc6b0b2aea9851096d2537e3d75ab7e75e85a242a595e5fc751993",
+      "reused": false,
+      "critique_id": "6475917af0114a7c",
+      "critique_role": "research_critic",
+      "systemd_unit": "devbox-consult-f05674237a7d4135.service",
+      "pid": 1333385,
+      "pgid": 1333385,
+      "attempt": 2,
+      "attempts": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "attempt_history": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5",
+          "budget_usd": 4,
+          "timeout_seconds": 1200,
+          "started_at": 1791217296,
+          "effort": "xhigh",
+          "effort_source": "jev"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol",
+          "budget_usd": null,
+          "timeout_seconds": 1189,
+          "started_at": 1791217307
+        }
+      ],
+      "exit_code": 0,
+      "finished_at": 1791217840,
+      "event_cursor": 102,
+      "events": [
+        {
+          "seq": 79,
+          "at": 1791217551,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 80,
+          "at": 1791217551,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 81,
+          "at": 1791217551,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 82,
+          "at": 1791217551,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 83,
+          "at": 1791217551,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 84,
+          "at": 1791217552,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 85,
+          "at": 1791217552,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 86,
+          "at": 1791217574,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 87,
+          "at": 1791217575,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 88,
+          "at": 1791217591,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 89,
+          "at": 1791217591,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 90,
+          "at": 1791217591,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 91,
+          "at": 1791217591,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 92,
+          "at": 1791217591,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 93,
+          "at": 1791217591,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 94,
+          "at": 1791217598,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 95,
+          "at": 1791217599,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 96,
+          "at": 1791217658,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 97,
+          "at": 1791217795,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 98,
+          "at": 1791217795,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 99,
+          "at": 1791217795,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 100,
+          "at": 1791217795,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 101,
+          "at": 1791217840,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 102,
+          "at": 1791217840,
+          "provider": "codex",
+          "kind": "phase",
+          "label": "Consultation completed",
+          "detail": "exit 0"
+        }
+      ],
+      "events_truncated": true,
+      "provider_events": {
+        "claude": [
+          {
+            "seq": 1,
+            "at": 1791217296,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Claude consultation attempt",
+            "detail": "claude-opus-5-5 · $4 cap · 1200s remaining"
+          },
+          {
+            "seq": 2,
+            "at": 1791217299,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Reviewer thinking applied",
+            "detail": "claude-opus-5-5 / xhigh (jev)",
+            "effort": "xhigh",
+            "model": "claude-opus-5-5",
+            "source": "jev"
+          },
+          {
+            "seq": 3,
+            "at": 1791217299,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Claude consultation started"
+          },
+          {
+            "seq": 4,
+            "at": 1791217305,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider reported an error",
+            "detail": "success"
+          },
+          {
+            "seq": 5,
+            "at": 1791217306,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider attempt exited",
+            "detail": "exit 1"
+          },
+          {
+            "seq": 6,
+            "at": 1791217307,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider unavailable; switching fallback",
+            "detail": "codex"
+          }
+        ],
+        "codex": [
+          {
+            "seq": 95,
+            "at": 1791217599,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 96,
+            "at": 1791217658,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 97,
+            "at": 1791217795,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 98,
+            "at": 1791217795,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 99,
+            "at": 1791217795,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 100,
+            "at": 1791217795,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 101,
+            "at": 1791217840,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 102,
+            "at": 1791217840,
+            "provider": "codex",
+            "kind": "phase",
+            "label": "Consultation completed",
+            "detail": "exit 0"
+          }
+        ]
+      },
+      "partial_result": "One validation blocker at [launch_fine_pack_diagnostic.py:260](/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue/scripts/launch_fine_pack_diagnostic.py:260): **14 stage names do not establish 14 required gates.** Empty pass maps satisfy `all(...)`; `tests_run` is unchecked; only three commands are compared exactly.\n\nConcrete counterexample: set `graph-regressions` to a zero-match Cargo filter, `tests_run=0`, and `required_test_passes={}`, retaining zero statuses. Synchronize the parent/workspace stage records and their hashes. This validator accepts them because the six SQ4 passes remain elsewhere. The existing mock fixture also credits library tests to the binary stage at line 1596.\n\nSmallest correction: check every stage’s exact argv, require positive test counts for test stages, and compare each pass map with the frozen mandatory roster. The existing [native stage validator](/home/rb/worktrees/borsuk-prod-ready-v9/scripts/launch_native_workspace_execution_spot.py:943) already establishes these rules. Cheap falsifier: one rehashed metadata fixture containing that zero-test regression stage must be refused.\n\nAfter closing this check and passing completed exact native authority, actual fixture, SDK and final freeze gates, **the consumed-panel SQ4 falsifier can proceed**. That permits the preregistered experiment; it establishes no cold-latency, QPS or vendor win. This review ran no tests and did not interact with the live job.",
+      "partial_result_truncated": false,
+      "provider_partials": {
+        "claude": "Failed to authenticate: OAuth session expired and could not be refreshed",
+        "codex": "One validation blocker at [launch_fine_pack_diagnostic.py:260](/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue/scripts/launch_fine_pack_diagnostic.py:260): **14 stage names do not establish 14 required gates.** Empty pass maps satisfy `all(...)`; `tests_run` is unchecked; only three commands are compared exactly.\n\nConcrete counterexample: set `graph-regressions` to a zero-match Cargo filter, `tests_run=0`, and `required_test_passes={}`, retaining zero statuses. Synchronize the parent/workspace stage records and their hashes. This validator accepts them because the six SQ4 passes remain elsewhere. The existing mock fixture also credits library tests to the binary stage at line 1596.\n\nSmallest correction: check every stage’s exact argv, require positive test counts for test stages, and compare each pass map with the frozen mandatory roster. The existing [native stage validator](/home/rb/worktrees/borsuk-prod-ready-v9/scripts/launch_native_workspace_execution_spot.py:943) already establishes these rules. Cheap falsifier: one rehashed metadata fixture containing that zero-test regression stage must be refused.\n\nAfter closing this check and passing completed exact native authority, actual fixture, SDK and final freeze gates, **the consumed-panel SQ4 falsifier can proceed**. That permits the preregistered experiment; it establishes no cold-latency, QPS or vendor win. This review ran no tests and did not interact with the live job."
+      },
+      "providers_used": [
+        "claude",
+        "codex"
+      ],
+      "active_provider": "codex",
+      "phase": "Consultation completed",
+      "input_bytes": 2768,
+      "output_bytes": 1468,
+      "elapsed_seconds": 544,
+      "progress": "devbox-consult-stream: provider result success\nReading additional input from stdin...\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)\ndevbox-ask: codex consult still running (4m 30s)\ndevbox-ask: codex consult still running (5m 00s)\ndevbox-ask: codex consult still running (5m 30s)\ndevbox-ask: codex consult still running (6m 00s)\ndevbox-ask: codex consult still running (6m 30s)\ndevbox-ask: codex consult still running (7m 00s)\ndevbox-ask: codex consult still running (7m 30s)\ndevbox-ask: codex consult still running (8m 00s)\ndevbox-ask: codex consult still running (8m 30s)",
+      "progress_truncated": false,
+      "result": "One validation blocker at [launch_fine_pack_diagnostic.py:260](/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue/scripts/launch_fine_pack_diagnostic.py:260): **14 stage names do not establish 14 required gates.** Empty pass maps satisfy `all(...)`; `tests_run` is unchecked; only three commands are compared exactly.\n\nConcrete counterexample: set `graph-regressions` to a zero-match Cargo filter, `tests_run=0`, and `required_test_passes={}`, retaining zero statuses. Synchronize the parent/workspace stage records and their hashes. This validator accepts them because the six SQ4 passes remain elsewhere. The existing mock fixture also credits library tests to the binary stage at line 1596.\n\nSmallest correction: check every stage’s exact argv, require positive test counts for test stages, and compare each pass map with the frozen mandatory roster. The existing [native stage validator](/home/rb/worktrees/borsuk-prod-ready-v9/scripts/launch_native_workspace_execution_spot.py:943) already establishes these rules. Cheap falsifier: one rehashed metadata fixture containing that zero-test regression stage must be refused.\n\nAfter closing this check and passing completed exact native authority, actual fixture, SDK and final freeze gates, **the consumed-panel SQ4 falsifier can proceed**. That permits the preregistered experiment; it establishes no cold-latency, QPS or vendor win. This review ran no tests and did not interact with the live job.",
+      "result_truncated": false
+    },
+    {
+      "role": "engineering_critic",
+      "id": "fdf85800532b4c9a",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "fallbacks": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "effort": "",
+      "agent": "borsuk/prod-ready-v9",
+      "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+      "status": "completed",
+      "runner_started": true,
+      "started_at": 1791217296,
+      "timeout_seconds": 1200,
+      "deadline_at": 1791218496,
+      "budget_usd": null,
+      "prompt_preview": "Act as the independent adversarial engineering and release critic. Inspect correctness, failure modes, security, operability, tests, and UX. Prioritize concrete findings with evidence. Do not edit files.\n\nMaterial to critique:\nRead-only release review, no edits/tests/cloud/native/children/consults. Repo /home/rb/worktrees/borsuk-prod-ready-v9 root1d93036a. SAME isolated worker /home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue frozen b0a598e9625941c3f23b978679b68d74a55a9a3d; file scripts/launch_fine_pack_diagnostic.py SHA9bb181008c315cb63d993c572b4a4624d2603e915fbe878d9883d720406d642e bytes121489. Diff from d1cb91fe18730218a7d8e43407ead528b1eacd43 limited own1 via e4ed9f91+b0a598e9. Focus additive --sq4 path, preserve historical packing. Native method frozen docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/preregister.md; prospective18-input roster229614200B and config/source/enclosure-c2d233d6.json atsame root. Science: exact retained FIRST100k D768 cosine k100 consumed64 ReLAION+CoHere, one SQ4 codec intervention,32ranges16MiB/mean>=.98/p05>=95, complete128 frozen before GT; no measured cold/QPS/vendor win. Native source c2d233d6 qualification ORIGINAL exec33227/instancei-0f484ec1159d1e744 LIVE, do NOT interact with it or incomplete results. Frozen native full4041689c53...; all14 REQUIRED Clippy FIRST; no completed source/binary authority yet. All future receipt/binary/config/Spot/code/source/scratch pins must remain root pending. Root independently checked exact current CLI --sq4 --self-check exit0/8.294s/256Mpeak/swap0 and old --self-check exit0/.833s/57.5M; actual SDK model, real fake-native/fsync/stream/no-overwrite; cloud/cgroup/native science mocked. Examine: actual18-body admission including78M records streaming, qualification14 exact exit0/terminal/fullsource/binary/same-instance termination, secret truth freeze and complete133/134 roster, PASS-lookingbodyexit2INVALID, genuine completedREJECT preserved, delegated cgroup before-exec caps/no orphan, whole4Gi scratch includes source/archive/SDK/static/input/output/temp with admission+1Hz+closure; SDK/CLI/conditionalPUT/bootstrap/collector paths and config/hash cycle. Report ONLY concrete blockers with file/line, actual causal counterexample and smallest correction/cheap falsifier, plus whether in-scope science can proceed once native authority/cheap actual fixture/SDK gates pass. Do not invent vendor parity or require new Python framework/extra canary product. Keep review bounded to these paths and relevant imported existing authority/lifecycle helpers.",
+      "prompt_sha256": "073e101b41e19cdf44f5592903589342bc34b73b7a962f408b3d6f19e99bce4b",
+      "prompt_bytes": 2802,
+      "fingerprint": "1e2018955b4d5aa7a4dd5677448314e98bc87b47350b42dd1290293ad2718137",
+      "evidence": {
+        "git_commit": "1d93036a5721c3b1e7d1182d5f52a3de094db0e1",
+        "git_branch": "devbox/prod-ready-v9",
+        "git_dirty": true,
+        "git_status_sha256": "7f911640d3897b79f5b7ac1bc3e7239794cfc8e579d238c5fc8989cb66b79d7d",
+        "worktree_sha256": "59391be552d6a2d21a941fb157fa4cc0ec24d67fa5ad66c9872dacc6885882ab",
+        "worktree_evidence_truncated": true,
+        "active_goal": {
+          "id": "goal-1790540483-1790540483843307105-2322852",
+          "agent": "borsuk/prod-ready-v9",
+          "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+          "status": "queued",
+          "revision": 4,
+          "actor": "devbox",
+          "note": "re-apply delivery failed; prior goal state restored",
+          "created_at": 1790540483,
+          "updated_at": 1790781535
+        }
+      },
+      "previous_fingerprint": "1b83e39256aa915d4a887905edee01601f2a29511d96236f14d5d5e1f209b0a0",
+      "reused": false,
+      "critique_id": "6475917af0114a7c",
+      "critique_role": "engineering_critic",
+      "systemd_unit": "devbox-consult-fdf85800532b4c9a.service",
+      "pid": 1333684,
+      "pgid": 1333684,
+      "attempt": 1,
+      "attempts": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "attempt_history": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra",
+          "budget_usd": null,
+          "timeout_seconds": 1199,
+          "started_at": 1791217297
+        }
+      ],
+      "exit_code": 0,
+      "finished_at": 1791217628,
+      "event_cursor": 47,
+      "events": [
+        {
+          "seq": 24,
+          "at": 1791217369,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 25,
+          "at": 1791217369,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 26,
+          "at": 1791217370,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 128"
+        },
+        {
+          "seq": 27,
+          "at": 1791217384,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 28,
+          "at": 1791217384,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 29,
+          "at": 1791217385,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 30,
+          "at": 1791217385,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 31,
+          "at": 1791217399,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 32,
+          "at": 1791217399,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 33,
+          "at": 1791217399,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 34,
+          "at": 1791217400,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 35,
+          "at": 1791217434,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 36,
+          "at": 1791217434,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 37,
+          "at": 1791217439,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 38,
+          "at": 1791217440,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 39,
+          "at": 1791217490,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 40,
+          "at": 1791217496,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 41,
+          "at": 1791217496,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 42,
+          "at": 1791217496,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 43,
+          "at": 1791217498,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 44,
+          "at": 1791217590,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 45,
+          "at": 1791217590,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 46,
+          "at": 1791217627,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 47,
+          "at": 1791217627,
+          "provider": "codex",
+          "kind": "phase",
+          "label": "Consultation completed",
+          "detail": "exit 0"
+        }
+      ],
+      "events_truncated": true,
+      "provider_events": {
+        "codex": [
+          {
+            "seq": 40,
+            "at": 1791217496,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 41,
+            "at": 1791217496,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 42,
+            "at": 1791217496,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 43,
+            "at": 1791217498,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 44,
+            "at": 1791217590,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 45,
+            "at": 1791217590,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 46,
+            "at": 1791217627,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 47,
+            "at": 1791217627,
+            "provider": "codex",
+            "kind": "phase",
+            "label": "Consultation completed",
+            "detail": "exit 0"
+          }
+        ]
+      },
+      "partial_result": "One blocker in frozen `b0a598e9`:\n\n- **[P1] The “whole-worker” 4 GiB scratch receipt omits bootstrap temporaries and final writes.** [Scratch observation](/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue/scripts/launch_fine_pack_diagnostic.py:342) counts only the campaign and retained-input directories. [Bootstrap](/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue/scripts/launch_fine_pack_diagnostic.py:453) installs packages without redirecting temporary storage, before observation starts. The [last observation](/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue/scripts/launch_fine_pack_diagnostic.py:771) also precedes writing `scratch.json`, copying `run-closed.log`, and writing `terminal.json`.\n\n  **Counterexample:** the existing fake-native scratch fault, placed in `/tmp` instead of `root/temporary`, leaves every observed byte count unchanged—even while exceeding the declared temporary-footprint limit. Likewise, closure writes can cross the cap after its final check. These are static counterexamples; I did not execute them.\n\n  **Smallest correction:** put bootstrap/runtime temporaries inside the charged tree, account for bootstrap overlap, and reserve or check all remaining closure writes before publishing a successful terminal. Extend the existing fixture with an external-temp fault and a near-cap closure case; no new framework is needed.\n\nAfter this correction and the pending native-authority, actual-input admission, and SDK/delegation canary gates pass, the preregistered consumed-panel SQ4 falsifier can proceed. This supports no cold-latency, QPS, vendor-parity, or production-readiness claim.\n\nRead-only review only; no tests, cloud calls, or interaction with the live qualification job.",
+      "partial_result_truncated": false,
+      "provider_partials": {
+        "codex": "One blocker in frozen `b0a598e9`:\n\n- **[P1] The “whole-worker” 4 GiB scratch receipt omits bootstrap temporaries and final writes.** [Scratch observation](/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue/scripts/launch_fine_pack_diagnostic.py:342) counts only the campaign and retained-input directories. [Bootstrap](/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue/scripts/launch_fine_pack_diagnostic.py:453) installs packages without redirecting temporary storage, before observation starts. The [last observation](/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue/scripts/launch_fine_pack_diagnostic.py:771) also precedes writing `scratch.json`, copying `run-closed.log`, and writing `terminal.json`.\n\n  **Counterexample:** the existing fake-native scratch fault, placed in `/tmp` instead of `root/temporary`, leaves every observed byte count unchanged—even while exceeding the declared temporary-footprint limit. Likewise, closure writes can cross the cap after its final check. These are static counterexamples; I did not execute them.\n\n  **Smallest correction:** put bootstrap/runtime temporaries inside the charged tree, account for bootstrap overlap, and reserve or check all remaining closure writes before publishing a successful terminal. Extend the existing fixture with an external-temp fault and a near-cap closure case; no new framework is needed.\n\nAfter this correction and the pending native-authority, actual-input admission, and SDK/delegation canary gates pass, the preregistered consumed-panel SQ4 falsifier can proceed. This supports no cold-latency, QPS, vendor-parity, or production-readiness claim.\n\nRead-only review only; no tests, cloud calls, or interaction with the live qualification job."
+      },
+      "providers_used": [
+        "codex"
+      ],
+      "active_provider": "codex",
+      "phase": "Consultation completed",
+      "input_bytes": 2802,
+      "output_bytes": 1772,
+      "elapsed_seconds": 332,
+      "progress": "Reading additional input from stdin...\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)\ndevbox-ask: codex consult still running (4m 30s)\ndevbox-ask: codex consult still running (5m 00s)\ndevbox-ask: codex consult still running (5m 30s)",
+      "progress_truncated": false,
+      "result": "One blocker in frozen `b0a598e9`:\n\n- **[P1] The “whole-worker” 4 GiB scratch receipt omits bootstrap temporaries and final writes.** [Scratch observation](/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue/scripts/launch_fine_pack_diagnostic.py:342) counts only the campaign and retained-input directories. [Bootstrap](/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue/scripts/launch_fine_pack_diagnostic.py:453) installs packages without redirecting temporary storage, before observation starts. The [last observation](/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue/scripts/launch_fine_pack_diagnostic.py:771) also precedes writing `scratch.json`, copying `run-closed.log`, and writing `terminal.json`.\n\n  **Counterexample:** the existing fake-native scratch fault, placed in `/tmp` instead of `root/temporary`, leaves every observed byte count unchanged—even while exceeding the declared temporary-footprint limit. Likewise, closure writes can cross the cap after its final check. These are static counterexamples; I did not execute them.\n\n  **Smallest correction:** put bootstrap/runtime temporaries inside the charged tree, account for bootstrap overlap, and reserve or check all remaining closure writes before publishing a successful terminal. Extend the existing fixture with an external-temp fault and a near-cap closure case; no new framework is needed.\n\nAfter this correction and the pending native-authority, actual-input admission, and SDK/delegation canary gates pass, the preregistered consumed-panel SQ4 falsifier can proceed. This supports no cold-latency, QPS, vendor-parity, or production-readiness claim.\n\nRead-only review only; no tests, cloud calls, or interaction with the live qualification job.",
+      "result_truncated": false
+    }
+  ],
+  "reused": false,
+  "finished_at": 1791217844,
+  "elapsed_seconds": 544,
+  "input_bytes": 2384,
+  "output_bytes": 3240
+}

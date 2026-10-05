@@ -1,0 +1,13 @@
+{
+  "id": "fdf85800532b4c9a",
+  "group": "6475917af0114a7c",
+  "role": "engineering_critic",
+  "provider": "codex",
+  "model": "gpt-6-astra",
+  "status": "completed",
+  "exit_code": 0,
+  "prompt_sha256": "073e101b41e19cdf44f5592903589342bc34b73b7a962f408b3d6f19e99bce4b",
+  "source_commit": "b0a598e9625941c3f23b978679b68d74a55a9a3d",
+  "source_sha256": "9bb181008c315cb63d993c572b4a4624d2603e915fbe878d9883d720406d642e",
+  "result": "One blocker in frozen `b0a598e9`:\n\n- **[P1] The “whole-worker” 4 GiB scratch receipt omits bootstrap temporaries and final writes.** [Scratch observation](/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue/scripts/launch_fine_pack_diagnostic.py:342) counts only the campaign and retained-input directories. [Bootstrap](/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue/scripts/launch_fine_pack_diagnostic.py:453) installs packages without redirecting temporary storage, before observation starts. The [last observation](/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue/scripts/launch_fine_pack_diagnostic.py:771) also precedes writing `scratch.json`, copying `run-closed.log`, and writing `terminal.json`.\n\n  **Counterexample:** the existing fake-native scratch fault, placed in `/tmp` instead of `root/temporary`, leaves every observed byte count unchanged—even while exceeding the declared temporary-footprint limit. Likewise, closure writes can cross the cap after its final check. These are static counterexamples; I did not execute them.\n\n  **Smallest correction:** put bootstrap/runtime temporaries inside the charged tree, account for bootstrap overlap, and reserve or check all remaining closure writes before publishing a successful terminal. Extend the existing fixture with an external-temp fault and a near-cap closure case; no new framework is needed.\n\nAfter this correction and the pending native-authority, actual-input admission, and SDK/delegation canary gates pass, the preregistered consumed-panel SQ4 falsifier can proceed. This supports no cold-latency, QPS, vendor-parity, or production-readiness claim.\n\nRead-only review only; no tests, cloud calls, or interaction with the live qualification job."
+}
