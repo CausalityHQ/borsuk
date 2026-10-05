@@ -1,0 +1,7 @@
+Running as unit: borsuk-global-leaf-2171-relaion-build-fine.service; invocation ID: 96eb4ec95d174e4ba1d6bc10d410c069
+Finished with result: signal
+Main processes terminated with: code=killed/status=KILL
+Service runtime: 47.474s
+CPU time consumed: 51.123s
+Memory peak: 256.0K
+Memory swap peak: 0B
