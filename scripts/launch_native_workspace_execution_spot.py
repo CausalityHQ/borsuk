@@ -693,7 +693,7 @@ def validate_hierarchical_archive(authority, inventory, manifest_path, base=None
 def validate_candidate_delta(paths):
     """Bind the exact native subset for a subsequent hierarchical increment."""
     assert type(paths) is list and paths and all(type(path) is str for path in paths), 'candidate native delta list'
-    if HIERARCHICAL_CELLS:
+    if HIERARCHICAL_CELLS or FINE_SQ8:
         assert paths == sorted(set(paths)) and set(paths) <= set(NATIVE_DELTA), 'exact admitted hierarchical native subset'
     else:
         assert paths == list(NATIVE_DELTA), 'exact candidate native delta'
@@ -2250,6 +2250,9 @@ def _fine_sq8_self_check():
         assert RECEIPT_SCHEMA == 'borsuk-fine-sq8-implementation-gates-receipt-v1'
         assert CODE == (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_fine_sq8_implementation.sh')
         assert NATIVE_DELTA == FINE_SQ8_DELTA and len(NATIVE_DELTA) == 3 and list(NATIVE_DELTA) == sorted(NATIVE_DELTA)
+        assert validate_candidate_delta(list(FINE_SQ8_DELTA[:2])) == list(FINE_SQ8_DELTA[:2])
+        rejected(lambda:validate_candidate_delta([FINE_SQ8_DELTA[0], FINE_SQ8_DELTA[0]]))
+        rejected(lambda:validate_candidate_delta(['crates/borsuk/src/unowned.rs']))
         assert RELEASE_ARTIFACTS == ('binaries/hierarchical_semantic_cells',)
         for key in ('CARGO_BUILD_JOBS', 'BORSUK_TEST_BUILD_JOBS', 'RUST_TEST_THREADS',
                     'BORSUK_CPU_THREADS', 'RAYON_NUM_THREADS', 'TOKIO_WORKER_THREADS'):
