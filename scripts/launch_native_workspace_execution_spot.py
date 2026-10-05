@@ -175,6 +175,13 @@ FINE_SQ8_STAGE_SCHEMA = 'borsuk-fine-sq8-implementation-stage-v1'
 # Exact target-qualified names from the final native sibling contract; source SHA is root-owned.
 FINE_SQ8_REQUIRED_TESTS = {
     'fine-sq8-tests': (
+        'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_dp_independent_brute_partitions_and_deviations',
+        'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_interval_cancellation_against_direct_deviations',
+        'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_exhaustive256_mapping_ties_and_uniform_bitwise_parity',
+        'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_scalar_scores_odd_tail_zero_nonunit_near_ties',
+        'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_book_binding_padding_counts_caps_and_numeric_negatives',
+        'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_full128_pipeline_books_requests_truth_closure_and_late_invalid',
+        'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_source_reauthentication_eof_prebody_caps_and_sync',
         'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_all_codes_numeric_oracle_odd_tail_nonunit_ties',
         'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_exact_cover_superset_and_binding',
         'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_auth_fifo_corruption_caps_and_durability',
@@ -201,6 +208,8 @@ FINE_SQ8_REQUIRED_TESTS = {
         'pq64_nominee::source_codes_tests::source_fit_is_ordinal_deterministic_and_codes_only',
     ),
     'fine-sq8-bin-tests': (
+        'tests::fine_histogram_sq4_strict_cli_dispatch_and_schema_identity',
+        'tests::fine_histogram_sq4_real_native_builder_paired_pipeline_all128_full_rosters_late_invalid',
         'tests::fine_sq4_real_native_pipeline_128_seal_before_truth',
         'tests::fine_sq4_strict_cli_dispatch',
         'tests::fine_pack_strict_cli_real_tiny_pipeline',
