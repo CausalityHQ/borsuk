@@ -1,0 +1,16 @@
+{
+  "schema": "borsuk-cell-overlap-log-transport-rebinding-v1",
+  "root_cause": "raw qualification logs were present but untracked in root; compressed originals are tracked",
+  "prelaunch_exit_status": 2,
+  "instance_launched": false,
+  "attempt_directory_created": false,
+  "replaced": {
+    "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/run-closed.log": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/run-closed.log.gz",
+    "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/test.log": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/test.log.gz"
+  },
+  "body_identity_policy": "original raw terminal SHA/bytes unchanged; gzip wholebody SHA pinned separately",
+  "source_archive_all_paths_tracked": true,
+  "source_archive_files": 473,
+  "config_sha256": "eca43b2faf4146a501ce69fb27f525507e24727edb485e29d39af9e8272996cb",
+  "scratch_admission_bytes": 5582115379
+}

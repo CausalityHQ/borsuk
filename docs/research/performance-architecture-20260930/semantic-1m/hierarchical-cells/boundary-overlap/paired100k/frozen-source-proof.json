@@ -1,9 +1,9 @@
 {
   "config_path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/paired100k/config.json",
-  "config_sha256": "50b983d35fd2f6077adf62690971b76477561b420dafbe5f9b3f6f312d7dc34e",
+  "config_sha256": "eca43b2faf4146a501ce69fb27f525507e24727edb485e29d39af9e8272996cb",
   "campaign_schema": "borsuk-cell-overlap-paired100k-spot-v1",
   "code_identity_sha256": "c616b24cbe2f420d87062a6b429e29908e00a3fafdaa65a9dfb7da00cce10ac6",
-  "refs_identity_sha256": "0bcf7d51f61a9130539e35ca5fbc994cd613fc9fd193fc612c7228cfc1ca0527",
+  "refs_identity_sha256": "35211179af9466438cfa9ffdd1cf1457f8fc16c185f09cc6d28a2a3692fbf613",
   "native_identity_sha256": "cfcec8b69ffd77c52944465cf72f3b6a23d82d301f993c734473b386a3195bb2",
   "source_file_count": 403,
   "source_archive_paths": [
@@ -410,13 +410,13 @@
     "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/config.json",
     "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/cpu.txt",
     "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/native-source-manifest.json",
-    "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/run-closed.log",
+    "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/run-closed.log.gz",
     "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/rustc-version.txt",
     "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/source-after.json",
     "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/source-before.json",
     "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/source-qualification.json",
     "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/test-resources.txt",
-    "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/test.log",
+    "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/test.log.gz",
     "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/workspace-cgroup.json",
     "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/workspace-receipt.json",
     "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/native-source-manifest.json",
@@ -481,7 +481,7 @@
     "scripts/v114_score_rust/src/bin/v149_contiguous_hierarchy.rs",
     "scripts/v114_score_rust/src/main.rs"
   ],
-  "source_archive_paths_sha256": "e19fa1dc4c2dfbae1fd775929428fba517f7c985ca238c9d3c0d827c47201d2c",
+  "source_archive_paths_sha256": "e40c867605b235a94d612995c128fdf2ce277d05fd6dfe878e1af17412833316",
   "artifact_roster_sha256": "517a79df03c7f239bbf01603e5c9b1fbb79a1bf458e1aa827174f93b7311b2cd",
   "awscli_version": "2.36.11",
   "awscli_sha256": "50fbb7a2f44a78eab4a210088040e8f0bc4b9937cac8043c2354269d58614df6"
