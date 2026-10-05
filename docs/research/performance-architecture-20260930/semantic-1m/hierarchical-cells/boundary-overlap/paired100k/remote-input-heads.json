@@ -1,0 +1,141 @@
+{
+  "schema": "borsuk-overlap-remote-input-heads-v1",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "body_gets": 0,
+  "query_truth_bodies_opened": false,
+  "status": "METADATA_GO",
+  "heads": [
+    {
+      "key": "research/hierarchical-cells/20261004/constrained-split-falsifier-a0002/artifacts/screen/retained/relaion/canonical.bin",
+      "expected_bytes": 308000000,
+      "actual_bytes": 308000000,
+      "etag": "\"bef4eddc80334b1d2c36a863193637dc-37\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/hierarchical-cells/20261004/constrained-split-falsifier-a0002/artifacts/screen/retained/relaion/order",
+      "expected_bytes": 800000,
+      "actual_bytes": 800000,
+      "etag": "\"88e677fadc833d94c35a8c6993581201\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/native-union/20260928/walk-source-http-a0002/indexes/relaion/candidate/generations/577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b/plane/records.bin",
+      "expected_bytes": 20000000,
+      "actual_bytes": 20000000,
+      "etag": "\"4a24ec4c11e42dd0e2062d5b433a9a19-3\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/native-union/20260928/locality-source-layout-a0001/data/relaion/objects/be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b",
+      "expected_bytes": 78000000,
+      "actual_bytes": 78000000,
+      "etag": "\"232d675ebacc2f6182cd025820847ac8\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/relaion/partitioner/directories.bin",
+      "expected_bytes": 6397659,
+      "actual_bytes": 6397659,
+      "etag": "\"8a64cfbf0a952166f605d366c8be4f4c\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/relaion/partitioner/cells.bin",
+      "expected_bytes": 98800000,
+      "actual_bytes": 98800000,
+      "etag": "\"1e26204665217db80a827c9f0467f69c-12\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/relaion/partitioner/requests64",
+      "expected_bytes": 937167,
+      "actual_bytes": 937167,
+      "etag": "\"a8f1c54a019e57830a79848cb9523d67\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/relaion/partitioner/truth64",
+      "expected_bytes": 25600,
+      "actual_bytes": 25600,
+      "etag": "\"422bc51922d69a915512d6894fcd88ff\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/hierarchical-cells/20261004/constrained-split-falsifier-a0002/artifacts/screen/retained/cohere/canonical.bin",
+      "expected_bytes": 308000000,
+      "actual_bytes": 308000000,
+      "etag": "\"8ec4bd86308d994b4d12f98e8926242d-37\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/hierarchical-cells/20261004/constrained-split-falsifier-a0002/artifacts/screen/retained/cohere/order",
+      "expected_bytes": 800000,
+      "actual_bytes": 800000,
+      "etag": "\"a4bf1bbbd7fa87e98f4842a5b239fd90\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/native-union/20260928/walk-source-http-a0002/indexes/cohere/candidate/generations/9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521/plane/records.bin",
+      "expected_bytes": 20000000,
+      "actual_bytes": 20000000,
+      "etag": "\"e8ae7021b06f2e8b19f7f1769e91df3d-3\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/native-union/20260928/walk-source-http-a0001/data/cohere/objects/c16929252705c831c6846022eec46481fc004f521f0c0814a53d49fece8771e0",
+      "expected_bytes": 78000000,
+      "actual_bytes": 78000000,
+      "etag": "\"f669afd022ec8e25f4b4ccf30f3741cc\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/cohere/partitioner/directories.bin",
+      "expected_bytes": 6410540,
+      "actual_bytes": 6410540,
+      "etag": "\"f036c5cf071047fa8ba2a4e054fd4b69\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/cohere/partitioner/cells.bin",
+      "expected_bytes": 98800000,
+      "actual_bytes": 98800000,
+      "etag": "\"4970b84d2d9882215702486302e48a79-12\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/cohere/partitioner/requests64",
+      "expected_bytes": 983232,
+      "actual_bytes": 983232,
+      "etag": "\"6f99e6eac3dba55c10f272cba62416f0\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/cohere/partitioner/truth64",
+      "expected_bytes": 25600,
+      "actual_bytes": 25600,
+      "etag": "\"158acc9634c25990a450412c14bad15b\"",
+      "body_sha256_verified": false
+    }
+  ],
+  "original_terminal": {
+    "unit": "borsuk-overlap-assets-head-a0001.service",
+    "invocation_id": "e7718426b9754bca9bd471dff64f7851",
+    "exit_status": 0,
+    "runtime_seconds": 0.597,
+    "cpu_seconds": 0.344,
+    "memory_peak_display": "45.9M",
+    "swap_display": "0B",
+    "memory_max_bytes": 268435456,
+    "cpu_quota_percent": 100,
+    "swap_max_bytes": 0
+  },
+  "roster": {
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/paired100k/remote-input-roster.json",
+    "bytes": 5884,
+    "sha256": "80c7af4a209fb409734b4183a7f7c92c00b428b15e9e1dc0037d03e37e0a6ea7"
+  },
+  "source_sha256": "0eb1ae92286302f3b0c294077e5fd6b593a37d3f014dc384718a830e3d644428"
+}

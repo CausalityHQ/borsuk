@@ -1,0 +1,138 @@
+{
+  "schema": "borsuk-overlap-prospective-remote-input-roster-v1",
+  "authority_pending": true,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "items": [
+    {
+      "dataset": "relaion",
+      "role": "original",
+      "name": "canonical",
+      "bytes": 308000000,
+      "key": "research/hierarchical-cells/20261004/constrained-split-falsifier-a0002/artifacts/screen/retained/relaion/canonical.bin",
+      "sha256": "c260b7fe0b6a54de98dfba3f2599d272242f724421064ed5ca18c0cd63e6283d"
+    },
+    {
+      "dataset": "relaion",
+      "role": "original",
+      "name": "order",
+      "bytes": 800000,
+      "key": "research/hierarchical-cells/20261004/constrained-split-falsifier-a0002/artifacts/screen/retained/relaion/order",
+      "sha256": "22abeb087000ea2978c4fef8e85c2f7fda4e4b22c4e5126ba37a1c19816fab18"
+    },
+    {
+      "dataset": "relaion",
+      "role": "original",
+      "name": "records",
+      "key": "research/native-union/20260928/walk-source-http-a0002/indexes/relaion/candidate/generations/577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b/plane/records.bin",
+      "bytes": 20000000,
+      "sha256": "624e63de5905210bde24a4e7752573d6811d9fa5142e5b529ff0e9f65054ce83"
+    },
+    {
+      "dataset": "relaion",
+      "role": "original",
+      "name": "sq8",
+      "key": "research/native-union/20260928/locality-source-layout-a0001/data/relaion/objects/be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b",
+      "bytes": 78000000,
+      "sha256": "be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b"
+    },
+    {
+      "dataset": "relaion",
+      "role": "layout",
+      "name": "directories.bin",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/relaion/partitioner/directories.bin",
+      "bytes": 6397659,
+      "sha256": "93c0d23d067d4929d44d1111159c3c46ac74800aba621a344a3cfd3fa8d5fe89"
+    },
+    {
+      "dataset": "relaion",
+      "role": "layout",
+      "name": "cells.bin",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/relaion/partitioner/cells.bin",
+      "bytes": 98800000,
+      "sha256": "6bb1c1259c3686ec7dfea1100e9162b45ad898c504b261f82979b974aedbf8ae"
+    },
+    {
+      "dataset": "relaion",
+      "role": "panel",
+      "name": "requests64",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/relaion/partitioner/requests64",
+      "bytes": 937167,
+      "sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330"
+    },
+    {
+      "dataset": "relaion",
+      "role": "panel",
+      "name": "truth64",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/relaion/partitioner/truth64",
+      "bytes": 25600,
+      "sha256": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c"
+    },
+    {
+      "dataset": "cohere",
+      "role": "original",
+      "name": "canonical",
+      "bytes": 308000000,
+      "key": "research/hierarchical-cells/20261004/constrained-split-falsifier-a0002/artifacts/screen/retained/cohere/canonical.bin",
+      "sha256": "38304c3b448f2f62b32da8b443bbe52f20ccc63f5472d0e7885d5c268dd7a6df"
+    },
+    {
+      "dataset": "cohere",
+      "role": "original",
+      "name": "order",
+      "bytes": 800000,
+      "key": "research/hierarchical-cells/20261004/constrained-split-falsifier-a0002/artifacts/screen/retained/cohere/order",
+      "sha256": "e2314ca14f5aa6f08b02cc328b863c921e55b1461a413ad6d3d66e781ff42d50"
+    },
+    {
+      "dataset": "cohere",
+      "role": "original",
+      "name": "records",
+      "key": "research/native-union/20260928/walk-source-http-a0002/indexes/cohere/candidate/generations/9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521/plane/records.bin",
+      "bytes": 20000000,
+      "sha256": "f47e344a6a959bfe1e9fe301785410b06667cf07d2bc0386892f510c7f5c6cf8"
+    },
+    {
+      "dataset": "cohere",
+      "role": "original",
+      "name": "sq8",
+      "key": "research/native-union/20260928/walk-source-http-a0001/data/cohere/objects/c16929252705c831c6846022eec46481fc004f521f0c0814a53d49fece8771e0",
+      "bytes": 78000000,
+      "sha256": "c16929252705c831c6846022eec46481fc004f521f0c0814a53d49fece8771e0"
+    },
+    {
+      "dataset": "cohere",
+      "role": "layout",
+      "name": "directories.bin",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/cohere/partitioner/directories.bin",
+      "bytes": 6410540,
+      "sha256": "f0df6a5900d6a66263389dfa353167790b18c2b819e09c288d6f218457dbf865"
+    },
+    {
+      "dataset": "cohere",
+      "role": "layout",
+      "name": "cells.bin",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/cohere/partitioner/cells.bin",
+      "bytes": 98800000,
+      "sha256": "647491734c13391be7ff682a8d8c125e69d317e87b31cd8e7d1ebb9eebee0ef0"
+    },
+    {
+      "dataset": "cohere",
+      "role": "panel",
+      "name": "requests64",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/cohere/partitioner/requests64",
+      "bytes": 983232,
+      "sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654"
+    },
+    {
+      "dataset": "cohere",
+      "role": "panel",
+      "name": "truth64",
+      "key": "research/hierarchical-cells/20261004/capacity-partitioner-paired100k-a0001/artifacts/screen/retained/cohere/partitioner/truth64",
+      "bytes": 25600,
+      "sha256": "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355"
+    }
+  ],
+  "total_bytes": 1025979798,
+  "remote_body_hydration_in_this_roster_check": false,
+  "large_body_authentication_required_on_remote_stage": true
+}
