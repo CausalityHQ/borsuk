@@ -1,0 +1,48 @@
+{
+  "candidate_payloads_bytes": 79200000,
+  "claim_scope": "Consumed-panel codec/cover falsifier only; no cold S3/QPS/vendor parity/100M/lifecycle win",
+  "compute_cap_usd": 0.3,
+  "ebs_s3_allowance_usd": 0.15,
+  "gates": {
+    "corpus_rows": 100000,
+    "datasets": [
+      "relaion",
+      "cohere"
+    ],
+    "dimensions": 768,
+    "k": 100,
+    "mean_recall_min": 0.98,
+    "metric": "cosine",
+    "p05_hits_min": 95,
+    "p05_index": 3,
+    "queries_each": 64,
+    "query_payload_cap_bytes": 16777216,
+    "range_cap": 32,
+    "split": "retained consumed64"
+  },
+  "inputs_bytes": 229614200,
+  "instance_type": "c7i.2xlarge",
+  "machine_limit_seconds": 1800,
+  "native_config": {
+    "bytes": 1695,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/prospective-native-config-c2d233d6.json",
+    "sha256": "771a0c1c8ed2060318b5388e3eed4c6a8dfac0b707687de823079ed8131d10fa"
+  },
+  "native_cpu_count": 1,
+  "native_deadline_seconds": 600,
+  "native_memory_bytes": 1073741824,
+  "native_output_cap_bytes": 268435456,
+  "native_qualification_pending": true,
+  "native_swap_bytes": 0,
+  "paid_launch_requires": [
+    "all14 exact native qualification gates0",
+    "authenticated current source/binary/completed terminal and termination",
+    "cheap source-bound real fixture plus supervisor/SDK preflight",
+    "frozen final code/config/source/input/output closure"
+  ],
+  "scratch_limit_bytes": 4294967296,
+  "scratch_note": "Whole worker source/archive/SDK/binary/inputs/output/logs charged together; predeclared reserve must include unpack and temporary overlap. Bound, not observed usage.",
+  "source_commit": "c2d233d6752d0a058d78c6077e51f31f0255e7c1",
+  "spot_max_usd_per_hour": 0.6,
+  "status": "PROSPECTIVE_NOT_LAUNCH_AUTHORITY"
+}

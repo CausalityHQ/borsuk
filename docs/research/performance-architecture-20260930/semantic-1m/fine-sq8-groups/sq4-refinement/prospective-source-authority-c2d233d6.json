@@ -1,0 +1,27 @@
+{
+  "authority_pending": true,
+  "bundle_commit": "ae68a7807ddd28c34134d09960227c5266d58b14",
+  "full_source_identity_sha256": "1689c53c7564f989f19da397b32b13f16f10df264d02355928849dcabf1e2849",
+  "native_config": {
+    "bytes": 1695,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/prospective-native-config-c2d233d6.json",
+    "sha256": "771a0c1c8ed2060318b5388e3eed4c6a8dfac0b707687de823079ed8131d10fa"
+  },
+  "not_launch_config": true,
+  "source_commit": "c2d233d6752d0a058d78c6077e51f31f0255e7c1",
+  "source_identity_sha256": "e808aae7d27e570d1bf7651d70f6144a7a93e09bae46f0222151852fff0a70db",
+  "source_sha256": {
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs": "4d46713e88ac6f75230327fc160734bebc991202e7904ee4994ccfd2760f7e6a",
+    "crates/borsuk/src/budgeted_page_rank.rs": "19509a9dccdd5354fc9d6e8018491167bfc18145b9fe65b3c51df895a411ed36",
+    "crates/borsuk/src/centroid_hnsw.rs": "2b70546426266d189fb440bcd66620bad2575c7fd8c985a16eaa56c11566077a",
+    "crates/borsuk/src/exact_sq8_nominee.rs": "09c253558ead184e9a3208fb4ff477387997ba809fe89bec747f6a4924aedcc2",
+    "crates/borsuk/src/fine_sq8_groups.rs": "250f592b8c2ad654f1b6b7281f08a0b3c420b4d4d157de29f8e2017212788f37",
+    "crates/borsuk/src/hierarchical_semantic_cells.rs": "0330e32270e5b6bc04f8bcd0cbbac6cceff6ef6989ec7f72cd1f9b9dd40211c2",
+    "crates/borsuk/src/lib.rs": "c44444884ec930f275fcfd34cced262057728be629d8dec31991b5788f425311",
+    "crates/borsuk/src/pq64_nominee.rs": "d76d2232b273f5e8b9095ee0ca5f788aa1cbd9d7d5dc19c88a7705298c902bf5",
+    "crates/borsuk/src/resident_vector_graph.rs": "c62459b45caeaaa798b16b24b88180ad6d4dc5bdd554cd804e6d6b354eb3b79d",
+    "crates/borsuk/src/returned_sq8.rs": "17531e7f09554927aee5533926e707c2e34430d002bf66f7e2ae4f1f325a3c63",
+    "crates/borsuk/src/sq8_page_authority.rs": "e4b34461509c78ca558f49a0ff11151dc1454589f472a5911913b5dbcea9af23",
+    "crates/borsuk/src/sq8_source.rs": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795"
+  }
+}
