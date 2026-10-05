@@ -1,0 +1,15 @@
+{
+  "id": "2b09fc3a2f674784",
+  "provider": "codex",
+  "model": "gpt-6-astra",
+  "effort": "xhigh",
+  "status": "completed",
+  "exit_code": 0,
+  "started_at": 1791160066,
+  "finished_at": 1791160633,
+  "source_commit": "3bb71007577a7688830aed776ade5e6d215d2d03",
+  "input_sha256": "57e7a21faf524916cbefedd421ac787446031e6395ff41b8b50aef9e1a12dd5e",
+  "providers_used": [
+    "codex"
+  ]
+}
