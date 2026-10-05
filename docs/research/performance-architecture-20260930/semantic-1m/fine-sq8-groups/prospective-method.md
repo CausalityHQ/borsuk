@@ -1,6 +1,6 @@
 # Fine SQ8 groups: prospective native falsifier
 
-Status: native source implementation is underway in the same bounded Rust worker; no compiled candidate, new experiment or measurement is qualified. Planning consultation 4e5aba57d4cc4756 completed exit0. Historical whole-cell and overlap FAIL decisions are unchanged.
+Status: exact-source native qualification passed on a79810b9. All 57 required tests, release build, workspace correctness/suspicious Clippy, and actual workspace test compilation passed. Full404 source before/after matches the frozen manifest; all14 bodies and SAME-instance termination authenticate. The substantive Rust increment is integrated. No paired corpus result, cold S3 latency/QPS, vendor win, or100M feasibility is qualified. Historical whole-cell and overlap FAIL decisions remain unchanged.
 
 Test one causal representation change: source-trained PQ row nomination plus authenticated 16-row contiguous SQ8 fetch groups in the unchanged primary physical order. No replicas, GT-trained fitting, whole-cell routing, or query-dependent layout. Preserve stored SQ8 bytes and coefficients.
 
