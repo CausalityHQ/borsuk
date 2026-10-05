@@ -1,0 +1,27 @@
+{
+  "exec_session": 95559,
+  "unit": "borsuk-fixed-sq4-compiler-repair-a0001-controller.service",
+  "invocation": "d0bb424008be4b25adfd5288c25247bb",
+  "bundle_commit": "d48ca575f28f9de38f71aa450ab668ca44820748",
+  "native_candidate": "a350611b3e68ba10a209ccbeb65acfdda65363ce",
+  "status": "original_remote_run_active",
+  "instance_id": "i-0b42e08427748ce04",
+  "source_archive_sha256": "c80abc9f9ac0055b8c73798ec22354c13439e208b0d4d006f1c72f61ec2b5dd4",
+  "source_preflight": {
+    "exit_status": 0,
+    "unit": "borsuk-sq4-compiler-repair-preflight-20261005",
+    "invocation": "554436ec56db496ba74283d5ded19c31",
+    "full_source_file_count": 404,
+    "source_identity_sha256": "3d8fd8aa316e3c900e129a253758f6e8253ef413a8817216916794811256fd0c"
+  },
+  "disposition": "Qualification pending; no scientific quality or performance result",
+  "limits": {
+    "build_jobs": 1,
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "cpu_percent": 200,
+    "tasks": 512
+  },
+  "previous_attempt": "../a0001",
+  "repair_scope": "Six test-only json! array-index expressions parenthesized; production and scientific protocol unchanged"
+}
