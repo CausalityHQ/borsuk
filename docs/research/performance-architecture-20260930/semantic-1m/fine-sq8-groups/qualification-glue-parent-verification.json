@@ -1,0 +1,24 @@
+{
+  "checks": [
+    {
+      "command": "python3 -m scripts.launch_native_workspace_execution_spot --fine-sq8-implementation --self-check",
+      "exit_status": 0
+    },
+    {
+      "command": "python3 -m scripts.launch_native_workspace_execution_spot --cell-overlap-implementation --self-check",
+      "exit_status": 0
+    }
+  ],
+  "glue_commit": "3f545cb678dca40bfbca00f1514bf159ae0b57a7",
+  "native_commit": "a79810b9cf9fee7c88fe9454737004bfccf44a44",
+  "native_inventory_files": 404,
+  "native_status": "UNVERIFIED",
+  "next_gate": "14 serial exact-source native stages, including affected tests, release, workspace correctness/suspicious Clippy and actual shim-unset test compilation",
+  "schema": "borsuk-fine-sq8-glue-parent-verification-v1",
+  "scope": "Python qualification mocks only; no Cargo, native queries, AWS or corpus run",
+  "source_sha256": {
+    "scripts/check_fine_sq8_implementation.sh": "b53d95dfea433ae244d79398fe81b0cabc29eea85ffdfcbeff6e2fa920218e66",
+    "scripts/check_native_workspace_execution.py": "d08cb1737f311f914b295087dd0e3d592b6cec40395ca721c8fdd91a21325cda",
+    "scripts/launch_native_workspace_execution_spot.py": "58fc0e618ffe78f030840474ebab7e0fa99700cf142f647d3370e3c05570b325"
+  }
+}
