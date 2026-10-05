@@ -1871,6 +1871,12 @@ mod tests {
             assert_eq!(probe_terminal(&out)["status"],"INVALID");
             assert!(!out.with_extension("fine-seal.json").exists());
         }
+        fs::remove_file(a.path.parent().unwrap().join("records.bin")).unwrap();
+        let fresh=std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact","tests::fine_fresh_process_plane_free_open","--nocapture"])
+            .env("BORSUK_FINE_TEST_ROOT",serde_json::to_string(&a).unwrap())
+            .env("BORSUK_FINE_TEST_REMOTE","1").status().unwrap();
+        assert!(fresh.success());
     }
     #[test]
     fn fine_fresh_process_plane_free_open() {
@@ -1878,6 +1884,27 @@ mod tests {
         let root:Artifact=serde_json::from_str(&encoded).unwrap();
         let limits=borsuk::fine_sq8_groups::ResidentLimits {max_peak_payload_bytes:256*1024*1024,
             pinned_generation_bytes:0,active_queries:1,delta_bytes:0,maintenance_bytes:0,runtime_bytes:0};
+        if std::env::var_os("BORSUK_FINE_TEST_REMOTE").is_some() {
+            use borsuk::fine_sq8_groups::{FineSq8Index,FineSq8Snapshot};
+            let manifest:Value=serde_json::from_slice(&fs::read(&root.path).unwrap()).unwrap();
+            assert!(!Path::new(manifest["primary_root"]["path"].as_str().unwrap()).exists());
+            for field in ["generation","plane","canonical","order","records","mean","sq8"] {
+                assert!(!Path::new(manifest["original"][field]["path"].as_str().unwrap()).exists());
+            }
+            assert!(!root.path.parent().unwrap().join("records.bin").exists());
+            assert!(FineSq8Index::open(&root,&limits).is_err());
+            let index=std::sync::Arc::new(FineSq8Index::open_remote(&root,&limits).unwrap());
+            let snapshot=FineSq8Snapshot::new(index.clone());
+            let query=[3.125,0.875]; let plan=snapshot.plan(&query,&mut index.new_workspace().unwrap()).unwrap();
+            assert!(plan.feasible() && !plan.nominees().is_empty() && !plan.ranges().is_empty());
+            let failure=snapshot.search(&plan,&query,100).unwrap_err();
+            assert_eq!(failure.error,"fine local record provider unavailable");
+            assert_eq!(failure.accounting.attempted_gets,0);
+            assert_eq!(failure.accounting.attempted_bytes,Some(0));
+            assert_eq!(failure.accounting.read_bytes,Some(0));
+            assert_eq!(failure.accounting.verified_bytes,0);
+            return;
+        }
         let index=borsuk::fine_sq8_groups::FineSq8Index::open(&root,&limits).unwrap();
         let query=[3.125,0.875]; let plan=index.plan(&query,&mut index.new_workspace().unwrap()).unwrap();
         assert_eq!(index.search(&plan,&query,100).unwrap().ranked.len(),100);

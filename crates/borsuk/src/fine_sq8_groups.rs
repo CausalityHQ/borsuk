@@ -287,7 +287,7 @@ pub struct FineSq8Index {
     pq: Pq64Codes,
     graph: PqVectorGraph,
     authority: PageAuthority,
-    records: File,
+    records: Option<File>,
     ids: Vec<i64>,
     delta_budget: usize,
     pub resources: ResourceReceipt,
@@ -513,7 +513,17 @@ impl FineSq8Index {
         Ok(root)
     }
 
+    /// Authenticate resident artifacts and pin the local SQ8 record file.
     pub fn open(root: &Artifact, limits: &ResidentLimits) -> Result<Self> {
+        let mut index = Self::open_remote(root, limits)?;
+        index.records = Some(secure_file(&index.manifest.records)?);
+        Ok(index)
+    }
+
+    /// Authenticate/admit the same resident artifacts without opening the SQ8
+    /// record body or any original source plane. Use a snapshot's `search_s3`
+    /// with the existing conditional reader to fetch authenticated groups.
+    pub fn open_remote(root: &Artifact, limits: &ResidentLimits) -> Result<Self> {
         Self::admission(root, limits)?;
         let manifest: Manifest =
             serde_json::from_slice(&read_source_probe_artifact(root, ROOT_CAP)?)?;
@@ -578,7 +588,6 @@ impl FineSq8Index {
         )?;
         let authority = PageAuthority::load(&page_manifest, &hash(&page_manifest), &hashes)
             .map_err(|e| format!("fine authority: {e:?}"))?;
-        let records = secure_file(&manifest.records)?; // No payload read at startup.
         resources.graph_capacity_bytes = graph.heap_bytes();
         resources.pq_capacity_bytes = pq.resident_bytes();
         resources.map_capacity_bytes = ids.capacity() * 8;
@@ -599,7 +608,7 @@ impl FineSq8Index {
             pq,
             graph,
             authority,
-            records,
+            records: None,
             ids,
             delta_budget: limits.delta_bytes,
             resources,
@@ -786,13 +795,17 @@ impl FineSq8Index {
         };
         let result = (|| -> Result<FineSearchTrace> {
             self.validate_plan(plan, query, k, revision, snapshot)?;
+            let records = self
+                .records
+                .as_ref()
+                .ok_or("fine local record provider unavailable")?;
             let mut payloads = Vec::with_capacity(plan.ranges.len());
             for range in &plan.ranges {
                 accounting.attempted_gets += 1;
                 accounting.attempted_bytes = accounting.attempted_bytes.map(|n| n + range.len());
                 let mut body = vec![0; range.len()];
                 let prior_read_bytes = accounting.read_bytes.take();
-                self.records.read_exact_at(&mut body, range.start as u64)?;
+                records.read_exact_at(&mut body, range.start as u64)?;
                 accounting.read_bytes = prior_read_bytes.map(|n| n + body.len());
                 payloads.push(body);
             }
@@ -1038,6 +1051,7 @@ impl FineSq8Snapshot {
     /// Existing one-attempt native conditional reader; no controller, retries
     /// or independent transport. Local counters must not be called S3 latency.
     /// The caller separately admits the existing client's runtime/TLS buffers.
+    /// Works with `FineSq8Index::open_remote`; no local record file is accessed.
     pub async fn search_s3(
         &self,
         plan: &FineFetchPlan,
