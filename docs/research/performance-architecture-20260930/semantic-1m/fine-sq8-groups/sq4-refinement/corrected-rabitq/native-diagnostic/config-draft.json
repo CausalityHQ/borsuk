@@ -1,0 +1,353 @@
+{
+  "authority_pending": true,
+  "binary": {
+    "bytes": 10608320,
+    "key": "research/semantic-router/20261005/corrected-four-bit-implementation-a0001/artifacts/binaries/hierarchical_semantic_cells",
+    "sha256": "1cba6503a6a51fad193110b2c2dd6cee324b1cdb8f4235761a9afa6c4b24d00c"
+  },
+  "code_sha256": {
+    "scripts/check_native_metadata_ranges_build.py": "da48c53562220026c8024ba2400dca2ba897aa12d49c3e27c3c2fb40b9f0770e",
+    "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
+    "scripts/check_native_startup_build.py": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52",
+    "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+    "scripts/launch_fine_pack_diagnostic.py": "c76397b802ff33ad5f6e74433844d5b879c9bfcc92818e4bfee0edca61c50ec3",
+    "scripts/launch_native_metadata_ranges_cold_spot.py": "f1dfdb56d08f864594c4dadbdbae593b61d5285f60703712e91865ebd0a9d0e2",
+    "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
+    "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
+    "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b",
+    "scripts/launch_v174_relaid_bind_compile_spot.py": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a",
+    "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+    "scripts/run_native_cold_first_query.py": "b4afffd43df8e2ab617749a50fd099fd279e57631e0dcb749b75169ad269a99f",
+    "scripts/run_native_metadata_ranges_cold.py": "1322fe19b705caeab275bce69ea6b4a9f2ed84cb6505dcbfe01b25301fdb71b8",
+    "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+    "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+    "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+    "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6"
+  },
+  "fixed": {
+    "automatic_retry": false,
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "compute_cap_usd": 0.6,
+    "ebs_s3_allowance_usd": 0.15,
+    "image_id": "ami-0b8a830d6339a9758",
+    "instance_type": "c7i.2xlarge",
+    "machine_limit_seconds": 3600,
+    "native_caps": {
+      "cpu_threads": 1,
+      "deadline_seconds": 600,
+      "memory_bytes": 1073741824,
+      "operations": 20000000000,
+      "output_bytes": 268435456,
+      "swap_bytes": 0
+    },
+    "native_cpu_affinity": [
+      0
+    ],
+    "quality_or_performance_claim": false,
+    "region": "eu-central-1",
+    "root_device_name": "/dev/sda1",
+    "scratch": {
+      "auxiliary_bytes": 33554432,
+      "binary_bytes": 10608320,
+      "bootstrap_bytes": 1073741824,
+      "cap_bytes": 8589934592,
+      "input_bytes": 229790129,
+      "native_output_bytes": 268435456,
+      "source_archive_bytes": 33554432
+    },
+    "spot_max_usd_per_hour": 0.6,
+    "subnet_id": "subnet-034528fbd6977848f",
+    "tasks_max": 32
+  },
+  "inputs": [
+    {
+      "bytes": 22721,
+      "destination": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/manifest.json",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/manifest.json",
+      "sha256": "0a2a2dff6a7abc48143d08eb491a150bbed03957b81b0261c2b8a0434612afec"
+    },
+    {
+      "bytes": 26712462,
+      "destination": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/graph.bin",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/graph.bin",
+      "sha256": "f817d7f4fbdd640f66590f58f9e07e9218753fbec4517ba95fc405a78d612325"
+    },
+    {
+      "bytes": 200000,
+      "destination": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/groups.bin",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/groups.bin",
+      "sha256": "a19930fbdcfa596f5e10434563ddee55806210cf5873db384a06cfa40281814c"
+    },
+    {
+      "bytes": 800000,
+      "destination": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/order.bin",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/order.bin",
+      "sha256": "5c7c552d0aef860803fa32b36764858fb3b251c1ee51a04af8ecda018365df53"
+    },
+    {
+      "bytes": 7186456,
+      "destination": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/pq.bin",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/pq.bin",
+      "sha256": "cfc3eb84e8bc9b405070006272adcc4a82ec4b6e30b5d255c73f6ebe80c32dc6"
+    },
+    {
+      "bytes": 78000000,
+      "destination": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/records.bin",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/records.bin",
+      "sha256": "0788700751fb243927e66ebcb6b9023d5d342e726e409b5827971d03277b4fae"
+    },
+    {
+      "bytes": 937167,
+      "destination": "/mnt/hierarchical-100k/screen/fine/requests/relaion/requests64",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/retained/relaion/requests64",
+      "sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330"
+    },
+    {
+      "bytes": 25600,
+      "destination": "/mnt/hierarchical-100k/screen/retained/relaion/truth64",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/retained/relaion/truth64",
+      "sha256": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c"
+    },
+    {
+      "bytes": 22815,
+      "destination": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/manifest.json",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/manifest.json",
+      "sha256": "ea1a792a841014ef08ed805d2872403739ba778ea8b8d3a9e5eab1b7f831c8bb"
+    },
+    {
+      "bytes": 26844914,
+      "destination": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/graph.bin",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/graph.bin",
+      "sha256": "4afd895f2e684f833437f4e6d4270c4713bbeb54fe67b50919f796e95f896e2e"
+    },
+    {
+      "bytes": 200000,
+      "destination": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/groups.bin",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/groups.bin",
+      "sha256": "729c46e01e598d43a38d4927246d1a63de36485eddb9e744a4938e05de447deb"
+    },
+    {
+      "bytes": 800000,
+      "destination": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/order.bin",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/order.bin",
+      "sha256": "75e22683a589429729f23ff1641c58cbcba8021fcb8bcfab9a256a30c2c572bf"
+    },
+    {
+      "bytes": 7186456,
+      "destination": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/pq.bin",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/pq.bin",
+      "sha256": "bc5efac783434a330f9ee4ef2ef930ea430fcdf6896e927e82ad55fa7cd55f38"
+    },
+    {
+      "bytes": 78000000,
+      "destination": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/records.bin",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/records.bin",
+      "sha256": "d9d8c8137cd17e738fb9b871974a14a916dbc460508f5c7c0d3212d6cc4995bf"
+    },
+    {
+      "bytes": 983232,
+      "destination": "/mnt/hierarchical-100k/screen/fine/requests/cohere/requests64",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/retained/cohere/requests64",
+      "sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654"
+    },
+    {
+      "bytes": 25600,
+      "destination": "/mnt/hierarchical-100k/screen/retained/cohere/truth64",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/retained/cohere/truth64",
+      "sha256": "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355"
+    },
+    {
+      "bytes": 1109,
+      "destination": "/mnt/hierarchical-100k/packing-original-seal.json",
+      "key": "research/fine-pack-diagnostic/inputs/374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62/packing-original-seal.json",
+      "sha256": "374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62"
+    },
+    {
+      "bytes": 1665668,
+      "destination": "/mnt/hierarchical-100k/packing-prefix.jsonl",
+      "key": "research/fine-pack-diagnostic/inputs/7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025/packing-prefix.jsonl",
+      "sha256": "7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025"
+    },
+    {
+      "bytes": 175929,
+      "destination": "/mnt/hierarchical-100k/corrected-four-bit-closed-populations.json",
+      "key": "research/hierarchical-cells/20261005/corrected-four-bit-authorities/closed-populations.json",
+      "sha256": "764674f0623797d1303158750fa82a568ea5fabd4fd57f7df5b333865e02a29a"
+    }
+  ],
+  "native_config": {
+    "caps": {
+      "cpu_threads": 1,
+      "deadline_seconds": 600,
+      "memory_bytes": 1073741824,
+      "operations": 20000000000,
+      "output_bytes": 268435456,
+      "swap_bytes": 0
+    },
+    "closed_populations": {
+      "bytes": 175929,
+      "path": "/mnt/hierarchical-100k/corrected-four-bit-closed-populations.json",
+      "sha256": "764674f0623797d1303158750fa82a568ea5fabd4fd57f7df5b333865e02a29a"
+    },
+    "construction_operations": 170000000000,
+    "original_seal": {
+      "bytes": 1109,
+      "path": "/mnt/hierarchical-100k/packing-original-seal.json",
+      "sha256": "374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62"
+    },
+    "panels": [
+      {
+        "dataset": "relaion",
+        "requests": {
+          "bytes": 937167,
+          "path": "/mnt/hierarchical-100k/screen/fine/requests/relaion/requests64",
+          "sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330"
+        },
+        "root": {
+          "bytes": 22721,
+          "path": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/manifest.json",
+          "sha256": "0a2a2dff6a7abc48143d08eb491a150bbed03957b81b0261c2b8a0434612afec"
+        },
+        "truth": {
+          "bytes": 25600,
+          "path": "/mnt/hierarchical-100k/screen/retained/relaion/truth64",
+          "sha256": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c"
+        },
+        "truth_width": 100
+      },
+      {
+        "dataset": "cohere",
+        "requests": {
+          "bytes": 983232,
+          "path": "/mnt/hierarchical-100k/screen/fine/requests/cohere/requests64",
+          "sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654"
+        },
+        "root": {
+          "bytes": 22815,
+          "path": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/manifest.json",
+          "sha256": "ea1a792a841014ef08ed805d2872403739ba778ea8b8d3a9e5eab1b7f831c8bb"
+        },
+        "truth": {
+          "bytes": 25600,
+          "path": "/mnt/hierarchical-100k/screen/retained/cohere/truth64",
+          "sha256": "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355"
+        },
+        "truth_width": 100
+      }
+    ],
+    "prefix": {
+      "bytes": 1665668,
+      "path": "/mnt/hierarchical-100k/packing-prefix.jsonl",
+      "sha256": "7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025"
+    },
+    "query_auth_operations": 64000000000,
+    "rotation_seed": [
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23,
+      23
+    ],
+    "schema": "borsuk-corrected-four-bit-config-v1",
+    "source_identity_sha256": "45821354fe7ee55fed119a81c51ef02cd0a82817c7e199d494d75b83366646ab"
+  },
+  "native_config_sha256": "64017a6d5f2f0d98a205e60b58cf0251a438ecc35ee608f2839d064ffbe8d208",
+  "native_qualification": [
+    {
+      "bytes": 18163,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/parent-verification.json",
+      "sha256": "033092a60df73a4d174444d816baf13331813d5d222388525ccda3023922eab5"
+    },
+    {
+      "bytes": 413513,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/source-qualification.json",
+      "sha256": "ed716bcd57f222244c0fa86531c9fa5e3a31c46bcbf1fb1169982fec83921939"
+    },
+    {
+      "bytes": 68394,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/workspace-receipt.json",
+      "sha256": "93e06898e98e42fabbb68addffaebf68e87b736649b4f460d6217b56145ec333"
+    },
+    {
+      "bytes": 3173,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/aws-terminal.json",
+      "sha256": "63ffed6c9eed380be072d859e0670f61ee649d0637b7de4636e5f095b7cfd4e8"
+    },
+    {
+      "bytes": 136,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/aws-closeout.json",
+      "sha256": "db52e50c24eeaf11eda7b9de850faabda24f5d436785a417f91f5f588961b048"
+    }
+  ],
+  "native_source": {
+    "commit": "4ec11b94bdc15b103bc713418e9f2c0705a9d0b6",
+    "full_source_identity_sha256": "ac0e198a2851fbd0869d3d03f8fa3c79a401fbfaee1180132f407e0a173a29ab",
+    "qualification_protocol_sha256": "abd38ba36ba44ee93bd1b0be4a6b3627085b8a1878c3ac45164d51df58aabba8",
+    "source_identity_sha256": "45821354fe7ee55fed119a81c51ef02cd0a82817c7e199d494d75b83366646ab",
+    "source_sha256": {
+      "crates/borsuk/src/bin/hierarchical_semantic_cells.rs": "d95fe9bb486055c027361eb852098aa2e7016bf182f76e63d826e5a87855ba7e",
+      "crates/borsuk/src/corrected_four_bit.rs": "6ccf7be1c080aa230587cfba100e3639a2dd429e3b745858f5717d7662c120df",
+      "crates/borsuk/src/fine_sq8_groups.rs": "aef94a182c8db8661ca7d4c24346e98236d894b524f2f72e82859ca13584b4f8",
+      "crates/borsuk/src/lib.rs": "a962c2cd8ed2c84091776ded8f3cc5f72fb51b9418f6ccd99ba420d7f398a53a"
+    }
+  },
+  "schema": "borsuk-corrected-four-bit-diagnostic-spot-v1",
+  "source_archive_paths": [
+    "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/closed-populations.json",
+    "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/aws-closeout.json",
+    "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/aws-terminal.json",
+    "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/parent-verification.json",
+    "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/source-qualification.json",
+    "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/workspace-receipt.json",
+    "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/native-diagnostic/config.json",
+    "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/qualification-source-contract-8c9f76f8.json",
+    "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/source-contract-4ec11b94.json",
+    "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/source-inventory-4ec11b94.json",
+    "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/prospective-input-roster.json",
+    "scripts/check_native_metadata_ranges_build.py",
+    "scripts/check_native_metadata_ranges_stats.py",
+    "scripts/check_native_startup_build.py",
+    "scripts/check_native_startup_stats.py",
+    "scripts/launch_fine_pack_diagnostic.py",
+    "scripts/launch_native_metadata_ranges_cold_spot.py",
+    "scripts/launch_native_peer_1m_spot.py",
+    "scripts/launch_native_startup_profile_spot.py",
+    "scripts/launch_v157_primary_feasibility_spot.py",
+    "scripts/launch_v174_relaid_bind_compile_spot.py",
+    "scripts/rest_coexistence_load.py",
+    "scripts/run_native_cold_first_query.py",
+    "scripts/run_native_metadata_ranges_cold.py",
+    "scripts/run_native_peer_1m_worker.py",
+    "scripts/run_native_peer_offered_http.py",
+    "scripts/run_native_union_http.py",
+    "scripts/run_native_union_offered_http.py"
+  ],
+  "source_archive_paths_sha256": "7f76b08921ae2f1ca1b98cd96d276db6baca9d41c3a66165e8085094d6d7b283"
+}

@@ -1,18 +1,32 @@
 {
   "actual_full_workspace_execution": false,
+  "all_source_blobs_independently_matched": true,
+  "artifact_hashes_independently_verified": true,
   "binary": {
     "bytes": 10608320,
     "sha256": "1cba6503a6a51fad193110b2c2dd6cee324b1cdb8f4235761a9afa6c4b24d00c"
   },
   "compiler_memory_max_events": 4697,
+  "descendants_drained": true,
+  "instance_closeout": {
+    "nodes": {
+      "0": {
+        "instance_id": "i-0792fe6e3a68fcb11"
+      }
+    },
+    "observed_elapsed_s": 1966,
+    "state": "terminated"
+  },
   "instance_id": "i-0792fe6e3a68fcb11",
   "memory_peak_bytes": 8589934592,
   "native_source_commit": "4ec11b94bdc15b103bc713418e9f2c0705a9d0b6",
   "oom": 0,
+  "original_controller_exit_status": 0,
   "original_exec_session": 83229,
   "qualified": true,
   "schema": "borsuk-corrected-four-bit-parent-verification-v1",
   "science_qualified": false,
+  "source_before_equals_after": true,
   "source_commit": "a80d423bd2c5ba19e7beafaac6865b5c61cad42f",
   "source_file_count": 405,
   "source_identity_sha256": "ac0e198a2851fbd0869d3d03f8fa3c79a401fbfaee1180132f407e0a173a29ab",

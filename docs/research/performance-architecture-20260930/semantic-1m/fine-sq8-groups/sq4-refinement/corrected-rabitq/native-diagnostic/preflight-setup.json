@@ -1,0 +1,15 @@
+{
+  "corrected_exit": 0,
+  "corrected_memory_peak": "11.4MiB",
+  "corrected_seconds": 0.069,
+  "corrected_unit": "borsuk-corrected-real-completed-proof-preflight-path-repaired.service",
+  "first_failure": "closed-population Artifact used repository path rather than authenticated staged destination",
+  "original_exit": 1,
+  "original_failed_unit": "borsuk-corrected-real-completed-proof-preflight.service",
+  "production_config": "pending canary",
+  "qualification": "all405/all15 completed actual original proof",
+  "repair": "deployment path only; bytes/SHA unchanged",
+  "science": "UNRUN",
+  "status": "SOURCE_METADATA_PREFLIGHT_PASS",
+  "swap": 0
+}
