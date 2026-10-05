@@ -1,0 +1,174 @@
+{
+  "agent_complete_called": false,
+  "assignment_base": "d1cb91fe18730218a7d8e43407ead528b1eacd43",
+  "ast_parse_exit_status": 0,
+  "branch": "devbox/fixed-sq4-exact-native-experiment-glue",
+  "checks": [
+    {
+      "argv": [
+        "sudo",
+        "-n",
+        "systemd-run",
+        "--unit=borsuk-sq4-glue-release-actual-final-v3",
+        "--wait",
+        "--pipe",
+        "-p",
+        "CPUQuota=100%",
+        "-p",
+        "MemoryMax=256M",
+        "-p",
+        "MemorySwapMax=0",
+        "-p",
+        "RuntimeMaxSec=120",
+        "-p",
+        "WorkingDirectory=/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue",
+        "/tmp/borsuk-offered-sdk-bootstrap-venv/bin/python",
+        "-m",
+        "scripts.launch_fine_pack_diagnostic",
+        "--sq4",
+        "--self-check"
+      ],
+      "configured_enclosure": {
+        "cpu_quota_percent": 100,
+        "memory_bytes": 268435456,
+        "runtime_seconds": 120,
+        "swap_bytes": 0
+      },
+      "log": {
+        "bytes": 822,
+        "path": "/tmp/borsuk-fixed-sq4-exact-native-experiment-glue-release-sq4-check.log",
+        "sha256": "1b953743135ba784e302534ff39704c98c3783a230a7d4012409b7519b18f9e3"
+      },
+      "mode": "sq4",
+      "observed_terminal_resource_summary": "Finished with result: success\nMain processes terminated with: code=exited, status=0/SUCCESS\n               Service runtime: 20.241s\n             CPU time consumed: 6.215s\n                   Memory peak: 256M (swap: 0B)",
+      "original_controller_exit_status": 0,
+      "original_service_exit_status": 0,
+      "source_file_sha256": "4c6739fae2d39c9d0fa21d5c4324f7e876102bb8a68e13347cac0da3c207749b",
+      "unit": "borsuk-sq4-glue-release-actual-final-v3"
+    },
+    {
+      "argv": [
+        "sudo",
+        "-n",
+        "systemd-run",
+        "--unit=borsuk-pack-glue-release-actual-final",
+        "--wait",
+        "--pipe",
+        "-p",
+        "CPUQuota=100%",
+        "-p",
+        "MemoryMax=256M",
+        "-p",
+        "MemorySwapMax=0",
+        "-p",
+        "RuntimeMaxSec=120",
+        "-p",
+        "WorkingDirectory=/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue",
+        "/tmp/borsuk-offered-sdk-bootstrap-venv/bin/python",
+        "-m",
+        "scripts.launch_fine_pack_diagnostic",
+        "--self-check"
+      ],
+      "configured_enclosure": {
+        "cpu_quota_percent": 100,
+        "memory_bytes": 268435456,
+        "runtime_seconds": 120,
+        "swap_bytes": 0
+      },
+      "log": {
+        "bytes": 2184,
+        "path": "/tmp/borsuk-fixed-sq4-exact-native-experiment-glue-release-packing-check.log",
+        "sha256": "cb775e5d8862790d6c3659adee0d71ed9dce474fe2a96dec05c142d9c113ad1e"
+      },
+      "mode": "packing",
+      "observed_terminal_resource_summary": "Finished with result: success\nMain processes terminated with: code=exited, status=0/SUCCESS\n               Service runtime: 778ms\n             CPU time consumed: 516ms\n                   Memory peak: 45.2M (swap: 0B)",
+      "original_controller_exit_status": 0,
+      "original_service_exit_status": 0,
+      "source_file_sha256": "4c6739fae2d39c9d0fa21d5c4324f7e876102bb8a68e13347cac0da3c207749b",
+      "unit": "borsuk-pack-glue-release-actual-final"
+    }
+  ],
+  "commit": "88f0a9ab1dc8d100e72adb2ec86523b3493a88aa",
+  "commit_chain_from_base": [
+    "e4ed9f9101d4af894e325b3892bdea4f21318371",
+    "b0a598e9625941c3f23b978679b68d74a55a9a3d",
+    "88f0a9ab1dc8d100e72adb2ec86523b3493a88aa"
+  ],
+  "contract": {
+    "bytes": 20465,
+    "path": "/tmp/borsuk-fixed-sq4-exact-native-experiment-glue-release-contract.json",
+    "sha256": "ab5c97b2e9a877a79060caac049c1cbadbddba71a9d9578c7aab9eabc6276b19"
+  },
+  "diff_check_exit_status": 0,
+  "git_clean": true,
+  "held_same_worker": true,
+  "historical_packing_selfchecks_structurally_unchanged": true,
+  "merged": false,
+  "mocked": [
+    "native scientific executable",
+    "native resource cgroup surfaces and read-only mount enforcement",
+    "SDK transport/AWS/IMDS",
+    "rebound qualification envelopes and mock-binary binding"
+  ],
+  "not_run": [
+    "native ANN",
+    "Cargo/rustc/clippy",
+    "corpus/GT decoding or hydration",
+    "network/AWS/paid jobs",
+    "reviews/consults/children/operator contact",
+    "merge/push"
+  ],
+  "only_owned_file_committed": true,
+  "operator_git_identity_preserved": true,
+  "owned_files": {
+    "scripts/launch_fine_pack_diagnostic.py": {
+      "bytes": 133473,
+      "sha256": "4c6739fae2d39c9d0fa21d5c4324f7e876102bb8a68e13347cac0da3c207749b"
+    }
+  },
+  "parent_commit": "b0a598e9625941c3f23b978679b68d74a55a9a3d",
+  "pending_parent": [
+    "Independent exact repair verification and integration",
+    "Authenticate deployment/input transports and final exact config/code/archive",
+    "Disposable actual SDK/Delegate/read-only temporary staging canary",
+    "Scientific experiment remains pending; worker held until parent disposition"
+  ],
+  "pushed": false,
+  "real": [
+    "Python CLI/mock-native subprocess exit/kill",
+    "filesystem no-overwrite/fsync/authentication",
+    "opaque streaming transport/hash",
+    "full raw/gzip closure collection/replay",
+    "old packing installed pinned SDK capability model",
+    "bounded systemd test units",
+    "Completed root native14-stage protocol and original qualification metadata read from committed e0d81804 only",
+    "Generated bootstrap observer subprocess with real positive and cap-failure filesystem receipts"
+  ],
+  "review_evidence_read": {
+    "both_reviewer_results_read": true,
+    "commit": "17d5d75eb5c9b4b904233401fe4953341eaf1424",
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/staging-dual-review-b0a598e9.json"
+  },
+  "schema": "borsuk-sq4-experiment-glue-worker-receipt-v1",
+  "scope": {
+    "actual_metadata_only_preflight": "PASS exact18 includes both78000000B records, no dataset/GT opens",
+    "all_native_outputs": 134,
+    "authenticated_input_bodies": 18,
+    "authenticated_input_bytes": 229614200,
+    "mode": "--sq4",
+    "native_command": "hierarchical_semantic_cells check-fine-sq4 CONFIG CONFIG_SHA256 NEW_REPORT_JSON",
+    "native_terminal": "Observed original exit/config/reportSHA/resource/drain/cleanup required. Silent success permitted; completed quality/envelopeREJECT retained; lateexit2 INVALID.",
+    "qualification_stage_order": "All14 exact bf0667e8 protocol with actual completed e0d81804 fixture; rehashed zero-test/argv/missing mandatory/reduced roster/misplaced passes/UTC/seriality/non-test-count refusals.",
+    "qualified_native_source": "Root completed c2 compiler authority read metadata-only; mock executable retains no science authority.",
+    "retained_artifacts": 152,
+    "scratch": "Whole worker root plus input root; bootstrap admission/1Hz and runtime1Hz observers; charged temporary paths; closure reservations/checks through successful terminal.",
+    "synthetic_large_download": "PASS78000000B authenticated streaming reads<=65536B; no real corpus"
+  },
+  "status": "GLUE_RELEASE_REPAIR_VERIFIED_HOLD_FOR_PARENT",
+  "supersedes": {
+    "bytes": 4687,
+    "path": "/tmp/borsuk-fixed-sq4-exact-native-experiment-glue-receipt.json",
+    "sha256": "de6b0d0bfff325f63101c814560f02763554739a11803a1258ba013173d14831"
+  },
+  "worktree": "/home/rb/worktrees/borsuk-fixed-sq4-exact-native-experiment-glue"
+}

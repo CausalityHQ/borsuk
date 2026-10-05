@@ -1,0 +1,64 @@
+{
+  "checks": [
+    {
+      "configured_limits": {
+        "cpu_quota_percent": 100,
+        "memory_max_bytes": 268435456,
+        "memory_swap_max_bytes": 0,
+        "runtime_max_seconds": 120,
+        "tasks_max": 512
+      },
+      "exit_status": 0,
+      "invocation_id": "5754ffe980f145fbaaef0736eab89737",
+      "log": {
+        "bytes": 479,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/staging-parent-sq4-88f0a9ab.log",
+        "sha256": "36b34a04ecb985d2eb4de2624e20a3bf60a6e112b15fee1f485eddcd88965b06"
+      },
+      "mode": "sq4",
+      "observed_memory_peak_human": "256M",
+      "runtime_seconds": 19.71,
+      "swap_peak_bytes": 0,
+      "unit": "borsuk-sq4-glue-parent-88f0a9ab.service"
+    },
+    {
+      "configured_limits": {
+        "cpu_quota_percent": 100,
+        "memory_max_bytes": 268435456,
+        "memory_swap_max_bytes": 0,
+        "runtime_max_seconds": 120,
+        "tasks_max": 512
+      },
+      "exit_status": 0,
+      "invocation_id": "d193e5a5d4c24a8bb74735d5de34b809",
+      "log": {
+        "bytes": 1845,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/staging-parent-legacy-88f0a9ab.log",
+        "sha256": "52fe3cc85729a8bc439b17cf58d74d2bccfadc295fc7c2c85bc8c300164cdeab"
+      },
+      "mode": "legacy",
+      "observed_memory_peak_human": "59.7M",
+      "runtime_seconds": 0.823,
+      "swap_peak_bytes": 0,
+      "unit": "borsuk-sq4-glue-parent-legacy-88f0a9ab.service"
+    }
+  ],
+  "full_product_goal_complete": false,
+  "native_algorithm_changed": false,
+  "owned_files": [
+    "scripts/launch_fine_pack_diagnostic.py"
+  ],
+  "required_repairs_verified": [
+    "actual14 protocol digest matching completed native receipts",
+    "positive test counts and exact mandatory owning-stage passes",
+    "serial UTC gate ordering",
+    "charged bootstrap temp/cache/log/bytecode tree and observer",
+    "pre-admitted closure writes and final terminal scratch observation"
+  ],
+  "review_group": "6475917af0114a7c",
+  "schema": "borsuk-sq4-staging-parent-verification-v1",
+  "scientific_quality_or_performance_claim": false,
+  "source_and_test_scope": "Python deployment/measurement glue only; metadata real, native/cloud transport/cgroup tests mocked",
+  "source_commit": "88f0a9ab1dc8d100e72adb2ec86523b3493a88aa",
+  "source_sha256": "4c6739fae2d39c9d0fa21d5c4324f7e876102bb8a68e13347cac0da3c207749b"
+}

@@ -1,0 +1,31 @@
+{
+  "authority_pending": false,
+  "config": {
+    "bytes": 13633,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/native-diagnostic/config.json",
+    "sha256": "0d8142c1e077a5dfb525851eb1d3b5005a102531f6aa5607e2ef9e6d7e4aed26"
+  },
+  "metadata_only": true,
+  "native_config_serialization": "sorted compact JSON with newline, identical parsed prospective native method",
+  "native_config_sha256": "abe04a851be07215f7568d556c8c7e69ffaea3e9edba9d2f6368d355840e9457",
+  "native_method_unchanged_from_prospective_c2": true,
+  "original_config_preflight": {
+    "cpu_quota_percent": 100,
+    "exit_status": 0,
+    "invocation_id": "3a546f05a1ba4914a7c6865be0ae0845",
+    "memory_max_bytes": 268435456,
+    "observed_memory_peak_human": "18.4M",
+    "runtime_seconds": 0.145,
+    "swap_peak_bytes": 0,
+    "unit": "borsuk-sq4-final-config-preflight.service"
+  },
+  "parent_source_checks": {
+    "legacy_exit_status": 0,
+    "review_group": "6475917af0114a7c",
+    "sq4_exit_status": 0
+  },
+  "remaining_launch_gate": "Committed source archive closure/size authentication, original attempt allocation and bounded infrastructure admission",
+  "schema": "borsuk-sq4-native-diagnostic-freeze-v1",
+  "scientific_measurement_pending": true,
+  "staging_source_commit": "88f0a9ab1dc8d100e72adb2ec86523b3493a88aa"
+}

@@ -1,9 +1,11 @@
 """One frozen native packing diagnostic; root owns config, transport and launch.
 
 CLI: aNNNN | --self-check | --replay OUT. Remote --remote is bootstrap-only.
+--sq4 explicitly selects the root-frozen native SQ4 experiment.
 No compiler, query runner, packing algorithm, retries or replacement instances.
 """
 import argparse
+from datetime import datetime, timedelta
 import fcntl
 import gzip
 import hashlib
@@ -86,6 +88,55 @@ ROSTER_SHA = hashlib.sha256(json.dumps(ARTIFACTS, separators=(',', ':')).encode(
 CGROUP_FILES = ('memory.max', 'memory.peak', 'memory.swap.max', 'memory.swap.peak',
                 'memory.events', 'memory.swap.events', 'cpu.max', 'cpu.stat',
                 'pids.max', 'pids.current', 'pids.events', 'cgroup.procs', 'cgroup.events')
+SQ4 = False
+SQ4_ROOT = ROOT.parent/'sq4-refinement'
+# Prospective fixture provenance only; config.native_source owns the qualified pins.
+SQ4_COMMIT = 'c2d233d6752d0a058d78c6077e51f31f0255e7c1'
+SQ4_SOURCE_ID = 'e808aae7d27e570d1bf7651d70f6144a7a93e09bae46f0222151852fff0a70db'
+SQ4_INPUT_ROOT = Path('/mnt/hierarchical-100k')
+SQ4_SCRATCH_CAP = 4*1024**3
+SQ4_CLOSURE_RESERVE = 12*1024**2  # Receipts + closed log + terminal + live log tail.
+SQ4_SOURCES = {
+    'crates/borsuk/src/fine_sq8_groups.rs': '250f592b8c2ad654f1b6b7281f08a0b3c420b4d4d157de29f8e2017212788f37',
+    'crates/borsuk/src/bin/hierarchical_semantic_cells.rs': '4d46713e88ac6f75230327fc160734bebc991202e7904ee4994ccfd2760f7e6a'}
+SQ4_RECEIPTS = ('parent-verification.json', 'source-qualification.json',
+                 'workspace-receipt.json', 'aws-terminal.json', 'aws-closeout.json')
+SQ4_OUTPUTS = ('screen/report.json', 'screen/report.sq4-0.bin', 'screen/report.sq4-1.bin',
+    'screen/report.sq4-payloads.json', 'screen/report.sq4-prefix.jsonl', 'screen/report.sq4-freeze.json',
+    *(f'screen/report.sq4-result-{i}.json' for i in range(128)))
+SQ4_TESTS = ('tests::fine_sq4_strict_cli_dispatch', 'tests::fine_sq4_real_native_pipeline_128_seal_before_truth',
+    *(f'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::{n}' for n in (
+        'fine_sq4_all_codes_numeric_oracle_odd_tail_nonunit_ties', 'fine_sq4_exact_cover_superset_and_binding',
+        'fine_sq4_auth_fifo_corruption_caps_and_durability', 'fine_sq4_full_pipeline_failure_order_and_sync')))
+# Canonical encoded({stages, mandatory_tests}) from bf0667e8's existing
+# FINE_SQ8_STAGES/FINE_SQ8_REQUIRED_TESTS. No reduced self-asserted roster.
+SQ4_QUALIFICATION_PROTOCOL_SHA = 'd3ac6d4f45391decf7c08f483a6209f99505897c62355a52d40f0a2b42f2cc8a'
+
+
+def configure_sq4():
+    """Opt-in campaign only. Resource/transport authority still comes from root."""
+    global SQ4, ROOT, CONFIG, SCHEMA, PREFIX, TOKEN_PREFIX, TAG, REMOTE_ROOT
+    global CAPS, NATIVE_COMMIT, SOURCE_ID, INPUT_PINS, ARTIFACTS, ROSTER_SHA
+    if SQ4:
+        return
+    SQ4 = True
+    ROOT = SQ4_ROOT/'native-diagnostic'; CONFIG = ROOT/'config.json'
+    SCHEMA = 'borsuk-fixed-sq4-diagnostic-spot-v1'
+    PREFIX = 'research/hierarchical-cells/20261005/fixed-sq4-diagnostic-'
+    TOKEN_PREFIX, TAG = 'fixed-sq4-diagnostic-', 'borsuk-fixed-sq4-diagnostic'
+    REMOTE_ROOT = Path('/mnt/fixed-sq4-diagnostic')
+    CAPS = dict(cpu_threads=1, memory_bytes=1024**3, swap_bytes=0,
+                deadline_seconds=600, operations=20000000000, output_bytes=256*1024**2)
+    NATIVE_COMMIT, SOURCE_ID = SQ4_COMMIT, SQ4_SOURCE_ID
+    # Metadata only: never hydrate or parse a retained input during preflight.
+    roster = decode(read(Path(__file__).resolve().parents[1]/SQ4_ROOT/'prospective-input-roster.json'))
+    require(roster['schema'] == 'borsuk-sq4-prospective-input-roster-v1'
+            and pin(encoded(roster['inputs'])) == dict(bytes=5175,
+                sha256='1959126f0910746e2b572b305dd4e77a59310e5ee16313ce5178fd36b28c1f3b'), 'SQ4 retained roster pin')
+    INPUT_PINS = tuple((d['destination'], d['bytes'], d['sha256']) for d in roster['inputs'])
+    ARTIFACTS = tuple(n for n in ARTIFACTS if not n.startswith('screen/')) + (
+        'scratch.json', *(f'qualification/{n}' for n in SQ4_RECEIPTS), *SQ4_OUTPUTS)
+    ROSTER_SHA = sha(json.dumps(ARTIFACTS, separators=(',', ':')).encode())
 
 
 def require(condition, message):
@@ -160,9 +211,9 @@ def write(path, body):
     sync_directory(path.parent)
 
 
-def body_pin(value):
+def body_pin(value, max_bytes=64*1024**2):
     require(type(value) is dict and set(value) == {'bytes', 'sha256'}, 'artifact identity fields')
-    require(type(value['bytes']) is int and 0 <= value['bytes'] <= 64*1024**2, 'artifact byte cap')
+    require(type(value['bytes']) is int and 0 <= value['bytes'] <= max_bytes, 'artifact byte cap')
     require(type(value['sha256']) is str and re.fullmatch('[0-9a-f]{64}', value['sha256']), 'artifact digest')
     return value
 
@@ -173,10 +224,155 @@ def object_key(key):
 
 
 def native_inputs(native):
+    if SQ4:
+        return [a for p in native['panels'] for a in (p['root'], p['requests'], p['truth'])]+[native['original_seal'], native['prefix']]
     return [a for p in native['panels'] for a in (p['root'], p['graph'])]+[native['original_seal'], native['prefix']]
 
 
+def sq4_qualification(config, base, collected=False):
+    receipts = {}
+    identities = {}
+    for r in config['native_qualification']:
+        name = Path(r['path']).name
+        path = Path(base)/('qualification/'+name if collected else r['path'])
+        require(file_pin(path) == {k:r[k] for k in ('bytes', 'sha256')}, 'SQ4 qualification drift: '+name)
+        receipts[name] = decode(read(path))
+        identities[name] = {k:r[k] for k in ('bytes','sha256')}
+    v, q, w, t, close = (receipts[n] for n in SQ4_RECEIPTS)
+    binary = {k:config['binary'][k] for k in ('bytes', 'sha256')}
+    sources = q['source_sha256']
+    source_id = sha(json.dumps(sources, sort_keys=True, separators=(',', ':')).encode())
+    authority = config['native_source']
+    require(source_id == authority['full_source_identity_sha256'] and len(sources) == q['source_file_count'] == w['source_file_count'] == v['source_file_count'] == 404
+            and all(sources.get(n) == h for n,h in authority['source_sha256'].items())
+            and w['source_sha256'] == sources, 'SQ4 full404 source proof')
+    for value in (v, q, t):
+        require(value['native_source_commit'] == authority['commit'], 'SQ4 exact native revision')
+    require(all(value['source_identity_sha256'] == source_id for value in (v,q,w,t)), 'SQ4 full404 identity')
+    require(q['mandatory_test_names_pending'] is w['mandatory_test_names_pending'] is False
+            and w['qualified'] is w['command_started'] is w['command_completed'] is w['source_unchanged'] is True
+            and type(w['exit_status']) is int and w['exit_status'] == w['gate_status'] == 0
+            and w['qualification_sha256'] == identities['source-qualification.json']['sha256'], 'SQ4 completed qualification')
+    stages = w['stages']
+    required = q['mandatory_tests']
+    require(stages == v['stages'] and w['mandatory_tests'] == required
+            and sha(encoded(dict(stages=[(s['stage'],s['command']) for s in stages],
+                                 mandatory_tests=required))) == SQ4_QUALIFICATION_PROTOCOL_SHA, 'SQ4 exact all14 commands and mandatory roster')
+    previous_finish = None
+    for stage in stages:
+        started, finished = (datetime.fromisoformat(stage[k]) for k in ('started_at','finished_at'))
+        require(started.utcoffset() == finished.utcoffset() == timedelta(0)
+                and finished >= started and (previous_finish is None or started >= previous_finish), 'SQ4 serial completed UTC stages')
+        previous_finish = finished
+        require(all(
+            type(stage[k]) is int and stage[k] == 0 for k in ('exit_status','gate_status','log_exit_status')), 'SQ4 original gate exit')
+        mandatory = required.get(stage['stage'], ())
+        require((type(stage['tests_run']) is int and stage['tests_run'] >= len(mandatory) > 0)
+                if mandatory else stage['tests_run'] is None, 'SQ4 positive counts only on test stages')
+        require(stage['required_test_passes'] == {n:1 for n in mandatory}
+                and all(type(n) is int for n in stage['required_test_passes'].values()), 'SQ4 exact owning-stage mandatory passes')
+    require(v['source_before_equals_after'] is v['all_source_blobs_independently_matched'] is True
+            and v['artifact_hashes_independently_verified'] is v['descendants_drained'] is True
+            and v['original_controller_exit_status'] == v['swap_peak_bytes'] == v['oom'] == 0
+            and v['binary'] == binary and v['instance_closeout'] == close, 'SQ4 parent source/resource proof')
+    require(t['status'] == t['phase'] == 'complete' and t['exit_code'] == t['original_exit_code'] == 0
+            and close['state'] == 'terminated' and close['nodes'] == {'0':{'instance_id':t['instance_id']}}
+            and t['source_qualification_sha256'] == identities['source-qualification.json']['sha256']
+            and t['artifacts']['workspace-receipt.json'] == identities['workspace-receipt.json']
+            and t['native_source_manifest_sha256'] == q['native_source_manifest_sha256'] == q['native_source_manifest']['sha256']
+            and t['artifacts'][BINARY_NAME] == binary, 'SQ4 qualified original terminal/binary/termination')
+    return receipts
+
+
+def validate_sq4_config(config, base=None):
+    global FIXED, WALL, COMPUTE_CAP, SPOT_MAX_USD_PER_HOUR, NATIVE_COMMIT, SOURCE_ID
+    require(set(config) == {'schema','authority_pending','fixed','native_config','native_config_sha256',
+        'binary','inputs','native_source','native_qualification','code_sha256','source_archive_paths','source_archive_paths_sha256'}
+        and config['schema'] == SCHEMA and config['authority_pending'] is False, 'SQ4 frozen root authority')
+    fixed = config['fixed']
+    require(set(fixed) == set(FIXED)|{'scratch'} and encoded(fixed['native_caps']) == encoded(CAPS)
+            and all(encoded(fixed[k]) == encoded(FIXED[k]) for k in FIXED if k not in (
+                'machine_limit_seconds','compute_cap_usd','spot_max_usd_per_hour','native_caps','scratch')), 'SQ4 fixed method/host')
+    wall, cost, spot = (fixed[k] for k in ('machine_limit_seconds','compute_cap_usd','spot_max_usd_per_hour'))
+    require(type(wall) is int and wall == 1800 and type(spot) in (int,float) and spot == .60
+            and type(cost) in (int,float) and cost == .30, 'SQ4 root wall/cost/Spot cap')
+    native = config['native_config']
+    authority = config['native_source']
+    require(set(authority) == {'commit','full_source_identity_sha256','source_identity_sha256','source_sha256'}
+            and re.fullmatch('[0-9a-f]{40}', authority['commit'])
+            and set(authority['source_sha256']) == set(SQ4_SOURCES), 'SQ4 exact root source pins')
+    for digest in (authority['full_source_identity_sha256'],authority['source_identity_sha256'],*authority['source_sha256'].values()):
+        body_pin(dict(bytes=0,sha256=digest))
+    require(set(native) == {'schema','source_identity_sha256','caps','panels','original_seal','prefix'}
+            and native['schema'] == 'borsuk-fixed-sq4-config-v1' and encoded(native['caps']) == encoded(CAPS)
+            and native['source_identity_sha256'] == authority['source_identity_sha256'] and len(native['panels']) == 2
+            and sha(encoded(native)) == config['native_config_sha256'], 'SQ4 exact native config')
+    for p,dataset in zip(native['panels'], ('relaion','cohere')):
+        require(set(p) == {'dataset','root','requests','truth','truth_width'} and p['dataset'] == dataset
+                and type(p['truth_width']) is int and p['truth_width'] == 100, 'SQ4 native panel')
+    expected = [dict(path=p,bytes=n,sha256=h) for p,n,h in INPUT_PINS]
+    require(encoded(native_inputs(native)) == encoded([expected[i] for i in (0,6,7,8,14,15,16,17)])
+            and len(config['inputs']) == len(INPUT_PINS) == 18, 'SQ4 retained original descriptors')
+    for d,(path,size,digest) in zip(config['inputs'], INPUT_PINS):
+        require(set(d) == {'destination','key','bytes','sha256'} and d['destination'] == path
+                and body_pin({k:d[k] for k in ('bytes','sha256')}, max_bytes=size) == dict(bytes=size,sha256=digest), 'SQ4 opaque input transport')
+        object_key(d['key'])
+    require(len({d['key'] for d in config['inputs']}) == 18, 'SQ4 distinct input objects')
+    require(set(config['binary']) == {'key','bytes','sha256'} and body_pin({k:config['binary'][k] for k in ('bytes','sha256')})['bytes'] > 0, 'SQ4 root binary pin')
+    object_key(config['binary']['key'])
+    receipts = config['native_qualification']
+    require(len(receipts) == 5 and tuple(Path(r['path']).name for r in receipts) == SQ4_RECEIPTS, 'SQ4 five completed qualification receipts')
+    for r in receipts:
+        require(set(r) == {'path','bytes','sha256'} and r['bytes'] > 0, 'SQ4 qualification descriptor')
+        object_key(r['path']); body_pin({k:r[k] for k in ('bytes','sha256')})
+    paths = sorted([str(CONFIG), str(SQ4_ROOT/'prospective-input-roster.json'), *CODE, *(r['path'] for r in receipts)])
+    require(config['source_archive_paths'] == paths and config['source_archive_paths_sha256'] == sha(
+        json.dumps(paths,separators=(',',':')).encode()) and set(config['code_sha256']) == set(CODE), 'SQ4 minimal source archive')
+    for name,digest in config['code_sha256'].items():
+        body_pin(dict(bytes=0,sha256=digest))
+        if base is not None:
+            require(file_pin(Path(base)/name)['sha256'] == digest, 'SQ4 code drift: '+name)
+    scratch = fixed['scratch']
+    require(set(scratch) == {'input_bytes','native_output_bytes','binary_bytes','source_archive_bytes',
+        'bootstrap_bytes','auxiliary_bytes','cap_bytes'} and all(type(n) is int and n > 0 for n in scratch.values())
+        and scratch['input_bytes'] == sum(p[1] for p in INPUT_PINS)
+        and scratch['native_output_bytes'] == CAPS['output_bytes'] and scratch['binary_bytes'] == config['binary']['bytes']
+        and sum(n for k,n in scratch.items() if k != 'cap_bytes') <= scratch['cap_bytes'] == SQ4_SCRATCH_CAP, 'SQ4 whole scratch coexistence charge')
+    if base is not None:
+        sq4_qualification(config, base)
+    FIXED = fixed
+    WALL, COMPUTE_CAP, SPOT_MAX_USD_PER_HOUR = wall, cost, spot
+    NATIVE_COMMIT, SOURCE_ID = authority['commit'], authority['source_identity_sha256']
+    return native
+
+
+def scratch_observation(root):
+    """Charge apparent or allocated bytes, including temporary files and symlinks."""
+    sizes = {}
+    for tree in (Path(root), SQ4_INPUT_ROOT):
+        total = 0
+        if tree.exists():
+            for directory, names, files in os.walk(tree, followlinks=False):
+                for path in (Path(directory), *(Path(directory)/n for n in files),
+                             *(Path(directory)/n for n in names if (Path(directory)/n).is_symlink())):
+                    try:
+                        s = path.lstat()
+                    except FileNotFoundError:
+                        continue  # A removed temporary file no longer coexists.
+                    total += max(s.st_size, s.st_blocks*512)
+        sizes[str(tree)] = total
+    return dict(roots=sizes, whole_scratch_bytes=sum(sizes.values()))
+
+
+def scratch_room(root, growth):
+    observation = scratch_observation(root)
+    require(observation['whole_scratch_bytes']+growth <= SQ4_SCRATCH_CAP, 'SQ4 scratch before closure write')
+    return observation
+
+
 def validate_config(config, base=None):
+    if SQ4:
+        return validate_sq4_config(config, base)
     require(set(config) == {'schema', 'authority_pending', 'fixed', 'native_config',
         'native_config_sha256', 'binary', 'inputs', 'native_qualification', 'code_sha256',
         'source_archive_paths', 'source_archive_paths_sha256'}, 'frozen config fields')
@@ -228,12 +424,15 @@ def preflight(base=Path('.')):
     raw = read(base/CONFIG)
     config = decode(raw)
     validate_config(config, base)
-    return dict(config_path=str(CONFIG), config_sha256=sha(raw), campaign_schema=SCHEMA,
+    proof = dict(config_path=str(CONFIG), config_sha256=sha(raw), campaign_schema=SCHEMA,
                 artifact_roster_sha256=ROSTER_SHA, native_config_sha256=config['native_config_sha256'],
                 binary=config['binary'], native_source_commit=NATIVE_COMMIT, source_identity_sha256=SOURCE_ID,
                 code_sha256=config['code_sha256'], native_qualification=config['native_qualification'],
                 source_archive_paths=config['source_archive_paths'],
                 source_archive_paths_sha256=config['source_archive_paths_sha256'])
+    if SQ4:
+        proof['scratch'] = config['fixed']['scratch']
+    return proof
 
 
 def lifecycle():
@@ -256,6 +455,58 @@ def user_data(commit, archive_sha, archive_key, prefix, qualification):
     require(re.fullmatch(re.escape(PREFIX)+r'a[0-9]{4}', prefix), 'attempt prefix')
     object_key(archive_key)
     require(qualification['config_path'] == str(CONFIG), 'bootstrap config path')
+    bootstrap_setup, bootstrap_stop, apt_options, supervisor_options, archive_write_guard, archive_extract_guard = '', '', '', '', '', ''
+    if SQ4:
+        import inspect
+        reserve = qualification['scratch']
+        require(reserve == FIXED['scratch'], 'SQ4 bootstrap frozen scratch admission')
+        # One bounded observer uses the same scan as runtime. All owned package
+        # caches, lists, logs, wheels, bytecode and process temporaries coexist here.
+        bootstrap_setup = f'''mkdir -p "$root/bootstrap/tmp" "$root/bootstrap/archives/partial" "$root/bootstrap/lists/partial" "$root/bootstrap/log"
+export TMPDIR="$root/bootstrap/tmp" TMP="$root/bootstrap/tmp" TEMP="$root/bootstrap/tmp" PIP_CACHE_DIR="$root/bootstrap/cache" PYTHONPYCACHEPREFIX="$root/bootstrap/pycache"
+cat >"$root/bootstrap/watch.py" <<'WATCH'
+import json, os, signal, sys, time
+from pathlib import Path
+root=Path({str(REMOTE_ROOT)!r}); SQ4_INPUT_ROOT=Path({str(SQ4_INPUT_ROOT)!r})
+{inspect.getsource(scratch_observation)}
+reserve={reserve!r}
+remaining=sum(reserve[k] for k in ('input_bytes','native_output_bytes','binary_bytes','auxiliary_bytes'))
+receipt=dict(interval_seconds=1, sample_count=0, peak_bytes=0, closed=False, cap_exceeded=False, reserve=reserve)
+running=True
+def stop(*args):
+    global running
+    running=False
+signal.signal(signal.SIGTERM,stop)
+try:
+    available=os.statvfs(root).f_bavail*os.statvfs(root).f_frsize
+    assert available >= sum(v for k,v in reserve.items() if k!='cap_bytes'), 'bootstrap free scratch admission'
+    while True:
+        observation=scratch_observation(root)
+        receipt.update(last=observation, sample_count=receipt['sample_count']+1, peak_bytes=max(receipt['peak_bytes'],observation['whole_scratch_bytes']))
+        assert receipt['peak_bytes']+remaining <= reserve['cap_bytes'], 'bootstrap/input/output overlap cap'
+        assert receipt['peak_bytes'] <= reserve['bootstrap_bytes']+reserve['source_archive_bytes'], 'bootstrap/source reserve'
+        if receipt['sample_count']==1:(root/'bootstrap/ready').touch(exist_ok=False)
+        if not running:break
+        time.sleep(1)
+    receipt['closed']=True
+except BaseException:
+    receipt['cap_exceeded']=True
+    os.kill(int(sys.argv[1]),signal.SIGTERM)
+    raise
+finally:
+    if scratch_observation(root)['whole_scratch_bytes']+65536 <= reserve['cap_bytes']:
+        with (root/'bootstrap/scratch.json').open('x') as output:
+            json.dump(receipt,output);output.flush();os.fsync(output.fileno())
+WATCH
+python3 "$root/bootstrap/watch.py" $$ &
+watcher=$!
+while ! test -f "$root/bootstrap/ready"; do kill -0 "$watcher"; sleep .05; done
+'''
+        bootstrap_stop = 'kill "$watcher"\nwait "$watcher"\n'
+        apt_options = '-o Dir::Cache::archives="$root/bootstrap/archives" -o Dir::State::lists="$root/bootstrap/lists" -o Dir::Log="$root/bootstrap/log" -o APT::Sandbox::User=root '
+        supervisor_options = "-p 'ReadOnlyPaths=/tmp /var/tmp' "
+        archive_write_guard = f"assert output.tell()+len(chunk) <= {reserve['source_archive_bytes']}, 'source archive scratch reserve'; "
+        archive_extract_guard = f"    assert Path('source.tar.gz').stat().st_size+sum(m.size for m in archive.getmembers())+4096*len(archive.getmembers()) <= {reserve['source_archive_bytes']}, 'source extraction overlap reserve'\n"
     # SDK bootstrap, IMDSv2, one request attempt, terminal last; no toolchain.
     body = f'''#!/bin/bash
 set -euo pipefail
@@ -267,8 +518,8 @@ cd "$root"
 trap '/usr/sbin/shutdown -h now || true' EXIT
 exec >run.log 2>&1
 test "$(uname -m)" = x86_64
-apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3.12 python3.12-venv tar gzip
+{bootstrap_setup}apt-get {apt_options}update -qq
+DEBIAN_FRONTEND=noninteractive apt-get {apt_options}install -y -qq python3.12 python3.12-venv tar gzip
 python3.12 -m venv "$root/venv"
 python="$root/venv/bin/python"
 "$python" -m pip install --retries 0 --timeout 15 --no-cache-dir --disable-pip-version-check --only-binary=:all: --no-deps boto3==1.40.72 botocore==1.40.72 jmespath==1.0.1 s3transfer==0.14.0 python-dateutil==2.9.0.post0 six==1.17.0 urllib3==2.6.3
@@ -284,16 +535,17 @@ response=s3.get_object(Bucket='{BUCKET}',Key='{archive_key}')
 digest=hashlib.sha256()
 with response['Body'] as source, open('source.tar.gz','xb') as output:
     while chunk:=source.read(65536):
-        digest.update(chunk); output.write(chunk)
+        {archive_write_guard}digest.update(chunk); output.write(chunk)
 assert digest.hexdigest()=='{archive_sha}'
 Path('repo').mkdir()
 with tarfile.open('source.tar.gz','r:gz') as archive:
-    archive.extractall('repo',filter='data')
+{archive_extract_guard}    archive.extractall('repo',filter='data')
 PY
-export PYTHONPATH="$root/repo"
-systemd-run --unit={SUPERVISOR_UNIT} --wait --pipe -p 'Delegate=cpu memory pids' -p DelegateSubgroup=supervisor -p RuntimeMaxSec={WALL} -p WorkingDirectory="$root" \\
+{bootstrap_stop}export PYTHONPATH="$root/repo"
+systemd-run --unit={SUPERVISOR_UNIT} --wait --pipe {supervisor_options}-p 'Delegate=cpu memory pids' -p DelegateSubgroup=supervisor -p RuntimeMaxSec={WALL} -p WorkingDirectory="$root" \\
  --setenv=PYTHONPATH="$root/repo" --setenv=AWS_MAX_ATTEMPTS=1 --setenv=AWS_RETRY_MODE=standard \\
- "$python" -m {MODULE} --remote "$root/repo" "$root" '{commit}' '{archive_sha}' '{prefix}' '{qualification['config_sha256']}'
+ {('--setenv=TMPDIR="$TMPDIR" --setenv=TMP="$TMP" --setenv=TEMP="$TEMP" --setenv=PYTHONPYCACHEPREFIX="$PYTHONPYCACHEPREFIX" '+chr(92)) if SQ4 else chr(92)}
+ "$python" -m {MODULE} {'--sq4 ' if SQ4 else ''}--remote "$root/repo" "$root" '{commit}' '{archive_sha}' '{prefix}' '{qualification['config_sha256']}'
 '''
     subprocess.run(['bash', '-n'], input=body, text=True, check=True)
     require(len(body.encode()) < 16384, 'EC2 userdata cap')
@@ -301,8 +553,13 @@ systemd-run --unit={SUPERVISOR_UNIT} --wait --pipe -p 'Delegate=cpu memory pids'
 
 
 def download(s3, descriptor, destination):
+    limit = 64*1024**2
+    if SQ4 and 'destination' in descriptor:
+        require(descriptor['destination'] == str(destination) and
+                (descriptor['destination'],descriptor['bytes'],descriptor['sha256']) in INPUT_PINS, 'SQ4 exact retained download descriptor')
+        limit = descriptor['bytes']
     response = s3.get_object(Bucket=BUCKET, Key=descriptor['key'])
-    expected = body_pin({k:descriptor[k] for k in ('bytes', 'sha256')})
+    expected = body_pin({k:descriptor[k] for k in ('bytes', 'sha256')}, max_bytes=limit)
     with response['Body'] as source:
         require(response['ContentLength'] == expected['bytes'], 'transport ContentLength')
         destination = Path(destination)
@@ -342,14 +599,44 @@ def validate_abi(abi):
 
 def stage(s3, config, root):
     validate_config(config)
+    scratch = None
+    if SQ4:
+        reserve = config['fixed']['scratch']
+        available = os.statvfs(root).f_bavail*os.statvfs(root).f_frsize
+        charged = sum(n for k,n in reserve.items() if k != 'cap_bytes')
+        source_bytes = sum(p.stat().st_size for p in (root/'repo').rglob('*') if p.is_file())
+        source_bytes += (root/'source.tar.gz').stat().st_size if (root/'source.tar.gz').exists() else 0
+        bootstrap_bytes = sum(max(p.lstat().st_size,p.lstat().st_blocks*512) for tree in (root/'venv',root/'bootstrap')
+                              for p in tree.rglob('*'))
+        bootstrap = decode(read(root/'bootstrap/scratch.json'))
+        require(bootstrap['closed'] is True and bootstrap['cap_exceeded'] is False and bootstrap['interval_seconds'] == 1
+                and bootstrap['sample_count'] >= 2 and bootstrap['reserve'] == reserve
+                and bootstrap['peak_bytes']+sum(reserve[k] for k in ('input_bytes','native_output_bytes','binary_bytes','auxiliary_bytes')) <= SQ4_SCRATCH_CAP,
+                'SQ4 observed bootstrap overlap')
+        observation = scratch_observation(root)
+        remaining = reserve['input_bytes']+reserve['native_output_bytes']+reserve['binary_bytes']+reserve['auxiliary_bytes']
+        require(available >= charged and source_bytes <= reserve['source_archive_bytes']
+                and bootstrap_bytes <= reserve['bootstrap_bytes']
+                and observation['whole_scratch_bytes']+remaining <= reserve['cap_bytes'], 'SQ4 scratch/source/input/output coexistence admission')
+        require(all(not os.path.lexists(d['destination']) for d in config['inputs']), 'SQ4 retained input no overwrite')
+        scratch = dict(config_sha256=config['native_config_sha256'], observation=observation,
+            reserve=reserve, charged_bytes=charged, free_bytes_before=available,
+            projected_peak_bytes=observation['whole_scratch_bytes']+remaining,
+            source_archive_observed_bytes=source_bytes, bootstrap_observed_bytes=bootstrap_bytes, bootstrap=bootstrap)
     download(s3, config['binary'], root/BINARY_NAME)
     (root/BINARY_NAME).chmod(0o500)
     write(root/'native-config.json', encoded(config['native_config']))
     for descriptor in config['inputs']:
+        if SQ4:
+            require(scratch_observation(root)['whole_scratch_bytes']+descriptor['bytes'] <= SQ4_SCRATCH_CAP, 'SQ4 scratch before input write')
         download(s3, descriptor, descriptor['destination'])
     result = dict(binary=file_pin(root/BINARY_NAME), native_config=file_pin(root/'native-config.json'),
                   inputs={d['destination']:file_pin(d['destination']) for d in config['inputs']},
                   exact_six_inputs=True, compiler_used=False)
+    if SQ4:
+        del result['exact_six_inputs']
+        result['exact_eighteen_inputs'] = True
+        result['scratch'] = scratch
     write(root/'stage-receipt.json', encoded(result))
     return result
 
@@ -446,7 +733,7 @@ def drain_group(group):
 
 def supervise(config, root, *, run_id):
     """Popen owns the original executable; the observer stays outside its cap."""
-    command = [str(root/BINARY_NAME), 'check-fine-pack', str(root/'native-config.json'),
+    command = [str(root/BINARY_NAME), 'check-fine-sq4' if SQ4 else 'check-fine-pack', str(root/'native-config.json'),
                config['native_config_sha256'], str(root/'screen/report.json')]
     (root/'screen').mkdir(exist_ok=False)
     receipt = dict(command=command, process_exit_code=None, process_started=False,
@@ -458,11 +745,34 @@ def supervise(config, root, *, run_id):
     cleanup = dict(drain_complete=False, cleanup_complete=False, output_durable=False)
     process, group, created, error = None, None, False, None
     started = time.monotonic()
+    scratch = None
+    if SQ4:
+        temporary = root/'bootstrap/tmp'
+        temporary.mkdir(parents=True, exist_ok=True)
+        require(temporary.resolve() == temporary.absolute(), 'SQ4 charged temporary directory')
+        scratch = dict(run_id=run_id, config_sha256=config['native_config_sha256'], cap_bytes=SQ4_SCRATCH_CAP,
+            admission=decode(read(root/'stage-receipt.json'))['scratch'], sample_count=0, peak_bytes=0,
+            interval_seconds=1, closed=False, cap_exceeded=False, closure_reserve_bytes=SQ4_CLOSURE_RESERVE)
+    last_scratch = started-1
+    def observe_scratch():
+        nonlocal last_scratch
+        observation = scratch_observation(root)
+        scratch.update(last=observation, sample_count=scratch['sample_count']+1,
+            peak_bytes=max(scratch['peak_bytes'],observation['whole_scratch_bytes']))
+        last_scratch = time.monotonic()
+        scratch['projected_closure_peak_bytes'] = observation['whole_scratch_bytes']+SQ4_CLOSURE_RESERVE
+        if scratch['projected_closure_peak_bytes'] > SQ4_SCRATCH_CAP:
+            scratch['cap_exceeded'] = True
+            raise ValueError('SQ4 whole scratch 4GiB cap')
     old_term = signal.getsignal(signal.SIGTERM)
     def interrupted(signum, frame):
         raise InterruptedError('original supervisor interrupted')
     signal.signal(signal.SIGTERM, interrupted)
     try:
+        if SQ4:
+            observe_scratch()
+            require(file_pin(root/'native-config.json') == pin(encoded(config['native_config']))
+                    and file_pin(root/BINARY_NAME) == {k:config['binary'][k] for k in ('bytes','sha256')}, 'SQ4 pre-exec config/binary drift')
         group = delegated_group(resource['delegation'])
         group.mkdir(exist_ok=False); created = True; create_group(group)
         resource['before'] = cgroup_snapshot(group)
@@ -478,6 +788,8 @@ def supervise(config, root, *, run_id):
             os.close(fd)
         environment = dict(os.environ, BORSUK_CPU_THREADS='1', RAYON_NUM_THREADS='1',
                            TOKIO_WORKER_THREADS='1', OMP_NUM_THREADS='1', AWS_MAX_ATTEMPTS='1')
+        if SQ4:
+            environment.update(TMPDIR=str(temporary), TMP=str(temporary), TEMP=str(temporary))
         try:
             with (root/'native.log').open('xb') as log:
                 process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
@@ -488,8 +800,12 @@ def supervise(config, root, *, run_id):
                     resource['elapsed_seconds'] = time.monotonic()-started
                     if resource['elapsed_seconds'] >= CAPS['deadline_seconds']:
                         resource['deadline_exceeded'] = True
-                        raise TimeoutError('native 300s deadline')
+                        raise TimeoutError('native '+str(CAPS['deadline_seconds'])+'s deadline')
                     require(log.tell() <= 4*1024**2, 'native log cap')
+                    if SQ4:
+                        require(sum(p.lstat().st_size for p in (root/'screen').iterdir()) <= CAPS['output_bytes'], 'SQ4 whole native output cap')
+                        if time.monotonic()-last_scratch >= 1:
+                            observe_scratch()
                     time.sleep(.05)
                 receipt['process_exit_code'] = process.wait()
                 resource['descendants_remaining_after_exit'] = bool((group/'cgroup.procs').read_text().strip())
@@ -509,7 +825,7 @@ def supervise(config, root, *, run_id):
                     receipt['process_exit_code'] = process.wait(timeout=5)
                 resource['after'] = cgroup_snapshot(group); resource['closed'] = True
                 group.rmdir(); cleanup['cleanup_complete'] = True
-            for name in ('native.log', 'screen/report.json', 'screen/report.permutations.json', 'screen/report.prefix.jsonl'):
+            for name in (('native.log', *SQ4_OUTPUTS) if SQ4 else ('native.log', 'screen/report.json', 'screen/report.permutations.json', 'screen/report.prefix.jsonl')):
                 path = root/name
                 if path.exists():
                     with regular(path) as output:
@@ -523,14 +839,138 @@ def supervise(config, root, *, run_id):
                 receipt['process_exit_code'] = process.wait(timeout=5)
         if error is not None:
             receipt['error'] = dict(type=type(error).__name__, message=str(error))
+        if SQ4 and (root/'screen/report.json').exists():
+            try:
+                receipt['report_sha256'] = file_pin(root/'screen/report.json')['sha256']
+            except BaseException as failure:
+                receipt['error'] = dict(type=type(failure).__name__, message=str(failure))
+        if SQ4:
+            signal.signal(signal.SIGTERM, old_term)
+            scratch_room(root, SQ4_CLOSURE_RESERVE)
         write(root/'native-exit.json', encoded(receipt))
         write(root/'resources.json', encoded(resource))
         write(root/'cleanup.json', encoded(cleanup))
+        if SQ4:
+            try:
+                observe_scratch()
+            except BaseException as failure:
+                scratch['error'] = dict(type=type(failure).__name__, message=str(failure))
+            scratch.update(closed=True, process_exit_code=receipt['process_exit_code'],
+                           report_sha256=receipt.get('report_sha256'))
+            require(len(encoded(scratch)) <= 65536, 'SQ4 scratch receipt closure reserve')
+            scratch_room(root, SQ4_CLOSURE_RESERVE)
+            write(root/'scratch.json', encoded(scratch))
         signal.signal(signal.SIGTERM, old_term)
     return receipt
 
 
+def validate_sq4_result(root, config):
+    validate_config(config)
+    sq4_qualification(config, root, collected=True)
+    validate_abi(decode(read(root/'runtime-abi.json')))
+    binary = {k:config['binary'][k] for k in ('bytes','sha256')}
+    require(file_pin(root/'native-config.json') == pin(encoded(config['native_config']))
+            and file_pin(root/BINARY_NAME) == binary, 'SQ4 executed config/binary bytes')
+    receipt, resource, cleanup = (decode(read(root/n)) for n in ('native-exit.json','resources.json','cleanup.json'))
+    command = receipt['command']; original = Path(command[0]).parent.parent
+    require(original.is_absolute() and original.resolve() == original and command == [str(original/BINARY_NAME),
+        'check-fine-sq4', str(original/'native-config.json'), config['native_config_sha256'], str(original/'screen/report.json')]
+        and receipt['config_sha256'] == config['native_config_sha256'] and receipt['binary'] == config['binary']
+        and type(receipt['process_exit_code']) is int and receipt['process_exit_code'] == 0
+        and receipt['process_started'] is True and 'error' not in receipt, 'SQ4 original exact native command/exit0')
+    validate_resources(resource)
+    require(all(cleanup.get(k) is True for k in ('drain_complete','cleanup_complete','output_durable')), 'SQ4 native cleanup/durability')
+    stage_receipt = decode(read(root/'stage-receipt.json'))
+    require(set(stage_receipt) == {'binary','native_config','inputs','exact_eighteen_inputs','compiler_used','scratch'}
+        and stage_receipt['binary'] == binary and stage_receipt['native_config'] == pin(encoded(config['native_config']))
+        and stage_receipt['inputs'] == {d['destination']:{k:d[k] for k in ('bytes','sha256')} for d in config['inputs']}
+        and stage_receipt['exact_eighteen_inputs'] is True and stage_receipt['compiler_used'] is False, 'SQ4 authenticated opaque staging')
+    scratch = decode(read(root/'scratch.json'))
+    admission = scratch['admission']; reserve = config['fixed']['scratch']
+    require(scratch['run_id'] == receipt['run_id'] and scratch['config_sha256'] == config['native_config_sha256']
+        and scratch['cap_bytes'] == SQ4_SCRATCH_CAP and scratch['closed'] is True and scratch['cap_exceeded'] is False
+        and scratch['process_exit_code'] == 0 and scratch['interval_seconds'] == 1 and scratch['sample_count'] >= 2
+        and 'error' not in scratch and admission == stage_receipt['scratch'] and admission['reserve'] == reserve
+        and admission['config_sha256'] == config['native_config_sha256']
+        and admission['charged_bytes'] == sum(n for k,n in reserve.items() if k != 'cap_bytes')
+        and admission['charged_bytes'] <= admission['free_bytes_before']
+        and admission['projected_peak_bytes'] <= SQ4_SCRATCH_CAP
+        and admission['source_archive_observed_bytes'] <= reserve['source_archive_bytes']
+        and admission['bootstrap_observed_bytes'] <= reserve['bootstrap_bytes']
+        and admission['bootstrap']['closed'] is True and admission['bootstrap']['cap_exceeded'] is False
+        and admission['bootstrap']['reserve'] == reserve and admission['bootstrap']['sample_count'] >= 2
+        and scratch['closure_reserve_bytes'] == SQ4_CLOSURE_RESERVE
+        and scratch['projected_closure_peak_bytes'] == scratch['last']['whole_scratch_bytes']+SQ4_CLOSURE_RESERVE <= SQ4_SCRATCH_CAP
+        and 0 <= scratch['last']['whole_scratch_bytes'] <= scratch['peak_bytes'] <= SQ4_SCRATCH_CAP
+        and set(scratch['last']['roots']) == {str(original),str(SQ4_INPUT_ROOT)}
+        and sum(scratch['last']['roots'].values()) == scratch['last']['whole_scratch_bytes'], 'SQ4 whole-worker scratch observations')
+    require({p.name for p in (root/'screen').iterdir() if not p.name.endswith('.gz')} == {Path(n).name for n in SQ4_OUTPUTS}, 'SQ4 exact native output closure')
+    require(sum(file_pin(root/n)['bytes'] for n in SQ4_OUTPUTS) <= CAPS['output_bytes'], 'SQ4 native output cap')
+    body = read(root/'screen/report.json', 8192); report = decode(body)
+    require(receipt['report_sha256'] == scratch['report_sha256'] == sha(body)
+        and report['schema'] == 'borsuk-fixed-sq4-report-v1' and report['codec'] == 'borsuk-sq4-nearest17-original-coefficients-v1'
+        and report['config_sha256'] == config['native_config_sha256'] and report['source_identity_sha256'] == SOURCE_ID
+        and report['complete'] is True and type(report['queries']) is int and report['queries'] == 128
+        and report['status'] in ('SURVIVED_CONSUMED_PANELS','REJECT') and report['standalone_authority'] is False
+        and report['quality_or_performance_claim'] is False and report['requires_matching_supervisor_exit_receipt'] is True, 'SQ4 independently bound terminal report')
+    details = report['details']; native = config['native_config']; truth = [p['truth'] for p in native['panels']]
+    require(details['rows'] == 100000 and details['dimensions'] == 768 and details['truth'] == truth
+        and details['frozen_original_authority'] is True and details['caps'] == CAPS
+        and details['whole_process_supervisor_required'] is True and 0 <= details['operations'] <= CAPS['operations']
+        and details['pair_payload_bytes'] == 79200000 and 0 <= details['modeled_peak_bytes'] <= CAPS['memory_bytes']
+        and 79200000 <= details['modeled_output_bytes'] <= CAPS['output_bytes'], 'SQ4 frozen native authority/resources')
+    def authenticate(descriptor, name):
+        require(descriptor == dict(path=str(original/name), **file_pin(root/name)), 'SQ4 native closure pin: '+name)
+    freeze_name = 'screen/report.sq4-freeze.json'
+    authenticate(details['freeze'], freeze_name)
+    freeze = decode(read(root/freeze_name, 8*1024**2))
+    require(freeze['schema'] == 'borsuk-fixed-sq4-freeze-v1' and freeze['config_sha256'] == config['native_config_sha256']
+        and freeze['source_identity_sha256'] == SOURCE_ID and freeze['truth_opened'] is False
+        and freeze['original_seal'] == native['original_seal'] and freeze['truth'] == truth, 'SQ4 freeze before truth')
+    authenticate(freeze['payload_seal'], 'screen/report.sq4-payloads.json')
+    authenticate(freeze['nomination_prefix'], 'screen/report.sq4-prefix.jsonl')
+    require(file_pin(root/'screen/report.sq4-prefix.jsonl') == {k:native['prefix'][k] for k in ('bytes','sha256')}, 'SQ4 consumed original nomination prefix')
+    seal = decode(read(root/'screen/report.sq4-payloads.json', 8*1024**2))
+    require(seal['schema'] == 'borsuk-fixed-sq4-payload-seal-v1' and seal['config_sha256'] == config['native_config_sha256']
+        and seal['source_identity_sha256'] == SOURCE_ID and seal['codec'] == report['codec']
+        and seal['original_seal'] == native['original_seal'] and seal['queries_opened'] is seal['truth_opened'] is False
+        and seal['payloads'] == freeze['payloads'] and len(seal['payloads']) == 2, 'SQ4 paired payload seal')
+    for i,payload in enumerate(seal['payloads']):
+        authenticate(payload['payload'], f'screen/report.sq4-{i}.bin')
+        require(payload['payload']['bytes'] == 39600000 and payload['original_root'] == native['panels'][i]['root']
+            and payload['codec'] == report['codec'] and payload['rows'] == 100000 and payload['dimensions'] == 768
+            and payload['row_bytes'] == 396 and payload['group_rows'] == 16, 'SQ4 payload identity/geometry')
+    require(len(freeze['results']) == 128, 'SQ4 all128 sealed results')
+    envelopes = True
+    for i,descriptor in enumerate(freeze['results']):
+        name = f'screen/report.sq4-result-{i}.json'; authenticate(descriptor, name)
+        query = decode(read(root/name, 8*1024**2)); plan = query['plan']; sq4 = query['sq4']
+        fits = sq4['verified_bytes'] <= 16*1024**2
+        require(query['schema'] == 'borsuk-fixed-sq4-query-v1' and query['dataset'] == native['panels'][i//64]['dataset']
+            and type(query['ordinal']) is int and query['ordinal'] == i%64 and query['nominees_retained'] is True
+            and query['original_cover_contained'] is True and query['truth_opened'] is False
+            and query['sq8_reference_serving_eligible'] is False and sq4['fetched_ids'] == query['sq8_reference']['fetched_ids']
+            and type(sq4['range_reads']) is int and 1 <= sq4['range_reads'] <= 32
+            and type(sq4['verified_bytes']) is int and 0 < sq4['verified_bytes'] == plan['candidate_bytes']
+            and plan['envelope_fits'] is fits, 'SQ4 authenticated same-population result/envelope')
+        envelopes &= fits
+    summaries = details['summaries']
+    require(len(summaries) == 2 and details['all128_envelopes_fit'] is envelopes, 'SQ4 native envelope summary')
+    quality = True
+    for panel,summary in zip(native['panels'], summaries):
+        returned = summary['sq4_returned']; mean, p05 = returned['mean_recall'], returned['p05_hits']
+        require(summary['dataset'] == panel['dataset'] and type(mean) in (int,float) and 0 <= mean <= 1
+                and type(p05) is int and 0 <= p05 <= 100, 'SQ4 native quality summary')
+        quality &= mean >= .98 and p05 >= 95
+    require(report['status'] == ('SURVIVED_CONSUMED_PANELS' if quality and envelopes else 'REJECT'), 'SQ4 completed disposition')
+    return dict(status=report['status'], valid_diagnostic=True, report_sha256=sha(body),
+        native_config_sha256=config['native_config_sha256'], binary=binary, summaries=summaries,
+        all128_envelopes_fit=envelopes, quality_or_performance_claim=False)
+
+
 def validate_result(root, config):
+    if SQ4:
+        return validate_sq4_result(root, config)
     validate_config(config)
     validate_abi(decode(read(root/'runtime-abi.json')))
     require(file_pin(root/'native-config.json') == pin(encoded(config['native_config'])), 'native config bytes')
@@ -613,6 +1053,8 @@ def validate_result(root, config):
 
 def publish(s3, root, prefix, terminal):
     """Retain every present raw body, read back, then publish the terminal."""
+    if SQ4:
+        scratch_room(root, SQ4_CLOSURE_RESERVE)
     artifacts = {}
     for name in ARTIFACTS:
         path = root/name
@@ -626,8 +1068,17 @@ def publish(s3, root, prefix, terminal):
                 require(pin(source.read(ident['bytes']+1)) == ident, 'upload readback: '+name)
             artifacts[name] = ident
     terminal['artifacts'] = artifacts
+    if SQ4:
+        observation = scratch_room(root, 4*1024**2)
+        terminal['scratch_closure'] = dict(before=observation, cap_bytes=SQ4_SCRATCH_CAP,
+            reserve_bytes=4*1024**2, projected_peak_bytes=observation['whole_scratch_bytes']+4*1024**2)
     raw = encoded(terminal)
+    if SQ4:
+        require(len(raw)+4096 <= 4*1024**2, 'SQ4 terminal closure reserve')
+        scratch_room(root, 4*1024**2)
     write(root/'terminal.json', raw)
+    if SQ4:
+        scratch_room(root, 0)  # The successful S3 marker follows the actual final scan.
     s3.put_object(Bucket=BUCKET, Key=prefix+'/terminal.json', Body=raw, IfNoneMatch='*')
     return terminal
 
@@ -658,6 +1109,9 @@ def remote(repo, root, commit, archive_sha, prefix, config_sha):
         config = decode(config_body); validate_config(config, repo)
         proof = preflight(repo)
         write(root/'config.json', config_body); write(root/'source-qualification.json', encoded(proof))
+        if SQ4:
+            for r in config['native_qualification']:
+                write(root/'qualification'/Path(r['path']).name, read(repo/r['path']))
         write(root/'cpu.txt', subprocess.check_output(['lscpu']))
         stage(s3, config, root)
         receipt = supervise(config, root, run_id=prefix+'/'+instance_id)
@@ -670,7 +1124,10 @@ def remote(repo, root, commit, archive_sha, prefix, config_sha):
     finally:
         if (root/'native-exit.json').exists():
             terminal['original_exit_code'] = decode(read(root/'native-exit.json'))['process_exit_code']
-        write(root/'run-closed.log', read(root/'run.log'))
+        closed_log = read(root/'run.log', 4*1024**2) if SQ4 else read(root/'run.log')
+        if SQ4:
+            scratch_room(root, SQ4_CLOSURE_RESERVE)
+        write(root/'run-closed.log', closed_log)
         publish(s3, root, prefix, terminal)
     return terminal['exit_code']
 
@@ -700,6 +1157,11 @@ def replay(out):
             and type(terminal['original_exit_code']) is int
             and terminal['exit_code'] == terminal['original_exit_code'] == 0
             and set(terminal['artifacts']) == set(ARTIFACTS), 'complete original terminal/roster')
+    if SQ4:
+        closure = terminal['scratch_closure']
+        require(closure['cap_bytes'] == SQ4_SCRATCH_CAP and closure['reserve_bytes'] == 4*1024**2
+                and closure['projected_peak_bytes'] == closure['before']['whole_scratch_bytes']+closure['reserve_bytes'] <= SQ4_SCRATCH_CAP
+                and sum(closure['before']['roots'].values()) == closure['before']['whole_scratch_bytes'], 'SQ4 final terminal scratch closure')
     raw = read(out/'config.json')
     require(sha(raw) == terminal['config_sha256'], 'collected config hash')
     config = decode(raw); validate_config(config)
@@ -1145,16 +1607,360 @@ sys.exit(17 if os.environ.get('FINE_PACK_FAKE')=='nonzero' else 0)
         print(f'PASS fine-pack: real fake-native exit0/REJECT/exit17/deadline; {failures} refusals; fullhash/readback/marker-last/no-overwrite; every-ACK same-ID terminate/wait; actual SDK model positive/official_old_negative={official_old_checked}; actual_delegated_cgroup={real_cgroup}; other cgroup/SDK transport/AWS MOCKED; no ANN/graph/corpus/network')
 
 
+def sq4_self_check():
+    """Mock native CLI and qualification metadata; no native/data/AWS execution."""
+    import copy
+    import tempfile
+    from contextlib import ExitStack
+    from unittest.mock import patch
+    module = sys.modules[__name__]
+    configure_sq4()
+    retained_pins = INPUT_PINS
+    require(SCHEMA == 'borsuk-fixed-sq4-diagnostic-spot-v1', 'explicit SQ4 mode')
+    require(len(INPUT_PINS) == 18 and sum(p[1] for p in INPUT_PINS) == 229614200, 'opaque retained roster')
+    require(len([n for n in ARTIFACTS if n.startswith('screen/')]) == 134, 'whole native closure')
+    # Root-authenticated completed metadata only; the executable/transport below
+    # remain mocked. No corpus, compiler or live job is opened by this fixture.
+    def committed(path):
+        repo=Path(__file__).resolve().parents[1]
+        return subprocess.check_output(['git','-c','safe.directory='+str(repo),'show','e0d81804:'+str(path)],cwd=repo)
+    deployment_body=committed(SQ4_ROOT/'qualified-deployment-pins-c2d233d6.json')
+    require(pin(deployment_body)==dict(bytes=15955,sha256='97c175233d71e5e6624fa91939baf436a79ec29b3cbbaff2d609ff453464d145'), 'root completed deployment fixture pin')
+    deployment=decode(deployment_body)
+    actual={}
+    for name,descriptor in deployment['qualification_receipts'].items():
+        body=committed(descriptor['path'])
+        require(pin(body)=={k:descriptor[k] for k in ('bytes','sha256')}, 'root completed receipt fixture pin')
+        actual[name]=decode(body)
+    old,verification,workspace=(actual[n] for n in ('source-qualification.json','parent-verification.json','workspace-receipt.json'))
+    require(deployment['required_stage_protocol']==[dict(stage=s['stage'],command=s['command'],
+        required_test_passes=s['required_test_passes'],require_positive_tests_run=s['tests_run'] is not None)
+        for s in workspace['stages']], 'actual completed root all14 protocol')
+    def refused(call):
+        try: call()
+        except (ValueError, OSError, KeyError): return
+        raise AssertionError('unsafe SQ4 acceptance')
+    # /tmp is tmpfs on Devbox: raw payload + transport + replay copies need disk.
+    with tempfile.TemporaryDirectory(prefix='sq4-glue-check-', dir='/var/tmp') as tmp, ExitStack() as stack:
+        base = Path(tmp)
+        stack.enter_context(patch.object(module, 'SQ4_INPUT_ROOT', base/'retained'))
+        pins = tuple((str(base/'retained'/f'input-{i}'), 1, sha(b'x')) for i in range(18))
+        stack.enter_context(patch.object(module, 'INPUT_PINS', pins))
+        descriptors = [dict(path=p, bytes=n, sha256=h) for p,n,h in pins]
+        native = dict(schema='borsuk-fixed-sq4-config-v1', source_identity_sha256=SOURCE_ID,
+            caps=copy.deepcopy(CAPS), original_seal=descriptors[16], prefix=descriptors[17],
+            panels=[dict(dataset=d, root=descriptors[i*8], requests=descriptors[i*8+6],
+                         truth=descriptors[i*8+7], truth_width=100) for i,d in enumerate(('relaion','cohere'))])
+        fake = b'''#!/usr/bin/env python3
+import hashlib,json,os,sys,tempfile,time
+from pathlib import Path
+_,mode,config_path,config_sha,out=sys.argv
+assert mode=='check-fine-sq4' and hashlib.sha256(Path(config_path).read_bytes()).hexdigest()==config_sha
+c=json.loads(Path(config_path).read_bytes());p=Path(out);fault=os.environ.get('SQ4_FAKE','')
+def emit(path,v):
+ b=json.dumps(v,separators=(',',':')).encode()
+ with path.open('xb') as f:f.write(b);f.flush();os.fsync(f.fileno())
+ return {'path':str(path),'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()}
+def body(path,b):
+ with path.open('xb') as f:f.write(b)
+ return {'path':str(path),'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()}
+payloads=[]
+for i,panel in enumerate(c['panels']):
+ path=p.with_suffix('.sq4-'+str(i)+'.bin')
+ with path.open('xb') as f:f.truncate(39600000)
+ h=hashlib.sha256()
+ with path.open('rb') as f:
+  while b:=f.read(65536):h.update(b)
+ payloads.append({'payload':{'path':str(path),'bytes':39600000,'sha256':h.hexdigest()},'original_root':panel['root'],
+  'codec':'borsuk-sq4-nearest17-original-coefficients-v1','rows':100000,'dimensions':768,'row_bytes':396,'group_rows':16})
+seal=emit(p.with_suffix('.sq4-payloads.json'),{'schema':'borsuk-fixed-sq4-payload-seal-v1','config_sha256':config_sha,
+ 'source_identity_sha256':c['source_identity_sha256'],'codec':'borsuk-sq4-nearest17-original-coefficients-v1',
+ 'original_seal':c['original_seal'],'payloads':payloads,'queries_opened':False,'truth_opened':False})
+prefix=body(p.with_suffix('.sq4-prefix.jsonl'),Path(c['prefix']['path']).read_bytes())
+results=[]
+for i in range(128):
+ fits=fault!='envelope' or i!=0
+ scored={'fetched_ids':[0],'ranked':[{'id':n,'ordinal':n,'score_bits':0} for n in range(100)],
+  'range_reads':1,'verified_bytes':396 if fits else 16777612}
+ results.append(emit(p.with_suffix('.sq4-result-'+str(i)+'.json'),{'schema':'borsuk-fixed-sq4-query-v1',
+  'dataset':c['panels'][i//64]['dataset'],'ordinal':i%64,'nominees_retained':True,'original_cover_contained':True,
+  'truth_opened':False,'sq8_reference_serving_eligible':False,'plan':{'envelope_fits':fits,'candidate_bytes':scored['verified_bytes']},
+  'sq4':scored,'sq8_reference':scored,'original256_baseline':scored}))
+freeze=emit(p.with_suffix('.sq4-freeze.json'),{'schema':'borsuk-fixed-sq4-freeze-v1','config_sha256':config_sha,
+ 'source_identity_sha256':c['source_identity_sha256'],'payload_seal':seal,'payloads':payloads,'original_seal':c['original_seal'],
+ 'truth':[x['truth'] for x in c['panels']],'nomination_prefix':prefix,'results':results,'truth_opened':False})
+reject=fault in ('reject','envelope')
+emit(p,{'schema':'borsuk-fixed-sq4-report-v1','codec':'borsuk-sq4-nearest17-original-coefficients-v1',
+ 'config_sha256':config_sha,'source_identity_sha256':c['source_identity_sha256'],'queries':128,'complete':True,
+ 'status':'REJECT' if reject else 'SURVIVED_CONSUMED_PANELS','standalone_authority':False,
+ 'requires_matching_supervisor_exit_receipt':True,'quality_or_performance_claim':False,
+ 'details':{'freeze':freeze,'rows':100000,'dimensions':768,'truth':[x['truth'] for x in c['panels']],
+ 'frozen_original_authority':True,'caps':c['caps'],'operations':1,'whole_process_supervisor_required':True,
+ 'pair_payload_bytes':79200000,'modeled_peak_bytes':100000000,'modeled_output_bytes':90000000,
+ 'all128_envelopes_fit':fault!='envelope','summaries':[{'dataset':x['dataset'],
+  'sq4_returned':{'mean_recall':.97 if fault=='reject' else .99,'p05_hits':94 if fault=='reject' else 99}} for x in c['panels']]}})
+if fault=='drift':Path(config_path).write_bytes(Path(config_path).read_bytes()+b' ')
+if fault in ('scratch','external-temp'):
+ path=p.parent.parent/'temporary' if fault=='scratch' else Path(tempfile.gettempdir())/'external-temporary'
+ if fault=='external-temp':assert path.parent==p.parent.parent/'bootstrap/tmp'
+ with path.open('xb') as f:f.truncate(4294967296)
+ time.sleep(2)
+if fault=='deadline':time.sleep(5)
+sys.exit(2 if fault=='latefailure' else 0)
+'''
+        source = dict(old['source_sha256'], **SQ4_SOURCES)
+        full_id = sha(json.dumps(source, sort_keys=True, separators=(',', ':')).encode())
+        require(full_id=='1689c53c7564f989f19da397b32b13f16f10df264d02355928849dcabf1e2849','actual prospective c2 full404 map')
+        old.update(native_source_commit=NATIVE_COMMIT, source_identity_sha256=full_id, source_sha256=source)
+        verification.update(native_source_commit=NATIVE_COMMIT, source_identity_sha256=full_id, binary=pin(fake))
+        workspace.update(source_identity_sha256=full_id, source_sha256=source)
+        terminal = actual['aws-terminal.json']
+        terminal.update(native_source_commit=NATIVE_COMMIT, source_identity_sha256=full_id)
+        receipt_bodies = dict(zip(SQ4_RECEIPTS, (verification, old, workspace, terminal,
+                                               actual['aws-closeout.json'])))
+        workspace['qualification_sha256'] = pin(encoded(old))['sha256']
+        terminal['artifacts']['workspace-receipt.json'] = pin(encoded(workspace))
+        terminal['artifacts'][BINARY_NAME] = pin(fake)
+        terminal['source_qualification_sha256'] = pin(encoded(old))['sha256']
+        receipts = []
+        for name,value in receipt_bodies.items():
+            path=base/'proofs'/name; write(path, encoded(value))
+            receipts.append(dict(path='proofs/'+name, **file_pin(path)))
+        fixed = copy.deepcopy(FIXED); fixed['native_caps']=copy.deepcopy(CAPS)
+        fixed.update(machine_limit_seconds=1800,compute_cap_usd=.30)
+        fixed['scratch'] = dict(input_bytes=18, native_output_bytes=CAPS['output_bytes'], binary_bytes=len(fake),
+            source_archive_bytes=8*1024**2, bootstrap_bytes=256*1024**2, auxiliary_bytes=16*1024**2, cap_bytes=4*1024**3)
+        paths = sorted([str(CONFIG), str(SQ4_ROOT/'prospective-input-roster.json'), *CODE, *(r['path'] for r in receipts)])
+        config = dict(schema=SCHEMA, authority_pending=False, fixed=fixed, native_config=native,
+            native_source=dict(commit=NATIVE_COMMIT,full_source_identity_sha256=full_id,
+                               source_identity_sha256=SOURCE_ID,source_sha256=SQ4_SOURCES),
+            native_config_sha256=sha(encoded(native)), binary=dict(pin(fake), key='mock/native'), inputs=[
+                dict(destination=p, bytes=n, sha256=h, key='mock/input-'+str(i)) for i,(p,n,h) in enumerate(pins)],
+            native_qualification=receipts, code_sha256={n:file_pin(n)['sha256'] for n in CODE},
+            source_archive_paths=paths, source_archive_paths_sha256=sha(json.dumps(paths,separators=(',',':')).encode()))
+        validate_config(config)
+        for n in CODE:write(base/n,read(n))
+        real=copy.deepcopy(config)
+        descriptors=[dict(path=p,bytes=n,sha256=h) for p,n,h in retained_pins]
+        real['native_config'].update(original_seal=descriptors[16],prefix=descriptors[17],panels=[
+            dict(dataset=d,root=descriptors[i*8],requests=descriptors[i*8+6],truth=descriptors[i*8+7],truth_width=100)
+            for i,d in enumerate(('relaion','cohere'))])
+        real['native_config_sha256']=sha(encoded(real['native_config']))
+        require(pin(encoded(real['native_config']).rstrip(b'\n'))==dict(bytes=1695,
+            sha256='771a0c1c8ed2060318b5388e3eed4c6a8dfac0b707687de823079ed8131d10fa'),'exact 1d93036a prospective c2 native config metadata')
+        real['inputs']=[dict(destination=p,bytes=n,sha256=h,key='retained/'+str(i)) for i,(p,n,h) in enumerate(retained_pins)]
+        real['fixed']['scratch']['input_bytes']=229614200
+        original_regular=regular
+        def metadata_only(path):
+            require(str(Path(path).absolute()) not in {p for p,_,_ in retained_pins},'metadata preflight opened retained data')
+            return original_regular(path)
+        with patch.object(module,'INPUT_PINS',retained_pins), patch.object(module,'regular',side_effect=metadata_only):
+            write(base/CONFIG,encoded(real));preflight(base)
+        print('PASS actual18 retained metadata, including both78000000B records; no data/GT opens',flush=True)
+        sq4_qualification(config, base)
+        for key,value in (('authority_pending',True), ('native_qualification',[]), ('binary',{}), ('native_config_sha256','0'*64)):
+            bad=copy.deepcopy(config);bad[key]=value;refused(lambda:validate_config(bad))
+        bad=copy.deepcopy(config);bad['fixed']['scratch']['cap_bytes']=1
+        refused(lambda:validate_config(bad))
+        bad=copy.deepcopy(config);bad['native_config']['caps']['cpu_threads']=True
+        bad['native_config_sha256']=sha(encoded(bad['native_config']))
+        refused(lambda:validate_config(bad))
+        # Rehashing all affected receipts cannot admit failed/reordered/missing gates.
+        for fault in ('failed','reordered','missing','zero-test','wrongargv','missingmandatory','reducedroster',
+                      'misplacedtests','utc','overlap','reversed','non-test-count'):
+            bad=copy.deepcopy(config);failed=copy.deepcopy(receipt_bodies)
+            stages=failed['workspace-receipt.json']['stages']
+            if fault=='failed':stages[0]['exit_status']=2
+            elif fault=='reordered':stages[0],stages[1]=stages[1],stages[0]
+            elif fault=='missing':stages.pop()
+            elif fault=='zero-test':stages[5].update(tests_run=0,required_test_passes={})
+            elif fault=='wrongargv':stages[5]['command'][6]='zero_match_filter'
+            elif fault=='missingmandatory':stages[5]['required_test_passes'].pop(next(iter(stages[5]['required_test_passes'])))
+            elif fault=='reducedroster':
+                stages[5]['required_test_passes']={}
+                for n in ('source-qualification.json','workspace-receipt.json'):failed[n]['mandatory_tests']['graph-regressions']=[]
+            elif fault=='misplacedtests':stages[1]['required_test_passes'].update(stages[2]['required_test_passes']);stages[2]['required_test_passes']={}
+            elif fault=='utc':stages[5]['started_at']='2026-10-05T13:05:00+01:00'
+            elif fault=='overlap':stages[5]['started_at']=(datetime.fromisoformat(stages[4]['started_at'])-timedelta(seconds=1)).isoformat()
+            elif fault=='reversed':stages[5]['finished_at']=(datetime.fromisoformat(stages[5]['started_at'])-timedelta(seconds=1)).isoformat()
+            else:stages[0]['tests_run']=1
+            failed['parent-verification.json']['stages']=stages
+            qualification_sha=pin(encoded(failed['source-qualification.json']))['sha256']
+            failed['workspace-receipt.json']['qualification_sha256']=qualification_sha
+            failed['aws-terminal.json']['source_qualification_sha256']=qualification_sha
+            failed['aws-terminal.json']['artifacts']['workspace-receipt.json']=pin(encoded(failed['workspace-receipt.json']))
+            for r in bad['native_qualification']:
+                name=Path(r['path']).name;p=base/fault/name;write(p,encoded(failed[name]))
+                r.update(path=fault+'/'+name,**file_pin(p))
+            try:refused(lambda:sq4_qualification(bad,base))
+            except AssertionError as error:raise AssertionError('unsafe rebound qualification: '+fault) from error
+        bad=copy.deepcopy(config);bad['native_source']['full_source_identity_sha256']='0'*64
+        refused(lambda:sq4_qualification(bad,base))
+        original=read(base/'proofs/workspace-receipt.json')
+        (base/'proofs/workspace-receipt.json').write_bytes(original+b' ')
+        refused(lambda:sq4_qualification(config,base));(base/'proofs/workspace-receipt.json').write_bytes(original)
+        (base/CONFIG).unlink();write(base/CONFIG, encoded(config))
+        proof=preflight(base)
+        userdata=user_data('a'*40,'b'*64,'mock/archive',PREFIX+'a0001',proof)
+        require('--sq4 --remote' in userdata and 'DelegateSubgroup=supervisor' in userdata, 'SQ4 SDK delegated bootstrap')
+        require(all(s in userdata for s in ('ReadOnlyPaths=/tmp /var/tmp','export TMPDIR=', 'Dir::Cache::archives=',
+                'Dir::State::lists=', 'Dir::Log=', '--setenv=TMPDIR=', 'bootstrap/input/output overlap cap',
+                'source archive scratch reserve', 'source extraction overlap reserve', 'wait "$watcher"')), 'charged SQ4 generated Bash')
+        def bootstrap_fixture(root, fault=False):
+            (root/'bootstrap/tmp').mkdir(parents=True)
+            with patch.object(module,'REMOTE_ROOT',root):
+                generated=user_data('a'*40,'b'*64,'mock/archive',PREFIX+'a0001',proof)
+            watcher=generated.split("<<'WATCH'\n",1)[1].split('\nWATCH\n',1)[0]
+            compile(watcher,'generated-bootstrap-watch','exec')
+            process=subprocess.Popen([sys.executable,'-c',"import os,sys;sys.argv=['watch',str(os.getpid())];"+watcher],
+                stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            started=time.monotonic()
+            while not (root/'bootstrap/ready').exists() and process.poll() is None:
+                require(time.monotonic()-started < 3,'bootstrap admission ACK deadline');time.sleep(.02)
+            require(process.poll() is None,'bootstrap admission before writes')
+            if fault:
+                with (root/'bootstrap/tmp/fault').open('xb') as f:f.truncate(SQ4_SCRATCH_CAP)
+            process.terminate()
+            stdout,stderr=process.communicate(timeout=3)
+            require((process.returncode != 0 and not (root/'bootstrap/scratch.json').exists()) if fault
+                    else (process.returncode == 0 and decode(read(root/'bootstrap/scratch.json'))['closed'] is True), 'generated bootstrap actual observer closure')
+        bootstrap_denied=base/'bootstrap-denied';bootstrap_denied.mkdir();bootstrap_fixture(bootstrap_denied,True)
+        import io
+        from types import SimpleNamespace
+        class Zeros:
+            remaining=78000000
+            def __enter__(self):return self
+            def __exit__(self,*args):pass
+            def read(self,n):
+                require(0 < n <= 65536,'large input streaming read cap')
+                count=min(n,self.remaining);self.remaining-=count;return bytes(count)
+        large=base/'large.bin'
+        digest='df4fabbabc07f9e687ba5ae43d2cb72c3c0f8f08e4dfdc6f9d8c91412ef9e7ff'
+        descriptor=dict(destination=str(large),bytes=78000000,sha256=digest,key='mock/large')
+        refused(lambda:body_pin({k:descriptor[k] for k in ('bytes','sha256')}))
+        with patch.object(module,'INPUT_PINS',((str(large),78000000,digest),)):
+            download(SimpleNamespace(get_object=lambda **kw:dict(Body=Zeros(),ContentLength=78000000)),descriptor,large)
+        require(file_pin(large)==dict(bytes=78000000,sha256=digest),'78000000B synthetic streamed authentication')
+        large.unlink()
+        store={}
+        bodies={'mock/native':fake, **{d['key']:b'x' for d in config['inputs']}}
+        calls = [0]
+        def get(**kwargs):
+            calls[0] += 1
+            if kwargs['Key'] in store:
+                p=store[kwargs['Key']]
+                return dict(Body=regular(p),ContentLength=p.stat().st_size)
+            b=bodies[kwargs['Key']]
+            return dict(Body=io.BytesIO(b),ContentLength=len(b))
+        def put(**kwargs):
+            require(kwargs['IfNoneMatch']=='*' and kwargs['Key'] not in store,'immutable put')
+            p=base/'store'/sha(kwargs['Key'].encode());write(p,kwargs['Body']);store[kwargs['Key']]=p
+        s3=SimpleNamespace(get_object=get,put_object=put)
+        files=dict(zip(CGROUP_FILES,(str(CAPS['memory_bytes']),'4096','0','0',
+            'low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n','high 0\nmax 0\nfail 0\n',
+            '100000 100000','usage_usec 1\nuser_usec 1\nsystem_usec 0\n',str(FIXED['tasks_max']),'0','max 0\n','','populated 0\nfrozen 0\n')))
+        def fixture(name,fault='',deadline=False):
+            root=base/name;root.mkdir()
+            write(root/'config.json',encoded(config));write(root/'source-qualification.json',encoded(proof))
+            write(root/'run-closed.log',b'');write(root/'cpu.txt',b'mock')
+            write(root/'runtime-abi.json',encoded(dict(machine='x86_64',python=[3,12],os=dict(ID='ubuntu',VERSION_ID='24.04'),
+                libc=['glibc','2.39'],sdk=dict(boto3='1.40.72',botocore='1.40.72',put_object_if_none_match=True))))
+            for r in receipts:write(root/'qualification'/Path(r['path']).name,read(base/r['path']))
+            bootstrap_fixture(root)
+            for p,_,_ in pins:
+                if Path(p).exists():Path(p).unlink()
+            stage(s3,config,root)
+            parent=base/(name+'-cgroups')/(SUPERVISOR_UNIT+'.service');parent.mkdir(parents=True)
+            group=parent/'native';owned=[]
+            def delegate(record):
+                record.update(unit=SUPERVISOR_UNIT+'.service',parent=str(parent),observer=str(parent/'supervisor'),observer_pid=os.getpid(),
+                    available=sorted(CONTROLLERS),enabled=sorted(CONTROLLERS),parent_process_ids=[],observer_process_ids=[os.getpid()],parent_type='domain')
+                return group
+            def create(g):(g/'cgroup.procs').write_text('')
+            def snapshot(g):return dict(path=str(g),observer_pid=os.getpid(),files=copy.deepcopy(files))
+            def drain(g):
+                if owned and owned[0].poll() is None:os.killpg(owned[0].pid,signal.SIGKILL)
+                (g/'cgroup.procs').unlink()
+            original_popen=subprocess.Popen
+            def spawn(command,**kwargs):
+                p=original_popen(command,**kwargs);owned.append(p);(group/'cgroup.procs').write_text('');return p
+            with ExitStack() as execution:
+                for method,fn in (('delegated_group',delegate),('create_group',create),('cgroup_snapshot',snapshot),('drain_group',drain)):
+                    execution.enter_context(patch.object(module,method,side_effect=fn))
+                execution.enter_context(patch.object(subprocess,'Popen',side_effect=spawn))
+                execution.enter_context(patch.dict(os.environ,SQ4_FAKE=fault))
+                execution.enter_context(patch.dict(CAPS,deadline_seconds=.2 if deadline else 600))
+                if fault in ('scratch','external-temp'):
+                    try:supervise(config,root,run_id=PREFIX+'a0001/i-original')
+                    except ValueError:pass
+                    else:raise AssertionError('scratch fault accepted '+fault+': '+read(root/'native.log').decode())
+                    receipt=dict(process_exit_code=owned[0].returncode)
+                else:receipt=supervise(config,root,run_id=PREFIX+'a0001/i-original')
+            require(not group.exists(),'drained mock cgroup')
+            return root,receipt
+        root,receipt=fixture('success')
+        result=validate_result(root,config)
+        require(receipt['process_exit_code']==0 and result['status']=='SURVIVED_CONSUMED_PANELS' and read(root/'native.log')==b'','silent original closure')
+        require(receipt['report_sha256']==file_pin(root/'screen/report.json')['sha256'],'independent terminal report binding')
+        refused(lambda:supervise(config,root,run_id='overwrite'))
+        for fault in ('reject','envelope','latefailure','drift','deadline','scratch','external-temp'):
+            out,exit_receipt=fixture(fault,fault,deadline=fault=='deadline')
+            if fault in ('reject','envelope'):require(validate_result(out,config)['status']=='REJECT','completed REJECT retained')
+            else:
+                refused(lambda:validate_result(out,config))
+                if fault=='latefailure':require(exit_receipt['process_exit_code']==2 and decode(read(out/'screen/report.json'))['complete'] is True,'late exit2 invalidates complete body')
+        for name in ('screen/report.sq4-1.bin','screen/report.sq4-result-127.json','screen/report.sq4-freeze.json','cleanup.json','resources.json','scratch.json'):
+            p=root/name;b=read(p,64*1024**2);p.write_bytes(b+b' ')
+            if not name.startswith('screen/'):
+                value=decode(b);value[{'cleanup.json':'cleanup_complete','resources.json':'closed','scratch.json':'closed'}[name]]=False
+                p.write_bytes(encoded(value))
+            refused(lambda:validate_result(root,config));p.write_bytes(b)
+        denied=base/'scratch-denied';denied.mkdir()
+        bootstrap_fixture(denied)
+        with (denied/'temporary').open('xb') as f:f.truncate(4*1024**3)
+        previous_calls=calls[0]
+        refused(lambda:stage(s3,config,denied))
+        require(calls[0]==previous_calls and not (denied/BINARY_NAME).exists(),'scratch refuses before hydration')
+        prefix=PREFIX+'a0001'
+        terminal=dict(schema=SCHEMA,source_commit='a'*40,source_archive_sha256='b'*64,instance_id='i-original',prefix=prefix,
+            config_sha256=sha(encoded(config)),status='complete',phase='complete',exit_code=0,original_exit_code=0,
+            disposition=result['status'],artifact_roster_sha256=ROSTER_SHA,qualification=proof,result=result)
+        near_cap=dict(roots={str(root):SQ4_SCRATCH_CAP-4096,str(SQ4_INPUT_ROOT):0},whole_scratch_bytes=SQ4_SCRATCH_CAP-4096)
+        previous_uploads=len(store)
+        with patch.object(module,'scratch_observation',return_value=near_cap):
+            refused(lambda:publish(s3,root,prefix,copy.deepcopy(terminal)))
+        require(len(store)==previous_uploads and not (root/'terminal.json').exists(),'near-cap closure refused before writes/uploads')
+        publish(s3,root,prefix,terminal)
+        out=base/'collected';out.mkdir()
+        write(out/'aws-reservation.json',encoded(dict(schema=SCHEMA,source_commit='a'*40,source_archive_sha256='b'*64,
+            config_sha256=terminal['config_sha256'],qualification=proof)))
+        write(out/'aws-launch.json',encoded(dict(instance_id='i-original',nodes={'0':{'instance_id':'i-original'}},prefix=prefix,
+            source_commit='a'*40,source_archive_sha256='b'*64)))
+        write(out/'aws-closeout.json',encoded(dict(state='terminated',nodes={'0':{'instance_id':'i-original'}})))
+        collect(s3,prefix,out,'i-original','a'*40,'b'*64)
+        require(replay(out)==result,'all raw/gzip native closure replay')
+        refused(lambda:collect(s3,prefix,out,'i-original','a'*40,'b'*64))
+        p=out/'screen/report.sq4-result-127.json';p.write_bytes(read(p)+b' ');refused(lambda:replay(out))
+        print('PASS SQ4 mock-native: exact14 argv/mandatory owning-stage passes/positive test counts/serial UTC; generated Bash/bootstrap observer; charged external-temp fault; near-cap closure; exact CLI; silent exit0; REJECT; late exit2; deadline; config/output drift; no overwrite; scratch; cleanup; full raw/gzip collection/replay. Cgroup/SDK transport/AWS/qualification metadata MOCKED; no native science.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('attempt', nargs='?')
     parser.add_argument('--self-check', action='store_true')
+    parser.add_argument('--sq4', action='store_true', help='opt in to the frozen native SQ4 experiment')
     parser.add_argument('--replay', type=Path)
     parser.add_argument('--remote', nargs=6)
     args = parser.parse_args()
+    if args.sq4:
+        configure_sq4()
     require(sum((args.attempt is not None, args.self_check, args.replay is not None, args.remote is not None)) == 1, 'one CLI mode')
     if args.self_check:
-        self_check(real_cgroup=os.environ.get('BORSUK_FINE_PACK_REAL_CGROUP')=='1'); return 0
+        if SQ4:
+            sq4_self_check()
+        else:
+            self_check(real_cgroup=os.environ.get('BORSUK_FINE_PACK_REAL_CGROUP')=='1')
+        return 0
     if args.replay:
         print(json.dumps(replay(args.replay), sort_keys=True)); return 0
     if args.remote:
@@ -1164,7 +1970,7 @@ def main():
     sdk_guard()
     os.environ['AWS_MAX_ATTEMPTS'] = '1'
     os.environ['AWS_RETRY_MODE'] = 'standard'
-    with open('/tmp/borsuk-fine-pack-diagnostic.lock', 'w') as lock:
+    with open('/tmp/borsuk-fixed-sq4-diagnostic.lock' if SQ4 else '/tmp/borsuk-fine-pack-diagnostic.lock', 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
         lifecycle().main(args.attempt, campaign=sys.modules[__name__])
     return 0
