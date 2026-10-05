@@ -92,6 +92,7 @@ pub mod resident_graph_store;
 pub mod resident_nominee_generation;
 pub mod resident_vector_graph;
 pub mod returned_sq8;
+pub mod semantic_cell_overlap;
 mod rotated_product_quantizer;
 pub mod rotated_two_bit;
 #[allow(

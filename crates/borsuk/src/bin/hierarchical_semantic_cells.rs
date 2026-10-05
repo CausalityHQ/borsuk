@@ -33,7 +33,11 @@ use borsuk::hierarchical_semantic_cells::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use borsuk::semantic_cell_overlap::{self as overlap, OverlapBuildConfig,
+    OverlapPairAdmission, OverlapRevisions, OverlapSearchTrace, search_selected_sq8};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::os::unix::fs::FileExt;
 use std::{
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
@@ -51,6 +55,316 @@ const DIAGNOSTIC_SCHEMA: &str = "borsuk-hierarchical-cells-diagnostic-v3";
 const NOMINATION_SCHEMA: &str = "borsuk-hierarchical-cells-nomination-v1";
 const FREEZE_CAP: usize = 4096;
 const NOMINATION_COUNT: usize = 64;
+
+/// `build-overlap CONFIG SHA NEW_DIRECTORY` builds source-only SQ8 extents.
+/// `paired-overlap CONFIG SHA NEW_JSONL` freezes both full-scanner arms before
+/// truth. A PANEL_PASS is not both-panel qualification or fresh quality.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OverlapPairedConfig {
+    schema: String,
+    dataset: String,
+    control_root: Artifact,
+    candidate_root: Artifact,
+    requests: Artifact,
+    first: usize,
+    count: usize,
+    truth: Artifact,
+    truth_width: usize,
+    source_identity_sha256: String,
+    max_resident_payload_bytes: usize,
+    max_evaluator_payload_bytes: usize,
+    max_result_bytes: usize,
+    resources: OverlapResources,
+    #[cfg(test)]
+    #[serde(skip)]
+    test_seam: Option<OverlapPairTestSeam>,
+}
+// Private native-fixture seam. It is absent from runtime builds and cannot be
+// supplied through strict JSON configuration, environment or command flags.
+#[cfg(test)]
+#[derive(Clone, Copy)]
+struct OverlapPairTestSeam {
+    rows: usize,
+    dimensions: usize,
+    evaluator_roster_bytes: usize,
+    query_scratch_bytes: usize,
+    selection_mismatch_at: Option<usize>,
+    fail_sync_at: Option<usize>,
+    corrupt_frame_arm: Option<&'static str>,
+}
+#[derive(Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct OverlapResources {
+    build_workers: usize,
+    build_memory_bytes: u64,
+    build_swap_bytes: u64,
+    build_scratch_bytes: u64,
+    build_timeout_seconds: u64,
+    query_workers: usize,
+    query_memory_bytes: u64,
+    query_swap_bytes: u64,
+    query_timeout_seconds: u64,
+}
+fn overlap_resources(r: &OverlapResources) -> Result<()> {
+    require((1..=4).contains(&r.build_workers) && r.build_memory_bytes == 8 * 1024 * 1024 * 1024
+        && r.build_swap_bytes == 0 && r.build_scratch_bytes == 8 * 1024 * 1024 * 1024
+        && r.build_timeout_seconds == 1200 && r.query_workers == 1
+        && r.query_memory_bytes == 512 * 1024 * 1024 && r.query_swap_bytes == 0
+        && r.query_timeout_seconds == 300, "overlap frozen resources")
+}
+fn overlap_source_identity() -> String {
+    let mut digest = Sha256::new();
+    // Order and names bind the exact five-file authored contract.
+    for (name, bytes) in [
+        ("hierarchical_semantic_cells.rs", include_bytes!("../hierarchical_semantic_cells.rs").as_slice()),
+        ("semantic_cell_overlap.rs", include_bytes!("../semantic_cell_overlap.rs").as_slice()),
+        ("returned_sq8.rs", include_bytes!("../returned_sq8.rs").as_slice()),
+        ("bin/hierarchical_semantic_cells.rs", include_bytes!("hierarchical_semantic_cells.rs").as_slice()),
+        ("lib.rs", include_bytes!("../lib.rs").as_slice()),
+    ] {
+        digest.update((name.len() as u64).to_le_bytes()); digest.update(name.as_bytes());
+        digest.update((bytes.len() as u64).to_le_bytes()); digest.update(bytes);
+    }
+    format!("{:x}", digest.finalize())
+}
+fn overlap_seal(events: &mut Events, seal_path: &Path, identity: &Value) -> Result<Artifact> {
+    require(identity["selections_per_arm"] == 64 && identity["complete_unique_scored_rosters_per_arm"] == 64,
+        "overlap paired seal requires both64 selections and complete rosters")?;
+    events.sync()?;
+    let body = serde_json::to_vec(identity)?;
+    require(body.len() <= FREEZE_CAP, "overlap seal cap")?;
+    let mut seal = OpenOptions::new().write(true).create_new(true).open(seal_path)?;
+    seal.write_all(&body)?;
+    seal.sync_all()?;
+    File::open(seal_path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")))?.sync_all()?;
+    Ok(Artifact { path: seal_path.into(), bytes: body.len(), sha256: hash(&body) })
+}
+fn authenticate_overlap_prefix(events: &Events, output: &Path, identity: &Value) -> Result<()> {
+    let prefix = identity["prefix_bytes"].as_u64().ok_or("overlap seal prefix bytes")?;
+    require(prefix <= events.bytes as u64, "overlap seal prefix length")?;
+    let mut file = OpenOptions::new().read(true).custom_flags(
+        (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32).open(output)?;
+    require(file.metadata()?.is_file() && file.metadata()?.len() == events.bytes as u64, "overlap durable roster exact length")?;
+    let mut digest = Sha256::new(); let mut remaining = prefix; let mut buffer = [0_u8; 65536];
+    while remaining > 0 {
+        let amount = remaining.min(buffer.len() as u64) as usize;
+        file.read_exact(&mut buffer[..amount])?; digest.update(&buffer[..amount]); remaining -= amount as u64;
+    }
+    require(identity["prefix_sha256"] == format!("{:x}", digest.finalize()), "overlap durable roster prefix authentication")
+}
+fn overlap_hits(trace: &OverlapSearchTrace, truth: &[i64]) -> (usize, usize) {
+    let coverage = truth.iter().filter(|id| trace.base_ids.binary_search(id).is_ok()).count();
+    let returned = trace.ranked.iter().take(100).map(|s| s.id).collect::<std::collections::BTreeSet<_>>();
+    (coverage, truth.iter().filter(|id| returned.contains(id)).count())
+}
+fn overlap_summary(hits: &[(usize, usize)]) -> Value {
+    let mut coverage = hits.iter().map(|v| v.0).collect::<Vec<_>>();
+    let mut recall = hits.iter().map(|v| v.1).collect::<Vec<_>>();
+    coverage.sort_unstable(); recall.sort_unstable();
+    json!({"queries":64,"denominator_per_query":100,"p05_sorted_index":3,
+        "coverage_mean":coverage.iter().sum::<usize>() as f64 / 6400.,"coverage_p05_hits":coverage[3],
+        "recall_mean":recall.iter().sum::<usize>() as f64 / 6400.,"recall_p05_hits":recall[3],
+        "pass":coverage.iter().sum::<usize>() >= 6272 && coverage[3] >= 95
+            && recall.iter().sum::<usize>() >= 6272 && recall[3] >= 95})
+}
+fn paired_overlap(config: OverlapPairedConfig, config_sha: &str, output: &Path) -> Result<()> {
+    let mut events = Events::new(output, config.max_result_bytes.min(512 * 1024 * 1024))?;
+    events.error_context = json!({"schema":"borsuk-cell-overlap-paired-v1","config_sha256":config_sha});
+    #[cfg(test)]
+    { events.fail_sync_at = config.test_seam.and_then(|seam| seam.fail_sync_at); }
+    events.run(|events| {
+        let started = (Instant::now(), cpu_ns());
+        let (logical_rows, dimensions, roster_allowance, query_scratch) = (100_000, 768,
+            128 * 32 * 640 * 64,
+            3 * overlap::MAX_BYTES + 32 * 640 * (768 + 12 + 512) + 8 * 32 * (768 * 4 + 4096));
+        #[cfg(test)]
+        let (logical_rows, dimensions, roster_allowance, query_scratch) = config.test_seam
+            .map(|seam| (seam.rows, seam.dimensions, seam.evaluator_roster_bytes, seam.query_scratch_bytes))
+            .unwrap_or((logical_rows, dimensions, roster_allowance, query_scratch));
+        require(config.schema == "borsuk-cell-overlap-paired-v1" && ["relaion", "cohere"].contains(&config.dataset.as_str())
+            && config.count == 64 && config.truth_width == 100 && config.first == 0
+            && config.source_identity_sha256 == overlap_source_identity()
+            && config.max_resident_payload_bytes <= 512 * 1024 * 1024
+            && config.max_evaluator_payload_bytes <= 512 * 1024 * 1024,
+            "overlap paired schema/source/panel/caps")?;
+        overlap_resources(&config.resources)?;
+        let modeled_evaluator = config.requests.bytes.checked_mul(4)
+            .and_then(|v| v.checked_add(config.truth.bytes))
+            .and_then(|v| v.checked_add(roster_allowance))
+            .ok_or("overlap evaluator payload overflow")?;
+        require(modeled_evaluator <= config.max_evaluator_payload_bytes && config.requests.bytes <= REQUEST_CAP,
+            "overlap evaluator admission")?;
+        let seal_path = output.with_extension("paired-seal.json");
+        require(fs::symlink_metadata(&seal_path).is_err(), "overlap paired seal exists")?;
+        // Authenticate ONLY small roots, then reject the complete pair before
+        // either directory/router/mapping/boundary/cell-body preload begins.
+        let admission = OverlapPairAdmission::read(&config.control_root, &config.candidate_root,
+            config.max_resident_payload_bytes, config.resources.query_memory_bytes as usize,
+            modeled_evaluator, query_scratch)?;
+        let ca = admission.control(); let ta = admission.candidate();
+        require(!ca.overlap_enabled() && ta.overlap_enabled() && ca.logical_rows() == logical_rows
+            && ta.logical_rows() == logical_rows && ca.dimensions() == dimensions && ta.dimensions() == dimensions
+            && ca.primary_root_identity().sha256 == ta.primary_root_identity().sha256
+            && ca.boundary_sha256() == ta.boundary_sha256(),
+            "overlap matched retained capacity-v4 layouts")?;
+        events.emit(&json!({"phase":"paired_metadata_admission","heavy_indexes_opened":0,
+            "control_primary_root":ca.primary_root_identity(),"candidate_primary_root":ta.primary_root_identity(),
+            "control_directory":ca.primary_directory(),"candidate_directory":ta.primary_directory(),
+            "control_metadata_payload_bytes":ca.modeled_metadata_payload_bytes(),
+            "candidate_metadata_payload_bytes":ta.modeled_metadata_payload_bytes(),
+            "control_preload_peak_bytes":ca.modeled_preload_peak_bytes(),"candidate_preload_peak_bytes":ta.modeled_preload_peak_bytes(),
+            "control_resident_payload_bytes":ca.modeled_resident_payload_bytes(),
+            "candidate_resident_payload_bytes":ta.modeled_resident_payload_bytes(),
+            "pair_peak_payload_bytes":admission.modeled_peak_payload_bytes,
+            "evaluator_payload_bytes":modeled_evaluator,"query_scratch_bytes":query_scratch}))?;
+        events.sync()?;
+        // Both admitted roots are reauthenticated before the first heavy open.
+        let (control, candidate) = admission.open()?;
+        let control = std::sync::Arc::new(control); let candidate = std::sync::Arc::new(candidate);
+        let request_body = read_source_probe_artifact(&config.requests, REQUEST_CAP)?;
+        let mut requests = Vec::new();
+        let mut previous = None;
+        for line in request_body.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
+            require(line.len() <= 65536, "overlap request line cap")?;
+            let request: Request = serde_json::from_slice(line)?;
+            require(previous.is_none_or(|p| request.ordinal > p) && request.query.len() == dimensions
+                && request.query.iter().all(|v| v.is_finite()), "overlap request order/geometry")?;
+            previous = Some(request.ordinal);
+            if (config.first..config.first + 64).contains(&request.ordinal) { requests.push(request); }
+        }
+        require(requests.len() == 64 && requests.iter().enumerate().all(|(i, r)| r.ordinal == config.first + i), "overlap exact64 requests")?;
+        drop(request_body);
+        let c = OverlapRevisions::new(control.clone(), 0, 0)?.pin();
+        let t = OverlapRevisions::new(candidate.clone(), 0, 0)?.pin();
+        require(c.delta_is_empty() && t.delta_is_empty(), "science requires empty delta")?;
+        let mut plans = Vec::with_capacity(64);
+        let mut routes_cpu = 0;
+        let mut routes_wall = 0;
+        for request in &requests {
+            let timer = (Instant::now(), cpu_ns());
+            let a = control.plan(&request.query)?;
+            let b = candidate.plan(&request.query)?;
+            #[cfg(test)]
+            let b = {
+                let mut plan = b;
+                if config.test_seam.is_some_and(|seam| seam.selection_mismatch_at == Some(request.ordinal)) {
+                    plan.selected[0].distance_bits ^= 1;
+                }
+                plan
+            };
+            // Identity precedes EVERY payload read in either arm.
+            require(a.selected == b.selected, "paired cell IDs/primary flags/distance bits mismatch")?;
+            routes_cpu += cpu_ns() - timer.1; routes_wall += timer.0.elapsed().as_nanos();
+            events.emit(&json!({"phase":"paired_selection","ordinal":request.ordinal,"control":a,"candidate":b}))?;
+            plans.push((a, b));
+        }
+        events.sync()?;
+        #[cfg(test)]
+        if let Some(arm) = config.test_seam.and_then(|seam| seam.corrupt_frame_arm) {
+            let (root, plan) = if arm == "candidate" { (&config.candidate_root, &plans[0].1) }
+                else { (&config.control_root, &plans[0].0) };
+            let file = OpenOptions::new().write(true).open(root.path.parent().unwrap().join("sq8-cells.bin"))?;
+            file.write_all_at(&[0xff], (plan.extents[0].offset + 64 + 8) as u64)?;
+        }
+        let mut rosters = Vec::with_capacity(64);
+        let mut scoring_cpu = 0;
+        let mut scoring_wall = 0;
+        for (request, (a, b)) in requests.iter().zip(&plans) {
+            // A new attempted query must not inherit the preceding receipt.
+            events.error_context.as_object_mut().unwrap().remove("failed_query_receipt");
+            let timer = (Instant::now(), cpu_ns());
+            let mut control_trace = match search_selected_sq8(&c, a, &request.query, control.logical_rows()) {
+                Ok(trace) => trace, Err(error) => {
+                    let receipt = json!({"ordinal":request.ordinal,"failed_arm":"control",
+                        "control":{"status":"failed","accounting":error.accounting},
+                        "candidate":{"status":"not_attempted"}});
+                    events.error_context["failed_query_receipt"] = receipt.clone();
+                    events.emit(&json!({"phase":"paired_arm_failure","receipt":receipt}))?;
+                    events.sync()?;
+                    return Err(error.into());
+                }
+            };
+            let mut candidate_trace = match search_selected_sq8(&t, b, &request.query, candidate.logical_rows()) {
+                Ok(trace) => trace, Err(error) => {
+                    let receipt = json!({"ordinal":request.ordinal,"failed_arm":"candidate",
+                        "control":{"status":"completed","accounting":control_trace.accounting},
+                        "candidate":{"status":"failed","accounting":error.accounting}});
+                    events.error_context["failed_query_receipt"] = receipt.clone();
+                    events.emit(&json!({"phase":"paired_arm_failure","receipt":receipt}))?;
+                    events.sync()?;
+                    return Err(error.into());
+                }
+            };
+            // Preserve both completed payload accounts before validation,
+            // roster emission, or the subsequent durable-prefix sync can fail.
+            events.error_context["failed_query_receipt"] = json!({"ordinal":request.ordinal,
+                "control":{"status":"completed","accounting":control_trace.accounting},
+                "candidate":{"status":"completed","accounting":candidate_trace.accounting}});
+            let added = candidate_trace.replica_ids.iter().copied().filter(|id| control_trace.base_ids.binary_search(id).is_err()).collect::<std::collections::BTreeSet<_>>();
+            let expected = control_trace.base_ids.iter().copied().chain(added).collect::<std::collections::BTreeSet<_>>();
+            require(expected.iter().copied().eq(candidate_trace.base_ids.iter().copied()), "paired unique membership monotonicity/admitted-replica invariant")?;
+            require(control_trace.ranked.len() == control_trace.base_ids.len()
+                && candidate_trace.ranked.len() == candidate_trace.base_ids.len(), "paired complete unique scored rosters")?;
+            // The sealed roster is complete; the scientific request remains
+            // k100, so underfill uses100 rather than the full-roster buffer cap.
+            control_trace.underfill = control_trace.ranked.len() < 100;
+            candidate_trace.underfill = candidate_trace.ranked.len() < 100;
+            scoring_cpu += cpu_ns() - timer.1; scoring_wall += timer.0.elapsed().as_nanos();
+            events.emit(&json!({"phase":"paired_scored_roster","ordinal":request.ordinal,
+                "control":control_trace,"candidate":candidate_trace,
+                "process_rss_and_lifetime_hwm_bytes":process_memory_snapshot()}))?;
+            rosters.push((control_trace, candidate_trace));
+        }
+        let identity = json!({"schema":"borsuk-cell-overlap-paired-seal-v1","config_sha256":config_sha,
+            "source_identity_sha256":config.source_identity_sha256,"control_root":config.control_root,
+            "candidate_root":config.candidate_root,"requests":config.requests,"truth_descriptor":config.truth,
+            "selections_per_arm":64,"complete_unique_scored_rosters_per_arm":64,"empty_delta":true,
+            "prefix_bytes":events.bytes,"prefix_sha256":format!("{:x}",events.digest.clone().finalize())});
+        let seal = overlap_seal(events, &seal_path, &identity)?;
+        events.emit(&json!({"phase":"paired_seal","seal":seal,"truth_opened":false}))?;
+        events.sync()?;
+        let durable = read_source_probe_artifact(&seal, FREEZE_CAP)?;
+        require(serde_json::from_slice::<Value>(&durable)? == identity, "overlap durable paired seal authentication")?;
+        authenticate_overlap_prefix(events, output, &identity)?;
+        // No truth file open (even metadata) occurs before both arms are sealed.
+        let required_truth_bytes = config.first.checked_add(64).and_then(|v| v.checked_mul(400)).ok_or("overlap truth geometry overflow")?;
+        require(config.truth.bytes > 0 && config.truth.bytes % 400 == 0
+            && config.truth.bytes >= required_truth_bytes && config.truth.bytes <= config.max_evaluator_payload_bytes,
+            "overlap actual truth descriptor admission")?;
+        // The evaluator budget includes rosters and may exceed the independent
+        // artifact reader's 128 MiB ceiling. Admit/read the actual truth bytes.
+        let truth = read_source_probe_artifact(&config.truth, config.truth.bytes)?;
+        let mut control_hits = Vec::new();
+        let mut candidate_hits = Vec::new();
+        for (request, (a, b)) in requests.iter().zip(&rosters) {
+            let start = request.ordinal.checked_mul(400).ok_or("overlap truth start overflow")?;
+            let end = request.ordinal.checked_add(1).and_then(|v| v.checked_mul(400)).ok_or("overlap truth end overflow")?;
+            let ids = truth.get(start..end).ok_or("overlap truth row bounds")?.chunks_exact(4)
+                .map(|v| i64::from(u32::from_le_bytes(v.try_into().unwrap()))).collect::<Vec<_>>();
+            require(ids.iter().all(|id| *id >= 0 && (*id as usize) < logical_rows)
+                && ids.iter().collect::<std::collections::BTreeSet<_>>().len() == 100, "overlap truth100 source IDs")?;
+            let ch = overlap_hits(a, &ids); let th = overlap_hits(b, &ids);
+            require(th.0 >= ch.0, "candidate unique truth coverage regression")?;
+            control_hits.push(ch); candidate_hits.push(th);
+            events.emit(&json!({"phase":"paired_metrics","ordinal":request.ordinal,"control_hits":ch,"candidate_hits":th,
+                "fixed_denominator":100,"control_underfill":a.ranked.len()<100,"candidate_underfill":b.ranked.len()<100}))?;
+        }
+        let cs = overlap_summary(&control_hits); let ts = overlap_summary(&candidate_hits);
+        Ok(json!({"phase":"terminal","schema":config.schema,"status":if ts["pass"] == true { "PANEL_PASS" } else { "FAIL" },
+            "complete":true,"dataset":config.dataset,"control":cs,"candidate":ts,"paired_seal":seal,
+            "source_identity_sha256":config.source_identity_sha256,"config_sha256":config_sha,
+            "resources":config.resources,"modeled_evaluator_payload_bytes":modeled_evaluator,
+            "control_startup":control.startup,"candidate_startup":candidate.startup,
+            "control_router_root_reads":control.router().startup,"candidate_router_root_reads":candidate.router().startup,
+            "control_router_directory_reads":control.router().startup_directory,"candidate_router_directory_reads":candidate.router().startup_directory,
+            "route_wall_ns":routes_wall,"route_process_cpu_ns":routes_cpu,
+            "full_sq8_scoring_wall_ns":scoring_wall,"full_sq8_scoring_process_cpu_ns":scoring_cpu,
+            "whole_wall_ns":started.0.elapsed().as_nanos(),"whole_process_cpu_ns":cpu_ns()-started.1,
+            "process_rss_and_lifetime_hwm_bytes":process_memory_snapshot(),"payload_dependency_waves":1,"actual_max_parallel_gets":1,
+            "whole_unit_caps_and_scratch":"external_supervisor_required","scientific_qualification":false,"quality_or_performance_claim":false}))
+    })
+}
 const NOMINATION_POLICIES: [NominationPolicy; 2] = [
     NominationPolicy::Hierarchical8And24,
     NominationPolicy::GlobalTop24,
@@ -110,6 +424,10 @@ struct Events {
     cap: usize,
     digest: Sha256,
     error_context: Value,
+    #[cfg(test)]
+    fail_sync_at: Option<usize>,
+    #[cfg(test)]
+    sync_calls: std::cell::Cell<usize>,
 }
 impl Events {
     fn new(output: &Path, cap: usize) -> Result<Self> {
@@ -123,6 +441,10 @@ impl Events {
             cap,
             digest: Sha256::new(),
             error_context: json!({}),
+            #[cfg(test)]
+            fail_sync_at: None,
+            #[cfg(test)]
+            sync_calls: std::cell::Cell::new(0),
         })
     }
     fn emit(&mut self, event: &Value) -> Result<()> {
@@ -142,6 +464,14 @@ impl Events {
         Ok(())
     }
     fn sync(&self) -> Result<()> {
+        #[cfg(test)]
+        {
+            let call = self.sync_calls.get() + 1;
+            self.sync_calls.set(call);
+            if self.fail_sync_at == Some(call) {
+                return Err(std::io::Error::other("paired fixture sync failure").into());
+            }
+        }
         self.file.sync_all()?;
         Ok(())
     }
@@ -1152,12 +1482,14 @@ fn execute() -> Result<()> {
 fn execute_args(args: &[String]) -> Result<()> {
     require(
         args.len() == 5,
-        "usage: hierarchical_semantic_cells build|diagnose|nominate|build-probes|nominate-probes|diagnose-probes CONFIG CONFIG_SHA256 NEW_OUTPUT",
+        "usage: hierarchical_semantic_cells build|diagnose|nominate|build-probes|nominate-probes|diagnose-probes|build-overlap|paired-overlap CONFIG CONFIG_SHA256 NEW_OUTPUT",
     )?;
     let probe_mode = matches!(
         args[1].as_str(),
-        "build-probes" | "nominate-probes" | "diagnose-probes"
+        "build-probes" | "nominate-probes" | "diagnose-probes" | "build-overlap" | "paired-overlap"
     );
+    let invalid_output = if args[1] == "build-overlap" { Path::new(&args[4]).with_extension("build.jsonl") }
+        else { Path::new(&args[4]).to_path_buf() };
     let path = Path::new(&args[2]);
     let metadata = if probe_mode {
         fs::symlink_metadata(path)
@@ -1168,7 +1500,7 @@ fn execute_args(args: &[String]) -> Result<()> {
     {
         Ok(bytes) => bytes,
         Err(error) if probe_mode => {
-            return probe_close_invalid(Path::new(&args[4]), &args[3], error.into());
+            return probe_close_invalid(&invalid_output, &args[3], error.into());
         }
         Err(error) => return Err(error.into()),
     };
@@ -1180,12 +1512,30 @@ fn execute_args(args: &[String]) -> Result<()> {
     let body = if probe_mode {
         match read_source_probe_artifact(&descriptor, CONFIG_CAP) {
             Ok(body) => body,
-            Err(error) => return probe_close_invalid(Path::new(&args[4]), &args[3], error),
+            Err(error) => return probe_close_invalid(&invalid_output, &args[3], error),
         }
     } else {
         descriptor.read(CONFIG_CAP)?
     };
     match args[1].as_str() {
+        "build-overlap" => {
+            let config: OverlapBuildConfig = probe_config(&body, &args[3], &invalid_output)?;
+            let mut events = Events::new(&invalid_output, 65536)?;
+            events.error_context = json!({"schema":overlap::BUILD_SCHEMA,"config_sha256":args[3]});
+            events.run(|_| {
+                let timer = (Instant::now(), cpu_ns());
+                let receipt = overlap::build_overlap(&config, Path::new(&args[4]))?;
+                Ok(json!({"phase":"terminal","status":"BUILT_UNVERIFIED","complete":true,
+                    "receipt":receipt,"config_sha256":args[3],"source_identity_sha256":overlap_source_identity(),
+                    "build_wall_ns":timer.0.elapsed().as_nanos(),"build_process_cpu_ns":cpu_ns()-timer.1,
+                    "process_rss_and_lifetime_hwm_bytes":process_memory_snapshot(),
+                    "required_build_cpu_max":4,"required_memory_bytes":8589934592_u64,"required_swap_bytes":0,
+                    "required_scratch_bytes":8589934592_u64,"required_timeout_seconds":1200,
+                    "actual_whole_unit_resources_and_scratch":"external_supervisor_required",
+                    "scientific_qualification":false,"quality_or_performance_claim":false}))
+            })
+        }
+        "paired-overlap" => paired_overlap(probe_config(&body, &args[3], &invalid_output)?, &args[3], Path::new(&args[4])),
         "build" => {
             let config: BuildConfig = serde_json::from_slice(&body)?;
             let wall = Instant::now();
@@ -1239,6 +1589,231 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn overlap_pair_seal_precedes_truth() {
+        let dir = tempfile::tempdir().unwrap();
+        let (control_root, candidate_root) = tiny_overlap_pair(dir.path());
+        let requests = (0..64).map(|ordinal| format!("{}\n", json!({"ordinal":ordinal,"query":[3.125,0.875]}))).collect::<String>();
+        let request = probe_artifact(&dir.path().join("pair-requests"), requests.as_bytes());
+        let truth_body = (0..64).flat_map(|_| (0..100_u32).flat_map(u32::to_le_bytes)).collect::<Vec<_>>();
+        let valid_truth = probe_artifact(&dir.path().join("valid-truth"), &truth_body);
+        let truth = probe_artifact(&dir.path().join("tampered-truth"), &truth_body);
+        let mut corrupt_truth = truth_body; corrupt_truth[0] ^= 1;
+        fs::write(&truth.path, corrupt_truth).unwrap();
+        let absent = Artifact { path: dir.path().join("absent-truth"), bytes: truth.bytes, sha256: truth.sha256.clone() };
+        let config = |request: Artifact, truth: Artifact| OverlapPairedConfig {
+            schema:"borsuk-cell-overlap-paired-v1".into(), dataset:"relaion".into(),
+            control_root:control_root.clone(), candidate_root:candidate_root.clone(), requests:request,
+            first:0, count:64, truth, truth_width:100, source_identity_sha256:overlap_source_identity(),
+            max_resident_payload_bytes:128 * 1024 * 1024, max_evaluator_payload_bytes:256 * 1024 * 1024,
+            max_result_bytes:16 * 1024 * 1024,
+            resources:OverlapResources { build_workers:1, build_memory_bytes:8 * 1024 * 1024 * 1024,
+                build_swap_bytes:0, build_scratch_bytes:8 * 1024 * 1024 * 1024, build_timeout_seconds:1200,
+                query_workers:1, query_memory_bytes:512 * 1024 * 1024, query_swap_bytes:0, query_timeout_seconds:300 },
+            test_seam:Some(OverlapPairTestSeam { rows:128, dimensions:2, evaluator_roster_bytes:128 * 32 * 640 * 64,
+                query_scratch_bytes:3 * overlap::MAX_BYTES + 128 * (2 + 12 + 512) + 8 * 32 * (2 * 4 + 4096),
+                selection_mismatch_at:None, fail_sync_at:None, corrupt_frame_arm:None }),
+        };
+        for (case, gt) in [("missing-gt", absent.clone()), ("tampered-gt", truth), ("valid-gt", valid_truth)] {
+            let output = dir.path().join(format!("{case}.jsonl"));
+            let cfg = config(request.clone(), gt);
+            assert!(cfg.max_evaluator_payload_bytes > 128 * 1024 * 1024);
+            assert!(cfg.test_seam.unwrap().evaluator_roster_bytes > 128 * 1024 * 1024);
+            assert_eq!(cfg.truth.bytes, 25600);
+            let result = paired_overlap(cfg, &"b".repeat(64), &output);
+            if case == "valid-gt" { result.unwrap(); } else {
+                let error = result.unwrap_err();
+                if case == "tampered-gt" { assert!(error.to_string().contains("probe artifact SHA256/EOF")); }
+            }
+            let body = fs::read(&output).unwrap();
+            let rows = std::str::from_utf8(&body).unwrap().lines().map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+            let selections = rows.iter().enumerate().filter(|(_, row)| row["phase"] == "paired_selection").collect::<Vec<_>>();
+            let rosters = rows.iter().enumerate().filter(|(_, row)| row["phase"] == "paired_scored_roster").collect::<Vec<_>>();
+            assert_eq!(selections.len(), 64); assert_eq!(rosters.len(), 64);
+            assert!(selections[63].0 < rosters[0].0);
+            for (ordinal, (_, row)) in selections.iter().enumerate() {
+                assert_eq!(row["ordinal"], ordinal);
+                assert!(!row["control"]["selected"].as_array().unwrap().is_empty());
+                assert_eq!(row["control"]["selected"], row["candidate"]["selected"]);
+            }
+            for (ordinal, (_, row)) in rosters.iter().enumerate() {
+                assert_eq!(row["ordinal"], ordinal);
+                for arm in ["control", "candidate"] {
+                    assert_eq!(row[arm]["base_ids"].as_array().unwrap().len(), 128);
+                    assert_eq!(row[arm]["ranked"].as_array().unwrap().len(), 128);
+                    assert!(row[arm]["accounting"]["payload"]["verified_bytes"].as_u64().unwrap() > 0);
+                }
+            }
+            let seal_index = rows.iter().position(|row| row["phase"] == "paired_seal").unwrap();
+            assert!(rosters[63].0 < seal_index); assert_eq!(rows[seal_index]["truth_opened"], false);
+            let seal_path = output.with_extension("paired-seal.json");
+            let sealed = fs::read(&seal_path).unwrap();
+            let identity: Value = serde_json::from_slice(&sealed).unwrap();
+            assert_eq!(identity["selections_per_arm"], 64);
+            assert_eq!(identity["complete_unique_scored_rosters_per_arm"], 64);
+            let prefix = identity["prefix_bytes"].as_u64().unwrap() as usize;
+            assert_eq!(identity["prefix_sha256"], hash(&body[..prefix]));
+            let prefix_rows = std::str::from_utf8(&body[..prefix]).unwrap().lines().map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+            assert_eq!(prefix_rows.iter().filter(|row| row["phase"] == "paired_scored_roster").count(), 64);
+            if case == "valid-gt" {
+                assert_eq!(rows.last().unwrap()["complete"], true);
+                assert!([json!("FAIL"), json!("PANEL_PASS")].contains(&rows.last().unwrap()["status"]));
+                assert_eq!(rows.iter().filter(|row| row["phase"] == "paired_metrics").count(), 64);
+            } else { assert_eq!(rows.last().unwrap()["status"], "INVALID"); }
+            assert!(paired_overlap(config(request.clone(), absent.clone()), &"b".repeat(64), &output).is_err());
+            assert_eq!(fs::read(&output).unwrap(), body); assert_eq!(fs::read(&seal_path).unwrap(), sealed);
+        }
+        let short_body = requests.lines().take(63).map(|line| format!("{line}\n")).collect::<String>();
+        let short = probe_artifact(&dir.path().join("short-requests"), short_body.as_bytes());
+        let control_frames = fs::read(control_root.path.parent().unwrap().join("sq8-cells.bin")).unwrap();
+        let candidate_frames = fs::read(candidate_root.path.parent().unwrap().join("sq8-cells.bin")).unwrap();
+        for case in ["incomplete", "incomplete-rosters", "selection-mismatch", "cap", "sync", "runtime-geometry", "count", "first", "resources", "candidate-frame", "control-frame"] {
+            let mut cfg = config(if case == "incomplete" { short.clone() } else { request.clone() }, absent.clone());
+            match case {
+                "selection-mismatch" => cfg.test_seam.as_mut().unwrap().selection_mismatch_at = Some(31),
+                "incomplete-rosters" => cfg.max_result_bytes = 512 * 1024,
+                "cap" => cfg.max_result_bytes = TERMINAL_CAP + 4096,
+                "sync" => cfg.test_seam.as_mut().unwrap().fail_sync_at = Some(3),
+                "runtime-geometry" => { cfg.test_seam = None; cfg.max_evaluator_payload_bytes = 512 * 1024 * 1024; },
+                "count" => cfg.count = 63,
+                "first" => cfg.first = 1,
+                "resources" => cfg.resources.query_memory_bytes = 128 * 1024 * 1024,
+                "candidate-frame" => cfg.test_seam.as_mut().unwrap().corrupt_frame_arm = Some("candidate"),
+                "control-frame" => cfg.test_seam.as_mut().unwrap().corrupt_frame_arm = Some("control"),
+                _ => {},
+            }
+            let output = dir.path().join(format!("{case}.jsonl"));
+            let error = paired_overlap(cfg, &"b".repeat(64), &output).unwrap_err();
+            let body = fs::read(&output).unwrap();
+            let rows = std::str::from_utf8(&body).unwrap().lines().map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+            assert_eq!(rows.last().unwrap()["status"], "INVALID");
+            assert!(!output.with_extension("paired-seal.json").exists());
+            if case == "selection-mismatch" {
+                assert!(error.to_string().contains("cell IDs/primary flags/distance bits mismatch"));
+                assert!(!rows.iter().any(|row| row["phase"] == "paired_scored_roster"));
+            }
+            if case == "incomplete-rosters" {
+                assert!(error.to_string().contains("diagnostic output byte cap"));
+                assert_eq!(rows.iter().filter(|row| row["phase"] == "paired_selection").count(), 64);
+                let scored = rows.iter().filter(|row| row["phase"] == "paired_scored_roster").count();
+                assert!(scored > 0 && scored < 64);
+            }
+            if case == "runtime-geometry" { assert!(error.to_string().contains("matched retained capacity-v4 layouts")); }
+            if case.ends_with("-frame") {
+                let failure = rows.iter().position(|row| row["phase"] == "paired_arm_failure").unwrap();
+                assert!(failure < rows.len() - 1);
+                let receipt = &rows[failure]["receipt"];
+                assert_eq!(receipt, &rows.last().unwrap()["failed_query_receipt"]);
+                assert_eq!(receipt["ordinal"], 0);
+                let arm = if case == "candidate-frame" { "candidate" } else { "control" };
+                assert_eq!(receipt["failed_arm"], arm);
+                assert_eq!(receipt[arm]["status"], "failed");
+                assert_eq!(receipt[arm]["accounting"]["payload"]["submitted_gets"], 1);
+                assert_eq!(receipt[arm]["accounting"]["payload"]["failed_gets"], 1);
+                assert_eq!(receipt[arm]["accounting"]["payload"]["verified_bytes"], 0);
+                assert!(receipt[arm]["accounting"]["payload"]["requested_bytes"].as_u64().unwrap() > 0);
+                if arm == "candidate" {
+                    assert_eq!(receipt["control"]["status"], "completed");
+                    assert!(receipt["control"]["accounting"]["payload"]["verified_bytes"].as_u64().unwrap() > 0);
+                    assert_eq!(receipt["control"]["accounting"]["payload"]["failed_gets"], 0);
+                    assert_eq!(receipt["control"]["accounting"]["visible_unique_rows"], 128);
+                } else {
+                    assert_eq!(receipt["candidate"]["status"], "not_attempted");
+                    assert!(receipt["candidate"].get("accounting").is_none());
+                }
+                fs::write(control_root.path.parent().unwrap().join("sq8-cells.bin"), &control_frames).unwrap();
+                fs::write(candidate_root.path.parent().unwrap().join("sq8-cells.bin"), &candidate_frames).unwrap();
+            }
+            if case == "sync" {
+                assert!(error.to_string().contains("paired fixture sync failure"));
+                assert_eq!(rows.iter().filter(|row| row["phase"] == "paired_selection").count(), 64);
+                assert_eq!(rows.iter().filter(|row| row["phase"] == "paired_scored_roster").count(), 64);
+            }
+            if ["incomplete-rosters", "sync"].contains(&case) {
+                let scored = rows.iter().filter(|row| row["phase"] == "paired_scored_roster").count();
+                let ordinal = if case == "sync" { 63 } else { scored };
+                let receipt = &rows.last().unwrap()["failed_query_receipt"];
+                assert_eq!(receipt["ordinal"], ordinal);
+                assert!(receipt.get("failed_arm").is_none());
+                for arm in ["control", "candidate"] {
+                    assert_eq!(receipt[arm]["status"], "completed");
+                    let account = &receipt[arm]["accounting"];
+                    assert!(account["payload"]["submitted_gets"].as_u64().unwrap() > 0);
+                    assert!(account["payload"]["requested_bytes"].as_u64().unwrap() > 0);
+                    assert!(account["payload"]["verified_bytes"].as_u64().unwrap() > 0);
+                    assert_eq!(account["payload"]["failed_gets"], 0);
+                    assert_eq!(account["visible_unique_rows"], 128);
+                }
+                if case == "incomplete-rosters" {
+                    assert!(!rows.iter().any(|row| row["phase"] == "paired_scored_roster" && row["ordinal"] == ordinal));
+                }
+            }
+            assert!(paired_overlap(config(request.clone(), absent.clone()), &"b".repeat(64), &output).is_err());
+            assert_eq!(fs::read(&output).unwrap(), body);
+        }
+        let output = dir.path().join("existing-seal.jsonl");
+        let seal = output.with_extension("paired-seal.json");
+        fs::write(&seal, b"existing immutable seal").unwrap();
+        assert!(paired_overlap(config(request, absent), &"b".repeat(64), &output).is_err());
+        assert_eq!(fs::read(seal).unwrap(), b"existing immutable seal");
+        // Both fixed denominator and the exact p05 index remain observable on
+        // underfill. Sorting index2 or dividing by returned length changes this.
+        let mut hits = vec![(100, 100); 64];
+        hits[..4].copy_from_slice(&[(0, 0), (10, 10), (20, 20), (30, 30)]);
+        let summary = overlap_summary(&hits);
+        assert_eq!(summary["coverage_p05_hits"], 30);
+        assert_eq!(summary["recall_mean"], 6060_f64 / 6400.);
+    }
+    fn tiny_overlap_pair(dir: &Path) -> (Artifact, Artifact) {
+        let codec = borsuk::rotated_two_bit::RotatedTwoBitCodec::new(&[0., 0.], 20260923).unwrap();
+        let mut canonical = Vec::new(); let mut records = Vec::new(); let mut sq8 = Vec::new(); let mut order = Vec::new();
+        for id in (0..128_i64).rev() {
+            let vector = if id % 2 == 0 { [1_f32, 0.] } else { [0_f32, 1.] };
+            canonical.extend_from_slice(&id.to_le_bytes());
+            for value in vector { canonical.extend_from_slice(&value.to_le_bytes()); }
+            records.extend_from_slice(&codec.encode(&vector).unwrap());
+            sq8.extend_from_slice(&id.to_le_bytes()); sq8.extend_from_slice(&1_f32.to_le_bytes());
+            sq8.extend(vector.map(|value| value as u8)); order.extend_from_slice(&(id as u64).to_le_bytes());
+        }
+        let canonical = probe_artifact(&dir.join("pair-canonical"), &canonical);
+        let records = probe_artifact(&dir.join("pair-codes"), &records);
+        let sq8 = probe_artifact(&dir.join("pair-sq8"), &sq8);
+        let order = probe_artifact(&dir.join("pair-order"), &order);
+        let mean = probe_artifact(&dir.join("pair-mean"), &[0; 8]);
+        let plane = probe_artifact(&dir.join("pair-plane.json"), &serde_json::to_vec(&borsuk::two_bit_source::SourcePlaneReceipt {
+            schema:"borsuk-two-bit-plane-v3".into(), rows:128, dimensions:2, seed:20260923, record_bytes:codec.record_bytes(),
+            source_sha256:"0".repeat(64), sq8_sha256:sq8.sha256.clone(), source_order_sha256:order.sha256.clone(),
+            mean_sha256:mean.sha256.clone(), records_sha256:records.sha256.clone(), page_rows:32,
+            page_digest_sha256:"0".repeat(64), query_or_truth_used:false,
+        }).unwrap());
+        let generation = probe_artifact(&dir.join("pair-generation.json"), &serde_json::to_vec(&json!({
+            "schema":"borsuk-two-bit-generation-v8","generation":1,"base_epoch":0,
+            "plane_manifest_sha256":plane.sha256,"page_manifest_sha256":"0".repeat(64),
+            "discovery":{"mode":"graph","centroids_sha256":"0".repeat(64),"graph_sha256":"0".repeat(64),
+                "graph_resident_bytes":1,"diverse_graph_sha256":"0".repeat(64),"diverse_graph_resident_bytes":1},
+            "sq8_object_sha256":sq8.sha256,"sq8_object_key":format!("objects/{}",sq8.sha256),"sq8_etag":"fixture",
+            "canonical":{"rows":128,"dimensions":2,"bytes":canonical.bytes,"sha256":canonical.sha256,
+                "object_key":format!("objects/{}",canonical.sha256)},"low":[0.,0.],"step":[1.,1.]
+        })).unwrap());
+        let original = BuildConfig { schema:borsuk::hierarchical_semantic_cells::BUILD_SCHEMA.into(),
+            generation, plane, canonical, order, records, mean, sq8, cell_rows:32, sample_rows:32, max_depth:24,
+            max_build_payload_bytes:64 * 1024 * 1024, max_output_bytes:16 * 1024 * 1024 };
+        let primary = dir.join("pair-primary");
+        let receipt = build(&original, &primary).unwrap();
+        let root = Artifact { path:primary.join("manifest.json"), bytes:fs::metadata(primary.join("manifest.json")).unwrap().len() as usize,
+            sha256:receipt.root_sha256 };
+        let arm = |name: &str, enabled| {
+            let output = dir.join(name);
+            let config = OverlapBuildConfig { schema:overlap::BUILD_SCHEMA.into(), retained_root:root.clone(), original:original.clone(),
+                overlap:enabled, max_resident_payload_bytes:128 * 1024 * 1024,
+                max_build_payload_bytes:128 * 1024 * 1024, max_output_bytes:16 * 1024 * 1024 };
+            let receipt = overlap::build_overlap(&config, &output).unwrap();
+            if enabled { assert!(receipt.admitted > 0); }
+            Artifact { path:output.join("manifest.json"), bytes:fs::metadata(output.join("manifest.json")).unwrap().len() as usize,
+                sha256:receipt.root_sha256 }
+        };
+        (arm("pair-control", false), arm("pair-candidate", true))
+    }
     fn probe_artifact(path: &Path, body: &[u8]) -> Artifact {
         fs::write(path, body).unwrap();
         Artifact {

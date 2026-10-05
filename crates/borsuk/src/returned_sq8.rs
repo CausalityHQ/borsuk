@@ -1,7 +1,80 @@
 //! Exact SQ8 ranking over authenticated physical ranges from one generation.
 
 use crate::exact_sq8_nominee::{ScoredNominee, Sq8Geometry, Sq8ScoreError, score_nominees};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+
+/// Validated headerless records from a framed extent. File offsets are not
+/// physical ordinals. Authentication and complete frame charging belong to
+/// the caller; this additive interface does not alter ReturnedRange.
+pub struct RecordSlice<'a> {
+    pub first_physical_ordinal: usize,
+    pub bytes: &'a [u8],
+}
+
+/// Validate every complete duplicate body, choose its smallest physical
+/// ordinal, then apply visibility and top-k using the unchanged SQ8 kernel.
+/// Logical count and encoded physical geometry are deliberately separate.
+#[allow(clippy::too_many_arguments)]
+pub fn rank_unique_sq8(
+    logical_rows: usize,
+    physical: Sq8Geometry,
+    slices: &[RecordSlice<'_>],
+    query: &[f32],
+    low: &[f32],
+    step: &[f32],
+    top_k: usize,
+    max_record_bytes: usize,
+    excluded_ids: &[i64],
+) -> Result<Vec<ScoredNominee>, Sq8ScoreError> {
+    if logical_rows == 0 || logical_rows > physical.rows || top_k == 0
+        || physical.dimensions == 0 {
+        return Err(Sq8ScoreError::InvalidGeometry);
+    }
+    if slices.is_empty() || excluded_ids.windows(2).any(|v| v[0] >= v[1]) {
+        return Err(Sq8ScoreError::InvalidRoster);
+    }
+    let width = physical.dimensions.checked_add(12).ok_or(Sq8ScoreError::InvalidGeometry)?;
+    let mut ordered = slices.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|s| s.first_physical_ordinal);
+    let mut previous = 0;
+    let mut bytes = 0_usize;
+    let mut unique: BTreeMap<i64, (&[u8], usize)> = BTreeMap::new();
+    for slice in ordered {
+        let count = slice.bytes.len() / width;
+        let end = slice.first_physical_ordinal.checked_add(count).ok_or(Sq8ScoreError::InvalidPlane)?;
+        bytes = bytes.checked_add(slice.bytes.len()).ok_or(Sq8ScoreError::InvalidPlane)?;
+        if count == 0 || slice.bytes.len() % width != 0 || slice.first_physical_ordinal < previous
+            || end > physical.rows || bytes > max_record_bytes {
+            return Err(Sq8ScoreError::InvalidPlane);
+        }
+        for (slot, body) in slice.bytes.chunks_exact(width).enumerate() {
+            let id = i64::from_le_bytes(body[..8].try_into().unwrap());
+            let ordinal = slice.first_physical_ordinal + slot;
+            if let Some((old, _)) = unique.get(&id) {
+                if *old != body { return Err(Sq8ScoreError::InvalidPlane); }
+            } else {
+                unique.insert(id, (body, ordinal));
+            }
+        }
+        previous = end;
+    }
+    if unique.len() > logical_rows { return Err(Sq8ScoreError::InvalidRoster); }
+    let mut plane = Vec::new();
+    plane.try_reserve_exact(unique.len().checked_mul(width).ok_or(Sq8ScoreError::InvalidGeometry)?)
+        .map_err(|_| Sq8ScoreError::InvalidGeometry)?;
+    let mut representatives = Vec::with_capacity(unique.len());
+    for (body, ordinal) in unique.values() {
+        plane.extend_from_slice(body);
+        representatives.push(*ordinal);
+    }
+    let ordinals = (0..unique.len()).collect::<Vec<_>>();
+    let mut scores = score_nominees(&plane, Sq8Geometry { rows: unique.len(), dimensions: physical.dimensions },
+        &ordinals, query, low, step)?;
+    for s in &mut scores { s.ordinal = representatives[s.ordinal]; }
+    scores.retain(|s| excluded_ids.binary_search(&s.id).is_err());
+    scores.sort_by(|a, b| a.score.total_cmp(&b.score).then(a.id.cmp(&b.id)));
+    Ok(scores[..top_k.min(scores.len())].to_vec())
+}
 
 /// Conservative concurrent response, ranking and planner payload admission.
 /// Allocator/runtime/transport overhead must be charged separately.
@@ -145,6 +218,35 @@ pub fn rank_returned_ranges_excluding(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlap_nonunit_sq8_and_duplicate_truncation() {
+        let a = row(10, 1., 1);
+        let mut b = a.clone();
+        b.extend_from_slice(&row(20, 2., 0));
+        let slices = [RecordSlice { first_physical_ordinal: 0, bytes: &a },
+            RecordSlice { first_physical_ordinal: 3, bytes: &b }];
+        let scores = rank_unique_sq8(2, Sq8Geometry { rows: 5, dimensions: 1 },
+            &slices, &[3.], &[0.], &[1.], 2, 39, &[]).unwrap();
+        assert_eq!(scores.iter().map(|s| (s.id, s.ordinal)).collect::<Vec<_>>(), vec![(10, 0), (20, 4)]);
+        let reference = score_nominees(&b, Sq8Geometry { rows: 2, dimensions: 1 },
+            &[0, 1], &[3.], &[0.], &[1.]).unwrap();
+        assert_eq!(scores[0].score.to_bits(), reference[0].score.to_bits());
+        assert_eq!(scores[1].score.to_bits(), reference[1].score.to_bits());
+        // Equal query scores do not establish duplicate byte identity.
+        let mut conflict = a.clone();
+        conflict[12] = 2;
+        assert!(rank_unique_sq8(2, Sq8Geometry { rows: 5, dimensions: 1 },
+            &[RecordSlice { first_physical_ordinal: 0, bytes: &a },
+              RecordSlice { first_physical_ordinal: 3, bytes: &conflict }],
+            &[0.], &[0.], &[1.], 1, 26, &[10]).is_err());
+        conflict = a.clone();
+        conflict[8..12].copy_from_slice(&2_f32.to_le_bytes());
+        assert!(rank_unique_sq8(2, Sq8Geometry { rows: 5, dimensions: 1 },
+            &[RecordSlice { first_physical_ordinal: 0, bytes: &a },
+              RecordSlice { first_physical_ordinal: 3, bytes: &conflict }],
+            &[0.], &[0.], &[1.], 1, 26, &[10]).is_err());
+    }
 
     #[test]
     fn query_admission_accounts_for_narrow_rows_concurrent_planners_and_overflow() {

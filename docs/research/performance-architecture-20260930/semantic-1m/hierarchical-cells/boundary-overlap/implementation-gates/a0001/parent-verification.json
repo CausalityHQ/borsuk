@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-parent-native-qualification-v1",
+  "candidate_commit": "afd58b557d01cafc307e650d9c29f381dbf24c41",
+  "source_identity_sha256": "f71f6923bf5ebdd131fb1ae7528cd9434d70c8d1d51c184cdb7900b46b0d7c59",
+  "original_instance_id": "i-0739ef9dca24d086e",
+  "native_qualification_passed": true,
+  "scientific_measurement_completed": false,
+  "actual_full_workspace_execution": false,
+  "stages": 7,
+  "test_counts": [
+    19,
+    1,
+    30,
+    5
+  ],
+  "memory_peak_bytes": 8589934592,
+  "swap_peak_bytes": 0,
+  "oom_kill": 0,
+  "closeout": "terminated"
+}

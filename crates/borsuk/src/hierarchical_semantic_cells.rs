@@ -79,32 +79,29 @@ pub struct Artifact {
 }
 impl Artifact {
     fn open(&self, cap: usize) -> Result<File> {
+        self.open_streamed(cap, rustix::fs::OFlags::NONBLOCK)
+    }
+    /// Secure final authentication of an already admitted large source object.
+    /// Reuses the exact-length/SHA/EOF stream without allocating an object Vec.
+    pub(crate) fn authenticate_streamed(&self, admitted_bytes: usize) -> Result<()> {
+        self.open_streamed(admitted_bytes, rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK)
+            .map(drop)
+    }
+    fn open_streamed(&self, cap: usize, flags: rustix::fs::OFlags) -> Result<File> {
         require(
             self.bytes > 0 && self.bytes <= cap && valid_sha(&self.sha256),
             "artifact descriptor/cap",
         )?;
         let mut file = OpenOptions::new()
             .read(true)
-            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+            .custom_flags(flags.bits() as i32)
             .open(&self.path)?;
         let metadata = file.metadata()?;
         require(
             metadata.is_file() && metadata.len() == self.bytes as u64,
             "artifact regular file/exact length",
         )?;
-        let mut digest = Sha256::new();
-        let mut remaining = self.bytes;
-        let mut buffer = [0_u8; 65536];
-        while remaining > 0 {
-            let amount = remaining.min(buffer.len());
-            file.read_exact(&mut buffer[..amount])?;
-            digest.update(&buffer[..amount]);
-            remaining -= amount;
-        }
-        require(
-            file.read(&mut [0])? == 0 && format!("{:x}", digest.finalize()) == self.sha256,
-            "artifact digest/length",
-        )?;
+        authenticate_artifact_file(&mut file, self.bytes, &self.sha256)?;
         file.seek(SeekFrom::Start(0))?;
         Ok(file)
     }
@@ -123,6 +120,20 @@ impl Artifact {
         )?;
         Ok(bytes)
     }
+}
+pub(crate) const ARTIFACT_STREAM_BUFFER_BYTES: usize = 65536;
+fn authenticate_artifact_file(file: &mut File, bytes: usize, sha256: &str) -> Result<()> {
+    let mut digest = Sha256::new();
+    let mut remaining = bytes;
+    let mut buffer = [0_u8; ARTIFACT_STREAM_BUFFER_BYTES];
+    while remaining > 0 {
+        let amount = remaining.min(buffer.len());
+        file.read_exact(&mut buffer[..amount])?;
+        digest.update(&buffer[..amount]);
+        remaining -= amount;
+    }
+    require(file.read(&mut [0])? == 0 && format!("{:x}", digest.finalize()) == sha256,
+        "artifact digest/length")
 }
 
 /// Explicit, truth-free build inputs and prototype limits; no tuning defaults.
@@ -280,6 +291,81 @@ fn capacity_partition(ids: &[usize], delta: &[f32], left: &mut [bool]) -> Result
     Ok(true)
 }
 
+/// Exact batch predicate, with its predetermined extension to outside rows.
+#[derive(Debug, Clone)]
+pub enum SplitBoundary {
+    /// None is ordinary rounded delta<=0; Some is the last-left normalized
+    /// (rounded delta, source ID) key of a capacity repair.
+    Centers { left: Vec<f32>, right: Vec<f32>, separation: f32, cut: Option<(f32, usize)> },
+    /// Coordinate total_cmp intentionally preserves signed zeros.
+    Coordinate { axis: usize, cut: (f32, usize), range: f32 },
+}
+impl SplitBoundary {
+    fn delta(&self, vector: &[f32]) -> Result<f32> {
+        let Self::Centers { left, right, .. } = self else { return Err("not a center boundary".into()); };
+        let a = VectorMetric::SquaredEuclidean.distance(vector, left)?;
+        let b = VectorMetric::SquaredEuclidean.distance(vector, right)?;
+        let d = a - b;
+        require(a.is_finite() && b.is_finite() && d.is_finite(), "boundary nonfinite delta")?;
+        Ok(d)
+    }
+    /// Evaluate the original rounded predicate on the unchanged vector and ID.
+    pub fn goes_left(&self, vector: &[f32], id: usize) -> Result<bool> {
+        match self {
+            Self::Centers { cut, .. } => {
+                let d = self.delta(vector)?;
+                Ok(match cut {
+                    None => d <= 0.,
+                    Some((score, tie)) => {
+                        let d = if d == 0. { 0. } else { d };
+                        let score = if *score == 0. { 0. } else { *score };
+                        d.total_cmp(&score).then(id.cmp(tie)).is_le()
+                    }
+                })
+            }
+            Self::Coordinate { axis, cut, .. } => {
+                let v = *vector.get(*axis).ok_or("boundary coordinate")?;
+                require(v.is_finite(), "boundary nonfinite coordinate")?;
+                Ok(v.total_cmp(&cut.0).then(id.cmp(&cut.1)).is_le())
+            }
+        }
+    }
+    /// Declared rounded-score margin proxy; degeneracy forbids crossing only.
+    pub fn margin(&self, vector: &[f32]) -> Result<Option<f64>> {
+        let value = match self {
+            Self::Centers { separation, cut, .. } => {
+                if !separation.is_finite() || *separation <= 0. { return Ok(None); }
+                (f64::from(self.delta(vector)?) - f64::from(cut.map_or(0., |v| v.0))).abs()
+                    / (2. * f64::from(*separation).sqrt())
+            }
+            Self::Coordinate { axis, cut, range } => {
+                if !range.is_finite() || *range <= 0. { return Ok(None); }
+                (f64::from(*vector.get(*axis).ok_or("boundary coordinate")?) - f64::from(cut.0)).abs()
+            }
+        };
+        require(value.is_finite(), "boundary nonfinite margin")?;
+        Ok(Some(value))
+    }
+}
+/// Ordered primary leaf captured from the actual Builder path.
+#[derive(Debug, Clone)]
+pub struct ReplayCell { pub cell_id: usize, pub ids: Vec<usize> }
+/// Preorder boundary identity, with exact original children and leaf roster.
+#[derive(Debug, Clone, Default)]
+pub struct ReplayNode {
+    pub depth: usize,
+    pub boundary: Option<SplitBoundary>,
+    pub children: Option<[usize; 2]>,
+    pub cell: Option<ReplayCell>,
+}
+/// Successful exact replay of an authenticated retained capacity-v4 layout.
+#[derive(Debug, Clone)]
+pub struct PrimaryReplay {
+    pub logical_rows: usize,
+    pub dimensions: usize,
+    pub nodes: Vec<ReplayNode>,
+}
+
 struct Builder<'a> {
     config: &'a BuildConfig,
     canonical: File,
@@ -295,6 +381,7 @@ struct Builder<'a> {
     cell_bytes: usize,
     next_row: usize,
     receipt: BuildReceipt,
+    replay: Option<Vec<ReplayNode>>,
 }
 impl Builder<'_> {
     fn vector(&mut self, id: usize) -> Result<Vec<f32>> {
@@ -350,6 +437,11 @@ impl Builder<'_> {
         })
     }
     fn node(&mut self, mut ids: Vec<usize>, depth: usize) -> Result<Node> {
+        let replay_index = self.replay.as_mut().map(|nodes| {
+            let i = nodes.len();
+            nodes.push(ReplayNode { depth, ..ReplayNode::default() });
+            i
+        });
         require(depth <= self.config.max_depth, "directory depth cap")?;
         self.receipt.max_depth = self.receipt.max_depth.max(depth);
         let mut sums = vec![0_f64; self.dimensions];
@@ -422,6 +514,9 @@ impl Builder<'_> {
             self.next_row += rows;
             self.receipt.cells += 1;
             self.receipt.max_cell_rows = self.receipt.max_cell_rows.max(rows);
+            if let Some(index) = replay_index {
+                self.replay.as_mut().unwrap()[index].cell = Some(ReplayCell { cell_id: cell.id, ids });
+            }
             return Ok(Node {
                 rows,
                 prototype,
@@ -440,6 +535,7 @@ impl Builder<'_> {
         assigned.resize(rows, false);
         let mut delta = Vec::new();
         let mut degenerate = identical_sample;
+        let mut boundary = None;
         if !identical_sample {
             // Same two sampled centers/distances; failures propagate, no sweep.
             let centers =
@@ -454,6 +550,10 @@ impl Builder<'_> {
             let separation = VectorMetric::SquaredEuclidean.distance(&centers[0], &centers[1])?;
             require(separation.is_finite(), "nonfinite sampled separator")?;
             degenerate = separation <= 0.;
+            if replay_index.is_some() {
+                boundary = Some(SplitBoundary::Centers { left: centers[0].clone(),
+                    right: centers[1].clone(), separation, cut: None });
+            }
             drop(sample);
             delta.try_reserve_exact(rows)?;
             for (slot, &id) in ids.iter().enumerate() {
@@ -495,6 +595,10 @@ impl Builder<'_> {
                     projected.push((self.vector(id)?[coordinate], id));
                 }
                 projected.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+                if replay_index.is_some() {
+                    boundary = Some(SplitBoundary::Coordinate { axis: coordinate,
+                        cut: projected[rows / 2 - 1], range: maximum[coordinate] - minimum[coordinate] });
+                }
                 // Preserve the original projected child order: node sums its
                 // prototype before sorting IDs, so floating-point order matters.
                 for (slot, item) in projected.iter().enumerate() {
@@ -503,6 +607,11 @@ impl Builder<'_> {
                 }
             } else if capacity_partition(&ids, &delta, &mut assigned)? {
                 self.receipt.semantic_repairs += 1;
+                if let Some(SplitBoundary::Centers { cut, .. }) = &mut boundary {
+                    *cut = ids.iter().zip(&delta).zip(&assigned).filter(|(_, a)| **a)
+                        .map(|((&id, &d), _)| (if d == 0. { 0. } else { d }, id))
+                        .max_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+                }
             }
         }
         drop(delta);
@@ -525,7 +634,16 @@ impl Builder<'_> {
                 right.push(id);
             }
         }
-        let children = vec![self.node(left, depth + 1)?, self.node(right, depth + 1)?];
+        let left_index = self.replay.as_ref().map_or(0, Vec::len);
+        let left_node = self.node(left, depth + 1)?;
+        let right_index = self.replay.as_ref().map_or(0, Vec::len);
+        let right_node = self.node(right, depth + 1)?;
+        if let Some(index) = replay_index {
+            let capture = &mut self.replay.as_mut().unwrap()[index];
+            capture.boundary = boundary;
+            capture.children = Some([left_index, right_index]);
+        }
+        let children = vec![left_node, right_node];
         let body = serde_json::to_vec(&Directory { children })?;
         require(body.len() <= PAGE_CAP, "directory page cap")?;
         let span = self.append(true, &body)?;
@@ -542,6 +660,10 @@ impl Builder<'_> {
 /// Inputs must remain immutable; they are reauthenticated before installation.
 /// The parent must qualify this exact source before any real/paid experiment.
 pub fn build(config: &BuildConfig, output: &Path) -> Result<BuildReceipt> {
+    Ok(build_captured(config, output, false)?.0)
+}
+
+fn build_captured(config: &BuildConfig, output: &Path, capture: bool) -> Result<(BuildReceipt, Vec<ReplayNode>)> {
     require(
         config.schema == BUILD_SCHEMA
             && (1..=512).contains(&config.cell_rows)
@@ -666,6 +788,7 @@ pub fn build(config: &BuildConfig, output: &Path) -> Result<BuildReceipt> {
             .sum(),
             ..BuildReceipt::default()
         },
+        replay: capture.then(Vec::new),
     };
     // Full ID roster validation precedes hierarchy fitting.
     let mut validation_query = vec![0.; dimensions];
@@ -771,8 +894,55 @@ pub fn build(config: &BuildConfig, output: &Path) -> Result<BuildReceipt> {
     let mut receipt = manifest.build;
     receipt.root_sha256 = hash(&body);
     receipt.output_bytes = body.len() + builder.directory_bytes + builder.cell_bytes;
-    Ok(receipt)
+    Ok((receipt, builder.replay.take().unwrap_or_default()))
 }
+
+/// Replay only from authenticated original inputs through the current builder.
+/// Directory byte identity proves topology, prototype bits and cell IDs;
+/// complete cell byte identity proves ordered memberships and SQ2/SQ8 bodies.
+/// Missing originals or any mismatch refuses; no lossy boundary inference.
+pub fn replay_primary(config: &BuildConfig, retained: &Prototype, scratch_parent: &Path) -> Result<PrimaryReplay> {
+    let old = retained.source_identity();
+    require(config.schema == old.schema && config.cell_rows == old.cell_rows
+        && config.sample_rows == old.sample_rows && config.max_depth == old.max_depth,
+        "retained capacity-v4 builder policy mismatch")?;
+    for (a, b) in [(&config.generation, &old.generation), (&config.plane, &old.plane),
+        (&config.canonical, &old.canonical), (&config.order, &old.order),
+        (&config.records, &old.records), (&config.mean, &old.mean), (&config.sq8, &old.sq8)] {
+        require(a.bytes == b.bytes && a.sha256 == b.sha256, "retained original input identity mismatch")?;
+    }
+    let scratch = tempfile::tempdir_in(scratch_parent)?;
+    let output = scratch.path().join("replay");
+    let (receipt, nodes) = build_captured(config, &output, true)?;
+    let root: Manifest = serde_json::from_slice(&fs::read(output.join("manifest.json"))?)?;
+    require(root.rows == retained.rows() && root.dimensions == retained.dimensions()
+        && root.directory_bytes == retained.manifest.directory_bytes
+        && root.directory_sha256 == retained.manifest.directory_sha256
+        && serde_json::to_vec(&root.root_directory)? == serde_json::to_vec(&retained.manifest.root_directory)?
+        && root.cell_bytes == retained.manifest.cell_bytes
+        && root.seed == retained.manifest.seed
+        && root.mean.iter().map(|v| v.to_bits()).eq(retained.manifest.mean.iter().map(|v| v.to_bits()))
+        && root.low.iter().map(|v| v.to_bits()).eq(retained.manifest.low.iter().map(|v| v.to_bits()))
+        && root.step.iter().map(|v| v.to_bits()).eq(retained.manifest.step.iter().map(|v| v.to_bits()))
+        && receipt.cells == retained.manifest.build.cells
+        && receipt.semantic_repairs == retained.manifest.build.semantic_repairs
+        && receipt.geometry_fallbacks == retained.manifest.build.geometry_fallbacks, "primary replay topology/prototype/coefficient mismatch")?;
+    let replay_cells = File::open(output.join("cells.bin"))?;
+    for page in retained.directories.values() {
+        for node in &page.children {
+            if let Target::Cell { cell } = &node.target {
+                let a = read_at(&retained.cells, cell.whole.offset, cell.whole.bytes)?;
+                let b = read_at(&replay_cells, cell.whole.offset, cell.whole.bytes)?;
+                require(hash(&a) == cell.whole.sha256 && a == b, "primary replay ordered bodies mismatch")?;
+            }
+        }
+    }
+    Ok(PrimaryReplay { logical_rows: root.rows, dimensions: root.dimensions, nodes })
+}
+
+/// Routing-only identity; no source/payload read and no exactly24 restriction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SelectedCell { pub cell_id: usize, pub primary: bool, pub distance_bits: u32 }
 
 /// Actual local payload operations in one stage (metadata syscalls excluded).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1112,6 +1282,48 @@ fn directory_admission(encoded: usize, pages: usize, cells: usize) -> Result<Dir
         parsed_owned_capacity_bytes: 0,
     })
 }
+fn manifest_directory_admission(manifest: &Manifest, bytes: usize) -> Result<DirectoryAdmission> {
+    require(manifest.seed == NATIVE_CODEC_SEED, "current fixed SQ2 seed")?;
+    require(
+        manifest.schema == SCHEMA
+            && manifest.input.schema == BUILD_SCHEMA
+            && (1..=100_000).contains(&manifest.rows)
+            && (1..=768).contains(&manifest.dimensions)
+            && (1..=512).contains(&manifest.input.cell_rows)
+            && (1..=32).contains(&manifest.input.max_depth)
+            && manifest.mean.len() == manifest.dimensions
+            && manifest.mean.iter().all(|v| v.is_finite())
+            && manifest.low.len() == manifest.dimensions
+            && manifest.step.len() == manifest.dimensions
+            && manifest.low.iter().all(|v| v.is_finite())
+            && manifest.step.iter().all(|v| v.is_finite() && *v > 0.)
+            && in_bounds(&manifest.root_directory, manifest.directory_bytes, PAGE_CAP)
+            && valid_sha(&manifest.directory_sha256)
+            && (1..=manifest.rows).contains(&manifest.build.cells)
+            && (1..=manifest.rows).contains(&manifest.build.directories)
+            && manifest.build.directories.checked_mul(PAGE_CAP).is_some_and(|v| manifest.directory_bytes <= v)
+            && manifest.directory_bytes.checked_add(manifest.cell_bytes)
+                .and_then(|n| n.checked_add(bytes)).is_some_and(|n| n <= manifest.input.max_output_bytes),
+        "research root schema/geometry/resource binding",
+    )?;
+    directory_admission(manifest.directory_bytes, manifest.build.directories, manifest.build.cells)
+}
+
+/// Authenticated retained-root metadata only. Reading this descriptor never
+/// opens the directory or cell body. Its actual directory digest/length drives
+/// overlap admission before the resident router is allocated.
+#[derive(Debug, Clone, Serialize)]
+pub struct PrimaryLayoutMetadata {
+    pub root: Artifact,
+    pub directory: Artifact,
+    pub cell_file: PathBuf,
+    pub cell_bytes: usize,
+    pub rows: usize,
+    pub dimensions: usize,
+    pub cells: usize,
+    pub directory_admission: DirectoryAdmission,
+    pub modeled_metadata_payload_bytes: usize,
+}
 fn page_owned_capacity(page: &Directory) -> usize {
     page.children.capacity() * std::mem::size_of::<Node>()
         + page
@@ -1173,6 +1385,22 @@ fn in_bounds(span: &Span, bytes: usize, cap: usize) -> bool {
             .is_some_and(|n| n <= bytes)
 }
 impl Prototype {
+    /// Parse and authenticate only the small retained root after admitting its
+    /// root/parser allowance. No directory or payload file is opened here.
+    pub fn admit_root_metadata(root: &Artifact, max_metadata_payload_bytes: usize) -> Result<PrimaryLayoutMetadata> {
+        let modeled = root.bytes.checked_mul(8).ok_or("retained root metadata overflow")?;
+        require(root.bytes > 0 && root.bytes <= ROOT_CAP && modeled <= max_metadata_payload_bytes,
+            "retained root metadata admission")?;
+        require(root.path.file_name().is_some_and(|v| v == "manifest.json"), "retained root filename")?;
+        let body = read_source_probe_artifact(root, ROOT_CAP)?;
+        let manifest: Manifest = serde_json::from_slice(&body)?;
+        let admission = manifest_directory_admission(&manifest, body.len())?;
+        let parent = root.path.parent().ok_or("retained root parent")?;
+        Ok(PrimaryLayoutMetadata { root: root.clone(), directory: Artifact { path: parent.join("directories.bin"),
+            bytes: manifest.directory_bytes, sha256: manifest.directory_sha256 }, cell_file: parent.join("cells.bin"),
+            cell_bytes: manifest.cell_bytes, rows: manifest.rows, dimensions: manifest.dimensions, cells: manifest.build.cells,
+            directory_admission: admission, modeled_metadata_payload_bytes: modeled })
+    }
     /// Admit and authenticate the complete 100k research directory at startup.
     /// The cap is checked before opening/reading/allocating the directory body.
     /// Full-directory residency grows with source size; N>100k is unsupported.
@@ -1243,36 +1471,7 @@ impl Prototype {
             descriptor.read(ROOT_CAP)?
         };
         let manifest: Manifest = serde_json::from_slice(&body)?;
-        require(manifest.seed == NATIVE_CODEC_SEED, "current fixed SQ2 seed")?;
-        require(
-            manifest.schema == SCHEMA
-                && manifest.input.schema == BUILD_SCHEMA
-                && (1..=100_000).contains(&manifest.rows)
-                && (1..=768).contains(&manifest.dimensions)
-                && (1..=512).contains(&manifest.input.cell_rows)
-                && (1..=32).contains(&manifest.input.max_depth)
-                && manifest.mean.len() == manifest.dimensions
-                && manifest.low.len() == manifest.dimensions
-                && manifest.step.len() == manifest.dimensions
-                && manifest.low.iter().all(|v| v.is_finite())
-                && manifest.step.iter().all(|v| v.is_finite() && *v > 0.)
-                && in_bounds(&manifest.root_directory, manifest.directory_bytes, PAGE_CAP)
-                && valid_sha(&manifest.directory_sha256)
-                && (1..=manifest.rows).contains(&manifest.build.cells)
-                && (1..=manifest.rows).contains(&manifest.build.directories)
-                && manifest.directory_bytes <= manifest.build.directories * PAGE_CAP
-                && manifest
-                    .directory_bytes
-                    .checked_add(manifest.cell_bytes)
-                    .and_then(|n| n.checked_add(body.len()))
-                    .is_some_and(|n| n <= manifest.input.max_output_bytes),
-            "research root schema/geometry/resource binding",
-        )?;
-        let admission = directory_admission(
-            manifest.directory_bytes,
-            manifest.build.directories,
-            manifest.build.cells,
-        )?;
+        let admission = manifest_directory_admission(&manifest, body.len())?;
         if let Some(startup) = startup_trace.as_deref_mut() {
             startup.admission = Some(admission.clone());
         }
@@ -1545,6 +1744,58 @@ impl Prototype {
     /// Authenticated original build/source descriptors, without opening inputs.
     pub fn source_identity(&self) -> &BuildConfig {
         &self.manifest.input
+    }
+
+    /// Actual unchanged independent primary8/wider24 union, bounded by32.
+    pub fn select_cells(&self, query: &[f32]) -> Result<Vec<SelectedCell>> {
+        require(query.len() == self.dimensions(), "selection query geometry")?;
+        let query = cosine_vector(query)?;
+        let options = SearchOptions { fetch_policy: FetchPolicy::WholeCell,
+            primary_beam: 8, boundary_beam: 24, blocks_per_cell: 16,
+            max_cells: 32, max_cell_gets: 32, max_cell_bytes: 16 * 1024 * 1024,
+            max_source_gets: 32, max_source_bytes: 16 * 1024 * 1024,
+            max_refinement_gets: 32, max_refinement_bytes: 16 * 1024 * 1024,
+            max_query_payload_bytes: 512 * 1024 * 1024 };
+        let (primary, wider) = self.route(&query, options)?;
+        let primary_ids = primary.iter().map(|n| match &n.target {
+            Target::Cell { cell } => Ok(cell.id), _ => Err("unresolved selection")
+        }).collect::<std::result::Result<BTreeSet<_>, _>>()?;
+        let mut union = BTreeMap::new();
+        for node in primary.into_iter().chain(wider) {
+            let Target::Cell { cell } = &node.target else { return Err("unresolved selection".into()); };
+            union.insert(cell.id, SelectedCell { cell_id: cell.id, primary: primary_ids.contains(&cell.id),
+                distance_bits: VectorMetric::SquaredEuclidean.distance(&query, &node.prototype)?.to_bits() });
+        }
+        require(!union.is_empty() && union.len() <= 32, "selection union cap")?;
+        let mut selected = union.into_values().collect::<Vec<_>>();
+        selected.sort_by(|a, b| f32::from_bits(a.distance_bits).total_cmp(&f32::from_bits(b.distance_bits))
+            .then(a.cell_id.cmp(&b.cell_id)));
+        Ok(selected)
+    }
+
+    /// Exact retained coefficient bits for unchanged SQ8 scoring.
+    pub fn sq8_coefficients(&self) -> (&[f32], &[f32]) { (&self.manifest.low, &self.manifest.step) }
+
+    /// Authenticate a complete retained leaf and return its ordered unchanged
+    /// SQ8 bodies. Used only during overlap build/open admission, not routing.
+    pub fn primary_cell_sq8(&self, id: usize) -> Result<Vec<u8>> {
+        for directory in self.directories.values() {
+            for node in &directory.children {
+                if let Target::Cell { cell } = &node.target {
+                    if cell.id == id {
+                        let bytes = read_at(&self.cells, cell.whole.offset, cell.whole.bytes)?;
+                        require(hash(&bytes) == cell.whole.sha256, "retained whole-cell authentication")?;
+                        let records = &bytes[cell.source.bytes..];
+                        for (a, b) in bytes[..cell.source.bytes].chunks_exact(self.codec.record_bytes() + 8)
+                            .zip(records.chunks_exact(self.dimensions() + 12)) {
+                            require(a[..8] == b[..8], "retained primary source/SQ8 ID")?;
+                        }
+                        return Ok(records.to_vec());
+                    }
+                }
+            }
+        }
+        Err("retained cell ID absent".into())
     }
 
     fn nomination_inner(
@@ -3754,6 +4005,517 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!(error.accounting.whole_cell.submitted_gets, 0);
+    }
+
+    #[test]
+    fn overlap_centroid_capacity_coordinate_tie_outsider_predicates() {
+        let ordinary = SplitBoundary::Centers { left: vec![0.], right: vec![2.],
+            separation: 4., cut: None };
+        assert!(ordinary.goes_left(&[1.], 100).unwrap());
+        assert!(!ordinary.goes_left(&[2.], 0).unwrap());
+        let shifted = SplitBoundary::Centers { left: vec![0.], right: vec![2.],
+            separation: 4., cut: Some((4., 7)) };
+        assert!(shifted.goes_left(&[2.], 7).unwrap());
+        assert!(!shifted.goes_left(&[2.], 8).unwrap());
+        assert_eq!(shifted.margin(&[2.]).unwrap(), Some(0.));
+        assert_eq!(ordinary.margin(&[2.]).unwrap(), Some(1.));
+        let coordinate = SplitBoundary::Coordinate { axis: 0, cut: (-0., 3), range: 1. };
+        assert!(coordinate.goes_left(&[-0.], 3).unwrap());
+        assert!(!coordinate.goes_left(&[0.], 0).unwrap());
+        let zero = SplitBoundary::Centers { left: vec![0.], right: vec![2.],
+            separation: 4., cut: Some((-0., 7)) };
+        assert!(zero.goes_left(&[1.], 7).unwrap());
+        assert!(!zero.goes_left(&[1.], 8).unwrap());
+    }
+
+    #[test]
+    fn overlap_replay_primary_parity_and_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = fixture(dir.path(), 40, 2, false);
+        let output = dir.path().join("retained");
+        let receipt = build(&config, &output).unwrap();
+        let retained = Prototype::open(&output, &receipt.root_sha256, 16 * 1024 * 1024).unwrap();
+        let replay = replay_primary(&config, &retained, dir.path()).unwrap();
+        assert_eq!(replay.logical_rows, 40);
+        assert_eq!(replay.nodes.iter().filter_map(|n| n.cell.as_ref()).map(|c| c.ids.len()).sum::<usize>(), 40);
+        let mut wrong = config.clone();
+        wrong.cell_rows += 1;
+        assert!(replay_primary(&wrong, &retained, dir.path()).is_err());
+    }
+
+    #[test]
+    fn overlap_builder_captures_actual_capacity_last_left_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let vectors = (0..1025).map(|id| if id % 257 < 32 { vec![0., 1.] } else { vec![1., 0.] }).collect::<Vec<_>>();
+        let mut config = fixture_with_vectors(dir.path(), &vectors, &[0., 0.], false);
+        config.cell_rows = 512;
+        let output = dir.path().join("primary");
+        let receipt = build(&config, &output).unwrap();
+        assert_eq!(receipt.semantic_repairs, 1);
+        let retained = Prototype::open(&output, &receipt.root_sha256, 64 * 1024 * 1024).unwrap();
+        let replay = replay_primary(&config, &retained, dir.path()).unwrap();
+        let root = &replay.nodes[0];
+        let boundary = root.boundary.as_ref().unwrap();
+        let SplitBoundary::Centers { cut: Some(cut), .. } = boundary else { panic!("actual capacity cut missing"); };
+        let mut stack = vec![root.children.unwrap()[0]];
+        let mut left_ids = BTreeSet::new();
+        while let Some(node) = stack.pop() {
+            let node = &replay.nodes[node];
+            if let Some(cell) = &node.cell { left_ids.extend(cell.ids.iter().copied()); }
+            else { stack.extend(node.children.unwrap()); }
+        }
+        let mut last = None;
+        for (id, vector) in vectors.iter().enumerate() {
+            let delta = boundary.delta(vector).unwrap();
+            let key = (if delta == 0. { 0. } else { delta }, id);
+            assert_eq!(boundary.goes_left(vector, id).unwrap(), left_ids.contains(&id));
+            if left_ids.contains(&id) && last.is_none_or(|v: (f32, usize)| key.0.total_cmp(&v.0).then(key.1.cmp(&v.1)).is_gt()) { last = Some(key); }
+        }
+        let last = last.unwrap();
+        assert_eq!((cut.0.to_bits(), cut.1), (last.0.to_bits(), last.1));
+        assert!(boundary.goes_left(&vectors[cut.1], cut.1).unwrap());
+        assert!(!boundary.goes_left(&vectors[cut.1], vectors.len() + 1).unwrap());
+        assert!(replay.nodes.iter().any(|n| matches!(&n.boundary, Some(SplitBoundary::Coordinate { .. }))));
+    }
+
+    fn overlap_fixture() -> (tempfile::TempDir, std::sync::Arc<crate::semantic_cell_overlap::OverlapIndex>) {
+        use crate::semantic_cell_overlap::{OverlapBuildConfig, build_overlap, OverlapIndex};
+        let dir = tempfile::tempdir().unwrap();
+        let config = fixture(dir.path(), 80, 2, false);
+        let primary = dir.path().join("primary");
+        let receipt = build(&config, &primary).unwrap();
+        let root = Artifact { path: primary.join("manifest.json"),
+            bytes: fs::metadata(primary.join("manifest.json")).unwrap().len() as usize, sha256: receipt.root_sha256 };
+        let candidate = dir.path().join("candidate");
+        let c = OverlapBuildConfig { schema: crate::semantic_cell_overlap::BUILD_SCHEMA.into(), retained_root: root,
+            original: config, overlap: true, max_resident_payload_bytes: 128 * 1024 * 1024,
+            max_build_payload_bytes: 128 * 1024 * 1024, max_output_bytes: 16 * 1024 * 1024 };
+        let receipt = build_overlap(&c, &candidate).unwrap();
+        assert!(receipt.admitted > 0);
+        let root = Artifact { path: candidate.join("manifest.json"),
+            bytes: fs::metadata(candidate.join("manifest.json")).unwrap().len() as usize, sha256: receipt.root_sha256 };
+        let index = std::sync::Arc::new(OverlapIndex::open(&root, 128 * 1024 * 1024).unwrap());
+        (dir, index)
+    }
+
+    #[test]
+    fn overlap_pinned_replace_owner_absent_replica_present() {
+        use crate::semantic_cell_overlap::{OverlapRevisions, search_selected_sq8};
+        let (_dir, index) = overlap_fixture();
+        let (id, &(owner, destination)) = index.replica_destinations().iter().enumerate().find(|(_, p)| p.1.is_some()).unwrap();
+        let destination = destination.unwrap();
+        let query = [3.125, 0.875];
+        let mut plan = index.plan(&query).unwrap();
+        plan.selected.retain(|s| s.cell_id == destination);
+        plan.extents.retain(|e| e.cell_id == destination);
+        plan.bytes = plan.extents.iter().map(|e| e.bytes).sum();
+        assert!(plan.extents.iter().all(|e| e.cell_id != owner));
+        let mut publisher = OverlapRevisions::new(index.clone(), 80, 4096).unwrap();
+        let old = publisher.pin();
+        let before = search_selected_sq8(&old, &plan, &query, 80).unwrap();
+        let old_bits = before.ranked.iter().find(|s| s.id == id as i64).unwrap().score_bits;
+        let mut replacement = (id as i64).to_le_bytes().to_vec();
+        replacement.extend_from_slice(&1000_f32.to_le_bytes());
+        replacement.extend_from_slice(&[0, 0]);
+        publisher.replace_sq8(&replacement).unwrap();
+        let new = publisher.pin();
+        let after = search_selected_sq8(&new, &plan, &query, 80).unwrap();
+        let item = after.ranked.iter().find(|s| s.id == id as i64).unwrap();
+        assert_ne!(item.score_bits, old_bits);
+        assert_eq!(item.physical_ordinal, None);
+        assert_eq!(after.ranked.iter().filter(|s| s.id == id as i64).count(), 1);
+        assert_eq!(search_selected_sq8(&old, &plan, &query, 80).unwrap().ranked.iter().find(|s| s.id == id as i64).unwrap().score_bits, old_bits);
+        assert_ne!(old.delta_sha256(), new.delta_sha256());
+        assert_eq!(old.revision(), 0);
+        assert_eq!(new.revision(), 1);
+    }
+
+    #[test]
+    fn overlap_delete_all_underfill_and_capacity_refusal() {
+        use crate::semantic_cell_overlap::{OverlapRevisions, search_selected_sq8};
+        let (_dir, index) = overlap_fixture();
+        let query = [3.125, 0.875];
+        let plan = index.plan(&query).unwrap();
+        let mut publisher = OverlapRevisions::new(index.clone(), 80, 4096).unwrap();
+        let old = publisher.pin();
+        for id in 0..80 { publisher.delete(id).unwrap(); }
+        let new = publisher.pin();
+        let trace = search_selected_sq8(&new, &plan, &query, 100).unwrap();
+        assert!(trace.underfill && trace.ranked.is_empty());
+        assert!(!search_selected_sq8(&old, &plan, &query, 100).unwrap().ranked.is_empty());
+        let mut full = OverlapRevisions::new(index, 1, 32).unwrap();
+        full.delete(0).unwrap();
+        let frozen = full.pin();
+        assert!(full.delete(1).is_err());
+        assert_eq!(full.pin().revision(), frozen.revision());
+        assert_eq!(full.pin().delta_sha256(), frozen.delta_sha256());
+        assert!(full.delete(80).is_err());
+        assert!(full.unsupported_maintenance().is_err());
+    }
+
+    #[test]
+    fn overlap_full_scanner_matches_independent_sq8() {
+        use crate::semantic_cell_overlap::{OverlapBuildConfig, OverlapIndex, OverlapRevisions, build_overlap, search_selected_sq8};
+        // An independent scalar oracle: no production normalization, scoring,
+        // decoding or ranking helper participates in the expected values.
+        fn scalar_reference(body: &[u8], query: &[f32], low: &[f32], step: &[f32]) -> Vec<(i64, u32)> {
+            let mut squared = 0_f64;
+            for &value in query { squared += f64::from(value).powi(2); }
+            let normalized = if (squared - 1.).abs() <= 1e-6 { query.to_vec() } else {
+                let norm = squared.sqrt();
+                query.iter().map(|&value| (f64::from(value) / norm) as f32).collect()
+            };
+            let mut shift = 0_f32;
+            let mut qnorm = 0_f32;
+            let mut weights = Vec::new();
+            for coordinate in 0..query.len() {
+                shift += normalized[coordinate] * low[coordinate];
+                qnorm += normalized[coordinate] * normalized[coordinate];
+                weights.push(normalized[coordinate] * step[coordinate]);
+            }
+            shift -= qnorm / 2.;
+            let mut expected = Vec::new();
+            for row in body.chunks_exact(query.len() + 12) {
+                let id = i64::from_le_bytes(row[..8].try_into().unwrap());
+                let stored_norm = f32::from_le_bytes(row[8..12].try_into().unwrap());
+                let mut inner = 0_f32;
+                for coordinate in 0..query.len() {
+                    inner += f32::from(row[12 + coordinate]) * weights[coordinate];
+                }
+                let score = stored_norm - 2. * (inner + shift);
+                expected.push((id, score));
+            }
+            expected.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+            expected.into_iter().map(|(id, score)| (id, score.to_bits())).collect()
+        }
+        struct FrameOracle {
+            owners: BTreeMap<i64, usize>,
+            destinations: BTreeMap<i64, usize>,
+            bodies: BTreeMap<i64, Vec<u8>>,
+            representatives: BTreeMap<i64, (usize, usize, usize)>,
+            selected_ids: BTreeSet<i64>,
+            selected_replicas: BTreeSet<i64>,
+            cells: usize,
+        }
+        // Parse the documented64-byte frames directly. Expected offsets and
+        // physical ordinals never use Extent, validate_frame, mapping helpers,
+        // production fetches or representative_location.
+        fn decode_frames(body: &[u8], selected: &BTreeSet<usize>, logical: usize) -> FrameOracle {
+            let mut oracle = FrameOracle { owners:BTreeMap::new(), destinations:BTreeMap::new(),
+                bodies:BTreeMap::new(), representatives:BTreeMap::new(), selected_ids:BTreeSet::new(),
+                selected_replicas:BTreeSet::new(), cells:0 };
+            let mut offset = 0; let mut ordinal = 0;
+            while offset < body.len() {
+                let header = &body[offset..offset + 64];
+                assert_eq!(&header[..8], b"BSOV0001");
+                let field = |slot: usize| u64::from_le_bytes(header[8 + slot * 8..16 + slot * 8].try_into().unwrap()) as usize;
+                let cell = field(0); let dimensions = field(1); let primary = field(2); let replicas = field(3);
+                assert_eq!(cell, oracle.cells); assert_eq!(dimensions, 2);
+                assert_eq!(field(4), ordinal); assert_eq!(field(5), logical); assert_eq!(field(6), 1);
+                let width = dimensions + 12;
+                for slot in 0..primary + replicas {
+                    let framed_offset = offset + 64 + slot * width;
+                    let row = &body[framed_offset..framed_offset + width];
+                    let id = i64::from_le_bytes(row[..8].try_into().unwrap());
+                    assert!(id >= 0 && (id as usize) < logical);
+                    if let Some(previous) = oracle.bodies.get(&id) { assert_eq!(previous.as_slice(), row); }
+                    else { oracle.bodies.insert(id, row.to_vec()); }
+                    // Sequential physical decoding makes this the smallest
+                    // global ordinal, even when that copy was not fetched.
+                    oracle.representatives.entry(id).or_insert((ordinal + slot, cell, framed_offset));
+                    if slot < primary { assert!(oracle.owners.insert(id, cell).is_none()); }
+                    else { assert!(oracle.destinations.insert(id, cell).is_none()); }
+                    if selected.contains(&cell) {
+                        oracle.selected_ids.insert(id);
+                        if slot >= primary { oracle.selected_replicas.insert(id); }
+                    }
+                }
+                offset += 64 + (primary + replicas) * width;
+                ordinal += primary + replicas; oracle.cells += 1;
+            }
+            assert_eq!(offset, body.len()); assert_eq!(oracle.owners.len(), logical);
+            assert_eq!(ordinal, logical + oracle.destinations.len());
+            oracle
+        }
+        for logical_rows in [80, 2048] {
+        let dir = tempfile::tempdir().unwrap();
+        let vectors = (0..logical_rows).map(|id| {
+            if logical_rows == 2048 { return if id % 2 == 0 { vec![1., 0.] } else { vec![0., 1.] }; }
+            let x = (id + 1) as f64; let y = (81 - id) as f64;
+            let norm = (x * x + y * y).sqrt();
+            vec![(x / norm) as f32, (y / norm) as f32]
+        }).collect::<Vec<_>>();
+        let mut original_config = fixture_with_vectors(dir.path(), &vectors, &[0.125, -0.25], true);
+        // Exercise nonzero lows, nonunit steps and stored reconstructed norms
+        // on the actual full-scanner fixture, with every input digest rebound.
+        let low = [-0.125_f32, -0.25]; let step = [1_f32 / 127., 1_f32 / 191.];
+        let mut sq8 = fs::read(&original_config.sq8.path).unwrap();
+        for row in sq8.chunks_exact_mut(14) {
+            let id = i64::from_le_bytes(row[..8].try_into().unwrap()) as usize;
+            let mut norm = 0_f32;
+            for coordinate in 0..2 {
+                let code = ((vectors[id][coordinate] - low[coordinate]) / step[coordinate])
+                    .round_ties_even().clamp(0., 255.) as u8;
+                row[12 + coordinate] = code;
+                let decoded = low[coordinate] + f32::from(code) * step[coordinate];
+                norm += decoded * decoded;
+            }
+            row[8..12].copy_from_slice(&norm.to_le_bytes());
+        }
+        original_config.sq8 = artifact(&original_config.sq8.path, &sq8);
+        let mut plane: serde_json::Value = serde_json::from_slice(&fs::read(&original_config.plane.path).unwrap()).unwrap();
+        plane["sq8_sha256"] = serde_json::json!(original_config.sq8.sha256);
+        original_config.plane = artifact(&original_config.plane.path, &serde_json::to_vec(&plane).unwrap());
+        let mut generation: serde_json::Value = serde_json::from_slice(&fs::read(&original_config.generation.path).unwrap()).unwrap();
+        generation["sq8_object_sha256"] = serde_json::json!(original_config.sq8.sha256);
+        generation["sq8_object_key"] = serde_json::json!(format!("objects/{}", original_config.sq8.sha256));
+        generation["plane_manifest_sha256"] = serde_json::json!(original_config.plane.sha256);
+        generation["low"] = serde_json::json!(low); generation["step"] = serde_json::json!(step);
+        original_config.generation = artifact(&original_config.generation.path, &serde_json::to_vec(&generation).unwrap());
+        let primary = dir.path().join("primary");
+        let primary_receipt = build(&original_config, &primary).unwrap();
+        let retained_root = Artifact { path: primary.join("manifest.json"),
+            bytes: fs::metadata(primary.join("manifest.json")).unwrap().len() as usize, sha256: primary_receipt.root_sha256 };
+        let candidate_output = dir.path().join("candidate");
+        let candidate_config = OverlapBuildConfig { schema: crate::semantic_cell_overlap::BUILD_SCHEMA.into(),
+            retained_root, original: original_config, overlap: true, max_resident_payload_bytes: 128 * 1024 * 1024,
+            max_build_payload_bytes: 128 * 1024 * 1024, max_output_bytes: 16 * 1024 * 1024 };
+        let candidate_receipt = build_overlap(&candidate_config, &candidate_output).unwrap();
+        let candidate_root = Artifact { path: candidate_output.join("manifest.json"),
+            bytes: fs::metadata(candidate_output.join("manifest.json")).unwrap().len() as usize,
+            sha256: candidate_receipt.root_sha256 };
+        let candidate = std::sync::Arc::new(OverlapIndex::open(&candidate_root, 128 * 1024 * 1024).unwrap());
+        let config = OverlapBuildConfig { schema: crate::semantic_cell_overlap::BUILD_SCHEMA.into(),
+            retained_root: candidate.primary_root_identity().clone(), original: candidate.router().source_identity().clone(),
+            overlap: false, max_resident_payload_bytes: 128 * 1024 * 1024,
+            max_build_payload_bytes: 128 * 1024 * 1024, max_output_bytes: 16 * 1024 * 1024 };
+        let output = dir.path().join("control");
+        let receipt = build_overlap(&config, &output).unwrap();
+        let root = Artifact { path: output.join("manifest.json"), bytes: fs::metadata(output.join("manifest.json")).unwrap().len() as usize,
+            sha256: receipt.root_sha256 };
+        let control = std::sync::Arc::new(OverlapIndex::open(&root, 128 * 1024 * 1024).unwrap());
+        assert_eq!(control.physical_rows(), control.logical_rows());
+        let query = [3.125, 0.875];
+        let a = control.plan(&query).unwrap(); let b = candidate.plan(&query).unwrap();
+        assert_eq!(a.selected, b.selected);
+        assert!(a.selected.len() <= 32);
+        if logical_rows == 80 { assert!(a.selected.len() < 24, "actual union must not require exactly24"); }
+        let selected = a.selected.iter().map(|cell| cell.cell_id).collect::<BTreeSet<_>>();
+        let control_oracle = decode_frames(&fs::read(output.join("sq8-cells.bin")).unwrap(), &selected, logical_rows);
+        let candidate_oracle = decode_frames(&fs::read(candidate_output.join("sq8-cells.bin")).unwrap(), &selected, logical_rows);
+        assert_eq!(control_oracle.owners, candidate_oracle.owners);
+        assert!(control_oracle.destinations.is_empty());
+        let mapping = fs::read(candidate_output.join("placement.bin")).unwrap();
+        assert_eq!(mapping.len(), logical_rows * 16);
+        for (id, row) in mapping.chunks_exact(16).enumerate() {
+            let owner = u64::from_le_bytes(row[..8].try_into().unwrap()) as usize;
+            let destination = u64::from_le_bytes(row[8..].try_into().unwrap());
+            assert_eq!(control_oracle.owners[&(id as i64)], owner);
+            assert_eq!(candidate_oracle.destinations.get(&(id as i64)).copied(),
+                if destination == u64::MAX { None } else { Some(destination as usize) });
+        }
+        let cs = OverlapRevisions::new(control.clone(), 0, 0).unwrap().pin();
+        let ts = OverlapRevisions::new(candidate.clone(), 0, 0).unwrap().pin();
+        let ct = search_selected_sq8(&cs, &a, &query, logical_rows).unwrap();
+        let tt = search_selected_sq8(&ts, &b, &query, logical_rows).unwrap();
+        assert!(ct.base_ids.iter().copied().eq(control_oracle.selected_ids.iter().copied()));
+        assert!(tt.base_ids.iter().copied().eq(candidate_oracle.selected_ids.iter().copied()));
+        assert!(tt.replica_ids.iter().copied().eq(candidate_oracle.selected_replicas.iter().copied()));
+        let expected_union = control_oracle.selected_ids.union(&candidate_oracle.selected_replicas).copied().collect::<BTreeSet<_>>();
+        assert_eq!(candidate_oracle.selected_ids, expected_union);
+        if logical_rows == 2048 {
+            assert!(selected.len() < candidate_oracle.cells);
+            assert!(control_oracle.selected_ids.len() < logical_rows);
+            let added = candidate_oracle.selected_ids.difference(&control_oracle.selected_ids).copied().collect::<Vec<_>>();
+            assert!(!added.is_empty(), "selected replicas must supply owner-absent coverage");
+            for id in &added {
+                assert!(!selected.contains(&candidate_oracle.owners[id]));
+                assert!(selected.contains(&candidate_oracle.destinations[id]));
+            }
+            assert!(tt.ranked.iter().any(|row| !selected.contains(&candidate_oracle.representatives[&row.id].1)),
+                "global representative may reside in an unselected frame");
+        } else { assert_eq!(ct.base_ids, tt.base_ids); }
+        let original = config.original.sq8.read(config.original.sq8.bytes).unwrap();
+        for row in original.chunks_exact(14) {
+            let id = i64::from_le_bytes(row[..8].try_into().unwrap());
+            assert_eq!(candidate_oracle.bodies[&id].as_slice(), row);
+            assert_eq!(control_oracle.bodies[&id].as_slice(), row);
+        }
+        let (retained_low, retained_step) = control.router().sq8_coefficients();
+        assert_eq!(retained_low.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), low.map(f32::to_bits));
+        assert_eq!(retained_step.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), step.map(f32::to_bits));
+        let expected = scalar_reference(&original, &query, &low, &step);
+        assert!(original.chunks_exact(14).any(|row| f32::from_le_bytes(row[8..12].try_into().unwrap()).to_bits() != 1_f32.to_bits()));
+        // Preserve production parity as an additional comparison, independently
+        // of the scalar expected IDs and bits above.
+        let normalized = cosine_vector(&query).unwrap();
+        let mut reference = crate::exact_sq8_nominee::score_nominees(&original,
+            Sq8Geometry { rows: logical_rows, dimensions: 2 }, &(0..logical_rows).collect::<Vec<_>>(), &normalized, &low, &step).unwrap();
+        reference.sort_by(|a, b| a.score.total_cmp(&b.score).then(a.id.cmp(&b.id)));
+        assert_eq!(reference.iter().map(|s| (s.id, s.score.to_bits())).collect::<Vec<_>>(), expected);
+        let control_expected = expected.iter().copied().filter(|row| control_oracle.selected_ids.contains(&row.0)).collect::<Vec<_>>();
+        let candidate_expected = expected.iter().copied().filter(|row| candidate_oracle.selected_ids.contains(&row.0)).collect::<Vec<_>>();
+        assert_eq!(ct.ranked.iter().map(|s| (s.id, s.score_bits)).collect::<Vec<_>>(), control_expected);
+        assert_eq!(tt.ranked.iter().map(|s| (s.id, s.score_bits)).collect::<Vec<_>>(), candidate_expected);
+        for (trace, oracle) in [(&ct, &control_oracle), (&tt, &candidate_oracle)] {
+            for s in &trace.ranked {
+                let (ordinal, _, offset) = oracle.representatives[&s.id];
+                assert_eq!(s.physical_ordinal, Some(ordinal)); assert_eq!(s.framed_file_offset, Some(offset));
+            }
+        }
+        }
+    }
+
+    #[test]
+    fn overlap_authenticated_open_and_selected_fetch_refuse_corruption() {
+        use crate::semantic_cell_overlap::{OverlapIndex, OverlapRevisions, search_selected_sq8};
+        let (dir, index) = overlap_fixture();
+        let root_path = dir.path().join("candidate/manifest.json");
+        let root = Artifact { bytes: fs::metadata(&root_path).unwrap().len() as usize,
+            sha256: index.root_sha256().into(), path: root_path };
+        let mapping_path = dir.path().join("candidate/placement.bin");
+        let mut mapping = fs::read(&mapping_path).unwrap();
+        mapping[0] ^= 1; fs::write(&mapping_path, &mapping).unwrap();
+        assert!(OverlapIndex::open(&root, 128 * 1024 * 1024).is_err());
+        mapping[0] ^= 1; fs::write(&mapping_path, &mapping).unwrap();
+        let query = [3.125, 0.875]; let plan = index.plan(&query).unwrap();
+        let path = dir.path().join("candidate/sq8-cells.bin");
+        let file = OpenOptions::new().write(true).open(path).unwrap();
+        file.write_all_at(&[0xff], (plan.extents[0].offset + 64 + 8) as u64).unwrap();
+        assert!(OverlapIndex::open(&root, 128 * 1024 * 1024).is_err());
+        let snapshot = OverlapRevisions::new(index, 0, 0).unwrap().pin();
+        let error = search_selected_sq8(&snapshot, &plan, &query, 100).unwrap_err();
+        assert_eq!(error.accounting.payload.submitted_gets, 1);
+        assert_eq!(error.accounting.payload.failed_gets, 1);
+        assert_eq!(error.accounting.payload.requested_bytes, plan.extents[0].bytes);
+    }
+
+    #[test]
+    fn overlap_streamed_original_auth_boundaries_and_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = artifact(&dir.path().join("empty"), &[]);
+        assert!(empty.authenticate_streamed(308_000_000).is_err());
+        for length in [1, 65535, 65536, 65537, 131072, 131073] {
+            let body = (0..length).map(|i| (i % 251) as u8).collect::<Vec<_>>();
+            let input = artifact(&dir.path().join(format!("stream-{length}")), &body);
+            // A large admitted object cap is NOT an allocating-reader cap.
+            input.authenticate_streamed(308_000_000).unwrap();
+            input.authenticate_streamed(length).unwrap();
+            assert!(input.authenticate_streamed(length - 1).err().unwrap().to_string().contains("artifact descriptor/cap"));
+            let mut corrupt = body.clone(); corrupt[0] ^= 1;
+            fs::write(&input.path, corrupt).unwrap();
+            assert!(input.authenticate_streamed(308_000_000).err().unwrap().to_string().contains("artifact digest/length"));
+            fs::write(&input.path, &body[..length - 1]).unwrap();
+            assert!(input.authenticate_streamed(308_000_000).is_err());
+            let mut grown = body.clone(); grown.push(0);
+            fs::write(&input.path, grown).unwrap();
+            assert!(input.authenticate_streamed(308_000_000).is_err());
+            fs::write(&input.path, &body).unwrap();
+        }
+        let body = vec![0x5a; ARTIFACT_STREAM_BUFFER_BYTES + 1];
+        let input = artifact(&dir.path().join("after-metadata"), &body);
+        // Exercise stream EOF checks after exact metadata admission, through
+        // the same stream core used by the final secure wrapper.
+        let mut file = File::open(&input.path).unwrap();
+        assert_eq!(file.metadata().unwrap().len(), input.bytes as u64);
+        OpenOptions::new().write(true).open(&input.path).unwrap().set_len((input.bytes - 1) as u64).unwrap();
+        assert!(authenticate_artifact_file(&mut file, input.bytes, &input.sha256).is_err());
+        fs::write(&input.path, &body).unwrap();
+        let mut file = File::open(&input.path).unwrap();
+        assert_eq!(file.metadata().unwrap().len(), input.bytes as u64);
+        let mut grown = body; grown.push(0);
+        fs::write(&input.path, &grown).unwrap();
+        assert!(authenticate_artifact_file(&mut file, input.bytes, &input.sha256).err().unwrap()
+            .to_string().contains("artifact digest/length"));
+        grown.pop(); fs::write(&input.path, &grown).unwrap();
+        input.authenticate_streamed(308_000_000).unwrap();
+        let link = dir.path().join("stream-link");
+        std::os::unix::fs::symlink(&input.path, &link).unwrap();
+        let symlink = Artifact { path:link, ..input };
+        assert!(symlink.authenticate_streamed(308_000_000).is_err());
+    }
+
+    #[test]
+    fn overlap_metadata_cap_refuses_before_missing_heavy_files() {
+        use crate::semantic_cell_overlap::{OverlapAdmission, OverlapIndex};
+        let (dir, index) = overlap_fixture();
+        let root = Artifact { path: dir.path().join("candidate/manifest.json"),
+            bytes: fs::metadata(dir.path().join("candidate/manifest.json")).unwrap().len() as usize,
+            sha256: index.root_sha256().into() };
+        let metadata = OverlapAdmission::read(&root, 128 * 1024 * 1024).unwrap();
+        assert_eq!(metadata.primary_directory().sha256, index.router().manifest.directory_sha256);
+        assert_eq!(metadata.primary_directory().bytes, index.router().manifest.directory_bytes);
+        assert!(metadata.modeled_preload_peak_bytes() > metadata.modeled_metadata_payload_bytes());
+        fs::remove_file(dir.path().join("primary/directories.bin")).unwrap();
+        fs::remove_file(dir.path().join("primary/cells.bin")).unwrap();
+        fs::remove_file(dir.path().join("candidate/sq8-cells.bin")).unwrap();
+        fs::remove_file(dir.path().join("candidate/placement.bin")).unwrap();
+        fs::remove_file(dir.path().join("candidate/boundaries.json")).unwrap();
+        // Successful metadata admission must not touch ANY of these bodies.
+        let checked = OverlapAdmission::read(&root, 128 * 1024 * 1024).unwrap();
+        let refused = OverlapIndex::open(&root, checked.modeled_preload_peak_bytes() - 1).err().unwrap();
+        assert!(refused.to_string().contains("overlap preload admission"));
+        assert!(OverlapAdmission::read(&root, root.bytes * 8 - 1).err().unwrap().to_string().contains("metadata admission"));
+        let overlap_body = fs::read(&root.path).unwrap();
+        let mut malformed: serde_json::Value = serde_json::from_slice(&overlap_body).unwrap();
+        malformed["cells"][0]["offset"] = serde_json::json!(1);
+        let malformed_body = serde_json::to_vec(&malformed).unwrap();
+        fs::write(&root.path, &malformed_body).unwrap();
+        let malformed_root = Artifact { path: root.path.clone(), bytes: malformed_body.len(), sha256: hash(&malformed_body) };
+        assert!(OverlapAdmission::read(&malformed_root, 128 * 1024 * 1024).err().unwrap()
+            .to_string().contains("overlap metadata extent geometry"));
+        fs::write(&root.path, overlap_body).unwrap();
+        let path = dir.path().join("primary/manifest.json");
+        let original = fs::read(&path).unwrap();
+        let mut corrupt = original.clone(); corrupt[0] ^= 1;
+        fs::write(&path, corrupt).unwrap();
+        assert!(OverlapIndex::open_admitted(checked).err().unwrap().to_string().contains("probe artifact SHA256/EOF"),
+            "metadata must be reauthenticated before instantiation");
+        fs::write(&path, original).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert!(OverlapAdmission::read(&root, 128 * 1024 * 1024).is_err());
+        fs::remove_file(&root.path).unwrap();
+        assert!(OverlapAdmission::read(&root, 128 * 1024 * 1024).is_err());
+    }
+
+    #[test]
+    fn overlap_pair_individually_fit_combined_overcap_has_zero_heavy_opens() {
+        use crate::semantic_cell_overlap::{OverlapAdmission, OverlapPairAdmission, OverlapBuildConfig, build_overlap};
+        let (dir, candidate) = overlap_fixture();
+        let config = OverlapBuildConfig { schema: crate::semantic_cell_overlap::BUILD_SCHEMA.into(),
+            retained_root: candidate.primary_root_identity().clone(), original: candidate.router().source_identity().clone(),
+            overlap: false, max_resident_payload_bytes: 128 * 1024 * 1024,
+            max_build_payload_bytes: 128 * 1024 * 1024, max_output_bytes: 16 * 1024 * 1024 };
+        let output = dir.path().join("control");
+        let receipt = build_overlap(&config, &output).unwrap();
+        let control_root = Artifact { path: output.join("manifest.json"), bytes: fs::metadata(output.join("manifest.json")).unwrap().len() as usize,
+            sha256: receipt.root_sha256 };
+        let candidate_root = Artifact { path: dir.path().join("candidate/manifest.json"),
+            bytes: fs::metadata(dir.path().join("candidate/manifest.json")).unwrap().len() as usize,
+            sha256: candidate.root_sha256().into() };
+        let a = OverlapAdmission::read(&control_root, 128 * 1024 * 1024).unwrap();
+        let b = OverlapAdmission::read(&candidate_root, 128 * 1024 * 1024).unwrap();
+        let cap = a.modeled_preload_peak_bytes().max(b.modeled_preload_peak_bytes());
+        assert!(OverlapAdmission::read(&control_root, cap).is_ok());
+        assert!(OverlapAdmission::read(&candidate_root, cap).is_ok());
+        fs::write(dir.path().join("primary/directories.bin"), b"corrupt body must remain unread").unwrap();
+        fs::remove_file(dir.path().join("candidate/sq8-cells.bin")).unwrap();
+        let spy = std::cell::Cell::new(0);
+        let result = OverlapPairAdmission::read(&control_root, &candidate_root, cap, cap, 0, 0)
+            .and_then(|admitted| { spy.set(spy.get() + 1); admitted.open() });
+        assert_eq!(spy.get(), 0);
+        assert!(result.err().unwrap().to_string().contains("paired resident/evaluator/query coexistence"));
+        // Evaluator/query charges also refuse without reaching the opener.
+        let result = OverlapPairAdmission::read(&control_root, &candidate_root, cap, 128 * 1024 * 1024, 128 * 1024 * 1024, 1)
+            .and_then(|admitted| { spy.set(spy.get() + 1); admitted.open() });
+        assert_eq!(spy.get(), 0);
+        assert!(result.is_err());
+        // Candidate metadata reauthentication precedes even the CONTROL body
+        // opener: its corrupt directory would otherwise fail first.
+        let pair = OverlapPairAdmission::read(&control_root, &candidate_root, cap, 128 * 1024 * 1024, 0, 0).unwrap();
+        let mut body = fs::read(&candidate_root.path).unwrap(); body[0] ^= 1;
+        fs::write(&candidate_root.path, body).unwrap();
+        assert!(pair.open().err().unwrap().to_string().contains("probe artifact SHA256/EOF"));
     }
 
     fn artifact(path: &Path, bytes: &[u8]) -> Artifact {
@@ -6704,6 +7466,7 @@ pub mod split_balance_diagnostic {
                 cell_bytes: 0,
                 next_row: 0,
                 receipt: BuildReceipt::default(),
+                replay: None,
             };
             // Exercise the real candidate builder/trainer. This is current
             // synthetic geometry, never a replacement for archived original data.
