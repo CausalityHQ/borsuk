@@ -1,0 +1,31 @@
+{
+  "canonical_authenticated": false,
+  "datasets": {
+    "cohere": {
+      "mean": {
+        "bytes": 3072,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/original-mean-inputs/cohere-mean.bin",
+        "sha256": "b50ffae3e16cc5e155ceee3adffcac0dc04d6812b0a1bb8fc01cbd259b58440a"
+      },
+      "method": "Exact LEf32 serialization of authenticated original root mean literals; whole body matches original input SHA. No canonical reconstruction, queries or GT.",
+      "root": {
+        "bytes": 30456,
+        "sha256": "c2bf337290f7713139903f398ac6b4007ed01faf47ff093e7e397b2715b7b4fc"
+      }
+    },
+    "relaion": {
+      "mean": {
+        "bytes": 3072,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/original-mean-inputs/relaion-mean.bin",
+        "sha256": "197a8ead172a5a41e029c8f0c9d39b981150c69fc3b0367316fb89c920eb1beb"
+      },
+      "method": "Exact LEf32 serialization of authenticated original root mean literals; whole body matches original input SHA. No canonical reconstruction, queries or GT.",
+      "root": {
+        "bytes": 31500,
+        "sha256": "3244e7bbd5e27eb1f3fe52cbddc450d08d45d25256eec98dc942ba42cf2808f1"
+      }
+    }
+  },
+  "other_inputs_complete": false,
+  "schema": "borsuk-overlap-original-mean-bodies-v1"
+}
