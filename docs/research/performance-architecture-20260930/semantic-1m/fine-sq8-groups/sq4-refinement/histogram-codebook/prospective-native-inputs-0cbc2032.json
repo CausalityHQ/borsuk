@@ -1,0 +1,34 @@
+{
+  "baseline": "valid uniform SQ4 native-diagnostic/a0002",
+  "causal_change": "per-axis corpus-only histogram-trained16 centers replaces uniform nearest17; same query populations and payload policies",
+  "compile_bound_identity_confirmation": "pending exact remote binary",
+  "config": {
+    "bytes": 1709,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/histogram-codebook/prospective-native-config-0cbc2032.json",
+    "sha256": "5d5405e8de112b81757f3f3b89794545ab40024743b4409c283eedf40f41a282"
+  },
+  "generation_paths_and_experiment_controller": "must be frozen after native qualification; no scientific run started",
+  "native_source_commit": "0cbc20323fb607ce0202f5a365763fa362224d97",
+  "schema": "borsuk-histogram-sq4-prospective-inputs-v1",
+  "scientific_gate": {
+    "datasets": [
+      "relaion",
+      "cohere"
+    ],
+    "dimensions": 768,
+    "mean_recall_at_100": 0.98,
+    "p05_hits": 95,
+    "payload_bytes": 16777216,
+    "payload_ranges": 32,
+    "queries_per_dataset": 64,
+    "rows": 100000,
+    "startup_codebook_reads_separate": true
+  },
+  "status": "PENDING_NATIVE_QUALIFICATION_NOT_LAUNCH_AUTHORITY",
+  "unchanged_fields": [
+    "panels",
+    "original_seal",
+    "prefix",
+    "caps"
+  ]
+}
