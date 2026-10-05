@@ -1664,7 +1664,7 @@ def probe_stage(repo, output, worker_root, *, canary=False):
     require(re.fullmatch(r'borsuk-global-leaf-[a-z0-9-]+\.slice', slice_name) and group.parent.name == slice_name, 'owned aggregate host slice')
     host_before = probe.cgroup_snapshot(group.parent, memory, 100 if canary else 200)
     main_before.update(cpu_max=(group/'cpu.max').read_text().strip(), tasks_max=(group/'pids.max').read_text().strip())
-    out.mkdir(); scratch = out/'scratch'; scratch.mkdir()
+    out.mkdir(); scratch = out/('infrastructure-scratch' if PROBE_SCHEMA == FINE_SCHEMA else 'scratch'); scratch.mkdir()
     client, calls, errors, peaks, stopped = None, [], [], {'scratch_bytes': 0}, threading.Event()
     result = dict(status='INVALID', complete=False, truth_opened=False, scientific_qualification=False, physical_s3_measured=False)
     old_alarm, old_term = signal.getsignal(signal.SIGALRM), signal.getsignal(signal.SIGTERM)
@@ -1704,7 +1704,7 @@ def probe_stage(repo, output, worker_root, *, canary=False):
                 exact(call['verified_bytes'], pin['bytes'], 'probe staged bytes'); exact(call['verified_sha256'], pin['sha256'], 'probe staged SHA')
             paired = config.get('schema') == PAIR_FIXED['schema']
             local.write_json(out/'staging.json', dict(schema='borsuk-global-leaf-probe-staging-receipt-v1',
-                sdk_calls=calls, truth_body_reads=2 if paired or config.get('schema') == OVERLAP_SCHEMA else 0,
+                sdk_calls=calls, truth_body_reads=2 if paired or config.get('schema') in (OVERLAP_SCHEMA, FINE_SCHEMA) else 0,
                 old_panel_producer_called=False, diagnose_called=paired))
     except BaseException as error:
         failure = error; result.update(status='INVALID', complete=False, error=type(error).__name__+': '+str(error))
@@ -1834,7 +1834,7 @@ def probe_replay(out, *, canary=False, repo=None):
     require(resource['scratch_bytes'] <= scratch_cap and 0 < resource['wall_seconds'] <= wall and not resource['monitor_errors'], 'probe deadline/scratch closure')
     clean = local.decode((out/'screen/cleanup.json').read_bytes())
     for n in ('scratch_removed', 'monitor_stopped', 'sdk_client_closed', 'original_root_removed'):
-        exact(clean[n], True, 'probe cleanup')
+        exact(clean[n], not (n == 'original_root_removed' and PROBE_SCHEMA == FINE_SCHEMA and not canary), 'probe cleanup')
     calls = resource['sdk_calls']; objects = probe_objects(config, evidence)
     if canary:
         receipt = local.decode((out/'screen/canary.json').read_bytes())
@@ -1871,7 +1871,7 @@ def probe_replay(out, *, canary=False, repo=None):
         staging = local.decode((out/'screen/staging.json').read_bytes())
         exact(staging['sdk_calls'], calls, 'probe staging SDK closure')
         paired = config.get('schema') == PAIR_FIXED['schema']
-        for n, expected in dict(truth_body_reads=2 if paired or config.get('schema') == OVERLAP_SCHEMA else 0,
+        for n, expected in dict(truth_body_reads=2 if paired or config.get('schema') in (OVERLAP_SCHEMA, FINE_SCHEMA) else 0,
                 old_panel_producer_called=False, diagnose_called=paired).items():
             exact(staging[n], expected, 'probe bypass old truth/diagnose path')
     return dict(executed=True, truth_opened=False, physical_s3_measured=False, vendor_win=False, scientific_qualification=False)
@@ -1890,7 +1890,7 @@ def probe_require_canary(base, proof):
     pointer = local.read_json(local.identity(Path(base)/PROBE_ROOT/'canary-admission.json'))
     fields(pointer, 'schema attempt config_sha256 code_identity_sha256 refs_identity_sha256 native_identity_sha256 '
            'source_archive_paths_sha256 terminal_sha256', 'probe canary pointer')
-    expected_schema = 'borsuk-cell-overlap-canary-admission-v1' if PROBE_SCHEMA == OVERLAP_SCHEMA else 'borsuk-capacity-partitioner-canary-admission-v1' if PROBE_SCHEMA == PAIR_SCHEMA else 'borsuk-global-leaf-probe-canary-admission-v1'
+    expected_schema = 'borsuk-fine-sq8-canary-admission-v1' if PROBE_SCHEMA == FINE_SCHEMA else 'borsuk-cell-overlap-canary-admission-v1' if PROBE_SCHEMA == OVERLAP_SCHEMA else 'borsuk-capacity-partitioner-canary-admission-v1' if PROBE_SCHEMA == PAIR_SCHEMA else 'borsuk-global-leaf-probe-canary-admission-v1'
     exact(pointer['schema'], expected_schema, 'probe canary admission')
     require(re.fullmatch(r'a[0-9]{4}', pointer['attempt']), 'probe canary attempt')
     out = Path(base)/PROBE_ROOT/'canary'/pointer['attempt']; terminal = local.decode((out/'aws-terminal.json').read_bytes())
@@ -2544,7 +2544,7 @@ def overlap_canary(config,evidence,client,calls,scratch,check,deadline):
     versions = {n:importlib.metadata.version(n) for n in (*FIXED['versions'],*SDK_VERSIONS)}
     exact(versions,dict(FIXED['versions'],**SDK_VERSIONS),'actual canary imports')
     require('IfNoneMatch' in client.meta.service_model.operation_model('PutObject').input_shape.members,'conditional SDK model')
-    cli = subprocess.run([sys.executable,'-m',MODULE,'--cell-overlap-pair'],capture_output=True,text=True,timeout=min(30,max(.001,deadline-time.monotonic())))
+    cli = subprocess.run([sys.executable,'-m',MODULE,'--fine-sq8-pair' if PROBE_SCHEMA == FINE_SCHEMA else '--cell-overlap-pair'],capture_output=True,text=True,timeout=min(30,max(.001,deadline-time.monotonic())))
     require(cli.returncode == 2 and 'INVALID:' in cli.stderr and 'CLI:' in cli.stderr and not cli.stdout,'actual usage CLI exit2')
     for p in overlap_objects(config):
         check(); response=publication.sdk_call(client,calls,'head_object',p['key'],BUCKET); exact(response['ContentLength'],p['bytes'],'HEAD presence/length only')
@@ -2911,9 +2911,291 @@ def overlap_self_check():
     print('PASS synthetic launcher: gzip exact CR/whitespace/tamper/cap; import closure; 30 HEAD/one proof GET and actual CLI; actual stage/cleanup/collection/gzip-sidecars/canary replay; SAME-ID ACK/terminate/wait/failures; opaque direct staging then tiny Python helper handoff; pending/source/original/request parity refusals without body hydration; scratch/deadline/nooverwrite. No network, native algorithms, real data, or GT decoding.')
 
 
+# Fine mode only adapts the existing direct-body transport and owned lifecycle.
+FINE_ROOT = ROOT.parent.parent/'fine-sq8-groups/paired100k'
+FINE_CONFIG = FINE_ROOT/'config.json'
+FINE_GATE = FINE_ROOT.parent/'implementation-gates/a0001'
+FINE_SCHEMA = 'borsuk-fine-sq8-paired100k-spot-v1'
+FINE_CANARY_SCHEMA = 'borsuk-fine-sq8-infrastructure-canary-v1'
+FINE_PREFIX = 'research/hierarchical-cells/20261005/fine-sq8-paired100k-'
+FINE_WORKER = Path('/mnt/hierarchical-100k')
+FINE_MACHINE = dict(wall_seconds=5000, compute_cap_usd=.75)
+FINE_DIRECT_ROSTER = OVERLAP_ROOT/'remote-input-roster.json'
+with overlap_controller.execution_mode(fine_sq8=True):
+    FINE_ASSURANCE = overlap_controller.ARTIFACTS
+    FINE_CODE = tuple(sorted(set((*OVERLAP_CODE, *overlap_controller.CODE))))
+FINE_ORDER = ('relaion-build-fine', 'cohere-build-fine', 'paired-fine')
+FINE_FILES = ('manifest.json', 'pq.bin', 'graph.bin', 'records.bin', 'groups.bin', 'order.bin')
+FINE_OUTPUTS = (*OVERLAP_OUTPUTS[:10], 'fine-config.json', 'fine/config.json', 'fine/terminal.json', 'fine/execution-receipt.json',
+    'fine/authority/current-source.json', 'fine/authority/retained-input-authority.json',
+    *(f'fine/authority/{n}.json' for n in ('terminal', 'launch', 'closeout')), *('fine/authority/native/'+n for n in FINE_ASSURANCE),
+    'fine/binary/hierarchical_semantic_cells',
+    *(f'fine/inputs/{d}/{c}/{n}' for d in probe.DATASETS for c,names in (('layout', ('manifest.json', 'directories.bin', 'cells.bin')),
+        ('original', 'generation plane canonical order records mean sq8'.split())) for n in names),
+    *(f'fine/requests/{d}/requests64' for d in probe.DATASETS),
+    *(f'fine/layouts/{d}/{n}' for d in probe.DATASETS for n in FINE_FILES), *(f'fine/layouts/{d}.build.jsonl' for d in probe.DATASETS),
+    *(f'fine/measurement/{n}{s}' for n in FINE_ORDER for s in ('-config.json', '-stage.json', '-stage-receipt.json', '-closure.json', '.log', '-unit.log')),
+    'fine/measurement/paired-fine.jsonl', 'fine/measurement/paired-fine.fine-seal.json',
+    *(f'retained/{d}/layout/{n}' for d in probe.DATASETS for n in ('manifest.json', 'directories.bin', 'cells.bin')),
+    *(f'retained/{d}/{n}' for d in probe.DATASETS for n in ('requests64', 'truth64')),
+    *(f'measurement/{d}-generation/{n}' for d in probe.DATASETS for n in ('manifest.json', 'canonical.bin', 'plane/manifest.json', 'plane/records.bin', 'plane/mean.bin')),
+    *(f'scratch/{d}/{n}' for d in probe.DATASETS for n in ('order', 'sq8')),
+    *('retained/native-qualification/'+n for n in (*FINE_ASSURANCE, 'aws-terminal.json', 'aws-launch.json', 'aws-closeout.json')))
+FINE_ARTIFACTS = ('test-resources.txt', 'run-closed.log', *('screen/'+n for n in FINE_OUTPUTS))
+
+
+def fine_scratch_roster(config, paths, repo):
+    helper = overlap_helper(); incoming = config['execution']['inputs']
+    originals = sum(incoming[d][c][n]['bytes'] for d in probe.DATASETS for c,names in (('original', helper.ORIGINALS), ('layout', helper.LAYOUT)) for n in names)
+    terminal = local.read_json(dict(config['execution']['qualification']['terminal'], path=str(Path(repo)/FINE_GATE/'aws-terminal.json')), 8 << 20)
+    assurance = sum(p['bytes'] for p in terminal['artifacts'].values())
+    return [dict(name='archive-and-controller', max_bytes=2*sum((512 << 10) if p == str(FINE_CONFIG) else repo_path(repo,p).stat().st_size for p in paths)),
+        dict(name='venv-cli-bootstrap-reserve', max_bytes=config['scratch_reserve_bytes']),
+        dict(name='direct-staged-originals-layouts-panels', max_bytes=sum(p['bytes'] for p in overlap_objects(config))+sum(p['bytes'] for v in config['headers'].values() for p in v.values())),
+        dict(name='restored-retained-native14-and-executable', max_bytes=3*assurance),
+        dict(name='helper-retained-originals-and-layouts', max_bytes=originals),
+        dict(name='two-fine-layouts-and-one-active-staging', max_bytes=3*(512 << 20)),
+        dict(name='native-both-panel-output', max_bytes=128 << 20), dict(name='three-native-logs-specs-seal-receipts', max_bytes=3*(34 << 20)),
+        dict(name='retained-request-panels', max_bytes=sum(incoming[d]['requests64']['bytes'] for d in probe.DATASETS))]
+
+
+def fine_qualify(base=Path('.'), *, canary=False):
+    repo = Path(base).resolve(); pin = local.identity(repo/FINE_CONFIG); config = local.read_json(pin, 512 << 10); helper = overlap_helper()
+    fields(config, 'schema authority_pending run_id code_sha256 execution qualification_transport assets native_assets headers canary_object machine scratch_reserve_bytes scratch_roster scratch_admission_bytes', 'root frozen fine launcher')
+    exact(config['schema'], FINE_SCHEMA, 'fine launcher schema'); exact(config['authority_pending'], False, 'parent freeze required')
+    require(type(config['run_id']) is str and re.fullmatch(r'a[0-9]{4}', config['run_id']), 'fine attempt'); exact(config['machine'], FINE_MACHINE, 'fine prospective5000s/$0.75')
+    cfg = config['execution']; exact(cfg['run_id'], 'fine-sq8-paired100k-'+config['run_id'], 'one immutable fine run')
+    exact(set(config['code_sha256']), set(FINE_CODE), 'complete existing import closure')
+    for n,h in config['code_sha256'].items(): exact(local.identity(repo/n)['sha256'], h, 'root frozen glue bytes')
+    helper.fine_inputs(cfg, repo, headers=config['headers'])
+    q = cfg['qualification']; remote = FINE_WORKER/'screen/retained/native-qualification'
+    exact(q['directory'], str(remote), 'controlled qualification directory')
+    for n,filename in dict(proof='source-qualification.json', terminal='aws-terminal.json', launch='aws-launch.json', closeout='aws-closeout.json').items():
+        exact(q[n]['path'], str(remote/filename), 'original qualification pointer')
+    exact(cfg['binary']['path'], str(remote/'binaries/hierarchical_semantic_cells'), 'qualified binary path')
+    sources = helper.fine_qualification(dict(cfg, qualification_transport=config['qualification_transport']), repo, metadata=True)
+    paths = {str(FINE_CONFIG), *FINE_CODE, *sources, helper.AUTHORITY['path'], str(FINE_DIRECT_ROSTER), str(FINE_ROOT/'native-qualification-transport.json'),
+        str(FINE_GATE/'native-source-manifest.json'), *(p['path'] for p in config['qualification_transport'].values()),
+        *(str(FINE_GATE/n) for n in ('aws-terminal.json', 'aws-launch.json', 'aws-closeout.json'))}
+    authority = probe.ref(repo, helper.AUTHORITY); terminal = probe.ref(repo, authority['terminal']); paths.add(authority['terminal']['path'])
+    direct = local.read_json(local.identity(repo/FINE_DIRECT_ROSTER))
+    exact(direct['bucket'], BUCKET, 'direct body bucket'); exact(config['assets'], direct['items'], 'reuse unchanged direct16 bodies')
+    native = local.read_json(local.identity(repo/FINE_ROOT/'native-qualification-transport.json'))
+    exact(native['bucket'], BUCKET, 'native body bucket'); exact(config['native_assets'], native['items'], 'original native14 bodies')
+    exact({p['name'] for p in config['native_assets']}, set(FINE_ASSURANCE), 'native14 names')
+    qualified = local.read_json(dict(q['terminal'], path=str(repo/FINE_GATE/'aws-terminal.json')), 8 << 20)
+    launch = local.read_json(dict(q['launch'], path=str(repo/FINE_GATE/'aws-launch.json')), 8 << 20)
+    for p in config['native_assets']:
+        fields(p, 'name key bytes sha256', 'qualified native object'); exact(body_pin(p), qualified['artifacts'][p['name']], 'original terminal native body')
+        exact(p['key'], launch['prefix']+'/artifacts/'+p['name'], 'original native key')
+    seen = set()
+    for asset in config['assets']:
+        fields(asset, 'dataset role name key bytes sha256', 'original direct object'); d,r,n = (asset[k] for k in ('dataset','role','name'))
+        require((d,r,n) not in seen, 'unique direct body'); seen.add((d,r,n))
+        exact(body_pin(asset), body_pin(overlap_input(config,d,r,n)), 'direct unchanged bytes')
+    expected = {(d,r,n) for d in probe.DATASETS for r,names in (('original', ('canonical','order','records','sq8')), ('layout', ('directories.bin','cells.bin')), ('panel', ('requests64','truth64'))) for n in names}
+    exact(seen, expected, 'exact sixteen direct roles'); fields(config['headers'], ' '.join(probe.DATASETS), 'both header sets')
+    for d in probe.DATASETS:
+        fields(config['headers'][d], 'generation plane mean manifest.json', 'original small headers')
+        for n,p in config['headers'][d].items():
+            fields(p, 'path bytes sha256', 'original archived header')
+            expected_path = str(Path(authority['terminal']['path']).parent/authority['datasets'][d][n]['terminal_path']) if n == 'manifest.json' else str(ROOT.parent/'boundary-overlap'/('original-'+n+'-inputs')/(d+'-'+n+('.bin' if n=='mean' else '.json')))
+            exact(p['path'], expected_path, 'same archived root/source header'); paths.add(p['path'])
+            exact(body_pin(p), body_pin(overlap_input(config,d,'layout' if n=='manifest.json' else 'original',n)), 'same original header bytes'); local.authenticate(dict(p,path=str(repo/p['path'])), 128 << 10)
+        for n in (*helper.LAYOUT, 'requests64', 'truth64'):
+            original = authority['datasets'][d][n]; exact(body_pin(original), terminal['artifacts'][original['terminal_path']], 'original closed retained body')
+    exact(config['canary_object'], {k:p[k] for p in config['native_assets'] if p['name']=='source-qualification.json' for k in ('key','bytes','sha256')}, 'one small original proof GET')
+    require(config['canary_object']['bytes'] <= 1 << 20, 'small canary GET'); exact(len(overlap_objects(config)), 30, 'all direct16/native14 object headers')
+    paths = sorted(paths)
+    for n in paths: publication.relative(n); repo_path(repo,n)
+    local.integer(config['scratch_reserve_bytes'], 256 << 20, 8 << 30, 'whole-runtime scratch reserve')
+    exact(config['scratch_roster'], fine_scratch_roster(config,paths,repo), 'all coexisting physical scratch components')
+    require(sum(p['max_bytes'] for p in config['scratch_roster']) <= config['scratch_admission_bytes'] <= 8 << 30, 'whole fine scratch fits8GiB')
+    proof = dict(config_path=str(FINE_CONFIG), config_sha256=pin['sha256'], campaign_schema=FINE_CANARY_SCHEMA if canary else FINE_SCHEMA,
+        code_identity_sha256=ids.sha(ids.encoded(config['code_sha256'])), refs_identity_sha256=ids.sha(ids.encoded({n:config[n] for n in ('execution','qualification_transport','assets','native_assets','headers','canary_object','machine')})),
+        native_identity_sha256=helper.FINE_FULL_SOURCE_ID, source_file_count=404, source_archive_paths=paths, source_archive_paths_sha256=ids.sha(ids.encoded(paths)),
+        artifact_roster_sha256=ids.sha(ids.encoded(PROBE_CANARY_ARTIFACTS if canary else FINE_ARTIFACTS)), awscli_version=AWSCLI_VERSION, awscli_sha256=AWSCLI_SHA256)
+    return config, proof, {}
+
+
+def fine_execute(config, config_pin, repo, out, download, check, deadline):
+    helper = overlap_helper(); repo,out = Path(repo),Path(out); cfg = config['execution']
+    exact(out, FINE_WORKER/'screen', 'fine controlled output'); (out/'retained').mkdir()
+    for asset in config['assets']:
+        p = overlap_input(config,asset['dataset'],asset['role'],asset['name']); target = positive.regular_path(p['path'])
+        require(target.is_relative_to(FINE_WORKER), 'inventoried direct destination'); target.parent.mkdir(parents=True,exist_ok=True); download(asset,target)
+    for asset in config['native_assets']:
+        target = positive.regular_path(Path(cfg['qualification']['directory'])/asset['name'])
+        require(target.is_relative_to(FINE_WORKER), 'inventoried native destination'); target.parent.mkdir(parents=True,exist_ok=True); download(asset,target)
+    for n,filename in dict(terminal='aws-terminal.json',launch='aws-launch.json',closeout='aws-closeout.json').items(): helper.retain(dict(cfg['qualification'][n],path=str(repo/FINE_GATE/filename)), Path(cfg['qualification'][n]['path'])); check()
+    for d in probe.DATASETS:
+        for n,p in config['headers'][d].items():
+            target = overlap_input(config,d,'layout' if n=='manifest.json' else 'original',n)
+            helper.retain(dict(p,path=str(repo/p['path'])), Path(target['path'])); check()
+    require(deadline-time.monotonic() >= 2700, 'exact three native budgets fit cumulative deadline')
+    pin = local.write_json(out/'fine-config.json', cfg); terminal = helper.fine_execute(pin['path'],pin['sha256'],repo,out/'fine'); check()
+    outcome = local.read_json(local.identity(out/'fine/execution-receipt.json'), 8 << 20)
+    result = dict(schema=FINE_SCHEMA+'-execution', config=config_pin, complete=terminal['complete'],status=terminal['status'],fine_terminal=terminal,
+        truth_opened=outcome['results'].get('truth_opened',False), scientific_qualification=False,physical_s3_measured=False)
+    local.write_json(out/'native-execution-receipt.json', result); require(terminal['execution_exit_code'] == 0, 'native fine execution INVALID'); return result
+
+
+def fine_verify_pair(output, *, repo=None, config=None, **_):
+    helper = overlap_helper(); output = Path(output)
+    # Authenticate collected originals at their original worker-relative names.
+    for d in probe.DATASETS:
+        for n,p in config['execution']['inputs'][d]['original'].items():
+            local.authenticate(dict(p,path=str(output/Path(p['path']).relative_to(FINE_WORKER/'screen'))), 512 << 20)
+    pin = local.identity(output/'fine-config.json'); exact(local.read_json(pin), config['execution'], 'unchanged fine execution configuration')
+    return helper.fine_replay(pin['path'],pin['sha256'],repo,output/'fine')
+
+
+def fine_verify_execution(output, config, terminal, evidence):
+    output = Path(output); result = local.read_json(local.identity(output/'execution-receipt.json'), 8 << 20)
+    native = local.read_json(dict(body_pin(result['native_execution']),path=str(output/'native-execution-receipt.json')), 8 << 20)
+    exact({k:v for k,v in result.items() if k not in ('native_execution','worker_closure')}, native, 'original native/worker binding')
+    exact(native['complete'],True,'closed fine result'); exact(native['fine_terminal'],terminal,'raw fine terminal'); exact(native['status'],terminal['status'],'native science FAIL preserved')
+    exact(body_pin(native['config']),body_pin(local.identity(output/'config.json')),'same root launcher config'); return native
+
+
+def fine_profile():
+    from contextlib import ExitStack
+    module = sys.modules[__name__]; stack = ExitStack()
+    stack.enter_context(patch.multiple(module, OVERLAP_ROOT=FINE_ROOT, OVERLAP_CONFIG=FINE_CONFIG, OVERLAP_SCHEMA=FINE_SCHEMA, OVERLAP_CANARY_SCHEMA=FINE_CANARY_SCHEMA,
+        OVERLAP_PREFIX=FINE_PREFIX, OVERLAP_WORKER=FINE_WORKER, OVERLAP_MACHINE=FINE_MACHINE, OVERLAP_CODE=FINE_CODE, OVERLAP_ARTIFACTS=FINE_ARTIFACTS,
+        overlap_qualify=fine_qualify, overlap_execute=fine_execute, overlap_verify_pair=fine_verify_pair, overlap_verify_execution=fine_verify_execution))
+    stack.enter_context(overlap_profile()); userdata,replay = probe_user_data,probe_replay
+    def fine_userdata(*args, **kwargs):
+        result = userdata(*args, **kwargs).replace('--cell-overlap-pair','--fine-sq8-pair').replace('import OVERLAP_ARTIFACTS','import FINE_ARTIFACTS').replace('join(OVERLAP_ARTIFACTS)','join(FINE_ARTIFACTS)')
+        subprocess.run(['bash','-n'], input=result,text=True,check=True); return result
+    def fine_collected(*args, **kwargs):
+        result = replay(*args, **kwargs)
+        if not kwargs.get('canary',False) and result['executed']:
+            result['truth_opened'] = local.read_json(local.identity(Path(args[0])/'screen/summary.json'),8 << 20)['truth_opened']
+        return result
+    stack.enter_context(patch.multiple(module, probe_user_data=fine_userdata, probe_replay=fine_collected))
+    return stack
+
+
+def fine_cli(args):
+    require(args, 'CLI: --fine-sq8-pair aNNNN | --canary aNNNN | --stage[-canary] REPO OUTPUT ROOT | --replay[-canary] OUTPUT | --preflight | --self-check')
+    if args == ['--self-check']:
+        overlap_helper().fine_self_check(); fine_launcher_self_check(); return
+    with fine_profile():
+        if args == ['--preflight']: print(json.dumps(fine_qualify()[1])); return
+        probe_cli(args)
+
+
+def fine_launcher_self_check():
+    assert len(set(FINE_ARTIFACTS)) == len(FINE_ARTIFACTS), 'unique complete collected fine roster'
+    assert FINE_MACHINE == dict(wall_seconds=5000, compute_cap_usd=.75), 'fixed fine machine caps'
+    from contextlib import ExitStack
+    import io
+    module = sys.modules[__name__]
+    def rejects(fn):
+        try: fn()
+        except (ValueError, AssertionError, OSError, KeyError): return
+        raise AssertionError('negative fine launcher admitted')
+    with tempfile.TemporaryDirectory(prefix='fine-launcher-check-') as tmp, ExitStack() as stack:
+        root = Path(tmp); repo = root/'probe-repo'; repo.mkdir(); cfg_path = root/'config.json'
+        config = dict(schema=FINE_SCHEMA,run_id='a0001',assets=[dict(key='synthetic/input/'+str(i),bytes=1,sha256=local.sha(b'x')) for i in range(16)],
+            native_assets=[dict(name=str(i),key='synthetic/native/'+str(i),bytes=1,sha256=local.sha(b'x')) for i in range(14)],
+            canary_object=dict(key='synthetic/native/0',bytes=1,sha256=local.sha(b'x')))
+        local.write_json(cfg_path,config)
+        proof = dict.fromkeys(TERMINAL_IDENTITIES,'0'*64)
+        proof.update(config_path=str(cfg_path),config_sha256=local.identity(cfg_path)['sha256'],campaign_schema=FINE_CANARY_SCHEMA,source_file_count=404,
+            source_archive_paths=['scripts/launch_hierarchical_cells_100k_spot.py'],awscli_version=AWSCLI_VERSION,awscli_sha256=AWSCLI_SHA256)
+        proof['source_archive_paths_sha256'] = ids.sha(ids.encoded(proof['source_archive_paths']))
+        stack.enter_context(patch.object(module,'FINE_CONFIG',cfg_path)); stack.enter_context(patch.object(module,'fine_qualify',return_value=(config,proof,{})))
+        with fine_profile():
+            exact(PROBE_ROOT,FINE_ROOT,'fine canary admission destination'); exact(PROBE_CODE,FINE_CODE,'closed packaged imports')
+            science = probe_user_data('a'*40,'b'*64,'source/mock',FINE_PREFIX+'a0001',proof)
+            canary = probe_user_data('a'*40,'b'*64,'source/mock',FINE_PREFIX+'canary-a0001',proof,canary=True)
+        for value in ('--fine-sq8-pair --stage ', '/mnt/hierarchical-100k', 'MemoryMax=8G','CPUQuota=200%', 'MemorySwapMax=0','5000','import FINE_ARTIFACTS','else test -f "$name"','sync -f terminal.json'):
+            require(value in science,'fine bootstrap: '+value)
+        require('MemoryMax=256M' in canary and '--fine-sq8-pair --stage-canary' in canary,'separate bounded metadata canary')
+        require(len(science.encode()) < 16384 and len(canary.encode()) < 16384,'unchanged userdata16KiB cap')
+        objects = overlap_objects(config); versions = dict(FIXED['versions'],**SDK_VERSIONS)
+        real_import = importlib.import_module; real_version = importlib.metadata.version
+        stack.enter_context(patch.object(importlib,'import_module',side_effect=lambda n,*a,**kw:SimpleNamespace() if n in versions else real_import(n,*a,**kw)))
+        stack.enter_context(patch.object(importlib.metadata,'version',side_effect=lambda n:versions[n] if n in versions else real_version(n)))
+        closed = []
+        class Client:
+            meta = SimpleNamespace(service_model=SimpleNamespace(operation_model=lambda _:SimpleNamespace(input_shape=SimpleNamespace(members={'IfNoneMatch':None}))))
+            def head_object(self,**kw): return dict(ContentLength=next(p['bytes'] for p in objects if p['key']==kw['Key']))
+            def get_object(self,**kw):
+                exact(kw['Key'],config['canary_object']['key'],'no canary dataset/panel/binary GET'); return dict(ContentLength=1,Body=io.BytesIO(b'x'))
+            def close(self): closed.append(True)
+        client = Client(); stack.enter_context(patch.object(publication,'sdk_client',return_value=client))
+        for n in ('native_stage','restore_writer_inputs','execute'): stack.enter_context(patch.object(probe,n,side_effect=AssertionError('canary cannot invoke science')))
+        group = root/'kernel/borsuk-global-leaf-mock.slice/controller'; group.mkdir(parents=True)
+        (group/'cpu.max').write_text('100000 100000'); (group/'pids.max').write_text('512')
+        counters = {'path':str(group),'memory.max':'268435456','memory.peak':'1024','memory.swap.max':'0','memory.swap.peak':'0','memory.events':'oom 0\noom_kill 0\noom_group_kill 0','cpu_affinity':[0],'cpu.max':'100000 100000','pids.max':'512'}
+        stack.enter_context(patch.object(local,'resource_snapshot',return_value=counters)); stack.enter_context(patch.object(probe,'cgroup_snapshot',return_value=dict(counters,path=str(group.parent))))
+        stack.enter_context(patch.dict(os.environ,dict(BORSUK_GLOBAL_LEAF_SLICE=group.parent.name,BORSUK_HIERARCHICAL_CONFIG_SHA256=proof['config_sha256'],
+            BORSUK_HIERARCHICAL_SOURCE_ARCHIVE_PATHS_SHA256=proof['source_archive_paths_sha256'],BORSUK_HIERARCHICAL_DEADLINE_EPOCH=str(int(time.time())+30),BORSUK_HIERARCHICAL_SCRATCH_BASE_USED=str(shutil.disk_usage(root).used))))
+        out = root/'closed'; out.mkdir()
+        with fine_profile():
+            probe_stage(repo,out/'screen',root,canary=True); rejects(lambda:probe_stage(repo,out/'screen',root,canary=True))
+            for n in ('test-resources.txt','run-closed.log'): probe.copy_bytes(out/n,b'synthetic closure\n')
+            nodes = {'worker':dict(instance_id='i-synthetic')}; identity = dict(source_commit='a'*40,source_archive_sha256='b'*64)
+            launch = dict(identity,instance_id='i-synthetic',nodes=nodes,prefix=FINE_PREFIX+'canary-a0001')
+            local.write_json(out/'aws-launch.json',launch); local.write_json(out/'aws-closeout.json',dict(state='terminated',nodes=nodes))
+            local.write_json(out/'aws-reservation.json',dict(identity,schema=FINE_CANARY_SCHEMA,qualification=proof,wall_seconds=480,compute_cap_usd=.12,ebs_s3_allowance_usd=.05))
+            terminal = dict(identity,**proof,instance_id='i-synthetic',schema=FINE_CANARY_SCHEMA,phase='complete',status='complete',exit_code=0,original_exit_code=0,
+                artifacts={n:body_pin(local.identity(out/n)) for n in PROBE_CANARY_ARTIFACTS})
+            local.write_json(out/'aws-terminal.json',terminal); require(probe_replay(out,canary=True,repo=repo)['executed'],'closed fine canary replay')
+            class Collected:
+                def get_object(self,**kw):
+                    key=kw['Key']; name='aws-terminal.json' if key.endswith('/terminal.json') else key.split('/artifacts/',1)[1]; return dict(Body=io.BytesIO((out/name).read_bytes()))
+            collected = root/'collected'; collected.mkdir()
+            for n in ('aws-launch.json','aws-closeout.json','aws-reservation.json'): shutil.copyfile(out/n,collected/n)
+            probe_collect(Collected(),launch['prefix'],collected,'i-synthetic','a'*40,'b'*64,canary=True)
+            require(probe_replay(collected,canary=True,repo=repo)['executed'],'streamed fine canary collection/gzip replay')
+            selected = repo/FINE_ROOT/'canary/a0001'; selected.parent.mkdir(parents=True); shutil.copytree(collected,selected)
+            pointer = {n:proof[n] for n in ('config_sha256','code_identity_sha256','refs_identity_sha256','native_identity_sha256','source_archive_paths_sha256')}
+            pointer.update(schema='borsuk-fine-sq8-canary-admission-v1',attempt='a0001',terminal_sha256=local.identity(selected/'aws-terminal.json')['sha256'])
+            pointer_path = repo/FINE_ROOT/'canary-admission.json'; local.write_json(pointer_path,pointer)
+            probe_require_canary(repo,proof)
+            before_pointer = pointer_path.read_bytes(); pointer['code_identity_sha256'] = 'f'*64; pointer_path.write_bytes(local.canonical(pointer))
+            rejects(lambda:probe_require_canary(repo,proof)); pointer_path.write_bytes(before_pointer)
+            before=(collected/'aws-closeout.json').read_bytes(); (collected/'aws-closeout.json').write_bytes(local.canonical(dict(state='terminated',nodes={'worker':dict(instance_id='i-wrong')})))
+            rejects(lambda:probe_replay(collected,canary=True,repo=repo)); (collected/'aws-closeout.json').write_bytes(before)
+            with patch.object(client,'head_object',return_value=dict(ContentLength=2)): rejects(lambda:probe_stage(repo,root/'failed-screen',root,canary=True))
+            exact(local.read_json(local.identity(root/'failed-screen/summary.json'))['status'],'INVALID','failed infrastructure stays INVALID')
+            clean=local.read_json(local.identity(root/'failed-screen/cleanup.json')); require(clean['sdk_client_closed'] and clean['scratch_removed'] and clean['monitor_stopped'],'same failed stage cleanup')
+        require(closed,'SDK client closed')
+        # Science retains the exact screen/scratch originals while removing
+        # only the disposable infrastructure scratch. No native work is run.
+        def staged(config,pin,repo,out,download,check,deadline):
+            (out/'retained').mkdir()
+            for i,p in enumerate((*config['assets'],*config['native_assets'])): download(p,out/'retained'/str(i))
+            probe.copy_bytes(out/'scratch/relaion/order',b'opaque original order'); probe.copy_bytes(out/'scratch/relaion/sq8',b'opaque original SQ8')
+            native_terminal = dict(status='FAIL',complete=True,execution_exit_code=0)
+            result = dict(schema=FINE_SCHEMA+'-execution',config=pin,status='FAIL',complete=True,fine_terminal=native_terminal,
+                truth_opened=False,scientific_qualification=False,physical_s3_measured=False)
+            local.write_json(out/'native-execution-receipt.json',result); return result
+        science_counters = dict(counters,**{'memory.max':str(8 << 30),'cpu.max':'200000 100000','cpu_affinity':[0,1]})
+        (group/'cpu.max').write_text('200000 100000')
+        with patch.object(module,'fine_execute',side_effect=staged),patch.object(probe,'ORIGINAL_ROOT',root),patch.object(client,'get_object',side_effect=lambda **_:dict(ContentLength=1,Body=io.BytesIO(b'x'))):
+            with patch.object(local,'resource_snapshot',return_value=science_counters),patch.object(probe,'cgroup_snapshot',return_value=dict(science_counters,path=str(group.parent))),fine_profile():
+                result = probe_stage(repo,root/'science-screen',root)
+                exact(result['status'],'FAIL','closed scientific FAIL remains valid')
+                clean = local.read_json(local.identity(root/'science-screen/cleanup.json'))
+                require(clean['scratch_removed'] and not clean['original_root_removed'],'infrastructure scratch removed; originals retained')
+                exact((root/'science-screen/scratch/relaion/order').read_bytes(),b'opaque original order','original order preserved through cleanup')
+                exact((root/'science-screen/scratch/relaion/sq8').read_bytes(),b'opaque original SQ8','original SQ8 preserved through cleanup')
+                fine_verify_execution(root/'science-screen',config,result['fine_terminal'],{})
+        shared,_ = ids.lifecycle(); shared.self_check(lifecycle_only=True)
+    exact(PROBE_SCHEMA,'borsuk-global-leaf-probe-spot-v1','historical namespace restored')
+    print('PASS fine launcher synthetic: bounded bootstrap/import roster,30 HEAD/one proof GET/no ANN/no GT,actual CLI exit2,stage cleanup,stream collection/gzip replay,SAME-ID refusal and shared ACK/terminate/wait failures. SDK/kernel mocked; no cloud/native/large-body opens.')
+
+
 if __name__ == '__main__':
     try:
-        if sys.argv[1:2] == ['--cell-overlap-pair']:
+        if sys.argv[1:2] == ['--fine-sq8-pair']:
+            fine_cli(sys.argv[2:])
+        elif sys.argv[1:2] == ['--cell-overlap-pair']:
             overlap_cli(sys.argv[2:])
         elif sys.argv[1:2] == ['--partitioner-pair']:
             pair_cli(sys.argv[2:])

@@ -764,10 +764,479 @@ def self_check(*, repair_only=False):
     print('PASS mock execution/replay: six serial calls, both-panel PASS/scientific FAIL, exit/config/source/seal/roster/tamper/resource/drain/closure/nooverwrite negatives; real silent tiny Python child through reused supervisor. No native algorithms, real data, GT, cloud or qualification executed.')
 
 
+FINE_BASE = 'docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/'
+FINE_GATE = FINE_BASE+'implementation-gates/a0001/'
+FINE_SCHEMA = 'borsuk-fine-sq8-pair-execution-v1'
+FINE_WORKER = Path('/mnt/hierarchical-100k')
+FINE_SOURCE_COMMIT = 'a79810b9cf9fee7c88fe9454737004bfccf44a44'
+FINE_FULL_SOURCE_ID = 'c7675eb2d827834524c34aa7f7c814b70b7a31e27f66e9bbf526adbce302629b'
+FINE_BINARY = dict(bytes=7123760, sha256='aed6e8f126e68af738841449b7d61b8c46e43b8f1e4476252c30f1f73109f9af')
+FINE_ORDER = ['relaion-build-fine', 'cohere-build-fine', 'paired-fine']
+FINE_FILES = ('manifest.json', 'pq.bin', 'graph.bin', 'records.bin', 'groups.bin', 'order.bin')
+FINE_ORIGINAL_PATHS = {d: dict(generation=f'screen/measurement/{d}-generation/manifest.json',
+    plane=f'screen/measurement/{d}-generation/plane/manifest.json', canonical=f'screen/measurement/{d}-generation/canonical.bin',
+    order=f'screen/scratch/{d}/order', records=f'screen/measurement/{d}-generation/plane/records.bin',
+    mean=f'screen/measurement/{d}-generation/plane/mean.bin', sq8=f'screen/scratch/{d}/sq8') for d in DATASETS}
+
+
+def fine_source_identity(repo):
+    """The qualified CLI's exact include_bytes name/length/body binding."""
+    repo = Path(repo); source = repo/'crates/borsuk/src/bin/hierarchical_semantic_cells.rs'
+    code = local.authenticate(local.identity(source), 1 << 20, read=True).decode()
+    section = code.split('fn fine_source_identity()', 1)[1].split('fn paired_fine(', 1)[0]
+    bindings = re.findall(r'\("([^"]+)", include_bytes!\("([^"]+)"\)\.as_slice\(\)\)', section)
+    exact([n for n, _ in bindings], ['fine_sq8_groups.rs', 'pq64_nominee.rs', 'resident_vector_graph.rs',
+        'hierarchical_semantic_cells.rs', 'budgeted_page_rank.rs', 'sq8_page_authority.rs', 'returned_sq8.rs',
+        'exact_sq8_nominee.rs', 'centroid_hnsw.rs', 'sq8_source.rs', 'bin/hierarchical_semantic_cells.rs', 'lib.rs'], 'qualified include_bytes roster')
+    digest = hashlib.sha256()
+    for name, relative in bindings:
+        path = (source.parent/relative).resolve()
+        require(path.is_relative_to(repo/'crates/borsuk/src'), 'include_bytes source ownership')
+        raw = local.authenticate(local.identity(path), 1 << 20, read=True); encoded = name.encode()
+        digest.update(struct.pack('<Q', len(encoded))); digest.update(encoded)
+        digest.update(struct.pack('<Q', len(raw))); digest.update(raw)
+    return digest.hexdigest()
+
+
+def fine_qualification(config, repo, *, metadata=False):
+    """Metadata-only locally; original native14 receipt validator after staging."""
+    repo = Path(repo); q = config['qualification']; fields(q, 'pending directory proof terminal launch closeout', 'fine qualification')
+    exact(q['pending'], False, 'fine qualification closed')
+    folder = positive.regular_path(q['directory']); require(folder.is_absolute(), 'qualification directory')
+    values = {}
+    for name, filename in dict(proof='source-qualification.json', terminal='aws-terminal.json', launch='aws-launch.json', closeout='aws-closeout.json').items():
+        descriptor(q[name], 8 << 20)
+        if name == 'proof': exact(q[name]['path'], str(folder/filename), 'original qualification pointer')
+        values[name] = local.read_json(dict(q[name], path=str(repo/FINE_GATE/filename)) if metadata else q[name], 8 << 20)
+    proof, terminal, launch, close = (values[n] for n in ('proof', 'terminal', 'launch', 'closeout'))
+    exact(close['state'], 'terminated', 'qualified SAME host terminated'); exact(close['nodes'], launch['nodes'], 'qualified SAME IDs')
+    require(terminal['instance_id'] == launch['instance_id'] in {n['instance_id'] for n in close['nodes'].values()}, 'qualified original instance')
+    for name in ('phase', 'status'): exact(terminal[name], 'complete', 'completed qualification')
+    for name in ('exit_code', 'original_exit_code'): exact(terminal[name], 0, 'qualification original exit0')
+    for name in ('source_commit', 'source_archive_sha256'): exact(terminal[name], launch[name], 'original launched archive')
+    exact(terminal['source_qualification_sha256'], q['proof']['sha256'], 'original proof SHA')
+    sources = witness.source_hashes(repo)
+    manifest = local.read_json(local.identity(repo/FINE_GATE/'native-source-manifest.json'), 128 << 10)
+    for value in (proof, manifest):
+        exact(value['native_source_commit'], FINE_SOURCE_COMMIT, 'qualified native revision')
+        exact(value['source_file_count'], 404, 'qualified full404 count'); exact(value['source_sha256'], sources, 'qualified full404 bytes')
+    exact(witness.source_identity(sources), FINE_FULL_SOURCE_ID, 'current full404 identity')
+    exact(proof['source_identity_sha256'], FINE_FULL_SOURCE_ID, 'qualified full404 identity')
+    descriptor(config['binary'], 256 << 20); exact(body(config['binary']), FINE_BINARY, 'exact qualified binary')
+    exact(body(config['binary']), terminal['artifacts']['binaries/hierarchical_semantic_cells'], 'original release artifact')
+    with controller.execution_mode(fine_sq8=True):
+        exact(set(proof['code_sha256']), set(controller.CODE), 'qualified controller closure')
+        for name, digest in proof['code_sha256'].items(): exact(local.identity(repo/name)['sha256'], digest, 'same qualified controller bytes')
+        for name in controller.TERMINAL_IDENTITIES: exact(terminal[name], proof[name], 'original terminal authority')
+        exact(terminal['schema'], controller.SCHEMA, 'original fine qualification mode')
+        if metadata:
+            from scripts.launch_hierarchical_cells_100k_spot import overlap_gzip
+            fields(config['qualification_transport'], ' '.join(controller.ARTIFACTS), 'all native14 transports')
+            with tempfile.TemporaryDirectory(prefix='fine-metadata-') as tmp:
+                for name, pin in config['qualification_transport'].items():
+                    fields(pin, 'path bytes sha256 encoding', 'original qualification transport')
+                    require(pin['encoding'] in ('raw', 'gzip'), 'explicit transport encoding')
+                    exact(pin['path'], FINE_GATE+name+('.gz' if pin['encoding'] == 'gzip' else ''), 'original archived qualification path')
+                    raw = terminal['artifacts'][name]; local.integer(raw['bytes'], 1, 32 << 20, 'bounded original artifact')
+                    if pin['encoding'] == 'raw': exact(body(pin), raw, 'original raw transport identity')
+                    if name.startswith('binaries/'): continue  # Binary body stays cold on the source-check host.
+                    bound = dict(body(pin), path=str(repo/pin['path'])); target = Path(tmp)/name
+                    if pin['encoding'] == 'gzip': overlap_gzip(bound, target, raw, 32 << 20)
+                    else: retain(bound, target)
+                receipt = local.read_json(local.identity(Path(tmp)/'workspace-receipt.json'), 8 << 20)
+                exact(receipt['schema'], controller.RECEIPT_SCHEMA, 'original receipt mode')
+                controller.validate_fine_sq8_config(proof); controller.validate_fine_sq8_config(receipt)
+                exact(receipt['stages'], controller.validate_bounded_publication_stages(Path(tmp)/'test.log', fine_sq8=True), 'all fourteen qualified stages/57 tests')
+                controller.worker.validate_cgroup(local.read_json(local.identity(Path(tmp)/'workspace-cgroup.json')))
+                for name in ('source-before.json', 'source-after.json'):
+                    exact(local.read_json(local.identity(Path(tmp)/name), 128 << 10), sources, 'full404 before/after')
+                for name in ('qualified', 'command_started', 'command_completed', 'source_unchanged'): exact(receipt[name], True, 'closed original qualification')
+                for name in ('exit_status', 'gate_status'): exact(receipt[name], 0, 'qualification gate exit0')
+                exact(receipt['source_sha256'], sources, 'original qualified source map')
+        else:
+            receipt = controller.validate_receipt(folder, proof)
+            for name in controller.ARTIFACTS: exact(body(local.identity(folder/name)), terminal['artifacts'][name], 'all original assurance bodies')
+        exact([s['stage'] for s in receipt['stages']], [n for n, _ in controller.FINE_SQ8_STAGES], 'original serial assurance order')
+    return sources
+
+
+def fine_inputs(config, repo, *, headers=None, retained=None):
+    """Headers and byte pins only; requests are authenticated without decoding."""
+    fields(config, 'schema run_id authority qualification binary inputs resources', 'fixed fine execution config')
+    exact(config['schema'], FINE_SCHEMA, 'fine execution schema'); exact(config['authority'], AUTHORITY, 'retained capacity-v4 authority')
+    require(type(config['run_id']) is str and re.fullmatch(r'[a-z0-9][a-z0-9-]{0,127}', config['run_id']), 'fine runID')
+    exact(config['resources'], RESOURCES, 'fixed fine CPU2/CPU1 resources')
+    for role, limits in RESOURCES.items():
+        for name, value in limits.items(): exact(type(config['resources'][role][name]), type(value), 'resource field type')
+        require(all(type(v) is int for v in config['resources'][role]['cpu_affinity']), 'integer affinity')
+    q = config['qualification']; fields(q, 'pending directory proof terminal launch closeout', 'controlled native qualification')
+    remote = FINE_WORKER/'screen/retained/native-qualification'; exact(q['directory'], str(remote), 'inventoried qualification directory')
+    exact(q['pending'], False, 'completed qualification only')
+    for n,f in dict(proof='source-qualification.json',terminal='aws-terminal.json',launch='aws-launch.json',closeout='aws-closeout.json').items():
+        descriptor(q[n], 8 << 20); exact(positive.regular_path(q[n]['path']), remote/f, 'inventoried qualification pointer')
+    descriptor(config['binary'], 256 << 20); exact(positive.regular_path(config['binary']['path']), remote/'binaries/hierarchical_semantic_cells', 'inventoried qualified binary')
+    authority = probe.ref(repo, AUTHORITY); fields(config['inputs'], ' '.join(DATASETS), 'both fine panels')
+    for d in DATASETS:
+        item = config['inputs'][d]; fields(item, 'layout original requests64 truth64', 'fine retained dataset')
+        fields(item['layout'], ' '.join(LAYOUT), 'retained root/dirs/cells'); fields(item['original'], ' '.join(ORIGINALS), 'seven originals')
+        for category, names in (('layout', LAYOUT), ('original', ORIGINALS), ('panel', ('requests64', 'truth64'))):
+            for name in names:
+                pin = item[category][name] if category != 'panel' else item[name]; descriptor(pin, 512 << 20)
+                path = positive.regular_path(pin['path']); require(path.is_relative_to(FINE_WORKER), 'inventoried worker path')
+                expected = FINE_WORKER/FINE_ORIGINAL_PATHS[d][name] if category == 'original' else FINE_WORKER/'screen/retained'/d/(Path(category)/name if category != 'panel' else Path(name))
+                exact(path, expected, 'unchanged original or controlled retained path')
+                if category != 'original': exact(body(pin), body(authority['datasets'][d][name]), 'exact retained authority')
+                if headers is None and retained is None and name != 'truth64': local.authenticate(pin, 512 << 20)
+        root_pin = retained[d]['layout']['manifest.json'] if retained is not None else dict(headers[d]['manifest.json'], path=str(Path(repo)/headers[d]['manifest.json']['path'])) if headers is not None else item['layout']['manifest.json']
+        root = local.read_json(root_pin, 128 << 10)
+        for name, value in dict(schema='borsuk-hierarchical-cells-resident-v4', rows=ROWS, dimensions=DIMENSIONS).items(): exact(root[name], value, 'unchanged primary geometry')
+        fields(root['input'], ' '.join(probe.BUILD_FIELDS), 'exact original BuildConfig')
+        for name in ORIGINALS: exact(item['original'][name], root['input'][name], 'exact immutable original path/bytes/SHA')
+        for name, value in dict(schema='borsuk-hierarchical-cells-build-v2', cell_rows=512, sample_rows=256, max_depth=32,
+                max_build_payload_bytes=64 << 20, max_output_bytes=256 << 20).items(): exact(root['input'][name], value, 'unchanged original build policy')
+
+
+def fine_build_config(root):
+    return dict(schema='borsuk-fine-sq8-build-v1', primary_root=root, max_build_payload_bytes=8 << 30, max_output_bytes=512 << 20)
+
+
+def fine_query_config(inputs, roots, source_id):
+    return dict(schema='borsuk-fine-sq8-paired-v1', panels=[dict(dataset=d, root=roots[d]['manifest.json'],
+        requests=inputs[d]['requests64'], truth=inputs[d]['truth64'], truth_width=100) for d in DATASETS], source_identity_sha256=source_id,
+        limits=dict(max_peak_payload_bytes=512 << 20, pinned_generation_bytes=0, active_queries=1, delta_bytes=0, maintenance_bytes=0, runtime_bytes=0),
+        max_evaluator_payload_bytes=256 << 20, max_result_bytes=128 << 20)
+
+
+def fine_build_report(path, cfg, roots, source_id, *, original, runtime_roots=None):
+    expected = runtime_roots or roots
+    rows = list(events(path, 65536)); exact(len(rows), 1, 'one native fine build terminal'); event = rows[0][1]
+    for name, value in dict(phase='terminal', status='BUILT_UNVERIFIED', complete=True, root=expected['manifest.json'],
+            source_identity_sha256=source_id, scientific_qualification=False, quality_or_performance_claim=False).items(): exact(event[name], value, 'native fine build envelope')
+    manifest = local.read_json(roots['manifest.json'], 65536)
+    exact(manifest['schema'], 'borsuk-fine-sq8-v1', 'fine native format'); exact(manifest['primary_root'], cfg['primary_root'], 'unchanged primary root')
+    exact(manifest['original'], original, 'native immutable original BuildConfig')
+    for name in FINE_FILES[1:]: exact(manifest[name.removesuffix('.bin')], expected[name], 'native output artifact descriptor')
+    require(sum(p['bytes'] for p in roots.values()) <= cfg['max_output_bytes'], 'fine output byte cap')
+
+
+def fine_paired_report(path, cfg, pin, seal_pin):
+    """Validate native envelopes and raw prefix seal; never inspect plans/hits."""
+    digest = hashlib.sha256(); size = 0; seal = terminal = None
+    counts = dict(startup=0, fine_plan=0, fine_scored=0, fine_metrics=0)
+    for line, event in events(path, cfg['max_result_bytes']):
+        require(terminal is None, 'native terminal last'); phase = event['phase']
+        if phase == 'fine_seal':
+            require(seal is None and counts == dict(startup=2, fine_plan=128, fine_scored=0, fine_metrics=0), 'both128 plans before seal')
+            seal = local.read_json(seal_pin, 4096)
+            expected = dict(schema='borsuk-fine-sq8-seal-v1', config_sha256=pin['sha256'], source_identity_sha256=cfg['source_identity_sha256'],
+                prefix_bytes=size, prefix_sha256=digest.hexdigest(), plans_per_panel=64, truth_opened=False,
+                panels=[{k:p[k] for k in ('dataset', 'root', 'requests')} for p in cfg['panels']])
+            exact(seal, expected, 'native both-panel raw prefix seal'); exact(event['identity'], seal, 'native emitted seal')
+            exact(event['sha256'], seal_pin['sha256'], 'native seal bytes'); exact(event['truth_opened'], False, 'seal precedes GT')
+        elif phase == 'terminal':
+            require(seal is not None, 'native closed science requires both-panel seal')
+            for name, value in dict(complete=True, scientific_qualification=False, quality_or_performance_claim=False).items(): exact(event[name], value, 'native closed scientific envelope')
+            require(event['status'] in ('SURVIVED_CONSUMED_PANELS', 'FAIL'), 'native science outcome distinct from INVALID')
+            if counts['fine_metrics'] == 0:
+                exact(counts['fine_scored'], 0, 'no partial scored result')
+                exact(event['status'], 'FAIL', 'native infeasible scientific FAIL'); exact(event['truth_opened'], False, 'infeasible no-GT FAIL')
+                exact(event['reason'], 'infeasible unchanged-shortlist cover', 'native infeasible closure')
+            else:
+                exact(counts['fine_scored'], 128, 'both complete scored panels'); exact(counts['fine_metrics'], 128, 'both native metric panels')
+                exact([p['dataset'] for p in event['summaries']], list(DATASETS), 'native separate panel summaries')
+            terminal = event
+        else:
+            require(phase in counts, 'native fine phase roster')
+            index = counts[phase]; count = 2 if phase == 'startup' else 128
+            require(index < count, 'bounded native event count'); exact(event['dataset'], DATASETS[index if phase == 'startup' else index//64], 'native both-panel order')
+            if phase != 'startup': exact(event['ordinal'], index % 64, 'native ordinal envelope')
+            if phase in ('startup', 'fine_plan'):
+                require(seal is None and counts['fine_scored'] == counts['fine_metrics'] == 0, 'native no-GT prefix order')
+                if phase == 'fine_plan': exact(counts['startup'], 2, 'both admitted roots before planning')
+                exact(event['truth_opened'], False, 'native plans before GT')
+            else:
+                require(seal is not None, 'native scored/metric envelopes after seal')
+                if phase == 'fine_scored':
+                    exact(counts['fine_metrics'], 0, 'both scored panels before either GT'); exact(event['truth_opened'], False, 'native scoring before GT')
+                else: exact(counts['fine_scored'], 128, 'both native scoring panels complete before GT')
+            counts[phase] += 1
+        if seal is None: digest.update(line); size += len(line)
+    require(terminal is not None, 'native terminal required')
+    return dict(terminal=terminal, truth_opened=counts['fine_metrics'] == 128)
+
+
+def fine_execute(config_path, config_sha, repo, output):
+    output = positive.regular_path(output); require(output.is_relative_to(FINE_WORKER/'screen'), 'fine output worker ownership')
+    require(positive.regular_path(config_path).is_relative_to(FINE_WORKER) and positive.regular_path(repo).is_relative_to(FINE_WORKER), 'inventoried config/source paths')
+    output.mkdir(exist_ok=False)
+    receipt = dict(schema=FINE_SCHEMA+'-receipt', output=str(output), status='INVALID', complete=False, stages=[], calls=[], inputs={}, roots={}, results={}, sampled_peak_output_bytes=0)
+    def check():
+        size = local.directory_bytes(output); receipt['sampled_peak_output_bytes'] = max(size, receipt['sampled_peak_output_bytes'])
+        require(local.directory_bytes(FINE_WORKER) <= 8 << 30, 'whole inventoried worker scratch cap')
+    old_term = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(InterruptedError('fine runner terminated')))
+    try:
+        config, pin = local.load_config(config_path, config_sha); receipt['config'] = retain(pin, output/'config.json')
+        fine_inputs(config, repo); sources = fine_qualification(config, repo); source_id = fine_source_identity(repo)
+        (output/'authority').mkdir(); local.write_json(output/'authority/current-source.json', sources)
+        probe.copy_bytes(output/'authority/retained-input-authority.json', probe.ref(repo, AUTHORITY, read=True))
+        with controller.execution_mode(fine_sq8=True): names = controller.ARTIFACTS
+        for name in names: retain(local.identity(Path(config['qualification']['directory'])/name), output/'authority/native'/name); check()
+        for name in ('terminal', 'launch', 'closeout'): retain(config['qualification'][name], output/'authority'/(name+'.json'))
+        binary = retain(config['binary'], output/'binary/hierarchical_semantic_cells'); os.chmod(binary['path'], 0o500); probe.fsync_file(binary['path']); receipt['binary'] = binary
+        (output/'measurement').mkdir(); (output/'layouts').mkdir()
+        for d in DATASETS:
+            incoming = config['inputs'][d]; kept = dict(layout={}, original={}); receipt['inputs'][d] = kept
+            for category, names in (('layout', LAYOUT), ('original', ORIGINALS)):
+                for name in names: kept[category][name] = retain(incoming[category][name], output/'inputs'/d/category/name); check()
+            kept['requests64'] = retain(incoming['requests64'], output/'requests'/d/'requests64'); kept['truth64'] = incoming['truth64']
+        def invoke(name, mode, role, cfg, destination):
+            cfg_pin = local.write_json(output/'measurement'/(name+'-config.json'), cfg); limits = RESOURCES[role]; seconds = limits['timeout_seconds']
+            command = [binary['path'], mode, cfg_pin['path'], cfg_pin['sha256'], str(destination)]
+            with patch.object(probe, '__file__', str(Path(__file__).resolve())), patch.object(probe, 'ORIGINAL_ROOT', output/'measurement'):
+                probe.native_stage(name, command, binary, cfg_pin, output/'measurement', limits, seconds, time.monotonic()+seconds+1, receipt['stages'], check)
+            item = dict(name=name, mode=mode, role=role, config=cfg_pin, destination=str(destination), report=local.identity(destination.with_suffix('.build.jsonl') if role == 'build' else destination), closure=local.identity(output/'measurement'/(name+'-closure.json')))
+            receipt['calls'].append(item); closure(output, output, item, binary); return item
+        for d in DATASETS:
+            destination = output/'layouts'/d; cfg = fine_build_config(receipt['inputs'][d]['layout']['manifest.json'])
+            item = invoke(d+'-build-fine', 'build-fine', 'build', cfg, destination)
+            roots = {n:local.identity(destination/n) for n in FINE_FILES}; receipt['roots'][d] = roots
+            fine_build_report(item['report']['path'], cfg, roots, source_id, original=local.read_json(receipt['inputs'][d]['layout']['manifest.json'])['input']); check()
+        cfg = fine_query_config(receipt['inputs'], receipt['roots'], source_id); destination = output/'measurement/paired-fine.jsonl'
+        item = invoke('paired-fine', 'paired-fine', 'query', cfg, destination); item['seal'] = local.identity(destination.with_suffix('.fine-seal.json'))
+        receipt['results'] = fine_paired_report(destination, cfg, item['config'], item['seal'])
+        exact([c['name'] for c in receipt['calls']], FINE_ORDER, 'exact three serial native calls')
+        receipt.update(complete=True, status='PASS' if receipt['results']['terminal']['status'] == 'SURVIVED_CONSUMED_PANELS' else 'FAIL'); check()
+    except BaseException as error: receipt.update(status='INVALID', complete=False, error=str(error), error_type=type(error).__name__)
+    finally:
+        signal.signal(signal.SIGTERM, old_term)
+        receipt['cleanup'] = dict(native_units_drained=all(s.get('unit_drained') and s.get('cgroup_drained') for s in receipt['stages']), native_processes_concurrent_max=1 if receipt['stages'] else 0, partial_artifacts_preserved=True)
+    with patch.object(sys.modules[__name__], 'SCHEMA', FINE_SCHEMA): return finish(output, receipt)
+
+
+def fine_replay(config_path, config_sha, repo, output):
+    output = positive.regular_path(output); config, pin = local.load_config(config_path, config_sha)
+    terminal = local.read_json(local.identity(output/'terminal.json'), 8 << 20); receipt = local.read_json(local.identity(output/'execution-receipt.json'), 8 << 20)
+    exact(terminal['schema'], FINE_SCHEMA+'-terminal', 'fine terminal schema'); exact(receipt['schema'], FINE_SCHEMA+'-receipt', 'fine receipt schema')
+    exact(terminal['inventory'], witness.inventory(output), 'terminal-last exact fine inventory')
+    exact(body(receipt['config']), body(pin), 'same frozen fine config'); exact(body(local.identity(output/'config.json')), body(pin), 'retained raw config')
+    for name in ('complete', 'status'): exact(terminal[name], receipt[name], 'fine terminal/receipt outcome')
+    exact(terminal['execution_exit_code'], 0 if receipt['complete'] else 2, 'science FAIL versus execution INVALID')
+    if not receipt['complete']: exact(receipt['status'], 'INVALID', 'partial fine attempt'); return terminal
+    runtime = receipt['output']; physical = lambda p: witness.physical(output, runtime, p)
+    rebound = copy.deepcopy(config); q = rebound['qualification']; q['directory'] = str(output/'authority/native')
+    q['proof'] = physical(dict(config['qualification']['proof'], path=str(Path(runtime)/'authority/native/source-qualification.json')))
+    for name in ('terminal', 'launch', 'closeout'): q[name] = physical(dict(config['qualification'][name], path=str(Path(runtime)/'authority'/(name+'.json'))))
+    rebound['binary'] = physical(receipt['binary']); sources = fine_qualification(rebound, repo)
+    exact(local.read_json(local.identity(output/'authority/current-source.json'), 128 << 10), sources, 'retained full404 source map')
+    exact(body(receipt['binary']), body(config['binary']), 'qualified binary'); local.authenticate(physical(receipt['binary']), 256 << 20)
+    retained = {d:dict(layout={n:physical(p) for n,p in receipt['inputs'][d]['layout'].items()}) for d in DATASETS}
+    fine_inputs(config, repo, retained=retained)
+    for d in DATASETS:
+        kept, incoming = receipt['inputs'][d], config['inputs'][d]
+        for category in ('layout', 'original'):
+            for name, p in kept[category].items(): exact(body(p), body(incoming[category][name]), 'preserved original/layout'); local.authenticate(physical(p), 512 << 20)
+        exact(body(kept['requests64']), body(incoming['requests64']), 'retained raw requests'); local.authenticate(physical(kept['requests64']), 32 << 20)
+        exact(kept['truth64'], incoming['truth64'], 'native-only unchanged GT pointer')
+        exact(set(receipt['roots'][d]), set(FINE_FILES), 'exact fine output roster')
+        for p in receipt['roots'][d].values(): local.authenticate(physical(p), 512 << 20)
+    exact([c['name'] for c in receipt['calls']], FINE_ORDER, 'exact three native calls')
+    exact(receipt['cleanup'], dict(native_units_drained=True, native_processes_concurrent_max=1, partial_artifacts_preserved=True), 'fine cleanup')
+    result = None; source_id = fine_source_identity(repo)
+    for index, item in enumerate(receipt['calls']):
+        closure(output, runtime, item, receipt['binary']); cfg = local.read_json(physical(item['config']))
+        exact(item['mode'], 'build-fine' if index < 2 else 'paired-fine', 'fixed native mode'); exact(item['role'], 'build' if index < 2 else 'query', 'fixed native resources')
+        if index < 2:
+            d = DATASETS[index]; exact(cfg, fine_build_config(receipt['inputs'][d]['layout']['manifest.json']), 'exact native FineBuildConfig')
+            roots = {n:physical(p) for n,p in receipt['roots'][d].items()}
+            fine_build_report(physical(item['report'])['path'], cfg, roots, source_id, original=local.read_json(physical(receipt['inputs'][d]['layout']['manifest.json']))['input'], runtime_roots=receipt['roots'][d])
+        else:
+            exact(cfg, fine_query_config(receipt['inputs'], receipt['roots'], source_id), 'exact native FinePairedConfig')
+            result = fine_paired_report(physical(item['report'])['path'], cfg, item['config'], physical(item['seal']))
+    exact(result, receipt['results'], 'original opaque native scientific outcome')
+    exact(receipt['status'], 'PASS' if result['terminal']['status'] == 'SURVIVED_CONSUMED_PANELS' else 'FAIL', 'native outcome preserved')
+    return terminal
+
+
+FINE_FIXTURE = FIXTURE.split('mode,cfg_path,expected,destination=', 1)[0].replace("bad='cohere-paired' in spec['name']", "bad=spec['name']=='paired-fine'")+r'''
+mode,cfg_path,expected,destination=sys.argv[1:]; raw=Path(cfg_path).read_bytes(); assert sha(raw)==expected; cfg=json.loads(raw); out=Path(destination)
+if mode=='build-fine':
+ assert not out.exists(); out.mkdir(); parts={}
+ for n in ('pq','graph','records','groups','order'):
+  p=out/(n+'.bin'); p.write_bytes(b'opaque '+n.encode()); parts[n]=pin(p)
+ primary=json.loads(Path(cfg['primary_root']['path']).read_bytes())
+ manifest=dict(schema='borsuk-fine-sq8-v1',primary_root=cfg['primary_root'],original=primary['input'],**parts)
+ write(out/'manifest.json',manifest)
+ write(out.with_suffix('.build.jsonl'),dict(phase='terminal',status='BUILT_UNVERIFIED',complete=True,root=pin(out/'manifest.json'),
+  source_identity_sha256=source,scientific_qualification=False,quality_or_performance_claim=False))
+ sys.exit(9 if scenario=='build-exit' and out.name=='cohere' else 0)
+assert mode=='paired-fine'
+events=[]
+for panel in cfg['panels']: events.append(dict(phase='startup',dataset=panel['dataset'],root=panel['root'],truth_opened=False))
+for panel in cfg['panels']:
+ for ordinal in range(64): events.append(dict(phase='fine_plan',dataset=panel['dataset'],ordinal=ordinal,truth_opened=False,plan={'opaque':'native group16/group256 data'}))
+prefix=b''.join(map(enc,events)); sealed=dict(schema='borsuk-fine-sq8-seal-v1',config_sha256=expected,source_identity_sha256=source,
+ prefix_bytes=len(prefix),prefix_sha256=sha(prefix),plans_per_panel=64,truth_opened=False,
+ panels=[{k:p[k] for k in ('dataset','root','requests')} for p in cfg['panels']])
+seal_path=out.with_suffix('.fine-seal.json'); write(seal_path,sealed)
+events.append(dict(phase='fine_seal',identity=sealed,sha256=pin(seal_path)['sha256'],truth_opened=False))
+if scenario=='infeasible':
+ terminal=dict(phase='terminal',status='FAIL',complete=True,truth_opened=False,reason='infeasible unchanged-shortlist cover')
+else:
+ for phase in ('fine_scored','fine_metrics'):
+  for panel in cfg['panels']:
+   for ordinal in range(64):
+    event=dict(phase=phase,dataset=panel['dataset'],ordinal=ordinal)
+    if phase=='fine_scored': event.update(truth_opened=False,opaque='native rosters/accounting')
+    else: event.update(containment_hits=1,coverage_hits=2,returned_hits=3)
+    events.append(event)
+ terminal=dict(phase='terminal',status='FAIL' if scenario=='fail' else 'SURVIVED_CONSUMED_PANELS',complete=True,
+  summaries=[dict(dataset=p['dataset'],opaque='native reductions') for p in cfg['panels']])
+terminal.update(scientific_qualification=False,quality_or_performance_claim=False); events.append(terminal)
+if scenario=='prefix': events[0]['root']=dict(events[0]['root'],sha256='0'*64)
+if scenario=='seal': sealed['source_identity_sha256']='0'*64; seal_path.write_bytes(enc(sealed))
+if scenario=='early-truth': events[1]['truth_opened']=True
+if scenario=='incomplete': events.pop(3)
+if scenario=='partial-metrics': events.pop(-2)
+if scenario=='invalid': terminal.update(status='INVALID',complete=False)
+with out.open('xb') as f: f.write(b''.join(map(enc,events))); f.flush(); os.fsync(f.fileno())
+sys.exit(7 if scenario=='exit' else 0)
+'''
+
+
+def fine_self_check():
+    """Fixed native schemas, then synthetic subprocess/closure replay only."""
+    assert 'fine_build_config' in globals(), 'three-call fine glue is absent'
+    root = dict(path='/synthetic/root', bytes=1, sha256='0'*64)
+    exact(fine_build_config(root), dict(schema='borsuk-fine-sq8-build-v1', primary_root=root,
+        max_build_payload_bytes=8 << 30, max_output_bytes=512 << 20), 'actual strict FineBuildConfig')
+    repo = Path(__file__).resolve().parents[1]; gate = repo/FINE_GATE; remote = FINE_WORKER/'screen/retained/native-qualification'
+    q = dict(pending=False,directory=str(remote))
+    for n,f in dict(proof='source-qualification.json',terminal='aws-terminal.json',launch='aws-launch.json',closeout='aws-closeout.json').items(): q[n] = dict(local.identity(gate/f),path=str(remote/f))
+    qualified = local.read_json(local.identity(gate/'aws-terminal.json'), 8 << 20)
+    transport = {n:dict(p,path=FINE_GATE+n,encoding='raw') for n,p in qualified['artifacts'].items()}
+    sources = fine_qualification(dict(qualification=q,binary=dict(FINE_BINARY,path=str(remote/'binaries/hierarchical_semantic_cells')),qualification_transport=transport),repo,metadata=True)
+    exact(len(sources),404,'real qualified404 metadata'); source_id = fine_source_identity(repo)
+    print('PASS exact real404 qualification metadata/57-test recorded gate; native include_bytes identity '+source_id+'; binary/corpus/GT bodies unopened.')
+    from contextlib import ExitStack
+    module = sys.modules[__name__]; compile(FINE_FIXTURE, '<fine-tiny-python-child>', 'exec')
+    def rejects(fn):
+        try: fn()
+        except (ValueError, AssertionError, OSError, KeyError): return
+        raise AssertionError('negative fine fixture admitted')
+    with tempfile.TemporaryDirectory(prefix='fine-pair-check-') as tmp, ExitStack() as stack:
+        worker = Path(tmp); (worker/'screen').mkdir(); repo = worker/'repo'; repo.mkdir(); qualified = worker/'screen/retained/native-qualification'; qualified.mkdir(parents=True)
+        native = worker/'tiny-python-native'; probe.copy_bytes(native, ('#!'+sys.executable+'\n'+FINE_FIXTURE).encode()); native.chmod(0o700)
+        with controller.execution_mode(fine_sq8=True):
+            for name in controller.ARTIFACTS: retain(local.identity(native), qualified/name) if name.startswith('binaries/') else probe.copy_bytes(qualified/name,b'synthetic qualification')
+        q = dict(pending=False,directory=str(qualified))
+        for n,f in dict(proof='source-qualification.json',terminal='aws-terminal.json',launch='aws-launch.json',closeout='aws-closeout.json').items():
+            if not (qualified/f).exists(): local.write_json(qualified/f,dict(synthetic=True))
+            q[n] = local.identity(qualified/f)
+        inputs = {}; authority = dict(schema='borsuk-source-witness-retained-input-authority-v1',datasets={})
+        for d in DATASETS:
+            original = {n:probe.copy_bytes(worker/FINE_ORIGINAL_PATHS[d][n], ('opaque '+d+' '+n).encode()) for n in ORIGINALS}
+            build = dict(original,schema='borsuk-hierarchical-cells-build-v2',cell_rows=512,sample_rows=256,max_depth=32,max_build_payload_bytes=64 << 20,max_output_bytes=256 << 20)
+            folder = worker/'screen/retained'/d
+            layout = {n:probe.copy_bytes(folder/'layout'/n,local.canonical(dict(schema='borsuk-hierarchical-cells-resident-v4',rows=4,dimensions=2,input=build)) if n=='manifest.json' else b'opaque primary body') for n in LAYOUT}
+            requests = probe.copy_bytes(folder/'requests64',b'  opaque request bytes\r\n')
+            truth = dict(path=str(folder/'truth64'),bytes=25600,sha256=local.sha(b'never opened synthetic GT descriptor'))
+            inputs[d] = dict(layout=layout,original=original,requests64=requests,truth64=truth)
+            authority['datasets'][d] = {n:body(p) for n,p in dict(layout,requests64=requests,truth64=truth).items()}
+        authority_pin = dict(local.write_json(repo/'authority.json',authority),path='authority.json'); source_id = '1'*64
+        sources = {'synthetic.rs':'2'*64}
+        config = dict(schema=FINE_SCHEMA,run_id='fine-sq8-paired100k-a0001',authority=authority_pin,qualification=q,
+            binary=local.identity(qualified/'binaries/hierarchical_semantic_cells'),inputs=inputs,resources=copy.deepcopy(RESOURCES))
+        for n,v in dict(AUTHORITY=authority_pin,FINE_WORKER=worker,ROWS=4,DIMENSIONS=2).items(): stack.enter_context(patch.object(module,n,v))
+        stack.enter_context(patch.object(module,'fine_qualification',return_value=sources)); stack.enter_context(patch.object(module,'fine_source_identity',return_value=source_id))
+        for n in ('layout','restore_writer_inputs','reconstruct_command','execute'): stack.enter_context(patch.object(probe,n,side_effect=AssertionError('forbidden old scientific path')))
+        stack.enter_context(patch.dict(os.environ,dict(BORSUK_GLOBAL_LEAF_SLICE='borsuk-global-leaf-synthetic.slice',OVERLAP_PAIR_FIXTURE_SOURCE=source_id)))
+        original_open = positive.open_input
+        def no_gt(path):
+            require(Path(path).name != 'truth64','Python GT access forbidden'); return original_open(path)
+        stack.enter_context(patch.object(positive,'open_input',side_effect=no_gt))
+        actual_popen = subprocess.Popen; processes = {}; calls = []; scenario = ''
+        def popen(command, **kwargs):
+            exact(command[0],'systemd-run','shared owned supervisor only'); pos = command.index('--owned-stage'); spec_path,_,receipt_path = command[pos+1:pos+4]
+            spec = local.read_json(local.identity(spec_path)); calls.append(spec['name']); require(spec['command'][1] in ('build-fine','paired-fine'),'only native fine CLI')
+            process = actual_popen([sys.executable,str(native),'supervise',spec_path,receipt_path],env=dict(os.environ,OVERLAP_PAIR_FIXTURE=scenario),**kwargs)
+            unit = next(c.removeprefix('--unit=') for c in command if c.startswith('--unit='))+'.service'; processes[unit] = process; return process
+        def run(command, **kwargs):
+            unit = next(c for c in command if c.endswith('.service')); process = processes[unit]
+            if command[1] in ('stop','kill'):
+                if process.poll() is None: os.killpg(process.pid,signal.SIGKILL)
+                return subprocess.CompletedProcess(command,0)
+            bad = scenario=='drain' and 'paired-fine' in unit
+            return subprocess.CompletedProcess(command,0,stdout='ActiveState='+('active' if bad else 'inactive')+'\nMainPID='+('1' if bad else '0')+'\nControlGroup=\n')
+        stack.enter_context(patch.object(probe,'subprocess',SimpleNamespace(Popen=popen,run=run,DEVNULL=subprocess.DEVNULL,STDOUT=subprocess.STDOUT,TimeoutExpired=subprocess.TimeoutExpired)))
+        def attempt(label, fault='', change=None, expected='INVALID', count=3):
+            nonlocal scenario
+            scenario = fault; calls.clear(); cfg = copy.deepcopy(config)
+            if change: change(cfg)
+            pin = local.write_json(worker/(label+'-config.json'),cfg); out = worker/'screen'/label
+            terminal = fine_execute(pin['path'],pin['sha256'],repo,out)
+            if terminal['status'] != expected:
+                receipt = local.read_json(local.identity(out/'execution-receipt.json'),8 << 20)
+                raise AssertionError('fine '+label+': '+str(receipt.get('error'))+'\n'+'\n'.join(p.read_text() for p in (out/'measurement').glob('*.log')))
+            exact(terminal['complete'],expected!='INVALID','fine completion'); exact(len(calls),count,'exact serial call count')
+            require(all(p.poll() is not None for p in processes.values()),'original tiny children drained')
+            exact(fine_replay(pin['path'],pin['sha256'],repo,out)['status'],expected,'closed fine replay')
+            return out,pin
+        good,pin = attempt('pass',expected='PASS'); attempt('scientific-fail','fail',expected='FAIL')
+        no_truth,_ = attempt('infeasible','infeasible',expected='FAIL')
+        exact(local.read_json(local.identity(no_truth/'execution-receipt.json'))['results']['truth_opened'],False,'closed infeasible FAIL before GT')
+        for fault in ('exit','config','memory','swap','oom','cpu','scratch','cleanup','drain','prefix','seal','early-truth','incomplete','partial-metrics','invalid'): attempt('invalid-'+fault,fault)
+        attempt('build-exit','build-exit',count=2)
+        for d in DATASETS:
+            p = Path(inputs[d]['requests64']['path']); raw = p.read_bytes(); p.write_bytes(raw+b'tamper')
+            attempt(d+'-request-tamper',count=0); p.write_bytes(raw)
+        for label,change in [('unknown',lambda c:c.update(extra=True)),('cpu4',lambda c:c['resources']['build'].update(cpu_affinity=[0,1,2,3])),
+                ('original-path',lambda c:c['inputs']['relaion']['original']['canonical'].update(path=str(worker/'outside-authority'))),
+                ('escape',lambda c:c['inputs']['cohere']['truth64'].update(path='/tmp/outside-worker-gt')),
+                ('qualification-path',lambda c:c['qualification']['terminal'].update(path='/tmp/outside-worker-proof')),
+                ('pending',lambda c:c['qualification'].update(pending=True))]: attempt(label,change=change,count=0)
+        before = (good/'terminal.json').read_bytes(); rejects(lambda:fine_execute(pin['path'],pin['sha256'],repo,good)); exact((good/'terminal.json').read_bytes(),before,'fine no-overwrite')
+        seal = good/'measurement/paired-fine.fine-seal.json'; before = seal.read_bytes(); seal.write_bytes(before+b'tamper'); rejects(lambda:fine_replay(pin['path'],pin['sha256'],repo,good)); seal.write_bytes(before)
+        closed = good/'measurement/paired-fine-closure.json'; before = closed.read_bytes(); value = local.decode(before); value['unit_drained'] = False; closed.write_bytes(local.canonical(value))
+        # Reseal inventory to prove closure validation, not just the outer SHA, rejects it.
+        saved = (good/'terminal.json').read_bytes(); term = local.decode(saved); term['inventory'] = witness.inventory(good); (good/'terminal.json').write_bytes(local.canonical(term))
+        rejects(lambda:fine_replay(pin['path'],pin['sha256'],repo,good)); closed.write_bytes(before); (good/'terminal.json').write_bytes(saved)
+        moved = worker/'collected'; good.rename(moved); exact(fine_replay(pin['path'],pin['sha256'],repo,moved)['status'],'PASS','relocated raw fine replay')
+        receipt = local.read_json(local.identity(moved/'execution-receipt.json'))
+        for item in receipt['calls']:
+            cfg = local.read_json(witness.physical(moved,receipt['output'],item['config']))
+            exact(set(cfg),set(fine_build_config(root)) if item['role']=='build' else {'schema','panels','source_identity_sha256','limits','max_evaluator_payload_bytes','max_result_bytes'},'strict native config fields')
+        for d in DATASETS: exact((moved/'requests'/d/'requests64').read_bytes(),b'  opaque request bytes\r\n','no normalization')
+        # Real reused owned_stage adapter with a silent tiny Python child;
+        # its binary lies inside the worker, like the qualified release does.
+        folder = worker/'screen/silent/measurement'; folder.mkdir(parents=True)
+        silent = worker/'screen/silent/binary'; probe.copy_bytes(silent, ('#!'+sys.executable+'\npass\n').encode()); silent.chmod(0o700)
+        cfg = local.write_json(folder/'config.json',dict(synthetic=True)); limits = dict(RESOURCES['query'],timeout_seconds=30)
+        spec = local.write_json(folder/'spec.json',dict(schema='borsuk-global-leaf-owned-stage-v1',name='silent',
+            command=[str(silent),'build-fine',cfg['path'],cfg['sha256'],str(folder/'unused-output')],binary=local.identity(silent),config=cfg,output=str(folder),resources=limits,timeout_seconds=30))
+        group = {'path':'/synthetic','memory.max':'536870912','memory.peak':'1048576','memory.swap.max':'0','memory.swap.peak':'0','memory.events':'oom 0\noom_kill 0\noom_group_kill 0','cpu_affinity':[0],'cpu.max':'100000 100000','pids.max':'512','cgroup.procs':str(os.getpid())}
+        with patch.object(local,'resource_snapshot',return_value=copy.deepcopy(group)),patch.object(probe,'cgroup_snapshot',return_value=copy.deepcopy(group)):
+            exact(main(['--owned-stage',spec['path'],spec['sha256'],str(folder/'receipt.json')]),0,'actual fine owned-stage adapter')
+        closed = local.read_json(local.identity(folder/'receipt.json')); exact(closed['complete'],True,'silent supervisor closed')
+        exact(closed['stages'][0]['log']['path'],str(folder/'silent.log'),'fine log stays in owned measurement')
+        exact(closed['stages'][0]['log']['bytes'],0,'fine silent stdout preserved')
+    print('PASS fine synthetic: exact3 serial calls, strict native configs, scientific FAIL/no-GT infeasible FAIL, both requests preauthenticated, original paths/nooverwrite/raw bytes, prefix/seal/exit/resource/cleanup faults, relocated closure replay. Tiny Python children only; no ANN/GT/network/native qualification.')
+
+
 def main(args):
     try:
+        if args[:1] == ['--fine-sq8-pair']:
+            args = args[1:]
+            if args == ['--self-check']: fine_self_check(); return 0
+            if len(args) == 5 and args[0] == '--replay': terminal = fine_replay(*args[1:])
+            elif len(args) == 4: terminal = fine_execute(*args)
+            else: raise ValueError('usage: --fine-sq8-pair CONFIG SHA REPO NEW_OUTPUT | --replay CONFIG SHA REPO OUTPUT | --self-check')
+            print(local.canonical(terminal).decode(), end=''); return terminal['execution_exit_code']
         if len(args) == 4 and args[0] == '--owned-stage':
-            _, pin = local.load_config(args[1], args[2]); owned_stage(pin, args[3]); return 0
+            spec, pin = local.load_config(args[1], args[2])
+            if spec['command'][1:2] in (['build-fine'], ['paired-fine']):
+                with patch.object(probe, 'ORIGINAL_ROOT', Path(spec['output'])): owned_stage(pin, args[3])
+            else: owned_stage(pin, args[3])
+            return 0
         if args == ['--self-check']:
             self_check(); return 0
         if len(args) == 5 and args[0] == '--replay':
