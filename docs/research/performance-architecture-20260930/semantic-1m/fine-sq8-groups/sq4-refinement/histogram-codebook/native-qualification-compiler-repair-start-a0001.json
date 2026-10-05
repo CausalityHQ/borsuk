@@ -1,0 +1,46 @@
+{
+  "config_commit": "d170d1a62ab4406ba3d77b997b17652c5fc88612",
+  "config_sha256": "e8abe6600c9daa97b9aee81ce44926e6e77d4823f316aad7e4748426b3583d31",
+  "contract": {
+    "bytes": 26038,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/histogram-codebook/native-source-contract-1057e5a6.json",
+    "sha256": "1b30f93093f994eb994f89dffc9d6ff70b564b4b3cb1de7f15bdfdc2b492caef"
+  },
+  "controller_commit": "f20153dec54d79483455a2f8f5863490726650af",
+  "instance_id": "i-0a8b7ed675f7667e5",
+  "native_repair": "one explicit reserved::<[u8;32]> type annotation; prior0cbc preserved",
+  "native_source_commit": "1057e5a6351ccb4c2d33918874e062730fd32225",
+  "native_source_identity_sha256": "824720f33687ef21a851225af1c72a0b8dbbf793ae9e0471a1b52d55c1753800",
+  "new_required_tests": 9,
+  "original_controller_session": 74907,
+  "preflight": {
+    "actual_controller_self_check_exit": 0,
+    "aws_cargo_mocked": true,
+    "clean_bundle_origin_config_full404_archive_closure": true,
+    "controller_self_check_peak": "69.4M as systemd reported",
+    "controller_self_check_runtime_seconds": 2.355,
+    "controller_self_check_swap_bytes": 0,
+    "sdk_model_check_reused_unchanged": true,
+    "shell_bash_syntax": true
+  },
+  "previous_original_disposition": "COMPILER_INVALID_NOT_SCIENTIFIC_REJECT; preserved implementation-gates/a0001; original same instance terminated before this launch",
+  "required_gates": 14,
+  "resource_limits": {
+    "ancillary_allowance_usd": 0.15,
+    "cargo_jobs": 1,
+    "compute_cap_usd": 1.25,
+    "cpu_percent": 200,
+    "machine_seconds": 9000,
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "tasks": 512,
+    "test_seconds": 7200,
+    "test_threads": 1
+  },
+  "schema": "borsuk-histogram-sq4-native-qualification-start-v1",
+  "science": "UNRUN",
+  "source_archive_sha256": "a46b45b45a3860863075202e7edcab1068959e5025260505d26b16aa02508de5",
+  "source_bundle_commit": "7781129f173288c1b4a411dec3b9ddfeb6c80b1b",
+  "source_file_count": 404,
+  "status": "RUNNING_NOT_QUALIFIED"
+}
