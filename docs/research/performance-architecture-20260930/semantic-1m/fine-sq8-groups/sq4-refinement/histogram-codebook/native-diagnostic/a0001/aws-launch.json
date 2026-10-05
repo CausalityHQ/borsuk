@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-00824fbde5beb5995",
+  "nodes": {
+    "0": {
+      "instance_id": "i-00824fbde5beb5995"
+    }
+  },
+  "prefix": "research/hierarchical-cells/20261005/histogram-sq4-diagnostic-a0001",
+  "source_commit": "013519190f7a48e1ad16900c6c755c5450044ee5",
+  "source_archive_sha256": "0c05519946ca871e4ac119a8f911a76ea53b77917d3f2c3b9bfe68d3f7e24460"
+}
