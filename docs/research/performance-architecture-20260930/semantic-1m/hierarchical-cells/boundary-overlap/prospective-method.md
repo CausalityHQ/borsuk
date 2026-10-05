@@ -1,6 +1,6 @@
 # Prospective bounded boundary overlap
 
-Status: native source implemented at `afd58b557d01cafc307e650d9c29f381dbf24c41`, not yet compiled or qualified. Exact-source remote implementation-gates/a0001 is running from bundle `2b3f683a9783945c994b3f99059df4dccbd0235d`; its reservation and launch receipts bind the 403-file native inventory and seven serial gates. No paired overlap quality or performance has been measured. This is a new arm. Historical witness and balanced-partitioner failures remain unchanged.
+Status: exact-source native implementation qualification passed all seven gate groups; paired100k/a0002 is now closed scientific **FAIL**, with authenticated raw-body replay exit0 and the original instance terminated. Candidate returned recall@100 is89.34375% ReLAION and80.703125% CoHere on consumed64 FIRST100k/D768 panels; both miss the preregistered98%/p05>=95 gate. See [closed decision](paired100k/a0002/decision.md) and [verification](paired100k/a0002/parent-verification.json). The method below is immutable historical methodology; this result rejects promotion of this arm. No physical S3 query performance or vendor win was measured.
 
 ## Causal change
 

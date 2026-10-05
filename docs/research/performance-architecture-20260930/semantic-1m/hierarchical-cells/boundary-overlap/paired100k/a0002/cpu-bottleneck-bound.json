@@ -1,0 +1,26 @@
+{
+  "schema": "borsuk-closed-overlap-cpu-bound-v1",
+  "source": "paired100k/a0002/screen/overlap/execution-receipt.json",
+  "scope": "two arms x64queries; local serial process CPU, including startup and evaluation; not service QPS/cold wall",
+  "hypothesis": "SIMD scoring cannot fix selected-cell coverage; quantify upper bound before kernel optimization",
+  "datasets": {
+    "cohere": {
+      "whole_process_cpu_ns": 3180755310,
+      "full_sq8_scoring_process_cpu_ns": 1871189887,
+      "route_process_cpu_ns": 79046509,
+      "scoring_cpu_fraction": 0.5882847640361245,
+      "perfect_scoring_cpu_speedup_upper_bound": 2.4288632351894344,
+      "upper_bound_is_estimate": true,
+      "algorithm_quality_unchanged": true
+    },
+    "relaion": {
+      "whole_process_cpu_ns": 3312421883,
+      "full_sq8_scoring_process_cpu_ns": 1967157055,
+      "route_process_cpu_ns": 71901009,
+      "scoring_cpu_fraction": 0.5938727385831607,
+      "perfect_scoring_cpu_speedup_upper_bound": 2.4622823804325313,
+      "upper_bound_is_estimate": true,
+      "algorithm_quality_unchanged": true
+    }
+  }
+}
