@@ -8,6 +8,14 @@ attribution, exact four-file scope, and every actual file SHA256 against the
 copied `source-contract-23e93cf2.json`. The change is additive: 2,367 lines,
 including nine authored native tests. No Rust source is integrated here.
 
+Root subsequently streamed and hashed all 405 native source files in the clean
+candidate checkout. The unchanged paths match the earlier qualified 404-file
+control map; the four owned paths match the candidate contract. Complete source
+identity is `a559b3e39e12fa0f49273d483dbe08d8dcd6dfdde22636e4e86e44cc96cc2ac6`.
+The map is preserved in `source-inventory-23e93cf2.json` with qualification
+explicitly pending. The original metadata hashing process was collected exit0;
+it performed no compilation, native query, corpus/GT read, or network request.
+
 Status: **UNVERIFIED**. Source parsing and whitespace checks reported exit0;
 compilation, tests, Clippy, workspace test compilation, recall, and performance
 have not run for this candidate. The worker is retained for concrete repairs.
