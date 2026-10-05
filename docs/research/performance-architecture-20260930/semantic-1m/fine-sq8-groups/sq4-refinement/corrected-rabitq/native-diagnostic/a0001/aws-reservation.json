@@ -1,0 +1,127 @@
+{
+  "schema": "borsuk-corrected-four-bit-diagnostic-spot-v1",
+  "source_commit": "43398acb9472fbb9d80ecd87edbca3b703fcd936",
+  "source_archive_sha256": "1caa6372707ee205289335277a8aecf162d82c5e4f336095f12b2c2bc62c867f",
+  "source_archive_key": "research/native-library-check/sources/1caa6372707ee205289335277a8aecf162d82c5e4f336095f12b2c2bc62c867f.tar.gz",
+  "wall_seconds": 3600,
+  "instance_type": "c7i.2xlarge",
+  "image_id": "ami-0b8a830d6339a9758",
+  "root_device_name": "/dev/sda1",
+  "availability_zone": "eu-central-1a",
+  "subnet_id": "subnet-034528fbd6977848f",
+  "spot_price_observed_usd_per_hour": "0.216200",
+  "spot_quote_timestamp": "2026-10-05T19:00:00+00:00",
+  "spot_max_usd_per_hour": 0.6,
+  "compute_cap_usd": 0.6,
+  "ebs_s3_allowance_usd": 0.15,
+  "total_cost_measured": false,
+  "cost_scope": "3600s at capped Spot rate; boot/termination overhead and EBS/S3 allowance estimated",
+  "qualification": {
+    "config_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/native-diagnostic/config.json",
+    "config_sha256": "f8a9631b9251e03db134d4092e78c392bd40b4b3cbc5e04ced51428fd6e5bf63",
+    "campaign_schema": "borsuk-corrected-four-bit-diagnostic-spot-v1",
+    "artifact_roster_sha256": "5044b1590b385f9c4ab7c1ed7a0a5879d231cb09ac8d05c007490286f48f88f0",
+    "native_config_sha256": "64017a6d5f2f0d98a205e60b58cf0251a438ecc35ee608f2839d064ffbe8d208",
+    "binary": {
+      "bytes": 10608320,
+      "key": "research/semantic-router/20261005/corrected-four-bit-implementation-a0001/artifacts/binaries/hierarchical_semantic_cells",
+      "sha256": "1cba6503a6a51fad193110b2c2dd6cee324b1cdb8f4235761a9afa6c4b24d00c"
+    },
+    "native_source_commit": "4ec11b94bdc15b103bc713418e9f2c0705a9d0b6",
+    "source_identity_sha256": "45821354fe7ee55fed119a81c51ef02cd0a82817c7e199d494d75b83366646ab",
+    "code_sha256": {
+      "scripts/check_native_metadata_ranges_build.py": "da48c53562220026c8024ba2400dca2ba897aa12d49c3e27c3c2fb40b9f0770e",
+      "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
+      "scripts/check_native_startup_build.py": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52",
+      "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+      "scripts/launch_fine_pack_diagnostic.py": "fdbea617f916b99dbacfa204780095b3e26a493248e89641a485578f20279864",
+      "scripts/launch_native_metadata_ranges_cold_spot.py": "f1dfdb56d08f864594c4dadbdbae593b61d5285f60703712e91865ebd0a9d0e2",
+      "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
+      "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
+      "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b",
+      "scripts/launch_v174_relaid_bind_compile_spot.py": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a",
+      "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+      "scripts/run_native_cold_first_query.py": "b4afffd43df8e2ab617749a50fd099fd279e57631e0dcb749b75169ad269a99f",
+      "scripts/run_native_metadata_ranges_cold.py": "1322fe19b705caeab275bce69ea6b4a9f2ed84cb6505dcbfe01b25301fdb71b8",
+      "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+      "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+      "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+      "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6"
+    },
+    "native_qualification": [
+      {
+        "bytes": 18163,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/parent-verification.json",
+        "sha256": "033092a60df73a4d174444d816baf13331813d5d222388525ccda3023922eab5"
+      },
+      {
+        "bytes": 413513,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/source-qualification.json",
+        "sha256": "ed716bcd57f222244c0fa86531c9fa5e3a31c46bcbf1fb1169982fec83921939"
+      },
+      {
+        "bytes": 68394,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/workspace-receipt.json",
+        "sha256": "93e06898e98e42fabbb68addffaebf68e87b736649b4f460d6217b56145ec333"
+      },
+      {
+        "bytes": 3173,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/aws-terminal.json",
+        "sha256": "63ffed6c9eed380be072d859e0670f61ee649d0637b7de4636e5f095b7cfd4e8"
+      },
+      {
+        "bytes": 136,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/aws-closeout.json",
+        "sha256": "db52e50c24eeaf11eda7b9de850faabda24f5d436785a417f91f5f588961b048"
+      }
+    ],
+    "source_archive_paths": [
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/closed-populations.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/aws-closeout.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/aws-terminal.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/parent-verification.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/source-qualification.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates/a0001/workspace-receipt.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/infrastructure-canary/a0001/canary-admission.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/native-diagnostic/config.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/qualification-source-contract-8c9f76f8.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/source-contract-4ec11b94.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/source-inventory-4ec11b94.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/prospective-input-roster.json",
+      "scripts/check_native_metadata_ranges_build.py",
+      "scripts/check_native_metadata_ranges_stats.py",
+      "scripts/check_native_startup_build.py",
+      "scripts/check_native_startup_stats.py",
+      "scripts/launch_fine_pack_diagnostic.py",
+      "scripts/launch_native_metadata_ranges_cold_spot.py",
+      "scripts/launch_native_peer_1m_spot.py",
+      "scripts/launch_native_startup_profile_spot.py",
+      "scripts/launch_v157_primary_feasibility_spot.py",
+      "scripts/launch_v174_relaid_bind_compile_spot.py",
+      "scripts/rest_coexistence_load.py",
+      "scripts/run_native_cold_first_query.py",
+      "scripts/run_native_metadata_ranges_cold.py",
+      "scripts/run_native_peer_1m_worker.py",
+      "scripts/run_native_peer_offered_http.py",
+      "scripts/run_native_union_http.py",
+      "scripts/run_native_union_offered_http.py"
+    ],
+    "source_archive_paths_sha256": "756e9b38bc6c92d8b577fc8a2105cc06be07a4b4f440d9aec0db46b9e5f15791",
+    "scratch": {
+      "auxiliary_bytes": 33554432,
+      "binary_bytes": 10608320,
+      "bootstrap_bytes": 1073741824,
+      "cap_bytes": 8589934592,
+      "input_bytes": 229790129,
+      "native_output_bytes": 268435456,
+      "source_archive_bytes": 33554432
+    },
+    "canary_admission": {
+      "bytes": 13760,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/infrastructure-canary/a0001/canary-admission.json",
+      "sha256": "c0ca1ab827e9acd2faf87efc38445111be2f6a8d3addd4140a9b31ceec02016b"
+    }
+  },
+  "config_sha256": "f8a9631b9251e03db134d4092e78c392bd40b4b3cbc5e04ced51428fd6e5bf63",
+  "interruption_policy": "Discard interrupted worker; no automatic replacement"
+}
