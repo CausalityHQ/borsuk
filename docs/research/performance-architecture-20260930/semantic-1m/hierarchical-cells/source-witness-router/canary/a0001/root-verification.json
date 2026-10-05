@@ -1,0 +1,38 @@
+{
+  "schema": "borsuk-source-witness-canary-root-verification-v1",
+  "attempt": "a0001",
+  "instance_id": "i-0375f9fff4d15bd11",
+  "original_controller_session": 2362,
+  "original_controller_exit_status": 2,
+  "original_controller_error": "absolute artifact path during offline replay of relative collected output",
+  "remote_original_exit_status": 0,
+  "remote_terminal_exit_status": 0,
+  "instance_terminated_and_waited": true,
+  "observed_ec2_elapsed_seconds": 93,
+  "authenticated_terminal_artifacts": 12,
+  "offline_absolute_replay": {
+    "exit_status": 0,
+    "result": {
+      "executed": true,
+      "status": "GO"
+    },
+    "unit": "borsuk-source-witness-canary-absolute-replay-20261005.service",
+    "invocation_id": "d784c600c71a4c0f90f02aa8bf74e88f",
+    "service_seconds": 1.114,
+    "cpu_seconds": 0.961,
+    "reported_memory_peak": "51.8M",
+    "swap_peak_bytes": 0
+  },
+  "worker_peak_bytes": 88899584,
+  "aggregate_peak_bytes": 88911872,
+  "worker_swap_peak_bytes": 0,
+  "scratch_peak_bytes": 1491861749,
+  "infrastructure_only": true,
+  "ann_queries": 0,
+  "truth_or_panel_body_reads": 0,
+  "native_processes": 0,
+  "sdk_asset_heads": 11,
+  "small_gate_log_get_bytes": 701198,
+  "total_cost_measured": false,
+  "future_local_output_decision": "Pass campaign.ROOT as an absolute output directory to existing shared.main; frozen config/code/remote bootstrap unchanged. No new canary required to replay an existing terminated result."
+}

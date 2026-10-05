@@ -1,0 +1,11 @@
+Running as unit: borsuk-source-witness-canary-controller-a0001-20261005.service; invocation ID: efdf81fb6cc346a2b07775642a3c0e8d
+{"instance_id": "i-0375f9fff4d15bd11", "nodes": {"0": {"instance_id": "i-0375f9fff4d15bd11"}}, "prefix": "research/hierarchical-cells/20261004/source-witness-canary-a0001", "source_commit": "d92099ecc06dbcd378959039da17713ca8c1bab4", "source_archive_sha256": "e02c1ec57050e2f7ac7eb1ac8f9e0b80947ca9d71500869118ebca4c0f2c7eb9"}
+{"instance_id": "i-0375f9fff4d15bd11", "state": "pending"}
+{"instance_id": "i-0375f9fff4d15bd11", "state": "running"}
+{"instance_id": "i-0375f9fff4d15bd11", "state": "running"}
+INVALID: absolute artifact path
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=2/INVALIDARGUMENT
+               Service runtime: 1min 42.041s
+             CPU time consumed: 6.051s
+                   Memory peak: 192M (swap: 0B)

@@ -1,0 +1,10 @@
+{
+  "attempt": "a0001",
+  "code_identity_sha256": "295651b699734c4e34717ba827c6959c4a1e9739de3d0c8ff49c780933ad8f7d",
+  "config_sha256": "fc66d5fd2a4401b6bb1fd4b7438ad28bb006feb2b25f69737e9b066c767962a2",
+  "native_identity_sha256": "2e8145e3639b3c4bf93f363dca110ff16f374bee4057e8426738fc02dc51941f",
+  "refs_identity_sha256": "5cc7cc1f09da6efbc6cd344bfd9f50165a69f9642d253dbca074e975b25a8152",
+  "schema": "borsuk-source-witness-fixed-canary-admission-v1",
+  "source_archive_paths_sha256": "1191ad81e0ab4cd8c39b056b0fe44c108ec49b103d2be0a0a5efe5683045632c",
+  "terminal_sha256": "021c79cacc3daf6ff7981622c2f18bbcde65c01bc2e9c705c6e0bbe1c012e320"
+}

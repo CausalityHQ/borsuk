@@ -1,0 +1,128 @@
+{
+  "authority_pending": false,
+  "code_sha256": {
+    "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/campaign.py": "cf157eb2a10ada52ac4648c7c90fea8c19aed85ec27b80c4016abac06e27f58e",
+    "scripts/audit_v36_ranked_physical_ids.py": "67af40bf3d505d45979f269218f4bfd426aaaa5f1e6705b6947bd32831d8bb2b",
+    "scripts/benchmark_with_resources.py": "5b46cd201dfc8491b3dd024bcabcbc8269d41fe9ca699b7e3a3e03fcccc146c4",
+    "scripts/check_native_metadata_ranges_build.py": "da48c53562220026c8024ba2400dca2ba897aa12d49c3e27c3c2fb40b9f0770e",
+    "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
+    "scripts/check_native_semantic_concurrency.py": "9cb0f018689496f6c2bea48d993a99e64f3f3c9b3850a899ef2c927b75ba83e5",
+    "scripts/check_native_semantic_metadata_cold.py": "19c6a1d5ecde151bf8e3d830a1e1a4b498273b9e550ad5ea67e74aa9dffc6491",
+    "scripts/check_native_semantic_router_stats.py": "d1fb970c0ab6ec98ec5311204a54277180631116d48a29a564ed3bbd68e5c5c2",
+    "scripts/check_native_startup_build.py": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52",
+    "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+    "scripts/check_native_workspace_execution.py": "37e7d14133e95cbda5b633f06d3d72e1c8355255c0eed48a165305c527739fe0",
+    "scripts/check_semantic_router_coverage.py": "221695c725d79dfbc7f0ac3c2a4bd4e46445fc32628a1fd989eb328270356ff3",
+    "scripts/launch_hierarchical_cells_100k_spot.py": "0aa164fd2a310324f657f8db041286c87dcb214ccee35da9b3ed74579e569683",
+    "scripts/launch_native_metadata_ranges_cold_spot.py": "f1dfdb56d08f864594c4dadbdbae593b61d5285f60703712e91865ebd0a9d0e2",
+    "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
+    "scripts/launch_native_semantic_metadata_cold_spot.py": "f87b5f61af16e422f052bf7ef1265c5b5e637d4819f2cdce7875b6a13d4fddf7",
+    "scripts/launch_native_semantic_panel_ids_spot.py": "e232d6433b9a8e4efd233bf45206b15dcffc87c96a75d2b4e85997ecced7b387",
+    "scripts/launch_native_semantic_router_cold_spot.py": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180",
+    "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
+    "scripts/launch_native_workspace_execution_spot.py": "bb3f6b18d5d82febc4c56ab087679f54e0d8f35f44bc1f2a762b98e2054bb5cd",
+    "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b",
+    "scripts/launch_v174_relaid_bind_compile_spot.py": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a",
+    "scripts/package_semantic_native_generation.py": "cb6a540c810e3a75381d22339eb72f00382b0972a2d3ee687bbb1d97d5a1b594",
+    "scripts/prepare_hierarchical_cells_100k.py": "0878f2d02285ae678e15c04862d76b5b0066f68d67bb786453f55d73ba40b724",
+    "scripts/prepare_native_semantic_publication.py": "2d3a9270f5ad847981d9d89fea8ead9e9295f742369fa1b9fd9cf3e7c7e2c7e4",
+    "scripts/prepare_semantic_positive_inputs.py": "99599d83c091c68661b5347ce568a92145695e420d8c9a3d61e7e0d6b84e884f",
+    "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+    "scripts/run_constrained_split_falsifier.py": "a41482a99b2b2b9a144729ae3e3455b489dd5b65cbdafae612f8e278ae0bf3d5",
+    "scripts/run_hierarchical_global_leaf_probe.py": "c7ca903a2441dea220be8dd134f83cfcaec3f8979825e210950f233ce1df562f",
+    "scripts/run_native_cold_first_query.py": "b4afffd43df8e2ab617749a50fd099fd279e57631e0dcb749b75169ad269a99f",
+    "scripts/run_native_cold_offered.py": "bcd4bbee7d14870489503f9d4e1ec17c53176ef97f0ce851a2f9e8189aa40dfb",
+    "scripts/run_native_metadata_ranges_cold.py": "1322fe19b705caeab275bce69ea6b4a9f2ed84cb6505dcbfe01b25301fdb71b8",
+    "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+    "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+    "scripts/run_native_semantic_metadata_cold.py": "15bfd05a21916555d64b64704792b87485b661a6ab615d3f5fb48536961090d7",
+    "scripts/run_native_semantic_router_cold.py": "9fe9e968d99a926bdfc15fae0fc0fadd15d44ed1242b6d4fa2e391c1a3b95f88",
+    "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+    "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6",
+    "scripts/run_source_witness_paired_coverage.py": "a0033b2e1b05026ab8162cdc7a7e8084f5fde57faa2cd96f051f8b1d9f77993d",
+    "scripts/select_v36_rank16_fresh_ids.py": "6388e274ba128d770bbadd8b02833af4f685214bc1f78c9796fd778471d30399"
+  },
+  "runner": {
+    "authority": {
+      "bytes": 3711,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/retained-input-authority.json",
+      "sha256": "93a6f221e895d400ff217e57cc5188d0aa475146ba94cd68876e41325b02a743"
+    },
+    "binary": {
+      "bytes": 5721952,
+      "path": "/mnt/source-witness/assets/hierarchical_semantic_cells",
+      "sha256": "6b697b09fc6e709b5127ce81290950d37aa5fde892a8e0d053e4c9ca824ff297"
+    },
+    "diagnostics": true,
+    "inputs": {
+      "cohere": {
+        "cells.bin": {
+          "bytes": 98800000,
+          "path": "/mnt/source-witness/assets/cohere/cells.bin",
+          "sha256": "647491734c13391be7ff682a8d8c125e69d317e87b31cd8e7d1ebb9eebee0ef0"
+        },
+        "directories.bin": {
+          "bytes": 6410540,
+          "path": "/mnt/source-witness/assets/cohere/directories.bin",
+          "sha256": "f0df6a5900d6a66263389dfa353167790b18c2b819e09c288d6f218457dbf865"
+        },
+        "manifest.json": {
+          "bytes": 30456,
+          "path": "/mnt/source-witness/assets/cohere/manifest.json",
+          "sha256": "c2bf337290f7713139903f398ac6b4007ed01faf47ff093e7e397b2715b7b4fc"
+        },
+        "requests64": {
+          "bytes": 983232,
+          "path": "/mnt/source-witness/assets/cohere/requests64",
+          "sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654"
+        },
+        "truth64": {
+          "bytes": 25600,
+          "path": "/mnt/source-witness/assets/cohere/truth64",
+          "sha256": "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355"
+        }
+      },
+      "relaion": {
+        "cells.bin": {
+          "bytes": 98800000,
+          "path": "/mnt/source-witness/assets/relaion/cells.bin",
+          "sha256": "6bb1c1259c3686ec7dfea1100e9162b45ad898c504b261f82979b974aedbf8ae"
+        },
+        "directories.bin": {
+          "bytes": 6397659,
+          "path": "/mnt/source-witness/assets/relaion/directories.bin",
+          "sha256": "93c0d23d067d4929d44d1111159c3c46ac74800aba621a344a3cfd3fa8d5fe89"
+        },
+        "manifest.json": {
+          "bytes": 31500,
+          "path": "/mnt/source-witness/assets/relaion/manifest.json",
+          "sha256": "3244e7bbd5e27eb1f3fe52cbddc450d08d45d25256eec98dc942ba42cf2808f1"
+        },
+        "requests64": {
+          "bytes": 937167,
+          "path": "/mnt/source-witness/assets/relaion/requests64",
+          "sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330"
+        },
+        "truth64": {
+          "bytes": 25600,
+          "path": "/mnt/source-witness/assets/relaion/truth64",
+          "sha256": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c"
+        }
+      }
+    },
+    "resources": {
+      "cpu_affinity": [
+        0
+      ],
+      "max_log_bytes": 16777216,
+      "memory_max_bytes": 536870912,
+      "per_dataset_seconds": 600,
+      "scratch_max_bytes": 17179869184,
+      "swap_bytes": 0,
+      "tasks_max": 512
+    },
+    "run_id": "source-witness-paired100k-a0001",
+    "schema": "borsuk-source-witness-paired-coverage-v1"
+  },
+  "schema": "borsuk-source-witness-fixed-campaign-config-v1"
+}
