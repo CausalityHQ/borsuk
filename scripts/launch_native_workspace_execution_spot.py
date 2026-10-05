@@ -169,12 +169,22 @@ CELL_OVERLAP_STAGES = tuple((name, command.split()) for name, command in (
     ('test-build', 'env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh')))
 
 FINE_SQ8_DELTA = ('crates/borsuk/src/bin/hierarchical_semantic_cells.rs',
+                  'crates/borsuk/src/corrected_four_bit.rs',
                   'crates/borsuk/src/fine_sq8_groups.rs',
-                  'crates/borsuk/src/resident_vector_graph.rs')
-FINE_SQ8_STAGE_SCHEMA = 'borsuk-fine-sq8-implementation-stage-v1'
+                  'crates/borsuk/src/lib.rs')
+FINE_SQ8_STAGE_SCHEMA = 'borsuk-corrected-four-bit-implementation-stage-v1'
 # Exact target-qualified names from the final native sibling contract; source SHA is root-owned.
 FINE_SQ8_REQUIRED_TESTS = {
+    'corrected-four-bit-tests': tuple('corrected_four_bit::tests::' + name for name in (
+        'corrected_four_bit_scalar_ratio_and_rounding',
+        'corrected_four_bit_exhaustive_tiny_grid',
+        'corrected_four_bit_exact_threshold_collision_and_subnormal',
+        'corrected_four_bit_rotation_bits_gram_and_corruption',
+        'corrected_four_bit_packing_tail_nonunit_and_caps',
+    )),
     'fine-sq8-tests': (
+        'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_corrected_four_bit_full128_pipeline_freeze_and_late_invalid',
+        'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_corrected_four_bit_prebody_caps_source_eof_and_sync',
         'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_dp_independent_brute_partitions_and_deviations',
         'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_interval_cancellation_against_direct_deviations',
         'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_exhaustive256_mapping_ties_and_uniform_bitwise_parity',
@@ -208,6 +218,8 @@ FINE_SQ8_REQUIRED_TESTS = {
         'pq64_nominee::source_codes_tests::source_fit_is_ordinal_deterministic_and_codes_only',
     ),
     'fine-sq8-bin-tests': (
+        'tests::fine_corrected_four_bit_strict_cli_dispatch',
+        'tests::fine_corrected_four_bit_real_native_two_panel_d3_all128_incidental_and_late_truth',
         'tests::fine_histogram_sq4_strict_cli_dispatch_and_schema_identity',
         'tests::fine_histogram_sq4_real_native_builder_paired_pipeline_all128_full_rosters_late_invalid',
         'tests::fine_sq4_real_native_pipeline_128_seal_before_truth',
@@ -278,6 +290,7 @@ FINE_SQ8_REQUIRED_TESTS = {
 }
 FINE_SQ8_STAGES = tuple((name, command.split()) for name, command in (
     ('clippy', 'cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious'),
+    ('corrected-four-bit-tests', 'cargo test --locked -p borsuk --lib corrected_four_bit:: -- --test-threads=1'),
     ('fine-sq8-bin-tests', 'cargo test --locked -p borsuk --bin hierarchical_semantic_cells fine_ -- --test-threads=1'),
     ('fine-sq8-tests', 'cargo test --locked -p borsuk --lib fine_sq8_groups:: -- --test-threads=1'),
     ('pq-codes-graph-tests', 'cargo test --locked -p borsuk --lib resident_vector_graph::bounded_pq_tests -- --test-threads=1'),
@@ -560,14 +573,14 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
 
 
     if fine_sq8:
-        ROOT = semantic.ROOT.parent/'semantic-1m/fine-sq8-groups/sq4-refinement/histogram-codebook/implementation-gates/roster-repair'
+        ROOT = semantic.ROOT.parent/'semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates'
         CONFIG = ROOT/'config.json'
-        TOKEN_PREFIX = 'histogram-sq4-roster-repair-'
+        TOKEN_PREFIX = 'corrected-four-bit-implementation-'
         PREFIX = 'research/semantic-router/20261005/' + TOKEN_PREFIX
-        TAG = 'borsuk-fine-sq8-implementation'
-        SCHEMA = 'borsuk-fine-sq8-implementation-gates-spot-v1'
-        CONFIG_SCHEMA = 'borsuk-fine-sq8-implementation-gates-v1'
-        RECEIPT_SCHEMA = 'borsuk-fine-sq8-implementation-gates-receipt-v1'
+        TAG = 'borsuk-corrected-four-bit-implementation'
+        SCHEMA = 'borsuk-corrected-four-bit-implementation-gates-spot-v1'
+        CONFIG_SCHEMA = 'borsuk-corrected-four-bit-implementation-gates-v1'
+        RECEIPT_SCHEMA = 'borsuk-corrected-four-bit-implementation-gates-receipt-v1'
         CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_fine_sq8_implementation.sh')
         FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_fine_sq8_implementation.sh'],
             environment=dict(worker.ENVIRONMENT, BORSUK_TEST_BUILD_JOBS='1', BORSUK_TEST_BUILD_COMMAND=None,
@@ -708,7 +721,7 @@ def validate_hierarchical_archive(authority, inventory, manifest_path, base=None
 def validate_candidate_delta(paths):
     """Bind the exact native subset for a subsequent hierarchical increment."""
     assert type(paths) is list and paths and all(type(path) is str for path in paths), 'candidate native delta list'
-    if HIERARCHICAL_CELLS or FINE_SQ8:
+    if HIERARCHICAL_CELLS:
         assert paths == sorted(set(paths)) and set(paths) <= set(NATIVE_DELTA), 'exact admitted hierarchical native subset'
     else:
         assert paths == list(NATIVE_DELTA), 'exact candidate native delta'
@@ -745,7 +758,7 @@ def qualify(base=Path('.')):
     manifest = json.loads((base/path).read_bytes())
     if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
         assert re.fullmatch('[0-9a-f]{40}', config['controller_source_commit']), 'frozen controller commit'
-        assert manifest['schema'] == ('borsuk-fine-sq8-native-source-manifest-v1' if FINE_SQ8 else 'borsuk-cell-overlap-native-source-manifest-v1' if CELL_OVERLAP else 'borsuk-constrained-split-native-source-manifest-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-native-source-manifest-v1' if HIERARCHICAL_CELLS else 'borsuk-fixed48-native-source-manifest-v1' if FIXED48 else 'borsuk-bounded-publication-native-source-manifest-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
+        assert manifest['schema'] == ('borsuk-corrected-four-bit-native-source-manifest-v1' if FINE_SQ8 else 'borsuk-cell-overlap-native-source-manifest-v1' if CELL_OVERLAP else 'borsuk-constrained-split-native-source-manifest-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-native-source-manifest-v1' if HIERARCHICAL_CELLS else 'borsuk-fixed48-native-source-manifest-v1' if FIXED48 else 'borsuk-bounded-publication-native-source-manifest-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
         assert manifest['candidate_qualification_pending'] is True, 'source authority is not completed assurance'
         validate_candidate_delta(manifest['candidate_delta_paths'])
         if STARTUP_WAVE8:
@@ -756,13 +769,15 @@ def qualify(base=Path('.')):
             assert manifest['control_native_source_commit'] == CONSTRAINED_SPLIT_CONTROL, 'exact original native control'
             validate_constrained_split_prefix(base)
     inventory = worker.source_hashes(base)
+    if FINE_SQ8:
+        assert set(NATIVE_DELTA) <= set(inventory), 'complete corrected four-bit native source roster'
     assert type(manifest['source_file_count']) is int and manifest['source_file_count'] == len(inventory) > 0
     assert manifest['source_sha256'] == inventory, 'full native source drift'
     identity = worker.source_identity(inventory)
     assert identity == manifest['source_identity_sha256']
     assert SEMANTIC_1M or identity == SOURCE_IDENTITY, 'historical native source identity'
     assert re.fullmatch('[0-9a-f]{40}', manifest['native_source_commit'])
-    proof = dict(schema='borsuk-fine-sq8-implementation-gates-qualification-v1' if FINE_SQ8 else 'borsuk-cell-overlap-implementation-gates-qualification-v1' if CELL_OVERLAP else 'borsuk-constrained-split-implementation-gates-qualification-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-implementation-gates-qualification-v2' if HIERARCHICAL_CELLS else 'borsuk-fixed48-implementation-gates-qualification-v1' if FIXED48 else 'borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
+    proof = dict(schema='borsuk-corrected-four-bit-implementation-gates-qualification-v1' if FINE_SQ8 else 'borsuk-cell-overlap-implementation-gates-qualification-v1' if CELL_OVERLAP else 'borsuk-constrained-split-implementation-gates-qualification-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-implementation-gates-qualification-v2' if HIERARCHICAL_CELLS else 'borsuk-fixed48-implementation-gates-qualification-v1' if FIXED48 else 'borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
         config_path=str(CONFIG), config_sha256=worker.sha(body), campaign_schema=SCHEMA,
         source_sha256=inventory, source_identity_sha256=identity, source_file_count=len(inventory),
         native_source_commit=manifest['native_source_commit'], native_source_manifest=pointer,
@@ -2056,7 +2071,7 @@ def _hierarchical_archive_self_check(*, constrained_split=False, cell_overlap=Fa
         for name, body in bodies.items():
             path = repo/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(body)
         inventory = worker.source_hashes(repo)
-        manifest = dict(schema='borsuk-fine-sq8-native-source-manifest-v1' if fine_sq8 else 'borsuk-cell-overlap-native-source-manifest-v1' if cell_overlap else 'borsuk-constrained-split-native-source-manifest-v1' if constrained_split else 'borsuk-hierarchical-cells-native-source-manifest-v1',
+        manifest = dict(schema='borsuk-corrected-four-bit-native-source-manifest-v1' if fine_sq8 else 'borsuk-cell-overlap-native-source-manifest-v1' if cell_overlap else 'borsuk-constrained-split-native-source-manifest-v1' if constrained_split else 'borsuk-hierarchical-cells-native-source-manifest-v1',
             source_sha256=inventory, source_file_count=len(inventory),
             source_identity_sha256=worker.source_identity(inventory), native_source_commit='7'*40,
             controller_source_commit='4'*40, control_native_source_commit=CONSTRAINED_SPLIT_CONTROL if constrained_split else '8'*40,
@@ -2076,6 +2091,23 @@ def _hierarchical_archive_self_check(*, constrained_split=False, cell_overlap=Fa
             proof = qualify(repo)
             assert set(authority) <= set(proof), 'hierarchical qualification must bind the minimal archive roster'
             assert {k: proof[k] for k in authority} == authority
+            if fine_sq8:
+                # Even a self-consistent shortened inventory must include OWN4.
+                for name in NATIVE_DELTA:
+                    (repo/name).unlink()
+                    shortened = worker.source_hashes(repo)
+                    changed = dict(manifest, source_sha256=shortened, source_file_count=len(shortened),
+                        source_identity_sha256=worker.source_identity(shortened))
+                    (repo/manifest_path).write_bytes(encoded(changed))
+                    shortened_paths = [path for path in paths if path != name]
+                    changed = dict(config, native_source_manifest=dict(path=str(manifest_path), **worker.artifact(repo/manifest_path)),
+                        source_archive_paths=shortened_paths, source_archive_file_count=len(shortened_paths),
+                        source_archive_paths_sha256=worker.sha(encoded(shortened_paths)))
+                    (repo/CONFIG).write_bytes(encoded(changed))
+                    rejected(lambda:qualify(repo))
+                    (repo/name).write_bytes(bodies[name])
+                (repo/manifest_path).write_bytes(encoded(manifest))
+                (repo/CONFIG).write_bytes(encoded(config))
             assert 'docs/research/native-script.rs' in paths and 'docs/research/old-binary.gz' not in paths
             assert 'crates/other/tests/fixtures/literal[1].json' in paths
             def git(*args):
@@ -2259,14 +2291,18 @@ def _fine_sq8_self_check():
         assert 'fine_sq8' in inspect.signature(function).parameters
     with execution_mode(fine_sq8=True):
         assert FINE_SQ8 and MINIMAL_ARCHIVE and not CELL_OVERLAP
-        assert str(ROOT).endswith('semantic-1m/fine-sq8-groups/sq4-refinement/histogram-codebook/implementation-gates/roster-repair')
+        assert str(ROOT).endswith('semantic-1m/fine-sq8-groups/sq4-refinement/corrected-rabitq/implementation-gates')
         assert mode_flag() == ' --fine-sq8-implementation'
-        assert CONFIG_SCHEMA == FIXED['schema'] == 'borsuk-fine-sq8-implementation-gates-v1'
-        assert SCHEMA == 'borsuk-fine-sq8-implementation-gates-spot-v1'
-        assert RECEIPT_SCHEMA == 'borsuk-fine-sq8-implementation-gates-receipt-v1'
+        assert CONFIG_SCHEMA == FIXED['schema'] == 'borsuk-corrected-four-bit-implementation-gates-v1'
+        assert SCHEMA == 'borsuk-corrected-four-bit-implementation-gates-spot-v1'
+        assert RECEIPT_SCHEMA == 'borsuk-corrected-four-bit-implementation-gates-receipt-v1'
         assert CODE == (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_fine_sq8_implementation.sh')
-        assert NATIVE_DELTA == FINE_SQ8_DELTA and len(NATIVE_DELTA) == 3 and list(NATIVE_DELTA) == sorted(NATIVE_DELTA)
-        assert validate_candidate_delta(list(FINE_SQ8_DELTA[:2])) == list(FINE_SQ8_DELTA[:2])
+        assert NATIVE_DELTA == FINE_SQ8_DELTA and len(NATIVE_DELTA) == 4 and list(NATIVE_DELTA) == sorted(NATIVE_DELTA)
+        assert validate_candidate_delta(list(FINE_SQ8_DELTA)) == list(FINE_SQ8_DELTA)
+        for index in range(len(FINE_SQ8_DELTA)):
+            rejected(lambda:validate_candidate_delta(list(FINE_SQ8_DELTA[:index]+FINE_SQ8_DELTA[index+1:])))
+        rejected(lambda:validate_candidate_delta(sorted((*FINE_SQ8_DELTA, 'crates/borsuk/src/resident_vector_graph.rs'))))
+        assert dict(FINE_SQ8_STAGES)['corrected-four-bit-tests'] == 'cargo test --locked -p borsuk --lib corrected_four_bit:: -- --test-threads=1'.split()
         rejected(lambda:validate_candidate_delta([FINE_SQ8_DELTA[0], FINE_SQ8_DELTA[0]]))
         rejected(lambda:validate_candidate_delta(['crates/borsuk/src/unowned.rs']))
         assert RELEASE_ARTIFACTS == ('binaries/hierarchical_semantic_cells',)
@@ -2274,6 +2310,9 @@ def _fine_sq8_self_check():
                     'BORSUK_CPU_THREADS', 'RAYON_NUM_THREADS', 'TOKIO_WORKER_THREADS'):
             assert FIXED['environment'][key] == '1'
         assert FIXED['environment']['BORSUK_TEST_BUILD_COMMAND'] is None
+        assert FIXED['environment']['BORSUK_FINE_TEST_ROOT'] is FIXED['environment']['BORSUK_FINE_TEST_REMOTE'] is None
+        assert FIXED['memory_bytes'] == 8*1024**3 and FIXED['swap_bytes'] == 0
+        assert FIXED['cpu_quota_percent'] == 200 and FIXED['tasks_max'] == 512
         for mode in ('test_build', 'startup_wave8', 'root_reuse', 'bounded_publication',
                      'fixed48', 'hierarchical_cells', 'constrained_split', 'cell_overlap'):
             rejected(lambda:configure(fine_sq8=True, **{mode:True}))
@@ -2368,7 +2407,7 @@ def _hierarchical_cells_script_self_check(*, constrained_split=False, cell_overl
                 cases.extend((body, '0', '0', 96) for body in ('', good+good, good.replace('jobs=1', 'jobs=2')))
             for test in names:
                 passed = 'test '+test+' ... ok'
-                for replacement in ('', passed.replace('ok', 'ignored'), passed+'\n'+passed):
+                for replacement in ('', passed.replace('ok', 'ignored'), passed.replace('ok', 'FAILED'), passed+'\n'+passed):
                     cases.append((good.replace(passed, replacement), '0', '0', 96))
             for body, status, log_status, expected in cases:
                 log.write_text(body)
@@ -2419,7 +2458,7 @@ def _fixed48_stages_self_check(*, hierarchical_cells=False, constrained_split=Fa
         for names in required.values():
             for name in names:
                 passed = 'test '+name+' ... ok'
-                for replacement in ('', passed.replace('ok', 'ignored'), passed+'\n'+passed):
+                for replacement in ('', passed.replace('ok', 'ignored'), passed.replace('ok', 'FAILED'), passed+'\n'+passed):
                     log.write_text('\n'.join(lines).replace(passed, replacement)+'\n')
                     rejected(lambda: validate_bounded_publication_stages(log, fixed48=not (hierarchical_cells or constrained_split or cell_overlap or fine_sq8), hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8))
                 misplaced = [line for line in lines if line != passed]
@@ -2552,7 +2591,7 @@ def _self_check():
         inventory = worker.source_hashes(base)
         for name in NATIVE_DELTA:
             inventory.setdefault(name, worker.sha(b'// synthetic new native source\n'))
-        manifest = dict(schema='borsuk-fine-sq8-native-source-manifest-v1' if FINE_SQ8 else 'borsuk-cell-overlap-native-source-manifest-v1' if CELL_OVERLAP else 'borsuk-constrained-split-native-source-manifest-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-native-source-manifest-v1', source_sha256=inventory,
+        manifest = dict(schema='borsuk-corrected-four-bit-native-source-manifest-v1' if FINE_SQ8 else 'borsuk-cell-overlap-native-source-manifest-v1' if CELL_OVERLAP else 'borsuk-constrained-split-native-source-manifest-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-native-source-manifest-v1', source_sha256=inventory,
             source_identity_sha256=worker.source_identity(inventory), source_file_count=len(inventory),
             native_source_commit='7'*40, candidate_delta_paths=list(NATIVE_DELTA),
             candidate_qualification_pending=True, control_native_source_commit=CONSTRAINED_SPLIT_CONTROL if CONSTRAINED_SPLIT else '8'*40)
@@ -2629,6 +2668,8 @@ def _self_check():
         with patch.object(worker,'source_hashes',return_value=inventory):
             proof = qualify(repo)
             assert proof['source_identity_sha256'] == manifest['source_identity_sha256']
+            if FINE_SQ8:
+                assert proof['schema'] == 'borsuk-corrected-four-bit-implementation-gates-qualification-v1'
             assert proof['actual_full_workspace_execution'] is False
             stage(repo,out)
             assert json.loads((out/'source-qualification.json').read_bytes()) == proof
@@ -2675,6 +2716,10 @@ def _self_check():
                     ('schema','wrong-manifest-mode'),('control_native_source_commit','not-a-commit')))
                 if FIXED48:
                     bad_manifest.append(('candidate_delta_paths',list(FIXED48_DELTA[1:])))
+                if FINE_SQ8:
+                    bad_manifest.extend(('candidate_delta_paths',list(NATIVE_DELTA[:index]+NATIVE_DELTA[index+1:]))
+                        for index in range(len(NATIVE_DELTA)))
+                    bad_manifest.append(('candidate_delta_paths', sorted((*NATIVE_DELTA, 'crates/borsuk/src/resident_vector_graph.rs'))))
                 if CONSTRAINED_SPLIT:
                     bad_manifest.append(('control_native_source_commit', '0'*40))
                 if STARTUP_WAVE8:

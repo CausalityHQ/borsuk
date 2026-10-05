@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exact-source fine SQ8 qualification; workspace tests are compiled.
+# Exact-source corrected four-bit qualification; workspace tests are compiled.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 if [[ -n "${BORSUK_TEST_BUILD_COMMAND:-}" ]]; then
@@ -45,6 +45,7 @@ run_stage() {
 
 # Check the previously failing Clippy layer first; retain all assurance stages.
 run_stage clippy cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
+run_stage corrected-four-bit-tests cargo test --locked -p borsuk --lib corrected_four_bit:: -- --test-threads=1
 run_stage fine-sq8-bin-tests cargo test --locked -p borsuk --bin hierarchical_semantic_cells fine_ -- --test-threads=1
 run_stage fine-sq8-tests cargo test --locked -p borsuk --lib fine_sq8_groups:: -- --test-threads=1
 run_stage pq-codes-graph-tests cargo test --locked -p borsuk --lib resident_vector_graph::bounded_pq_tests -- --test-threads=1
