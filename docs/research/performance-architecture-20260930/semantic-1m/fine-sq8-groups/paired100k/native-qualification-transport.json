@@ -1,0 +1,90 @@
+{
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "items": [
+    {
+      "bytes": 7123760,
+      "key": "research/semantic-router/20261005/fine-sq8-implementation-a0001/artifacts/binaries/hierarchical_semantic_cells",
+      "name": "binaries/hierarchical_semantic_cells",
+      "sha256": "aed6e8f126e68af738841449b7d61b8c46e43b8f1e4476252c30f1f73109f9af"
+    },
+    {
+      "bytes": 36,
+      "key": "research/semantic-router/20261005/fine-sq8-implementation-a0001/artifacts/cargo-version.txt",
+      "name": "cargo-version.txt",
+      "sha256": "fb3f25aefd6d5441842d285f5a9b125b3f0f0b0bf2013d9a32677f9e99c6c854"
+    },
+    {
+      "bytes": 365213,
+      "key": "research/semantic-router/20261005/fine-sq8-implementation-a0001/artifacts/config.json",
+      "name": "config.json",
+      "sha256": "c1054e1c61a857f17522a4478790ab3dba443a2d2288fff86ea556a490140bc9"
+    },
+    {
+      "bytes": 3517,
+      "key": "research/semantic-router/20261005/fine-sq8-implementation-a0001/artifacts/cpu.txt",
+      "name": "cpu.txt",
+      "sha256": "396d14f90b7420fe624960f04559cf69bec58d72bceb66d1f6a2e89bd477c4cd"
+    },
+    {
+      "bytes": 44861,
+      "key": "research/semantic-router/20261005/fine-sq8-implementation-a0001/artifacts/native-source-manifest.json",
+      "name": "native-source-manifest.json",
+      "sha256": "e5b58c3e441ae545518784e3d31d2fe8d19d3fc0bb4f8745d4da93ef3cf36adb"
+    },
+    {
+      "bytes": 90383,
+      "key": "research/semantic-router/20261005/fine-sq8-implementation-a0001/artifacts/run-closed.log",
+      "name": "run-closed.log",
+      "sha256": "f33938d83b335fa4dacb44c786c172b1aa677cc63a93786c2e38795facf51b7a"
+    },
+    {
+      "bytes": 196,
+      "key": "research/semantic-router/20261005/fine-sq8-implementation-a0001/artifacts/rustc-version.txt",
+      "name": "rustc-version.txt",
+      "sha256": "3975d062e234a9f3921955bf6ae5b90f5819df94fa825d057f76b34a35ed0f4d"
+    },
+    {
+      "bytes": 44267,
+      "key": "research/semantic-router/20261005/fine-sq8-implementation-a0001/artifacts/source-after.json",
+      "name": "source-after.json",
+      "sha256": "bb92a221c0dfeb516cc8a451d86bb378997c683093e2e772d3073fec6ac4c647"
+    },
+    {
+      "bytes": 44267,
+      "key": "research/semantic-router/20261005/fine-sq8-implementation-a0001/artifacts/source-before.json",
+      "name": "source-before.json",
+      "sha256": "bb92a221c0dfeb516cc8a451d86bb378997c683093e2e772d3073fec6ac4c647"
+    },
+    {
+      "bytes": 410107,
+      "key": "research/semantic-router/20261005/fine-sq8-implementation-a0001/artifacts/source-qualification.json",
+      "name": "source-qualification.json",
+      "sha256": "be20f0efe4756f6c567b889f033fba2b70ba64502592fea8aac9faea8404dfa1"
+    },
+    {
+      "bytes": 840,
+      "key": "research/semantic-router/20261005/fine-sq8-implementation-a0001/artifacts/test-resources.txt",
+      "name": "test-resources.txt",
+      "sha256": "213953950b9974021da4f2ceec0ac8ffa4c2655185a3c93fcfe74c15bc3293a5"
+    },
+    {
+      "bytes": 1837465,
+      "key": "research/semantic-router/20261005/fine-sq8-implementation-a0001/artifacts/test.log",
+      "name": "test.log",
+      "sha256": "6442da466f43b596cee58410bff3af79b8fdc8b1d4dee4790b7a0e496b92754f"
+    },
+    {
+      "bytes": 1388,
+      "key": "research/semantic-router/20261005/fine-sq8-implementation-a0001/artifacts/workspace-cgroup.json",
+      "name": "workspace-cgroup.json",
+      "sha256": "0f7f96ff3af1a7b54f73ababfce5693e0e5e6ca9bd2d7bb136b7af974ee3fa41"
+    },
+    {
+      "bytes": 61771,
+      "key": "research/semantic-router/20261005/fine-sq8-implementation-a0001/artifacts/workspace-receipt.json",
+      "name": "workspace-receipt.json",
+      "sha256": "e2e55d1818039701c33569b3a42dafef3b5c6b1c43451e670e9a2c52473e955b"
+    }
+  ],
+  "schema": "borsuk-fine-sq8-native-qualification-transport-v1"
+}
