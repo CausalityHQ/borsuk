@@ -3042,6 +3042,1104 @@ pub mod pack_diagnostic {
             Ok(file)
         }
 
+        /// Corrected direction codec diagnostic; lifecycle remains unqualified.
+        pub mod corrected {
+            use super::*;
+            pub use super::{Caps, Panel, SupervisorReceipt};
+            use crate::corrected_four_bit::{self as codec, Limits, Rotation};
+            pub const CONFIG_SCHEMA: &str = "borsuk-corrected-four-bit-config-v1";
+            pub const REPORT_SCHEMA: &str = "borsuk-corrected-four-bit-report-v1";
+            pub const ROOT_SCHEMA: &str = "borsuk-corrected-four-bit-generation-v1";
+            pub const CODEC: &str = codec::CODEC;
+            const NAME: &str = "corrected-four-bit";
+            const RESERVE: usize = 16 * 1024;
+            #[derive(Clone, Debug, Serialize, Deserialize)]
+            #[serde(deny_unknown_fields)]
+            pub struct Config {
+                pub schema: String,
+                pub source_identity_sha256: String,
+                pub panels: [Panel; 2],
+                pub original_seal: Artifact,
+                pub prefix: Artifact,
+                pub caps: Caps,
+                pub rotation_seed: [u8; 32],
+                /// Neutral authority derived from all 128 authenticated closed
+                /// histogram results; the strict CLI pins its exact bytes/digest.
+                pub closed_populations: Artifact,
+                /// Mandatory preregistered construction allowance; never raised
+                /// automatically. The two D768/100k transforms alone cost
+                /// 2*100000*768^2 = 117964800000 MACs, exceeding the old 20B.
+                pub construction_operations: u64,
+                /// Prospective whole three-control/authentication allowance.
+                /// Mandatory and independent of the preserved historical 20B
+                /// caps.operations field; never raised to fit an observed run.
+                pub query_auth_operations: u64,
+            }
+            impl Config {
+                fn legacy(&self) -> super::Config {
+                    super::Config {
+                        schema: super::CONFIG_SCHEMA.into(),
+                        source_identity_sha256: super::source_identity(),
+                        panels: self.panels.clone(),
+                        original_seal: self.original_seal.clone(),
+                        prefix: self.prefix.clone(),
+                        caps: self.caps.clone(),
+                    }
+                }
+                fn limits(&self) -> Limits {
+                    Limits {
+                        memory_bytes: self.caps.memory_bytes,
+                        operations: self.construction_operations,
+                    }
+                }
+            }
+            pub fn source_identity() -> String {
+                let mut h = Sha256::new();
+                h.update(b"borsuk-corrected-four-bit-source-v1");
+                h.update(super::source_identity());
+                h.update(include_bytes!("corrected_four_bit.rs"));
+                format!("{:x}", h.finalize())
+            }
+            fn valid(c: &Config) -> Result<()> {
+                super::config_valid_for(&c.legacy(), false)?;
+                digest(&c.closed_populations.sha256)?;
+                require(
+                    c.schema == CONFIG_SCHEMA
+                        && c.source_identity_sha256 == source_identity()
+                        && c.construction_operations > 0
+                        && c.query_auth_operations > 0
+                        && (1..=262144).contains(&c.closed_populations.bytes),
+                    "corrected config/source/host contract",
+                )
+            }
+            fn terminal(sha: &str, status: &str, complete: bool, details: Value) -> Value {
+                let mut v = super::terminal_for(sha, status, complete, details, false);
+                v["schema"] = json!(REPORT_SCHEMA);
+                v["codec"] = json!(CODEC);
+                v["source_identity_sha256"] = json!(source_identity());
+                v
+            }
+            pub(super) fn invalidate(
+                out: &mut Outputs,
+                sha: &str,
+                e: &dyn std::fmt::Display,
+                p: &Progress,
+            ) {
+                let mut v = terminal(
+                    sha,
+                    "INVALID",
+                    false,
+                    json!({"error":e.to_string().chars().take(512).collect::<String>(),
+                    "stage":p.stage,"truth_opened":p.truth_opened,"truth_body_read_attempted":p.truth_body_read_attempted,
+                    "freeze":p.freeze,"published_bytes":out.published_bytes,"known_written_bytes":out.bytes,
+                    "written_bytes":if out.written_unknown {None} else {Some(out.bytes)},"unsealed_output":out.unsealed,"operations":p.operations}),
+                );
+                v["queries"] = json!(p.scored_queries);
+                if let Ok(b) = serde_json::to_vec(&v) {
+                    let _ = out.report.set_len(0);
+                    let _ = out.report.seek(SeekFrom::Start(0));
+                    let _ = out.report.write_all(&b);
+                    let _ = out.report.sync_all();
+                    let _ = out.parent.sync_all();
+                }
+            }
+            fn cpu_ns() -> i128 {
+                let t = rustix::time::clock_gettime(rustix::time::ClockId::ProcessCPUTime);
+                i128::from(t.tv_sec) * 1_000_000_000 + i128::from(t.tv_nsec)
+            }
+            /// Every distinct startup object is charged once. This is an object
+            /// ledger, not the sum of overlapping generation/book counters.
+            #[derive(Serialize)]
+            struct StartupObject {
+                artifact: Artifact,
+                read_attempts: usize,
+            }
+            fn startup_add(ledger: &mut BTreeMap<PathBuf, StartupObject>, a: &Artifact) -> Result<()> {
+                if let Some(old) = ledger.get_mut(&a.path) {
+                    require(
+                        same_artifact(&old.artifact, a),
+                        "corrected startup object identity",
+                    )?;
+                    old.read_attempts += 1;
+                } else {
+                    ledger.insert(
+                        a.path.clone(),
+                        StartupObject {
+                            artifact: a.clone(),
+                            read_attempts: 1,
+                        },
+                    );
+                }
+                Ok(())
+            }
+            struct Generation {
+                plane: super::Plane,
+                root: Artifact,
+                groups: Artifact,
+                max_correction_rounding: f64,
+            }
+            #[derive(Deserialize)]
+            struct PopulationFreeze {
+                schema: String,
+                rows: usize,
+                dimensions: usize,
+                count_per_dataset: usize,
+                source_row_bytes: usize,
+                packed_row_bytes: usize,
+                fetched_id_hash_encoding: String,
+                nominee_ordinal_hash_encoding: String,
+                historical_prefix: Artifact,
+                panels: [PopulationPanel; 2],
+            }
+            #[derive(Deserialize)]
+            struct PopulationPlan {
+                ordinal: usize,
+                query_sha256: String,
+                row_ranges: Vec<Range<usize>>,
+                fetched_rows: usize,
+                fetched_ids_sha256: String,
+                nominee_ordinals_sha256: String,
+            }
+            #[derive(Deserialize)]
+            struct PopulationPanel {
+                dataset: String,
+                root_sha256: String,
+                queries: Vec<PopulationPlan>,
+            }
+            fn populations(
+                c: &Config,
+                plans: &[Plan],
+                n: usize,
+                d: usize,
+                guard: &mut Guard,
+                ledger: &mut BTreeMap<PathBuf, StartupObject>,
+            ) -> Result<PopulationFreeze> {
+                let frozen: PopulationFreeze =
+                    serde_json::from_slice(&read_pinned(&c.closed_populations, 262144, false, guard)?)?;
+                require(
+                    frozen.schema == "borsuk-corrected-four-bit-closed-populations-v1"
+                        && frozen.rows == n
+                        && frozen.dimensions == d
+                        && frozen.count_per_dataset == 64
+                        && frozen.source_row_bytes == 12 + d
+                        && frozen.packed_row_bytes == 12 + d.div_ceil(2)
+                        && frozen.fetched_id_hash_encoding == "ordered-le-i64"
+                        && frozen.nominee_ordinal_hash_encoding == "ordered-le-u64"
+                        && frozen.historical_prefix.sha256 == c.prefix.sha256
+                        && frozen.historical_prefix.bytes == c.prefix.bytes,
+                    "corrected closed population authority",
+                )?;
+                startup_add(ledger, &c.closed_populations)?;
+                for (index, panel) in frozen.panels.iter().enumerate() {
+                    require(
+                        panel.dataset == c.panels[index].dataset
+                            && panel.root_sha256 == c.panels[index].root.sha256
+                            && panel.queries.len() == 64,
+                        "corrected closed panel identity",
+                    )?;
+                    for (ordinal, old) in panel.queries.iter().enumerate() {
+                        let p = &plans[index * 64 + ordinal];
+                        let mut h = Sha256::new();
+                        for &row in &p.nominees {
+                            h.update((row as u64).to_le_bytes());
+                        }
+                        digest(&old.fetched_ids_sha256)?;
+                        require(
+                            old.ordinal == ordinal
+                                && old.query_sha256 == p.query_sha256
+                                && old.row_ranges == p.row_ranges
+                                && old.fetched_rows == p.row_ranges.iter().map(|r| r.len()).sum::<usize>()
+                                && old.nominee_ordinals_sha256 == format!("{:x}", h.finalize()),
+                            "corrected exact closed ordered population differs",
+                        )?;
+                    }
+                }
+                Ok(frozen)
+            }
+            fn decode(row: &[u8], m: &Manifest) -> Result<Vec<f32>> {
+                let d = m.identity.dimensions;
+                require(
+                    row.len() == 12 + d && f32::from_le_bytes(row[8..12].try_into()?).is_finite(),
+                    "corrected original row width/norm",
+                )?;
+                let mut v = reserved(d)?;
+                for j in 0..d {
+                    let x = m.low[j] + f32::from(row[12 + j]) * m.step[j];
+                    require(x.is_finite(), "corrected original decoded finite")?;
+                    v.push(x);
+                }
+                Ok(v)
+            }
+            fn build(
+                c: &Config,
+                sha: &str,
+                index: usize,
+                m: Manifest,
+                rotation: &Rotation,
+                rotation_pin: &Artifact,
+                out: &mut Outputs,
+                guard: &mut Guard,
+                construction: &mut Guard,
+                ledger: &mut BTreeMap<PathBuf, StartupObject>,
+            ) -> Result<Generation> {
+                let root = &c.panels[index].root;
+                let n = m.identity.rows;
+                let d = m.identity.dimensions;
+                let old = 12 + d;
+                let width = 12 + d.div_ceil(2);
+                for a in [root, &m.graph, &m.pq, &m.order, &m.groups] {
+                    startup_add(ledger, a)?;
+                }
+                authenticate(&m.graph, guard)?;
+                authenticate(&m.pq, guard)?;
+                let order = read_pinned(&m.order, n * 8, false, guard)?;
+                let mut ids = reserved(n)?;
+                let mut seen = filled(n, false)?;
+                for word in order.chunks_exact(8) {
+                    let id = usize::try_from(u64::from_le_bytes(word.try_into()?))?;
+                    require(
+                        id < n && !std::mem::replace(&mut seen[id], true),
+                        "corrected original order bijection",
+                    )?;
+                    ids.push(id as i64);
+                }
+                drop(order);
+                drop(seen);
+                let groups = read_pinned(&m.groups, n.div_ceil(16) * 32, false, guard)?;
+                let original = descriptor(&m.records, false)?;
+                let path = out.output.with_extension(format!("{NAME}-{index}.bin"));
+                let mut file = Outputs::create_at(&out.parent, &path)?;
+                let mut input = filled(16 * old, 0u8)?;
+                let mut packed = filled(16 * width, 0u8)?;
+                let mut hashes = reserved(n.div_ceil(16))?;
+                let mut input_hash = Sha256::new();
+                let mut output_hash = Sha256::new();
+                let mut rounding = 0f64;
+                for first in (0..n).step_by(16) {
+                    let count = (n - first).min(16);
+                    let source = &mut input[..count * old];
+                    let target = &mut packed[..count * width];
+                    guard.tick(source.len() as u64)?;
+                    original.read_exact_at(source, (first * old) as u64)?;
+                    require(
+                        Sha256::digest(&*source).as_slice()
+                            == &groups[first / 16 * 32..(first / 16 + 1) * 32],
+                        "corrected original group digest",
+                    )?;
+                    input_hash.update(&*source);
+                    for (slot, (row, dst)) in source
+                        .chunks_exact(old)
+                        .zip(target.chunks_exact_mut(width))
+                        .enumerate()
+                    {
+                        let id = i64::from_le_bytes(row[..8].try_into()?);
+                        require(id == ids[first + slot], "corrected original row identity")?;
+                        construction.tick(codec::encode_work(d)?)?;
+                        let encoded = rotation.encode(id, &decode(row, &m)?, c.limits())?;
+                        dst.copy_from_slice(&encoded.bytes);
+                        rounding = rounding.max(encoded.correction_rounding_abs);
+                    }
+                    out.write_owned(&mut file, &path, target)?;
+                    output_hash.update(&*target);
+                    hashes.push(<[u8; 32]>::from(Sha256::digest(&*target)));
+                }
+                require(
+                    format!("{:x}", input_hash.finalize()) == m.records.sha256,
+                    "corrected original full digest",
+                )?;
+                exact_eof(&original, m.records.bytes)?;
+                out.sync(&file)?;
+                out.seal_written(n * width)?;
+                drop(file);
+                let payload = Artifact {
+                    path,
+                    bytes: n * width,
+                    sha256: format!("{:x}", output_hash.finalize()),
+                };
+                let sq4 = descriptor(&payload, false)?;
+                let mut group_body = reserved(n.div_ceil(16) * 32)?;
+                for h in &hashes {
+                    group_body.extend_from_slice(h);
+                }
+                let group_pin = out.publish(&format!("{NAME}-{index}-groups.bin"), &group_body)?;
+                drop(group_body);
+                let root_body = serde_json::to_vec(
+                    &json!({"schema":ROOT_SCHEMA,"codec":CODEC,"source_identity_sha256":source_identity(),"config_sha256":sha,
+                    "original_root":root,"original_records":m.records,"original_order":m.order,"original_groups":m.groups,
+                    "original_graph":m.graph,"original_pq":m.pq,"router_identity":m.identity,
+                    "low_bits":m.low.iter().map(|v|v.to_bits()).collect::<Vec<_>>(),"step_bits":m.step.iter().map(|v|v.to_bits()).collect::<Vec<_>>(),
+                    "rotation":rotation_pin,"payload":payload,"groups":group_pin,"dimensions":d,"rows":n,"row_bytes":width,
+                    "source_convention":"f32(low+code*step) then f64 N(RN(x))","query_convention":"frozen cosine_vector then f64 N(RN(q))",
+                    "ties":"equal critical thresholds together; earliest strict objective optimum; zero positive","correction":"f32 reciprocal dot replaces norm; score f64 cast once unclamped"}),
+                )?;
+                require(root_body.len() <= ROOT_CAP, "corrected generation root cap")?;
+                let generation_root = out.publish(&format!("{NAME}-{index}-root.json"), &root_body)?;
+                // Reopen and authenticate all persisted generation metadata.
+                require(
+                    read_pinned(&generation_root, ROOT_CAP, false, guard)? == root_body,
+                    "corrected generation binding",
+                )?;
+                let reopened = read_pinned(&group_pin, n.div_ceil(16) * 32, false, guard)?;
+                require(
+                    reopened.chunks_exact(32).zip(&hashes).all(|(a, b)| a == b),
+                    "corrected generation group binding",
+                )?;
+                startup_add(ledger, &generation_root)?;
+                startup_add(ledger, &group_pin)?;
+                Ok(Generation {
+                    plane: super::Plane {
+                        root: root.clone(),
+                        manifest: m,
+                        ids,
+                        original,
+                        groups,
+                        sq4,
+                        payload,
+                        sq4_hashes: hashes,
+                        histogram: None,
+                    },
+                    root: generation_root,
+                    groups: group_pin,
+                    max_correction_rounding: rounding,
+                })
+            }
+            fn unit(v: &[f32]) -> Result<Vec<f64>> {
+                require(v.iter().all(|x| x.is_finite()), "corrected control finite")?;
+                let norm = v.iter().map(|&x| f64::from(x).powi(2)).sum::<f64>().sqrt();
+                require(norm > 0. && norm.is_finite(), "corrected control norm")?;
+                let mut out = reserved(v.len())?;
+                for &x in v {
+                    out.push(f64::from(x) / norm);
+                }
+                Ok(out)
+            }
+            fn score(
+                g: &Generation,
+                rotation: &Rotation,
+                ranges: &[Range<usize>],
+                query: &[f32],
+                packed: bool,
+                c: &Config,
+                guard: &mut Guard,
+            ) -> Result<Value> {
+                let start = (Instant::now(), cpu_ns());
+                let p = &g.plane;
+                let n = p.ids.len();
+                let d = rotation.dimensions();
+                let normalized = query;
+                guard.tick(codec::encode_work(d)?)?;
+                let prepared = if packed {
+                    Some(rotation.prepare_query(normalized, c.limits())?)
+                } else {
+                    None
+                };
+                let control = unit(normalized)?;
+                let prepare_wall = start.0.elapsed().as_nanos();
+                let prepare_cpu = cpu_ns() - start.1;
+                let score_start = (Instant::now(), cpu_ns());
+                let width = if packed { 12 + d.div_ceil(2) } else { 12 + d };
+                let total = ranges.iter().try_fold(0usize, |a, r| {
+                    a.checked_add(r.len())
+                        .ok_or("corrected fetched count overflow")
+                })?;
+                require(total <= n, "corrected fetched count")?;
+                let mut all = reserved::<ScoredNominee>(total)?;
+                let mut fetched = reserved(total)?;
+                let mut prior = 0;
+                let mut bytes = 0;
+                let mut peak = 0;
+                for r in ranges {
+                    require(
+                        r.start >= prior
+                            && r.start < r.end
+                            && r.end <= n
+                            && r.start % 16 == 0
+                            && (r.end == n || r.end % 16 == 0),
+                        "corrected fetched intervals",
+                    )?;
+                    // The run-level model admits the worst complete population,
+                    // including these exact reserved capacities, before bodies.
+                    let mut body = filled(r.len() * width, 0u8)?;
+                    peak = peak.max(body.capacity());
+                    guard.tick((body.len() + r.len() * d * 8) as u64)?;
+                    let file = if packed { &p.sq4 } else { &p.original };
+                    file.read_exact_at(&mut body, (r.start * width) as u64)?;
+                    for (i, group) in body.chunks(16 * width).enumerate() {
+                        let index = r.start / 16 + i;
+                        let expected = if packed {
+                            &p.sq4_hashes[index][..]
+                        } else {
+                            &p.groups[index * 32..(index + 1) * 32]
+                        };
+                        require(
+                            Sha256::digest(group).as_slice() == expected,
+                            "corrected fetched group digest",
+                        )?;
+                    }
+                    for (slot, row) in body.chunks_exact(width).enumerate() {
+                        let id = i64::from_le_bytes(row[..8].try_into()?);
+                        let ordinal = r.start + slot;
+                        require(id == p.ids[ordinal], "corrected fetched order")?;
+                        let score = if let Some(q) = &prepared {
+                            q.score(rotation, row)?
+                        } else {
+                            let x = unit(&decode(row, &p.manifest)?)?;
+                            let mut dot = 0.;
+                            for j in 0..d {
+                                dot += x[j] * control[j];
+                            }
+                            (2. - 2. * dot) as f32
+                        };
+                        require(score.is_finite(), "corrected control score finite")?;
+                        fetched.push(id);
+                        all.push(ScoredNominee { id, ordinal, score });
+                    }
+                    bytes += body.len();
+                    prior = r.end;
+                }
+                guard.tick((total * (usize::BITS - total.max(1).leading_zeros()) as usize) as u64)?;
+                all.sort_unstable_by(|a, b| a.score.total_cmp(&b.score).then(a.id.cmp(&b.id)));
+                let ranked = all
+                    .iter()
+                    .take(100)
+                    .map(|s| Score {
+                        id: s.id,
+                        ordinal: s.ordinal,
+                        score_bits: s.score.to_bits(),
+                    })
+                    .collect::<Vec<_>>();
+                Ok(
+                    json!({"ranked":ranked,"fetched_ids":fetched,"range_reads":ranges.len(),"verified_bytes":bytes,"range_payload_capacity_peak":peak,
+                    "query_prepare_wall_ns":prepare_wall,"query_prepare_cpu_ns":prepare_cpu,"scoring_wall_ns":score_start.0.elapsed().as_nanos(),"scoring_cpu_ns":cpu_ns()-score_start.1,
+                    "rank100_score_bits":all.get(99).map(|s|s.score.to_bits()),"rank101_score_bits":all.get(100).map(|s|s.score.to_bits()),
+                    "rank_boundary_gap":all.get(99).zip(all.get(100)).map(|(a,b)|f64::from(b.score)-f64::from(a.score)),
+                    "correction_cosine_rounding_error_bound":g.max_correction_rounding*7.5*(d as f64).sqrt(),
+                    "correction_distance_rounding_error_bound":2.*g.max_correction_rounding*7.5*(d as f64).sqrt(),
+                    "ideal_rotation_distance_error_bound":4.*rotation.gram_defect_bound/(1.-rotation.gram_defect_bound),
+                    "other_numerical_error_terms":"normalization, matrix-vector accumulation, denominator/reciprocal, packed dot, final f32 cast are separate; correction bound does not include them"}),
+                )
+            }
+            pub(super) fn run(
+                c: &Config,
+                sha: &str,
+                out: &mut Outputs,
+                protocol: &Protocol,
+                strict: bool,
+                guard: &mut Guard,
+                progress: &mut Progress,
+            ) -> Result<Value> {
+                valid(c)?;
+                digest(sha)?;
+                progress.stage = "admission";
+                let old = c.legacy();
+                super::terminal_admission(&old, &out.output, true)?;
+                let n = protocol.rows;
+                let d = protocol.dimensions;
+                let modeled = memory(
+                    &c.caps,
+                    &[
+                        super::allocation_model(&old, n, d)?,
+                        codec::workspace_bytes(d)?,
+                        n * 64,
+                        4 * ROOT_CAP,
+                        c.closed_populations
+                            .bytes
+                            .checked_mul(16)
+                            .ok_or("corrected population metadata overflow")?,
+                        RESULT_CAP,
+                    ],
+                )?;
+                let work = codec::rotation_work(d)?
+                    .checked_mul(2)
+                    .and_then(|v| v.checked_add(codec::encode_work(d).ok()?.checked_mul((2 * n) as u64)?))
+                    .ok_or("corrected construction work overflow")?;
+                require(
+                    work <= c.construction_operations,
+                    "corrected preregistered construction work cap; old20B is insufficient",
+                )?;
+                if strict {
+                    require(
+                        archived_truth(c.panels.each_ref().map(|p| &p.truth))
+                            && crate::configured_cpu_threads() == 1
+                            && c.closed_populations.bytes == 175929
+                            && c.closed_populations.sha256
+                                == "764674f0623797d1303158750fa82a568ea5fabd4fd57f7df5b333865e02a29a",
+                        "corrected strict truth/CPU/population binding",
+                    )?;
+                }
+                require(
+                    c.prefix.bytes == protocol.prefix_bytes
+                        && c.prefix.sha256 == protocol.prefix_sha
+                        && c.original_seal.sha256 == protocol.seal_sha,
+                    "corrected frozen authority",
+                )?;
+                out.cap = c.caps.output_bytes;
+                let mut ledger = BTreeMap::new();
+                startup_add(&mut ledger, &c.original_seal)?;
+                startup_add(&mut ledger, &c.prefix)?;
+                let seal: OriginalSeal =
+                    serde_json::from_slice(&read_pinned(&c.original_seal, 4096, false, guard)?)?;
+                digest(&seal.config_sha256)?;
+                digest(&seal.source_identity_sha256)?;
+                require(
+                    seal.schema == "borsuk-fine-sq8-seal-v1"
+                        && !seal.truth_opened
+                        && seal.plans_per_panel == 64
+                        && seal.prefix_bytes == c.prefix.bytes
+                        && seal.prefix_sha256 == c.prefix.sha256,
+                    "corrected original seal",
+                )?;
+                for (a, b) in seal.panels.iter().zip(&c.panels) {
+                    require(
+                        a.dataset == b.dataset
+                            && same_artifact(&a.root, &b.root)
+                            && same_artifact(&a.requests, &b.requests),
+                        "corrected sealed panel",
+                    )?;
+                }
+                let mut manifests = reserved(2)?;
+                for panel in &c.panels {
+                    let m: Manifest =
+                        serde_json::from_slice(&read_pinned(&panel.root, ROOT_CAP, false, guard)?)?;
+                    validate_manifest(&m, &panel.root)?;
+                    require(
+                        m.identity.rows == n && m.identity.dimensions == d,
+                        "corrected paired geometry",
+                    )?;
+                    manifests.push(m);
+                }
+                let prefix = read_pinned(&c.prefix, 2 * 1024 * 1024, true, guard)?;
+                let replay_config = super::super::Config {
+                    schema: super::super::CONFIG_SCHEMA.into(),
+                    original_seal: c.original_seal.clone(),
+                    prefix: c.prefix.clone(),
+                    caps: c.caps.clone(),
+                    panels: std::array::from_fn(|i| super::super::Panel {
+                        dataset: c.panels[i].dataset.clone(),
+                        root: c.panels[i].root.clone(),
+                        graph: manifests[i].graph.clone(),
+                        identity: manifests[i].identity.clone(),
+                    }),
+                };
+                let maps = [
+                    (0..n.div_ceil(16) as u32).collect(),
+                    (0..n.div_ceil(16) as u32).collect(),
+                ];
+                super::super::replay(&prefix, &replay_config, &maps, guard)?;
+                let mut plans = reserved(128)?;
+                for line in std::str::from_utf8(&prefix)?.lines().skip(2) {
+                    let FrozenEvent::Plan { plan: original, .. } = serde_json::from_str(line)? else {
+                        return Err("corrected frozen event".into());
+                    };
+                    plans.push(super::plan(original, n, d)?);
+                }
+                require(plans.len() == 128, "corrected all128 plans")?;
+                let populations = populations(c, &plans, n, d, guard, &mut ledger)?;
+                let extra_rosters = plans.iter().try_fold(0usize, |a, p| {
+                    sum(&[
+                        a,
+                        p.row_ranges
+                            .iter()
+                            .map(|r| r.len())
+                            .sum::<usize>()
+                            .saturating_sub(p.original_row_ranges.iter().map(|r| r.len()).sum::<usize>())
+                            * ((n - 1).to_string().len() + 1),
+                    ])
+                })?;
+                let modeled_output = sum(&[
+                    super::output_admission(&old, &plans, n, d)?,
+                    extra_rosters,
+                    64 + 8 * d * d,
+                    2 * (ROOT_CAP + n.div_ceil(16) * 32),
+                    128 * 32768,
+                    RESERVE,
+                ])?;
+                require(
+                    modeled_output <= out.cap,
+                    "corrected complete output admission",
+                )?;
+                let mut scoring_work = [
+                    128 * codec::encode_work(d)?,
+                    128 * codec::encode_work(d)?,
+                    0u64,
+                ];
+                let mut fetched_hash_work = 0u64;
+                for plan in &plans {
+                    let rows = plan.row_ranges.iter().map(|r| r.len()).sum::<usize>();
+                    let sort = (usize::BITS - rows.max(1).leading_zeros()) as usize;
+                    for (i, per_row) in [
+                        12 + d.div_ceil(2) + 8 * d + sort,
+                        12 + d + 8 * d + sort,
+                        12 + d + 5 * d + 128,
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        scoring_work[i] = scoring_work[i]
+                            .checked_add((rows * per_row) as u64)
+                            .ok_or("corrected scoring work overflow")?;
+                    }
+                    fetched_hash_work = fetched_hash_work
+                        .checked_add((rows * 8) as u64)
+                        .ok_or("corrected ID hash work overflow")?;
+                }
+                let source_bytes = manifests
+                    .iter()
+                    .zip(&c.panels)
+                    .try_fold(0usize, |a, (m, p)| {
+                        sum(&[
+                            a,
+                            p.root.bytes,
+                            m.records.bytes,
+                            m.groups.bytes,
+                            m.order.bytes,
+                            m.graph.bytes,
+                            m.pq.bytes,
+                        ])
+                    })?;
+                // Already authenticated bytes are included via guard.operations.
+                // Three source/output passes cover construction, startup,
+                // serialization, closure rehash and the later truth recount.
+                let query_auth_bound = [
+                    guard.operations,
+                    scoring_work[0],
+                    scoring_work[1],
+                    scoring_work[2],
+                    fetched_hash_work,
+                    3u64 * source_bytes as u64,
+                    3u64 * modeled_output as u64,
+                    c.prefix.bytes as u64,
+                    c.original_seal.bytes as u64,
+                    c.closed_populations.bytes as u64,
+                    c.panels
+                        .iter()
+                        .map(|p| (p.requests.bytes + p.truth.bytes) as u64)
+                        .sum(),
+                ]
+                .into_iter()
+                .try_fold(0u64, |a, b| {
+                    a.checked_add(b).ok_or("corrected whole work overflow")
+                })?;
+                require(
+                    query_auth_bound <= c.query_auth_operations,
+                    "corrected full query/auth batch admission before construction; explicit prospective allowance required",
+                )?;
+                let mut construction_caps = c.caps.clone();
+                construction_caps.operations = c.construction_operations;
+                let mut construction = Guard::new(&construction_caps);
+                let build_start = (Instant::now(), cpu_ns());
+                progress.stage = "construction";
+                construction.tick(codec::rotation_work(d)?)?;
+                let rotation = Rotation::generate_guarded(d, c.rotation_seed, c.limits(), &mut || {
+                    guard.tick(0)?;
+                    construction.tick(0)
+                })?;
+                let encoded = rotation.to_bytes(c.limits())?;
+                let rotation_pin = out.publish(&format!("{NAME}-rotation.bin"), &encoded)?;
+                drop(encoded);
+                drop(rotation);
+                let encoded = read_pinned(&rotation_pin, 64 + 8 * d * d, false, guard)?;
+                construction.tick(codec::rotation_work(d)?)?;
+                let rotation = Rotation::from_bytes_guarded(
+                    &encoded,
+                    digest(&rotation_pin.sha256)?,
+                    c.limits(),
+                    &mut || {
+                        guard.tick(0)?;
+                        construction.tick(0)
+                    },
+                )?;
+                drop(encoded);
+                startup_add(&mut ledger, &rotation_pin)?;
+                let mut generations = reserved(2)?;
+                for (i, m) in manifests.into_iter().enumerate() {
+                    generations.push(build(
+                        c,
+                        sha,
+                        i,
+                        m,
+                        &rotation,
+                        &rotation_pin,
+                        out,
+                        guard,
+                        &mut construction,
+                        &mut ledger,
+                    )?);
+                }
+                for (p, g) in generations.iter().enumerate() {
+                    for (ordinal, old) in populations.panels[p].queries.iter().enumerate() {
+                        let mut h = Sha256::new();
+                        for row in plans[p * 64 + ordinal]
+                            .row_ranges
+                            .iter()
+                            .flat_map(|r| r.clone())
+                        {
+                            h.update(g.plane.ids[row].to_le_bytes());
+                        }
+                        guard.tick((old.fetched_rows * 8) as u64)?;
+                        require(
+                            format!("{:x}", h.finalize()) == old.fetched_ids_sha256,
+                            "corrected exact historical fetched ID sequence",
+                        )?;
+                    }
+                }
+                construction.tick(0)?;
+                let build_wall = build_start.0.elapsed().as_nanos();
+                let build_cpu = cpu_ns() - build_start.1;
+                let payloads=generations.iter().map(|g|json!({"root":g.root,"payload":g.plane.payload,"groups":g.groups,"original_root":g.plane.root})).collect::<Vec<_>>();
+                let payload_seal=out.publish(&format!("{NAME}-payloads.json"),&serde_json::to_vec(&json!({"schema":"borsuk-corrected-four-bit-payload-seal-v1","config_sha256":sha,
+                    "source_identity_sha256":source_identity(),"rotation":rotation_pin,"payloads":payloads,"queries_opened":false,"truth_opened":false}))?)?;
+                let prefix_pin = out.publish(&format!("{NAME}-prefix.jsonl"), &prefix)?;
+                drop(prefix);
+                let mut results = reserved(128)?;
+                let mut envelope = true;
+                progress.stage = "scoring";
+                for (panel_index, panel) in c.panels.iter().enumerate() {
+                    let body = read_pinned(&panel.requests, REQUEST_CAP, false, guard)?;
+                    let mut count = 0;
+                    for (ordinal, line) in std::str::from_utf8(&body)?.lines().enumerate() {
+                        require(
+                            ordinal < 64 && line.len() <= ROOT_CAP,
+                            "corrected request count/cap",
+                        )?;
+                        let request: Request = serde_json::from_str(line)?;
+                        let plan = &plans[panel_index * 64 + ordinal];
+                        require(
+                            request.ordinal == ordinal
+                                && request.query.len() == d
+                                && query_digest(&request.query) == plan.query_sha256,
+                            "corrected frozen query binding",
+                        )?;
+                        let g = &generations[panel_index];
+                        let normalized = cosine_vector(&request.query)?;
+                        let candidate = score(g, &rotation, &plan.row_ranges, &normalized, true, c, guard)?;
+                        let cosine = score(g, &rotation, &plan.row_ranges, &normalized, false, c, guard)?;
+                        let sq8_start = (Instant::now(), cpu_ns());
+                        guard.tick(
+                            (plan.row_ranges.iter().map(|r| r.len()).sum::<usize>() * (4 * d + 128)) as u64,
+                        )?;
+                        let sq8 = super::score(&g.plane, &plan.row_ranges, &request.query, false, guard)?;
+                        let sq8_cpu = cpu_ns() - sq8_start.1;
+                        let sq8_wall = sq8_start.0.elapsed().as_nanos();
+                        require(
+                            candidate["fetched_ids"] == cosine["fetched_ids"]
+                                && candidate["fetched_ids"] == json!(sq8.fetched_ids)
+                                && candidate["verified_bytes"] == plan.candidate_bytes
+                                && candidate["range_reads"].as_u64().is_some_and(|n| n <= 32),
+                            "corrected all fetched rows/accounting",
+                        )?;
+                        envelope &= plan.envelope_fits;
+                        let old_top = sq8.ranked.iter().map(|s| s.id).collect::<BTreeSet<_>>();
+                        let new_top = candidate["ranked"]
+                            .as_array()
+                            .ok_or("corrected ranked array")?
+                            .iter()
+                            .map(|s| s["id"].as_i64().ok_or("corrected ranked ID"))
+                            .collect::<std::result::Result<BTreeSet<_>, _>>()?;
+                        let value = json!({"schema":"borsuk-corrected-four-bit-query-v1","dataset":panel.dataset,"ordinal":ordinal,"plan":plan,
+                            "generation":g.root,"rotation":rotation_pin,"mutation_revision":0,"nominees_retained":true,"original_cover_contained":true,"truth_opened":false,
+                            "nominee_ids":plan.nominees.iter().map(|&i|g.plane.ids[i]).collect::<Vec<_>>(),"corrected":candidate,"decoded_cosine":cosine,"sq8_reference":sq8,
+                            "sq8_scoring_cpu_ns":sq8_cpu,"sq8_scoring_wall_ns":sq8_wall,"pretruth_replacements":{"removed":old_top.difference(&new_top).copied().collect::<Vec<_>>(),"added":new_top.difference(&old_top).copied().collect::<Vec<_>>()}});
+                        let bytes = serde_json::to_vec(&value)?;
+                        require(bytes.len() <= RESULT_CAP, "corrected result cap")?;
+                        guard.tick(bytes.len() as u64)?;
+                        results.push(out.publish(
+                            &format!("{NAME}-result-{}.json", panel_index * 64 + ordinal),
+                            &bytes,
+                        )?);
+                        progress.scored_queries += 1;
+                        count += 1;
+                    }
+                    require(count == 64, "corrected consumed64 complete")?;
+                }
+                require(results.len() == 128, "corrected complete results")?;
+                progress.stage = "freeze";
+                let freeze=out.publish(&format!("{NAME}-freeze.json"),&serde_json::to_vec(&json!({"schema":"borsuk-corrected-four-bit-freeze-v1","config_sha256":sha,
+                    "source_identity_sha256":source_identity(),"rotation":rotation_pin,"payload_seal":payload_seal,"payloads":payloads,"original_seal":c.original_seal,
+                    "truth":c.panels.each_ref().map(|p|&p.truth),"nomination_prefix":prefix_pin,"closed_populations":c.closed_populations,"results":results,"truth_opened":false}))?)?;
+                progress.freeze = Some(freeze.clone());
+                progress.stage = "pretruth authentication";
+                #[cfg(test)]
+                pretruth_test_hook(c, &results)?;
+                for pin in [&freeze, &payload_seal, &prefix_pin, &rotation_pin]
+                    .into_iter()
+                    .chain(results.iter())
+                {
+                    authenticate(pin, guard)?;
+                }
+                // Rehash the original prefix, preserving its intentionally unread
+                // tail. Reauthenticate original records completely, plus EOF.
+                read_pinned(&c.prefix, 2 * 1024 * 1024, true, guard)?;
+                authenticate(&c.original_seal, guard)?;
+                authenticate(&c.closed_populations, guard)?;
+                for g in &generations {
+                    let m = &g.plane.manifest;
+                    for pin in [
+                        &g.root,
+                        &g.groups,
+                        &g.plane.payload,
+                        &g.plane.root,
+                        &m.records,
+                        &m.order,
+                        &m.groups,
+                        &m.graph,
+                        &m.pq,
+                    ] {
+                        authenticate(pin, guard)?;
+                    }
+                    exact_eof(&g.plane.original, m.records.bytes)?;
+                }
+                require(
+                    sum(&[out.bytes, RESERVE])? <= modeled_output,
+                    "corrected durable output admission",
+                )?;
+                let mut summaries = Vec::new();
+                let mut quality = true;
+                progress.stage = "truth";
+                for (p, panel) in c.panels.iter().enumerate() {
+                    let file = descriptor_acquired(&panel.truth, false, Some(&mut progress.truth_opened))?;
+                    progress.truth_body_read_attempted = true;
+                    let truth = read_descriptor(&panel.truth, &file, false, guard)?;
+                    let mut counts = [Vec::new(), Vec::new(), Vec::new()];
+                    let mut coverage = Vec::new();
+                    for ordinal in 0..64 {
+                        let gt = truth[ordinal * 400..(ordinal + 1) * 400]
+                            .chunks_exact(4)
+                            .map(|b| i64::from(u32::from_le_bytes(b.try_into().unwrap())))
+                            .collect::<BTreeSet<_>>();
+                        require(
+                            gt.len() == 100 && gt.iter().all(|&id| id >= 0 && (id as usize) < n),
+                            "corrected full truth IDs",
+                        )?;
+                        let result: Value = serde_json::from_slice(&read_pinned(
+                            &results[p * 64 + ordinal],
+                            RESULT_CAP,
+                            false,
+                            guard,
+                        )?)?;
+                        for (i, key) in ["corrected", "decoded_cosine", "sq8_reference"]
+                            .iter()
+                            .enumerate()
+                        {
+                            let ranked: Vec<Score> =
+                                serde_json::from_value(result[*key]["ranked"].clone())?;
+                            counts[i].push(ranked.iter().filter(|s| gt.contains(&s.id)).count());
+                        }
+                        coverage.push(
+                            plans[p * 64 + ordinal]
+                                .row_ranges
+                                .iter()
+                                .flat_map(|r| r.clone())
+                                .filter(|&i| gt.contains(&generations[p].plane.ids[i]))
+                                .count(),
+                        );
+                    }
+                    let summary = |hits: &[usize]| {
+                        let mut sorted = hits.to_vec();
+                        sorted.sort_unstable();
+                        json!({"hits":hits,"total_hits":hits.iter().sum::<usize>(),"mean_recall":hits.iter().sum::<usize>() as f64/6400.,"p05_hits":sorted[3]})
+                    };
+                    let returned = summary(&counts[0]);
+                    quality &= counts[0].iter().sum::<usize>() >= 6272
+                        && returned["p05_hits"].as_u64().unwrap() >= 95;
+                    summaries.push(json!({"dataset":panel.dataset,"corrected":returned,"decoded_cosine":summary(&counts[1]),"sq8_reference":summary(&counts[2]),"fetched_coverage":summary(&coverage)}));
+                }
+                guard.tick(0)?;
+                // The fixture-only geometry probe performs one extra root read.
+                if !strict {
+                    startup_add(&mut ledger, &c.panels[0].root)?;
+                }
+                let startup_bytes = ledger
+                    .values()
+                    .try_fold(0usize, |n, a| sum(&[n, a.artifact.bytes]))?;
+                let startup_reads = ledger.values().map(|a| a.read_attempts).sum::<usize>();
+                let startup_read_bytes = ledger.values().try_fold(0usize, |n, a| {
+                    sum(&[
+                        n,
+                        a.artifact
+                            .bytes
+                            .checked_mul(a.read_attempts)
+                            .ok_or("corrected startup read bytes overflow")?,
+                    ])
+                })?;
+                // Put the potentially long startup roster in its own artifact,
+                // keeping the failure-safe terminal reserve bounded.
+                let startup=out.publish(&format!("{NAME}-startup.json"),&serde_json::to_vec(&json!({"distinct_objects":ledger.values().collect::<Vec<_>>(),"bytes":startup_bytes,"count":ledger.len(),"counted_once":true,
+                    "read_attempts":startup_reads,"read_bytes":startup_read_bytes,"separate_pretruth_reauthentication_reads":results.len()+4+3+generations.len()*9}))?)?;
+                let details = json!({"freeze":freeze,"summaries":summaries,"all128_envelopes_fit":envelope,"rows":n,"dimensions":d,"truth":c.panels.each_ref().map(|p|&p.truth),
+                    "frozen_original_authority":strict && n==100000 && d==768 && archived_truth(c.panels.each_ref().map(|p|&p.truth)),
+                    "modeled_peak_bytes":modeled,"modeled_output_bytes":modeled_output,"caps":c.caps,"query_auth_operations":guard.operations,
+                    "query_auth_work_bound":query_auth_bound,"query_auth_limit":c.query_auth_operations,"candidate_query_charged_work":scoring_work[0],
+                    "decoded_cosine_control_charged_work":scoring_work[1],"unchanged_sq8_control_charged_work":scoring_work[2],
+                    "query_work_formula":"candidate:128E(D)+sum T*(12+ceil(D/2)+8D+bit_length(T)); cosine:128E(D)+sum T*(12+9D+bit_length(T)); SQ8:sum T*(12+6D+128); auth bound:spent+three scoring terms+8sum(T)+3source_bytes+3modeled_output+prefix+seal+populations+requests+truth",
+                    "construction_charged_work":construction.operations,"construction_work_bound":work,"construction_limit":c.construction_operations,
+                    "charged_work_is_conservative_bound":true,"actual_dense_encoding_macs":2u64*n as u64*d as u64*d as u64,
+                    "construction_work_formula":"2*(8D^3+128D^2)+2N*(D^2+128D+7D*bit_length(7D)); MAC=one unit; byte authentication charged separately",
+                    "construction_wall_ns":build_wall,"construction_cpu_ns":build_cpu,"rotation_bytes":rotation.retained_bytes(),"rotation_gram_defect_bound":rotation.gram_defect_bound,
+                    "startup":startup,"startup_distinct_objects":ledger.len(),"startup_distinct_bytes":startup_bytes,"payload_ranges_exclude_startup":true,
+                    "total_cold_get_claim":false,"total_cold_byte_claim":false,"whole_process_supervisor_required":true,
+                    "lifecycle_qualified":false,"production_snapshot_integration":false,"finite_Haar_unbiasedness_claim":false,"radial_causation_claim":false});
+                Ok(terminal(
+                    sha,
+                    if quality && envelope {
+                        "SURVIVED_CONSUMED_PANELS"
+                    } else {
+                        "REJECT"
+                    },
+                    true,
+                    details,
+                ))
+            }
+            #[cfg(test)]
+            thread_local! {pub(super) static PRETRUTH_FAILURE:std::cell::Cell<u8>=const {std::cell::Cell::new(0)};}
+            #[cfg(test)]
+            fn pretruth_test_hook(c: &Config, results: &[Artifact]) -> Result<()> {
+                match PRETRUTH_FAILURE.with(|v| v.replace(0)) {
+                    1 => {
+                        let m: Manifest = serde_json::from_slice(&std::fs::read(&c.panels[1].root.path)?)?;
+                        OpenOptions::new()
+                            .append(true)
+                            .open(m.records.path)?
+                            .write_all(b"growth")?;
+                    }
+                    2 => {
+                        OpenOptions::new()
+                            .write(true)
+                            .open(&results[127].path)?
+                            .write_all(b"!")?;
+                    }
+                    3 => {
+                        OpenOptions::new()
+                            .write(true)
+                            .open(&c.prefix.path)?
+                            .write_all(b"!")?;
+                    }
+                    _ => {}
+                }
+                Ok(())
+            }
+            pub fn check_fine_corrected_four_bit(path: &Path, sha: &str, output: &Path) -> Result<()> {
+                execute(None, Some(path), sha, output)
+            }
+            /// Fixture/source-bound API; only the strict CLI can bind historical
+            /// FIRST100k/D768 authority. Neither API alone certifies survival.
+            pub fn diagnose(c: &Config, sha: &str, output: &Path) -> Result<()> {
+                execute(Some(c), None, sha, output)
+            }
+            fn execute(
+                config: Option<&Config>,
+                path: Option<&Path>,
+                sha: &str,
+                output: &Path,
+            ) -> Result<()> {
+                let mut out = Outputs::create(output)?;
+                let mut progress = Progress {
+                    stage: "config",
+                    ..Progress::default()
+                };
+                let result = (|| {
+                    digest(sha)?;
+                    let owned;
+                    let c = if let Some(c) = config {
+                        c
+                    } else {
+                        let file = secure_open(
+                            path.ok_or("corrected config path")?,
+                            rustix::fs::OFlags::RDONLY,
+                        )?;
+                        let meta = file.metadata()?;
+                        require(
+                            meta.is_file() && meta.len() <= ROOT_CAP as u64,
+                            "corrected config cap",
+                        )?;
+                        let mut body = filled(meta.len() as usize, 0u8)?;
+                        file.read_exact_at(&mut body, 0)?;
+                        exact_eof(&file, body.len())?;
+                        require(hash(&body) == sha, "corrected config digest")?;
+                        owned = serde_json::from_slice::<Config>(&body)?;
+                        &owned
+                    };
+                    valid(c)?;
+                    super::terminal_admission(&c.legacy(), output, true)?;
+                    let mut query_caps = c.caps.clone();
+                    query_caps.operations = c.query_auth_operations;
+                    let mut guard = Guard::new(&query_caps);
+                    let protocol = if config.is_none() {
+                        Protocol::frozen()
+                    } else {
+                        // Only bounded root metadata is needed to establish tiny
+                        // fixture dimensions; all other bodies remain unopened.
+                        let m: Manifest = serde_json::from_slice(&read_pinned(
+                            &c.panels[0].root,
+                            ROOT_CAP,
+                            false,
+                            &mut guard,
+                        )?)?;
+                        Protocol {
+                            rows: m.identity.rows,
+                            dimensions: m.identity.dimensions,
+                            prefix_bytes: c.prefix.bytes,
+                            prefix_sha: c.prefix.sha256.clone(),
+                            seal_sha: c.original_seal.sha256.clone(),
+                        }
+                    };
+                    let report = run(
+                        c,
+                        sha,
+                        &mut out,
+                        &protocol,
+                        config.is_none(),
+                        &mut guard,
+                        &mut progress,
+                    );
+                    progress.operations = guard.operations;
+                    let report = report?;
+                    progress.stage = "terminal";
+                    require(
+                        serde_json::to_vec(&report)?.len() <= RESERVE,
+                        "corrected terminal reserve",
+                    )?;
+                    out.finish(&report)?;
+                    guard.tick(0)
+                })();
+                if let Err(e) = &result {
+                    invalidate(&mut out, sha, e, &progress);
+                }
+                result
+            }
+            pub fn admit_survival(body: &[u8], run_id: &str, receipt: &SupervisorReceipt) -> Result<()> {
+                require(body.len() <= RESERVE, "corrected report cap")?;
+                let v: Value = serde_json::from_slice(body)?;
+                let truth: [Artifact; 2] = serde_json::from_value(v["details"]["truth"].clone())?;
+                digest(&receipt.config_sha256)?;
+                digest(&receipt.report_sha256)?;
+                require(
+                    !run_id.is_empty()
+                        && receipt.run_id == run_id
+                        && receipt.report_sha256 == hash(body)
+                        && v["config_sha256"] == receipt.config_sha256
+                        && receipt.process_exit_code == 0
+                        && receipt.resource_limits_observed
+                        && receipt.drain_complete
+                        && receipt.cleanup_complete
+                        && v["schema"] == REPORT_SCHEMA
+                        && v["codec"] == CODEC
+                        && v["source_identity_sha256"] == source_identity()
+                        && v["complete"] == true
+                        && v["status"] == "SURVIVED_CONSUMED_PANELS"
+                        && v["queries"] == 128
+                        && v["details"]["rows"] == 100000
+                        && v["details"]["dimensions"] == 768
+                        && v["details"]["frozen_original_authority"] == true
+                        && archived_truth(truth.each_ref())
+                        && v["standalone_authority"] == false
+                        && v["quality_or_performance_claim"] == false
+                        && v["requires_matching_supervisor_exit_receipt"] == true,
+                    "corrected survival requires authenticated original supervisor closure",
+                )
+            }
+        }
+
         /// Corpus-only histogram training and immutable generation mapping.
         /// This diagnostic does not integrate updates or garbage collection.
         pub mod histogram {
@@ -6099,6 +7197,200 @@ pub mod pack_diagnostic {
                     seal_sha: seal.sha256,
                 };
                 (tmp, config, protocol)
+            }
+            fn corrected_fixture() -> (tempfile::TempDir, corrected::Config, Protocol) {
+                let (tmp, mut old, protocol) = paired_fixture();
+                old.schema = histogram::CONFIG_SCHEMA.into();
+                old.source_identity_sha256 = histogram::source_identity();
+                let report = tmp.path().join("historical.json");
+                histogram::diagnose(&old, &hash(b"historical config"), &report).unwrap();
+                let path = report.with_extension("histogram-sq4-freeze.json");
+                let body = fs::read(&path).unwrap();
+                let freeze: Value = serde_json::from_slice(&body).unwrap();
+                let panels=(0..2).map(|panel|json!({"dataset":old.panels[panel].dataset,"root_sha256":old.panels[panel].root.sha256,
+                    "queries":(0..64).map(|ordinal|{
+                        let pin=&freeze["results"][panel*64+ordinal];let r:Value=serde_json::from_slice(&fs::read(pin["path"].as_str().unwrap()).unwrap()).unwrap();
+                        let ids=r["sq4"]["fetched_ids"].as_array().unwrap();let nominees=r["plan"]["nominees"].as_array().unwrap();
+                        json!({"ordinal":ordinal,"query_sha256":r["plan"]["query_sha256"],"row_ranges":r["plan"]["row_ranges"],"fetched_rows":ids.len(),
+                            "fetched_ids_sha256":hash(&ids.iter().flat_map(|id|id.as_i64().unwrap().to_le_bytes()).collect::<Vec<_>>()),
+                            "nominee_ordinals_sha256":hash(&nominees.iter().flat_map(|id|id.as_u64().unwrap().to_le_bytes()).collect::<Vec<_>>())})
+                    }).collect::<Vec<_>>()})).collect::<Vec<_>>();
+                let closed_populations=write_body(tmp.path(),tmp.path(),"populations.json",&serde_json::to_vec(&json!({"schema":"borsuk-corrected-four-bit-closed-populations-v1",
+                    "rows":135,"dimensions":3,"count_per_dataset":64,"source_row_bytes":15,"packed_row_bytes":14,
+                    "fetched_id_hash_encoding":"ordered-le-i64","nominee_ordinal_hash_encoding":"ordered-le-u64","historical_prefix":old.prefix,"panels":panels})).unwrap()).unwrap();
+                let config = corrected::Config {
+                    schema: corrected::CONFIG_SCHEMA.into(),
+                    source_identity_sha256: corrected::source_identity(),
+                    panels: old.panels,
+                    original_seal: old.original_seal,
+                    prefix: old.prefix,
+                    caps: old.caps,
+                    rotation_seed: [23; 32],
+                    construction_operations: 20_000_000_000,
+                    query_auth_operations: 20_000_000_000,
+                    closed_populations,
+                };
+                (tmp, config, protocol)
+            }
+            #[test]
+            fn fine_corrected_four_bit_full128_pipeline_freeze_and_late_invalid() {
+                for failure in [0u8, 1, 2, 3] {
+                    let (tmp, c, _) = corrected_fixture();
+                    let path = tmp.path().join("corrected.json");
+                    super::super::OPENS.with(|v| v.borrow_mut().clear());
+                    corrected::PRETRUTH_FAILURE.with(|v| v.set(failure));
+                    let result = corrected::diagnose(&c, &hash(b"corrected config"), &path);
+                    let v: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                    assert_eq!(v["queries"], 128);
+                    let freeze: Value = serde_json::from_slice(
+                        &fs::read(path.with_extension("corrected-four-bit-freeze.json")).unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(freeze["results"].as_array().unwrap().len(), 128);
+                    assert_eq!(freeze["truth_opened"], false);
+                    let opened = super::super::OPENS.with(|v| v.borrow().clone());
+                    let request_at = opened
+                        .iter()
+                        .position(|p| p == &c.panels[0].requests.path)
+                        .unwrap();
+                    for extension in [
+                        "corrected-four-bit-rotation.bin",
+                        "corrected-four-bit-0.bin",
+                        "corrected-four-bit-1.bin",
+                    ] {
+                        assert!(
+                            opened
+                                .iter()
+                                .position(|p| p == &path.with_extension(extension))
+                                .unwrap()
+                                < request_at
+                        );
+                    }
+                    if failure == 0 {
+                        result.unwrap();
+                        assert_eq!(v["complete"], true);
+                        assert_eq!(v["details"]["frozen_original_authority"], false);
+                        for pin in freeze["results"].as_array().unwrap() {
+                            let r: Value =
+                                serde_json::from_slice(&fs::read(pin["path"].as_str().unwrap()).unwrap())
+                                    .unwrap();
+                            assert_eq!(
+                                r["corrected"]["fetched_ids"],
+                                r["decoded_cosine"]["fetched_ids"]
+                            );
+                            assert_eq!(
+                                r["corrected"]["fetched_ids"],
+                                r["sq8_reference"]["fetched_ids"]
+                            );
+                            assert_eq!(r["corrected"]["fetched_ids"].as_array().unwrap().len(), 23);
+                        }
+                        let body = fs::read(&path).unwrap();
+                        let receipt = SupervisorReceipt {
+                            run_id: "tiny".into(),
+                            config_sha256: hash(b"corrected config"),
+                            report_sha256: hash(&body),
+                            process_exit_code: 0,
+                            resource_limits_observed: true,
+                            drain_complete: true,
+                            cleanup_complete: true,
+                        };
+                        assert!(corrected::admit_survival(&body, "tiny", &receipt).is_err());
+                    } else {
+                        assert!(result.is_err());
+                        assert_eq!(v["status"], "INVALID");
+                        assert_eq!(v["details"]["truth_opened"], false);
+                        assert!(!opened.contains(&c.panels[0].truth.path));
+                    }
+                    assert!(corrected::diagnose(&c, &hash(b"corrected config"), &path).is_err());
+                }
+            }
+            #[test]
+            fn fine_corrected_four_bit_prebody_caps_source_eof_and_sync() {
+                for case in [
+                    "memory",
+                    "work",
+                    "query-work",
+                    "sync",
+                    "short-write",
+                    "source-growth",
+                    "population",
+                ] {
+                    let (tmp, mut c, protocol) = corrected_fixture();
+                    let path = tmp.path().join("failure.json");
+                    let mut out = Outputs::create(&path).unwrap();
+                    match case {
+                        "memory" => c.caps.memory_bytes = FIXED,
+                        "work" => c.construction_operations = 1,
+                        "query-work" => c.query_auth_operations = 1,
+                        "sync" => out.fail_sync = Some(1),
+                        "short-write" => out.fail_write = Some(3),
+                        "source-growth" => {
+                            let m: Manifest =
+                                serde_json::from_slice(&fs::read(&c.panels[1].root.path).unwrap()).unwrap();
+                            OpenOptions::new()
+                                .append(true)
+                                .open(m.records.path)
+                                .unwrap()
+                                .write_all(b"!")
+                                .unwrap();
+                        }
+                        "population" => {
+                            // Still retains nominees, but substitutes one incidental
+                            // interval in an otherwise authenticated historical result.
+                            let mut frozen: Value =
+                                serde_json::from_slice(&fs::read(&c.closed_populations.path).unwrap()).unwrap();
+                            frozen["panels"][0]["queries"][0]["row_ranges"][0]["end"] = json!(32);
+                            let bytes = serde_json::to_vec(&frozen).unwrap();
+                            fs::write(&c.closed_populations.path, &bytes).unwrap();
+                            c.closed_populations.bytes = bytes.len();
+                            c.closed_populations.sha256 = hash(&bytes);
+                        }
+                        _ => unreachable!(),
+                    }
+                    super::super::OPENS.with(|v| v.borrow_mut().clear());
+                    let mut guard = Guard::new(&c.caps);
+                    let mut progress = Progress::default();
+                    let result = corrected::run(
+                        &c,
+                        &hash(b"config"),
+                        &mut out,
+                        &protocol,
+                        false,
+                        &mut guard,
+                        &mut progress,
+                    );
+                    assert!(result.is_err(), "{case}");
+                    corrected::invalidate(&mut out, &hash(b"config"), &result.unwrap_err(), &progress);
+                    let v: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                    assert_eq!(v["status"], "INVALID");
+                    let opened = super::super::OPENS.with(|v| v.borrow().clone());
+                    assert!(!opened.contains(&c.panels[0].requests.path));
+                    assert!(!opened.contains(&c.panels[0].truth.path));
+                    if ["memory", "work"].contains(&case) {
+                        assert!(!opened.contains(&c.original_seal.path));
+                        assert!(!opened.contains(&c.panels[0].root.path));
+                    }
+                    if case == "query-work" {
+                        assert!(
+                            !path
+                                .with_extension("corrected-four-bit-rotation.bin")
+                                .exists()
+                        );
+                        for panel in &c.panels {
+                            let m: Manifest =
+                                serde_json::from_slice(&fs::read(&panel.root.path).unwrap()).unwrap();
+                            assert!(!opened.contains(&m.records.path));
+                        }
+                    }
+                    if case == "short-write" {
+                        assert_eq!(v["details"]["unsealed_output"]["written_bytes"], 3);
+                    }
+                    assert!(
+                        !path
+                            .with_extension("corrected-four-bit-payloads.json")
+                            .exists()
+                    );
+                }
             }
             #[test]
             fn fine_sq4_full_pipeline_failure_order_and_sync() {

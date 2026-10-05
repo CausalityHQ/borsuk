@@ -13,6 +13,7 @@ mod cell_wal;
 mod centroid_hnsw;
 mod collection_control;
 pub mod contiguous_page_hierarchy;
+pub mod corrected_four_bit;
 mod error;
 pub mod exact_sq8_mirror;
 pub mod exact_sq8_nominee;
