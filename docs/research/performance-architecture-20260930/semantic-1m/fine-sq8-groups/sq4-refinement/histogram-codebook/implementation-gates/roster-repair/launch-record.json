@@ -1,0 +1,12 @@
+{
+  "bundle_commit": "83a41f9aceba4ed26362ecfc10e74bddbf5f08d0",
+  "config_commit": "d651af0630d58ae966353dcf2037c1eee29f408d",
+  "exec_session": 86617,
+  "instance_id": "i-0692339944ef63d14",
+  "native_source_commit": "1057e5a6351ccb4c2d33918874e062730fd32225",
+  "prefix": "research/semantic-router/20261005/histogram-sq4-roster-repair-a0001",
+  "schema": "borsuk-histogram-sq4-native-qualification-launch-v1",
+  "source_archive_sha256": "9c672fe9c7f36ee98f8992345bf0ce24fbcd9419bea08d20e187613dff522fa4",
+  "status": "RUNNING_NOT_QUALIFIED",
+  "worktree": "/home/rb/worktrees/borsuk-histogram-sq4-roster-repair-gates-frozen"
+}
