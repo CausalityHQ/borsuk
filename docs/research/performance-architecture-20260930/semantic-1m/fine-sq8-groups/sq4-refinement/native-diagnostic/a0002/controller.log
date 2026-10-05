@@ -1,0 +1,5 @@
+{"instance_id": "i-023fe623d50cfd7a4", "nodes": {"0": {"instance_id": "i-023fe623d50cfd7a4"}}, "prefix": "research/hierarchical-cells/20261005/fixed-sq4-diagnostic-a0002", "source_commit": "f68aee38ea5017eba17785d4adf917fa4e7a911a", "source_archive_sha256": "ed4a56e152e2f01472c7367ff0b12bb57830dd46af3c76944873e5d5c21f2f18"}
+{"instance_id": "i-023fe623d50cfd7a4", "state": "pending"}
+{"instance_id": "i-023fe623d50cfd7a4", "state": "running"}
+{"instance_id": "i-023fe623d50cfd7a4", "state": "running"}
+{"complete": true, "instance_id": "i-023fe623d50cfd7a4", "state": "terminated"}

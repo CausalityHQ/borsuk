@@ -1,0 +1,1 @@
+{"libc":["glibc","2.39"],"machine":"x86_64","os":{"ID":"ubuntu","VERSION_ID":"24.04"},"python":[3,12],"sdk":{"boto3":"1.40.72","botocore":"1.40.72","put_object_if_none_match":true}}
