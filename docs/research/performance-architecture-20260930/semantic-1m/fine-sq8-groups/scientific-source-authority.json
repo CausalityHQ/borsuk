@@ -1,0 +1,56 @@
+{
+  "native_commit": "a79810b9cf9fee7c88fe9454737004bfccf44a44",
+  "full404_identity": "c7675eb2d827834524c34aa7f7c814b70b7a31e27f66e9bbf526adbce302629b",
+  "fine_source_identity_sha256": "3f30f2302a23099fec0c826d03d1b861a664f296ea3606de59b202bc0c8950f4",
+  "binary_sha256": "aed6e8f126e68af738841449b7d61b8c46e43b8f1e4476252c30f1f73109f9af",
+  "source_bindings": [
+    [
+      "fine_sq8_groups.rs",
+      "crates/borsuk/src/fine_sq8_groups.rs"
+    ],
+    [
+      "pq64_nominee.rs",
+      "crates/borsuk/src/pq64_nominee.rs"
+    ],
+    [
+      "resident_vector_graph.rs",
+      "crates/borsuk/src/resident_vector_graph.rs"
+    ],
+    [
+      "hierarchical_semantic_cells.rs",
+      "crates/borsuk/src/hierarchical_semantic_cells.rs"
+    ],
+    [
+      "budgeted_page_rank.rs",
+      "crates/borsuk/src/budgeted_page_rank.rs"
+    ],
+    [
+      "sq8_page_authority.rs",
+      "crates/borsuk/src/sq8_page_authority.rs"
+    ],
+    [
+      "returned_sq8.rs",
+      "crates/borsuk/src/returned_sq8.rs"
+    ],
+    [
+      "exact_sq8_nominee.rs",
+      "crates/borsuk/src/exact_sq8_nominee.rs"
+    ],
+    [
+      "centroid_hnsw.rs",
+      "crates/borsuk/src/centroid_hnsw.rs"
+    ],
+    [
+      "sq8_source.rs",
+      "crates/borsuk/src/sq8_source.rs"
+    ],
+    [
+      "bin/hierarchical_semantic_cells.rs",
+      "crates/borsuk/src/bin/hierarchical_semantic_cells.rs"
+    ],
+    [
+      "lib.rs",
+      "crates/borsuk/src/lib.rs"
+    ]
+  ]
+}

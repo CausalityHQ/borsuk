@@ -1,0 +1,51 @@
+{
+  "additional_root_auth_seconds": 0.001576193026266992,
+  "datasets": [
+    {
+      "bytes_unchanged": true,
+      "dataset": "relaion",
+      "dimensions": 768,
+      "finite_f32": true,
+      "original_record_descriptor_bound": {
+        "bytes": 78000000,
+        "path": "/mnt/hierarchical-100k/screen/scratch/relaion/sq8",
+        "sha256": "be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b"
+      },
+      "primary_root_body_authenticated": true,
+      "primary_root_sha256": "3244e7bbd5e27eb1f3fe52cbddc450d08d45d25256eec98dc942ba42cf2808f1",
+      "request_shape_exact": true,
+      "requests_sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330",
+      "rows": 64,
+      "source_record_descriptors_match_frozen_assets": true,
+      "split": "consumed64 FIRST100k",
+      "truth_body_opened": false,
+      "unit_norm_required": false
+    },
+    {
+      "bytes_unchanged": true,
+      "dataset": "cohere",
+      "dimensions": 768,
+      "finite_f32": true,
+      "original_record_descriptor_bound": {
+        "bytes": 78000000,
+        "path": "/mnt/hierarchical-100k/screen/scratch/cohere/sq8",
+        "sha256": "c16929252705c831c6846022eec46481fc004f521f0c0814a53d49fece8771e0"
+      },
+      "primary_root_body_authenticated": true,
+      "primary_root_sha256": "c2bf337290f7713139903f398ac6b4007ed01faf47ff093e7e397b2715b7b4fc",
+      "request_shape_exact": true,
+      "requests_sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654",
+      "rows": 64,
+      "source_record_descriptors_match_frozen_assets": true,
+      "split": "consumed64 FIRST100k",
+      "truth_body_opened": false,
+      "unit_norm_required": false
+    }
+  ],
+  "elapsed_seconds": 0.10960867197718471,
+  "native_ann_executed": false,
+  "native_parser_execution_claim": false,
+  "remaining_gate": "Final glue qualify on actual frozen config + source-bound fixture; separate infrastructure canary before paid native science",
+  "schema": "borsuk-fine-sq8-real-request-preflight-v1",
+  "status": "PASS_METADATA_AND_REAL_REQUEST_SCHEMA_ONLY"
+}
