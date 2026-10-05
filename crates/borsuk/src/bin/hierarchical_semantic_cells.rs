@@ -1641,10 +1641,17 @@ fn execute() -> Result<()> {
     execute_args(&std::env::args().collect::<Vec<_>>())
 }
 fn execute_args(args: &[String]) -> Result<()> {
+    execute_args_with_pack(args, borsuk::fine_sq8_groups::pack_diagnostic::check_fine_pack)
+}
+fn execute_args_with_pack(args: &[String], check_pack: fn(&Path, &str, &Path) -> Result<()>) -> Result<()> {
     require(
         args.len() == 5,
         "usage: hierarchical_semantic_cells build|diagnose|nominate|build-probes|nominate-probes|diagnose-probes|build-overlap|paired-overlap CONFIG CONFIG_SHA256 NEW_OUTPUT",
     )?;
+    if args[1] == "check-fine-pack" {
+        return check_pack(
+            Path::new(&args[2]), &args[3], Path::new(&args[4]));
+    }
     let probe_mode = matches!(
         args[1].as_str(),
         "build-probes" | "nominate-probes" | "diagnose-probes" | "build-overlap" | "paired-overlap" | "build-fine" | "paired-fine"
@@ -1765,6 +1772,148 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fine_pack_strict_cli_real_tiny_pipeline() {
+        use borsuk::fine_sq8_groups::{
+            FineBuildConfig, FineSq8Index, ResidentLimits, pack_diagnostic as pack,
+        };
+        fn tiny_action(path: &Path, sha: &str, output: &Path) -> Result<()> {
+            let a = Artifact {
+                path: path.into(),
+                bytes: fs::metadata(path)?.len() as usize,
+                sha256: sha.into(),
+            };
+            let config: pack::Config =
+                serde_json::from_slice(&read_source_probe_artifact(&a, CONFIG_CAP)?)?;
+            pack::diagnose(&config, sha, output)
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let primary = tiny_fine_primary(temp.path());
+        let build_config = FineBuildConfig {
+            schema: borsuk::fine_sq8_groups::BUILD_SCHEMA.into(),
+            primary_root: primary,
+            max_build_payload_bytes: 128 * 1024 * 1024,
+            max_output_bytes: 16 * 1024 * 1024,
+        };
+        let limits = ResidentLimits {
+            max_peak_payload_bytes: 256 * 1024 * 1024,
+            pinned_generation_bytes: 0,
+            active_queries: 1,
+            delta_bytes: 0,
+            maintenance_bytes: 0,
+            runtime_bytes: 0,
+        };
+        let roots = ["relaion", "cohere"]
+            .map(|name| FineSq8Index::build(&build_config, &temp.path().join(name)).unwrap());
+        let indexes = roots
+            .iter()
+            .map(|root| FineSq8Index::open(root, &limits).unwrap())
+            .collect::<Vec<_>>();
+        let mut prefix = Vec::new();
+        for (i, index) in indexes.iter().enumerate() {
+            prefix.extend(serde_json::to_vec(&json!({"phase":"startup","dataset":(["relaion","cohere"][i]),"root":roots[i],
+                "resources":index.resources,"build":index.build_receipt(),"truth_opened":false,"wall_ns":1,"process_cpu_ns":1})).unwrap());
+            prefix.push(b'\n');
+        }
+        for (i, index) in indexes.iter().enumerate() {
+            let mut workspace = index.new_workspace().unwrap();
+            for ordinal in 0..64 {
+                let query = [1.0, ordinal as f32 / 64.0];
+                let plan = index.plan(&query, &mut workspace).unwrap();
+                prefix.extend(serde_json::to_vec(&json!({"phase":"fine_plan","dataset":(["relaion","cohere"][i]),"ordinal":ordinal,
+                    "plan":plan,"truth_opened":false,"wall_ns":1,"process_cpu_ns":1})).unwrap());
+                prefix.push(b'\n');
+            }
+        }
+        drop(indexes);
+        let prefix_pin = probe_artifact(&temp.path().join("prefix.jsonl"), &prefix);
+        OpenOptions::new()
+            .append(true)
+            .open(&prefix_pin.path)
+            .unwrap()
+            .write_all(b"UNOPENED REMAINING TRACE")
+            .unwrap();
+        let requests = Artifact {
+            path: temp.path().join("nonexistent-requests"),
+            bytes: 1,
+            sha256: hash(b"unopened"),
+        };
+        let seal=probe_artifact(&temp.path().join("seal.json"),&serde_json::to_vec(&json!({
+            "schema":"borsuk-fine-sq8-seal-v1","config_sha256":hash(b"paired config"),"source_identity_sha256":hash(b"paired source"),
+            "prefix_bytes":prefix_pin.bytes,"prefix_sha256":prefix_pin.sha256,"plans_per_panel":64,"truth_opened":false,
+            "panels":roots.iter().enumerate().map(|(i,root)|json!({"dataset":(["relaion","cohere"][i]),"root":root,"requests":requests})).collect::<Vec<_>>() })).unwrap());
+        let panels=roots.iter().enumerate().map(|(i,root)|{
+            let manifest:Value=serde_json::from_slice(&fs::read(&root.path).unwrap()).unwrap();
+            // Actual built objects are deliberately absent during the diagnostic.
+            for field in ["pq","records","groups","order"] {fs::remove_file(manifest[field]["path"].as_str().unwrap()).unwrap();}
+            json!({"dataset":(["relaion","cohere"][i]),"root":root,"graph":manifest["graph"],"identity":manifest["identity"]})
+        }).collect::<Vec<_>>();
+        let config = json!({"schema":pack::CONFIG_SCHEMA,"panels":panels,"original_seal":seal,"prefix":prefix_pin,
+            "caps":{"memory_bytes":268435456,"output_bytes":2097152,"deadline_seconds":300,"operations":500000000,"cpu_threads":1,"swap_bytes":0}});
+        let pin = probe_artifact(
+            &temp.path().join("pack-config.json"),
+            &serde_json::to_vec(&config).unwrap(),
+        );
+        let out = temp.path().join("pack.json");
+        let mut args = vec![
+            "hierarchical_semantic_cells".into(),
+            "check-fine-pack".into(),
+            pin.path.display().to_string(),
+            pin.sha256.clone(),
+            out.display().to_string(),
+        ];
+        // Same strict argument dispatcher, using only a private action seam for
+        // tiny geometry. The production action rejects this unfrozen fixture.
+        execute_args_with_pack(&args, tiny_action).unwrap();
+        let result: Value = serde_json::from_slice(&fs::read(&out).unwrap()).unwrap();
+        assert_eq!(result["status"], "SURVIVED_NECESSARY_LOCALITY");
+        assert_eq!(result["queries"], 128);
+        assert_eq!(
+            result["diagnostic_source_sha256"]["bin/hierarchical_semantic_cells.rs"],
+            hash(include_bytes!("hierarchical_semantic_cells.rs"))
+        );
+        assert_eq!(
+            result["details"]["original_trace_source_identity_sha256"],
+            hash(b"paired source")
+        );
+        assert_eq!(
+            fs::read(out.with_extension("prefix.jsonl")).unwrap(),
+            prefix
+        );
+        assert!(execute_args_with_pack(&args, tiny_action).is_err());
+        args[4] = temp
+            .path()
+            .join("production-reject.json")
+            .display()
+            .to_string();
+        assert!(execute_args(&args).is_err());
+        args[4] = temp.path().join("bad-sha.json").display().to_string();
+        args[3] = "0".repeat(64);
+        assert!(execute_args_with_pack(&args, tiny_action).is_err());
+        for forbidden in [
+            "truth",
+            "requests",
+            "query",
+            "test_geometry",
+            "groups_per_pack",
+        ] {
+            let mut bad = config.clone();
+            bad[forbidden] = json!("forbidden");
+            let pin = probe_artifact(
+                &temp.path().join(format!("config-{forbidden}")),
+                &serde_json::to_vec(&bad).unwrap(),
+            );
+            args[2] = pin.path.display().to_string();
+            args[3] = pin.sha256;
+            args[4] = temp
+                .path()
+                .join(format!("out-{forbidden}"))
+                .display()
+                .to_string();
+            assert!(execute_args_with_pack(&args, tiny_action).is_err());
+        }
+        assert!(execute_args_with_pack(&args[..4], tiny_action).is_err());
+    }
     fn tiny_fine_primary(dir: &Path) -> Artifact {
         let codec = borsuk::rotated_two_bit::RotatedTwoBitCodec::new(&[0., 0.], 20260923).unwrap();
         let mut canonical = Vec::new(); let mut records = Vec::new(); let mut sq8 = Vec::new(); let mut order = Vec::new();

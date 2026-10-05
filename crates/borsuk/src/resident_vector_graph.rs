@@ -1048,6 +1048,20 @@ impl PqVectorGraph {
             || identity.generation == 0 { return Err("PQ graph identity".into()); }
         let cap = identity.rows.checked_mul(512).ok_or("PQ graph cap overflow")?;
         let body = read_source_probe_artifact(artifact, cap)?;
+        Self::decode_for_inspection(&body, identity, &mut |_| Ok(()))
+    }
+
+    // Shared format, ordinal, layer and reachability validation. The diagnostic
+    // authenticates a bounded descriptor first and supplies its deadline/work
+    // poll; serving retains its existing authenticated opener and identity.
+    pub(crate) fn decode_for_inspection(
+        body: &[u8], identity: &PqGraphIdentity,
+        poll: &mut impl FnMut(u64) -> crate::hierarchical_semantic_cells::Result<()>,
+    ) -> crate::hierarchical_semantic_cells::Result<Self> {
+        if !(2..=100_000).contains(&identity.rows) || !(1..=768).contains(&identity.dimensions)
+            || identity.generation == 0 { return Err("PQ graph identity".into()); }
+        let cap = identity.rows.checked_mul(512).ok_or("PQ graph cap overflow")?;
+        if body.len() > cap { return Err("PQ graph encoded cap".into()); }
         let mut input = std::io::Cursor::new(&body);
         let mut header = [0u8; 132];
         input.read_exact(&mut header)?;
@@ -1060,9 +1074,12 @@ impl PqVectorGraph {
         let entry = u32::from_le_bytes(header[128..132].try_into()?);
         if entry as usize >= identity.rows { return Err("PQ graph entry".into()); }
         let mut neighbours = Vec::new();
+        if identity.rows.checked_mul(std::mem::size_of::<Vec<Vec<u32>>>())
+            .is_none_or(|bytes| bytes > cap) { return Err("PQ graph outer admission".into()); }
         neighbours.try_reserve_exact(identity.rows)?;
         let mut used = neighbours.capacity() * std::mem::size_of::<Vec<Vec<u32>>>();
         for node in 0..identity.rows {
+            poll(1)?;
             let mut count = [0u8]; input.read_exact(&mut count)?;
             let count = usize::from(count[0]);
             if !(1..=17).contains(&count) || used + count * std::mem::size_of::<Vec<u32>>() > cap {
@@ -1078,6 +1095,9 @@ impl PqVectorGraph {
                 if degree > if layer + 1 == count { 256 } else { 32 } || used + degree * 4 > cap {
                     return Err("PQ graph edge admission".into());
                 }
+                // One edge work unit includes a bounded <=256-entry duplicate
+                // check. Poll before that bounded inner loop, not after decode.
+                poll(degree as u64 + 1)?;
                 let mut edges = Vec::new(); edges.try_reserve_exact(degree)?;
                 used += edges.capacity() * 4;
                 if used > cap { return Err("PQ graph capacity admission".into()); }
@@ -1095,7 +1115,9 @@ impl PqVectorGraph {
         }
         if input.position() != body.len() as u64 { return Err("PQ graph trailing bytes".into()); }
         for tower in &neighbours {
+            poll(1)?;
             for (index, edges) in tower.iter().enumerate() {
+                poll(edges.len() as u64)?;
                 let layer = tower.len() - index - 1;
                 if edges.iter().any(|&edge| neighbours[edge as usize].len() <= layer) {
                     return Err("PQ graph edge layer".into());
@@ -1104,8 +1126,37 @@ impl PqVectorGraph {
         }
         let graph = ResidentVectorGraph { neighbours, entry, generation: identity.generation,
             source_sha256: identity.source, plane_sha256: identity.layout };
-        if graph.structural_stats().reachable != identity.rows { return Err("PQ graph unreachable rows".into()); }
+        let mut seen = Vec::new(); seen.try_reserve_exact(identity.rows)?;
+        seen.resize(identity.rows, false);
+        let mut queue = Vec::new(); queue.try_reserve_exact(identity.rows)?;
+        if seen.capacity() + queue.capacity() * std::mem::size_of::<u32>() > identity.rows * 16 {
+            return Err("PQ graph validation capacity".into());
+        }
+        seen[entry as usize] = true; queue.push(entry);
+        let mut front = 0;
+        while front < queue.len() {
+            let edges = graph.neighbours[queue[front] as usize].last().ok_or("PQ graph base layer")?;
+            poll(edges.len() as u64 + 1)?;
+            for &target in edges {
+                if !std::mem::replace(&mut seen[target as usize], true) { queue.push(target); }
+            }
+            front += 1;
+        }
+        if queue.len() != identity.rows { return Err("PQ graph unreachable rows".into()); }
         Ok(Self { graph, identity: identity.clone(), construction_capacity_bytes:None })
+    }
+
+    /// Inspect each authenticated directed base edge once, using physical
+    /// ordinals. Upper layers are never exposed as packing evidence.
+    pub fn inspect_authenticated_base_edges(
+        &self, mut inspect: impl FnMut(u32, u32) -> crate::hierarchical_semantic_cells::Result<()>,
+    ) -> crate::hierarchical_semantic_cells::Result<()> {
+        for (source, tower) in self.graph.neighbours.iter().enumerate() {
+            for &target in tower.last().ok_or("PQ graph base layer")? {
+                inspect(source as u32, target)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn nominate_pq(&self, query: &[f32], pq: &Pq64Codes, workspace: &mut GraphSearchWorkspace)

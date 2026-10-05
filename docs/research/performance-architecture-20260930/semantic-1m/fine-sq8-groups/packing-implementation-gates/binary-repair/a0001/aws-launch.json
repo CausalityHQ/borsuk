@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0f94d877132efa035",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0f94d877132efa035"
+    }
+  },
+  "prefix": "research/semantic-router/20261005/fine-sq8-packing-binary-repair-a0001",
+  "source_commit": "e34e375c18d0bf7b785e4e5c6f6f60e40a42ec80",
+  "source_archive_sha256": "61c16c8efa6dacf5355ab340085c890414085ad868c7b18e2ba0653ab7d590d1"
+}
