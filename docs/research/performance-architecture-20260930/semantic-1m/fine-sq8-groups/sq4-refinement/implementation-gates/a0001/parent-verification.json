@@ -1,0 +1,15 @@
+{
+  "schema": "borsuk-sq4-native-failed-qualification-v1",
+  "controller_exit_status": 1,
+  "native_exit_status": 101,
+  "tests_executed": 0,
+  "remaining_gates": "UNRUN",
+  "authenticated_terminal_bodies": 13,
+  "source_unchanged": true,
+  "source_file_count": 404,
+  "source_identity_sha256": "0820450abaa221b77f4449d9a5b694015625248480f70072d5dc5077f7700b17",
+  "instance_id": "i-0507b0696c7f65b94",
+  "instance_terminated": true,
+  "disposition": "INVALID native qualification; test-only json! syntax defect, no algorithm rejection",
+  "repair": "same worker; three indexed array literal expressions require parentheses; preserve7923"
+}

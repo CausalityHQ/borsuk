@@ -5,6 +5,9 @@
   "bundle_commit": "14ac12e8c1027013d21db7b6fb10de5e7fa2dd9d",
   "native_candidate": "7923fbfb3f1add7fd0bf7782658ee823f3323fa9",
   "output": "/home/rb/worktrees/borsuk-sq4-native-gates-frozen/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/implementation-gates/a0001",
-  "status": "running-original-controller",
-  "verification": "launch health running; terminal absent; no native gate or science result claimed"
+  "status": "terminal",
+  "controller_exit_status": 1,
+  "native_exit_status": 101,
+  "instance_state": "terminated",
+  "failure": "bin test json! array literal indexing at3sites; zero tests"
 }
