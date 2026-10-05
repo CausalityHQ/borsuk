@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-corrected-canary-root-source-verification-v1",
+  "source_commit": "7efbc734803ccf1a4946b81f2f6c5b620a558c1b",
+  "worker_commit": "375f932a6c6a517abb3336fd400c3b9bdaa4b45a",
+  "source_sha256": "fdbea617f916b99dbacfa204780095b3e26a493248e89641a485578f20279864",
+  "contract_sha256": "05e8f2d850ec98a6e91f80f57b6b1592c5f5646191933b3822cb685c56ba20fd",
+  "command": "python3 scripts/launch_fine_pack_diagnostic.py --corrected-four-bit --canary --self-check",
+  "unit": "borsuk-corrected-canary-root-verification.service",
+  "exit_status": 0,
+  "wall_seconds": 1.372,
+  "cpu_seconds": 0.824,
+  "memory_peak_reported": "79.3 MiB",
+  "swap_bytes": 0,
+  "memory_cap_bytes": 268435456,
+  "cpu_count": 1,
+  "network_families": [
+    "AF_UNIX"
+  ],
+  "paid_compute_launched": false,
+  "scientific_execution": false,
+  "production_readiness_proven": false
+}
