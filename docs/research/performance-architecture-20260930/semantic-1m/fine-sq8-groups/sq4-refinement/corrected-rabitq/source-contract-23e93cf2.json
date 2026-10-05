@@ -1,0 +1,91 @@
+{
+  "base": "128a27266091945b65e93a67d683194cd977c7d9",
+  "status": "SOURCE_ONLY_UNVERIFIED",
+  "files": [
+    "crates/borsuk/src/corrected_four_bit.rs",
+    "crates/borsuk/src/lib.rs",
+    "crates/borsuk/src/fine_sq8_groups.rs",
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs"
+  ],
+  "codec_api": {
+    "Limits": "{ memory_bytes: usize, operations: u64 }; explicit, no defaults",
+    "Rotation": "generate(dimensions, seed: [u8;32], limits); from_bytes(body, expected_sha256: [u8;32], limits); to_bytes(limits); digest(); dimensions(); retained_bytes(); encode(id, source: &[f32], limits); prepare_query(query: &[f32], limits)",
+    "EncodedRow": "{ bytes: Vec<u8>, correction_rounding_abs: f64 }; ID8+correction4+ceil(D/2)",
+    "PreparedQuery": "score(&Rotation, packed_row: &[u8]) -> Result<f32>; capacity_bytes()",
+    "rotation_format": "64-byte versioned header plus exact little-endian f64 matrix; SHA256 authenticated whole object; row-major full D rotation; zero padding and geometry checked",
+    "rules": "Any positive D admitted by checked D^2/D^3/O(7D) capacity/work formulas; N(RN(x)); low nibble first; odd high tail zero; zero positive; exact dyadic critical-ratio ordering and true-equality groups; winning event-prefix replay; earliest strict ordered-f64 objective optimum (no exact-real objective claim); correction f32; distance final f32 cast only, unclamped"
+  },
+  "diagnostic_api": "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::corrected::{Config, Panel, Caps, source_identity, diagnose, check_fine_corrected_four_bit, admit_survival}; CLI check-fine-corrected-four-bit CONFIG SHA NEW_REPORT",
+  "config": "Strict Config original fields plus mandatory rotation_seed:[u8;32], construction_operations:u64, closed_populations:Artifact. Strict CLI pins 175929 bytes/SHA256 764674f0623797d1303158750fa82a568ea5fabd4fd57f7df5b333865e02a29a; cap 262144. caps.memory_bytes explicit <=1GiB, operations query/auth <=20B, CPU1 swap0. No defaults or implicit cap lift. Diagnostic D<=768/N<=100000; strict CLI D768/N100000. Mandatory query_auth_operations:u64 supplies a distinct prospective full three-arm/authentication budget; legacy caps.operations <=20B is preserved, not silently increased. Full batch admission precedes rotation/source bodies.",
+  "allocation": "Source edits/rustfmt/diff checks CPU1/256MiB/swap0. Native diagnostic preserves explicit <=1GiB cap; whole simultaneous legacy scratch+rotation generation/serialized/reopen/event scratch+both ID/group sets+neutral populations parsed metadata admitted before bodies; exact Vec capacity checks. Output preadmission adjusts third complete fetched roster, shared rotation, roots/groups, all128 results and 16KiB terminal reserve.",
+  "authority": "distinct schemas and source closure includes codec; one shared persisted rotation; original root/records/coefficient/order/router/config/source/rotation/payload/group bindings; all128 results and prefix rehashed before full-truth descriptor acquisition; original records whole hash+EOF repeated pretruth; no-overwrite and existing invalidation/supervisor machinery",
+  "tests": [
+    "corrected_four_bit_scalar_ratio_and_rounding",
+    "corrected_four_bit_exhaustive_tiny_grid",
+    "corrected_four_bit_rotation_bits_gram_and_corruption",
+    "corrected_four_bit_packing_tail_nonunit_and_caps",
+    "fine_corrected_four_bit_full128_pipeline_freeze_and_late_invalid",
+    "fine_corrected_four_bit_prebody_caps_source_eof_and_sync",
+    "fine_corrected_four_bit_strict_cli_dispatch",
+    "corrected_four_bit_exact_threshold_collision_and_subnormal",
+    "fine_corrected_four_bit_real_native_two_panel_d3_all128_incidental_and_late_truth"
+  ],
+  "work": {
+    "construction_bound_D768_N100k": 159001952256,
+    "query_scoring_charged": [
+      15733844912,
+      16649896880,
+      11326600896
+    ],
+    "query_scoring_subtotal": 43710342688,
+    "auth_formula": "spent+scoring_subtotal+8sum(T)+3source_bytes+3modeled_output+prefix+seal+closed_populations+requests+truth",
+    "new_limits": "Both prospective limits are mandatory explicit inputs with no defaults."
+  },
+  "commit": "23e93cf251c82ba1b155189d72ca372ab7433d31",
+  "file_sha256": {
+    "crates/borsuk/src/corrected_four_bit.rs": "6ccf7be1c080aa230587cfba100e3639a2dd429e3b745858f5717d7662c120df",
+    "crates/borsuk/src/lib.rs": "a962c2cd8ed2c84091776ded8f3cc5f72fb51b9418f6ccd99ba420d7f398a53a",
+    "crates/borsuk/src/fine_sq8_groups.rs": "3e9eb484d18b0fca42660648cd65544c733918a8e5668df6ac637bd4d31bcf52",
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs": "9e4b255629cba94ccc6ea1e737f147a0ffd9d17b6ee46e7882ea406004217cd9"
+  },
+  "native_test_count": 9,
+  "native_test_targets": [
+    {
+      "target": "borsuk --lib",
+      "source": "crates/borsuk/src/corrected_four_bit.rs",
+      "names": [
+        "corrected_four_bit::tests::corrected_four_bit_scalar_ratio_and_rounding",
+        "corrected_four_bit::tests::corrected_four_bit_exhaustive_tiny_grid",
+        "corrected_four_bit::tests::corrected_four_bit_exact_threshold_collision_and_subnormal",
+        "corrected_four_bit::tests::corrected_four_bit_rotation_bits_gram_and_corruption",
+        "corrected_four_bit::tests::corrected_four_bit_packing_tail_nonunit_and_caps"
+      ]
+    },
+    {
+      "target": "borsuk --lib",
+      "source": "crates/borsuk/src/fine_sq8_groups.rs",
+      "names": [
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_corrected_four_bit_full128_pipeline_freeze_and_late_invalid",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_corrected_four_bit_prebody_caps_source_eof_and_sync"
+      ]
+    },
+    {
+      "target": "borsuk --bin hierarchical_semantic_cells",
+      "source": "crates/borsuk/src/bin/hierarchical_semantic_cells.rs",
+      "names": [
+        "tests::fine_corrected_four_bit_strict_cli_dispatch",
+        "tests::fine_corrected_four_bit_real_native_two_panel_d3_all128_incidental_and_late_truth"
+      ]
+    }
+  ],
+  "source_checks": {
+    "limits": "systemd-run --user --scope CPUQuota=100% MemoryMax=256M MemorySwapMax=0",
+    "rustfmt_full_four_file_parse_exit": 0,
+    "git_diff_check_exit": 0,
+    "legacy_deletions": 0,
+    "native_compilation": "NOT RUN; forbidden locally",
+    "test_execution": "NOT RUN; parent remote gates pending",
+    "working_tree": "clean after commit",
+    "worker_lifecycle": "retained; no agent_complete pending parent gates"
+  }
+}
