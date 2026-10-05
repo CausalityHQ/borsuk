@@ -1,0 +1,67 @@
+{
+  "status": "INVALID_NATIVE_COMPILATION",
+  "controller_exit_status": 1,
+  "native_exit_status": 101,
+  "tests_run": 0,
+  "remaining_stages_unrun": 13,
+  "instance_id": "i-0b42e08427748ce04",
+  "instance_state": "terminated",
+  "original_exec_session": 95559,
+  "full_artifacts_verified": {
+    "cargo-version.txt": {
+      "bytes": 36,
+      "sha256": "fb3f25aefd6d5441842d285f5a9b125b3f0f0b0bf2013d9a32677f9e99c6c854"
+    },
+    "config.json": {
+      "bytes": 366519,
+      "sha256": "1e70c05795f62d9602a60d7b11b350d112d0bf5f42719883ac1b2d0625a3c53d"
+    },
+    "cpu.txt": {
+      "bytes": 3517,
+      "sha256": "396d14f90b7420fe624960f04559cf69bec58d72bceb66d1f6a2e89bd477c4cd"
+    },
+    "native-source-manifest.json": {
+      "bytes": 47226,
+      "sha256": "2dbebc95c0fc91d2158957dff10b94210907f0fa0fd15ca0379d0fddb2a874b5"
+    },
+    "run-closed.log": {
+      "bytes": 81046,
+      "sha256": "9b50ab82acabd24624404b9d34f6413f5276e2a9d5c5f02bdf18962f73c7795e"
+    },
+    "rustc-version.txt": {
+      "bytes": 196,
+      "sha256": "3975d062e234a9f3921955bf6ae5b90f5819df94fa825d057f76b34a35ed0f4d"
+    },
+    "source-after.json": {
+      "bytes": 44267,
+      "sha256": "6c90e4afd6ae6481887ccb4da742884196a50338fd4389045d07f403d123148a"
+    },
+    "source-before.json": {
+      "bytes": 44267,
+      "sha256": "6c90e4afd6ae6481887ccb4da742884196a50338fd4389045d07f403d123148a"
+    },
+    "source-qualification.json": {
+      "bytes": 411336,
+      "sha256": "4488d204d9e33bd69fd21896b0076a7c6330e920a7c78ae5bad9b323e43833a8"
+    },
+    "test-resources.txt": {
+      "bytes": 870,
+      "sha256": "c4edd9e8504019fc3c3386282d665fbb2bba780db994db29843315d44b6cc29d"
+    },
+    "test.log": {
+      "bytes": 136253,
+      "sha256": "5f5d91311cd4a6ed3f00f22541be84d0bd0f3c31425d5f5a1c2c65b850112db3"
+    },
+    "workspace-cgroup.json": {
+      "bytes": 1372,
+      "sha256": "d65d76d7f44be46917b7000f48eaec70817321ec811c3ae195253156aa2d6e14"
+    },
+    "workspace-receipt.json": {
+      "bytes": 52874,
+      "sha256": "f3dc31637c079f2dc9205f79ccad2ae2f78139b23a075974bbc3feb18c5aa706"
+    }
+  },
+  "source_before_equals_after": true,
+  "failure": "E0618 test local FineBuildConfig build shadows builder function at bin2151",
+  "scientific_quality_or_performance_claim": false
+}
