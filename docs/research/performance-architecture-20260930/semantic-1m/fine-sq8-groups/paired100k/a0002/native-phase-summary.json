@@ -1,0 +1,51 @@
+{
+  "datasets": {
+    "cohere": {
+      "fetch_and_rank_cpu_ms_mean": 10.54175075,
+      "fetch_and_rank_wall_ms_mean": 12.055675015625,
+      "local_range_reads_mean": 219.21875,
+      "nomination_cpu_ms_mean": 4.188245078125,
+      "verified_bytes_mean": 6884085
+    },
+    "relaion": {
+      "fetch_and_rank_cpu_ms_mean": 8.139300078125,
+      "fetch_and_rank_wall_ms_mean": 9.231107953125,
+      "local_range_reads_mean": 163.125,
+      "nomination_cpu_ms_mean": 3.87370778125,
+      "verified_bytes_mean": 5313945
+    }
+  },
+  "scope": "consumed64 per dataset FIRST100k D768 cosine k100; local native phases only; no cold S3/QPS/vendor claim",
+  "summaries": [
+    {
+      "containment": {
+        "mean_hits": 99.796875,
+        "p05_hits": 99
+      },
+      "coverage": {
+        "mean_hits": 99.9375,
+        "p05_hits": 100
+      },
+      "dataset": "relaion",
+      "returned": {
+        "mean_hits": 99.484375,
+        "p05_hits": 99
+      }
+    },
+    {
+      "containment": {
+        "mean_hits": 95.609375,
+        "p05_hits": 87
+      },
+      "coverage": {
+        "mean_hits": 98.9375,
+        "p05_hits": 95
+      },
+      "dataset": "cohere",
+      "returned": {
+        "mean_hits": 98.515625,
+        "p05_hits": 95
+      }
+    }
+  ]
+}
