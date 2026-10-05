@@ -1,0 +1,35 @@
+from pathlib import Path
+import json,hashlib,time
+import boto3
+from botocore.config import Config
+p=Path('/tmp/borsuk-overlap-plane-exact-recovery-a0001')
+x=json.loads(Path('/tmp/borsuk-overlap-original-recovery-inputs.json').read_bytes())
+s=boto3.Session(profile_name='causality',region_name='eu-central-1').client('s3',config=Config(retries={'total_max_attempts':1},connect_timeout=5,read_timeout=20))
+receipt={'schema':'borsuk-overlap-exact-plane-body-recovery-v1','native_algorithms_executed':False,'queries_or_truth_opened':False,'datasets':{},'dispatches':0}
+for item in x['original_sources']['items']:
+ ds=item['name'];wanted=x['items'][ds]['build_inputs'];art=item['artifacts']['control/plane/records.bin']
+ assert {k:art[k] for k in ['bytes','sha256']}=={k:wanted['records'][k] for k in ['bytes','sha256']}
+ obj=s.get_object(Bucket=x['original_sources']['bucket'],Key=art['key']);receipt['dispatches']+=1
+ assert obj['ContentLength']==art['bytes']
+ digest=hashlib.sha256();table=hashlib.sha256();n=0;block_bytes=32*(art['bytes']//100000);buff=b''
+ dest=p/(ds+'-records.bin')
+ with dest.open('xb') as f:
+  while True:
+   body=obj['Body'].read(65536)
+   if not body:break
+   n+=len(body);assert n<=art['bytes'];digest.update(body);f.write(body);buff+=body
+   while len(buff)>=block_bytes:
+    table.update(hashlib.sha256(buff[:block_bytes]).digest());buff=buff[block_bytes:]
+  if buff:table.update(hashlib.sha256(buff).digest())
+ obj['Body'].close();assert n==art['bytes'] and digest.hexdigest()==art['sha256']
+ oldpin=item['artifacts']['control/plane/manifest.json'];obj=s.get_object(Bucket=x['original_sources']['bucket'],Key=oldpin['key']);receipt['dispatches']+=1
+ assert obj['ContentLength']==oldpin['bytes'];oldbody=obj['Body'].read(oldpin['bytes']+1);obj['Body'].close()
+ assert len(oldbody)==oldpin['bytes'] and hashlib.sha256(oldbody).hexdigest()==oldpin['sha256'];old=json.loads(oldbody)
+ g=json.loads(Path('docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/original-generation-inputs/'+ds+'-generation.json').read_bytes())
+ d=g['discovery'];h={'schema':'borsuk-two-bit-plane-v3','rows':100000,'dimensions':768,'seed':20260923,'record_bytes':200,'source_sha256':d['source_sha256'],'sq8_sha256':d['sq8_sha256'],'source_order_sha256':d['source_order_sha256'],'mean_sha256':d['mean_sha256'],'records_sha256':d['records_sha256'],'page_rows':32,'page_digest_sha256':table.hexdigest(),'query_or_truth_used':False}
+ body=(json.dumps(h,separators=(',',':'))+'\n').encode();actual=hashlib.sha256(body).hexdigest()
+ receipt['datasets'][ds]={'records':{'bytes':n,'sha256':digest.hexdigest(),'key':art['key']},'historical_plane_descriptor':oldpin,'derived_header_bytes':len(body),'derived_header_sha256':actual,'expected_header':wanted['plane'],'exact_match':len(body)==wanted['plane']['bytes'] and actual==wanted['plane']['sha256'],'page_digest_sha256':table.hexdigest()}
+ (p/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
+ assert receipt['datasets'][ds]['exact_match'],'derived manifest differs from immutable original'
+ (p/(ds+'-plane.json')).write_bytes(body)
+print(json.dumps(receipt))

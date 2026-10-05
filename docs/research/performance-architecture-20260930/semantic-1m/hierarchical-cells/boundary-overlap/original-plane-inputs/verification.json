@@ -1,0 +1,69 @@
+{
+  "schema": "borsuk-overlap-exact-plane-body-recovery-v1",
+  "native_algorithms_executed": false,
+  "queries_or_truth_opened": false,
+  "datasets": {
+    "relaion": {
+      "records": {
+        "bytes": 20000000,
+        "sha256": "624e63de5905210bde24a4e7752573d6811d9fa5142e5b529ff0e9f65054ce83",
+        "key": "research/native-union/20260928/walk-source-http-a0002/indexes/relaion/candidate/generations/577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b/plane/records.bin"
+      },
+      "historical_plane_descriptor": {
+        "key": "research/native-union/20260928/walk-source-http-a0002/indexes/relaion/candidate/generations/577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b/plane/manifest.json",
+        "bytes": 548,
+        "sha256": "16dd4cfabb6e2a079fd261c4f0626cafa4bcb4ec3e82aee303b066f08d2ae4fa"
+      },
+      "derived_header_bytes": 651,
+      "derived_header_sha256": "762eb65ab8a4f6da9b0c96c71c1908e0c9abde4368f0124c879c267b18a8eefe",
+      "expected_header": {
+        "bytes": 651,
+        "path": "/mnt/hierarchical-100k/screen/measurement/relaion-generation/plane/manifest.json",
+        "sha256": "762eb65ab8a4f6da9b0c96c71c1908e0c9abde4368f0124c879c267b18a8eefe"
+      },
+      "exact_match": true,
+      "page_digest_sha256": "afa60c15233830817c97e4d7a23e019d88b9f4d139b2b84ec234488db7eb3de6"
+    },
+    "cohere": {
+      "records": {
+        "bytes": 20000000,
+        "sha256": "f47e344a6a959bfe1e9fe301785410b06667cf07d2bc0386892f510c7f5c6cf8",
+        "key": "research/native-union/20260928/walk-source-http-a0002/indexes/cohere/candidate/generations/9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521/plane/records.bin"
+      },
+      "historical_plane_descriptor": {
+        "key": "research/native-union/20260928/walk-source-http-a0002/indexes/cohere/candidate/generations/9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521/plane/manifest.json",
+        "bytes": 548,
+        "sha256": "5b945745af8709927f078e19e0fe7b14466675c9ec21b9227ac21ef1d04be31f"
+      },
+      "derived_header_bytes": 651,
+      "derived_header_sha256": "310ee747fcdd22adb98c55870e255fbc9a91531241e7bf4bd228828a713557ce",
+      "expected_header": {
+        "bytes": 651,
+        "path": "/mnt/hierarchical-100k/screen/measurement/cohere-generation/plane/manifest.json",
+        "sha256": "310ee747fcdd22adb98c55870e255fbc9a91531241e7bf4bd228828a713557ce"
+      },
+      "exact_match": true,
+      "page_digest_sha256": "e96db1f18f3effbfc63596cd6b57bd4243b992031cfb30d80065a8453b969979"
+    }
+  },
+  "dispatches": 4,
+  "original_terminal": {
+    "unit": "borsuk-overlap-plane-exact-recovery-a0001.service",
+    "exit_status": 0,
+    "runtime_seconds": 0.967,
+    "cpu_seconds": 0.491,
+    "memory_peak_display": "85.3M",
+    "swap_display": "0B",
+    "caps": {
+      "memory_max_bytes": 268435456,
+      "swap_max_bytes": 0,
+      "cpu_quota_percent": 100,
+      "deadline_seconds": 120
+    }
+  },
+  "recovery_script": {
+    "bytes": 3157,
+    "sha256": "205b277cd12d1dc2a5e41b5c4ca949de85b22b0a2bb448086d54ba4f2610f834"
+  },
+  "purpose": "Byte-exact original artifact recovery only; no ANN/scientific measurement, no compatibility reader or native writer rebuild"
+}

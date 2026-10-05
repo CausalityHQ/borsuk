@@ -9,16 +9,19 @@
       "canonical_whole_body_verified_now": false,
       "sq8_whole_body_verified_now": false,
       "missing_staging": [
-        "plane manifest",
-        "plane records",
-        "remote canonical/order/SQ8 authentication",
+        "remote canonical/order/SQ8 body authentication",
         "all final remote paths"
       ],
       "available_small_headers": [
         "generation",
-        "mean"
+        "mean",
+        "plane"
       ],
-      "requests_native_smoke_passed": true
+      "requests_native_smoke_passed": true,
+      "records_key": "research/native-union/20260928/walk-source-http-a0002/indexes/relaion/candidate/generations/577a9c874005b6b29c65f62ce2f525ee2634662ff2b4097ff267759766351d3b/plane/records.bin",
+      "records_whole_body_verified_now": true,
+      "plane_manifest_exact_original_sha_verified": true,
+      "native_writer_rebuild_required": false
     },
     "cohere": {
       "seven_original_bytes": 406838390,
@@ -28,16 +31,19 @@
       "canonical_whole_body_verified_now": false,
       "sq8_whole_body_verified_now": false,
       "missing_staging": [
-        "plane manifest",
-        "plane records",
-        "remote canonical/order/SQ8 authentication",
+        "remote canonical/order/SQ8 body authentication",
         "all final remote paths"
       ],
       "available_small_headers": [
         "generation",
-        "mean"
+        "mean",
+        "plane"
       ],
-      "requests_native_smoke_passed": true
+      "requests_native_smoke_passed": true,
+      "records_key": "research/native-union/20260928/walk-source-http-a0002/indexes/cohere/candidate/generations/9430551e73a3ca09aed910a8d6502fafa0f5ec836a53c2fab6ab88a8547b4521/plane/records.bin",
+      "records_whole_body_verified_now": true,
+      "plane_manifest_exact_original_sha_verified": true,
+      "native_writer_rebuild_required": false
     }
   },
   "science_executed": false,
@@ -45,7 +51,7 @@
   "source_trace": {
     "plane_manifest": "crates/borsuk/src/two_bit_source.rs SourcePlaneReceipt, compact serde JSON plus newline; exact root plane SHA is mandatory",
     "plane_records": "Original Rust v1 encoded records SHA pinned by retained BuildConfig; no reconstruction from SQ8 permitted",
-    "recovery": "Use qualified original native writer on authenticated original raw/order/SQ8 if retained plane bodies unavailable; generation/mean/canonical/records SHA parity required before overlap builds",
-    "status": "Two small plane manifests and two encoded record bodies still require recovery; original output terminal did not retain them. Not a new ANN method or a quality failure."
+    "recovery": "Both exact original651B plane manifests recovered and match retained-root SHA; records published bodies match retained-root SHA. No native writer rebuild needed.",
+    "status": "All seven input identities now have direct exact body/transport pins; final remote body staging remains mandatory."
   }
 }
