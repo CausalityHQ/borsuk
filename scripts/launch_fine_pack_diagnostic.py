@@ -2,6 +2,7 @@
 
 CLI: aNNNN | --self-check | --replay OUT. Remote --remote is bootstrap-only.
 --sq4 explicitly selects the root-frozen native SQ4 experiment.
+--histogram-sq4 selects the separate learned-codebook experiment.
 No compiler, query runner, packing algorithm, retries or replacement instances.
 """
 import argparse
@@ -89,6 +90,13 @@ CGROUP_FILES = ('memory.max', 'memory.peak', 'memory.swap.max', 'memory.swap.pea
                 'memory.events', 'memory.swap.events', 'cpu.max', 'cpu.stat',
                 'pids.max', 'pids.current', 'pids.events', 'cgroup.procs', 'cgroup.events')
 SQ4 = False
+HISTOGRAM_SQ4 = False
+SQ4_NAME, SQ4_SCHEMA, SQ4_CLI = 'sq4', 'borsuk-fixed-sq4', 'check-fine-sq4'
+SQ4_CODEC = 'borsuk-sq4-nearest17-original-coefficients-v1'
+HISTOGRAM_TRAINER = 'occupied-u8-weighted-contiguous-f64-dp-smallest-predecessor-v1'
+# encoded({stages, mandatory_tests}) from committed f20153de's final launcher:
+# all14 commands, all nine histogram names and all historical regressions.
+HISTOGRAM_QUALIFICATION_PROTOCOL_SHA = '2ecd3774357341ba92325eac611a9f97c79ea1e6b11efa5570170606e3020d2f'
 SQ4_ROOT = ROOT.parent/'sq4-refinement'
 # Prospective fixture provenance only; config.native_source owns the qualified pins.
 SQ4_COMMIT = 'c2d233d6752d0a058d78c6077e51f31f0255e7c1'
@@ -113,13 +121,16 @@ SQ4_TESTS = ('tests::fine_sq4_strict_cli_dispatch', 'tests::fine_sq4_real_native
 SQ4_QUALIFICATION_PROTOCOL_SHA = 'd3ac6d4f45391decf7c08f483a6209f99505897c62355a52d40f0a2b42f2cc8a'
 
 
-def configure_sq4():
+def configure_sq4(*, histogram=False):
     """Opt-in campaign only. Resource/transport authority still comes from root."""
     global SQ4, ROOT, CONFIG, SCHEMA, PREFIX, TOKEN_PREFIX, TAG, REMOTE_ROOT
     global CAPS, NATIVE_COMMIT, SOURCE_ID, INPUT_PINS, ARTIFACTS, ROSTER_SHA
+    global HISTOGRAM_SQ4, SQ4_NAME, SQ4_SCHEMA, SQ4_CLI, SQ4_CODEC, SQ4_OUTPUTS
     if SQ4:
+        require(HISTOGRAM_SQ4 is histogram, 'one SQ4 campaign mode')
         return
     SQ4 = True
+    HISTOGRAM_SQ4 = histogram
     ROOT = SQ4_ROOT/'native-diagnostic'; CONFIG = ROOT/'config.json'
     SCHEMA = 'borsuk-fixed-sq4-diagnostic-spot-v1'
     PREFIX = 'research/hierarchical-cells/20261005/fixed-sq4-diagnostic-'
@@ -128,6 +139,18 @@ def configure_sq4():
     CAPS = dict(cpu_threads=1, memory_bytes=1024**3, swap_bytes=0,
                 deadline_seconds=600, operations=20000000000, output_bytes=256*1024**2)
     NATIVE_COMMIT, SOURCE_ID = SQ4_COMMIT, SQ4_SOURCE_ID
+    if histogram:
+        SQ4_NAME, SQ4_SCHEMA, SQ4_CLI = 'histogram-sq4', 'borsuk-histogram-sq4', 'check-fine-histogram-sq4'
+        SQ4_CODEC = 'borsuk-sq4-histogram16-original-coefficients-v1'
+        ROOT = SQ4_ROOT/'histogram-codebook/native-diagnostic'; CONFIG = ROOT/'config.json'
+        SCHEMA = SQ4_SCHEMA+'-diagnostic-spot-v1'
+        PREFIX = 'research/hierarchical-cells/20261005/histogram-sq4-diagnostic-'
+        TOKEN_PREFIX, TAG = 'histogram-sq4-diagnostic-', 'borsuk-histogram-sq4-diagnostic'
+        REMOTE_ROOT = Path('/mnt/histogram-sq4-diagnostic')
+        NATIVE_COMMIT, SOURCE_ID = '', ''  # Completed root authority supplies both.
+        SQ4_OUTPUTS = tuple(n.replace('.sq4-', '.histogram-sq4-') for n in SQ4_OUTPUTS)+tuple(
+            f'screen/report.histogram-sq4-{i}.bin-{suffix}' for i in range(2)
+            for suffix in ('book.bin','groups.bin','root.json'))
     # Metadata only: never hydrate or parse a retained input during preflight.
     roster = decode(read(Path(__file__).resolve().parents[1]/SQ4_ROOT/'prospective-input-roster.json'))
     require(roster['schema'] == 'borsuk-sq4-prospective-input-roster-v1'
@@ -255,9 +278,13 @@ def sq4_qualification(config, base, collected=False):
             and w['qualification_sha256'] == identities['source-qualification.json']['sha256'], 'SQ4 completed qualification')
     stages = w['stages']
     required = q['mandatory_tests']
+    protocol_sha = authority['qualification_protocol_sha256'] if HISTOGRAM_SQ4 else SQ4_QUALIFICATION_PROTOCOL_SHA
     require(stages == v['stages'] and w['mandatory_tests'] == required
             and sha(encoded(dict(stages=[(s['stage'],s['command']) for s in stages],
-                                 mandatory_tests=required))) == SQ4_QUALIFICATION_PROTOCOL_SHA, 'SQ4 exact all14 commands and mandatory roster')
+                                 mandatory_tests=required))) == protocol_sha, 'SQ4 exact all14 commands and mandatory roster')
+    if HISTOGRAM_SQ4:
+        require(protocol_sha == HISTOGRAM_QUALIFICATION_PROTOCOL_SHA and len(stages) == 14
+                and v['qualified'] is True, 'histogram completed native protocol')
     previous_finish = None
     for stage in stages:
         started, finished = (datetime.fromisoformat(stage[k]) for k in ('started_at','finished_at'))
@@ -299,12 +326,15 @@ def validate_sq4_config(config, base=None):
     native = config['native_config']
     authority = config['native_source']
     require(set(authority) == {'commit','full_source_identity_sha256','source_identity_sha256','source_sha256'}
+                | ({'qualification_protocol_sha256'} if HISTOGRAM_SQ4 else set())
             and re.fullmatch('[0-9a-f]{40}', authority['commit'])
             and set(authority['source_sha256']) == set(SQ4_SOURCES), 'SQ4 exact root source pins')
     for digest in (authority['full_source_identity_sha256'],authority['source_identity_sha256'],*authority['source_sha256'].values()):
         body_pin(dict(bytes=0,sha256=digest))
+    if HISTOGRAM_SQ4:
+        require(authority['qualification_protocol_sha256'] == HISTOGRAM_QUALIFICATION_PROTOCOL_SHA, 'histogram root native protocol pin')
     require(set(native) == {'schema','source_identity_sha256','caps','panels','original_seal','prefix'}
-            and native['schema'] == 'borsuk-fixed-sq4-config-v1' and encoded(native['caps']) == encoded(CAPS)
+            and native['schema'] == SQ4_SCHEMA+'-config-v1' and encoded(native['caps']) == encoded(CAPS)
             and native['source_identity_sha256'] == authority['source_identity_sha256'] and len(native['panels']) == 2
             and sha(encoded(native)) == config['native_config_sha256'], 'SQ4 exact native config')
     for p,dataset in zip(native['panels'], ('relaion','cohere')):
@@ -545,7 +575,7 @@ PY
 systemd-run --unit={SUPERVISOR_UNIT} --wait --pipe {supervisor_options}-p 'Delegate=cpu memory pids' -p DelegateSubgroup=supervisor -p RuntimeMaxSec={WALL} -p WorkingDirectory="$root" \\
  --setenv=PYTHONPATH="$root/repo" --setenv=AWS_MAX_ATTEMPTS=1 --setenv=AWS_RETRY_MODE=standard \\
  {('--setenv=TMPDIR="$TMPDIR" --setenv=TMP="$TMP" --setenv=TEMP="$TEMP" --setenv=PYTHONPYCACHEPREFIX="$PYTHONPYCACHEPREFIX" '+chr(92)) if SQ4 else chr(92)}
- "$python" -m {MODULE} {'--sq4 ' if SQ4 else ''}--remote "$root/repo" "$root" '{commit}' '{archive_sha}' '{prefix}' '{qualification['config_sha256']}'
+ "$python" -m {MODULE} {'--histogram-sq4 ' if HISTOGRAM_SQ4 else '--sq4 ' if SQ4 else ''}--remote "$root/repo" "$root" '{commit}' '{archive_sha}' '{prefix}' '{qualification['config_sha256']}'
 '''
     subprocess.run(['bash', '-n'], input=body, text=True, check=True)
     require(len(body.encode()) < 16384, 'EC2 userdata cap')
@@ -733,7 +763,7 @@ def drain_group(group):
 
 def supervise(config, root, *, run_id):
     """Popen owns the original executable; the observer stays outside its cap."""
-    command = [str(root/BINARY_NAME), 'check-fine-sq4' if SQ4 else 'check-fine-pack', str(root/'native-config.json'),
+    command = [str(root/BINARY_NAME), SQ4_CLI if SQ4 else 'check-fine-pack', str(root/'native-config.json'),
                config['native_config_sha256'], str(root/'screen/report.json')]
     (root/'screen').mkdir(exist_ok=False)
     receipt = dict(command=command, process_exit_code=None, process_started=False,
@@ -874,7 +904,7 @@ def validate_sq4_result(root, config):
     receipt, resource, cleanup = (decode(read(root/n)) for n in ('native-exit.json','resources.json','cleanup.json'))
     command = receipt['command']; original = Path(command[0]).parent.parent
     require(original.is_absolute() and original.resolve() == original and command == [str(original/BINARY_NAME),
-        'check-fine-sq4', str(original/'native-config.json'), config['native_config_sha256'], str(original/'screen/report.json')]
+        SQ4_CLI, str(original/'native-config.json'), config['native_config_sha256'], str(original/'screen/report.json')]
         and receipt['config_sha256'] == config['native_config_sha256'] and receipt['binary'] == config['binary']
         and type(receipt['process_exit_code']) is int and receipt['process_exit_code'] == 0
         and receipt['process_started'] is True and 'error' not in receipt, 'SQ4 original exact native command/exit0')
@@ -908,7 +938,7 @@ def validate_sq4_result(root, config):
     require(sum(file_pin(root/n)['bytes'] for n in SQ4_OUTPUTS) <= CAPS['output_bytes'], 'SQ4 native output cap')
     body = read(root/'screen/report.json', 8192); report = decode(body)
     require(receipt['report_sha256'] == scratch['report_sha256'] == sha(body)
-        and report['schema'] == 'borsuk-fixed-sq4-report-v1' and report['codec'] == 'borsuk-sq4-nearest17-original-coefficients-v1'
+        and report['schema'] == SQ4_SCHEMA+'-report-v1' and report['codec'] == SQ4_CODEC
         and report['config_sha256'] == config['native_config_sha256'] and report['source_identity_sha256'] == SOURCE_ID
         and report['complete'] is True and type(report['queries']) is int and report['queries'] == 128
         and report['status'] in ('SURVIVED_CONSUMED_PANELS','REJECT') and report['standalone_authority'] is False
@@ -921,32 +951,66 @@ def validate_sq4_result(root, config):
         and 79200000 <= details['modeled_output_bytes'] <= CAPS['output_bytes'], 'SQ4 frozen native authority/resources')
     def authenticate(descriptor, name):
         require(descriptor == dict(path=str(original/name), **file_pin(root/name)), 'SQ4 native closure pin: '+name)
-    freeze_name = 'screen/report.sq4-freeze.json'
+    freeze_name = f'screen/report.{SQ4_NAME}-freeze.json'
     authenticate(details['freeze'], freeze_name)
     freeze = decode(read(root/freeze_name, 8*1024**2))
-    require(freeze['schema'] == 'borsuk-fixed-sq4-freeze-v1' and freeze['config_sha256'] == config['native_config_sha256']
+    require(freeze['schema'] == SQ4_SCHEMA+'-freeze-v1' and freeze['config_sha256'] == config['native_config_sha256']
         and freeze['source_identity_sha256'] == SOURCE_ID and freeze['truth_opened'] is False
         and freeze['original_seal'] == native['original_seal'] and freeze['truth'] == truth, 'SQ4 freeze before truth')
-    authenticate(freeze['payload_seal'], 'screen/report.sq4-payloads.json')
-    authenticate(freeze['nomination_prefix'], 'screen/report.sq4-prefix.jsonl')
-    require(file_pin(root/'screen/report.sq4-prefix.jsonl') == {k:native['prefix'][k] for k in ('bytes','sha256')}, 'SQ4 consumed original nomination prefix')
-    seal = decode(read(root/'screen/report.sq4-payloads.json', 8*1024**2))
-    require(seal['schema'] == 'borsuk-fixed-sq4-payload-seal-v1' and seal['config_sha256'] == config['native_config_sha256']
+    authenticate(freeze['payload_seal'], f'screen/report.{SQ4_NAME}-payloads.json')
+    authenticate(freeze['nomination_prefix'], f'screen/report.{SQ4_NAME}-prefix.jsonl')
+    require(file_pin(root/f'screen/report.{SQ4_NAME}-prefix.jsonl') == {k:native['prefix'][k] for k in ('bytes','sha256')}, 'SQ4 consumed original nomination prefix')
+    seal = decode(read(root/f'screen/report.{SQ4_NAME}-payloads.json', 8*1024**2))
+    require(seal['schema'] == SQ4_SCHEMA+'-payload-seal-v1' and seal['config_sha256'] == config['native_config_sha256']
         and seal['source_identity_sha256'] == SOURCE_ID and seal['codec'] == report['codec']
         and seal['original_seal'] == native['original_seal'] and seal['queries_opened'] is seal['truth_opened'] is False
         and seal['payloads'] == freeze['payloads'] and len(seal['payloads']) == 2, 'SQ4 paired payload seal')
     for i,payload in enumerate(seal['payloads']):
-        authenticate(payload['payload'], f'screen/report.sq4-{i}.bin')
+        authenticate(payload['payload'], f'screen/report.{SQ4_NAME}-{i}.bin')
         require(payload['payload']['bytes'] == 39600000 and payload['original_root'] == native['panels'][i]['root']
             and payload['codec'] == report['codec'] and payload['rows'] == 100000 and payload['dimensions'] == 768
             and payload['row_bytes'] == 396 and payload['group_rows'] == 16, 'SQ4 payload identity/geometry')
+        if HISTOGRAM_SQ4:
+            generation = payload['histogram_generation']
+            stem = f'screen/report.{SQ4_NAME}-{i}.bin-'
+            for key,suffix in (('root','root.json'),('book','book.bin'),('groups','groups.bin')):
+                authenticate(generation[key], stem+suffix)
+            generation_root = decode(read(root/(stem+'root.json')))
+            require(set(generation_root) == {'schema','codec','trainer','source_identity_sha256','config_sha256',
+                'original_root','original_records','coefficients_sha256','histogram_sha256','rows','dimensions',
+                'book','payload','group_hashes','fit'}
+                and generation_root['schema'] == SQ4_SCHEMA+'-generation-v1'
+                and generation_root['codec'] == SQ4_CODEC and generation_root['trainer'] == generation['trainer'] == HISTOGRAM_TRAINER
+                and generation_root['source_identity_sha256'] == SOURCE_ID
+                and generation_root['config_sha256'] == config['native_config_sha256']
+                and generation_root['original_root'] == payload['original_root']
+                and generation_root['original_records'] == payload['original_records']
+                and generation_root['rows'] == 100000 and generation_root['dimensions'] == 768
+                and generation_root['book'] == generation['book'] and generation_root['group_hashes'] == generation['groups']
+                and generation_root['payload'] == payload['payload'] and generation_root['fit'] == generation['fit']
+                and generation_root['histogram_sha256'] == generation['fit']['histogram_sha256'], 'histogram native generation bindings')
+            require(generation['book']['bytes'] == 144+65*768 and generation['groups']['bytes'] == 6250*32
+                and generation['groups']['sha256'] == payload['group_hashes_sha256'], 'histogram native book/groups geometry')
+            bits = payload['low_bits']+payload['step_bits']
+            require(len(payload['low_bits']) == len(payload['step_bits']) == 768
+                and all(type(b) is int and 0 <= b < 2**32 for b in bits), 'histogram native coefficient bits')
+            coefficients = sha((768).to_bytes(4,'little')+b''.join(b.to_bytes(4,'little') for b in bits))
+            require(generation_root['coefficients_sha256'] == coefficients, 'histogram native coefficient binding')
+            book = read(root/(stem+'book.bin'),65536)
+            require(book[:144] == b'BORSH401'+(768).to_bytes(4,'little')+(100000).to_bytes(4,'little')
+                +bytes.fromhex(payload['original_records']['sha256']+coefficients+generation_root['histogram_sha256'])
+                +hashlib.sha256(HISTOGRAM_TRAINER.encode()).digest(), 'histogram native book source binding')
+            require(generation['startup_book_reads'] == 1 and generation['startup_book_bytes'] == generation['book']['bytes']
+                and generation['startup_generation_reads'] == 3
+                and generation['startup_generation_bytes'] == sum(generation[k]['bytes'] for k in ('root','book','groups'))
+                and generation['mse_implies_recall'] is generation['updates_gc_integrated'] is False, 'histogram separately counted startup')
     require(len(freeze['results']) == 128, 'SQ4 all128 sealed results')
     envelopes = True
     for i,descriptor in enumerate(freeze['results']):
-        name = f'screen/report.sq4-result-{i}.json'; authenticate(descriptor, name)
+        name = f'screen/report.{SQ4_NAME}-result-{i}.json'; authenticate(descriptor, name)
         query = decode(read(root/name, 8*1024**2)); plan = query['plan']; sq4 = query['sq4']
         fits = sq4['verified_bytes'] <= 16*1024**2
-        require(query['schema'] == 'borsuk-fixed-sq4-query-v1' and query['dataset'] == native['panels'][i//64]['dataset']
+        require(query['schema'] == SQ4_SCHEMA+'-query-v1' and query['dataset'] == native['panels'][i//64]['dataset']
             and type(query['ordinal']) is int and query['ordinal'] == i%64 and query['nominees_retained'] is True
             and query['original_cover_contained'] is True and query['truth_opened'] is False
             and query['sq8_reference_serving_eligible'] is False and sq4['fetched_ids'] == query['sq8_reference']['fetched_ids']
@@ -954,6 +1018,12 @@ def validate_sq4_result(root, config):
             and type(sq4['verified_bytes']) is int and 0 < sq4['verified_bytes'] == plan['candidate_bytes']
             and plan['envelope_fits'] is fits, 'SQ4 authenticated same-population result/envelope')
         envelopes &= fits
+        if HISTOGRAM_SQ4:
+            metrics = sq4['histogram_metrics']; generation = seal['payloads'][i//64]['histogram_generation']
+            require(metrics['direct_packed'] is metrics['payload_ranges_exclude_startup'] is True
+                and metrics['total_cold_get_claim'] is False and all(metrics[k] == generation[k] for k in (
+                    'startup_book_reads','startup_book_bytes','startup_generation_reads','startup_generation_bytes')),
+                'histogram payload metrics exclude startup')
     summaries = details['summaries']
     require(len(summaries) == 2 and details['all128_envelopes_fit'] is envelopes, 'SQ4 native envelope summary')
     quality = True
@@ -963,9 +1033,18 @@ def validate_sq4_result(root, config):
                 and type(p05) is int and 0 <= p05 <= 100, 'SQ4 native quality summary')
         quality &= mean >= .98 and p05 >= 95
     require(report['status'] == ('SURVIVED_CONSUMED_PANELS' if quality and envelopes else 'REJECT'), 'SQ4 completed disposition')
-    return dict(status=report['status'], valid_diagnostic=True, report_sha256=sha(body),
+    result = dict(status=report['status'], valid_diagnostic=True, report_sha256=sha(body),
         native_config_sha256=config['native_config_sha256'], binary=binary, summaries=summaries,
         all128_envelopes_fit=envelopes, quality_or_performance_claim=False)
+    if HISTOGRAM_SQ4:
+        startup = details['histogram_resources']
+        generations = [p['histogram_generation'] for p in seal['payloads']]
+        require(startup['startup_book_reads'] == 2 and startup['startup_generation_reads'] == 6
+            and all(startup[k] == sum(g[k] for g in generations) for k in ('startup_book_bytes','startup_generation_bytes'))
+            and startup['payload_ranges_exclude_startup'] is True and startup['total_cold_get_claim'] is False
+            and startup['packed_row_bytes'] == 396, 'histogram startup separate from payload envelope')
+        result['histogram_resources'] = startup
+    return result
 
 
 def validate_result(root, config):
@@ -1607,23 +1686,24 @@ sys.exit(17 if os.environ.get('FINE_PACK_FAKE')=='nonzero' else 0)
         print(f'PASS fine-pack: real fake-native exit0/REJECT/exit17/deadline; {failures} refusals; fullhash/readback/marker-last/no-overwrite; every-ACK same-ID terminate/wait; actual SDK model positive/official_old_negative={official_old_checked}; actual_delegated_cgroup={real_cgroup}; other cgroup/SDK transport/AWS MOCKED; no ANN/graph/corpus/network')
 
 
-def sq4_self_check():
+def sq4_self_check(histogram=False):
     """Mock native CLI and qualification metadata; no native/data/AWS execution."""
     import copy
     import tempfile
     from contextlib import ExitStack
     from unittest.mock import patch
     module = sys.modules[__name__]
-    configure_sq4()
+    configure_sq4(histogram=histogram)
     retained_pins = INPUT_PINS
-    require(SCHEMA == 'borsuk-fixed-sq4-diagnostic-spot-v1', 'explicit SQ4 mode')
+    require(SCHEMA == ('borsuk-histogram-sq4-diagnostic-spot-v1' if histogram else 'borsuk-fixed-sq4-diagnostic-spot-v1'), 'explicit SQ4 mode')
     require(len(INPUT_PINS) == 18 and sum(p[1] for p in INPUT_PINS) == 229614200, 'opaque retained roster')
-    require(len([n for n in ARTIFACTS if n.startswith('screen/')]) == 134, 'whole native closure')
+    require(len([n for n in ARTIFACTS if n.startswith('screen/')]) == (140 if histogram else 134), 'whole native closure')
     # Root-authenticated completed metadata only; the executable/transport below
     # remain mocked. No corpus, compiler or live job is opened by this fixture.
-    def committed(path):
+    def committed(path, revision=None):
         repo=Path(__file__).resolve().parents[1]
-        return subprocess.check_output(['git','-c','safe.directory='+str(repo),'show','e0d81804:'+str(path)],cwd=repo)
+        revision = revision or 'e0d81804'
+        return subprocess.check_output(['git','-c','safe.directory='+str(repo),'show',revision+':'+str(path)],cwd=repo)
     deployment_body=committed(SQ4_ROOT/'qualified-deployment-pins-c2d233d6.json')
     require(pin(deployment_body)==dict(bytes=15955,sha256='97c175233d71e5e6624fa91939baf436a79ec29b3cbbaff2d609ff453464d145'), 'root completed deployment fixture pin')
     deployment=decode(deployment_body)
@@ -1636,6 +1716,42 @@ def sq4_self_check():
     require(deployment['required_stage_protocol']==[dict(stage=s['stage'],command=s['command'],
         required_test_passes=s['required_test_passes'],require_positive_tests_run=s['tests_run'] is not None)
         for s in workspace['stages']], 'actual completed root all14 protocol')
+    if histogram:
+        import ast
+        hist_root = SQ4_ROOT/'histogram-codebook'
+        contract = decode(committed(hist_root/'native-source-contract-1057e5a6.json','de0b6e38'))
+        prospective = decode(committed(hist_root/'prospective-native-config-1057e5a6.json','de0b6e38'))
+        launch = decode(committed(hist_root/'implementation-gates/compiler-repair/config.json','de0b6e38'))
+        manifest = decode(committed(hist_root/'implementation-gates/compiler-repair/native-source-manifest.json','de0b6e38'))
+        launcher = ast.parse(committed(Path('scripts/launch_native_workspace_execution_spot.py'),'f20153de'))
+        assignments = {n.targets[0].id:n.value for n in launcher.body
+                       if isinstance(n,ast.Assign) and isinstance(n.targets[0],ast.Name)}
+        commands = [(n,c.split()) for n,c in ast.literal_eval(assignments['FINE_SQ8_STAGES'].args[0].generators[0].iter)]
+        mandatory = ast.literal_eval(assignments['FINE_SQ8_REQUIRED_TESTS'])
+        protocol = sha(encoded(dict(stages=commands,mandatory_tests=mandatory)))
+        require(protocol == HISTOGRAM_QUALIFICATION_PROTOCOL_SHA and len(commands) == 14
+                and launch['mandatory_tests'] == {n:list(v) for n,v in mandatory.items()}, 'committed final native protocol')
+        native_body = committed(Path('crates/borsuk/src/fine_sq8_groups.rs'), '1057e5a6')
+        require(pin(native_body) == next({k:d[k] for k in ('bytes','sha256')} for d in contract['owned_files']
+                    if d['path'].endswith('/fine_sq8_groups.rs')), 'actual Rust source fixture')
+        for token in ('{extension}-book.bin','{extension}-groups.bin','{extension}-root.json',
+                      '{name}-payloads.json','{name}-prefix.jsonl','{name}-freeze.json','{name}-result-{}.json'):
+            require(token.encode() in native_body, 'source-bound native roster')
+        old.update(source_sha256=manifest['source_sha256'], native_source_manifest=launch['native_source_manifest'],
+                   native_source_manifest_sha256=launch['native_source_manifest']['sha256'], mandatory_tests=launch['mandatory_tests'])
+        stages = workspace['stages']
+        for record,(name,command) in zip(stages,commands):
+            tests = mandatory.get(name,())
+            record.update(stage=name,command=command,tests_run=max(1,len(tests)) if tests else None,
+                         required_test_passes={n:1 for n in tests})
+        verification['stages'] = stages
+        workspace['mandatory_tests'] = launch['mandatory_tests']
+        # These are synthetic completed receipts, never the running native job.
+        NATIVE_COMMIT_FIXTURE = manifest['native_source_commit']
+        SOURCE_ID_FIXTURE = contract['expected_histogram_source_identity_sha256']
+        SOURCES_FIXTURE = {d['path']:d['sha256'] for d in contract['owned_files']}
+    else:
+        NATIVE_COMMIT_FIXTURE, SOURCE_ID_FIXTURE, SOURCES_FIXTURE = NATIVE_COMMIT, SOURCE_ID, SQ4_SOURCES
     def refused(call):
         try: call()
         except (ValueError, OSError, KeyError): return
@@ -1643,11 +1759,14 @@ def sq4_self_check():
     # /tmp is tmpfs on Devbox: raw payload + transport + replay copies need disk.
     with tempfile.TemporaryDirectory(prefix='sq4-glue-check-', dir='/var/tmp') as tmp, ExitStack() as stack:
         base = Path(tmp)
+        stack.enter_context(patch.object(module,'NATIVE_COMMIT',NATIVE_COMMIT_FIXTURE))
+        stack.enter_context(patch.object(module,'SOURCE_ID',SOURCE_ID_FIXTURE))
+        stack.enter_context(patch.object(module,'SQ4_SOURCES',SOURCES_FIXTURE))
         stack.enter_context(patch.object(module, 'SQ4_INPUT_ROOT', base/'retained'))
         pins = tuple((str(base/'retained'/f'input-{i}'), 1, sha(b'x')) for i in range(18))
         stack.enter_context(patch.object(module, 'INPUT_PINS', pins))
         descriptors = [dict(path=p, bytes=n, sha256=h) for p,n,h in pins]
-        native = dict(schema='borsuk-fixed-sq4-config-v1', source_identity_sha256=SOURCE_ID,
+        native = dict(schema=SQ4_SCHEMA+'-config-v1', source_identity_sha256=SOURCE_ID,
             caps=copy.deepcopy(CAPS), original_seal=descriptors[16], prefix=descriptors[17],
             panels=[dict(dataset=d, root=descriptors[i*8], requests=descriptors[i*8+6],
                          truth=descriptors[i*8+7], truth_width=100) for i,d in enumerate(('relaion','cohere'))])
@@ -1665,6 +1784,8 @@ def body(path,b):
  with path.open('xb') as f:f.write(b)
  return {'path':str(path),'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()}
 payloads=[]
+learned=c['schema']=='borsuk-histogram-sq4-config-v1'
+trainer='occupied-u8-weighted-contiguous-f64-dp-smallest-predecessor-v1'
 for i,panel in enumerate(c['panels']):
  path=p.with_suffix('.sq4-'+str(i)+'.bin')
  with path.open('xb') as f:f.truncate(39600000)
@@ -1673,6 +1794,23 @@ for i,panel in enumerate(c['panels']):
   while b:=f.read(65536):h.update(b)
  payloads.append({'payload':{'path':str(path),'bytes':39600000,'sha256':h.hexdigest()},'original_root':panel['root'],
   'codec':'borsuk-sq4-nearest17-original-coefficients-v1','rows':100000,'dimensions':768,'row_bytes':396,'group_rows':16})
+ if learned:
+  v=payloads[-1]
+  records={'path':panel['root']['path']+'-records','bytes':78000000,'sha256':hashlib.sha256(b'synthetic original records').hexdigest()}
+  coeff=hashlib.sha256((768).to_bytes(4,'little')+bytes(768*4)+(1065353216).to_bytes(4,'little')*768).hexdigest()
+  fit={'histogram_sha256':hashlib.sha256(b'synthetic histogram').hexdigest()}
+  header=b'BORSH401'+(768).to_bytes(4,'little')+(100000).to_bytes(4,'little')+bytes.fromhex(records['sha256']+coeff+fit['histogram_sha256'])+hashlib.sha256(trainer.encode()).digest()
+  book=body(Path(str(path)+'-book.bin'),header+(bytes([1])+bytes(64))*768)
+  groups=body(Path(str(path)+'-groups.bin'),bytes(200000))
+  v.update(original_records=records,low_bits=[0]*768,step_bits=[1065353216]*768,group_hashes_sha256=groups['sha256'])
+  generation=emit(Path(str(path)+'-root.json'),{'schema':'borsuk-histogram-sq4-generation-v1','codec':v['codec'],
+   'trainer':trainer,'source_identity_sha256':c['source_identity_sha256'],'config_sha256':config_sha,
+   'original_root':panel['root'],'original_records':records,'coefficients_sha256':coeff,'histogram_sha256':fit['histogram_sha256'],
+   'rows':100000,'dimensions':768,'book':book,'payload':v['payload'],'group_hashes':groups,'fit':fit})
+  v['histogram_generation']={'root':generation,'book':book,'groups':groups,'fit':fit,'trainer':trainer,
+   'startup_book_reads':1,'startup_book_bytes':book['bytes'],'startup_generation_reads':3,
+   'startup_generation_bytes':sum(x['bytes'] for x in (generation,book,groups)),
+   'mse_implies_recall':False,'updates_gc_integrated':False}
 seal=emit(p.with_suffix('.sq4-payloads.json'),{'schema':'borsuk-fixed-sq4-payload-seal-v1','config_sha256':config_sha,
  'source_identity_sha256':c['source_identity_sha256'],'codec':'borsuk-sq4-nearest17-original-coefficients-v1',
  'original_seal':c['original_seal'],'payloads':payloads,'queries_opened':False,'truth_opened':False})
@@ -1682,6 +1820,10 @@ for i in range(128):
  fits=fault!='envelope' or i!=0
  scored={'fetched_ids':[0],'ranked':[{'id':n,'ordinal':n,'score_bits':0} for n in range(100)],
   'range_reads':1,'verified_bytes':396 if fits else 16777612}
+ if learned:
+  g=payloads[i//64]['histogram_generation']
+  scored['histogram_metrics']={k:g[k] for k in ('startup_book_reads','startup_book_bytes','startup_generation_reads','startup_generation_bytes')}
+  scored['histogram_metrics'].update(direct_packed=True,payload_ranges_exclude_startup=True,total_cold_get_claim=False)
  results.append(emit(p.with_suffix('.sq4-result-'+str(i)+'.json'),{'schema':'borsuk-fixed-sq4-query-v1',
   'dataset':c['panels'][i//64]['dataset'],'ordinal':i%64,'nominees_retained':True,'original_cover_contained':True,
   'truth_opened':False,'sq8_reference_serving_eligible':False,'plan':{'envelope_fits':fits,'candidate_bytes':scored['verified_bytes']},
@@ -1690,7 +1832,7 @@ freeze=emit(p.with_suffix('.sq4-freeze.json'),{'schema':'borsuk-fixed-sq4-freeze
  'source_identity_sha256':c['source_identity_sha256'],'payload_seal':seal,'payloads':payloads,'original_seal':c['original_seal'],
  'truth':[x['truth'] for x in c['panels']],'nomination_prefix':prefix,'results':results,'truth_opened':False})
 reject=fault in ('reject','envelope')
-emit(p,{'schema':'borsuk-fixed-sq4-report-v1','codec':'borsuk-sq4-nearest17-original-coefficients-v1',
+report={'schema':'borsuk-fixed-sq4-report-v1','codec':'borsuk-sq4-nearest17-original-coefficients-v1',
  'config_sha256':config_sha,'source_identity_sha256':c['source_identity_sha256'],'queries':128,'complete':True,
  'status':'REJECT' if reject else 'SURVIVED_CONSUMED_PANELS','standalone_authority':False,
  'requires_matching_supervisor_exit_receipt':True,'quality_or_performance_claim':False,
@@ -1698,7 +1840,13 @@ emit(p,{'schema':'borsuk-fixed-sq4-report-v1','codec':'borsuk-sq4-nearest17-orig
  'frozen_original_authority':True,'caps':c['caps'],'operations':1,'whole_process_supervisor_required':True,
  'pair_payload_bytes':79200000,'modeled_peak_bytes':100000000,'modeled_output_bytes':90000000,
  'all128_envelopes_fit':fault!='envelope','summaries':[{'dataset':x['dataset'],
-  'sq4_returned':{'mean_recall':.97 if fault=='reject' else .99,'p05_hits':94 if fault=='reject' else 99}} for x in c['panels']]}})
+  'sq4_returned':{'mean_recall':.97 if fault=='reject' else .99,'p05_hits':94 if fault=='reject' else 99}} for x in c['panels']]}}
+if learned:
+ assert len(results)==128 and all(Path(x['path']).exists() for x in results) and Path(freeze['path']).exists()
+ report['details']['histogram_resources']={'startup_book_reads':2,'startup_book_bytes':100128,
+  'startup_generation_reads':6,'startup_generation_bytes':sum(v['histogram_generation']['startup_generation_bytes'] for v in payloads),
+  'payload_ranges_exclude_startup':True,'total_cold_get_claim':False,'packed_row_bytes':396}
+emit(p,report)
 if fault=='drift':Path(config_path).write_bytes(Path(config_path).read_bytes()+b' ')
 if fault in ('scratch','external-temp'):
  path=p.parent.parent/'temporary' if fault=='scratch' else Path(tempfile.gettempdir())/'external-temporary'
@@ -1708,14 +1856,19 @@ if fault in ('scratch','external-temp'):
 if fault=='deadline':time.sleep(5)
 sys.exit(2 if fault=='latefailure' else 0)
 '''
+        if histogram:
+            fake = fake.replace(b'check-fine-sq4',b'check-fine-histogram-sq4').replace(
+                b'borsuk-fixed-sq4',b'borsuk-histogram-sq4').replace(b'.sq4-',b'.histogram-sq4-').replace(
+                b'borsuk-sq4-nearest17-original-coefficients-v1',SQ4_CODEC.encode())
         source = dict(old['source_sha256'], **SQ4_SOURCES)
         full_id = sha(json.dumps(source, sort_keys=True, separators=(',', ':')).encode())
-        require(full_id=='1689c53c7564f989f19da397b32b13f16f10df264d02355928849dcabf1e2849','actual prospective c2 full404 map')
+        require(full_id==(manifest['source_identity_sha256'] if histogram else '1689c53c7564f989f19da397b32b13f16f10df264d02355928849dcabf1e2849'),'actual prospective full404 map')
         old.update(native_source_commit=NATIVE_COMMIT, source_identity_sha256=full_id, source_sha256=source)
         verification.update(native_source_commit=NATIVE_COMMIT, source_identity_sha256=full_id, binary=pin(fake))
         workspace.update(source_identity_sha256=full_id, source_sha256=source)
         terminal = actual['aws-terminal.json']
         terminal.update(native_source_commit=NATIVE_COMMIT, source_identity_sha256=full_id)
+        terminal['native_source_manifest_sha256'] = old['native_source_manifest_sha256']
         receipt_bodies = dict(zip(SQ4_RECEIPTS, (verification, old, workspace, terminal,
                                                actual['aws-closeout.json'])))
         workspace['qualification_sha256'] = pin(encoded(old))['sha256']
@@ -1738,6 +1891,8 @@ sys.exit(2 if fault=='latefailure' else 0)
                 dict(destination=p, bytes=n, sha256=h, key='mock/input-'+str(i)) for i,(p,n,h) in enumerate(pins)],
             native_qualification=receipts, code_sha256={n:file_pin(n)['sha256'] for n in CODE},
             source_archive_paths=paths, source_archive_paths_sha256=sha(json.dumps(paths,separators=(',',':')).encode()))
+        if histogram:
+            config['native_source']['qualification_protocol_sha256'] = protocol
         validate_config(config)
         for n in CODE:write(base/n,read(n))
         real=copy.deepcopy(config)
@@ -1746,8 +1901,8 @@ sys.exit(2 if fault=='latefailure' else 0)
             dict(dataset=d,root=descriptors[i*8],requests=descriptors[i*8+6],truth=descriptors[i*8+7],truth_width=100)
             for i,d in enumerate(('relaion','cohere'))])
         real['native_config_sha256']=sha(encoded(real['native_config']))
-        require(pin(encoded(real['native_config']).rstrip(b'\n'))==dict(bytes=1705,
-            sha256='23defe690a3fc9b193ed6e1cc8b91b58ace57b843cf0adeebaf4e124b6a30b4e'),'exact c2 native config with authenticated sealed request destinations')
+        require(pin(encoded(real['native_config']).rstrip(b'\n'))==(pin(encoded(prospective).rstrip(b'\n')) if histogram else dict(bytes=1705,
+            sha256='23defe690a3fc9b193ed6e1cc8b91b58ace57b843cf0adeebaf4e124b6a30b4e')), 'exact native config with authenticated sealed request destinations')
         real['inputs']=[dict(destination=p,bytes=n,sha256=h,key='retained/'+str(i)) for i,(p,n,h) in enumerate(retained_pins)]
         real['fixed']['scratch']['input_bytes']=229614200
         original_regular=regular
@@ -1765,9 +1920,16 @@ sys.exit(2 if fault=='latefailure' else 0)
         bad=copy.deepcopy(config);bad['native_config']['caps']['cpu_threads']=True
         bad['native_config_sha256']=sha(encoded(bad['native_config']))
         refused(lambda:validate_config(bad))
+        if histogram:
+            for key,value in (('schema','borsuk-fixed-sq4-config-v1'),('source_identity_sha256','0'*64),('extra',True)):
+                bad=copy.deepcopy(config);bad['native_config'][key]=value
+                bad['native_config_sha256']=sha(encoded(bad['native_config']))
+                refused(lambda:validate_config(bad))
+            bad=copy.deepcopy(config);bad['native_source']['qualification_protocol_sha256']=SQ4_QUALIFICATION_PROTOCOL_SHA
+            refused(lambda:validate_config(bad))
         # Rehashing all affected receipts cannot admit failed/reordered/missing gates.
         for fault in ('failed','reordered','missing','zero-test','wrongargv','missingmandatory','reducedroster',
-                      'misplacedtests','utc','overlap','reversed','non-test-count'):
+                      'misplacedtests','utc','overlap','reversed','non-test-count','pending'):
             bad=copy.deepcopy(config);failed=copy.deepcopy(receipt_bodies)
             stages=failed['workspace-receipt.json']['stages']
             if fault=='failed':stages[0]['exit_status']=2
@@ -1783,6 +1945,7 @@ sys.exit(2 if fault=='latefailure' else 0)
             elif fault=='utc':stages[5]['started_at']='2026-10-05T13:05:00+01:00'
             elif fault=='overlap':stages[5]['started_at']=(datetime.fromisoformat(stages[4]['started_at'])-timedelta(seconds=1)).isoformat()
             elif fault=='reversed':stages[5]['finished_at']=(datetime.fromisoformat(stages[5]['started_at'])-timedelta(seconds=1)).isoformat()
+            elif fault=='pending':failed['workspace-receipt.json']['mandatory_test_names_pending']=True
             else:stages[0]['tests_run']=1
             failed['parent-verification.json']['stages']=stages
             qualification_sha=pin(encoded(failed['source-qualification.json']))['sha256']
@@ -1802,7 +1965,8 @@ sys.exit(2 if fault=='latefailure' else 0)
         (base/CONFIG).unlink();write(base/CONFIG, encoded(config))
         proof=preflight(base)
         userdata=user_data('a'*40,'b'*64,'mock/archive',PREFIX+'a0001',proof)
-        require('--sq4 --remote' in userdata and 'DelegateSubgroup=supervisor' in userdata, 'SQ4 SDK delegated bootstrap')
+        require(('--histogram-sq4 --remote' if histogram else '--sq4 --remote') in userdata
+                and 'DelegateSubgroup=supervisor' in userdata, 'SQ4 SDK delegated bootstrap')
         require(all(s in userdata for s in ('ReadOnlyPaths=/tmp /var/tmp','export TMPDIR=', 'Dir::Cache::archives=',
                 'Dir::State::lists=', 'Dir::Log=', '--setenv=TMPDIR=', 'bootstrap/input/output overlap cap',
                 'source archive scratch reserve', 'source extraction overlap reserve', 'wait "$watcher"')), 'charged SQ4 generated Bash')
@@ -1903,13 +2067,54 @@ sys.exit(2 if fault=='latefailure' else 0)
         require(receipt['process_exit_code']==0 and result['status']=='SURVIVED_CONSUMED_PANELS' and read(root/'native.log')==b'','silent original closure')
         require(receipt['report_sha256']==file_pin(root/'screen/report.json')['sha256'],'independent terminal report binding')
         refused(lambda:supervise(config,root,run_id='overwrite'))
+        if histogram:
+            stem=f'screen/report.{SQ4_NAME}-0.bin-'
+            seal_name=f'screen/report.{SQ4_NAME}-payloads.json'
+            freeze_name=f'screen/report.{SQ4_NAME}-freeze.json'
+            def rebound_fault(name, mutate, binary=False):
+                names={name,stem+'root.json',seal_name,freeze_name,'screen/report.json','native-exit.json','scratch.json'}
+                saved={n:read(root/n) for n in names}
+                try:
+                    value=read(root/name) if binary else decode(read(root/name))
+                    altered=mutate(value)
+                    (root/name).write_bytes(altered if binary else encoded(value))
+                    g=decode(read(root/(stem+'root.json')))
+                    if name==stem+'book.bin':
+                        g['book'].update(file_pin(root/name));(root/(stem+'root.json')).write_bytes(encoded(g))
+                    seal=decode(read(root/seal_name));generation=seal['payloads'][0]['histogram_generation']
+                    generation['root'].update(file_pin(root/(stem+'root.json')))
+                    generation['book']=g['book']
+                    (root/seal_name).write_bytes(encoded(seal))
+                    freeze=decode(read(root/freeze_name));freeze['payloads']=seal['payloads']
+                    freeze['payload_seal'].update(file_pin(root/seal_name));(root/freeze_name).write_bytes(encoded(freeze))
+                    report=decode(read(root/'screen/report.json'));report['details']['freeze'].update(file_pin(root/freeze_name))
+                    (root/'screen/report.json').write_bytes(encoded(report))
+                    for n in ('native-exit.json','scratch.json'):
+                        v=decode(read(root/n));v['report_sha256']=file_pin(root/'screen/report.json')['sha256']
+                        (root/n).write_bytes(encoded(v))
+                    refused(lambda:validate_result(root,config))
+                finally:
+                    for n,b in saved.items():(root/n).write_bytes(b)
+            rebound_fault(stem+'root.json',lambda v:v.update(source_identity_sha256='0'*64))
+            rebound_fault(stem+'root.json',lambda v:v.update(config_sha256='0'*64))
+            rebound_fault(stem+'book.bin',lambda b:b[:16]+bytes(32)+b[48:],True)
+            rebound_fault(freeze_name,lambda v:v.update(truth_opened=True))
+            rebound_fault(freeze_name,lambda v:v['results'].pop())
+            rebound_fault('screen/report.json',lambda v:v.update(schema='borsuk-fixed-sq4-report-v1'))
+            rebound_fault('screen/report.json',lambda v:v.update(source_identity_sha256='0'*64))
+            for suffix in ('book.bin','groups.bin','root.json'):
+                p=root/(stem+suffix);saved=read(p);p.unlink()
+                try:refused(lambda:validate_result(root,config))
+                finally:write(p,saved)
+            p=root/'screen/extra';write(p,b'synthetic');refused(lambda:validate_result(root,config));p.unlink()
         for fault in ('reject','envelope','latefailure','drift','deadline','scratch','external-temp'):
             out,exit_receipt=fixture(fault,fault,deadline=fault=='deadline')
             if fault in ('reject','envelope'):require(validate_result(out,config)['status']=='REJECT','completed REJECT retained')
             else:
                 refused(lambda:validate_result(out,config))
                 if fault=='latefailure':require(exit_receipt['process_exit_code']==2 and decode(read(out/'screen/report.json'))['complete'] is True,'late exit2 invalidates complete body')
-        for name in ('screen/report.sq4-1.bin','screen/report.sq4-result-127.json','screen/report.sq4-freeze.json','cleanup.json','resources.json','scratch.json'):
+        for name in (f'screen/report.{SQ4_NAME}-1.bin',f'screen/report.{SQ4_NAME}-result-127.json',
+                     f'screen/report.{SQ4_NAME}-freeze.json','cleanup.json','resources.json','scratch.json'):
             p=root/name;b=read(p,64*1024**2);p.write_bytes(b+b' ')
             if not name.startswith('screen/'):
                 value=decode(b);value[{'cleanup.json':'cleanup_complete','resources.json':'closed','scratch.json':'closed'}[name]]=False
@@ -1939,9 +2144,19 @@ sys.exit(2 if fault=='latefailure' else 0)
         write(out/'aws-closeout.json',encoded(dict(state='terminated',nodes={'0':{'instance_id':'i-original'}})))
         collect(s3,prefix,out,'i-original','a'*40,'b'*64)
         require(replay(out)==result,'all raw/gzip native closure replay')
+        require(read(out/'screen/report.json') == read(root/'screen/report.json')
+            and all(read(out/'qualification'/n) == read(root/'qualification'/n) for n in SQ4_RECEIPTS), 'byte-exact native report and qualification receipts')
         refused(lambda:collect(s3,prefix,out,'i-original','a'*40,'b'*64))
-        p=out/'screen/report.sq4-result-127.json';p.write_bytes(read(p)+b' ');refused(lambda:replay(out))
-        print('PASS SQ4 mock-native: exact14 argv/mandatory owning-stage passes/positive test counts/serial UTC; generated Bash/bootstrap observer; charged external-temp fault; near-cap closure; exact CLI; silent exit0; REJECT; late exit2; deadline; config/output drift; no overwrite; scratch; cleanup; full raw/gzip collection/replay. Cgroup/SDK transport/AWS/qualification metadata MOCKED; no native science.')
+        p=out/f'screen/report.{SQ4_NAME}-result-127.json';saved=read(p)
+        p.write_bytes(saved+b' ');refused(lambda:replay(out));p.write_bytes(saved)
+        if histogram:
+            p=out/'aws-terminal.json';saved=read(p)
+            for field,value in (('original_exit_code',2),('artifact_roster_sha256','0'*64),('instance_id','i-other')):
+                bad=decode(saved);bad[field]=value;p.write_bytes(encoded(bad));refused(lambda:replay(out))
+            bad=decode(saved);bad.update(status='failed',phase='execution',exit_code=96,original_exit_code=2,disposition='INVALID')
+            p.write_bytes(encoded(bad));require(replay(out)['status']=='INVALID','execution INVALID distinct from complete REJECT')
+            p.write_bytes(saved)
+        print('PASS '+SQ4_NAME+' mock-native: exact14 argv/mandatory owning-stage passes/positive test counts/serial UTC; generated Bash/bootstrap observer; charged external-temp fault; near-cap closure; exact CLI; silent exit0; REJECT; late exit2; deadline; config/output drift; no overwrite; scratch; cleanup; full raw/gzip collection/replay; byte-exact report/qualification. Cgroup/SDK transport/AWS/qualification metadata SYNTHETIC; no native science.')
 
 
 def main():
@@ -1949,15 +2164,17 @@ def main():
     parser.add_argument('attempt', nargs='?')
     parser.add_argument('--self-check', action='store_true')
     parser.add_argument('--sq4', action='store_true', help='opt in to the frozen native SQ4 experiment')
+    parser.add_argument('--histogram-sq4', action='store_true', help='opt in to the frozen native histogram SQ4 experiment')
     parser.add_argument('--replay', type=Path)
     parser.add_argument('--remote', nargs=6)
     args = parser.parse_args()
-    if args.sq4:
-        configure_sq4()
+    require(not (args.sq4 and args.histogram_sq4), 'one SQ4 experiment')
+    if args.sq4 or args.histogram_sq4:
+        configure_sq4(histogram=args.histogram_sq4)
     require(sum((args.attempt is not None, args.self_check, args.replay is not None, args.remote is not None)) == 1, 'one CLI mode')
     if args.self_check:
         if SQ4:
-            sq4_self_check()
+            sq4_self_check(histogram=HISTOGRAM_SQ4)
         else:
             self_check(real_cgroup=os.environ.get('BORSUK_FINE_PACK_REAL_CGROUP')=='1')
         return 0
@@ -1970,7 +2187,7 @@ def main():
     sdk_guard()
     os.environ['AWS_MAX_ATTEMPTS'] = '1'
     os.environ['AWS_RETRY_MODE'] = 'standard'
-    with open('/tmp/borsuk-fixed-sq4-diagnostic.lock' if SQ4 else '/tmp/borsuk-fine-pack-diagnostic.lock', 'w') as lock:
+    with open('/tmp/borsuk-histogram-sq4-diagnostic.lock' if HISTOGRAM_SQ4 else '/tmp/borsuk-fixed-sq4-diagnostic.lock' if SQ4 else '/tmp/borsuk-fine-pack-diagnostic.lock', 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
         lifecycle().main(args.attempt, campaign=sys.modules[__name__])
     return 0
