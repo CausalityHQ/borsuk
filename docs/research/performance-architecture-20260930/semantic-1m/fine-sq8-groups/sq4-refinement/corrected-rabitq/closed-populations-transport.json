@@ -1,0 +1,21 @@
+{
+  "action": "created",
+  "billed_requests": null,
+  "boto3": "1.40.72",
+  "botocore": "1.40.72",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "bytes": 175929,
+  "confirmed_wire_requests": null,
+  "etag": "\"035271388fc10f5fe7a59ad91cdca20d\"",
+  "key": "research/hierarchical-cells/20261005/corrected-four-bit-authorities/closed-populations.json",
+  "retries": 0,
+  "schema": "borsuk-corrected-four-bit-authority-transport-v1",
+  "science_run": false,
+  "sdk_api_operations": [
+    "PutObject.IfNoneMatch",
+    "HeadObject",
+    "GetObject"
+  ],
+  "sha256": "764674f0623797d1303158750fa82a568ea5fabd4fd57f7df5b333865e02a29a",
+  "whole_body_verified": true
+}
