@@ -1824,10 +1824,18 @@ mod tests {
             fs::remove_file(primary_manifest["input"][field]["path"].as_str().unwrap()).unwrap();
         }
         fs::remove_dir_all(cfg.primary_root.path.parent().unwrap()).unwrap();
+        let assert_fresh = |fresh: std::process::Output| {
+            let stdout=String::from_utf8_lossy(&fresh.stdout);
+            assert!(fresh.status.success()
+                && stdout.lines().filter(|line| line.starts_with("test ") && line.ends_with(" ... ok"))
+                    .eq(std::iter::once("test tests::fine_fresh_process_plane_free_open ... ok"))
+                && stdout.lines().any(|line| line.starts_with("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured;")),
+                "fresh child status={}\nstdout:\n{}\nstderr:\n{}",fresh.status,stdout,String::from_utf8_lossy(&fresh.stderr));
+        };
         let fresh=std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact","tests::fine_fresh_process_plane_free_open","--nocapture"])
-            .env("BORSUK_FINE_TEST_ROOT",serde_json::to_string(&a).unwrap()).status().unwrap();
-        assert!(fresh.success());
+            .args(["--exact","tests::fine_fresh_process_plane_free_open","--color","never"])
+            .env("BORSUK_FINE_TEST_ROOT",serde_json::to_string(&a).unwrap()).output().unwrap();
+        assert_fresh(fresh);
         let requests=(0..64).map(|ordinal| format!("{}\n",json!({"ordinal":ordinal,"query":[3.125,0.875]}))).collect::<String>();
         let requests=probe_artifact(&temp.path().join("fine-requests"),requests.as_bytes());
         let truth_body=(0..64).flat_map(|_|(0..100u32).flat_map(u32::to_le_bytes)).collect::<Vec<_>>();
@@ -1873,10 +1881,10 @@ mod tests {
         }
         fs::remove_file(a.path.parent().unwrap().join("records.bin")).unwrap();
         let fresh=std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact","tests::fine_fresh_process_plane_free_open","--nocapture"])
+            .args(["--exact","tests::fine_fresh_process_plane_free_open","--color","never"])
             .env("BORSUK_FINE_TEST_ROOT",serde_json::to_string(&a).unwrap())
-            .env("BORSUK_FINE_TEST_REMOTE","1").status().unwrap();
-        assert!(fresh.success());
+            .env("BORSUK_FINE_TEST_REMOTE","1").output().unwrap();
+        assert_fresh(fresh);
     }
     #[test]
     fn fine_fresh_process_plane_free_open() {
