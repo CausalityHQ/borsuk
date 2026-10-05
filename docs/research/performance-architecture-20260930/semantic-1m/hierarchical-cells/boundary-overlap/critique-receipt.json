@@ -1,0 +1,61 @@
+{
+  "id": "6d28a64bc34748da",
+  "status": "completed",
+  "source_commit": "d16eb7c9ce16b84a8fb0782ccbdeda42db4720e6",
+  "prompt_sha256": "db60a5f31fe2dbbc40faff9d8d81e01b9ce2960aec7d62aa197d1b94cac3bfe7",
+  "force_reason": "New necessary architecture decision after fresh authenticated layout oracle proves any unchanged-cell <=32GET router cannot pass CoHere quality. Prior group355f6211 reviewed a different execution bridge; do not repeat that review. Review new bounded overlap protocol before native source freeze, with independent implementation already underway.",
+  "started_at": 1791160959,
+  "finished_at": 1791161576,
+  "reviewers": [
+    {
+      "role": "research_critic",
+      "id": "720be6c5eb6a4bf0",
+      "status": "completed",
+      "requested_model": "gpt-6.1-sol",
+      "active_provider": "codex",
+      "providers_used": [
+        "claude",
+        "codex"
+      ],
+      "attempt_history": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5",
+          "budget_usd": 4,
+          "timeout_seconds": 1200,
+          "started_at": 1791160959,
+          "effort": "high",
+          "effort_source": "fallback"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol",
+          "budget_usd": null,
+          "timeout_seconds": 1188,
+          "started_at": 1791160971
+        }
+      ],
+      "exit_code": 0
+    },
+    {
+      "role": "engineering_critic",
+      "id": "41e49448b38243bb",
+      "status": "completed",
+      "requested_model": "gpt-6-astra",
+      "active_provider": "codex",
+      "providers_used": [
+        "codex"
+      ],
+      "attempt_history": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra",
+          "budget_usd": null,
+          "timeout_seconds": 1200,
+          "started_at": 1791160959
+        }
+      ],
+      "exit_code": 0
+    }
+  ]
+}
