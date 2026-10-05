@@ -1,0 +1,22 @@
+{
+  "controller_exit": 0,
+  "native_exit": 0,
+  "all_terminal_bodies_authenticated": true,
+  "queries": 128,
+  "per_panel_passes": [
+    35,
+    16
+  ],
+  "per_panel_max_bytes": [
+    42494400,
+    31150080
+  ],
+  "status": "REJECT",
+  "native_kernel_peak_bytes": 85553152,
+  "native_wall_seconds": 1.117659034000006,
+  "native_cpu_usec": 1069772,
+  "swap_oom": 0,
+  "instance_terminated_and_waited": true,
+  "quality_or_latency_measured": false,
+  "source_commit": "b2369c8a03cf06c7d5d0149d9d45442c57cc498e"
+}
