@@ -1,0 +1,201 @@
+{
+  "actual_command_stages": [
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-05T19:22:52Z",
+      "gate_status": 0,
+      "log_exit_status": 0,
+      "required_test_passes": {},
+      "schema": "borsuk-fine-sq8-implementation-stage-v1",
+      "stage": "clippy",
+      "started_at": "2026-10-05T19:18:31Z",
+      "tests_run": null
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "hierarchical_semantic_cells",
+        "fine_",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-05T19:27:11Z",
+      "gate_status": 0,
+      "log_exit_status": 0,
+      "required_test_passes": {
+        "tests::fine_fresh_process_plane_free_open": 1,
+        "tests::fine_histogram_sq4_real_native_builder_paired_pipeline_all128_full_rosters_late_invalid": 1,
+        "tests::fine_histogram_sq4_strict_cli_dispatch_and_schema_identity": 1,
+        "tests::fine_pack_strict_cli_real_tiny_pipeline": 1,
+        "tests::fine_real_source_pipeline_seals_both_panels_before_gt_and_is_durable": 1,
+        "tests::fine_sq4_real_native_pipeline_128_seal_before_truth": 1,
+        "tests::fine_sq4_strict_cli_dispatch": 1
+      },
+      "schema": "borsuk-fine-sq8-implementation-stage-v1",
+      "stage": "fine-sq8-bin-tests",
+      "started_at": "2026-10-05T19:22:53Z",
+      "tests_run": 7
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "fine_sq8_groups::",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-05T19:29:05Z",
+      "gate_status": 96,
+      "log_exit_status": 0,
+      "required_test_passes": {
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_book_binding_padding_counts_caps_and_numeric_negatives": 1,
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_dp_independent_brute_partitions_and_deviations": 1,
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_exhaustive256_mapping_ties_and_uniform_bitwise_parity": 1,
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_full128_pipeline_books_requests_truth_closure_and_late_invalid": 0,
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_interval_cancellation_against_direct_deviations": 1,
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_scalar_scores_odd_tail_zero_nonunit_near_ties": 1,
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_source_reauthentication_eof_prebody_caps_and_sync": 0,
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_all_codes_numeric_oracle_odd_tail_nonunit_ties": 1,
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_auth_fifo_corruption_caps_and_durability": 1,
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_exact_cover_superset_and_binding": 1,
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_full_pipeline_failure_order_and_sync": 1,
+        "fine_sq8_groups::pack_diagnostic::tests::pack_affinity_matches_exhaustive_ties": 1,
+        "fine_sq8_groups::pack_diagnostic::tests::pack_both_seals_precede_prefix": 1,
+        "fine_sq8_groups::pack_diagnostic::tests::pack_graph_binding_corruption_caps": 1,
+        "fine_sq8_groups::pack_diagnostic::tests::pack_incomplete_output_sync_and_supervisor": 1,
+        "fine_sq8_groups::pack_diagnostic::tests::pack_secure_prefix_and_forbidden_opens": 1,
+        "fine_sq8_groups::pack_diagnostic::tests::pack_tail_bijection_and_cover_match_brute": 1,
+        "fine_sq8_groups::tests::fine_auth_length_symlink_and_admission_fail_closed": 1,
+        "fine_sq8_groups::tests::fine_bridged_corruption_and_best_replacement_outside_shortlist": 1,
+        "fine_sq8_groups::tests::fine_cover_matches_independent_bruteforce_with_tail": 1,
+        "fine_sq8_groups::tests::fine_exhausted_shortlist_is_scored_empty_is_underfilled_and_refusal_reads_nothing": 1,
+        "fine_sq8_groups::tests::fine_nonzero_coefficients_scalar_oracle_extremes_and_near_ties": 1,
+        "fine_sq8_groups::tests::fine_remote_failure_preserves_partial_known_stats_and_unknown_bytes": 1,
+        "fine_sq8_groups::tests::fine_tail_scalar_ties_nonunit_and_pins": 1
+      },
+      "schema": "borsuk-fine-sq8-implementation-stage-v1",
+      "stage": "fine-sq8-tests",
+      "started_at": "2026-10-05T19:27:11Z",
+      "tests_run": 24
+    }
+  ],
+  "actual_native_tests_passed": 31,
+  "actual_new_histogram_tests_passed": [
+    "tests::fine_histogram_sq4_real_native_builder_paired_pipeline_all128_full_rosters_late_invalid",
+    "tests::fine_histogram_sq4_strict_cli_dispatch_and_schema_identity",
+    "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_book_binding_padding_counts_caps_and_numeric_negatives",
+    "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_dp_independent_brute_partitions_and_deviations",
+    "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_exhaustive256_mapping_ties_and_uniform_bitwise_parity",
+    "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_interval_cancellation_against_direct_deviations",
+    "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_scalar_scores_odd_tail_zero_nonunit_near_ties",
+    "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_histogram_sq4_full128_pipeline_books_requests_truth_closure_and_late_invalid",
+    "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_histogram_sq4_source_reauthentication_eof_prebody_caps_and_sync"
+  ],
+  "artifact_hashes_independently_verified": true,
+  "compiler_cgroup_peak_bytes": 8589934592,
+  "descendants_drained": true,
+  "disposition": "HARNESS_NAMESPACE_INVALID_NOT_SCIENTIFIC_REJECT",
+  "failed_gate_group": "fine-sq8-tests exact name binding; command exit0/tee0/24passed but gate96",
+  "full_artifacts_verified": {
+    "cargo-version.txt": {
+      "bytes": 36,
+      "sha256": "fb3f25aefd6d5441842d285f5a9b125b3f0f0b0bf2013d9a32677f9e99c6c854"
+    },
+    "config.json": {
+      "bytes": 367727,
+      "sha256": "e8abe6600c9daa97b9aee81ce44926e6e77d4823f316aad7e4748426b3583d31"
+    },
+    "cpu.txt": {
+      "bytes": 3517,
+      "sha256": "396d14f90b7420fe624960f04559cf69bec58d72bceb66d1f6a2e89bd477c4cd"
+    },
+    "native-source-manifest.json": {
+      "bytes": 44753,
+      "sha256": "8b4209d54bc9f26ee24675d75c903d6b5e4b887f9b2142398ec8e199a8dd7935"
+    },
+    "run-closed.log": {
+      "bytes": 82155,
+      "sha256": "1d326f76f0f4b5308df30983878b9b715f0542930cf528b86c269daca2351947"
+    },
+    "rustc-version.txt": {
+      "bytes": 196,
+      "sha256": "3975d062e234a9f3921955bf6ae5b90f5819df94fa825d057f76b34a35ed0f4d"
+    },
+    "source-after.json": {
+      "bytes": 44267,
+      "sha256": "f645553384e4931b9757135813bc56fb6de1894455f0c970b67bfbfeed52467e"
+    },
+    "source-before.json": {
+      "bytes": 44267,
+      "sha256": "f645553384e4931b9757135813bc56fb6de1894455f0c970b67bfbfeed52467e"
+    },
+    "source-qualification.json": {
+      "bytes": 412563,
+      "sha256": "48592796876dad1cc15e85bd0a611ced52a12efc0335b61b5c284342d3bf9e5d"
+    },
+    "test-resources.txt": {
+      "bytes": 872,
+      "sha256": "c58bd4c87fdd72837a2e647d634e135523f6a0997897ae4317588071c3acb931"
+    },
+    "test.log": {
+      "bytes": 675422,
+      "sha256": "d9f87d539cd368fd2c786d87b222feab8e2bf24ed7653da126e0bb2206ba0e3d"
+    },
+    "workspace-cgroup.json": {
+      "bytes": 1380,
+      "sha256": "594438c46f0b3dbc4168bc41c0932530d0a18cea2384633537887c9aeeb723ed"
+    },
+    "workspace-receipt.json": {
+      "bytes": 54023,
+      "sha256": "a517464b85ab898ccc14f1553bfdec14c55920f508b18a102923134e4bc03d66"
+    }
+  },
+  "instance_closeout": {
+    "nodes": {
+      "0": {
+        "instance_id": "i-0a8b7ed675f7667e5"
+      }
+    },
+    "observed_elapsed_s": 738,
+    "state": "terminated"
+  },
+  "native_source_commit": "1057e5a6351ccb4c2d33918874e062730fd32225",
+  "oom": 0,
+  "original_controller_exit_status": 1,
+  "original_exec_session": 74907,
+  "original_worker_exit_status": 96,
+  "passed_gate_groups": 2,
+  "qualified": false,
+  "remaining_gate_groups_unrun": 11,
+  "repair": "two root mandatory namespace paths only; no native source change; exact final full14 qualification required",
+  "root_cause": "two integration tests actually in sq4_diagnostic::tests, not histogram::tests",
+  "schema": "borsuk-histogram-sq4-parent-failed-native-verification-v1",
+  "scientific_quality_or_performance_claim": false,
+  "source_before_equals_after": true,
+  "source_file_count": 404,
+  "source_identity_sha256": "824720f33687ef21a851225af1c72a0b8dbbf793ae9e0471a1b52d55c1753800",
+  "swap_peak_bytes": 0
+}

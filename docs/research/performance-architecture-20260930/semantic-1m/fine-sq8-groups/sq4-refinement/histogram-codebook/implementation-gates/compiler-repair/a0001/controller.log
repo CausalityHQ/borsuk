@@ -1,0 +1,47 @@
+{"instance_id": "i-0a8b7ed675f7667e5", "nodes": {"0": {"instance_id": "i-0a8b7ed675f7667e5"}}, "prefix": "research/semantic-router/20261005/histogram-sq4-compiler-repair-a0001", "source_commit": "7781129f173288c1b4a411dec3b9ddfeb6c80b1b", "source_archive_sha256": "a46b45b45a3860863075202e7edcab1068959e5025260505d26b16aa02508de5"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "pending"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+{"instance_id": "i-0a8b7ed675f7667e5", "state": "running"}
+Traceback (most recent call last):
+  File "/home/rb/worktrees/borsuk-histogram-sq4-compiler-repair-gates-frozen/scripts/launch_native_workspace_execution_spot.py", line 2796, in <module>
+    main(args[0])
+    ~~~~^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-histogram-sq4-compiler-repair-gates-frozen/scripts/launch_native_workspace_execution_spot.py", line 1178, in main
+    return shared.main(attempt, campaign=sys.modules[__name__])
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-histogram-sq4-compiler-repair-gates-frozen/scripts/launch_native_metadata_ranges_cold_spot.py", line 373, in main
+    assert terminal['status'] == terminal['phase'] == 'complete' and terminal['exit_code'] == 0
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0a8b7ed675f7667e5",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0a8b7ed675f7667e5"
+    }
+  },
+  "prefix": "research/semantic-router/20261005/histogram-sq4-compiler-repair-a0001",
+  "source_commit": "7781129f173288c1b4a411dec3b9ddfeb6c80b1b",
+  "source_archive_sha256": "a46b45b45a3860863075202e7edcab1068959e5025260505d26b16aa02508de5"
+}

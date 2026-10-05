@@ -180,8 +180,8 @@ FINE_SQ8_REQUIRED_TESTS = {
         'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_exhaustive256_mapping_ties_and_uniform_bitwise_parity',
         'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_scalar_scores_odd_tail_zero_nonunit_near_ties',
         'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_book_binding_padding_counts_caps_and_numeric_negatives',
-        'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_full128_pipeline_books_requests_truth_closure_and_late_invalid',
-        'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_source_reauthentication_eof_prebody_caps_and_sync',
+        'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_histogram_sq4_full128_pipeline_books_requests_truth_closure_and_late_invalid',
+        'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_histogram_sq4_source_reauthentication_eof_prebody_caps_and_sync',
         'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_all_codes_numeric_oracle_odd_tail_nonunit_ties',
         'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_exact_cover_superset_and_binding',
         'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_auth_fifo_corruption_caps_and_durability',
@@ -560,9 +560,9 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
 
 
     if fine_sq8:
-        ROOT = semantic.ROOT.parent/'semantic-1m/fine-sq8-groups/sq4-refinement/histogram-codebook/implementation-gates/compiler-repair'
+        ROOT = semantic.ROOT.parent/'semantic-1m/fine-sq8-groups/sq4-refinement/histogram-codebook/implementation-gates/roster-repair'
         CONFIG = ROOT/'config.json'
-        TOKEN_PREFIX = 'histogram-sq4-compiler-repair-'
+        TOKEN_PREFIX = 'histogram-sq4-roster-repair-'
         PREFIX = 'research/semantic-router/20261005/' + TOKEN_PREFIX
         TAG = 'borsuk-fine-sq8-implementation'
         SCHEMA = 'borsuk-fine-sq8-implementation-gates-spot-v1'
@@ -2259,7 +2259,7 @@ def _fine_sq8_self_check():
         assert 'fine_sq8' in inspect.signature(function).parameters
     with execution_mode(fine_sq8=True):
         assert FINE_SQ8 and MINIMAL_ARCHIVE and not CELL_OVERLAP
-        assert str(ROOT).endswith('semantic-1m/fine-sq8-groups/sq4-refinement/histogram-codebook/implementation-gates/compiler-repair')
+        assert str(ROOT).endswith('semantic-1m/fine-sq8-groups/sq4-refinement/histogram-codebook/implementation-gates/roster-repair')
         assert mode_flag() == ' --fine-sq8-implementation'
         assert CONFIG_SCHEMA == FIXED['schema'] == 'borsuk-fine-sq8-implementation-gates-v1'
         assert SCHEMA == 'borsuk-fine-sq8-implementation-gates-spot-v1'
