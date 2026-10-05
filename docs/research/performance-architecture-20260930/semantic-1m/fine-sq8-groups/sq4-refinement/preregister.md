@@ -8,6 +8,8 @@ Preserve original physical row order, group16, graph, PQ coefficients/codes, nom
 
 Use existing deterministic smallest-gap cover_pages with candidate row bytes 396 at D768, page_rows16, max_gets32. Assert every original nominee remains and the original 256-range row set is contained. No packing permutation, new routing, replication, second fetch wave or parameter sweep.
 
+Native arithmetic inspection: sq8_source.rs computes decoded=low[d]+f32(code)*step[d], then accumulates norm+=decoded*decoded sequentially in f32. exact_sq8_nominee.rs retains the original query, computes shift=sum(q*low)-sum(q*q)/2, weights=q*step, inner=sum(code*weights), and score=norm-2*(inner+shift). Preserve this operation order; no f64 substitution, reassociation or fused arithmetic in this arm. A nonzero original vector can reconstruct to zero after SQ4 quantization: retain and score that exact representation with norm0 rather than dropping it or borrowing the SQ8 norm. The scorer accepts finite zero norms. Independently test this case and the error from copying the old norm.
+
 ## Paired quality gate
 
 Sequential ReLAION and CoHere FIRST100k/D768/cosine/k100, same consumed64 requests each. Authenticate original payload/source/requests and sealed nomination authority. Seal both transcoded payloads before reading queries; freeze all128 candidate plans and complete ranked outputs before any truth open. Evaluate candidate SQ4 and SQ8 reference on IDENTICAL fetched physical row sets, retaining incidental rows. The reference reads/memory are separately accounted and may exceed serving envelope; never label it an eligible32GET serving result. Retain original256-range returned baseline separately.
@@ -23,4 +25,3 @@ Proposed experiment ceiling CPU1/1GiB/noSwap/600s, data sequential, no graph/PQ 
 ## Limits of evidence
 
 Closed original plans hypothetically fit: ReLAION max16625664B/41984rows, CoHere13749120B/34720rows at396B/row. No actual SQ4 recall or latency measurement exists. Latest graph-affinity packing validREJECT R35/64,C16/64 byte fits; historical environmentINVALID preserved. SQ4 does not solve current graph resident RAM (~59.003GB at100M projection), builder/lifecycle/write throughput, cold tails or matched vendor comparison. No production promotion or100M feasibility claim.
-
