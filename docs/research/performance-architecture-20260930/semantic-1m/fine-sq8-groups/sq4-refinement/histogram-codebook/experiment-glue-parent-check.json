@@ -1,0 +1,17 @@
+{
+  "exit_status": 0,
+  "integrated_commit": "29621dbe",
+  "invocation": "6fcdb01c2abe4da3939302aba9ace1f5",
+  "memory_max": 268435456,
+  "memory_peak": 268435456,
+  "native_and_cloud_mocked": true,
+  "oom": 0,
+  "runtime_seconds": 22.548,
+  "schema": "borsuk-histogram-experiment-glue-parent-check-v1",
+  "scientific_qualification": false,
+  "session": 58489,
+  "source_sha256": "3f9fdb3be20ff579d5e1c3ba81307e5f6a58c48d3a097a02b252d849a3da9f5c",
+  "swap_peak": 0,
+  "unit": "borsuk-histogram-glue-root-verify.service",
+  "worker_commit": "163ff3855a065c7081bba5206c615967ca45878c"
+}

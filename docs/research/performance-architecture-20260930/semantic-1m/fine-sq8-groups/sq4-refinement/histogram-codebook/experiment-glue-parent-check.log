@@ -1,0 +1,10 @@
+Running as unit: borsuk-histogram-glue-root-verify.service; invocation ID: 6fcdb01c2abe4da3939302aba9ace1f5
+{"memory.max": "268435456", "memory.swap.max": "0", "cpu.max": "100000 100000"}
+PASS actual18 retained metadata, including both78000000B records; no data/GT opens
+PASS histogram-sq4 mock-native: exact14 argv/mandatory owning-stage passes/positive test counts/serial UTC; generated Bash/bootstrap observer; charged external-temp fault; near-cap closure; exact CLI; silent exit0; REJECT; late exit2; deadline; config/output drift; no overwrite; scratch; cleanup; full raw/gzip collection/replay; byte-exact report/qualification. Cgroup/SDK transport/AWS/qualification metadata SYNTHETIC; no native science.
+{"memory.peak": "268435456", "memory.swap.peak": "0", "memory.events": "low 0\nhigh 0\nmax 4912\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"}
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 22.548s
+             CPU time consumed: 8.109s
+                   Memory peak: 256M (swap: 0B)
