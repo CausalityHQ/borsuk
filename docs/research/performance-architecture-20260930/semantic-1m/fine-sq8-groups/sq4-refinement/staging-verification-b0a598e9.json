@@ -1,0 +1,34 @@
+{
+  "actual_retained_input_descriptors": 18,
+  "cloud_and_native_resource_cgroup_mocked": true,
+  "configured_cpu_percent": 100,
+  "configured_memory_max_bytes": 268435456,
+  "configured_runtime_max_seconds": 120,
+  "configured_tasks_max": 512,
+  "historical_packing_self_check": {
+    "exit_status": 0,
+    "invocation": "ed790acbf8dc4e1390f3cfcddece1e2b",
+    "peak_memory_reported": "57.5MiB",
+    "seconds": 0.833,
+    "swap_bytes": 0
+  },
+  "input_bytes": 229614200,
+  "native_science_executed": false,
+  "native_source_qualification_pending": true,
+  "review_group": "6475917af0114a7c",
+  "review_pending": true,
+  "schema": "borsuk-sq4-staging-parent-verification-v1",
+  "science_launch_authorized_by_this_receipt": false,
+  "source_bytes": 121489,
+  "source_commit": "b0a598e9625941c3f23b978679b68d74a55a9a3d",
+  "source_path": "scripts/launch_fine_pack_diagnostic.py",
+  "source_sha256": "9bb181008c315cb63d993c572b4a4624d2603e915fbe878d9883d720406d642e",
+  "sq4_self_check": {
+    "exit_status": 0,
+    "invocation": "d9a6dec75e654937bc31c018145c4ef4",
+    "original_exec_session": 61906,
+    "peak_memory_reported": "256MiB",
+    "seconds": 8.294,
+    "swap_bytes": 0
+  }
+}
