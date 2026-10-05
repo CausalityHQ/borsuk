@@ -1,0 +1,130 @@
+{
+  "kernel_limits": {
+    "memory.max": "268435456",
+    "memory.swap.max": "0",
+    "cpu.max": "100000 100000"
+  },
+  "cpu_affinity": [
+    0
+  ],
+  "source_only": true,
+  "started": 1791194307.9050434,
+  "checks": {
+    "scratch": {
+      "passed": true,
+      "seconds": 0.9396247370168567,
+      "result": {
+        "retained_sparse_logical_bytes": 2048293796,
+        "equal": {
+          "scratch_bytes": 2050390948,
+          "scratch_components": {
+            "directory_bytes": 2050390948,
+            "filesystem_growth_bytes": 0,
+            "extra_root_bytes": 0,
+            "total_bytes": 2050390948
+          },
+          "scratch_scan_calls": 1,
+          "scratch_scan_seconds": 0.0007507629925385118
+        },
+        "disjoint": {
+          "scratch_bytes": 2051439524,
+          "scratch_components": {
+            "directory_bytes": 2050390948,
+            "filesystem_growth_bytes": 0,
+            "extra_root_bytes": 1048576,
+            "total_bytes": 2051439524
+          },
+          "scratch_scan_calls": 1,
+          "scratch_scan_seconds": 0.000735623063519597
+        },
+        "outside_growth": {
+          "directory_bytes": 2050390948,
+          "filesystem_growth_bytes": 4194304,
+          "extra_root_bytes": 0,
+          "total_bytes": 2054585252
+        },
+        "old_directory_envelope_bytes": 4531361694,
+        "old_minimum_runtime_charge_bytes": 9062723388,
+        "prospective_preflight": {
+          "directory_bytes": 3343161788,
+          "filesystem_growth_bytes": 3611597244,
+          "extra_root_bytes": 0,
+          "total_bytes": 6954759032
+        },
+        "inclusive_cap_bytes": 8589934592,
+        "generated_watchdog_checked": true
+      }
+    },
+    "fine_helper": {
+      "passed": true,
+      "seconds": 15.042599610053003,
+      "result": {
+        "before": {
+          "copied_root": "/tmp/borsuk-fine-fixture/fine-pair-check-fqjazcmp",
+          "helper_root": "/tmp/borsuk-fine-fixture/fine-pair-check-fqjazcmp"
+        },
+        "after": {
+          "copied_root": "/tmp/borsuk-fine-fixture/fine-pair-check-fqjazcmp",
+          "helper_root": "/tmp/borsuk-fine-fixture/fine-pair-check-fqjazcmp"
+        },
+        "during": [
+          {
+            "name": "relaion-build-fine",
+            "copied_root": "/tmp/borsuk-fine-fixture/fine-pair-check-fqjazcmp",
+            "helper_root": "/tmp/borsuk-fine-fixture/fine-pair-check-fqjazcmp/screen/pass/measurement",
+            "charge": {
+              "directory_bytes": 46710,
+              "filesystem_growth_bytes": 0,
+              "extra_root_bytes": 0,
+              "total_bytes": 46710
+            }
+          },
+          {
+            "name": "cohere-build-fine",
+            "copied_root": "/tmp/borsuk-fine-fixture/fine-pair-check-fqjazcmp",
+            "helper_root": "/tmp/borsuk-fine-fixture/fine-pair-check-fqjazcmp/screen/pass/measurement",
+            "charge": {
+              "directory_bytes": 55861,
+              "filesystem_growth_bytes": 0,
+              "extra_root_bytes": 0,
+              "total_bytes": 55861
+            }
+          },
+          {
+            "name": "paired-fine",
+            "copied_root": "/tmp/borsuk-fine-fixture/fine-pair-check-fqjazcmp",
+            "helper_root": "/tmp/borsuk-fine-fixture/fine-pair-check-fqjazcmp/screen/pass/measurement",
+            "charge": {
+              "directory_bytes": 66275,
+              "filesystem_growth_bytes": 0,
+              "extra_root_bytes": 0,
+              "total_bytes": 66275
+            }
+          }
+        ]
+      }
+    },
+    "fine_launcher": {
+      "passed": true,
+      "seconds": 1.7038334680255502,
+      "result": null
+    },
+    "legacy_helper": {
+      "passed": true,
+      "seconds": 14.185231861076318,
+      "result": null
+    },
+    "legacy_launcher": {
+      "passed": true,
+      "seconds": 2.030819665058516,
+      "result": null
+    }
+  },
+  "finished": 1791194341.8077538,
+  "violations": [],
+  "kernel_peak": {
+    "memory.peak": "115748864",
+    "memory.swap.peak": "0",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+  }
+}

@@ -1,0 +1,19 @@
+Running as unit: run-p2804240-i401186241.service; invocation ID: f8dde4ba22274f5d84fe608800d08cdf
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    from scripts.launch_hierarchical_cells_100k_spot import fine_scratch_self_check; fine_scratch_self_check()
+                                                                                     ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/rb/worktrees/borsuk-fine-sq8-scratch-admission-repair/scripts/launch_hierarchical_cells_100k_spot.py", line 3124, in fine_scratch_self_check
+    exact(first['scratch_bytes'],local.directory_bytes(worker),'equal root must be scanned once')
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-fine-sq8-scratch-admission-repair/scripts/prepare_hierarchical_cells_100k.py", line 81, in exact
+    require(type(value) is type(expected) and value == expected, name)
+    ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-fine-sq8-scratch-admission-repair/scripts/check_semantic_router_coverage.py", line 46, in require
+    raise ValueError(message)
+ValueError: equal root must be scanned once
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 585ms
+             CPU time consumed: 553ms
+                   Memory peak: 51.1M (swap: 0B)

@@ -1,0 +1,265 @@
+{
+  "schema": "borsuk-fine-sq8-scratch-admission-repair-contract-v1",
+  "status": "SOURCE_CHECKS_PASSED_PARENT_INTEGRATION_REQUIRED",
+  "worktree": "/home/rb/worktrees/borsuk-fine-sq8-scratch-admission-repair",
+  "base": "72f0072e921e90310249b602f608c5637acebfeb",
+  "commit": "e95b78525ee86b6ff20a9574216172f68c3fc02e",
+  "author": "Roman Bartusiak <riomus@gmail.com>",
+  "clean_worktree": true,
+  "changed_files": [
+    "scripts/launch_hierarchical_cells_100k_spot.py",
+    "scripts/run_cell_overlap_pair.py"
+  ],
+  "source_pins": {
+    "scripts/launch_hierarchical_cells_100k_spot.py": {
+      "path": "/home/rb/worktrees/borsuk-fine-sq8-scratch-admission-repair/scripts/launch_hierarchical_cells_100k_spot.py",
+      "bytes": 259285,
+      "sha256": "ad196311b92d34c1738602cdd6f29122063613235759964d5961494ebeae70fe"
+    },
+    "scripts/run_cell_overlap_pair.py": {
+      "path": "/home/rb/worktrees/borsuk-fine-sq8-scratch-admission-repair/scripts/run_cell_overlap_pair.py",
+      "bytes": 106558,
+      "sha256": "7b4e1381c2e02f3c0401bd198eadd0f64bc148f9535b68a1a5a8d08a5cc24e5c"
+    },
+    "crates/borsuk/src/fine_sq8_groups.rs": {
+      "path": "/home/rb/worktrees/borsuk-fine-sq8-scratch-admission-repair/crates/borsuk/src/fine_sq8_groups.rs",
+      "bytes": 65662,
+      "sha256": "194a815900274ccb6c96e5ac83511b144370dc9820e51f5ab6edb9537b4f2cdc"
+    },
+    "crates/borsuk/src/resident_vector_graph.rs": {
+      "path": "/home/rb/worktrees/borsuk-fine-sq8-scratch-admission-repair/crates/borsuk/src/resident_vector_graph.rs",
+      "bytes": 63375,
+      "sha256": "172709ddaf629bb4e59e6ffc62501f5f5b74df917dc76b4f2c497f897796c930"
+    },
+    "crates/borsuk/src/pq64_nominee.rs": {
+      "path": "/home/rb/worktrees/borsuk-fine-sq8-scratch-admission-repair/crates/borsuk/src/pq64_nominee.rs",
+      "bytes": 28434,
+      "sha256": "d76d2232b273f5e8b9095ee0ca5f788aa1cbd9d7d5dc19c88a7705298c902bf5"
+    }
+  },
+  "historical_config": {
+    "path": "/home/rb/worktrees/borsuk-fine-sq8-scratch-admission-repair/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/config.json",
+    "bytes": 30533,
+    "sha256": "d29a26a8ecc6d18a7a8e87b55b7e6b3bf709985321f94688f3fc6025c6276d9d"
+  },
+  "historical_fixture": {
+    "path": "/home/rb/worktrees/borsuk-fine-sq8-scratch-admission-repair/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0001/screen/config.json",
+    "bytes": 30533,
+    "sha256": "d29a26a8ecc6d18a7a8e87b55b7e6b3bf709985321f94688f3fc6025c6276d9d"
+  },
+  "native_source_identity_sha256": "3f30f2302a23099fec0c826d03d1b861a664f296ea3606de59b202bc0c8950f4",
+  "original_attempt": {
+    "status": "INVALID",
+    "completed_queries": 0,
+    "scientific_quality_available": false,
+    "unchanged": true
+  },
+  "api": {
+    "scratch_snapshot(root, baseline, *, components=None)": "Existing integer return retained. Optional dict receives directory_bytes and filesystem_growth_bytes; value remains directory + max(0, filesystem_used - baseline).",
+    "probe_resource_check(root, baseline, scratch_cap, deadline, errors, peaks, *, scan=True)": "Resolve both roots. Original equal to/descendant of worker: one worker directory scan, extra=0. Disjoint original: separate directory charge retained. Original ancestor of worker: ValueError. peaks.scratch_components is one coherent snapshot at the reported scratch_bytes peak with directory_bytes, filesystem_growth_bytes, extra_root_bytes, total_bytes. Deadline, monitor errors and 8GiB cap unchanged.",
+    "fine_layout_bound()": "Single layout logical-name upper bound N*(D+12+512+64+8+2)+4MiB, with fixed ROWS=100000,DIMENSIONS=768. Returns 140794304. No native configuration or code change.",
+    "fine_scratch_roster(config, paths, repo)": "Existing categories retained; two-fine-layouts-and-one-active-staging becomes 3*fine_layout_bound()=422382912 bytes.",
+    "fine_scratch_admission(config)": "D=sum(scratch_roster.max_bytes), R=scratch_filesystem_reserve_bytes (integer >=256MiB). Returns directory_bytes=D, filesystem_growth_bytes=D+R, extra_root_bytes=0, total_bytes=2D+R; rejects unless total <= scratch_admission_bytes <= 8589934592.",
+    "fine_qualify(base, *, canary=False)": "Requires explicit scratch_filesystem_reserve_bytes and recomputed exact roster; exposes scratch_charge in source qualification/preflight proof. Native404 identity/qualification checks precede admission.",
+    "fine_profile().probe_user_data(...)": "Fine-only watchdog embeds the existing directory_bytes implementation before source extraction, counts both hard-link names like runtime, and adds positive df growth. Old modes retain their watchdog. Fine generated userdata checked below16384 bytes.",
+    "source_checks": "fine_scratch_self_check() authenticates original a0001 config, returns component/preflight receipts; helper.fine_self_check() returns actual fine_profile/invoke/native_stage root and charge observations. fine_launcher_self_check() exercises actual probe_stage monitor. Fine CLI --self-check runs all three."
+  },
+  "model_proof": {
+    "writer": "FineSq8Index::build in fine_sq8_groups.rs: fixed 2<=N<=100000 and 1<=D<=768; complete primary permutation validated before source output. write_body creates one file of body.len and syncs; graph has the one separate streaming writer; tempdir_in(parent) is under fine/layouts. Six names only: records, order, groups, PQ, graph and capped manifest. Failure paths retain at most bounded partial names.",
+    "records": "Exactly N*(D+12) bytes after complete permutation; 78000000 at100k/768.",
+    "order": "N little-endian u64 ordinals =8N=800000.",
+    "groups": "32*ceil(N/16) bytes <=2N+30; at100k exactly200000.",
+    "pq": "pq64_nominee.rs fit_source_codes allocates 64N code bytes and 64*256*ceil(D/64) f32 books, validated again by Pq64Codes::new. encode_pq writes24-byte header+4*books.len+codes.len; at100k/768=7186456.",
+    "graph": "PqVectorGraph::build rejects heap_bytes>512N before graph file creation. On the qualified x86_64 target heap_bytes=24*outer_capacity+sum(24*tower_capacity+4*edge_capacity). Length<=capacity. write_authenticated emits132 header bytes+N tower-count bytes+2L degree bytes+4E edges; thus encoded<=132+heap_bytes<=132+512N=51200132. This is independent of optimistic assumed degree or graph topology.",
+    "manifest": "serde body is checked <=65536 before write_body; larger metadata is not written.",
+    "remainder": "At maximum geometry, books/header/graph header/manifest/group rounding <=786432+24+132+65536+30=852154 <4194304. Single-body exact conservative sum at100k/768 is137452124 <=140794304.",
+    "coexistence": "Publication hard-links staged files into an empty output directory before tempdir drops. One serial builder means two completed layouts plus at most one additional active staging name set: <=3*140794304=422382912 logical bytes. Runtime intentionally counts hard links by name. Prospective filesystem growth is also conservatively charged by D+R; no max(directory,growth) substitution.",
+    "native_output_bound": "Unchanged native output_bound=2*(N*(D+12+512+64+8+2)+4MiB)=281588608 covers active staging+published names. Existing max_output_bytes=512MiB stays unchanged; the roster uses the independently proved per-layout bound, not that configuration limit.",
+    "filesystem_reserve": "R explicitly covers outside-root bootstrap/install writes, allocation/metadata overhead and cumulative deleted-temp-file growth beyond D. It consumes the same8GiB cap. Root must choose/substantiate R for the prospective environment; the test uses256MiB as an illustrative declared envelope, not empirical bootstrap qualification."
+  },
+  "config_required_changes": {
+    "new_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/config-scratch-v2.json",
+    "new_file_created_by_worker": false,
+    "historical_config_mutated": false,
+    "root_actions": [
+      "Create new config-scratch-v2.json; old config.json and a0001 artifacts remain immutable.",
+      "Choose new run_id and matching execution.run_id; preserve scientific inputs, native binary/qualification and fixed machine limits.",
+      "Choose explicit scratch_filesystem_reserve_bytes >=268435456 to cover outside bootstrap/FS overhead/deleted-temp growth. Keep existing scratch_reserve_bytes for in-root bootstrap/venv/CLI.",
+      "Refresh code_sha256 for FINE_CODE. Build exact new source_archive_paths, replacing only old config path with new path; recompute fine_scratch_roster.",
+      "Set integer scratch_admission_bytes >=fine_scratch_admission(config).total_bytes and <=8589934592.",
+      "Freeze prospective source/config and obtain a new canary admission bound to the new config/code/archive pins before root-owned paid launch."
+    ],
+    "illustrative_source_preflight": {
+      "directory_bytes": 3343161788,
+      "filesystem_growth_bytes": 3611597244,
+      "extra_root_bytes": 0,
+      "total_bytes": 6954759032
+    },
+    "old_minimum_charge": 9062723388,
+    "no_default_fallback": "Missing new config rejects; old config is not aliased or adapted as current."
+  },
+  "verification": {
+    "scope": "Bounded source/controller regression only; not native qualification or scientific validity.",
+    "command": "sudo -n systemd-run --wait --pipe --collect -p User=rb -p MemoryMax=256M -p MemorySwapMax=0 -p CPUQuota=100% -p RuntimeMaxSec=120 -p TasksMax=128 -p TemporaryFileSystem=/tmp/borsuk-fine-fixture:rw,size=64M,mode=1777 --setenv=TMPDIR=/tmp/borsuk-fine-fixture -p WorkingDirectory=/home/rb/worktrees/borsuk-fine-sq8-scratch-admission-repair taskset -c 0 python3 -u /tmp/borsuk-fine-scratch-source-check.py",
+    "runner": {
+      "path": "/tmp/borsuk-fine-scratch-source-check.py",
+      "bytes": 2810,
+      "sha256": "e7e4bb51b9ca3a2b02d97426e8fb0d3109cc32dcc4573f41168c0227aefaeb4a"
+    },
+    "log": {
+      "path": "/tmp/borsuk-fine-scratch-source-check.log",
+      "bytes": 9304,
+      "sha256": "a58abfa05a3be842db17af80b28d64063bdf76567d06938fa4fe4fedc9973fa0"
+    },
+    "receipt_file": {
+      "path": "/tmp/borsuk-fine-scratch-source-receipt.json",
+      "bytes": 4127,
+      "sha256": "d0886efa7377aa5a71ffb30468ec4451eba676a9b2b4df9609fcc9cdce19b966"
+    },
+    "receipt": {
+      "kernel_limits": {
+        "memory.max": "268435456",
+        "memory.swap.max": "0",
+        "cpu.max": "100000 100000"
+      },
+      "cpu_affinity": [
+        0
+      ],
+      "source_only": true,
+      "started": 1791193971.475071,
+      "checks": {
+        "scratch": {
+          "passed": true,
+          "seconds": 3.1319259769516066,
+          "result": {
+            "retained_sparse_logical_bytes": 2048293796,
+            "equal": {
+              "scratch_bytes": 2050390948,
+              "scratch_components": {
+                "directory_bytes": 2050390948,
+                "filesystem_growth_bytes": 0,
+                "extra_root_bytes": 0,
+                "total_bytes": 2050390948
+              },
+              "scratch_scan_calls": 1,
+              "scratch_scan_seconds": 0.0007688689511269331
+            },
+            "disjoint": {
+              "scratch_bytes": 2051439524,
+              "scratch_components": {
+                "directory_bytes": 2050390948,
+                "filesystem_growth_bytes": 0,
+                "extra_root_bytes": 1048576,
+                "total_bytes": 2051439524
+              },
+              "scratch_scan_calls": 1,
+              "scratch_scan_seconds": 0.0006791430059820414
+            },
+            "outside_growth": {
+              "directory_bytes": 2050390948,
+              "filesystem_growth_bytes": 4194304,
+              "extra_root_bytes": 0,
+              "total_bytes": 2054585252
+            },
+            "old_directory_envelope_bytes": 4531361694,
+            "old_minimum_runtime_charge_bytes": 9062723388,
+            "prospective_preflight": {
+              "directory_bytes": 3343161788,
+              "filesystem_growth_bytes": 3611597244,
+              "extra_root_bytes": 0,
+              "total_bytes": 6954759032
+            },
+            "inclusive_cap_bytes": 8589934592,
+            "generated_watchdog_checked": true
+          }
+        },
+        "fine_helper": {
+          "passed": true,
+          "seconds": 15.374617411056533,
+          "result": {
+            "before": {
+              "copied_root": "/tmp/borsuk-fine-fixture/fine-pair-check-g4gewzvt",
+              "helper_root": "/tmp/borsuk-fine-fixture/fine-pair-check-g4gewzvt"
+            },
+            "after": {
+              "copied_root": "/tmp/borsuk-fine-fixture/fine-pair-check-g4gewzvt",
+              "helper_root": "/tmp/borsuk-fine-fixture/fine-pair-check-g4gewzvt"
+            },
+            "during": [
+              {
+                "name": "relaion-build-fine",
+                "copied_root": "/tmp/borsuk-fine-fixture/fine-pair-check-g4gewzvt",
+                "helper_root": "/tmp/borsuk-fine-fixture/fine-pair-check-g4gewzvt/screen/pass/measurement",
+                "charge": {
+                  "directory_bytes": 46710,
+                  "filesystem_growth_bytes": 0,
+                  "extra_root_bytes": 0,
+                  "total_bytes": 46710
+                }
+              },
+              {
+                "name": "cohere-build-fine",
+                "copied_root": "/tmp/borsuk-fine-fixture/fine-pair-check-g4gewzvt",
+                "helper_root": "/tmp/borsuk-fine-fixture/fine-pair-check-g4gewzvt/screen/pass/measurement",
+                "charge": {
+                  "directory_bytes": 55862,
+                  "filesystem_growth_bytes": 0,
+                  "extra_root_bytes": 0,
+                  "total_bytes": 55862
+                }
+              },
+              {
+                "name": "paired-fine",
+                "copied_root": "/tmp/borsuk-fine-fixture/fine-pair-check-g4gewzvt",
+                "helper_root": "/tmp/borsuk-fine-fixture/fine-pair-check-g4gewzvt/screen/pass/measurement",
+                "charge": {
+                  "directory_bytes": 66277,
+                  "filesystem_growth_bytes": 0,
+                  "extra_root_bytes": 0,
+                  "total_bytes": 66277
+                }
+              }
+            ]
+          }
+        },
+        "fine_launcher": {
+          "passed": true,
+          "seconds": 1.6935006190324202,
+          "result": null
+        },
+        "legacy_helper": {
+          "passed": true,
+          "seconds": 14.141356518026441,
+          "result": null
+        },
+        "legacy_launcher": {
+          "passed": true,
+          "seconds": 2.036184170981869,
+          "result": null
+        }
+      },
+      "finished": 1791194007.8532865,
+      "violations": [],
+      "kernel_peak": {
+        "memory.peak": "115576832",
+        "memory.swap.peak": "0",
+        "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+      }
+    },
+    "unit": "run-p3533518-i401940807.service",
+    "exit_status": 0,
+    "wall_seconds_from_systemd": 36.679,
+    "private_filesystem": "64MiB tmpfs mounted only at /tmp/borsuk-fine-fixture inside the capped unit; sixMiB allocated fixture payload, GiB lengths sparse. Source shadow uses hard links on repository filesystem; native binary transport is an unopened sparse stub.",
+    "red_regression": {
+      "path": "/tmp/borsuk-fine-scratch-red.log",
+      "bytes": 1453,
+      "sha256": "3bec8624c5168eafd90b04a29e2e4949001c2e0e78cc13f0f0c2eae58e4b497a"
+    },
+    "resolved_iteration_failures": [
+      "Initial source shadow hard-link attempt crossed /tmp and repository devices; source view moved to repository filesystem.",
+      "Legacy launcher synthetic fixture used frozen historical helper SHA; fixture now pins copied source only. Production historical authority unchanged.",
+      "Shared filesystem deletions made the two outside-growth samples race; private bounded tmpfs isolates final accounting measurement."
+    ],
+    "forbidden_work": "No cargo/rustc, cloud/network, consult/review, extra agents, native ANN, large real input/binary/GT hydration, push or merge."
+  }
+}

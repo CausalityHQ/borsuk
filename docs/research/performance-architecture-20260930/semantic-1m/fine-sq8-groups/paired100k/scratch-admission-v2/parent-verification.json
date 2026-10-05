@@ -1,0 +1,37 @@
+{
+  "files": {
+    "child-source-check.log": {
+      "bytes": 9304,
+      "sha256": "a58abfa05a3be842db17af80b28d64063bdf76567d06938fa4fe4fedc9973fa0"
+    },
+    "child-source-receipt.json": {
+      "bytes": 4127,
+      "sha256": "d0886efa7377aa5a71ffb30468ec4451eba676a9b2b4df9609fcc9cdce19b966"
+    },
+    "contract.json": {
+      "bytes": 16106,
+      "sha256": "772492971636ae6330f996e3656bfe9b33785b5a14579ec27897db5a8f199124"
+    },
+    "parent-runner.py": {
+      "bytes": 2810,
+      "sha256": "12c8e9652836efadc1f4dab2986115a587356e62f5c91a3f0dadde1952fe21b9"
+    },
+    "parent-source-check.log": {
+      "bytes": 9362,
+      "sha256": "51c5cd4a8f7146d6f4df88144bc526cf270ec31d494504227c2ff2e73c8a5d04"
+    },
+    "parent-source-receipt.json": {
+      "bytes": 4127,
+      "sha256": "da2848849e3af59ee467c900bde33480e1e379321e4dd2497375a23abd52b3d4"
+    },
+    "red-regression.log": {
+      "bytes": 1453,
+      "sha256": "3bec8624c5168eafd90b04a29e2e4949001c2e0e78cc13f0f0c2eae58e4b497a"
+    }
+  },
+  "native_qualification_reused": "fine-sq8-groups/implementation-gates/a0001; Rust404 unchanged",
+  "parent_original_exit": 0,
+  "parent_original_session": 54747,
+  "scientific_qualification": false,
+  "status": "SOURCE_CHECKS_PASSED"
+}

@@ -1,0 +1,54 @@
+Running as unit: run-p3533518-i401940807.service
+PASS fine scratch: real profile copy, aliases/disjoint/ancestor, two sparse committed copies, synced outside growth,8GiB runtime/generated-watchdog boundary, real preflight components/rejection; no native/data/GT hydration.
+CHECK CLOSED scratch
+PASS exact real404 qualification metadata/57-test recorded gate; native include_bytes identity 3f30f2302a23099fec0c826d03d1b861a664f296ea3606de59b202bc0c8950f4; binary/corpus/GT bodies unopened.
+PASS fine synthetic: exact3 serial calls, actual fine_profile/invoke/native_stage scratch checks, strict native configs, scientific FAIL/no-GT infeasible FAIL, both requests preauthenticated, original paths/nooverwrite/raw bytes, prefix/seal/exit/resource/cleanup faults, relocated closure replay. Tiny Python children only; no ANN/GT/network/native qualification.
+CHECK CLOSED fine_helper
+PASS tiny committed archive closure/authentic bytes/gzip/literal paths/unsafe/missing/nonfile refusals/fullrepo default
+{"instance_id": "i-original", "observation_error": "EndpointConnectionError"}
+{"instance_id": "i-original", "observation_error": "ReadTimeoutError"}
+{"instance_id": "i-original", "state": "running"}
+{"cleanup_retry": "EndpointConnectionError", "nodes": {"0": {"instance_id": "i-original"}}}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"complete": true, "instance_id": "i-original", "state": "terminated"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}, "1": {"instance_id": "i-extra"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "2222222222222222222222222222222222222222", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"complete": true, "instance_id": "i-original", "state": "terminated"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"complete": true, "instance_id": "i-original", "state": "terminated"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}, "1": {"instance_id": "i-extra"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+PASS bounded archive/chunk/producer/reader and shared ACK/fsync/multi-ACK/SIGTERM/cleanup-before-collection
+PASS fine launcher synthetic: bounded bootstrap/import roster,30 HEAD/one proof GET/no ANN/no GT,actual CLI exit2,stage cleanup,stream collection/gzip replay,SAME-ID refusal and shared ACK/terminate/wait failures. SDK/kernel mocked; no cloud/native/large-body opens.
+CHECK CLOSED fine_launcher
+PASS mock execution/replay: six serial calls, both-panel PASS/scientific FAIL, exit/config/source/seal/roster/tamper/resource/drain/closure/nooverwrite negatives; real silent tiny Python child through reused supervisor. No native algorithms, real data, GT, cloud or qualification executed.
+CHECK CLOSED legacy_helper
+PASS tiny committed archive closure/authentic bytes/gzip/literal paths/unsafe/missing/nonfile refusals/fullrepo default
+{"instance_id": "i-original", "observation_error": "EndpointConnectionError"}
+{"instance_id": "i-original", "observation_error": "ReadTimeoutError"}
+{"instance_id": "i-original", "state": "running"}
+{"cleanup_retry": "EndpointConnectionError", "nodes": {"0": {"instance_id": "i-original"}}}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"complete": true, "instance_id": "i-original", "state": "terminated"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}, "1": {"instance_id": "i-extra"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "2222222222222222222222222222222222222222", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"complete": true, "instance_id": "i-original", "state": "terminated"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"complete": true, "instance_id": "i-original", "state": "terminated"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}, "1": {"instance_id": "i-extra"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+PASS bounded archive/chunk/producer/reader and shared ACK/fsync/multi-ACK/SIGTERM/cleanup-before-collection
+PASS synthetic launcher: gzip exact CR/whitespace/tamper/cap; import closure; 30 HEAD/one proof GET and actual CLI; actual stage/cleanup/collection/gzip-sidecars/canary replay; SAME-ID ACK/terminate/wait/failures; opaque direct staging then tiny Python helper handoff; pending/source/original/request parity refusals without body hydration; scratch/deadline/nooverwrite. No network, native algorithms, real data, or GT decoding.
+CHECK CLOSED legacy_launcher
+PASS bounded source-only gate; actual kernel limits, no native/data/GT hydration or network
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 36.679s
+             CPU time consumed: 26.895s
+                   Memory peak: 110.2M (swap: 0B)
