@@ -5,6 +5,7 @@ CLI: aNNNN | --canary aNNNN | --stage[-canary] REPO NEW_OUTPUT WORKER_ROOT
      --replay[-canary] OUTPUT | --self-check.
 Explicit --global-leaf-probe prefix selects the separate nomination campaign.
 Explicit --partitioner-pair selects the fixed original401/candidate402 test.
+Explicit --cell-overlap-pair stages exact inputs for the frozen six-call helper.
 Missing/pending authority closes before cloud. The native proof is supplied by
 the root, never inferred from a binary name or a synthetic test transcript.
 Quality FAIL is a completed diagnostic; identity/execution/resource errors are
@@ -1703,7 +1704,8 @@ def probe_stage(repo, output, worker_root, *, canary=False):
                 exact(call['verified_bytes'], pin['bytes'], 'probe staged bytes'); exact(call['verified_sha256'], pin['sha256'], 'probe staged SHA')
             paired = config.get('schema') == PAIR_FIXED['schema']
             local.write_json(out/'staging.json', dict(schema='borsuk-global-leaf-probe-staging-receipt-v1',
-                sdk_calls=calls, truth_body_reads=2 if paired else 0, old_panel_producer_called=False, diagnose_called=paired))
+                sdk_calls=calls, truth_body_reads=2 if paired or config.get('schema') == OVERLAP_SCHEMA else 0,
+                old_panel_producer_called=False, diagnose_called=paired))
     except BaseException as error:
         failure = error; result.update(status='INVALID', complete=False, error=type(error).__name__+': '+str(error))
     finally:
@@ -1844,12 +1846,12 @@ def probe_replay(out, *, canary=False, repo=None):
         exact(receipt['config_sha256'], proof['config_sha256'], 'probe canary config')
         require('INVALID:' in receipt['cli_stderr'] and 'CLI:' in receipt['cli_stderr'], 'probe canary actual CLI')
         exact(receipt['sdk_calls'], calls, 'probe canary SDK receipt')
-        exact(len(calls), len(objects)+2, 'delegated HEAD roster plus two log GETs')
+        exact(len(calls), len(objects)+len(probe.ROLE_NAMES), 'delegated HEAD roster plus authenticated log GETs')
         for call, pin in zip(calls[:len(objects)], objects):
             for n, expected in dict(operation='head_object', key=pin['key'], declared_bytes=pin['bytes'], outcome='returned').items():
                 exact(call[n], expected, 'probe canary HEAD metadata')
             require('verified_sha256' not in call, 'HEAD cannot prove body SHA')
-        logs = [dict(bytes=p['bytes'], sha256=p['sha256'], key=p['key']) for p in
+        logs = [config['canary_object']] if schema == OVERLAP_CANARY_SCHEMA else [dict(bytes=p['bytes'], sha256=p['sha256'], key=p['key']) for p in
                 (objects[1], objects[4])] if schema == 'borsuk-constrained-split-falsifier-infrastructure-canary-v1' else [config['roles'][r]['native']['gate_log'] for r in probe.ROLE_NAMES]
         for call, pin in zip(calls[len(objects):], logs):
             for n, expected in dict(operation='get_object', key=pin['key'], verified_bytes=pin['bytes'], verified_sha256=pin['sha256'], outcome='returned').items():
@@ -1869,7 +1871,8 @@ def probe_replay(out, *, canary=False, repo=None):
         staging = local.decode((out/'screen/staging.json').read_bytes())
         exact(staging['sdk_calls'], calls, 'probe staging SDK closure')
         paired = config.get('schema') == PAIR_FIXED['schema']
-        for n, expected in dict(truth_body_reads=2 if paired else 0, old_panel_producer_called=False, diagnose_called=paired).items():
+        for n, expected in dict(truth_body_reads=2 if paired or config.get('schema') == OVERLAP_SCHEMA else 0,
+                old_panel_producer_called=False, diagnose_called=paired).items():
             exact(staging[n], expected, 'probe bypass old truth/diagnose path')
     return dict(executed=True, truth_opened=False, physical_s3_measured=False, vendor_win=False, scientific_qualification=False)
 
@@ -1887,7 +1890,7 @@ def probe_require_canary(base, proof):
     pointer = local.read_json(local.identity(Path(base)/PROBE_ROOT/'canary-admission.json'))
     fields(pointer, 'schema attempt config_sha256 code_identity_sha256 refs_identity_sha256 native_identity_sha256 '
            'source_archive_paths_sha256 terminal_sha256', 'probe canary pointer')
-    expected_schema = 'borsuk-capacity-partitioner-canary-admission-v1' if PROBE_SCHEMA == PAIR_SCHEMA else 'borsuk-global-leaf-probe-canary-admission-v1'
+    expected_schema = 'borsuk-cell-overlap-canary-admission-v1' if PROBE_SCHEMA == OVERLAP_SCHEMA else 'borsuk-capacity-partitioner-canary-admission-v1' if PROBE_SCHEMA == PAIR_SCHEMA else 'borsuk-global-leaf-probe-canary-admission-v1'
     exact(pointer['schema'], expected_schema, 'probe canary admission')
     require(re.fullmatch(r'a[0-9]{4}', pointer['attempt']), 'probe canary attempt')
     out = Path(base)/PROBE_ROOT/'canary'/pointer['attempt']; terminal = local.decode((out/'aws-terminal.json').read_bytes())
@@ -2323,9 +2326,567 @@ def pair_cli(args):
         probe_cli(args)
 
 
+# Transport and lifetime only; the separately frozen helper owns all six calls.
+OVERLAP_ROOT = ROOT.parent/'boundary-overlap/paired100k'
+OVERLAP_CONFIG = OVERLAP_ROOT/'config.json'
+OVERLAP_SCHEMA = 'borsuk-cell-overlap-paired100k-spot-v1'
+OVERLAP_CANARY_SCHEMA = 'borsuk-cell-overlap-infrastructure-canary-v1'
+OVERLAP_PREFIX = 'research/hierarchical-cells/20261005/cell-overlap-paired100k-'
+OVERLAP_WORKER = Path('/mnt/hierarchical-cell-overlap-pair')
+OVERLAP_GATE = ROOT.parent/'boundary-overlap/implementation-gates/a0001'
+OVERLAP_HELPER_SHA = '66ce4aa6c896c28bea73769d1f2be68b102d6ec0e6b4ae83a609aeda7fe68608'
+OVERLAP_MACHINE = dict(wall_seconds=6500, compute_cap_usd=1.25)
+from scripts import launch_native_workspace_execution_spot as overlap_controller
+with overlap_controller.execution_mode(cell_overlap=True):
+    OVERLAP_ASSURANCE = overlap_controller.ARTIFACTS
+    OVERLAP_CODE = tuple(sorted(set((*PROBE_CODE, *overlap_controller.CODE,
+        'scripts/run_cell_overlap_pair.py', 'scripts/run_source_witness_paired_coverage.py'))))
+OVERLAP_ORDER = tuple(d+'-'+a+'-build-overlap' for d in probe.DATASETS for a in ('control', 'candidate'))+tuple(d+'-paired-overlap' for d in probe.DATASETS)
+OVERLAP_OUTPUTS = ('config.json', 'source-qualification.json', 'tool-versions.json', 'staging.json',
+    'native-execution-receipt.json', 'execution-receipt.json', 'summary.json', 'resources.json', 'worker-cgroup.json', 'cleanup.json',
+    'overlap-config.json', 'overlap/config.json', 'overlap/terminal.json', 'overlap/execution-receipt.json',
+    'overlap/authority/current-source.json', 'overlap/authority/retained-input-authority.json',
+    *(f'overlap/authority/{n}.json' for n in ('terminal', 'launch', 'closeout')),
+    *('overlap/authority/native/'+n for n in OVERLAP_ASSURANCE), 'overlap/binary/hierarchical_semantic_cells',
+    *(f'overlap/inputs/{d}/{category}/{n}' for d in probe.DATASETS for category, names in (
+        ('layout', ('manifest.json', 'directories.bin', 'cells.bin')), ('original', 'generation plane canonical order records mean sq8'.split())) for n in names),
+    *(f'overlap/requests/{d}/requests64' for d in probe.DATASETS),
+    *(f'overlap/layouts/{d}-{a}/{n}' for d in probe.DATASETS for a in ('control', 'candidate') for n in ('manifest.json', 'sq8-cells.bin', 'placement.bin', 'boundaries.json')),
+    *(f'overlap/layouts/{d}-{a}.build.jsonl' for d in probe.DATASETS for a in ('control', 'candidate')),
+    *(f'overlap/measurement/{n}{s}' for n in OVERLAP_ORDER for s in ('-config.json', '-stage.json', '-stage-receipt.json', '-closure.json', '.log', '-unit.log')),
+    *(f'overlap/measurement/{d}-paired-overlap{s}' for d in probe.DATASETS for s in ('.jsonl', '.paired-seal.json')))
+OVERLAP_ARTIFACTS = ('test-resources.txt', 'run-closed.log', *('screen/'+n for n in OVERLAP_OUTPUTS))
+
+
+def overlap_helper():
+    from scripts import run_cell_overlap_pair
+    return run_cell_overlap_pair
+
+
+def overlap_gzip(pin, target, raw_pin, cap):
+    """Bounded opaque restoration; CR/whitespace remain original evidence."""
+    import gzip
+    require(raw_pin['bytes'] <= cap, 'uncompressed qualification cap'); local.authenticate(pin, cap)
+    target = Path(target); target.parent.mkdir(parents=True, exist_ok=True)
+    with positive.open_input(pin['path']) as source, gzip.GzipFile(fileobj=source) as stream:
+        publication.transfer(stream, body_pin(raw_pin), target)
+    exact(body_pin(local.identity(target)), body_pin(raw_pin), 'original decompressed qualification bytes')
+    return local.identity(target)
+
+
+def overlap_objects(config, evidence=None):
+    pins = [{k:p[k] for k in ('key', 'bytes', 'sha256')} for p in (*config['assets'], *config['native_assets'])]
+    require(len({p['key'] for p in pins}) == len(pins), 'distinct frozen object roster')
+    for p in pins: publication.object_identity(p)
+    return pins
+
+
+def overlap_input(config, d, role, name):
+    item = config['execution']['inputs'][d]
+    return item[role][name] if role in ('layout', 'original') else item[name]
+
+
+def overlap_qualification(config, repo, paths):
+    """Local preflight authenticates metadata/logs, leaving binary bodies cold."""
+    helper = overlap_helper(); cfg = config['execution']; q = cfg['qualification']
+    fields(q, 'pending directory proof terminal launch closeout', 'overlap qualified authority')
+    exact(q['pending'], False, 'completed qualification required')
+    remote_gate = OVERLAP_WORKER/'screen/retained/native-qualification'
+    exact(q['directory'], str(remote_gate), 'fixed remote qualification directory')
+    values = {}
+    for n, filename in dict(proof='source-qualification.json', terminal='aws-terminal.json', launch='aws-launch.json', closeout='aws-closeout.json').items():
+        p = q[n]; helper.descriptor(p, 8 << 20)
+        exact(p['path'], str(remote_gate/filename), 'fixed original qualification pointer')
+        name = str(OVERLAP_GATE/filename); paths.add(name)
+        values[n] = local.read_json(dict(p, path=str(repo/name)), 8 << 20)
+    proof, terminal, launch, close = (values[n] for n in ('proof', 'terminal', 'launch', 'closeout'))
+    exact(close['state'], 'terminated', 'qualified host closed'); exact(close['nodes'], launch['nodes'], 'qualified SAME IDs')
+    require(terminal['instance_id'] == launch['instance_id'] in {p['instance_id'] for p in close['nodes'].values()}, 'qualified original host')
+    for n in ('phase', 'status'): exact(terminal[n], 'complete', 'original complete qualification')
+    for n in ('exit_code', 'original_exit_code'): exact(terminal[n], 0, 'original qualification exit0')
+    for n in ('source_commit', 'source_archive_sha256'): exact(terminal[n], launch[n], 'original launched source')
+    exact(terminal['source_qualification_sha256'], q['proof']['sha256'], 'original proof SHA')
+    sources = source_hashes(repo); manifest = probe.ref(repo, helper.MANIFEST)
+    paths.add(helper.MANIFEST['path']); paths.update(sources)
+    for value in (proof, manifest):
+        exact(value['source_sha256'], sources, 'all frozen403 native source bytes')
+        exact(value['native_source_commit'], helper.SOURCE_COMMIT, 'qualified final Rust revision')
+        exact(value['source_file_count'], 403, 'full403 source roster')
+    exact(source_identity(sources), helper.FULL_SOURCE_ID, 'full403 frozen identity')
+    exact(proof['source_identity_sha256'], helper.FULL_SOURCE_ID, 'qualified full403 identity')
+    exact(set(config['qualification_transport']), set(OVERLAP_ASSURANCE), 'all original assurance artifacts')
+    with overlap_controller.execution_mode(cell_overlap=True), tempfile.TemporaryDirectory(prefix='overlap-log-preflight-') as tmp:
+        exact(set(proof['code_sha256']), set(overlap_controller.CODE), 'original qualified controller roster')
+        for name, digest in proof['code_sha256'].items():
+            exact(local.identity(repo/name)['sha256'], digest, 'original qualified controller source unchanged')
+        for n in overlap_controller.TERMINAL_IDENTITIES: exact(terminal[n], proof[n], 'original proof/terminal binding')
+        exact(terminal['schema'], overlap_controller.SCHEMA, 'completed overlap gate mode')
+        for name, pin in config['qualification_transport'].items():
+            fields(pin, 'path bytes sha256 encoding', 'archived assurance transport')
+            exact(pin['encoding'] in ('raw', 'gzip'), True, 'explicit archive encoding')
+            relative = str(OVERLAP_GATE/name)+('.gz' if pin['encoding'] == 'gzip' else '')
+            exact(pin['path'], relative, 'exact archived assurance path'); paths.add(relative)
+            raw = terminal['artifacts'][name]
+            local.integer(raw['bytes'], 1, 32 << 20, 'bounded assurance body')
+            if pin['encoding'] == 'raw': exact(body_pin(pin), raw, 'terminal original assurance pin')
+            # Binary descriptors are terminal-bound; remote helper opens them.
+            if not name.startswith('binaries/'):
+                target = Path(tmp)/name
+                if pin['encoding'] == 'gzip': overlap_gzip(dict(body_pin(pin), path=str(repo/relative)), target, raw, 32 << 20)
+                else: probe.copy_bytes(target, local.authenticate(dict(body_pin(pin), path=str(repo/relative)), 32 << 20, read=True))
+        receipt = local.read_json(local.identity(Path(tmp)/'workspace-receipt.json'), 8 << 20)
+        exact(receipt['source_sha256'], sources, 'original receipt native source map')
+        exact(receipt['stages'], overlap_controller.validate_bounded_publication_stages(Path(tmp)/'test.log', cell_overlap=True), 'all seven original completed stages')
+        overlap_controller.worker.validate_cgroup(local.read_json(local.identity(Path(tmp)/'workspace-cgroup.json')))
+        for n in ('qualified', 'command_started', 'command_completed', 'source_unchanged'): exact(receipt[n], True, 'original closed gate receipt')
+        for n in ('exit_status', 'gate_status'): exact(receipt[n], 0, 'original gate status')
+    exact(cfg['binary']['path'], str(remote_gate/'binaries/hierarchical_semantic_cells'), 'fixed qualified binary path')
+    exact(body_pin(cfg['binary']), terminal['artifacts']['binaries/hierarchical_semantic_cells'], 'qualified candidate binary descriptor')
+    return proof
+
+
+def overlap_scratch_roster(config, evidence, paths, repo):
+    helper = overlap_helper(); incoming = config['execution']['inputs']
+    retained = sum(incoming[d][c][n]['bytes'] for d in probe.DATASETS for c, names in (('original', helper.ORIGINALS), ('layout', helper.LAYOUT)) for n in names)
+    assurance = sum(p['bytes'] for p in config['qualification_transport'].values())
+    return [dict(name='archive-and-controller', max_bytes=2*sum((512 << 10) if p == str(OVERLAP_CONFIG) else repo_path(repo,p).stat().st_size for p in paths)),
+        dict(name='venv-cli-bootstrap-reserve', max_bytes=config['scratch_reserve_bytes']),
+        dict(name='direct-staged-bodies', max_bytes=sum(p['bytes'] for p in overlap_objects(config))+sum(p['bytes'] for v in config['headers'].values() for p in v.values())),
+        dict(name='restored-and-retained-native-assurance', max_bytes=3*assurance+config['execution']['binary']['bytes']),
+        dict(name='helper-retained-originals-and-layouts', max_bytes=retained),
+        dict(name='four-overlap-layouts', max_bytes=4*(256 << 20)),
+        dict(name='two-native-paired-outputs', max_bytes=2*(512 << 20)),
+        dict(name='six-native-logs-specs-seals-receipts', max_bytes=6*(34 << 20)),
+        dict(name='retained-request-panels', max_bytes=sum(incoming[d]['requests64']['bytes'] for d in probe.DATASETS))]
+
+
+def overlap_qualify(base=Path('.'), *, canary=False):
+    repo = Path(base).resolve(); pin = local.identity(repo/OVERLAP_CONFIG); config = local.read_json(pin, 512 << 10)
+    fields(config, 'schema authority_pending run_id code_sha256 execution qualification_transport assets native_assets headers canary_object machine scratch_reserve_bytes scratch_roster scratch_admission_bytes', 'root frozen overlap launcher config')
+    exact(config['schema'], OVERLAP_SCHEMA, 'overlap launcher schema'); exact(config['authority_pending'], False, 'root freeze pending')
+    require(re.fullmatch(r'a[0-9]{4}', config['run_id']), 'frozen overlap runID'); exact(config['machine'], OVERLAP_MACHINE, 'root prospective machine freeze')
+    helper = overlap_helper(); cfg = config['execution']
+    fields(cfg, 'schema run_id authority qualification binary inputs resources', 'unchanged helper configuration')
+    exact(cfg['schema'], helper.SCHEMA, 'helper config schema'); exact(cfg['authority'], helper.AUTHORITY, 'exact relative retained authority')
+    exact(cfg['resources'], helper.RESOURCES, 'two-CPU build/one-CPU query fixed resources')
+    exact(cfg['run_id'], 'boundary-overlap-paired100k-'+config['run_id'], 'same immutable scientific run')
+    exact(set(config['code_sha256']), set(OVERLAP_CODE), 'complete existing launcher/helper import closure')
+    exact(config['code_sha256']['scripts/run_cell_overlap_pair.py'], OVERLAP_HELPER_SHA, 'final independently repaired helper source')
+    for name, digest in config['code_sha256'].items(): exact(local.identity(repo/name)['sha256'], digest, 'frozen launcher/helper source')
+    paths = {str(OVERLAP_CONFIG), *OVERLAP_CODE, helper.AUTHORITY['path'], str(OVERLAP_ROOT/'remote-input-roster.json'), str(OVERLAP_ROOT/'native-qualification-transport.json')}
+    candidate = overlap_qualification(config, repo, paths)
+    authority = probe.ref(repo, helper.AUTHORITY); retained_terminal = probe.ref(repo, authority['terminal']); paths.add(authority['terminal']['path'])
+    asset_roster = local.read_json(local.identity(repo/OVERLAP_ROOT/'remote-input-roster.json'))
+    exact(asset_roster['bucket'], BUCKET, 'direct asset bucket'); exact(config['assets'], asset_roster['items'], 'exact root direct sixteen-asset roster')
+    exact(len(config['assets']), 16, 'sixteen opaque direct bodies')
+    native_roster = local.read_json(local.identity(repo/OVERLAP_ROOT/'native-qualification-transport.json'))
+    exact(native_roster['bucket'], BUCKET, 'qualified native bucket'); exact(config['native_assets'], native_roster['items'], 'exact fourteen native bodies')
+    exact({p['name'] for p in config['native_assets']}, set(OVERLAP_ASSURANCE), 'fourteen actual assurance bodies')
+    terminal = local.read_json(dict(cfg['qualification']['terminal'], path=str(repo/OVERLAP_GATE/'aws-terminal.json')))
+    launch = local.read_json(dict(cfg['qualification']['launch'], path=str(repo/OVERLAP_GATE/'aws-launch.json')))
+    for p in config['native_assets']:
+        fields(p, 'name key bytes sha256', 'qualified native remote body'); exact(body_pin(p), terminal['artifacts'][p['name']], 'terminal-bound native body')
+        exact(p['key'], launch['prefix']+'/artifacts/'+p['name'], 'original qualified native object')
+    fields(cfg['inputs'], ' '.join(probe.DATASETS), 'both scientific datasets'); fields(config['headers'], ' '.join(probe.DATASETS), 'both source-header rosters')
+    seen = set()
+    for asset in config['assets']:
+        fields(asset, 'dataset role name key bytes sha256', 'root direct body descriptor')
+        d, role, n = (asset[k] for k in ('dataset', 'role', 'name')); require(d in probe.DATASETS and role in ('original', 'layout', 'panel'), 'direct staged body role')
+        require((d,role,n) not in seen, 'unique direct body role'); seen.add((d,role,n))
+        exact(body_pin(asset), body_pin(overlap_input(config,d,role,n)), 'unchanged direct body identity')
+    for d in probe.DATASETS:
+        item = cfg['inputs'][d]; fields(item, 'layout original requests64 truth64', 'scientific dataset')
+        fields(item['original'], ' '.join(helper.ORIGINALS), 'seven exact originals'); fields(item['layout'], ' '.join(helper.LAYOUT), 'capacity-v4 layout')
+        fields(config['headers'][d], 'generation plane mean manifest.json', 'six original headers plus two retained manifests')
+        header_root = ROOT.parent/'boundary-overlap'
+        for n, pin in config['headers'][d].items():
+            fields(pin, 'path bytes sha256', 'archived input header')
+            if n != 'manifest.json':
+                filename = d+'-'+n+('.bin' if n == 'mean' else '.json')
+                exact(pin['path'], str(header_root/('original-'+n+'-inputs')/filename), 'exact recovered source header path')
+            else:
+                exact(pin['path'], str(Path(authority['terminal']['path']).parent/authority['datasets'][d][n]['terminal_path']), 'original retained manifest header path')
+            paths.add(pin['path']); target = item['layout'][n] if n == 'manifest.json' else item['original'][n]
+            exact(body_pin(pin), body_pin(target), 'exact source header original pin'); local.authenticate(dict(pin, path=str(repo/pin['path'])), 128 << 10)
+        root = read_ref(repo, config['headers'][d]['manifest.json'], 128 << 10)
+        exact(root['schema'], 'borsuk-hierarchical-cells-resident-v4', 'retained capacity-v4'); exact(root['rows'], 100000, 'FIRST100k'); exact(root['dimensions'], 768, 'D768')
+        fields(root['input'], ' '.join(probe.BUILD_FIELDS), 'strict original build policy')
+        for n in helper.ORIGINALS: exact(body_pin(item['original'][n]), body_pin(root['input'][n]), 'retained root-bound original SHA/bytes')
+        for n,value in dict(schema='borsuk-hierarchical-cells-build-v2',cell_rows=512,sample_rows=256,max_depth=32,max_build_payload_bytes=64<<20,max_output_bytes=256<<20).items(): exact(root['input'][n],value,'unchanged original build policy')
+        for category,names in (('original',helper.ORIGINALS),('layout',helper.LAYOUT),('panel',('requests64','truth64'))):
+            for n in names:
+                p = overlap_input(config,d,category,n); helper.descriptor(p, 512 << 20)
+                suffix = Path(category)/n if category != 'panel' else Path(n)
+                exact(p['path'], str(OVERLAP_WORKER/'screen/retained'/d/suffix), 'root frozen staged body path')
+        for n in (*helper.LAYOUT,'requests64','truth64'):
+            p = item['layout'][n] if n in helper.LAYOUT else item[n]; expected = authority['datasets'][d][n]
+            exact(body_pin(p),body_pin(expected),'retained layout/panel authority'); exact(body_pin(expected),retained_terminal['artifacts'][expected['terminal_path']],'original terminal-bound retained body')
+    expected_seen = {(d,role,n) for d in probe.DATASETS for role,names in (('original',('canonical','order','records','sq8')),('layout',('directories.bin','cells.bin')),('panel',('requests64','truth64'))) for n in names}
+    exact(seen,expected_seen,'direct body role roster')
+    terminal = local.read_json(dict(cfg['qualification']['terminal'],path=str(repo/OVERLAP_GATE/'aws-terminal.json')))
+    exact(body_pin(config['canary_object']),terminal['artifacts']['source-qualification.json'],'small authenticated original proof GET')
+    exact(config['canary_object'], {k:p[k] for p in config['native_assets'] if p['name']=='source-qualification.json' for k in ('key','bytes','sha256')}, 'one small source-bound proof GET')
+    require(config['canary_object']['bytes'] <= 1 << 20,'canary small GET cap'); overlap_objects(config)
+    paths = sorted(paths)
+    for name in paths: publication.relative(name); repo_path(repo,name)
+    local.integer(config['scratch_reserve_bytes'],256<<20,8<<30,'root whole-runtime reserve')
+    roster = overlap_scratch_roster(config,None,paths,repo); exact(config['scratch_roster'],roster,'exact coexisting physical scratch admission')
+    require(sum(p['max_bytes'] for p in roster) <= config['scratch_admission_bytes'] <= 8 << 30,'all staged physical scratch fits8GiB')
+    proof = dict(config_path=str(OVERLAP_CONFIG), config_sha256=pin['sha256'], campaign_schema=OVERLAP_CANARY_SCHEMA if canary else OVERLAP_SCHEMA,
+        code_identity_sha256=ids.sha(ids.encoded(config['code_sha256'])), refs_identity_sha256=ids.sha(ids.encoded({n:config[n] for n in ('execution','qualification_transport','assets','native_assets','headers','canary_object','machine')})),
+        native_identity_sha256=ids.sha(ids.encoded(candidate)), source_file_count=403, source_archive_paths=paths,
+        source_archive_paths_sha256=ids.sha(ids.encoded(paths)), artifact_roster_sha256=ids.sha(ids.encoded(PROBE_CANARY_ARTIFACTS if canary else OVERLAP_ARTIFACTS)),awscli_version=AWSCLI_VERSION,awscli_sha256=AWSCLI_SHA256)
+    return config,proof,{}
+
+
+def overlap_canary(config,evidence,client,calls,scratch,check,deadline):
+    for n in ('numpy','pyarrow','boto3','botocore'): importlib.import_module(n)
+    versions = {n:importlib.metadata.version(n) for n in (*FIXED['versions'],*SDK_VERSIONS)}
+    exact(versions,dict(FIXED['versions'],**SDK_VERSIONS),'actual canary imports')
+    require('IfNoneMatch' in client.meta.service_model.operation_model('PutObject').input_shape.members,'conditional SDK model')
+    cli = subprocess.run([sys.executable,'-m',MODULE,'--cell-overlap-pair'],capture_output=True,text=True,timeout=min(30,max(.001,deadline-time.monotonic())))
+    require(cli.returncode == 2 and 'INVALID:' in cli.stderr and 'CLI:' in cli.stderr and not cli.stdout,'actual usage CLI exit2')
+    for p in overlap_objects(config):
+        check(); response=publication.sdk_call(client,calls,'head_object',p['key'],BUCKET); exact(response['ContentLength'],p['bytes'],'HEAD presence/length only')
+    p=config['canary_object'];check();publication.download(client,calls,BUCKET,p,scratch/'qualified-gate.log');check()
+    return dict(schema=OVERLAP_CANARY_SCHEMA,status='GO',complete=True,scientific_performance_evidence=False,versions=versions,
+        sdk_conditional_put_model=True,cli_exit_status=cli.returncode,cli_stderr=cli.stderr,sdk_calls=calls,authenticated_logs=[body_pin(p)],
+        transport='real SDK; all thirty frozen HEADs and one authenticated small proof GET',ann_queries=0,native_processes=0,truth_or_panel_body_reads=0,dataset_payload_gets=0)
+
+
+def overlap_execute(config, config_pin, repo, out, download, check, deadline):
+    helper = overlap_helper(); repo, out = Path(repo), Path(out); cfg = config['execution']
+    (out/'retained').mkdir()
+    for asset in config['assets']:
+        p = overlap_input(config, asset['dataset'], asset['role'], asset['name'])
+        target = Path(p['path']); target.parent.mkdir(parents=True, exist_ok=True)
+        download(asset, target)
+    for asset in config['native_assets']:
+        target = Path(cfg['qualification']['directory'])/asset['name']; target.parent.mkdir(parents=True, exist_ok=True)
+        download(asset, target)
+    for n, filename in dict(terminal='aws-terminal.json', launch='aws-launch.json', closeout='aws-closeout.json').items():
+        pin = cfg['qualification'][n]
+        helper.retain(dict(pin, path=str(repo/OVERLAP_GATE/filename)), Path(pin['path'])); check()
+    for d in probe.DATASETS:
+        for n, pin in config['headers'][d].items():
+            target = overlap_input(config, d, 'layout' if n == 'manifest.json' else 'original', n)
+            helper.retain(dict(pin, path=str(repo/pin['path'])), Path(target['path'])); check()
+    require(deadline-time.monotonic() >= 5400, 'six fixed native budgets fit cumulative machine deadline')
+    helper.qualify(cfg, repo)  # Strict remote original receipt/binary/allbody authentication before science.
+    execution = local.write_json(out/'overlap-config.json', cfg)
+    terminal = helper.execute(execution['path'], execution['sha256'], repo, out/'overlap'); check()
+    receipt = dict(schema=OVERLAP_SCHEMA+'-execution', config=config_pin, complete=terminal['complete'], status=terminal['status'],
+        overlap_terminal=terminal, truth_opened=terminal['complete'], scientific_qualification=False, physical_s3_measured=False)
+    local.write_json(out/'native-execution-receipt.json', receipt)
+    require(terminal['execution_exit_code'] == 0, 'scientific helper execution INVALID')
+    return receipt
+
+
+def overlap_verify_pair(output, *, repo=None, config=None, **_):
+    """Replay qualified helper with collected retained bodies, preserving raw configs."""
+    helper = overlap_helper(); output = Path(output); root = output/'overlap'
+    receipt = local.read_json(local.identity(root/'execution-receipt.json'), 8 << 20)
+    runtime = receipt['output']; real_qualify = helper.qualify
+    def qualify_relocated(cfg, repo):
+        rebound = copy.deepcopy(cfg)
+        q = rebound['qualification']; q['directory'] = str(root/'authority/native')
+        q['proof'] = local.identity(root/'authority/native/source-qualification.json')
+        for n in ('terminal', 'launch', 'closeout'): q[n] = local.identity(root/'authority'/(n+'.json'))
+        rebound['binary'] = helper.witness.physical(root, runtime, receipt['binary'])
+        for d in probe.DATASETS:
+            for category in ('layout', 'original'):
+                rebound['inputs'][d][category] = {n:helper.witness.physical(root, runtime, p) for n,p in receipt['inputs'][d][category].items()}
+            rebound['inputs'][d]['requests64'] = helper.witness.physical(root, runtime, receipt['inputs'][d]['requests64'])
+        return real_qualify(rebound, repo)
+    pin = local.identity(output/'overlap-config.json')
+    exact(local.read_json(pin), config['execution'], 'unchanged exact scientific config')
+    with patch.object(helper, 'qualify', side_effect=qualify_relocated):
+        return helper.replay(pin['path'], pin['sha256'], repo, root)
+
+
+def overlap_verify_execution(output,config,terminal,evidence):
+    out=Path(output);receipt=local.read_json(local.identity(out/'execution-receipt.json'),8<<20)
+    native=local.read_json(dict(body_pin(receipt['native_execution']),path=str(out/'native-execution-receipt.json')),8<<20)
+    exact({k:v for k,v in receipt.items() if k not in ('native_execution','worker_closure')},native,'final/native execution binding')
+    exact(native['complete'],True,'both datasets closed');exact(native['overlap_terminal'],terminal,'original helper terminal retained')
+    exact(native['status'],terminal['status'],'native PASS/FAIL preserved')
+    exact(body_pin(native['config']),body_pin(local.identity(out/'config.json')),'same frozen launcher configuration')
+    return native
+
+
+def overlap_profile():
+    """Use the existing SDK/ACK/termination/collection lifecycle and guards."""
+    from contextlib import ExitStack
+    module=sys.modules[__name__];stack=ExitStack();old_userdata,old_replay=probe_user_data,probe_replay
+    def userdata(*args,**kwargs):
+        canary=kwargs.get('canary',False)
+        if not canary:
+            cfg=local.read_json(local.identity(OVERLAP_CONFIG),512<<10)
+            exact(args[3],OVERLAP_PREFIX+cfg['run_id'],'one unchanged scientific run')
+        # The shared terminal reads ARTIFACT_NAMES. Import the frozen large
+        # roster remotely so userdata stays below EC2's 16 KiB bound.
+        with patch.object(module,'PROBE_ARTIFACTS',('test-resources.txt','run-closed.log')):
+            body=old_userdata(*args,**kwargs)
+        body=body.replace('--global-leaf-probe','--cell-overlap-pair').replace('/mnt/hierarchical-global-leaf-probe',str(OVERLAP_WORKER))
+        if not canary:
+            body=body.replace('MemoryMax=2G','MemoryMax=8G')
+            body=body.replace("export ARTIFACT_NAMES='test-resources.txt run-closed.log'",'export ARTIFACT_NAMES=$(PYTHONPATH="$root/probe-repo" python3.12 -c "from '+MODULE+' import OVERLAP_ARTIFACTS; print(\' \'.join(OVERLAP_ARTIFACTS))")')
+            body=body.replace('else test -s "$name"; fi','else test -f "$name"; fi')
+        subprocess.run(['bash','-n'],input=body,text=True,check=True)
+        require(len(body.encode())<16384 and '--cell-overlap-pair' in body,'bounded shared overlap bootstrap')
+        return body
+    def replay_overlap(out,*,canary=False,repo=None):
+        result=old_replay(out,canary=canary,repo=repo)
+        if not canary and result['executed']:
+            receipt=local.read_json(local.identity(Path(out)/'screen/summary.json'),8<<20)
+            result.update(status=receipt['status'],truth_opened=True,complete_query_latency='complete-query-unmeasured')
+        return result
+    helper=SimpleNamespace(**vars(probe));helper.ROLE_NAMES=('qualified',)
+    helper.execute,helper.verify_pair,helper.verify_execution=overlap_execute,overlap_verify_pair,overlap_verify_execution
+    stack.enter_context(patch.multiple(module,PROBE_ROOT=OVERLAP_ROOT,PROBE_CONFIG=OVERLAP_CONFIG,PROBE_SCHEMA=OVERLAP_SCHEMA,
+        PROBE_CANARY_SCHEMA=OVERLAP_CANARY_SCHEMA,PROBE_PREFIX=OVERLAP_PREFIX,PROBE_CANARY_PREFIX=OVERLAP_PREFIX+'canary-',
+        PROBE_CODE=OVERLAP_CODE,PROBE_ARTIFACTS=OVERLAP_ARTIFACTS,probe=helper,probe_qualify=overlap_qualify,probe_canary=overlap_canary,
+        probe_objects=overlap_objects,probe_user_data=userdata,probe_replay=replay_overlap,
+        WALL=OVERLAP_MACHINE['wall_seconds'],COMPUTE_CAP=OVERLAP_MACHINE['compute_cap_usd'],MEMORY=8<<30,SCRATCH=8<<30))
+    return stack
+
+
+def overlap_cli(args):
+    require(args,'CLI: --cell-overlap-pair aNNNN | --canary aNNNN | --stage[-canary] REPO OUTPUT ROOT | --replay[-canary] OUTPUT | --preflight | --self-check')
+    if args==['--self-check']:overlap_self_check();return
+    with overlap_profile():
+        if args==['--preflight']:print(json.dumps(overlap_qualify()[1]));return
+        probe_cli(args)
+
+
+def overlap_self_check():
+    """Synthetic transport/lifetime only: no network, native algorithms or GT."""
+    from contextlib import ExitStack
+    import gzip
+    import botocore.session
+    module = sys.modules[__name__]
+    def rejects(fn):
+        try: fn()
+        except (ValueError, AssertionError, OSError, KeyError): return
+        raise AssertionError('negative synthetic fixture admitted')
+    with tempfile.TemporaryDirectory(prefix='overlap-launcher-check-') as tmp, ExitStack() as stack:
+        root = Path(tmp); repo = root/'probe-repo'; repo.mkdir()
+        raw = b'original evidence\r\n  spaces\t\n'; archived = root/'raw.gz'
+        archived.write_bytes(gzip.compress(raw,mtime=0)); compressed = local.identity(archived)
+        expected = dict(bytes=len(raw),sha256=local.sha(raw)); restored = overlap_gzip(compressed,root/'restored.log',expected,1024)
+        exact(Path(restored['path']).read_bytes(),raw,'immutable CR and whitespace preserved')
+        rejects(lambda:overlap_gzip(compressed,root/'wrong.log',dict(expected,sha256='0'*64),1024))
+        rejects(lambda:overlap_gzip(compressed,root/'overcap.log',expected,1))
+        archived.write_bytes(archived.read_bytes()+b'tamper');rejects(lambda:overlap_gzip(compressed,root/'tamper.log',expected,1024))
+        # Bootstrap uses the fixed roster once, permits authenticated empty logs,
+        # drains the same slice and keeps the shared terminal-last publication.
+        cfg_path=root/'config.json';local.write_json(cfg_path,dict(run_id='a0001'))
+        stack.enter_context(patch.object(module,'OVERLAP_CONFIG',cfg_path))
+        proof={n:'0'*64 for n in TERMINAL_IDENTITIES};proof.update(config_path=str(cfg_path),source_file_count=403,
+            campaign_schema=OVERLAP_SCHEMA,awscli_version=AWSCLI_VERSION,awscli_sha256=AWSCLI_SHA256)
+        with overlap_profile():
+            science=probe_user_data('a'*40,'b'*64,'source/mock',OVERLAP_PREFIX+'a0001',proof)
+            canary=probe_user_data('a'*40,'b'*64,'source/mock',OVERLAP_PREFIX+'canary-a0001',dict(proof,campaign_schema=OVERLAP_CANARY_SCHEMA),canary=True)
+        for value in ('MemoryMax=8G','CPUQuota=200%','MemorySwapMax=0','6500','--cell-overlap-pair --stage ','OVERLAP_ARTIFACTS','else test -f "$name"','sync -f terminal.json'):
+            require(value in science,'scientific bootstrap contract: '+value)
+        require('MemoryMax=256M' in canary and '--cell-overlap-pair --stage-canary' in canary,'separate metadata-only canary')
+        exact(len(OVERLAP_ARTIFACTS),len(set(OVERLAP_ARTIFACTS)),'unique retained original artifact roster')
+        require(not any('writer' in n for n in OVERLAP_ARTIFACTS),'no obsolete writer recovery artifacts')
+        # A source-only archive must import both the launcher and the frozen
+        # helper, without falling through to the caller's checkout.
+        closure=root/'closure';closure.mkdir()
+        for name in OVERLAP_CODE:
+            source=Path(name)
+            if name=='scripts/run_cell_overlap_pair.py' and not source.exists():
+                source=Path(os.environ.get('BORSUK_OVERLAP_HELPER_FIXTURE',''))
+                require(source.is_file() and local.identity(source)['sha256']==OVERLAP_HELPER_SHA,'exact helper Git-blob fixture required')
+            target=closure/name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,target)
+        subprocess.run([sys.executable,'-B','-c','from scripts import run_cell_overlap_pair; from scripts import launch_hierarchical_cells_100k_spot'],cwd=closure,
+            env=dict(os.environ,PYTHONPATH=str(closure)),timeout=10,check=True)
+        versions=dict(FIXED['versions'],**SDK_VERSIONS);real_import=importlib.import_module;real_version=importlib.metadata.version
+        def imports(name,*a,**kw):
+            return SimpleNamespace(__version__=versions[name]) if name in ('numpy','pyarrow') else real_import(name,*a,**kw)
+        def version(name):return versions[name] if name in ('numpy','pyarrow') else real_version(name)
+        stack.enter_context(patch.object(importlib,'import_module',side_effect=imports))
+        stack.enter_context(patch.object(importlib.metadata,'version',side_effect=version))
+        config=dict(schema=OVERLAP_SCHEMA,assets=[dict(key='synthetic/input/'+str(i),bytes=1,sha256=local.sha(b'x')) for i in range(16)],
+            native_assets=[dict(name=str(i),key='synthetic/native/'+str(i),bytes=1,sha256=local.sha(b'x')) for i in range(14)],
+            canary_object=dict(key='synthetic/native/0',bytes=1,sha256=local.sha(b'x')))
+        objects=overlap_objects(config);closed=[]
+        class Client:
+            meta=SimpleNamespace(service_model=botocore.session.Session().get_service_model('s3'))
+            def head_object(self,**args):return dict(ContentLength=next(p['bytes'] for p in objects if p['key']==args['Key']))
+            def get_object(self,**args):
+                exact(args['Key'],config['canary_object']['key'],'canary cannot fetch dataset/panel/GT/native binary')
+                return dict(ContentLength=1,Body=io.BytesIO(b'x'))
+            def close(self):closed.append(True)
+        for name in ('native_stage','restore_writer_inputs','execute'):
+            stack.enter_context(patch.object(probe,name,side_effect=AssertionError('forbidden original scientific path: '+name)))
+        calls=[];scratch=root/'canary';scratch.mkdir();client=Client()
+        receipt=overlap_canary(config,{},client,calls,scratch,lambda:None,time.monotonic()+30);client.close()
+        exact(len(calls),31,'HEADall30 then one proof GET');exact(receipt['authenticated_logs'],[body_pin(config['canary_object'])],'one proof body authenticated')
+        require(closed and receipt['native_processes']==receipt['truth_or_panel_body_reads']==0,'canary closure/no native/no GT')
+        # Exercise the real shared stage, closure, collection and canary replay
+        # against mocked SDK/kernel counters; no native capability is present.
+        with ExitStack() as lifecycle_stack:
+            cfg_path.write_bytes(local.canonical(config))
+            closed_proof=dict(proof,config_sha256=local.sha(cfg_path.read_bytes()),campaign_schema=OVERLAP_CANARY_SCHEMA,
+                source_archive_paths=['scripts/launch_hierarchical_cells_100k_spot.py'])
+            closed_proof['source_archive_paths_sha256']=ids.sha(ids.encoded(closed_proof['source_archive_paths']))
+            lifecycle_stack.enter_context(patch.object(module,'overlap_qualify',return_value=(config,closed_proof,{})))
+            lifecycle_stack.enter_context(patch.object(publication,'sdk_client',return_value=client))
+            group=root/'kernel/borsuk-global-leaf-mock.slice/controller';group.mkdir(parents=True)
+            (group/'cpu.max').write_text('100000 100000');(group/'pids.max').write_text('512')
+            counters={'path':str(group),'memory.max':'268435456','memory.peak':'1024','memory.swap.max':'0','memory.swap.peak':'0',
+                'memory.events':'oom 0\noom_kill 0\noom_group_kill 0','cpu_affinity':[0],'cpu.max':'100000 100000','pids.max':'512'}
+            lifecycle_stack.enter_context(patch.object(local,'resource_snapshot',return_value=counters))
+            lifecycle_stack.enter_context(patch.object(probe,'cgroup_snapshot',return_value=dict(counters,path=str(group.parent))))
+            lifecycle_stack.enter_context(patch.dict(os.environ,dict(BORSUK_GLOBAL_LEAF_SLICE=group.parent.name,
+                BORSUK_HIERARCHICAL_CONFIG_SHA256=closed_proof['config_sha256'],BORSUK_HIERARCHICAL_SOURCE_ARCHIVE_PATHS_SHA256=closed_proof['source_archive_paths_sha256'],
+                BORSUK_HIERARCHICAL_DEADLINE_EPOCH=str(int(time.time())+30),BORSUK_HIERARCHICAL_SCRATCH_BASE_USED=str(shutil.disk_usage(root).used))))
+            closed_out=root/'closed';closed_out.mkdir()
+            with overlap_profile():
+                probe_stage(repo,closed_out/'screen',root,canary=True)
+                rejects(lambda:probe_stage(repo,closed_out/'screen',root,canary=True))
+                for n in ('test-resources.txt','run-closed.log'):probe.copy_bytes(closed_out/n,b'synthetic closure\n')
+                nodes={'worker':dict(instance_id='i-synthetic')};identity=dict(source_commit='a'*40,source_archive_sha256='b'*64)
+                launch=dict(identity,instance_id='i-synthetic',nodes=nodes,prefix=OVERLAP_PREFIX+'canary-a0001')
+                local.write_json(closed_out/'aws-launch.json',launch);local.write_json(closed_out/'aws-closeout.json',dict(state='terminated',nodes=nodes))
+                local.write_json(closed_out/'aws-reservation.json',dict(identity,schema=OVERLAP_CANARY_SCHEMA,qualification=closed_proof,
+                    wall_seconds=480,compute_cap_usd=.12,ebs_s3_allowance_usd=.05))
+                terminal=dict(identity,**closed_proof,instance_id='i-synthetic',schema=OVERLAP_CANARY_SCHEMA,phase='complete',status='complete',
+                    exit_code=0,original_exit_code=0,artifacts={n:body_pin(local.identity(closed_out/n)) for n in PROBE_CANARY_ARTIFACTS})
+                local.write_json(closed_out/'aws-terminal.json',terminal)
+                require(probe_replay(closed_out,canary=True,repo=repo)['executed'],'actual collected canary replay')
+                class Collected:
+                    def get_object(self,**args):
+                        key=args['Key'];name='aws-terminal.json' if key.endswith('/terminal.json') else key.split('/artifacts/',1)[1]
+                        return dict(Body=io.BytesIO((closed_out/name).read_bytes()))
+                collected=root/'collected';collected.mkdir()
+                for n in ('aws-launch.json','aws-closeout.json','aws-reservation.json'):shutil.copyfile(closed_out/n,collected/n)
+                probe_collect(Collected(),launch['prefix'],collected,'i-synthetic','a'*40,'b'*64,canary=True)
+                require(probe_replay(collected,canary=True,repo=repo)['executed'],'actual SDK collection plus gzip sidecars replay')
+                original_close=(collected/'aws-closeout.json').read_bytes()
+                (collected/'aws-closeout.json').write_bytes(local.canonical(dict(state='terminated',nodes={'worker':dict(instance_id='i-wrong')})))
+                rejects(lambda:probe_replay(collected,canary=True,repo=repo));(collected/'aws-closeout.json').write_bytes(original_close)
+                with patch.object(client,'head_object',return_value=dict(ContentLength=2)):
+                    rejects(lambda:probe_stage(repo,root/'failed-screen',root,canary=True))
+                failure=local.read_json(local.identity(root/'failed-screen/summary.json'))
+                exact(failure['status'],'INVALID','failed HEAD stage stays execution INVALID')
+                cleanup=local.read_json(local.identity(root/'failed-screen/cleanup.json'))
+                require(cleanup['sdk_client_closed'] and cleanup['scratch_removed'] and cleanup['monitor_stopped'],'actual failure cleanup')
+        # Shared lifecycle fixtures exercise launch, ACK refusal, timeout,
+        # collection failure, and terminate+wait of the SAME instance IDs.
+        shared,_=ids.lifecycle();shared.self_check(lifecycle_only=True)
+        # Exercise direct staging and handoff through a real tiny Python child.
+        cfg=dict(inputs={},qualification=dict(directory=str(root/'qualified')))
+        headers={};assets=[];bodies={};folder=root/'inputs'
+        originals='generation plane canonical order records mean sq8'.split()
+        layout=('manifest.json','directories.bin','cells.bin')
+        for d in ('relaion','cohere'):
+            cfg['inputs'][d]=dict(original={},layout={});headers[d]={}
+            for role,names in (('original',originals),('layout',layout),('panel',('requests64','truth64'))):
+                for n in names:
+                    raw=b'opaque synthetic '+d.encode()+b' '+n.encode();pin=dict(bytes=len(raw),sha256=local.sha(raw),path=str(folder/d/role/n))
+                    if role=='panel':cfg['inputs'][d][n]=pin
+                    else:cfg['inputs'][d][role][n]=pin
+                    if n in ('generation','plane','mean','manifest.json'):
+                        relative=d+'-'+n;probe.copy_bytes(repo/relative,raw);headers[d][n]=dict(body_pin(pin),path=relative)
+                    else:
+                        key=d+'/'+role+'/'+n;assets.append(dict(dataset=d,role=role,name=n,key=key,**body_pin(pin)));bodies[key]=raw
+        for n,filename in dict(terminal='aws-terminal.json',launch='aws-launch.json',closeout='aws-closeout.json').items():
+            raw=b'opaque control';probe.copy_bytes(repo/'qualified'/filename,raw);cfg['qualification'][n]=dict(bytes=len(raw),sha256=local.sha(raw),path=str(root/'qualified'/filename))
+        events=[];native=[dict(name='source-qualification.json',key='proof',bytes=1,sha256=local.sha(b'p'))];bodies['proof']=b'p'
+        def download(pin,path):
+            events.append('get:'+pin['key']);publication.transfer(io.BytesIO(bodies[pin['key']]),body_pin(pin),path)
+        from scripts import run_source_witness_paired_coverage as witness
+        def qualified(config,repo):
+            events.append('qualified')
+            for d in ('relaion','cohere'):
+                for pin in (*config['inputs'][d]['original'].values(),*config['inputs'][d]['layout'].values(),config['inputs'][d]['requests64']):local.authenticate(pin,4096)
+        def execute(path,sha,repo,out):
+            exact(events[-1],'qualified','all staged identity checks before any native handoff')
+            result=subprocess.run([sys.executable,'-c','import json; print(json.dumps({"status":"PASS","complete":True,"execution_exit_code":0}))'],capture_output=True,text=True,check=True,timeout=5)
+            events.append('six-call-helper');return json.loads(result.stdout)
+        fake=SimpleNamespace(retain=witness.retain,qualify=qualified,execute=execute)
+        stack.enter_context(patch.object(module,'overlap_helper',return_value=fake));stack.enter_context(patch.object(module,'OVERLAP_GATE',Path('qualified')))
+        config=dict(execution=cfg,assets=assets,native_assets=native,headers=headers)
+        out=root/'stage';out.mkdir()
+        result=overlap_execute(config,dict(bytes=1,sha256='0'*64,path='synthetic'),repo,out,download,lambda:None,time.monotonic()+5500)
+        exact(result['status'],'PASS','actual direct staging handoff completed');exact(events[-1],'six-call-helper','only helper owns scientific calls')
+        require(len([e for e in events if e.startswith('get:')])==17,'closed opaque GET roster, no original archive/source/writer')
+        # Metadata preflight must reject pending/source/parity drift while every
+        # future dataset and GT body remains absent and inaccessible.
+        def fixture_json(path,value):
+            path=Path(path);path.parent.mkdir(parents=True,exist_ok=True);path.unlink(missing_ok=True);return local.write_json(path,value)
+        with ExitStack() as metadata_stack:
+            config_path=OVERLAP_ROOT/'config.json';metadata_stack.enter_context(patch.object(module,'OVERLAP_CONFIG',config_path))
+            metadata_stack.enter_context(patch.object(module,'OVERLAP_CODE',('scripts/run_cell_overlap_pair.py',)))
+            metadata_stack.enter_context(patch.object(module,'overlap_qualification',return_value={}))
+            future=root/'never-hydrated';metadata_stack.enter_context(patch.object(module,'OVERLAP_WORKER',future))
+            helper_source=Path('scripts/run_cell_overlap_pair.py')
+            if not helper_source.exists():helper_source=Path(os.environ['BORSUK_OVERLAP_HELPER_FIXTURE'])
+            probe.copy_bytes(repo/'scripts/run_cell_overlap_pair.py',helper_source.read_bytes())
+            from importlib import util as import_util
+            spec=import_util.spec_from_file_location('synthetic_overlap_helper',helper_source);descriptor_helper=import_util.module_from_spec(spec);spec.loader.exec_module(descriptor_helper)
+            fake.SCHEMA=descriptor_helper.SCHEMA;fake.ORIGINALS=originals;fake.LAYOUT=layout;fake.RESOURCES=descriptor_helper.RESOURCES;fake.descriptor=descriptor_helper.descriptor
+            cfg=copy.deepcopy(cfg);cfg.update(schema=fake.SCHEMA,run_id='boundary-overlap-paired100k-a0001',resources=copy.deepcopy(fake.RESOURCES),binary=dict(path=str(future/'binary'),bytes=1,sha256=local.sha(b'b')))
+            authority=dict(datasets={});retained=dict(artifacts={});headers={};assets=[]
+            for d in ('relaion','cohere'):
+                headers[d]={};authority['datasets'][d]={}
+                for role,names in (('original',originals),('layout',layout),('panel',('requests64','truth64'))):
+                    for n in names:
+                        item=cfg['inputs'][d][n] if role=='panel' else cfg['inputs'][d][role][n]
+                        item['path']=str(future/'screen/retained'/d/(Path(n) if role=='panel' else Path(role)/n))
+                        if role=='original' and n in ('generation','plane','mean'):
+                            pin=headers[d][n]=dict(body_pin(item),path=str(ROOT.parent/'boundary-overlap'/('original-'+n+'-inputs')/(d+'-'+n+('.bin' if n=='mean' else '.json'))))
+                            probe.copy_bytes(repo/pin['path'],(repo/(d+'-'+n)).read_bytes())
+                        elif n!='manifest.json':assets.append(dict(dataset=d,role=role,name=n,key=d+'/'+role+'/'+n,**body_pin(item)))
+                build=dict(cfg['inputs'][d]['original'],schema='borsuk-hierarchical-cells-build-v2',cell_rows=512,sample_rows=256,max_depth=32,max_build_payload_bytes=64<<20,max_output_bytes=256<<20)
+                relative='retained/screen/'+d+'/manifest.json';pin=fixture_json(repo/relative,dict(schema='borsuk-hierarchical-cells-resident-v4',rows=100000,dimensions=768,input=build))
+                headers[d]['manifest.json']=dict(pin,path=relative);cfg['inputs'][d]['layout']['manifest.json'].update(body_pin(pin))
+                for n in (*layout,'requests64','truth64'):
+                    item=cfg['inputs'][d]['layout'][n] if n in layout else cfg['inputs'][d][n];terminal_path=d+'/manifest.json' if n=='manifest.json' else d+'/'+n
+                    authority['datasets'][d][n]=dict(body_pin(item),terminal_path=terminal_path);retained['artifacts'][terminal_path]=body_pin(item)
+            terminal_pin=fixture_json(repo/'retained/aws-terminal.json',retained);authority['terminal']=dict(terminal_pin,path='retained/aws-terminal.json')
+            # Adjust the archived manifest path to exactly parent/terminal_path.
+            for d in ('relaion','cohere'):
+                old=headers[d]['manifest.json'];new='retained/'+authority['datasets'][d]['manifest.json']['terminal_path']
+                probe.copy_bytes(repo/new,(repo/old['path']).read_bytes());headers[d]['manifest.json']['path']=new
+            auth_pin=fixture_json(repo/'authority.json',authority);fake.AUTHORITY=dict(auth_pin,path='authority.json');cfg['authority']=fake.AUTHORITY
+            native=[dict(name=n,key='native/artifacts/'+n,bytes=1,sha256=local.sha(b'p')) for n in OVERLAP_ASSURANCE]
+            cfg['qualification']['terminal'].update(body_pin(fixture_json(repo/'qualified/aws-terminal.json',dict(artifacts={p['name']:body_pin(p) for p in native}))))
+            cfg['qualification']['launch'].update(body_pin(fixture_json(repo/'qualified/aws-launch.json',dict(prefix='native'))))
+            fixture_json(repo/OVERLAP_ROOT/'remote-input-roster.json',dict(bucket=BUCKET,items=assets))
+            fixture_json(repo/OVERLAP_ROOT/'native-qualification-transport.json',dict(bucket=BUCKET,items=native))
+            config=dict(schema=OVERLAP_SCHEMA,authority_pending=False,run_id='a0001',code_sha256={'scripts/run_cell_overlap_pair.py':OVERLAP_HELPER_SHA},execution=cfg,
+                qualification_transport={},assets=assets,native_assets=native,headers=headers,canary_object={k:p[k] for p in native if p['name']=='source-qualification.json' for k in ('key','bytes','sha256')},machine=copy.deepcopy(OVERLAP_MACHINE),scratch_reserve_bytes=256<<20,scratch_roster=[],scratch_admission_bytes=8<<30)
+            source_paths=sorted({str(config_path),'scripts/run_cell_overlap_pair.py',fake.AUTHORITY['path'],str(OVERLAP_ROOT/'remote-input-roster.json'),str(OVERLAP_ROOT/'native-qualification-transport.json'),authority['terminal']['path'],*(p['path'] for v in headers.values() for p in v.values())})
+            config['scratch_roster']=overlap_scratch_roster(config,None,source_paths,repo)
+            before_open=positive.open_input
+            def metadata_only(path):
+                require(not Path(path).is_relative_to(future),'local preflight attempted dataset/GT hydration');return before_open(path)
+            metadata_stack.enter_context(patch.object(positive,'open_input',side_effect=metadata_only))
+            def preflight(value):fixture_json(repo/config_path,value);return overlap_qualify(repo,canary=True)
+            preflight(config)
+            for label,mutate in [('pending',lambda c:c.update(authority_pending=True)),('source',lambda c:c['code_sha256'].update({'scripts/run_cell_overlap_pair.py':'0'*64})),
+                ('original-parity',lambda c:c['execution']['inputs']['relaion']['original']['canonical'].update(sha256='0'*64)),
+                ('request-parity',lambda c:c['execution']['inputs']['cohere']['requests64'].update(sha256='0'*64)),
+                ('unknown',lambda c:c.update(roles={})),('scratch',lambda c:c.update(scratch_admission_bytes=1)),('machine',lambda c:c['machine'].update(wall_seconds=6501))]:
+                altered=copy.deepcopy(config);mutate(altered);rejects(lambda:preflight(altered))
+            require(not future.exists(),'metadata preflight never created or hydrated future data paths')
+        # Scratch/deadline checks and occupied output fail without cloud calls.
+        rejects(lambda:probe_resource_check(root,0,1,time.monotonic()+10,[],dict(scratch_bytes=2),scan=False))
+        rejects(lambda:probe_resource_check(root,0,1,time.monotonic()-1,[],dict(scratch_bytes=0),scan=False))
+        rejects(lambda:probe_stage(repo,out,root,canary=True))
+    print('PASS synthetic launcher: gzip exact CR/whitespace/tamper/cap; import closure; 30 HEAD/one proof GET and actual CLI; actual stage/cleanup/collection/gzip-sidecars/canary replay; SAME-ID ACK/terminate/wait/failures; opaque direct staging then tiny Python helper handoff; pending/source/original/request parity refusals without body hydration; scratch/deadline/nooverwrite. No network, native algorithms, real data, or GT decoding.')
+
+
 if __name__ == '__main__':
     try:
-        if sys.argv[1:2] == ['--partitioner-pair']:
+        if sys.argv[1:2] == ['--cell-overlap-pair']:
+            overlap_cli(sys.argv[2:])
+        elif sys.argv[1:2] == ['--partitioner-pair']:
             pair_cli(sys.argv[2:])
         elif sys.argv[1:2] == ['--constrained-split-falsifier']:
             from scripts import run_constrained_split_falsifier as split
