@@ -1,0 +1,241 @@
+{
+  "automatic_retry": false,
+  "checked_at": "2026-10-05T16:52:42.974313+00:00",
+  "cli_dispatch_attempts": 19,
+  "compute_instance_launched": false,
+  "data_or_truth_bodies_opened": false,
+  "elapsed_seconds": 27.899514944059774,
+  "execution": {
+    "cpu_quota_percent": 100,
+    "exit_status": 0,
+    "invocation_id": "e4cce889715a44edba9df981263e213c",
+    "memory_max_bytes": 268435456,
+    "memory_swap_max_bytes": 0,
+    "original_session": 29322,
+    "runtime_max_seconds": 120,
+    "tasks_max": 32,
+    "terminal_active_state": "inactive",
+    "terminal_main_pid": 0,
+    "terminal_resource_output": {
+      "memory_peak_human": "66.1M",
+      "runtime_seconds": 27.957,
+      "swap_peak_bytes": 0
+    },
+    "unit": "borsuk-sq4-deployment-head-preflight.service"
+  },
+  "full_body_hashes_verified": false,
+  "metadata_only": true,
+  "objects": [
+    {
+      "actual_bytes": 22721,
+      "etag": "\"979efa1c4a5acf3cdff1b350a4f4efc0\"",
+      "exit_status": 0,
+      "expected_bytes": 22721,
+      "expected_sha256": "0a2a2dff6a7abc48143d08eb491a150bbed03957b81b0261c2b8a0434612afec",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/manifest.json",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 26712462,
+      "etag": "\"d16d2c07d0935605cb010aa6c94e78e5-4\"",
+      "exit_status": 0,
+      "expected_bytes": 26712462,
+      "expected_sha256": "f817d7f4fbdd640f66590f58f9e07e9218753fbec4517ba95fc405a78d612325",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/graph.bin",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 200000,
+      "etag": "\"afeba266f78f73ff148f2324560983dc\"",
+      "exit_status": 0,
+      "expected_bytes": 200000,
+      "expected_sha256": "a19930fbdcfa596f5e10434563ddee55806210cf5873db384a06cfa40281814c",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/groups.bin",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 800000,
+      "etag": "\"0de681f68b3b97a30feba9aea1f77e84\"",
+      "exit_status": 0,
+      "expected_bytes": 800000,
+      "expected_sha256": "5c7c552d0aef860803fa32b36764858fb3b251c1ee51a04af8ecda018365df53",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/order.bin",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 7186456,
+      "etag": "\"b09fd139b3d89527cb6aeb8bef817c44\"",
+      "exit_status": 0,
+      "expected_bytes": 7186456,
+      "expected_sha256": "cfc3eb84e8bc9b405070006272adcc4a82ec4b6e30b5d255c73f6ebe80c32dc6",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/pq.bin",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 78000000,
+      "etag": "\"daf7f9df77d48784f33e187e70bae737-10\"",
+      "exit_status": 0,
+      "expected_bytes": 78000000,
+      "expected_sha256": "0788700751fb243927e66ebcb6b9023d5d342e726e409b5827971d03277b4fae",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/records.bin",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 937167,
+      "etag": "\"a8f1c54a019e57830a79848cb9523d67\"",
+      "exit_status": 0,
+      "expected_bytes": 937167,
+      "expected_sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/retained/relaion/requests64",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 25600,
+      "etag": "\"422bc51922d69a915512d6894fcd88ff\"",
+      "exit_status": 0,
+      "expected_bytes": 25600,
+      "expected_sha256": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/retained/relaion/truth64",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 22815,
+      "etag": "\"0aee3eb9c11ddf0670821fc589666c02\"",
+      "exit_status": 0,
+      "expected_bytes": 22815,
+      "expected_sha256": "ea1a792a841014ef08ed805d2872403739ba778ea8b8d3a9e5eab1b7f831c8bb",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/manifest.json",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 26844914,
+      "etag": "\"e43efb63a0bacfb2bca4c6d763fb030e-4\"",
+      "exit_status": 0,
+      "expected_bytes": 26844914,
+      "expected_sha256": "4afd895f2e684f833437f4e6d4270c4713bbeb54fe67b50919f796e95f896e2e",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/graph.bin",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 200000,
+      "etag": "\"10250f877d321062800181238e710aca\"",
+      "exit_status": 0,
+      "expected_bytes": 200000,
+      "expected_sha256": "729c46e01e598d43a38d4927246d1a63de36485eddb9e744a4938e05de447deb",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/groups.bin",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 800000,
+      "etag": "\"554126f1bf4c87b8bb126ab63669f4c9\"",
+      "exit_status": 0,
+      "expected_bytes": 800000,
+      "expected_sha256": "75e22683a589429729f23ff1641c58cbcba8021fcb8bcfab9a256a30c2c572bf",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/order.bin",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 7186456,
+      "etag": "\"76f2cfcd71e52909054b02d7385ce846\"",
+      "exit_status": 0,
+      "expected_bytes": 7186456,
+      "expected_sha256": "bc5efac783434a330f9ee4ef2ef930ea430fcdf6896e927e82ad55fa7cd55f38",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/pq.bin",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 78000000,
+      "etag": "\"25ecd1b173247b9a9905a4fbc0bb6b5a-10\"",
+      "exit_status": 0,
+      "expected_bytes": 78000000,
+      "expected_sha256": "d9d8c8137cd17e738fb9b871974a14a916dbc460508f5c7c0d3212d6cc4995bf",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/records.bin",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 983232,
+      "etag": "\"6f99e6eac3dba55c10f272cba62416f0\"",
+      "exit_status": 0,
+      "expected_bytes": 983232,
+      "expected_sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/retained/cohere/requests64",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 25600,
+      "etag": "\"158acc9634c25990a450412c14bad15b\"",
+      "exit_status": 0,
+      "expected_bytes": 25600,
+      "expected_sha256": "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/retained/cohere/truth64",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 1109,
+      "etag": "\"cc96085c430ea6e9b335d852cfeadf07\"",
+      "exit_status": 0,
+      "expected_bytes": 1109,
+      "expected_sha256": "374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62",
+      "key": "research/fine-pack-diagnostic/inputs/374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62/packing-original-seal.json",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 1665668,
+      "etag": "\"a41460e8a27b35d6670bd83a2d94c463\"",
+      "exit_status": 0,
+      "expected_bytes": 1665668,
+      "expected_sha256": "7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025",
+      "key": "research/fine-pack-diagnostic/inputs/7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025/packing-prefix.jsonl",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    },
+    {
+      "actual_bytes": 8955016,
+      "etag": "\"f77f057247afec2a9c5eb52c6a0d8590-2\"",
+      "exit_status": 0,
+      "expected_bytes": 8955016,
+      "expected_sha256": "30b59cb554cc62970ca56bab511b86ab03d77955ffe753f3ff392797b731735b",
+      "key": "research/semantic-router/20261005/fixed-sq4-clippy-repair-a0001/artifacts/binaries/hierarchical_semantic_cells",
+      "length_matches": true,
+      "metadata": {},
+      "version_id": null
+    }
+  ],
+  "schema": "borsuk-sq4-deployment-head-preflight-v1",
+  "status": "GO"
+}
