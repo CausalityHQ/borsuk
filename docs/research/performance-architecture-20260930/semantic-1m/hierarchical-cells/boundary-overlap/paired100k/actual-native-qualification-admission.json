@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-overlap-parent-actual-native-qualification-admission-v1",
+  "integrated_runner_revision": "62b91d07",
+  "helper_sha256": "66ce4aa6c896c28bea73769d1f2be68b102d6ec0e6b4ae83a609aeda7fe68608",
+  "native_source_identity_sha256": "f71f6923bf5ebdd131fb1ae7528cd9434d70c8d1d51c184cdb7900b46b0d7c59",
+  "native_source_file_count": 403,
+  "actual_completed_qualification_accepted": true,
+  "original_unit": "borsuk-overlap-parent-qualification-check-a0001.service",
+  "original_exit_status": 0,
+  "runtime_seconds": 21.915,
+  "cpu_seconds": 1.019,
+  "memory_peak_display": "63.6M",
+  "swap_display": "0B",
+  "caps": {
+    "memory_max_bytes": 268435456,
+    "swap_max_bytes": 0,
+    "cpu_quota_percent": 100,
+    "timeout_seconds": 120
+  },
+  "scope": "Existing runner qualification() on root actual completed receipt, all native source identities and terminal bodies; no native commands, dataset or GT opening. Preflight wall time includes local filesystem waits and is not ANN latency.",
+  "scientific_execution_completed": false
+}
