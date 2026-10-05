@@ -2074,7 +2074,8 @@ mod tests {
             let rotation =
                 borsuk::corrected_four_bit::Rotation::from_bytes(&rotation_body, rotation_sha, limits)
                     .unwrap();
-            let normalized = borsuk::sq8_source::cosine_vector(&query).unwrap();
+            let normalized =
+                borsuk::two_bit_generation::normalize_two_bit_diagnostic_query(&query).unwrap();
             let prepared = rotation.prepare_query(&normalized, limits).unwrap();
             for p in 0..2 {
                 let packed =
