@@ -551,9 +551,9 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
 
 
     if fine_sq8:
-        ROOT = semantic.ROOT.parent/'semantic-1m/fine-sq8-groups/sq4-refinement/implementation-gates/compiler-repair'
+        ROOT = semantic.ROOT.parent/'semantic-1m/fine-sq8-groups/sq4-refinement/implementation-gates/compiler-binding-repair'
         CONFIG = ROOT/'config.json'
-        TOKEN_PREFIX = 'fixed-sq4-compiler-repair-'
+        TOKEN_PREFIX = 'fixed-sq4-compiler-binding-repair-'
         PREFIX = 'research/semantic-router/20261005/' + TOKEN_PREFIX
         TAG = 'borsuk-fine-sq8-implementation'
         SCHEMA = 'borsuk-fine-sq8-implementation-gates-spot-v1'
@@ -2249,7 +2249,7 @@ def _fine_sq8_self_check():
         assert 'fine_sq8' in inspect.signature(function).parameters
     with execution_mode(fine_sq8=True):
         assert FINE_SQ8 and MINIMAL_ARCHIVE and not CELL_OVERLAP
-        assert str(ROOT).endswith('semantic-1m/fine-sq8-groups/sq4-refinement/implementation-gates/compiler-repair')
+        assert str(ROOT).endswith('semantic-1m/fine-sq8-groups/sq4-refinement/implementation-gates/compiler-binding-repair')
         assert mode_flag() == ' --fine-sq8-implementation'
         assert CONFIG_SCHEMA == FIXED['schema'] == 'borsuk-fine-sq8-implementation-gates-v1'
         assert SCHEMA == 'borsuk-fine-sq8-implementation-gates-spot-v1'
