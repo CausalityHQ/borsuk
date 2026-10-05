@@ -1,0 +1,790 @@
+{
+  "id": "e6c97af66a40437f",
+  "status": "completed",
+  "started_at": 1791210035,
+  "agent": "borsuk/prod-ready-v9",
+  "force_reason": "New distinct fixed-SQ4 Rust implementation after the closed graph-packing scientific REJECT; review exact immutable codec/paired diagnostic source, not a repeat of packing review.",
+  "rolling_6h_count": 3,
+  "prompt_preview": "Read-only hard implementation review BORSUK. Candidate 9853e133df6240d04378fc61050467ee01a3a81d, parent673b303820da91a692f1ce358679e3d78a58717a, worktree /home/rb/worktrees/borsuk-fixed-sq4-native-refinement. ONLY fine_sq8_groups.rs and bin/hierarchical_semantic_cells.rs additive1987lines. Final contract /tmp/borsuk-fixed-sq4-native-refinement-contract.json. Root methodology docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/{preregister.md,research-result.md}; root HEAD3b74d618 correction preserves original once cosine_vector preprocessing. Fixed causal arm SQ8code -> nibble(c+8)/17 ->17*n, sequentialf32 recomputed norm including validzero, unchanged original physical order/group16/PQgraph nominees, exact32 smallest-gap cover16MiB, compare SQ4 and SQ8 on SAME expanded cover, old256SQ8 separate. All128 result/plans sealed and closure reauthenticated BEFORE truth; supervisor required for survival. Inspect concrete correctness, resource preadmission/coexistence/output/EOFgrowth/secureFD/durability/actual failure receipts, independent bitexact numeric and real tiny128 pipeline tests. No Cargo locally/no edits/no cloud. Return actionable defects with exact source references, distinguish scientific mechanism limitations from implementation bugs; do not propose parameter sweeps or reject due solely env. Native compilation/tests UNRUN; root will remote qualify exact source. Research critic assess causal fairness/recall interpretation, engineering critic actual code/test gaps. Preserve current goal and existing same worker.",
+  "prompt_sha256": "29441dd8316c577d7965705269e98d0c9129ddd92286a7c919453a4498c854de",
+  "prompt_bytes": 1581,
+  "fingerprint": "15a429a42bf205ff69f5c279a01c8b7bc000e2704bb2108758155ef46a0a74da",
+  "evidence": {
+    "git_commit": "3b74d6188666820c5ad1e02f1eeb176aff9f1827",
+    "git_branch": "devbox/prod-ready-v9",
+    "git_dirty": true,
+    "git_status_sha256": "7f911640d3897b79f5b7ac1bc3e7239794cfc8e579d238c5fc8989cb66b79d7d",
+    "worktree_sha256": "59391be552d6a2d21a941fb157fa4cc0ec24d67fa5ad66c9872dacc6885882ab",
+    "worktree_evidence_truncated": true,
+    "active_goal": {
+      "id": "goal-1790540483-1790540483843307105-2322852",
+      "agent": "borsuk/prod-ready-v9",
+      "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+      "status": "queued",
+      "revision": 4,
+      "actor": "devbox",
+      "note": "re-apply delivery failed; prior goal state restored",
+      "created_at": 1790540483,
+      "updated_at": 1790781535
+    }
+  },
+  "reviewers": [
+    {
+      "role": "research_critic",
+      "id": "589917f9c3c64107",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "fallbacks": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "effort": "",
+      "agent": "borsuk/prod-ready-v9",
+      "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+      "status": "completed",
+      "runner_started": true,
+      "started_at": 1791210035,
+      "timeout_seconds": 1200,
+      "deadline_at": 1791211235,
+      "budget_usd": null,
+      "prompt_preview": "Act as the independent research and first-principles critic. Challenge assumptions, compare alternatives and prior art, and identify missing evidence. Do not edit files.\n\nMaterial to critique:\nRead-only hard implementation review BORSUK. Candidate 9853e133df6240d04378fc61050467ee01a3a81d, parent673b303820da91a692f1ce358679e3d78a58717a, worktree /home/rb/worktrees/borsuk-fixed-sq4-native-refinement. ONLY fine_sq8_groups.rs and bin/hierarchical_semantic_cells.rs additive1987lines. Final contract /tmp/borsuk-fixed-sq4-native-refinement-contract.json. Root methodology docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/{preregister.md,research-result.md}; root HEAD3b74d618 correction preserves original once cosine_vector preprocessing. Fixed causal arm SQ8code -> nibble(c+8)/17 ->17*n, sequentialf32 recomputed norm including validzero, unchanged original physical order/group16/PQgraph nominees, exact32 smallest-gap cover16MiB, compare SQ4 and SQ8 on SAME expanded cover, old256SQ8 separate. All128 result/plans sealed and closure reauthenticated BEFORE truth; supervisor required for survival. Inspect concrete correctness, resource preadmission/coexistence/output/EOFgrowth/secureFD/durability/actual failure receipts, independent bitexact numeric and real tiny128 pipeline tests. No Cargo locally/no edits/no cloud. Return actionable defects with exact source references, distinguish scientific mechanism limitations from implementation bugs; do not propose parameter sweeps or reject due solely env. Native compilation/tests UNRUN; root will remote qualify exact source. Research critic assess causal fairness/recall interpretation, engineering critic actual code/test gaps. Preserve current goal and existing same worker.",
+      "prompt_sha256": "4b7e0142fc9510d3ed81d34df1ab25330c3311155f3e43c63f8ff75791b3f19c",
+      "prompt_bytes": 1965,
+      "fingerprint": "c43c6283a9fc6b0b2aea9851096d2537e3d75ab7e75e85a242a595e5fc751993",
+      "evidence": {
+        "git_commit": "3b74d6188666820c5ad1e02f1eeb176aff9f1827",
+        "git_branch": "devbox/prod-ready-v9",
+        "git_dirty": true,
+        "git_status_sha256": "7f911640d3897b79f5b7ac1bc3e7239794cfc8e579d238c5fc8989cb66b79d7d",
+        "worktree_sha256": "59391be552d6a2d21a941fb157fa4cc0ec24d67fa5ad66c9872dacc6885882ab",
+        "worktree_evidence_truncated": true,
+        "active_goal": {
+          "id": "goal-1790540483-1790540483843307105-2322852",
+          "agent": "borsuk/prod-ready-v9",
+          "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+          "status": "queued",
+          "revision": 4,
+          "actor": "devbox",
+          "note": "re-apply delivery failed; prior goal state restored",
+          "created_at": 1790540483,
+          "updated_at": 1790781535
+        }
+      },
+      "previous_fingerprint": "425257755d57e58ae8d8069b99351720496687c7788f8ebe2a96c200e6c779cb",
+      "reused": false,
+      "critique_id": "e6c97af66a40437f",
+      "critique_role": "research_critic",
+      "systemd_unit": "devbox-consult-589917f9c3c64107.service",
+      "pid": 2757618,
+      "pgid": 2757618,
+      "attempt": 2,
+      "attempts": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "attempt_history": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5",
+          "budget_usd": 4,
+          "timeout_seconds": 1200,
+          "started_at": 1791210035,
+          "effort": "xhigh",
+          "effort_source": "jev"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol",
+          "budget_usd": null,
+          "timeout_seconds": 1196,
+          "started_at": 1791210039
+        }
+      ],
+      "exit_code": 0,
+      "finished_at": 1791210713,
+      "event_cursor": 73,
+      "events": [
+        {
+          "seq": 50,
+          "at": 1791210185,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 51,
+          "at": 1791210222,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 52,
+          "at": 1791210223,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 53,
+          "at": 1791210223,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Web search started"
+        },
+        {
+          "seq": 54,
+          "at": 1791210225,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Web search completed"
+        },
+        {
+          "seq": 55,
+          "at": 1791210286,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 56,
+          "at": 1791210302,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 57,
+          "at": 1791210302,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 58,
+          "at": 1791210302,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Web search started"
+        },
+        {
+          "seq": 59,
+          "at": 1791210304,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Web search completed"
+        },
+        {
+          "seq": 60,
+          "at": 1791210422,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 61,
+          "at": 1791210422,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 62,
+          "at": 1791210428,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 63,
+          "at": 1791210428,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 64,
+          "at": 1791210490,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 65,
+          "at": 1791210507,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Web search started"
+        },
+        {
+          "seq": 66,
+          "at": 1791210509,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Web search completed"
+        },
+        {
+          "seq": 67,
+          "at": 1791210509,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 68,
+          "at": 1791210513,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 69,
+          "at": 1791210612,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 70,
+          "at": 1791210635,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 71,
+          "at": 1791210635,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 72,
+          "at": 1791210712,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 73,
+          "at": 1791210712,
+          "provider": "codex",
+          "kind": "phase",
+          "label": "Consultation completed",
+          "detail": "exit 0"
+        }
+      ],
+      "events_truncated": true,
+      "provider_events": {
+        "claude": [
+          {
+            "seq": 1,
+            "at": 1791210035,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Claude consultation attempt",
+            "detail": "claude-opus-5-5 · $4 cap · 1200s remaining"
+          },
+          {
+            "seq": 2,
+            "at": 1791210036,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Reviewer thinking applied",
+            "detail": "claude-opus-5-5 / xhigh (jev)",
+            "effort": "xhigh",
+            "model": "claude-opus-5-5",
+            "source": "jev"
+          },
+          {
+            "seq": 3,
+            "at": 1791210036,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Claude consultation started"
+          },
+          {
+            "seq": 4,
+            "at": 1791210038,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider reported an error",
+            "detail": "success"
+          },
+          {
+            "seq": 5,
+            "at": 1791210038,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider attempt exited",
+            "detail": "exit 1"
+          },
+          {
+            "seq": 6,
+            "at": 1791210039,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider unavailable; switching fallback",
+            "detail": "codex"
+          }
+        ],
+        "codex": [
+          {
+            "seq": 66,
+            "at": 1791210509,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Web search completed"
+          },
+          {
+            "seq": 67,
+            "at": 1791210509,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 68,
+            "at": 1791210513,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 69,
+            "at": 1791210612,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 70,
+            "at": 1791210635,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 71,
+            "at": 1791210635,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 72,
+            "at": 1791210712,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 73,
+            "at": 1791210712,
+            "provider": "codex",
+            "kind": "phase",
+            "label": "Consultation completed",
+            "detail": "exit 0"
+          }
+        ]
+      },
+      "partial_result": "Candidate `9853e133` is a defensible consumed-panel falsifier, but remains unqualified. I found two validation gaps and one material integration-test gap.\n\n1. **P1 — “Frozen original authority” does not bind historical truth.**  \n   The seal comparison authenticates roots and requests at [fine_sq8_groups.rs:3331](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3331). Truth validation accepts the new config’s hash and checks its geometry and IDs; the authority flag at [line 3584](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3584) omits truth entirely. Consequently, replacement truth with an updated config hash can still receive historical-authority status.\n\n   **Action:** bind both truth hashes to the [original authenticated paired config](/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/fine/measurement/paired-fine-config.json:1), without opening truth early. Add a replacement-truth rejection check. If the parent owns this binding externally, its admission receipt must demonstrate it; `admit_survival` alone does not.\n\n2. **P2 — Original SQ8 growth after transcoding escapes validation.**  \n   Original EOF is checked at [line 3024](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3024). Subsequent scoring reads authenticated ranges from the retained descriptor at [line 3194](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3194), while pre-truth closure reauthentication checks the new payloads at [line 3498](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3498). Appending to an original between those stages leaves fetched group hashes valid and goes undetected.\n\n   **Action:** recheck exact EOF on both retained originals before truth acquisition. Test growth after successful transcode. This concerns artifact validation; it does not demonstrate biased recall.\n\n3. **Integration evidence gap — Neither 128-query fixture exercises range coalescence.**  \n   Both fixtures contain 135 rows: only nine groups. Thus their 32-range and 256-range covers cannot differ. The genuine build fixture also uses repeated queries and one-hot vectors whose codes collapse to zero under this codec. See [the pipeline test](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:1813), [its source fixture](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:2167), and [the library pipeline fixture](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:4195).\n\n   **Action:** add one bounded pipeline case with more than 32 disjoint selected groups, nontrivial nibble levels, and distinct queries. Assert that added incidental rows participate in both scoring arms and check expected rankings. The standalone cover test establishes geometry but cannot catch a pipeline accidentally scoring the old population.\n\nThe causal comparison itself is sound. Both arms receive identical expanded ranges, query normalization matches the corrected contract, reconstructed norms are recomputed sequentially, and the historical baseline remains separate. Static inspection found no codec/scorer mismatch.\n\nThree scientific limitations remain:\n\n- **Coverage containment does not imply returned-recall improvement.** Additional rows can displace true neighbors under approximate SQ8 scores. Report reference-minus-baseline and SQ4-minus-reference separately; the existing outputs support this decomposition.\n- **The scorer measures reconstructed squared L2.** Quantization changes database norms, so this is an approximation to original cosine retrieval, not exact cosine on reconstructed vectors. Recomputing norms is correct for the frozen arm. The normalized-vector equivalence requires normalized database vectors too. [Faiss metric documentation](https://github.com/facebookresearch/faiss/wiki/MetricType-and-distances)\n- **Thirty-two ranges do not establish lower cost or faster serving.** Recalculating the closed cover metadata gives 2.32×/2.43× more scored rows and 18%/23% more payload bytes for ReLAION/CoHere. The diagnostic additionally expands records and executes two reference arms; its whole-process time cannot represent candidate serving latency.\n\nPrior art narrows the interpretation of failure. Faiss supports trained SQ4 and transformed codecs; RaBitQ changes the representation and distance estimator; DiskANN places graph neighborhoods and full vectors on SSD while retaining compressed vectors in memory. A failure here rejects **nearest-17 refinement with this frozen layout**, not four-bit quantization generally. These alternatives would require separate protocols, not changes to this arm. [Faiss codecs](https://github.com/facebookresearch/faiss/wiki/Vector-codecs), [RaBitQ](https://arxiv.org/abs/2409.09913), [DiskANN](https://proceedings.neurips.cc/paper/2019/file/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Paper.pdf)\n\nI verified the clean candidate revision, both contract source hashes, and `git diff --check`. Native compilation, tests, actual failure receipts, Clippy, complete workspace test-build, observed resource limits, and measured SQ4 recall remain **UNRUN**. Keep the fixed scientific limits unchanged; setup or qualification failures remain INVALID.\n\nNo files, goal, or worker were changed. No Cargo or cloud execution was performed.",
+      "partial_result_truncated": false,
+      "provider_partials": {
+        "claude": "Failed to authenticate: OAuth session expired and could not be refreshed",
+        "codex": "Candidate `9853e133` is a defensible consumed-panel falsifier, but remains unqualified. I found two validation gaps and one material integration-test gap.\n\n1. **P1 — “Frozen original authority” does not bind historical truth.**  \n   The seal comparison authenticates roots and requests at [fine_sq8_groups.rs:3331](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3331). Truth validation accepts the new config’s hash and checks its geometry and IDs; the authority flag at [line 3584](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3584) omits truth entirely. Consequently, replacement truth with an updated config hash can still receive historical-authority status.\n\n   **Action:** bind both truth hashes to the [original authenticated paired config](/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/fine/measurement/paired-fine-config.json:1), without opening truth early. Add a replacement-truth rejection check. If the parent owns this binding externally, its admission receipt must demonstrate it; `admit_survival` alone does not.\n\n2. **P2 — Original SQ8 growth after transcoding escapes validation.**  \n   Original EOF is checked at [line 3024](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3024). Subsequent scoring reads authenticated ranges from the retained descriptor at [line 3194](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3194), while pre-truth closure reauthentication checks the new payloads at [line 3498](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3498). Appending to an original between those stages leaves fetched group hashes valid and goes undetected.\n\n   **Action:** recheck exact EOF on both retained originals before truth acquisition. Test growth after successful transcode. This concerns artifact validation; it does not demonstrate biased recall.\n\n3. **Integration evidence gap — Neither 128-query fixture exercises range coalescence.**  \n   Both fixtures contain 135 rows: only nine groups. Thus their 32-range and 256-range covers cannot differ. The genuine build fixture also uses repeated queries and one-hot vectors whose codes collapse to zero under this codec. See [the pipeline test](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:1813), [its source fixture](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:2167), and [the library pipeline fixture](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:4195).\n\n   **Action:** add one bounded pipeline case with more than 32 disjoint selected groups, nontrivial nibble levels, and distinct queries. Assert that added incidental rows participate in both scoring arms and check expected rankings. The standalone cover test establishes geometry but cannot catch a pipeline accidentally scoring the old population.\n\nThe causal comparison itself is sound. Both arms receive identical expanded ranges, query normalization matches the corrected contract, reconstructed norms are recomputed sequentially, and the historical baseline remains separate. Static inspection found no codec/scorer mismatch.\n\nThree scientific limitations remain:\n\n- **Coverage containment does not imply returned-recall improvement.** Additional rows can displace true neighbors under approximate SQ8 scores. Report reference-minus-baseline and SQ4-minus-reference separately; the existing outputs support this decomposition.\n- **The scorer measures reconstructed squared L2.** Quantization changes database norms, so this is an approximation to original cosine retrieval, not exact cosine on reconstructed vectors. Recomputing norms is correct for the frozen arm. The normalized-vector equivalence requires normalized database vectors too. [Faiss metric documentation](https://github.com/facebookresearch/faiss/wiki/MetricType-and-distances)\n- **Thirty-two ranges do not establish lower cost or faster serving.** Recalculating the closed cover metadata gives 2.32×/2.43× more scored rows and 18%/23% more payload bytes for ReLAION/CoHere. The diagnostic additionally expands records and executes two reference arms; its whole-process time cannot represent candidate serving latency.\n\nPrior art narrows the interpretation of failure. Faiss supports trained SQ4 and transformed codecs; RaBitQ changes the representation and distance estimator; DiskANN places graph neighborhoods and full vectors on SSD while retaining compressed vectors in memory. A failure here rejects **nearest-17 refinement with this frozen layout**, not four-bit quantization generally. These alternatives would require separate protocols, not changes to this arm. [Faiss codecs](https://github.com/facebookresearch/faiss/wiki/Vector-codecs), [RaBitQ](https://arxiv.org/abs/2409.09913), [DiskANN](https://proceedings.neurips.cc/paper/2019/file/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Paper.pdf)\n\nI verified the clean candidate revision, both contract source hashes, and `git diff --check`. Native compilation, tests, actual failure receipts, Clippy, complete workspace test-build, observed resource limits, and measured SQ4 recall remain **UNRUN**. Keep the fixed scientific limits unchanged; setup or qualification failures remain INVALID.\n\nNo files, goal, or worker were changed. No Cargo or cloud execution was performed."
+      },
+      "providers_used": [
+        "claude",
+        "codex"
+      ],
+      "active_provider": "codex",
+      "phase": "Consultation completed",
+      "input_bytes": 1965,
+      "output_bytes": 5632,
+      "elapsed_seconds": 678,
+      "progress": "devbox-consult-stream: provider result success\nReading additional input from stdin...\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)\ndevbox-ask: codex consult still running (4m 30s)\ndevbox-ask: codex consult still running (5m 00s)\ndevbox-ask: codex consult still running (5m 30s)\ndevbox-ask: codex consult still running (6m 00s)\ndevbox-ask: codex consult still running (6m 30s)\ndevbox-ask: codex consult still running (7m 00s)\ndevbox-ask: codex consult still running (7m 30s)\ndevbox-ask: codex consult still running (8m 00s)\ndevbox-ask: codex consult still running (8m 30s)\ndevbox-ask: codex consult still running (9m 00s)\ndevbox-ask: codex consult still running (9m 30s)\ndevbox-ask: codex consult still running (10m 00s)\ndevbox-ask: codex consult still running (10m 30s)\ndevbox-ask: codex consult still running (11m 00s)",
+      "progress_truncated": false,
+      "result": "Candidate `9853e133` is a defensible consumed-panel falsifier, but remains unqualified. I found two validation gaps and one material integration-test gap.\n\n1. **P1 — “Frozen original authority” does not bind historical truth.**  \n   The seal comparison authenticates roots and requests at [fine_sq8_groups.rs:3331](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3331). Truth validation accepts the new config’s hash and checks its geometry and IDs; the authority flag at [line 3584](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3584) omits truth entirely. Consequently, replacement truth with an updated config hash can still receive historical-authority status.\n\n   **Action:** bind both truth hashes to the [original authenticated paired config](/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/fine/measurement/paired-fine-config.json:1), without opening truth early. Add a replacement-truth rejection check. If the parent owns this binding externally, its admission receipt must demonstrate it; `admit_survival` alone does not.\n\n2. **P2 — Original SQ8 growth after transcoding escapes validation.**  \n   Original EOF is checked at [line 3024](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3024). Subsequent scoring reads authenticated ranges from the retained descriptor at [line 3194](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3194), while pre-truth closure reauthentication checks the new payloads at [line 3498](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3498). Appending to an original between those stages leaves fetched group hashes valid and goes undetected.\n\n   **Action:** recheck exact EOF on both retained originals before truth acquisition. Test growth after successful transcode. This concerns artifact validation; it does not demonstrate biased recall.\n\n3. **Integration evidence gap — Neither 128-query fixture exercises range coalescence.**  \n   Both fixtures contain 135 rows: only nine groups. Thus their 32-range and 256-range covers cannot differ. The genuine build fixture also uses repeated queries and one-hot vectors whose codes collapse to zero under this codec. See [the pipeline test](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:1813), [its source fixture](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/bin/hierarchical_semantic_cells.rs:2167), and [the library pipeline fixture](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:4195).\n\n   **Action:** add one bounded pipeline case with more than 32 disjoint selected groups, nontrivial nibble levels, and distinct queries. Assert that added incidental rows participate in both scoring arms and check expected rankings. The standalone cover test establishes geometry but cannot catch a pipeline accidentally scoring the old population.\n\nThe causal comparison itself is sound. Both arms receive identical expanded ranges, query normalization matches the corrected contract, reconstructed norms are recomputed sequentially, and the historical baseline remains separate. Static inspection found no codec/scorer mismatch.\n\nThree scientific limitations remain:\n\n- **Coverage containment does not imply returned-recall improvement.** Additional rows can displace true neighbors under approximate SQ8 scores. Report reference-minus-baseline and SQ4-minus-reference separately; the existing outputs support this decomposition.\n- **The scorer measures reconstructed squared L2.** Quantization changes database norms, so this is an approximation to original cosine retrieval, not exact cosine on reconstructed vectors. Recomputing norms is correct for the frozen arm. The normalized-vector equivalence requires normalized database vectors too. [Faiss metric documentation](https://github.com/facebookresearch/faiss/wiki/MetricType-and-distances)\n- **Thirty-two ranges do not establish lower cost or faster serving.** Recalculating the closed cover metadata gives 2.32×/2.43× more scored rows and 18%/23% more payload bytes for ReLAION/CoHere. The diagnostic additionally expands records and executes two reference arms; its whole-process time cannot represent candidate serving latency.\n\nPrior art narrows the interpretation of failure. Faiss supports trained SQ4 and transformed codecs; RaBitQ changes the representation and distance estimator; DiskANN places graph neighborhoods and full vectors on SSD while retaining compressed vectors in memory. A failure here rejects **nearest-17 refinement with this frozen layout**, not four-bit quantization generally. These alternatives would require separate protocols, not changes to this arm. [Faiss codecs](https://github.com/facebookresearch/faiss/wiki/Vector-codecs), [RaBitQ](https://arxiv.org/abs/2409.09913), [DiskANN](https://proceedings.neurips.cc/paper/2019/file/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Paper.pdf)\n\nI verified the clean candidate revision, both contract source hashes, and `git diff --check`. Native compilation, tests, actual failure receipts, Clippy, complete workspace test-build, observed resource limits, and measured SQ4 recall remain **UNRUN**. Keep the fixed scientific limits unchanged; setup or qualification failures remain INVALID.\n\nNo files, goal, or worker were changed. No Cargo or cloud execution was performed.",
+      "result_truncated": false
+    },
+    {
+      "role": "engineering_critic",
+      "id": "2b142939cca34845",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "fallbacks": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "effort": "",
+      "agent": "borsuk/prod-ready-v9",
+      "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+      "status": "completed",
+      "runner_started": true,
+      "started_at": 1791210035,
+      "timeout_seconds": 1200,
+      "deadline_at": 1791211235,
+      "budget_usd": null,
+      "prompt_preview": "Act as the independent adversarial engineering and release critic. Inspect correctness, failure modes, security, operability, tests, and UX. Prioritize concrete findings with evidence. Do not edit files.\n\nMaterial to critique:\nRead-only hard implementation review BORSUK. Candidate 9853e133df6240d04378fc61050467ee01a3a81d, parent673b303820da91a692f1ce358679e3d78a58717a, worktree /home/rb/worktrees/borsuk-fixed-sq4-native-refinement. ONLY fine_sq8_groups.rs and bin/hierarchical_semantic_cells.rs additive1987lines. Final contract /tmp/borsuk-fixed-sq4-native-refinement-contract.json. Root methodology docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/{preregister.md,research-result.md}; root HEAD3b74d618 correction preserves original once cosine_vector preprocessing. Fixed causal arm SQ8code -> nibble(c+8)/17 ->17*n, sequentialf32 recomputed norm including validzero, unchanged original physical order/group16/PQgraph nominees, exact32 smallest-gap cover16MiB, compare SQ4 and SQ8 on SAME expanded cover, old256SQ8 separate. All128 result/plans sealed and closure reauthenticated BEFORE truth; supervisor required for survival. Inspect concrete correctness, resource preadmission/coexistence/output/EOFgrowth/secureFD/durability/actual failure receipts, independent bitexact numeric and real tiny128 pipeline tests. No Cargo locally/no edits/no cloud. Return actionable defects with exact source references, distinguish scientific mechanism limitations from implementation bugs; do not propose parameter sweeps or reject due solely env. Native compilation/tests UNRUN; root will remote qualify exact source. Research critic assess causal fairness/recall interpretation, engineering critic actual code/test gaps. Preserve current goal and existing same worker.",
+      "prompt_sha256": "74baf6e503d655d53819cbbdf28db62817bbb46bca4ec41e30a42fa5a6876270",
+      "prompt_bytes": 1999,
+      "fingerprint": "1e06ba913d69d3099e1aa362da665412689804c8825c2045a2f8f2ebf2d65989",
+      "evidence": {
+        "git_commit": "3b74d6188666820c5ad1e02f1eeb176aff9f1827",
+        "git_branch": "devbox/prod-ready-v9",
+        "git_dirty": true,
+        "git_status_sha256": "7f911640d3897b79f5b7ac1bc3e7239794cfc8e579d238c5fc8989cb66b79d7d",
+        "worktree_sha256": "59391be552d6a2d21a941fb157fa4cc0ec24d67fa5ad66c9872dacc6885882ab",
+        "worktree_evidence_truncated": true,
+        "active_goal": {
+          "id": "goal-1790540483-1790540483843307105-2322852",
+          "agent": "borsuk/prod-ready-v9",
+          "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+          "status": "queued",
+          "revision": 4,
+          "actor": "devbox",
+          "note": "re-apply delivery failed; prior goal state restored",
+          "created_at": 1790540483,
+          "updated_at": 1790781535
+        }
+      },
+      "previous_fingerprint": "c43c6283a9fc6b0b2aea9851096d2537e3d75ab7e75e85a242a595e5fc751993",
+      "reused": false,
+      "critique_id": "e6c97af66a40437f",
+      "critique_role": "engineering_critic",
+      "systemd_unit": "devbox-consult-2b142939cca34845.service",
+      "pid": 2757716,
+      "pgid": 2757716,
+      "attempt": 1,
+      "attempts": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "attempt_history": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra",
+          "budget_usd": null,
+          "timeout_seconds": 1200,
+          "started_at": 1791210035
+        }
+      ],
+      "exit_code": 0,
+      "finished_at": 1791210729,
+      "event_cursor": 99,
+      "events": [
+        {
+          "seq": 76,
+          "at": 1791210490,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 77,
+          "at": 1791210490,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 78,
+          "at": 1791210500,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 79,
+          "at": 1791210505,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 80,
+          "at": 1791210505,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 81,
+          "at": 1791210593,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 82,
+          "at": 1791210593,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 83,
+          "at": 1791210606,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 84,
+          "at": 1791210606,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 85,
+          "at": 1791210606,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 86,
+          "at": 1791210607,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 87,
+          "at": 1791210607,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 88,
+          "at": 1791210607,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 89,
+          "at": 1791210625,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 90,
+          "at": 1791210630,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 91,
+          "at": 1791210630,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 92,
+          "at": 1791210630,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 93,
+          "at": 1791210630,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 94,
+          "at": 1791210645,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 95,
+          "at": 1791210645,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 96,
+          "at": 1791210659,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 97,
+          "at": 1791210659,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 98,
+          "at": 1791210729,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 99,
+          "at": 1791210729,
+          "provider": "codex",
+          "kind": "phase",
+          "label": "Consultation completed",
+          "detail": "exit 0"
+        }
+      ],
+      "events_truncated": true,
+      "provider_events": {
+        "codex": [
+          {
+            "seq": 92,
+            "at": 1791210630,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 93,
+            "at": 1791210630,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 94,
+            "at": 1791210645,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 95,
+            "at": 1791210645,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 96,
+            "at": 1791210659,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 97,
+            "at": 1791210659,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 98,
+            "at": 1791210729,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 99,
+            "at": 1791210729,
+            "provider": "codex",
+            "kind": "phase",
+            "label": "Consultation completed",
+            "detail": "exit 0"
+          }
+        ]
+      },
+      "partial_result": "Review of **`9853e133`**: one high-priority provenance defect and two test/operability gaps. References below use that frozen revision; the worker now has uncommitted changes, including a prospective truth-binding repair.\n\n1. **P1 — Alternate truth can qualify as the frozen historical panel.**  \n   [Truth validation](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:2760) checks size and digest syntax. [Seal binding](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3331) authenticates roots and requests, but excludes truth. Consequently, [the authority flag](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3584) can remain true with substituted truth.\n\n   A same-sized truth file containing each query’s returned SQ4 IDs would yield perfect recall while retaining the original nominations. Matching config/report hashes and a successful supervisor receipt do not establish historical truth provenance.\n\n   **Fix:** bind strict execution and survival admission to the archived per-dataset truth hashes, preserving relocation freedom. Reject substituted descriptors before opening data. The [archived config]( /home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/fine/measurement/paired-fine-config.json) supplies those identities.\n\n2. **P2 — Numeric fixtures cannot detect forbidden wider norm accumulation.**  \n   The [norm oracle](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3668) uses simple binary fractions. Independent binary32 emulation found **zero differences across its 256 rows plus the wrapper’s 135 rows** when replacing sequential f32 norm arithmetic with f64 arithmetic followed by an f32 cast.\n\n   A distinguishing fixture is `low=[0.1,0.2,0.3]`, `step=[0.01,0.02,0.03]`, reconstructed codes `[17,34,51]`: sequential norm bits are `0x40864744`; wider arithmetic produces `0x40864745`.\n\n   **Fix:** add that exact-bit witness and confirm the forbidden implementation fails it. Current production encoding uses the required sequential f32 arithmetic; this is a regression-test gap.\n\n3. **P2 — Late failure receipts discard actual progress.**  \n   [Invalidation](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:2726) replaces the report with an error-only body and `queries: 0`. For the existing terminal-sync fault at call 267, all 128 results have been sealed and truth has already been read. The receipt loses that distinction, the freeze pin, and available resource counters.\n\n   **Fix:** retain bounded failure context—stage, scored-query count, truth-open state, published bytes, and freeze identity—while keeping `INVALID` and nonzero exit. Extend the existing fault test to assert these facts.\n\nSource inspection supports the intended once-only preprocessing, identical-population comparison, cover containment, and pre-truth output authentication. These findings do not reject SQ4 scientifically or establish production feasibility.\n\nCandidate hashes matched the contract; `git diff --check` passed. No files edited, Cargo/native tests run, cloud work, or worker/goal control performed. Native qualification remains pending.",
+      "partial_result_truncated": false,
+      "provider_partials": {
+        "codex": "Review of **`9853e133`**: one high-priority provenance defect and two test/operability gaps. References below use that frozen revision; the worker now has uncommitted changes, including a prospective truth-binding repair.\n\n1. **P1 — Alternate truth can qualify as the frozen historical panel.**  \n   [Truth validation](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:2760) checks size and digest syntax. [Seal binding](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3331) authenticates roots and requests, but excludes truth. Consequently, [the authority flag](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3584) can remain true with substituted truth.\n\n   A same-sized truth file containing each query’s returned SQ4 IDs would yield perfect recall while retaining the original nominations. Matching config/report hashes and a successful supervisor receipt do not establish historical truth provenance.\n\n   **Fix:** bind strict execution and survival admission to the archived per-dataset truth hashes, preserving relocation freedom. Reject substituted descriptors before opening data. The [archived config]( /home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/fine/measurement/paired-fine-config.json) supplies those identities.\n\n2. **P2 — Numeric fixtures cannot detect forbidden wider norm accumulation.**  \n   The [norm oracle](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3668) uses simple binary fractions. Independent binary32 emulation found **zero differences across its 256 rows plus the wrapper’s 135 rows** when replacing sequential f32 norm arithmetic with f64 arithmetic followed by an f32 cast.\n\n   A distinguishing fixture is `low=[0.1,0.2,0.3]`, `step=[0.01,0.02,0.03]`, reconstructed codes `[17,34,51]`: sequential norm bits are `0x40864744`; wider arithmetic produces `0x40864745`.\n\n   **Fix:** add that exact-bit witness and confirm the forbidden implementation fails it. Current production encoding uses the required sequential f32 arithmetic; this is a regression-test gap.\n\n3. **P2 — Late failure receipts discard actual progress.**  \n   [Invalidation](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:2726) replaces the report with an error-only body and `queries: 0`. For the existing terminal-sync fault at call 267, all 128 results have been sealed and truth has already been read. The receipt loses that distinction, the freeze pin, and available resource counters.\n\n   **Fix:** retain bounded failure context—stage, scored-query count, truth-open state, published bytes, and freeze identity—while keeping `INVALID` and nonzero exit. Extend the existing fault test to assert these facts.\n\nSource inspection supports the intended once-only preprocessing, identical-population comparison, cover containment, and pre-truth output authentication. These findings do not reject SQ4 scientifically or establish production feasibility.\n\nCandidate hashes matched the contract; `git diff --check` passed. No files edited, Cargo/native tests run, cloud work, or worker/goal control performed. Native qualification remains pending."
+      },
+      "providers_used": [
+        "codex"
+      ],
+      "active_provider": "codex",
+      "phase": "Consultation completed",
+      "input_bytes": 1999,
+      "output_bytes": 3370,
+      "elapsed_seconds": 694,
+      "progress": "Reading additional input from stdin...\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)\ndevbox-ask: codex consult still running (4m 30s)\ndevbox-ask: codex consult still running (5m 00s)\ndevbox-ask: codex consult still running (5m 30s)\ndevbox-ask: codex consult still running (6m 00s)\ndevbox-ask: codex consult still running (6m 30s)\ndevbox-ask: codex consult still running (7m 00s)\ndevbox-ask: codex consult still running (7m 30s)\ndevbox-ask: codex consult still running (8m 00s)\ndevbox-ask: codex consult still running (8m 30s)\ndevbox-ask: codex consult still running (9m 00s)\ndevbox-ask: codex consult still running (9m 30s)\ndevbox-ask: codex consult still running (10m 00s)\ndevbox-ask: codex consult still running (10m 30s)\ndevbox-ask: codex consult still running (11m 00s)\ndevbox-ask: codex consult still running (11m 30s)",
+      "progress_truncated": false,
+      "result": "Review of **`9853e133`**: one high-priority provenance defect and two test/operability gaps. References below use that frozen revision; the worker now has uncommitted changes, including a prospective truth-binding repair.\n\n1. **P1 — Alternate truth can qualify as the frozen historical panel.**  \n   [Truth validation](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:2760) checks size and digest syntax. [Seal binding](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3331) authenticates roots and requests, but excludes truth. Consequently, [the authority flag](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3584) can remain true with substituted truth.\n\n   A same-sized truth file containing each query’s returned SQ4 IDs would yield perfect recall while retaining the original nominations. Matching config/report hashes and a successful supervisor receipt do not establish historical truth provenance.\n\n   **Fix:** bind strict execution and survival admission to the archived per-dataset truth hashes, preserving relocation freedom. Reject substituted descriptors before opening data. The [archived config]( /home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/fine/measurement/paired-fine-config.json) supplies those identities.\n\n2. **P2 — Numeric fixtures cannot detect forbidden wider norm accumulation.**  \n   The [norm oracle](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:3668) uses simple binary fractions. Independent binary32 emulation found **zero differences across its 256 rows plus the wrapper’s 135 rows** when replacing sequential f32 norm arithmetic with f64 arithmetic followed by an f32 cast.\n\n   A distinguishing fixture is `low=[0.1,0.2,0.3]`, `step=[0.01,0.02,0.03]`, reconstructed codes `[17,34,51]`: sequential norm bits are `0x40864744`; wider arithmetic produces `0x40864745`.\n\n   **Fix:** add that exact-bit witness and confirm the forbidden implementation fails it. Current production encoding uses the required sequential f32 arithmetic; this is a regression-test gap.\n\n3. **P2 — Late failure receipts discard actual progress.**  \n   [Invalidation](/home/rb/worktrees/borsuk-fixed-sq4-native-refinement/crates/borsuk/src/fine_sq8_groups.rs:2726) replaces the report with an error-only body and `queries: 0`. For the existing terminal-sync fault at call 267, all 128 results have been sealed and truth has already been read. The receipt loses that distinction, the freeze pin, and available resource counters.\n\n   **Fix:** retain bounded failure context—stage, scored-query count, truth-open state, published bytes, and freeze identity—while keeping `INVALID` and nonzero exit. Extend the existing fault test to assert these facts.\n\nSource inspection supports the intended once-only preprocessing, identical-population comparison, cover containment, and pre-truth output authentication. These findings do not reject SQ4 scientifically or establish production feasibility.\n\nCandidate hashes matched the contract; `git diff --check` passed. No files edited, Cargo/native tests run, cloud work, or worker/goal control performed. Native qualification remains pending.",
+      "result_truncated": false
+    }
+  ],
+  "reused": false,
+  "finished_at": 1791210751,
+  "elapsed_seconds": 694,
+  "input_bytes": 1581,
+  "output_bytes": 9002
+}
