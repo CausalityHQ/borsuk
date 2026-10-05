@@ -1,0 +1,8 @@
+Running as unit: borsuk-sq4-glue-clippy-first-green.service; invocation ID: 421ee6eac3fd4d4bb9355f33a1925d33
+PASS actual18 retained metadata, including both78000000B records; no data/GT opens
+PASS SQ4 mock-native: exact CLI; silent exit0; REJECT; late exit2; deadline; config/output drift; no overwrite; scratch; cleanup; full raw/gzip collection/replay. Cgroup/SDK transport/AWS/qualification metadata MOCKED; no native science.
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 7.564s
+             CPU time consumed: 5.205s
+                   Memory peak: 256M (swap: 0B)
