@@ -1,0 +1,15 @@
+PASS delegation model: explicit controllers; unavailable/internal-PID/threaded/shared-parent/missing-interface refusals before exec
+{"binary":{"bytes":3360,"key":"research/semantic-router/20261005/fine-sq8-packing-binary-repair-a0001/artifacts/binaries/hierarchical_semantic_cells","sha256":"57d31c5a1f632e0d45be6b0ddad6a2a031a584bd85bda14c4ae64f1e5128fa76"},"command":["/tmp/fine-pack-check-w8iltdlh/actual-cgroup/binaries/hierarchical_semantic_cells","check-fine-pack","/tmp/fine-pack-check-w8iltdlh/actual-cgroup/native-config.json","4ea41fa3f93e70d5ca32dc535c7457e454dfda86075c425c8a919db7de7f0057","/tmp/fine-pack-check-w8iltdlh/actual-cgroup/screen/report.json"],"config_sha256":"4ea41fa3f93e70d5ca32dc535c7457e454dfda86075c425c8a919db7de7f0057","error":{"message":"dedicated supervisor service required","type":"ValueError"},"process_exit_code":null,"process_started":false,"run_id":"research/hierarchical-cells/20261005/fine-pack-diagnostic-a0001/i-original"}
+
+Traceback (most recent call last):
+  File "/tmp/borsuk-sq4-real-delegation-debug.py", line 14, in <module>
+    m.require=observed;m.self_check(real_cgroup=True)
+                       ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-sq4-diagnostic-a0001-frozen/scripts/launch_fine_pack_diagnostic.py", line 1478, in self_check
+    require(receipt['process_exit_code']==0 and validate_result(actual,config)['valid_diagnostic'],'actual delegated cgroup original process/resources/drain/cleanup')
+    ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/borsuk-sq4-real-delegation-debug.py", line 13, in observed
+    return original(condition,message)
+  File "/home/rb/worktrees/borsuk-sq4-diagnostic-a0001-frozen/scripts/launch_fine_pack_diagnostic.py", line 144, in require
+    raise ValueError(message)
+ValueError: actual delegated cgroup original process/resources/drain/cleanup

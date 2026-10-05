@@ -1,0 +1,18 @@
+{
+  "actual_child_memory_peak_bytes": 7778304,
+  "actual_child_swap_peak_bytes": 0,
+  "actual_cpu_memory_pids_delegation": true,
+  "actual_drain_and_cleanup": true,
+  "environment_root_cause": "Wrong local service name and logging wrapper; dedicated direct Python service topology required by existing unchanged production guard",
+  "invalid_original_local_preflight_preserved": true,
+  "invocation_id": "e1dc4db3b36747ad852e92c35190ca6f",
+  "native_ANN_executed": false,
+  "observed_scope_memory_peak_human": "57.7M",
+  "original_corrected_exit_status": 0,
+  "production_source_change_required": false,
+  "runtime_seconds": 0.912,
+  "schema": "borsuk-sq4-real-delegation-parent-proof-v1",
+  "source_sha256": "4c6739fae2d39c9d0fa21d5c4324f7e876102bb8a68e13347cac0da3c207749b",
+  "swap_peak_bytes": 0,
+  "unit": "fine-pack-supervisor.service"
+}
