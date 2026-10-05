@@ -131,8 +131,8 @@ def configure_sq4():
     # Metadata only: never hydrate or parse a retained input during preflight.
     roster = decode(read(Path(__file__).resolve().parents[1]/SQ4_ROOT/'prospective-input-roster.json'))
     require(roster['schema'] == 'borsuk-sq4-prospective-input-roster-v1'
-            and pin(encoded(roster['inputs'])) == dict(bytes=5175,
-                sha256='1959126f0910746e2b572b305dd4e77a59310e5ee16313ce5178fd36b28c1f3b'), 'SQ4 retained roster pin')
+            and pin(encoded(roster['inputs'])) == dict(bytes=5185,
+                sha256='657f8a5f34e6865d46f9b526e627debb413ab1f1a6ca9d695f47d38d3dd2ffbb'), 'SQ4 retained roster pin')
     INPUT_PINS = tuple((d['destination'], d['bytes'], d['sha256']) for d in roster['inputs'])
     ARTIFACTS = tuple(n for n in ARTIFACTS if not n.startswith('screen/')) + (
         'scratch.json', *(f'qualification/{n}' for n in SQ4_RECEIPTS), *SQ4_OUTPUTS)
@@ -1746,8 +1746,8 @@ sys.exit(2 if fault=='latefailure' else 0)
             dict(dataset=d,root=descriptors[i*8],requests=descriptors[i*8+6],truth=descriptors[i*8+7],truth_width=100)
             for i,d in enumerate(('relaion','cohere'))])
         real['native_config_sha256']=sha(encoded(real['native_config']))
-        require(pin(encoded(real['native_config']).rstrip(b'\n'))==dict(bytes=1695,
-            sha256='771a0c1c8ed2060318b5388e3eed4c6a8dfac0b707687de823079ed8131d10fa'),'exact 1d93036a prospective c2 native config metadata')
+        require(pin(encoded(real['native_config']).rstrip(b'\n'))==dict(bytes=1705,
+            sha256='23defe690a3fc9b193ed6e1cc8b91b58ace57b843cf0adeebaf4e124b6a30b4e'),'exact c2 native config with authenticated sealed request destinations')
         real['inputs']=[dict(destination=p,bytes=n,sha256=h,key='retained/'+str(i)) for i,(p,n,h) in enumerate(retained_pins)]
         real['fixed']['scratch']['input_bytes']=229614200
         original_regular=regular

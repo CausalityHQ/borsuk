@@ -1,0 +1,33 @@
+{
+  "algorithm_and_quality_resource_gates_unchanged": true,
+  "config_sha256": "8a2efaac8e97e42eab9365cf0443d944e31190e9efe006ffecf87d9dedc9f1cb",
+  "minimal_controller_delta": "Only exact INPUT_PINS roster identity updated for the two authenticated original request destinations",
+  "native_config_sha256": "5a983a7c2ce29142fb36ce8e64256ac92afa25e695646d017114517224d693b2",
+  "native_source_and_binary_changed": false,
+  "original_a0001": "Preserved closed INVALID/0queries/truth unopened; not a quality rejection",
+  "original_seal_sha256": "374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62",
+  "production_native_verification_pending": true,
+  "request_path_changes": [
+    {
+      "bytes": 937167,
+      "dataset": "relaion",
+      "from": "/mnt/hierarchical-100k/screen/retained/relaion/requests64",
+      "sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330",
+      "to": "/mnt/hierarchical-100k/screen/fine/requests/relaion/requests64"
+    },
+    {
+      "bytes": 983232,
+      "dataset": "cohere",
+      "from": "/mnt/hierarchical-100k/screen/retained/cohere/requests64",
+      "sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654",
+      "to": "/mnt/hierarchical-100k/screen/fine/requests/cohere/requests64"
+    }
+  ],
+  "requests_bytes_sha256_unchanged": true,
+  "roster_encoded_bytes": 5185,
+  "roster_encoded_sha256": "657f8a5f34e6865d46f9b526e627debb413ab1f1a6ca9d695f47d38d3dd2ffbb",
+  "schema": "borsuk-sq4-sealed-request-path-repair-v1",
+  "scientific_method_changed": false,
+  "source_test_fixture_update": "Only expected serialized native-config bytes/SHA updated for the two corrected paths; old historical fixture remains in Git",
+  "truth_descriptors_unchanged": true
+}

@@ -1,0 +1,17 @@
+{
+  "actual_original_seal": {
+    "bytes": 1109,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/fine/measurement/paired-fine.fine-seal.json",
+    "sha256": "374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62"
+  },
+  "all18_input_keys_bytes_hashes_unchanged": true,
+  "both_full_root_request_descriptors_equal_original_seal": true,
+  "config_sha256": "8a2efaac8e97e42eab9365cf0443d944e31190e9efe006ffecf87d9dedc9f1cb",
+  "native_execution": false,
+  "original_a0001_failure_reproduced_by_metadata": true,
+  "qualified_binary_source_and_caps_unchanged": true,
+  "request_truth_bodies_opened": false,
+  "schema": "borsuk-sq4-actual-sealed-binding-preflight-v1",
+  "stage_destinations_equal_sealed_requests": true,
+  "status": "CLOSED0"
+}

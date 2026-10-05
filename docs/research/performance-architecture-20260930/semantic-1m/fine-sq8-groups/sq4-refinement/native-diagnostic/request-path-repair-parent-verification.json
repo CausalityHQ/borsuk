@@ -1,0 +1,18 @@
+{
+  "actual_sdk_guard": true,
+  "all14_actual_qualification_preflight": true,
+  "config_sha256": "8a2efaac8e97e42eab9365cf0443d944e31190e9efe006ffecf87d9dedc9f1cb",
+  "earlier_stale_selfcheck_config_hash_failure": "Original check 9cb4b4161a8c4d01add38b1af26e2272 rejected old historical literal after two destination corrections; exact fixture identity updated, no gate weakened",
+  "generated_bash_syntax_passed": true,
+  "generated_shell_bytes": 6216,
+  "native_config_sha256": "5a983a7c2ce29142fb36ce8e64256ac92afa25e695646d017114517224d693b2",
+  "observed_memory_peak_human": "256M",
+  "runtime_seconds": 19.761,
+  "science_or_native_execution": false,
+  "source_check_exit_status": 0,
+  "source_check_invocation_id": "2de0775d40d140fdbbd0c3d56dc6ae92",
+  "source_check_original_exec_session": 65481,
+  "source_check_unit": "borsuk-sq4-request-path-repair-check-r1.service",
+  "source_file_sha256": "2f5c1b0ddcef749453eb9b14e87fc5e01f297b61c1ca4a3a8c7eaae979401a55",
+  "swap_peak_bytes": 0
+}
