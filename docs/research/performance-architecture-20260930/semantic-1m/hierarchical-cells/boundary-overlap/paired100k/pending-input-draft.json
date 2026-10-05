@@ -1,0 +1,205 @@
+{
+  "authority_pending": true,
+  "reason": "Prospective root draft only; transport staging/infra canary/helper repair/whole-machine freeze outstanding",
+  "schema": "borsuk-cell-overlap-pair-execution-v1",
+  "run_id": "boundary-overlap-paired100k-a0001",
+  "authority": {
+    "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/retained-input-authority.json",
+    "bytes": 3711,
+    "sha256": "93a6f221e895d400ff217e57cc5188d0aa475146ba94cd68876e41325b02a743"
+  },
+  "qualification": {
+    "pending": false,
+    "directory": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001",
+    "proof": {
+      "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/source-qualification.json",
+      "bytes": 406277,
+      "sha256": "93e69a107dd3fa7e06167b67805636c361c502755fa47d0dc2c0a6f7fe5b59a7"
+    },
+    "terminal": {
+      "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/aws-terminal.json",
+      "bytes": 3210,
+      "sha256": "56411cdcc9896f6ff7d5e340a552f2a1a7a16154903dfd6093535a85b747dfc8"
+    },
+    "launch": {
+      "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/aws-launch.json",
+      "bytes": 366,
+      "sha256": "226b239312459072e4ef539355771e4b47746a9bb2b3a48e454fb30af34d41fa"
+    },
+    "closeout": {
+      "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/aws-closeout.json",
+      "bytes": 136,
+      "sha256": "209dc128df581738777f8bf2ca87766bd770121feb504dc710fdbbae3ebf24c5"
+    }
+  },
+  "binary": {
+    "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/binaries/hierarchical_semantic_cells",
+    "bytes": 6336312,
+    "sha256": "40ccd33199cce09d88936503db02895970a9a90463dc405f8a0c3731ede3fb5b"
+  },
+  "inputs": {
+    "relaion": {
+      "layout": {
+        "manifest.json": {
+          "bytes": 31500,
+          "sha256": "3244e7bbd5e27eb1f3fe52cbddc450d08d45d25256eec98dc942ba42cf2808f1",
+          "path": "/mnt/borsuk-overlap/inputs/relaion/manifest.json"
+        },
+        "directories.bin": {
+          "bytes": 6397659,
+          "sha256": "93c0d23d067d4929d44d1111159c3c46ac74800aba621a344a3cfd3fa8d5fe89",
+          "path": "/mnt/borsuk-overlap/inputs/relaion/directories.bin"
+        },
+        "cells.bin": {
+          "bytes": 98800000,
+          "sha256": "6bb1c1259c3686ec7dfea1100e9162b45ad898c504b261f82979b974aedbf8ae",
+          "path": "/mnt/borsuk-overlap/inputs/relaion/cells.bin"
+        }
+      },
+      "original": {
+        "generation": {
+          "path": "/mnt/borsuk-overlap/inputs/relaion/original/generation",
+          "bytes": 34630,
+          "sha256": "60893e05a256c8f04c633aa600828ba06d2cbc16cd9269f3c713d92b6e7796c9"
+        },
+        "plane": {
+          "path": "/mnt/borsuk-overlap/inputs/relaion/original/plane",
+          "bytes": 651,
+          "sha256": "762eb65ab8a4f6da9b0c96c71c1908e0c9abde4368f0124c879c267b18a8eefe"
+        },
+        "canonical": {
+          "path": "/mnt/borsuk-overlap/inputs/relaion/original/canonical",
+          "bytes": 308000000,
+          "sha256": "c260b7fe0b6a54de98dfba3f2599d272242f724421064ed5ca18c0cd63e6283d"
+        },
+        "order": {
+          "path": "/mnt/borsuk-overlap/inputs/relaion/original/order",
+          "bytes": 800000,
+          "sha256": "22abeb087000ea2978c4fef8e85c2f7fda4e4b22c4e5126ba37a1c19816fab18"
+        },
+        "records": {
+          "path": "/mnt/borsuk-overlap/inputs/relaion/original/records",
+          "bytes": 20000000,
+          "sha256": "624e63de5905210bde24a4e7752573d6811d9fa5142e5b529ff0e9f65054ce83"
+        },
+        "mean": {
+          "path": "/mnt/borsuk-overlap/inputs/relaion/original/mean",
+          "bytes": 3072,
+          "sha256": "197a8ead172a5a41e029c8f0c9d39b981150c69fc3b0367316fb89c920eb1beb"
+        },
+        "sq8": {
+          "path": "/mnt/borsuk-overlap/inputs/relaion/original/sq8",
+          "bytes": 78000000,
+          "sha256": "be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b"
+        }
+      },
+      "requests64": {
+        "bytes": 937167,
+        "sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330",
+        "path": "/mnt/borsuk-overlap/inputs/relaion/requests64"
+      },
+      "truth64": {
+        "bytes": 25600,
+        "sha256": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c",
+        "path": "/mnt/borsuk-overlap/inputs/relaion/truth64"
+      }
+    },
+    "cohere": {
+      "layout": {
+        "manifest.json": {
+          "bytes": 30456,
+          "sha256": "c2bf337290f7713139903f398ac6b4007ed01faf47ff093e7e397b2715b7b4fc",
+          "path": "/mnt/borsuk-overlap/inputs/cohere/manifest.json"
+        },
+        "directories.bin": {
+          "bytes": 6410540,
+          "sha256": "f0df6a5900d6a66263389dfa353167790b18c2b819e09c288d6f218457dbf865",
+          "path": "/mnt/borsuk-overlap/inputs/cohere/directories.bin"
+        },
+        "cells.bin": {
+          "bytes": 98800000,
+          "sha256": "647491734c13391be7ff682a8d8c125e69d317e87b31cd8e7d1ebb9eebee0ef0",
+          "path": "/mnt/borsuk-overlap/inputs/cohere/cells.bin"
+        }
+      },
+      "original": {
+        "generation": {
+          "path": "/mnt/borsuk-overlap/inputs/cohere/original/generation",
+          "bytes": 34667,
+          "sha256": "233226f08d589f4d263c06aef8849ef3d57756c0625a5067608d889b40a270df"
+        },
+        "plane": {
+          "path": "/mnt/borsuk-overlap/inputs/cohere/original/plane",
+          "bytes": 651,
+          "sha256": "310ee747fcdd22adb98c55870e255fbc9a91531241e7bf4bd228828a713557ce"
+        },
+        "canonical": {
+          "path": "/mnt/borsuk-overlap/inputs/cohere/original/canonical",
+          "bytes": 308000000,
+          "sha256": "38304c3b448f2f62b32da8b443bbe52f20ccc63f5472d0e7885d5c268dd7a6df"
+        },
+        "order": {
+          "path": "/mnt/borsuk-overlap/inputs/cohere/original/order",
+          "bytes": 800000,
+          "sha256": "e2314ca14f5aa6f08b02cc328b863c921e55b1461a413ad6d3d66e781ff42d50"
+        },
+        "records": {
+          "path": "/mnt/borsuk-overlap/inputs/cohere/original/records",
+          "bytes": 20000000,
+          "sha256": "f47e344a6a959bfe1e9fe301785410b06667cf07d2bc0386892f510c7f5c6cf8"
+        },
+        "mean": {
+          "path": "/mnt/borsuk-overlap/inputs/cohere/original/mean",
+          "bytes": 3072,
+          "sha256": "b50ffae3e16cc5e155ceee3adffcac0dc04d6812b0a1bb8fc01cbd259b58440a"
+        },
+        "sq8": {
+          "path": "/mnt/borsuk-overlap/inputs/cohere/original/sq8",
+          "bytes": 78000000,
+          "sha256": "c16929252705c831c6846022eec46481fc004f521f0c0814a53d49fece8771e0"
+        }
+      },
+      "requests64": {
+        "bytes": 983232,
+        "sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654",
+        "path": "/mnt/borsuk-overlap/inputs/cohere/requests64"
+      },
+      "truth64": {
+        "bytes": 25600,
+        "sha256": "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355",
+        "path": "/mnt/borsuk-overlap/inputs/cohere/truth64"
+      }
+    }
+  },
+  "resources": {
+    "build": {
+      "cpu_affinity": [
+        0,
+        1
+      ],
+      "memory_max_bytes": 8589934592,
+      "scratch_max_bytes": 8589934592,
+      "swap_bytes": 0,
+      "timeout_seconds": 1200,
+      "max_log_bytes": 16777216,
+      "tasks_max": 512
+    },
+    "query": {
+      "cpu_affinity": [
+        0
+      ],
+      "memory_max_bytes": 536870912,
+      "scratch_max_bytes": 8589934592,
+      "swap_bytes": 0,
+      "timeout_seconds": 300,
+      "max_log_bytes": 16777216,
+      "tasks_max": 512
+    }
+  },
+  "qualification_transport_pending": true,
+  "notes": [
+    "Draft descriptors bind actual completed native proof and both original seven-input identities. Absolute paths must be rebound to authenticated remote staging before freeze.",
+    "Helper resources require outstanding same-worker two-CPU and pre-build request authentication corrections.",
+    "No science launch allowed from this pending draft. Infrastructure canary and whole scratch/cost/deadline freeze remain mandatory."
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "schema": "borsuk-overlap-prospective-staging-ledger-v1",
+  "datasets": {
+    "relaion": {
+      "seven_original_bytes": 406838353,
+      "retained_layout_bytes": 105229159,
+      "canonical_object_key": "research/native-union/20260928/locality-source-layout-a0001/data/relaion/objects/c260b7fe0b6a54de98dfba3f2599d272242f724421064ed5ca18c0cd63e6283d",
+      "sq8_object_key": "research/native-union/20260928/locality-source-layout-a0001/data/relaion/objects/be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b",
+      "canonical_whole_body_verified_now": false,
+      "sq8_whole_body_verified_now": false,
+      "missing_staging": [
+        "plane manifest",
+        "plane records",
+        "remote canonical/order/SQ8 authentication",
+        "all final remote paths"
+      ],
+      "available_small_headers": [
+        "generation",
+        "mean"
+      ],
+      "requests_native_smoke_passed": true
+    },
+    "cohere": {
+      "seven_original_bytes": 406838390,
+      "retained_layout_bytes": 105240996,
+      "canonical_object_key": "research/native-union/20260928/walk-source-http-a0001/data/cohere/objects/38304c3b448f2f62b32da8b443bbe52f20ccc63f5472d0e7885d5c268dd7a6df",
+      "sq8_object_key": "research/native-union/20260928/walk-source-http-a0001/data/cohere/objects/c16929252705c831c6846022eec46481fc004f521f0c0814a53d49fece8771e0",
+      "canonical_whole_body_verified_now": false,
+      "sq8_whole_body_verified_now": false,
+      "missing_staging": [
+        "plane manifest",
+        "plane records",
+        "remote canonical/order/SQ8 authentication",
+        "all final remote paths"
+      ],
+      "available_small_headers": [
+        "generation",
+        "mean"
+      ],
+      "requests_native_smoke_passed": true
+    }
+  },
+  "science_executed": false,
+  "transport_only_no_quality_claim": true
+}
