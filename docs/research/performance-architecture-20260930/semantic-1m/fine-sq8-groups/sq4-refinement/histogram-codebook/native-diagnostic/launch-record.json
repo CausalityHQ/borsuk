@@ -1,0 +1,16 @@
+{
+  "binary_sha256": "21aadaba2dfc5f556760b2ddd9d35b195d332ed53d8e69a0eca3958b41bb07ae",
+  "instance_id": "i-00824fbde5beb5995",
+  "max_payload_bytes": 16777216,
+  "max_payload_ranges": 32,
+  "mean_recall_gate": 0.98,
+  "native_source_commit": "1057e5a6351ccb4c2d33918874e062730fd32225",
+  "original_exec_session": 92660,
+  "p05_hits_gate": 95,
+  "prefix": "research/hierarchical-cells/20261005/histogram-sq4-diagnostic-a0001",
+  "schema": "borsuk-histogram-sq4-scientific-launch-v1",
+  "source_archive_sha256": "0c05519946ca871e4ac119a8f911a76ea53b77917d3f2c3b9bfe68d3f7e24460",
+  "source_commit": "013519190f7a48e1ad16900c6c755c5450044ee5",
+  "startup_separate": true,
+  "status": "RUNNING_UNMEASURED"
+}
