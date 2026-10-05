@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-045de8b2128c20192",
+  "nodes": {
+    "0": {
+      "instance_id": "i-045de8b2128c20192"
+    }
+  },
+  "prefix": "research/hierarchical-cells/20261005/fine-pack-diagnostic-a0001",
+  "source_commit": "3e9fbf989b119967ec2e4443d96ed9a7ebc27960",
+  "source_archive_sha256": "aef4c25f0187408a7f8a3dcb46b87a09a6194b05da9fff553db6b10cc0a6e0b1"
+}

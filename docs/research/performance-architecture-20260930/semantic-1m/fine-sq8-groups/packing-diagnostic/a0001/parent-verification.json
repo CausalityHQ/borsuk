@@ -1,0 +1,81 @@
+{
+  "status": "INVALID",
+  "original_controller_exit": 1,
+  "native_started": false,
+  "native_exit": null,
+  "instance_id": "i-045de8b2128c20192",
+  "instance_terminated_and_waited": true,
+  "root_cause": "PermissionError writing native cgroup cpu.max before Popen; no packing result",
+  "source_commit": "3e9fbf989b119967ec2e4443d96ed9a7ebc27960",
+  "exec_session": 62981,
+  "artifacts": {
+    "native-exit.json.gz": {
+      "bytes": 460,
+      "sha256": "8111b2287e1941c71a13bb6c2866f14e839a4caee88cb224afeebf2e1988a560"
+    },
+    "aws-launch.json": {
+      "bytes": 358,
+      "sha256": "ec81b072d1123176a5f7a751f61388d5fe2c30435a7d5ee8856f973b6e27d8a7"
+    },
+    "aws-user-data.sh": {
+      "bytes": 2120,
+      "sha256": "8e395eb1508f968eb7a09f8380f36e1e0c3ce0a9264b5257547af096ce2c5bdd"
+    },
+    "config.json.gz": {
+      "bytes": 3081,
+      "sha256": "88722b1ccfacf702f64b40bffbf15672e67a6fd63f51eacf4001a6f709bfd31c"
+    },
+    "collection-replay.json": {
+      "bytes": 72,
+      "sha256": "44f3f7c482606bd304220906fc9ce103f9c8ce74beceed2765b06dfd638928e4"
+    },
+    "cleanup.json.gz": {
+      "bytes": 76,
+      "sha256": "8aad07dbaf6ea7c3187b8a27c21a40798ca418e618ae127b337465c237812b99"
+    },
+    "resources.json.gz": {
+      "bytes": 188,
+      "sha256": "91960f39bc2508f22d8d242f1396e6c088e0b0e30953d4db7b951dc5b7db2bc1"
+    },
+    "aws-reservation.json": {
+      "bytes": 7420,
+      "sha256": "00b3613cc7b1cf80887da257d60bad441cd58208a9d6ab1dff7f753695c51336"
+    },
+    "stage-receipt.json.gz": {
+      "bytes": 587,
+      "sha256": "19389622101f467a6f771962f96c1b998cfad71d66620a815d159f104697d39b"
+    },
+    "run-closed.log.gz": {
+      "bytes": 861,
+      "sha256": "da19f1961ea8dc8117354a368e5cabc9509b1922bb0a59674b06cc5cdb73ba57"
+    },
+    "aws-closeout.json": {
+      "bytes": 134,
+      "sha256": "46fbc474f73612620ab9332dca7057afde427df868b96705abe540359265ad0e"
+    },
+    "source-qualification.json.gz": {
+      "bytes": 1899,
+      "sha256": "437c41c2c7aa8ca5ba7f73ac1791fb9da6828a566764e69ad9a4acb4460e2009"
+    },
+    "cpu.txt.gz": {
+      "bytes": 1278,
+      "sha256": "f2e7ff56026489a66a2ee049a5e37335600c5359deaed2daaf58d00d5240941a"
+    },
+    "native-config.json.gz": {
+      "bytes": 1039,
+      "sha256": "12f241e6d13f7ac08d42a464e7777e3e29879360fef718d455b2392fe76d4fdb"
+    },
+    "runtime-abi.json.gz": {
+      "bytes": 167,
+      "sha256": "5615614c5f2d4d5ab4cb8040d346b9210572bbcf5eb777923b7a942b9cb54c7c"
+    },
+    "aws-terminal.json": {
+      "bytes": 1889,
+      "sha256": "d4303a1482f4b31000f61757b2b5979ae37ae384a870b6c402485cb62415b28c"
+    },
+    "binaries/hierarchical_semantic_cells.gz": {
+      "bytes": 2532270,
+      "sha256": "41c72db973c2a8d6ac21eaf226c28b193c610bfbaa75e3e2e70803e94c7489b6"
+    }
+  }
+}
