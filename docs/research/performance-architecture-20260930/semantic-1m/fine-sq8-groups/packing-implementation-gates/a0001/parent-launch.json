@@ -1,0 +1,28 @@
+{
+  "compute_cap_usd": 1.25,
+  "controller_invocation": "17b435adaa3d4f218e4e689df99e6bfa",
+  "controller_unit": "borsuk-fine-pack-qualification-a0001-controller.service",
+  "ebs_s3_allowance_usd": 0.15,
+  "launch": {
+    "instance_id": "i-0897b20fca9ed85ea",
+    "nodes": {
+      "0": {
+        "instance_id": "i-0897b20fca9ed85ea"
+      }
+    },
+    "prefix": "research/semantic-router/20261005/fine-sq8-packing-implementation-a0001",
+    "source_archive_sha256": "89fcab346082372f05b92df2910563ffb82f4badd42cd4954eda3d6358ad6684",
+    "source_commit": "a689ad0a80e4b9595979446f49cc593321d14c3c"
+  },
+  "local_cargo_started": false,
+  "native_source_commit": "8fb6124261310938921aa8e276ae8e70e30418d9",
+  "native_tests_complete": false,
+  "original_session_id": 90234,
+  "preflight_observed_seconds": 0.6361442499328405,
+  "preflight_sha256": "c209479c12ae3b74eeba5ed6101ce0271a2d0915c5b99d81a3e5b788de8a3b51",
+  "quality_performance_measured": false,
+  "source_file_count": 404,
+  "source_identity_sha256": "b19a8d06c6a73fec88e415406945044ed775772c4229c97de6037ed2ad5e3619",
+  "status": "LAUNCHED_UNVERIFIED",
+  "total_cost_measured": false
+}
