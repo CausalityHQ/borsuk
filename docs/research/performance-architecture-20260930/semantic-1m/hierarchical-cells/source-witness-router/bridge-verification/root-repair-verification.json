@@ -1,0 +1,48 @@
+{
+  "schema": "borsuk-source-witness-bridge-root-repair-verification-v1",
+  "specialist_commit": "bcf54986fc4f544328eadf25d6a01bb3fa8515a0",
+  "integrated_commit": "dde3b47c",
+  "source_sha256": "cf157eb2a10ada52ac4648c7c90fea8c19aed85ec27b80c4016abac06e27f58e",
+  "original_session": 18287,
+  "unit": "borsuk-source-witness-bridge-root-repair-check-20261005.service",
+  "invocation_id": "c89a4cc5f4244df3ac5f4083437241a8",
+  "command": [
+    "python3",
+    "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/campaign.py",
+    "--self-check"
+  ],
+  "exit_status": 0,
+  "service_seconds": 5.267,
+  "cpu_seconds": 4.689,
+  "reported_memory_peak": "121.7M",
+  "swap_peak_bytes": 0,
+  "limits": {
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "cpu_percent": 100,
+    "tasks": 512,
+    "runtime_seconds": 120
+  },
+  "closed_unit": {
+    "active_state": "inactive",
+    "main_pid": 0,
+    "control_group": ""
+  },
+  "existing_negative_checks": 44,
+  "new_retention_checks": [
+    "scratch breach drains owned units before scratch admission; reclaims assets and bundles original partial output",
+    "real tiny Python SIGKILL; bootstrap fallback retains original terminal and empty logs; original137 staysINVALID"
+  ],
+  "generated_shell_checks": "success and failure slice-stop paths; pinned venv interpreter; fallback after scratch monitor stop/set+e",
+  "release_review_group": "355f6211f35d484f",
+  "root_reconciliation": {
+    "scratch_breach": "Resolved with deadline-only drain, disposal before byte admission, 4GiB closeout reserve within unchanged16GiB cap.",
+    "killed_controller": "Resolved by bounded bootstrap fallback after original slice stop and verified drain.",
+    "interpreter": "Fallback uses original provisioned venv, not system Python.",
+    "scientific_failure": "Original execution failure remains INVALID; no normalization."
+  },
+  "native_source_changed": false,
+  "native_cloud_internal_cgroups": "MOCKED",
+  "real_ann_or_gt_execution": false,
+  "paid_launch_started": false
+}

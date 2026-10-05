@@ -1,0 +1,27 @@
+{
+  "schema": "borsuk-source-witness-campaign-final-preflight-v1",
+  "config_sha256": "fc66d5fd2a4401b6bb1fd4b7438ad28bb006feb2b25f69737e9b066c767962a2",
+  "source_sha256": "cf157eb2a10ada52ac4648c7c90fea8c19aed85ec27b80c4016abac06e27f58e",
+  "original_session": 55859,
+  "unit": "borsuk-source-witness-campaign-final-preflight-r2-20261005.service",
+  "invocation_id": "3947b58a68d74c0198776fada5649d3a",
+  "command": [
+    "python3",
+    "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/campaign.py",
+    "--preflight"
+  ],
+  "exit_status": 0,
+  "service_seconds": 1.232,
+  "cpu_seconds": 1.22,
+  "reported_memory_peak": "51.2M",
+  "swap_peak_bytes": 0,
+  "code_paths": 40,
+  "source_file_count": 402,
+  "native_identity_sha256": "2e8145e3639b3c4bf93f363dca110ff16f374bee4057e8426738fc02dc51941f",
+  "code_identity_sha256": "295651b699734c4e34717ba827c6959c4a1e9739de3d0c8ff49c780933ad8f7d",
+  "refs_identity_sha256": "5cc7cc1f09da6efbc6cd344bfd9f50165a69f9642d253dbca074e975b25a8152",
+  "source_archive_paths_sha256": "1191ad81e0ab4cd8c39b056b0fe44c108ec49b103d2be0a0a5efe5683045632c",
+  "artifact_roster_sha256": "8e46b8bcfa9d7c9ce6ead9ad8c643f83e084a39cf22ec191d4421cbcca6a0d5d",
+  "runner_unchanged": true,
+  "scope": "Actual metadata/config/source authority; no cloud/native/ANN/GT. One infrastructure canary required before science."
+}

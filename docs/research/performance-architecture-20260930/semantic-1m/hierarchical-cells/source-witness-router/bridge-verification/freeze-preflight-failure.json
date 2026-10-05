@@ -1,0 +1,16 @@
+{
+  "schema": "borsuk-source-witness-freeze-preflight-failure-v1",
+  "original_session": 94036,
+  "unit": "borsuk-source-witness-campaign-final-preflight-20261005.service",
+  "invocation_id": "abffdbef3e34479a902433e0c25883fe",
+  "exit_status": 2,
+  "service_seconds": 1.212,
+  "cpu_seconds": 1.043,
+  "reported_memory_peak": "53.9M",
+  "swap_peak_bytes": 0,
+  "failed_config_sha256": "a9eb736042aeebcecb4dd0703c2f1df79a90a01b75bd5413b697f2b6b6df2e53",
+  "error": "entire consumed script closure",
+  "root_cause": "Root freeze wrote path list instead of required path->SHA256 map.",
+  "repair": "Rebuilt exact40-path SHA256 map; source and native qualification unchanged.",
+  "paid_launch_started": false
+}
