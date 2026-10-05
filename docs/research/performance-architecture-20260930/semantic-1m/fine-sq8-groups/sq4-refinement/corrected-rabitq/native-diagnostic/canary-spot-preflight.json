@@ -1,0 +1,17 @@
+{
+  "active_borsuk_instances": [],
+  "actual_total_cost_measured": false,
+  "ancillary_reservation_usd": 0.15,
+  "availability_zone": "eu-central-1a",
+  "capped_rate_times_machine_limit_usd": 0.08,
+  "compute_reservation_usd": 0.12,
+  "instance_type": "c7i.2xlarge",
+  "machine_seconds": 480,
+  "maximum_rate_usd_per_hour": 0.6,
+  "must_refresh_at_actual_launch": true,
+  "no_launch": true,
+  "quote_timestamp": "2026-10-05T19:00:00+00:00",
+  "schema": "borsuk-corrected-four-bit-canary-spot-preflight-v1",
+  "spot_price_observed_usd_per_hour": 0.2162,
+  "total_reservation_usd": 0.27
+}
