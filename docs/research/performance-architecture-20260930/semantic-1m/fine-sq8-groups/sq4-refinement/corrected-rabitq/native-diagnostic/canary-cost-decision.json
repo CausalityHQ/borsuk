@@ -1,0 +1,25 @@
+{
+  "actual_cost_measured": false,
+  "ann_calls": 0,
+  "compute_cap_usd": 0.12,
+  "cpu_threads": 1,
+  "dataset_body_gets": 0,
+  "ebs_s3_allowance_usd": 0.15,
+  "machine_seconds": 480,
+  "memory_bytes": 268435456,
+  "reason": "Reuse existing audited lifecycle: reservation declares ancillary allowance 0.15 and encrypted delete-on-termination 80GiB gp3 root volume. No shared controller change or reservation interception.",
+  "root_before_launch": [
+    "fresh Spot quote and cost admission",
+    "source-bound cheap fixtures pass",
+    "frozen canary source/config and exact artifact roster",
+    "one original attempt, same instance termination/wait then collection"
+  ],
+  "schema": "borsuk-corrected-four-bit-canary-cost-decision-v1",
+  "scientific_gate_changes": false,
+  "sdk_dispatch_cap": 128,
+  "status": "PROSPECTIVE_NO_LAUNCH",
+  "swap_bytes": 0,
+  "total_reserved_cap_usd": 0.27,
+  "truth_body_gets": 0,
+  "whole_owned_scratch_cap_bytes": 4294967296
+}
