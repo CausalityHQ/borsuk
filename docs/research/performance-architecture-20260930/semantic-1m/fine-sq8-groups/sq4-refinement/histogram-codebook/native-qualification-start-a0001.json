@@ -1,0 +1,44 @@
+{
+  "config_commit": "e06300314d43ec11d9a13f2e6a1b70441eb42814",
+  "config_sha256": "cf3f5c5023b26ea5a0977eb62c5b2ad1c6e54173afddaed1b1cd2fa22d30f4ed",
+  "contract": {
+    "bytes": 23377,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/histogram-codebook/native-source-contract-0cbc2032.json",
+    "sha256": "c1d211e023011311de3d439ec06a41029cfcfe1b60f9418723fd9440a3960d83"
+  },
+  "controller_commit": "2c9dbf97cd3ec3efaaf32e483273c6d7eaba24cc",
+  "controller_log": "/tmp/borsuk-histogram-sq4-native-gates-a0001-controller.log",
+  "immutable_prior_uniform_sq4_reject_preserved": true,
+  "instance_id": "i-055b6795d0785dd56",
+  "native_source_commit": "0cbc20323fb607ce0202f5a365763fa362224d97",
+  "native_source_file_count": 404,
+  "native_source_identity_sha256": "3d1dd1335427dd8a2b61507227a4602b667234e82c61b509237fca6f70296a48",
+  "native_test_results": "pending",
+  "new_required_test_names": 9,
+  "original_controller_session": 60715,
+  "preflight": {
+    "bounded_git_setup_failure": "Git threaded lstat under inherited 256MiB AS cap failed128; exact preflight then passed0 with core.preloadIndex=false/index.threads=1; no native/paid retry",
+    "exact_clean_bundle_and_origin_config": true,
+    "full_source_and_archive_closure": true,
+    "generated_shell_bash_syntax": true,
+    "installed_sdk_conditional_put_model": true
+  },
+  "required_gates": 14,
+  "resource_limits": {
+    "ancillary_allowance_usd": 0.15,
+    "cargo_jobs": 1,
+    "compute_cap_usd": 1.25,
+    "cpu_percent": 200,
+    "machine_seconds": 9000,
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "tasks": 512,
+    "test_seconds": 7200,
+    "test_threads": 1
+  },
+  "schema": "borsuk-histogram-sq4-native-qualification-start-v1",
+  "scientific_results": "not run",
+  "source_archive_sha256": "02a2d3656ed1fd4b69e54277ec102c72b263d234c36290041074545ad822b520",
+  "source_bundle_commit": "6123465cdb654a84346db0583867d936e544c0ff",
+  "status": "RUNNING_NOT_QUALIFIED"
+}

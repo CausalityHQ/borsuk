@@ -1,0 +1,394 @@
+{
+   "api" : {
+      "cli" : "hierarchical_semantic_cells check-fine-histogram-sq4 CONFIG CONFIG_SHA256 NEW_REPORT_JSON",
+      "functions" : {
+         "admit_survival" : "fn admit_survival(body: &[u8], run_id: &str, original_supervisor: &SupervisorReceipt) -> Result<()>",
+         "check_fine_histogram_sq4" : "fn check_fine_histogram_sq4(config_path: &Path, sha: &str, new_report: &Path) -> Result<()>; strict frozen FIRST100k D768 original prefix/seal/truth and CPU1",
+         "decode" : "Codebook::from_bytes(body: &[u8], rows: usize, low: &[f32], step: &[f32], source_sha256: [u8; 32], histogram_sha256: [u8; 32], encoded_plus_decoded_cap: usize) -> Result<Codebook>; caller authenticates body",
+         "diagnose" : "fn diagnose(config: &Config, sha: &str, new_report: &Path) -> Result<()>; explicit caller-authenticated synthetic/tiny fixture, no scientific authority",
+         "direct_score" : "PackedQuery::score_row(&self, book: &Codebook, packed_row: &[u8], ordinal: usize) -> Result<ScoredNominee>; no per-row SQ8 expansion",
+         "encoding_map" : "Codebook::encoding_map(&self) -> Result<Vec<[u8; 256]>>",
+         "fit" : "Codebook::fit(histograms: &[[u32; 256]], rows: usize, low: &[f32], step: &[f32], original_sq8_source_sha256: [u8; 32], caps: &Caps) -> Result<(Codebook, FitReceipt)>",
+         "frozen_mapping" : "Codebook::encode_sq8_row(&self, original_d_plus_12_row: &[u8], low: &[f32], step: &[f32], packed_out: &mut [u8]) -> Result<()>; never retrains; never fits from SQ4",
+         "prepare_query" : "Codebook::prepare_query(&self, query: &[f32], low: &[f32], step: &[f32]) -> Result<PackedQuery>; existing cosine_vector normalization",
+         "serialize" : "Codebook::to_bytes(&self) -> Result<Vec<u8>>",
+         "source_identity" : "fn source_identity() -> String",
+         "training_bytes" : "fn training_bytes(dimensions: usize) -> Result<usize>"
+      },
+      "namespace" : "borsuk::fine_sq8_groups::histogram_sq4_diagnostic",
+      "reexports" : [
+         "Config",
+         "Panel",
+         "Caps",
+         "SupervisorReceipt",
+         "Codebook",
+         "PackedQuery",
+         "FitReceipt"
+      ],
+      "uniform_api_and_results_semantics_preserved" : true
+   },
+   "author" : "Roman Bartusiak <riomus@gmail.com>",
+   "base" : "b55e492a8dd923cfa10a61fb8b6de64e8086e2b2",
+   "branch" : "devbox/histogram-sq4-native-codebook",
+   "closure" : {
+      "all128_complete_plans_rankings_full_rosters_before_either_truth" : true,
+      "books_and_payloads_before_requests" : true,
+      "late_malformed_evidence" : "INVALID with partial stage/query/operation/freeze accounting",
+      "output_exclusive_create_and_durability" : true,
+      "partial_output_accounting" : "Checked chunk accounting is shared by Plane transcoding and Outputs::publish. written_bytes counts actual successful writes and owned-FD length recovered after a short write; null indicates unknown total with known_written_bytes lower bound. published_bytes advances only after whole-source authentication/EOF (Plane) and both file/parent sync. unsealed_output retains current path, attempted_bytes, written_bytes (null on unknown FD metadata). Success never double-counts.",
+      "per_dataset_scientific_gate" : "sum hits >=6272/6400; fourth-smallest hits >=95; all nominees retained; all128 byte/range envelopes. Consumed64 only; no fresh recall/vendor/cold serving qualification.",
+      "pretruth" : "Reauthenticate freeze, payload seal, prefix, all128 results, both payloads, both binary books and generation roots/group hashes, original roots/records/groups/orders; source descriptor EOF rechecked",
+      "pretruth_replacements_and_rank_boundary_gaps" : true,
+      "quality_failure_does_not_stop_remaining_results" : true,
+      "supervisor_authority_required" : true,
+      "terminal_prebody_admission" : "Serialize actual escaped two truth descriptors plus future freeze descriptor and longest future unsealed-output descriptor, with usize::MAX lengths and SHA64. Checked serialized_bytes + 4096 fixed-key/numeric/summary/escaped-error allowance must fit unchanged RESERVE8192. Diagnose admits before fixture root body; run/check admit before original seal/root/training/source bodies, requests and truth. Final actual serialization remains checked.",
+      "training" : "All authenticated original corpus rows only, SHA/group/ID/finite-original-norm/exact-EOF checks, second encoding pass reauthenticates source",
+      "truth_fd_accounting" : "truth_opened records actual secure_open FD acquisition before metadata/type/length validation. truth_body_read_attempted marks entry to body read only after descriptor validation. First-panel truncated truth refuses after all128 freeze, records acquired FD, no body read."
+   },
+   "commit" : "0cbc20323fb607ce0202f5a365763fa362224d97",
+   "commits" : [
+      "499efa02ee9513f34740b9bf11d96fedf77e2e4c",
+      "fd9fd4e2fb96b93c061fd90b810c7d8e0d6fb2f4",
+      "0cbc20323fb607ce0202f5a365763fa362224d97"
+   ],
+   "expected_histogram_source_identity_sha256" : "769929d177fff22c591aae3c3e7a3a263ac30a960c337d8d8ffb2a0be855e91a",
+   "expected_uniform_source_identity_sha256" : "7f7c4022e23309fb9d43a04f266a510ae628682c652939778094cd0483174954",
+   "mandatory_tests" : {
+      "existing_remote_lane_selection" : {
+         "bin" : "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin hierarchical_semantic_cells fine_ -- --test-threads=1",
+         "lib" : "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib fine_sq8_groups:: -- --test-threads=1",
+         "new_named_test_count" : 9,
+         "script_unchanged" : "scripts/launch_native_workspace_execution_spot.py lines272-273; all nine current names selected in existing stages; root owning-stage final contract remains mandatory"
+      },
+      "native_execution_status" : "NOT RUN: assignment explicitly prohibits local Cargo/rustc/native executions",
+      "new_bin" : [
+         "fine_histogram_sq4_strict_cli_dispatch_and_schema_identity",
+         "fine_histogram_sq4_real_native_builder_paired_pipeline_all128_full_rosters_late_invalid"
+      ],
+      "new_lib" : [
+         "fine_histogram_sq4_dp_independent_brute_partitions_and_deviations",
+         "fine_histogram_sq4_interval_cancellation_against_direct_deviations",
+         "fine_histogram_sq4_exhaustive256_mapping_ties_and_uniform_bitwise_parity",
+         "fine_histogram_sq4_scalar_scores_odd_tail_zero_nonunit_near_ties",
+         "fine_histogram_sq4_book_binding_padding_counts_caps_and_numeric_negatives",
+         "fine_histogram_sq4_full128_pipeline_books_requests_truth_closure_and_late_invalid",
+         "fine_histogram_sq4_source_reauthentication_eof_prebody_caps_and_sync"
+      ],
+      "uniform_regression_bin" : [
+         "fine_sq4_strict_cli_dispatch",
+         "fine_sq4_real_native_pipeline_128_seal_before_truth"
+      ],
+      "uniform_regression_lib" : [
+         "fine_sq4_all_codes_numeric_oracle_odd_tail_nonunit_ties",
+         "fine_sq4_exact_cover_superset_and_binding",
+         "fine_sq4_auth_fifo_corruption_caps_and_durability",
+         "fine_sq4_full_pipeline_failure_order_and_sync"
+      ]
+   },
+   "numeric_policy" : {
+      "dp" : "Full deterministic f64 weighted contiguous-partition search over occupied u8 bins, K=min(16,occupied), exact computed-cost ties use smallest predecessor. Checked widened u64 moments from checked u32 histograms; each axis sums to admitted corpus rows.",
+      "interval_negative_allowance" : "64*f64::EPSILON*max(1,abs(V)+abs(M*M/W)); refuse below negative allowance, clamp permitted negative cancellation to zero",
+      "literal_f32_sse_allowance" : "128*f32::EPSILON*uniform17_literal_f32_SSE + 128*(f32::EPSILON^2)*max(1,literal_f32_source_energy); all constants and literal statistics recorded before query/truth reads",
+      "mapping" : "All256 exhaustive closest stored f32 center by f64 distance, smaller center index on exact tie",
+      "recall_inferred_from_mse" : false,
+      "score" : "shift += q[j]*low[j]; qnorm += q[j]*q[j]; weight[j]=q[j]*step[j]; shift -= qnorm/2; inner += center[j][nibble]*weight[j]; score=norm-2*(inner+shift), sequential f32, no FMA/reassociation/norm division"
+   },
+   "owned_files" : [
+      {
+         "bytes" : 341115,
+         "path" : "crates/borsuk/src/fine_sq8_groups.rs",
+         "sha256" : "a94646f78e718dcd1631299fd24518e85d2f31210e2f63c0ad2243fb7498742e"
+      },
+      {
+         "bytes" : 217327,
+         "path" : "crates/borsuk/src/bin/hierarchical_semantic_cells.rs",
+         "sha256" : "535bf7abb98bde91d17ab8ebc397ec1571f9c01d2f465420b050f89ec22a216e"
+      }
+   ],
+   "parent_delivery" : {
+      "from" : "borsuk/histogram-sq4-native-codebook",
+      "message_id" : "1791226711882061028-944849",
+      "resend" : false,
+      "status" : "durably_deferred_recipient_queue_full",
+      "to" : "borsuk/prod-ready-v9",
+      "tool_status" : "queued"
+   },
+   "parent_delivery_history" : [
+      {
+         "from" : "borsuk/histogram-sq4-native-codebook",
+         "message_id" : "1791225170571655027-944849",
+         "resend" : false,
+         "status" : "queued",
+         "to" : "borsuk/prod-ready-v9"
+      },
+      {
+         "from" : "borsuk/histogram-sq4-native-codebook",
+         "message_id" : "1791225745865638906-944849",
+         "resend" : false,
+         "status" : "queued",
+         "to" : "borsuk/prod-ready-v9"
+      }
+   ],
+   "parent_disposition" : "HOLD SAME worker. Do not complete/archive, merge/push, freeze science or run optional edits here; root owns remote qualification, critiques, experiment, integration and disposition.",
+   "parent_required_gates" : [
+      {
+         "command" : "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib fine_sq8_groups:: -- --nocapture",
+         "name" : "affected_library_tests",
+         "required_exit" : 0
+      },
+      {
+         "command" : "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin hierarchical_semantic_cells -- --nocapture",
+         "name" : "affected_actual_cli_and_builder_tests",
+         "required_exit" : 0
+      },
+      {
+         "command" : "env CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk --bin hierarchical_semantic_cells",
+         "name" : "release_binary",
+         "required_exit" : 0
+      },
+      {
+         "command" : "env CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+         "name" : "workspace_clippy_correctness_and_suspicious",
+         "required_exit" : 0
+      },
+      {
+         "command" : "env -u BORSUK_TEST_BUILD_COMMAND CARGO_BUILD_JOBS=1 BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+         "name" : "actual_workspace_test_build_shim_unset",
+         "required_exit" : 0,
+         "shim_must_be_unset" : true
+      }
+   ],
+   "reconciliation_followup" : {
+      "authorizing_continuation" : "immediate-1791225838980116095-944849",
+      "codec_api_schemas_layout_algorithm_scientific_arm_unchanged" : true,
+      "commit" : "0cbc20323fb607ce0202f5a365763fa362224d97",
+      "immutable_review_files_read" : [
+         "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/histogram-codebook/source-review-499efa-research.md",
+         "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/histogram-codebook/source-review-499efa-engineering.md",
+         "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/histogram-codebook/source-review-499efa-receipt.json"
+      ],
+      "immutable_reviews_read_commit" : "803dbd1c4a2bff0efbdaf2c1a49c9876290d1787",
+      "native_status" : "UNVERIFIED; no local Cargo/rustc/native/tests/release/Clippy/cloud/reviews/children. Parent remote qualification required on exact final source identity.",
+      "new_named_tests" : false,
+      "repairs" : [
+         "Nine new tests renamed to fine_histogram_sq4_*; existing score-oracle body preserved exactly from fd9fd4e2.",
+         "Reusable core checked row count broadened to u32::MAX; existing numeric test adds histogram-only100M roundtrip/admission, u32::MAX header/count and sum overflow cases.",
+         "Shared partial output accounting; existing full128 test injects a later second-pass group failure after one write and checks actual positive bytes/context, no requests/truth/seal.",
+         "Existing prebody test injects shared publisher short write and asserts FD length3, written3, attempted6, published0, unsealed path.",
+         "Truth acquisition recorded before descriptor length validation; existing full128 test truncates first-panel truth and checks128 frozen/no truth-body read.",
+         "Terminal metadata admitted before source bodies with escaped JSON cost; existing prebody test adds legal ~3KiB ASCII and quote/backslash path cases, bounded INVALID and no root/source/prefix/request/truth reads."
+      ],
+      "retained_parent_messages_read" : [
+         "1791223116462379692-2278566",
+         "1791223566939820660-2278566",
+         "1791225310350926532-944849",
+         "1791225454982362894-944849",
+         "1791225672271436070-944849",
+         "1791225762305065104-944849"
+      ],
+      "reviewed_candidate" : "499efa02ee9513f34740b9bf11d96fedf77e2e4c"
+   },
+   "resources" : {
+      "backpointer_bytes" : 8738,
+      "bins_and_axis_map_stack_bytes" : 512,
+      "both_training_passes_and_dp_guarded" : true,
+      "core_fit_max_rows" : 4294967295,
+      "core_vs_diagnostic_rows" : "Reusable codebook fits count totals in 1..=u32::MAX with checked u64 sums and checked u32 header casts; count histograms/scratch remain N-independent. Actual paired diagnostic stays strict FIRST100k/D768/consumed64. Histogram-only 100M and u32::MAX count assertions allocate no corpus and confer no runtime, recall or scale qualification.",
+      "cpu_threads" : 1,
+      "cumulative_operations_and_deadline" : true,
+      "d768_100m_packed_body_projection_bytes_per_generation" : 39600000000,
+      "d768_active_count_bytes" : 768,
+      "d768_center_bytes" : 49152,
+      "d768_encoding_map_bytes" : 196608,
+      "d768_histogram_bytes" : 786432,
+      "d768_pair_retained_book_bytes" : 99840,
+      "d768_retained_book_bytes" : 49920,
+      "d768_stream_group_buffers_bytes" : 18816,
+      "d768_training_peak_payload_bound" : 1726666,
+      "diagnostic_dimensions" : 768,
+      "diagnostic_rows" : 100000,
+      "dp_rows_bytes" : 4112,
+      "encoded_decoded_allowance_bytes" : 131072,
+      "exact_owned_vec_capacity_checks" : true,
+      "max_dimensions" : 768,
+      "measured_rss_claim" : false,
+      "model" : "64MiB fixed + 16*prefix_bytes + 16*largest_request_bytes + 64*N + N*(12+ceil(D/2)+12+D+256) + training_bytes(D) + 2*65*D; existing uniform model retained conservatively for matched SQ8 scorer",
+      "packed_d768_row_bytes" : 396,
+      "per_query_payload_ranges_max" : 32,
+      "per_query_verified_payload_bytes_max" : 16777216,
+      "prefix_stack_bytes" : 6168,
+      "reused_interval_table_bytes" : 524288,
+      "router_pins_and_runtime_additional" : true,
+      "startup" : "Each generation separately reopens/authenticates generation root, binary book and group-hash object (3 object reads); report book bytes/reads separately plus total generation startup bytes/reads/time. Local descriptor reads, not measured physical S3 GETs.",
+      "swap_bytes" : 0,
+      "total_cold_get_claim" : false,
+      "training_scratch_retained" : false,
+      "updates_gc_integrated" : false
+   },
+   "schema" : "borsuk-histogram-sq4-source-contract-v1",
+   "schemas" : {
+      "artifact_fields" : [
+         "path",
+         "bytes",
+         "sha256"
+      ],
+      "binary" : {
+         "axis" : "active_count_u8 + sixteen bin-coordinate f32 centers; strictly ordered active centers; remaining centers duplicate the last active center bitwise",
+         "bytes_formula" : "144 + 65*D",
+         "d768_bytes" : 50064,
+         "endianness" : "little",
+         "header" : "magic8 + dimensions_u32 + training_rows_u32 + source_sha32 + coefficient_sha32 + histogram_sha32 + trainer_sha32",
+         "header_bytes" : 144,
+         "magic" : "BORSH401",
+         "max_bytes" : 65536
+      },
+      "caps_fields" : [
+         "memory_bytes",
+         "output_bytes",
+         "deadline_seconds",
+         "operations",
+         "cpu_threads",
+         "swap_bytes"
+      ],
+      "codec" : "borsuk-sq4-histogram16-original-coefficients-v1",
+      "config" : "borsuk-histogram-sq4-config-v1",
+      "config_fields" : [
+         "schema",
+         "source_identity_sha256",
+         "panels",
+         "original_seal",
+         "prefix",
+         "caps"
+      ],
+      "freeze" : "borsuk-histogram-sq4-freeze-v1",
+      "generation" : "borsuk-histogram-sq4-generation-v1",
+      "invalid_receipt_additional_fields" : [
+         "truth_body_read_attempted",
+         "published_bytes",
+         "written_bytes",
+         "known_written_bytes",
+         "unsealed_output"
+      ],
+      "output_names" : "REPORT.histogram-sq4-{i}.bin; REPORT.histogram-sq4-{i}.bin-book.bin; REPORT.histogram-sq4-{i}.bin-groups.bin; REPORT.histogram-sq4-{i}.bin-root.json; REPORT.histogram-sq4-payloads.json; REPORT.histogram-sq4-prefix.jsonl; REPORT.histogram-sq4-result-{0..127}.json; REPORT.histogram-sq4-freeze.json",
+      "panel_fields" : [
+         "dataset",
+         "root",
+         "requests",
+         "truth",
+         "truth_width"
+      ],
+      "payload_seal" : "borsuk-histogram-sq4-payload-seal-v1",
+      "query" : "borsuk-histogram-sq4-query-v1",
+      "report" : "borsuk-histogram-sq4-report-v1",
+      "rows" : "i64 ID + sequential-f32 recomputed squared norm + ceil(D/2) packed nibbles, low nibble first; unused odd high nibble must be zero",
+      "trainer" : "occupied-u8-weighted-contiguous-f64-dp-smallest-predecessor-v1",
+      "unknown_config_fields_rejected" : true,
+      "unsealed_output_fields" : [
+         "path",
+         "attempted_bytes",
+         "written_bytes"
+      ]
+   },
+   "source_closure" : {
+      "crates/borsuk/src/bin/hierarchical_semantic_cells.rs" : {
+         "bytes" : 217327,
+         "sha256" : "535bf7abb98bde91d17ab8ebc397ec1571f9c01d2f465420b050f89ec22a216e"
+      },
+      "crates/borsuk/src/budgeted_page_rank.rs" : {
+         "bytes" : 15471,
+         "sha256" : "19509a9dccdd5354fc9d6e8018491167bfc18145b9fe65b3c51df895a411ed36"
+      },
+      "crates/borsuk/src/centroid_hnsw.rs" : {
+         "bytes" : 114971,
+         "sha256" : "2b70546426266d189fb440bcd66620bad2575c7fd8c985a16eaa56c11566077a"
+      },
+      "crates/borsuk/src/exact_sq8_nominee.rs" : {
+         "bytes" : 10367,
+         "sha256" : "09c253558ead184e9a3208fb4ff477387997ba809fe89bec747f6a4924aedcc2"
+      },
+      "crates/borsuk/src/fine_sq8_groups.rs" : {
+         "bytes" : 341115,
+         "sha256" : "a94646f78e718dcd1631299fd24518e85d2f31210e2f63c0ad2243fb7498742e"
+      },
+      "crates/borsuk/src/hierarchical_semantic_cells.rs" : {
+         "bytes" : 368622,
+         "sha256" : "0330e32270e5b6bc04f8bcd0cbbac6cceff6ef6989ec7f72cd1f9b9dd40211c2"
+      },
+      "crates/borsuk/src/lib.rs" : {
+         "bytes" : 43257,
+         "sha256" : "c44444884ec930f275fcfd34cced262057728be629d8dec31991b5788f425311"
+      },
+      "crates/borsuk/src/pq64_nominee.rs" : {
+         "bytes" : 28434,
+         "sha256" : "d76d2232b273f5e8b9095ee0ca5f788aa1cbd9d7d5dc19c88a7705298c902bf5"
+      },
+      "crates/borsuk/src/resident_vector_graph.rs" : {
+         "bytes" : 66097,
+         "sha256" : "c62459b45caeaaa798b16b24b88180ad6d4dc5bdd554cd804e6d6b354eb3b79d"
+      },
+      "crates/borsuk/src/returned_sq8.rs" : {
+         "bytes" : 17499,
+         "sha256" : "17531e7f09554927aee5533926e707c2e34430d002bf66f7e2ae4f1f325a3c63"
+      },
+      "crates/borsuk/src/sq8_page_authority.rs" : {
+         "bytes" : 14674,
+         "sha256" : "e4b34461509c78ca558f49a0ff11151dc1454589f472a5911913b5dbcea9af23"
+      },
+      "crates/borsuk/src/sq8_source.rs" : {
+         "bytes" : 15552,
+         "sha256" : "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795"
+      }
+   },
+   "source_identity_note" : "Independent source-byte hash only; parent must confirm the compiled Rust source_identity() on the exact qualification revision.",
+   "status" : "UNVERIFIED_SOURCE_COMMIT_HOLD_SAME_WORKER",
+   "test_followup" : {
+      "borrowed_rule_query" : "[1 + f32::EPSILON, 0, -0]",
+      "changed_file" : "crates/borsuk/src/fine_sq8_groups.rs",
+      "commit" : "fd9fd4e2fb96b93c061fd90b810c7d8e0d6fb2f4",
+      "current_name" : "fine_histogram_sq4_scalar_scores_odd_tail_zero_nonunit_near_ties",
+      "f64_direct_distance_sanity_retained" : true,
+      "independent_oracle" : "Manual f64 normalization with norm-squared within 1e-6 of 1 borrowing original f32 values (including signed zero); stored norm and independent nibble/center decode; sequential-f32 shift, weights, qnorm, inner, score. Exact per-row ID+scorebits and full sorted ID+scorebits roster versus production.",
+      "learned_near_tie" : {
+         "exact_score_id_ties" : "IDs 2/8 share one vector and scorebits; IDs 3/9 share the other vector and scorebits.",
+         "expected_ids" : [
+            2,
+            8,
+            3,
+            9
+         ],
+         "expected_positive_score_gap_ulps_max" : 4,
+         "expected_positive_score_gap_ulps_min" : 1,
+         "low" : "[0, 0]",
+         "original_bin_pairs" : "[(0,0), (16,0)] decode to distinct learned fractional-center vectors; duplicated each with independent IDs.",
+         "query" : "[31/2048 + 1/65536, -1]",
+         "step" : "[1/1024, 1/8]",
+         "training" : "Two per-axis histograms with one count in every u8 bin, K16; assert trained stored centers 7.5 and 23.5."
+      },
+      "native_execution_status" : "NOT RUN; root must qualify this exact commit and compile-bound source identity remotely.",
+      "original_name" : "histogram_sq4_scalar_scores_odd_tail_zero_nonunit_near_ties",
+      "prior_checkpoint" : "499efa02ee9513f34740b9bf11d96fedf77e2e4c",
+      "scope" : "Only this existing inline test changed; production/API/codec/policy/resources unchanged.",
+      "uniform17_production_parity_test_unchanged" : "fine_histogram_sq4_exhaustive256_mapping_ties_and_uniform_bitwise_parity"
+   },
+   "worker_verification" : {
+      "commit_owned_file_count" : 2,
+      "compile_test_release_clippy_not_run" : true,
+      "control_file_edited" : false,
+      "followup_git_diff_check_exit" : 0,
+      "followup_rust_syntax_parse_lib_exit" : 0,
+      "formatter_limits" : "systemd user scope MemoryMax=256M, MemorySwapMax=0, CPUQuota=100%, taskset one allowed CPU, timeout55s, rustfmt --edition2024 --config skip_children=true --emit stdout; new regions only applied",
+      "git_diff_check_exit" : 0,
+      "git_worktree_clean" : true,
+      "no_attribution_trailers" : true,
+      "pushed_or_merged" : false,
+      "real_data_truth_network_cloud_consults_reviews_children_not_run" : true,
+      "reconciled_git_diff_check_exit" : 0,
+      "reconciled_source_syntax_parse_bin_exit" : 0,
+      "reconciled_source_syntax_parse_lib_exit" : 0,
+      "rust_syntax_parse_bin_exit" : 0,
+      "rust_syntax_parse_lib_exit" : 0,
+      "score_oracle_body_preserved_exactly_since_fd9" : true,
+      "source_only" : true
+   },
+   "worktree" : "/home/rb/worktrees/borsuk-histogram-sq4-native-codebook"
+}
