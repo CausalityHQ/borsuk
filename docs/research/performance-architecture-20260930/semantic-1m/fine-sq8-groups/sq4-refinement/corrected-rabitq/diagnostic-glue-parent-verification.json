@@ -1,0 +1,18 @@
+{
+  "child_commit": "5bd7fb891e8d33322fab8a89a5054e00293baf85",
+  "integrated_commit": "af8d8ce918d8499b8a74292b4953d4c96fc17bd8",
+  "native_qualification": "PENDING original exec83229 i-0792fe6e3a68fcb11",
+  "observed_original_service": {
+    "ExecMainStatus": 0,
+    "MainPID": 0,
+    "Result": "success",
+    "unit": "borsuk-corrected-glue-all-modes-final.service"
+  },
+  "paid_launch": false,
+  "python_ast_parse": true,
+  "resource_numbers": "worker contract and retained systemd journal; original peak counters no longer available after service collection",
+  "schema": "borsuk-corrected-diagnostic-glue-parent-verification-v1",
+  "science": "UNRUN",
+  "source_byte_equality": true,
+  "source_sha256": "c76397b802ff33ad5f6e74433844d5b879c9bfcc92818e4bfee0edca61c50ec3"
+}
