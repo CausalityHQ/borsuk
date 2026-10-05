@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0792fe6e3a68fcb11",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0792fe6e3a68fcb11"
+    }
+  },
+  "prefix": "research/semantic-router/20261005/corrected-four-bit-implementation-a0001",
+  "source_commit": "a80d423bd2c5ba19e7beafaac6865b5c61cad42f",
+  "source_archive_sha256": "52a84f6218f6e3cc4b760d98d4fc828597a331f7614906b2a03e14dbcbd23f65"
+}
