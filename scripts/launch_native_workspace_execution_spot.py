@@ -262,10 +262,10 @@ FINE_SQ8_REQUIRED_TESTS = {
     ),
 }
 FINE_SQ8_STAGES = tuple((name, command.split()) for name, command in (
+    ('fine-sq8-bin-tests', 'cargo test --locked -p borsuk --bin hierarchical_semantic_cells fine_ -- --test-threads=1'),
     ('fine-sq8-tests', 'cargo test --locked -p borsuk --lib fine_sq8_groups:: -- --test-threads=1'),
     ('pq-codes-graph-tests', 'cargo test --locked -p borsuk --lib resident_vector_graph::bounded_pq_tests -- --test-threads=1'),
     ('source-pq-tests', 'cargo test --locked -p borsuk --lib pq64_nominee::source_codes_tests -- --test-threads=1'),
-    ('fine-sq8-bin-tests', 'cargo test --locked -p borsuk --bin hierarchical_semantic_cells fine_ -- --test-threads=1'),
     ('graph-regressions', 'cargo test --locked -p borsuk --lib resident_vector_graph::tests -- --test-threads=1'),
     ('pq-regressions', 'cargo test --locked -p borsuk --lib pq64_nominee::tests -- --test-threads=1'),
     ('page-cover-regressions', 'cargo test --locked -p borsuk --lib budgeted_page_rank::tests -- --test-threads=1'),
@@ -545,9 +545,9 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
 
 
     if fine_sq8:
-        ROOT = semantic.ROOT.parent/'semantic-1m/fine-sq8-groups/packing-implementation-gates'
+        ROOT = semantic.ROOT.parent/'semantic-1m/fine-sq8-groups/packing-implementation-gates/binary-repair'
         CONFIG = ROOT/'config.json'
-        TOKEN_PREFIX = 'fine-sq8-packing-implementation-'
+        TOKEN_PREFIX = 'fine-sq8-packing-binary-repair-'
         PREFIX = 'research/semantic-router/20261005/' + TOKEN_PREFIX
         TAG = 'borsuk-fine-sq8-implementation'
         SCHEMA = 'borsuk-fine-sq8-implementation-gates-spot-v1'
@@ -2243,7 +2243,7 @@ def _fine_sq8_self_check():
         assert 'fine_sq8' in inspect.signature(function).parameters
     with execution_mode(fine_sq8=True):
         assert FINE_SQ8 and MINIMAL_ARCHIVE and not CELL_OVERLAP
-        assert str(ROOT).endswith('semantic-1m/fine-sq8-groups/packing-implementation-gates')
+        assert str(ROOT).endswith('semantic-1m/fine-sq8-groups/packing-implementation-gates/binary-repair')
         assert mode_flag() == ' --fine-sq8-implementation'
         assert CONFIG_SCHEMA == FIXED['schema'] == 'borsuk-fine-sq8-implementation-gates-v1'
         assert SCHEMA == 'borsuk-fine-sq8-implementation-gates-spot-v1'

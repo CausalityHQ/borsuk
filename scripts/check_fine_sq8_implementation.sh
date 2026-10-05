@@ -43,10 +43,11 @@ run_stage() {
   return "$status"
 }
 
+# Check the previously failing binary layer first; retain all assurance stages.
+run_stage fine-sq8-bin-tests cargo test --locked -p borsuk --bin hierarchical_semantic_cells fine_ -- --test-threads=1
 run_stage fine-sq8-tests cargo test --locked -p borsuk --lib fine_sq8_groups:: -- --test-threads=1
 run_stage pq-codes-graph-tests cargo test --locked -p borsuk --lib resident_vector_graph::bounded_pq_tests -- --test-threads=1
 run_stage source-pq-tests cargo test --locked -p borsuk --lib pq64_nominee::source_codes_tests -- --test-threads=1
-run_stage fine-sq8-bin-tests cargo test --locked -p borsuk --bin hierarchical_semantic_cells fine_ -- --test-threads=1
 run_stage graph-regressions cargo test --locked -p borsuk --lib resident_vector_graph::tests -- --test-threads=1
 run_stage pq-regressions cargo test --locked -p borsuk --lib pq64_nominee::tests -- --test-threads=1
 run_stage page-cover-regressions cargo test --locked -p borsuk --lib budgeted_page_rank::tests -- --test-threads=1
