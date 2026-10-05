@@ -1,0 +1,41 @@
+{
+  "datasets": {
+    "cohere": {
+      "matches_original_builder_generation": true,
+      "original_generation": {
+        "bytes": 34667,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/original-generation-inputs/cohere-generation.json",
+        "sha256": "233226f08d589f4d263c06aef8849ef3d57756c0625a5067608d889b40a270df"
+      },
+      "original_terminal_artifact": "screen/retained/cohere/generation.json",
+      "retained_layout": {
+        "bytes": 30456,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/a0001/screen/retained/cohere/partitioner/manifest.json",
+        "sha256": "c2bf337290f7713139903f398ac6b4007ed01faf47ff093e7e397b2715b7b4fc"
+      }
+    },
+    "relaion": {
+      "matches_original_builder_generation": true,
+      "original_generation": {
+        "bytes": 34630,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/original-generation-inputs/relaion-generation.json",
+        "sha256": "60893e05a256c8f04c633aa600828ba06d2cbc16cd9269f3c713d92b6e7796c9"
+      },
+      "original_terminal_artifact": "screen/retained/relaion/generation.json",
+      "retained_layout": {
+        "bytes": 31500,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/a0001/screen/retained/relaion/partitioner/manifest.json",
+        "sha256": "3244e7bbd5e27eb1f3fe52cbddc450d08d45d25256eec98dc942ba42cf2808f1"
+      }
+    }
+  },
+  "large_inputs_authenticated": false,
+  "native_replay_executed": false,
+  "schema": "borsuk-boundary-overlap-original-generation-recovery-v1",
+  "scientific_measurement_executed": false,
+  "terminal": {
+    "bytes": 6112,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/constrained-split/falsifier/a0002/aws-terminal.json",
+    "sha256": "d2d66b59e6a68cbc9870e11ac814ddb767e3d9328ce021f3b421a1be408ec71d"
+  }
+}
