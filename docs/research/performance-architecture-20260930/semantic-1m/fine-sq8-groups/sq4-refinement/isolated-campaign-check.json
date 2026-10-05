@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-sq4-campaign-isolation-check-v1",
+  "controller_sha256": "7ac93dded1fda444ded2a7d99591a0f584f7d2c9ba86ed343f303046ba3cbd89",
+  "historical_config_modified": false,
+  "new_root": "semantic-1m/fine-sq8-groups/sq4-refinement/implementation-gates",
+  "failed_original": {
+    "unit": "borsuk-sq4-isolated-campaign-check-20261005",
+    "exit_status": 1,
+    "reason": "self-check retained historical ROOT suffix assertion; no Cargo or cloud"
+  },
+  "repaired_original": {
+    "unit": "borsuk-sq4-isolated-campaign-check-r1-20261005",
+    "invocation": "ffa454347c37448f8fd628345d804fcf",
+    "exit_status": 0,
+    "runtime_seconds": 2.166,
+    "cpu_seconds": 2.145,
+    "swap_bytes": 0
+  },
+  "scope": "Python qualification mocks only; Rust and AWS unrun"
+}
