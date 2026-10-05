@@ -175,6 +175,10 @@ FINE_SQ8_STAGE_SCHEMA = 'borsuk-fine-sq8-implementation-stage-v1'
 # Exact target-qualified names from the final native sibling contract; source SHA is root-owned.
 FINE_SQ8_REQUIRED_TESTS = {
     'fine-sq8-tests': (
+        'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_all_codes_numeric_oracle_odd_tail_nonunit_ties',
+        'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_exact_cover_superset_and_binding',
+        'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_auth_fifo_corruption_caps_and_durability',
+        'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_full_pipeline_failure_order_and_sync',
         'fine_sq8_groups::pack_diagnostic::tests::pack_affinity_matches_exhaustive_ties',
         'fine_sq8_groups::pack_diagnostic::tests::pack_tail_bijection_and_cover_match_brute',
         'fine_sq8_groups::pack_diagnostic::tests::pack_graph_binding_corruption_caps',
@@ -197,6 +201,8 @@ FINE_SQ8_REQUIRED_TESTS = {
         'pq64_nominee::source_codes_tests::source_fit_is_ordinal_deterministic_and_codes_only',
     ),
     'fine-sq8-bin-tests': (
+        'tests::fine_sq4_real_native_pipeline_128_seal_before_truth',
+        'tests::fine_sq4_strict_cli_dispatch',
         'tests::fine_pack_strict_cli_real_tiny_pipeline',
         'tests::fine_real_source_pipeline_seals_both_panels_before_gt_and_is_durable',
         'tests::fine_fresh_process_plane_free_open',
