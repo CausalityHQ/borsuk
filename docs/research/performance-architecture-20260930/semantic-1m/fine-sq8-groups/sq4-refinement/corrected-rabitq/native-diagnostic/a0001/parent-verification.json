@@ -1,0 +1,64 @@
+{
+  "schema": "borsuk-corrected-independent-closed-recount-v1",
+  "instance_id": "i-02164a710b7393a6b",
+  "same_instance_terminated": true,
+  "controller_exit": 0,
+  "native_exit": 0,
+  "authenticated_artifact_count": 159,
+  "independent_truth_recounts": [
+    {
+      "dataset": "relaion",
+      "corrected": {
+        "total_hits": 6127,
+        "mean_recall": 0.95734375,
+        "p05_hits": 93
+      },
+      "decoded_cosine": {
+        "total_hits": 6371,
+        "mean_recall": 0.99546875,
+        "p05_hits": 99
+      },
+      "sq8_reference": {
+        "total_hits": 6369,
+        "mean_recall": 0.99515625,
+        "p05_hits": 99
+      },
+      "fetched_coverage": {
+        "total_hits": 6399,
+        "mean_recall": 0.99984375,
+        "p05_hits": 100
+      }
+    },
+    {
+      "dataset": "cohere",
+      "corrected": {
+        "total_hits": 5787,
+        "mean_recall": 0.90421875,
+        "p05_hits": 85
+      },
+      "decoded_cosine": {
+        "total_hits": 6343,
+        "mean_recall": 0.99109375,
+        "p05_hits": 97
+      },
+      "sq8_reference": {
+        "total_hits": 6338,
+        "mean_recall": 0.9903125,
+        "p05_hits": 97
+      },
+      "fetched_coverage": {
+        "total_hits": 6376,
+        "mean_recall": 0.99625,
+        "p05_hits": 98
+      }
+    }
+  ],
+  "disposition": "REJECT",
+  "whole_native_seconds": 441.598954461,
+  "native_cgroup_peak_bytes": 165343232,
+  "swap_bytes": 0,
+  "all128_envelopes_fit": true,
+  "terminal_sha256": "954b23aa3cf2c43d5a41d427c7663485eb97557b7ac07827a70ea678bddb6822",
+  "quality_scope": "consumed FIRST100k D768 cosine k100 64queries per dataset",
+  "serving_latency_or_qps_claim": false
+}
