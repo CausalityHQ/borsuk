@@ -1,0 +1,19 @@
+{
+  "native_executed": false,
+  "qualification": "metadata-only original root/header and descriptor check; no ANN, GT body, or performance execution",
+  "qualified_native_source_identity_sha256": "c7675eb2d827834524c34aa7f7c814b70b7a31e27f66e9bbf526adbce302629b",
+  "results": {
+    "cohere": {
+      "exact_paths_and_body_pins_match_root": true,
+      "original_artifacts": 7,
+      "root_sha256": "c2bf337290f7713139903f398ac6b4007ed01faf47ff093e7e397b2715b7b4fc"
+    },
+    "relaion": {
+      "exact_paths_and_body_pins_match_root": true,
+      "original_artifacts": 7,
+      "root_sha256": "3244e7bbd5e27eb1f3fe52cbddc450d08d45d25256eec98dc942ba42cf2808f1"
+    }
+  },
+  "schema": "borsuk-fine-sq8-original-path-preflight-v1",
+  "truth_body_opened": false
+}
