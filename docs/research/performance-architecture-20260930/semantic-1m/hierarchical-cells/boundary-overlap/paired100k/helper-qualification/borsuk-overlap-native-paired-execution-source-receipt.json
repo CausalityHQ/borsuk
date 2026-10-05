@@ -1,0 +1,88 @@
+{
+  "base": "86cb1a579d9b889b49c7d3db42dc966f014c799c",
+  "commit": "0495c8bb758abae581be754fc751610279efc91d",
+  "integration": "Commit only; parent must verify/integrate. No merge or push.",
+  "native_final_source_contract": {
+    "bytes": 41242,
+    "path": "/tmp/borsuk-bounded-boundary-overlap-native-final-source-contract.json",
+    "sha256": "b62e57193cb9dfcd899bf08a3846e41fcb24a0b8f5d8ed39e06be61c2bc21a22"
+  },
+  "owned_files": [
+    {
+      "bytes": 59740,
+      "path": "/home/rb/worktrees/borsuk-overlap-native-paired-execution/scripts/run_cell_overlap_pair.py",
+      "sha256": "66ce4aa6c896c28bea73769d1f2be68b102d6ec0e6b4ae83a609aeda7fe68608"
+    }
+  ],
+  "parent_remote_gate_untouched": {
+    "execution": "exec32570",
+    "instance": "i-0739ef9dca24d086e"
+  },
+  "parent_reported_native_evidence": {
+    "directly_verified_by_this_worker": false,
+    "full403_identity_sha256": "f71f6923bf5ebdd131fb1ae7528cd9434d70c8d1d51c184cdb7900b46b0d7c59",
+    "instance": "i-0739ef9dca24d086e",
+    "instance_state": "terminated",
+    "message": "1791173067548377626-2054090",
+    "native_commit": "afd58b557d01cafc307e650d9c29f381dbf24c41",
+    "paired_science": "pending",
+    "root_integrated_revision": "48d69ed0",
+    "seven_native_gates": "GO/0; independently replayed by parent",
+    "truth_free_real_request_runtime_preflight": "existing build-probes/nominate-probes both datasets, four native calls0/4.637s/232MiB/noSwap; parent receipt revision f6758eea"
+  },
+  "preserved_previous_commit": "68547f6ce26a7e4f9c70048d7ffc75c4b697d939",
+  "preserved_previous_receipt": {
+    "bytes": 2599,
+    "path": "/tmp/borsuk-overlap-native-paired-execution-source-receipt-68547f6c.json",
+    "sha256": "00020b3d53c0d04e7d4c9a3feb6a1172aaf98bc687f7f4645056085ef96e9907"
+  },
+  "schema": "borsuk-overlap-native-paired-execution-source-receipt-v1",
+  "scratch_scope": "This script observes output only. Parent owns physical staging+retained copies+layouts+archive+binary+logs and machine deadline.",
+  "status": "MOCK_CHECKED_TWO_CORRECTIONS_NATIVE_QUALIFIED_BY_PARENT",
+  "verification": {
+    "actual_native_algorithms_executed": false,
+    "checks": [
+      "source AST/compile and tiny fixture compile",
+      "six serial fake-native calls + original exit/resource/drain replay",
+      "all four build units CPUQuota200/RAYON2/affinity[0,1]",
+      "both paired configs build_workers2",
+      "CPU4 config refused before any native call",
+      "tampered ReLAION requests64 body refused before any native call",
+      "tampered CoHere requests64 body refused before any native call",
+      "Python GT/body normalization/scoring remain absent"
+    ],
+    "cloud_or_network_executed": false,
+    "command": "taskset -c 0 python3 -B -c source AST/compile then scripts.run_cell_overlap_pair.self_check(repair_only=True)",
+    "cpu_affinity": [
+      0
+    ],
+    "cpu_quota_percent": 100,
+    "exit_status": 0,
+    "invocation_id": "07907bf4cb514355bf291cf667f367a2",
+    "local_cargo_or_rustc_executed": false,
+    "log": {
+      "bytes": 601,
+      "path": "/tmp/borsuk-overlap-native-paired-execution-repair-selfcheck.log",
+      "sha256": "b809f818aff5c8f018de77b7c29abb81bf4a7ed9dbf2f1df153edc802d33d5d4"
+    },
+    "memory_max_bytes": 268435456,
+    "original_full_mock_suite_not_repeated": true,
+    "qualification_executed_by_this_worker": false,
+    "real_corpus_or_GT_opened": false,
+    "reported_cpu_seconds": 1.128,
+    "reported_peak_memory": "59.2M",
+    "reported_runtime_seconds": 1.357,
+    "reported_swap_bytes": 0,
+    "runtime_max_seconds": 120,
+    "swap_max_bytes": 0,
+    "unit": "borsuk-overlap-glue-repair-check-20261005-a.service",
+    "unit_terminal": {
+      "ActiveState": "inactive",
+      "ControlGroup": "",
+      "ExecMainStatus": "0",
+      "MainPID": "0",
+      "Result": "success",
+      "SubState": "dead"
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "schema": "borsuk-overlap-helper-parent-verification-v1",
+  "source_commit": "0495c8bb758abae581be754fc751610279efc91d",
+  "source_sha256": "66ce4aa6c896c28bea73769d1f2be68b102d6ec0e6b4ae83a609aeda7fe68608",
+  "original_worker_receipt_and_log_authenticated": true,
+  "parent_original_unit": "borsuk-overlap-pair-parent-repair-check-20261005.service",
+  "invocation_id": "191aefb5b36e4a53a92b1cd2724d00d7",
+  "exit_status": 0,
+  "runtime_seconds": 1.185,
+  "cpu_display": "961ms",
+  "memory_peak_display": "57.3M",
+  "swap_display": "0B",
+  "checks": "CPU2 and six fake calls; CPU4 and each tampered request body rejected before any native call; existing supervisor exit/resources/drain replay",
+  "actual_borsuk_native_or_quality_execution": false
+}

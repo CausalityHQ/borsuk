@@ -1,0 +1,7 @@
+Running as unit: borsuk-overlap-glue-repair-check-20261005-a.service; invocation ID: 07907bf4cb514355bf291cf667f367a2
+PASS focused correction checks: four builds CPU[0,1]/workers2 then two pairs; original exit/resource/drain replay; CPU4 and each tampered requests64 body refused before any native call. Synthetic only, no GT/body normalization/scoring/native/data/cloud.
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 1.357s
+             CPU time consumed: 1.128s
+                   Memory peak: 59.2M (swap: 0B)

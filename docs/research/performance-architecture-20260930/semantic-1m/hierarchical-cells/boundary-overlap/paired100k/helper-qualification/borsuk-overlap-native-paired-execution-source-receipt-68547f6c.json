@@ -1,0 +1,68 @@
+{
+  "base": "86cb1a579d9b889b49c7d3db42dc966f014c799c",
+  "commit": "68547f6ce26a7e4f9c70048d7ffc75c4b697d939",
+  "integration": "Commit only; parent must verify/integrate. No merge or push.",
+  "native_final_source_contract": {
+    "bytes": 41242,
+    "path": "/tmp/borsuk-bounded-boundary-overlap-native-final-source-contract.json",
+    "sha256": "b62e57193cb9dfcd899bf08a3846e41fcb24a0b8f5d8ed39e06be61c2bc21a22"
+  },
+  "owned_files": [
+    {
+      "bytes": 57970,
+      "path": "/home/rb/worktrees/borsuk-overlap-native-paired-execution/scripts/run_cell_overlap_pair.py",
+      "sha256": "7e7900dc294a38bbce04a4dd4ed6cdd5d818fbd8d17f4dd95a62984dd87f448e"
+    }
+  ],
+  "parent_remote_gate_untouched": {
+    "execution": "exec32570",
+    "instance": "i-0739ef9dca24d086e"
+  },
+  "schema": "borsuk-overlap-native-paired-execution-source-receipt-v1",
+  "status": "MOCK_CHECKED_NATIVE_UNVERIFIED",
+  "verification": {
+    "actual_native_algorithms_executed": false,
+    "checks": [
+      "Python AST/compile",
+      "inline tiny fake-native source compile",
+      "actual six serial call execution/replay through reused native_stage",
+      "both-dataset PASS and scientific FAIL exit0",
+      "native exit/config/source/seal/incomplete/full-roster/preseal-metric/prefix/tamper refusals",
+      "actual inner+outer original resource/cleanup/drain refusal checks",
+      "missing/different identity/unknownfields/pending and refused qualification inputs",
+      "nooverwrite/partial-layout preservation/relocated replay",
+      "real silent tiny Python child through reused owned_stage adapter"
+    ],
+    "cloud_or_network_executed": false,
+    "cpu_affinity": [
+      0
+    ],
+    "cpu_quota_percent": 100,
+    "exit_status": 0,
+    "invocation_id": "d50e59886e3b493bb2441e39ac843311",
+    "local_cargo_or_rustc_executed": false,
+    "log": {
+      "bytes": 636,
+      "path": "/tmp/borsuk-overlap-native-paired-execution-selfcheck.log",
+      "sha256": "62378c82467647de4922537c812eda2b38882655bd2ee17addca31edfebc8834"
+    },
+    "memory_max_bytes": 268435456,
+    "qualification_executed": false,
+    "real_corpus_or_GT_opened": false,
+    "reported_cpu_seconds": 10.71,
+    "reported_peak_memory": "80.3M",
+    "reported_runtime_seconds": 14.472,
+    "reported_swap_bytes": 0,
+    "runtime_max_seconds": 120,
+    "swap_max_bytes": 0,
+    "unit": "borsuk-overlap-glue-check-20261005-final.service",
+    "unit_terminal": {
+      "ActiveState": "inactive",
+      "ControlGroup": "",
+      "ExecMainStatus": "0",
+      "MainPID": "0",
+      "Result": "success",
+      "SubState": "dead"
+    }
+  }
+}
