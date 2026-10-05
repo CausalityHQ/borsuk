@@ -1,0 +1,23 @@
+{
+  "schema": "borsuk-sq4-truth-binding-source-finding-v1",
+  "candidate": "9853e133df6240d04378fc61050467ee01a3a81d",
+  "finding": "Strict frozen admission binds archived root/requests/prefix/seal but not truth descriptor; same-sized alternative truth is accepted by config shape. Require archived truth SHA/bytes before body reads and in survival authority. Generic tiny fixture API remains separate.",
+  "original_terminal": {
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/aws-terminal.json",
+    "bytes": 19405,
+    "sha256": "f8169d66b71fcdcf92f9b97a875b5a8e70bc73312b3bf99505576cc626ebc5a2"
+  },
+  "truth": {
+    "screen/retained/cohere/truth64": {
+      "bytes": 25600,
+      "sha256": "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355"
+    },
+    "screen/retained/relaion/truth64": {
+      "bytes": 25600,
+      "sha256": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c"
+    }
+  },
+  "repair_message": "1791210353691758761-1977921",
+  "immediate_queue_read_delivered": "immediate-1791210396843827577-1977921",
+  "status": "repair pending; native unverified"
+}
