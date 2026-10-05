@@ -1,0 +1,391 @@
+{
+  "binary": {
+    "bytes": 8955016,
+    "key": "research/semantic-router/20261005/fixed-sq4-clippy-repair-a0001/artifacts/binaries/hierarchical_semantic_cells",
+    "sha256": "30b59cb554cc62970ca56bab511b86ab03d77955ffe753f3ff392797b731735b"
+  },
+  "compiler_qualification_only": true,
+  "completed_tests": 70,
+  "instance_terminated": {
+    "nodes": {
+      "0": {
+        "instance_id": "i-0f484ec1159d1e744"
+      }
+    },
+    "observed_elapsed_s": 1852,
+    "state": "terminated"
+  },
+  "native_config": {
+    "bytes": 1695,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/prospective-native-config-c2d233d6.json",
+    "sha256": "771a0c1c8ed2060318b5388e3eed4c6a8dfac0b707687de823079ed8131d10fa"
+  },
+  "native_source": {
+    "commit": "c2d233d6752d0a058d78c6077e51f31f0255e7c1",
+    "full_source_identity_sha256": "1689c53c7564f989f19da397b32b13f16f10df264d02355928849dcabf1e2849",
+    "source_identity_sha256": "e808aae7d27e570d1bf7651d70f6144a7a93e09bae46f0222151852fff0a70db",
+    "source_sha256": {
+      "crates/borsuk/src/bin/hierarchical_semantic_cells.rs": "4d46713e88ac6f75230327fc160734bebc991202e7904ee4994ccfd2760f7e6a",
+      "crates/borsuk/src/budgeted_page_rank.rs": "19509a9dccdd5354fc9d6e8018491167bfc18145b9fe65b3c51df895a411ed36",
+      "crates/borsuk/src/centroid_hnsw.rs": "2b70546426266d189fb440bcd66620bad2575c7fd8c985a16eaa56c11566077a",
+      "crates/borsuk/src/exact_sq8_nominee.rs": "09c253558ead184e9a3208fb4ff477387997ba809fe89bec747f6a4924aedcc2",
+      "crates/borsuk/src/fine_sq8_groups.rs": "250f592b8c2ad654f1b6b7281f08a0b3c420b4d4d157de29f8e2017212788f37",
+      "crates/borsuk/src/hierarchical_semantic_cells.rs": "0330e32270e5b6bc04f8bcd0cbbac6cceff6ef6989ec7f72cd1f9b9dd40211c2",
+      "crates/borsuk/src/lib.rs": "c44444884ec930f275fcfd34cced262057728be629d8dec31991b5788f425311",
+      "crates/borsuk/src/pq64_nominee.rs": "d76d2232b273f5e8b9095ee0ca5f788aa1cbd9d7d5dc19c88a7705298c902bf5",
+      "crates/borsuk/src/resident_vector_graph.rs": "c62459b45caeaaa798b16b24b88180ad6d4dc5bdd554cd804e6d6b354eb3b79d",
+      "crates/borsuk/src/returned_sq8.rs": "17531e7f09554927aee5533926e707c2e34430d002bf66f7e2ae4f1f325a3c63",
+      "crates/borsuk/src/sq8_page_authority.rs": "e4b34461509c78ca558f49a0ff11151dc1454589f472a5911913b5dbcea9af23",
+      "crates/borsuk/src/sq8_source.rs": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795"
+    }
+  },
+  "not_launch_config": true,
+  "qualification_receipts": {
+    "aws-closeout.json": {
+      "bytes": 136,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/implementation-gates/clippy-repair/a0001/aws-closeout.json",
+      "sha256": "8ccc63c952a7d06926d780f5ff4e3136e1fa00ae9538ba9713b8f95bbc44d595",
+      "transport_pending": true
+    },
+    "aws-terminal.json": {
+      "bytes": 3083,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/implementation-gates/clippy-repair/a0001/aws-terminal.json",
+      "sha256": "9ffaf3def8b776427b342d36ae5488668ccf3d3b7b8d661afdb8966f9fe07e2c",
+      "transport_pending": true
+    },
+    "parent-verification.json": {
+      "bytes": 17354,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/implementation-gates/clippy-repair/a0001/parent-verification.json",
+      "sha256": "dd151c95be4d6ae3793f3c78b88452cc5cacb3521ccffc3845ffae0f6c8a3c3d",
+      "transport_pending": true
+    },
+    "source-qualification.json": {
+      "bytes": 411328,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/implementation-gates/clippy-repair/a0001/source-qualification.json",
+      "sha256": "1a1e1ae31aae5f487ec3892ac93efc9de978ca23536c17d9aa71436bf5dcd5a1",
+      "transport_pending": true
+    },
+    "workspace-receipt.json": {
+      "bytes": 63813,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/sq4-refinement/implementation-gates/clippy-repair/a0001/workspace-receipt.json",
+      "sha256": "1a931d43b754a813ebbacab22e0b655f47229d6ff4105e5e1965347a53a97a88",
+      "transport_pending": true
+    }
+  },
+  "remaining": [
+    "Repaired staging source and independently collected source checks",
+    "Final frozen config/code/archive and whole scratch admission",
+    "Authenticate uploaded receipt transports and exact retained input keys",
+    "One original bounded paired native scientific run and terminal cleanup"
+  ],
+  "required_stage_protocol": [
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "require_positive_tests_run": false,
+      "required_test_passes": {},
+      "stage": "clippy"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "hierarchical_semantic_cells",
+        "fine_",
+        "--",
+        "--test-threads=1"
+      ],
+      "require_positive_tests_run": true,
+      "required_test_passes": {
+        "tests::fine_fresh_process_plane_free_open": 1,
+        "tests::fine_pack_strict_cli_real_tiny_pipeline": 1,
+        "tests::fine_real_source_pipeline_seals_both_panels_before_gt_and_is_durable": 1,
+        "tests::fine_sq4_real_native_pipeline_128_seal_before_truth": 1,
+        "tests::fine_sq4_strict_cli_dispatch": 1
+      },
+      "stage": "fine-sq8-bin-tests"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "fine_sq8_groups::",
+        "--",
+        "--test-threads=1"
+      ],
+      "require_positive_tests_run": true,
+      "required_test_passes": {
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_all_codes_numeric_oracle_odd_tail_nonunit_ties": 1,
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_auth_fifo_corruption_caps_and_durability": 1,
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_exact_cover_superset_and_binding": 1,
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_full_pipeline_failure_order_and_sync": 1,
+        "fine_sq8_groups::pack_diagnostic::tests::pack_affinity_matches_exhaustive_ties": 1,
+        "fine_sq8_groups::pack_diagnostic::tests::pack_both_seals_precede_prefix": 1,
+        "fine_sq8_groups::pack_diagnostic::tests::pack_graph_binding_corruption_caps": 1,
+        "fine_sq8_groups::pack_diagnostic::tests::pack_incomplete_output_sync_and_supervisor": 1,
+        "fine_sq8_groups::pack_diagnostic::tests::pack_secure_prefix_and_forbidden_opens": 1,
+        "fine_sq8_groups::pack_diagnostic::tests::pack_tail_bijection_and_cover_match_brute": 1,
+        "fine_sq8_groups::tests::fine_auth_length_symlink_and_admission_fail_closed": 1,
+        "fine_sq8_groups::tests::fine_bridged_corruption_and_best_replacement_outside_shortlist": 1,
+        "fine_sq8_groups::tests::fine_cover_matches_independent_bruteforce_with_tail": 1,
+        "fine_sq8_groups::tests::fine_exhausted_shortlist_is_scored_empty_is_underfilled_and_refusal_reads_nothing": 1,
+        "fine_sq8_groups::tests::fine_nonzero_coefficients_scalar_oracle_extremes_and_near_ties": 1,
+        "fine_sq8_groups::tests::fine_remote_failure_preserves_partial_known_stats_and_unknown_bytes": 1,
+        "fine_sq8_groups::tests::fine_tail_scalar_ties_nonunit_and_pins": 1
+      },
+      "stage": "fine-sq8-tests"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "resident_vector_graph::bounded_pq_tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "require_positive_tests_run": true,
+      "required_test_passes": {
+        "resident_vector_graph::bounded_pq_tests::repaired_producer_above_m0_reopens_and_decoded_allocations_are_bounded": 1,
+        "resident_vector_graph::bounded_pq_tests::total_budget_counts_upper_layers_and_reports_partial_ties": 1
+      },
+      "stage": "pq-codes-graph-tests"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "pq64_nominee::source_codes_tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "require_positive_tests_run": true,
+      "required_test_passes": {
+        "pq64_nominee::source_codes_tests::source_fit_is_ordinal_deterministic_and_codes_only": 1
+      },
+      "stage": "source-pq-tests"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "resident_vector_graph::tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "require_positive_tests_run": true,
+      "required_test_passes": {
+        "resident_vector_graph::tests::graph_returns_stable_ids_and_rejects_generation_mismatch": 1,
+        "resident_vector_graph::tests::graph_ties_keep_smallest_physical_ordinals": 1
+      },
+      "stage": "graph-regressions"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "pq64_nominee::tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "require_positive_tests_run": true,
+      "required_test_passes": {
+        "pq64_nominee::tests::admits_a_short_final_page_without_padding_rows": 1,
+        "pq64_nominee::tests::cosine_view_uses_reconstructed_direction_instead_of_squared_l2": 1,
+        "pq64_nominee::tests::huge_page_width_allocates_only_the_one_actual_candidate": 1,
+        "pq64_nominee::tests::ninety_six_dimensions_score_the_last_coordinate_in_the_last_subspace": 1,
+        "pq64_nominee::tests::pads_a_nonmultiple_of_64_dimension_only_inside_pq_distance": 1,
+        "pq64_nominee::tests::row_scores_use_the_same_d96_subspace_padding_as_nomination": 1,
+        "pq64_nominee::tests::scored_rows_match_nominee_adc_order": 1,
+        "pq64_nominee::tests::scores_only_requested_rows_in_caller_order": 1,
+        "pq64_nominee::tests::selects_the_nearest_page_and_orders_tied_rows_by_ordinal": 1
+      },
+      "stage": "pq-regressions"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "budgeted_page_rank::tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "require_positive_tests_run": true,
+      "required_test_passes": {
+        "budgeted_page_rank::tests::cheapest_gap_bridge_counts_bytes_and_rejects_over_cap_page": 1,
+        "budgeted_page_rank::tests::complete_sparse_scores_refine_dense_page_admission": 1,
+        "budgeted_page_rank::tests::incremental_cover_charge_matches_exact_cover_across_page_patterns": 1,
+        "budgeted_page_rank::tests::incremental_cover_charge_matches_exact_ranges_with_tied_gaps_and_final_page": 1,
+        "budgeted_page_rank::tests::primary_page_precedes_better_scoring_secondary_page": 1,
+        "budgeted_page_rank::tests::short_final_page_is_charged_by_its_actual_rows": 1,
+        "budgeted_page_rank::tests::signed_zero_scores_tie_by_page_id": 1,
+        "budgeted_page_rank::tests::source_unit_cover_preserves_all_units_and_clips_tail": 1,
+        "budgeted_page_rank::tests::sparse_candidates_never_admit_an_unvisited_page": 1,
+        "budgeted_page_rank::tests::sparse_candidates_reject_duplicates_and_unknown_pages": 1
+      },
+      "stage": "page-cover-regressions"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "returned_sq8::tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "require_positive_tests_run": true,
+      "required_test_passes": {
+        "returned_sq8::tests::mutation_visibility_precedes_top_k_and_validates_masked_rows": 1,
+        "returned_sq8::tests::overlap_nonunit_sq8_and_duplicate_truncation": 1,
+        "returned_sq8::tests::query_admission_accounts_for_narrow_rows_concurrent_planners_and_overflow": 1,
+        "returned_sq8::tests::ranks_sparse_ranges_and_ties_by_id": 1,
+        "returned_sq8::tests::rejects_overlap_unaligned_budget_and_duplicate_ids": 1
+      },
+      "stage": "returned-sq8-regressions"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "sq8_page_authority::tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "require_positive_tests_run": true,
+      "required_test_passes": {
+        "sq8_page_authority::tests::authenticates_short_final_page_and_rejects_changed_bytes_or_etag": 1,
+        "sq8_page_authority::tests::two_bit_unit_pages_bind_geometry_and_authenticate_partial_tail": 1
+      },
+      "stage": "page-authority-regressions"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "sq8_s3_range::tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "require_positive_tests_run": true,
+      "required_test_passes": {
+        "sq8_s3_range::tests::bounded_query_reads_only_verified_pages_and_charges_failures": 1,
+        "sq8_s3_range::tests::bounded_range_query_future_is_send": 1,
+        "sq8_s3_range::tests::bounded_source_ranges_authenticate_tail_and_charge_failures": 1,
+        "sq8_s3_range::tests::conditional_short_tail_rejects_mutated_object": 1,
+        "sq8_s3_range::tests::generation_publish_reload_and_http_search_fail_closed": 1,
+        "sq8_s3_range::tests::real_http_range_faults_fail_closed_without_hidden_retries": 1,
+        "sq8_s3_range::tests::redirects_and_unfinished_error_bodies_fail_after_one_request": 1,
+        "sq8_s3_range::tests::source_authority_is_rejected_before_sq8_get": 1
+      },
+      "stage": "s3-range-regressions"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "hierarchical_semantic_cells",
+        "--",
+        "--test-threads=1",
+        "--skip",
+        "fine_"
+      ],
+      "require_positive_tests_run": true,
+      "required_test_passes": {
+        "tests::configurations_reject_unknown_fields_and_truth_in_requests": 1,
+        "tests::created_outputs_close_invalid_on_bad_truth_or_output_cap_without_overwrite": 1,
+        "tests::nomination_cli_full64_freezes_prefix_and_both_policies_without_truth": 1,
+        "tests::nomination_cli_rejects_truth_fields_incomplete_panels_and_tampering": 1,
+        "tests::nomination_freeze_reserve_and_synced_prefix_tamper_close_invalid": 1,
+        "tests::nomination_prefix_rejects_fifo_and_symlink_without_blocking": 1,
+        "tests::overlap_pair_seal_precedes_truth": 1,
+        "tests::source_probe_cli_actual_full_pipeline_freezes_before_truth_and_closes_invalid": 1,
+        "tests::source_probe_cli_coverage_fifo_truth_and_output_cap_close_invalid": 1
+      },
+      "stage": "hierarchical-bin-regressions"
+    },
+    {
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "hierarchical_semantic_cells"
+      ],
+      "require_positive_tests_run": false,
+      "required_test_passes": {},
+      "stage": "release"
+    },
+    {
+      "command": [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "BORSUK_TEST_BUILD_JOBS=1",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ],
+      "require_positive_tests_run": false,
+      "required_test_passes": {},
+      "stage": "test-build"
+    }
+  ],
+  "schema": "borsuk-sq4-qualified-deployment-pins-v1",
+  "scientific_measurement_pending": true,
+  "staging_release_repairs_pending": true
+}
