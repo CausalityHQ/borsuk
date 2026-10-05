@@ -1,0 +1,27 @@
+{
+  "schema": "borsuk-fine-pack-derived-input-publication-v1",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "objects": [
+    {
+      "key": "research/fine-pack-diagnostic/inputs/374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62/packing-original-seal.json",
+      "bytes": 1109,
+      "sha256": "374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62",
+      "conditionally_created": true,
+      "head_verified": true,
+      "whole_readback_verified": true,
+      "destination": "/mnt/hierarchical-100k/packing-original-seal.json"
+    },
+    {
+      "key": "research/fine-pack-diagnostic/inputs/7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025/packing-prefix.jsonl",
+      "bytes": 1665668,
+      "sha256": "7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025",
+      "conditionally_created": true,
+      "head_verified": true,
+      "whole_readback_verified": true,
+      "destination": "/mnt/hierarchical-100k/packing-prefix.jsonl"
+    }
+  ],
+  "sdk_dispatch_attempts": 6,
+  "retries": 0,
+  "truth_requests_graph_bodies_or_trace_suffix_opened": false
+}
