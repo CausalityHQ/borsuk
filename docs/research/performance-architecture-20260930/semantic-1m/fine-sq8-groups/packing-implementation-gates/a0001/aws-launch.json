@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0897b20fca9ed85ea",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0897b20fca9ed85ea"
+    }
+  },
+  "prefix": "research/semantic-router/20261005/fine-sq8-packing-implementation-a0001",
+  "source_commit": "a689ad0a80e4b9595979446f49cc593321d14c3c",
+  "source_archive_sha256": "89fcab346082372f05b92df2910563ffb82f4badd42cd4954eda3d6358ad6684"
+}

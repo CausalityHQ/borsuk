@@ -1,0 +1,224 @@
+{
+  "automatic_retry": false,
+  "binary_tests_run": 0,
+  "controller_original_exit_status": 1,
+  "instance_id": "i-0897b20fca9ed85ea",
+  "instance_terminal_state": "terminated",
+  "kernel_memory_peak_bytes": 6523834368,
+  "kernel_swap_peak_bytes": 0,
+  "native_original_exit_status": 101,
+  "native_tests_completed": 16,
+  "quality_performance_measured": false,
+  "release_clippy_workspace_testbuild_complete": false,
+  "repair_owner": "SAME fine-sq8-graph-packing-falsifier worker",
+  "root_cause": "Four test-only json! values use unparenthesized array indexing; binary compilation rejects token [.",
+  "session_id": 90234,
+  "source_before_equals_after": true,
+  "source_file_count": 404,
+  "source_identity_sha256": "b19a8d06c6a73fec88e415406945044ed775772c4229c97de6037ed2ad5e3619",
+  "stages": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "fine_sq8_groups::",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": null,
+      "finished_at": null,
+      "gate_status": null,
+      "log_exit_status": null,
+      "required_test_passes": null,
+      "schema": "borsuk-fine-sq8-implementation-stage-v1",
+      "stage": "fine-sq8-tests",
+      "started_at": "2026-10-05T11:37:36Z",
+      "tests_run": null
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "fine_sq8_groups::",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-05T11:42:05Z",
+      "gate_status": 0,
+      "log_exit_status": 0,
+      "required_test_passes": {
+        "fine_sq8_groups::pack_diagnostic::tests::pack_affinity_matches_exhaustive_ties": 1,
+        "fine_sq8_groups::pack_diagnostic::tests::pack_both_seals_precede_prefix": 1,
+        "fine_sq8_groups::pack_diagnostic::tests::pack_graph_binding_corruption_caps": 1,
+        "fine_sq8_groups::pack_diagnostic::tests::pack_incomplete_output_sync_and_supervisor": 1,
+        "fine_sq8_groups::pack_diagnostic::tests::pack_secure_prefix_and_forbidden_opens": 1,
+        "fine_sq8_groups::pack_diagnostic::tests::pack_tail_bijection_and_cover_match_brute": 1,
+        "fine_sq8_groups::tests::fine_auth_length_symlink_and_admission_fail_closed": 1,
+        "fine_sq8_groups::tests::fine_bridged_corruption_and_best_replacement_outside_shortlist": 1,
+        "fine_sq8_groups::tests::fine_cover_matches_independent_bruteforce_with_tail": 1,
+        "fine_sq8_groups::tests::fine_exhausted_shortlist_is_scored_empty_is_underfilled_and_refusal_reads_nothing": 1,
+        "fine_sq8_groups::tests::fine_nonzero_coefficients_scalar_oracle_extremes_and_near_ties": 1,
+        "fine_sq8_groups::tests::fine_remote_failure_preserves_partial_known_stats_and_unknown_bytes": 1,
+        "fine_sq8_groups::tests::fine_tail_scalar_ties_nonunit_and_pins": 1
+      },
+      "schema": "borsuk-fine-sq8-implementation-stage-v1",
+      "stage": "fine-sq8-tests",
+      "started_at": "2026-10-05T11:37:36Z",
+      "tests_run": 13
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "resident_vector_graph::bounded_pq_tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": null,
+      "finished_at": null,
+      "gate_status": null,
+      "log_exit_status": null,
+      "required_test_passes": null,
+      "schema": "borsuk-fine-sq8-implementation-stage-v1",
+      "stage": "pq-codes-graph-tests",
+      "started_at": "2026-10-05T11:42:06Z",
+      "tests_run": null
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "resident_vector_graph::bounded_pq_tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-05T11:42:07Z",
+      "gate_status": 0,
+      "log_exit_status": 0,
+      "required_test_passes": {
+        "resident_vector_graph::bounded_pq_tests::repaired_producer_above_m0_reopens_and_decoded_allocations_are_bounded": 1,
+        "resident_vector_graph::bounded_pq_tests::total_budget_counts_upper_layers_and_reports_partial_ties": 1
+      },
+      "schema": "borsuk-fine-sq8-implementation-stage-v1",
+      "stage": "pq-codes-graph-tests",
+      "started_at": "2026-10-05T11:42:06Z",
+      "tests_run": 2
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "pq64_nominee::source_codes_tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": null,
+      "finished_at": null,
+      "gate_status": null,
+      "log_exit_status": null,
+      "required_test_passes": null,
+      "schema": "borsuk-fine-sq8-implementation-stage-v1",
+      "stage": "source-pq-tests",
+      "started_at": "2026-10-05T11:42:07Z",
+      "tests_run": null
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "pq64_nominee::source_codes_tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-05T11:42:08Z",
+      "gate_status": 0,
+      "log_exit_status": 0,
+      "required_test_passes": {
+        "pq64_nominee::source_codes_tests::source_fit_is_ordinal_deterministic_and_codes_only": 1
+      },
+      "schema": "borsuk-fine-sq8-implementation-stage-v1",
+      "stage": "source-pq-tests",
+      "started_at": "2026-10-05T11:42:07Z",
+      "tests_run": 1
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "hierarchical_semantic_cells",
+        "fine_",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": null,
+      "finished_at": null,
+      "gate_status": null,
+      "log_exit_status": null,
+      "required_test_passes": null,
+      "schema": "borsuk-fine-sq8-implementation-stage-v1",
+      "stage": "fine-sq8-bin-tests",
+      "started_at": "2026-10-05T11:42:08Z",
+      "tests_run": null
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "hierarchical_semantic_cells",
+        "fine_",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": 101,
+      "finished_at": "2026-10-05T11:43:18Z",
+      "gate_status": 101,
+      "log_exit_status": 0,
+      "required_test_passes": {
+        "tests::fine_fresh_process_plane_free_open": 0,
+        "tests::fine_pack_strict_cli_real_tiny_pipeline": 0,
+        "tests::fine_real_source_pipeline_seals_both_panels_before_gt_and_is_durable": 0
+      },
+      "schema": "borsuk-fine-sq8-implementation-stage-v1",
+      "stage": "fine-sq8-bin-tests",
+      "started_at": "2026-10-05T11:42:08Z",
+      "tests_run": 0
+    }
+  ],
+  "status": "UNQUALIFIED_NATIVE_BINARY_TEST_COMPILE_FAILURE",
+  "terminal_artifacts_authenticated": 13
+}
