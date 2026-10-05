@@ -63,5 +63,10 @@
   },
   "source_before_equals_after": true,
   "failure": "E0618 test local FineBuildConfig build shadows builder function at bin2151",
-  "scientific_quality_or_performance_claim": false
+  "scientific_quality_or_performance_claim": false,
+  "source_file_count": 404,
+  "resource_gate_passed": true,
+  "compiler_cgroup_peak_bytes": 5285036032,
+  "compiler_swap_peak_bytes": 0,
+  "observed_processes_drained": true
 }
