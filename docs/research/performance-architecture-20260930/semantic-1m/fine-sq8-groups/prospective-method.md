@@ -1,6 +1,6 @@
 # Fine SQ8 groups: prospective native falsifier
 
-Status: source implementation not started; no new experiment or measurement. Planning consultation 4e5aba57d4cc4756 completed exit0. Historical whole-cell and overlap FAIL decisions are unchanged.
+Status: native source implementation is underway in the same bounded Rust worker; no compiled candidate, new experiment or measurement is qualified. Planning consultation 4e5aba57d4cc4756 completed exit0. Historical whole-cell and overlap FAIL decisions are unchanged.
 
 Test one causal representation change: source-trained PQ row nomination plus authenticated 16-row contiguous SQ8 fetch groups in the unchanged primary physical order. No replicas, GT-trained fitting, whole-cell routing, or query-dependent layout. Preserve stored SQ8 bytes and coefficients.
 
@@ -16,6 +16,6 @@ Implement Rust library first; existing bin may supply a thin strict diagnostic c
 
 ## Pre-source-freeze clarification
 
-No native candidate or scientific run exists yet. The planning32MiB per-query extra allowance is insufficient: existing response/ranking admission alone is approximately53MiB for16MiB of transferred bytes. Implement actual checked coexistence admission including graph marks, PQ lookup, cover planner, authenticated response buffers, decoded records/ranking, evaluator and generation pins against the512MiB query cap before allocation or payload reads. Transfer remains16MiB; this is not a runtime-cap increase. Record actual formula/capacity separately from RSS.
+This clarification was frozen before native source completion or scientific execution. The planning32MiB per-query extra allowance is insufficient: existing response/ranking admission alone is approximately53MiB for16MiB of transferred bytes. Implement actual checked coexistence admission including graph marks, PQ lookup, cover planner, authenticated response buffers, decoded records/ranking, evaluator and generation pins against the512MiB query cap before allocation or payload reads. Transfer remains16MiB; this is not a runtime-cap increase. Record actual formula/capacity separately from RSS.
 
 The65536 scoring ceiling is an algorithmic budget. Count every scorer invocation, including repeated upper-layer evaluations, before invocation. When exhausted, close with explicit exhausted=true/converged=false, freezing only already-scored current nominees and their actual length; do not invent or discard nominees, retry, or raise the cap. All64 query records being closed does not mean navigation converged. Evaluate the frozen actual shortlist with denominator100 and visible underfill. Empty early-exhausted nomination is a resource/quality hypothesis failure, not authentication INVALID. Invalid inputs, panics, timeout, failed resource closure or corrupt artifacts remain INVALID. Small independent tests must prove no extra scorer call after the cap and distinguish upper-layer work from base visits.
