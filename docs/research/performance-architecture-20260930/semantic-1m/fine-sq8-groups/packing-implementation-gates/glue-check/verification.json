@@ -1,0 +1,62 @@
+{
+  "aws_execution": false,
+  "changes": [
+    "require six nested packing tests and one binary test",
+    "use broad fine_sq8_groups:: module filter",
+    "bind exact three-file native delta",
+    "separate packing-implementation-gates evidence directory"
+  ],
+  "command": [
+    "python3",
+    "scripts/launch_native_workspace_execution_spot.py",
+    "--fine-sq8-implementation",
+    "--self-check"
+  ],
+  "exit_status": 0,
+  "frozen_config_created": false,
+  "invocation": "85861f956b5e4780ad00bce85d6706c7",
+  "limits": {
+    "cpu_quota_percent": 100,
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "tasks_max": 512,
+    "wall_seconds": 120
+  },
+  "native_execution": false,
+  "observed": {
+    "process_max_rss_kib": 77292,
+    "process_wall_seconds": 6.99,
+    "swap_bytes": 0,
+    "unit_memory_peak_display": "86.2M",
+    "unit_wall_seconds": 7.01
+  },
+  "original_session": 42759,
+  "remaining": [
+    "final native source and mandatory-name reconciliation",
+    "exact-source external tests/release/Clippy/real test compilation",
+    "bounded native packing diagnostic"
+  ],
+  "schema": "borsuk-fine-pack-qualification-glue-check-v1",
+  "scope": "qualification glue only; Rust unrun",
+  "source_and_log_artifacts": {
+    "scripts/check_fine_sq8_implementation.sh": {
+      "bytes": 3087,
+      "sha256": "c5e930205c1c911c5265e0b35fbeb590e16545de6047ca76eebcaa84ea95b08e"
+    },
+    "scripts/launch_native_workspace_execution_spot.py": {
+      "bytes": 206048,
+      "sha256": "849a3c48e66ea71e1d4951aeb3598331bb997383d148cf012bbb48ab6436c342"
+    },
+    "self-check.log": {
+      "bytes": 1065,
+      "sha256": "1cc38aefcfd2f86c0c4517bc64491e5931c7a65e5a19c44c2d8f743b331d58ed"
+    },
+    "self-check.time": {
+      "bytes": 832,
+      "sha256": "d7bc0a4e7238c6718ad9103cc696722bc96384f16016df41cee4f32524f44c23"
+    }
+  },
+  "source_parent": "68dde4d6",
+  "status": "CLOSED0",
+  "unit": "borsuk-fine-pack-qualification-glue-check-20261005.service"
+}

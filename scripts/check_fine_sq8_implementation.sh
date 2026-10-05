@@ -43,7 +43,7 @@ run_stage() {
   return "$status"
 }
 
-run_stage fine-sq8-tests cargo test --locked -p borsuk --lib fine_sq8_groups::tests -- --test-threads=1
+run_stage fine-sq8-tests cargo test --locked -p borsuk --lib fine_sq8_groups:: -- --test-threads=1
 run_stage pq-codes-graph-tests cargo test --locked -p borsuk --lib resident_vector_graph::bounded_pq_tests -- --test-threads=1
 run_stage source-pq-tests cargo test --locked -p borsuk --lib pq64_nominee::source_codes_tests -- --test-threads=1
 run_stage fine-sq8-bin-tests cargo test --locked -p borsuk --bin hierarchical_semantic_cells fine_ -- --test-threads=1

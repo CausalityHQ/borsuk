@@ -1,0 +1,10 @@
+Running as unit: borsuk-fine-pack-qualification-glue-check-20261005.service; invocation ID: 85861f956b5e4780ad00bce85d6706c7
+PASS tiny committed archive closure/authentic bytes/gzip/literal paths/unsafe/missing/nonfile refusals/fullrepo default
+PASS hierarchical minimal archive/native docs/runtime fixture/tamper/no remote Git
+PASS workspace implementation-gates (fine-sq8): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli=False; code=24 artifacts=14 release_copy=True; userdata=7344 peak_bytes=79147008; AWS/Cargo/cgroup MOCKED
+PASS fine SQ8 qualification MOCKS ONLY: exact roster/commands/counts, source drift, native/tee exit, authenticated terminal and same-ID cleanup; Rust UNRUN
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 7.010s
+             CPU time consumed: 2.184s
+                   Memory peak: 86.2M (swap: 0B)

@@ -170,13 +170,17 @@ CELL_OVERLAP_STAGES = tuple((name, command.split()) for name, command in (
 
 FINE_SQ8_DELTA = ('crates/borsuk/src/bin/hierarchical_semantic_cells.rs',
                   'crates/borsuk/src/fine_sq8_groups.rs',
-                  'crates/borsuk/src/lib.rs',
-                  'crates/borsuk/src/pq64_nominee.rs',
                   'crates/borsuk/src/resident_vector_graph.rs')
 FINE_SQ8_STAGE_SCHEMA = 'borsuk-fine-sq8-implementation-stage-v1'
 # Exact target-qualified names from the final native sibling contract; source SHA is root-owned.
 FINE_SQ8_REQUIRED_TESTS = {
     'fine-sq8-tests': (
+        'fine_sq8_groups::pack_diagnostic::tests::pack_affinity_matches_exhaustive_ties',
+        'fine_sq8_groups::pack_diagnostic::tests::pack_tail_bijection_and_cover_match_brute',
+        'fine_sq8_groups::pack_diagnostic::tests::pack_graph_binding_corruption_caps',
+        'fine_sq8_groups::pack_diagnostic::tests::pack_secure_prefix_and_forbidden_opens',
+        'fine_sq8_groups::pack_diagnostic::tests::pack_both_seals_precede_prefix',
+        'fine_sq8_groups::pack_diagnostic::tests::pack_incomplete_output_sync_and_supervisor',
         'fine_sq8_groups::tests::fine_remote_failure_preserves_partial_known_stats_and_unknown_bytes',
         'fine_sq8_groups::tests::fine_cover_matches_independent_bruteforce_with_tail',
         'fine_sq8_groups::tests::fine_tail_scalar_ties_nonunit_and_pins',
@@ -193,6 +197,7 @@ FINE_SQ8_REQUIRED_TESTS = {
         'pq64_nominee::source_codes_tests::source_fit_is_ordinal_deterministic_and_codes_only',
     ),
     'fine-sq8-bin-tests': (
+        'tests::fine_pack_strict_cli_real_tiny_pipeline',
         'tests::fine_real_source_pipeline_seals_both_panels_before_gt_and_is_durable',
         'tests::fine_fresh_process_plane_free_open',
     ),
@@ -257,7 +262,7 @@ FINE_SQ8_REQUIRED_TESTS = {
     ),
 }
 FINE_SQ8_STAGES = tuple((name, command.split()) for name, command in (
-    ('fine-sq8-tests', 'cargo test --locked -p borsuk --lib fine_sq8_groups::tests -- --test-threads=1'),
+    ('fine-sq8-tests', 'cargo test --locked -p borsuk --lib fine_sq8_groups:: -- --test-threads=1'),
     ('pq-codes-graph-tests', 'cargo test --locked -p borsuk --lib resident_vector_graph::bounded_pq_tests -- --test-threads=1'),
     ('source-pq-tests', 'cargo test --locked -p borsuk --lib pq64_nominee::source_codes_tests -- --test-threads=1'),
     ('fine-sq8-bin-tests', 'cargo test --locked -p borsuk --bin hierarchical_semantic_cells fine_ -- --test-threads=1'),
@@ -540,9 +545,9 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
 
 
     if fine_sq8:
-        ROOT = semantic.ROOT.parent/'semantic-1m/fine-sq8-groups/implementation-gates'
+        ROOT = semantic.ROOT.parent/'semantic-1m/fine-sq8-groups/packing-implementation-gates'
         CONFIG = ROOT/'config.json'
-        TOKEN_PREFIX = 'fine-sq8-implementation-'
+        TOKEN_PREFIX = 'fine-sq8-packing-implementation-'
         PREFIX = 'research/semantic-router/20261005/' + TOKEN_PREFIX
         TAG = 'borsuk-fine-sq8-implementation'
         SCHEMA = 'borsuk-fine-sq8-implementation-gates-spot-v1'
@@ -2238,13 +2243,13 @@ def _fine_sq8_self_check():
         assert 'fine_sq8' in inspect.signature(function).parameters
     with execution_mode(fine_sq8=True):
         assert FINE_SQ8 and MINIMAL_ARCHIVE and not CELL_OVERLAP
-        assert str(ROOT).endswith('semantic-1m/fine-sq8-groups/implementation-gates')
+        assert str(ROOT).endswith('semantic-1m/fine-sq8-groups/packing-implementation-gates')
         assert mode_flag() == ' --fine-sq8-implementation'
         assert CONFIG_SCHEMA == FIXED['schema'] == 'borsuk-fine-sq8-implementation-gates-v1'
         assert SCHEMA == 'borsuk-fine-sq8-implementation-gates-spot-v1'
         assert RECEIPT_SCHEMA == 'borsuk-fine-sq8-implementation-gates-receipt-v1'
         assert CODE == (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_fine_sq8_implementation.sh')
-        assert NATIVE_DELTA == FINE_SQ8_DELTA and len(NATIVE_DELTA) == 5 and list(NATIVE_DELTA) == sorted(NATIVE_DELTA)
+        assert NATIVE_DELTA == FINE_SQ8_DELTA and len(NATIVE_DELTA) == 3 and list(NATIVE_DELTA) == sorted(NATIVE_DELTA)
         assert RELEASE_ARTIFACTS == ('binaries/hierarchical_semantic_cells',)
         for key in ('CARGO_BUILD_JOBS', 'BORSUK_TEST_BUILD_JOBS', 'RUST_TEST_THREADS',
                     'BORSUK_CPU_THREADS', 'RAYON_NUM_THREADS', 'TOKIO_WORKER_THREADS'):
