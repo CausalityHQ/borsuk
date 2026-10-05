@@ -1,0 +1,15 @@
+# Fine SQ8 groups: prospective native falsifier
+
+Status: source implementation not started; no new experiment or measurement. Planning consultation 4e5aba57d4cc4756 completed exit0. Historical whole-cell and overlap FAIL decisions are unchanged.
+
+Test one causal representation change: source-trained PQ row nomination plus authenticated 16-row contiguous SQ8 fetch groups in the unchanged primary physical order. No replicas, GT-trained fitting, whole-cell routing, or query-dependent layout. Preserve stored SQ8 bytes and coefficients.
+
+New frozen arm: ef4096, shortlist1024, at most65536 score evaluations including upper levels, group16, max256 ranges, max16MiB including bridged gaps. Every nominee must remain covered or the query is rejected; no budget-driven candidate trimming. Runtime exhaustion must be explicit and cannot silently imply complete nomination. Source fitting uses deterministic ordinal sampling<=16384, PQ64/256 words/four iterations; graph m32/m0=64/efconstruction128. Both consumed64 FIRST100k/D768 cosine/k100 panels may falsify, never establish fresh generalization.
+
+Seal nominees and complete fetch plans for both datasets before GT; report containment, fetched coverage and returned recall separately. Gate both datasets mean>=98%, sorted p05 index3 hits>=95, every query within256GET/16MiB; invalid auth/runtime/resource failures remain INVALID. Preserve same-nominee 256-row fetch cost as a paired layout comparator. No parameter ladder. Local one-stage reads are not measured parallel S3 latency, physical requests, QPS or vendor parity.
+
+Native correctness must independently cover interval optimality with brute-force tiny sets, unchanged IDs/bytes, tail groups, hash/length faults, nonunit cosine, score ties, exhaustion, generation/query-plan mismatch, delete/replace suppression and old-reader pins. Affected tests, workspace correctness/suspicious Clippy and real workspace test compilation must pass on exact frozen native source before integration. No local Cargo; remote qualification remains parent-owned.
+
+Product constraint: graph serving must open without hydrating an FP16 plane. Charge actual adjacency capacities and visit workspace; do not omit them. Existing in-memory source/FP16 construction is allowed only as an explicitly bounded100k source-training implementation, not a100M build claim. 100M RAM/startup/build/graph maintenance remain unqualified; no scale promotion solely from static100k quality. Model unique pinned generations + concurrency*workspace + delta + maintenance + runtime before allocation. The planning ceiling582N is a conservative admission formula, not RSS or a product target. A feasible scalable builder/maintainer and measured cold lifecycle remain mandatory.
+
+Implement Rust library first; existing bin may supply a thin strict diagnostic command. Python remains existing minimal execution glue. Root owns all source freezes, resource grants, scientific admission and pushes.
