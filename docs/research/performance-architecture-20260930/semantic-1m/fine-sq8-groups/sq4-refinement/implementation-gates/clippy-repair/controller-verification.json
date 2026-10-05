@@ -1,0 +1,26 @@
+{
+  "candidate": "c2d233d6752d0a058d78c6077e51f31f0255e7c1",
+  "fine_self_check": {
+    "exit": 0,
+    "invocation": "075b71372d9f48989196af09a038a8cb",
+    "memory_peak": "74MiB",
+    "seconds": 3.74,
+    "swap": 0
+  },
+  "gate_order": "clippy first; all14 retained",
+  "historical_stage_validation": {
+    "exit": 0,
+    "invocation": "0c5945b92cd9427ebc87902b44a4b50d"
+  },
+  "native_qualified": false,
+  "setup_attempts": [
+    {
+      "cause": "user manager cwd /home/rb; no checks started",
+      "exit": 2
+    },
+    {
+      "cause": "mock assertion retained test-prefix assumption; repaired by stage identity",
+      "exit": 1
+    }
+  ]
+}

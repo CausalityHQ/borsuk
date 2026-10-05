@@ -268,6 +268,7 @@ FINE_SQ8_REQUIRED_TESTS = {
     ),
 }
 FINE_SQ8_STAGES = tuple((name, command.split()) for name, command in (
+    ('clippy', 'cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious'),
     ('fine-sq8-bin-tests', 'cargo test --locked -p borsuk --bin hierarchical_semantic_cells fine_ -- --test-threads=1'),
     ('fine-sq8-tests', 'cargo test --locked -p borsuk --lib fine_sq8_groups:: -- --test-threads=1'),
     ('pq-codes-graph-tests', 'cargo test --locked -p borsuk --lib resident_vector_graph::bounded_pq_tests -- --test-threads=1'),
@@ -280,13 +281,12 @@ FINE_SQ8_STAGES = tuple((name, command.split()) for name, command in (
     ('s3-range-regressions', 'cargo test --locked -p borsuk --lib sq8_s3_range::tests -- --test-threads=1'),
     ('hierarchical-bin-regressions', 'cargo test --locked -p borsuk --bin hierarchical_semantic_cells -- --test-threads=1 --skip fine_'),
     ('release', 'cargo build --release --locked -p borsuk --bin hierarchical_semantic_cells'),
-    ('clippy', 'cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious'),
     ('test-build', 'env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh')))
 
 
 def fine_sq8_required_tests():
     required = FINE_SQ8_REQUIRED_TESTS
-    assert set(required) == {name for name, _ in FINE_SQ8_STAGES[:-3]} and all(required.values()), 'native fine SQ8 mandatory test names pending'
+    assert set(required) == {name for name, _ in FINE_SQ8_STAGES if name not in ('release', 'clippy', 'test-build')} and all(required.values()), 'native fine SQ8 mandatory test names pending'
     names = [test for tests in required.values() for test in tests]
     assert len(names) == len(set(names)) and all(type(name) is str and re.fullmatch(r'[a-zA-Z0-9_]+(?:::[a-zA-Z0-9_]+)+', name) for name in names), 'exact unique native fine SQ8 tests'
     return required
@@ -551,9 +551,9 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
 
 
     if fine_sq8:
-        ROOT = semantic.ROOT.parent/'semantic-1m/fine-sq8-groups/sq4-refinement/implementation-gates/compiler-binding-repair'
+        ROOT = semantic.ROOT.parent/'semantic-1m/fine-sq8-groups/sq4-refinement/implementation-gates/clippy-repair'
         CONFIG = ROOT/'config.json'
-        TOKEN_PREFIX = 'fixed-sq4-compiler-binding-repair-'
+        TOKEN_PREFIX = 'fixed-sq4-clippy-repair-'
         PREFIX = 'research/semantic-router/20261005/' + TOKEN_PREFIX
         TAG = 'borsuk-fine-sq8-implementation'
         SCHEMA = 'borsuk-fine-sq8-implementation-gates-spot-v1'
@@ -876,21 +876,22 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
     schema = FINE_SQ8_STAGE_SCHEMA if fine_sq8 else CELL_OVERLAP_STAGE_SCHEMA if cell_overlap else CONSTRAINED_SPLIT_STAGE_SCHEMA if constrained_split else HIERARCHICAL_CELLS_STAGE_SCHEMA if hierarchical_cells else FIXED48_STAGE_SCHEMA if fixed48 else BOUNDED_PUBLICATION_STAGE_SCHEMA
     required = fine_sq8_required_tests() if fine_sq8 else cell_overlap_required_tests() if cell_overlap else constrained_split_required_tests() if constrained_split else HIERARCHICAL_CELLS_REQUIRED_TESTS if hierarchical_cells else FIXED48_REQUIRED_TESTS
     named_protocol = fixed48 or hierarchical_cells or constrained_split or cell_overlap or fine_sq8
-    test_stage_count = len(stages) - 3
+    test_stage_indices = {index for index, (name, _) in enumerate(stages) if name not in ('release', 'clippy', 'test-build')}
+    test_record_positions = {2*index+1 for index in test_stage_indices}
     named_stages = {test: index for index, (name, _) in enumerate(stages)
         for test in required.get(name, ())} if named_protocol else {BOUNDED_PUBLICATION_CAP_TEST: 1}
     passes = dict.fromkeys(named_stages, 0)
-    test_counts = [0]*test_stage_count
-    passed_lines = [0]*test_stage_count
-    seen = [set() for _ in range(test_stage_count)]
-    summaries = [0]*test_stage_count
+    test_counts = [0]*len(stages)
+    passed_lines = [0]*len(stages)
+    seen = [set() for _ in range(len(stages))]
+    summaries = [0]*len(stages)
     test_builds = 0
     records = []
     with Path(log).open() as source:
         for line in source:
             match = re.fullmatch(r'test (\S+) \.\.\. ok\n?', line)
             if strict_counts and match:
-                assert len(records) in range(1, 2*test_stage_count, 2), 'test outside execution stage'
+                assert len(records) in test_record_positions, 'test outside execution stage'
                 assert match[1] not in seen[len(records)//2], 'duplicate test in stage: '+match[1]
                 seen[len(records)//2].add(match[1])
                 passed_lines[len(records)//2] += 1
@@ -906,7 +907,7 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
             if named_protocol:
                 summary = re.fullmatch(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; \d+ filtered out;.*\n?', line)
                 if summary:
-                    assert len(records) in range(1, 2*test_stage_count, 2), 'tests outside execution stages'
+                    assert len(records) in test_record_positions, 'tests outside execution stages'
                     assert int(summary[2]) == 0, 'failed tests'
                     assert not (constrained_split or cell_overlap or fine_sq8) or int(summary[3]) == 0, 'ignored tests forbidden'
                     test_counts[len(records)//2] += int(summary[1])
@@ -925,7 +926,7 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
                 assert len(records) <= 2*len(stages), 'extra gate stage records'
     assert len(records) == 2*len(stages), 'all completed stages required'
     assert all(count == 1 for count in passes.values()), 'named tests must pass exactly once'
-    assert not strict_counts or all(count == 1 for count in summaries) and passed_lines == test_counts, 'actual nonzero test counts'
+    assert not strict_counts or all(summaries[index] == 1 and passed_lines[index] == test_counts[index] for index in test_stage_indices), 'actual nonzero test counts'
     assert not (hierarchical_cells or constrained_split or cell_overlap or fine_sq8) or test_builds == 1, 'actual unshimmed test-build completion'
     previous_finish = None
     for index, (name, command) in enumerate(stages):
@@ -939,9 +940,9 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
             assert type(end['log_exit_status']) is int and end['log_exit_status'] == 0, 'stage log exit'
         assert start['started_at'] == end['started_at']
         assert datetime.fromisoformat(end['finished_at']) >= datetime.fromisoformat(start['started_at'])
-        assert (type(end['tests_run']) is int and end['tests_run'] > 0) if index < test_stage_count else end['tests_run'] is None
+        assert (type(end['tests_run']) is int and end['tests_run'] > 0) if index in test_stage_indices else end['tests_run'] is None
         if named_protocol:
-            assert index >= test_stage_count or end['tests_run'] == test_counts[index], 'actual test count'
+            assert index not in test_stage_indices or end['tests_run'] == test_counts[index], 'actual test count'
             expected = {test: passes[test] for test in required.get(name, ())}
             assert end[test_field] == expected and all(type(count) is int for count in end[test_field].values()), 'actual named test passes'
             started, finished = datetime.fromisoformat(start['started_at']), datetime.fromisoformat(end['finished_at'])
@@ -1243,16 +1244,16 @@ def _worker_self_check(proof, config_body, manifest_body):
                             if failure != 'missing-cap-proof':
                                 for test in named:
                                     kw['stdout'].write(('test '+test+' ... ok\n').encode())
-                            if (CELL_OVERLAP or FINE_SQ8) and not named and index < len(stages)-3:
+                            if (CELL_OVERLAP or FINE_SQ8) and not named and name not in ('release', 'clippy', 'test-build'):
                                 kw['stdout'].write(b'test tests::regression ... ok\n')
-                            if index < len(stages)-3:
+                            if name not in ('release', 'clippy', 'test-build'):
                                 kw['stdout'].write(f'test result: ok. {max(1, len(named))} passed; 0 failed; {int(failure == "ignored-tests")} ignored; 0 measured; 100 filtered out; finished in 0.00s\n'.encode())
                         elif index == 1 and failure != 'missing-cap-proof':
                             kw['stdout'].write(('test '+BOUNDED_PUBLICATION_CAP_TEST+' ... ok\n').encode())
                         if MINIMAL_ARCHIVE and name == 'test-build':
                             kw['stdout'].write(b'rust-test-build status=0 elapsed_seconds=0 jobs=1\n')
                         record.update(finished_at=record['started_at'], exit_status=0, gate_status=0,
-                            tests_run=(0 if failure == 'zero-stage-record' else False if failure == 'stage-bool' else max(1, len(named))) if index < len(stages)-3 else None)
+                            tests_run=(0 if failure == 'zero-stage-record' else False if failure == 'stage-bool' else max(1, len(named))) if name not in ('release', 'clippy', 'test-build') else None)
                         if CONSTRAINED_SPLIT or CELL_OVERLAP or FINE_SQ8:
                             record['gate_status'] = 96 if failure == 'gate-failure' else 0
                             record['log_exit_status'] = 18 if failure == 'tee-failure' else 0
@@ -1341,7 +1342,7 @@ def _worker_self_check(proof, config_body, manifest_body):
                             rejected(lambda:validate_receipt(out, proof))
                         (out/'workspace-receipt.json').write_bytes(encoded(result))
                     if BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
-                        assert len(result['stages']) == (len(FINE_SQ8_STAGES) if FINE_SQ8 else 7 if CELL_OVERLAP else 6 if MINIMAL_ARCHIVE else 7) and all(record['tests_run'] > 0 for record in result['stages'][:-3])
+                        assert len(result['stages']) == (len(FINE_SQ8_STAGES) if FINE_SQ8 else 7 if CELL_OVERLAP else 6 if MINIMAL_ARCHIVE else 7) and all(record['tests_run'] > 0 for record in result['stages'] if record['stage'] not in ('release', 'clippy', 'test-build'))
                         for stages in ([], result['stages'][:-1], list(reversed(result['stages']))):
                             (out/'workspace-receipt.json').write_bytes(encoded(dict(result, stages=stages)))
                             rejected(lambda:validate_receipt(out, proof))
@@ -2249,7 +2250,7 @@ def _fine_sq8_self_check():
         assert 'fine_sq8' in inspect.signature(function).parameters
     with execution_mode(fine_sq8=True):
         assert FINE_SQ8 and MINIMAL_ARCHIVE and not CELL_OVERLAP
-        assert str(ROOT).endswith('semantic-1m/fine-sq8-groups/sq4-refinement/implementation-gates/compiler-binding-repair')
+        assert str(ROOT).endswith('semantic-1m/fine-sq8-groups/sq4-refinement/implementation-gates/clippy-repair')
         assert mode_flag() == ' --fine-sq8-implementation'
         assert CONFIG_SCHEMA == FIXED['schema'] == 'borsuk-fine-sq8-implementation-gates-v1'
         assert SCHEMA == 'borsuk-fine-sq8-implementation-gates-spot-v1'
@@ -2342,15 +2343,15 @@ def _hierarchical_cells_script_self_check(*, constrained_split=False, cell_overl
         for index, (name, command) in enumerate(stages):
             names = required.get(name, ())
             lines = ['test '+test+' ... ok' for test in names]
-            if (cell_overlap or fine_sq8) and not names and index < len(stages)-3:
+            if (cell_overlap or fine_sq8) and not names and name not in ('release', 'clippy', 'test-build'):
                 lines.append('test tests::regression ... ok')
-            if index < len(stages)-3:
+            if name not in ('release', 'clippy', 'test-build'):
                 lines.append(f'test result: ok. {max(1, len(names))} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s')
             if (cell_overlap or fine_sq8) and name == 'test-build':
                 lines.append('rust-test-build status=0 elapsed_seconds=0 jobs=1')
             good = '\n'.join(lines)+'\n'
             cases = [(good, '0', '0', 0), (good, '17', '0', 17), (good, '0', '18', 18)]
-            if index < len(stages)-3:
+            if name not in ('release', 'clippy', 'test-build'):
                 cases.append(('', '0', '0', 96))
                 if constrained_split or cell_overlap or fine_sq8:
                     cases.append((good.replace('0 ignored', '1 ignored'), '0', '0', 96))
@@ -2391,10 +2392,10 @@ def _fixed48_stages_self_check(*, hierarchical_cells=False, constrained_split=Fa
             lines.append(encoded(record).decode())
             names = required.get(name, ())
             lines.extend('test '+test+' ... ok' for test in names)
-            if (cell_overlap or fine_sq8) and not names and index < len(stages)-3:
+            if (cell_overlap or fine_sq8) and not names and name not in ('release', 'clippy', 'test-build'):
                 lines.append('test tests::regression ... ok')
-            tests = max(1, len(names)) if index < len(stages)-3 else None
-            if index < len(stages)-3:
+            tests = max(1, len(names)) if name not in ('release', 'clippy', 'test-build') else None
+            if name not in ('release', 'clippy', 'test-build'):
                 lines.append(f'test result: ok. {tests} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s')
             if (hierarchical_cells or constrained_split or cell_overlap or fine_sq8) and name == 'test-build':
                 lines.append('rust-test-build status=0 elapsed_seconds=0 jobs=1')
@@ -2405,7 +2406,7 @@ def _fixed48_stages_self_check(*, hierarchical_cells=False, constrained_split=Fa
             lines.append(encoded(record).decode())
         log.write_text('\n'.join(lines)+'\n')
         records = validate_bounded_publication_stages(log, fixed48=not (hierarchical_cells or constrained_split or cell_overlap or fine_sq8), hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8)
-        assert len(records) == len(stages) and [r['tests_run'] for r in records[:-3]] == [max(1,len(required.get(name, ()))) for name,_ in stages[:-3]]
+        assert len(records) == len(stages) and [r['tests_run'] for r in records if r['stage'] not in ('release', 'clippy', 'test-build')] == [max(1,len(required.get(name, ()))) for name,_ in stages if name not in ('release', 'clippy', 'test-build')]
         for names in required.values():
             for name in names:
                 passed = 'test '+name+' ... ok'

@@ -43,7 +43,8 @@ run_stage() {
   return "$status"
 }
 
-# Check the previously failing binary layer first; retain all assurance stages.
+# Check the previously failing Clippy layer first; retain all assurance stages.
+run_stage clippy cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
 run_stage fine-sq8-bin-tests cargo test --locked -p borsuk --bin hierarchical_semantic_cells fine_ -- --test-threads=1
 run_stage fine-sq8-tests cargo test --locked -p borsuk --lib fine_sq8_groups:: -- --test-threads=1
 run_stage pq-codes-graph-tests cargo test --locked -p borsuk --lib resident_vector_graph::bounded_pq_tests -- --test-threads=1
@@ -56,5 +57,4 @@ run_stage page-authority-regressions cargo test --locked -p borsuk --lib sq8_pag
 run_stage s3-range-regressions cargo test --locked -p borsuk --lib sq8_s3_range::tests -- --test-threads=1
 run_stage hierarchical-bin-regressions cargo test --locked -p borsuk --bin hierarchical_semantic_cells -- --test-threads=1 --skip fine_
 run_stage release cargo build --release --locked -p borsuk --bin hierarchical_semantic_cells
-run_stage clippy cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
 run_stage test-build env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh
