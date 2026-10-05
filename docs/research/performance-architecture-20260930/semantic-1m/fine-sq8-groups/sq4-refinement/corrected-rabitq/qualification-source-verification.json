@@ -1,0 +1,35 @@
+{
+  "actual_full_workspace_execution": false,
+  "aws_cargo_cgroups": "MOCKED",
+  "child_commit": "8c9f76f85852ccbdc3aa07aa3f2189677c355941",
+  "command": [
+    "python3",
+    "scripts/launch_native_workspace_execution_spot.py",
+    "--fine-sq8-implementation",
+    "--self-check"
+  ],
+  "controller_commit": "a907c6083554f84f38b1bed1085491178f755876",
+  "cpu_seconds": 2.709,
+  "exit_status": 0,
+  "invocation_id": "1d86b3e353114698a349279e0e85517e",
+  "native_tests": "UNRUN",
+  "notes": "Root independently collected original source-only mocked qualification check; host IO pressure observed. No native compiler/query/cloud calls.",
+  "original_exec_session": 49189,
+  "owned_file_sha256": {
+    "scripts/check_fine_sq8_implementation.sh": "e339ae20a945314973dc6aa8a57f13b75e886b8e8e06c61e27db6167f9243317",
+    "scripts/launch_native_workspace_execution_spot.py": "29004a437458d05911d716b24c52691c27b702a93c697c2dd01e05e4e23d88a9"
+  },
+  "reported_memory_peak": "93.4M",
+  "resource_caps": {
+    "cpu_quota_percent": 100,
+    "memory_bytes": 268435456,
+    "runtime_seconds": 120,
+    "swap_bytes": 0,
+    "tasks": 512
+  },
+  "runtime_seconds": 22.131,
+  "schema": "borsuk-corrected-four-bit-qualification-source-check-v1",
+  "swap_bytes": 0,
+  "terminal_systemd_show": "ActiveState=inactive\nMainPID=0\nExecMainStatus=0\nControlGroup=\nMemoryPeak=[not set]\nMemorySwapPeak=[not set]\nCPUUsageNSec=[not set]\n",
+  "unit": "borsuk-corrected-qualification-root-179123.service"
+}
