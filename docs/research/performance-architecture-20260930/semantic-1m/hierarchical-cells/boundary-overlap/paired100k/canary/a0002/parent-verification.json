@@ -1,0 +1,13 @@
+{
+  "status": "INFRASTRUCTURE_GO",
+  "controller_exit": 0,
+  "independent_replay_exit": 0,
+  "terminal_exit": 0,
+  "authenticated_artifacts": 10,
+  "same_instance": "i-059b49bde3879ae10",
+  "terminated": true,
+  "scientific_qualification": false,
+  "truth_opened": false,
+  "native_queries": 0,
+  "repair_checked": "Post-install import of full scientific publication roster"
+}

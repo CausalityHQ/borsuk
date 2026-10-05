@@ -1,0 +1,5 @@
+{"instance_id": "i-059b49bde3879ae10", "nodes": {"0": {"instance_id": "i-059b49bde3879ae10"}}, "prefix": "research/hierarchical-cells/20261005/cell-overlap-paired100k-canary-a0002", "source_commit": "2f197c624368bef8c0fb755ffbb463f116e88a8b", "source_archive_sha256": "7ce13a9febbc89c4c3aeb77fee16276e0f8e4ec0796754be10bc950250c3ab40"}
+{"instance_id": "i-059b49bde3879ae10", "state": "pending"}
+{"instance_id": "i-059b49bde3879ae10", "state": "running"}
+{"instance_id": "i-059b49bde3879ae10", "state": "running"}
+{"complete": true, "instance_id": "i-059b49bde3879ae10", "state": "terminated"}
