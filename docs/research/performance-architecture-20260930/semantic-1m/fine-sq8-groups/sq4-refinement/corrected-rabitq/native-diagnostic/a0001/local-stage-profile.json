@@ -147,11 +147,47 @@
       "p50_ms": 93.0962915,
       "p95_ms": 133.94317,
       "max_ms": 149.353373
+    },
+    {
+      "dataset": "relaion",
+      "arm": "sq8_reference",
+      "field": "sq8_scoring_cpu_ns",
+      "sum_seconds": 1.029329372,
+      "p50_ms": 14.190274,
+      "p95_ms": 38.32468,
+      "max_ms": 45.351144
+    },
+    {
+      "dataset": "relaion",
+      "arm": "sq8_reference",
+      "field": "sq8_scoring_wall_ns",
+      "sum_seconds": 1.029677651,
+      "p50_ms": 14.1906875,
+      "p95_ms": 38.325186,
+      "max_ms": 45.351551
+    },
+    {
+      "dataset": "cohere",
+      "arm": "sq8_reference",
+      "field": "sq8_scoring_cpu_ns",
+      "sum_seconds": 1.39305143,
+      "p50_ms": 21.9276165,
+      "p95_ms": 31.795961,
+      "max_ms": 35.480689
+    },
+    {
+      "dataset": "cohere",
+      "arm": "sq8_reference",
+      "field": "sq8_scoring_wall_ns",
+      "sum_seconds": 1.393115528,
+      "p50_ms": 21.927992,
+      "p95_ms": 31.796478,
+      "max_ms": 35.481175
     }
   ],
   "limitations": [
     "scoring includes payload reads, hash verification, arithmetic, allocations and full sorting; cannot attribute all CPU to a SIMD kernel",
-    "SQ8 reference lacks separate CPU/wall fields, so no measured SQ8 CPU speedup claim",
     "whole process includes build and all three arms; cannot derive serving QPS from whole wall time"
-  ]
+  ],
+  "sq8_timing_location": "outer query.sq8_scoring_cpu_ns and query.sq8_scoring_wall_ns; corrected/decoded timers are nested"
 }
