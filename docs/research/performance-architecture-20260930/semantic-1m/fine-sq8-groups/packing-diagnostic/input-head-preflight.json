@@ -1,0 +1,64 @@
+{
+  "schema": "borsuk-fine-pack-input-head-preflight-v1",
+  "sdk_dispatch_attempts": 7,
+  "retries": 0,
+  "objects": [
+    {
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/manifest.json",
+      "bytes": 22721,
+      "etag": "\"979efa1c4a5acf3cdff1b350a4f4efc0\"",
+      "last_modified": "2026-10-05T10:20:24+00:00",
+      "expected_sha256": "0a2a2dff6a7abc48143d08eb491a150bbed03957b81b0261c2b8a0434612afec",
+      "whole_body_verified_here": false
+    },
+    {
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/graph.bin",
+      "bytes": 26712462,
+      "etag": "\"d16d2c07d0935605cb010aa6c94e78e5-4\"",
+      "last_modified": "2026-10-05T10:20:25+00:00",
+      "expected_sha256": "f817d7f4fbdd640f66590f58f9e07e9218753fbec4517ba95fc405a78d612325",
+      "whole_body_verified_here": false
+    },
+    {
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/manifest.json",
+      "bytes": 22815,
+      "etag": "\"0aee3eb9c11ddf0670821fc589666c02\"",
+      "last_modified": "2026-10-05T10:20:28+00:00",
+      "expected_sha256": "ea1a792a841014ef08ed805d2872403739ba778ea8b8d3a9e5eab1b7f831c8bb",
+      "whole_body_verified_here": false
+    },
+    {
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/graph.bin",
+      "bytes": 26844914,
+      "etag": "\"e43efb63a0bacfb2bca4c6d763fb030e-4\"",
+      "last_modified": "2026-10-05T10:20:29+00:00",
+      "expected_sha256": "4afd895f2e684f833437f4e6d4270c4713bbeb54fe67b50919f796e95f896e2e",
+      "whole_body_verified_here": false
+    },
+    {
+      "key": "research/fine-pack-diagnostic/inputs/374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62/packing-original-seal.json",
+      "bytes": 1109,
+      "etag": "\"cc96085c430ea6e9b335d852cfeadf07\"",
+      "last_modified": "2026-10-05T12:33:24+00:00",
+      "expected_sha256": "374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62",
+      "whole_body_verified_here": false
+    },
+    {
+      "key": "research/fine-pack-diagnostic/inputs/7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025/packing-prefix.jsonl",
+      "bytes": 1665668,
+      "etag": "\"a41460e8a27b35d6670bd83a2d94c463\"",
+      "last_modified": "2026-10-05T12:33:24+00:00",
+      "expected_sha256": "7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025",
+      "whole_body_verified_here": false
+    },
+    {
+      "key": "research/semantic-router/20261005/fine-sq8-packing-binary-repair-a0001/artifacts/binaries/hierarchical_semantic_cells",
+      "bytes": 7860472,
+      "etag": "\"bc367d7d0ec8de82299db7032c1d3c5b\"",
+      "last_modified": "2026-10-05T12:25:37+00:00",
+      "expected_sha256": "a4ea1d88223dbcf73b714ca2f75b9556c9d4f1389333391c1ac619a8bb9b4f45",
+      "whole_body_verified_here": false
+    }
+  ],
+  "graph_truth_requests_pq_records_bodies_opened": false
+}
