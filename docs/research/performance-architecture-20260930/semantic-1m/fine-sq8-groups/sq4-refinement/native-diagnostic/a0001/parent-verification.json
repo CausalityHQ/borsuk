@@ -1,0 +1,31 @@
+{
+  "all_terminal_bodies_independently_authenticated": true,
+  "binary_transport": "gzip; decompressed identity equals authenticated terminal binary",
+  "drain_and_cleanup_complete": true,
+  "failure": "SQ4 sealed root/request binding",
+  "instance_closeout": {
+    "nodes": {
+      "0": {
+        "instance_id": "i-022ec60ff868e065a"
+      }
+    },
+    "observed_elapsed_s": 73,
+    "state": "terminated"
+  },
+  "instance_id": "i-022ec60ff868e065a",
+  "native_elapsed_seconds": 0.121172002,
+  "native_memory_peak_bytes": 524288,
+  "native_swap_peak_bytes": 0,
+  "original_controller_exit_status": 1,
+  "original_exec_session": 22050,
+  "original_native_exit_status": 2,
+  "quality_or_performance_measurement": false,
+  "queries_scored": 0,
+  "required_repair": "Stage requests and configure native requests at authenticated original sealed absolute paths; preserve all object bytes/SHAs, algorithm and gates",
+  "root_cause": "Root native config requests path /screen/retained differs from archived sealed requests path /screen/fine/requests despite identical bytes/SHA",
+  "schema": "borsuk-sq4-closed-invalid-verification-v1",
+  "stage": "validation",
+  "status": "INVALID",
+  "terminal_artifact_count": 19,
+  "truth_opened": false
+}

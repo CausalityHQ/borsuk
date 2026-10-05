@@ -1,0 +1,14 @@
+{"instance_id": "i-022ec60ff868e065a", "nodes": {"0": {"instance_id": "i-022ec60ff868e065a"}}, "prefix": "research/hierarchical-cells/20261005/fixed-sq4-diagnostic-a0001", "source_commit": "959e8acb7e340da581bf24593b483b78ea26e008", "source_archive_sha256": "748fda3c3ea93dff0c7e19b68015c9cd991bed18da88b31197b6b729d7d16147"}
+{"instance_id": "i-022ec60ff868e065a", "state": "pending"}
+{"instance_id": "i-022ec60ff868e065a", "state": "running"}
+Traceback (most recent call last):
+  File "/home/rb/worktrees/borsuk-sq4-diagnostic-a0001-frozen/scripts/launch_fine_pack_diagnostic.py", line 1980, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/home/rb/worktrees/borsuk-sq4-diagnostic-a0001-frozen/scripts/launch_fine_pack_diagnostic.py", line 1975, in main
+    lifecycle().main(args.attempt, campaign=sys.modules[__name__])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/rb/worktrees/borsuk-sq4-diagnostic-a0001-frozen/scripts/launch_native_metadata_ranges_cold_spot.py", line 373, in main
+    assert terminal['status'] == terminal['phase'] == 'complete' and terminal['exit_code'] == 0
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
