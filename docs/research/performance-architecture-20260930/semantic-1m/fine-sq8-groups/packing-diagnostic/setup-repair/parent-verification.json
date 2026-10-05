@@ -1,0 +1,9 @@
+{
+  "source_commit": "d005ba948bf8db67422a0b49924f4957bba3aa5d",
+  "source_sha256": "44731d5271c65e53be17a7f4310a4d31a542866682ac75df02e7c4e670d14a76",
+  "independent_bounded_self_check_exit": 0,
+  "actual_kernel_setup_proof_validated": true,
+  "native_binary_and_config_unchanged": true,
+  "native_ANN_executed": false,
+  "next_attempt": "a0002"
+}
