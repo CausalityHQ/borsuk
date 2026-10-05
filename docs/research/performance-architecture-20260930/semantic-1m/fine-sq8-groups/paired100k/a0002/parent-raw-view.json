@@ -1,0 +1,13 @@
+{
+  "original": "/home/rb/worktrees/borsuk-fine-sq8-scientific-launch-v2/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002",
+  "view": "/home/rb/worktrees/borsuk-fine-sq8-scientific-launch-v2/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002-replay-view",
+  "raw_files": "hardlinks; gzip transport sidecars omitted",
+  "restored": {
+    "path": "screen/fine/authority/terminal.json.gz",
+    "raw": {
+      "bytes": 3191,
+      "sha256": "2602aef71e4e76ebd43110bd72f7cb67466116fdeeb2255b37311a73044e8512"
+    }
+  },
+  "original_modified": false
+}

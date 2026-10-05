@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-095e59139c20804fe",
+  "nodes": {
+    "0": {
+      "instance_id": "i-095e59139c20804fe"
+    }
+  },
+  "prefix": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002",
+  "source_commit": "f6e55f83b879e641ca7c26c7009d52cf9d205e10",
+  "source_archive_sha256": "6f38d73fe0f353a32691054bbf0037a159bd407129ac1f2c518d9e90e95efa2a"
+}

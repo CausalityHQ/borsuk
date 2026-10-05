@@ -1,0 +1,1594 @@
+{
+  "native_source_unchanged": true,
+  "queries": 128,
+  "rows": [
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 4168320,
+        "64": 3244800,
+        "128": 3120000,
+        "256": 3120000
+      },
+      "ordinal": 0,
+      "original_runs": 74,
+      "selected_pages": 250
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 32747520,
+        "64": 21690240,
+        "128": 13528320,
+        "256": 8424000
+      },
+      "ordinal": 1,
+      "original_runs": 343,
+      "selected_pages": 588
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 5328960,
+        "64": 4080960,
+        "128": 3781440,
+        "256": 3781440
+      },
+      "ordinal": 2,
+      "original_runs": 88,
+      "selected_pages": 303
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 12180480,
+        "64": 8773440,
+        "128": 7026240,
+        "256": 6252480
+      },
+      "ordinal": 3,
+      "original_runs": 190,
+      "selected_pages": 501
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 25821120,
+        "64": 18844800,
+        "128": 12854400,
+        "256": 8973120
+      },
+      "ordinal": 4,
+      "original_runs": 336,
+      "selected_pages": 639
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 6215040,
+        "64": 4305600,
+        "128": 3506880,
+        "256": 3506880
+      },
+      "ordinal": 5,
+      "original_runs": 108,
+      "selected_pages": 281
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 9784320,
+        "64": 7612800,
+        "128": 6252480,
+        "256": 5778240
+      },
+      "ordinal": 6,
+      "original_runs": 166,
+      "selected_pages": 463
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 10146240,
+        "64": 6976320,
+        "128": 5141760,
+        "256": 4630080
+      },
+      "ordinal": 7,
+      "original_runs": 169,
+      "selected_pages": 371
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 21889920,
+        "64": 16473600,
+        "128": 11581440,
+        "256": 8424000
+      },
+      "ordinal": 8,
+      "original_runs": 313,
+      "selected_pages": 618
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 1797120,
+        "64": 1797120,
+        "128": 1797120,
+        "256": 1797120
+      },
+      "ordinal": 9,
+      "original_runs": 28,
+      "selected_pages": 144
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 10208640,
+        "64": 7974720,
+        "128": 6202560,
+        "256": 5541120
+      },
+      "ordinal": 10,
+      "original_runs": 181,
+      "selected_pages": 444
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 17921280,
+        "64": 10533120,
+        "128": 6789120,
+        "256": 5665920
+      },
+      "ordinal": 11,
+      "original_runs": 206,
+      "selected_pages": 454
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 16323840,
+        "64": 11294400,
+        "128": 7512960,
+        "256": 5790720
+      },
+      "ordinal": 12,
+      "original_runs": 224,
+      "selected_pages": 464
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 19106880,
+        "64": 12380160,
+        "128": 8136960,
+        "256": 6402240
+      },
+      "ordinal": 13,
+      "original_runs": 222,
+      "selected_pages": 513
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 31861440,
+        "64": 20542080,
+        "128": 12742080,
+        "256": 8486400
+      },
+      "ordinal": 14,
+      "original_runs": 335,
+      "selected_pages": 601
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 15924480,
+        "64": 12242880,
+        "128": 9547200,
+        "256": 7500480
+      },
+      "ordinal": 15,
+      "original_runs": 260,
+      "selected_pages": 597
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 6252480,
+        "64": 4380480,
+        "128": 3756480,
+        "256": 3756480
+      },
+      "ordinal": 16,
+      "original_runs": 103,
+      "selected_pages": 301
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 12068160,
+        "64": 8486400,
+        "128": 5815680,
+        "256": 5129280
+      },
+      "ordinal": 17,
+      "original_runs": 183,
+      "selected_pages": 411
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 10770240,
+        "64": 7887360,
+        "128": 6327360,
+        "256": 5790720
+      },
+      "ordinal": 18,
+      "original_runs": 171,
+      "selected_pages": 464
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 14826240,
+        "64": 10133760,
+        "128": 7188480,
+        "256": 5965440
+      },
+      "ordinal": 19,
+      "original_runs": 203,
+      "selected_pages": 478
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 7712640,
+        "64": 5366400,
+        "128": 4330560,
+        "256": 4330560
+      },
+      "ordinal": 20,
+      "original_runs": 124,
+      "selected_pages": 347
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 31462080,
+        "64": 21964800,
+        "128": 13665600,
+        "256": 8736000
+      },
+      "ordinal": 21,
+      "original_runs": 341,
+      "selected_pages": 615
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 6888960,
+        "64": 4455360,
+        "128": 3494400,
+        "256": 3494400
+      },
+      "ordinal": 22,
+      "original_runs": 115,
+      "selected_pages": 280
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 21665280,
+        "64": 13166400,
+        "128": 9185280,
+        "256": 6888960
+      },
+      "ordinal": 23,
+      "original_runs": 263,
+      "selected_pages": 545
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 9222720,
+        "64": 6027840,
+        "128": 4942080,
+        "256": 4942080
+      },
+      "ordinal": 24,
+      "original_runs": 124,
+      "selected_pages": 396
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 11032320,
+        "64": 7537920,
+        "128": 5703360,
+        "256": 5378880
+      },
+      "ordinal": 25,
+      "original_runs": 154,
+      "selected_pages": 431
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 10757760,
+        "64": 6651840,
+        "128": 4817280,
+        "256": 4430400
+      },
+      "ordinal": 26,
+      "original_runs": 159,
+      "selected_pages": 355
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 4255680,
+        "64": 3644160,
+        "128": 3456960,
+        "256": 3456960
+      },
+      "ordinal": 27,
+      "original_runs": 79,
+      "selected_pages": 277
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 13416000,
+        "64": 9909120,
+        "128": 7475520,
+        "256": 6689280
+      },
+      "ordinal": 28,
+      "original_runs": 191,
+      "selected_pages": 536
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 8785920,
+        "64": 6651840,
+        "128": 5141760,
+        "256": 4842240
+      },
+      "ordinal": 29,
+      "original_runs": 152,
+      "selected_pages": 388
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 16236480,
+        "64": 9622080,
+        "128": 6963840,
+        "256": 6027840
+      },
+      "ordinal": 30,
+      "original_runs": 193,
+      "selected_pages": 483
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 16161600,
+        "64": 9310080,
+        "128": 6115200,
+        "256": 5154240
+      },
+      "ordinal": 31,
+      "original_runs": 192,
+      "selected_pages": 413
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 12442560,
+        "64": 8661120,
+        "128": 6751680,
+        "256": 6240000
+      },
+      "ordinal": 32,
+      "original_runs": 169,
+      "selected_pages": 500
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 20267520,
+        "64": 12916800,
+        "128": 8498880,
+        "256": 6626880
+      },
+      "ordinal": 33,
+      "original_runs": 239,
+      "selected_pages": 531
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 29290560,
+        "64": 22027200,
+        "128": 15088320,
+        "256": 9796800
+      },
+      "ordinal": 34,
+      "original_runs": 368,
+      "selected_pages": 659
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 16036800,
+        "64": 10632960,
+        "128": 7288320,
+        "256": 6227520
+      },
+      "ordinal": 35,
+      "original_runs": 197,
+      "selected_pages": 499
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 19381440,
+        "64": 12754560,
+        "128": 8623680,
+        "256": 6252480
+      },
+      "ordinal": 36,
+      "original_runs": 255,
+      "selected_pages": 501
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 13653120,
+        "64": 11032320,
+        "128": 8686080,
+        "256": 6864000
+      },
+      "ordinal": 37,
+      "original_runs": 250,
+      "selected_pages": 550
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 2096640,
+        "64": 1934400,
+        "128": 1934400,
+        "256": 1934400
+      },
+      "ordinal": 38,
+      "original_runs": 45,
+      "selected_pages": 155
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 2895360,
+        "64": 2608320,
+        "128": 2608320,
+        "256": 2608320
+      },
+      "ordinal": 39,
+      "original_runs": 51,
+      "selected_pages": 209
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 22301760,
+        "64": 14102400,
+        "128": 9884160,
+        "256": 7400640
+      },
+      "ordinal": 40,
+      "original_runs": 271,
+      "selected_pages": 578
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 12754560,
+        "64": 8960640,
+        "128": 6302400,
+        "256": 5516160
+      },
+      "ordinal": 41,
+      "original_runs": 186,
+      "selected_pages": 442
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 10470720,
+        "64": 7350720,
+        "128": 5541120,
+        "256": 5154240
+      },
+      "ordinal": 42,
+      "original_runs": 159,
+      "selected_pages": 413
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 4218240,
+        "64": 3419520,
+        "128": 3219840,
+        "256": 3219840
+      },
+      "ordinal": 43,
+      "original_runs": 80,
+      "selected_pages": 258
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 6489600,
+        "64": 4992000,
+        "128": 4230720,
+        "256": 4230720
+      },
+      "ordinal": 44,
+      "original_runs": 114,
+      "selected_pages": 339
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 15986880,
+        "64": 8349120,
+        "128": 5191680,
+        "256": 4779840
+      },
+      "ordinal": 45,
+      "original_runs": 161,
+      "selected_pages": 383
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 2371200,
+        "64": 2271360,
+        "128": 2271360,
+        "256": 2271360
+      },
+      "ordinal": 46,
+      "original_runs": 40,
+      "selected_pages": 182
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 9409920,
+        "64": 6514560,
+        "128": 5116800,
+        "256": 4867200
+      },
+      "ordinal": 47,
+      "original_runs": 148,
+      "selected_pages": 390
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 22875840,
+        "64": 15400320,
+        "128": 10033920,
+        "256": 7313280
+      },
+      "ordinal": 48,
+      "original_runs": 276,
+      "selected_pages": 566
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 11294400,
+        "64": 8261760,
+        "128": 6427200,
+        "256": 5940480
+      },
+      "ordinal": 49,
+      "original_runs": 167,
+      "selected_pages": 476
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 5703360,
+        "64": 4268160,
+        "128": 3756480,
+        "256": 3756480
+      },
+      "ordinal": 50,
+      "original_runs": 105,
+      "selected_pages": 301
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 4430400,
+        "64": 3893760,
+        "128": 3731520,
+        "256": 3731520
+      },
+      "ordinal": 51,
+      "original_runs": 77,
+      "selected_pages": 299
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 16411200,
+        "64": 11968320,
+        "128": 8723520,
+        "256": 6814080
+      },
+      "ordinal": 52,
+      "original_runs": 242,
+      "selected_pages": 546
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 17896320,
+        "64": 12916800,
+        "128": 9497280,
+        "256": 7300800
+      },
+      "ordinal": 53,
+      "original_runs": 259,
+      "selected_pages": 582
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 8074560,
+        "64": 6464640,
+        "128": 5441280,
+        "256": 5266560
+      },
+      "ordinal": 54,
+      "original_runs": 142,
+      "selected_pages": 422
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 4130880,
+        "64": 3407040,
+        "128": 3282240,
+        "256": 3282240
+      },
+      "ordinal": 55,
+      "original_runs": 74,
+      "selected_pages": 263
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 9834240,
+        "64": 7550400,
+        "128": 6077760,
+        "256": 5640960
+      },
+      "ordinal": 56,
+      "original_runs": 163,
+      "selected_pages": 452
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 3007680,
+        "64": 2745600,
+        "128": 2745600,
+        "256": 2745600
+      },
+      "ordinal": 57,
+      "original_runs": 50,
+      "selected_pages": 220
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 6090240,
+        "64": 4892160,
+        "128": 4205760,
+        "256": 4205760
+      },
+      "ordinal": 58,
+      "original_runs": 114,
+      "selected_pages": 337
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 4118400,
+        "64": 3194880,
+        "128": 3070080,
+        "256": 3070080
+      },
+      "ordinal": 59,
+      "original_runs": 74,
+      "selected_pages": 246
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 2870400,
+        "64": 2558400,
+        "128": 2558400,
+        "256": 2558400
+      },
+      "ordinal": 60,
+      "original_runs": 50,
+      "selected_pages": 205
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 4230720,
+        "64": 3419520,
+        "128": 3169920,
+        "256": 3169920
+      },
+      "ordinal": 61,
+      "original_runs": 84,
+      "selected_pages": 254
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 15375360,
+        "64": 11032320,
+        "128": 7974720,
+        "256": 6714240
+      },
+      "ordinal": 62,
+      "original_runs": 214,
+      "selected_pages": 538
+    },
+    {
+      "dataset": "relaion",
+      "min_cover_bytes": {
+        "32": 11269440,
+        "64": 7899840,
+        "128": 6090240,
+        "256": 5503680
+      },
+      "ordinal": 63,
+      "original_runs": 175,
+      "selected_pages": 441
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 24223680,
+        "64": 19606080,
+        "128": 14514240,
+        "256": 10183680
+      },
+      "ordinal": 0,
+      "original_runs": 386,
+      "selected_pages": 677
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 15213120,
+        "64": 12105600,
+        "128": 9285120,
+        "256": 7225920
+      },
+      "ordinal": 1,
+      "original_runs": 267,
+      "selected_pages": 568
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 23212800,
+        "64": 17634240,
+        "128": 12742080,
+        "256": 9235200
+      },
+      "ordinal": 2,
+      "original_runs": 346,
+      "selected_pages": 650
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 19443840,
+        "64": 15649920,
+        "128": 12055680,
+        "256": 8985600
+      },
+      "ordinal": 3,
+      "original_runs": 317,
+      "selected_pages": 659
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 21091200,
+        "64": 15362880,
+        "128": 10720320,
+        "256": 7637760
+      },
+      "ordinal": 4,
+      "original_runs": 300,
+      "selected_pages": 568
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 13153920,
+        "64": 10071360,
+        "128": 7662720,
+        "256": 6527040
+      },
+      "ordinal": 5,
+      "original_runs": 205,
+      "selected_pages": 523
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 22501440,
+        "64": 16174080,
+        "128": 10782720,
+        "256": 7625280
+      },
+      "ordinal": 6,
+      "original_runs": 281,
+      "selected_pages": 586
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 21528000,
+        "64": 14813760,
+        "128": 9434880,
+        "256": 6527040
+      },
+      "ordinal": 7,
+      "original_runs": 266,
+      "selected_pages": 513
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 18283200,
+        "64": 13728000,
+        "128": 9035520,
+        "256": 6165120
+      },
+      "ordinal": 8,
+      "original_runs": 259,
+      "selected_pages": 491
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 12242880,
+        "64": 9035520,
+        "128": 6851520,
+        "256": 5890560
+      },
+      "ordinal": 9,
+      "original_runs": 195,
+      "selected_pages": 472
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 16698240,
+        "64": 12030720,
+        "128": 8261760,
+        "256": 6252480
+      },
+      "ordinal": 10,
+      "original_runs": 235,
+      "selected_pages": 501
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 7862400,
+        "64": 5403840,
+        "128": 4230720,
+        "256": 4230720
+      },
+      "ordinal": 11,
+      "original_runs": 122,
+      "selected_pages": 339
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 15986880,
+        "64": 12217920,
+        "128": 9210240,
+        "256": 7076160
+      },
+      "ordinal": 12,
+      "original_runs": 256,
+      "selected_pages": 567
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 22027200,
+        "64": 16311360,
+        "128": 11531520,
+        "256": 8436480
+      },
+      "ordinal": 13,
+      "original_runs": 313,
+      "selected_pages": 619
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 19755840,
+        "64": 13353600,
+        "128": 8848320,
+        "256": 6427200
+      },
+      "ordinal": 14,
+      "original_runs": 255,
+      "selected_pages": 515
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 22688640,
+        "64": 17983680,
+        "128": 12480000,
+        "256": 8598720
+      },
+      "ordinal": 15,
+      "original_runs": 338,
+      "selected_pages": 607
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 21128640,
+        "64": 15100800,
+        "128": 10595520,
+        "256": 7712640
+      },
+      "ordinal": 16,
+      "original_runs": 294,
+      "selected_pages": 580
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 14451840,
+        "64": 10121280,
+        "128": 7263360,
+        "256": 6190080
+      },
+      "ordinal": 17,
+      "original_runs": 203,
+      "selected_pages": 496
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 12305280,
+        "64": 7712640,
+        "128": 5416320,
+        "256": 4992000
+      },
+      "ordinal": 18,
+      "original_runs": 162,
+      "selected_pages": 400
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 24123840,
+        "64": 19219200,
+        "128": 13528320,
+        "256": 8960640
+      },
+      "ordinal": 19,
+      "original_runs": 340,
+      "selected_pages": 634
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 24073920,
+        "64": 18033600,
+        "128": 11993280,
+        "256": 8024640
+      },
+      "ordinal": 20,
+      "original_runs": 318,
+      "selected_pages": 581
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 8199360,
+        "64": 6165120,
+        "128": 4979520,
+        "256": 4829760
+      },
+      "ordinal": 21,
+      "original_runs": 140,
+      "selected_pages": 387
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 11880960,
+        "64": 7800000,
+        "128": 5204160,
+        "256": 4655040
+      },
+      "ordinal": 22,
+      "original_runs": 172,
+      "selected_pages": 373
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 10171200,
+        "64": 6289920,
+        "128": 4255680,
+        "256": 4105920
+      },
+      "ordinal": 23,
+      "original_runs": 140,
+      "selected_pages": 329
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 14364480,
+        "64": 10358400,
+        "128": 7562880,
+        "256": 6377280
+      },
+      "ordinal": 24,
+      "original_runs": 213,
+      "selected_pages": 511
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 8835840,
+        "64": 7275840,
+        "128": 6040320,
+        "256": 5865600
+      },
+      "ordinal": 25,
+      "original_runs": 142,
+      "selected_pages": 470
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 16985280,
+        "64": 11868480,
+        "128": 7525440,
+        "256": 5790720
+      },
+      "ordinal": 26,
+      "original_runs": 218,
+      "selected_pages": 464
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 20816640,
+        "64": 14302080,
+        "128": 9784320,
+        "256": 7450560
+      },
+      "ordinal": 27,
+      "original_runs": 276,
+      "selected_pages": 577
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 9896640,
+        "64": 7438080,
+        "128": 5715840,
+        "256": 5179200
+      },
+      "ordinal": 28,
+      "original_runs": 171,
+      "selected_pages": 415
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 12866880,
+        "64": 9447360,
+        "128": 6826560,
+        "256": 5903040
+      },
+      "ordinal": 29,
+      "original_runs": 198,
+      "selected_pages": 473
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 6177600,
+        "64": 4979520,
+        "128": 4368000,
+        "256": 4368000
+      },
+      "ordinal": 30,
+      "original_runs": 108,
+      "selected_pages": 350
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 14564160,
+        "64": 10208640,
+        "128": 7138560,
+        "256": 5890560
+      },
+      "ordinal": 31,
+      "original_runs": 204,
+      "selected_pages": 472
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 24860160,
+        "64": 20230080,
+        "128": 14938560,
+        "256": 10033920
+      },
+      "ordinal": 32,
+      "original_runs": 384,
+      "selected_pages": 654
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 21465600,
+        "64": 15400320,
+        "128": 10408320,
+        "256": 7438080
+      },
+      "ordinal": 33,
+      "original_runs": 284,
+      "selected_pages": 568
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 20354880,
+        "64": 14676480,
+        "128": 9796800,
+        "256": 7238400
+      },
+      "ordinal": 34,
+      "original_runs": 279,
+      "selected_pages": 557
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 21802560,
+        "64": 16523520,
+        "128": 12043200,
+        "256": 8673600
+      },
+      "ordinal": 35,
+      "original_runs": 323,
+      "selected_pages": 628
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 17222400,
+        "64": 10857600,
+        "128": 7038720,
+        "256": 5740800
+      },
+      "ordinal": 36,
+      "original_runs": 213,
+      "selected_pages": 460
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 6327360,
+        "64": 4704960,
+        "128": 3818880,
+        "256": 3818880
+      },
+      "ordinal": 37,
+      "original_runs": 119,
+      "selected_pages": 306
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 19818240,
+        "64": 14713920,
+        "128": 9871680,
+        "256": 6976320
+      },
+      "ordinal": 38,
+      "original_runs": 276,
+      "selected_pages": 539
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 23999040,
+        "64": 18807360,
+        "128": 14077440,
+        "256": 10096320
+      },
+      "ordinal": 39,
+      "original_runs": 382,
+      "selected_pages": 683
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 11107200,
+        "64": 8611200,
+        "128": 6601920,
+        "256": 5928000
+      },
+      "ordinal": 40,
+      "original_runs": 182,
+      "selected_pages": 475
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 6115200,
+        "64": 4904640,
+        "128": 4368000,
+        "256": 4368000
+      },
+      "ordinal": 41,
+      "original_runs": 105,
+      "selected_pages": 350
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 19693440,
+        "64": 15050880,
+        "128": 10957440,
+        "256": 8174400
+      },
+      "ordinal": 42,
+      "original_runs": 309,
+      "selected_pages": 602
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 16086720,
+        "64": 12692160,
+        "128": 9472320,
+        "256": 7250880
+      },
+      "ordinal": 43,
+      "original_runs": 264,
+      "selected_pages": 573
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 23874240,
+        "64": 18670080,
+        "128": 13590720,
+        "256": 9584640
+      },
+      "ordinal": 44,
+      "original_runs": 348,
+      "selected_pages": 676
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 12854400,
+        "64": 9559680,
+        "128": 7325760,
+        "256": 6190080
+      },
+      "ordinal": 45,
+      "original_runs": 206,
+      "selected_pages": 496
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 9459840,
+        "64": 6926400,
+        "128": 5366400,
+        "256": 5029440
+      },
+      "ordinal": 46,
+      "original_runs": 155,
+      "selected_pages": 403
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 14177280,
+        "64": 10595520,
+        "128": 8037120,
+        "256": 6714240
+      },
+      "ordinal": 47,
+      "original_runs": 227,
+      "selected_pages": 538
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 15263040,
+        "64": 10208640,
+        "128": 6626880,
+        "256": 5603520
+      },
+      "ordinal": 48,
+      "original_runs": 196,
+      "selected_pages": 449
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 15263040,
+        "64": 11918400,
+        "128": 9060480,
+        "256": 7238400
+      },
+      "ordinal": 49,
+      "original_runs": 239,
+      "selected_pages": 580
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 6115200,
+        "64": 4729920,
+        "128": 4155840,
+        "256": 4155840
+      },
+      "ordinal": 50,
+      "original_runs": 103,
+      "selected_pages": 333
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 15637440,
+        "64": 10233600,
+        "128": 6240000,
+        "256": 5154240
+      },
+      "ordinal": 51,
+      "original_runs": 199,
+      "selected_pages": 413
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 13403520,
+        "64": 10171200,
+        "128": 7687680,
+        "256": 6377280
+      },
+      "ordinal": 52,
+      "original_runs": 219,
+      "selected_pages": 511
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 19294080,
+        "64": 13752960,
+        "128": 9247680,
+        "256": 6477120
+      },
+      "ordinal": 53,
+      "original_runs": 268,
+      "selected_pages": 507
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 19119360,
+        "64": 15150720,
+        "128": 11044800,
+        "256": 8274240
+      },
+      "ordinal": 54,
+      "original_runs": 296,
+      "selected_pages": 623
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 21340800,
+        "64": 16760640,
+        "128": 12342720,
+        "256": 9147840
+      },
+      "ordinal": 55,
+      "original_runs": 337,
+      "selected_pages": 652
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 21240960,
+        "64": 16149120,
+        "128": 11544000,
+        "256": 8473920
+      },
+      "ordinal": 56,
+      "original_runs": 308,
+      "selected_pages": 627
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 15774720,
+        "64": 11544000,
+        "128": 8236800,
+        "256": 6514560
+      },
+      "ordinal": 57,
+      "original_runs": 240,
+      "selected_pages": 522
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 27081600,
+        "64": 21602880,
+        "128": 15862080,
+        "256": 10920000
+      },
+      "ordinal": 58,
+      "original_runs": 402,
+      "selected_pages": 701
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 12330240,
+        "64": 9310080,
+        "128": 7438080,
+        "256": 6614400
+      },
+      "ordinal": 59,
+      "original_runs": 194,
+      "selected_pages": 530
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 21290880,
+        "64": 16685760,
+        "128": 11768640,
+        "256": 8261760
+      },
+      "ordinal": 60,
+      "original_runs": 306,
+      "selected_pages": 612
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 23088000,
+        "64": 17759040,
+        "128": 12442560,
+        "256": 8923200
+      },
+      "ordinal": 61,
+      "original_runs": 334,
+      "selected_pages": 637
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 18283200,
+        "64": 13802880,
+        "128": 9884160,
+        "256": 7300800
+      },
+      "ordinal": 62,
+      "original_runs": 281,
+      "selected_pages": 560
+    },
+    {
+      "dataset": "cohere",
+      "min_cover_bytes": {
+        "32": 9609600,
+        "64": 6676800,
+        "128": 4942080,
+        "256": 4567680
+      },
+      "ordinal": 63,
+      "original_runs": 158,
+      "selected_pages": 366
+    }
+  ],
+  "schema": "borsuk-frozen-shortlist-cover-arithmetic-v1",
+  "scope": "exact minimum cover-byte arithmetic for unchanged physical shortlist; no native/S3 execution or new recall",
+  "source_trace": {
+    "bytes": 9064136,
+    "sha256": "2bbfbee1de7c882143c8b03622678502ee8132a1111e54258a94b7eb926b9eaf"
+  },
+  "summaries": {
+    "cohere": {
+      "128": {
+        "fit16MiB": 64,
+        "max_bytes": 15862080,
+        "mean_bytes": 8938800
+      },
+      "256": {
+        "fit16MiB": 64,
+        "max_bytes": 10920000,
+        "mean_bytes": 6884085
+      },
+      "32": {
+        "fit16MiB": 32,
+        "max_bytes": 27081600,
+        "mean_bytes": 16720470
+      },
+      "64": {
+        "fit16MiB": 54,
+        "max_bytes": 21602880,
+        "mean_bytes": 12456015
+      }
+    },
+    "relaion": {
+      "128": {
+        "fit16MiB": 64,
+        "max_bytes": 15088320,
+        "mean_bytes": 6342570
+      },
+      "256": {
+        "fit16MiB": 64,
+        "max_bytes": 9796800,
+        "mean_bytes": 5313945
+      },
+      "32": {
+        "fit16MiB": 50,
+        "max_bytes": 32747520,
+        "mean_bytes": 12353445
+      },
+      "64": {
+        "fit16MiB": 59,
+        "max_bytes": 22027200,
+        "mean_bytes": 8630700
+      }
+    }
+  }
+}

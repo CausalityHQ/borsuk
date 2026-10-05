@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0bbdd7838f54481a1",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0bbdd7838f54481a1"
+    }
+  },
+  "prefix": "research/semantic-router/20261005/fine-sq8-implementation-a0001",
+  "source_commit": "d3b999729ebde228bc75a68625649074f6fb78d7",
+  "source_archive_sha256": "e267a8903e3102ce66ba9ba4e06e6d878d565500f72f44acad3eb5fffa591187"
+}

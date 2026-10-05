@@ -1,0 +1,86 @@
+{
+  "artifact_payloads_not_opened": true,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "datasets": {
+    "cohere": {
+      "cells.bin": {
+        "bytes": 98800000,
+        "sha256": "647491734c13391be7ff682a8d8c125e69d317e87b31cd8e7d1ebb9eebee0ef0",
+        "terminal_path": "screen/retained/cohere/partitioner/cells.bin"
+      },
+      "directories.bin": {
+        "bytes": 6410540,
+        "sha256": "f0df6a5900d6a66263389dfa353167790b18c2b819e09c288d6f218457dbf865",
+        "terminal_path": "screen/retained/cohere/partitioner/directories.bin"
+      },
+      "manifest.json": {
+        "bytes": 30456,
+        "sha256": "c2bf337290f7713139903f398ac6b4007ed01faf47ff093e7e397b2715b7b4fc",
+        "terminal_path": "screen/retained/cohere/partitioner/manifest.json"
+      },
+      "requests64": {
+        "bytes": 983232,
+        "sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654",
+        "terminal_path": "screen/retained/cohere/partitioner/requests64"
+      },
+      "truth64": {
+        "bytes": 25600,
+        "sha256": "f6630d0edf06539752c3fbf129ae01e58d3a3cf7b6aefa4decaa9c979e8ba355",
+        "terminal_path": "screen/retained/cohere/partitioner/truth64"
+      }
+    },
+    "relaion": {
+      "cells.bin": {
+        "bytes": 98800000,
+        "sha256": "6bb1c1259c3686ec7dfea1100e9162b45ad898c504b261f82979b974aedbf8ae",
+        "terminal_path": "screen/retained/relaion/partitioner/cells.bin"
+      },
+      "directories.bin": {
+        "bytes": 6397659,
+        "sha256": "93c0d23d067d4929d44d1111159c3c46ac74800aba621a344a3cfd3fa8d5fe89",
+        "terminal_path": "screen/retained/relaion/partitioner/directories.bin"
+      },
+      "manifest.json": {
+        "bytes": 31500,
+        "sha256": "3244e7bbd5e27eb1f3fe52cbddc450d08d45d25256eec98dc942ba42cf2808f1",
+        "terminal_path": "screen/retained/relaion/partitioner/manifest.json"
+      },
+      "requests64": {
+        "bytes": 937167,
+        "sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330",
+        "terminal_path": "screen/retained/relaion/partitioner/requests64"
+      },
+      "truth64": {
+        "bytes": 25600,
+        "sha256": "3ad233f399ba5172051e747f24dbde402bdd357a69460c349ec5ed5872ee5a5c",
+        "terminal_path": "screen/retained/relaion/partitioner/truth64"
+      }
+    }
+  },
+  "method": {
+    "bytes": 4425,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/prospective-method.json",
+    "sha256": "81dea91c3f2a009a3c4bf7f30affd126753e911c86cb8a94fb4bdd4ea68efad5"
+  },
+  "native_binary": {
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/implementation-gates/a0001/binaries/hierarchical_semantic_cells.gz",
+    "transport": "gzip",
+    "uncompressed": {
+      "bytes": 5721952,
+      "sha256": "6b697b09fc6e709b5127ce81290950d37aa5fde892a8e0d053e4c9ca824ff297"
+    }
+  },
+  "native_qualification": {
+    "bytes": 8442,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/implementation-gates/a0001/verification.json",
+    "sha256": "5f9862ea6d0a8eb429c0273d407829234432a312cd86fb03c51350a27e794f45"
+  },
+  "schema": "borsuk-source-witness-retained-input-authority-v1",
+  "source_qualification_pending": false,
+  "status": "AUTHENTICATED_RETAINED_METADATA_AND_NATIVE_QUALIFICATION",
+  "terminal": {
+    "bytes": 22182,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/a0001/aws-terminal.json",
+    "sha256": "597173881cc39644403748abc08e8f65281339ae24c37b6797b940fc48bff235"
+  }
+}
