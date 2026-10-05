@@ -94,9 +94,9 @@ HISTOGRAM_SQ4 = False
 SQ4_NAME, SQ4_SCHEMA, SQ4_CLI = 'sq4', 'borsuk-fixed-sq4', 'check-fine-sq4'
 SQ4_CODEC = 'borsuk-sq4-nearest17-original-coefficients-v1'
 HISTOGRAM_TRAINER = 'occupied-u8-weighted-contiguous-f64-dp-smallest-predecessor-v1'
-# encoded({stages, mandatory_tests}) from committed f20153de's final launcher:
+# encoded({stages, mandatory_tests}) from root's corrected e91cf344 launcher:
 # all14 commands, all nine histogram names and all historical regressions.
-HISTOGRAM_QUALIFICATION_PROTOCOL_SHA = '2ecd3774357341ba92325eac611a9f97c79ea1e6b11efa5570170606e3020d2f'
+HISTOGRAM_QUALIFICATION_PROTOCOL_SHA = 'f5ac8d1e19c074de4acf00c2aac20647c09df8b648a350dafa5453b031c27155'
 SQ4_ROOT = ROOT.parent/'sq4-refinement'
 # Prospective fixture provenance only; config.native_source owns the qualified pins.
 SQ4_COMMIT = 'c2d233d6752d0a058d78c6077e51f31f0255e7c1'
@@ -1723,17 +1723,31 @@ def sq4_self_check(histogram=False):
         prospective = decode(committed(hist_root/'prospective-native-config-1057e5a6.json','de0b6e38'))
         launch = decode(committed(hist_root/'implementation-gates/compiler-repair/config.json','de0b6e38'))
         manifest = decode(committed(hist_root/'implementation-gates/compiler-repair/native-source-manifest.json','de0b6e38'))
-        launcher = ast.parse(committed(Path('scripts/launch_native_workspace_execution_spot.py'),'f20153de'))
+        launcher = ast.parse(committed(Path('scripts/launch_native_workspace_execution_spot.py'),'e91cf34439c54a655ccf9edc53e9b66214fda4ae'))
         assignments = {n.targets[0].id:n.value for n in launcher.body
                        if isinstance(n,ast.Assign) and isinstance(n.targets[0],ast.Name)}
         commands = [(n,c.split()) for n,c in ast.literal_eval(assignments['FINE_SQ8_STAGES'].args[0].generators[0].iter)]
         mandatory = ast.literal_eval(assignments['FINE_SQ8_REQUIRED_TESTS'])
         protocol = sha(encoded(dict(stages=commands,mandatory_tests=mandatory)))
+        corrected = {n:list(v) for n,v in mandatory.items()}
+        changed = [(old,new) for stage,names in launch['mandatory_tests'].items()
+                   for old,new in zip(names,corrected[stage]) if old != new]
         require(protocol == HISTOGRAM_QUALIFICATION_PROTOCOL_SHA and len(commands) == 14
-                and launch['mandatory_tests'] == {n:list(v) for n,v in mandatory.items()}, 'committed final native protocol')
+                and len(changed) == 2 and all(old.replace('::histogram::tests::','::tests::') == new
+                    for old,new in changed), 'committed corrected native protocol')
+        # Rebind synthetic full authority only; original partial gate96 is never admitted.
+        launch['mandatory_tests'] = corrected
         native_body = committed(Path('crates/borsuk/src/fine_sq8_groups.rs'), '1057e5a6')
         require(pin(native_body) == next({k:d[k] for k in ('bytes','sha256')} for d in contract['owned_files']
                     if d['path'].endswith('/fine_sq8_groups.rs')), 'actual Rust source fixture')
+        source_text = native_body.decode()
+        for name in mandatory['fine-sq8-tests']:
+            if 'fine_histogram_sq4_' not in name:
+                continue
+            definition = re.search(r'(?m)^ *fn '+re.escape(name.rsplit('::',1)[1])+r'\(',source_text)
+            require(definition is not None, 'actual native mandatory test definition')
+            tests_indent = re.findall(r'(?m)^( +)mod tests \{',source_text[:definition.start()])[-1]
+            require((len(tests_indent) == 12) == ('::histogram::tests::' in name), 'source-bound histogram test namespace')
         for token in ('{extension}-book.bin','{extension}-groups.bin','{extension}-root.json',
                       '{name}-payloads.json','{name}-prefix.jsonl','{name}-freeze.json','{name}-result-{}.json'):
             require(token.encode() in native_body, 'source-bound native roster')
