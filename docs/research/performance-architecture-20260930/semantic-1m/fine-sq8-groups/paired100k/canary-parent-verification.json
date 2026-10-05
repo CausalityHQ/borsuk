@@ -1,0 +1,24 @@
+{
+  "admission": {
+    "attempt": "a0001",
+    "code_identity_sha256": "65904490b24df390ee7cfb36e4b131aeeeade234855a58ce7207ec5d4b4e7d24",
+    "config_sha256": "d29a26a8ecc6d18a7a8e87b55b7e6b3bf709985321f94688f3fc6025c6276d9d",
+    "native_identity_sha256": "c7675eb2d827834524c34aa7f7c814b70b7a31e27f66e9bbf526adbce302629b",
+    "refs_identity_sha256": "a3dc910eb81dac0aae7b0ced19ee96db7da6463cf66aa81a31cddeec11f3d3bd",
+    "schema": "borsuk-fine-sq8-canary-admission-v1",
+    "source_archive_paths_sha256": "40011b05c164bf8deb0f4c7bc3855412e44693436336fde616f19fe84fece337",
+    "terminal_sha256": "6ae059a88234ef2fcb9678ca754bb257380be8542a3885e69713db34d6d7c56e"
+  },
+  "instance_id": "i-097e00d583a4468ad",
+  "instance_terminated_and_waited": true,
+  "original_controller_exit": 0,
+  "replay": {
+    "executed": true,
+    "physical_s3_measured": false,
+    "scientific_qualification": false,
+    "truth_opened": false,
+    "vendor_win": false
+  },
+  "schema": "borsuk-fine-sq8-parent-canary-verification-v1",
+  "scientific_measurement": false
+}

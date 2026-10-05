@@ -1,0 +1,9 @@
+{
+  "nodes": {
+    "0": {
+      "instance_id": "i-097e00d583a4468ad"
+    }
+  },
+  "state": "terminated",
+  "observed_elapsed_s": 93
+}

@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-097e00d583a4468ad",
+  "nodes": {
+    "0": {
+      "instance_id": "i-097e00d583a4468ad"
+    }
+  },
+  "prefix": "research/hierarchical-cells/20261005/fine-sq8-paired100k-canary-a0001",
+  "source_commit": "0b2f5b2a0d26b9868f6f9b7b5f785aeccf24c2ff",
+  "source_archive_sha256": "d2f39d3f1bf7841907cedf9d0d3ffb53035ca85d229fd881abcab21425ff5bef"
+}
