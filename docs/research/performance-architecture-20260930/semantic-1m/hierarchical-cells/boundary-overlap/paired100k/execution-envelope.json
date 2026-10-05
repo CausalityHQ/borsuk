@@ -1,0 +1,45 @@
+{
+  "schema": "borsuk-overlap-paired-prospective-envelope-v1",
+  "authority_pending": true,
+  "science_launched": false,
+  "region": "eu-central-1",
+  "aws_profile": "causality",
+  "instance_type": "c7i.2xlarge",
+  "purchase": "Spot",
+  "machine_wall_seconds": 6500,
+  "compute_cap_usd": 1.25,
+  "ancillary_allowance_usd": 0.15,
+  "max_quote_usd_per_hour": 0.5,
+  "outer_memory_max_bytes": 8589934592,
+  "outer_swap_max_bytes": 0,
+  "outer_cpu_quota_percent": 200,
+  "outer_tasks_max": 512,
+  "whole_physical_scratch_max_bytes": 8589934592,
+  "native_calls": {
+    "build_overlap": 4,
+    "paired_overlap": 2,
+    "native_writer_recovery": 0
+  },
+  "build_per_call": {
+    "seconds": 1200,
+    "cpu_affinity": [
+      0,
+      1
+    ],
+    "workers": 2,
+    "memory_max_bytes": 8589934592
+  },
+  "query_per_call": {
+    "seconds": 300,
+    "cpu_affinity": [
+      0
+    ],
+    "workers": 1,
+    "memory_max_bytes": 536870912
+  },
+  "max_native_call_seconds_sum": 5400,
+  "infrastructure_canary_required": true,
+  "canary_scientific_queries": 0,
+  "cost_and_time_are_caps_not_measurements": true,
+  "inputs": "Exact recovered plane headers and original record/canonical/order/SQ8/generation/mean pins; all large bodies must authenticate on remote stage. Full scratch includes staged and retained copies, archive, repo, binaries, layouts and logs."
+}
