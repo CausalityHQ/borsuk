@@ -1,0 +1,154 @@
+{
+  "schema": "borsuk-overlap-real-request-native-smoke-v1",
+  "scientific_measurement": false,
+  "truth_configured": false,
+  "calls": [
+    {
+      "dataset": "relaion",
+      "mode": "build",
+      "exit": 0,
+      "seconds": 2.1222733330214396
+    },
+    {
+      "dataset": "relaion",
+      "mode": "nominate",
+      "exit": 0,
+      "seconds": 0.365995203028433
+    },
+    {
+      "dataset": "cohere",
+      "mode": "build",
+      "exit": 0,
+      "seconds": 1.7188992339652032
+    },
+    {
+      "dataset": "cohere",
+      "mode": "nominate",
+      "exit": 0,
+      "seconds": 0.371969465049915
+    }
+  ],
+  "terminals": [
+    {
+      "dataset": "relaion",
+      "terminal": {
+        "candidate_root_sha256": "3244e7bbd5e27eb1f3fe52cbddc450d08d45d25256eec98dc942ba42cf2808f1",
+        "cell_payload_query_bytes": 0,
+        "cell_payload_query_gets": 0,
+        "complete": true,
+        "config_sha256": "090ea777fc4d7ab1e6bd46906ec1adcfeca0015b3072b3715033a2146cbed1e2",
+        "dataset": "relaion",
+        "phase": "terminal",
+        "prefix_bytes": 6326817,
+        "prefix_sha256": "b332f1c8355c3d73c75867f95d9530ef023dc290069fb5823816ecb0e4d22eba",
+        "probes_sha256": "63d0530af39eecbc4ea828ac5059253a1d1cb6b4ac6026c7cb79905807cc125f",
+        "quality": null,
+        "quality_or_performance_claim": false,
+        "queries": 64,
+        "requests_sha256": "6da3f26a2a5f90b51d345726be5cab2e1a69fb75000cfe83f451442e1f797330",
+        "requires_matching_supervisor_exit_receipt": true,
+        "schema": "borsuk-source-witness-nomination-v1",
+        "scientific_qualification": false,
+        "status": "SELECTIONS_FROZEN",
+        "truth": null,
+        "truth_opened": false,
+        "truth_width": 0
+      }
+    },
+    {
+      "dataset": "cohere",
+      "terminal": {
+        "candidate_root_sha256": "c2bf337290f7713139903f398ac6b4007ed01faf47ff093e7e397b2715b7b4fc",
+        "cell_payload_query_bytes": 0,
+        "cell_payload_query_gets": 0,
+        "complete": true,
+        "config_sha256": "7aada10afd301ed7d89f053584fccc60efa8557cf483c2d8ac890671f94b13a8",
+        "dataset": "cohere",
+        "phase": "terminal",
+        "prefix_bytes": 6449257,
+        "prefix_sha256": "e4e289865270765776c80d93acb14309fd11e106ade4eb12c29566140589ccc4",
+        "probes_sha256": "7925ca2efc97b6555ec9b2b17b528a6688fdcf199be8e5ff6536b87d03586daa",
+        "quality": null,
+        "quality_or_performance_claim": false,
+        "queries": 64,
+        "requests_sha256": "23afccf4caac37a9bc413d63a7106f0ba3170b270730197af3ebf6a998804654",
+        "requires_matching_supervisor_exit_receipt": true,
+        "schema": "borsuk-source-witness-nomination-v1",
+        "scientific_qualification": false,
+        "status": "SELECTIONS_FROZEN",
+        "truth": null,
+        "truth_opened": false,
+        "truth_width": 0
+      }
+    }
+  ],
+  "unit_properties": "InvocationID=\nResult=success\nExecMainStatus=0\nMemoryPeak=[not set]\nMemorySwapPeak=[not set]\n",
+  "binary_sha256": "40ccd33199cce09d88936503db02895970a9a90463dc405f8a0c3731ede3fb5b",
+  "bootstrap_failure": "original unit permission denied before native execution; exact-byte executable copy used in distinct r1 unit",
+  "artifacts": {
+    "cohere-nominate.jsonl": {
+      "bytes": 6450914,
+      "sha256": "14e4fe4072dacef3887823f1d63ef1dd5a934d663b374b76e60f0abc6e394dc7"
+    },
+    "cohere-nominate.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cohere.bin": {
+      "bytes": 4694440,
+      "sha256": "7925ca2efc97b6555ec9b2b17b528a6688fdcf199be8e5ff6536b87d03586daa"
+    },
+    "cohere-build.jsonl": {
+      "bytes": 2536,
+      "sha256": "d7b1963514ac763f1a12303e83102e955ceada54d4a597cb90c48891d892b47f"
+    },
+    "cohere-build.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "relaion-nominate.jsonl": {
+      "bytes": 6328476,
+      "sha256": "ec6b10d197df31831a2008ae5e97634632d2891e774d7dde53ae2e9f4420e213"
+    },
+    "relaion-nominate.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "receipt.json": {
+      "bytes": 424,
+      "sha256": "d0f5e3f60114b7a04f284e6c9c41b078b1c8ce0cd5dc077122e85ac1a4ff2fba"
+    },
+    "relaion.bin": {
+      "bytes": 4606072,
+      "sha256": "63d0530af39eecbc4ea828ac5059253a1d1cb6b4ac6026c7cb79905807cc125f"
+    },
+    "relaion-build.jsonl": {
+      "bytes": 2538,
+      "sha256": "ad47a090b03817e766f49bd5ee7ca4d733f3be827e3fdb7d272f8879cbe16a34"
+    },
+    "runner.py": {
+      "bytes": 967,
+      "sha256": "15f389b52fb4fc6e29a27b30afc9f44b0335dade5fb4bc1c3b06ebe439dfb4ef"
+    },
+    "relaion-build.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "cohere-nominate.json": {
+      "bytes": 970,
+      "sha256": "7aada10afd301ed7d89f053584fccc60efa8557cf483c2d8ac890671f94b13a8"
+    },
+    "cohere-build.json": {
+      "bytes": 405,
+      "sha256": "85e3847cc85ede294c2ae42f5c0ce8805b649b0d19f8eca5678fdb398d1f5eb6"
+    },
+    "relaion-nominate.json": {
+      "bytes": 974,
+      "sha256": "090ea777fc4d7ab1e6bd46906ec1adcfeca0015b3072b3715033a2146cbed1e2"
+    },
+    "relaion-build.json": {
+      "bytes": 407,
+      "sha256": "c83ae4ec4346345385494c88daffad2df9bde20dc9ff31b63d4549574c045ecb"
+    }
+  }
+}
