@@ -1,0 +1,650 @@
+{
+  "ARTIFACTS": [
+    "config.json",
+    "native-config.json",
+    "source-qualification.json",
+    "stage-receipt.json",
+    "native-exit.json",
+    "resources.json",
+    "cleanup.json",
+    "cpu.txt",
+    "runtime-abi.json",
+    "run-closed.log",
+    "native.log",
+    "binaries/hierarchical_semantic_cells",
+    "screen/report.json",
+    "screen/report.permutations.json",
+    "screen/report.prefix.jsonl"
+  ],
+  "CODE": [
+    "scripts/check_native_metadata_ranges_build.py",
+    "scripts/check_native_metadata_ranges_stats.py",
+    "scripts/check_native_startup_build.py",
+    "scripts/check_native_startup_stats.py",
+    "scripts/launch_fine_pack_diagnostic.py",
+    "scripts/launch_native_metadata_ranges_cold_spot.py",
+    "scripts/launch_native_peer_1m_spot.py",
+    "scripts/launch_native_startup_profile_spot.py",
+    "scripts/launch_v157_primary_feasibility_spot.py",
+    "scripts/launch_v174_relaid_bind_compile_spot.py",
+    "scripts/rest_coexistence_load.py",
+    "scripts/run_native_cold_first_query.py",
+    "scripts/run_native_metadata_ranges_cold.py",
+    "scripts/run_native_peer_1m_worker.py",
+    "scripts/run_native_peer_offered_http.py",
+    "scripts/run_native_union_http.py",
+    "scripts/run_native_union_offered_http.py"
+  ],
+  "artifact_roster_sha256": "06fd5aa9ac85c2bc6e9bbad6de235f496b6d4027414022c5bce5f5e8e7b31152",
+  "binary": {
+    "bytes": 7860472,
+    "key": "research/semantic-router/20261005/fine-sq8-packing-binary-repair-a0001/artifacts/binaries/hierarchical_semantic_cells",
+    "sha256": "a4ea1d88223dbcf73b714ca2f75b9556c9d4f1389333391c1ac619a8bb9b4f45"
+  },
+  "bootstrap": {
+    "SDK_total_max_attempts": 1,
+    "boto3": "1.40.72",
+    "botocore": "1.40.72",
+    "installed_model_guard": "PutObject.IfNoneMatch",
+    "interpreter_shared": true,
+    "os": "Ubuntu24.04 x86_64",
+    "pip_retries": 0,
+    "python": "3.12"
+  },
+  "cli": [
+    "aNNNN",
+    "--self-check",
+    "--replay OUT"
+  ],
+  "config_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-diagnostic/config.json",
+  "exact_config_template": {
+    "authority_pending": false,
+    "binary": {
+      "bytes": 7860472,
+      "key": "research/semantic-router/20261005/fine-sq8-packing-binary-repair-a0001/artifacts/binaries/hierarchical_semantic_cells",
+      "sha256": "a4ea1d88223dbcf73b714ca2f75b9556c9d4f1389333391c1ac619a8bb9b4f45"
+    },
+    "code_sha256": {
+      "scripts/check_native_metadata_ranges_build.py": "da48c53562220026c8024ba2400dca2ba897aa12d49c3e27c3c2fb40b9f0770e",
+      "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
+      "scripts/check_native_startup_build.py": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52",
+      "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+      "scripts/launch_fine_pack_diagnostic.py": "44731d5271c65e53be17a7f4310a4d31a542866682ac75df02e7c4e670d14a76",
+      "scripts/launch_native_metadata_ranges_cold_spot.py": "f1dfdb56d08f864594c4dadbdbae593b61d5285f60703712e91865ebd0a9d0e2",
+      "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
+      "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
+      "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b",
+      "scripts/launch_v174_relaid_bind_compile_spot.py": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a",
+      "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+      "scripts/run_native_cold_first_query.py": "b4afffd43df8e2ab617749a50fd099fd279e57631e0dcb749b75169ad269a99f",
+      "scripts/run_native_metadata_ranges_cold.py": "1322fe19b705caeab275bce69ea6b4a9f2ed84cb6505dcbfe01b25301fdb71b8",
+      "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+      "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+      "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+      "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6"
+    },
+    "fixed": {
+      "automatic_retry": false,
+      "bucket": "borsuk-bench-453182569524-euc1",
+      "compute_cap_usd": 0.15,
+      "ebs_s3_allowance_usd": 0.15,
+      "image_id": "ami-0b8a830d6339a9758",
+      "instance_type": "c7i.2xlarge",
+      "machine_limit_seconds": 900,
+      "native_caps": {
+        "cpu_threads": 1,
+        "deadline_seconds": 300,
+        "memory_bytes": 268435456,
+        "operations": 500000000,
+        "output_bytes": 2097152,
+        "swap_bytes": 0
+      },
+      "native_cpu_affinity": [
+        0
+      ],
+      "quality_or_performance_claim": false,
+      "region": "eu-central-1",
+      "root_device_name": "/dev/sda1",
+      "spot_max_usd_per_hour": 0.6,
+      "subnet_id": "subnet-034528fbd6977848f",
+      "tasks_max": 32
+    },
+    "inputs": [
+      {
+        "bytes": 22721,
+        "destination": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/manifest.json",
+        "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/manifest.json",
+        "sha256": "0a2a2dff6a7abc48143d08eb491a150bbed03957b81b0261c2b8a0434612afec"
+      },
+      {
+        "bytes": 26712462,
+        "destination": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/graph.bin",
+        "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/graph.bin",
+        "sha256": "f817d7f4fbdd640f66590f58f9e07e9218753fbec4517ba95fc405a78d612325"
+      },
+      {
+        "bytes": 22815,
+        "destination": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/manifest.json",
+        "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/manifest.json",
+        "sha256": "ea1a792a841014ef08ed805d2872403739ba778ea8b8d3a9e5eab1b7f831c8bb"
+      },
+      {
+        "bytes": 26844914,
+        "destination": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/graph.bin",
+        "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/graph.bin",
+        "sha256": "4afd895f2e684f833437f4e6d4270c4713bbeb54fe67b50919f796e95f896e2e"
+      },
+      {
+        "bytes": 1109,
+        "destination": "/mnt/hierarchical-100k/packing-original-seal.json",
+        "key": "research/fine-pack-diagnostic/inputs/374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62/packing-original-seal.json",
+        "sha256": "374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62"
+      },
+      {
+        "bytes": 1665668,
+        "destination": "/mnt/hierarchical-100k/packing-prefix.jsonl",
+        "key": "research/fine-pack-diagnostic/inputs/7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025/packing-prefix.jsonl",
+        "sha256": "7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025"
+      }
+    ],
+    "native_config": {
+      "caps": {
+        "cpu_threads": 1,
+        "deadline_seconds": 300,
+        "memory_bytes": 268435456,
+        "operations": 500000000,
+        "output_bytes": 2097152,
+        "swap_bytes": 0
+      },
+      "original_seal": {
+        "bytes": 1109,
+        "path": "/mnt/hierarchical-100k/packing-original-seal.json",
+        "sha256": "374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62"
+      },
+      "panels": [
+        {
+          "dataset": "relaion",
+          "graph": {
+            "bytes": 26712462,
+            "path": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/graph.bin",
+            "sha256": "f817d7f4fbdd640f66590f58f9e07e9218753fbec4517ba95fc405a78d612325"
+          },
+          "identity": {
+            "dimensions": 768,
+            "generation": 12789909399387194419,
+            "layout": [
+              13,
+              159,
+              87,
+              224,
+              186,
+              255,
+              33,
+              148,
+              5,
+              169,
+              40,
+              39,
+              95,
+              240,
+              220,
+              156,
+              221,
+              220,
+              248,
+              128,
+              214,
+              198,
+              248,
+              206,
+              132,
+              98,
+              117,
+              128,
+              102,
+              191,
+              135,
+              99
+            ],
+            "pq": [
+              207,
+              195,
+              235,
+              132,
+              232,
+              188,
+              155,
+              64,
+              80,
+              112,
+              0,
+              98,
+              114,
+              173,
+              204,
+              74,
+              130,
+              236,
+              75,
+              110,
+              48,
+              181,
+              210,
+              85,
+              199,
+              63,
+              110,
+              190,
+              128,
+              195,
+              45,
+              198
+            ],
+            "rows": 100000,
+            "source": [
+              194,
+              96,
+              183,
+              254,
+              11,
+              106,
+              84,
+              222,
+              152,
+              223,
+              186,
+              63,
+              37,
+              153,
+              210,
+              114,
+              36,
+              47,
+              114,
+              68,
+              33,
+              6,
+              78,
+              213,
+              202,
+              24,
+              192,
+              205,
+              99,
+              230,
+              40,
+              61
+            ]
+          },
+          "root": {
+            "bytes": 22721,
+            "path": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/manifest.json",
+            "sha256": "0a2a2dff6a7abc48143d08eb491a150bbed03957b81b0261c2b8a0434612afec"
+          }
+        },
+        {
+          "dataset": "cohere",
+          "graph": {
+            "bytes": 26844914,
+            "path": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/graph.bin",
+            "sha256": "4afd895f2e684f833437f4e6d4270c4713bbeb54fe67b50919f796e95f896e2e"
+          },
+          "identity": {
+            "dimensions": 768,
+            "generation": 3562900979990118339,
+            "layout": [
+              179,
+              205,
+              181,
+              51,
+              135,
+              181,
+              16,
+              191,
+              148,
+              25,
+              48,
+              56,
+              213,
+              135,
+              134,
+              124,
+              233,
+              167,
+              210,
+              243,
+              33,
+              192,
+              40,
+              16,
+              14,
+              60,
+              4,
+              102,
+              177,
+              181,
+              250,
+              225
+            ],
+            "pq": [
+              188,
+              94,
+              250,
+              199,
+              131,
+              67,
+              74,
+              51,
+              15,
+              158,
+              228,
+              239,
+              46,
+              249,
+              48,
+              234,
+              67,
+              15,
+              205,
+              246,
+              137,
+              110,
+              146,
+              126,
+              130,
+              173,
+              85,
+              250,
+              124,
+              213,
+              95,
+              56
+            ],
+            "rows": 100000,
+            "source": [
+              56,
+              48,
+              76,
+              59,
+              68,
+              143,
+              47,
+              98,
+              179,
+              45,
+              168,
+              180,
+              67,
+              187,
+              229,
+              47,
+              32,
+              204,
+              198,
+              63,
+              84,
+              114,
+              208,
+              231,
+              136,
+              93,
+              92,
+              38,
+              141,
+              215,
+              166,
+              223
+            ]
+          },
+          "root": {
+            "bytes": 22815,
+            "path": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/manifest.json",
+            "sha256": "ea1a792a841014ef08ed805d2872403739ba778ea8b8d3a9e5eab1b7f831c8bb"
+          }
+        }
+      ],
+      "prefix": {
+        "bytes": 1665668,
+        "path": "/mnt/hierarchical-100k/packing-prefix.jsonl",
+        "sha256": "7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025"
+      },
+      "schema": "borsuk-fine-pack-config-v1"
+    },
+    "native_config_sha256": "0eb14d90272cff7d7e61e60eb3ae73044474903de8fa26b5ac2bc64530bd1196",
+    "native_qualification": [
+      {
+        "bytes": 14424,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-implementation-gates/binary-repair/a0001/parent-verification.json",
+        "sha256": "c13efa7743a6d9e9f9d21b0e9e5ec56b3b5058484b2d4eca71ec7c817c6132bd"
+      },
+      {
+        "bytes": 3128,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-implementation-gates/binary-repair/a0001/aws-terminal.json",
+        "sha256": "3dca512d1b9c89e571944e792efc36d91a66e02c6e5195c78b2810098ea8855e"
+      },
+      {
+        "bytes": 136,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-implementation-gates/binary-repair/a0001/aws-closeout.json",
+        "sha256": "1d3cce4ac98066fe088ed543e0a34fefa34f8557d935edd63f5f4cf9b5558fd2"
+      },
+      {
+        "bytes": 62788,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-implementation-gates/binary-repair/a0001/workspace-receipt.json",
+        "sha256": "697db113bf61402d8a6c776fbbd7c94bb12538faec904c2f23ab7bf611a02333"
+      },
+      {
+        "bytes": 410667,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-implementation-gates/binary-repair/a0001/source-qualification.json",
+        "sha256": "ffae1c458c116584539b234825a314d2fab71d90f593cd64d19c8849593c56d9"
+      }
+    ],
+    "schema": "borsuk-fine-pack-diagnostic-spot-v1",
+    "source_archive_paths": [
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-diagnostic/config.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-implementation-gates/binary-repair/a0001/aws-closeout.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-implementation-gates/binary-repair/a0001/aws-terminal.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-implementation-gates/binary-repair/a0001/parent-verification.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-implementation-gates/binary-repair/a0001/source-qualification.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-implementation-gates/binary-repair/a0001/workspace-receipt.json",
+      "scripts/check_native_metadata_ranges_build.py",
+      "scripts/check_native_metadata_ranges_stats.py",
+      "scripts/check_native_startup_build.py",
+      "scripts/check_native_startup_stats.py",
+      "scripts/launch_fine_pack_diagnostic.py",
+      "scripts/launch_native_metadata_ranges_cold_spot.py",
+      "scripts/launch_native_peer_1m_spot.py",
+      "scripts/launch_native_startup_profile_spot.py",
+      "scripts/launch_v157_primary_feasibility_spot.py",
+      "scripts/launch_v174_relaid_bind_compile_spot.py",
+      "scripts/rest_coexistence_load.py",
+      "scripts/run_native_cold_first_query.py",
+      "scripts/run_native_metadata_ranges_cold.py",
+      "scripts/run_native_peer_1m_worker.py",
+      "scripts/run_native_peer_offered_http.py",
+      "scripts/run_native_union_http.py",
+      "scripts/run_native_union_offered_http.py"
+    ],
+    "source_archive_paths_sha256": "40899187d4292c3834d994769cf05782e8e6037caa92ef192b9a1149897a821e"
+  },
+  "generated_bootstrap_bytes": 2299,
+  "implementation_base": "6e5a34c41d542c42ee16f1bb10684d75f8ce390c",
+  "implementation_commit": "d005ba948bf8db67422a0b49924f4957bba3aa5d",
+  "implementation_file_sha256": "44731d5271c65e53be17a7f4310a4d31a542866682ac75df02e7c4e670d14a76",
+  "implementation_verified": true,
+  "input_roster": [
+    {
+      "bytes": 22721,
+      "destination": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/manifest.json",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/manifest.json",
+      "sha256": "0a2a2dff6a7abc48143d08eb491a150bbed03957b81b0261c2b8a0434612afec"
+    },
+    {
+      "bytes": 26712462,
+      "destination": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/graph.bin",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/graph.bin",
+      "sha256": "f817d7f4fbdd640f66590f58f9e07e9218753fbec4517ba95fc405a78d612325"
+    },
+    {
+      "bytes": 22815,
+      "destination": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/manifest.json",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/manifest.json",
+      "sha256": "ea1a792a841014ef08ed805d2872403739ba778ea8b8d3a9e5eab1b7f831c8bb"
+    },
+    {
+      "bytes": 26844914,
+      "destination": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/graph.bin",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/graph.bin",
+      "sha256": "4afd895f2e684f833437f4e6d4270c4713bbeb54fe67b50919f796e95f896e2e"
+    },
+    {
+      "bytes": 1109,
+      "destination": "/mnt/hierarchical-100k/packing-original-seal.json",
+      "key": "research/fine-pack-diagnostic/inputs/374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62/packing-original-seal.json",
+      "sha256": "374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62"
+    },
+    {
+      "bytes": 1665668,
+      "destination": "/mnt/hierarchical-100k/packing-prefix.jsonl",
+      "key": "research/fine-pack-diagnostic/inputs/7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025/packing-prefix.jsonl",
+      "sha256": "7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025"
+    }
+  ],
+  "module": "scripts.launch_fine_pack_diagnostic",
+  "native_config_encoding": "JSON sort_keys=True separators=(comma,colon) allow_nan=False plus one newline; same encoded() helper",
+  "native_config_sha256": "0eb14d90272cff7d7e61e60eb3ae73044474903de8fa26b5ac2bc64530bd1196",
+  "notes": [
+    "No pending preparation file is execution authority",
+    "Only exact six authenticated bodies staged; no GT/requests/PQ/records/suffix opens",
+    "Silent exit0 native.log is valid with bytes0; all128 completed REJECT is a valid negative",
+    "Supervisor is outside native cgroup; timeout/OOM/descendants/cleanup/auth/persistence/nonzero are INVALID",
+    "Shared main terminates and waits every same acknowledged instance before fullhash collection",
+    "Source-only task: root owns launch, no merge/push/paid experiment by child"
+  ],
+  "proof_roster": [
+    {
+      "bytes": 14424,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-implementation-gates/binary-repair/a0001/parent-verification.json",
+      "sha256": "c13efa7743a6d9e9f9d21b0e9e5ec56b3b5058484b2d4eca71ec7c817c6132bd"
+    },
+    {
+      "bytes": 3128,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-implementation-gates/binary-repair/a0001/aws-terminal.json",
+      "sha256": "3dca512d1b9c89e571944e792efc36d91a66e02c6e5195c78b2810098ea8855e"
+    },
+    {
+      "bytes": 136,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-implementation-gates/binary-repair/a0001/aws-closeout.json",
+      "sha256": "1d3cce4ac98066fe088ed543e0a34fefa34f8557d935edd63f5f4cf9b5558fd2"
+    },
+    {
+      "bytes": 62788,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-implementation-gates/binary-repair/a0001/workspace-receipt.json",
+      "sha256": "697db113bf61402d8a6c776fbbd7c94bb12538faec904c2f23ab7bf611a02333"
+    },
+    {
+      "bytes": 410667,
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-implementation-gates/binary-repair/a0001/source-qualification.json",
+      "sha256": "ffae1c458c116584539b234825a314d2fab71d90f593cd64d19c8849593c56d9"
+    }
+  ],
+  "remaining_root_pins": [
+    "Independently verify and integrate implementation_commit; recompute code_sha256 if integration changes any CODE file",
+    "Freeze config.json using exact_config_template; closure fields already computed but remain root-owned",
+    "Commit frozen config before shared main archive; source/archive hashes bound by reservation and original terminal, never embedded in config",
+    "Root independently verifies source/resources/bootstrap and authorizes the one paid aNNNN launch"
+  ],
+  "resources": {
+    "automatic_retry": false,
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "compute_cap_usd": 0.15,
+    "ebs_s3_allowance_usd": 0.15,
+    "image_id": "ami-0b8a830d6339a9758",
+    "instance_type": "c7i.2xlarge",
+    "machine_limit_seconds": 900,
+    "native_caps": {
+      "cpu_threads": 1,
+      "deadline_seconds": 300,
+      "memory_bytes": 268435456,
+      "operations": 500000000,
+      "output_bytes": 2097152,
+      "swap_bytes": 0
+    },
+    "native_cpu_affinity": [
+      0
+    ],
+    "quality_or_performance_claim": false,
+    "region": "eu-central-1",
+    "root_device_name": "/dev/sda1",
+    "spot_max_usd_per_hour": 0.6,
+    "subnet_id": "subnet-034528fbd6977848f",
+    "tasks_max": 32
+  },
+  "root": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-diagnostic",
+  "schema": "borsuk-fine-pack-native-diagnostic-run-contract-v1",
+  "source_repair_base": "39a03dc24ac95e224c2426275fdc4239b20c3109",
+  "source_repair_contract": {
+    "path": "/tmp/borsuk-fine-pack-native-diagnostic-run-repair-contract.json",
+    "sha256": "eccfcf19869de679e8600e44e713eb1b617fa9ccb8bd5ed477dadd899b988c1e"
+  },
+  "source_repair_pending_commit": false,
+  "synthetic_checks": {
+    "command": "systemd-run --user --unit=fine-pack-supervisor --wait --pipe --collect -p 'Delegate=cpu memory pids' -p DelegateSubgroup=supervisor -p MemoryMax=256M -p MemorySwapMax=0 -p CPUQuota=100% -p RuntimeMaxSec=120 -p TasksMax=64 -p CPUAffinity=0 -p WorkingDirectory=/home/rb/worktrees/borsuk-fine-pack-native-diagnostic-run --setenv=BORSUK_FINE_PACK_REAL_CGROUP=1 --setenv=BORSUK_FINE_PACK_SETUP_PROOF_OUT=/tmp/borsuk-fine-pack-native-diagnostic-run-setup-proof python3 scripts/launch_fine_pack_diagnostic.py --self-check",
+    "command_argv": [
+      "systemd-run",
+      "--user",
+      "--unit=fine-pack-supervisor",
+      "--wait",
+      "--pipe",
+      "--collect",
+      "-p",
+      "Delegate=cpu memory pids",
+      "-p",
+      "DelegateSubgroup=supervisor",
+      "-p",
+      "MemoryMax=256M",
+      "-p",
+      "MemorySwapMax=0",
+      "-p",
+      "CPUQuota=100%",
+      "-p",
+      "RuntimeMaxSec=120",
+      "-p",
+      "TasksMax=64",
+      "-p",
+      "CPUAffinity=0",
+      "-p",
+      "WorkingDirectory=/home/rb/worktrees/borsuk-fine-pack-native-diagnostic-run",
+      "--setenv=BORSUK_FINE_PACK_REAL_CGROUP=1",
+      "--setenv=BORSUK_FINE_PACK_SETUP_PROOF_OUT=/tmp/borsuk-fine-pack-native-diagnostic-run-setup-proof",
+      "python3",
+      "scripts/launch_fine_pack_diagnostic.py",
+      "--self-check"
+    ],
+    "exit_status": 0,
+    "graph_corpus_GT_opened": false,
+    "mocked": [
+      "negative cgroup fixtures",
+      "SDK transport",
+      "AWS lifecycle"
+    ],
+    "native_ANN": false,
+    "network": false,
+    "official_old_sdk_service_model_checked": true,
+    "official_old_sdk_service_model_sha256": "0e0760c9ae10e9f8af267b0d9708fefabbaec023370f0044bbecc51565f05699",
+    "original_processes": "real synthetic executable only",
+    "passed": true,
+    "proof_path": "/tmp/borsuk-fine-pack-native-diagnostic-run-setup-proof/setup-proof.json",
+    "proof_sha256": "2d5d9944d564a738411a9716a6987e2f65815ba98b6b6c25beeb80e7c6e4cebf",
+    "real_kernel_setup_and_original_fake_native": true,
+    "refusals": 47
+  },
+  "verification_exit_statuses": {
+    "bounded_self_check": 0,
+    "exact_CODE_AST_closure": 0,
+    "generated_Bash_and_Python_bootstrap": 0,
+    "git_diff_check": 0,
+    "py_compile": 0,
+    "real_kernel_setup_and_fake_native": 0,
+    "strict_template_and_qualification_pins": 0
+  }
+}

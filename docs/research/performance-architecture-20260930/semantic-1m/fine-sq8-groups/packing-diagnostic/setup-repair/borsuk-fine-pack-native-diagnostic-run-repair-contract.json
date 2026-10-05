@@ -1,0 +1,269 @@
+{
+  "base_commit": "39a03dc24ac95e224c2426275fdc4239b20c3109",
+  "cause": "cpu controller disabled for child: absent cpu.max plus Path.write_text O_CREAT produces kernel EACCES; direct unmanaged global hierarchy assumed availability",
+  "checks": {
+    "bounded_self_check": 0,
+    "diff_check": 0,
+    "generated_Bash_Python": 0,
+    "py_compile": 0,
+    "real_kernel_setup_and_fake_native": 0,
+    "strict_template_pins": 0
+  },
+  "controller_scope": "Only dedicated fine-pack-supervisor.service parent subtree_control; supervisor/native sibling leaves; no global/root controller mutation or unrelated PID moves",
+  "fixed_scientific_caps": {
+    "cpu_threads": 1,
+    "deadline_seconds": 300,
+    "memory_bytes": 268435456,
+    "operations": 500000000,
+    "output_bytes": 2097152,
+    "swap_bytes": 0
+  },
+  "native_config_sha256": "0eb14d90272cff7d7e61e60eb3ae73044474903de8fa26b5ac2bc64530bd1196",
+  "original_attempt": "a0001",
+  "original_disposition": "INVALID_ENVIRONMENT",
+  "original_evidence": {
+    "aws-terminal.json": {
+      "bytes": 1889,
+      "path": "/home/rb/worktrees/borsuk-fine-pack-diagnostic-frozen/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-diagnostic/a0001/aws-terminal.json",
+      "sha256": "d4303a1482f4b31000f61757b2b5979ae37ae384a870b6c402485cb62415b28c"
+    },
+    "cleanup.json": {
+      "bytes": 72,
+      "path": "/home/rb/worktrees/borsuk-fine-pack-diagnostic-frozen/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-diagnostic/a0001/cleanup.json",
+      "sha256": "984373a760709e814b7ae9f9311098fcb88ea884b0d4c841097188f93697d604"
+    },
+    "native-exit.json": {
+      "bytes": 838,
+      "path": "/home/rb/worktrees/borsuk-fine-pack-diagnostic-frozen/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-diagnostic/a0001/native-exit.json",
+      "sha256": "4faebecca8e35499be4f0c3ed609788d3882eff9c87af7eb4f9b9d906f7eccc4"
+    },
+    "resources.json": {
+      "bytes": 248,
+      "path": "/home/rb/worktrees/borsuk-fine-pack-diagnostic-frozen/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-diagnostic/a0001/resources.json",
+      "sha256": "1ad76d7fdb9ce4439f25dd18a1d47d0b683d2bdd79764853567eefef475065d0"
+    },
+    "run-closed.log": {
+      "bytes": 3688,
+      "path": "/home/rb/worktrees/borsuk-fine-pack-diagnostic-frozen/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/packing-diagnostic/a0001/run-closed.log",
+      "sha256": "4d195e609c306ee0a6a2c612e312d39981b116439b088c6cd632b8e5d17f5bd6"
+    }
+  },
+  "original_instance_id": "i-045de8b2128c20192",
+  "original_native_started": false,
+  "repair_commit": "d005ba948bf8db67422a0b49924f4957bba3aa5d",
+  "repair_verified": true,
+  "repaired_setup": {
+    "SDK_transport_and_AWS_mocked": true,
+    "cgroups_mocked": false,
+    "cleanup": {
+      "cleanup_complete": true,
+      "drain_complete": true,
+      "output_durable": true
+    },
+    "command": [
+      "systemd-run",
+      "--user",
+      "--unit=fine-pack-supervisor",
+      "--wait",
+      "--pipe",
+      "--collect",
+      "-p",
+      "Delegate=cpu memory pids",
+      "-p",
+      "DelegateSubgroup=supervisor",
+      "-p",
+      "MemoryMax=256M",
+      "-p",
+      "MemorySwapMax=0",
+      "-p",
+      "CPUQuota=100%",
+      "-p",
+      "RuntimeMaxSec=120",
+      "-p",
+      "TasksMax=64",
+      "-p",
+      "CPUAffinity=0",
+      "-p",
+      "WorkingDirectory=/home/rb/worktrees/borsuk-fine-pack-native-diagnostic-run",
+      "--setenv=BORSUK_FINE_PACK_REAL_CGROUP=1",
+      "--setenv=BORSUK_FINE_PACK_SETUP_PROOF_OUT=/tmp/borsuk-fine-pack-native-diagnostic-run-setup-proof",
+      "python3",
+      "scripts/launch_fine_pack_diagnostic.py",
+      "--self-check"
+    ],
+    "exit_status": 0,
+    "invocation_id": "6015f42fe0224e6e973f3b9bad7d9090",
+    "kernel_peak_bytes": 7782400,
+    "native_ANN_executed": false,
+    "native_original_exit": 0,
+    "proof_artifacts": {
+      "cleanup.json": {
+        "bytes": 70,
+        "sha256": "2a52fbfbc0735128b52a67f48fa3900ae88164290aab79a04c86b0dbf0444a3a"
+      },
+      "native-exit.json": {
+        "bytes": 773,
+        "sha256": "d180bb06f94bfc1a503be4c9bfda087d3a6969db64bb4f01f92611b0066a475a"
+      },
+      "native.log": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "resources.json": {
+        "bytes": 2190,
+        "sha256": "69b34490f97456cdc77ff1183983b7248aa77ec12e4818a033a9811ed32e6077"
+      }
+    },
+    "proof_path": "/tmp/borsuk-fine-pack-native-diagnostic-run-setup-proof/setup-proof.json",
+    "proof_sha256": "2d5d9944d564a738411a9716a6987e2f65815ba98b6b6c25beeb80e7c6e4cebf",
+    "resources": {
+      "after": {
+        "files": {
+          "cgroup.events": "populated 0\nfrozen 0\n",
+          "cgroup.procs": "",
+          "cpu.max": "100000 100000\n",
+          "cpu.stat": "usage_usec 31982\nuser_usec 18989\nsystem_usec 12992\nnice_usec 0\ncore_sched.force_idle_usec 0\nnr_periods 1\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n",
+          "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n",
+          "memory.max": "268435456\n",
+          "memory.peak": "7782400\n",
+          "memory.swap.events": "high 0\nmax 0\nfail 0\n",
+          "memory.swap.max": "0\n",
+          "memory.swap.peak": "0\n",
+          "pids.current": "0\n",
+          "pids.events": "max 0\n",
+          "pids.max": "32\n"
+        },
+        "observer_pid": 4112448,
+        "path": "/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service/app.slice/fine-pack-supervisor.service/native"
+      },
+      "before": {
+        "files": {
+          "cgroup.events": "populated 0\nfrozen 0\n",
+          "cgroup.procs": "",
+          "cpu.max": "100000 100000\n",
+          "cpu.stat": "usage_usec 0\nuser_usec 0\nsystem_usec 0\nnice_usec 0\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n",
+          "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n",
+          "memory.max": "268435456\n",
+          "memory.peak": "0\n",
+          "memory.swap.events": "high 0\nmax 0\nfail 0\n",
+          "memory.swap.max": "0\n",
+          "memory.swap.peak": "0\n",
+          "pids.current": "0\n",
+          "pids.events": "max 0\n",
+          "pids.max": "32\n"
+        },
+        "observer_pid": 4112448,
+        "path": "/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service/app.slice/fine-pack-supervisor.service/native"
+      },
+      "closed": true,
+      "cpu_affinity": [
+        0
+      ],
+      "deadline_exceeded": false,
+      "delegation": {
+        "available": [
+          "cpu",
+          "memory",
+          "pids"
+        ],
+        "enabled": [
+          "cpu",
+          "memory",
+          "pids"
+        ],
+        "enabled_before": [],
+        "observer": "/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service/app.slice/fine-pack-supervisor.service/supervisor",
+        "observer_pid": 4112448,
+        "observer_process_ids": [
+          4112448
+        ],
+        "parent": "/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service/app.slice/fine-pack-supervisor.service",
+        "parent_process_ids": [],
+        "parent_type": "domain",
+        "unit": "fine-pack-supervisor.service"
+      },
+      "descendants_remaining_after_exit": false,
+      "elapsed_seconds": 0.06523630709853023,
+      "pre_exec_limits_observed": true,
+      "process_attached_before_exec": true,
+      "supervisor_outside_native_cgroup": true
+    },
+    "swap_peak_bytes": 0,
+    "unit_cpu_ms": 590,
+    "unit_memory_peak_reported": "56.3M",
+    "unit_runtime_ms": 864,
+    "unit_swap_bytes": 0
+  },
+  "reproduction": {
+    "attempted_cpu_max": "100000 100000",
+    "available": [
+      "cpu",
+      "memory",
+      "pids"
+    ],
+    "cleanup_complete": true,
+    "command": [
+      "systemd-run",
+      "--user",
+      "--unit=borsuk-fine-pack-eacces-reproduction",
+      "--wait",
+      "--pipe",
+      "--collect",
+      "-p",
+      "Delegate=cpu memory pids",
+      "-p",
+      "DelegateSubgroup=supervisor",
+      "-p",
+      "MemoryMax=256M",
+      "-p",
+      "MemorySwapMax=0",
+      "-p",
+      "CPUQuota=100%",
+      "-p",
+      "RuntimeMaxSec=120",
+      "-p",
+      "TasksMax=64",
+      "-p",
+      "CPUAffinity=0",
+      "python3",
+      "-c",
+      "import errno,pathlib; observer=pathlib.Path(\"/sys/fs/cgroup\")/pathlib.Path(\"/proc/self/cgroup\").read_text().strip().split(\"0::\")[-1].lstrip(\"/\"); parent=observer.parent; (parent/\"cgroup.subtree_control\").write_text(\"+memory +pids\"); child=parent/\"native\"; child.mkdir(); (child/\"memory.max\").write_text(\"268435456\"); (child/\"memory.swap.max\").write_text(\"0\"); print({\"available\":(parent/\"cgroup.controllers\").read_text(),\"enabled\":(parent/\"cgroup.subtree_control\").read_text(),\"cpu_max_exists\":(child/\"cpu.max\").exists()}); caught=None\ntry: (child/\"cpu.max\").write_text(\"100000 100000\")\nexcept OSError as e: caught=e; print({\"error\":type(e).__name__,\"errno\":e.errno,\"path\":e.filename})\nassert caught is not None and caught.errno==errno.EACCES; child.rmdir()"
+    ],
+    "cpu_max_exists": false,
+    "enabled": [
+      "memory",
+      "pids"
+    ],
+    "errno": 13,
+    "error": "PermissionError",
+    "exit_status": 0,
+    "invocation_id": "c518fc144d5e4ed7b3763b2dc788de71",
+    "kernel_cgroup_real": true,
+    "memory_max": 268435456,
+    "memory_swap_max": 0,
+    "native_process_started": false,
+    "unit_cpu_ms": 27,
+    "unit_memory_peak_reported": "5.3M",
+    "unit_runtime_ms": 51,
+    "unit_swap_bytes": 0
+  },
+  "root_handoff_receipt": {
+    "archive_sha256_prefix": "148a777b",
+    "attempt": "a0002",
+    "config_sha256_prefix": "b2369c8a",
+    "controller_identity_reported": "0ad59f62df5347fb99fe29f69563c436",
+    "independent_validation": "actual kernel setup native synthetic exit0/cleanup/swap/OOM0 and bounded47 refusal selfcheck0",
+    "instance_id": "i-0163a17d289fa5fba",
+    "integration_commit_prefix": "0bd3",
+    "message_id": "1791206625380377073-2054090",
+    "original_exec_session": 62101,
+    "parent": "borsuk/prod-ready-v9",
+    "status": "parent reports integrated, frozen, pushed and original fresh job launched; parent owns collection and scientific decision"
+  },
+  "root_next_steps": [
+    "Finish collection and scientific decision for original a0002; parent owns that job",
+    "Preserve original a0001 INVALID/environment and unchanged native binary/config/six inputs/scientific caps"
+  ],
+  "schema": "borsuk-fine-pack-native-diagnostic-source-repair-v1",
+  "source_file_sha256": "44731d5271c65e53be17a7f4310a4d31a542866682ac75df02e7c4e670d14a76"
+}
