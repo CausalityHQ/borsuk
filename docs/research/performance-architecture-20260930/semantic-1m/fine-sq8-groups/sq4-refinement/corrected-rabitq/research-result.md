@@ -124,3 +124,10 @@ At 100M, bodies alone remain **39.6 GB per generation**, with another **200 MB o
 
 Read-only throughout: no edits, Cargo, experiments, corpus/query/truth reads, AWS or children. The worktree advanced concurrently to `3feea1d`; only the decision document changed from `371e0988`, and the reviewed Rust files remained unchanged.
 
+## Root corrections before implementation freeze
+
+The consultation's correction-rounding expression bounds cosine error. For the declared distance `2 - 2*cosine`, the correction-only bound is **twice** that expression: `2*abs(lambda32-lambda)*abs(dot(v,z))`. Final `f32` score-cast error must be accounted separately. This follows directly from the declared score algebra; no native measurement is implied.
+
+Validate the conservative Gram certificate once when constructing or admitting the immutable rotation. Encoding and query preparation borrow that admitted state; copying V23's validation-per-row pattern would add repeated cubic work. Persist exact matrix bits and bind the admitted matrix identity to each prepared query. The certificate must account for dot-product and row-sum measurement roundoff before comparison with the declared tolerance.
+
+Equal encoder thresholds mean exact equality of finite `f64` values, never epsilon grouping. The winning code must reconstruct the exact state whose objective was evaluated. Exhaustive tiny-dimensional tests must cover both exact and adjacent-representable thresholds.
