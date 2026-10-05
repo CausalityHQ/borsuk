@@ -1,0 +1,124 @@
+{
+  "canary_qualified": false,
+  "child_checks": [
+    {
+      "command": "python3 -B scripts/launch_hierarchical_cells_100k_spot.py --fine-sq8-pair --self-check",
+      "covers": [
+        "real exact404/recorded57-test metadata only",
+        "three serial tiny Python native stand-ins",
+        "valid scientific FAIL and no-GT infeasible FAIL",
+        "preauthentication of both opaque requests",
+        "prefix/seal/tamper/incomplete/exit/cgroup/memory/swap/OOM/CPU/scratch/cleanup/drain rejection",
+        "relocated raw replay and resealed cleanup tamper",
+        "real silent tiny Python child through reused owned_stage adapter",
+        "30 mocked HEAD + one proof GET + actual usage CLI2",
+        "stream collection/gzip/SAME-ID replay and selectedGO identity refusal",
+        "science-stage scratch originals preserved",
+        "shared mocked ACK/terminate-wait lifecycle"
+      ],
+      "exit_status": 0,
+      "observed_cpu_seconds": 13.898,
+      "observed_seconds": 15.991,
+      "observed_swap": "0B",
+      "observed_unit_memory_peak": "100.1M",
+      "unit": "borsuk-fine-glue-final-source-check"
+    },
+    {
+      "command": "python3 -B /tmp/borsuk-fine-glue-metadata-source-check.py",
+      "covers": [
+        "full direct/scoped fine_qualify",
+        "exact404/recorded native57 metadata",
+        "direct16/native14 descriptors",
+        "CODE/source/immutable original paths/headers/scratch",
+        "pending/path/code/scratch negatives"
+      ],
+      "exit_status": 0,
+      "fixture": {
+        "bytes": 5162,
+        "path": "/tmp/borsuk-fine-glue-metadata-source-check.py",
+        "sha256": "ff0b573eccf5338fa12d8377d4bf693bd26989543e52082e20bef15b1d8a32d6"
+      },
+      "note": "Metadata fixture copies only source/qualification/header metadata. Binary transport is an unopened synthetic placeholder. Real corpus/request/GT bodies remain unopened."
+    },
+    {
+      "command": "compile(source, path, \"exec\"); git diff --check; AST comparison against c71271c2",
+      "exit_status": 0,
+      "legacy_definitions_changed": {
+        "helper": [
+          "main"
+        ],
+        "launcher": [
+          "probe_stage",
+          "probe_replay",
+          "probe_require_canary",
+          "overlap_canary"
+        ]
+      },
+      "note": "All other original function/class definitions are unchanged; listed edits are scoped fine-mode branches."
+    },
+    {
+      "command": "python3 -B scripts/run_cell_overlap_pair.py --self-check",
+      "exit_status": 0,
+      "observed_seconds": 14.35,
+      "observed_unit_memory_peak": "84.4M"
+    },
+    {
+      "command": "overlap_self_check() with fixture-only OVERLAP_HELPER_SHA=current helper SHA",
+      "exit_status": 0,
+      "note": "Unmodified legacy CLI self-check first exited2 at frozen launcher/helper source because it hardcodes the historical66ce digest. Fixture-only override passes; production historical freeze constant remains unchanged.",
+      "observed_seconds": 2.707,
+      "observed_unit_memory_peak": "98.9M"
+    }
+  ],
+  "child_commit": "6244de801d002c7c9c562ab081b3d0da09feb1cc",
+  "contract": {
+    "bytes": 97959,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/source-glue-contract.json",
+    "sha256": "5b65c8a579773b1249884bd8664ecf395b240902689c4b2fa9d66e92a38609db"
+  },
+  "integrated_commit": "6bb1c6c5f81265c57b001ca09349c866b23e0b8d",
+  "native_executed": false,
+  "network_called_by_preflight": false,
+  "next_gate": "one metadata-only Spot canary; authenticate original terminated GO before one three-call native scientific attempt",
+  "owned_files": {
+    "scripts/launch_hierarchical_cells_100k_spot.py": {
+      "bytes": 246789,
+      "path": "/home/rb/worktrees/borsuk-fine-sq8-existing-native-experiment/scripts/launch_hierarchical_cells_100k_spot.py",
+      "sha256": "c59e107d0d2f4e3b6a6e9333be5829743232b47dae07b37dfb942b0abffd79be"
+    },
+    "scripts/run_cell_overlap_pair.py": {
+      "bytes": 104095,
+      "path": "/home/rb/worktrees/borsuk-fine-sq8-existing-native-experiment/scripts/run_cell_overlap_pair.py",
+      "sha256": "dc99360ffd09b030f656bc30cfe7034dc5fea3be93ee3ccfca39af539cdb46b0"
+    }
+  },
+  "qualification": {
+    "artifact_roster_sha256": "8c2553152ad35fb63e1f013c807c54fa2b3568f0096ad46021326221c3f9970e",
+    "code_identity_sha256": "65904490b24df390ee7cfb36e4b131aeeeade234855a58ce7207ec5d4b4e7d24",
+    "config_sha256": "d29a26a8ecc6d18a7a8e87b55b7e6b3bf709985321f94688f3fc6025c6276d9d",
+    "native_identity_sha256": "c7675eb2d827834524c34aa7f7c814b70b7a31e27f66e9bbf526adbce302629b",
+    "refs_identity_sha256": "a3dc910eb81dac0aae7b0ced19ee96db7da6463cf66aa81a31cddeec11f3d3bd",
+    "source_archive_paths_sha256": "40011b05c164bf8deb0f4c7bc3855412e44693436336fde616f19fe84fece337",
+    "source_file_count": 404
+  },
+  "root_preflight": {
+    "command": "systemd-run --user --wait --pipe --collect --unit=borsuk-fine-root-final-preflight-r1 -p WorkingDirectory=/home/rb/worktrees/borsuk-prod-ready-v9 -p MemoryMax=256M -p MemorySwapMax=0 -p CPUQuota=100% -p TasksMax=512 -p RuntimeMaxSec=120 /usr/bin/python3 -B scripts/launch_hierarchical_cells_100k_spot.py --fine-sq8-pair --preflight",
+    "exit_status": 0,
+    "invocation_id": "4fe1249e59784362bde679b84a1ff434",
+    "setup_attempt": {
+      "cause": "user systemd default cwd; repaired explicit WorkingDirectory",
+      "exit_status": 2,
+      "invocation_id": "64429843a0c74837815c03de1e36c025",
+      "qualification_started": false
+    },
+    "unit_memory_peak_reported": "60.2M",
+    "unit_swap_reported": "0B",
+    "unit_wall_seconds": 0.907
+  },
+  "rust_source_changed": false,
+  "schema": "borsuk-fine-sq8-parent-source-glue-verification-v1",
+  "science_qualified": false,
+  "scratch_admitted_bytes": 4531361694,
+  "scratch_limit_bytes": 8589934592,
+  "truth_body_opened": false
+}
