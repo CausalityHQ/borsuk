@@ -3,7 +3,8 @@
 
 CLI: --preflight | --self-check | --canary aNNNN | aNNNN
 Private bootstrap/collection: --stage[-canary] REPO NEW_OUTPUT WORKER_ROOT;
---replay[-canary] OUTPUT. No native qualification, compiler, retry or tuning.
+--bootstrap-closeout REPO WORKER_ROOT ORIGINAL_EXIT; --replay[-canary] OUTPUT.
+No native qualification, compiler, retry or tuning.
 """
 import ast
 import copy
@@ -45,15 +46,17 @@ PREFIX = 'research/hierarchical-cells/20261004/source-witness-paired100k-'
 CANARY_PREFIX = 'research/hierarchical-cells/20261004/source-witness-canary-'
 WALL, CANARY_WALL = 2400, 480
 CLOSEOUT_SECONDS, CLOSEOUT_RESERVE = 60, 75
+CLOSEOUT_BYTES = 4 << 30  # Reserved inside the original 16GiB whole-worker cap.
 MEMORY, CANARY_MEMORY = 1 << 30, 256 << 20
 SCRATCH, CANARY_SCRATCH = 16 << 30, 4 << 30
 WORKER_ROOT = Path('/mnt/source-witness')
+CGROUP_ROOT = Path('/sys/fs/cgroup')
 VERSIONS = dict(bridge.FIXED['versions'], **bridge.SDK_VERSIONS)
 OUTPUTS = ('config.json', 'source-qualification.json', 'tool-versions.json',
            'resources.json', 'worker-cgroup.json', 'native-drain.json', 'cleanup.json', 'summary.json')
 ARTIFACTS = ('test-resources.txt', 'run-closed.log', *('screen/'+n for n in
              (*OUTPUTS, 'runner-config.json', 'runner-return.json', 'runner.stdout',
-              'runner.stderr', 'native-output.tar.gz')))
+              'runner.stderr', 'native-output.tar.gz', 'bootstrap-closeout.json')))
 CANARY_ARTIFACTS = ('test-resources.txt', 'run-closed.log', *('screen/'+n for n in
                     (*OUTPUTS, 'canary.json', 'gate.log')))
 IDENTITIES = bridge.TERMINAL_IDENTITIES
@@ -238,10 +241,28 @@ def validate_canary(receipt, evidence):
     require(evidence['gate_log']['bytes'] <= 1 << 20, 'canary log cap')
 
 
+def bundle_bound(source):
+    paths = []
+    for path in sorted(Path(source).rglob('*')):
+        runner.positive.regular_path(path)
+        if path.is_dir():
+            continue
+        require(path.is_file() and len(str(path.relative_to(source)).encode()) <= 4096, 'bounded regular native output name')
+        paths.append(path)
+    require(0 < len(paths) < 10000, 'bounded nonempty native output roster')
+    # Conservative PAX headers, tar padding and deflate expansion; no body reads.
+    raw = sum(p.stat().st_size for p in paths)+32768*len(paths)+(1 << 20)
+    upper = raw+raw//100+(1 << 20)
+    require(2*upper <= CLOSEOUT_BYTES, 'native archive fits fixed closeout byte reserve')
+    return upper
+
+
 def bundle(source, destination, check):
     check()
+    upper = bundle_bound(source)
     with Path(destination).open('xb') as stream, gzip.GzipFile(fileobj=stream, mode='wb', mtime=0) as zipped, tarfile.open(fileobj=zipped, mode='w|') as archive:
         for path in sorted(Path(source).rglob('*')):
+            check()
             runner.positive.regular_path(path)
             if path.is_dir():
                 continue
@@ -249,6 +270,7 @@ def bundle(source, destination, check):
             archive.add(path, arcname=str(path.relative_to(source)), recursive=False)
         zipped.flush()
     probe.fsync_file(destination); probe.fsync_dir(Path(destination).parent); check()
+    require(Path(destination).stat().st_size <= upper, 'actual native bundle fits admitted archive bound')
     expected = {str(p.relative_to(source)): ids.artifact(p) for p in sorted(Path(source).rglob('*')) if p.is_file()}
     seen = []
     with tarfile.open(destination, 'r|gz') as archived:
@@ -263,6 +285,19 @@ def bundle(source, destination, check):
     exact(seen, sorted(expected), 'closed lossless native bundle')
     check()
     return ids.artifact(destination)
+
+
+def closeout_bundle(root, baseline, cap, check):
+    """Only drained native originals; charge archive growth before writing it."""
+    root = Path(root); source, destination = root/'native-output', root/'screen/native-output.tar.gz'
+    check()
+    upper = bundle_bound(source)
+    require(bridge.scratch_snapshot(root,baseline)+2*upper <= cap, 'whole-worker reserved bundle headroom')
+    require(shutil.disk_usage(root).free >= upper, 'native bundle filesystem headroom')
+    destination.unlink(missing_ok=True)  # Reclaim an unclosed archive; originals still exist.
+    closed = bundle(source,destination,check)
+    shutil.rmtree(source)  # Only a closed, byte-authenticated bundle permits deletion.
+    return closed
 
 
 def drain_owned(group, check):
@@ -372,6 +407,7 @@ def stage(repo, output, worker_root, *, is_canary=False):
     baseline = int(os.environ['BORSUK_HIERARCHICAL_SCRATCH_BASE_USED'])
     deadline = time.monotonic()+remaining
     work_deadline = deadline-CLOSEOUT_RESERVE
+    work_cap = cap if is_canary else cap-CLOSEOUT_BYTES
     before, host_before = snapshots(memory)
     out.mkdir(); assets, native_out = root/'assets', root/'native-output'
     require(not assets.exists() and not native_out.exists(), 'fresh staged/native paths')
@@ -379,7 +415,7 @@ def stage(repo, output, worker_root, *, is_canary=False):
     client, failure, thread, sdk_closed = None, None, None, False
     result = dict(status='INVALID', complete=False, execution_exit_code=2)
     def check():
-        bridge.probe_resource_check(root, baseline, cap, work_deadline, errors, peaks)
+        bridge.probe_resource_check(root, baseline, work_cap, work_deadline, errors, peaks)
     def interrupted(*_):
         raise InterruptedError('fixed bridge deadline/resource interruption')
     def monitor():
@@ -426,9 +462,11 @@ def stage(repo, output, worker_root, *, is_canary=False):
         if thread is not None:
             thread.join(timeout=2)
         closeout_deadline = min(deadline, time.monotonic()+CLOSEOUT_SECONDS)
+        def closeout_time():
+            require(time.monotonic() < closeout_deadline, 'fixed closeout deadline')
         def closeout_check():
             # Active-work errors stay INVALID, but cannot prohibit their receipts.
-            require(time.monotonic() < closeout_deadline, 'fixed closeout deadline')
+            closeout_time()
             amount = bridge.scratch_snapshot(root, baseline)
             peaks['scratch_bytes'] = max(peaks['scratch_bytes'], amount)
             peaks['scratch_scan_calls'] = peaks.get('scratch_scan_calls',0)+1
@@ -437,17 +475,21 @@ def stage(repo, output, worker_root, *, is_canary=False):
         drain = dict(owned_units=[],stop_calls=[],closed=False)
         try:
             signal.setitimer(signal.ITIMER_REAL, max(.001, closeout_deadline-time.monotonic()))
-            drain, drain_error = drain_owned(before['path'], closeout_check)
-            local.write_json(out/'native-drain.json',drain); closeout_check()
+            drain, drain_error = drain_owned(before['path'], closeout_time)
+            local.write_json(out/'native-drain.json',drain); closeout_time()
             if drain_error is not None:
                 raise drain_error
             if drain['stop_calls']:
                 failure = failure or ValueError('runner left live owned native units; stopped during closeout')
+            amount = bridge.scratch_snapshot(root,baseline)
+            peaks['scratch_bytes'] = max(peaks['scratch_bytes'],amount)
+            if amount > work_cap:
+                failure = failure or ValueError('scratch admission breached before closeout reclamation')
             if assets.exists():
                 shutil.rmtree(assets)
+            probe.fsync_dir(root); closeout_check()
             if not is_canary and native_out.exists():
-                closed_bundle = bundle(native_out, out/'native-output.tar.gz', closeout_check)
-                shutil.rmtree(native_out)  # Only a closed, byte-authenticated bundle permits deletion.
+                closed_bundle = closeout_bundle(root,baseline,cap,closeout_check)
             if client is not None:
                 client.close(); sdk_closed = True
             after, host_after = snapshots(memory)
@@ -466,6 +508,7 @@ def stage(repo, output, worker_root, *, is_canary=False):
             result.update(status='INVALID', complete=False, execution_exit_code=2, error=str(failure or 'incomplete original cleanup'))
         local.write_json(out/'resources.json', dict(peaks, sdk_calls=calls, monitor_errors=errors,
             deadline_seconds=remaining, closeout_reserve_seconds=CLOSEOUT_RESERVE, closeout_limit_seconds=CLOSEOUT_SECONDS,
+            closeout_reserve_bytes=0 if is_canary else CLOSEOUT_BYTES, active_scratch_cap_bytes=work_cap,
             wall_seconds=remaining-(deadline-time.monotonic())))
         local.write_json(out/'cleanup.json', clean)
         local.write_json(out/'summary.json', result); probe.fsync_dir(out)
@@ -475,6 +518,60 @@ def stage(repo, output, worker_root, *, is_canary=False):
     if not result['complete']:
         raise ValueError('INVALID fixed bridge: '+result.get('error', 'incomplete'))
     return result
+
+
+def bootstrap_closeout(repo, root, original_exit_code):
+    """Bounded retention after the original slice stopped, even without finally."""
+    repo, root = (runner.positive.regular_path(p) for p in (repo,root))
+    exact(root,WORKER_ROOT,'fixed fallback worker root'); exact(repo,root/'probe-repo','authenticated fallback source root')
+    exact(int(os.environ['BORSUK_SOURCE_WITNESS_SLICE_STOP_EXIT']),0,'original owned slice stop succeeded')
+    group = Path(os.environ['BORSUK_SOURCE_WITNESS_SLICE_CGROUP'])
+    require(group.is_relative_to(CGROUP_ROOT) and re.fullmatch(r'borsuk-global-leaf-a[0-9]{4}\.slice',group.name), 'fixed owned fallback slice cgroup')
+    require(not any(p.read_text().strip() for p in group.rglob('cgroup.procs')), 'original slice actually drained before fallback')
+    baseline = int(os.environ['BORSUK_HIERARCHICAL_SCRATCH_BASE_USED'])
+    remaining = int(os.environ['BORSUK_HIERARCHICAL_DEADLINE_EPOCH'])-time.time()
+    deadline = time.monotonic()+min(CLOSEOUT_SECONDS,remaining)
+    out = root/'screen'; out.mkdir(exist_ok=True)
+    record = dict(original_exit_code=original_exit_code,status='INVALID',complete=False,
+        slice_cgroup=str(group),slice_stop_exit=0,slice_drained=True,used_fallback=False,native_bundle=None,
+        scratch_bytes=0,scratch_cap_bytes=SCRATCH,closeout_reserve_bytes=CLOSEOUT_BYTES,
+        closeout_limit_seconds=CLOSEOUT_SECONDS,remaining_machine_seconds=remaining)
+    def time_check():
+        require(time.monotonic() < deadline,'fallback stays inside original machine deadline and 60sec closeout')
+    def check():
+        time_check()
+        amount = bridge.scratch_snapshot(root,baseline)
+        record['scratch_bytes'] = max(record['scratch_bytes'],amount)
+        require(amount <= SCRATCH,'fallback whole-worker scratch cap')
+    try:
+        time_check()
+        record['scratch_bytes'] = bridge.scratch_snapshot(root,baseline)
+        if (root/'assets').exists():
+            shutil.rmtree(root/'assets')
+        # The original controller may have died during bundle creation.
+        if (root/'native-output').exists():
+            (out/'native-output.tar.gz').unlink(missing_ok=True)
+            probe.fsync_dir(root); check()
+            record['native_bundle'] = closeout_bundle(root,baseline,SCRATCH,check)
+            record['used_fallback'] = True
+        elif (out/'native-output.tar.gz').exists():
+            cleanup = local.decode((out/'cleanup.json').read_bytes())
+            record['native_bundle'] = ids.artifact(out/'native-output.tar.gz')
+            exact(record['native_bundle'],cleanup['closed_native_bundle'],'reuse only original authenticated closed bundle')
+            check()
+        else:
+            require(original_exit_code != 0,'successful original runner requires native bundle')
+            check()
+        record['complete'] = True
+        if original_exit_code == 0 and record['scratch_bytes'] <= SCRATCH:
+            record['status'] = 'GO'
+        require(original_exit_code != 0 or record['status']=='GO','fallback scratch breach remains INVALID')
+    except BaseException as error:
+        record['error'] = type(error).__name__+': '+str(error)
+        raise
+    finally:
+        local.write_json(out/'bootstrap-closeout.json',record); probe.fsync_dir(out)
+    return record
 
 
 def user_data(commit, archive_sha, archive_key, prefix, proof, *, is_canary=False):
@@ -497,9 +594,38 @@ def user_data(commit, archive_sha, archive_key, prefix, proof, *, is_canary=Fals
         body = body.replace(' -p MemoryMax=2G', ' -p MemoryMax=256M', 1)
         body = body.replace('CPUQuota=200%', 'CPUQuota=100%').replace('taskset -c 0,1', 'taskset -c 0')
         body = body.replace('NUM_THREADS=2', 'NUM_THREADS=1')
+        # Leave 15 seconds even if the outer controller needs its hard kill;
+        # its own active-work timer already reserves 75 seconds for closeout.
+        body = body.replace('test "$remaining" -gt 0\n','test "$remaining" -gt 15\ncontroller_remaining=$((remaining-15))\n',1)
+        body = body.replace('RuntimeMaxSec="$remaining"','RuntimeMaxSec="$controller_remaining"',1)
+        body = body.replace('--kill-after=5 "$remaining"','--kill-after=5 "$controller_remaining"',1)
+        slice_name = 'borsuk-global-leaf-'+prefix[-5:]+'.slice'
+        stop = '  systemctl stop '+slice_name+' 2>/dev/null || true\n'
+        require(body.count(stop)==1,'original slice stop hook before artifact publication')
+        body = body.replace(stop,'',1)
+        # The inherited finish first disables its scratch watcher and errexit.
+        # Closeout must survive an original stop failure to publish INVALID.
+        require(body.count('  set +e\n')==1,'original failure-closeout shell hook')
+        body = body.replace('  set +e\n',f'''  set +e
+  source_witness_group=$(systemctl show {slice_name} --property=ControlGroup --value)
+  timeout --kill-after=2 10 systemctl stop {slice_name}
+  source_witness_stop_code=$?
+  source_witness_remaining=$((BORSUK_HIERARCHICAL_DEADLINE_EPOCH-$(date +%s)))
+  if [ "$source_witness_stop_code" = 0 ] && [ -n "$source_witness_group" ] && [ "$source_witness_remaining" -gt 3 ] && [ -f "$root/probe-repo/{FILE}" ]; then
+    source_witness_remaining=$((source_witness_remaining-3))
+    if [ "$source_witness_remaining" -gt {CLOSEOUT_SECONDS-3} ]; then source_witness_remaining={CLOSEOUT_SECONDS-3}; fi
+    timeout --kill-after=2 "$source_witness_remaining" systemd-run --unit=source-witness-closeout-{prefix[-5:]} --wait --pipe \\
+      -p MemoryMax=256M -p MemorySwapMax=0 -p CPUQuota=100% -p TasksMax=512 -p KillMode=control-group -p TimeoutStopSec=1 -p RuntimeMaxSec="$source_witness_remaining" \\
+      --setenv=BORSUK_HIERARCHICAL_DEADLINE_EPOCH="$BORSUK_HIERARCHICAL_DEADLINE_EPOCH" \\
+      --setenv=BORSUK_HIERARCHICAL_SCRATCH_BASE_USED="$BORSUK_HIERARCHICAL_SCRATCH_BASE_USED" \\
+      --setenv=BORSUK_SOURCE_WITNESS_SLICE_CGROUP="/sys/fs/cgroup$source_witness_group" \\
+      --setenv=BORSUK_SOURCE_WITNESS_SLICE_STOP_EXIT="$source_witness_stop_code" \\
+      taskset -c 0 "$root/venv/bin/python" "$root/probe-repo/{FILE}" --bootstrap-closeout "$root/probe-repo" "$root" "$original_code" || code=96
+  else code=96; fi
+''',1)
     # Empty original native stdout/stderr are valid evidence, never fabrication.
     body = body.replace('if [ "$name" = run-closed.log ]; then test -s run.log; else test -s "$name"; fi',
-        'case "$name" in run-closed.log) test -s run.log;; screen/runner.stdout|screen/runner.stderr) test -f "$name";; *) test -s "$name";; esac')
+        'case "$name" in run-closed.log) test -s run.log;; screen/runner.stdout|screen/runner.stderr) test -f "$name";; screen/bootstrap-closeout.json) :;; *) test -s "$name";; esac')
     subprocess.run(['bash', '-n'], input=body, text=True, check=True)
     compile(body.split("python3 - <<'PY' >terminal.json\n", 1)[1].split('\nPY\n', 1)[0], '<fixed-terminal>', 'exec')
     require(len(body.encode()) < 16384 and all(s not in body for s in ('rustup', 'cargo', 'unused', 'NUM_THREADS=2', 'CPUQuota=200%')), 'fixed bootstrap <16KiB/no compiler/CPU1')
@@ -574,6 +700,8 @@ def replay(out, *, is_canary=False, repo=REPO):
         resources['scratch_bytes'] <= cap and not resources['monitor_errors'] and resources['scratch_scan_calls'] >= 2, 'actual whole-worker resource/deadline closure')
     exact(resources['closeout_reserve_seconds'],CLOSEOUT_RESERVE,'original machine-deadline closeout reserve')
     exact(resources['closeout_limit_seconds'],CLOSEOUT_SECONDS,'original bounded closeout allowance')
+    exact(resources['closeout_reserve_bytes'],0 if is_canary else CLOSEOUT_BYTES,'archive reserve inside original scratch cap')
+    exact(resources['active_scratch_cap_bytes'],cap if is_canary else cap-CLOSEOUT_BYTES,'original scratch admission leaves archive reserve')
     clean = local.decode((screen/'cleanup.json').read_bytes())
     exact(clean['closeout_limit_seconds'],CLOSEOUT_SECONDS,'original cleanup allowance')
     exact(clean['closed_native_bundle'],None if is_canary else ids.artifact(screen/'native-output.tar.gz'),'closed authenticated original native bundle')
@@ -589,6 +717,12 @@ def replay(out, *, is_canary=False, repo=REPO):
         exact(summary, receipt, 'original closed canary summary')
         gate_log(dict(runner.body(evidence['gate_log']), path=str(screen/'gate.log')), evidence['stages'])
     else:
+        fallback = local.decode((screen/'bootstrap-closeout.json').read_bytes())
+        for n,v in dict(status='GO',complete=True,slice_drained=True,slice_stop_exit=0,original_exit_code=0,used_fallback=False,
+                        scratch_cap_bytes=SCRATCH,closeout_reserve_bytes=CLOSEOUT_BYTES,closeout_limit_seconds=CLOSEOUT_SECONDS).items():
+            exact(fallback[n],v,'original bootstrap retention closure')
+        exact(fallback['native_bundle'],ids.artifact(screen/'native-output.tar.gz'),'bootstrap authenticated original bundle')
+        require(0 <= fallback['scratch_bytes'] <= SCRATCH and 0 < fallback['remaining_machine_seconds'] <= WALL,'bootstrap bounded scratch/deadline')
         validate_calls(resources['sdk_calls'], evidence['objects'], 'get_object')
         cfg = local.identity(screen/'runner-config.json')
         exact(local.read_json(cfg), config['runner'], 'original exact native runner config')
@@ -656,6 +790,8 @@ def main(args):
             print(json.dumps(preflight(), sort_keys=True)); return 0
         if len(args) == 4 and args[0] in ('--stage', '--stage-canary'):
             stage(*args[1:], is_canary=args[0] == '--stage-canary'); return 0
+        if len(args) == 4 and args[0] == '--bootstrap-closeout':
+            bootstrap_closeout(args[1],args[2],int(args[3])); return 0
         if len(args) == 2 and args[0] in ('--replay', '--replay-canary'):
             result = replay(args[1], is_canary=args[0] == '--replay-canary')
             print(json.dumps(result, sort_keys=True)); return 0 if result['executed'] else 2
@@ -668,6 +804,85 @@ def main(args):
         shared.main(args[0], campaign=campaign(is_canary=is_canary)); return 0
     except Exception as error:
         print('INVALID: '+str(error), file=sys.stderr); return 2
+
+
+def closeout_self_check():
+    """Only the release-review scratch and killed-controller retention paths."""
+    from contextlib import ExitStack
+    module = sys.modules[__name__]
+    native_body = b'original partial terminal\n'
+    with tempfile.TemporaryDirectory(prefix='source-witness-closeout-') as tmp:
+        root = Path(tmp); repo = root/'probe-repo'; (repo/'scripts').mkdir(parents=True)
+        (repo/CONFIG).parent.mkdir(parents=True); (repo/CONFIG).write_bytes(b'{}\n')
+        stub = '''from pathlib import Path\nimport os, signal, sys\nout=Path(sys.argv[4]);out.mkdir();(out/"terminal.json").write_bytes(%r);(out/"silent.log").write_bytes(b"")\n%s\n'''
+        (repo/'scripts/run_source_witness_paired_coverage.py').write_text(stub % (native_body, ''))
+        assets = root/'assets'; assets.mkdir(); (assets/'disposable').write_bytes(b'staged input')
+        group = root/'cgroups/owned/main'; group.mkdir(parents=True)
+        child = group.parent/'borsuk-global-leaf-123-relaion-build-probes.service'; child.mkdir()
+        (child/'cgroup.procs').write_text('123')
+        counters = dict(path=str(group), **{'memory.events':'oom 0\noom_kill 0\noom_group_kill 0'})
+        proof = dict(config_sha256='0'*64, source_archive_paths_sha256='1'*64)
+        # Staging is normally new; the fixture creates its disposable input at SDK admission.
+        shutil.rmtree(assets)
+        def client(*_):
+            assets.mkdir(); (assets/'disposable').write_bytes(b'staged input')
+            return SimpleNamespace(close=lambda: None)
+        def scratch(*_):
+            return SCRATCH+1 if assets.exists() and (root/'native-output').exists() else 0
+        def stop(command, **kwargs):
+            exact(command, ['systemctl','stop',child.name], 'same owned sibling stop')
+            exact(scratch(), SCRATCH+1, 'native drain proceeds while whole scratch is over cap')
+            (child/'cgroup.procs').write_text('')
+            return SimpleNamespace(returncode=0,stdout='',stderr='')
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(module,'WORKER_ROOT',root))
+            stack.enter_context(patch.object(module,'qualify',return_value=({'runner':{}},proof,{'objects':[]})))
+            stack.enter_context(patch.object(module,'snapshots',return_value=(counters,counters)))
+            stack.enter_context(patch.object(publication,'sdk_client',side_effect=client))
+            stack.enter_context(patch.object(bridge,'scratch_snapshot',side_effect=scratch))
+            stack.enter_context(patch.object(importlib.metadata,'version',side_effect=lambda n: VERSIONS[n]))
+            stack.enter_context(patch.object(runner,'replay',return_value=dict(status='FAIL',complete=True,execution_exit_code=0)))
+            stack.enter_context(patch.object(subprocess,'run',side_effect=stop))
+            stack.enter_context(patch.dict(os.environ,dict(BORSUK_HIERARCHICAL_CONFIG_SHA256='0'*64,
+                BORSUK_HIERARCHICAL_SOURCE_ARCHIVE_PATHS_SHA256='1'*64,
+                BORSUK_HIERARCHICAL_DEADLINE_EPOCH=str(int(time.time())+110),BORSUK_HIERARCHICAL_SCRATCH_BASE_USED='0')))
+            try:
+                stage(repo,root/'screen',root)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('scratch exhaustion admitted scientific success')
+        require((root/'screen/native-output.tar.gz').exists(), 'scratch breach still bundles partial native originals: '+(root/'screen/summary.json').read_text())
+        require(not assets.exists() and not (child/'cgroup.procs').read_text().strip(), 'breached scratch still reclaims assets and drains siblings')
+        exact(local.decode((root/'screen/summary.json').read_bytes())['status'],'INVALID','scratch breach remains INVALID')
+        restored = unpack(root/'screen/native-output.tar.gz',root/'retained')
+        exact((restored/'terminal.json').read_bytes(),native_body,'scratch breach collected original partial terminal')
+        exact((restored/'silent.log').read_bytes(),b'','scratch breach collected original empty raw log')
+        # A real tiny Python SIGKILL bypasses stage/finally entirely. Native work is mocked.
+        shutil.rmtree(root/'screen'); shutil.rmtree(root/'retained'); (root/'screen').mkdir()
+        (repo/'scripts/run_source_witness_paired_coverage.py').write_text(stub % (native_body, 'os.kill(os.getpid(),signal.SIGKILL)'))
+        pin = local.write_json(root/'screen/runner-config.json',{})
+        killed = invoke(pin,repo,root/'screen',root/'native-output',time.monotonic()+30)
+        exact(killed['original_exit_code'],-signal.SIGKILL,'actual Python killed before any bridge finally')
+        (root/'screen/native-output.tar.gz').write_bytes(b'unclosed gzip')
+        assets.mkdir(); (assets/'disposable').write_bytes(b'staged input')
+        slice_group = root/'cgroups/borsuk-global-leaf-a0001.slice'
+        slice_group.mkdir(); (slice_group/'cgroup.procs').write_text('')
+        with patch.object(module,'WORKER_ROOT',root), patch.object(module,'CGROUP_ROOT',root/'cgroups'), \
+                patch.object(bridge,'scratch_snapshot',side_effect=scratch), patch.dict(os.environ,dict(
+                BORSUK_HIERARCHICAL_DEADLINE_EPOCH=str(int(time.time())+60), BORSUK_HIERARCHICAL_SCRATCH_BASE_USED='0',
+                BORSUK_SOURCE_WITNESS_SLICE_CGROUP=str(slice_group),BORSUK_SOURCE_WITNESS_SLICE_STOP_EXIT='0')):
+            receipt = bootstrap_closeout(repo,root,137)
+        exact(receipt['status'],'INVALID','bootstrap retention never changes original SIGKILL into scientific success')
+        exact(receipt['original_exit_code'],137,'bootstrap preserves original shell SIGKILL exit')
+        exact(receipt['native_bundle'],ids.artifact(root/'screen/native-output.tar.gz'),'bootstrap fallback closed raw bundle pin')
+        require(not (root/'native-output').exists() and not assets.exists(),'fallback deletion only after authenticated bundle')
+        restored = unpack(root/'screen/native-output.tar.gz',root/'retained')
+        exact((restored/'terminal.json').read_bytes(),native_body,'SIGKILL fallback original terminal collected')
+        exact((restored/'silent.log').read_bytes(),b'','SIGKILL fallback original empty raw log collected')
+        exact((root/'screen/runner.stdout').read_bytes(),b'','SIGKILL fallback original runner stdout retained')
+        exact((root/'screen/runner.stderr').read_bytes(),b'','SIGKILL fallback original runner stderr retained')
+    print('PASS release closeout falsifiers: scratch exhaustion; actual Python SIGKILL; native/cloud/cgroups MOCKED')
 
 
 def self_check():
@@ -716,6 +931,50 @@ def self_check():
                 'X-aws-ec2-metadata-token' in body and 'sync -f terminal.json' in body and
                 'screen/runner.stdout|screen/runner.stderr' in body and
                 'CPUQuota=100%' in body and 'taskset -c 0 ' in body, 'reviewed fixed bootstrap')
+            if not is_canary:
+                require(body.index('systemctl stop borsuk-global-leaf-a0001.slice') < body.index('--bootstrap-closeout') < body.index('for name in $ARTIFACT_NAMES; do'), 'fallback follows owned slice stop and precedes every upload')
+                require(body.index('wait "$scratch_watch_pid"') < body.index('  set +e\n') < body.index('systemctl stop borsuk-global-leaf-a0001.slice'), 'fallback cannot be killed by inherited scratch watch or stop errexit')
+                require('controller_remaining=$((remaining-15))' in body and 'source_witness_remaining=$((source_witness_remaining-3))' in body and '-p RuntimeMaxSec="$source_witness_remaining"' in body, 'fallback remains inside unchanged machine deadline')
+                fallback_interpreter = 'taskset -c 0 "$root/venv/bin/python" "$root/probe-repo/'+FILE+'" --bootstrap-closeout'
+                require(body.count(fallback_interpreter)==1 and body.count('taskset -c 0 "$root/venv/bin/python"')==2, 'actual fallback and original stage use the same provisioned SDK interpreter')
+                # This receipt is written in finish, after the ordinary stage gate.
+                # Execute that generated gate with an absent fallback receipt.
+                gate = body.rsplit('for name in $ARTIFACT_NAMES; do\n',1)[1].split('\ndone\n',1)[0]
+                with tempfile.TemporaryDirectory(prefix='source-witness-generated-gate-') as gate_tmp:
+                    gate_root = Path(gate_tmp)
+                    for name in (*ARTIFACTS,'run.log'):
+                        if name == 'screen/bootstrap-closeout.json':
+                            continue
+                        path = gate_root/name; path.parent.mkdir(parents=True,exist_ok=True)
+                        path.write_bytes(b'' if name in ('screen/runner.stdout','screen/runner.stderr') else b'fixture')
+                    subprocess.run(['bash','-ec','for name in $ARTIFACT_NAMES; do\n'+gate+'\ndone\n'],cwd=gate_root,
+                        env=dict(os.environ,ARTIFACT_NAMES=' '.join(ARTIFACTS)),check=True,capture_output=True,text=True)
+                    # Execute the exact generated finish prefix with managed stop/
+                    # systemd calls mocked, retaining the original SIGKILL code.
+                    hook = gate_root/'probe-repo'/FILE; hook.parent.mkdir(parents=True); hook.write_bytes(b'fixture')
+                    finish = body.split('finish() {\n',1)[1].split('  cd "$root"\n',1)[0]
+                    shell = '''systemctl() { if [ "$1" = show ]; then printf '/borsuk.slice/borsuk-global-leaf-a0001.slice\\n'; else return "$STOP_EXIT"; fi; }
+timeout() { shift 2; "$@"; }
+systemd-run() { printf '%s\\n' "$@" >"$EVENTS"; }
+finish() {
+'''+finish+'''  printf '%s %s\\n' "$original_code" "$code" >"$CODES"
+}
+trap finish EXIT
+exit 137
+'''
+                    for stop_exit in (0,15):
+                        events,codes = gate_root/'events',gate_root/'codes'; events.unlink(missing_ok=True)
+                        completed = subprocess.run(['bash','-euc',shell],cwd=gate_root,capture_output=True,text=True,
+                            env=dict(os.environ,root=str(gate_root),EVENTS=str(events),CODES=str(codes),STOP_EXIT=str(stop_exit),
+                                BORSUK_HIERARCHICAL_DEADLINE_EPOCH=str(int(time.time())+90),BORSUK_HIERARCHICAL_SCRATCH_BASE_USED='0'))
+                        exact(completed.returncode,137,'generated finish preserves original SIGKILL exit')
+                        exact(codes.read_text().strip(),'137 '+('137' if stop_exit==0 else '96'),'failed slice stop remains INVALID and reaches collection')
+                        if stop_exit==0:
+                            actual = events.read_text().splitlines()
+                            require(str(gate_root/'venv/bin/python') in actual and actual[-1]=='137' and '-p' in actual and 'MemoryMax=256M' in actual,
+                                'generated fallback actual interpreter, original exit and bounded managed properties')
+                        else:
+                            require(not events.exists(),'never bundle an undrained original slice')
         broken = copy.deepcopy(config); broken['authority_pending'] = True
         put_json(repo/CONFIG, broken); reject('pending root freeze', lambda: qualify(repo))
         broken = copy.deepcopy(config); broken['code_sha256'][FILE] = 'f'*64
@@ -889,6 +1148,12 @@ def self_check():
                     exact(replay_mock.call_count, 1, 'native replay delegated once before bundle')
                     exact((root/'screen/runner.stdout').read_bytes(), b'', 'original silent runner stdout')
                     exact((root/'screen/runner.stderr').read_bytes(), b'', 'original silent runner stderr')
+                    slice_group = root/'cgroup/borsuk-global-leaf-a0001.slice'; slice_group.mkdir()
+                    (slice_group/'cgroup.procs').write_text('')
+                    with patch.object(module,'CGROUP_ROOT',root/'cgroup'), patch.dict(os.environ,dict(
+                            BORSUK_SOURCE_WITNESS_SLICE_CGROUP=str(slice_group),BORSUK_SOURCE_WITNESS_SLICE_STOP_EXIT='0')):
+                        closed = bootstrap_closeout(work,root,0)
+                    exact(closed['used_fallback'],False,'normal bootstrap reuses authenticated original bundle')
                 artifacts = CANARY_ARTIFACTS if is_canary else ARTIFACTS
                 (root/'test-resources.txt').write_bytes(b'MOCK resource transcript\n')
                 (root/'run-closed.log').write_bytes(b'MOCK closed bootstrap log\n')
@@ -971,6 +1236,7 @@ def self_check():
         fixture(drain_failure=True)
         fixture(cleanup_failure=True)
         fixture(bundle_failure=True)
+    closeout_self_check()
     print('PASS fixed bridge source-bound self-check; negatives='+str(len(rejected))+'; native/cloud/cgroups MOCKED; no corpus bodies/GT/ANN')
 
 
