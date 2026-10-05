@@ -34,6 +34,8 @@ INSTANCE_TYPE, IMAGE_ID = 'c7i.2xlarge', 'ami-0b8a830d6339a9758'
 ROOT_DEVICE_NAME, SUBNET = '/dev/sda1', 'subnet-034528fbd6977848f'
 REGION, BUCKET = 'eu-central-1', 'borsuk-bench-453182569524-euc1'
 REMOTE_ROOT = Path('/mnt/fine-pack-diagnostic')
+SUPERVISOR_UNIT = 'fine-pack-supervisor'
+CONTROLLERS = {'cpu', 'memory', 'pids'}
 BINARY_NAME = 'binaries/hierarchical_semantic_cells'
 BINARY_PIN = dict(bytes=7860472, sha256='a4ea1d88223dbcf73b714ca2f75b9556c9d4f1389333391c1ac619a8bb9b4f45')
 BINARY_KEY = 'research/semantic-router/20261005/fine-sq8-packing-binary-repair-a0001/artifacts/'+BINARY_NAME
@@ -289,7 +291,9 @@ with tarfile.open('source.tar.gz','r:gz') as archive:
     archive.extractall('repo',filter='data')
 PY
 export PYTHONPATH="$root/repo"
-"$python" -m {MODULE} --remote "$root/repo" "$root" '{commit}' '{archive_sha}' '{prefix}' '{qualification['config_sha256']}'
+systemd-run --unit={SUPERVISOR_UNIT} --wait --pipe -p 'Delegate=cpu memory pids' -p DelegateSubgroup=supervisor -p RuntimeMaxSec={WALL} -p WorkingDirectory="$root" \\
+ --setenv=PYTHONPATH="$root/repo" --setenv=AWS_MAX_ATTEMPTS=1 --setenv=AWS_RETRY_MODE=standard \\
+ "$python" -m {MODULE} --remote "$root/repo" "$root" '{commit}' '{archive_sha}' '{prefix}' '{qualification['config_sha256']}'
 '''
     subprocess.run(['bash', '-n'], input=body, text=True, check=True)
     require(len(body.encode()) < 16384, 'EC2 userdata cap')
@@ -359,38 +363,75 @@ def events(body):
     return {k:int(v) for k, v in (line.split() for line in body.splitlines())}
 
 
+def validate_snapshot(snapshot):
+    f = snapshot['files']
+    require(set(f) == set(CGROUP_FILES), 'mandatory kernel resource counters')
+    require(int(f['memory.max']) == CAPS['memory_bytes']
+            and 0 <= int(f['memory.peak']) <= CAPS['memory_bytes'], 'native kernel memory cap/peak')
+    require(int(f['memory.swap.max']) == int(f['memory.swap.peak']) == 0, 'native swap')
+    quota, period = map(int, f['cpu.max'].split())
+    require(quota == period and period > 0, 'CPU1 quota')
+    require(int(f['pids.max']) == FIXED['tasks_max'] and int(f['pids.current']) == 0
+            and not f['cgroup.procs'].strip() and events(f['cgroup.events'])['populated'] == 0, 'native descendants drained')
+    require(events(f['cpu.stat'])['usage_usec'] >= 0, 'CPU evidence')
+    for key in ('memory.events', 'memory.swap.events', 'pids.events'):
+        counters = events(f[key])
+        required = ('oom', 'oom_kill', 'oom_group_kill') if key == 'memory.events' else tuple(counters)
+        require(counters and all(counters.get(k, -1) == 0 for k in required), 'resource failure: '+key)
+
+
 def validate_resources(resource):
     require(resource['closed'] is True and resource['deadline_exceeded'] is False, 'resource closure/deadline')
     before, after = resource['before'], resource['after']
     require(before['path'] == after['path'], 'same original cgroup')
     for snapshot in (before, after):
-        f = snapshot['files']
-        require(set(f) == set(CGROUP_FILES), 'mandatory kernel resource counters')
-        require(int(f['memory.max']) == CAPS['memory_bytes']
-                and 0 <= int(f['memory.peak']) <= CAPS['memory_bytes'], 'native kernel memory cap/peak')
-        require(int(f['memory.swap.max']) == int(f['memory.swap.peak']) == 0, 'native swap')
-        quota, period = map(int, f['cpu.max'].split())
-        require(quota == period and period > 0, 'CPU1 quota')
-        require(int(f['pids.max']) == FIXED['tasks_max'] and int(f['pids.current']) == 0
-                and not f['cgroup.procs'].strip() and events(f['cgroup.events'])['populated'] == 0, 'native descendants drained')
-        require(events(f['cpu.stat'])['usage_usec'] >= 0, 'CPU evidence')
-        for key in ('memory.events', 'memory.swap.events', 'pids.events'):
-            counters = events(f[key])
-            required = ('oom', 'oom_kill', 'oom_group_kill') if key == 'memory.events' else tuple(counters)
-            require(counters and all(counters.get(k, -1) == 0 for k in required), 'resource failure: '+key)
+        validate_snapshot(snapshot)
+    d = resource['delegation']
+    require(d['unit'] == SUPERVISOR_UNIT+'.service' and CONTROLLERS <= set(d['available'])
+            and CONTROLLERS <= set(d['enabled']) and d['parent_process_ids'] == []
+            and d['parent_type'] == 'domain' and d['observer_process_ids'] == [d['observer_pid']]
+            and d['observer_pid'] == before['observer_pid'] == after['observer_pid']
+            and str(Path(d['parent'])/'native') == before['path']
+            and str(Path(d['parent'])/'supervisor') == d['observer'], 'dedicated delegated supervisor/native leaves')
     for key in ('memory.events', 'memory.swap.events', 'pids.events', 'cpu.stat'):
         a, b = events(before['files'][key]), events(after['files'][key])
         require(set(a) == set(b) and all(b[k] >= a[k] for k in a), 'resource counter regression')
     require(resource['cpu_affinity'] == [0] and resource['supervisor_outside_native_cgroup'] is True
             and resource['process_attached_before_exec'] is True
+            and resource['pre_exec_limits_observed'] is True
             and resource['descendants_remaining_after_exit'] is False
             and 0 <= resource['elapsed_seconds'] <= CAPS['deadline_seconds'], 'original native resource authority')
+
+
+def delegated_group(record, proc=Path('/proc/self/cgroup'), root=Path('/sys/fs/cgroup')):
+    lines = proc.read_text().splitlines()
+    require(len(lines) == 1 and lines[0].startswith('0::/'), 'unified original supervisor cgroup')
+    relative = lines[0][4:]
+    require(relative and all(p not in ('', '.', '..') for p in relative.split('/')), 'supervisor cgroup path')
+    observer = root/relative
+    parent = observer.parent
+    # Only the dedicated service's delegated subtree is ours to configure.
+    require(observer.name == 'supervisor' and parent.name == SUPERVISOR_UNIT+'.service', 'dedicated supervisor service required')
+    record.update(unit=parent.name, parent=str(parent), observer=str(observer), observer_pid=os.getpid(),
+        available=sorted((parent/'cgroup.controllers').read_text().split()),
+        enabled_before=sorted((parent/'cgroup.subtree_control').read_text().split()),
+        parent_process_ids=[int(p) for p in (parent/'cgroup.procs').read_text().split()],
+        observer_process_ids=[int(p) for p in (observer/'cgroup.procs').read_text().split()],
+        parent_type=(parent/'cgroup.type').read_text().strip())
+    require(CONTROLLERS <= set(record['available']), 'required delegated cpu/memory/pids controllers unavailable')
+    require(record['parent_type'] == 'domain' and record['parent_process_ids'] == []
+            and record['observer_process_ids'] == [os.getpid()], 'delegated domain must keep supervisor in its leaf')
+    (parent/'cgroup.subtree_control').write_text('+cpu +memory +pids')
+    record['enabled'] = sorted((parent/'cgroup.subtree_control').read_text().split())
+    require(CONTROLLERS <= set(record['enabled']), 'required native controllers not enabled')
+    return parent/'native'
 
 
 def create_group(group):
     for name, value in (('memory.max', str(CAPS['memory_bytes'])), ('memory.swap.max', '0'),
                         ('cpu.max', '100000 100000'), ('pids.max', str(FIXED['tasks_max'])),
                         ('memory.oom.group', '1')):
+        require((group/name).is_file(), 'native controller interface unavailable: '+name)
         (group/name).write_text(value)
 
 
@@ -403,9 +444,8 @@ def drain_group(group):
         time.sleep(.05)
 
 
-def supervise(config, root, *, run_id, group=None):
+def supervise(config, root, *, run_id):
     """Popen owns the original executable; the observer stays outside its cap."""
-    group = group or Path('/sys/fs/cgroup')/('borsuk-fine-pack-'+str(os.getpid()))
     command = [str(root/BINARY_NAME), 'check-fine-pack', str(root/'native-config.json'),
                config['native_config_sha256'], str(root/'screen/report.json')]
     (root/'screen').mkdir(exist_ok=False)
@@ -414,18 +454,20 @@ def supervise(config, root, *, run_id, group=None):
     resource = dict(closed=False, deadline_exceeded=False, before=None, after=None,
                     cpu_affinity=[0], process_attached_before_exec=False,
                     supervisor_outside_native_cgroup=False, elapsed_seconds=0,
-                    descendants_remaining_after_exit=True)
+                    descendants_remaining_after_exit=True, delegation={}, pre_exec_limits_observed=False)
     cleanup = dict(drain_complete=False, cleanup_complete=False, output_durable=False)
-    process, created, error = None, False, None
+    process, group, created, error = None, None, False, None
     started = time.monotonic()
     old_term = signal.getsignal(signal.SIGTERM)
     def interrupted(signum, frame):
         raise InterruptedError('original supervisor interrupted')
     signal.signal(signal.SIGTERM, interrupted)
     try:
+        group = delegated_group(resource['delegation'])
         group.mkdir(exist_ok=False); created = True; create_group(group)
         resource['before'] = cgroup_snapshot(group)
-        require(not resource['before']['files']['cgroup.procs'].strip(), 'fresh native cgroup')
+        validate_snapshot(resource['before'])
+        resource['pre_exec_limits_observed'] = True
         observer = Path('/proc/self/cgroup').read_text()
         require(str(group).removeprefix('/sys/fs/cgroup') not in observer, 'supervisor outside native cap')
         resource['supervisor_outside_native_cgroup'] = True
@@ -433,6 +475,7 @@ def supervise(config, root, *, run_id, group=None):
         def attach():
             os.sched_setaffinity(0, {0})
             os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
         environment = dict(os.environ, BORSUK_CPU_THREADS='1', RAYON_NUM_THREADS='1',
                            TOKIO_WORKER_THREADS='1', OMP_NUM_THREADS='1', AWS_MAX_ATTEMPTS='1')
         try:
@@ -692,7 +735,51 @@ def collect(s3, prefix, out, instance_id, commit, digest):
     return terminal
 
 
-def self_check():
+def setup_self_check():
+    """Filesystem controller model: refuse before exec, never touch shared roots."""
+    import tempfile
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory(prefix='fine-pack-delegation-check-') as tmp:
+        root=Path(tmp)/'cgroup';parent=root/'system.slice'/(SUPERVISOR_UNIT+'.service')
+        observer=parent/'supervisor';observer.mkdir(parents=True)
+        proc=Path(tmp)/'proc';proc.write_text('0::/system.slice/'+SUPERVISOR_UNIT+'.service/supervisor\n')
+        initial={'cgroup.controllers':'cpu memory pids\n','cgroup.subtree_control':'',
+                 'cgroup.procs':'','cgroup.type':'domain\n'}
+        for name,body in initial.items():(parent/name).write_text(body)
+        (observer/'cgroup.procs').write_text(str(os.getpid()))
+        original_write=Path.write_text
+        writes=[]
+        def enable(path,body,*args,**kwargs):
+            writes.append(str(path))
+            require(path==parent/'cgroup.subtree_control','only dedicated parent controller write')
+            require(body=='+cpu +memory +pids','exact required controllers')
+            return original_write(path,'cpu memory pids\n',*args,**kwargs)
+        with patch.object(Path,'write_text',enable):
+            record={};group=delegated_group(record,proc,root)
+        require(group==parent/'native' and writes==[str(parent/'cgroup.subtree_control')]
+                and record['enabled']==['cpu','memory','pids'],'delegated controller activation')
+        for name,body,label in [('cgroup.controllers','memory pids\n','CPU unavailable'),
+                               ('cgroup.procs',str(os.getpid()),'internal observer'),
+                               ('cgroup.type','domain threaded\n','threaded domain')]:
+            old=(parent/name).read_text();(parent/name).write_text(body)
+            with patch.object(Path,'write_text',side_effect=AssertionError('unsafe controller write')):
+                try:delegated_group({},proc,root)
+                except ValueError:pass
+                else:raise AssertionError('accepted '+label)
+            (parent/name).write_text(old)
+        proc.write_text('0::/system.slice/cloud-final.service\n')
+        try:delegated_group({},proc,root)
+        except ValueError:pass
+        else:raise AssertionError('undelegated shared hierarchy accepted')
+        group.mkdir()
+        for name in ('memory.max','memory.swap.max'):(group/name).write_text('0')
+        try:create_group(group)
+        except ValueError as error:require('cpu.max' in str(error),'missing controller diagnostic')
+        else:raise AssertionError('missing native CPU interface accepted')
+    print('PASS delegation model: explicit controllers; unavailable/internal-PID/threaded/shared-parent/missing-interface refusals before exec')
+
+
+def self_check(real_cgroup=False):
     """Real fake-native original processes; cgroup, SDK, IMDS and AWS mocked.
 
     Run under CPU1/256MiB/swap0/120s. No corpus, graph, native ANN or network.
@@ -705,6 +792,7 @@ def self_check():
     from contextlib import ExitStack
     module = sys.modules[__name__]
     shared = lifecycle()
+    setup_self_check()
     # Actual installed service model, no client/credentials/network.
     require(sdk_guard() == dict(boto3='1.40.72',botocore='1.40.72',put_object_if_none_match=True), 'real installed immutable SDK model')
     import botocore.session
@@ -735,6 +823,13 @@ import hashlib,json,os,sys,time
 from pathlib import Path
 _,mode,config_path,config_sha,out=sys.argv
 assert mode=='check-fine-pack'
+if os.environ.get('BORSUK_FINE_PACK_REAL_CGROUP')=='1':
+ group=Path('/sys/fs/cgroup')/Path('/proc/self/cgroup').read_text().strip().split('0::')[-1].lstrip('/')
+ assert group.name=='native' and os.sched_getaffinity(0)=={0}
+ assert int((group/'memory.max').read_text())==268435456
+ assert int((group/'memory.swap.max').read_text())==0
+ assert (group/'cpu.max').read_text().split()==['100000','100000']
+ assert int((group/'pids.max').read_text())==32
 c=json.loads(Path(config_path).read_bytes());p=Path(out)
 def sha(b):return hashlib.sha256(b).hexdigest()
 def emit(path,value):
@@ -852,7 +947,7 @@ sys.exit(17 if os.environ.get('FINE_PACK_FAKE')=='nonzero' else 0)
             'high 0\nmax 0\nfail 0\n','100000 100000','usage_usec 1\nuser_usec 1\nsystem_usec 0\n',
             str(FIXED['tasks_max']),'0','max 0\n','','populated 0\nfrozen 0\n')))
         run_id=PREFIX+'a0001/i-original'
-        def fixture(name, mode='success', deadline=False):
+        def fixture(name, mode='success', deadline=False, real=False):
             root=base/name;root.mkdir()
             write(root/'config.json',raw);write(root/'source-qualification.json',encoded(proof))
             write(root/'native-config.json',encoded(native));write(root/BINARY_NAME,fake);(root/BINARY_NAME).chmod(0o700)
@@ -863,7 +958,14 @@ sys.exit(17 if os.environ.get('FINE_PACK_FAKE')=='nonzero' else 0)
             write(root/'runtime-abi.json',encoded(dict(machine='x86_64',python=[3,12],
                 os=dict(ID='ubuntu',VERSION_ID='24.04'),libc=['glibc','2.39'],
                 sdk=dict(boto3='1.40.72',botocore='1.40.72',put_object_if_none_match=True))))
-            group=base/(name+'-cgroup')
+            parent=base/(name+'-cgroup')/(SUPERVISOR_UNIT+'.service')
+            parent.mkdir(parents=True)
+            group=parent/'native'
+            def delegate(record):
+                record.update(unit=SUPERVISOR_UNIT+'.service',parent=str(parent),observer=str(parent/'supervisor'),
+                    observer_pid=os.getpid(),available=sorted(CONTROLLERS),enabled=sorted(CONTROLLERS),
+                    enabled_before=[],parent_process_ids=[],observer_process_ids=[os.getpid()],parent_type='domain')
+                return group
             def create(g):
                 (g/'cgroup.procs').write_text('')
             def snapshot(g):
@@ -880,18 +982,26 @@ sys.exit(17 if os.environ.get('FINE_PACK_FAKE')=='nonzero' else 0)
                 # Synthetic cgroup cannot remove exited PIDs as a kernel does.
                 (group/'cgroup.procs').write_text('')
                 return p
-            with patch.object(module,'create_group',side_effect=create), \
-                 patch.object(module,'cgroup_snapshot',side_effect=snapshot), \
-                 patch.object(module,'drain_group',side_effect=drain), \
-                 patch.object(subprocess,'Popen',side_effect=spawn), \
-                 patch.dict(os.environ,FINE_PACK_FAKE=mode), \
-                 patch.dict(CAPS,deadline_seconds=.2 if deadline else 300):
-                receipt=supervise(config,root,run_id=run_id,group=group)
+            with ExitStack() as process_stack:
+                if not real:
+                    for method, implementation in (('delegated_group',delegate),('create_group',create),
+                            ('cgroup_snapshot',snapshot),('drain_group',drain)):
+                        process_stack.enter_context(patch.object(module,method,side_effect=implementation))
+                    process_stack.enter_context(patch.object(subprocess,'Popen',side_effect=spawn))
+                process_stack.enter_context(patch.dict(os.environ,FINE_PACK_FAKE=mode,
+                    BORSUK_FINE_PACK_REAL_CGROUP='1' if real else '0'))
+                process_stack.enter_context(patch.dict(CAPS,deadline_seconds=.2 if deadline else 300))
+                receipt=supervise(config,root,run_id=run_id)
             require(not group.exists(),'synthetic cgroup cleanup')
             return root,receipt
         root, receipt=fixture('original')
         require(receipt['process_exit_code']==0 and validate_result(root,config)['status']=='SURVIVED_NECESSARY_LOCALITY', 'original fake process closure')
         require(file_pin(root/'native.log')['bytes']==0,'silent exit0 log allowed')
+        previous=files['cpu.max'];files['cpu.max']='200000 100000'
+        denied, denied_receipt=fixture('pre-exec-cpu-refusal')
+        require(denied_receipt['process_started'] is False and denied_receipt['process_exit_code'] is None
+                and not (denied/'native.log').exists(),'invalid CPU limit refuses before native exec')
+        files['cpu.max']=previous
         rejected, receipt=fixture('rejected','reject')
         require(receipt['process_exit_code']==0 and validate_result(rejected,config)['status']=='REJECT','completed all128 rejection')
         nonzero, receipt=fixture('nonzero','nonzero')
@@ -900,7 +1010,24 @@ sys.exit(17 if os.environ.get('FINE_PACK_FAKE')=='nonzero' else 0)
         timeout, receipt=fixture('timeout','deadline',True)
         require(receipt['process_exit_code']==-signal.SIGKILL and decode(read(timeout/'resources.json'))['deadline_exceeded'] is True,'real deadline process killed')
         failure(lambda:validate_result(timeout,config),'deadline PASS body');failures+=1
-        failure(lambda:supervise(config,root,run_id=run_id,group=base/'never-created'),'output overwrite');failures+=1
+        failure(lambda:supervise(config,root,run_id=run_id),'output overwrite');failures+=1
+        if real_cgroup:
+            actual, receipt=fixture('actual-cgroup',real=True)
+            require(receipt['process_exit_code']==0 and validate_result(actual,config)['valid_diagnostic'],'actual delegated cgroup original process/resources/drain/cleanup')
+            actual_resources=decode(read(actual/'resources.json'))
+            proof_dir=os.environ.get('BORSUK_FINE_PACK_SETUP_PROOF_OUT')
+            if proof_dir:
+                destination=Path(proof_dir);destination.mkdir(parents=True,exist_ok=False)
+                for name in ('native-exit.json','resources.json','cleanup.json','native.log'):
+                    write(destination/name,read(actual/name))
+                write(destination/'setup-proof.json',encoded(dict(schema='borsuk-fine-pack-setup-proof-v1',
+                    source_file_sha256=file_pin(__file__)['sha256'],invocation_id=os.environ.get('INVOCATION_ID'),
+                    original_fake_native_exit=receipt['process_exit_code'],native_ANN_executed=False,
+                    cgroups_mocked=False,SDK_transport_and_AWS_mocked=True,
+                    artifacts={n:file_pin(destination/n) for n in ('native-exit.json','resources.json','cleanup.json','native.log')})))
+            print('PASS actual delegated setup: '+json.dumps(dict(delegation=actual_resources['delegation'],
+                memory_peak=actual_resources['after']['files']['memory.peak'],swap_peak=actual_resources['after']['files']['memory.swap.peak'],
+                original_exit=receipt['process_exit_code'],cleanup=decode(read(actual/'cleanup.json'))),sort_keys=True))
         def tamper(name, change):
             path=root/name;original=read(path);path.write_bytes(change(original))
             try:failure(lambda:validate_result(root,config),'tamper '+name)
@@ -1015,7 +1142,7 @@ sys.exit(17 if os.environ.get('FINE_PACK_FAKE')=='nonzero' else 0)
                     and kwargs['InstanceMarketOptions']['SpotOptions']['MaxPrice']=='0.60','bounded c7i Spot launch')
             if mode!='launch-fsync':
                 require(decode(read(campaign.ROOT/'lifecycle/a0001/aws-launch.json'))['nodes']=={str(i):{'instance_id':v} for i,v in enumerate(ack)},'durable every-ACK receipt')
-        print(f'PASS fine-pack: real fake-native exit0/REJECT/exit17/deadline; {failures} refusals; fullhash/readback/marker-last/no-overwrite; every-ACK same-ID terminate/wait; actual SDK model positive/official_old_negative={official_old_checked}; cgroup/SDK transport/AWS MOCKED; no ANN/graph/corpus/network')
+        print(f'PASS fine-pack: real fake-native exit0/REJECT/exit17/deadline; {failures} refusals; fullhash/readback/marker-last/no-overwrite; every-ACK same-ID terminate/wait; actual SDK model positive/official_old_negative={official_old_checked}; actual_delegated_cgroup={real_cgroup}; other cgroup/SDK transport/AWS MOCKED; no ANN/graph/corpus/network')
 
 
 def main():
@@ -1027,7 +1154,7 @@ def main():
     args = parser.parse_args()
     require(sum((args.attempt is not None, args.self_check, args.replay is not None, args.remote is not None)) == 1, 'one CLI mode')
     if args.self_check:
-        self_check(); return 0
+        self_check(real_cgroup=os.environ.get('BORSUK_FINE_PACK_REAL_CGROUP')=='1'); return 0
     if args.replay:
         print(json.dumps(replay(args.replay), sort_keys=True)); return 0
     if args.remote:
