@@ -6,9 +6,11 @@
     "crates/borsuk/src/lib.rs"
   ],
   "candidate_qualification_pending": true,
-  "control_native_source_commit": "1057e5a6351ccb4c2d33918874e062730fd32225",
+  "control_native_source_identity_sha256": "824720f33687ef21a851225af1c72a0b8dbbf793ae9e0471a1b52d55c1753800",
+  "native_compilation": "UNRUN",
   "native_source_commit": "4ec11b94bdc15b103bc713418e9f2c0705a9d0b6",
-  "schema": "borsuk-corrected-four-bit-native-source-manifest-v1",
+  "native_test_execution": "UNRUN",
+  "schema": "borsuk-corrected-four-bit-source-evidence-v1",
   "source_file_count": 405,
   "source_identity_sha256": "ac0e198a2851fbd0869d3d03f8fa3c79a401fbfaee1180132f407e0a173a29ab",
   "source_sha256": {
