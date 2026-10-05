@@ -1,0 +1,104 @@
+{
+  "schema": "borsuk-overlap-native-assets-heads-v1",
+  "body_gets": 0,
+  "status": "METADATA_GO",
+  "heads": [
+    {
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/binaries/hierarchical_semantic_cells",
+      "bytes": 6336312,
+      "etag": "\"057ce2f8771f8ef201325fa75e7c1098\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/cargo-version.txt",
+      "bytes": 36,
+      "etag": "\"5ac1484396ddc24464c1bf111a6c1e01\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/config.json",
+      "bytes": 361453,
+      "etag": "\"5eaa63a07d6b8928813a6683372ec5c0\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/cpu.txt",
+      "bytes": 3517,
+      "etag": "\"dc3eb117d8060cb06acf511dd7a48348\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/native-source-manifest.json",
+      "bytes": 44771,
+      "etag": "\"e58f60eeef8a8b62b203df83eb513aeb\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/run-closed.log",
+      "bytes": 80716,
+      "etag": "\"b5834358f364a97000bfff712b74b68c\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/rustc-version.txt",
+      "bytes": 196,
+      "etag": "\"ca4a8a8fbbbff01372924da2c4c01e30\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/source-after.json",
+      "bytes": 44161,
+      "etag": "\"26f2aeca3b1df97a16574efdf520815d\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/source-before.json",
+      "bytes": 44161,
+      "etag": "\"26f2aeca3b1df97a16574efdf520815d\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/source-qualification.json",
+      "bytes": 406277,
+      "etag": "\"1a7882170bc24d991a0b155f85512f71\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/test-resources.txt",
+      "bytes": 844,
+      "etag": "\"8ed74db75a994d90d060d9bcd3fb25d9\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/test.log",
+      "bytes": 959919,
+      "etag": "\"75b22418c6974e78ccb30063364d3f35\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/workspace-cgroup.json",
+      "bytes": 1389,
+      "etag": "\"837b3d89edde365db010f01eca3ff765\"",
+      "body_sha256_verified": false
+    },
+    {
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/workspace-receipt.json",
+      "bytes": 52433,
+      "etag": "\"e5f26304286add985bd4171a1aeffb9a\"",
+      "body_sha256_verified": false
+    }
+  ],
+  "original_terminal": {
+    "unit": "borsuk-overlap-native-assets-head-a0001.service",
+    "exit_status": 0,
+    "runtime_seconds": 0.563,
+    "cpu_seconds": 0.355,
+    "memory_peak_display": "45.9M",
+    "swap_display": "0B",
+    "memory_max_bytes": 268435456,
+    "cpu_quota_percent": 100,
+    "swap_max_bytes": 0
+  },
+  "roster_sha256": "c9cea6f2d757d6315e79c46baa9614c8969bdf644ab7ae5b355b40800050379a",
+  "source_sha256": "fef8f6a074470656c6532f9774c6004244081701ad8c86fad115ed42ad832228"
+}

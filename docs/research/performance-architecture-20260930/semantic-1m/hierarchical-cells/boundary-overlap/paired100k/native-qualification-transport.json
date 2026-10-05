@@ -1,0 +1,111 @@
+{
+  "schema": "borsuk-overlap-native-qualification-transport-v1",
+  "authority_pending": true,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "qualification_instance": "i-0739ef9dca24d086e",
+  "source_identity_sha256": "f71f6923bf5ebdd131fb1ae7528cd9434d70c8d1d51c184cdb7900b46b0d7c59",
+  "items": [
+    {
+      "name": "binaries/hierarchical_semantic_cells",
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/binaries/hierarchical_semantic_cells",
+      "bytes": 6336312,
+      "sha256": "40ccd33199cce09d88936503db02895970a9a90463dc405f8a0c3731ede3fb5b"
+    },
+    {
+      "name": "cargo-version.txt",
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/cargo-version.txt",
+      "bytes": 36,
+      "sha256": "fb3f25aefd6d5441842d285f5a9b125b3f0f0b0bf2013d9a32677f9e99c6c854"
+    },
+    {
+      "name": "config.json",
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/config.json",
+      "bytes": 361453,
+      "sha256": "609986f0509e46f84892de354b0ae026d1023b912c9316e2cdb966bdf6c4f699"
+    },
+    {
+      "name": "cpu.txt",
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/cpu.txt",
+      "bytes": 3517,
+      "sha256": "396d14f90b7420fe624960f04559cf69bec58d72bceb66d1f6a2e89bd477c4cd"
+    },
+    {
+      "name": "native-source-manifest.json",
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/native-source-manifest.json",
+      "bytes": 44771,
+      "sha256": "95b30ea3abc56c017991c9420af403e117eba9aecc12d6d7a29b801e994afedc"
+    },
+    {
+      "name": "run-closed.log",
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/run-closed.log",
+      "bytes": 80716,
+      "sha256": "62ff63e83b497eda929eacc9567a8cabd5f6aa3367ef30adf681a8038352be7b"
+    },
+    {
+      "name": "rustc-version.txt",
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/rustc-version.txt",
+      "bytes": 196,
+      "sha256": "3975d062e234a9f3921955bf6ae5b90f5819df94fa825d057f76b34a35ed0f4d"
+    },
+    {
+      "name": "source-after.json",
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/source-after.json",
+      "bytes": 44161,
+      "sha256": "0d0a51fefc1fb64d7d3d6464132e7eb73e0f89c4cdd54a978838e067a36071d8"
+    },
+    {
+      "name": "source-before.json",
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/source-before.json",
+      "bytes": 44161,
+      "sha256": "0d0a51fefc1fb64d7d3d6464132e7eb73e0f89c4cdd54a978838e067a36071d8"
+    },
+    {
+      "name": "source-qualification.json",
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/source-qualification.json",
+      "bytes": 406277,
+      "sha256": "93e69a107dd3fa7e06167b67805636c361c502755fa47d0dc2c0a6f7fe5b59a7"
+    },
+    {
+      "name": "test-resources.txt",
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/test-resources.txt",
+      "bytes": 844,
+      "sha256": "f20dfb4689cb2e4f70d40a1e9204d5e8d951aa4f48d79dfef476b18d35618f0f"
+    },
+    {
+      "name": "test.log",
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/test.log",
+      "bytes": 959919,
+      "sha256": "4ca0d0504f019708e2dbf4a8c7c33f7665ba93e8c399292e5a86564a709bb94e"
+    },
+    {
+      "name": "workspace-cgroup.json",
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/workspace-cgroup.json",
+      "bytes": 1389,
+      "sha256": "a77754c999a3109308c2abb129bf463e64fb4d29ac1dcb108f007679c2002dae"
+    },
+    {
+      "name": "workspace-receipt.json",
+      "key": "research/semantic-router/20261005/boundary-overlap-implementation-a0001/artifacts/workspace-receipt.json",
+      "bytes": 52433,
+      "sha256": "3af079fc70ba9eeca0f7307d939a1edb3e1f2125dbe0979dc6479e8c27a6d605"
+    }
+  ],
+  "source_bound_control_bodies": {
+    "aws-launch.json": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/aws-launch.json",
+      "bytes": 366,
+      "sha256": "226b239312459072e4ef539355771e4b47746a9bb2b3a48e454fb30af34d41fa"
+    },
+    "aws-closeout.json": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/aws-closeout.json",
+      "bytes": 136,
+      "sha256": "209dc128df581738777f8bf2ca87766bd770121feb504dc710fdbbae3ebf24c5"
+    },
+    "aws-terminal.json": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/implementation-gates/a0001/aws-terminal.json",
+      "bytes": 3210,
+      "sha256": "56411cdcc9896f6ff7d5e340a552f2a1a7a16154903dfd6093535a85b747dfc8"
+    }
+  },
+  "remote_gets_executed_for_this_roster": 0
+}
