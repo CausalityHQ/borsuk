@@ -1,0 +1,32 @@
+{
+  "schema": "borsuk-cell-overlap-canary-parent-verification-v1",
+  "original_exec_session": 76758,
+  "controller_exit_status": 0,
+  "instance_id": "i-037b3460a3455ab2a",
+  "source_commit": "7a2db75b3c16046ee46d0779c4b265d45fd03313",
+  "source_archive_sha256": "b50ab94424d467aa3ba2445f67e84c26ba238b0894ed36203a20af1ff98883bd",
+  "full_terminal_bodies_authenticated": 10,
+  "independent_replay": {
+    "executed": true,
+    "truth_opened": false,
+    "physical_s3_measured": false,
+    "vendor_win": false,
+    "scientific_qualification": false
+  },
+  "independent_ec2_state": "terminated",
+  "observed_closeout_elapsed_seconds": 78,
+  "worker_scope_memory_peak_bytes": 93732864,
+  "worker_scope_swap_peak_bytes": 0,
+  "worker_scope_oom_events": 0,
+  "whole_scratch_observed_bytes": 1507467284,
+  "head_requests": 30,
+  "proof_gets": 1,
+  "ann_queries": 0,
+  "native_processes": 0,
+  "scientific_evidence": false,
+  "cost_measured": false,
+  "reservation_caps_usd": {
+    "compute": 0.12,
+    "ancillary": 0.05
+  }
+}

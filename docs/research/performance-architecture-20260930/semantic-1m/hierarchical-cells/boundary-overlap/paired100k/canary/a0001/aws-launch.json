@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-037b3460a3455ab2a",
+  "nodes": {
+    "0": {
+      "instance_id": "i-037b3460a3455ab2a"
+    }
+  },
+  "prefix": "research/hierarchical-cells/20261005/cell-overlap-paired100k-canary-a0001",
+  "source_commit": "7a2db75b3c16046ee46d0779c4b265d45fd03313",
+  "source_archive_sha256": "b50ab94424d467aa3ba2445f67e84c26ba238b0894ed36203a20af1ff98883bd"
+}

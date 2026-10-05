@@ -1,0 +1,10 @@
+{
+  "schema": "borsuk-cell-overlap-canary-admission-v1",
+  "attempt": "a0001",
+  "config_sha256": "eca43b2faf4146a501ce69fb27f525507e24727edb485e29d39af9e8272996cb",
+  "code_identity_sha256": "c616b24cbe2f420d87062a6b429e29908e00a3fafdaa65a9dfb7da00cce10ac6",
+  "refs_identity_sha256": "35211179af9466438cfa9ffdd1cf1457f8fc16c185f09cc6d28a2a3692fbf613",
+  "native_identity_sha256": "cfcec8b69ffd77c52944465cf72f3b6a23d82d301f993c734473b386a3195bb2",
+  "source_archive_paths_sha256": "e40c867605b235a94d612995c128fdf2ce277d05fd6dfe878e1af17412833316",
+  "terminal_sha256": "cdcf47b413a456f6c81c8f5c54e2e29ac4f8707a65b3db43b76a91f0dad5992f"
+}
