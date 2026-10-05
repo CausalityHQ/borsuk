@@ -1,0 +1,83 @@
+{
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "datasets": {
+    "cohere": {
+      "canonical": {
+        "expected": {
+          "bytes": 308000000,
+          "key": "research/hierarchical-cells/20261004/constrained-split-falsifier-a0002/artifacts/screen/retained/cohere/canonical.bin",
+          "sha256": "38304c3b448f2f62b32da8b443bbe52f20ccc63f5472d0e7885d5c268dd7a6df"
+        },
+        "head": {
+          "bytes": 308000000,
+          "etag": "\"8ec4bd86308d994b4d12f98e8926242d-37\"",
+          "metadata": {}
+        },
+        "whole_body_authenticated_in_this_probe": false
+      },
+      "order": {
+        "expected": {
+          "bytes": 800000,
+          "key": "research/hierarchical-cells/20261004/constrained-split-falsifier-a0002/artifacts/screen/retained/cohere/order",
+          "sha256": "e2314ca14f5aa6f08b02cc328b863c921e55b1461a413ad6d3d66e781ff42d50"
+        },
+        "head": {
+          "bytes": 800000,
+          "etag": "\"a4bf1bbbd7fa87e98f4842a5b239fd90\"",
+          "metadata": {}
+        },
+        "whole_body_authenticated_in_this_probe": false
+      }
+    },
+    "relaion": {
+      "canonical": {
+        "expected": {
+          "bytes": 308000000,
+          "key": "research/hierarchical-cells/20261004/constrained-split-falsifier-a0002/artifacts/screen/retained/relaion/canonical.bin",
+          "sha256": "c260b7fe0b6a54de98dfba3f2599d272242f724421064ed5ca18c0cd63e6283d"
+        },
+        "head": {
+          "bytes": 308000000,
+          "etag": "\"bef4eddc80334b1d2c36a863193637dc-37\"",
+          "metadata": {}
+        },
+        "whole_body_authenticated_in_this_probe": false
+      },
+      "order": {
+        "expected": {
+          "bytes": 800000,
+          "key": "research/hierarchical-cells/20261004/constrained-split-falsifier-a0002/artifacts/screen/retained/relaion/order",
+          "sha256": "22abeb087000ea2978c4fef8e85c2f7fda4e4b22c4e5126ba37a1c19816fab18"
+        },
+        "head": {
+          "bytes": 800000,
+          "etag": "\"88e677fadc833d94c35a8c6993581201\"",
+          "metadata": {}
+        },
+        "whole_body_authenticated_in_this_probe": false
+      }
+    }
+  },
+  "original_terminal": {
+    "bytes": 6112,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/constrained-split/falsifier/a0002/aws-terminal.json",
+    "sha256": "d2d66b59e6a68cbc9870e11ac814ddb767e3d9328ce021f3b421a1be408ec71d"
+  },
+  "profile": "causality",
+  "purpose": "Original canonical/order availability only; not body authentication or native admission",
+  "recovery_receipt": {
+    "bytes": 2162,
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/constrained-split/falsifier/a0002/screen/recovery.json",
+    "sha256": "c38399ead80a24b1d8eec3d8d387026c8595bb0738ac8f754baead53e15a3d29"
+  },
+  "region": "eu-central-1",
+  "remaining": "Stream and hash original bodies on bounded remote staging before exact replay; plane/records/mean/SQ8 inputs remain separately mandatory. No canonical reconstruction from SQ8.",
+  "requests": {
+    "ann_queries": 0,
+    "compute_instances": 0,
+    "get_object": 0,
+    "head_object": 4,
+    "retries_configured": 0
+  },
+  "schema": "borsuk-boundary-overlap-original-input-metadata-v1"
+}
