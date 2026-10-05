@@ -4,9 +4,12 @@
   "invocation": "9565676484fa4199991b6f6d1616c28d",
   "bundle_commit": "25d3726509556eae1317d59f674cb7e64ea8c8bf",
   "native_candidate": "c501dfe8d65ad83a07afeb41e861619ed650a437",
-  "status": "remote_pending",
+  "status": "terminal",
   "source_file_count": 404,
   "source_identity_sha256": "9dfa52bc424a4c5747cf8983eb7e0b77c5c1040f5b0480e89c3a53c30c7a85e3",
   "instance_id": "i-006d3164ca4124446",
-  "source_archive_sha256": "427a4f2596020d95ef2050acde6a9635dbad9a8689388a72dad256e20d3c36cd"
+  "source_archive_sha256": "427a4f2596020d95ef2050acde6a9635dbad9a8689388a72dad256e20d3c36cd",
+  "controller_exit_status": 1,
+  "native_exit_status": 101,
+  "instance_state": "terminated"
 }
