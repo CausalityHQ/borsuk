@@ -1,0 +1,56 @@
+{
+  "code_implemented": false,
+  "design_review": {
+    "critique": "6d28a64bc34748da",
+    "critique_status": "both completed; concrete policy repairs persisted, source review still required",
+    "plan": "2b09fc3a2f674784",
+    "plan_status": "completed exit0"
+  },
+  "goal_complete": false,
+  "historical_result": {
+    "instance": "i-094c252c6d18eebc3",
+    "instance_state": "terminated and waited",
+    "native_execution": "complete exit0 scientificFAIL",
+    "outer_campaign": "INVALID exit2",
+    "repeat_measurements": 0
+  },
+  "next_native_task": {
+    "agent": "borsuk/bounded-boundary-overlap-native",
+    "contract_output": "/tmp/borsuk-bounded-boundary-overlap-native-contract.json",
+    "initial_base": "d16eb7c9ce16b84a8fb0782ccbdeda42db4720e6",
+    "instance_id": "dfb07dc3-c35e-43f9-8269-c428271848bf",
+    "owned_files": 5,
+    "queued_policy_update": "1791161694572662188-2054090",
+    "state": "WAITING: Hooks need review before opening turn",
+    "verification": "UNIMPLEMENTED/UNVERIFIED; no Cargo or native execution authorized for child"
+  },
+  "next_steps": [
+    "Recover SAME child/modal and saved opening brief through authorized control",
+    "Confirm actual opening turn via agent_output; consume final method and both critique results",
+    "Freeze UNVERIFIED native source and exact test/API/framing/resource contract",
+    "Run cheap actual native correctness tests then exact-source remote Clippy/real test compilation",
+    "Authenticate originals and preregister one matched full-SQ8 no-overlap/overlap paired falsifier; canary before paid science",
+    "Only survivor receives fresh quality/cold HTTP/scale/lifecycle and matched vendor qualification"
+  ],
+  "progress": "Closed original native result independently replayed; same-layout oracle changed architecture decision; source-bound overlap method and independent critique repairs committed",
+  "recovery": {
+    "attempt_exit_status": 1,
+    "attempt_reason": "ownership denied before action",
+    "audited_skip_attempt": "devbox-agent key borsuk/bounded-boundary-overlap-native Escape",
+    "keys_delivered": 0,
+    "operator_notified": true,
+    "recipient": "devbox/main",
+    "recipient_state": "WAITING with exact recovery message unsubmitted in composer",
+    "request": "immediate-1791160995755399958-2054090",
+    "restart_or_respawn": false,
+    "untrusted_hooks_approved": false
+  },
+  "resources": {
+    "local_cargo_running": false,
+    "metadata_gets": 0,
+    "metadata_heads": 4,
+    "paid_compute_running": false,
+    "whole_canonical_bodies_authenticated": false
+  },
+  "schema": "borsuk-native-goal-checkpoint-v1"
+}
