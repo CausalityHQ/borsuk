@@ -49,3 +49,23 @@ rosters are sealed before missing/tampered truth refusal, and incomplete or
 mismatched selection fails without a success seal. Keep failure, output-cap,
 fsync and no-overwrite behavior observable. These are test repairs, not a change
 to scientific admission or result thresholds.
+
+## Deterministic real-input cap failures
+
+The final `build_overlap` original-input reauthentication loop calls
+`read_source_probe_artifact(artifact, artifact.bytes)`. That helper requires
+`cap <= PROBE_CAP` (128 MiB). The authenticated 100k canonical input is
+308,000,000 bytes, so this path necessarily rejects the real build. Use secure
+streaming exact-length/EOF/SHA authentication within the already admitted build
+envelope instead of allocating another full body or lifting the legacy cap.
+
+The paired evaluator passes `max_evaluator_payload_bytes` as the truth-read cap
+to the same helper. Its fixed roster allowance alone is 167,772,160 bytes, above
+128 MiB, so every admitted evaluator budget causes that call to reject even a
+25,600-byte truth artifact. Admit the actual truth descriptor separately and use
+its bounded body length as the read cap; retain the aggregate coexistence model
+and the truth-after-seal invariant. Cover the actual paired pipeline with a
+large evaluator budget and small truth body in the tiny native fixture.
+
+Both failures are source-derived, not native execution results. Their repairs
+must be compiled and run before any scientific job.
