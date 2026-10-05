@@ -1,0 +1,26 @@
+{
+  "cases": [
+    {
+      "admitted": false,
+      "charge_bytes": 2097152,
+      "original_root": "worker root"
+    },
+    {
+      "admitted": true,
+      "charge_bytes": 1048576,
+      "original_root": "empty child directory"
+    }
+  ],
+  "conclusion": "ORIGINAL_ROOT alias alters admission for identical files; source-level flaw reproduced. Exact contribution to archived stop not separately sampled.",
+  "filesystem_growth_isolated": "baseline set above current used so growth charge zero",
+  "fixture_body_bytes": 1048576,
+  "fixture_cap_bytes": 1572864,
+  "invoked_actual_function": "probe_resource_check",
+  "production_source_changed": false,
+  "schema": "borsuk-fine-sq8-scratch-alias-source-falsifier-v1",
+  "scientific_measurement": false,
+  "source": {
+    "path": "scripts/launch_hierarchical_cells_100k_spot.py",
+    "sha256": "c59e107d0d2f4e3b6a6e9333be5829743232b47dae07b37dfb942b0abffd79be"
+  }
+}
