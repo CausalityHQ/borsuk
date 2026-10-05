@@ -8,14 +8,14 @@ Source references are relative to `crates/borsuk/src/` at that commit.
 
 **Blockers needing repair**
 
-1. **P1 — Both FIRST100k/D768 builds necessarily fail during final reauthentication.**  
+1. **P1 — Both FIRST100k/D768 builds necessarily fail during final reauthentication.**
    `semantic_cell_overlap.rs:503` calls `read_source_probe_artifact(artifact, artifact.bytes)` for the canonical input. That input is `100000 × (8 + 4×768) = 308,000,000` bytes. The helper explicitly rejects **caps exceeding 128 MiB** (`hierarchical_semantic_cells.rs:2198,2243–2248`).
 
    This occurs after replay, extent construction and staging fsync, but before publication. Both overlap and control are affected.
 
    **Smallest repair:** use bounded streaming authentication for large originals; preserve the existing resource limits. A descriptor-only native falsifier can demonstrate the current rejection before opening or allocating any large payload.
 
-2. **P1 — Every admitted paired evaluation necessarily rejects its truth read.**  
+2. **P1 — Every admitted paired evaluation necessarily rejects its truth read.**
    `bin/hierarchical_semantic_cells.rs:165–170` requires the evaluator budget to cover at least:
    ```
    128 × 32 × 640 × 64 = 167,772,160 bytes
@@ -26,7 +26,7 @@ Source references are relative to `crates/borsuk/src/` at that commit.
 
    **Smallest repair:** separate the aggregate evaluator budget from the per-artifact read cap. Native regression: authenticate a tiny truth file with an otherwise admissible evaluator budget, exercising the actual evaluator read path.
 
-3. **P1 — A mandatory test contains an assertion that must fail.**  
+3. **P1 — A mandatory test contains an assertion that must fail.**
    `semantic_cell_overlap.rs:1448` asserts:
    ```rust
    validate_placement(0, 0, false, &[(0, Some(1))]).is_err()
@@ -35,7 +35,7 @@ Source references are relative to `crates/borsuk/src/` at that commit.
 
    **Smallest repair:** assert success for this case and use a different cell for the invalid-primary case. Do not change valid placement semantics to satisfy this assertion.
 
-4. **P2 — Required independent correctness and seal-order coverage is ineffective.**  
+4. **P2 — Required independent correctness and seal-order coverage is ineffective.**
    The “independent SQ8” oracle calls the production `score_nominees` and `cosine_vector` (`hierarchical_semantic_cells.rs:4141–4147`). Its representative-location assertion calls the same production lookup used to construct the result (`:4149–4150`). The fixture fetches the entire tiny dataset, so it also misses selective replica gains.
 
    Separately, `overlap_pair_seal_precedes_truth` manufactures events and calls seal helpers; it never invokes `paired_overlap` (`bin/hierarchical_semantic_cells.rs:1495–1515`). Moving the production truth read before sealing would leave this test passing.
@@ -59,4 +59,3 @@ CARGO_BUILD_JOBS=2 cargo test --locked -p borsuk --lib \
 After repair, require the two cap regressions and independent sequencing/scoring fixtures before the existing overlap suites, Clippy and workspace test-build gates. No algorithm sweep or quality-threshold change is needed.
 
 No files were edited. No Cargo, native tests, corpus reads or experiments ran; the deterministic failures above are established by source inspection.
-
