@@ -2066,17 +2066,36 @@ mod tests {
             assert_eq!(report["complete"], true);
             let rotation_pin: &Value = &freeze["rotation"];
             let rotation_body = fs::read(rotation_pin["path"].as_str().unwrap()).unwrap();
-            let rotation_sha: [u8; 32] = Sha256::digest(&rotation_body).into();
-            let limits = borsuk::corrected_four_bit::Limits {
-                memory_bytes: 8 * 1024 * 1024,
-                operations: 100_000_000,
-            };
-            let rotation =
-                borsuk::corrected_four_bit::Rotation::from_bytes(&rotation_body, rotation_sha, limits)
-                    .unwrap();
+            assert_eq!(json!(hash(&rotation_body)), rotation_pin["sha256"]);
+            assert_eq!(rotation_body.len(), 64 + 9 * 8);
+            let matrix = std::array::from_fn::<_, 9, _>(|i| {
+                f64::from_le_bytes(rotation_body[64 + i * 8..72 + i * 8].try_into().unwrap())
+            });
             let normalized =
                 borsuk::two_bit_generation::normalize_two_bit_diagnostic_query(&query).unwrap();
-            let prepared = rotation.prepare_query(&normalized, limits).unwrap();
+            // Independent scalar direction and packed-score oracle: no codec
+            // prepare/score or SQ8 scorer calls may supply expected values.
+            fn scalar_unit(v: &mut [f64]) {
+                let scale = v.iter().fold(0f64, |a, b| a.max(b.abs()));
+                let mut squares = 0.;
+                for x in v.iter_mut() {
+                    *x /= scale;
+                    squares += *x * *x;
+                }
+                let norm = squares.sqrt();
+                for x in v {
+                    *x /= norm;
+                }
+            }
+            let mut unit_query = std::array::from_fn::<_, 3, _>(|j| f64::from(normalized[j]));
+            scalar_unit(&mut unit_query);
+            let mut rotated_query = [0.; 3];
+            for i in 0..3 {
+                for j in 0..3 {
+                    rotated_query[i] += matrix[i * 3 + j] * unit_query[j];
+                }
+            }
+            scalar_unit(&mut rotated_query);
             for p in 0..2 {
                 let packed =
                     fs::read(path.with_extension(format!("corrected-four-bit-{p}.bin"))).unwrap();
@@ -2105,13 +2124,49 @@ mod tests {
                     })
                     .collect::<Vec<_>>();
                 cosine.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+                // The independently decoded source/query oracle must identify
+                // the deliberately selected incidental row as the rank-one
+                // winner. A query following a nominee fails this assertion.
+                let incidental_winner = cosine[0];
+                assert_eq!(incidental_winner.2, 1);
+                assert!(!nominees.contains(&incidental_winner.2));
+                let mut shift = 0f32;
+                let mut query_norm = 0f32;
+                let mut weights = [0f32; 3];
+                for j in 0..3 {
+                    shift += normalized[j] * low[j];
+                    query_norm += normalized[j] * normalized[j];
+                    weights[j] = normalized[j] * step[j];
+                }
+                shift -= query_norm / 2.;
+                let mut sq8 = sources[p]
+                    .chunks_exact(15)
+                    .enumerate()
+                    .map(|(ordinal, row)| {
+                        let norm = f32::from_le_bytes(row[8..12].try_into().unwrap());
+                        let mut inner = 0f32;
+                        for j in 0..3 {
+                            inner += f32::from(row[12 + j]) * weights[j];
+                        }
+                        (norm - 2. * (inner + shift), ids[ordinal], ordinal)
+                    })
+                    .collect::<Vec<_>>();
+                sq8.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
                 let mut expected = packed
                     .chunks_exact(14)
                     .enumerate()
-                    .map(|(i, row)| (prepared.score(&rotation, row).unwrap(), ids[i], i))
+                    .map(|(i, row)| {
+                        let correction = f64::from(f32::from_le_bytes(row[8..12].try_into().unwrap()));
+                        let mut dot = 0.;
+                        for j in 0..3 {
+                            let code = (row[12 + j / 2] >> (4 * (j % 2))) & 15;
+                            dot += rotated_query[j] * (f64::from(code) - 7.5);
+                        }
+                        ((2. - 2. * correction * dot) as f32, ids[i], i)
+                    })
                     .collect::<Vec<_>>();
                 expected.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-                assert!(expected.iter().take(100).any(|s| !nominees.contains(&s.2)));
+                assert!(!nominees.contains(&expected[0].2));
                 for ordinal in 0..64 {
                     let result: Value = serde_json::from_slice(
                         &fs::read(
@@ -2122,15 +2177,30 @@ mod tests {
                         .unwrap(),
                     )
                     .unwrap();
+                    let winner = &result["decoded_cosine"]["ranked"][0];
+                    assert_eq!(winner["ordinal"], incidental_winner.2);
+                    assert_eq!(winner["id"], incidental_winner.1);
+                    assert_eq!(winner["score_bits"], incidental_winner.0.to_bits());
                     for key in ["corrected", "decoded_cosine", "sq8_reference"] {
                         assert_eq!(result[key]["fetched_ids"], json!(ids));
                         assert_eq!(result[key]["ranked"].as_array().unwrap().len(), 100);
                     }
-                    for (key, oracle) in [("corrected", &expected), ("decoded_cosine", &cosine)] {
+                    for (key, oracle) in [
+                        ("corrected", &expected),
+                        ("decoded_cosine", &cosine),
+                        ("sq8_reference", &sq8),
+                    ] {
                         for (rank, s) in oracle.iter().take(100).enumerate() {
                             assert_eq!(result[key]["ranked"][rank]["id"], s.1);
                             assert_eq!(result[key]["ranked"][rank]["score_bits"], s.0.to_bits());
+                            assert_eq!(result[key]["ranked"][rank]["ordinal"], s.2);
                         }
+                        assert_eq!(result[key]["rank100_score_bits"], oracle[99].0.to_bits());
+                        assert_eq!(result[key]["rank101_score_bits"], oracle[100].0.to_bits());
+                        assert_eq!(
+                            result[key]["rank_boundary_gap"].as_f64(),
+                            Some(f64::from(oracle[100].0) - f64::from(oracle[99].0))
+                        );
                     }
                 }
             }

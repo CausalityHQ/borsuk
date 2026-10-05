@@ -3818,7 +3818,15 @@ pub mod pack_diagnostic {
                         guard.tick(
                             (plan.row_ranges.iter().map(|r| r.len()).sum::<usize>() * (4 * d + 128)) as u64,
                         )?;
-                        let sq8 = super::score(&g.plane, &plan.row_ranges, &request.query, false, guard)?;
+                        let mut sq8_boundary = [None; 2];
+                        let sq8 = super::score_with_boundary(
+                            &g.plane,
+                            &plan.row_ranges,
+                            &request.query,
+                            false,
+                            guard,
+                            Some(&mut sq8_boundary),
+                        )?;
                         let sq8_cpu = cpu_ns() - sq8_start.1;
                         let sq8_wall = sq8_start.0.elapsed().as_nanos();
                         require(
@@ -3836,9 +3844,17 @@ pub mod pack_diagnostic {
                             .iter()
                             .map(|s| s["id"].as_i64().ok_or("corrected ranked ID"))
                             .collect::<std::result::Result<BTreeSet<_>, _>>()?;
+                        let mut sq8_evidence = serde_json::to_value(&sq8)?;
+                        sq8_evidence["rank100_score_bits"] = json!(sq8_boundary[0].map(f32::to_bits));
+                        sq8_evidence["rank101_score_bits"] = json!(sq8_boundary[1].map(f32::to_bits));
+                        sq8_evidence["rank_boundary_gap"] = json!(
+                            sq8_boundary[0]
+                                .zip(sq8_boundary[1])
+                                .map(|(a, b)| f64::from(b) - f64::from(a))
+                        );
                         let value = json!({"schema":"borsuk-corrected-four-bit-query-v1","dataset":panel.dataset,"ordinal":ordinal,"plan":plan,
                             "generation":g.root,"rotation":rotation_pin,"mutation_revision":0,"nominees_retained":true,"original_cover_contained":true,"truth_opened":false,
-                            "nominee_ids":plan.nominees.iter().map(|&i|g.plane.ids[i]).collect::<Vec<_>>(),"corrected":candidate,"decoded_cosine":cosine,"sq8_reference":sq8,
+                            "nominee_ids":plan.nominees.iter().map(|&i|g.plane.ids[i]).collect::<Vec<_>>(),"corrected":candidate,"decoded_cosine":cosine,"sq8_reference":sq8_evidence,
                             "sq8_scoring_cpu_ns":sq8_cpu,"sq8_scoring_wall_ns":sq8_wall,"pretruth_replacements":{"removed":old_top.difference(&new_top).copied().collect::<Vec<_>>(),"added":new_top.difference(&old_top).copied().collect::<Vec<_>>()}});
                         let bytes = serde_json::to_vec(&value)?;
                         require(bytes.len() <= RESULT_CAP, "corrected result cap")?;
@@ -5817,6 +5833,19 @@ pub mod pack_diagnostic {
             packed: bool,
             guard: &mut Guard,
         ) -> Result<Scored> {
+            score_with_boundary(plane, ranges, query, packed, guard, None)
+        }
+        // The corrected diagnostic alone observes these two scores before the
+        // existing top-100 truncation. Legacy callers and serialized results
+        // remain unchanged; there is no extra read, score pass, or ranking.
+        fn score_with_boundary(
+            plane: &Plane,
+            ranges: &[Range<usize>],
+            query: &[f32],
+            packed: bool,
+            guard: &mut Guard,
+            boundary: Option<&mut [Option<f32>; 2]>,
+        ) -> Result<Scored> {
             let score_start = Instant::now();
             let n = plane.ids.len();
             let d = plane.manifest.identity.dimensions;
@@ -5953,6 +5982,9 @@ pub mod pack_diagnostic {
             }
             if plane.histogram.is_some() { guard.tick((total * (usize::BITS - total.max(1).leading_zeros()) as usize) as u64)?; }
             all.sort_unstable_by(|a, b| a.score.total_cmp(&b.score).then(a.id.cmp(&b.id)));
+            if let Some(boundary) = boundary {
+                *boundary = [all.get(99).map(|s| s.score), all.get(100).map(|s| s.score)];
+            }
             let ranked = all
                 .iter()
                 .take(100)
@@ -7306,11 +7338,18 @@ pub mod pack_diagnostic {
             }
             #[test]
             fn fine_corrected_four_bit_prebody_caps_source_eof_and_sync() {
+                // One rotation, three objects per generation, payload seal and
+                // prefix, then 128 results; every publication syncs file + dir.
+                const BEFORE_FREEZE_SYNCS: usize = 2 * (1 + 2 * 3 + 2 + 128);
                 for case in [
                     "memory",
                     "work",
                     "query-work",
                     "sync",
+                    "freeze-file-sync",
+                    "freeze-directory-sync",
+                    "terminal-file-sync",
+                    "terminal-directory-sync",
                     "short-write",
                     "source-growth",
                     "population",
@@ -7323,6 +7362,11 @@ pub mod pack_diagnostic {
                         "work" => c.construction_operations = 1,
                         "query-work" => c.query_auth_operations = 1,
                         "sync" => out.fail_sync = Some(1),
+                        "freeze-file-sync" => out.fail_sync = Some(BEFORE_FREEZE_SYNCS + 1),
+                        "freeze-directory-sync" => out.fail_sync = Some(BEFORE_FREEZE_SYNCS + 2),
+                        // Freeze and startup ledger each sync twice before finish.
+                        "terminal-file-sync" => out.fail_sync = Some(BEFORE_FREEZE_SYNCS + 5),
+                        "terminal-directory-sync" => out.fail_sync = Some(BEFORE_FREEZE_SYNCS + 6),
                         "short-write" => out.fail_write = Some(3),
                         "source-growth" => {
                             let m: Manifest =
@@ -7358,14 +7402,50 @@ pub mod pack_diagnostic {
                         false,
                         &mut guard,
                         &mut progress,
-                    );
+                    )
+                    .and_then(|report| {
+                        progress.stage = "terminal";
+                        out.finish(&report)
+                    });
                     assert!(result.is_err(), "{case}");
-                    corrected::invalidate(&mut out, &hash(b"config"), &result.unwrap_err(), &progress);
+                    let error = result.as_ref().unwrap_err();
+                    let freeze_sync = case.starts_with("freeze-");
+                    let terminal_sync = case.starts_with("terminal-");
+                    if freeze_sync || terminal_sync {
+                        assert!(
+                            error.to_string().contains("injected")
+                                && error.to_string().contains("sync")
+                        );
+                        assert_eq!(Some(out.sync_count), out.fail_sync);
+                        assert_eq!(progress.scored_queries, 128);
+                        assert_eq!(
+                            progress.stage,
+                            if freeze_sync { "freeze" } else { "terminal" }
+                        );
+                    }
+                    corrected::invalidate(&mut out, &hash(b"config"), error, &progress);
                     let v: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
                     assert_eq!(v["status"], "INVALID");
+                    assert!(result.is_err(), "invalidation must retain the original error");
+                    assert_eq!(v["details"]["error"], error.to_string());
                     let opened = super::super::OPENS.with(|v| v.borrow().clone());
-                    assert!(!opened.contains(&c.panels[0].requests.path));
-                    assert!(!opened.contains(&c.panels[0].truth.path));
+                    assert_eq!(
+                        opened.contains(&c.panels[0].requests.path),
+                        freeze_sync || terminal_sync
+                    );
+                    assert_eq!(opened.contains(&c.panels[0].truth.path), terminal_sync);
+                    assert_eq!(v["details"]["truth_opened"], terminal_sync);
+                    if freeze_sync || terminal_sync {
+                        assert_eq!(v["queries"], 128);
+                        assert!(
+                            path.with_extension("corrected-four-bit-result-127.json")
+                                .exists()
+                        );
+                        assert!(
+                            path.with_extension("corrected-four-bit-payloads.json")
+                                .exists()
+                        );
+                    }
                     if ["memory", "work"].contains(&case) {
                         assert!(!opened.contains(&c.original_seal.path));
                         assert!(!opened.contains(&c.panels[0].root.path));
@@ -7385,11 +7465,13 @@ pub mod pack_diagnostic {
                     if case == "short-write" {
                         assert_eq!(v["details"]["unsealed_output"]["written_bytes"], 3);
                     }
-                    assert!(
-                        !path
-                            .with_extension("corrected-four-bit-payloads.json")
-                            .exists()
-                    );
+                    if !freeze_sync && !terminal_sync {
+                        assert!(
+                            !path
+                                .with_extension("corrected-four-bit-payloads.json")
+                                .exists()
+                        );
+                    }
                 }
             }
             #[test]
