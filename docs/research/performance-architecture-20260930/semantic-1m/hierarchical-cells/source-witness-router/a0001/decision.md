@@ -17,7 +17,7 @@ The frozen gate was mean coverage >=98% and p05 >=95 on both panels. Optional re
 
 ## Measured work and limits
 
-Sixteen source-only witnesses per cell, scored globally by nearest witness, selected exactly 24 unchanged cells. Mean route CPU was 2.380138 ms on ReLAION and 2.451547 ms on CoHere. Route-only wall p95 was 4.569452 and 8.458778 ms, respectively; these are not end-to-end latency or cold S3 tails. Actual payload query GETs were zero. Hypothetical whole-cell fetch was 24 GETs and mean 7,768,535.9375 / 7,931,633.125 bytes. CPU, payload and memory cannot establish a 100M performance claim.
+Sixteen source-only witnesses per cell, scored globally by nearest witness, selected exactly 24 unchanged cells. Mean route CPU was 2.380138 ms on ReLAION and 2.451547 ms on CoHere. Route-only wall p95 was 4.416708 and 8.452654 ms, respectively; these are not end-to-end latency or cold S3 tails. Actual payload query GETs were zero. Hypothetical whole-cell fetch was 24 GETs and mean 7,768,535.9375 / 7,931,633.125 bytes. CPU, payload and memory cannot establish a 100M performance claim.
 
 ## Decision
 
