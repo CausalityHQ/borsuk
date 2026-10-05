@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-cell-overlap-paired-parent-disposition-v1",
+  "status": "INVALID",
+  "scientific_qualification": false,
+  "original_controller_exec": 41144,
+  "controller_exit_status": 2,
+  "instance_id": "i-0b6ce82dc8ce3b5fe",
+  "same_original_instance_terminated_and_waited": true,
+  "observed_closeout_elapsed_seconds": 184,
+  "terminal_phase": "complete",
+  "terminal_exit_code": 0,
+  "original_exit_code": 0,
+  "artifact_count": 0,
+  "root_cause_source_evidence": "generated bootstrap line9 imports ARTIFACTS before source download (line96+) and venv install (line104+); export masks command substitution failure and yields an empty roster",
+  "native_execution_not_qualified": true,
+  "recall_latency_qps_unqualified": true,
+  "rust_source_unchanged": true,
+  "retry_launched": false,
+  "cost_measured": false
+}

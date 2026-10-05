@@ -1,0 +1,18 @@
+{
+  "status": "SOURCE_CHECK_PASS",
+  "scientific_qualification": false,
+  "source_sha256": "b0ee63734abdcaca3dac1e47566280605990b98f45baf42deaa1233a549ac638",
+  "command": "python3 scripts/launch_hierarchical_cells_100k_spot.py --cell-overlap-pair --self-check",
+  "exit_status": 0,
+  "wall_seconds": 2.51,
+  "process_peak_rss_kib": 73180,
+  "scope_memory_peak_display": "107.6M",
+  "swap_bytes": 0,
+  "limits": {
+    "memory_bytes": 268435456,
+    "cpu_percent": 100,
+    "tasks": 512,
+    "wall_seconds": 120
+  },
+  "verified": "Actual generated science/canary roster imports after environment installation; failed interpreter exits7 and retains fallback publication roster. Original a0001 terminal remains complete0 with empty artifacts and parent INVALID."
+}

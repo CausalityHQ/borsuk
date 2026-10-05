@@ -2630,8 +2630,15 @@ def overlap_profile():
         body=body.replace('--global-leaf-probe','--cell-overlap-pair').replace('/mnt/hierarchical-global-leaf-probe',str(OVERLAP_WORKER))
         if not canary:
             body=body.replace('MemoryMax=2G','MemoryMax=8G')
-            body=body.replace("export ARTIFACT_NAMES='test-resources.txt run-closed.log'",'export ARTIFACT_NAMES=$(PYTHONPATH="$root/probe-repo" python3.12 -c "from '+MODULE+' import OVERLAP_ARTIFACTS; print(\' \'.join(OVERLAP_ARTIFACTS))")')
             body=body.replace('else test -s "$name"; fi','else test -f "$name"; fi')
+        # Resolve only after source and the worker interpreter are installed.
+        # A failed assignment retains the bootstrap fallback for the EXIT trap.
+        roster='overlap_artifact_names=$(PYTHONPATH="$root/probe-repo" "$root/venv/bin/python" -c "from '+MODULE+' import OVERLAP_ARTIFACTS; print(\' \'.join(OVERLAP_ARTIFACTS))")\ntest -n "$overlap_artifact_names"\n'
+        if not canary:
+            roster+='export ARTIFACT_NAMES="$overlap_artifact_names"\n'
+        phase='phase=infrastructure-canary' if canary else 'phase=paired-nomination'
+        require(body.count(phase)==1,'one post-install overlap phase')
+        body=body.replace(phase,roster+phase)
         subprocess.run(['bash','-n'],input=body,text=True,check=True)
         require(len(body.encode())<16384 and '--cell-overlap-pair' in body,'bounded shared overlap bootstrap')
         return body
@@ -2663,6 +2670,7 @@ def overlap_self_check():
     """Synthetic transport/lifetime only: no network, native algorithms or GT."""
     from contextlib import ExitStack
     import gzip
+    import shlex
     import botocore.session
     module = sys.modules[__name__]
     def rejects(fn):
@@ -2703,6 +2711,23 @@ def overlap_self_check():
             target=closure/name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,target)
         subprocess.run([sys.executable,'-B','-c','from scripts import run_cell_overlap_pair; from scripts import launch_hierarchical_cells_100k_spot'],cwd=closure,
             env=dict(os.environ,PYTHONPATH=str(closure)),timeout=10,check=True)
+        # Execute the generated roster block, including its failure semantics.
+        worker=root/'worker';worker.mkdir();(worker/'venv/bin').mkdir(parents=True)
+        (worker/'probe-repo').symlink_to(closure.resolve(),target_is_directory=True)
+        interpreter=worker/'venv/bin/python';interpreter.symlink_to(sys.executable)
+        for shell in (science,canary):
+            begin=shell.index('overlap_artifact_names=$(')
+            end=shell.index('phase=',begin)
+            require(shell.index('-m pip install')<begin,'roster follows SDK installation')
+            block=shell[begin:end]
+            script='set -eu\nroot='+shlex.quote(str(worker))+'\nexport ARTIFACT_NAMES=fallback\n'+block+'printf "%s" "$overlap_artifact_names"\n'
+            result=subprocess.run(['bash','-c',script],capture_output=True,text=True,timeout=10,check=True)
+            exact(result.stdout.split(),list(OVERLAP_ARTIFACTS),'actual generated roster import')
+        interpreter.unlink();interpreter.write_text('#!/bin/sh\nexit 7\n');interpreter.chmod(0o755)
+        script='set -eu\nroot='+shlex.quote(str(worker))+'\nexport ARTIFACT_NAMES=fallback\ntrap \'printf "%s" "$ARTIFACT_NAMES"\' EXIT\n'+science[science.index('overlap_artifact_names=$('):science.index('phase=paired-nomination')]
+        failed=subprocess.run(['bash','-c',script],capture_output=True,text=True,timeout=10)
+        exact(failed.returncode,7,'failed roster import stops bootstrap')
+        exact(failed.stdout,'fallback','failure publication roster survives')
         versions=dict(FIXED['versions'],**SDK_VERSIONS);real_import=importlib.import_module;real_version=importlib.metadata.version
         def imports(name,*a,**kw):
             return SimpleNamespace(__version__=versions[name]) if name in ('numpy','pyarrow') else real_import(name,*a,**kw)
