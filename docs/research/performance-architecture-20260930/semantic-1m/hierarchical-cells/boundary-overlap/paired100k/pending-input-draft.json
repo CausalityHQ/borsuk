@@ -4,7 +4,7 @@
   "schema": "borsuk-cell-overlap-pair-execution-v1",
   "run_id": "boundary-overlap-paired100k-a0001",
   "authority": {
-    "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/retained-input-authority.json",
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/source-witness-router/retained-input-authority.json",
     "bytes": 3711,
     "sha256": "93a6f221e895d400ff217e57cc5188d0aa475146ba94cd68876e41325b02a743"
   },
@@ -200,6 +200,7 @@
   "notes": [
     "Draft descriptors bind actual completed native proof and both original seven-input identities. Absolute paths must be rebound to authenticated remote staging before freeze.",
     "Helper resources require outstanding same-worker two-CPU and pre-build request authentication corrections.",
-    "No science launch allowed from this pending draft. Infrastructure canary and whole scratch/cost/deadline freeze remain mandatory."
+    "No science launch allowed from this pending draft. Infrastructure canary and whole scratch/cost/deadline freeze remain mandatory.",
+    "Completed qualification raw logs are retained as authenticated gzip transports; stage decompresses with terminal uncompressed SHA/length bounds before validate_receipt. Do not rewrite raw log whitespace."
   ]
 }
