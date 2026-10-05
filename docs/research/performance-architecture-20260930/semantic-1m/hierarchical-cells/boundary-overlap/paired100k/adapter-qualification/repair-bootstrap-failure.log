@@ -1,0 +1,10 @@
+Running as unit: borsuk-overlap-parent-config-binding-repair-a0001.service
+Traceback (most recent call last):
+  File "/tmp/borsuk-overlap-parent-repair-check.py", line 2, in <module>
+    from scripts import launch_hierarchical_cells_100k_spot as m
+ModuleNotFoundError: No module named 'scripts'
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 113ms
+             CPU time consumed: 104ms
+                   Memory peak: 16.8M (swap: 0B)

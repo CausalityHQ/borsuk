@@ -1,0 +1,27 @@
+Running as unit: borsuk-overlap-staging-final-r2.service
+PASS tiny committed archive closure/authentic bytes/gzip/literal paths/unsafe/missing/nonfile refusals/fullrepo default
+{"instance_id": "i-original", "observation_error": "EndpointConnectionError"}
+{"instance_id": "i-original", "observation_error": "ReadTimeoutError"}
+{"instance_id": "i-original", "state": "running"}
+{"cleanup_retry": "EndpointConnectionError", "nodes": {"0": {"instance_id": "i-original"}}}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"complete": true, "instance_id": "i-original", "state": "terminated"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}, "1": {"instance_id": "i-extra"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "2222222222222222222222222222222222222222", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"complete": true, "instance_id": "i-original", "state": "terminated"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"complete": true, "instance_id": "i-original", "state": "terminated"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+{"instance_id": "i-original", "nodes": {"0": {"instance_id": "i-original"}, "1": {"instance_id": "i-extra"}}, "prefix": "research/native-union/20260930/metadata-ranges-cold-a0001", "source_commit": "0000000000000000000000000000000000000000", "source_archive_sha256": "5f6e2d8d0212297d8a44edba3525ffa9c575049c9ac22780e6b4b8762930a186"}
+PASS bounded archive/chunk/producer/reader and shared ACK/fsync/multi-ACK/SIGTERM/cleanup-before-collection
+PASS synthetic launcher: gzip exact CR/whitespace/tamper/cap; import closure; 30 HEAD/one proof GET and actual CLI; actual stage/cleanup/collection/gzip-sidecars/canary replay; SAME-ID ACK/terminate/wait/failures; opaque direct staging then tiny Python helper handoff; pending/source/original/request parity refusals without body hydration; scratch/deadline/nooverwrite. No network, native algorithms, real data, or GT decoding.
+{"native_identity": "f71f6923bf5ebdd131fb1ae7528cd9434d70c8d1d51c184cdb7900b46b0d7c59", "no_binary_body_read": true, "no_native_cloud_or_GT": true, "no_remote_body_hydration": true, "scratch_admission_bytes": 5586623562, "source_archive_files": 473, "source_file_count": 403, "status": "PASS"}
+PASS final source gate: compile/AST, complete synthetic launcher check, actual-pointer metadata/source/parity check, diff whitespace; no native/cloud/GT.
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 2.620s
+             CPU time consumed: 2.546s
+                   Memory peak: 111.9M (swap: 0B)

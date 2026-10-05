@@ -1,0 +1,59 @@
+{
+  "schema": "borsuk-cell-overlap-parent-adapter-verification-v1",
+  "worker_commit": "7c4dff958a5641202c642c61cc65fcf65f98d5f2",
+  "integrated_commit": "0a847c79e6f089c4899214a27dd619d94a56f4df",
+  "source": {
+    "path": "/home/rb/worktrees/borsuk-prod-ready-v9/scripts/launch_hierarchical_cells_100k_spot.py",
+    "bytes": 216633,
+    "sha256": "1b6d6d8e1a601f8b6f03904580ad5d449d2e7cc2095ec219cd0a9e12b8fbcd43"
+  },
+  "worker_exact_source_check": {
+    "unit": "borsuk-overlap-staging-final-r2.service",
+    "original_exit_status": 0,
+    "runtime_seconds": 2.62,
+    "cpu_seconds": 2.546,
+    "memory_peak_display": "111.9M",
+    "swap_peak_display": "0B",
+    "closure": {
+      "ActiveState": "inactive",
+      "MainPID": "0",
+      "ControlGroup": ""
+    },
+    "original_log": {
+      "path": "/tmp/borsuk-overlap-staging-final-check-r2.log",
+      "bytes": 4680,
+      "sha256": "4c658d7db35492b5019c8f27d1e2347967b274a778aa76f0791bb1369e59e6fa"
+    },
+    "unit_closure": {
+      "path": "/tmp/borsuk-overlap-staging-final-unit.txt",
+      "bytes": 146,
+      "sha256": "cb602cf4e4204ad2fa3560296ac03424b13686466d5d23733baca7fbed07cb56"
+    },
+    "failure_diagnostics": {
+      "path": "/tmp/borsuk-overlap-staging-failure-diagnostics.json",
+      "bytes": 2766,
+      "sha256": "6e9435372b942dc73b9ddeea0a5d014b67bc3e7832cdefa1536101a83f756d19"
+    },
+    "failure_journal": {
+      "path": "/tmp/borsuk-overlap-staging-original-failure-journal.log",
+      "bytes": 3128,
+      "sha256": "6b08ecbe1dc384e2c13082cb46bf6b0c4a08121bc433b32f3dfe7afe620aec29"
+    }
+  },
+  "parent_exact_source_check": {
+    "unit": "borsuk-overlap-parent-adapter-check-a0001",
+    "original_exec_session": 28373,
+    "exit_status": 0,
+    "wall_seconds": 1.977,
+    "cpu_seconds": 1.909,
+    "memory_peak_display": "95.1M",
+    "swap_peak_display": "0B",
+    "log": {
+      "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/paired100k/adapter-qualification/parent-check.log",
+      "bytes": 4290,
+      "sha256": "e4f0e8929737cad30e222a9c0f85fb464a6c7912b793a996196004297b7c3071"
+    }
+  },
+  "scope": "source/transport/lifecycle qualification; no ANN/native scientific execution or cloud launch",
+  "config_freeze_pending_canary": true
+}

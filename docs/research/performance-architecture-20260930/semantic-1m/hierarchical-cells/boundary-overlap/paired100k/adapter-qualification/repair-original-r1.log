@@ -1,0 +1,7 @@
+Running as unit: borsuk-overlap-parent-config-binding-repair-a0001-r1.service; invocation ID: 1b699049f07f414f9708461aa359ddf5
+{"status": "PASS", "source_sha256": "e4624c3cad7cceee5c08a6fff06349e5d9fd0529a32f890cb3408518855d1bc4", "config_sha256": "50b983d35fd2f6077adf62690971b76477561b420dafbe5f9b3f6f312d7dc34e", "exact_config_binding": true, "source_file_count": 403, "archive_files": 473, "native_cloud_jobs": 0}
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 25.511s
+             CPU time consumed: 3.201s
+                   Memory peak: 133.9M (swap: 0B)

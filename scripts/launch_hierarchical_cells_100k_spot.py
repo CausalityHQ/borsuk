@@ -2461,7 +2461,7 @@ def overlap_scratch_roster(config, evidence, paths, repo):
 
 
 def overlap_qualify(base=Path('.'), *, canary=False):
-    repo = Path(base).resolve(); pin = local.identity(repo/OVERLAP_CONFIG); config = local.read_json(pin, 512 << 10)
+    repo = Path(base).resolve(); config_pin = local.identity(repo/OVERLAP_CONFIG); config = local.read_json(config_pin, 512 << 10)
     fields(config, 'schema authority_pending run_id code_sha256 execution qualification_transport assets native_assets headers canary_object machine scratch_reserve_bytes scratch_roster scratch_admission_bytes', 'root frozen overlap launcher config')
     exact(config['schema'], OVERLAP_SCHEMA, 'overlap launcher schema'); exact(config['authority_pending'], False, 'root freeze pending')
     require(re.fullmatch(r'a[0-9]{4}', config['run_id']), 'frozen overlap runID'); exact(config['machine'], OVERLAP_MACHINE, 'root prospective machine freeze')
@@ -2532,7 +2532,7 @@ def overlap_qualify(base=Path('.'), *, canary=False):
     local.integer(config['scratch_reserve_bytes'],256<<20,8<<30,'root whole-runtime reserve')
     roster = overlap_scratch_roster(config,None,paths,repo); exact(config['scratch_roster'],roster,'exact coexisting physical scratch admission')
     require(sum(p['max_bytes'] for p in roster) <= config['scratch_admission_bytes'] <= 8 << 30,'all staged physical scratch fits8GiB')
-    proof = dict(config_path=str(OVERLAP_CONFIG), config_sha256=pin['sha256'], campaign_schema=OVERLAP_CANARY_SCHEMA if canary else OVERLAP_SCHEMA,
+    proof = dict(config_path=str(OVERLAP_CONFIG), config_sha256=config_pin['sha256'], campaign_schema=OVERLAP_CANARY_SCHEMA if canary else OVERLAP_SCHEMA,
         code_identity_sha256=ids.sha(ids.encoded(config['code_sha256'])), refs_identity_sha256=ids.sha(ids.encoded({n:config[n] for n in ('execution','qualification_transport','assets','native_assets','headers','canary_object','machine')})),
         native_identity_sha256=ids.sha(ids.encoded(candidate)), source_file_count=403, source_archive_paths=paths,
         source_archive_paths_sha256=ids.sha(ids.encoded(paths)), artifact_roster_sha256=ids.sha(ids.encoded(PROBE_CANARY_ARTIFACTS if canary else OVERLAP_ARTIFACTS)),awscli_version=AWSCLI_VERSION,awscli_sha256=AWSCLI_SHA256)
@@ -2867,7 +2867,11 @@ def overlap_self_check():
             def metadata_only(path):
                 require(not Path(path).is_relative_to(future),'local preflight attempted dataset/GT hydration');return before_open(path)
             metadata_stack.enter_context(patch.object(positive,'open_input',side_effect=metadata_only))
-            def preflight(value):fixture_json(repo/config_path,value);return overlap_qualify(repo,canary=True)
+            def preflight(value):
+                fixture_json(repo/config_path,value)
+                result=overlap_qualify(repo,canary=True)
+                exact(result[1]['config_sha256'], local.sha((repo/config_path).read_bytes()), 'proof binds actual config rather than last header')
+                return result
             preflight(config)
             for label,mutate in [('pending',lambda c:c.update(authority_pending=True)),('source',lambda c:c['code_sha256'].update({'scripts/run_cell_overlap_pair.py':'0'*64})),
                 ('original-parity',lambda c:c['execution']['inputs']['relaion']['original']['canonical'].update(sha256='0'*64)),

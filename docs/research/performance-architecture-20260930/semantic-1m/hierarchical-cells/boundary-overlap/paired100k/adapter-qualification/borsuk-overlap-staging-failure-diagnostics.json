@@ -1,0 +1,43 @@
+{
+  "schema": "borsuk-overlap-staging-failure-diagnostics-v1",
+  "failures": [
+    {
+      "unit": "borsuk-overlap-staging-selfcheck2.service",
+      "exception": "cannot access local variable 'importlib' where it is not associated with a value",
+      "root_cause": "Fixture imported importlib.util inside the function, shadowing importlib before earlier import calls. Switched to a separately named util import."
+    },
+    {
+      "unit": "borsuk-overlap-staging-selfcheck3.service",
+      "tool_session_id": 96636,
+      "exception": "[Errno 2] No such file or directory: temporary probe-repo/retained/screen/relaion/manifest.json",
+      "root_cause": "Metadata fixture used create-new JSON writer without creating its parent directory. Fixture helper now creates parents."
+    },
+    {
+      "unit": "borsuk-overlap-staging-selfcheck4.service",
+      "tool_session_id": 10345,
+      "exception": "[Errno 17] File exists: temporary probe-repo/qualified/aws-terminal.json",
+      "root_cause": "Metadata fixture reused prior opaque control-file path; create-new writer correctly refused overwrite. Synthetic fixture explicitly removes its own prior file before replacement."
+    },
+    {
+      "unit": "borsuk-overlap-staging-selfcheck5.service",
+      "tool_session_id": 62726,
+      "exception": "artifact authentication: temporary probe-repo/qualified/aws-terminal.json",
+      "root_cause": "Synthetic metadata JSON replaced prior opaque file but kept old fixture SHA/bytes; fixture now binds replacement pins."
+    },
+    {
+      "unit": "borsuk-overlap-staging-actual-metadata1.service",
+      "exception": "[Errno 18] Invalid cross-device link: root Cargo.lock to /tmp fixture",
+      "root_cause": "Initial actual-pointer hardlink view was under /tmp on a different filesystem. Fixture now uses a temporary directory beside this isolated worktree; no binary bodies copied/read."
+    },
+    {
+      "unit": "borsuk-overlap-staging-final.service",
+      "tool_session_id": 49865,
+      "exception": "git diff --check exit129: Not a git repository",
+      "root_cause": "Verification unit runs as root; Git needed explicit per-command safe.directory for the operator-owned worktree. Failing layer independently passed with that one path; operator Git identity/config untouched."
+    }
+  ],
+  "original_unit_journal": "/tmp/borsuk-overlap-staging-original-failure-journal.log",
+  "original_final_full_stdout": "/tmp/borsuk-overlap-staging-final-check.log",
+  "earlier_exception_evidence": "Original exec/write_stdin outputs are preserved in the managed agent transcript. Attempts2-7 did not redirect an original raw stdout file; the journal is unit-state evidence, not a reconstructed stdout transcript.",
+  "production_defects_from_these_failures": false
+}

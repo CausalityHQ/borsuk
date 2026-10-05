@@ -1,0 +1,53 @@
+{
+  "schema": "borsuk-cell-overlap-config-binding-repair-v1",
+  "previous_integrated_commit": "0a847c79",
+  "root_cause": "overlap_qualify header-loop pin shadowed config pin; proof.config_sha256 incorrectly became final CoHere plane SHA",
+  "red": {
+    "original_exec_session": 58029,
+    "exit_status": 0,
+    "identity_valid": false,
+    "actual_config": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/paired100k/adapter-qualification/invalid-original-config.json",
+      "bytes": 25841,
+      "sha256": "0cabb81f89f02778662b4e2491dfba1ff5e5f47204be6764cd59ef29426c57d2"
+    },
+    "returned_config_sha256": "310ee747fcdd22adb98c55870e255fbc9a91531241e7bf4bd228828a713557ce",
+    "log": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/paired100k/adapter-qualification/invalid-original-preflight.log",
+      "bytes": 25081,
+      "sha256": "4401993a33db561935b00ead28bb1f5f2bc854acc73b089ea6048e355bb97d54"
+    }
+  },
+  "green": {
+    "original_exec_session": 61892,
+    "unit": "borsuk-overlap-parent-config-binding-repair-a0001-r1",
+    "invocation_id": "1b699049f07f414f9708461aa359ddf5",
+    "exit_status": 0,
+    "wall_seconds": 25.511,
+    "cpu_seconds": 3.201,
+    "memory_peak_display": "133.9M",
+    "swap_peak_display": "0B",
+    "source": {
+      "path": "scripts/launch_hierarchical_cells_100k_spot.py",
+      "bytes": 216864,
+      "sha256": "e4624c3cad7cceee5c08a6fff06349e5d9fd0529a32f890cb3408518855d1bc4"
+    },
+    "config": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/paired100k/config.json",
+      "bytes": 25841,
+      "sha256": "50b983d35fd2f6077adf62690971b76477561b420dafbe5f9b3f6f312d7dc34e"
+    },
+    "exact_config_binding": true,
+    "log": {
+      "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/paired100k/adapter-qualification/repair-original-r1.log",
+      "bytes": 649,
+      "sha256": "40e43444b2a225edcf3f6782a81785ab46bf5f69753514af57ce25eb07aa750c"
+    }
+  },
+  "scope": "minimal qualification glue repair; Rust403 unchanged; no ANN/native scientific or cloud execution",
+  "bootstrap_failure_preserved": {
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/boundary-overlap/paired100k/adapter-qualification/repair-bootstrap-failure.log",
+    "bytes": 524,
+    "sha256": "b6a6bc7dfb26897db3d7c6e77393fee160a31368d2433edf1bab54f075dbb1b1"
+  }
+}

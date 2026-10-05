@@ -1,0 +1,19 @@
+2026-10-05T04:44:58+00:00 vps-6b513f64 systemd[1]: Started borsuk-overlap-staging-selfcheck2.service - [systemd-run] /usr/bin/python3 -B -m scripts.launch_hierarchical_cells_100k_spot --cell-overlap-pair --self-check.
+2026-10-05T04:44:59+00:00 vps-6b513f64 systemd[1]: borsuk-overlap-staging-selfcheck2.service: Main process exited, code=exited, status=2/INVALIDARGUMENT
+2026-10-05T04:44:59+00:00 vps-6b513f64 systemd[1]: borsuk-overlap-staging-selfcheck2.service: Failed with result 'exit-code'.
+2026-10-05T04:44:59+00:00 vps-6b513f64 systemd[1]: borsuk-overlap-staging-selfcheck2.service: Consumed 830ms CPU time over 854ms wall clock time, 93.7M memory peak.
+2026-10-05T04:45:19+00:00 vps-6b513f64 systemd[1]: Started borsuk-overlap-staging-selfcheck3.service - [systemd-run] /usr/bin/python3 -B -m scripts.launch_hierarchical_cells_100k_spot --cell-overlap-pair --self-check.
+2026-10-05T04:45:20+00:00 vps-6b513f64 systemd[1]: borsuk-overlap-staging-selfcheck3.service: Main process exited, code=exited, status=2/INVALIDARGUMENT
+2026-10-05T04:45:20+00:00 vps-6b513f64 systemd[1]: borsuk-overlap-staging-selfcheck3.service: Failed with result 'exit-code'.
+2026-10-05T04:45:20+00:00 vps-6b513f64 systemd[1]: borsuk-overlap-staging-selfcheck3.service: Consumed 1.334s CPU time over 1.360s wall clock time, 93.7M memory peak.
+2026-10-05T04:46:24+00:00 vps-6b513f64 systemd[1]: Started borsuk-overlap-staging-selfcheck4.service - [systemd-run] /usr/bin/python3 -B -m scripts.launch_hierarchical_cells_100k_spot --cell-overlap-pair --self-check.
+2026-10-05T04:46:25+00:00 vps-6b513f64 systemd[1]: borsuk-overlap-staging-selfcheck4.service: Main process exited, code=exited, status=2/INVALIDARGUMENT
+2026-10-05T04:46:25+00:00 vps-6b513f64 systemd[1]: borsuk-overlap-staging-selfcheck4.service: Failed with result 'exit-code'.
+2026-10-05T04:46:25+00:00 vps-6b513f64 systemd[1]: borsuk-overlap-staging-selfcheck4.service: Consumed 1.289s CPU time over 1.322s wall clock time, 93.7M memory peak.
+2026-10-05T04:47:37+00:00 vps-6b513f64 systemd[1]: Started borsuk-overlap-staging-actual-metadata1.service - [systemd-run] /usr/bin/python3 -B /tmp/borsuk-overlap-staging-actual-pointers.py.
+2026-10-05T04:47:38+00:00 vps-6b513f64 systemd[1]: borsuk-overlap-staging-actual-metadata1.service: Main process exited, code=exited, status=1/FAILURE
+2026-10-05T04:47:38+00:00 vps-6b513f64 systemd[1]: borsuk-overlap-staging-actual-metadata1.service: Failed with result 'exit-code'.
+2026-10-05T04:48:03+00:00 vps-6b513f64 systemd[1]: Started borsuk-overlap-staging-selfcheck5.service - [systemd-run] /usr/bin/python3 -B -m scripts.launch_hierarchical_cells_100k_spot --cell-overlap-pair --self-check.
+2026-10-05T04:48:04+00:00 vps-6b513f64 systemd[1]: borsuk-overlap-staging-selfcheck5.service: Main process exited, code=exited, status=2/INVALIDARGUMENT
+2026-10-05T04:48:04+00:00 vps-6b513f64 systemd[1]: borsuk-overlap-staging-selfcheck5.service: Failed with result 'exit-code'.
+2026-10-05T04:48:04+00:00 vps-6b513f64 systemd[1]: borsuk-overlap-staging-selfcheck5.service: Consumed 1.314s CPU time over 1.346s wall clock time, 93.7M memory peak.
