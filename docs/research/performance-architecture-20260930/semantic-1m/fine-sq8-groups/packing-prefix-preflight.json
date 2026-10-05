@@ -1,0 +1,40 @@
+{
+  "schema": "borsuk-fine-pack-prefix-metadata-preflight-v1",
+  "status": "CLOSED0",
+  "scope": "Read-only real frozen prefix shape; not Rust parser or packing execution",
+  "prefix_bytes_read": 1665668,
+  "prefix_sha256": "7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025",
+  "events": 130,
+  "startup_events": 2,
+  "plans": 128,
+  "plan_fields_exactly_match_draft_FrozenPlan": true,
+  "converged_xor_exhausted_all_plans": true,
+  "relaion": {
+    "queries": 64,
+    "maximum_base_visits": 39233,
+    "maximum_evaluations": 39370,
+    "nominees_min": 1024,
+    "nominees_max": 1024,
+    "maximum_reserialized_plan_line_bytes": 17424
+  },
+  "cohere": {
+    "queries": 64,
+    "maximum_base_visits": 30390,
+    "maximum_evaluations": 30559,
+    "nominees_min": 1024,
+    "nominees_max": 1024,
+    "maximum_reserialized_plan_line_bytes": 17474
+  },
+  "original_unit": "borsuk-fine-pack-prefix-shape-check-20261005.service",
+  "original_invocation": "88c6cb5220944b2eae1ec007b2827c85",
+  "original_exit_status": 0,
+  "observed_unit_wall_ms": 92,
+  "observed_unit_cpu_ms": 78,
+  "observed_memory_peak_display": "24.7M",
+  "observed_swap_bytes": 0,
+  "limits": {"memory_bytes": 268435456, "swap_bytes": 0, "cpu_quota_percent": 100, "tasks_max": 512, "wall_seconds": 30},
+  "requests_truth_and_trace_suffix_read": false,
+  "rust_execution": false,
+  "packing_or_recall_result": false,
+  "decision": "Retain base-visit guard bounded by row count and actual evaluations; a 4096 beam-size bound would reject authentic plans before packing. Native qualification remains pending."
+}
