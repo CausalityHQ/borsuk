@@ -1,6 +1,6 @@
 # Prospective bounded boundary overlap
 
-Status: native implementation authorized, source not yet implemented or qualified. This is a new arm. Historical witness and balanced-partitioner failures remain unchanged.
+Status: native source implemented at `afd58b557d01cafc307e650d9c29f381dbf24c41`, not yet compiled or qualified. Exact-source remote implementation-gates/a0001 is running from bundle `2b3f683a9783945c994b3f99059df4dccbd0235d`; its reservation and launch receipts bind the 403-file native inventory and seven serial gates. No paired overlap quality or performance has been measured. This is a new arm. Historical witness and balanced-partitioner failures remain unchanged.
 
 ## Causal change
 
