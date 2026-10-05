@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0507b0696c7f65b94",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0507b0696c7f65b94"
+    }
+  },
+  "prefix": "research/semantic-router/20261005/fixed-sq4-implementation-a0001",
+  "source_commit": "14ac12e8c1027013d21db7b6fb10de5e7fa2dd9d",
+  "source_archive_sha256": "fa04d47529531afe14d3c330fa15f44b4134e4a3584d2cbc2207273778f638f2"
+}
