@@ -1,0 +1,89 @@
+{
+  "authority_pending": false,
+  "controls": {
+    "authentication_scope": "Source-only builder authenticates retained cell spans and exact raw records. Serving sidecar has an externally authenticated SHA and binds the layout root and fixed policy; do not claim each witness membership is independently proven from a root hash without a record proof or source read.",
+    "final_query_latency_required": true,
+    "historical_closed_FAILs_immutable": true,
+    "physical_s3_query_performance_unmeasured": true,
+    "same_layout_and_query_bytes": true,
+    "stage_sums_not_complete_query_latency": true,
+    "vendor_parity_unmeasured": true
+  },
+  "count": 64,
+  "datasets": [
+    "relaion",
+    "cohere"
+  ],
+  "dimensions": 768,
+  "failure_labels": {
+    "coverage_or_returned_quality": "frozen arm FAIL; not universal rejection of representative routers",
+    "native_identity_resources_durability_cleanup": "INVALID"
+  },
+  "first": 0,
+  "gate_order": [
+    "source-only deterministic sidecar construction with requests/truth unopened",
+    "seal sidecars/configs before queries",
+    "freeze all64 selections per dataset before truth attribution",
+    "selected-cell coverage mean>=0.98 and p05hits>=95 on BOTH datasets, otherwise stop representation arm",
+    "only if coverage survives, test all selected SQ8 rows with native full-block ranking; remeasure final quantization loss",
+    "fresh held-out and bounded routing scalability qualification before any production promotion"
+  ],
+  "k": 100,
+  "methodology_frozen_before_implementation": true,
+  "metric": "cosine",
+  "paid_run_started": false,
+  "parent_closed_decision": "docs/research/performance-architecture-20260930/semantic-1m/hierarchical-cells/capacity-constrained-partitioner/paired100k/a0001/decision.md",
+  "payload": {
+    "fetch_policy": "whole_cell",
+    "max_cell_bytes": 16777216,
+    "max_cell_rows": 512,
+    "max_cells": 24,
+    "max_total_cell_gets": 24
+  },
+  "qualification": {
+    "actual_workspace_test_compile": true,
+    "affected_native_tests": true,
+    "exact_source_receipts_required": true,
+    "release_binary": true,
+    "workspace_clippy_correctness_suspicious": true
+  },
+  "resources": {
+    "actual_input_output_inventory_required": true,
+    "cpu_quota_percent": 100,
+    "no_local_cargo": true,
+    "per_dataset_limit_seconds": 600,
+    "prospective_native_memory_bytes": 536870912,
+    "scratch_limit_bytes": 17179869184,
+    "swap_bytes": 0
+  },
+  "returned_diagnostic": {
+    "blocks_per_cell": 16,
+    "meaning": "all fetched blocks admitted; separate diagnostic of ranking after routing, explicitly differs from historical four-block nominee arm",
+    "quality_gate": {
+      "mean_recall_at_100": 0.98,
+      "p05_hits": 95
+    }
+  },
+  "routing": {
+    "cell_order": "score then cell ID",
+    "dataset_specific_tuning": false,
+    "fallback_widening": false,
+    "hierarchy_prefilter": false,
+    "query_normalization": "Reuse the unchanged native diagnostic query preparation, including original nonunit f32 query behavior; witness scoring must match existing SQ8 scorer bitwise.",
+    "query_scoring": "unchanged native SQ8 arithmetic on original SQ8 witness bytes; minimum score per cell",
+    "selected_cells": 24,
+    "selection": "min(16,cell_rows); smallest source ID first; farthest from nearest selected decoded-normalized SQ8 witness; ties by source ID",
+    "selection_numeric": "Decode using existing SQ8 low/step coefficients into f32 coordinates; sum squared norm in f64, reject zero/nonfinite, divide in f64 and cast normalized coordinates to f32; deterministic squared-Euclidean nearest-witness distance with source-ID ties.",
+    "training_inputs": "authenticated retained cell SQ8 records only; no requests or truth",
+    "witnesses_per_cell": 16
+  },
+  "rows": 100000,
+  "scaling_boundary": {
+    "flat_scan": "O(16*N/average_cell_rows*D) per query; NOT qualified for100M",
+    "next_if_representation_passes": "qualify bounded resident search over witnesses and incremental generation lifecycle; do not scale flat scan by assumption",
+    "resident": "existing directory plus packed probes and all live generations; arithmetic only until measured"
+  },
+  "schema": "borsuk-source-witness-router-method-v1",
+  "scope": "Native representation falsifier on unchanged retained partitioner layouts; no production winner or 100M qualification",
+  "split": "consumed historical panels, not held out"
+}
