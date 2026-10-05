@@ -1,0 +1,157 @@
+{
+  "schema": "borsuk-corrected-closed-local-stage-profile-v1",
+  "terminal_sha256": "954b23aa3cf2c43d5a41d427c7663485eb97557b7ac07827a70ea678bddb6822",
+  "scope": "consumed FIRST100k D768 cosine k100, 64 per panel; local authenticated file scoring, NOT S3/HTTP p95 or QPS",
+  "p95_definition": "nearest rank ceil(.95*64), sorted index60",
+  "stages": [
+    {
+      "dataset": "relaion",
+      "arm": "corrected",
+      "field": "query_prepare_cpu_ns",
+      "sum_seconds": 0.078781111,
+      "p50_ms": 1.228607,
+      "p95_ms": 1.246667,
+      "max_ms": 1.250905
+    },
+    {
+      "dataset": "relaion",
+      "arm": "corrected",
+      "field": "scoring_cpu_ns",
+      "sum_seconds": 1.18392762,
+      "p50_ms": 16.281268,
+      "p95_ms": 43.796307,
+      "max_ms": 51.783202
+    },
+    {
+      "dataset": "relaion",
+      "arm": "corrected",
+      "field": "query_prepare_wall_ns",
+      "sum_seconds": 0.078829438,
+      "p50_ms": 1.2291365,
+      "p95_ms": 1.247666,
+      "max_ms": 1.255932
+    },
+    {
+      "dataset": "relaion",
+      "arm": "corrected",
+      "field": "scoring_wall_ns",
+      "sum_seconds": 1.183926067,
+      "p50_ms": 16.2841005,
+      "p95_ms": 43.795408,
+      "max_ms": 51.78233
+    },
+    {
+      "dataset": "relaion",
+      "arm": "decoded_cosine",
+      "field": "query_prepare_cpu_ns",
+      "sum_seconds": 0.000153225,
+      "p50_ms": 0.0023865,
+      "p95_ms": 0.002514,
+      "max_ms": 0.003177
+    },
+    {
+      "dataset": "relaion",
+      "arm": "decoded_cosine",
+      "field": "scoring_cpu_ns",
+      "sum_seconds": 4.37751994,
+      "p50_ms": 60.2640525,
+      "p95_ms": 162.232223,
+      "max_ms": 186.079379
+    },
+    {
+      "dataset": "relaion",
+      "arm": "decoded_cosine",
+      "field": "query_prepare_wall_ns",
+      "sum_seconds": 0.000154073,
+      "p50_ms": 0.002412,
+      "p95_ms": 0.00255,
+      "max_ms": 0.003172
+    },
+    {
+      "dataset": "relaion",
+      "arm": "decoded_cosine",
+      "field": "scoring_wall_ns",
+      "sum_seconds": 4.377670151,
+      "p50_ms": 60.270838,
+      "p95_ms": 162.243371,
+      "max_ms": 186.087964
+    },
+    {
+      "dataset": "cohere",
+      "arm": "corrected",
+      "field": "query_prepare_cpu_ns",
+      "sum_seconds": 0.078730733,
+      "p50_ms": 1.226194,
+      "p95_ms": 1.248129,
+      "max_ms": 1.257266
+    },
+    {
+      "dataset": "cohere",
+      "arm": "corrected",
+      "field": "scoring_cpu_ns",
+      "sum_seconds": 1.588857059,
+      "p50_ms": 25.050389,
+      "p95_ms": 35.917615,
+      "max_ms": 40.09907
+    },
+    {
+      "dataset": "cohere",
+      "arm": "corrected",
+      "field": "query_prepare_wall_ns",
+      "sum_seconds": 0.078781116,
+      "p50_ms": 1.2268365,
+      "p95_ms": 1.24882,
+      "max_ms": 1.258282
+    },
+    {
+      "dataset": "cohere",
+      "arm": "corrected",
+      "field": "scoring_wall_ns",
+      "sum_seconds": 1.588864876,
+      "p50_ms": 25.049742,
+      "p95_ms": 35.916808,
+      "max_ms": 40.098145
+    },
+    {
+      "dataset": "cohere",
+      "arm": "decoded_cosine",
+      "field": "query_prepare_cpu_ns",
+      "sum_seconds": 0.000162875,
+      "p50_ms": 0.002518,
+      "p95_ms": 0.002754,
+      "max_ms": 0.002862
+    },
+    {
+      "dataset": "cohere",
+      "arm": "decoded_cosine",
+      "field": "scoring_cpu_ns",
+      "sum_seconds": 5.916255764,
+      "p50_ms": 93.094122,
+      "p95_ms": 133.937177,
+      "max_ms": 149.354893
+    },
+    {
+      "dataset": "cohere",
+      "arm": "decoded_cosine",
+      "field": "query_prepare_wall_ns",
+      "sum_seconds": 0.000163985,
+      "p50_ms": 0.0025275,
+      "p95_ms": 0.002779,
+      "max_ms": 0.002949
+    },
+    {
+      "dataset": "cohere",
+      "arm": "decoded_cosine",
+      "field": "scoring_wall_ns",
+      "sum_seconds": 5.91668215,
+      "p50_ms": 93.0962915,
+      "p95_ms": 133.94317,
+      "max_ms": 149.353373
+    }
+  ],
+  "limitations": [
+    "scoring includes payload reads, hash verification, arithmetic, allocations and full sorting; cannot attribute all CPU to a SIMD kernel",
+    "SQ8 reference lacks separate CPU/wall fields, so no measured SQ8 CPU speedup claim",
+    "whole process includes build and all three arms; cannot derive serving QPS from whole wall time"
+  ]
+}
