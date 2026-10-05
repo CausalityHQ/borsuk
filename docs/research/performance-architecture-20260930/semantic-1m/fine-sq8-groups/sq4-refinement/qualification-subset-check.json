@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-sq4-qualification-subset-source-check-v1",
+  "scope": "Python qualification glue only; AWS, Cargo and native cgroups mocked inside the self-check",
+  "source_commit": "a92573c077f3bb332473675b43e20e431722c698",
+  "tested_file": "scripts/launch_native_workspace_execution_spot.py",
+  "tested_sha256": "a283183dfe18c59c543b694366d9cd02021730a491e3f0b66666d90e779ba0df",
+  "command": "systemd-run --user --wait --pipe --unit=borsuk-sq4-qualification-subset-check-20261005 -p MemoryMax=256M -p MemorySwapMax=0 -p CPUQuota=100% -p TasksMax=512 -p RuntimeMaxSec=120 -p WorkingDirectory=/home/rb/worktrees/borsuk-prod-ready-v9 /usr/bin/env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 scripts/launch_native_workspace_execution_spot.py --fine-sq8-implementation --self-check",
+  "original_session": 11236,
+  "invocation_id": "ac983b66f18d4a2a9f98b0478fe3bbc5",
+  "exit_code": 0,
+  "service_runtime_seconds": 4.079,
+  "cpu_seconds": 2.122,
+  "kernel_memory_peak_display": "73.3M",
+  "kernel_swap_peak_bytes": 0,
+  "assertions": ["exact two-file native subset accepted", "full historical fine roster accepted", "duplicates, empty, reverse and unowned paths refused", "other execution modes retain exact roster guards", "existing fine-mode source/command/test-count/terminal/cleanup mocks passed"],
+  "rust_compiled": false,
+  "ann_executed": false,
+  "quality_measured": false
+}
