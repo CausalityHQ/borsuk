@@ -41,5 +41,11 @@
     }
   },
   "science_executed": false,
-  "transport_only_no_quality_claim": true
+  "transport_only_no_quality_claim": true,
+  "source_trace": {
+    "plane_manifest": "crates/borsuk/src/two_bit_source.rs SourcePlaneReceipt, compact serde JSON plus newline; exact root plane SHA is mandatory",
+    "plane_records": "Original Rust v1 encoded records SHA pinned by retained BuildConfig; no reconstruction from SQ8 permitted",
+    "recovery": "Use qualified original native writer on authenticated original raw/order/SQ8 if retained plane bodies unavailable; generation/mean/canonical/records SHA parity required before overlap builds",
+    "status": "Two small plane manifests and two encoded record bodies still require recovery; original output terminal did not retain them. Not a new ANN method or a quality failure."
+  }
 }
