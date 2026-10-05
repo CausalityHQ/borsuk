@@ -3,6 +3,7 @@
 CLI: aNNNN | --self-check | --replay OUT. Remote --remote is bootstrap-only.
 --sq4 explicitly selects the root-frozen native SQ4 experiment.
 --histogram-sq4 selects the separate learned-codebook experiment.
+--corrected-four-bit selects the separately qualified direction codec.
 No compiler, query runner, packing algorithm, retries or replacement instances.
 """
 import argparse
@@ -91,6 +92,20 @@ CGROUP_FILES = ('memory.max', 'memory.peak', 'memory.swap.max', 'memory.swap.pea
                 'pids.max', 'pids.current', 'pids.events', 'cgroup.procs', 'cgroup.events')
 SQ4 = False
 HISTOGRAM_SQ4 = False
+CORRECTED_FOUR_BIT = False
+CORRECTED_ROOT = ROOT.parent/'sq4-refinement/corrected-rabitq'
+CORRECTED_EVIDENCE = (
+    ('source-contract-4ec11b94.json', 9072, 'ad8fcb1fbaae99102497128ea6656fd1ab871fd8995d04df9297ccfa4605607d'),
+    ('source-inventory-4ec11b94.json', 47525, '5d6a83873a4239ad9adfa277ba493500c4ad52e2c32795b11bac4cde026fd7cb'),
+    ('qualification-source-contract-8c9f76f8.json', 30606, 'b9a2bc45f99e25c71a11fb6674808b5cf262978b49eb27983292c3bb71fb3cc0'),
+    ('closed-populations.json', 175929, '764674f0623797d1303158750fa82a568ea5fabd4fd57f7df5b333865e02a29a'))
+CORRECTED_PROTOCOL_SHA = 'abd38ba36ba44ee93bd1b0be4a6b3627085b8a1878c3ac45164d51df58aabba8'
+CORRECTED_COMMIT = '4ec11b94bdc15b103bc713418e9f2c0705a9d0b6'
+# Recomputed from source_identity()'s 12 framed include_bytes and codec body at
+# the exact isolated native revision, never from the controller's Rust tree.
+CORRECTED_DIAGNOSTIC_SOURCE_ID = '45821354fe7ee55fed119a81c51ef02cd0a82817c7e199d494d75b83366646ab'
+CORRECTED_SUPERVISOR_SECONDS = 1800  # Exact native valid() still caps its own deadline at 600s.
+CORRECTED_SOURCE, CORRECTED_PROTOCOL, CORRECTED_POPULATIONS = {}, {}, {}
 SQ4_NAME, SQ4_SCHEMA, SQ4_CLI = 'sq4', 'borsuk-fixed-sq4', 'check-fine-sq4'
 SQ4_CODEC = 'borsuk-sq4-nearest17-original-coefficients-v1'
 HISTOGRAM_TRAINER = 'occupied-u8-weighted-contiguous-f64-dp-smallest-predecessor-v1'
@@ -121,16 +136,20 @@ SQ4_TESTS = ('tests::fine_sq4_strict_cli_dispatch', 'tests::fine_sq4_real_native
 SQ4_QUALIFICATION_PROTOCOL_SHA = 'd3ac6d4f45391decf7c08f483a6209f99505897c62355a52d40f0a2b42f2cc8a'
 
 
-def configure_sq4(*, histogram=False):
+def configure_sq4(*, histogram=False, corrected=False):
     """Opt-in campaign only. Resource/transport authority still comes from root."""
     global SQ4, ROOT, CONFIG, SCHEMA, PREFIX, TOKEN_PREFIX, TAG, REMOTE_ROOT
     global CAPS, NATIVE_COMMIT, SOURCE_ID, INPUT_PINS, ARTIFACTS, ROSTER_SHA
     global HISTOGRAM_SQ4, SQ4_NAME, SQ4_SCHEMA, SQ4_CLI, SQ4_CODEC, SQ4_OUTPUTS
+    global CORRECTED_FOUR_BIT, SQ4_SOURCES, SQ4_SCRATCH_CAP
+    global CORRECTED_SOURCE, CORRECTED_PROTOCOL, CORRECTED_POPULATIONS
+    require(not (histogram and corrected), 'one SQ4 campaign mode')
     if SQ4:
-        require(HISTOGRAM_SQ4 is histogram, 'one SQ4 campaign mode')
+        require(HISTOGRAM_SQ4 is histogram and CORRECTED_FOUR_BIT is corrected, 'one SQ4 campaign mode')
         return
     SQ4 = True
     HISTOGRAM_SQ4 = histogram
+    CORRECTED_FOUR_BIT = corrected
     ROOT = SQ4_ROOT/'native-diagnostic'; CONFIG = ROOT/'config.json'
     SCHEMA = 'borsuk-fixed-sq4-diagnostic-spot-v1'
     PREFIX = 'research/hierarchical-cells/20261005/fixed-sq4-diagnostic-'
@@ -151,12 +170,40 @@ def configure_sq4(*, histogram=False):
         SQ4_OUTPUTS = tuple(n.replace('.sq4-', '.histogram-sq4-') for n in SQ4_OUTPUTS)+tuple(
             f'screen/report.histogram-sq4-{i}.bin-{suffix}' for i in range(2)
             for suffix in ('book.bin','groups.bin','root.json'))
+    if corrected:
+        SQ4_NAME, SQ4_SCHEMA, SQ4_CLI = 'corrected-four-bit', 'borsuk-corrected-four-bit', 'check-fine-corrected-four-bit'
+        SQ4_CODEC = 'borsuk-corrected-four-bit-direction-v1'
+        ROOT = CORRECTED_ROOT/'native-diagnostic'; CONFIG = ROOT/'config.json'
+        SCHEMA = SQ4_SCHEMA+'-diagnostic-spot-v1'
+        PREFIX = 'research/hierarchical-cells/20261005/corrected-four-bit-diagnostic-'
+        TOKEN_PREFIX, TAG = 'corrected-four-bit-diagnostic-', 'borsuk-corrected-four-bit-diagnostic'
+        REMOTE_ROOT = Path('/mnt/corrected-four-bit-diagnostic')
+        SQ4_SCRATCH_CAP = 8*1024**3
+        NATIVE_COMMIT, SOURCE_ID = '', ''  # Completed root proof supplies authority.
+        values = []
+        for name, size, digest in CORRECTED_EVIDENCE:
+            body = read(Path(__file__).resolve().parents[1]/CORRECTED_ROOT/name)
+            require(pin(body) == dict(bytes=size, sha256=digest), 'corrected committed evidence: '+name)
+            values.append(decode(body))
+        contract, CORRECTED_SOURCE, CORRECTED_PROTOCOL, CORRECTED_POPULATIONS = values
+        SQ4_SOURCES = contract['file_sha256']
+        require(contract['commit'] == CORRECTED_SOURCE['native_source_commit'] == CORRECTED_COMMIT
+                and len(CORRECTED_SOURCE['source_sha256']) == 405, 'corrected exact source evidence')
+        require(sha(encoded(dict(stages=[(s['stage'],s['command']) for s in CORRECTED_PROTOCOL['stages']],
+                mandatory_tests=CORRECTED_PROTOCOL['fixed']['mandatory_tests']))) == CORRECTED_PROTOCOL_SHA,
+                'corrected all15 protocol')
+        SQ4_OUTPUTS = tuple(n.replace('.sq4-', '.corrected-four-bit-') for n in SQ4_OUTPUTS)+(
+            'screen/report.corrected-four-bit-rotation.bin', 'screen/report.corrected-four-bit-startup.json',
+            *(f'screen/report.corrected-four-bit-{i}-{suffix}' for i in range(2) for suffix in ('groups.bin','root.json')))
     # Metadata only: never hydrate or parse a retained input during preflight.
     roster = decode(read(Path(__file__).resolve().parents[1]/SQ4_ROOT/'prospective-input-roster.json'))
     require(roster['schema'] == 'borsuk-sq4-prospective-input-roster-v1'
             and pin(encoded(roster['inputs'])) == dict(bytes=5185,
                 sha256='657f8a5f34e6865d46f9b526e627debb413ab1f1a6ca9d695f47d38d3dd2ffbb'), 'SQ4 retained roster pin')
     INPUT_PINS = tuple((d['destination'], d['bytes'], d['sha256']) for d in roster['inputs'])
+    if corrected:
+        INPUT_PINS += ((str(SQ4_INPUT_ROOT/'corrected-four-bit-closed-populations.json'),
+                        CORRECTED_EVIDENCE[-1][1], CORRECTED_EVIDENCE[-1][2]),)
     ARTIFACTS = tuple(n for n in ARTIFACTS if not n.startswith('screen/')) + (
         'scratch.json', *(f'qualification/{n}' for n in SQ4_RECEIPTS), *SQ4_OUTPUTS)
     ROSTER_SHA = sha(json.dumps(ARTIFACTS, separators=(',', ':')).encode())
@@ -248,7 +295,7 @@ def object_key(key):
 
 def native_inputs(native):
     if SQ4:
-        return [a for p in native['panels'] for a in (p['root'], p['requests'], p['truth'])]+[native['original_seal'], native['prefix']]
+        return [a for p in native['panels'] for a in (p['root'], p['requests'], p['truth'])]+[native['original_seal'], native['prefix']]+([native['closed_populations']] if CORRECTED_FOUR_BIT else [])
     return [a for p in native['panels'] for a in (p['root'], p['graph'])]+[native['original_seal'], native['prefix']]
 
 
@@ -266,9 +313,21 @@ def sq4_qualification(config, base, collected=False):
     sources = q['source_sha256']
     source_id = sha(json.dumps(sources, sort_keys=True, separators=(',', ':')).encode())
     authority = config['native_source']
-    require(source_id == authority['full_source_identity_sha256'] and len(sources) == q['source_file_count'] == w['source_file_count'] == v['source_file_count'] == 404
+    count = 405 if CORRECTED_FOUR_BIT else 404
+    require(source_id == authority['full_source_identity_sha256'] and len(sources) == q['source_file_count'] == w['source_file_count'] == v['source_file_count'] == count
             and all(sources.get(n) == h for n,h in authority['source_sha256'].items())
             and w['source_sha256'] == sources, 'SQ4 full404 source proof')
+    if CORRECTED_FOUR_BIT:
+        require(sources == CORRECTED_SOURCE['source_sha256'] and source_id == CORRECTED_SOURCE['source_identity_sha256']
+                and authority['commit'] == CORRECTED_COMMIT, 'corrected exact full405 source proof')
+        require(q['schema'] == 'borsuk-corrected-four-bit-implementation-gates-qualification-v1'
+                and w['schema'] == 'borsuk-corrected-four-bit-implementation-gates-receipt-v1'
+                and t['schema'] == 'borsuk-corrected-four-bit-implementation-gates-spot-v1'
+                and t['source_file_count'] == 405, 'corrected completed qualification schemas')
+        before = body_pin(w['artifacts']['source-before.json'])
+        require(before['bytes'] > 0 and before == w['artifacts']['source-after.json']
+                == t['artifacts']['source-before.json'] == t['artifacts']['source-after.json']
+                and w['artifacts'][BINARY_NAME] == binary, 'corrected original unchanged source/binary artifacts')
     for value in (v, q, t):
         require(value['native_source_commit'] == authority['commit'], 'SQ4 exact native revision')
     require(all(value['source_identity_sha256'] == source_id for value in (v,q,w,t)), 'SQ4 full404 identity')
@@ -278,13 +337,16 @@ def sq4_qualification(config, base, collected=False):
             and w['qualification_sha256'] == identities['source-qualification.json']['sha256'], 'SQ4 completed qualification')
     stages = w['stages']
     required = q['mandatory_tests']
-    protocol_sha = authority['qualification_protocol_sha256'] if HISTOGRAM_SQ4 else SQ4_QUALIFICATION_PROTOCOL_SHA
+    protocol_sha = authority['qualification_protocol_sha256'] if HISTOGRAM_SQ4 or CORRECTED_FOUR_BIT else SQ4_QUALIFICATION_PROTOCOL_SHA
     require(stages == v['stages'] and w['mandatory_tests'] == required
             and sha(encoded(dict(stages=[(s['stage'],s['command']) for s in stages],
                                  mandatory_tests=required))) == protocol_sha, 'SQ4 exact all14 commands and mandatory roster')
     if HISTOGRAM_SQ4:
         require(protocol_sha == HISTOGRAM_QUALIFICATION_PROTOCOL_SHA and len(stages) == 14
                 and v['qualified'] is True, 'histogram completed native protocol')
+    if CORRECTED_FOUR_BIT:
+        require(protocol_sha == CORRECTED_PROTOCOL_SHA and len(stages) == 15 and v['qualified'] is True,
+                'corrected completed all15 native protocol')
     previous_finish = None
     for stage in stages:
         started, finished = (datetime.fromisoformat(stage[k]) for k in ('started_at','finished_at'))
@@ -321,19 +383,25 @@ def validate_sq4_config(config, base=None):
             and all(encoded(fixed[k]) == encoded(FIXED[k]) for k in FIXED if k not in (
                 'machine_limit_seconds','compute_cap_usd','spot_max_usd_per_hour','native_caps','scratch')), 'SQ4 fixed method/host')
     wall, cost, spot = (fixed[k] for k in ('machine_limit_seconds','compute_cap_usd','spot_max_usd_per_hour'))
-    require(type(wall) is int and wall == 1800 and type(spot) in (int,float) and spot == .60
-            and type(cost) in (int,float) and cost == .30, 'SQ4 root wall/cost/Spot cap')
+    require(type(wall) is int and wall == (3600 if CORRECTED_FOUR_BIT else 1800) and type(spot) in (int,float) and spot == .60
+            and type(cost) in (int,float) and cost == (.60 if CORRECTED_FOUR_BIT else .30), 'SQ4 root wall/cost/Spot cap')
     native = config['native_config']
     authority = config['native_source']
     require(set(authority) == {'commit','full_source_identity_sha256','source_identity_sha256','source_sha256'}
-                | ({'qualification_protocol_sha256'} if HISTOGRAM_SQ4 else set())
+                | ({'qualification_protocol_sha256'} if HISTOGRAM_SQ4 or CORRECTED_FOUR_BIT else set())
             and re.fullmatch('[0-9a-f]{40}', authority['commit'])
             and set(authority['source_sha256']) == set(SQ4_SOURCES), 'SQ4 exact root source pins')
     for digest in (authority['full_source_identity_sha256'],authority['source_identity_sha256'],*authority['source_sha256'].values()):
         body_pin(dict(bytes=0,sha256=digest))
     if HISTOGRAM_SQ4:
         require(authority['qualification_protocol_sha256'] == HISTOGRAM_QUALIFICATION_PROTOCOL_SHA, 'histogram root native protocol pin')
+    if CORRECTED_FOUR_BIT:
+        require(authority['qualification_protocol_sha256'] == CORRECTED_PROTOCOL_SHA
+                and authority['commit'] == CORRECTED_COMMIT and authority['source_sha256'] == SQ4_SOURCES
+                and authority['source_identity_sha256'] == CORRECTED_DIAGNOSTIC_SOURCE_ID
+                and authority['full_source_identity_sha256'] == CORRECTED_SOURCE['source_identity_sha256'], 'corrected exact qualified source pins')
     require(set(native) == {'schema','source_identity_sha256','caps','panels','original_seal','prefix'}
+                | ({'rotation_seed','construction_operations','query_auth_operations','closed_populations'} if CORRECTED_FOUR_BIT else set())
             and native['schema'] == SQ4_SCHEMA+'-config-v1' and encoded(native['caps']) == encoded(CAPS)
             and native['source_identity_sha256'] == authority['source_identity_sha256'] and len(native['panels']) == 2
             and sha(encoded(native)) == config['native_config_sha256'], 'SQ4 exact native config')
@@ -341,13 +409,20 @@ def validate_sq4_config(config, base=None):
         require(set(p) == {'dataset','root','requests','truth','truth_width'} and p['dataset'] == dataset
                 and type(p['truth_width']) is int and p['truth_width'] == 100, 'SQ4 native panel')
     expected = [dict(path=p,bytes=n,sha256=h) for p,n,h in INPUT_PINS]
-    require(encoded(native_inputs(native)) == encoded([expected[i] for i in (0,6,7,8,14,15,16,17)])
-            and len(config['inputs']) == len(INPUT_PINS) == 18, 'SQ4 retained original descriptors')
+    input_count = 19 if CORRECTED_FOUR_BIT else 18
+    require(encoded(native_inputs(native)) == encoded([expected[i] for i in (0,6,7,8,14,15,16,17)]+([expected[18]] if CORRECTED_FOUR_BIT else []))
+            and len(config['inputs']) == len(INPUT_PINS) == input_count, 'SQ4 retained original descriptors')
+    if CORRECTED_FOUR_BIT:
+        require(type(native['rotation_seed']) is list and len(native['rotation_seed']) == 32
+                and all(type(v) is int and 0 <= v <= 255 for v in native['rotation_seed']), 'corrected mandatory seed32')
+        require(type(native['construction_operations']) is int and 159001952256 <= native['construction_operations'] < 2**64
+                and type(native['query_auth_operations']) is int and corrected_query_floor(CAPS['output_bytes']) <= native['query_auth_operations'] < 2**64,
+                'corrected explicit separate construction/query-auth admission')
     for d,(path,size,digest) in zip(config['inputs'], INPUT_PINS):
         require(set(d) == {'destination','key','bytes','sha256'} and d['destination'] == path
                 and body_pin({k:d[k] for k in ('bytes','sha256')}, max_bytes=size) == dict(bytes=size,sha256=digest), 'SQ4 opaque input transport')
         object_key(d['key'])
-    require(len({d['key'] for d in config['inputs']}) == 18, 'SQ4 distinct input objects')
+    require(len({d['key'] for d in config['inputs']}) == input_count, 'SQ4 distinct input objects')
     require(set(config['binary']) == {'key','bytes','sha256'} and body_pin({k:config['binary'][k] for k in ('bytes','sha256')})['bytes'] > 0, 'SQ4 root binary pin')
     object_key(config['binary']['key'])
     receipts = config['native_qualification']
@@ -355,13 +430,17 @@ def validate_sq4_config(config, base=None):
     for r in receipts:
         require(set(r) == {'path','bytes','sha256'} and r['bytes'] > 0, 'SQ4 qualification descriptor')
         object_key(r['path']); body_pin({k:r[k] for k in ('bytes','sha256')})
-    paths = sorted([str(CONFIG), str(SQ4_ROOT/'prospective-input-roster.json'), *CODE, *(r['path'] for r in receipts)])
+    paths = sorted([str(CONFIG), str(SQ4_ROOT/'prospective-input-roster.json'), *CODE, *(r['path'] for r in receipts),
+                    *(str(CORRECTED_ROOT/n) for n,_,_ in CORRECTED_EVIDENCE if CORRECTED_FOUR_BIT)])
     require(config['source_archive_paths'] == paths and config['source_archive_paths_sha256'] == sha(
         json.dumps(paths,separators=(',',':')).encode()) and set(config['code_sha256']) == set(CODE), 'SQ4 minimal source archive')
     for name,digest in config['code_sha256'].items():
         body_pin(dict(bytes=0,sha256=digest))
         if base is not None:
             require(file_pin(Path(base)/name)['sha256'] == digest, 'SQ4 code drift: '+name)
+    if CORRECTED_FOUR_BIT and base is not None:
+        for name,size,digest in CORRECTED_EVIDENCE:
+            require(file_pin(Path(base)/CORRECTED_ROOT/name) == dict(bytes=size,sha256=digest), 'corrected archive evidence drift')
     scratch = fixed['scratch']
     require(set(scratch) == {'input_bytes','native_output_bytes','binary_bytes','source_archive_bytes',
         'bootstrap_bytes','auxiliary_bytes','cap_bytes'} and all(type(n) is int and n > 0 for n in scratch.values())
@@ -374,6 +453,14 @@ def validate_sq4_config(config, base=None):
     WALL, COMPUTE_CAP, SPOT_MAX_USD_PER_HOUR = wall, cost, spot
     NATIVE_COMMIT, SOURCE_ID = authority['commit'], authority['source_identity_sha256']
     return native
+
+
+def corrected_query_floor(output_bytes):
+    """Metadata-only prospective allowance; native admits its exact full bound."""
+    rows = sum(q['fetched_rows'] for p in CORRECTED_POPULATIONS['panels'] for q in p['queries'])
+    source_bytes = sum(INPUT_PINS[i][1] for i in (*range(6), *range(8,14)))
+    metadata_bytes = sum(INPUT_PINS[i][1] for i in (6,7,14,15,16,17,18))
+    return 43710342688+8*rows+3*source_bytes+3*output_bytes+metadata_bytes
 
 
 def scratch_observation(root):
@@ -575,7 +662,7 @@ PY
 systemd-run --unit={SUPERVISOR_UNIT} --wait --pipe {supervisor_options}-p 'Delegate=cpu memory pids' -p DelegateSubgroup=supervisor -p RuntimeMaxSec={WALL} -p WorkingDirectory="$root" \\
  --setenv=PYTHONPATH="$root/repo" --setenv=AWS_MAX_ATTEMPTS=1 --setenv=AWS_RETRY_MODE=standard \\
  {('--setenv=TMPDIR="$TMPDIR" --setenv=TMP="$TMP" --setenv=TEMP="$TEMP" --setenv=PYTHONPYCACHEPREFIX="$PYTHONPYCACHEPREFIX" '+chr(92)) if SQ4 else chr(92)}
- "$python" -m {MODULE} {'--histogram-sq4 ' if HISTOGRAM_SQ4 else '--sq4 ' if SQ4 else ''}--remote "$root/repo" "$root" '{commit}' '{archive_sha}' '{prefix}' '{qualification['config_sha256']}'
+ "$python" -m {MODULE} {'--corrected-four-bit ' if CORRECTED_FOUR_BIT else '--histogram-sq4 ' if HISTOGRAM_SQ4 else '--sq4 ' if SQ4 else ''}--remote "$root/repo" "$root" '{commit}' '{archive_sha}' '{prefix}' '{qualification['config_sha256']}'
 '''
     subprocess.run(['bash', '-n'], input=body, text=True, check=True)
     require(len(body.encode()) < 16384, 'EC2 userdata cap')
@@ -665,7 +752,7 @@ def stage(s3, config, root):
                   exact_six_inputs=True, compiler_used=False)
     if SQ4:
         del result['exact_six_inputs']
-        result['exact_eighteen_inputs'] = True
+        result['exact_nineteen_inputs' if CORRECTED_FOUR_BIT else 'exact_eighteen_inputs'] = True
         result['scratch'] = scratch
     write(root/'stage-receipt.json', encoded(result))
     return result
@@ -717,7 +804,7 @@ def validate_resources(resource):
             and resource['process_attached_before_exec'] is True
             and resource['pre_exec_limits_observed'] is True
             and resource['descendants_remaining_after_exit'] is False
-            and 0 <= resource['elapsed_seconds'] <= CAPS['deadline_seconds'], 'original native resource authority')
+            and 0 <= resource['elapsed_seconds'] <= (CORRECTED_SUPERVISOR_SECONDS if CORRECTED_FOUR_BIT else CAPS['deadline_seconds']), 'original native resource authority')
 
 
 def delegated_group(record, proc=Path('/proc/self/cgroup'), root=Path('/sys/fs/cgroup')):
@@ -793,7 +880,7 @@ def supervise(config, root, *, run_id):
         scratch['projected_closure_peak_bytes'] = observation['whole_scratch_bytes']+SQ4_CLOSURE_RESERVE
         if scratch['projected_closure_peak_bytes'] > SQ4_SCRATCH_CAP:
             scratch['cap_exceeded'] = True
-            raise ValueError('SQ4 whole scratch 4GiB cap')
+            raise ValueError('SQ4 whole scratch cap')
     old_term = signal.getsignal(signal.SIGTERM)
     def interrupted(signum, frame):
         raise InterruptedError('original supervisor interrupted')
@@ -828,9 +915,10 @@ def supervise(config, root, *, run_id):
                 resource['process_attached_before_exec'] = True
                 while process.poll() is None:
                     resource['elapsed_seconds'] = time.monotonic()-started
-                    if resource['elapsed_seconds'] >= CAPS['deadline_seconds']:
+                    deadline = CORRECTED_SUPERVISOR_SECONDS if CORRECTED_FOUR_BIT else CAPS['deadline_seconds']
+                    if resource['elapsed_seconds'] >= deadline:
                         resource['deadline_exceeded'] = True
-                        raise TimeoutError('native '+str(CAPS['deadline_seconds'])+'s deadline')
+                        raise TimeoutError('native supervisor '+str(deadline)+'s deadline')
                     require(log.tell() <= 4*1024**2, 'native log cap')
                     if SQ4:
                         require(sum(p.lstat().st_size for p in (root/'screen').iterdir()) <= CAPS['output_bytes'], 'SQ4 whole native output cap')
@@ -911,10 +999,11 @@ def validate_sq4_result(root, config):
     validate_resources(resource)
     require(all(cleanup.get(k) is True for k in ('drain_complete','cleanup_complete','output_durable')), 'SQ4 native cleanup/durability')
     stage_receipt = decode(read(root/'stage-receipt.json'))
-    require(set(stage_receipt) == {'binary','native_config','inputs','exact_eighteen_inputs','compiler_used','scratch'}
+    staged_count = 'exact_nineteen_inputs' if CORRECTED_FOUR_BIT else 'exact_eighteen_inputs'
+    require(set(stage_receipt) == {'binary','native_config','inputs',staged_count,'compiler_used','scratch'}
         and stage_receipt['binary'] == binary and stage_receipt['native_config'] == pin(encoded(config['native_config']))
         and stage_receipt['inputs'] == {d['destination']:{k:d[k] for k in ('bytes','sha256')} for d in config['inputs']}
-        and stage_receipt['exact_eighteen_inputs'] is True and stage_receipt['compiler_used'] is False, 'SQ4 authenticated opaque staging')
+        and stage_receipt[staged_count] is True and stage_receipt['compiler_used'] is False, 'SQ4 authenticated opaque staging')
     scratch = decode(read(root/'scratch.json'))
     admission = scratch['admission']; reserve = config['fixed']['scratch']
     require(scratch['run_id'] == receipt['run_id'] and scratch['config_sha256'] == config['native_config_sha256']
@@ -936,7 +1025,7 @@ def validate_sq4_result(root, config):
         and sum(scratch['last']['roots'].values()) == scratch['last']['whole_scratch_bytes'], 'SQ4 whole-worker scratch observations')
     require({p.name for p in (root/'screen').iterdir() if not p.name.endswith('.gz')} == {Path(n).name for n in SQ4_OUTPUTS}, 'SQ4 exact native output closure')
     require(sum(file_pin(root/n)['bytes'] for n in SQ4_OUTPUTS) <= CAPS['output_bytes'], 'SQ4 native output cap')
-    body = read(root/'screen/report.json', 8192); report = decode(body)
+    body = read(root/'screen/report.json', 16384 if CORRECTED_FOUR_BIT else 8192); report = decode(body)
     require(receipt['report_sha256'] == scratch['report_sha256'] == sha(body)
         and report['schema'] == SQ4_SCHEMA+'-report-v1' and report['codec'] == SQ4_CODEC
         and report['config_sha256'] == config['native_config_sha256'] and report['source_identity_sha256'] == SOURCE_ID
@@ -944,6 +1033,8 @@ def validate_sq4_result(root, config):
         and report['status'] in ('SURVIVED_CONSUMED_PANELS','REJECT') and report['standalone_authority'] is False
         and report['quality_or_performance_claim'] is False and report['requires_matching_supervisor_exit_receipt'] is True, 'SQ4 independently bound terminal report')
     details = report['details']; native = config['native_config']; truth = [p['truth'] for p in native['panels']]
+    if CORRECTED_FOUR_BIT:
+        return validate_corrected_outputs(root, config, original, report, body)
     require(details['rows'] == 100000 and details['dimensions'] == 768 and details['truth'] == truth
         and details['frozen_original_authority'] is True and details['caps'] == CAPS
         and details['whole_process_supervisor_required'] is True and 0 <= details['operations'] <= CAPS['operations']
@@ -1045,6 +1136,121 @@ def validate_sq4_result(root, config):
             and startup['packed_row_bytes'] == 396, 'histogram startup separate from payload envelope')
         result['histogram_resources'] = startup
     return result
+
+
+def validate_corrected_outputs(root, config, original, report, body):
+    native, details = config['native_config'], report['details']
+    truth = [p['truth'] for p in native['panels']]
+    require(details['rows'] == 100000 and details['dimensions'] == 768 and details['truth'] == truth
+            and details['caps'] == CAPS and details['frozen_original_authority'] is True
+            and details['whole_process_supervisor_required'] is True
+            and 0 <= details['modeled_peak_bytes'] <= CAPS['memory_bytes']
+            and 79200000 <= details['modeled_output_bytes'] <= CAPS['output_bytes'], 'corrected frozen geometry/resources')
+    require(details['construction_limit'] == native['construction_operations']
+            and details['construction_work_bound'] == 159001952256
+            and 0 <= details['construction_charged_work'] <= details['construction_work_bound'] <= details['construction_limit']
+            and details['query_auth_limit'] == native['query_auth_operations']
+            and 0 <= details['query_auth_operations'] <= details['query_auth_work_bound'] <= details['query_auth_limit']
+            and details['query_auth_work_bound'] >= corrected_query_floor(details['modeled_output_bytes'])
+            and [details[k] for k in ('candidate_query_charged_work','decoded_cosine_control_charged_work',
+                'unchanged_sq8_control_charged_work')] == [15733844912,16649896880,11326600896]
+            and details['charged_work_is_conservative_bound'] is True
+            and details['actual_dense_encoding_macs'] == 117964800000, 'corrected separate construction/three-arm/auth work')
+    for k in ('total_cold_get_claim','total_cold_byte_claim','lifecycle_qualified','production_snapshot_integration',
+              'finite_Haar_unbiasedness_claim','radial_causation_claim'):
+        require(details[k] is False, 'corrected scope: '+k)
+    require(details['payload_ranges_exclude_startup'] is True, 'corrected startup separate from payload')
+    def authenticate(descriptor, suffix):
+        name = 'screen/report.corrected-four-bit-'+suffix
+        require(descriptor == dict(path=str(original/name), **file_pin(root/name)), 'corrected closure: '+suffix)
+        return root/name
+    freeze = decode(read(authenticate(details['freeze'], 'freeze.json')))
+    require(freeze['schema'] == SQ4_SCHEMA+'-freeze-v1' and freeze['config_sha256'] == config['native_config_sha256']
+            and freeze['source_identity_sha256'] == SOURCE_ID and freeze['truth_opened'] is False
+            and freeze['original_seal'] == native['original_seal'] and freeze['truth'] == truth
+            and freeze['closed_populations'] == native['closed_populations'], 'corrected whole128 pretruth freeze')
+    rotation = freeze['rotation']
+    path = authenticate(rotation, 'rotation.bin')
+    require(rotation['bytes'] == 64+8*768**2, 'corrected persisted full rotation geometry')
+    with regular(path) as source:
+        require(source.read(64) == b'BORSUK-C4ROT-v1\0'+(768).to_bytes(8,'little')+bytes(40), 'corrected rotation header')
+    seal = decode(read(authenticate(freeze['payload_seal'], 'payloads.json')))
+    authenticate(freeze['nomination_prefix'], 'prefix.jsonl')
+    require(file_pin(root/'screen/report.corrected-four-bit-prefix.jsonl') == {k:native['prefix'][k] for k in ('bytes','sha256')}, 'corrected original nominations')
+    require(seal['schema'] == SQ4_SCHEMA+'-payload-seal-v1' and seal['config_sha256'] == config['native_config_sha256']
+            and seal['source_identity_sha256'] == SOURCE_ID and seal['rotation'] == rotation
+            and seal['queries_opened'] is seal['truth_opened'] is False
+            and seal['payloads'] == freeze['payloads'] and len(seal['payloads']) == 2, 'corrected paired persisted seal')
+    generations = []
+    for i,payload in enumerate(seal['payloads']):
+        generation = decode(read(authenticate(payload['root'], str(i)+'-root.json')))
+        authenticate(payload['payload'], str(i)+'.bin'); authenticate(payload['groups'], str(i)+'-groups.bin')
+        require(generation['schema'] == SQ4_SCHEMA+'-generation-v1' and generation['codec'] == SQ4_CODEC
+                and generation['config_sha256'] == config['native_config_sha256'] and generation['source_identity_sha256'] == SOURCE_ID
+                and generation['rotation'] == rotation and generation['payload'] == payload['payload'] and generation['groups'] == payload['groups']
+                and generation['original_root'] == payload['original_root'] == native['panels'][i]['root']
+                and generation['rows'] == 100000 and generation['dimensions'] == 768 and generation['row_bytes'] == 396
+                and payload['payload']['bytes'] == 39600000 and payload['groups']['bytes'] == 200000, 'corrected generation bindings')
+        for key, offset in (('original_records',5),('original_order',3),('original_groups',2),('original_graph',1),('original_pq',4)):
+            p,n,h = INPUT_PINS[i*8+offset]
+            require(generation[key] == dict(path=p,bytes=n,sha256=h), 'corrected original descriptor: '+key)
+        identity = generation['router_identity']
+        require(identity['rows'] == 100000 and identity['dimensions'] == 768, 'corrected original router geometry')
+        require(len(generation['low_bits']) == len(generation['step_bits']) == 768
+                and all(type(b) is int and 0 <= b < 2**32 for b in generation['low_bits']+generation['step_bits']), 'corrected original coefficient bits')
+        generations.append(generation)
+    require(len(freeze['results']) == 128, 'corrected all128 sealed results')
+    envelopes = True
+    for i, descriptor in enumerate(freeze['results']):
+        query = decode(read(authenticate(descriptor, 'result-'+str(i)+'.json'),8*1024**2))
+        candidate, cosine, reference, plan = (query[k] for k in ('corrected','decoded_cosine','sq8_reference','plan'))
+        require(query['schema'] == SQ4_SCHEMA+'-query-v1' and query['dataset'] == native['panels'][i//64]['dataset']
+                and type(query['ordinal']) is int and query['ordinal'] == i%64
+                and query['generation'] == seal['payloads'][i//64]['root'] and query['rotation'] == rotation
+                and query['mutation_revision'] == 0 and query['nominees_retained'] is query['original_cover_contained'] is True
+                and query['truth_opened'] is False and candidate['fetched_ids'] == cosine['fetched_ids'] == reference['fetched_ids'], 'corrected same-population three-arm query')
+        rows = sum(r['end']-r['start'] for r in plan['row_ranges'])
+        old = CORRECTED_POPULATIONS['panels'][i//64]['queries'][i%64]
+        require(plan['row_ranges'] == old['row_ranges'] and rows == old['fetched_rows']
+                and plan['query_sha256'] == old['query_sha256']
+                and sha(b''.join(v.to_bytes(8,'little',signed=True) for v in candidate['fetched_ids'])) == old['fetched_ids_sha256']
+                and sha(b''.join(v.to_bytes(8,'little') for v in plan['nominees'])) == old['nominee_ordinals_sha256'],
+                'corrected closed ordered population bindings')
+        require(type(candidate['range_reads']) is int and 1 <= candidate['range_reads'] == len(plan['row_ranges']) <= 32
+                and candidate['verified_bytes'] == plan['candidate_bytes'] == rows*396
+                and cosine['verified_bytes'] == reference['verified_bytes'] == rows*780
+                and len(candidate['fetched_ids']) == rows, 'corrected exact query payload accounting')
+        fits = candidate['verified_bytes'] <= 16*1024**2
+        require(plan['envelope_fits'] is fits, 'corrected query envelope'); envelopes &= fits
+    require(details['all128_envelopes_fit'] is envelopes and len(details['summaries']) == 2, 'corrected envelope summary')
+    quality = True
+    for panel, summary in zip(native['panels'],details['summaries']):
+        require(summary['dataset'] == panel['dataset'], 'corrected summary panel')
+        for arm in ('corrected','decoded_cosine','sq8_reference','fetched_coverage'):
+            hits = summary[arm]['hits']
+            require(len(hits) == 64 and all(type(v) is int and 0 <= v <= 100 for v in hits)
+                    and summary[arm]['total_hits'] == sum(hits) and summary[arm]['mean_recall'] == sum(hits)/6400
+                    and summary[arm]['p05_hits'] == sorted(hits)[3], 'corrected summary arithmetic')
+        quality &= summary['corrected']['total_hits'] >= 6272 and summary['corrected']['p05_hits'] >= 95
+    require(report['status'] == ('SURVIVED_CONSUMED_PANELS' if quality and envelopes else 'REJECT'), 'corrected completed disposition')
+    startup = decode(read(authenticate(details['startup'], 'startup.json')))
+    objects = startup['distinct_objects']
+    expected = [native['original_seal'],native['prefix'],native['closed_populations'],rotation]
+    for generation in generations:
+        expected += [generation[k] for k in ('original_root','original_graph','original_pq','original_order','original_groups','groups')]
+    expected += [p['root'] for p in seal['payloads']]
+    require(startup['counted_once'] is True and len(objects) == len({o['artifact']['path'] for o in objects})
+            and sorted((o['artifact'] for o in objects),key=lambda a:a['path']) == sorted(expected,key=lambda a:a['path'])
+            and all(type(o['read_attempts']) is int and o['read_attempts'] > 0 for o in objects)
+            and startup['count'] == details['startup_distinct_objects'] == len(objects)
+            and startup['bytes'] == details['startup_distinct_bytes'] == sum(o['artifact']['bytes'] for o in objects)
+            and startup['read_attempts'] == sum(o['read_attempts'] for o in objects)
+            and startup['read_bytes'] == sum(o['read_attempts']*o['artifact']['bytes'] for o in objects)
+            and startup['separate_pretruth_reauthentication_reads'] == 153, 'corrected distinct startup ledger')
+    return dict(status=report['status'],valid_diagnostic=True,report_sha256=sha(body),
+        native_config_sha256=config['native_config_sha256'],binary={k:config['binary'][k] for k in ('bytes','sha256')},
+        summaries=details['summaries'],all128_envelopes_fit=envelopes,quality_or_performance_claim=False,
+        startup=startup,construction_charged_work=details['construction_charged_work'],query_auth_operations=details['query_auth_operations'])
 
 
 def validate_result(root, config):
@@ -1686,18 +1892,18 @@ sys.exit(17 if os.environ.get('FINE_PACK_FAKE')=='nonzero' else 0)
         print(f'PASS fine-pack: real fake-native exit0/REJECT/exit17/deadline; {failures} refusals; fullhash/readback/marker-last/no-overwrite; every-ACK same-ID terminate/wait; actual SDK model positive/official_old_negative={official_old_checked}; actual_delegated_cgroup={real_cgroup}; other cgroup/SDK transport/AWS MOCKED; no ANN/graph/corpus/network')
 
 
-def sq4_self_check(histogram=False):
+def sq4_self_check(histogram=False, corrected=False):
     """Mock native CLI and qualification metadata; no native/data/AWS execution."""
     import copy
     import tempfile
     from contextlib import ExitStack
     from unittest.mock import patch
     module = sys.modules[__name__]
-    configure_sq4(histogram=histogram)
+    configure_sq4(histogram=histogram, corrected=corrected)
     retained_pins = INPUT_PINS
-    require(SCHEMA == ('borsuk-histogram-sq4-diagnostic-spot-v1' if histogram else 'borsuk-fixed-sq4-diagnostic-spot-v1'), 'explicit SQ4 mode')
-    require(len(INPUT_PINS) == 18 and sum(p[1] for p in INPUT_PINS) == 229614200, 'opaque retained roster')
-    require(len([n for n in ARTIFACTS if n.startswith('screen/')]) == (140 if histogram else 134), 'whole native closure')
+    require(SCHEMA == ('borsuk-corrected-four-bit-diagnostic-spot-v1' if corrected else 'borsuk-histogram-sq4-diagnostic-spot-v1' if histogram else 'borsuk-fixed-sq4-diagnostic-spot-v1'), 'explicit SQ4 mode')
+    require(len(INPUT_PINS) == (19 if corrected else 18) and sum(p[1] for p in INPUT_PINS) == 229614200+(175929 if corrected else 0), 'opaque retained roster')
+    require(len([n for n in ARTIFACTS if n.startswith('screen/')]) == (140 if histogram or corrected else 134), 'whole native closure')
     # Root-authenticated completed metadata only; the executable/transport below
     # remain mocked. No corpus, compiler or live job is opened by this fixture.
     def committed(path, revision=None):
@@ -1729,14 +1935,14 @@ def sq4_self_check(histogram=False):
         commands = [(n,c.split()) for n,c in ast.literal_eval(assignments['FINE_SQ8_STAGES'].args[0].generators[0].iter)]
         mandatory = ast.literal_eval(assignments['FINE_SQ8_REQUIRED_TESTS'])
         protocol = sha(encoded(dict(stages=commands,mandatory_tests=mandatory)))
-        corrected = {n:list(v) for n,v in mandatory.items()}
+        corrected_names = {n:list(v) for n,v in mandatory.items()}
         changed = [(old,new) for stage,names in launch['mandatory_tests'].items()
-                   for old,new in zip(names,corrected[stage]) if old != new]
+                   for old,new in zip(names,corrected_names[stage]) if old != new]
         require(protocol == HISTOGRAM_QUALIFICATION_PROTOCOL_SHA and len(commands) == 14
                 and len(changed) == 2 and all(old.replace('::histogram::tests::','::tests::') == new
                     for old,new in changed), 'committed corrected native protocol')
         # Rebind synthetic full authority only; original partial gate96 is never admitted.
-        launch['mandatory_tests'] = corrected
+        launch['mandatory_tests'] = corrected_names
         native_body = committed(Path('crates/borsuk/src/fine_sq8_groups.rs'), '1057e5a6')
         require(pin(native_body) == next({k:d[k] for k in ('bytes','sha256')} for d in contract['owned_files']
                     if d['path'].endswith('/fine_sq8_groups.rs')), 'actual Rust source fixture')
@@ -1764,6 +1970,39 @@ def sq4_self_check(histogram=False):
         NATIVE_COMMIT_FIXTURE = manifest['native_source_commit']
         SOURCE_ID_FIXTURE = contract['expected_histogram_source_identity_sha256']
         SOURCES_FIXTURE = {d['path']:d['sha256'] for d in contract['owned_files']}
+    elif corrected:
+        commands = [(s['stage'],s['command']) for s in CORRECTED_PROTOCOL['stages']]
+        mandatory = CORRECTED_PROTOCOL['fixed']['mandatory_tests']
+        protocol = CORRECTED_PROTOCOL_SHA
+        manifest = decode(committed(CORRECTED_ROOT/'implementation-gates/native-source-manifest.json','6089bd0c'))
+        require(manifest['source_sha256'] == CORRECTED_SOURCE['source_sha256'], 'actual isolated full405 map')
+        # Read-only source checks reconstruct the native identity and CLI/roster.
+        native_body = committed(Path('crates/borsuk/src/fine_sq8_groups.rs'),CORRECTED_COMMIT)
+        text = native_body.decode(); start = text.index('pub fn source_identity()',text.index('pub mod sq4_diagnostic'))
+        framed = hashlib.sha256()
+        for name,path in re.findall(r'"([^"]+)",\s*include_bytes!\("([^"]+)"\)',text[start:text.index('format!("{:x}", h.finalize())',start)]):
+            source = committed(Path('crates/borsuk/src')/path,CORRECTED_COMMIT)
+            require(sha(source) == CORRECTED_SOURCE['source_sha256']['crates/borsuk/src/'+path], 'actual isolated diagnostic include')
+            framed.update(len(name).to_bytes(8,'little'));framed.update(name.encode())
+            framed.update(len(source).to_bytes(8,'little'));framed.update(source)
+        codec = committed(Path('crates/borsuk/src/corrected_four_bit.rs'),CORRECTED_COMMIT)
+        require(sha(b'borsuk-corrected-four-bit-source-v1'+framed.hexdigest().encode()+codec) == CORRECTED_DIAGNOSTIC_SOURCE_ID, 'actual corrected diagnostic identity')
+        binary_source = committed(Path('crates/borsuk/src/bin/hierarchical_semantic_cells.rs'),CORRECTED_COMMIT)
+        require(b'check-fine-corrected-four-bit CONFIG CONFIG_SHA256 NEW_REPORT_JSON' in binary_source, 'actual exact native CLI')
+        for token in ('{NAME}-rotation.bin','{NAME}-startup.json','{NAME}-{index}.bin','{NAME}-{index}-groups.bin','{NAME}-{index}-root.json','{NAME}-payloads.json','{NAME}-prefix.jsonl','{NAME}-freeze.json','{NAME}-result-{}.json'):
+            require(token.encode() in native_body,'actual corrected native output roster')
+        old.update(source_sha256=manifest['source_sha256'],source_file_count=405,
+            native_source_manifest=pin(encoded(manifest)),native_source_manifest_sha256=sha(encoded(manifest)),mandatory_tests=mandatory)
+        template = copy.deepcopy(workspace['stages'][0]); stages=[]
+        for index,(name,command) in enumerate(commands):
+            record = copy.deepcopy(template);tests = mandatory.get(name,())
+            instant = datetime.fromisoformat(template['started_at'])+timedelta(seconds=index*2)
+            record.update(stage=name,command=command,tests_run=len(tests) if tests else None,
+                required_test_passes={n:1 for n in tests},started_at=instant.isoformat(),finished_at=(instant+timedelta(seconds=1)).isoformat())
+            stages.append(record)
+        workspace.update(stages=stages,mandatory_tests=mandatory,source_file_count=405)
+        verification.update(stages=stages,source_file_count=405,qualified=True)
+        NATIVE_COMMIT_FIXTURE,SOURCE_ID_FIXTURE,SOURCES_FIXTURE = CORRECTED_COMMIT,CORRECTED_DIAGNOSTIC_SOURCE_ID,SQ4_SOURCES
     else:
         NATIVE_COMMIT_FIXTURE, SOURCE_ID_FIXTURE, SOURCES_FIXTURE = NATIVE_COMMIT, SOURCE_ID, SQ4_SOURCES
     def refused(call):
@@ -1777,13 +2016,16 @@ def sq4_self_check(histogram=False):
         stack.enter_context(patch.object(module,'SOURCE_ID',SOURCE_ID_FIXTURE))
         stack.enter_context(patch.object(module,'SQ4_SOURCES',SOURCES_FIXTURE))
         stack.enter_context(patch.object(module, 'SQ4_INPUT_ROOT', base/'retained'))
-        pins = tuple((str(base/'retained'/f'input-{i}'), 1, sha(b'x')) for i in range(18))
+        pins = tuple((str(base/'retained'/f'input-{i}'), 1, sha(b'x')) for i in range(19 if corrected else 18))
         stack.enter_context(patch.object(module, 'INPUT_PINS', pins))
         descriptors = [dict(path=p, bytes=n, sha256=h) for p,n,h in pins]
         native = dict(schema=SQ4_SCHEMA+'-config-v1', source_identity_sha256=SOURCE_ID,
             caps=copy.deepcopy(CAPS), original_seal=descriptors[16], prefix=descriptors[17],
             panels=[dict(dataset=d, root=descriptors[i*8], requests=descriptors[i*8+6],
                          truth=descriptors[i*8+7], truth_width=100) for i,d in enumerate(('relaion','cohere'))])
+        if corrected:
+            native.update(rotation_seed=[23]*32,construction_operations=159001952256,query_auth_operations=50000000000,
+                closed_populations=descriptors[18])
         fake = b'''#!/usr/bin/env python3
 import hashlib,json,os,sys,tempfile,time
 from pathlib import Path
@@ -1874,14 +2116,74 @@ sys.exit(2 if fault=='latefailure' else 0)
             fake = fake.replace(b'check-fine-sq4',b'check-fine-histogram-sq4').replace(
                 b'borsuk-fixed-sq4',b'borsuk-histogram-sq4').replace(b'.sq4-',b'.histogram-sq4-').replace(
                 b'borsuk-sq4-nearest17-original-coefficients-v1',SQ4_CODEC.encode())
+        if corrected:
+            fake = fake.replace(b'check-fine-sq4',SQ4_CLI.encode()).replace(b'borsuk-fixed-sq4',SQ4_SCHEMA.encode()).replace(
+                b'.sq4-',b'.corrected-four-bit-').replace(b'borsuk-sq4-nearest17-original-coefficients-v1',SQ4_CODEC.encode())
+            generation_code = '''rotation=body(p.with_suffix('.corrected-four-bit-rotation.bin'),b'BORSUK-C4ROT-v1\\0'+(768).to_bytes(8,'little')+bytes(40+8*768**2))
+inputs=INPUTS
+for i,v in enumerate(payloads):
+ groups=body(p.with_suffix('.corrected-four-bit-'+str(i)+'-groups.bin'),bytes(200000))
+ g={'schema':'borsuk-corrected-four-bit-generation-v1','codec':v['codec'],'source_identity_sha256':c['source_identity_sha256'],
+  'config_sha256':config_sha,'original_root':v['original_root'],'rotation':rotation,'payload':v['payload'],'groups':groups,
+  'rows':100000,'dimensions':768,'row_bytes':396,'router_identity':{'rows':100000,'dimensions':768},'low_bits':[0]*768,'step_bits':[0]*768}
+ for key,offset in (('original_records',5),('original_order',3),('original_groups',2),('original_graph',1),('original_pq',4)):g[key]=inputs[i*8+offset]
+ root=emit(p.with_suffix('.corrected-four-bit-'+str(i)+'-root.json'),g)
+ v.clear();v.update(root=root,payload=g['payload'],groups=groups,original_root=g['original_root'])
+'''.replace('INPUTS',repr(descriptors))
+            fake = fake.replace(b'seal=emit(',generation_code.encode()+b'seal=emit(',1)
+            fake = fake.replace(b"'fetched_ids':[0]",b"'fetched_ids':list(range(16))").replace(b'396 if fits',b'6336 if fits')
+            correction_code = ''' if v.get('schema')=='borsuk-corrected-four-bit-query-v1':
+  v.pop('sq8_reference_serving_eligible');v.pop('original256_baseline')
+  v['corrected']=v.pop('sq4');v['decoded_cosine']=dict(v['corrected'],verified_bytes=12480)
+  v['sq8_reference']=dict(v['corrected'],verified_bytes=12480)
+  v.update(generation=payloads[i//64]['root'],rotation=rotation,mutation_revision=0)
+  v['plan'].update(row_ranges=[{'start':0,'end':16}],nominees=[0],query_sha256='0'*64)
+'''
+            fake = fake.replace(b' b=json.dumps(v,',correction_code.encode()+b' b=json.dumps(v,',1)
+            # Add corrected companions before their parent descriptors are sealed.
+            fake = fake.replace(b"'payloads':payloads,'queries_opened'",b"'rotation':rotation,'payloads':payloads,'queries_opened'")
+            fake = fake.replace(b"'results':results,'truth_opened'",b"'rotation':rotation,'closed_populations':c['closed_populations'],'results':results,'truth_opened'")
+            report_code = '''objects=[c['original_seal'],c['prefix'],c['closed_populations'],rotation]
+for i,v in enumerate(payloads):
+ g=json.loads(Path(v['root']['path']).read_bytes())
+ objects.extend(g[k] for k in ('original_root','original_graph','original_pq','original_order','original_groups','groups'))
+ objects.append(v['root'])
+startup={'distinct_objects':[{'artifact':a,'read_attempts':1} for a in objects],'bytes':sum(a['bytes'] for a in objects),
+ 'count':len(objects),'counted_once':True,'read_attempts':len(objects),'read_bytes':sum(a['bytes'] for a in objects),'separate_pretruth_reauthentication_reads':153}
+startup_pin=emit(p.with_suffix('.corrected-four-bit-startup.json'),startup)
+d=report['details'];d.pop('operations');d.pop('pair_payload_bytes')
+d.update(construction_limit=c['construction_operations'],construction_work_bound=159001952256,construction_charged_work=159001952256,
+ query_auth_limit=c['query_auth_operations'],query_auth_work_bound=49000000000,query_auth_operations=45000000000,
+ candidate_query_charged_work=15733844912,decoded_cosine_control_charged_work=16649896880,unchanged_sq8_control_charged_work=11326600896,
+ charged_work_is_conservative_bound=True,actual_dense_encoding_macs=117964800000,startup=startup_pin,
+ startup_distinct_objects=startup['count'],startup_distinct_bytes=startup['bytes'],payload_ranges_exclude_startup=True,
+ total_cold_get_claim=False,total_cold_byte_claim=False,lifecycle_qualified=False,production_snapshot_integration=False,
+ finite_Haar_unbiasedness_claim=False,radial_causation_claim=False)
+for summary in d['summaries']:
+ summary.pop('sq4_returned');hits=[94 if fault=='reject' else 99]*64
+ summary.update({k:{'hits':hits,'total_hits':sum(hits),'mean_recall':sum(hits)/6400,'p05_hits':hits[0]} for k in ('corrected','decoded_cosine','sq8_reference','fetched_coverage')})
+'''
+            fake = fake.replace(b'emit(p,report)',report_code.encode()+b'emit(p,report)')
+            fake = fake.replace(b'f.truncate(4294967296)',b'f.truncate(8589934592)')
+            populations = dict(panels=[dict(queries=[dict(row_ranges=[dict(start=0,end=16)],fetched_rows=16,query_sha256='0'*64,
+                fetched_ids_sha256=sha(b''.join(n.to_bytes(8,'little',signed=True) for n in range(16))),
+                nominee_ordinals_sha256=sha(bytes(8))) for _ in range(64)]) for _ in range(2)])
+            stack.enter_context(patch.object(module,'CORRECTED_POPULATIONS',populations))
         source = dict(old['source_sha256'], **SQ4_SOURCES)
         full_id = sha(json.dumps(source, sort_keys=True, separators=(',', ':')).encode())
-        require(full_id==(manifest['source_identity_sha256'] if histogram else '1689c53c7564f989f19da397b32b13f16f10df264d02355928849dcabf1e2849'),'actual prospective full404 map')
+        require(full_id==(manifest['source_identity_sha256'] if histogram or corrected else '1689c53c7564f989f19da397b32b13f16f10df264d02355928849dcabf1e2849'),'actual prospective full source map')
         old.update(native_source_commit=NATIVE_COMMIT, source_identity_sha256=full_id, source_sha256=source)
         verification.update(native_source_commit=NATIVE_COMMIT, source_identity_sha256=full_id, binary=pin(fake))
         workspace.update(source_identity_sha256=full_id, source_sha256=source)
         terminal = actual['aws-terminal.json']
         terminal.update(native_source_commit=NATIVE_COMMIT, source_identity_sha256=full_id)
+        if corrected:
+            old['schema'] = 'borsuk-corrected-four-bit-implementation-gates-qualification-v1'
+            workspace['schema'] = 'borsuk-corrected-four-bit-implementation-gates-receipt-v1'
+            terminal.update(schema='borsuk-corrected-four-bit-implementation-gates-spot-v1',source_file_count=405)
+            for value in (workspace,terminal):
+                value['artifacts'].update({'source-before.json':pin(encoded(source)),
+                    'source-after.json':pin(encoded(source)),BINARY_NAME:pin(fake)})
         terminal['native_source_manifest_sha256'] = old['native_source_manifest_sha256']
         receipt_bodies = dict(zip(SQ4_RECEIPTS, (verification, old, workspace, terminal,
                                                actual['aws-closeout.json'])))
@@ -1894,10 +2196,11 @@ sys.exit(2 if fault=='latefailure' else 0)
             path=base/'proofs'/name; write(path, encoded(value))
             receipts.append(dict(path='proofs/'+name, **file_pin(path)))
         fixed = copy.deepcopy(FIXED); fixed['native_caps']=copy.deepcopy(CAPS)
-        fixed.update(machine_limit_seconds=1800,compute_cap_usd=.30)
-        fixed['scratch'] = dict(input_bytes=18, native_output_bytes=CAPS['output_bytes'], binary_bytes=len(fake),
-            source_archive_bytes=8*1024**2, bootstrap_bytes=256*1024**2, auxiliary_bytes=16*1024**2, cap_bytes=4*1024**3)
-        paths = sorted([str(CONFIG), str(SQ4_ROOT/'prospective-input-roster.json'), *CODE, *(r['path'] for r in receipts)])
+        fixed.update(machine_limit_seconds=3600 if corrected else 1800,compute_cap_usd=.60 if corrected else .30)
+        fixed['scratch'] = dict(input_bytes=len(pins), native_output_bytes=CAPS['output_bytes'], binary_bytes=len(fake),
+            source_archive_bytes=8*1024**2, bootstrap_bytes=256*1024**2, auxiliary_bytes=16*1024**2, cap_bytes=SQ4_SCRATCH_CAP)
+        paths = sorted([str(CONFIG), str(SQ4_ROOT/'prospective-input-roster.json'), *CODE, *(r['path'] for r in receipts),
+                        *(str(CORRECTED_ROOT/n) for n,_,_ in CORRECTED_EVIDENCE if corrected)])
         config = dict(schema=SCHEMA, authority_pending=False, fixed=fixed, native_config=native,
             native_source=dict(commit=NATIVE_COMMIT,full_source_identity_sha256=full_id,
                                source_identity_sha256=SOURCE_ID,source_sha256=SQ4_SOURCES),
@@ -1905,27 +2208,32 @@ sys.exit(2 if fault=='latefailure' else 0)
                 dict(destination=p, bytes=n, sha256=h, key='mock/input-'+str(i)) for i,(p,n,h) in enumerate(pins)],
             native_qualification=receipts, code_sha256={n:file_pin(n)['sha256'] for n in CODE},
             source_archive_paths=paths, source_archive_paths_sha256=sha(json.dumps(paths,separators=(',',':')).encode()))
-        if histogram:
+        if histogram or corrected:
             config['native_source']['qualification_protocol_sha256'] = protocol
         validate_config(config)
         for n in CODE:write(base/n,read(n))
+        if corrected:
+            for name,_,_ in CORRECTED_EVIDENCE:write(base/CORRECTED_ROOT/name,read(CORRECTED_ROOT/name))
         real=copy.deepcopy(config)
         descriptors=[dict(path=p,bytes=n,sha256=h) for p,n,h in retained_pins]
         real['native_config'].update(original_seal=descriptors[16],prefix=descriptors[17],panels=[
             dict(dataset=d,root=descriptors[i*8],requests=descriptors[i*8+6],truth=descriptors[i*8+7],truth_width=100)
             for i,d in enumerate(('relaion','cohere'))])
+        if corrected:
+            real['native_config']['closed_populations'] = descriptors[18]
         real['native_config_sha256']=sha(encoded(real['native_config']))
-        require(pin(encoded(real['native_config']).rstrip(b'\n'))==(pin(encoded(prospective).rstrip(b'\n')) if histogram else dict(bytes=1705,
-            sha256='23defe690a3fc9b193ed6e1cc8b91b58ace57b843cf0adeebaf4e124b6a30b4e')), 'exact native config with authenticated sealed request destinations')
+        if not corrected:
+            require(pin(encoded(real['native_config']).rstrip(b'\n'))==(pin(encoded(prospective).rstrip(b'\n')) if histogram else dict(bytes=1705,
+                sha256='23defe690a3fc9b193ed6e1cc8b91b58ace57b843cf0adeebaf4e124b6a30b4e')), 'exact native config with authenticated sealed request destinations')
         real['inputs']=[dict(destination=p,bytes=n,sha256=h,key='retained/'+str(i)) for i,(p,n,h) in enumerate(retained_pins)]
-        real['fixed']['scratch']['input_bytes']=229614200
+        real['fixed']['scratch']['input_bytes']=sum(p[1] for p in retained_pins)
         original_regular=regular
         def metadata_only(path):
             require(str(Path(path).absolute()) not in {p for p,_,_ in retained_pins},'metadata preflight opened retained data')
             return original_regular(path)
         with patch.object(module,'INPUT_PINS',retained_pins), patch.object(module,'regular',side_effect=metadata_only):
             write(base/CONFIG,encoded(real));preflight(base)
-        print('PASS actual18 retained metadata, including both78000000B records; no data/GT opens',flush=True)
+        print('PASS actual18 retained metadata'+(' + exact closed-populations metadata' if corrected else '')+'; both78000000B records opaque; no data/GT opens',flush=True)
         sq4_qualification(config, base)
         for key,value in (('authority_pending',True), ('native_qualification',[]), ('binary',{}), ('native_config_sha256','0'*64)):
             bad=copy.deepcopy(config);bad[key]=value;refused(lambda:validate_config(bad))
@@ -1941,6 +2249,17 @@ sys.exit(2 if fault=='latefailure' else 0)
                 refused(lambda:validate_config(bad))
             bad=copy.deepcopy(config);bad['native_source']['qualification_protocol_sha256']=SQ4_QUALIFICATION_PROTOCOL_SHA
             refused(lambda:validate_config(bad))
+        if corrected:
+            for key,value in (('rotation_seed',[True]*32),('construction_operations',20000000000),
+                    ('query_auth_operations',43710342688),('closed_populations',{}),('extra',True)):
+                bad=copy.deepcopy(config);bad['native_config'][key]=value
+                bad['native_config_sha256']=sha(encoded(bad['native_config']));refused(lambda:validate_config(bad))
+            for key in ('rotation_seed','construction_operations','query_auth_operations','closed_populations'):
+                bad=copy.deepcopy(config);del bad['native_config'][key]
+                bad['native_config_sha256']=sha(encoded(bad['native_config']));refused(lambda:validate_config(bad))
+            bad=copy.deepcopy(config);bad['fixed']['native_caps']['deadline_seconds']=1800
+            bad['native_config']['caps']['deadline_seconds']=1800
+            bad['native_config_sha256']=sha(encoded(bad['native_config']));refused(lambda:validate_config(bad))
         # Rehashing all affected receipts cannot admit failed/reordered/missing gates.
         for fault in ('failed','reordered','missing','zero-test','wrongargv','missingmandatory','reducedroster',
                       'misplacedtests','utc','overlap','reversed','non-test-count','pending'):
@@ -1976,10 +2295,15 @@ sys.exit(2 if fault=='latefailure' else 0)
         original=read(base/'proofs/workspace-receipt.json')
         (base/'proofs/workspace-receipt.json').write_bytes(original+b' ')
         refused(lambda:sq4_qualification(config,base));(base/'proofs/workspace-receipt.json').write_bytes(original)
+        if corrected:
+            for key in ('source_before_equals_after','all_source_blobs_independently_matched','descendants_drained'):
+                original=read(base/'proofs/parent-verification.json');bad=decode(original);bad[key]=False
+                (base/'proofs/parent-verification.json').write_bytes(encoded(bad))
+                refused(lambda:sq4_qualification(config,base));(base/'proofs/parent-verification.json').write_bytes(original)
         (base/CONFIG).unlink();write(base/CONFIG, encoded(config))
         proof=preflight(base)
         userdata=user_data('a'*40,'b'*64,'mock/archive',PREFIX+'a0001',proof)
-        require(('--histogram-sq4 --remote' if histogram else '--sq4 --remote') in userdata
+        require(('--corrected-four-bit --remote' if corrected else '--histogram-sq4 --remote' if histogram else '--sq4 --remote') in userdata
                 and 'DelegateSubgroup=supervisor' in userdata, 'SQ4 SDK delegated bootstrap')
         require(all(s in userdata for s in ('ReadOnlyPaths=/tmp /var/tmp','export TMPDIR=', 'Dir::Cache::archives=',
                 'Dir::State::lists=', 'Dir::Log=', '--setenv=TMPDIR=', 'bootstrap/input/output overlap cap',
@@ -2068,10 +2392,18 @@ sys.exit(2 if fault=='latefailure' else 0)
                 execution.enter_context(patch.object(subprocess,'Popen',side_effect=spawn))
                 execution.enter_context(patch.dict(os.environ,SQ4_FAKE=fault))
                 execution.enter_context(patch.dict(CAPS,deadline_seconds=.2 if deadline else 600))
+                if corrected:
+                    execution.enter_context(patch.object(module,'CORRECTED_SUPERVISOR_SECONDS',.2 if deadline else 1800))
+                    if fault=='sync':
+                        original_sync=sync_directory
+                        def sync_failure(path):
+                            if path==root/'screen':raise OSError('mock screen directory sync')
+                            return original_sync(path)
+                        execution.enter_context(patch.object(module,'sync_directory',side_effect=sync_failure))
                 if fault in ('scratch','external-temp'):
                     try:supervise(config,root,run_id=PREFIX+'a0001/i-original')
                     except ValueError:pass
-                    else:raise AssertionError('scratch fault accepted '+fault+': '+read(root/'native.log').decode())
+                    else:raise AssertionError('scratch fault accepted '+fault+': '+read(root/'native-exit.json').decode())
                     receipt=dict(process_exit_code=owned[0].returncode)
                 else:receipt=supervise(config,root,run_id=PREFIX+'a0001/i-original')
             require(not group.exists(),'drained mock cgroup')
@@ -2121,7 +2453,23 @@ sys.exit(2 if fault=='latefailure' else 0)
                 try:refused(lambda:validate_result(root,config))
                 finally:write(p,saved)
             p=root/'screen/extra';write(p,b'synthetic');refused(lambda:validate_result(root,config));p.unlink()
-        for fault in ('reject','envelope','latefailure','drift','deadline','scratch','external-temp'):
+        if corrected:
+            for suffix in ('rotation.bin','startup.json','0-root.json','1-groups.bin'):
+                path=root/('screen/report.corrected-four-bit-'+suffix);saved=read(path,8*1024**2)
+                path.write_bytes(saved+b' ');refused(lambda:validate_result(root,config));path.write_bytes(saved)
+                path.unlink();refused(lambda:validate_result(root,config));write(path,saved)
+            # Preserve all enclosing hashes: semantic binding still refuses.
+            names=('screen/report.corrected-four-bit-freeze.json','screen/report.json','native-exit.json','scratch.json')
+            saved={n:read(root/n) for n in names}
+            for field,value in (('truth_opened',True),('source_identity_sha256','0'*64),('closed_populations',{}),('results',[])):
+                freeze=decode(saved[names[0]]);freeze[field]=value;(root/names[0]).write_bytes(encoded(freeze))
+                report=decode(saved[names[1]]);report['details']['freeze'].update(file_pin(root/names[0]))
+                (root/names[1]).write_bytes(encoded(report))
+                for n in names[2:]:
+                    receipt=decode(saved[n]);receipt['report_sha256']=file_pin(root/names[1])['sha256'];(root/n).write_bytes(encoded(receipt))
+                refused(lambda:validate_result(root,config))
+                for n,b in saved.items():(root/n).write_bytes(b)
+        for fault in (('reject','latefailure','drift','deadline','scratch','external-temp','sync') if corrected else ('reject','envelope','latefailure','drift','deadline','scratch','external-temp')):
             out,exit_receipt=fixture(fault,fault,deadline=fault=='deadline')
             if fault in ('reject','envelope'):require(validate_result(out,config)['status']=='REJECT','completed REJECT retained')
             else:
@@ -2136,7 +2484,7 @@ sys.exit(2 if fault=='latefailure' else 0)
             refused(lambda:validate_result(root,config));p.write_bytes(b)
         denied=base/'scratch-denied';denied.mkdir()
         bootstrap_fixture(denied)
-        with (denied/'temporary').open('xb') as f:f.truncate(4*1024**3)
+        with (denied/'temporary').open('xb') as f:f.truncate(SQ4_SCRATCH_CAP)
         previous_calls=calls[0]
         refused(lambda:stage(s3,config,denied))
         require(calls[0]==previous_calls and not (denied/BINARY_NAME).exists(),'scratch refuses before hydration')
@@ -2163,14 +2511,14 @@ sys.exit(2 if fault=='latefailure' else 0)
         refused(lambda:collect(s3,prefix,out,'i-original','a'*40,'b'*64))
         p=out/f'screen/report.{SQ4_NAME}-result-127.json';saved=read(p)
         p.write_bytes(saved+b' ');refused(lambda:replay(out));p.write_bytes(saved)
-        if histogram:
+        if histogram or corrected:
             p=out/'aws-terminal.json';saved=read(p)
             for field,value in (('original_exit_code',2),('artifact_roster_sha256','0'*64),('instance_id','i-other')):
                 bad=decode(saved);bad[field]=value;p.write_bytes(encoded(bad));refused(lambda:replay(out))
             bad=decode(saved);bad.update(status='failed',phase='execution',exit_code=96,original_exit_code=2,disposition='INVALID')
             p.write_bytes(encoded(bad));require(replay(out)['status']=='INVALID','execution INVALID distinct from complete REJECT')
             p.write_bytes(saved)
-        print('PASS '+SQ4_NAME+' mock-native: exact14 argv/mandatory owning-stage passes/positive test counts/serial UTC; generated Bash/bootstrap observer; charged external-temp fault; near-cap closure; exact CLI; silent exit0; REJECT; late exit2; deadline; config/output drift; no overwrite; scratch; cleanup; full raw/gzip collection/replay; byte-exact report/qualification. Cgroup/SDK transport/AWS/qualification metadata SYNTHETIC; no native science.')
+        print('PASS '+SQ4_NAME+' mock-native: exact'+str(15 if corrected else 14)+' argv/mandatory owning-stage passes/positive test counts/serial UTC; generated Bash/bootstrap observer; charged external-temp fault; near-cap closure; exact CLI; silent exit0; REJECT; late exit2; deadline; config/output drift; no overwrite; scratch; cleanup; full raw/gzip collection/replay; byte-exact report/qualification. Cgroup/SDK transport/AWS/qualification metadata SYNTHETIC; no native science.')
 
 
 def main():
@@ -2179,16 +2527,17 @@ def main():
     parser.add_argument('--self-check', action='store_true')
     parser.add_argument('--sq4', action='store_true', help='opt in to the frozen native SQ4 experiment')
     parser.add_argument('--histogram-sq4', action='store_true', help='opt in to the frozen native histogram SQ4 experiment')
+    parser.add_argument('--corrected-four-bit', action='store_true', help='opt in to the separately qualified corrected direction codec')
     parser.add_argument('--replay', type=Path)
     parser.add_argument('--remote', nargs=6)
     args = parser.parse_args()
-    require(not (args.sq4 and args.histogram_sq4), 'one SQ4 experiment')
-    if args.sq4 or args.histogram_sq4:
-        configure_sq4(histogram=args.histogram_sq4)
+    require(sum((args.sq4,args.histogram_sq4,args.corrected_four_bit)) <= 1, 'one SQ4 experiment')
+    if args.sq4 or args.histogram_sq4 or args.corrected_four_bit:
+        configure_sq4(histogram=args.histogram_sq4, corrected=args.corrected_four_bit)
     require(sum((args.attempt is not None, args.self_check, args.replay is not None, args.remote is not None)) == 1, 'one CLI mode')
     if args.self_check:
         if SQ4:
-            sq4_self_check(histogram=HISTOGRAM_SQ4)
+            sq4_self_check(histogram=HISTOGRAM_SQ4, corrected=CORRECTED_FOUR_BIT)
         else:
             self_check(real_cgroup=os.environ.get('BORSUK_FINE_PACK_REAL_CGROUP')=='1')
         return 0
@@ -2201,7 +2550,7 @@ def main():
     sdk_guard()
     os.environ['AWS_MAX_ATTEMPTS'] = '1'
     os.environ['AWS_RETRY_MODE'] = 'standard'
-    with open('/tmp/borsuk-histogram-sq4-diagnostic.lock' if HISTOGRAM_SQ4 else '/tmp/borsuk-fixed-sq4-diagnostic.lock' if SQ4 else '/tmp/borsuk-fine-pack-diagnostic.lock', 'w') as lock:
+    with open('/tmp/borsuk-corrected-four-bit-diagnostic.lock' if CORRECTED_FOUR_BIT else '/tmp/borsuk-histogram-sq4-diagnostic.lock' if HISTOGRAM_SQ4 else '/tmp/borsuk-fixed-sq4-diagnostic.lock' if SQ4 else '/tmp/borsuk-fine-pack-diagnostic.lock', 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
         lifecycle().main(args.attempt, campaign=sys.modules[__name__])
     return 0
