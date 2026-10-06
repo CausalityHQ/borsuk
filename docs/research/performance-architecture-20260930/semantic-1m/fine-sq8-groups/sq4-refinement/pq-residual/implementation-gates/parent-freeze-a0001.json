@@ -1,0 +1,22 @@
+{
+  "bundle": "c86d6f4ac4470257a5be755c0f11cef78c96994b",
+  "config_commit": "6081b56e7de29247901a7a40c77813e2e71760b7",
+  "config_sha256": "51480627950b04c645f955bc98bf145d23417caa31788233ae5e7acff95b97d8",
+  "controller": "30a7c52c78181469d04a5a4ee9fa96619d9aa39a",
+  "exec_session": 66198,
+  "instance_id": "i-077610ae471d88abe",
+  "native": "7bb862b273151e91a49d1d4a8f1ba4dce8c8328b",
+  "preflight": {
+    "cause": "empty sparse checkout before materialization; no Rust/cloud execution",
+    "original_exit": 1,
+    "repaired_exit": 0,
+    "source_unchanged": true
+  },
+  "preview": "806db74ed6098693e107f44547c8caea10a21f26",
+  "root_harness_selfcheck_exit": 0,
+  "schema": "borsuk-pq-residual-parent-freeze-v1",
+  "source_archive_sha256": "94c9c5805340bb1602467c12af8e4183260af43d9ad06647bc0dbe50487c7759",
+  "source_identity": "b3bc0fe24aa74da1338465adf357ff1e6f5cec48e2d9092177cbcd670675351f",
+  "status": "QUALIFICATION_RUNNING_NATIVE_RESULT_UNVERIFIED",
+  "worktree": "/home/rb/worktrees/borsuk-pq-residual-qualification-bundle"
+}
