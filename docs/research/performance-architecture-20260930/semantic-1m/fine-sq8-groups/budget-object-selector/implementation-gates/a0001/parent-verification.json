@@ -1,0 +1,25 @@
+{
+  "schema": "borsuk-selector-parent-verification-v1",
+  "native_commit": "6a0629e4743695871657451072e5f59d346c8436",
+  "bundle_commit": "3769d22a88f9c57e9ce3b9557e3cafccb2a96d62",
+  "instance_id": "i-072a4527e3a43ef9b",
+  "original_exec": 77933,
+  "controller_exit_status": 0,
+  "authenticated_artifacts": 14,
+  "source_before_equals_after_equals_current_candidate": true,
+  "source_file_count": 408,
+  "source_identity_sha256": "919ae78c976aa080ca8fa9c3a4e9909c50ac7bcb91b14dda545d09bcf22d2075",
+  "mandatory_tests_passed": 7,
+  "serial_stage_exits": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "instance_terminated": true,
+  "compiler_memory_peak_bytes": 8589934592,
+  "compiler_swap_peak_bytes": 0,
+  "compiler_oom_events": 0,
+  "ann_quality_performance_qualified": false,
+  "full_workspace_tests_executed": false
+}

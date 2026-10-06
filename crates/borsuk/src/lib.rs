@@ -7,6 +7,7 @@
 
 mod arrow_vector_sidecar;
 mod bm25;
+pub mod budget_object_selector;
 pub mod budgeted_page_rank;
 pub(crate) mod build_timing;
 mod cell_wal;
