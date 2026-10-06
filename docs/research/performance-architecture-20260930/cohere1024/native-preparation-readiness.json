@@ -1,0 +1,62 @@
+{
+  "status": "PROSPECTIVE_NATIVE_PREPARATION_NOT_LAUNCHED",
+  "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+  "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+  "population": "fixed100k corpus and disjoint1000 queries; correctness only",
+  "original_qualification": {
+    "exec_session": 16875,
+    "instance": "i-0d8798d666acc40b2",
+    "preserve": true
+  },
+  "ordered_steps": [
+    "Require actual runner/preparer tests, two release binaries, Clippy and real workspace test compilation on frozen411 source; collect and terminate original",
+    "Authenticate qualified binary bodies and publisher-pinned whole Parquet shards remotely",
+    "Native prepare_cohere_native_cohort: original f32 corpus/queries, exhaustive f64 cosine truth, marker-last source identities",
+    "Use existing Rust normalize_source, fit_source_order, build_sq8_source through build_sq8_source example; authenticate exact-source release build before execution",
+    "Use existing qualified build_two_bit_generation with Native100k,D1024 and pinned normalized source/order/SQ8 coefficients",
+    "Publish through existing generation-pinned object-store path and run check_cohere_native_baseline on all1000 queries; retain per-query outcomes"
+  ],
+  "packaging_gap": {
+    "path": "crates/borsuk/examples/build_sq8_source.rs",
+    "retained_release_binary": false,
+    "action": "Build/authenticate existing example on exact qualified source in bounded native setup before opening dataset bodies; no new ANN implementation or claim of existing artifact",
+    "repair_worker_instance": "30a337ba-37e6-427d-9d53-4201471120c0",
+    "remaining": "Recover the SAME worker and bind completed native qualification; then build and authenticate the existing SQ8 example once. No dataset bodies or ANN execution before artifact admission."
+  },
+  "comparison_claim": false,
+  "ten_million_scope": "later matched BORSUK/S3 Vectors only after correctness gate; no extra datasets or100B",
+  "local_sq8_etag_admission": {
+    "locked_dependency": "object_store 0.14.1 (direct borsuk dependency)",
+    "formula": "quoted lowercase hex inode + hyphen + mtime microseconds since epoch + hyphen + byte size",
+    "source": "object_store-0.14.1/src/local.rs::get_etag",
+    "rule": "Stage SQ8 at its final LocalFileSystem key first, derive ETag there, then freeze generation builder config. Preserve descriptor identity and avoid mutation before query. The 0.13.2 transitive dependency uses an unquoted ETag and must not be substituted.",
+    "real_execution_verified": false
+  },
+  "generation_inputs": {
+    "raw": "internal normalized corpus derived from sealed original corpus.f32",
+    "sq8": "SQ8 body created by unchanged Rust builder with authenticated physical order",
+    "requests": "original unnormalized queries.f32 passed unchanged to qualified baseline",
+    "truth": "independent exhaustive cosine truth.u64 from original f32 corpus"
+  },
+  "required_leaf_byte_admission_qualification": {
+    "source_commit": "478caab70d9657aac9bb2f1ff1f1c91b1f85e5e1",
+    "native_source_identity": "0fae950fcfb3221804fc7c307474fc66604b18cd021c2af3e0caa71269ecdc7e",
+    "original_exec_session": 12009,
+    "instance_id": "i-07515496bdaec3142",
+    "status": "NATIVE_QUALIFIED",
+    "required_new_test_names": [
+      "two_bit_generation::source_walk_tests::native_full_sixteen_leaf_router_validation_d1024_and_d768",
+      "two_bit_generation::source_walk_tests::native_full_sixteen_leaf_generation_admission_d1024_and_d768"
+    ],
+    "requires_terminal_zero_source_before_after_binary_resources_and_termination": true,
+    "integrated_commit": "99b82131",
+    "verification": {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/implementation-gates/a0003/verification.json",
+      "bytes": 2858,
+      "sha256": "27c852069de8d978f6b40e4e62ed54fb7af05f210a5d9ec2abe6a7586b73e2e9"
+    },
+    "instance_terminated": true
+  },
+  "library_scope": "Dataset-independent Rust library with explicit dimensions/resource admission. Cohere is only the current matched evaluation workload; no generalized quality claim.",
+  "active_native_jobs": []
+}
