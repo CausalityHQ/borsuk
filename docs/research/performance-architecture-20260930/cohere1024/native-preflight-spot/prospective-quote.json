@@ -1,0 +1,15 @@
+{
+  "status": "READ_ONLY_PROSPECTIVE_QUOTE_NOT_LAUNCHED",
+  "region": "eu-central-1",
+  "subnet": "subnet-034528fbd6977848f",
+  "availability_zone": "eu-central-1a",
+  "instance_type": "c7i.2xlarge",
+  "quote_timestamp": "2026-10-06T14:00:00+00:00",
+  "spot_price_usd_per_hour": "0.216300",
+  "spot_cap_usd_per_hour": 0.5,
+  "machine_seconds": 10800,
+  "compute_cap_usd": 1.5,
+  "estimated_compute_at_observed_quote": 0.6489,
+  "ancillary_cap_usd": 0.15,
+  "active_borsuk_instance_ids": []
+}

@@ -1,0 +1,17 @@
+{
+  "status": "SOURCE_ADAPTER_VERIFIED_NATIVE_QUALIFIED_NOT_LAUNCHED",
+  "source_commit": "687428584868ed24fe4cff94f6dc8947a0301508",
+  "source_sha256": "54f194b613b05f47e01ae917647b5178cea1ecaa259b86eda6f2e16e0eb6387b",
+  "unit": "borsuk-preflight-spot-repaired-root-check-20261006.service",
+  "invocation_id": "9712f94014bb4fc4bbef40121cc4ea66",
+  "exit_status": 0,
+  "runtime_seconds": 2.44,
+  "cpu_seconds": 2.129,
+  "memory_peak_reported": "109.4M",
+  "memory_cap_bytes": 268435456,
+  "cpu_quota_percent": 100,
+  "swap_bytes": 0,
+  "runtime_limit_seconds": 120,
+  "scope": "Actual adapter source-bound synthetic self-check; no corpus/native/cloud run; final native qualification independently closed0",
+  "prior_source_check": "b809 original exit0 preserved /tmp/borsuk-cohere-preflight-spot-root-check-b809.json"
+}
