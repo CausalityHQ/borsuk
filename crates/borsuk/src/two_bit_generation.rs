@@ -2532,6 +2532,101 @@ mod source_walk_tests {
             .unwrap();
     }
 
+    fn native_full_leaf_fixture(
+        dimensions: usize,
+    ) -> (SemanticUnitRouter, Vec<usize>, Vec<Vec<u8>>) {
+        use crate::semantic_unit_router::{SourceIdentity, build};
+        use sha2::{Digest, Sha256};
+
+        let hash = |body: &[u8]| format!("{:x}", Sha256::digest(body));
+        let profile = SemanticProfile::Native100k;
+        let rows = 32_768_usize;
+        // Encode unit means directly; no full canonical vector fixture is needed.
+        let mut blob = b"BORSUCP1".to_vec();
+        blob.extend_from_slice(&(rows as u64).to_le_bytes());
+        for word in [dimensions as u32, 32, 256, 0] {
+            blob.extend_from_slice(&word.to_le_bytes());
+        }
+        blob.resize(32 + 1024 * dimensions * 2, 0);
+        let centroid_sha = hash(&blob);
+        let input = SourceIdentity {
+            profile,
+            schema: "native-full-leaf-test",
+            root_sha256: &"1".repeat(64),
+            centroids_sha256: &centroid_sha,
+            rows,
+            dimensions,
+        };
+        let artifacts = build(&blob, &input, profile.allocation_cap()).unwrap();
+        let router = SemanticUnitRouter::open(
+            &artifacts.manifest,
+            &artifacts.membership,
+            &hash(&artifacts.manifest),
+            &input,
+            profile.root_cap(),
+        )
+        .unwrap();
+        assert_eq!(router.manifest().leaves.len(), 16);
+        assert!(
+            router
+                .manifest()
+                .leaves
+                .iter()
+                .all(|leaf| leaf.unit_count == 64)
+        );
+        // Identical means tie all leaves: eight primary plus eight boundary leaves.
+        let ids = router.nominate(&vec![1.; dimensions]).unwrap();
+        assert_eq!(ids, (0..16).collect::<Vec<_>>());
+        let bodies = ids
+            .iter()
+            .map(|&id| {
+                let leaf = &router.manifest().leaves[id];
+                artifacts.leaves[leaf.offset..leaf.offset + leaf.bytes].to_vec()
+            })
+            .collect::<Vec<_>>();
+        (router, ids, bodies)
+    }
+
+    #[test]
+    fn native_full_sixteen_leaf_router_validation_d1024_and_d768() {
+        for (dimensions, expected_bytes) in [(1024, 2_101_248), (768, 1_576_960)] {
+            let (router, ids, bodies) = native_full_leaf_fixture(dimensions);
+            assert_eq!(bodies.iter().map(Vec::len).sum::<usize>(), expected_bytes);
+            let parts = bodies.iter().map(Vec::as_slice).collect::<Vec<_>>();
+            let nomination = router.validate_selected(&ids, &parts).unwrap();
+            assert_eq!(nomination.units, (0..1024).collect());
+            assert_eq!(nomination.page_closure, (0..128).collect());
+            assert!(nomination.seed_additions.is_empty());
+            if dimensions == 1024 {
+                let mut excess = bodies[15].clone();
+                excess.push(0);
+                let mut overbound = parts;
+                overbound[15] = &excess;
+                let error = router.validate_selected(&ids, &overbound).err().unwrap();
+                assert!(error.to_string().contains("selected leaf byte cap"));
+            }
+        }
+    }
+
+    #[test]
+    fn native_full_sixteen_leaf_generation_admission_d1024_and_d768() {
+        for dimensions in [1024, 768] {
+            let (router, ids, bodies) = native_full_leaf_fixture(dimensions);
+            TwoBitGeneration::admit_leaves(&router, &ids).unwrap();
+            assert_eq!(
+                TwoBitGeneration::semantic_walks(&router, &ids, &bodies, None).unwrap(),
+                vec![(0, (0..1024).collect::<Vec<_>>())]
+            );
+            // Descriptor admission happens before local or remote payload access.
+            for invalid in [vec![], vec![0; 17], vec![16]] {
+                assert!(matches!(
+                    TwoBitGeneration::admit_leaves(&router, &invalid),
+                    Err(TwoBitGenerationError::Invalid("leaf admission"))
+                ));
+            }
+        }
+    }
+
     #[tokio::test]
     async fn native_100k_d1024_generation_serving_scalar_oracle() {
         use crate::semantic_unit_router::{Geometry, admit};

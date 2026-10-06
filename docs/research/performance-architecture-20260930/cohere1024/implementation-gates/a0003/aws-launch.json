@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-07515496bdaec3142",
+  "nodes": {
+    "0": {
+      "instance_id": "i-07515496bdaec3142"
+    }
+  },
+  "prefix": "research/semantic-router/20261006/cohere1024-implementation-a0003",
+  "source_commit": "c0936ebe80825b5e275202cbc95cefcca4692ff7",
+  "source_archive_sha256": "56922a13c0a53d1706676f128dfd2126fc192727188f54aba8a48a7871929cd4"
+}

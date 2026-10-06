@@ -1,0 +1,120 @@
+{
+  "status": "NATIVE_QUALIFIED",
+  "source_commit": "c0936ebe80825b5e275202cbc95cefcca4692ff7",
+  "native_source_identity_sha256": "0fae950fcfb3221804fc7c307474fc66604b18cd021c2af3e0caa71269ecdc7e",
+  "source_file_count": 411,
+  "full_source_before_after_root_match": true,
+  "terminal_artifacts_authenticated": 18,
+  "terminal_sha256": "7b356f33d61c4837364971cb32ef9a8b120a41d61c4ce63ca35bdbe044b1376e",
+  "stages": [
+    {
+      "name": "generation-tests",
+      "exit": 0,
+      "tests": 16,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "two_bit_generation::",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "generation-release-test",
+      "exit": 0,
+      "tests": 1,
+      "command": [
+        "cargo",
+        "test",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "two_bit_generation::source_walk_tests::native_100k_d1024_generation_serving_scalar_oracle",
+        "--",
+        "--exact",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "router-tests",
+      "exit": 0,
+      "tests": 7,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "semantic_unit_router::",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "release",
+      "exit": 0,
+      "tests": null,
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--example",
+        "two_bit_http",
+        "--bin",
+        "build_two_bit_generation",
+        "--bin",
+        "build_semantic_unit_router",
+        "--bin",
+        "repackage_semantic_generation",
+        "--bin",
+        "check_semantic_router_scorer"
+      ]
+    },
+    {
+      "name": "clippy",
+      "exit": 0,
+      "tests": null,
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ]
+    },
+    {
+      "name": "test-build",
+      "exit": 0,
+      "tests": null,
+      "command": [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "BORSUK_TEST_BUILD_JOBS=1",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ]
+    }
+  ],
+  "instance_id": "i-07515496bdaec3142",
+  "terminated": true,
+  "scope": "Affected generation/router tests including both full16-leaf D1024/D768 regressions, release oracle and five artifacts, workspace Clippy correctness+suspicious, real workspace test compilation. No real corpus, ANN quality/performance or full workspace execution claim.",
+  "cgroup_peak_bytes": 8589934592,
+  "swap_peak_bytes": 0,
+  "oom": 0
+}

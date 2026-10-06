@@ -63,7 +63,7 @@ impl SemanticProfile {
     }
     pub(crate) const fn selected_leaf_bytes(self) -> usize {
         match self {
-            Self::Native100k => 2 * 1024 * 1024,
+            Self::Native100k => 16 * LEAF_UNITS * (4 + 1024 * 2),
             Self::Fresh1m => 48 * LEAF_UNITS * (4 + 768 * 2),
         }
     }
