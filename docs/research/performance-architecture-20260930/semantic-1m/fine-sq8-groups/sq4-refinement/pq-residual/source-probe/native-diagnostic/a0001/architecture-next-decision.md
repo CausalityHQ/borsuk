@@ -11,3 +11,15 @@ Next bounded design question: define one source-only co-selection placement/expa
 Exact incidental-winner truth contribution remains missing; the conservative bound cannot certify the tail. The planned source-only rule must be frozen independently before its paired coverage/quality audit. No new paid run or format rewrite is authorized merely by this document; existing session authorization and root resource/freeze gates remain authoritative.
 
 Product gates remain incomplete: fresh1M cold HTTP, matched vendor p90/p95/QPS/total lifecycle cost, incremental maintenance/recovery/compaction, and100M resource admission. Current100M residency/query figures59.003GB/gen and464.23MB/query are model projections beyond the100k guard, not feasibility measurements. The old18.4GB estimate is superseded. SIMD is not selected from these whole-local-phase timings.
+
+## Source inspection before the next layout implementation
+
+At revision f76314782c9758049aeee8c64bde48635b488822, `budgeted_page_rank::cover_pages` joins the smallest gaps between selected runs until the range count fits. For fixed ordering, equal row widths and mandatory selected groups, this minimizes fetched bytes. A replacement merge heuristic alone cannot lower that cost; placement, selected population or the declared fetch envelope must change. This conclusion is from source inspection, not a new benchmark.
+
+`FineSq8Index::plan_nomination` maps PQ graph physical ordinals to complete 16-row groups. Returned payload authentication also checks each row ID against the pinned physical order. A layout experiment must explicitly bind the permutation and preserve logical nominee IDs; it cannot reinterpret physical ordinals as logical IDs. Preserve unchanged SQ8 arithmetic and authenticate every fetched group, including bridged rows.
+
+`GraphSearchWorkspace` allocates a `Vec<u32>` with one mark per graph row, reused by its worker. The declared model charges 4N bytes for each active query. At 100M rows that is 400,000,000 bytes per worker before payload, heaps and resident graph; current geometry admission still rejects more than100k rows. Physical placement alone does not fix this scaling limitation.
+
+Maintenance exists in the Rust library: `compact_two_bit_index` runs an owned in-process worker with a durable compaction job, lock and authenticated generation publication. However, that path explicitly rejects `SemanticProfile::Fresh1m`. `FineSq8Snapshot` separately provides immutable in-memory replacement/delete visibility and permits replacement IDs only within the existing row roster; it is not persistent insertion, recovery or compaction integration. A candidate fetch-layout result must not be presented as completion of those product requirements. Bind new layouts to the generation publication and maintenance lifecycle before production promotion; account old/new generation coexistence, deltas and rebuild scratch.
+
+These are current-source constraints. No native execution, measured RSS, performance result or maintenance qualification is added by this inspection.
