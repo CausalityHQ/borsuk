@@ -65,13 +65,13 @@ pub struct Storage {
     pub validation_operations: u64,
 }
 
-fn add(a: usize, b: usize) -> Result<usize, Error> {
+pub(crate) fn add(a: usize, b: usize) -> Result<usize, Error> {
     a.checked_add(b).ok_or(Error::Overflow)
 }
-fn mul(a: usize, b: usize) -> Result<usize, Error> {
+pub(crate) fn mul(a: usize, b: usize) -> Result<usize, Error> {
     a.checked_mul(b).ok_or(Error::Overflow)
 }
-fn sum(a: u64, b: u64) -> Result<u64, Error> {
+pub(crate) fn sum(a: u64, b: u64) -> Result<u64, Error> {
     a.checked_add(b).ok_or(Error::Overflow)
 }
 fn geometry(d: usize, s: usize) -> Result<usize, Error> {
@@ -107,15 +107,15 @@ fn sort_work(n: usize) -> Result<u64, Error> {
     u64::try_from(work).map_err(|_| Error::Overflow)
 }
 
-struct Admission {
-    limits: Limits,
-    bytes: usize,
-    peak: usize,
-    work: u64,
-    fixed: usize,
+pub(crate) struct Admission {
+    pub(crate) limits: Limits,
+    pub(crate) bytes: usize,
+    pub(crate) peak: usize,
+    pub(crate) work: u64,
+    pub(crate) fixed: usize,
 }
 impl Admission {
-    fn new(limits: Limits) -> Self {
+    pub(crate) fn new(limits: Limits) -> Self {
         Self {
             limits,
             bytes: 0,
@@ -124,27 +124,27 @@ impl Admission {
             fixed: 0,
         }
     }
-    fn ensure_bytes(&self, bytes: usize) -> Result<(), Error> {
+    pub(crate) fn ensure_bytes(&self, bytes: usize) -> Result<(), Error> {
         if add(add(self.bytes, self.fixed)?, bytes)? > self.limits.transient_bytes {
             return Err(Error::Refused("transient capacity ceiling"));
         }
         Ok(())
     }
-    fn account(&mut self, bytes: usize) -> Result<(), Error> {
+    pub(crate) fn account(&mut self, bytes: usize) -> Result<(), Error> {
         self.ensure_bytes(bytes)?;
         self.bytes = add(self.bytes, bytes)?;
         self.peak = self.peak.max(self.bytes);
         Ok(())
     }
-    fn fixed(&mut self, bytes: usize) -> Result<(), Error> {
+    pub(crate) fn fixed(&mut self, bytes: usize) -> Result<(), Error> {
         self.ensure_bytes(bytes)?;
         self.fixed = add(self.fixed, bytes)?;
         Ok(())
     }
-    fn release(&mut self, bytes: usize) {
+    pub(crate) fn release(&mut self, bytes: usize) {
         self.bytes -= bytes;
     }
-    fn charge(&mut self, operations: u64) -> Result<(), Error> {
+    pub(crate) fn charge(&mut self, operations: u64) -> Result<(), Error> {
         let next = sum(self.work, operations)?;
         if next > self.limits.operations {
             return Err(Error::Refused("compute ceiling"));
@@ -152,7 +152,7 @@ impl Admission {
         self.work = next;
         Ok(())
     }
-    fn vector<T>(&mut self, count: usize) -> Result<Vec<T>, Error> {
+    pub(crate) fn vector<T>(&mut self, count: usize) -> Result<Vec<T>, Error> {
         self.ensure_bytes(mul(count, size_of::<T>())?)?;
         let mut v = Vec::new();
         v.try_reserve_exact(count)
@@ -160,7 +160,7 @@ impl Admission {
         self.account(mul(v.capacity(), size_of::<T>())?)?;
         Ok(v)
     }
-    fn memory(&self, retained: usize) -> Memory {
+    pub(crate) fn memory(&self, retained: usize) -> Memory {
         Memory {
             peak_capacity_bytes: self.peak,
             retained_capacity_bytes: retained,
@@ -168,7 +168,7 @@ impl Admission {
         }
     }
 }
-fn capacity<T>(v: &Vec<T>) -> Result<usize, Error> {
+pub(crate) fn capacity<T>(v: &Vec<T>) -> Result<usize, Error> {
     mul(v.capacity(), size_of::<T>())
 }
 
@@ -251,6 +251,23 @@ impl<'a> Membership<'a> {
         digests: &'a [Hash],
         limits: Limits,
     ) -> Result<Self, Error> {
+        Self::new_admitted(
+            dimension,
+            side,
+            total_rows,
+            owners,
+            digests,
+            &mut Admission::new(limits),
+        )
+    }
+    pub(crate) fn new_admitted(
+        dimension: usize,
+        side: usize,
+        total_rows: u64,
+        owners: &'a [u32],
+        digests: &'a [Hash],
+        admission: &mut Admission,
+    ) -> Result<Self, Error> {
         let labels = geometry(dimension, side)?;
         let groups = total_rows.checked_add(15).ok_or(Error::Overflow)? / 16;
         if groups != owners.len() as u64
@@ -260,7 +277,6 @@ impl<'a> Membership<'a> {
         {
             return Err(Error::Invalid("membership geometry"));
         }
-        let mut admission = Admission::new(limits);
         let canonical_bytes = add(add(mul(owners.len(), 4)?, mul(labels, 32)?)?, 56)?;
         admission.charge(sum(
             sum(sum(owners.len() as u64, labels as u64)?, sort_work(labels)?)?,
@@ -385,7 +401,7 @@ pub struct Budget {
     pub attempts: Charge,
 }
 impl Budget {
-    fn reservations(self) -> Result<Charge, Error> {
+    pub(crate) fn reservations(self) -> Result<Charge, Error> {
         if self.max_reads > MAX_READS || self.max_bytes > MAX_BYTES {
             return Err(Error::Invalid("read/byte cap"));
         }
@@ -407,7 +423,7 @@ pub struct Snapshot {
     pub revision: u64,
 }
 impl Snapshot {
-    fn validate(self) -> Result<(), Error> {
+    pub(crate) fn validate(self) -> Result<(), Error> {
         if self.root == [0; 32] || self.coefficients == [0; 32] || self.delta == [0; 32] {
             return Err(Error::Invalid("snapshot identity"));
         }
@@ -480,7 +496,17 @@ fn identity(
     if model.dimension != membership.dimension || model.side != membership.side {
         return Err(Error::Invalid("model/membership geometry"));
     }
-    if query.len() != model.dimension || query.iter().any(|x| !x.is_finite()) {
+    let query = query_hash(model.dimension, query)?;
+    Ok(Identity {
+        model: model.sha256,
+        membership: membership.sha256,
+        query,
+        snapshot,
+    })
+}
+
+fn query_hash(dimension: usize, query: &[f32]) -> Result<Hash, Error> {
+    if query.len() != dimension || query.iter().any(|x| !x.is_finite()) {
         return Err(Error::Invalid("query"));
     }
     let norm: f64 = query.iter().map(|&x| f64::from(x).powi(2)).sum();
@@ -493,12 +519,7 @@ fn identity(
     for x in query {
         h.update(x.to_bits().to_le_bytes());
     }
-    Ok(Identity {
-        model: model.sha256,
-        membership: membership.sha256,
-        query: h.finalize().into(),
-        snapshot,
-    })
+    Ok(h.finalize().into())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -627,21 +648,21 @@ impl Plan {
     }
 }
 
-fn finite(value: f32) -> Result<f32, Error> {
+pub(crate) fn finite(value: f32) -> Result<f32, Error> {
     if value.is_finite() {
         Ok(value)
     } else {
         Err(Error::Invalid("nonfinite intermediate"))
     }
 }
-fn linear(weights: &[f32], input: &[f32], bias: f32) -> Result<f32, Error> {
+pub(crate) fn linear(weights: &[f32], input: &[f32], bias: f32) -> Result<f32, Error> {
     let mut dot = 0f32;
     for (&w, &x) in weights.iter().zip(input) {
         dot = finite(dot + finite(w * x)?)?;
     }
     finite(dot + bias)
 }
-fn softmax(values: &mut [f32]) -> Result<(), Error> {
+pub(crate) fn softmax(values: &mut [f32]) -> Result<(), Error> {
     let maximum = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     finite(maximum)?;
     let mut divisor = 0f32;
@@ -677,12 +698,26 @@ fn probabilities(
     if let Cow::Owned(v) = &normalized {
         admission.account(capacity(v)?)?;
     }
+    let values = probabilities_normalized(model, &normalized, admission)?;
+    if let Cow::Owned(v) = &normalized {
+        admission.release(capacity(v)?);
+    }
+    Ok(values)
+}
+fn probabilities_normalized(
+    model: &Model<'_>,
+    normalized: &[f32],
+    admission: &mut Admission,
+) -> Result<Vec<f32>, Error> {
+    let d = model.dimension;
+    let s = model.side;
+    let count = add(MIXTURES, mul(8, s)?)?;
     let mut values = admission.vector::<f32>(count)?;
     let mut hidden = [0f32; HIDDEN];
     let p = model.parameters;
     let hidden_bias = HIDDEN * d;
     for (h, value) in hidden.iter_mut().enumerate() {
-        *value = linear(&p[h * d..(h + 1) * d], &normalized, p[hidden_bias + h])?.max(0.);
+        *value = linear(&p[h * d..(h + 1) * d], normalized, p[hidden_bias + h])?.max(0.);
     }
     let mixture_weights = hidden_bias + HIDDEN;
     let mixture_bias = mixture_weights + MIXTURES * HIDDEN;
@@ -711,11 +746,9 @@ fn probabilities(
         }
         offset = head_bias + MIXTURES * s;
     }
-    if let Cow::Owned(v) = &normalized {
-        admission.release(capacity(v)?);
-    }
     Ok(values)
 }
+
 fn top_head(values: &[f32]) -> [usize; HEAD_TOP] {
     let mut top = [usize::MAX; HEAD_TOP];
     for (i, &score) in values.iter().enumerate() {
@@ -730,7 +763,7 @@ fn top_head(values: &[f32]) -> [usize; HEAD_TOP] {
     }
     top
 }
-fn model_score(p: &[f32], s: usize, label: u32) -> Result<f32, Error> {
+pub(crate) fn model_score(p: &[f32], s: usize, label: u32) -> Result<f32, Error> {
     let i = label as usize / s;
     let j = label as usize % s;
     let mut score = 0f32;
@@ -764,59 +797,151 @@ pub fn select(
     requested_rows: u64,
     limits: Limits,
 ) -> Result<Plan, Error> {
-    let reserved = budget.reservations()?;
-    let mut admission = Admission::new(limits);
-    admission.fixed(HIDDEN * size_of::<f32>() + 2 * HEAD_TOP * size_of::<usize>())?;
-    validate_weights(membership, neighbors, &mut admission)?;
-    admission.charge(identity_work(model.dimension, neighbors.len())?)?;
-    let binding = Binding {
-        identity: identity(model, membership, query, snapshot)?,
-        neighbors: neighbor_hash(neighbors),
+    select_impl(
+        model,
+        membership,
+        query,
+        neighbors,
+        snapshot,
         budget,
         requested_rows,
+        limits,
+        None,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn select_impl(
+    model: &Model<'_>,
+    membership: &Membership<'_>,
+    query: &[f32],
+    neighbors: &[GroupWeight],
+    snapshot: Snapshot,
+    budget: Budget,
+    requested_rows: u64,
+    limits: Limits,
+    prepared: Option<&PreparedQuery>,
+    observation: Option<&PreparedObservation<'_>>,
+) -> Result<Plan, Error> {
+    select_admitted(
+        model,
+        membership,
+        query,
+        neighbors,
+        snapshot,
+        budget,
+        requested_rows,
+        prepared,
+        observation,
+        &mut Admission::new(limits),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn select_admitted(
+    model: &Model<'_>,
+    membership: &Membership<'_>,
+    query: &[f32],
+    neighbors: &[GroupWeight],
+    snapshot: Snapshot,
+    budget: Budget,
+    requested_rows: u64,
+    prepared: Option<&PreparedQuery>,
+    observation: Option<&PreparedObservation<'_>>,
+    admission: &mut Admission,
+) -> Result<Plan, Error> {
+    let reserved = budget.reservations()?;
+    if observation.is_none() {
+        admission.fixed(HIDDEN * size_of::<f32>() + 2 * HEAD_TOP * size_of::<usize>())?;
+    }
+    let binding = if let Some(observation) = observation {
+        admission.charge(32)?;
+        observation.validate_population(model, membership)?;
+        snapshot.validate()?;
+        Binding {
+            identity: Identity {
+                model: model.sha256,
+                membership: membership.sha256,
+                query: observation.query,
+                snapshot,
+            },
+            neighbors: observation.neighbors,
+            budget,
+            requested_rows,
+        }
+    } else {
+        validate_weights(membership, neighbors, admission)?;
+        admission.charge(identity_work(model.dimension, neighbors.len())?)?;
+        Binding {
+            identity: identity(model, membership, query, snapshot)?,
+            neighbors: neighbor_hash(neighbors),
+            budget,
+            requested_rows,
+        }
     };
-    let p = probabilities(model, query, &mut admission)?;
-    admission.charge(sum(
-        sum(
-            (8 * model.side * HEAD_TOP) as u64,
-            sort_work(MAX_CANDIDATES)?,
-        )?,
-        sum(
-            sort_work(MAX_CANDIDATES)?,
-            add(
-                MAX_CANDIDATES * MIXTURES * 3 + MAX_CANDIDATES,
-                mul(neighbors.len(), MAX_SELECTED)?,
-            )? as u64,
-        )?,
-    )?)?;
-    let mut candidates = admission.vector::<u32>(MAX_CANDIDATES)?;
-    let s = model.side;
-    for r in 0..MIXTURES {
-        let first = top_head(&p[MIXTURES + r * s..MIXTURES + (r + 1) * s]);
-        let second =
-            top_head(&p[MIXTURES + MIXTURES * s + r * s..MIXTURES + MIXTURES * s + (r + 1) * s]);
-        for &i in &first[..s.min(HEAD_TOP)] {
-            for &j in &second[..s.min(HEAD_TOP)] {
-                candidates.push((i * s + j) as u32);
+    let (candidates, occupied_candidates) = if let Some(prepared) = prepared {
+        if prepared.model != model.sha256 || prepared.query != binding.identity.query {
+            return Err(Error::IdentityMismatch);
+        }
+        admission.charge(add(MAX_CANDIDATES * 2, mul(neighbors.len(), MAX_SELECTED)?)? as u64)?;
+        let mut candidates = admission.vector::<u32>(MAX_CANDIDATES)?;
+        candidates.extend_from_slice(&prepared.candidates);
+        let mut occupied = admission.vector::<Score>(MAX_CANDIDATES)?;
+        occupied.extend(
+            prepared
+                .ranked
+                .iter()
+                .copied()
+                .filter(|score| membership.objects[score.label as usize].rows != 0),
+        );
+        (candidates, occupied)
+    } else {
+        let p = probabilities(model, query, admission)?;
+        admission.charge(sum(
+            sum(
+                (8 * model.side * HEAD_TOP) as u64,
+                sort_work(MAX_CANDIDATES)?,
+            )?,
+            sum(
+                sort_work(MAX_CANDIDATES)?,
+                add(
+                    MAX_CANDIDATES * MIXTURES * 3 + MAX_CANDIDATES,
+                    mul(neighbors.len(), MAX_SELECTED)?,
+                )? as u64,
+            )?,
+        )?)?;
+        let mut candidates = admission.vector::<u32>(MAX_CANDIDATES)?;
+        let s = model.side;
+        for r in 0..MIXTURES {
+            let first = top_head(&p[MIXTURES + r * s..MIXTURES + (r + 1) * s]);
+            let second = top_head(
+                &p[MIXTURES + MIXTURES * s + r * s..MIXTURES + MIXTURES * s + (r + 1) * s],
+            );
+            for &i in &first[..s.min(HEAD_TOP)] {
+                for &j in &second[..s.min(HEAD_TOP)] {
+                    candidates.push((i * s + j) as u32);
+                }
             }
         }
-    }
-    candidates.sort_unstable();
-    candidates.dedup();
-    let mut occupied_candidates = admission.vector::<Score>(MAX_CANDIDATES)?;
-    for &label in &candidates {
-        if membership.objects[label as usize].rows != 0 {
-            occupied_candidates.push(Score {
-                label,
-                probability: model_score(&p, s, label)?,
-            });
+        candidates.sort_unstable();
+        candidates.dedup();
+        let mut occupied_candidates = admission.vector::<Score>(MAX_CANDIDATES)?;
+        for &label in &candidates {
+            if membership.objects[label as usize].rows != 0 {
+                occupied_candidates.push(Score {
+                    label,
+                    probability: model_score(&p, s, label)?,
+                });
+            }
         }
-    }
-    occupied_candidates.sort_unstable_by(|a, b| {
-        b.probability
-            .total_cmp(&a.probability)
-            .then(a.label.cmp(&b.label))
-    });
+        occupied_candidates.sort_unstable_by(|a, b| {
+            b.probability
+                .total_cmp(&a.probability)
+                .then(a.label.cmp(&b.label))
+        });
+        (candidates, occupied_candidates)
+    };
     let mut selected = admission.vector::<SelectedObject>(MAX_SELECTED)?;
     let mut skipped = admission.vector::<SkippedObject>(MAX_CANDIDATES)?;
     let mut charge = reserved;
@@ -897,6 +1022,137 @@ pub fn select(
         },
         memory: admission.memory(retained),
     })
+}
+
+/// Immutable inference only. No occupancy, snapshot, budget or selection is cached.
+#[derive(Debug)]
+pub struct PreparedQuery {
+    model: Hash,
+    query: Hash,
+    probabilities: Vec<f32>,
+    candidates: Vec<u32>,
+    ranked: Vec<Score>,
+    work: Work,
+    memory: Memory,
+}
+impl PreparedQuery {
+    pub fn model_identity(&self) -> Hash {
+        self.model
+    }
+    pub fn query_identity(&self) -> Hash {
+        self.query
+    }
+    pub fn probabilities(&self) -> &[f32] {
+        &self.probabilities
+    }
+    pub fn candidates(&self) -> &[u32] {
+        &self.candidates
+    }
+    pub fn ranked(&self) -> &[Score] {
+        &self.ranked
+    }
+    pub fn work(&self) -> Work {
+        self.work
+    }
+    pub fn memory(&self) -> Memory {
+        self.memory
+    }
+}
+pub fn prepare_query(
+    model: &Model<'_>,
+    query: &[f32],
+    limits: Limits,
+) -> Result<PreparedQuery, Error> {
+    let mut a = Admission::new(limits);
+    a.fixed(HIDDEN * size_of::<f32>() + 2 * HEAD_TOP * size_of::<usize>())?;
+    a.charge(identity_work(model.dimension, 0)?)?;
+    let query_identity = query_hash(model.dimension, query)?;
+    prepare_query_impl(model, query, query_identity, false, &mut a)
+}
+
+fn prepare_query_impl(
+    model: &Model<'_>,
+    query: &[f32],
+    query_identity: Hash,
+    normalized: bool,
+    a: &mut Admission,
+) -> Result<PreparedQuery, Error> {
+    let p = if normalized {
+        let count = add(MIXTURES, mul(8, model.side)?)?;
+        let dots = add(mul(HIDDEN, model.dimension)?, mul(count, HIDDEN)?)?;
+        a.charge(add(mul(dots, 2)?, mul(count, 4)?)? as u64)?;
+        probabilities_normalized(model, query, a)?
+    } else {
+        probabilities(model, query, a)?
+    };
+    a.charge(sum(
+        (8 * model.side * HEAD_TOP + MAX_CANDIDATES * MIXTURES * 3) as u64,
+        sum(sort_work(MAX_CANDIDATES)?, sort_work(MAX_CANDIDATES)?)?,
+    )?)?;
+    let mut candidates = a.vector::<u32>(MAX_CANDIDATES)?;
+    let s = model.side;
+    for r in 0..MIXTURES {
+        let first = top_head(&p[MIXTURES + r * s..MIXTURES + (r + 1) * s]);
+        let second =
+            top_head(&p[MIXTURES + MIXTURES * s + r * s..MIXTURES + MIXTURES * s + (r + 1) * s]);
+        for &i in &first[..s.min(HEAD_TOP)] {
+            for &j in &second[..s.min(HEAD_TOP)] {
+                candidates.push((i * s + j) as u32);
+            }
+        }
+    }
+    candidates.sort_unstable();
+    candidates.dedup();
+    let mut ranked = a.vector::<Score>(MAX_CANDIDATES)?;
+    for &label in &candidates {
+        ranked.push(Score {
+            label,
+            probability: model_score(&p, s, label)?,
+        });
+    }
+    ranked.sort_unstable_by(|x, y| {
+        y.probability
+            .total_cmp(&x.probability)
+            .then(x.label.cmp(&y.label))
+    });
+    let retained = add(
+        capacity(&p)?,
+        add(capacity(&candidates)?, capacity(&ranked)?)?,
+    )?;
+    Ok(PreparedQuery {
+        model: model.sha256,
+        query: query_identity,
+        probabilities: p,
+        candidates,
+        ranked,
+        work: Work { operations: a.work },
+        memory: a.memory(retained),
+    })
+}
+#[allow(clippy::too_many_arguments)]
+pub fn select_prepared(
+    prepared: &PreparedQuery,
+    model: &Model<'_>,
+    membership: &Membership<'_>,
+    query: &[f32],
+    neighbors: &[GroupWeight],
+    snapshot: Snapshot,
+    budget: Budget,
+    requested_rows: u64,
+    limits: Limits,
+) -> Result<Plan, Error> {
+    select_impl(
+        model,
+        membership,
+        query,
+        neighbors,
+        snapshot,
+        budget,
+        requested_rows,
+        limits,
+        Some(prepared),
+        None,
+    )
 }
 
 /// Separately charged full-grid ranking over occupied labels only. Empty
@@ -1226,9 +1482,23 @@ pub fn evaluate_checkpoint(
     budget: Budget,
     limits: Limits,
 ) -> Result<Acceptance, Error> {
+    checkpoint_impl(before, after, samples, budget, limits, None)
+}
+
+fn checkpoint_impl(
+    before: Evaluation<'_>,
+    after: Evaluation<'_>,
+    samples: &[TrainingSample<'_>],
+    budget: Budget,
+    limits: Limits,
+    prepared: Option<(&[PreparedQuery], &[PreparedQuery])>,
+) -> Result<Acceptance, Error> {
     same_population(before, after)?;
     if samples.is_empty() || samples.len() > 256 {
         return Err(Error::Invalid("training count"));
+    }
+    if prepared.is_some_and(|(a, b)| a.len() != samples.len() || b.len() != samples.len()) {
+        return Err(Error::Invalid("prepared training count"));
     }
     let fixed_arrays = 2 * 256 * size_of::<u64>();
     let transient_bytes = limits
@@ -1259,7 +1529,7 @@ pub fn evaluate_checkpoint(
             transient_bytes,
             operations: limits.operations - work,
         };
-        let a = select(
+        let a = select_impl(
             before.model,
             before.membership,
             sample.query,
@@ -1268,6 +1538,8 @@ pub fn evaluate_checkpoint(
             budget,
             sample.requested_rows,
             remaining,
+            prepared.map(|(a, _)| &a[i]),
+            None,
         )?;
         work = sum(work, a.work.operations)?;
         // The first plan's output remains live during the second evaluation.
@@ -1277,7 +1549,7 @@ pub fn evaluate_checkpoint(
                 .ok_or(Error::Refused("checkpoint coexistence"))?,
             operations: limits.operations - work,
         };
-        let b = select(
+        let b = select_impl(
             after.model,
             after.membership,
             sample.query,
@@ -1286,6 +1558,8 @@ pub fn evaluate_checkpoint(
             budget,
             sample.requested_rows,
             after_limits,
+            prepared.map(|(_, b)| &b[i]),
+            None,
         )?;
         work = sum(work, b.work.operations)?;
         peak = peak.max(a.memory.peak_capacity_bytes).max(add(
@@ -1348,6 +1622,403 @@ pub fn evaluate_checkpoint(
                 + HIDDEN * size_of::<f32>()
                 + 2 * HEAD_TOP * size_of::<usize>(),
         },
+    })
+}
+
+/// Exact acceptance receipts; work/memory report the cheaper cached execution.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_prepared_checkpoint(
+    before: Evaluation<'_>,
+    after: Evaluation<'_>,
+    before_cache: &[PreparedQuery],
+    after_cache: &[PreparedQuery],
+    samples: &[TrainingSample<'_>],
+    budget: Budget,
+    limits: Limits,
+) -> Result<Acceptance, Error> {
+    checkpoint_impl(
+        before,
+        after,
+        samples,
+        budget,
+        limits,
+        Some((before_cache, after_cache)),
+    )
+}
+
+/// Immutable source observation. Borrowing prevents safe mutation of the raw
+/// query/teacher after validation; owners may change within the frozen population.
+pub struct PreparedObservation<'a> {
+    sample: TrainingSample<'a>,
+    normalized: Cow<'a, [f32]>,
+    dimension: usize,
+    side: usize,
+    rows: u64,
+    groups: usize,
+    query: Hash,
+    neighbors: Hash,
+}
+impl PreparedObservation<'_> {
+    pub fn normalized_query(&self) -> &[f32] {
+        &self.normalized
+    }
+    pub fn query_identity(&self) -> Hash {
+        self.query
+    }
+    fn validate_population(
+        &self,
+        model: &Model<'_>,
+        membership: &Membership<'_>,
+    ) -> Result<(), Error> {
+        if (self.dimension, self.side, self.rows, self.groups)
+            != (
+                model.dimension,
+                model.side,
+                membership.total_rows,
+                membership.owners.len(),
+            )
+            || model.dimension != membership.dimension
+            || model.side != membership.side
+        {
+            return Err(Error::IdentityMismatch);
+        }
+        Ok(())
+    }
+}
+/// Query normalization, teacher validation and canonical training identity are
+/// charged once. Reusable across model checkpoints and membership proposals.
+pub struct PreparedTraining<'a> {
+    observations: Vec<PreparedObservation<'a>>,
+    training: Hash,
+    work: Work,
+    memory: Memory,
+}
+impl<'a> PreparedTraining<'a> {
+    pub fn observations(&self) -> &[PreparedObservation<'a>] {
+        &self.observations
+    }
+    pub fn sha256(&self) -> Hash {
+        self.training
+    }
+    pub fn work(&self) -> Work {
+        self.work
+    }
+    pub fn memory(&self) -> Memory {
+        self.memory
+    }
+}
+pub fn prepare_training<'a>(
+    model: &Model<'_>,
+    membership: &Membership<'_>,
+    samples: &[TrainingSample<'a>],
+    limits: Limits,
+) -> Result<PreparedTraining<'a>, Error> {
+    prepare_training_admitted(model, membership, samples, &mut Admission::new(limits))
+}
+pub(crate) fn prepare_training_admitted<'a>(
+    model: &Model<'_>,
+    membership: &Membership<'_>,
+    samples: &[TrainingSample<'a>],
+    a: &mut Admission,
+) -> Result<PreparedTraining<'a>, Error> {
+    if samples.is_empty() || samples.len() > 256 {
+        return Err(Error::Invalid("training count"));
+    }
+    if model.dimension != membership.dimension || model.side != membership.side {
+        return Err(Error::Invalid("model/membership geometry"));
+    }
+    a.charge(add(mul(samples.len(), 72)?, 40)? as u64)?;
+    let mut observations = a.vector::<PreparedObservation<'a>>(samples.len())?;
+    let mut training = Sha256::new();
+    training.update(b"BORSUK-budget-training-v1");
+    training.update((samples.len() as u32).to_le_bytes());
+    for &sample in samples {
+        validate_weights(membership, sample.neighbors, a)?;
+        a.charge(identity_work(model.dimension, sample.neighbors.len())?)?;
+        let query = query_hash(model.dimension, sample.query)?;
+        let neighbors = neighbor_hash(sample.neighbors);
+        a.charge(mul(model.dimension, 4)? as u64)?;
+        a.ensure_bytes(mul(model.dimension, size_of::<f32>())?)?;
+        let normalized = crate::sq8_source::cosine_vector(sample.query)
+            .map_err(|_| Error::Invalid("query normalization"))?;
+        if let Cow::Owned(v) = &normalized {
+            a.account(capacity(v)?)?;
+        }
+        training.update(query);
+        training.update(neighbors);
+        training.update(sample.requested_rows.to_le_bytes());
+        observations.push(PreparedObservation {
+            sample,
+            normalized,
+            dimension: model.dimension,
+            side: model.side,
+            rows: membership.total_rows,
+            groups: membership.owners.len(),
+            query,
+            neighbors,
+        });
+    }
+    let retained = observations
+        .iter()
+        .try_fold(capacity(&observations)?, |b, observation| {
+            if let Cow::Owned(v) = &observation.normalized {
+                add(b, capacity(v)?)
+            } else {
+                Ok(b)
+            }
+        })?;
+    Ok(PreparedTraining {
+        observations,
+        training: training.finalize().into(),
+        work: Work { operations: a.work },
+        memory: a.memory(retained),
+    })
+}
+pub fn prepare_observed_query(
+    model: &Model<'_>,
+    observation: &PreparedObservation<'_>,
+    limits: Limits,
+) -> Result<PreparedQuery, Error> {
+    prepare_observed_query_admitted(model, observation, &mut Admission::new(limits))
+}
+pub(crate) fn prepare_observed_query_admitted(
+    model: &Model<'_>,
+    observation: &PreparedObservation<'_>,
+    a: &mut Admission,
+) -> Result<PreparedQuery, Error> {
+    if model.dimension != observation.dimension || model.side != observation.side {
+        return Err(Error::IdentityMismatch);
+    }
+    a.fixed(HIDDEN * size_of::<f32>() + 2 * HEAD_TOP * size_of::<usize>())?;
+    a.charge(4)?;
+    prepare_query_impl(model, &observation.normalized, observation.query, true, a)
+}
+#[allow(clippy::too_many_arguments)]
+pub fn select_observed(
+    prepared: &PreparedQuery,
+    model: &Model<'_>,
+    membership: &Membership<'_>,
+    observation: &PreparedObservation<'_>,
+    snapshot: Snapshot,
+    budget: Budget,
+    limits: Limits,
+) -> Result<Plan, Error> {
+    let sample = observation.sample;
+    select_impl(
+        model,
+        membership,
+        sample.query,
+        sample.neighbors,
+        snapshot,
+        budget,
+        sample.requested_rows,
+        limits,
+        Some(prepared),
+        Some(observation),
+    )
+}
+
+/// Accepted-state coverage baseline. Private fields prevent forged totals;
+/// identity validation proves reuse against the current immutable accepted state.
+#[derive(Debug)]
+pub struct PreparedCoverage {
+    model: Hash,
+    membership: Hash,
+    snapshot: Snapshot,
+    training: Hash,
+    budget: Budget,
+    dimension: usize,
+    side: usize,
+    rows: u64,
+    samples: usize,
+    total: u64,
+    lower_tail: u64,
+    incomplete: bool,
+    reads: u64,
+    bytes: u64,
+    actual_bytes: u64,
+    work: Work,
+    memory: Memory,
+}
+impl PreparedCoverage {
+    pub fn complete(&self) -> bool {
+        !self.incomplete
+    }
+    pub fn work(&self) -> Work {
+        self.work
+    }
+    pub fn memory(&self) -> Memory {
+        self.memory
+    }
+    pub fn validate(
+        &self,
+        model: &Model<'_>,
+        membership: &Membership<'_>,
+        snapshot: Snapshot,
+        training: &PreparedTraining<'_>,
+        budget: Budget,
+    ) -> Result<(), Error> {
+        if (
+            self.model,
+            self.membership,
+            self.snapshot,
+            self.training,
+            self.budget,
+        ) != (
+            model.sha256,
+            membership.sha256,
+            snapshot,
+            training.training,
+            budget,
+        ) {
+            return Err(Error::IdentityMismatch);
+        }
+        Ok(())
+    }
+}
+/// One current-state evaluation; no teacher revalidation/query SHA/score sort.
+/// Model inference and observation preparation are separately charged.
+pub fn evaluate_observed(
+    model: &Model<'_>,
+    membership: &Membership<'_>,
+    training: &PreparedTraining<'_>,
+    cache: &[PreparedQuery],
+    snapshot: Snapshot,
+    budget: Budget,
+    limits: Limits,
+) -> Result<PreparedCoverage, Error> {
+    evaluate_observed_admitted(
+        model,
+        membership,
+        training,
+        cache,
+        snapshot,
+        budget,
+        &mut Admission::new(limits),
+    )
+}
+pub(crate) fn evaluate_observed_admitted(
+    model: &Model<'_>,
+    membership: &Membership<'_>,
+    training: &PreparedTraining<'_>,
+    cache: &[PreparedQuery],
+    snapshot: Snapshot,
+    budget: Budget,
+    a: &mut Admission,
+) -> Result<PreparedCoverage, Error> {
+    if cache.len() != training.observations.len() {
+        return Err(Error::Invalid("prepared training count"));
+    }
+    a.fixed(256 * size_of::<u64>())?;
+    a.charge(sum(sort_work(cache.len())?, mul(cache.len(), 8)? as u64)?)?;
+    let mut hits = [0u64; 256];
+    let mut total = 0;
+    let mut reads = 0;
+    let mut bytes = 0;
+    let mut actual_bytes = 0;
+    let mut incomplete = false;
+    for (i, (observation, prepared)) in training.observations.iter().zip(cache).enumerate() {
+        let sample = observation.sample;
+        let plan = select_admitted(
+            model,
+            membership,
+            sample.query,
+            sample.neighbors,
+            snapshot,
+            budget,
+            sample.requested_rows,
+            Some(prepared),
+            Some(observation),
+            a,
+        )?;
+        hits[i] = plan.covered_weight;
+        total = sum(total, plan.covered_weight)?;
+        reads = sum(reads, plan.charge.reads)?;
+        bytes = sum(bytes, plan.charge.bytes)?;
+        actual_bytes = sum(actual_bytes, plan.actual_modeled_charge.bytes)?;
+        incomplete |= plan.disposition != Disposition::Selected;
+        // Drop each plan before the next anchor; the same ledger survives errors.
+        a.release(plan.memory.retained_capacity_bytes);
+    }
+    hits[..cache.len()].sort_unstable();
+    let rank = (cache.len() * 5).div_ceil(100);
+    Ok(PreparedCoverage {
+        model: model.sha256,
+        membership: membership.sha256,
+        snapshot,
+        training: training.training,
+        budget,
+        dimension: model.dimension,
+        side: model.side,
+        rows: membership.total_rows,
+        samples: cache.len(),
+        total,
+        lower_tail: hits[rank - 1],
+        incomplete,
+        reads,
+        bytes,
+        actual_bytes,
+        work: Work { operations: a.work },
+        memory: a.memory(0),
+    })
+}
+/// Semantic acceptance includes both modeled serving arms; work/memory only
+/// describe this comparison. Neither arm's already-charged evaluation repeats.
+pub fn compare_coverage(
+    before: &PreparedCoverage,
+    after: &PreparedCoverage,
+    limits: Limits,
+) -> Result<Acceptance, Error> {
+    if (
+        before.dimension,
+        before.side,
+        before.rows,
+        before.samples,
+        before.training,
+        before.budget,
+        before.snapshot.coefficients,
+    ) != (
+        after.dimension,
+        after.side,
+        after.rows,
+        after.samples,
+        after.training,
+        after.budget,
+        after.snapshot.coefficients,
+    ) {
+        return Err(Error::IdentityMismatch);
+    }
+    let mut a = Admission::new(limits);
+    a.charge(64)?;
+    let decision = if before.incomplete || after.incomplete {
+        AcceptanceDecision::Refused(Refusal::IncompleteSelection)
+    } else if after.total <= before.total {
+        AcceptanceDecision::Refused(Refusal::ZeroGain)
+    } else if after.lower_tail < before.lower_tail {
+        AcceptanceDecision::Refused(Refusal::LowerTailRegression)
+    } else {
+        AcceptanceDecision::Accepted
+    };
+    Ok(Acceptance {
+        before_model: before.model,
+        after_model: after.model,
+        before_membership: before.membership,
+        after_membership: after.membership,
+        before_snapshot: before.snapshot,
+        after_snapshot: after.snapshot,
+        training: before.training,
+        budget: before.budget,
+        before_total: before.total,
+        after_total: after.total,
+        before_lower_tail: before.lower_tail,
+        after_lower_tail: after.lower_tail,
+        lower_tail_rank: (before.samples * 5).div_ceil(100),
+        decision,
+        modeled_reads: sum(before.reads, after.reads)?,
+        reserved_bytes: sum(before.bytes, after.bytes)?,
+        actual_modeled_bytes: sum(before.actual_bytes, after.actual_bytes)?,
+        work: Work { operations: a.work },
+        memory: a.memory(0),
     })
 }
 
@@ -2461,6 +3132,754 @@ mod tests {
         assert_eq!(
             underfilled.decision,
             AcceptanceDecision::Refused(Refusal::IncompleteSelection)
+        );
+    }
+    // Execution accounting differs under reuse; every serving receipt field
+    // (including identities, all candidates/skips and underfill) must match.
+    fn assert_serving_receipt(mut uncached: Plan, cached: Plan) {
+        assert!(cached.work.operations < uncached.work.operations);
+        assert!(cached.memory.peak_capacity_bytes <= uncached.memory.peak_capacity_bytes);
+        uncached.work = cached.work;
+        uncached.memory = cached.memory;
+        assert_eq!(uncached, cached);
+    }
+    #[test]
+    fn oracle_prepared_full_receipts_new_occupancy_tails_and_identity() {
+        let p = parameters(1, 2, None);
+        let model = Model::new(1, 2, &p).unwrap();
+        let prepared = prepare_query(&model, &[2.], limits()).unwrap();
+        assert_eq!(prepared.candidates(), &[0, 1, 2, 3]);
+        // Uniform analytic model: all pre-occupancy scores are exactly 1/4.
+        assert_eq!(
+            prepared.ranked(),
+            &[
+                Score {
+                    label: 0,
+                    probability: 0.25
+                },
+                Score {
+                    label: 1,
+                    probability: 0.25
+                },
+                Score {
+                    label: 2,
+                    probability: 0.25
+                },
+                Score {
+                    label: 3,
+                    probability: 0.25
+                }
+            ]
+        );
+        let weights = [
+            GroupWeight {
+                group: 0,
+                weight: 1,
+            },
+            GroupWeight {
+                group: 2,
+                weight: 5,
+            },
+        ];
+        let body = max_body_reservation_bytes(1).unwrap();
+        for owners in [[0, 0, 3], [1, 2, 0], [3, 3, 2]] {
+            let hashes = digests(2, &owners);
+            let m = membership(2, 37, &owners, &hashes);
+            for (reads, bytes, requested) in [
+                (2, body * 2, 1),
+                (3, body * 2 - 1, 100),
+                (0, body, 1),
+                (1, body - 1, 1),
+            ] {
+                let b = budget(reads, bytes);
+                let a = select(
+                    &model,
+                    &m,
+                    &[2.],
+                    &weights,
+                    snapshot(),
+                    b,
+                    requested,
+                    limits(),
+                )
+                .unwrap();
+                let c = select_prepared(
+                    &prepared,
+                    &model,
+                    &m,
+                    &[2.],
+                    &weights,
+                    snapshot(),
+                    b,
+                    requested,
+                    limits(),
+                )
+                .unwrap();
+                assert_serving_receipt(a, c);
+            }
+            let mut metadata = budget(3, body * 3);
+            metadata.delta = Charge {
+                reads: 1,
+                bytes: body + 1,
+            };
+            let mut changed_snapshot = snapshot();
+            changed_snapshot.delta = [9; 32];
+            changed_snapshot.revision += 1;
+            assert_serving_receipt(
+                select(
+                    &model,
+                    &m,
+                    &[2.],
+                    &weights,
+                    changed_snapshot,
+                    metadata,
+                    40,
+                    limits(),
+                )
+                .unwrap(),
+                select_prepared(
+                    &prepared,
+                    &model,
+                    &m,
+                    &[2.],
+                    &weights,
+                    changed_snapshot,
+                    metadata,
+                    40,
+                    limits(),
+                )
+                .unwrap(),
+            );
+            assert_eq!(
+                select_prepared(
+                    &prepared,
+                    &model,
+                    &m,
+                    &[1.],
+                    &weights,
+                    snapshot(),
+                    budget(2, body * 2),
+                    1,
+                    limits()
+                )
+                .unwrap_err(),
+                Error::IdentityMismatch
+            );
+            let changed = parameters(1, 2, Some(&vec![vec![0.2, 0.8]; 4]));
+            let changed = Model::new(1, 2, &changed).unwrap();
+            assert_eq!(
+                select_prepared(
+                    &prepared,
+                    &changed,
+                    &m,
+                    &[2.],
+                    &weights,
+                    snapshot(),
+                    budget(2, body * 2),
+                    1,
+                    limits()
+                )
+                .unwrap_err(),
+                Error::IdentityMismatch
+            );
+        }
+        let empty = Membership::new(1, 2, 0, &[], &[[0; 32]; 4], limits()).unwrap();
+        assert_serving_receipt(
+            select(
+                &model,
+                &empty,
+                &[2.],
+                &[],
+                snapshot(),
+                budget(1, body),
+                1,
+                limits(),
+            )
+            .unwrap(),
+            select_prepared(
+                &prepared,
+                &model,
+                &empty,
+                &[2.],
+                &[],
+                snapshot(),
+                budget(1, body),
+                1,
+                limits(),
+            )
+            .unwrap(),
+        );
+        assert!(Membership::new(1, 2, 16, &[0], &[[0; 32]; 4], limits()).is_err());
+        assert!(prepare_query(&model, &[0.], limits()).is_err());
+        assert!(prepare_query(&model, &[f32::NAN], limits()).is_err());
+        assert!(
+            prepare_query(
+                &model,
+                &[2.],
+                Limits {
+                    transient_bytes: 1,
+                    ..limits()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            prepare_query(
+                &model,
+                &[2.],
+                Limits {
+                    operations: 1,
+                    ..limits()
+                }
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn oracle_prepared_checkpoint_full_receipts_and_lower_tail() {
+        let p = parameters(1, 2, None);
+        let model = Model::new(1, 2, &p).unwrap();
+        let owners = [0, 0, 1, 2, 2, 3];
+        let after_owners = [0, 1, 0, 2, 2, 3];
+        let hashes = digests(2, &owners);
+        let after_hashes = digests(2, &after_owners);
+        let before = membership(2, 85, &owners, &hashes);
+        let after = membership(2, 85, &after_owners, &after_hashes);
+        let low = [
+            GroupWeight {
+                group: 0,
+                weight: 1,
+            },
+            GroupWeight {
+                group: 1,
+                weight: 1,
+            },
+        ];
+        let high = [
+            GroupWeight {
+                group: 0,
+                weight: 2,
+            },
+            GroupWeight {
+                group: 2,
+                weight: 8,
+            },
+        ];
+        let samples: Vec<_> = (0..256)
+            .map(|i| TrainingSample {
+                query: &[1.],
+                neighbors: if i < 20 { &low } else { &high },
+                requested_rows: 1,
+            })
+            .collect();
+        let cache: Vec<_> = samples
+            .iter()
+            .map(|x| prepare_query(&model, x.query, limits()).unwrap())
+            .collect();
+        let a = Evaluation {
+            model: &model,
+            membership: &before,
+            snapshot: snapshot(),
+        };
+        let b = Evaluation {
+            membership: &after,
+            ..a
+        };
+        let budget = budget(1, max_body_reservation_bytes(1).unwrap());
+        let mut raw = evaluate_checkpoint(a, b, &samples, budget, limits()).unwrap();
+        let cached =
+            evaluate_prepared_checkpoint(a, b, &cache, &cache, &samples, budget, limits()).unwrap();
+        // Independent counting: 20 lose one, 236 gain eight; tail regresses.
+        assert_eq!(
+            (
+                cached.before_total,
+                cached.after_total,
+                cached.lower_tail_rank
+            ),
+            (512, 2380, 13)
+        );
+        assert_eq!((cached.before_lower_tail, cached.after_lower_tail), (2, 1));
+        assert_eq!(
+            cached.decision,
+            AcceptanceDecision::Refused(Refusal::LowerTailRegression)
+        );
+        assert!(cached.work.operations < raw.work.operations);
+        raw.work = cached.work;
+        raw.memory = cached.memory;
+        assert_eq!(raw, cached);
+        assert!(
+            evaluate_prepared_checkpoint(a, b, &[], &cache, &samples, budget, limits()).is_err()
+        );
+        assert!(
+            evaluate_prepared_checkpoint(
+                a,
+                b,
+                &cache,
+                &cache,
+                &samples,
+                budget,
+                Limits {
+                    operations: 1,
+                    ..limits()
+                }
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn oracle_prepared_scale_s335_exact_serving_receipt() {
+        let p = parameters(768, 335, None);
+        let model = Model::new(768, 335, &p).unwrap();
+        let mut query = [0f32; 768];
+        query[0] = 2.;
+        let owners = [0, 7, 334, 335, 2345];
+        let hashes = digests(335, &owners);
+        let m = Membership::new(768, 335, 65, &owners, &hashes, limits()).unwrap();
+        let prepared = prepare_query(&model, &query, limits()).unwrap();
+        let expected: Vec<u32> = (0..8)
+            .flat_map(|i| (0..8).map(move |j| i * 335 + j))
+            .collect();
+        assert_eq!(prepared.candidates(), expected);
+        let weights = [GroupWeight {
+            group: 4,
+            weight: 1,
+        }];
+        let budget = budget(2, 2 * (64 + 1024 * 780));
+        assert_serving_receipt(
+            select(
+                &model,
+                &m,
+                &query,
+                &weights,
+                snapshot(),
+                budget,
+                17,
+                limits(),
+            )
+            .unwrap(),
+            select_prepared(
+                &prepared,
+                &model,
+                &m,
+                &query,
+                &weights,
+                snapshot(),
+                budget,
+                17,
+                limits(),
+            )
+            .unwrap(),
+        );
+    }
+    #[test]
+    fn oracle_observed_selection_full_receipts_identity_and_no_repeat_validation() {
+        let p = parameters(1, 2, None);
+        let model = Model::new(1, 2, &p).unwrap();
+        let owners = [0, 0, 3];
+        let hashes = digests(2, &owners);
+        let initial = membership(2, 37, &owners, &hashes);
+        let weights = [
+            GroupWeight {
+                group: 0,
+                weight: 1,
+            },
+            GroupWeight {
+                group: 2,
+                weight: 5,
+            },
+        ];
+        let samples = [TrainingSample {
+            query: &[2.],
+            neighbors: &weights,
+            requested_rows: 1,
+        }];
+        let training = prepare_training(&model, &initial, &samples, limits()).unwrap();
+        assert_eq!(training.observations()[0].normalized_query(), &[1.]);
+        let prepared =
+            prepare_observed_query(&model, &training.observations()[0], limits()).unwrap();
+        for owners in [[0, 0, 3], [1, 2, 0], [3, 3, 2]] {
+            let hashes = digests(2, &owners);
+            let m = membership(2, 37, &owners, &hashes);
+            let body = max_body_reservation_bytes(1).unwrap();
+            for b in [budget(2, body * 2), budget(1, body - 1), budget(0, body)] {
+                let raw = select(&model, &m, &[2.], &weights, snapshot(), b, 1, limits()).unwrap();
+                let observed = select_observed(
+                    &prepared,
+                    &model,
+                    &m,
+                    &training.observations()[0],
+                    snapshot(),
+                    b,
+                    limits(),
+                )
+                .unwrap();
+                // Literal fast-path work: 32 population/binding operations,
+                // two scans of <=256 candidates, and <=15 labels per teacher.
+                assert_eq!(observed.work.operations, 32 + 2 * 256 + 2 * 15);
+                assert_serving_receipt(raw, observed);
+            }
+        }
+        let other_query = [TrainingSample {
+            query: &[1.],
+            ..samples[0]
+        }];
+        let other = prepare_training(&model, &initial, &other_query, limits()).unwrap();
+        assert_eq!(
+            select_observed(
+                &prepared,
+                &model,
+                &initial,
+                &other.observations()[0],
+                snapshot(),
+                budget(1, 16 << 20),
+                limits()
+            )
+            .unwrap_err(),
+            Error::IdentityMismatch
+        );
+        let changed_owners = [0, 0, 3];
+        let changed_hashes = digests(2, &changed_owners);
+        let changed_rows = membership(2, 38, &changed_owners, &changed_hashes);
+        assert_eq!(
+            select_observed(
+                &prepared,
+                &model,
+                &changed_rows,
+                &training.observations()[0],
+                snapshot(),
+                budget(1, 16 << 20),
+                limits()
+            )
+            .unwrap_err(),
+            Error::IdentityMismatch
+        );
+        let bad = [GroupWeight {
+            group: 2,
+            weight: 6,
+        }];
+        let bad_samples = [TrainingSample {
+            neighbors: &bad,
+            ..samples[0]
+        }];
+        assert!(prepare_training(&model, &initial, &bad_samples, limits()).is_err());
+        assert!(
+            prepare_training(
+                &model,
+                &initial,
+                &samples,
+                Limits {
+                    operations: 1,
+                    ..limits()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            prepare_training(
+                &model,
+                &initial,
+                &samples,
+                Limits {
+                    transient_bytes: 1,
+                    ..limits()
+                }
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn oracle_observed_unrelated_occupancy_displacement_and_row_underfill() {
+        let p = parameters(1, 2, None);
+        let model = Model::new(1, 2, &p).unwrap();
+        let owners = [1, 2]; // label0 empty; teacher group0 selected at label1
+        let hashes = digests(2, &owners);
+        let initial = membership(2, 32, &owners, &hashes);
+        let moved_owners = [1, 0]; // group1 never appears in this teacher
+        let moved_hashes = digests(2, &moved_owners);
+        let moved = membership(2, 32, &moved_owners, &moved_hashes);
+        let teachers = [GroupWeight {
+            group: 0,
+            weight: 1,
+        }];
+        let samples = [TrainingSample {
+            query: &[1.],
+            neighbors: &teachers,
+            requested_rows: 1,
+        }];
+        let training = prepare_training(&model, &initial, &samples, limits()).unwrap();
+        let cache =
+            [prepare_observed_query(&model, &training.observations()[0], limits()).unwrap()];
+        let b = budget(1, max_body_reservation_bytes(1).unwrap());
+        for (m, label, hits) in [(&initial, 1, 1), (&moved, 0, 0)] {
+            let observed = select_observed(
+                &cache[0],
+                &model,
+                m,
+                &training.observations()[0],
+                snapshot(),
+                b,
+                limits(),
+            )
+            .unwrap();
+            assert_eq!(observed.selected[0].label, label);
+            assert_eq!(observed.covered_weight, hits);
+            assert_serving_receipt(
+                select(&model, m, &[1.], &teachers, snapshot(), b, 1, limits()).unwrap(),
+                observed,
+            );
+        }
+        let before =
+            evaluate_observed(&model, &initial, &training, &cache, snapshot(), b, limits())
+                .unwrap();
+        let after =
+            evaluate_observed(&model, &moved, &training, &cache, snapshot(), b, limits()).unwrap();
+        let loss = compare_coverage(&before, &after, limits()).unwrap();
+        assert_eq!((loss.before_total, loss.after_total), (1, 0));
+        assert!(!loss.accepted());
+        assert!(
+            compare_coverage(&after, &before, limits())
+                .unwrap()
+                .accepted()
+        );
+        // The same unrelated move can leave coverage intact but underfill rows.
+        let owners = [0, 0];
+        let hashes = digests(2, &owners);
+        let full = membership(2, 32, &owners, &hashes);
+        let moved_owners = [0, 1];
+        let moved_hashes = digests(2, &moved_owners);
+        let short = membership(2, 32, &moved_owners, &moved_hashes);
+        let samples = [TrainingSample {
+            requested_rows: 17,
+            ..samples[0]
+        }];
+        let training = prepare_training(&model, &full, &samples, limits()).unwrap();
+        for (m, visible) in [(&full, 32), (&short, 16)] {
+            let plan = select_observed(
+                &cache[0],
+                &model,
+                m,
+                &training.observations()[0],
+                snapshot(),
+                b,
+                limits(),
+            )
+            .unwrap();
+            assert_eq!(plan.covered_weight, 1);
+            assert_eq!(plan.visible_rows, visible);
+            assert_eq!(
+                plan.disposition,
+                if visible == 32 {
+                    Disposition::Selected
+                } else {
+                    Disposition::Underfill {
+                        requested: 17,
+                        visible: 16,
+                    }
+                }
+            );
+            assert_serving_receipt(
+                select(&model, m, &[1.], &teachers, snapshot(), b, 17, limits()).unwrap(),
+                plan,
+            );
+        }
+        let before =
+            evaluate_observed(&model, &full, &training, &cache, snapshot(), b, limits()).unwrap();
+        let after =
+            evaluate_observed(&model, &short, &training, &cache, snapshot(), b, limits()).unwrap();
+        assert_eq!(
+            compare_coverage(&before, &after, limits())
+                .unwrap()
+                .decision,
+            AcceptanceDecision::Refused(Refusal::IncompleteSelection)
+        );
+    }
+    #[test]
+    fn oracle_observed_baseline_acceptance_full_receipts_tail_and_stale_state() {
+        let p = parameters(1, 2, None);
+        let model = Model::new(1, 2, &p).unwrap();
+        let owners = [0, 0, 1, 2, 2, 3];
+        let moved_owners = [0, 1, 0, 2, 2, 3];
+        let hashes = digests(2, &owners);
+        let moved_hashes = digests(2, &moved_owners);
+        let initial = membership(2, 85, &owners, &hashes);
+        let moved = membership(2, 85, &moved_owners, &moved_hashes);
+        let low = [
+            GroupWeight {
+                group: 0,
+                weight: 1,
+            },
+            GroupWeight {
+                group: 1,
+                weight: 1,
+            },
+        ];
+        let high = [
+            GroupWeight {
+                group: 0,
+                weight: 2,
+            },
+            GroupWeight {
+                group: 2,
+                weight: 8,
+            },
+        ];
+        let samples: Vec<_> = (0..256)
+            .map(|i| TrainingSample {
+                query: &[2.],
+                neighbors: if i < 20 { &low } else { &high },
+                requested_rows: 1,
+            })
+            .collect();
+        let training = prepare_training(&model, &initial, &samples, limits()).unwrap();
+        let cache: Vec<_> = training
+            .observations()
+            .iter()
+            .map(|x| prepare_observed_query(&model, x, limits()).unwrap())
+            .collect();
+        let b = budget(1, max_body_reservation_bytes(1).unwrap());
+        let baseline =
+            evaluate_observed(&model, &initial, &training, &cache, snapshot(), b, limits())
+                .unwrap();
+        let proposal =
+            evaluate_observed(&model, &moved, &training, &cache, snapshot(), b, limits()).unwrap();
+        let comparison = compare_coverage(&baseline, &proposal, limits()).unwrap();
+        let evaluation = Evaluation {
+            model: &model,
+            membership: &initial,
+            snapshot: snapshot(),
+        };
+        let mut expected = evaluate_checkpoint(
+            evaluation,
+            Evaluation {
+                membership: &moved,
+                ..evaluation
+            },
+            &samples,
+            b,
+            limits(),
+        )
+        .unwrap();
+        // Independent counts from this immutable fixture: twenty lose one,
+        // the other 236 gain eight; total rises but the 13th-smallest falls.
+        assert_eq!(
+            (
+                comparison.before_total,
+                comparison.after_total,
+                comparison.before_lower_tail,
+                comparison.after_lower_tail,
+                comparison.lower_tail_rank
+            ),
+            (512, 2380, 2, 1, 13)
+        );
+        assert_eq!(
+            comparison.decision,
+            AcceptanceDecision::Refused(Refusal::LowerTailRegression)
+        );
+        assert_eq!(comparison.work.operations, 64);
+        assert_eq!(comparison.memory, Memory::default());
+        expected.work = comparison.work;
+        expected.memory = comparison.memory;
+        assert_eq!(expected, comparison);
+        baseline
+            .validate(&model, &initial, snapshot(), &training, b)
+            .unwrap();
+        assert_eq!(
+            baseline.validate(&model, &moved, snapshot(), &training, b),
+            Err(Error::IdentityMismatch)
+        );
+        let changed_samples: Vec<_> = (0..256)
+            .map(|_| TrainingSample {
+                query: &[2.],
+                neighbors: &high,
+                requested_rows: 1,
+            })
+            .collect();
+        let changed_training =
+            prepare_training(&model, &initial, &changed_samples, limits()).unwrap();
+        assert_eq!(
+            baseline.validate(&model, &initial, snapshot(), &changed_training, b),
+            Err(Error::IdentityMismatch)
+        );
+        let changed_state = evaluate_observed(
+            &model,
+            &initial,
+            &changed_training,
+            &cache,
+            snapshot(),
+            b,
+            limits(),
+        )
+        .unwrap();
+        assert!(compare_coverage(&baseline, &changed_state, limits()).is_err());
+        assert!(baseline.work.operations > comparison.work.operations);
+        assert!(proposal.work.operations > comparison.work.operations);
+        // Retrying a refused proposal uses exactly the same accepted baseline.
+        let repeated = compare_coverage(&baseline, &proposal, limits()).unwrap();
+        assert_eq!(repeated, comparison);
+        let changed = parameters(1, 2, Some(&vec![vec![0.2, 0.8]; 4]));
+        let changed = Model::new(1, 2, &changed).unwrap();
+        let changed_cache: Vec<_> = training
+            .observations()
+            .iter()
+            .map(|x| prepare_observed_query(&changed, x, limits()).unwrap())
+            .collect();
+        let after = evaluate_observed(
+            &changed,
+            &initial,
+            &training,
+            &changed_cache,
+            snapshot(),
+            b,
+            limits(),
+        )
+        .unwrap();
+        let checkpoint = compare_coverage(&baseline, &after, limits()).unwrap();
+        let mut expected = evaluate_checkpoint(
+            evaluation,
+            Evaluation {
+                model: &changed,
+                ..evaluation
+            },
+            &samples,
+            b,
+            limits(),
+        )
+        .unwrap();
+        expected.work = checkpoint.work;
+        expected.memory = checkpoint.memory;
+        assert_eq!(expected, checkpoint);
+        assert_eq!(
+            baseline.validate(&changed, &initial, snapshot(), &training, b),
+            Err(Error::IdentityMismatch)
+        );
+        assert!(
+            evaluate_observed(&model, &initial, &training, &[], snapshot(), b, limits()).is_err()
+        );
+        assert!(
+            evaluate_observed(
+                &model,
+                &initial,
+                &training,
+                &cache,
+                snapshot(),
+                b,
+                Limits {
+                    transient_bytes: 1,
+                    ..limits()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            compare_coverage(
+                &baseline,
+                &proposal,
+                Limits {
+                    operations: 1,
+                    ..limits()
+                }
+            )
+            .is_err()
         );
     }
 }

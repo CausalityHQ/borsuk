@@ -1,0 +1,90 @@
+{
+  "status": "NATIVE_QUALIFIED",
+  "native_commit": "693989978444884638790802e3da232b0a3bc7e2",
+  "original_exec": 12620,
+  "instance_id": "i-07290732127e619f6",
+  "terminated": true,
+  "terminal_artifacts_whole_sha_verified": 14,
+  "source_files": 409,
+  "source_before_after_current_candidate_equal": true,
+  "mandatory_tests": 21,
+  "stages": [
+    {
+      "stage": "budget-object-fitter-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "budget_object_",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": 0,
+      "gate_status": 0,
+      "started_at": "2026-10-06T07:01:12Z",
+      "finished_at": "2026-10-06T07:05:53Z"
+    },
+    {
+      "stage": "release",
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "--bin",
+        "hierarchical_semantic_cells"
+      ],
+      "exit_status": 0,
+      "gate_status": 0,
+      "started_at": "2026-10-06T07:05:53Z",
+      "finished_at": "2026-10-06T07:20:51Z"
+    },
+    {
+      "stage": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "exit_status": 0,
+      "gate_status": 0,
+      "started_at": "2026-10-06T07:20:52Z",
+      "finished_at": "2026-10-06T07:25:34Z"
+    },
+    {
+      "stage": "test-build",
+      "command": [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "BORSUK_TEST_BUILD_JOBS=1",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ],
+      "exit_status": 0,
+      "gate_status": 0,
+      "started_at": "2026-10-06T07:25:34Z",
+      "finished_at": "2026-10-06T07:32:30Z"
+    }
+  ],
+  "memory_cap_bytes": 8589934592,
+  "swap_peak_bytes": 0,
+  "oom_events": 0,
+  "drained": true,
+  "actual_full_workspace_execution": false,
+  "ann_quality_or_performance_measured": false,
+  "next_gate": "Authenticated source teachers, fixed fitting, sealed held-source top100 agreement; no vendor win claim."
+}
