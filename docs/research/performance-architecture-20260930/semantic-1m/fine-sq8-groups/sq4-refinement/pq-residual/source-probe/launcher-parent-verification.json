@@ -1,0 +1,34 @@
+{
+  "contract_sha256": "3df7f4dc6ddb2fa9e3a8c9afdf741e8e3599bbd03b6977e1e84f71d5cd16864a",
+  "corrected_check": {
+    "address_families": [
+      "AF_UNIX"
+    ],
+    "command": "/usr/bin/python3 scripts/launch_fine_pack_diagnostic.py --pq-residual-source --self-check",
+    "cpu_quota_percent": 100,
+    "environment_repair": "GIT_CONFIG_COUNT=1; safe.directory exact child worktree only",
+    "exec_session": 53763,
+    "exit_status": 0,
+    "memory_max_bytes": 268435456,
+    "result": "65 refusals; real tiny silent subprocess exit/report binding; opaque staging; resource/cleanup and SAME-ID lifecycle mocks passed",
+    "runtime_max_seconds": 120,
+    "swap_max_bytes": 0,
+    "tasks_max": 512,
+    "unit": "borsuk-pq-probe-root-check-r1-20261006"
+  },
+  "implementation_commit": "de8f77077c4267dc0ab915a7909a3c3e91bdced2",
+  "integrated_commit": "2ac1c8f7c932f35118cc212adf376553be8e3ded",
+  "native_qualification_pending": true,
+  "original_setup_check": {
+    "exit_status": 1,
+    "reason": "root systemd unit Git safe.directory ownership guard; no fixture/native/cloud ran"
+  },
+  "quality_or_performance_claim": false,
+  "schema": "borsuk-pq-residual-probe-parent-source-check-v1",
+  "science_executed": false,
+  "source": {
+    "bytes": 265140,
+    "path": "scripts/launch_fine_pack_diagnostic.py",
+    "sha256": "62f5ef50072acfee54c9fc83060a0a684e6745b83e8593f092cc44428ff16154"
+  }
+}
