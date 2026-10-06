@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-092b24c0ccb591afe",
+  "nodes": {
+    "0": {
+      "instance_id": "i-092b24c0ccb591afe"
+    }
+  },
+  "prefix": "research/semantic-router/20261006/cohere-cohort-implementation-a0002",
+  "source_commit": "d3f163f498beb26c58ee1155bd82092100c2c50b",
+  "source_archive_sha256": "aeeca910c806af85e6cf588a1f0245806001e67ed754034b10f5134d7dd6ac3e"
+}
