@@ -16,6 +16,7 @@ controller_code_sha256={every CODE path:SHA256}, native_source_manifest=
 --pq-residual-implementation qualifies the native raw-PQ residual candidate, without a corpus run.
 --co-selection-implementation qualifies the source-only virtual-layout falsifier.
 --budget-object-selector-implementation qualifies only the four native evaluator gates.
+--budget-object-fitter-implementation executes both modules and the same three build gates.
 --hierarchical-cells-implementation uses a separate minimal-archive v2 root.
 Its config additionally carries hierarchical_archive_authority(...)'s four
 ARCHIVE_FIELDS, derived from the committed controller tree before config freeze.
@@ -70,6 +71,7 @@ FINE_SQ8 = False
 PQ_RESIDUAL = False
 CO_SELECTION = False
 BUDGET_OBJECT_SELECTOR = False
+BUDGET_OBJECT_FITTER = False
 MINIMAL_ARCHIVE = False
 HIERARCHICAL_CELLS_DELTA = ('crates/borsuk/src/bin/hierarchical_semantic_cells.rs',
                           'crates/borsuk/src/hierarchical_semantic_cells.rs')
@@ -404,6 +406,50 @@ BUDGET_OBJECT_SELECTOR_STAGES = tuple((name, command.split()) for name, command 
     ('test-build', 'env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh')))
 
 
+BUDGET_OBJECT_FITTER_DELTA = ('crates/borsuk/src/budget_object_fitter.rs',
+                            'crates/borsuk/src/budget_object_selector.rs', 'crates/borsuk/src/lib.rs')
+BUDGET_OBJECT_FITTER_STAGE_SCHEMA = 'borsuk-budget-object-fitter-implementation-stage-v1'
+# Exact names from the same native worker final committed source contract.
+BUDGET_OBJECT_FITTER_REQUIRED_TESTS = {
+    'budget-object-fitter-tests': (
+        'budget_object_selector::tests::oracle_exhaustive_six_group_four_label_capacity_two',
+        'budget_object_selector::tests::oracle_mixture_33_omitted_global_winner_and_ties',
+        'budget_object_selector::tests::oracle_scale_s335_bounded_candidates_and_charges',
+        'budget_object_selector::tests::oracle_finite_mlp_nonunit_query_matches_independent_scalar',
+        'budget_object_selector::tests::oracle_budget_boundaries_overflow_and_finite_validation',
+        'budget_object_selector::tests::oracle_identity_binding_and_determinism',
+        'budget_object_selector::tests::oracle_move_swap_and_checkpoint_strict_acceptance',
+        'budget_object_selector::tests::oracle_prepared_full_receipts_new_occupancy_tails_and_identity',
+        'budget_object_selector::tests::oracle_prepared_checkpoint_full_receipts_and_lower_tail',
+        'budget_object_selector::tests::oracle_prepared_scale_s335_exact_serving_receipt',
+        'budget_object_fitter::tests::oracle_fitter_asymmetric_forward_gradient_and_finite_difference',
+        'budget_object_fitter::tests::oracle_fitter_sha_initialization_and_fixed_batch_update_order',
+        'budget_object_fitter::tests::oracle_fitter_tiny_actual_pipeline_determinism_acceptance_and_rollback',
+        'budget_object_fitter::tests::oracle_fitter_capacity_move_smallest_swap_and_production_mass',
+        'budget_object_fitter::tests::oracle_fitter_refusal_caps_coexistence_corruption_and_source_unchanged',
+    ),
+}
+BUDGET_OBJECT_FITTER_STAGES = (
+    ('budget-object-fitter-tests', 'cargo test --locked -p borsuk --lib budget_object_ -- --test-threads=1'.split()),
+    *BUDGET_OBJECT_SELECTOR_STAGES[1:],
+)
+
+
+def budget_object_fitter_required_tests():
+    required = BUDGET_OBJECT_FITTER_REQUIRED_TESTS
+    assert set(required) == {'budget-object-fitter-tests'} and required['budget-object-fitter-tests'], 'native fitter mandatory test names pending'
+    names = required['budget-object-fitter-tests']
+    assert len(names) == len(set(names)) and all(type(name) is str and re.fullmatch(r'budget_object_(?:selector|fitter)::tests::[a-zA-Z0-9_]+', name) for name in names), 'exact unique native fitter tests'
+    original = set(BUDGET_OBJECT_SELECTOR_REQUIRED_TESTS['budget-object-selector-tests'])
+    assert original < set(names) and any(name.startswith('budget_object_fitter::tests::') for name in names), 'original selector and additional fitter tests required'
+    return required
+
+
+def validate_budget_object_fitter_config(config):
+    assert config['mandatory_test_names_pending'] is False, 'native fitter mandatory test names pending'
+    assert config['mandatory_tests'] == {name:list(tests) for name,tests in budget_object_fitter_required_tests().items()}, 'exact native fitter test roster'
+
+
 def budget_object_selector_required_tests():
     required = BUDGET_OBJECT_SELECTOR_REQUIRED_TESTS
     assert set(required) == {'budget-object-selector-tests'} and required['budget-object-selector-tests'], 'native selector mandatory test names pending'
@@ -579,15 +625,15 @@ def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 
 
-def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False):
+def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False):
     """Select the protocol explicitly in every controller/worker process."""
     global SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, CONSTRAINED_SPLIT, CELL_OVERLAP, FINE_SQ8, PQ_RESIDUAL, CO_SELECTION, MINIMAL_ARCHIVE, NATIVE_DELTA, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
     global SCHEMA, CONFIG_SCHEMA, RECEIPT_SCHEMA, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, TERMINAL_IDENTITIES
-    global BUDGET_OBJECT_SELECTOR
-    assert type(budget_object_selector) is bool
+    global BUDGET_OBJECT_SELECTOR, BUDGET_OBJECT_FITTER
+    assert type(budget_object_selector) is type(budget_object_fitter) is bool
     assert type(semantic_1m) is type(test_build) is type(implementation) is type(startup_wave8) is type(root_reuse) is type(bounded_publication) is type(fixed48) is type(hierarchical_cells) is type(constrained_split) is type(cell_overlap) is type(fine_sq8) is type(pq_residual) is type(co_selection) is bool
-    scoped = startup_wave8 or root_reuse or bounded_publication or fixed48 or hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector
-    assert sum((startup_wave8, root_reuse, bounded_publication, fixed48, hierarchical_cells, constrained_split, cell_overlap, fine_sq8, pq_residual, co_selection, budget_object_selector)) <= 1 and not (scoped and test_build), 'mutually exclusive execution modes'
+    scoped = startup_wave8 or root_reuse or bounded_publication or fixed48 or hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter
+    assert sum((startup_wave8, root_reuse, bounded_publication, fixed48, hierarchical_cells, constrained_split, cell_overlap, fine_sq8, pq_residual, co_selection, budget_object_selector, budget_object_fitter)) <= 1 and not (scoped and test_build), 'mutually exclusive execution modes'
     if scoped:
         semantic_1m = implementation = True
     assert not (test_build and implementation), 'mutually exclusive execution modes'
@@ -606,9 +652,10 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
     PQ_RESIDUAL = pq_residual
     CO_SELECTION = co_selection
     BUDGET_OBJECT_SELECTOR = budget_object_selector
-    MINIMAL_ARCHIVE = hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector
-    NATIVE_DELTA = BUDGET_OBJECT_SELECTOR_DELTA if budget_object_selector else CO_SELECTION_DELTA if co_selection else PQ_RESIDUAL_DELTA if pq_residual else FINE_SQ8_DELTA if fine_sq8 else CELL_OVERLAP_DELTA if cell_overlap else CONSTRAINED_SPLIT_DELTA if constrained_split else HIERARCHICAL_CELLS_DELTA if hierarchical_cells else FIXED48_DELTA if fixed48 else BOUNDED_PUBLICATION_DELTA if bounded_publication else ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
-    RELEASE_ARTIFACTS = ('binaries/hierarchical_semantic_cells',) if cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector else ('binaries/check_hierarchical_split_balance', 'binaries/hierarchical_semantic_cells', 'binaries/two_bit_http') if constrained_split else ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation', 'binaries/check_semantic_router_scorer') if hierarchical_cells else ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
+    BUDGET_OBJECT_FITTER = budget_object_fitter
+    MINIMAL_ARCHIVE = hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter
+    NATIVE_DELTA = BUDGET_OBJECT_FITTER_DELTA if budget_object_fitter else BUDGET_OBJECT_SELECTOR_DELTA if budget_object_selector else CO_SELECTION_DELTA if co_selection else PQ_RESIDUAL_DELTA if pq_residual else FINE_SQ8_DELTA if fine_sq8 else CELL_OVERLAP_DELTA if cell_overlap else CONSTRAINED_SPLIT_DELTA if constrained_split else HIERARCHICAL_CELLS_DELTA if hierarchical_cells else FIXED48_DELTA if fixed48 else BOUNDED_PUBLICATION_DELTA if bounded_publication else ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
+    RELEASE_ARTIFACTS = ('binaries/hierarchical_semantic_cells',) if cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter else ('binaries/check_hierarchical_split_balance', 'binaries/hierarchical_semantic_cells', 'binaries/two_bit_http') if constrained_split else ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation', 'binaries/check_semantic_router_scorer') if hierarchical_cells else ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
     TERMINAL_IDENTITIES = (*FULL_TERMINAL_IDENTITIES, 'controller_source_commit', 'candidate_delta_paths') if scoped else FULL_TERMINAL_IDENTITIES
     if MINIMAL_ARCHIVE:
         TERMINAL_IDENTITIES += ARCHIVE_IDENTITIES
@@ -799,24 +846,47 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
                 if BUDGET_OBJECT_SELECTOR_REQUIRED_TESTS else {})
 
 
+    if budget_object_fitter:
+        ROOT = semantic.ROOT.parent/'semantic-1m/fine-sq8-groups/budget-object-selector/fitter-implementation-gates'
+        CONFIG = ROOT/'config.json'
+        TOKEN_PREFIX = 'budget-object-fitter-implementation-'
+        PREFIX = 'research/semantic-router/20261006/' + TOKEN_PREFIX
+        TAG = 'borsuk-budget-object-fitter-implementation'
+        SCHEMA = 'borsuk-budget-object-fitter-implementation-gates-spot-v1'
+        CONFIG_SCHEMA = 'borsuk-budget-object-fitter-implementation-gates-v1'
+        RECEIPT_SCHEMA = 'borsuk-budget-object-fitter-implementation-gates-receipt-v1'
+        CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_budget_object_fitter_implementation.sh')
+        FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_budget_object_fitter_implementation.sh'],
+            environment=dict(worker.ENVIRONMENT, BORSUK_TEST_BUILD_JOBS='1', BORSUK_TEST_BUILD_COMMAND=None,
+                BORSUK_CPU_THREADS='1', RAYON_NUM_THREADS='1', TOKIO_WORKER_THREADS='1',
+                BORSUK_FINE_TEST_ROOT=None, BORSUK_FINE_TEST_REMOTE=None, LC_ALL='C'),
+            mandatory_test_names_pending=not bool(BUDGET_OBJECT_FITTER_REQUIRED_TESTS),
+            mandatory_tests={name:list(tests) for name,tests in budget_object_fitter_required_tests().items()}
+                if BUDGET_OBJECT_FITTER_REQUIRED_TESTS else {})
+
+
 @contextlib.contextmanager
-def execution_mode(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False):
+def execution_mode(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False):
     """Restore the caller's protocol after a worker or synthetic check."""
-    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, CONSTRAINED_SPLIT, CELL_OVERLAP, FINE_SQ8, PQ_RESIDUAL, CO_SELECTION, BUDGET_OBJECT_SELECTOR
-    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector)
+    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, CONSTRAINED_SPLIT, CELL_OVERLAP, FINE_SQ8, PQ_RESIDUAL, CO_SELECTION, BUDGET_OBJECT_SELECTOR, BUDGET_OBJECT_FITTER
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter)
     try:
         yield
     finally:
-        configure(previous[0], test_build=previous[1], implementation=previous[2], startup_wave8=previous[3], root_reuse=previous[4], bounded_publication=previous[5], fixed48=previous[6], hierarchical_cells=previous[7], constrained_split=previous[8], cell_overlap=previous[9], fine_sq8=previous[10], pq_residual=previous[11], co_selection=previous[12], budget_object_selector=previous[13])
+        configure(previous[0], test_build=previous[1], implementation=previous[2], startup_wave8=previous[3], root_reuse=previous[4], bounded_publication=previous[5], fixed48=previous[6], hierarchical_cells=previous[7], constrained_split=previous[8], cell_overlap=previous[9], fine_sq8=previous[10], pq_residual=previous[11], co_selection=previous[12], budget_object_selector=previous[13], budget_object_fitter=previous[14])
 
 
 def mode_flag():
+    if BUDGET_OBJECT_FITTER:
+        return ' --budget-object-fitter-implementation'
     if BUDGET_OBJECT_SELECTOR:
         return ' --budget-object-selector-implementation'
     return ' --co-selection-implementation' if CO_SELECTION else ' --pq-residual-implementation' if PQ_RESIDUAL else ' --fine-sq8-implementation' if FINE_SQ8 else ' --cell-overlap-implementation' if CELL_OVERLAP else ' --constrained-split-implementation' if CONSTRAINED_SPLIT else ' --hierarchical-cells-implementation' if HIERARCHICAL_CELLS else ' --fixed48-implementation' if FIXED48 else ' --bounded-publication-implementation' if BOUNDED_PUBLICATION else ' --root-reuse-implementation' if ROOT_REUSE else ' --startup-wave8-implementation' if STARTUP_WAVE8 else ' --semantic-1m-implementation' if IMPLEMENTATION else ' --semantic-1m-test-build' if TEST_BUILD else ' --semantic-1m' if SEMANTIC_1M else ''
 
 
 def archive_binding_prefix():
+    if BUDGET_OBJECT_FITTER:
+        return 'BORSUK_BUDGET_OBJECT_FITTER_'
     if BUDGET_OBJECT_SELECTOR:
         return 'BORSUK_BUDGET_OBJECT_SELECTOR_'
     return 'BORSUK_CO_SELECTION_' if CO_SELECTION else 'BORSUK_PQ_RESIDUAL_' if PQ_RESIDUAL else 'BORSUK_FINE_SQ8_' if FINE_SQ8 else 'BORSUK_CELL_OVERLAP_' if CELL_OVERLAP else 'BORSUK_CONSTRAINED_SPLIT_' if CONSTRAINED_SPLIT else 'BORSUK_HIERARCHICAL_'
@@ -946,6 +1016,10 @@ def qualify(base=Path('.')):
     body = (base/CONFIG).read_bytes()
     config = json.loads(body)
     assert config['controller_authority_pending'] is False, 'root authority freeze pending'
+    if BUDGET_OBJECT_FITTER:
+        validate_budget_object_fitter_config(config)
+        assert set(config) == set(FIXED) | {'controller_authority_pending', 'controller_source_commit',
+            'controller_code_sha256', 'native_source_manifest', *ARCHIVE_FIELDS}, 'exact fitter config'
     if BUDGET_OBJECT_SELECTOR:
         validate_budget_object_selector_config(config)
         assert set(config) == set(FIXED) | {'controller_authority_pending', 'controller_source_commit',
@@ -982,7 +1056,7 @@ def qualify(base=Path('.')):
     manifest = json.loads((base/path).read_bytes())
     if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
         assert re.fullmatch('[0-9a-f]{40}', config['controller_source_commit']), 'frozen controller commit'
-        assert manifest['schema'] == ('borsuk-budget-object-selector-native-source-manifest-v1' if BUDGET_OBJECT_SELECTOR else 'borsuk-co-selection-native-source-manifest-v1' if CO_SELECTION else 'borsuk-pq-residual-native-source-manifest-v1' if PQ_RESIDUAL else 'borsuk-corrected-four-bit-native-source-manifest-v1' if FINE_SQ8 else 'borsuk-cell-overlap-native-source-manifest-v1' if CELL_OVERLAP else 'borsuk-constrained-split-native-source-manifest-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-native-source-manifest-v1' if HIERARCHICAL_CELLS else 'borsuk-fixed48-native-source-manifest-v1' if FIXED48 else 'borsuk-bounded-publication-native-source-manifest-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
+        assert manifest['schema'] == ('borsuk-budget-object-fitter-native-source-manifest-v1' if BUDGET_OBJECT_FITTER else 'borsuk-budget-object-selector-native-source-manifest-v1' if BUDGET_OBJECT_SELECTOR else 'borsuk-co-selection-native-source-manifest-v1' if CO_SELECTION else 'borsuk-pq-residual-native-source-manifest-v1' if PQ_RESIDUAL else 'borsuk-corrected-four-bit-native-source-manifest-v1' if FINE_SQ8 else 'borsuk-cell-overlap-native-source-manifest-v1' if CELL_OVERLAP else 'borsuk-constrained-split-native-source-manifest-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-native-source-manifest-v1' if HIERARCHICAL_CELLS else 'borsuk-fixed48-native-source-manifest-v1' if FIXED48 else 'borsuk-bounded-publication-native-source-manifest-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
         assert manifest['candidate_qualification_pending'] is True, 'source authority is not completed assurance'
         validate_candidate_delta(manifest['candidate_delta_paths'])
         if STARTUP_WAVE8:
@@ -993,7 +1067,7 @@ def qualify(base=Path('.')):
             assert manifest['control_native_source_commit'] == CONSTRAINED_SPLIT_CONTROL, 'exact original native control'
             validate_constrained_split_prefix(base)
     inventory = worker.source_hashes(base)
-    if FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR:
+    if FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR or BUDGET_OBJECT_FITTER:
         assert set(NATIVE_DELTA) <= set(inventory), 'complete corrected four-bit native source roster'
     assert type(manifest['source_file_count']) is int and manifest['source_file_count'] == len(inventory) > 0
     assert manifest['source_sha256'] == inventory, 'full native source drift'
@@ -1001,7 +1075,7 @@ def qualify(base=Path('.')):
     assert identity == manifest['source_identity_sha256']
     assert SEMANTIC_1M or identity == SOURCE_IDENTITY, 'historical native source identity'
     assert re.fullmatch('[0-9a-f]{40}', manifest['native_source_commit'])
-    proof = dict(schema='borsuk-budget-object-selector-implementation-gates-qualification-v1' if BUDGET_OBJECT_SELECTOR else 'borsuk-co-selection-implementation-gates-qualification-v1' if CO_SELECTION else 'borsuk-pq-residual-implementation-gates-qualification-v1' if PQ_RESIDUAL else 'borsuk-corrected-four-bit-implementation-gates-qualification-v1' if FINE_SQ8 else 'borsuk-cell-overlap-implementation-gates-qualification-v1' if CELL_OVERLAP else 'borsuk-constrained-split-implementation-gates-qualification-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-implementation-gates-qualification-v2' if HIERARCHICAL_CELLS else 'borsuk-fixed48-implementation-gates-qualification-v1' if FIXED48 else 'borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
+    proof = dict(schema='borsuk-budget-object-fitter-implementation-gates-qualification-v1' if BUDGET_OBJECT_FITTER else 'borsuk-budget-object-selector-implementation-gates-qualification-v1' if BUDGET_OBJECT_SELECTOR else 'borsuk-co-selection-implementation-gates-qualification-v1' if CO_SELECTION else 'borsuk-pq-residual-implementation-gates-qualification-v1' if PQ_RESIDUAL else 'borsuk-corrected-four-bit-implementation-gates-qualification-v1' if FINE_SQ8 else 'borsuk-cell-overlap-implementation-gates-qualification-v1' if CELL_OVERLAP else 'borsuk-constrained-split-implementation-gates-qualification-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-implementation-gates-qualification-v2' if HIERARCHICAL_CELLS else 'borsuk-fixed48-implementation-gates-qualification-v1' if FIXED48 else 'borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
         config_path=str(CONFIG), config_sha256=worker.sha(body), campaign_schema=SCHEMA,
         source_sha256=inventory, source_identity_sha256=identity, source_file_count=len(inventory),
         native_source_commit=manifest['native_source_commit'], native_source_manifest=pointer,
@@ -1021,7 +1095,7 @@ def qualify(base=Path('.')):
         proof.update(mandatory_test_names_pending=False, mandatory_tests=config['mandatory_tests'],
                      control_native_source_commit=CONSTRAINED_SPLIT_CONTROL,
                      control_module_prefix=CONSTRAINED_SPLIT_PREFIX)
-    if CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR:
+    if CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR or BUDGET_OBJECT_FITTER:
         proof.update(mandatory_test_names_pending=False, mandatory_tests=config['mandatory_tests'])
     if MINIMAL_ARCHIVE:
         proof.update(validate_hierarchical_archive(config, inventory, pointer['path'], base))
@@ -1072,13 +1146,13 @@ def stage(repo, out):
     return proof
 
 
-def record_constrained_split_stage(argv, *, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False):
+def record_constrained_split_stage(argv, *, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False):
     """Stage gate shared by the serial shell runner and bounded Python checks."""
-    strict_counts = cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector
-    required = budget_object_selector_required_tests() if budget_object_selector else co_selection_required_tests() if co_selection else pq_residual_required_tests() if pq_residual else fine_sq8_required_tests() if fine_sq8 else cell_overlap_required_tests() if cell_overlap else constrained_split_required_tests()
-    stages = BUDGET_OBJECT_SELECTOR_STAGES if budget_object_selector else CO_SELECTION_STAGES if co_selection else PQ_RESIDUAL_STAGES if pq_residual else FINE_SQ8_STAGES if fine_sq8 else CELL_OVERLAP_STAGES if cell_overlap else CONSTRAINED_SPLIT_STAGES
+    strict_counts = cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter
+    required = budget_object_fitter_required_tests() if budget_object_fitter else budget_object_selector_required_tests() if budget_object_selector else co_selection_required_tests() if co_selection else pq_residual_required_tests() if pq_residual else fine_sq8_required_tests() if fine_sq8 else cell_overlap_required_tests() if cell_overlap else constrained_split_required_tests()
+    stages = BUDGET_OBJECT_FITTER_STAGES if budget_object_fitter else BUDGET_OBJECT_SELECTOR_STAGES if budget_object_selector else CO_SELECTION_STAGES if co_selection else PQ_RESIDUAL_STAGES if pq_residual else FINE_SQ8_STAGES if fine_sq8 else CELL_OVERLAP_STAGES if cell_overlap else CONSTRAINED_SPLIT_STAGES
     resources = None
-    if budget_object_selector:
+    if budget_object_selector or budget_object_fitter:
         *argv, resource_log = argv
         if argv[2]:
             resources = Path(resource_log).read_text()
@@ -1098,15 +1172,15 @@ def record_constrained_split_stage(argv, *, cell_overlap=False, fine_sq8=False, 
                 tests = 0
             with Path(log).open() as source:
                 for line in source:
-                    if pq_residual or co_selection or budget_object_selector:
+                    if pq_residual or co_selection or budget_object_selector or budget_object_fitter:
                         failed += bool(re.fullmatch(r'test .+ \.\.\. (?:FAILED|ignored)\n?', line))
                         failed += line.startswith('test result: FAILED.')
-                    test = re.fullmatch(r'test (?:crates/borsuk/)?(.+) \.\.\. ok\n?' if pq_residual or co_selection or budget_object_selector else r'test (\S+) \.\.\. ok\n?', line)
+                    test = re.fullmatch(r'test (?:crates/borsuk/)?(.+) \.\.\. ok\n?' if pq_residual or co_selection or budget_object_selector or budget_object_fitter else r'test (\S+) \.\.\. ok\n?', line)
                     passed_lines += bool(test)
                     if strict_counts and test:
                         duplicate |= test[1] in seen
                         seen.add(test[1])
-                        wrong_stage |= (pq_residual or co_selection or budget_object_selector) and any(test[1] in names for name, names in required.items() if name != stage)
+                        wrong_stage |= (pq_residual or co_selection or budget_object_selector or budget_object_fitter) and any(test[1] in names for name, names in required.items() if name != stage)
                     if test and test[1] in passes:
                         passes[test[1]] += 1
                     summary = re.fullmatch(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; \d+ filtered out;.*\n?', line)
@@ -1118,15 +1192,15 @@ def record_constrained_split_stage(argv, *, cell_overlap=False, fine_sq8=False, 
     evidence_invalid = strict_counts and bool(finished) and (
         (stage not in ('release', 'clippy', 'test-build') and (summaries != 1 or passed_lines != tests)) or
         (stage == 'test-build' and test_builds != 1))
-    evidence_invalid |= (pq_residual or co_selection or budget_object_selector) and bool(finished) and (wrong_stage or
-        stage.startswith(('pq-residual-', 'co-selection-', 'budget-object-selector-')) and (seen != set(passes) or tests != len(passes)))
+    evidence_invalid |= (pq_residual or co_selection or budget_object_selector or budget_object_fitter) and bool(finished) and (wrong_stage or
+        stage.startswith(('pq-residual-', 'co-selection-', 'budget-object-selector-', 'budget-object-fitter-')) and (seen != set(passes) or tests != len(passes)))
     gate = (int(status) or int(log_status) or
         (96 if tests == 0 or failed or ignored or duplicate or evidence_invalid or any(count != 1 for count in passes.values()) else 0)) if finished else None
-    print(json.dumps(dict(schema=BUDGET_OBJECT_SELECTOR_STAGE_SCHEMA if budget_object_selector else CO_SELECTION_STAGE_SCHEMA if co_selection else PQ_RESIDUAL_STAGE_SCHEMA if pq_residual else FINE_SQ8_STAGE_SCHEMA if fine_sq8 else CELL_OVERLAP_STAGE_SCHEMA if cell_overlap else CONSTRAINED_SPLIT_STAGE_SCHEMA, stage=stage,
+    print(json.dumps(dict(schema=BUDGET_OBJECT_FITTER_STAGE_SCHEMA if budget_object_fitter else BUDGET_OBJECT_SELECTOR_STAGE_SCHEMA if budget_object_selector else CO_SELECTION_STAGE_SCHEMA if co_selection else PQ_RESIDUAL_STAGE_SCHEMA if pq_residual else FINE_SQ8_STAGE_SCHEMA if fine_sq8 else CELL_OVERLAP_STAGE_SCHEMA if cell_overlap else CONSTRAINED_SPLIT_STAGE_SCHEMA, stage=stage,
         started_at=started, finished_at=finished or None, exit_status=int(status) if finished else None,
         log_exit_status=int(log_status) if finished else None, gate_status=gate,
         tests_run=tests, required_test_passes=passes, command=command,
-        **({'resources':resources} if budget_object_selector else {})), sort_keys=True), flush=True)
+        **({'resources':resources} if budget_object_selector or budget_object_fitter else {})), sort_keys=True), flush=True)
     return gate or 0
 
 
@@ -1146,14 +1220,14 @@ def validate_budget_object_selector_resources(body, status):
             assert int(matches[0]) == status, 'stage resource exit'
 
 
-def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False):
+def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False):
     from datetime import datetime
-    strict_counts = cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector
-    assert sum((fixed48, hierarchical_cells, constrained_split, cell_overlap, fine_sq8, pq_residual, co_selection, budget_object_selector)) <= 1, 'mutually exclusive stage protocols'
-    stages = BUDGET_OBJECT_SELECTOR_STAGES if budget_object_selector else CO_SELECTION_STAGES if co_selection else PQ_RESIDUAL_STAGES if pq_residual else FINE_SQ8_STAGES if fine_sq8 else CELL_OVERLAP_STAGES if cell_overlap else CONSTRAINED_SPLIT_STAGES if constrained_split else HIERARCHICAL_CELLS_STAGES if hierarchical_cells else FIXED48_STAGES if fixed48 else BOUNDED_PUBLICATION_STAGES
-    schema = BUDGET_OBJECT_SELECTOR_STAGE_SCHEMA if budget_object_selector else CO_SELECTION_STAGE_SCHEMA if co_selection else PQ_RESIDUAL_STAGE_SCHEMA if pq_residual else FINE_SQ8_STAGE_SCHEMA if fine_sq8 else CELL_OVERLAP_STAGE_SCHEMA if cell_overlap else CONSTRAINED_SPLIT_STAGE_SCHEMA if constrained_split else HIERARCHICAL_CELLS_STAGE_SCHEMA if hierarchical_cells else FIXED48_STAGE_SCHEMA if fixed48 else BOUNDED_PUBLICATION_STAGE_SCHEMA
-    required = budget_object_selector_required_tests() if budget_object_selector else co_selection_required_tests() if co_selection else pq_residual_required_tests() if pq_residual else fine_sq8_required_tests() if fine_sq8 else cell_overlap_required_tests() if cell_overlap else constrained_split_required_tests() if constrained_split else HIERARCHICAL_CELLS_REQUIRED_TESTS if hierarchical_cells else FIXED48_REQUIRED_TESTS
-    named_protocol = fixed48 or hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector
+    strict_counts = cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter
+    assert sum((fixed48, hierarchical_cells, constrained_split, cell_overlap, fine_sq8, pq_residual, co_selection, budget_object_selector, budget_object_fitter)) <= 1, 'mutually exclusive stage protocols'
+    stages = BUDGET_OBJECT_FITTER_STAGES if budget_object_fitter else BUDGET_OBJECT_SELECTOR_STAGES if budget_object_selector else CO_SELECTION_STAGES if co_selection else PQ_RESIDUAL_STAGES if pq_residual else FINE_SQ8_STAGES if fine_sq8 else CELL_OVERLAP_STAGES if cell_overlap else CONSTRAINED_SPLIT_STAGES if constrained_split else HIERARCHICAL_CELLS_STAGES if hierarchical_cells else FIXED48_STAGES if fixed48 else BOUNDED_PUBLICATION_STAGES
+    schema = BUDGET_OBJECT_FITTER_STAGE_SCHEMA if budget_object_fitter else BUDGET_OBJECT_SELECTOR_STAGE_SCHEMA if budget_object_selector else CO_SELECTION_STAGE_SCHEMA if co_selection else PQ_RESIDUAL_STAGE_SCHEMA if pq_residual else FINE_SQ8_STAGE_SCHEMA if fine_sq8 else CELL_OVERLAP_STAGE_SCHEMA if cell_overlap else CONSTRAINED_SPLIT_STAGE_SCHEMA if constrained_split else HIERARCHICAL_CELLS_STAGE_SCHEMA if hierarchical_cells else FIXED48_STAGE_SCHEMA if fixed48 else BOUNDED_PUBLICATION_STAGE_SCHEMA
+    required = budget_object_fitter_required_tests() if budget_object_fitter else budget_object_selector_required_tests() if budget_object_selector else co_selection_required_tests() if co_selection else pq_residual_required_tests() if pq_residual else fine_sq8_required_tests() if fine_sq8 else cell_overlap_required_tests() if cell_overlap else constrained_split_required_tests() if constrained_split else HIERARCHICAL_CELLS_REQUIRED_TESTS if hierarchical_cells else FIXED48_REQUIRED_TESTS
+    named_protocol = fixed48 or hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter
     test_stage_indices = {index for index, (name, _) in enumerate(stages) if name not in ('release', 'clippy', 'test-build')}
     test_record_positions = {2*index+1 for index in test_stage_indices}
     named_stages = {test: index for index, (name, _) in enumerate(stages)
@@ -1167,9 +1241,9 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
     records = []
     with Path(log).open() as source:
         for line in source:
-            assert not (pq_residual or co_selection or budget_object_selector) or not re.fullmatch(r'test .+ \.\.\. (?:FAILED|ignored)\n?', line), 'unsuccessful selector stage test' if budget_object_selector else 'unsuccessful PQ residual stage test'
-            assert not (pq_residual or co_selection or budget_object_selector) or not line.startswith('test result: FAILED.'), 'failed selector stage summary' if budget_object_selector else 'failed PQ residual stage summary'
-            match = re.fullmatch(r'test (?:crates/borsuk/)?(.+) \.\.\. ok\n?' if pq_residual or co_selection or budget_object_selector else r'test (\S+) \.\.\. ok\n?', line)
+            assert not (pq_residual or co_selection or budget_object_selector or budget_object_fitter) or not re.fullmatch(r'test .+ \.\.\. (?:FAILED|ignored)\n?', line), 'unsuccessful selector stage test' if budget_object_selector else 'unsuccessful PQ residual stage test'
+            assert not (pq_residual or co_selection or budget_object_selector or budget_object_fitter) or not line.startswith('test result: FAILED.'), 'failed selector stage summary' if budget_object_selector else 'failed PQ residual stage summary'
+            match = re.fullmatch(r'test (?:crates/borsuk/)?(.+) \.\.\. ok\n?' if pq_residual or co_selection or budget_object_selector or budget_object_fitter else r'test (\S+) \.\.\. ok\n?', line)
             if strict_counts and match:
                 assert len(records) in test_record_positions, 'test outside execution stage'
                 assert match[1] not in seen[len(records)//2], 'duplicate test in stage: '+match[1]
@@ -1207,8 +1281,8 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
     assert len(records) == 2*len(stages), 'all completed stages required'
     assert all(count == 1 for count in passes.values()), 'named tests must pass exactly once'
     assert not strict_counts or all(summaries[index] == 1 and passed_lines[index] == test_counts[index] for index in test_stage_indices), 'actual nonzero test counts'
-    assert not (pq_residual or co_selection or budget_object_selector) or all(seen[index] == set(required[name]) and test_counts[index] == len(required[name])
-        for index, (name, _) in enumerate(stages) if name.startswith(('pq-residual-', 'co-selection-', 'budget-object-selector-'))), 'exact selector stage tests' if budget_object_selector else 'exact PQ residual stage tests'
+    assert not (pq_residual or co_selection or budget_object_selector or budget_object_fitter) or all(seen[index] == set(required[name]) and test_counts[index] == len(required[name])
+        for index, (name, _) in enumerate(stages) if name.startswith(('pq-residual-', 'co-selection-', 'budget-object-selector-', 'budget-object-fitter-'))), 'exact selector stage tests' if budget_object_selector else 'exact PQ residual stage tests'
     assert not (hierarchical_cells or constrained_split or strict_counts) or test_builds == 1, 'actual unshimmed test-build completion'
     previous_finish = None
     for index, (name, command) in enumerate(stages):
@@ -1221,7 +1295,7 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
             assert start['log_exit_status'] is None
             assert type(end['log_exit_status']) is int and end['log_exit_status'] == 0, 'stage log exit'
         assert start['started_at'] == end['started_at']
-        if budget_object_selector:
+        if budget_object_selector or budget_object_fitter:
             assert start['resources'] is None
             validate_budget_object_selector_resources(end['resources'], end['exit_status'])
         assert datetime.fromisoformat(end['finished_at']) >= datetime.fromisoformat(start['started_at'])
@@ -1242,6 +1316,8 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
 def validate_receipt(out, proof):
     out = Path(out)
     assert proof['config_path'] == str(CONFIG) and proof['campaign_schema'] == SCHEMA, 'receipt mode'
+    if BUDGET_OBJECT_FITTER:
+        validate_budget_object_fitter_config(proof)
     if BUDGET_OBJECT_SELECTOR:
         validate_budget_object_selector_config(proof)
     if CO_SELECTION:
@@ -1258,6 +1334,8 @@ def validate_receipt(out, proof):
         validate_hierarchical_archive(proof, proof['source_sha256'], proof['native_source_manifest']['path'])
     receipt = json.loads((out/'workspace-receipt.json').read_bytes())
     assert receipt['schema'] == RECEIPT_SCHEMA
+    if BUDGET_OBJECT_FITTER:
+        validate_budget_object_fitter_config(receipt)
     if BUDGET_OBJECT_SELECTOR:
         validate_budget_object_selector_config(receipt)
     if CO_SELECTION:
@@ -1309,7 +1387,7 @@ def validate_receipt(out, proof):
     for name in ('source-before.json','source-after.json'):
         assert json.loads((out/name).read_bytes()) == proof['source_sha256']
     if BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
-        assert receipt['stages'] == validate_bounded_publication_stages(out/'test.log', fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS, constrained_split=CONSTRAINED_SPLIT, cell_overlap=CELL_OVERLAP, fine_sq8=FINE_SQ8, pq_residual=PQ_RESIDUAL, co_selection=CO_SELECTION, budget_object_selector=BUDGET_OBJECT_SELECTOR), 'actual stage receipt'
+        assert receipt['stages'] == validate_bounded_publication_stages(out/'test.log', fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS, constrained_split=CONSTRAINED_SPLIT, cell_overlap=CELL_OVERLAP, fine_sq8=FINE_SQ8, pq_residual=PQ_RESIDUAL, co_selection=CO_SELECTION, budget_object_selector=BUDGET_OBJECT_SELECTOR, budget_object_fitter=BUDGET_OBJECT_FITTER), 'actual stage receipt'
     worker.validate_cgroup(json.loads((out/'workspace-cgroup.json').read_bytes()))
     return receipt
 
@@ -1318,6 +1396,8 @@ def user_data(commit, archive_sha, archive_key, prefix, qualification):
     assert re.fullmatch('[0-9a-f]{40}', commit) and re.fullmatch('[0-9a-f]{64}', archive_sha)
     assert re.fullmatch(re.escape(PREFIX)+r'a[0-9]{4}', prefix)
     assert qualification['campaign_schema'] == SCHEMA and qualification['config_path'] == str(CONFIG)
+    if BUDGET_OBJECT_FITTER:
+        validate_budget_object_fitter_config(qualification)
     if BUDGET_OBJECT_SELECTOR:
         validate_budget_object_selector_config(qualification)
     if CO_SELECTION:
@@ -1392,6 +1472,8 @@ def replay(out):
     terminal = json.loads((out/'aws-terminal.json').read_bytes())
     proof = reservation['qualification']
     assert proof['config_path'] == str(CONFIG) and proof['campaign_schema'] == SCHEMA, 'replay mode'
+    if BUDGET_OBJECT_FITTER:
+        validate_budget_object_fitter_config(proof)
     if BUDGET_OBJECT_SELECTOR:
         validate_budget_object_selector_config(proof)
     if FINE_SQ8:
@@ -1490,7 +1572,7 @@ def _worker_self_check(proof, config_body, manifest_body):
         failures += ('missing-binary', 'bad-binary', 'symlink-binary', 'copy-failure')
     if BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
         failures += ('missing-stage', 'zero-stage-record', 'stage-order', 'stage-bool', 'missing-cap-proof')
-    if CONSTRAINED_SPLIT or CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR:
+    if CONSTRAINED_SPLIT or CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR or BUDGET_OBJECT_FITTER:
         failures += ('gate-failure', 'tee-failure', 'ignored-tests')
     for failure in failures:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1530,28 +1612,28 @@ def _worker_self_check(proof, config_body, manifest_body):
                 assert not Path(kw['env']['CARGO_TARGET_DIR']).is_relative_to(repo)
                 kw['stdout'].write(b'full mocked cargo log\n')
                 if BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
-                    stages = list(BUDGET_OBJECT_SELECTOR_STAGES if BUDGET_OBJECT_SELECTOR else CO_SELECTION_STAGES if CO_SELECTION else PQ_RESIDUAL_STAGES if PQ_RESIDUAL else FINE_SQ8_STAGES if FINE_SQ8 else CELL_OVERLAP_STAGES if CELL_OVERLAP else CONSTRAINED_SPLIT_STAGES if CONSTRAINED_SPLIT else HIERARCHICAL_CELLS_STAGES if HIERARCHICAL_CELLS else FIXED48_STAGES if FIXED48 else BOUNDED_PUBLICATION_STAGES)
+                    stages = list(BUDGET_OBJECT_FITTER_STAGES if BUDGET_OBJECT_FITTER else BUDGET_OBJECT_SELECTOR_STAGES if BUDGET_OBJECT_SELECTOR else CO_SELECTION_STAGES if CO_SELECTION else PQ_RESIDUAL_STAGES if PQ_RESIDUAL else FINE_SQ8_STAGES if FINE_SQ8 else CELL_OVERLAP_STAGES if CELL_OVERLAP else CONSTRAINED_SPLIT_STAGES if CONSTRAINED_SPLIT else HIERARCHICAL_CELLS_STAGES if HIERARCHICAL_CELLS else FIXED48_STAGES if FIXED48 else BOUNDED_PUBLICATION_STAGES)
                     if failure == 'stage-order':
                         stages.reverse()
                     for index, (name, command) in enumerate(stages):
                         if failure == 'missing-stage' and index == len(stages)-1:
                             continue
-                        record = dict(schema=BUDGET_OBJECT_SELECTOR_STAGE_SCHEMA if BUDGET_OBJECT_SELECTOR else CO_SELECTION_STAGE_SCHEMA if CO_SELECTION else PQ_RESIDUAL_STAGE_SCHEMA if PQ_RESIDUAL else FINE_SQ8_STAGE_SCHEMA if FINE_SQ8 else CELL_OVERLAP_STAGE_SCHEMA if CELL_OVERLAP else CONSTRAINED_SPLIT_STAGE_SCHEMA if CONSTRAINED_SPLIT else HIERARCHICAL_CELLS_STAGE_SCHEMA if HIERARCHICAL_CELLS else FIXED48_STAGE_SCHEMA if FIXED48 else BOUNDED_PUBLICATION_STAGE_SCHEMA, stage=name,
+                        record = dict(schema=BUDGET_OBJECT_FITTER_STAGE_SCHEMA if BUDGET_OBJECT_FITTER else BUDGET_OBJECT_SELECTOR_STAGE_SCHEMA if BUDGET_OBJECT_SELECTOR else CO_SELECTION_STAGE_SCHEMA if CO_SELECTION else PQ_RESIDUAL_STAGE_SCHEMA if PQ_RESIDUAL else FINE_SQ8_STAGE_SCHEMA if FINE_SQ8 else CELL_OVERLAP_STAGE_SCHEMA if CELL_OVERLAP else CONSTRAINED_SPLIT_STAGE_SCHEMA if CONSTRAINED_SPLIT else HIERARCHICAL_CELLS_STAGE_SCHEMA if HIERARCHICAL_CELLS else FIXED48_STAGE_SCHEMA if FIXED48 else BOUNDED_PUBLICATION_STAGE_SCHEMA, stage=name,
                             command=command, started_at='2026-10-02T00:00:00Z',
                             finished_at=None, exit_status=None, gate_status=None, tests_run=None)
                         field = 'required_test_passes' if FIXED48 or MINIMAL_ARCHIVE else 'publication_cap_test_passed'
                         record[field] = None
-                        if BUDGET_OBJECT_SELECTOR:
+                        if BUDGET_OBJECT_SELECTOR or BUDGET_OBJECT_FITTER:
                             record['resources'] = None
-                        if CONSTRAINED_SPLIT or CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR:
+                        if CONSTRAINED_SPLIT or CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR or BUDGET_OBJECT_FITTER:
                             record['log_exit_status'] = None
                         kw['stdout'].write(encoded(record)+b'\n')
-                        named = (budget_object_selector_required_tests() if BUDGET_OBJECT_SELECTOR else co_selection_required_tests() if CO_SELECTION else pq_residual_required_tests() if PQ_RESIDUAL else fine_sq8_required_tests() if FINE_SQ8 else cell_overlap_required_tests() if CELL_OVERLAP else constrained_split_required_tests() if CONSTRAINED_SPLIT else HIERARCHICAL_CELLS_REQUIRED_TESTS if HIERARCHICAL_CELLS else FIXED48_REQUIRED_TESTS).get(name, ()) if FIXED48 or MINIMAL_ARCHIVE else ()
+                        named = (budget_object_fitter_required_tests() if BUDGET_OBJECT_FITTER else budget_object_selector_required_tests() if BUDGET_OBJECT_SELECTOR else co_selection_required_tests() if CO_SELECTION else pq_residual_required_tests() if PQ_RESIDUAL else fine_sq8_required_tests() if FINE_SQ8 else cell_overlap_required_tests() if CELL_OVERLAP else constrained_split_required_tests() if CONSTRAINED_SPLIT else HIERARCHICAL_CELLS_REQUIRED_TESTS if HIERARCHICAL_CELLS else FIXED48_REQUIRED_TESTS).get(name, ()) if FIXED48 or MINIMAL_ARCHIVE else ()
                         if FIXED48 or MINIMAL_ARCHIVE:
                             if failure != 'missing-cap-proof':
                                 for test in named:
                                     kw['stdout'].write(('test '+test+' ... ok\n').encode())
-                            if (CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR) and not named and name not in ('release', 'clippy', 'test-build'):
+                            if (CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR or BUDGET_OBJECT_FITTER) and not named and name not in ('release', 'clippy', 'test-build'):
                                 kw['stdout'].write(b'test tests::regression ... ok\n')
                             if name not in ('release', 'clippy', 'test-build'):
                                 kw['stdout'].write(f'test result: ok. {max(1, len(named))} passed; 0 failed; {int(failure == "ignored-tests")} ignored; 0 measured; 100 filtered out; finished in 0.00s\n'.encode())
@@ -1561,10 +1643,10 @@ def _worker_self_check(proof, config_body, manifest_body):
                             kw['stdout'].write(b'rust-test-build status=0 elapsed_seconds=0 jobs=1\n')
                         record.update(finished_at=record['started_at'], exit_status=0, gate_status=0,
                             tests_run=(0 if failure == 'zero-stage-record' else False if failure == 'stage-bool' else max(1, len(named))) if name not in ('release', 'clippy', 'test-build') else None)
-                        if CONSTRAINED_SPLIT or CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR:
+                        if CONSTRAINED_SPLIT or CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR or BUDGET_OBJECT_FITTER:
                             record['gate_status'] = 96 if failure == 'gate-failure' else 0
                             record['log_exit_status'] = 18 if failure == 'tee-failure' else 0
-                        if BUDGET_OBJECT_SELECTOR:
+                        if BUDGET_OBJECT_SELECTOR or BUDGET_OBJECT_FITTER:
                             record['resources'] = 'User time (seconds): 0.01\nSystem time (seconds): 0.01\nElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.02\nMaximum resident set size (kbytes): 10000\nExit status: 0\n'
                         record[field] = {test: int(failure != 'missing-cap-proof') for test in named} if FIXED48 or MINIMAL_ARCHIVE else (failure != 'missing-cap-proof') if index == 1 else None
                         kw['stdout'].write(encoded(record)+b'\n')
@@ -1595,7 +1677,7 @@ def _worker_self_check(proof, config_body, manifest_body):
                     patches.enter_context(patch.object(worker.shutil, 'copyfileobj', side_effect=OSError('binary copy failed')))
                 previous = authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.HIERARCHICAL_CELLS, authority.CONSTRAINED_SPLIT, authority.CELL_OVERLAP, authority.FINE_SQ8, authority.PQ_RESIDUAL, authority.CO_SELECTION, authority.CONFIG, authority.CODE, authority.FIXED
                 result = worker.main('cargo' if TEST_BUILD or IMPLEMENTATION else 'fake-cargo', repo, out,
-                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION, startup_wave8=STARTUP_WAVE8, root_reuse=ROOT_REUSE, bounded_publication=BOUNDED_PUBLICATION, fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS, constrained_split=CONSTRAINED_SPLIT, cell_overlap=CELL_OVERLAP, fine_sq8=FINE_SQ8, pq_residual=PQ_RESIDUAL, co_selection=CO_SELECTION, budget_object_selector=BUDGET_OBJECT_SELECTOR)
+                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION, startup_wave8=STARTUP_WAVE8, root_reuse=ROOT_REUSE, bounded_publication=BOUNDED_PUBLICATION, fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS, constrained_split=CONSTRAINED_SPLIT, cell_overlap=CELL_OVERLAP, fine_sq8=FINE_SQ8, pq_residual=PQ_RESIDUAL, co_selection=CO_SELECTION, budget_object_selector=BUDGET_OBJECT_SELECTOR, budget_object_fitter=BUDGET_OBJECT_FITTER)
                 assert previous == (authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.HIERARCHICAL_CELLS, authority.CONSTRAINED_SPLIT, authority.CELL_OVERLAP, authority.FINE_SQ8, authority.PQ_RESIDUAL, authority.CO_SELECTION, authority.CONFIG, authority.CODE, authority.FIXED)
             assert len(calls) == 1, 'full test repeated'
             assert type(result['exit_status']) is int
@@ -1645,13 +1727,13 @@ def _worker_self_check(proof, config_body, manifest_body):
                             (out/'workspace-receipt.json').write_bytes(encoded(dict(result, **{key:value})))
                             rejected(lambda:validate_receipt(out, proof))
                         (out/'workspace-receipt.json').write_bytes(encoded(result))
-                    if CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR:
+                    if CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR or BUDGET_OBJECT_FITTER:
                         for key,value in (('mandatory_test_names_pending', True), ('mandatory_tests', {})):
                             (out/'workspace-receipt.json').write_bytes(encoded(dict(result, **{key:value})))
                             rejected(lambda:validate_receipt(out, proof))
                         (out/'workspace-receipt.json').write_bytes(encoded(result))
                     if BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
-                        assert len(result['stages']) == (len(BUDGET_OBJECT_SELECTOR_STAGES) if BUDGET_OBJECT_SELECTOR else len(CO_SELECTION_STAGES) if CO_SELECTION else len(PQ_RESIDUAL_STAGES) if PQ_RESIDUAL else len(FINE_SQ8_STAGES) if FINE_SQ8 else 7 if CELL_OVERLAP else 6 if MINIMAL_ARCHIVE else 7) and all(record['tests_run'] > 0 for record in result['stages'] if record['stage'] not in ('release', 'clippy', 'test-build'))
+                        assert len(result['stages']) == (len(BUDGET_OBJECT_FITTER_STAGES) if BUDGET_OBJECT_FITTER else len(BUDGET_OBJECT_SELECTOR_STAGES) if BUDGET_OBJECT_SELECTOR else len(CO_SELECTION_STAGES) if CO_SELECTION else len(PQ_RESIDUAL_STAGES) if PQ_RESIDUAL else len(FINE_SQ8_STAGES) if FINE_SQ8 else 7 if CELL_OVERLAP else 6 if MINIMAL_ARCHIVE else 7) and all(record['tests_run'] > 0 for record in result['stages'] if record['stage'] not in ('release', 'clippy', 'test-build'))
                         for stages in ([], result['stages'][:-1], list(reversed(result['stages']))):
                             (out/'workspace-receipt.json').write_bytes(encoded(dict(result, stages=stages)))
                             rejected(lambda:validate_receipt(out, proof))
@@ -2567,68 +2649,83 @@ def _constrained_split_self_check():
     print('PASS constrained split exact config/native prefix/test names; six serial gates/log exits; existing hierarchical mode preserved')
 
 
-def _budget_object_selector_self_check():
+def _budget_object_selector_self_check(*, budget_object_fitter=False):
     """Minimal source-bound fixtures only; Rust and cloud execution are mocked."""
     if __name__ == '__main__':
         from scripts import launch_native_workspace_execution_spot as authority
-        return authority._budget_object_selector_self_check()
+        return authority._budget_object_selector_self_check(budget_object_fitter=budget_object_fitter)
     import inspect
     from shlex import split
     import types
     module = sys.modules[__name__]
     base = Path(__file__).resolve().parents[1]
-    assert 'budget_object_selector' in inspect.signature(configure).parameters, 'selector mode missing'
-    assert 'budget_object_selector' in inspect.signature(execution_mode).parameters
-    assert 'budget_object_selector' in inspect.signature(worker.main).parameters
+    mode_name = 'budget_object_fitter' if budget_object_fitter else 'budget_object_selector'
+    mode = {mode_name: True}
+    tag = 'budget-object-fitter' if budget_object_fitter else 'budget-object-selector'
+    required_attr = 'BUDGET_OBJECT_FITTER_REQUIRED_TESTS' if budget_object_fitter else 'BUDGET_OBJECT_SELECTOR_REQUIRED_TESTS'
+    required_tests = budget_object_fitter_required_tests if budget_object_fitter else budget_object_selector_required_tests
+    validate_config = validate_budget_object_fitter_config if budget_object_fitter else validate_budget_object_selector_config
+    stages = BUDGET_OBJECT_FITTER_STAGES if budget_object_fitter else BUDGET_OBJECT_SELECTOR_STAGES
+    stage_name = tag+'-tests'
+    assert mode_name in inspect.signature(configure).parameters, 'execution mode missing'
+    assert mode_name in inspect.signature(execution_mode).parameters
+    assert mode_name in inspect.signature(worker.main).parameters
     # Compare every historical config/roster byte with the exact opening base.
     old = types.ModuleType('selector_historical_protocol')
     old.__file__ = __file__
-    exec(compile(subprocess.check_output(['git', 'show', BUDGET_OBJECT_SELECTOR_CHECK_BASE+':scripts/launch_native_workspace_execution_spot.py'], cwd=base), '<historical-protocol>', 'exec'), old.__dict__)
+    exec(compile(subprocess.check_output(['git', 'show', ('bb8fe89f30e8e5dcf9fbb6a5bf4440704dc01f66' if budget_object_fitter else BUDGET_OBJECT_SELECTOR_CHECK_BASE)+':scripts/launch_native_workspace_execution_spot.py'], cwd=base), '<historical-protocol>', 'exec'), old.__dict__)
     fields = ('ROOT', 'CONFIG', 'PREFIX', 'TOKEN_PREFIX', 'TAG', 'SCHEMA', 'CONFIG_SCHEMA',
               'RECEIPT_SCHEMA', 'CODE', 'FIXED', 'ARTIFACTS', 'RELEASE_ARTIFACTS', 'TERMINAL_IDENTITIES', 'NATIVE_DELTA')
     modes = [{}, {'semantic_1m':True}, {'semantic_1m':True, 'test_build':True},
              {'semantic_1m':True, 'implementation':True}]
     modes += [{name:True} for name in ('startup_wave8', 'root_reuse', 'bounded_publication',
         'fixed48', 'hierarchical_cells', 'constrained_split', 'cell_overlap', 'fine_sq8', 'pq_residual', 'co_selection')]
-    for mode in modes:
-        old.configure(**mode)
-        with execution_mode(**mode):
+    historical_modes = [*modes, {"budget_object_selector":True}] if budget_object_fitter else modes
+    for historical_mode in historical_modes:
+        old.configure(**historical_mode)
+        with execution_mode(**historical_mode):
             assert all(encoded(str(globals()[name]) if isinstance(globals()[name], Path) else globals()[name]) ==
                 encoded(str(getattr(old, name)) if isinstance(getattr(old, name), Path) else getattr(old, name)) for name in fields), 'historical protocol bytes changed'
-    for mode in ('fixed48', 'hierarchical_cells', 'constrained_split', 'cell_overlap', 'fine_sq8', 'pq_residual', 'co_selection'):
-        _fixed48_stages_self_check(**{mode:True}) if mode != 'fixed48' else _fixed48_stages_self_check()
-    with patch.object(module, 'BUDGET_OBJECT_SELECTOR_REQUIRED_TESTS', {}), execution_mode(budget_object_selector=True):
+    for regression_mode in ('fixed48', 'hierarchical_cells', 'constrained_split', 'cell_overlap', 'fine_sq8', 'pq_residual', 'co_selection'):
+        _fixed48_stages_self_check(**{regression_mode:True}) if regression_mode != 'fixed48' else _fixed48_stages_self_check()
+    with patch.object(module, required_attr, {}), execution_mode(**mode):
         assert FIXED['mandatory_test_names_pending'] is True
-        rejected(budget_object_selector_required_tests)
-        rejected(lambda:validate_budget_object_selector_config(FIXED))
-    synthetic = {'budget-object-selector-tests': ('budget_object_selector::tests::synthetic_contract_fixture',)}
-    with patch.object(module, 'BUDGET_OBJECT_SELECTOR_REQUIRED_TESTS', synthetic), execution_mode(budget_object_selector=True):
-        assert len(BUDGET_OBJECT_SELECTOR_STAGES) == 4
-        assert NATIVE_DELTA == ('crates/borsuk/src/budget_object_selector.rs', 'crates/borsuk/src/lib.rs')
+        rejected(required_tests)
+        rejected(lambda:validate_config(FIXED))
+    synthetic_names = (*BUDGET_OBJECT_SELECTOR_REQUIRED_TESTS['budget-object-selector-tests'],
+        'budget_object_selector::tests::synthetic_prepared_fixture', 'budget_object_fitter::tests::synthetic_contract_fixture') if budget_object_fitter else ('budget_object_selector::tests::synthetic_contract_fixture',)
+    synthetic = {stage_name: synthetic_names}
+    with patch.object(module, required_attr, synthetic), execution_mode(**mode):
+        assert len(stages) == 4
+        assert set(NATIVE_DELTA) == {'crates/borsuk/src/budget_object_selector.rs', 'crates/borsuk/src/lib.rs'} | ({'crates/borsuk/src/budget_object_fitter.rs'} if budget_object_fitter else set())
         assert RELEASE_ARTIFACTS == ('binaries/hierarchical_semantic_cells',)
-        assert str(ROOT).endswith('fine-sq8-groups/budget-object-selector/implementation-gates')
-        assert mode_flag() == ' --budget-object-selector-implementation'
-        assert archive_binding_prefix() == 'BORSUK_BUDGET_OBJECT_SELECTOR_'
-        assert CONFIG_SCHEMA == FIXED['schema'] == 'borsuk-budget-object-selector-implementation-gates-v1'
-        assert CODE == (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_budget_object_selector_implementation.sh')
+        assert str(ROOT).endswith('fine-sq8-groups/budget-object-selector/'+('fitter-implementation-gates' if budget_object_fitter else 'implementation-gates'))
+        assert mode_flag() == ' --'+tag+'-implementation'
+        assert archive_binding_prefix() == 'BORSUK_'+tag.replace('-','_').upper()+'_'
+        assert CONFIG_SCHEMA == FIXED['schema'] == 'borsuk-'+tag+'-implementation-gates-v1'
+        assert CODE == (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_'+mode_name+'_implementation.sh')
         assert ARTIFACTS == (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS)
-        for mode in modes[2:3]+modes[4:]:
-            rejected(lambda:configure(budget_object_selector=True, **mode))
-        rejected(lambda:configure(budget_object_selector=1))
-        for invalid in ({}, {'budget-object-selector-tests': ()},
-                {'budget-object-selector-tests': synthetic['budget-object-selector-tests']*2},
-                {'budget-object-selector-tests': ('tests::foreign',)}):
-            with patch.object(module, 'BUDGET_OBJECT_SELECTOR_REQUIRED_TESTS', invalid):
-                rejected(budget_object_selector_required_tests)
+        for conflicting_mode in historical_modes[2:3]+historical_modes[4:]:
+            rejected(lambda:configure(**mode, **conflicting_mode))
+        rejected(lambda:configure(**{mode_name:1}))
+        for invalid in ({}, {stage_name: ()},
+                {stage_name: synthetic[stage_name]*2},
+                {stage_name: ('tests::foreign',)}):
+            with patch.object(module, required_attr, invalid):
+                rejected(required_tests)
+        if budget_object_fitter:
+            for invalid_names in (synthetic_names[1:], synthetic_names[:-1], synthetic_names[:7]):
+                with patch.object(module, required_attr, {stage_name:invalid_names}):
+                    rejected(required_tests)
         script = (base/FIXED['command'][1]).read_text()
-        assert tuple((args[1], args[2:]) for line in script.splitlines() if line.startswith('run_stage ') for args in (split(line),)) == BUDGET_OBJECT_SELECTOR_STAGES
+        assert tuple((args[1], args[2:]) for line in script.splitlines() if line.startswith('run_stage ') for args in (split(line),)) == stages
         subprocess.run(['bash', '-n'], input=script, text=True, check=True)
         # Exercise the real Bash/time/tee/end/cleanup with a labelled fake Cargo.
-        functions = script[script.index('stage_record() {'):script.index('run_stage budget-object-selector-tests')]
+        functions = script[script.index('stage_record() {'):script.index('run_stage '+stage_name)]
         functions = functions.replace('sys.exit(record_constrained_split_stage',
-            'from scripts import launch_native_workspace_execution_spot as c\nc.BUDGET_OBJECT_SELECTOR_REQUIRED_TESTS = '+encoded(synthetic).decode()+'\nsys.exit(record_constrained_split_stage')
-        name, command = BUDGET_OBJECT_SELECTOR_STAGES[0]
-        fake_output = 'test '+synthetic[name][0]+' ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s\n'
+            'from scripts import launch_native_workspace_execution_spot as c\nc.'+required_attr+' = '+encoded(synthetic).decode()+'\nsys.exit(record_constrained_split_stage')
+        name, command = stages[0]
+        fake_output = ''.join('test '+test+' ... ok\n' for test in synthetic[name])+f'test result: ok. {len(synthetic[name])} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s\n'
         with tempfile.TemporaryDirectory() as tmp:
             fake = Path(tmp)/'cargo'
             fake.write_text('#!/usr/bin/env python3\nimport os,sys\nprint('+repr(fake_output)+',end="",flush=True)\nsys.exit(int(os.environ["FAKE_CARGO_EXIT"]))\n')
@@ -2651,41 +2748,41 @@ def _budget_object_selector_self_check():
         with tempfile.TemporaryDirectory() as tmp:
             log, usage, combined = (Path(tmp)/name for name in ('stage.log', 'usage.txt', 'test.log'))
             lines = []
-            for name, command in BUDGET_OBJECT_SELECTOR_STAGES:
+            for name, command in stages:
                 names = synthetic.get(name, ())
                 good = ''.join('test '+test+' ... ok\n' for test in names)
                 if names:
-                    good += 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s\n'
+                    good += f'test result: ok. {len(names)} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s\n'
                 if name == 'test-build':
                     good += 'rust-test-build status=0 elapsed_seconds=0 jobs=1\n'
                 with contextlib.redirect_stdout(io.StringIO()) as output:
-                    assert record_constrained_split_stage([name, '2026-10-06T00:00:00Z', '', '', '', '', *command, str(usage)], budget_object_selector=True) == 0
+                    assert record_constrained_split_stage([name, '2026-10-06T00:00:00Z', '', '', '', '', *command, str(usage)], budget_object_selector=not budget_object_fitter, budget_object_fitter=budget_object_fitter) == 0
                 lines.append(output.getvalue()); lines.append(good)
                 cases = [(good, '0', '0', 0), (good, '17', '0', 17), (good, '0', '18', 18)]
                 if names:
                     test = 'test '+names[0]+' ... ok'
                     cases += [(good.replace(test, replacement), '0', '0', 96) for replacement in ('', test+'\n'+test, test.replace('ok', 'FAILED'), test.replace('ok', 'ignored'), 'test budget_object_selector::tests::foreign ... ok')]
-                    cases += [(good.replace('1 passed', '0 passed'), '0', '0', 96), (good.replace('0 ignored', '1 ignored'), '0', '0', 96), (good+good, '0', '0', 96)]
+                    cases += [(good.replace(str(len(names))+' passed', '0 passed'), '0', '0', 96), (good.replace('0 ignored', '1 ignored'), '0', '0', 96), (good+good, '0', '0', 96)]
                 if name == 'test-build':
                     cases += [(body, '0', '0', 96) for body in ('', good+good, good.replace('jobs=1', 'jobs=2'))]
                 for body, status, tee_status, expected in cases:
                     log.write_text(body); usage.write_text(resources.replace('Exit status: 0', 'Exit status: '+status))
                     with contextlib.redirect_stdout(io.StringIO()) as output:
-                        gate = record_constrained_split_stage([name, '2026-10-06T00:00:00Z', '2026-10-06T00:00:00Z', status, str(log), tee_status, *command, str(usage)], budget_object_selector=True)
+                        gate = record_constrained_split_stage([name, '2026-10-06T00:00:00Z', '2026-10-06T00:00:00Z', status, str(log), tee_status, *command, str(usage)], budget_object_selector=not budget_object_fitter, budget_object_fitter=budget_object_fitter)
                     assert gate == expected, (name, expected, gate)
                     if expected == 0:
                         lines.append(output.getvalue())
-                rejected(lambda:record_constrained_split_stage([name, 'start', '', '', '', '', *command, '--extra', str(usage)], budget_object_selector=True))
+                rejected(lambda:record_constrained_split_stage([name, 'start', '', '', '', '', *command, '--extra', str(usage)], budget_object_selector=not budget_object_fitter, budget_object_fitter=budget_object_fitter))
             combined.write_text(''.join(lines))
-            assert len(validate_bounded_publication_stages(combined, budget_object_selector=True)) == 4
+            assert len(validate_bounded_publication_stages(combined, budget_object_selector=not budget_object_fitter, budget_object_fitter=budget_object_fitter)) == 4
             good_log = combined.read_text()
-            for bad in (good_log.replace('1 passed', '0 passed'), good_log.replace('status=0 elapsed', 'status=17 elapsed'),
+            for bad in (good_log.replace(str(len(synthetic_names))+' passed', '0 passed'), good_log.replace('status=0 elapsed', 'status=17 elapsed'),
                     good_log.replace('jobs=1', 'jobs=2'), good_log.replace('"log_exit_status": 0', '"log_exit_status": 18'),
                     good_log.replace('"resources": "User time', '"resources": "Missing time'), good_log+good_log,
-                    good_log.replace('test budget_object_selector::tests::synthetic_contract_fixture ... ok', ''),
+                    good_log.replace('test '+synthetic_names[-1]+' ... ok', ''),
                     good_log.replace('"exit_status": 0', '"exit_status": false')):
                 combined.write_text(bad)
-                rejected(lambda:validate_bounded_publication_stages(combined, budget_object_selector=True))
+                rejected(lambda:validate_bounded_publication_stages(combined, budget_object_selector=not budget_object_fitter, budget_object_fitter=budget_object_fitter))
             for bad in ('', resources+resources, resources.replace('10000', str(worker.MEMORY)), resources.replace('Exit status: 0', 'Exit status: 17')):
                 rejected(lambda:validate_budget_object_selector_resources(bad, 0))
         # Actual portable qualification over a tiny new Rust fixture and runtime support.
@@ -2701,7 +2798,7 @@ def _budget_object_selector_self_check():
                 path = repo/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(body)
             inventory = worker.source_hashes(repo)
             manifest_path = ROOT/'native-source-manifest.json'
-            manifest = dict(schema='borsuk-budget-object-selector-native-source-manifest-v1',
+            manifest = dict(schema='borsuk-'+tag+'-native-source-manifest-v1',
                 native_source_commit='7'*40, control_native_source_commit='8'*40,
                 candidate_qualification_pending=True, candidate_delta_paths=list(NATIVE_DELTA),
                 source_sha256=inventory, source_file_count=len(inventory), source_identity_sha256=worker.source_identity(inventory))
@@ -2716,7 +2813,7 @@ def _budget_object_selector_self_check():
                 source_archive_file_count=len(paths), source_archive_support_sha256=support)
             config_body = encoded(config); (repo/CONFIG).write_bytes(config_body)
             proof = qualify(repo)
-            assert proof['schema'] == 'borsuk-budget-object-selector-implementation-gates-qualification-v1'
+            assert proof['schema'] == 'borsuk-'+tag+'-implementation-gates-qualification-v1'
             assert stage(repo, out) == proof
             for key, value in (('mandatory_test_names_pending',True), ('mandatory_tests',{}),
                     ('controller_authority_pending',True), ('source_archive_paths_sha256','0'*64),
@@ -2771,12 +2868,15 @@ def _budget_object_selector_self_check():
                     else:
                         rejected(lambda:preflight(repo))
             body = user_data('0'*40, '1'*64, 'sources/mock', PREFIX+'a0001', proof)
-            assert 'BORSUK_BUDGET_OBJECT_SELECTOR_SOURCE_ARCHIVE' in body and len(body.encode()) < 16384
+            assert archive_binding_prefix()+'SOURCE_ARCHIVE' in body and len(body.encode()) < 16384
             files = _worker_self_check(proof, config_body, manifest_body)
             _collection_self_check(proof, files, body)
             _lifecycle_self_check(proof)
-    print('PASS budget-object-selector glue: four serial gates; exact names/counts/resources; pending/source/archive/tee/ACK/termination refusals; historical protocol bytes preserved; SYNTHETIC MOCKS ONLY, Rust UNRUN')
+    print('PASS '+tag+' glue: four serial gates; exact names/counts/resources; pending/source/archive/tee/ACK/termination refusals; historical protocol bytes preserved; SYNTHETIC MOCKS ONLY, Rust UNRUN')
 
+
+def _budget_object_fitter_self_check():
+    return _budget_object_selector_self_check(budget_object_fitter=True)
 
 def _co_selection_self_check():
     """Qualification mocks with labelled synthetic names; no native execution."""
@@ -3266,8 +3366,11 @@ def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication
                     rejected(lambda:preflight())
 
 
-def self_check(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False):
-    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector):
+def self_check(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False):
+    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter):
+        if budget_object_fitter:
+            _budget_object_fitter_self_check()
+            return
         if budget_object_selector:
             _budget_object_selector_self_check()
         else:
@@ -3480,6 +3583,7 @@ def _self_check():
 
 if __name__ == '__main__':
     args = sys.argv[1:]
+    budget_object_fitter = args[:1] == ['--budget-object-fitter-implementation']
     budget_object_selector = args[:1] == ['--budget-object-selector-implementation']
     co_selection = args[:1] == ['--co-selection-implementation']
     pq_residual = args[:1] == ['--pq-residual-implementation']
@@ -3491,15 +3595,17 @@ if __name__ == '__main__':
     bounded_publication = args[:1] == ['--bounded-publication-implementation']
     root_reuse = args[:1] == ['--root-reuse-implementation']
     startup_wave8 = args[:1] == ['--startup-wave8-implementation']
-    implementation = budget_object_selector or co_selection or pq_residual or fine_sq8 or cell_overlap or constrained_split or hierarchical_cells or fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
+    implementation = budget_object_fitter or budget_object_selector or co_selection or pq_residual or fine_sq8 or cell_overlap or constrained_split or hierarchical_cells or fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
     test_build = args[:1] == ['--semantic-1m-test-build']
     semantic_1m = implementation or test_build or args[:1] == ['--semantic-1m']
     if semantic_1m:
         args = args[1:]
-    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector)
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter)
     if args[:1] and args[0].startswith('--'):
         resource.setrlimit(resource.RLIMIT_AS, (200*1024**2,200*1024**2))
-    if args == ['--self-check'] and budget_object_selector:
+    if args == ['--self-check'] and budget_object_fitter:
+        _budget_object_fitter_self_check()
+    elif args == ['--self-check'] and budget_object_selector:
         _budget_object_selector_self_check()
     elif args == ['--self-check'] and co_selection:
         _co_selection_self_check()
@@ -3542,7 +3648,7 @@ if __name__ == '__main__':
         assert len(args) == 2
         print(json.dumps(replay(args[1]),sort_keys=True))
     else:
-        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation | --fixed48-implementation | --hierarchical-cells-implementation | --constrained-split-implementation | --cell-overlap-implementation | --fine-sq8-implementation | --pq-residual-implementation | --co-selection-implementation | --budget-object-selector-implementation] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
+        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation | --fixed48-implementation | --hierarchical-cells-implementation | --constrained-split-implementation | --cell-overlap-implementation | --fine-sq8-implementation | --pq-residual-implementation | --co-selection-implementation | --budget-object-selector-implementation | --budget-object-fitter-implementation] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
         with open('/tmp/borsuk-native-workspace-execution-launch.lock','a+') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             main(args[0])
