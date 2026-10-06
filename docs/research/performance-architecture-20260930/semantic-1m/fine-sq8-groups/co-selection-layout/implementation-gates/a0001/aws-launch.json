@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0138fe480f4178e19",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0138fe480f4178e19"
+    }
+  },
+  "prefix": "research/semantic-router/20261006/co-selection-implementation-a0001",
+  "source_commit": "c6688a6e4893b86ed52acdb0372fa317eb4f6201",
+  "source_archive_sha256": "0bbc67a736146635d8552e6bda026173f08e807f7504e648aabe8ff85e55383a"
+}
