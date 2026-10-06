@@ -1,0 +1,75 @@
+{
+  "base": "a9f323f7b58df5041774e458bb3628dc0c3396c2",
+  "checks": [
+    "Python AST and Bash syntax",
+    "13 existing modes and stage/test authorities byte-identical to explicit historical base",
+    "original PQ residual source mocks and strict-count/start-record regressions",
+    "original fine SQ8 source mocks",
+    "original cell overlap source mocks",
+    "co-selection21 synthetic source/stage/Bash/worker/receipt/archive/lifecycle mocks",
+    "final native OWN4 committed blobs match all4 contract hashes and12 function names",
+    "final SAME native contract names, real-roster source mocks; Rust UNRUN"
+  ],
+  "command": [
+    "/usr/bin/python3",
+    "/tmp/borsuk-co-selection-native-gates-source-check.py"
+  ],
+  "elapsed_seconds": 14.002498319954611,
+  "exit_status": 0,
+  "finished_at": "2026-10-06T02:40:57.985869+00:00",
+  "limits": {
+    "cpu_quota_percent": 100,
+    "memory_bytes": 268435456,
+    "runtime_seconds": 120,
+    "swap_bytes": 0
+  },
+  "native_execution": "UNRUN",
+  "native_verified": false,
+  "resources": {
+    "after": {
+      "cgroup.procs": "4108951\n",
+      "cpu.max": "100000 100000\n",
+      "cpu.stat": "usage_usec 13818245\nuser_usec 11220312\nsystem_usec 2597933\nnice_usec 0\ncore_sched.force_idle_usec 0\nnr_periods 143\nnr_throttled 4\nthrottled_usec 3117\nnr_bursts 0\nburst_usec 0\n",
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n",
+      "memory.max": "268435456\n",
+      "memory.peak": "101453824\n",
+      "memory.swap.events": "high 0\nmax 0\nfail 0\n",
+      "memory.swap.max": "0\n",
+      "memory.swap.peak": "0\n",
+      "path": "/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service/app.slice/borsuk-co-selection-source-final-2.service",
+      "pids.current": "1\n",
+      "pids.max": "64\n"
+    },
+    "before": {
+      "cgroup.procs": "4108951\n",
+      "cpu.max": "100000 100000\n",
+      "cpu.stat": "usage_usec 277738\nuser_usec 237351\nsystem_usec 40387\nnice_usec 0\ncore_sched.force_idle_usec 0\nnr_periods 3\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n",
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n",
+      "memory.max": "268435456\n",
+      "memory.peak": "39940096\n",
+      "memory.swap.events": "high 0\nmax 0\nfail 0\n",
+      "memory.swap.max": "0\n",
+      "memory.swap.peak": "0\n",
+      "path": "/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service/app.slice/borsuk-co-selection-source-final-2.service",
+      "pids.current": "1\n",
+      "pids.max": "64\n"
+    }
+  },
+  "schema": "borsuk-co-selection-local-source-check-v1",
+  "source_after": {
+    "scripts/check_co_selection_implementation.sh": "6da055649984333a51e21a97c6e31ca01b3147c7bf338e6a4b6ffe0200c608eb",
+    "scripts/check_native_workspace_execution.py": "075275249e9eb927a596e07094db48aa7379938bec82bb54a865290690a971c3",
+    "scripts/launch_native_workspace_execution_spot.py": "6113d6b93e298ef7dd8b9ba25bd9903222c5e166365b6c12da3f34472e272ef9"
+  },
+  "source_before": {
+    "scripts/check_co_selection_implementation.sh": "6da055649984333a51e21a97c6e31ca01b3147c7bf338e6a4b6ffe0200c608eb",
+    "scripts/check_native_workspace_execution.py": "075275249e9eb927a596e07094db48aa7379938bec82bb54a865290690a971c3",
+    "scripts/launch_native_workspace_execution_spot.py": "6113d6b93e298ef7dd8b9ba25bd9903222c5e166365b6c12da3f34472e272ef9"
+  },
+  "source_check_log": {
+    "bytes": 2939,
+    "path": "/tmp/borsuk-co-selection-native-gates-source-check.log",
+    "sha256": "1eea5ff817bde18ec6f690be2d92de4d351ff6534a1486c7b28c0c5f8ca73d33"
+  },
+  "started_at": "2026-10-06T02:40:43.983359+00:00"
+}

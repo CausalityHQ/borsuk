@@ -1,0 +1,17 @@
+PASS tiny committed archive closure/authentic bytes/gzip/literal paths/unsafe/missing/nonfile refusals/fullrepo default
+PASS hierarchical minimal archive/native docs/runtime fixture/tamper/no remote Git
+PASS workspace implementation-gates (pq-residual): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli=False; code=24 artifacts=14 release_copy=True; userdata=7419 peak_bytes=78372864; AWS/Cargo/cgroup MOCKED
+PASS PQ residual qualification MOCKS ONLY: exact 5+5+1+doc, serial regressions, dynamic native/archive inventory, drift/tee/cleanup/terminal refusals; Rust UNRUN
+PASS tiny committed archive closure/authentic bytes/gzip/literal paths/unsafe/missing/nonfile refusals/fullrepo default
+PASS hierarchical minimal archive/native docs/runtime fixture/tamper/no remote Git
+PASS workspace implementation-gates (fine-sq8): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli=False; code=24 artifacts=14 release_copy=True; userdata=7393 peak_bytes=78372864; AWS/Cargo/cgroup MOCKED
+PASS fine SQ8 qualification MOCKS ONLY: exact roster/commands/counts, source drift, native/tee exit, authenticated terminal and same-ID cleanup; Rust UNRUN
+PASS tiny committed archive closure/authentic bytes/gzip/literal paths/unsafe/missing/nonfile refusals/fullrepo default
+PASS hierarchical minimal archive/native docs/runtime fixture/tamper/no remote Git
+PASS workspace implementation-gates (cell-overlap): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli=False; code=24 artifacts=14 release_copy=True; userdata=7449 peak_bytes=78495744; AWS/Cargo/cgroup MOCKED
+PASS cell overlap qualification MOCKS ONLY: exact names, seven serial stages, dynamic inventory/archive, native exit/closure; no native qualification claimed
+PASS tiny committed archive closure/authentic bytes/gzip/literal paths/unsafe/missing/nonfile refusals/fullrepo default
+PASS hierarchical minimal archive/native docs/runtime fixture/tamper/no remote Git
+PASS workspace implementation-gates (co-selection): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli=False; code=24 artifacts=14 release_copy=True; userdata=7390 peak_bytes=78495744; AWS/Cargo/cgroup MOCKED
+PASS co-selection qualification SYNTHETIC MOCKS ONLY: 21 serial gates; pending names, exact rosters, archive/source drift, tee/cleanup/terminal refusals; Rust UNRUN
+PASS all source-only checks; native/cloud/corpus/query/truth UNRUN

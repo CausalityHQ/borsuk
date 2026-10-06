@@ -1,0 +1,279 @@
+{
+  "status": "FINAL_SOURCE_UNVERIFIED_REMOTE_GATES_PENDING",
+  "base": "06aced808e64cb05604a16a86d6727777ac2cfc4",
+  "commit": "510bde198af4f28952db2fc85a42018472b23fdc",
+  "native_commit": "510bde198af4f28952db2fc85a42018472b23fdc",
+  "owned_files": [
+    "crates/borsuk/src/co_selection_layout.rs",
+    "crates/borsuk/src/lib.rs",
+    "crates/borsuk/src/fine_sq8_groups.rs",
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs"
+  ],
+  "consumed_method": {
+    "commit": "24f66b338bcedc8377f6a863b309c8dfcba4fe76",
+    "sha256": "cf46dee0862854d61bf17d84f116dba880b123e7b95c161f3d20aec6d70e95f4",
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/method.md"
+  },
+  "consumed_reviews": {
+    "commit": "a9f323f7b58df5041774e458bb3628dc0c3396c2",
+    "full_files": [
+      "engineering-review.md",
+      "research-review.md"
+    ],
+    "method_sha256": "760319004afdd851ae690989ea5937b6b57300336ec3a0e3f19fc677ff6a55a7"
+  },
+  "consumed_output_audit_message": "1791253553313204528-2748870",
+  "schemas": {
+    "config": "borsuk-co-selection-config-v1",
+    "map": "borsuk-co-selection-map-v1",
+    "report": "borsuk-co-selection-diagnostic-v1",
+    "selection_binary_magic": "BORSCS01"
+  },
+  "strict_config": {
+    "fields": [
+      "schema",
+      "panels",
+      "original_seal",
+      "prefix",
+      "caps",
+      "prior_reads"
+    ],
+    "panel_fields": [
+      "dataset",
+      "root",
+      "identity",
+      "canonical",
+      "source_order",
+      "fine_order",
+      "pq",
+      "graph"
+    ],
+    "caps_fields": [
+      "memory_bytes",
+      "caller_pinned_bytes",
+      "source_auth_bytes",
+      "construction_operations",
+      "replay_operations",
+      "output_bytes",
+      "deadline_seconds",
+      "cpu_threads",
+      "swap_bytes"
+    ],
+    "prior_reads_fields": [
+      "operations",
+      "bytes"
+    ],
+    "policy": "All structs deny unknown fields. Exactly ordered relaion/cohere panels. No request-vector, truth, training-selection, geometry or anchor override fields. prior_reads consumes the same total32 GET/16MiB budget."
+  },
+  "anchor_order": "SHA256(literal borsuk-co-selection-anchor-v1 followed by NUL || raw32 original canonical SHA256 || LE u64 nonnegative logical ID), ascending digest then logical ID then canonical physical ordinal. Fine physical ordinal independently bound.",
+  "anchor_test_vector": {
+    "canonical_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "logical_id": 1,
+    "sha256": "c80f8eaa165ccce90907df27ed0975522d81196a87700ed8ce25d8ca16ed7728"
+  },
+  "constants": {
+    "training_anchors": 4096,
+    "held_anchors": 512,
+    "group_rows": 16,
+    "rows": 100000,
+    "dimensions": 768,
+    "capacity": "min(64,floor(16777216/(32*16*(D+12))))",
+    "capacity_d768": 42,
+    "destination_blocks": 8,
+    "sweeps": 1,
+    "blocks_per_object": 128,
+    "max_total_requests": 32,
+    "max_total_bytes": 16777216,
+    "fit_memory_cap": 536870912,
+    "source_auth_cap": 1073741824,
+    "construction_operations_cap": 512000000000,
+    "replay_operations_cap": 20000000000,
+    "output_cap": 67108864,
+    "cpu_threads": 1,
+    "swap_bytes": 0
+  },
+  "fit_ties": "Ascending original full-group IDs, one sweep. Candidate destinations sharing training incidence ranked by relaxed move gain descending (including zero/negative), then block ID; take eight excluding current block. Every full-group partner considered, including previously visited groups. Accept maximum strictly positive exact gain, tie destination block then partner original ID. Shared-anchor incidence cancels exactly. Counts include fixed short tail; tail never swaps and remains last. Final block members sorted original group ID. Exact u128 objective and gains serialized as decimal strings.",
+  "expansion": "One TRAINING anchor of maximum integer-cross-multiplied Jaccard. Ties logical ID then canonical ordinal. Zero overlap means none. Missing groups visited by first nomination position. Recompute whole replacement cover against unchanged remaining budget for each candidate; skip unaffordable and continue. Held anchors excluded from fit/dictionary/destinations.",
+  "cover": "Cross-object largest-gap cuts: descending gap bytes then stable virtual object ordinal and start offset. Complete J>K rejection returns one covering interval per required object, not a partial plan. All mandatory, expansion and bridge groups/rows charged. Report mandatory-only cover and expanded cover. Nominee loss invariant is INVALID. Resource/auth/I/O/decode INVALID dominates scientific REJECT; process all128 after valid FAIL.",
+  "api": [
+    "SourceSelections::generate(&Panel, &mut WorkBudget) -> Result<Self>",
+    "WorkBudget::new(Caps) -> Result<Self>",
+    "WorkBudget::begin_replay(&mut self) -> Result<()>",
+    "CoSelectionLayout::fit(&SourceSelections, &mut WorkBudget) -> Result<Self>",
+    "CoSelectionLayout::plan(&[usize], ReadBudget, &mut WorkBudget) -> Result<LayoutPlan>",
+    "CoSelectionLayout::replay_frozen_plans (private paired authenticated prefix path)",
+    "check_co_selection_layout(&Path, &str, &Path) -> Result<()>"
+  ],
+  "cli": [
+    "hierarchical_semantic_cells",
+    "check-co-selection-layout",
+    "CONFIG",
+    "CONFIG_SHA256",
+    "NEW_OUTPUT"
+  ],
+  "provenance": "SourceSelections fields private, no Deserialize or public precomputed constructor. Independently pinned root/primary/PQ/graph/canonical/source order/fine order/group digests. Capture selected source vectors during same full streamed canonical SHA+EOF authentication, nominate only after authentication using unchanged FineSq8Index.plan. SQ8 records handle never opened. Both maps and binary selection pins file+directory fsynced, then descriptive held1024, then authenticated frozen128 metadata prefix opened. No ANN request rerun, GT or request vectors.",
+  "prefix": {
+    "bytes": 1665668,
+    "sha256": "7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025",
+    "seal_sha256": "374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62"
+  },
+  "selection_encoding": "208-byte header: BORSCS01 (8 bytes), six raw32 SHA256 pins root/canonical/source order/fine order/PQ/graph, train and held LEu32. Each hash-ordered anchor: nonnegative logical ID LEi64 bits (8), fine ordinal LEu32 (4), canonical ordinal LEu32 (4), query raw32, nominee count LEu32 (4), actual ordered unchanged nominees LEu32 each. Groups/first positions derived uniquely. Pair upper38,228,384 bytes.",
+  "outputs": [
+    "NEW_OUTPUT (terminal JSON)",
+    ".relaion.selections.bin",
+    ".relaion.map.json",
+    ".cohere.selections.bin",
+    ".cohere.map.json",
+    ".held.jsonl",
+    ".prefix.jsonl",
+    ".plans.jsonl"
+  ],
+  "output_policy": "Extensions replace NEW_OUTPUT extension. CREATE_EXCL + secure NOFOLLOW parent traversal, write caps, file+directory fsync. Virtual object placement_metadata_sha256 is not payload identity; payload_sha256 and payload_etag null. Full output files coexist on disk. Reports require matching original supervisor exit receipt; standalone report is not authority.",
+  "work_preflight": {
+    "model": "Checked worst-case two-panel whole batch. Separate phase counters and caps, retained allocations/caller/source bytes/deadline never reset. Per-loop charges, unchanged nomination call reservation before entry and actual eval/visit charges after; cap exhaustion INVALID.",
+    "source_code_bytes": 1577427,
+    "nomination": 235363368960,
+    "source_setup_max_graph": 8087751936,
+    "fitting": 18616337448,
+    "held": 86942593024,
+    "per_plan": 84904876,
+    "authentication_and_serialization": 1421905560,
+    "construction": 350431956928,
+    "replay": 12306506904,
+    "authentication_formula": "source_auth_cap +5*output_cap +8*compiled_source_bytes",
+    "old_20B_whole_construction_sufficient": false,
+    "qualification": "Source arithmetic only; native elapsed time/RSS/runtime feasibility unmeasured. Root freezes actual deadline/cost later."
+  },
+  "output_preflight": {
+    "formula_frozen": "60354084 +2304*O +128*R <= configured output_bytes <=67108864",
+    "O": "160 + conservative JSON string encoded length of NEW_OUTPUT.with_extension(relaion.selections.bin)",
+    "R": "max panel root descriptor: 160 + conservative JSON string encoded path length",
+    "path_encoding": "2 quote bytes +6 per control byte,2 per quote/backslash,1 per other UTF8 byte",
+    "pair_selection": 38228384,
+    "pair_maps": 3724288,
+    "held_line": "7168+2*O (1024 lines)",
+    "replay_line": "73340+2*O+R (128 lines)",
+    "prefix": 1665668,
+    "terminal": 8192,
+    "example_O300_R300_total": 61083684,
+    "admission": "Checked before source generation. Paths exceeding total cap deterministically INVALID, no cap/algorithm tuning."
+  },
+  "serialization_memory": {
+    "formula": "retained distinct source/layout capacities +caller_pinned +67108864 fixed concurrent allowance +17*per-output encoded bound BEFORE Value/buffer construction",
+    "fixed_allowance": "config/pins/decoder+plan scratch, <=2MiB prefix retained through replay/terminal, and reserved emergency INVALID report",
+    "max_extra_frozen": 31656448,
+    "binary_selection": "Admit actual selection bytes alongside retained sources/maps before allocation, max19,114,192 per panel",
+    "bounded_writer": "Preallocated exact-capacity buffer; serde_json writes into fixed slice Cursor; JSONL newline included; no serialization growth. One buffer at a time, all on-disk files remain. Buffer initialization is charged explicitly.",
+    "terminal": "Normal terminal admitted before Value; emergency INVALID uses fixed reserved space and fixed8192-byte writer. No success follows failed fsync/output write."
+  },
+  "mandatory_tests": {
+    "co-selection-tests": [
+      "co_selection_layout::tests::co_selection_cover_matches_independent_interval_dp_and_exhaustive_masks",
+      "co_selection_layout::tests::co_selection_anchor_hash_domain_and_caps_are_frozen",
+      "co_selection_layout::tests::co_selection_objective_swaps_and_all_ties_match_independent_recomputation",
+      "co_selection_layout::tests::co_selection_bijection_short_tail_objects_nominees_and_total_budget",
+      "co_selection_layout::tests::co_selection_expansion_uses_one_anchor_and_skips_unaffordable_groups",
+      "co_selection_layout::tests::co_selection_source_anchor_purity_actual_nominees_and_identity_tamper",
+      "co_selection_layout::tests::co_selection_actual_cli128_seals_before_prefix_and_never_reads_payload_tail",
+      "co_selection_layout::tests::co_selection_cli_complete_reject_does_not_mask_late_invalid_or_hash_tamper",
+      "co_selection_layout::tests::co_selection_cli_output_fsync_resource_failures_and_strict_config_are_invalid",
+      "co_selection_layout::tests::co_selection_phase_ledgers_and_full_batch_work_preflight_are_checked",
+      "co_selection_layout::tests::co_selection_terminal_fsync_failure_overrides_all128_success"
+    ],
+    "co-selection-bin-tests": [
+      "tests::co_selection_layout_strict_cli_dispatch_no_geometry_truth_or_selection_override"
+    ]
+  },
+  "mandatory_test_names": [
+    "co_selection_layout::tests::co_selection_cover_matches_independent_interval_dp_and_exhaustive_masks",
+    "co_selection_layout::tests::co_selection_anchor_hash_domain_and_caps_are_frozen",
+    "co_selection_layout::tests::co_selection_objective_swaps_and_all_ties_match_independent_recomputation",
+    "co_selection_layout::tests::co_selection_bijection_short_tail_objects_nominees_and_total_budget",
+    "co_selection_layout::tests::co_selection_expansion_uses_one_anchor_and_skips_unaffordable_groups",
+    "co_selection_layout::tests::co_selection_source_anchor_purity_actual_nominees_and_identity_tamper",
+    "co_selection_layout::tests::co_selection_actual_cli128_seals_before_prefix_and_never_reads_payload_tail",
+    "co_selection_layout::tests::co_selection_cli_complete_reject_does_not_mask_late_invalid_or_hash_tamper",
+    "co_selection_layout::tests::co_selection_cli_output_fsync_resource_failures_and_strict_config_are_invalid",
+    "co_selection_layout::tests::co_selection_phase_ledgers_and_full_batch_work_preflight_are_checked",
+    "co_selection_layout::tests::co_selection_terminal_fsync_failure_overrides_all128_success",
+    "tests::co_selection_layout_strict_cli_dispatch_no_geometry_truth_or_selection_override"
+  ],
+  "remote_locked_gates": [
+    [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "borsuk",
+      "--lib",
+      "co_selection_layout::tests",
+      "--",
+      "--test-threads=1"
+    ],
+    [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "borsuk",
+      "--bin",
+      "hierarchical_semantic_cells",
+      "co_selection_",
+      "--",
+      "--test-threads=1"
+    ],
+    [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "-p",
+      "borsuk",
+      "--bin",
+      "hierarchical_semantic_cells"
+    ],
+    [
+      "cargo",
+      "clippy",
+      "--locked",
+      "--workspace",
+      "--all-targets",
+      "--",
+      "-D",
+      "clippy::correctness",
+      "-D",
+      "clippy::suspicious"
+    ],
+    [
+      "env",
+      "-u",
+      "BORSUK_TEST_BUILD_COMMAND",
+      "BORSUK_TEST_BUILD_JOBS=1",
+      "bash",
+      "scripts/check_rust_test_build.sh"
+    ]
+  ],
+  "qualification_glue": "/tmp/borsuk-co-selection-native-gates-contract.json retains19 original stages plus2 co-selection groups. Root owns full21 remote gates CPU2/8GiB; no local Cargo/rustc.",
+  "local_verification": {
+    "native": "UNRUN",
+    "allowed": "rustfmt syntax and git diff checks only",
+    "unit": "co-selection-rustfmt-output.service",
+    "exit_status": 0,
+    "cpu_quota_percent": 100,
+    "memory_limit_bytes": 268435456,
+    "swap_limit_bytes": 0,
+    "service_runtime_seconds": 25.924,
+    "cpu_time_ms": 420,
+    "memory_peak": "99.8M",
+    "swap_peak_bytes": 0,
+    "diff_check_exit_status": 0,
+    "existing_three_files": "additions only; old APIs/scoring/nomination preserved"
+  },
+  "sourcehashes": {
+    "crates/borsuk/src/co_selection_layout.rs": "b9e31c2aaba06a4f982ac240bfde33b63b6c8fbe1726775eea19fd4e17203c7f",
+    "crates/borsuk/src/fine_sq8_groups.rs": "f87d5c7ec17c71921d681092fd49e13b51d6f53a1af33388a434fea02f7dbc9f",
+    "crates/borsuk/src/lib.rs": "15c59640b930de2b0eb85b36646d9caf44e4afff0edf1ba6461bd8658a6171c4",
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs": "34a4e63e77bd2ce5aaede845f2b2c00ef27876d9b2b2dc4112290dc0b004eb05"
+  },
+  "completion": "Same child held UNVERIFIED until parent confirms actual remote gates exit0. No native work, push, merge, extra workers/reviews or completion."
+}

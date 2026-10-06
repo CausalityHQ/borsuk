@@ -1,0 +1,43 @@
+{
+  "base": "06aced808e64cb05604a16a86d6727777ac2cfc4",
+  "committed_bytes_match_worktree": true,
+  "contract": {
+    "bytes": 14648,
+    "path": "/tmp/borsuk-co-selection-layout-native-contract.json",
+    "sha256": "354ada3627dd3f237dfccbf51429c4002bd1d5213b48916019490cb92dd0f55e"
+  },
+  "exact_owned_scope": true,
+  "mandatory_test_names": [
+    "co_selection_layout::tests::co_selection_cover_matches_independent_interval_dp_and_exhaustive_masks",
+    "co_selection_layout::tests::co_selection_anchor_hash_domain_and_caps_are_frozen",
+    "co_selection_layout::tests::co_selection_objective_swaps_and_all_ties_match_independent_recomputation",
+    "co_selection_layout::tests::co_selection_bijection_short_tail_objects_nominees_and_total_budget",
+    "co_selection_layout::tests::co_selection_expansion_uses_one_anchor_and_skips_unaffordable_groups",
+    "co_selection_layout::tests::co_selection_source_anchor_purity_actual_nominees_and_identity_tamper",
+    "co_selection_layout::tests::co_selection_actual_cli128_seals_before_prefix_and_never_reads_payload_tail",
+    "co_selection_layout::tests::co_selection_cli_complete_reject_does_not_mask_late_invalid_or_hash_tamper",
+    "co_selection_layout::tests::co_selection_cli_output_fsync_resource_failures_and_strict_config_are_invalid",
+    "co_selection_layout::tests::co_selection_phase_ledgers_and_full_batch_work_preflight_are_checked",
+    "co_selection_layout::tests::co_selection_terminal_fsync_failure_overrides_all128_success",
+    "tests::co_selection_layout_strict_cli_dispatch_no_geometry_truth_or_selection_override"
+  ],
+  "native_commit": "510bde198af4f28952db2fc85a42018472b23fdc",
+  "native_compilation_verified": false,
+  "native_tests_verified": false,
+  "owned_files": [
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs",
+    "crates/borsuk/src/co_selection_layout.rs",
+    "crates/borsuk/src/fine_sq8_groups.rs",
+    "crates/borsuk/src/lib.rs"
+  ],
+  "schema": "borsuk-co-selection-root-source-admission-v1",
+  "scientific_qualification_verified": false,
+  "source_sha256": {
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs": "34a4e63e77bd2ce5aaede845f2b2c00ef27876d9b2b2dc4112290dc0b004eb05",
+    "crates/borsuk/src/co_selection_layout.rs": "b9e31c2aaba06a4f982ac240bfde33b63b6c8fbe1726775eea19fd4e17203c7f",
+    "crates/borsuk/src/fine_sq8_groups.rs": "f87d5c7ec17c71921d681092fd49e13b51d6f53a1af33388a434fea02f7dbc9f",
+    "crates/borsuk/src/lib.rs": "15c59640b930de2b0eb85b36646d9caf44e4afff0edf1ba6461bd8658a6171c4"
+  },
+  "whitespace_check_exit": 0,
+  "worktree_clean": true
+}

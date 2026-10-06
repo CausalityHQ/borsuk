@@ -1,0 +1,894 @@
+{
+  "API": {
+    "archive": "hierarchical_archive_authority(PREVIEW_REPO, PREVIEW_COMMIT, FULL_NATIVE_INVENTORY, MANIFEST_PATH)",
+    "configure": "configure(co_selection=True)",
+    "context": "execution_mode(co_selection=True)",
+    "git_admission": "preflight(REPO)",
+    "receipt": "validate_receipt(OUTPUT, PROOF)",
+    "recorder": "record_constrained_split_stage(ARGV, co_selection=True)",
+    "source": "qualify(REPO)",
+    "stage": "stage(REPO, OUTPUT)",
+    "stages": "validate_bounded_publication_stages(LOG, co_selection=True)",
+    "terminal_replay": "replay(OUTPUT)",
+    "worker": "check_native_workspace_execution.main(CARGO, REPO, OUTPUT, co_selection=True)"
+  },
+  "CODE": [
+    "scripts/check_native_metadata_ranges_stats.py",
+    "scripts/check_native_semantic_router_stats.py",
+    "scripts/check_native_startup_build.py",
+    "scripts/check_native_startup_stats.py",
+    "scripts/check_native_workspace_execution.py",
+    "scripts/launch_native_metadata_ranges_cold_spot.py",
+    "scripts/launch_native_peer_1m_spot.py",
+    "scripts/launch_native_semantic_router_cold_spot.py",
+    "scripts/launch_native_startup_profile_spot.py",
+    "scripts/launch_native_workspace_execution_spot.py",
+    "scripts/launch_v157_primary_feasibility_spot.py",
+    "scripts/launch_v174_relaid_bind_compile_spot.py",
+    "scripts/package_semantic_native_generation.py",
+    "scripts/prepare_native_semantic_publication.py",
+    "scripts/rest_coexistence_load.py",
+    "scripts/run_native_cold_first_query.py",
+    "scripts/run_native_metadata_ranges_cold.py",
+    "scripts/run_native_peer_1m_worker.py",
+    "scripts/run_native_peer_offered_http.py",
+    "scripts/run_native_semantic_router_cold.py",
+    "scripts/run_native_union_http.py",
+    "scripts/run_native_union_offered_http.py",
+    "scripts/check_rust_test_build.sh",
+    "scripts/check_co_selection_implementation.sh"
+  ],
+  "FIXED": {
+    "architecture": "x86_64",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "command": [
+      "bash",
+      "scripts/check_co_selection_implementation.sh"
+    ],
+    "compute_cap_usd": 1.25,
+    "cpu_quota_percent": 200,
+    "ebs_s3_allowance_usd": 0.15,
+    "environment": {
+      "BORSUK_CPU_THREADS": "1",
+      "BORSUK_FINE_TEST_REMOTE": null,
+      "BORSUK_FINE_TEST_ROOT": null,
+      "BORSUK_TEST_BUILD_COMMAND": null,
+      "BORSUK_TEST_BUILD_JOBS": "1",
+      "CARGO_BUILD_JOBS": "1",
+      "RAYON_NUM_THREADS": "1",
+      "RUSTC_WORKSPACE_WRAPPER": "",
+      "RUSTC_WRAPPER": "",
+      "RUST_TEST_THREADS": "1",
+      "TOKIO_WORKER_THREADS": "1"
+    },
+    "execution_kind": "implementation-gates",
+    "image_id": "ami-0b8a830d6339a9758",
+    "instance_type": "c7i.2xlarge",
+    "machine_limit_seconds": 9000,
+    "mandatory_test_names_pending": false,
+    "mandatory_tests": {
+      "co-selection-bin-tests": [
+        "tests::co_selection_layout_strict_cli_dispatch_no_geometry_truth_or_selection_override"
+      ],
+      "co-selection-tests": [
+        "co_selection_layout::tests::co_selection_cover_matches_independent_interval_dp_and_exhaustive_masks",
+        "co_selection_layout::tests::co_selection_anchor_hash_domain_and_caps_are_frozen",
+        "co_selection_layout::tests::co_selection_objective_swaps_and_all_ties_match_independent_recomputation",
+        "co_selection_layout::tests::co_selection_bijection_short_tail_objects_nominees_and_total_budget",
+        "co_selection_layout::tests::co_selection_expansion_uses_one_anchor_and_skips_unaffordable_groups",
+        "co_selection_layout::tests::co_selection_source_anchor_purity_actual_nominees_and_identity_tamper",
+        "co_selection_layout::tests::co_selection_actual_cli128_seals_before_prefix_and_never_reads_payload_tail",
+        "co_selection_layout::tests::co_selection_cli_complete_reject_does_not_mask_late_invalid_or_hash_tamper",
+        "co_selection_layout::tests::co_selection_cli_output_fsync_resource_failures_and_strict_config_are_invalid",
+        "co_selection_layout::tests::co_selection_phase_ledgers_and_full_batch_work_preflight_are_checked",
+        "co_selection_layout::tests::co_selection_terminal_fsync_failure_overrides_all128_success"
+      ],
+      "corrected-four-bit-tests": [
+        "corrected_four_bit::tests::corrected_four_bit_scalar_ratio_and_rounding",
+        "corrected_four_bit::tests::corrected_four_bit_exhaustive_tiny_grid",
+        "corrected_four_bit::tests::corrected_four_bit_exact_threshold_collision_and_subnormal",
+        "corrected_four_bit::tests::corrected_four_bit_rotation_bits_gram_and_corruption",
+        "corrected_four_bit::tests::corrected_four_bit_packing_tail_nonunit_and_caps"
+      ],
+      "fine-sq8-bin-tests": [
+        "tests::fine_corrected_four_bit_strict_cli_dispatch",
+        "tests::fine_corrected_four_bit_real_native_two_panel_d3_all128_incidental_and_late_truth",
+        "tests::fine_histogram_sq4_strict_cli_dispatch_and_schema_identity",
+        "tests::fine_histogram_sq4_real_native_builder_paired_pipeline_all128_full_rosters_late_invalid",
+        "tests::fine_sq4_real_native_pipeline_128_seal_before_truth",
+        "tests::fine_sq4_strict_cli_dispatch",
+        "tests::fine_pack_strict_cli_real_tiny_pipeline",
+        "tests::fine_real_source_pipeline_seals_both_panels_before_gt_and_is_durable",
+        "tests::fine_fresh_process_plane_free_open"
+      ],
+      "fine-sq8-tests": [
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_corrected_four_bit_full128_pipeline_freeze_and_late_invalid",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_corrected_four_bit_prebody_caps_source_eof_and_sync",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_dp_independent_brute_partitions_and_deviations",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_interval_cancellation_against_direct_deviations",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_exhaustive256_mapping_ties_and_uniform_bitwise_parity",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_scalar_scores_odd_tail_zero_nonunit_near_ties",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_book_binding_padding_counts_caps_and_numeric_negatives",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_histogram_sq4_full128_pipeline_books_requests_truth_closure_and_late_invalid",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_histogram_sq4_source_reauthentication_eof_prebody_caps_and_sync",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_all_codes_numeric_oracle_odd_tail_nonunit_ties",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_exact_cover_superset_and_binding",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_auth_fifo_corruption_caps_and_durability",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_full_pipeline_failure_order_and_sync",
+        "fine_sq8_groups::pack_diagnostic::tests::pack_affinity_matches_exhaustive_ties",
+        "fine_sq8_groups::pack_diagnostic::tests::pack_tail_bijection_and_cover_match_brute",
+        "fine_sq8_groups::pack_diagnostic::tests::pack_graph_binding_corruption_caps",
+        "fine_sq8_groups::pack_diagnostic::tests::pack_secure_prefix_and_forbidden_opens",
+        "fine_sq8_groups::pack_diagnostic::tests::pack_both_seals_precede_prefix",
+        "fine_sq8_groups::pack_diagnostic::tests::pack_incomplete_output_sync_and_supervisor",
+        "fine_sq8_groups::tests::fine_remote_failure_preserves_partial_known_stats_and_unknown_bytes",
+        "fine_sq8_groups::tests::fine_cover_matches_independent_bruteforce_with_tail",
+        "fine_sq8_groups::tests::fine_tail_scalar_ties_nonunit_and_pins",
+        "fine_sq8_groups::tests::fine_exhausted_shortlist_is_scored_empty_is_underfilled_and_refusal_reads_nothing",
+        "fine_sq8_groups::tests::fine_nonzero_coefficients_scalar_oracle_extremes_and_near_ties",
+        "fine_sq8_groups::tests::fine_bridged_corruption_and_best_replacement_outside_shortlist",
+        "fine_sq8_groups::tests::fine_auth_length_symlink_and_admission_fail_closed"
+      ],
+      "graph-regressions": [
+        "resident_vector_graph::tests::graph_ties_keep_smallest_physical_ordinals",
+        "resident_vector_graph::tests::graph_returns_stable_ids_and_rejects_generation_mismatch"
+      ],
+      "hierarchical-bin-regressions": [
+        "tests::overlap_pair_seal_precedes_truth",
+        "tests::source_probe_cli_actual_full_pipeline_freezes_before_truth_and_closes_invalid",
+        "tests::source_probe_cli_coverage_fifo_truth_and_output_cap_close_invalid",
+        "tests::nomination_cli_full64_freezes_prefix_and_both_policies_without_truth",
+        "tests::nomination_cli_rejects_truth_fields_incomplete_panels_and_tampering",
+        "tests::nomination_prefix_rejects_fifo_and_symlink_without_blocking",
+        "tests::nomination_freeze_reserve_and_synced_prefix_tamper_close_invalid",
+        "tests::created_outputs_close_invalid_on_bad_truth_or_output_cap_without_overwrite",
+        "tests::configurations_reject_unknown_fields_and_truth_in_requests"
+      ],
+      "page-authority-regressions": [
+        "sq8_page_authority::tests::two_bit_unit_pages_bind_geometry_and_authenticate_partial_tail",
+        "sq8_page_authority::tests::authenticates_short_final_page_and_rejects_changed_bytes_or_etag"
+      ],
+      "page-cover-regressions": [
+        "budgeted_page_rank::tests::source_unit_cover_preserves_all_units_and_clips_tail",
+        "budgeted_page_rank::tests::sparse_candidates_never_admit_an_unvisited_page",
+        "budgeted_page_rank::tests::complete_sparse_scores_refine_dense_page_admission",
+        "budgeted_page_rank::tests::sparse_candidates_reject_duplicates_and_unknown_pages",
+        "budgeted_page_rank::tests::incremental_cover_charge_matches_exact_ranges_with_tied_gaps_and_final_page",
+        "budgeted_page_rank::tests::incremental_cover_charge_matches_exact_cover_across_page_patterns",
+        "budgeted_page_rank::tests::primary_page_precedes_better_scoring_secondary_page",
+        "budgeted_page_rank::tests::cheapest_gap_bridge_counts_bytes_and_rejects_over_cap_page",
+        "budgeted_page_rank::tests::short_final_page_is_charged_by_its_actual_rows",
+        "budgeted_page_rank::tests::signed_zero_scores_tie_by_page_id"
+      ],
+      "pq-codes-graph-tests": [
+        "resident_vector_graph::bounded_pq_tests::repaired_producer_above_m0_reopens_and_decoded_allocations_are_bounded",
+        "resident_vector_graph::bounded_pq_tests::total_budget_counts_upper_layers_and_reports_partial_ties"
+      ],
+      "pq-regressions": [
+        "pq64_nominee::tests::selects_the_nearest_page_and_orders_tied_rows_by_ordinal",
+        "pq64_nominee::tests::admits_a_short_final_page_without_padding_rows",
+        "pq64_nominee::tests::pads_a_nonmultiple_of_64_dimension_only_inside_pq_distance",
+        "pq64_nominee::tests::ninety_six_dimensions_score_the_last_coordinate_in_the_last_subspace",
+        "pq64_nominee::tests::huge_page_width_allocates_only_the_one_actual_candidate",
+        "pq64_nominee::tests::scores_only_requested_rows_in_caller_order",
+        "pq64_nominee::tests::cosine_view_uses_reconstructed_direction_instead_of_squared_l2",
+        "pq64_nominee::tests::row_scores_use_the_same_d96_subspace_padding_as_nomination",
+        "pq64_nominee::tests::scored_rows_match_nominee_adc_order"
+      ],
+      "pq-residual-bin-tests": [
+        "tests::pq_residual_source_strict_cli_dispatch_no_geometry_or_truth_override"
+      ],
+      "pq-residual-codec-tests": [
+        "pq_residual_four_bit::tests::pq_residual_raw_pq_floor_padding_and_physical_order",
+        "pq_residual_four_bit::tests::pq_residual_bins_constants_endpoints_subnormal_and_center_ties",
+        "pq_residual_four_bit::tests::pq_residual_original_norm_nonunit_near_ulp_scalar_oracle",
+        "pq_residual_four_bit::tests::pq_residual_book_binding_corruption_padding_and_caps",
+        "pq_residual_four_bit::tests::pq_residual_literal_d1_d3_d65_roundtrip_and_native_constant_ties"
+      ],
+      "pq-residual-doc-tests": [
+        "src/pq_residual_four_bit.rs - pq_residual_four_bit::Axis (line 13) - compile fail"
+      ],
+      "pq-residual-source-tests": [
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_dp_independent_brute_cost_and_ties",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_actual_native_pipeline_selection_no_gt_and_sealed_recount",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_admission_underflow_and_same_size_bindings",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_pipeline_pass_mutation_eof_partial_sync_seal_and_late_invalid",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_frozen_thresholds_cohort_membership_ties_and_supervisor"
+      ],
+      "returned-sq8-regressions": [
+        "returned_sq8::tests::overlap_nonunit_sq8_and_duplicate_truncation",
+        "returned_sq8::tests::query_admission_accounts_for_narrow_rows_concurrent_planners_and_overflow",
+        "returned_sq8::tests::ranks_sparse_ranges_and_ties_by_id",
+        "returned_sq8::tests::mutation_visibility_precedes_top_k_and_validates_masked_rows",
+        "returned_sq8::tests::rejects_overlap_unaligned_budget_and_duplicate_ids"
+      ],
+      "s3-range-regressions": [
+        "sq8_s3_range::tests::bounded_range_query_future_is_send",
+        "sq8_s3_range::tests::source_authority_is_rejected_before_sq8_get",
+        "sq8_s3_range::tests::bounded_source_ranges_authenticate_tail_and_charge_failures",
+        "sq8_s3_range::tests::redirects_and_unfinished_error_bodies_fail_after_one_request",
+        "sq8_s3_range::tests::generation_publish_reload_and_http_search_fail_closed",
+        "sq8_s3_range::tests::real_http_range_faults_fail_closed_without_hidden_retries",
+        "sq8_s3_range::tests::conditional_short_tail_rejects_mutated_object",
+        "sq8_s3_range::tests::bounded_query_reads_only_verified_pages_and_charges_failures"
+      ],
+      "source-pq-tests": [
+        "pq64_nominee::source_codes_tests::source_fit_is_ordinal_deterministic_and_codes_only"
+      ]
+    },
+    "memory_bytes": 8589934592,
+    "region": "eu-central-1",
+    "root_device_name": "/dev/sda1",
+    "schema": "borsuk-co-selection-implementation-gates-v1",
+    "service_limit_seconds": 7260,
+    "spot_max_usd_per_hour": 0.5,
+    "subnet_id": "subnet-034528fbd6977848f",
+    "swap_bytes": 0,
+    "tasks_max": 512,
+    "test_limit_seconds": 7200
+  },
+  "archive_binding_prefix": "BORSUK_CO_SELECTION_",
+  "archive_fields": [
+    "source_archive_paths",
+    "source_archive_paths_sha256",
+    "source_archive_file_count",
+    "source_archive_support_sha256"
+  ],
+  "artifacts": [
+    "source-qualification.json",
+    "config.json",
+    "native-source-manifest.json",
+    "source-before.json",
+    "source-after.json",
+    "workspace-receipt.json",
+    "test.log",
+    "test-resources.txt",
+    "workspace-cgroup.json",
+    "cpu.txt",
+    "rustc-version.txt",
+    "cargo-version.txt",
+    "run-closed.log",
+    "binaries/hierarchical_semantic_cells"
+  ],
+  "base": "a9f323f7b58df5041774e458bb3628dc0c3396c2",
+  "clean_worktree": true,
+  "commit": "c43edf9f44e471c79764959b0b2a8c0a9522da86",
+  "config": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates/config.json",
+  "development_check": {
+    "exit_status": 0,
+    "limits": {
+      "cpu_quota_percent": 100,
+      "memory_bytes": 268435456,
+      "runtime_seconds": 120,
+      "swap_bytes": 0
+    },
+    "memory_peak": "112.1M",
+    "native": "UNRUN",
+    "runtime_seconds": 5.359,
+    "swap_bytes": 0,
+    "unit": "borsuk-co-selection-source-development-6.service"
+  },
+  "final_source_check_command": "systemd-run --user --wait --pipe --collect -p CPUQuota=100% -p MemoryMax=256M -p MemorySwapMax=0 -p RuntimeMaxSec=120 -p TasksMax=64 --working-directory=/home/rb/worktrees/borsuk-co-selection-native-gates env PYTHONDONTWRITEBYTECODE=1 python3 /tmp/borsuk-co-selection-native-gates-source-check.py",
+  "final_source_check_log": {
+    "bytes": 2939,
+    "path": "/tmp/borsuk-co-selection-native-gates-source-check.log",
+    "sha256": "1eea5ff817bde18ec6f690be2d92de4d351ff6534a1486c7b28c0c5f8ca73d33"
+  },
+  "final_source_check_receipt": {
+    "bytes": 3681,
+    "path": "/tmp/borsuk-co-selection-native-gates-source-check-receipt.json",
+    "sha256": "1ce4d661a6d0aee7796c974702f39f54f314dae7e6b590baba0156bba3a1594c"
+  },
+  "final_source_check_unit": "borsuk-co-selection-source-final-2.service",
+  "freeze": [
+    "Root obtains final SAME native contract and verifies all OWN4 committed bytes.",
+    "Use committed PREVIEW INCLUDING final native files, final controller files and root native manifest for hierarchical_archive_authority; never controller-only tree.",
+    "Root freezes controller commit and complete native source manifest; native qualification remains pending, mandatory test names must be final.",
+    "Config-only freeze immediately follows controller. Root freezes FIXED + controller_authority_pending=false + controller_source_commit + exact controller_code_sha256 + native_source_manifest pointer + all4 ARCHIVE_FIELDS.",
+    "Final bundle immediately follows config-only freeze and differs by exactly the sorted OWN4 candidate_delta_paths; root freezes/pushes, preflight authenticates origin-backed config and actual candidate blobs and committed archive closure.",
+    "Root alone launches existing SAME-ID ACK/termination/drain/wait-before-collect Spot path and verifies terminal artifact authority; no native qualification is inferred from these mocks."
+  ],
+  "full_native_count": "root manifest source_file_count == dynamic full source inventory length; expected407 is prospective only",
+  "integration": "Parent only; worker did not merge or push. Native tests/release/Clippy/real workspace test compilation remain UNRUN here.",
+  "literal_commands": {
+    "ROOT_ONLY_launch": "python3 scripts/launch_native_workspace_execution_spot.py --co-selection-implementation aNNNN",
+    "local_source_check": "systemd-run --user --wait --pipe --collect -p CPUQuota=100% -p MemoryMax=256M -p MemorySwapMax=0 -p RuntimeMaxSec=120 -p TasksMax=64 --working-directory=/home/rb/worktrees/borsuk-co-selection-native-gates env PYTHONDONTWRITEBYTECODE=1 python3 /tmp/borsuk-co-selection-native-gates-source-check.py",
+    "receipt": "python3 scripts/launch_native_workspace_execution_spot.py --co-selection-implementation --check-receipt OUTPUT",
+    "replay": "python3 scripts/launch_native_workspace_execution_spot.py --co-selection-implementation --replay OUTPUT",
+    "root_preflight": "python3 -c 'from scripts import launch_native_workspace_execution_spot as c; c.configure(co_selection=True); print(c.encoded(c.preflight()).decode())'",
+    "self_check": "python3 scripts/launch_native_workspace_execution_spot.py --co-selection-implementation --self-check",
+    "source_check": "python3 -c 'from scripts import launch_native_workspace_execution_spot as c; c.configure(co_selection=True); print(c.encoded(c.qualify()).decode())'",
+    "stage": "python3 scripts/launch_native_workspace_execution_spot.py --co-selection-implementation --stage REPO OUTPUT",
+    "worker": "python3 scripts/check_native_workspace_execution.py --co-selection-implementation CARGO REPO OUTPUT"
+  },
+  "mandatory_test_names": [
+    "co_selection_layout::tests::co_selection_cover_matches_independent_interval_dp_and_exhaustive_masks",
+    "co_selection_layout::tests::co_selection_anchor_hash_domain_and_caps_are_frozen",
+    "co_selection_layout::tests::co_selection_objective_swaps_and_all_ties_match_independent_recomputation",
+    "co_selection_layout::tests::co_selection_bijection_short_tail_objects_nominees_and_total_budget",
+    "co_selection_layout::tests::co_selection_expansion_uses_one_anchor_and_skips_unaffordable_groups",
+    "co_selection_layout::tests::co_selection_source_anchor_purity_actual_nominees_and_identity_tamper",
+    "co_selection_layout::tests::co_selection_actual_cli128_seals_before_prefix_and_never_reads_payload_tail",
+    "co_selection_layout::tests::co_selection_cli_complete_reject_does_not_mask_late_invalid_or_hash_tamper",
+    "co_selection_layout::tests::co_selection_cli_output_fsync_resource_failures_and_strict_config_are_invalid",
+    "co_selection_layout::tests::co_selection_phase_ledgers_and_full_batch_work_preflight_are_checked",
+    "co_selection_layout::tests::co_selection_terminal_fsync_failure_overrides_all128_success",
+    "tests::co_selection_layout_strict_cli_dispatch_no_geometry_truth_or_selection_override"
+  ],
+  "mandatory_test_names_pending": false,
+  "mandatory_tests": {
+    "co-selection-bin-tests": [
+      "tests::co_selection_layout_strict_cli_dispatch_no_geometry_truth_or_selection_override"
+    ],
+    "co-selection-tests": [
+      "co_selection_layout::tests::co_selection_cover_matches_independent_interval_dp_and_exhaustive_masks",
+      "co_selection_layout::tests::co_selection_anchor_hash_domain_and_caps_are_frozen",
+      "co_selection_layout::tests::co_selection_objective_swaps_and_all_ties_match_independent_recomputation",
+      "co_selection_layout::tests::co_selection_bijection_short_tail_objects_nominees_and_total_budget",
+      "co_selection_layout::tests::co_selection_expansion_uses_one_anchor_and_skips_unaffordable_groups",
+      "co_selection_layout::tests::co_selection_source_anchor_purity_actual_nominees_and_identity_tamper",
+      "co_selection_layout::tests::co_selection_actual_cli128_seals_before_prefix_and_never_reads_payload_tail",
+      "co_selection_layout::tests::co_selection_cli_complete_reject_does_not_mask_late_invalid_or_hash_tamper",
+      "co_selection_layout::tests::co_selection_cli_output_fsync_resource_failures_and_strict_config_are_invalid",
+      "co_selection_layout::tests::co_selection_phase_ledgers_and_full_batch_work_preflight_are_checked",
+      "co_selection_layout::tests::co_selection_terminal_fsync_failure_overrides_all128_success"
+    ],
+    "corrected-four-bit-tests": [
+      "corrected_four_bit::tests::corrected_four_bit_scalar_ratio_and_rounding",
+      "corrected_four_bit::tests::corrected_four_bit_exhaustive_tiny_grid",
+      "corrected_four_bit::tests::corrected_four_bit_exact_threshold_collision_and_subnormal",
+      "corrected_four_bit::tests::corrected_four_bit_rotation_bits_gram_and_corruption",
+      "corrected_four_bit::tests::corrected_four_bit_packing_tail_nonunit_and_caps"
+    ],
+    "fine-sq8-bin-tests": [
+      "tests::fine_corrected_four_bit_strict_cli_dispatch",
+      "tests::fine_corrected_four_bit_real_native_two_panel_d3_all128_incidental_and_late_truth",
+      "tests::fine_histogram_sq4_strict_cli_dispatch_and_schema_identity",
+      "tests::fine_histogram_sq4_real_native_builder_paired_pipeline_all128_full_rosters_late_invalid",
+      "tests::fine_sq4_real_native_pipeline_128_seal_before_truth",
+      "tests::fine_sq4_strict_cli_dispatch",
+      "tests::fine_pack_strict_cli_real_tiny_pipeline",
+      "tests::fine_real_source_pipeline_seals_both_panels_before_gt_and_is_durable",
+      "tests::fine_fresh_process_plane_free_open"
+    ],
+    "fine-sq8-tests": [
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_corrected_four_bit_full128_pipeline_freeze_and_late_invalid",
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_corrected_four_bit_prebody_caps_source_eof_and_sync",
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_dp_independent_brute_partitions_and_deviations",
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_interval_cancellation_against_direct_deviations",
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_exhaustive256_mapping_ties_and_uniform_bitwise_parity",
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_scalar_scores_odd_tail_zero_nonunit_near_ties",
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::histogram::tests::fine_histogram_sq4_book_binding_padding_counts_caps_and_numeric_negatives",
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_histogram_sq4_full128_pipeline_books_requests_truth_closure_and_late_invalid",
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_histogram_sq4_source_reauthentication_eof_prebody_caps_and_sync",
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_all_codes_numeric_oracle_odd_tail_nonunit_ties",
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_exact_cover_superset_and_binding",
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_auth_fifo_corruption_caps_and_durability",
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::tests::fine_sq4_full_pipeline_failure_order_and_sync",
+      "fine_sq8_groups::pack_diagnostic::tests::pack_affinity_matches_exhaustive_ties",
+      "fine_sq8_groups::pack_diagnostic::tests::pack_tail_bijection_and_cover_match_brute",
+      "fine_sq8_groups::pack_diagnostic::tests::pack_graph_binding_corruption_caps",
+      "fine_sq8_groups::pack_diagnostic::tests::pack_secure_prefix_and_forbidden_opens",
+      "fine_sq8_groups::pack_diagnostic::tests::pack_both_seals_precede_prefix",
+      "fine_sq8_groups::pack_diagnostic::tests::pack_incomplete_output_sync_and_supervisor",
+      "fine_sq8_groups::tests::fine_remote_failure_preserves_partial_known_stats_and_unknown_bytes",
+      "fine_sq8_groups::tests::fine_cover_matches_independent_bruteforce_with_tail",
+      "fine_sq8_groups::tests::fine_tail_scalar_ties_nonunit_and_pins",
+      "fine_sq8_groups::tests::fine_exhausted_shortlist_is_scored_empty_is_underfilled_and_refusal_reads_nothing",
+      "fine_sq8_groups::tests::fine_nonzero_coefficients_scalar_oracle_extremes_and_near_ties",
+      "fine_sq8_groups::tests::fine_bridged_corruption_and_best_replacement_outside_shortlist",
+      "fine_sq8_groups::tests::fine_auth_length_symlink_and_admission_fail_closed"
+    ],
+    "graph-regressions": [
+      "resident_vector_graph::tests::graph_ties_keep_smallest_physical_ordinals",
+      "resident_vector_graph::tests::graph_returns_stable_ids_and_rejects_generation_mismatch"
+    ],
+    "hierarchical-bin-regressions": [
+      "tests::overlap_pair_seal_precedes_truth",
+      "tests::source_probe_cli_actual_full_pipeline_freezes_before_truth_and_closes_invalid",
+      "tests::source_probe_cli_coverage_fifo_truth_and_output_cap_close_invalid",
+      "tests::nomination_cli_full64_freezes_prefix_and_both_policies_without_truth",
+      "tests::nomination_cli_rejects_truth_fields_incomplete_panels_and_tampering",
+      "tests::nomination_prefix_rejects_fifo_and_symlink_without_blocking",
+      "tests::nomination_freeze_reserve_and_synced_prefix_tamper_close_invalid",
+      "tests::created_outputs_close_invalid_on_bad_truth_or_output_cap_without_overwrite",
+      "tests::configurations_reject_unknown_fields_and_truth_in_requests"
+    ],
+    "page-authority-regressions": [
+      "sq8_page_authority::tests::two_bit_unit_pages_bind_geometry_and_authenticate_partial_tail",
+      "sq8_page_authority::tests::authenticates_short_final_page_and_rejects_changed_bytes_or_etag"
+    ],
+    "page-cover-regressions": [
+      "budgeted_page_rank::tests::source_unit_cover_preserves_all_units_and_clips_tail",
+      "budgeted_page_rank::tests::sparse_candidates_never_admit_an_unvisited_page",
+      "budgeted_page_rank::tests::complete_sparse_scores_refine_dense_page_admission",
+      "budgeted_page_rank::tests::sparse_candidates_reject_duplicates_and_unknown_pages",
+      "budgeted_page_rank::tests::incremental_cover_charge_matches_exact_ranges_with_tied_gaps_and_final_page",
+      "budgeted_page_rank::tests::incremental_cover_charge_matches_exact_cover_across_page_patterns",
+      "budgeted_page_rank::tests::primary_page_precedes_better_scoring_secondary_page",
+      "budgeted_page_rank::tests::cheapest_gap_bridge_counts_bytes_and_rejects_over_cap_page",
+      "budgeted_page_rank::tests::short_final_page_is_charged_by_its_actual_rows",
+      "budgeted_page_rank::tests::signed_zero_scores_tie_by_page_id"
+    ],
+    "pq-codes-graph-tests": [
+      "resident_vector_graph::bounded_pq_tests::repaired_producer_above_m0_reopens_and_decoded_allocations_are_bounded",
+      "resident_vector_graph::bounded_pq_tests::total_budget_counts_upper_layers_and_reports_partial_ties"
+    ],
+    "pq-regressions": [
+      "pq64_nominee::tests::selects_the_nearest_page_and_orders_tied_rows_by_ordinal",
+      "pq64_nominee::tests::admits_a_short_final_page_without_padding_rows",
+      "pq64_nominee::tests::pads_a_nonmultiple_of_64_dimension_only_inside_pq_distance",
+      "pq64_nominee::tests::ninety_six_dimensions_score_the_last_coordinate_in_the_last_subspace",
+      "pq64_nominee::tests::huge_page_width_allocates_only_the_one_actual_candidate",
+      "pq64_nominee::tests::scores_only_requested_rows_in_caller_order",
+      "pq64_nominee::tests::cosine_view_uses_reconstructed_direction_instead_of_squared_l2",
+      "pq64_nominee::tests::row_scores_use_the_same_d96_subspace_padding_as_nomination",
+      "pq64_nominee::tests::scored_rows_match_nominee_adc_order"
+    ],
+    "pq-residual-bin-tests": [
+      "tests::pq_residual_source_strict_cli_dispatch_no_geometry_or_truth_override"
+    ],
+    "pq-residual-codec-tests": [
+      "pq_residual_four_bit::tests::pq_residual_raw_pq_floor_padding_and_physical_order",
+      "pq_residual_four_bit::tests::pq_residual_bins_constants_endpoints_subnormal_and_center_ties",
+      "pq_residual_four_bit::tests::pq_residual_original_norm_nonunit_near_ulp_scalar_oracle",
+      "pq_residual_four_bit::tests::pq_residual_book_binding_corruption_padding_and_caps",
+      "pq_residual_four_bit::tests::pq_residual_literal_d1_d3_d65_roundtrip_and_native_constant_ties"
+    ],
+    "pq-residual-doc-tests": [
+      "src/pq_residual_four_bit.rs - pq_residual_four_bit::Axis (line 13) - compile fail"
+    ],
+    "pq-residual-source-tests": [
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_dp_independent_brute_cost_and_ties",
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_actual_native_pipeline_selection_no_gt_and_sealed_recount",
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_admission_underflow_and_same_size_bindings",
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_pipeline_pass_mutation_eof_partial_sync_seal_and_late_invalid",
+      "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_frozen_thresholds_cohort_membership_ties_and_supervisor"
+    ],
+    "returned-sq8-regressions": [
+      "returned_sq8::tests::overlap_nonunit_sq8_and_duplicate_truncation",
+      "returned_sq8::tests::query_admission_accounts_for_narrow_rows_concurrent_planners_and_overflow",
+      "returned_sq8::tests::ranks_sparse_ranges_and_ties_by_id",
+      "returned_sq8::tests::mutation_visibility_precedes_top_k_and_validates_masked_rows",
+      "returned_sq8::tests::rejects_overlap_unaligned_budget_and_duplicate_ids"
+    ],
+    "s3-range-regressions": [
+      "sq8_s3_range::tests::bounded_range_query_future_is_send",
+      "sq8_s3_range::tests::source_authority_is_rejected_before_sq8_get",
+      "sq8_s3_range::tests::bounded_source_ranges_authenticate_tail_and_charge_failures",
+      "sq8_s3_range::tests::redirects_and_unfinished_error_bodies_fail_after_one_request",
+      "sq8_s3_range::tests::generation_publish_reload_and_http_search_fail_closed",
+      "sq8_s3_range::tests::real_http_range_faults_fail_closed_without_hidden_retries",
+      "sq8_s3_range::tests::conditional_short_tail_rejects_mutated_object",
+      "sq8_s3_range::tests::bounded_query_reads_only_verified_pages_and_charges_failures"
+    ],
+    "source-pq-tests": [
+      "pq64_nominee::source_codes_tests::source_fit_is_ordinal_deterministic_and_codes_only"
+    ]
+  },
+  "native_commit": "510bde198af4f28952db2fc85a42018472b23fdc",
+  "native_contract": "/tmp/borsuk-co-selection-layout-native-contract.json",
+  "native_contract_identity": {
+    "bytes": 14648,
+    "path": "/tmp/borsuk-co-selection-layout-native-contract.json",
+    "sha256": "354ada3627dd3f237dfccbf51429c4002bd1d5213b48916019490cb92dd0f55e"
+  },
+  "native_contract_source_check": "/tmp/borsuk-co-selection-native-gates-native-contract-source-check.json",
+  "native_delta": [
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs",
+    "crates/borsuk/src/co_selection_layout.rs",
+    "crates/borsuk/src/fine_sq8_groups.rs",
+    "crates/borsuk/src/lib.rs"
+  ],
+  "native_source_hashes_from_contract": {
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs": "34a4e63e77bd2ce5aaede845f2b2c00ef27876d9b2b2dc4112290dc0b004eb05",
+    "crates/borsuk/src/co_selection_layout.rs": "b9e31c2aaba06a4f982ac240bfde33b63b6c8fbe1726775eea19fd4e17203c7f",
+    "crates/borsuk/src/fine_sq8_groups.rs": "f87d5c7ec17c71921d681092fd49e13b51d6f53a1af33388a434fea02f7dbc9f",
+    "crates/borsuk/src/lib.rs": "15c59640b930de2b0eb85b36646d9caf44e4afff0edf1ba6461bd8658a6171c4"
+  },
+  "native_verified": false,
+  "origin_ref": "refs/remotes/origin/main",
+  "owned_files": [
+    "scripts/launch_native_workspace_execution_spot.py",
+    "scripts/check_native_workspace_execution.py",
+    "scripts/check_co_selection_implementation.sh"
+  ],
+  "parent_commit": "a9f323f7b58df5041774e458bb3628dc0c3396c2",
+  "prefix": "research/semantic-router/20261006/co-selection-implementation-",
+  "release_artifacts": [
+    "binaries/hierarchical_semantic_cells"
+  ],
+  "root": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates",
+  "schemas": {
+    "campaign": "borsuk-co-selection-implementation-gates-spot-v1",
+    "config": "borsuk-co-selection-implementation-gates-v1",
+    "native_manifest": "borsuk-co-selection-native-source-manifest-v1",
+    "qualification": "borsuk-co-selection-implementation-gates-qualification-v1",
+    "receipt": "borsuk-co-selection-implementation-gates-receipt-v1",
+    "stage": "borsuk-co-selection-implementation-stage-v1"
+  },
+  "source_check_elapsed_seconds": 14.002498319954611,
+  "source_check_exit_status": 0,
+  "source_check_limits": {
+    "cpu_quota_percent": 100,
+    "memory_bytes": 268435456,
+    "runtime_seconds": 120,
+    "swap_bytes": 0
+  },
+  "source_check_log": {
+    "bytes": 2939,
+    "path": "/tmp/borsuk-co-selection-native-gates-source-check.log",
+    "sha256": "1eea5ff817bde18ec6f690be2d92de4d351ff6534a1486c7b28c0c5f8ca73d33"
+  },
+  "source_check_native_verified": false,
+  "source_check_owned_sha256": {
+    "scripts/check_co_selection_implementation.sh": "6da055649984333a51e21a97c6e31ca01b3147c7bf338e6a4b6ffe0200c608eb",
+    "scripts/check_native_workspace_execution.py": "075275249e9eb927a596e07094db48aa7379938bec82bb54a865290690a971c3",
+    "scripts/launch_native_workspace_execution_spot.py": "6113d6b93e298ef7dd8b9ba25bd9903222c5e166365b6c12da3f34472e272ef9"
+  },
+  "source_check_receipt": "/tmp/borsuk-co-selection-native-gates-source-check-receipt.json",
+  "source_check_resources": {
+    "after": {
+      "cgroup.procs": "4108951\n",
+      "cpu.max": "100000 100000\n",
+      "cpu.stat": "usage_usec 13818245\nuser_usec 11220312\nsystem_usec 2597933\nnice_usec 0\ncore_sched.force_idle_usec 0\nnr_periods 143\nnr_throttled 4\nthrottled_usec 3117\nnr_bursts 0\nburst_usec 0\n",
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n",
+      "memory.max": "268435456\n",
+      "memory.peak": "101453824\n",
+      "memory.swap.events": "high 0\nmax 0\nfail 0\n",
+      "memory.swap.max": "0\n",
+      "memory.swap.peak": "0\n",
+      "path": "/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service/app.slice/borsuk-co-selection-source-final-2.service",
+      "pids.current": "1\n",
+      "pids.max": "64\n"
+    },
+    "before": {
+      "cgroup.procs": "4108951\n",
+      "cpu.max": "100000 100000\n",
+      "cpu.stat": "usage_usec 277738\nuser_usec 237351\nsystem_usec 40387\nnice_usec 0\ncore_sched.force_idle_usec 0\nnr_periods 3\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n",
+      "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n",
+      "memory.max": "268435456\n",
+      "memory.peak": "39940096\n",
+      "memory.swap.events": "high 0\nmax 0\nfail 0\n",
+      "memory.swap.max": "0\n",
+      "memory.swap.peak": "0\n",
+      "path": "/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service/app.slice/borsuk-co-selection-source-final-2.service",
+      "pids.current": "1\n",
+      "pids.max": "64\n"
+    }
+  },
+  "source_checks": [
+    "Python AST and Bash syntax",
+    "13 existing modes and stage/test authorities byte-identical to explicit historical base",
+    "original PQ residual source mocks and strict-count/start-record regressions",
+    "original fine SQ8 source mocks",
+    "original cell overlap source mocks",
+    "co-selection21 synthetic source/stage/Bash/worker/receipt/archive/lifecycle mocks",
+    "final native OWN4 committed blobs match all4 contract hashes and12 function names",
+    "final SAME native contract names, real-roster source mocks; Rust UNRUN"
+  ],
+  "stage_count": 21,
+  "stages": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "co_selection_layout::tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "name": "co-selection-tests"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "hierarchical_semantic_cells",
+        "co_selection_",
+        "--",
+        "--test-threads=1"
+      ],
+      "name": "co-selection-bin-tests"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "pq_residual_four_bit::tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "name": "pq-residual-codec-tests"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "name": "pq-residual-source-tests"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "hierarchical_semantic_cells",
+        "pq_residual_source_strict_cli_dispatch_no_geometry_or_truth_override",
+        "--",
+        "--test-threads=1"
+      ],
+      "name": "pq-residual-bin-tests"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--doc",
+        "pq_residual_four_bit",
+        "--",
+        "--test-threads=1"
+      ],
+      "name": "pq-residual-doc-tests"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "corrected_four_bit::",
+        "--",
+        "--test-threads=1"
+      ],
+      "name": "corrected-four-bit-tests"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "hierarchical_semantic_cells",
+        "fine_",
+        "--",
+        "--test-threads=1"
+      ],
+      "name": "fine-sq8-bin-tests"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "fine_sq8_groups::",
+        "--",
+        "--test-threads=1",
+        "--skip",
+        "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::"
+      ],
+      "name": "fine-sq8-tests"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "resident_vector_graph::bounded_pq_tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "name": "pq-codes-graph-tests"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "pq64_nominee::source_codes_tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "name": "source-pq-tests"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "resident_vector_graph::tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "name": "graph-regressions"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "pq64_nominee::tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "name": "pq-regressions"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "budgeted_page_rank::tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "name": "page-cover-regressions"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "returned_sq8::tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "name": "returned-sq8-regressions"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "sq8_page_authority::tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "name": "page-authority-regressions"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "sq8_s3_range::tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "name": "s3-range-regressions"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "hierarchical_semantic_cells",
+        "--",
+        "--test-threads=1",
+        "--skip",
+        "fine_",
+        "--skip",
+        "tests::pq_residual_source_strict_cli_dispatch_no_geometry_or_truth_override",
+        "--skip",
+        "tests::co_selection_"
+      ],
+      "name": "hierarchical-bin-regressions"
+    },
+    {
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "hierarchical_semantic_cells"
+      ],
+      "name": "release"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "name": "clippy"
+    },
+    {
+      "command": [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "BORSUK_TEST_BUILD_JOBS=1",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ],
+      "name": "test-build"
+    }
+  ],
+  "status": "GLUE_SOURCE_VERIFIED_NATIVE_UNVERIFIED_PARENT_OWNS_REMOTE_GATES",
+  "tag": "borsuk-co-selection-implementation",
+  "terminal_identities": [
+    "config_sha256",
+    "code_identity_sha256",
+    "campaign_schema",
+    "source_identity_sha256",
+    "source_file_count",
+    "native_source_manifest_sha256",
+    "native_source_commit",
+    "artifact_roster_sha256",
+    "awscli_version",
+    "awscli_sha256",
+    "controller_source_commit",
+    "candidate_delta_paths",
+    "source_archive_paths_sha256",
+    "source_archive_file_count"
+  ],
+  "token_prefix": "co-selection-implementation-"
+}
