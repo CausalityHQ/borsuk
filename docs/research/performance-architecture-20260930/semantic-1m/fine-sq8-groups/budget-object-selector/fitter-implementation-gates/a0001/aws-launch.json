@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-07290732127e619f6",
+  "nodes": {
+    "0": {
+      "instance_id": "i-07290732127e619f6"
+    }
+  },
+  "prefix": "research/semantic-router/20261006/budget-object-fitter-implementation-a0001",
+  "source_commit": "5151b26e05ec4a8ca41f4d04c5edabab3f173432",
+  "source_archive_sha256": "c3e31a336f1142f8f21776f00106dcc4059fdfea08fc1845cb15126a48caa983"
+}

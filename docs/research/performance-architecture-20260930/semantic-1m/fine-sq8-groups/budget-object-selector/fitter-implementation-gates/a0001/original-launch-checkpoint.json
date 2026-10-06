@@ -1,0 +1,36 @@
+{
+  "schema": "borsuk-fitter-original-launch-checkpoint-v1",
+  "status": "RUNNING_UNQUALIFIED",
+  "original_session": 12620,
+  "instance_id": "i-07290732127e619f6",
+  "source_bundle_commit": "5151b26e05ec4a8ca41f4d04c5edabab3f173432",
+  "native_commit": "693989978444884638790802e3da232b0a3bc7e2",
+  "config_commit": "baf8825b6258992f3097173148115c7a6d96c2ef",
+  "controller_commit": "886a1ca0f29ac526d8802fa2d9bbc5086cdb6de5",
+  "source_file_count": 409,
+  "source_identity_sha256": "9f145ffc65ac665b1de35e66a2ccde97b8c1ca4a9188455d052cc1d66ef39fa5",
+  "archive_file_count": 2439,
+  "preflight": {
+    "exit_status": 0,
+    "runtime_seconds": 1.192,
+    "memory_peak_display": "68.4M",
+    "swap_bytes": 0,
+    "invocation_id": "ec5ee8112c0c4fb4a562bde149a89834"
+  },
+  "artifacts": {
+    "aws-launch.json": {
+      "bytes": 370,
+      "sha256": "26061824c33f18b6f7f89131ea5fade67b7cce612df57aa0abfe33cd9c95c929"
+    },
+    "aws-reservation.json": {
+      "bytes": 447197,
+      "sha256": "23e9b8f6ed1e3aaf03e1e997ab1028af8034a03f93ef6396311101e393ed1564"
+    },
+    "aws-user-data.sh": {
+      "bytes": 7513,
+      "sha256": "d5d1e7f842b58aa3f531bec5aee114dfcdd7c43355f34b9e0aa867d0c4a1cea5"
+    }
+  },
+  "ann_measurement": false,
+  "native_qualification_complete": false
+}
