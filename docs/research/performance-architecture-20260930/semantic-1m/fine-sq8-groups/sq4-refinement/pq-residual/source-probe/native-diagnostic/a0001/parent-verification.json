@@ -1,0 +1,37 @@
+{
+  "all_artifacts_independently_hashed": true,
+  "artifact_count": 33,
+  "instance_id": "i-03af7b00dc59cac50",
+  "native_memory_peak_bytes": 76423168,
+  "native_process_wall_seconds": 4.328770359,
+  "native_source_commit": "7bb862b273151e91a49d1d4a8f1ba4dce8c8328b",
+  "native_swap_peak_bytes": 0,
+  "next_action": "stop rejected arm; no matched GT refinement or parameter retuning",
+  "original_native_exit_status": 0,
+  "quality_or_performance_claim": false,
+  "requests_opened": false,
+  "same_instance_terminated": true,
+  "schema": "borsuk-pq-residual-source-parent-verification-v1",
+  "sealed_results_independently_recounted": 128,
+  "source_commit": "79c4fc388300931be2af2df803a49986f49e5879",
+  "status": "REJECT",
+  "summary": [
+    {
+      "dataset": "relaion",
+      "p05_overlap_hits": 96,
+      "passed": false,
+      "source_top100_overlap_mean": 0.98234375,
+      "sum_hits": 6287
+    },
+    {
+      "dataset": "cohere",
+      "p05_overlap_hits": 93,
+      "passed": false,
+      "source_top100_overlap_mean": 0.96296875,
+      "sum_hits": 6163
+    }
+  ],
+  "truth_opened": false,
+  "valid_diagnostic": true,
+  "verified": true
+}
