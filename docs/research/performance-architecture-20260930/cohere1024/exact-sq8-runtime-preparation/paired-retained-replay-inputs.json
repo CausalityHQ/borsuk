@@ -208,5 +208,20 @@
     "generation_prefix",
     "generation_root_sha256"
   ],
-  "source_identity_note": "Preserve native_source.source_sha256=20936913... and source_order_sha256=6b6a6709... from authenticated runner config. The plane source identity is NOT the canonical object SHA84169ab5."
+  "source_identity_note": "Preserve native_source.source_sha256=20936913... and source_order_sha256=6b6a6709... from authenticated runner config. The plane source identity is NOT the canonical object SHA84169ab5.",
+  "original_head_authenticated": {
+    "schema": "borsuk-two-bit-head-v2",
+    "epoch": 1,
+    "generation": 1,
+    "root_sha256": "4ec270e5ddaf588ab637321ba8ff807712f146817d93d3780eeb54b084b27982",
+    "mutation": null,
+    "fence": null
+  },
+  "retained_approval": {
+    "root_sha256": "4ec270e5ddaf588ab637321ba8ff807712f146817d93d3780eeb54b084b27982",
+    "generation": 1,
+    "control_epoch": 1,
+    "sq8_object_key": "semantic/objects/07a14360b06add9a35f82b97f4e031690ff878ff497ee047902818823992337b",
+    "sq8_etag_runtime_pending": true
+  }
 }
