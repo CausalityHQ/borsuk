@@ -1,0 +1,383 @@
+{
+  "schema": "borsuk-cohere-cohort-native-qualification-contract-v1",
+  "phase": "FINAL_SOURCE_GLUE_VERIFIED_ONLY_ROOT_REMOTE_NATIVE_GATES_PENDING",
+  "base_commit": "a76d2bb4cde8c7daafd93eafb09b5c7264bbcfee",
+  "owned_files": [
+    "scripts/launch_native_workspace_execution_spot.py",
+    "scripts/check_native_workspace_execution.py",
+    "scripts/check_cohere_cohort_implementation.sh"
+  ],
+  "mode": "cohere_cohort=True",
+  "cli": "--cohere-cohort-implementation",
+  "root": "docs/research/performance-architecture-20260930/cohere1024/cohort-implementation-gates",
+  "native_delta": [
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+    "crates/borsuk/src/bin/prepare_cohere_native_cohort.rs"
+  ],
+  "native_contract_commits": [
+    "d869e786e3c343d2c2ebf382d4ba7f0807a7be29",
+    "9d5b3dc0d1af31ccad32e82d0a83fd73967ee43e"
+  ],
+  "native_sources": "ROOT SUPPLIED; no fixed native SHA",
+  "apis": [
+    "configure(cohere_cohort=True)",
+    "execution_mode(cohere_cohort=True)",
+    "worker.main(CARGO, REPO, OUTPUT, cohere_cohort=True)",
+    "self_check(cohere_cohort=True)",
+    "record_constrained_split_stage(argv, cohere_cohort=True)",
+    "validate_bounded_publication_stages(log, cohere_cohort=True)",
+    "cohere_cohort_required_tests()",
+    "validate_cohere_cohort_config(config)",
+    "qualify(base)",
+    "preflight(base)",
+    "stage(repo,out)",
+    "hierarchical_archive_authority(base,commit,inventory,manifest_path)",
+    "user_data(commit,archive_sha,archive_key,prefix,qualification)",
+    "replay(out)"
+  ],
+  "code": [
+    "scripts/check_native_metadata_ranges_stats.py",
+    "scripts/check_native_semantic_router_stats.py",
+    "scripts/check_native_startup_build.py",
+    "scripts/check_native_startup_stats.py",
+    "scripts/check_native_workspace_execution.py",
+    "scripts/launch_native_metadata_ranges_cold_spot.py",
+    "scripts/launch_native_peer_1m_spot.py",
+    "scripts/launch_native_semantic_router_cold_spot.py",
+    "scripts/launch_native_startup_profile_spot.py",
+    "scripts/launch_native_workspace_execution_spot.py",
+    "scripts/launch_v157_primary_feasibility_spot.py",
+    "scripts/launch_v174_relaid_bind_compile_spot.py",
+    "scripts/package_semantic_native_generation.py",
+    "scripts/prepare_native_semantic_publication.py",
+    "scripts/rest_coexistence_load.py",
+    "scripts/run_native_cold_first_query.py",
+    "scripts/run_native_metadata_ranges_cold.py",
+    "scripts/run_native_peer_1m_worker.py",
+    "scripts/run_native_peer_offered_http.py",
+    "scripts/run_native_semantic_router_cold.py",
+    "scripts/run_native_union_http.py",
+    "scripts/run_native_union_offered_http.py",
+    "scripts/check_rust_test_build.sh",
+    "scripts/check_cohere_cohort_implementation.sh"
+  ],
+  "artifacts": [
+    "source-qualification.json",
+    "config.json",
+    "native-source-manifest.json",
+    "source-before.json",
+    "source-after.json",
+    "workspace-receipt.json",
+    "test.log",
+    "test-resources.txt",
+    "workspace-cgroup.json",
+    "cpu.txt",
+    "rustc-version.txt",
+    "cargo-version.txt",
+    "run-closed.log",
+    "binaries/check_cohere_native_baseline",
+    "binaries/prepare_cohere_native_cohort"
+  ],
+  "schemas": {
+    "config": "borsuk-cohere-cohort-implementation-gates-v1",
+    "spot": "borsuk-cohere-cohort-implementation-gates-spot-v1",
+    "receipt": "borsuk-cohere-cohort-implementation-gates-receipt-v1",
+    "stage": "borsuk-cohere-cohort-implementation-gates-stage-v1",
+    "qualification": "borsuk-cohere-cohort-implementation-gates-qualification-v1",
+    "native_manifest": "borsuk-cohere-cohort-implementation-gates-native-source-manifest-v1"
+  },
+  "config_schema": "borsuk-cohere-cohort-implementation-gates-v1",
+  "rosters": {
+    "cohere-native-baseline-tests": [
+      "tests::production_contract_rejects_unknown_hash_geometry_and_caps",
+      "tests::secure_artifacts_reject_hash_length_eof_symlink_fifo_and_bad_rows",
+      "tests::scratch_formula_keeps_codec_and_trace_separate",
+      "tests::actual_native_queries_seal_and_reduce_against_literal_oracles",
+      "tests::missing_or_tampered_truth_is_invalid_only_after_all_queries_are_sealed",
+      "tests::prefix_or_requests_tampering_blocks_first_truth_open",
+      "tests::source_binding_and_all_request_rows_fail_before_queries",
+      "tests::reporting_underfill_keeps_fixed_ten_denominator_and_bounded_output"
+    ],
+    "cohere-native-cohort-tests": [
+      "tests::two_shard_original_bits_scalar_truth_and_locators",
+      "tests::fixed_list_and_integer_ids",
+      "tests::invalid_embeddings_and_duplicate_ids",
+      "tests::strict_config_and_missing_columns",
+      "tests::secure_hash_eof_link_fifo_inputs",
+      "tests::metadata_and_batch_memory_caps",
+      "tests::missing_rows_and_occupied_output",
+      "tests::sync_failure_removes_complete_marker"
+    ]
+  },
+  "caps": {
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "cpu_quota_percent": 200,
+    "tasks_max": 512,
+    "test_seconds": 7200,
+    "service_seconds": 7260,
+    "machine_seconds": 9000,
+    "local_cpu": 1,
+    "local_memory_bytes": 268435456,
+    "local_swap_bytes": 0,
+    "local_timeout_seconds": 120
+  },
+  "freeze_steps": [
+    "Root commits/integrates ONLY verified glue; keeps new native bins out of controller/config lineage until final bundle. Root supplies final candidate source commit (repairs from live critique may change SHA, fixed testnames stay).",
+    "Root prepares a separate committed fullsource projection with final candidate bins + controller/support/config path + prospective distinct source manifest; hashes entire native inventory, not only delta, from that exact projection.",
+    "Root commits controller+distinct prospective native source manifest with root-supplied candidate/control/full-source identities and exactly two native delta paths; qualification_pending=true, no frozen config yet.",
+    "Root calls configure(cohere_cohort=True), derives hierarchical_archive_authority(fullsource_projection, projection_commit, inventory, manifest_path). CONFIG may be absent; its self hash is deliberately excluded. Support/CODE/native bytes must equal final bundle.",
+    "Root commits ONLY CONFIG as immediate child of frozen controller commit, setting controller_authority_pending=false, exact FIXED/CODE/native-manifest pointer/archive authority; config freeze must be on origin ref.",
+    "Root creates immediate config child adding EXACTLY both new bin files as A additions from final candidate; pristine full-source bundle validated via preflight, full SHA and native blob provenance checked.",
+    "Root launches ONE remote five-stage native gate only AFTER original exec62254/i-05d1bccc1f60d4647 is terminal; bounded ACK/fsync/terminate-wait/collect lifecycle unchanged. Root freezes binary hashes from collected release artifacts. No corpus/GT/scientific run in qualification glue."
+  ],
+  "commit": "382de80583e808195f57eb8bf38047b60543fffe",
+  "verification": {
+    "new_cohort_self_check_exit": 0,
+    "historical_cohere1024_self_check_exit": 0,
+    "all_historical_mode_protocol_bytes": "equal to opening base",
+    "affected_script_syntax_exit": 0,
+    "diff_check_exit": 0,
+    "native_tests_builds": "NOT RUN; root remote gates required",
+    "runtime": "real Bash/time/tee/stage recorder with Python Cargo-output recorder; no fake Rust compiled",
+    "source_fixture": "two real native source copies only in temporary synthetic source fixture; no native changes in owned worktree"
+  },
+  "release_artifacts": [
+    "binaries/check_cohere_native_baseline",
+    "binaries/prepare_cohere_native_cohort"
+  ],
+  "terminal_identities": [
+    "config_sha256",
+    "code_identity_sha256",
+    "campaign_schema",
+    "source_identity_sha256",
+    "source_file_count",
+    "native_source_manifest_sha256",
+    "native_source_commit",
+    "artifact_roster_sha256",
+    "awscli_version",
+    "awscli_sha256",
+    "controller_source_commit",
+    "candidate_delta_paths",
+    "source_archive_paths_sha256",
+    "source_archive_file_count"
+  ],
+  "config": "docs/research/performance-architecture-20260930/cohere1024/cohort-implementation-gates/config.json",
+  "stages": [
+    {
+      "stage": "cohere-native-baseline-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "check_cohere_native_baseline",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "stage": "cohere-native-cohort-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "prepare_cohere_native_cohort",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "stage": "release",
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "check_cohere_native_baseline",
+        "--bin",
+        "prepare_cohere_native_cohort"
+      ]
+    },
+    {
+      "stage": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ]
+    },
+    {
+      "stage": "test-build",
+      "command": [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "BORSUK_TEST_BUILD_JOBS=1",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ]
+    }
+  ],
+  "fixed": {
+    "schema": "borsuk-cohere-cohort-implementation-gates-v1",
+    "architecture": "x86_64",
+    "region": "eu-central-1",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "instance_type": "c7i.2xlarge",
+    "image_id": "ami-0b8a830d6339a9758",
+    "root_device_name": "/dev/sda1",
+    "subnet_id": "subnet-034528fbd6977848f",
+    "spot_max_usd_per_hour": 0.5,
+    "compute_cap_usd": 1.25,
+    "ebs_s3_allowance_usd": 0.15,
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "cpu_quota_percent": 200,
+    "tasks_max": 512,
+    "test_limit_seconds": 7200,
+    "service_limit_seconds": 7260,
+    "machine_limit_seconds": 9000,
+    "command": [
+      "bash",
+      "scripts/check_cohere_cohort_implementation.sh"
+    ],
+    "environment": {
+      "CARGO_BUILD_JOBS": "1",
+      "RUST_TEST_THREADS": "1",
+      "RAYON_NUM_THREADS": "1",
+      "TOKIO_WORKER_THREADS": "1",
+      "RUSTC_WRAPPER": "",
+      "RUSTC_WORKSPACE_WRAPPER": "",
+      "BORSUK_TEST_BUILD_JOBS": "1",
+      "BORSUK_TEST_BUILD_COMMAND": null,
+      "BORSUK_CPU_THREADS": "1",
+      "BORSUK_FINE_TEST_ROOT": null,
+      "BORSUK_FINE_TEST_REMOTE": null,
+      "LC_ALL": "C"
+    },
+    "execution_kind": "implementation-gates",
+    "mandatory_test_names_pending": false,
+    "mandatory_tests": {
+      "cohere-native-baseline-tests": [
+        "tests::production_contract_rejects_unknown_hash_geometry_and_caps",
+        "tests::secure_artifacts_reject_hash_length_eof_symlink_fifo_and_bad_rows",
+        "tests::scratch_formula_keeps_codec_and_trace_separate",
+        "tests::actual_native_queries_seal_and_reduce_against_literal_oracles",
+        "tests::missing_or_tampered_truth_is_invalid_only_after_all_queries_are_sealed",
+        "tests::prefix_or_requests_tampering_blocks_first_truth_open",
+        "tests::source_binding_and_all_request_rows_fail_before_queries",
+        "tests::reporting_underfill_keeps_fixed_ten_denominator_and_bounded_output"
+      ],
+      "cohere-native-cohort-tests": [
+        "tests::two_shard_original_bits_scalar_truth_and_locators",
+        "tests::fixed_list_and_integer_ids",
+        "tests::invalid_embeddings_and_duplicate_ids",
+        "tests::strict_config_and_missing_columns",
+        "tests::secure_hash_eof_link_fifo_inputs",
+        "tests::metadata_and_batch_memory_caps",
+        "tests::missing_rows_and_occupied_output",
+        "tests::sync_failure_removes_complete_marker"
+      ]
+    }
+  },
+  "config_required_fields": [
+    "architecture",
+    "bucket",
+    "command",
+    "compute_cap_usd",
+    "controller_authority_pending",
+    "controller_code_sha256",
+    "controller_source_commit",
+    "cpu_quota_percent",
+    "ebs_s3_allowance_usd",
+    "environment",
+    "execution_kind",
+    "image_id",
+    "instance_type",
+    "machine_limit_seconds",
+    "mandatory_test_names_pending",
+    "mandatory_tests",
+    "memory_bytes",
+    "native_source_manifest",
+    "region",
+    "root_device_name",
+    "schema",
+    "service_limit_seconds",
+    "source_archive_file_count",
+    "source_archive_paths",
+    "source_archive_paths_sha256",
+    "source_archive_support_sha256",
+    "spot_max_usd_per_hour",
+    "subnet_id",
+    "swap_bytes",
+    "tasks_max",
+    "test_limit_seconds"
+  ],
+  "native_manifest_fields": [
+    "schema",
+    "native_source_commit",
+    "control_native_source_commit",
+    "candidate_qualification_pending",
+    "candidate_delta_paths",
+    "source_sha256",
+    "source_file_count",
+    "source_identity_sha256"
+  ],
+  "archive_binding_prefix": "BORSUK_COHERE_COHORT_",
+  "record_stage_argv": [
+    "stage",
+    "started_UTC",
+    "finished_UTC_or_empty",
+    "exit_or_empty",
+    "stage_log_or_empty",
+    "tee_exit_or_empty",
+    "EXACT_COMMAND_ARGV...",
+    "time_resource_file"
+  ],
+  "stage_refusals": [
+    "zero/missing/ignored/failed/duplicate/foreign/extra/wrong-stage test; summary mismatch; missing or duplicate test-build completion; nonzero command/tee; wrong argv; missing/duplicate/overcap resources"
+  ],
+  "fixture_source_sha256": {
+    "/home/rb/worktrees/borsuk-cohere1024-native-runner/crates/borsuk/src/bin/check_cohere_native_baseline.rs": "d4a6b318102235428733538d50f1ee13d30a36c2ff15779271b89a6e336a7828",
+    "/home/rb/worktrees/borsuk-cohere1024-native-cohort-preparer/crates/borsuk/src/bin/prepare_cohere_native_cohort.rs": "487707b0645531c8af5703e9a4522f29d8d9cff4cb323921b1f52d223d124f78"
+  },
+  "commit_parent": "a76d2bb4cde8c7daafd93eafb09b5c7264bbcfee",
+  "commit_author": "Roman Bartusiak <riomus@gmail.com>",
+  "commit_files": [
+    "scripts/check_cohere_cohort_implementation.sh",
+    "scripts/check_native_workspace_execution.py",
+    "scripts/launch_native_workspace_execution_spot.py"
+  ],
+  "worktree_clean": true,
+  "owned_sha256": {
+    "scripts/check_cohere_cohort_implementation.sh": "2973c19c34f4880defb32a43c310753383ba2a6513de71b69f9e971dd76f5007",
+    "scripts/check_native_workspace_execution.py": "fc31531058efef3823b6bce324a6f3c7fef22b36e9021866800ca84f3f814edd",
+    "scripts/launch_native_workspace_execution_spot.py": "e343902f6a8a9c86eba505491bff0aaea06d5072bba48b1b91995e18918963f3"
+  },
+  "local_final_resource_evidence": {
+    "memory.max": "268435456",
+    "memory.swap.max": "0",
+    "cpu.max": "100000 100000",
+    "memory.peak": "14012416",
+    "memory.swap.peak": "0"
+  },
+  "original_exec62254": "UNTOUCHED",
+  "native_source_sha_authority": "ROOT SUPPLIED FINAL SOURCE; fixture identities are local synthetic evidence only",
+  "forbidden_work": "NO Cargo/rustc/native/data/corpus/GT/network/AWS/cloud/reviews/children/push/merge executed"
+}

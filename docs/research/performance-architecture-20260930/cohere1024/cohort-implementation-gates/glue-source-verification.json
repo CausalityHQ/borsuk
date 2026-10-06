@@ -1,0 +1,38 @@
+{
+  "status": "SOURCE_GLUE_MOCKS_PASS_NATIVE_UNVERIFIED",
+  "child_commit": "382de80583e808195f57eb8bf38047b60543fffe",
+  "parent_head_before_integration": "d2b3c336381322b29f8a448dad742265aa171414",
+  "owned_sha256": {
+    "scripts/launch_native_workspace_execution_spot.py": "e343902f6a8a9c86eba505491bff0aaea06d5072bba48b1b91995e18918963f3",
+    "scripts/check_native_workspace_execution.py": "fc31531058efef3823b6bce324a6f3c7fef22b36e9021866800ca84f3f814edd",
+    "scripts/check_cohere_cohort_implementation.sh": "2973c19c34f4880defb32a43c310753383ba2a6513de71b69f9e971dd76f5007"
+  },
+  "original_exec_session": 70420,
+  "unit": "run-p1977407-i492642795.service",
+  "command": [
+    "/usr/bin/env",
+    "PYTHONDONTWRITEBYTECODE=1",
+    "/usr/bin/python3",
+    "-m",
+    "scripts.launch_native_workspace_execution_spot",
+    "--cohere-cohort-implementation",
+    "--self-check"
+  ],
+  "exit_status": 0,
+  "resource_limits": {
+    "cpu_percent": 100,
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "tasks": 512,
+    "runtime_seconds": 120
+  },
+  "actual_service_runtime_seconds": 6.538,
+  "actual_cpu_seconds": 6.359,
+  "reported_memory_peak": "96.8M",
+  "reported_swap_bytes": 0,
+  "source_identity_scope": "owned3 glue bytes only; final native source/config/archive still pending",
+  "native_tests_builds": "NOT RUN",
+  "original_library_job": "62254 closed0; instance terminated; qualified source integratedc4c8a574",
+  "science": "NO_CORPUS_GT_RECALL_LATENCY_QPS_VENDOR_COMPARISON_EXECUTED",
+  "next_gate": "freeze repaired final two-bin sources, then one exact-source remote native qualification"
+}
