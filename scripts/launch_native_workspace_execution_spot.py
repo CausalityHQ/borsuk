@@ -966,7 +966,7 @@ def record_constrained_split_stage(argv, *, cell_overlap=False, fine_sq8=False, 
                         tests += int(summary[1]) + int(summary[2])
                         failed += int(summary[2]); ignored += int(summary[3])
                     test_builds += bool(re.fullmatch(r'rust-test-build status=0 elapsed_seconds=\d+ jobs=1\n?', line))
-    evidence_invalid = strict_counts and finished and (
+    evidence_invalid = strict_counts and bool(finished) and (
         (stage not in ('release', 'clippy', 'test-build') and (summaries != 1 or passed_lines != tests)) or
         (stage == 'test-build' and test_builds != 1))
     evidence_invalid |= pq_residual and bool(finished) and (wrong_stage or
@@ -2425,6 +2425,7 @@ def _pq_residual_self_check():
             rejected(lambda:validate_pq_residual_config(dict(FIXED, **{key:value})))
             rejected(lambda:validate_pq_residual_config({k:v for k,v in FIXED.items() if k != key}))
         _hierarchical_cells_script_self_check(pq_residual=True)
+        _pq_residual_shell_self_check()
         _fixed48_stages_self_check(pq_residual=True)
         _startup_wave8_preflight_self_check(pq_residual=True)
         _hierarchical_archive_self_check(pq_residual=True)
@@ -2541,6 +2542,17 @@ def _hierarchical_cells_script_self_check(*, constrained_split=False, cell_overl
         log = Path(tmp)/'stage.log'
         for index, (name, command) in enumerate(stages):
             names = required.get(name, ())
+            if pq_residual:
+                argv = ['recorder', name, '2026-10-06T00:00:00Z', '', '', '', '', *command]
+                with patch.object(sys, 'argv', argv), contextlib.redirect_stdout(io.StringIO()) as output:
+                    try:
+                        exec(recorder, {})
+                    except SystemExit as result:
+                        assert result.code == 0
+                record = json.loads(output.getvalue())
+                assert record['stage'] == name and record['command'] == command
+                assert all(record[key] is None for key in ('finished_at', 'exit_status', 'log_exit_status',
+                    'gate_status', 'tests_run', 'required_test_passes'))
             lines = ['test '+test+' ... ok' for test in names]
             if (cell_overlap or fine_sq8 or pq_residual) and not names and name not in ('release', 'clippy', 'test-build'):
                 lines.append('test tests::regression ... ok')
@@ -2582,6 +2594,37 @@ def _hierarchical_cells_script_self_check(*, constrained_split=False, cell_overl
                 record = json.loads(output.getvalue())
                 assert record['gate_status'] == expected and record['command'] == command
                 assert record['schema'] == (PQ_RESIDUAL_STAGE_SCHEMA if pq_residual else FINE_SQ8_STAGE_SCHEMA if fine_sq8 else CELL_OVERLAP_STAGE_SCHEMA if cell_overlap else CONSTRAINED_SPLIT_STAGE_SCHEMA if constrained_split else HIERARCHICAL_CELLS_STAGE_SCHEMA)
+
+
+def _pq_residual_shell_self_check():
+    """Real Bash start/command/tee/end/cleanup; only Cargo and source checks are fake."""
+    script = (Path(__file__).resolve().parent/'check_pq_residual_implementation.sh').read_text()
+    functions = script[script.index('stage_record() {'):script.index('# Cheap synthetic native falsifiers')]
+    name, command = PQ_RESIDUAL_STAGES[0]
+    names = pq_residual_required_tests()[name]
+    good = ''.join('test '+test+' ... ok\n' for test in names)
+    good += f'test result: ok. {len(names)} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s\n'
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = Path(tmp)/'cargo'
+        fake.write_text('#!/usr/bin/env python3\nimport os,sys\nprint('+repr(good)+',end="",flush=True)\nsys.exit(int(os.environ["FAKE_CARGO_EXIT"]))\n')
+        fake.chmod(0o755)
+        for native_status, tee_status in ((0, 0), (17, 0), (0, 18)):
+            env = dict(os.environ, PATH=tmp+os.pathsep+os.environ['PATH'], TMPDIR=tmp,
+                PYTHONDONTWRITEBYTECODE='1', FAKE_CARGO_EXIT=str(native_status))
+            tee = ('tee() { /usr/bin/tee "$@"; return 18; }\n' if tee_status else '')
+            body = 'set -euo pipefail\nsource_check() { :; }\n'+functions+tee
+            body += 'run_stage '+name+' '+' '.join(command)+'\n'
+            result = subprocess.run(['bash', '-c', body], cwd=Path(__file__).resolve().parents[1],
+                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+            assert result.returncode == (native_status or tee_status), result.stderr
+            records = [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
+            assert len(records) == 2 and all(record['stage'] == name and record['command'] == command for record in records)
+            start, end = records
+            assert start['finished_at'] is start['exit_status'] is start['gate_status'] is None
+            assert end['exit_status'] == native_status and end['log_exit_status'] == tee_status
+            assert end['gate_status'] == (native_status or tee_status) and end['tests_run'] == len(names)
+            assert end['required_test_passes'] == dict.fromkeys(names, 1)
+            assert list(Path(tmp).iterdir()) == [fake], 'stage log cleaned on success and failure'
 
 
 def _fixed48_stages_self_check(*, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False):
