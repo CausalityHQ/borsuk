@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-selector-root-source-authentication-v1",
+  "native_commit": "6a0629e4743695871657451072e5f59d346c8436",
+  "gates_commit": "6622b9eaf37b942cf34ab146bb346efadeebf5e7",
+  "owned_native_files_authenticated": true,
+  "owned_gate_files_authenticated": true,
+  "seven_test_rosters_identical": true,
+  "native_execution": "UNRUN",
+  "production_qualified": false,
+  "root_glue_check": {
+    "unit": "borsuk-selector-root-glue-check.service",
+    "invocation": "b62df71d567a4479a931618897f0fa74",
+    "exit_status": 0,
+    "runtime_seconds": 4.61,
+    "reported_memory_peak": "92.5M",
+    "swap_bytes": 0,
+    "scope": "synthetic glue only; Rust UNRUN"
+  }
+}
