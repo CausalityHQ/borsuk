@@ -1,0 +1,26 @@
+# Prospective paired retained Cohere replay
+
+Status: NOT LAUNCHED; requires final retained-publication Rust qualification and root source/config/transport freeze. This is an end-to-end local-file optimization gate, not a competitor benchmark or cold-cache result. The library remains generic; dataset constraints belong to this experiment.
+
+## Fixed population
+
+CohereLabs/wikipedia-2023-11-embed-multilingual-v3 revision ade45fb52bd549f5e8c065636fe4160a43c2af36. Corpus source ordinals [0,100000); disjoint queries [100000,101000); D1024, cosine, k10, no filters. Retain the completed a0002 index bytes and original coefficients, router/membership/source/SQ8/canonical identities. No re-encoding or retraining.
+
+Query bytes4096000 SHA2568460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e. Truth bytes80000 SHA256479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c. Original generation root4ec270e5ddaf588ab637321ba8ff807712f146817d93d3780eeb54b084b27982. Original baseline binary SHA256ce43842caeea9dbb722f3497b237265e71c7d829cbaf0243a81a2a352fcf1221. Qualified blocked-scorer binary SHA2563911839ba9ef68604e2c487d802a3b3e125bdc1121aee9af268db3ba8a9ca8cf. Authenticate complete transported bodies, not HEAD lengths alone.
+
+## Sequence and admission
+
+1. Opaque stage and SHA/length authenticate the fixed fifteen retained assets (551480739 bytes), both qualified query binaries and qualified native retained publisher. Runtime-specific SQ8 ETag is read only after complete object authentication; it is sealed into the retained publisher config before any query. The allowed envelope mutation is SQ8 key/ETag only. Pin the resulting new root/head and metadata roster once for all four runs. Original raw publication remains immutable.
+2. Run old A1, blocked B1, blocked B2, old A2 on the SAME instance/provider/files/root/query bytes and resources, serially. Each native runner retains its durable query seal before GT reduction. No fitting, parameter sweep, per-arm data layout change or mid-run source change.
+3. Collect only complete original terminal outputs and original supervisor resource/exit/drain/cleanup receipts. Authenticate all four full 1000-query result rosters. Check exact query ordinal, returned IDs and score bits across A1/B1/B2/A2 before admitting a performance comparison. Require equal recall numerator/denominator, no underfill, same logical GET/range/byte accounting and unchanged root/payload identities. A mismatch invalidates the optimization gate; do not excuse it with approximate recall equality.
+4. Report each run plus each arm's pooled 2000 queries: nearest-rank p50/p90/p95/p99, query wall sum and sequential QPS, per-stage times, process RSS, cgroup memory peak including page cache, swap/OOM, logical GETs/bytes and total reserved versus incurred cost when independently observed. Preserve per-query paired deltas as well as distribution ratios. No physical S3 request claim from LocalFileSystem. Shared OS page cache is uncontrolled: label explicitly, and do not call this hot/cold equivalence.
+
+## Prospective resource envelope
+
+One interruptible Causality EC2 Spot instance; CPU1/noSwap/512MiB cgroup per native query or publisher phase; max300 seconds per native call; max1800 seconds for staging/publication/measurement execution, machine maximum3600 seconds. Total scratch maximum4GiB, including retained inputs, metadata copies, binaries, raw logs, config and all four outputs. No local native execution. Compute reservation at most$0.50 at Spot maximum$0.50/hour and machine3600 seconds; ancillary allowance$0.15, total reservation$0.65. These are caps, not measured runtime or spend. Refresh actual quote, exact asset/archive admission and full resource configuration at freeze.
+
+Sync terminal receipts to S3; terminate and wait immediately after terminal closure. On interruption discard the entire paired measurement cell and preserve its interruption/cost evidence; no automatic duplicate launch. No independent maintenance instance. A canary may be required by the existing frozen transport authority; any such bounded usage-only gate has separate pins/cost closure and performs no ANN measurement.
+
+## Decision
+
+Only exact semantic parity plus a measured end-to-end latency/QPS/RAM tradeoff admits the blocked scorer for this workload. Synthetic kernel qualification alone is insufficient. Continue with actual S3-backed queries and a matched own S3 Vectors run on the agreed Cohere workload; 10M/8QPS/600s is the comparison target. Published Turbopuffer v3 remains a disclosed methodology/reference, since exact vendor corpus/query IDs and cache environment are not established here. No vendor win or 100B extrapolation follows from this gate.
