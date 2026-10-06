@@ -1,0 +1,393 @@
+{
+  "CODE": [
+    "scripts/check_native_metadata_ranges_stats.py",
+    "scripts/check_native_semantic_router_stats.py",
+    "scripts/check_native_startup_build.py",
+    "scripts/check_native_startup_stats.py",
+    "scripts/check_native_workspace_execution.py",
+    "scripts/launch_native_metadata_ranges_cold_spot.py",
+    "scripts/launch_native_peer_1m_spot.py",
+    "scripts/launch_native_semantic_router_cold_spot.py",
+    "scripts/launch_native_startup_profile_spot.py",
+    "scripts/launch_native_workspace_execution_spot.py",
+    "scripts/launch_v157_primary_feasibility_spot.py",
+    "scripts/launch_v174_relaid_bind_compile_spot.py",
+    "scripts/package_semantic_native_generation.py",
+    "scripts/prepare_native_semantic_publication.py",
+    "scripts/rest_coexistence_load.py",
+    "scripts/run_native_cold_first_query.py",
+    "scripts/run_native_metadata_ranges_cold.py",
+    "scripts/run_native_peer_1m_worker.py",
+    "scripts/run_native_peer_offered_http.py",
+    "scripts/run_native_semantic_router_cold.py",
+    "scripts/run_native_union_http.py",
+    "scripts/run_native_union_offered_http.py",
+    "scripts/check_rust_test_build.sh",
+    "scripts/check_budget_object_fitter_implementation.sh"
+  ],
+  "FIXED": {
+    "architecture": "x86_64",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "command": [
+      "bash",
+      "scripts/check_budget_object_fitter_implementation.sh"
+    ],
+    "compute_cap_usd": 1.25,
+    "cpu_quota_percent": 200,
+    "ebs_s3_allowance_usd": 0.15,
+    "environment": {
+      "BORSUK_CPU_THREADS": "1",
+      "BORSUK_FINE_TEST_REMOTE": null,
+      "BORSUK_FINE_TEST_ROOT": null,
+      "BORSUK_TEST_BUILD_COMMAND": null,
+      "BORSUK_TEST_BUILD_JOBS": "1",
+      "CARGO_BUILD_JOBS": "1",
+      "LC_ALL": "C",
+      "RAYON_NUM_THREADS": "1",
+      "RUSTC_WORKSPACE_WRAPPER": "",
+      "RUSTC_WRAPPER": "",
+      "RUST_TEST_THREADS": "1",
+      "TOKIO_WORKER_THREADS": "1"
+    },
+    "execution_kind": "implementation-gates",
+    "image_id": "ami-0b8a830d6339a9758",
+    "instance_type": "c7i.2xlarge",
+    "machine_limit_seconds": 9000,
+    "mandatory_test_names_pending": false,
+    "mandatory_tests": {
+      "budget-object-fitter-tests": [
+        "budget_object_selector::tests::oracle_exhaustive_six_group_four_label_capacity_two",
+        "budget_object_selector::tests::oracle_mixture_33_omitted_global_winner_and_ties",
+        "budget_object_selector::tests::oracle_scale_s335_bounded_candidates_and_charges",
+        "budget_object_selector::tests::oracle_finite_mlp_nonunit_query_matches_independent_scalar",
+        "budget_object_selector::tests::oracle_budget_boundaries_overflow_and_finite_validation",
+        "budget_object_selector::tests::oracle_identity_binding_and_determinism",
+        "budget_object_selector::tests::oracle_move_swap_and_checkpoint_strict_acceptance",
+        "budget_object_selector::tests::oracle_prepared_full_receipts_new_occupancy_tails_and_identity",
+        "budget_object_selector::tests::oracle_prepared_checkpoint_full_receipts_and_lower_tail",
+        "budget_object_selector::tests::oracle_prepared_scale_s335_exact_serving_receipt",
+        "budget_object_fitter::tests::oracle_fitter_asymmetric_forward_gradient_and_finite_difference",
+        "budget_object_fitter::tests::oracle_fitter_sha_initialization_and_fixed_batch_update_order",
+        "budget_object_fitter::tests::oracle_fitter_tiny_actual_pipeline_determinism_acceptance_and_rollback",
+        "budget_object_fitter::tests::oracle_fitter_capacity_move_smallest_swap_and_production_mass",
+        "budget_object_fitter::tests::oracle_fitter_refusal_caps_coexistence_corruption_and_source_unchanged"
+      ]
+    },
+    "memory_bytes": 8589934592,
+    "region": "eu-central-1",
+    "root_device_name": "/dev/sda1",
+    "schema": "borsuk-budget-object-fitter-implementation-gates-v1",
+    "service_limit_seconds": 7260,
+    "spot_max_usd_per_hour": 0.5,
+    "subnet_id": "subnet-034528fbd6977848f",
+    "swap_bytes": 0,
+    "tasks_max": 512,
+    "test_limit_seconds": 7200
+  },
+  "api": {
+    "cli": "--budget-object-fitter-implementation",
+    "functions": [
+      "configure",
+      "execution_mode",
+      "qualify",
+      "preflight",
+      "stage",
+      "user_data",
+      "replay",
+      "validate_receipt",
+      "budget_object_fitter_required_tests",
+      "validate_budget_object_fitter_config",
+      "record_constrained_split_stage(argv, budget_object_fitter=True)",
+      "validate_bounded_publication_stages(log, budget_object_fitter=True)",
+      "worker.main(CARGO, REPO, OUT, budget_object_fitter=True)"
+    ],
+    "mode": "budget_object_fitter=True"
+  },
+  "artifact_roster_sha256": "79aa7df432795fd1bf991c67c7e2b66175f242611fb0a9635c615e3cef9b5aa8",
+  "artifacts": [
+    "source-qualification.json",
+    "config.json",
+    "native-source-manifest.json",
+    "source-before.json",
+    "source-after.json",
+    "workspace-receipt.json",
+    "test.log",
+    "test-resources.txt",
+    "workspace-cgroup.json",
+    "cpu.txt",
+    "rustc-version.txt",
+    "cargo-version.txt",
+    "run-closed.log",
+    "binaries/hierarchical_semantic_cells"
+  ],
+  "base": "bb8fe89f30e8e5dcf9fbb6a5bf4440704dc01f66",
+  "commit": "d0c3e13b6c40c08456bd50562c4a18a16f3dda6d",
+  "config": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/budget-object-selector/fitter-implementation-gates/config.json",
+  "config_template": {
+    "architecture": "x86_64",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "command": [
+      "bash",
+      "scripts/check_budget_object_fitter_implementation.sh"
+    ],
+    "compute_cap_usd": 1.25,
+    "controller_authority_pending": true,
+    "controller_code_sha256": null,
+    "controller_source_commit": null,
+    "cpu_quota_percent": 200,
+    "ebs_s3_allowance_usd": 0.15,
+    "environment": {
+      "BORSUK_CPU_THREADS": "1",
+      "BORSUK_FINE_TEST_REMOTE": null,
+      "BORSUK_FINE_TEST_ROOT": null,
+      "BORSUK_TEST_BUILD_COMMAND": null,
+      "BORSUK_TEST_BUILD_JOBS": "1",
+      "CARGO_BUILD_JOBS": "1",
+      "LC_ALL": "C",
+      "RAYON_NUM_THREADS": "1",
+      "RUSTC_WORKSPACE_WRAPPER": "",
+      "RUSTC_WRAPPER": "",
+      "RUST_TEST_THREADS": "1",
+      "TOKIO_WORKER_THREADS": "1"
+    },
+    "execution_kind": "implementation-gates",
+    "image_id": "ami-0b8a830d6339a9758",
+    "instance_type": "c7i.2xlarge",
+    "machine_limit_seconds": 9000,
+    "mandatory_test_names_pending": false,
+    "mandatory_tests": {
+      "budget-object-fitter-tests": [
+        "budget_object_selector::tests::oracle_exhaustive_six_group_four_label_capacity_two",
+        "budget_object_selector::tests::oracle_mixture_33_omitted_global_winner_and_ties",
+        "budget_object_selector::tests::oracle_scale_s335_bounded_candidates_and_charges",
+        "budget_object_selector::tests::oracle_finite_mlp_nonunit_query_matches_independent_scalar",
+        "budget_object_selector::tests::oracle_budget_boundaries_overflow_and_finite_validation",
+        "budget_object_selector::tests::oracle_identity_binding_and_determinism",
+        "budget_object_selector::tests::oracle_move_swap_and_checkpoint_strict_acceptance",
+        "budget_object_selector::tests::oracle_prepared_full_receipts_new_occupancy_tails_and_identity",
+        "budget_object_selector::tests::oracle_prepared_checkpoint_full_receipts_and_lower_tail",
+        "budget_object_selector::tests::oracle_prepared_scale_s335_exact_serving_receipt",
+        "budget_object_fitter::tests::oracle_fitter_asymmetric_forward_gradient_and_finite_difference",
+        "budget_object_fitter::tests::oracle_fitter_sha_initialization_and_fixed_batch_update_order",
+        "budget_object_fitter::tests::oracle_fitter_tiny_actual_pipeline_determinism_acceptance_and_rollback",
+        "budget_object_fitter::tests::oracle_fitter_capacity_move_smallest_swap_and_production_mass",
+        "budget_object_fitter::tests::oracle_fitter_refusal_caps_coexistence_corruption_and_source_unchanged"
+      ]
+    },
+    "memory_bytes": 8589934592,
+    "native_source_manifest": null,
+    "region": "eu-central-1",
+    "root_device_name": "/dev/sda1",
+    "schema": "borsuk-budget-object-fitter-implementation-gates-v1",
+    "service_limit_seconds": 7260,
+    "source_archive_file_count": null,
+    "source_archive_paths": null,
+    "source_archive_paths_sha256": null,
+    "source_archive_support_sha256": null,
+    "spot_max_usd_per_hour": 0.5,
+    "subnet_id": "subnet-034528fbd6977848f",
+    "swap_bytes": 0,
+    "tasks_max": 512,
+    "test_limit_seconds": 7200
+  },
+  "controller_code_sha256": {
+    "scripts/check_budget_object_fitter_implementation.sh": "4526fcedda19e4c05a08553361b1ed83a669840f52a6431013985a2ac82666f6",
+    "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
+    "scripts/check_native_semantic_router_stats.py": "d1fb970c0ab6ec98ec5311204a54277180631116d48a29a564ed3bbd68e5c5c2",
+    "scripts/check_native_startup_build.py": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52",
+    "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+    "scripts/check_native_workspace_execution.py": "59b07a29343cdba430d2aeaa6c1654f73b822a57e29568a4ce88b4309ffc2ace",
+    "scripts/check_rust_test_build.sh": "a41d6498d84a26816a868ff96b93aae36c329fcf0630fbfc8438471ef28ba681",
+    "scripts/launch_native_metadata_ranges_cold_spot.py": "f1dfdb56d08f864594c4dadbdbae593b61d5285f60703712e91865ebd0a9d0e2",
+    "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
+    "scripts/launch_native_semantic_router_cold_spot.py": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180",
+    "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
+    "scripts/launch_native_workspace_execution_spot.py": "f2fffc7f54de0426d8cd1be32ea24f7dc2cc90ccbbe7950c785d1fbe683bd0f6",
+    "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b",
+    "scripts/launch_v174_relaid_bind_compile_spot.py": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a",
+    "scripts/package_semantic_native_generation.py": "cb6a540c810e3a75381d22339eb72f00382b0972a2d3ee687bbb1d97d5a1b594",
+    "scripts/prepare_native_semantic_publication.py": "2d3a9270f5ad847981d9d89fea8ead9e9295f742369fa1b9fd9cf3e7c7e2c7e4",
+    "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+    "scripts/run_native_cold_first_query.py": "b4afffd43df8e2ab617749a50fd099fd279e57631e0dcb749b75169ad269a99f",
+    "scripts/run_native_metadata_ranges_cold.py": "1322fe19b705caeab275bce69ea6b4a9f2ed84cb6505dcbfe01b25301fdb71b8",
+    "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+    "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+    "scripts/run_native_semantic_router_cold.py": "9fe9e968d99a926bdfc15fae0fc0fadd15d44ed1242b6d4fa2e391c1a3b95f88",
+    "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+    "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6"
+  },
+  "local_verification": {
+    "actual_cpu_max": "100000 100000",
+    "actual_memory_max": 268435456,
+    "actual_swap_max": 0,
+    "actual_swap_peak": 0,
+    "elapsed_seconds": 10.383,
+    "git_diff_check": 0,
+    "logs": [
+      "/tmp/borsuk-budget-object-fitter-native-gates-mocks1.log",
+      "/tmp/borsuk-budget-object-fitter-native-gates-roster.log",
+      "/tmp/borsuk-budget-object-fitter-native-gates-finalchecks.log",
+      "/tmp/borsuk-budget-object-fitter-native-gates-handoff.log"
+    ],
+    "peak_memory": "110.4M",
+    "scope": "borsuk-fitter-gates-finalchecks.service",
+    "scope_runtime_limit_seconds": 120
+  },
+  "mandatory_tests": {
+    "budget-object-fitter-tests": [
+      "budget_object_selector::tests::oracle_exhaustive_six_group_four_label_capacity_two",
+      "budget_object_selector::tests::oracle_mixture_33_omitted_global_winner_and_ties",
+      "budget_object_selector::tests::oracle_scale_s335_bounded_candidates_and_charges",
+      "budget_object_selector::tests::oracle_finite_mlp_nonunit_query_matches_independent_scalar",
+      "budget_object_selector::tests::oracle_budget_boundaries_overflow_and_finite_validation",
+      "budget_object_selector::tests::oracle_identity_binding_and_determinism",
+      "budget_object_selector::tests::oracle_move_swap_and_checkpoint_strict_acceptance",
+      "budget_object_selector::tests::oracle_prepared_full_receipts_new_occupancy_tails_and_identity",
+      "budget_object_selector::tests::oracle_prepared_checkpoint_full_receipts_and_lower_tail",
+      "budget_object_selector::tests::oracle_prepared_scale_s335_exact_serving_receipt",
+      "budget_object_fitter::tests::oracle_fitter_asymmetric_forward_gradient_and_finite_difference",
+      "budget_object_fitter::tests::oracle_fitter_sha_initialization_and_fixed_batch_update_order",
+      "budget_object_fitter::tests::oracle_fitter_tiny_actual_pipeline_determinism_acceptance_and_rollback",
+      "budget_object_fitter::tests::oracle_fitter_capacity_move_smallest_swap_and_production_mass",
+      "budget_object_fitter::tests::oracle_fitter_refusal_caps_coexistence_corruption_and_source_unchanged"
+    ]
+  },
+  "native_roster_evidence": {
+    "candidate_commit_authority": "root final frozen source manifest; no native candidate SHA in production glue",
+    "committed_test_roster_verified_at": "65ee264baade2af21f5099bb77bd030a0f6b6d79",
+    "contract": "/tmp/borsuk-budget-object-fitter-native-contract.json"
+  },
+  "owned_paths": [
+    "scripts/launch_native_workspace_execution_spot.py",
+    "scripts/check_native_workspace_execution.py",
+    "scripts/check_budget_object_fitter_implementation.sh"
+  ],
+  "owned_sha256": {
+    "scripts/check_budget_object_fitter_implementation.sh": "4526fcedda19e4c05a08553361b1ed83a669840f52a6431013985a2ac82666f6",
+    "scripts/check_native_workspace_execution.py": "59b07a29343cdba430d2aeaa6c1654f73b822a57e29568a4ce88b4309ffc2ace",
+    "scripts/launch_native_workspace_execution_spot.py": "f2fffc7f54de0426d8cd1be32ea24f7dc2cc90ccbbe7950c785d1fbe683bd0f6"
+  },
+  "parent": "bb8fe89f30e8e5dcf9fbb6a5bf4440704dc01f66",
+  "remaining_root_pins": [
+    "integrate and independently verify glue commit",
+    "final native candidate source commit/hashes and unchanged exact15 tests",
+    "root native source manifest/full current source inventory identity",
+    "root committed minimal archive/support roster and hashes",
+    "root controller hashes/config-only authority freeze/exact native source bundle",
+    "parent-owned actual four remote stages and closed resource/source/lifecycle receipts"
+  ],
+  "resources": {
+    "local_actual": {
+      "cpu.max": "100000 100000",
+      "memory.max": "268435456",
+      "memory.swap.max": "0"
+    },
+    "production": {
+      "cpu_quota_percent": 200,
+      "machine_limit_seconds": 9000,
+      "memory_bytes": 8589934592,
+      "service_limit_seconds": 7260,
+      "swap_bytes": 0,
+      "tasks_max": 512,
+      "test_limit_seconds": 7200
+    }
+  },
+  "schema": "borsuk-budget-object-fitter-native-gates-contract-v1",
+  "source": {
+    "authority": "root frozen manifest",
+    "delta": [
+      "crates/borsuk/src/budget_object_fitter.rs",
+      "crates/borsuk/src/budget_object_selector.rs",
+      "crates/borsuk/src/lib.rs"
+    ],
+    "inventory": "dynamic all current Rust/Cargo/build/fixture source from worker.source_hashes; no native candidate commit hardcode"
+  },
+  "stages": [
+    [
+      "budget-object-fitter-tests",
+      [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "budget_object_",
+        "--",
+        "--test-threads=1"
+      ]
+    ],
+    [
+      "release",
+      [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "--bin",
+        "hierarchical_semantic_cells"
+      ]
+    ],
+    [
+      "clippy",
+      [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ]
+    ],
+    [
+      "test-build",
+      [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "BORSUK_TEST_BUILD_JOBS=1",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ]
+    ]
+  ],
+  "status": "SOURCE_ONLY_COMMITTED_GLUE_LOCAL_MOCKS_PASS_NATIVE_GATES_UNVERIFIED",
+  "statuses": {
+    "actual_mock_cli": true,
+    "full_native_roster_verified": true,
+    "historical_protocol_bytes_preserved": true,
+    "merged": false,
+    "native_executed": false,
+    "old_selector_shell_byte_identical": true,
+    "operator_identity_no_trailers": true,
+    "pushed": false,
+    "python_syntax": true,
+    "quality_claim": false,
+    "source_only": true,
+    "worktree_clean": true
+  },
+  "support_archive": {
+    "authority": "hierarchical_archive_authority and existing minimal archive closure",
+    "binding_prefix": "BORSUK_BUDGET_OBJECT_FITTER_",
+    "fields": [
+      "source_archive_paths",
+      "source_archive_paths_sha256",
+      "source_archive_file_count",
+      "source_archive_support_sha256"
+    ]
+  },
+  "template": {
+    "campaign": "borsuk-budget-object-fitter-implementation-gates-spot-v1",
+    "manifest": "borsuk-budget-object-fitter-native-source-manifest-v1",
+    "qualification": "borsuk-budget-object-fitter-implementation-gates-qualification-v1",
+    "receipt": "borsuk-budget-object-fitter-implementation-gates-receipt-v1",
+    "stage": "borsuk-budget-object-fitter-implementation-stage-v1"
+  }
+}

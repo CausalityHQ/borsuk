@@ -1,0 +1,47 @@
+{
+  "ann_quality_performance_verified": false,
+  "artifacts": {
+    "glue-contract-d0c3e13b.json": {
+      "bytes": 17949,
+      "sha256": "371172596798fda9e22b48e430e9d44fefcbc9296ade22eb9837f6097c9184fb"
+    },
+    "root-check.log": {
+      "bytes": 204,
+      "sha256": "b5b69db9d560131f8567b5a9408b8f2c6f3c080a424c00d6bf6ab281db9e9dab"
+    },
+    "root-check.time": {
+      "bytes": 832,
+      "sha256": "1fda9b49dc5b402d4364583997f0cb9567e58df6a05adaee47d72a4e9db0424e"
+    }
+  },
+  "code_sha256": {
+    "scripts/check_budget_object_fitter_implementation.sh": "4526fcedda19e4c05a08553361b1ed83a669840f52a6431013985a2ac82666f6",
+    "scripts/check_native_workspace_execution.py": "59b07a29343cdba430d2aeaa6c1654f73b822a57e29568a4ce88b4309ffc2ace",
+    "scripts/launch_native_workspace_execution_spot.py": "f2fffc7f54de0426d8cd1be32ea24f7dc2cc90ccbbe7950c785d1fbe683bd0f6"
+  },
+  "command": "python3 scripts/launch_native_workspace_execution_spot.py --budget-object-fitter-implementation --self-check",
+  "exit_status": 0,
+  "integrated_commit": "19494b632863e0a25a3c897c228cf2ef61f9f184",
+  "invocation": "174176d23aa64901975d09f58c33abe4",
+  "limits": {
+    "CPUQuotaPercent": 100,
+    "MemoryMax": 268435456,
+    "MemorySwapMax": 0,
+    "RuntimeMaxSec": 120,
+    "TasksMax": 512
+  },
+  "mandatory_roster_final": false,
+  "native_source_frozen": false,
+  "original_exec_session": 94053,
+  "process_max_rss_kib": 87916,
+  "process_wall_seconds": 4.29,
+  "remaining": "Same native worker must apply queued full review repairs; reconcile exact final tests/source before freezing config or paid native launch.",
+  "rust_execution_verified": false,
+  "schema": "borsuk-native-fitter-root-glue-verification-v1",
+  "swap_bytes": 0,
+  "synthetic_only": true,
+  "unit": "borsuk-fitter-root-glue-check.service",
+  "unit_memory_peak_display": "108.6M",
+  "unit_runtime_seconds": 4.311,
+  "worker_commit": "d0c3e13b6c40c08456bd50562c4a18a16f3dda6d"
+}
