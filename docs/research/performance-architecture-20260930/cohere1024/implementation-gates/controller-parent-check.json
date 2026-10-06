@@ -1,0 +1,35 @@
+{
+  "child_commit": "fc6ee264fcaef5327eb9673476c566eee2e6b02b",
+  "controller_integration_commit": "d774ebebc86e51be52073c70bf3bda6abc048457",
+  "native_candidate": "1d8f16ac0ad96c5cac8d711751a4a71ba15ce819",
+  "native_qualified": false,
+  "owned_sha256": {
+    "scripts/check_cohere1024_implementation.sh": "4f55d033ca21e487b41afe6bcc3c8a3ccb1badd9b995755b8e64548ccf9ead9e",
+    "scripts/check_native_workspace_execution.py": "6c0581cd2681ef225248bc6ccebcf4138c9d452acb52aaec9feadbc17ea84bdb",
+    "scripts/launch_native_workspace_execution_spot.py": "9e768cbb88f174456f334f5222c69ccf7d409ec2c122b86e24b070812e5d90ad"
+  },
+  "parent_mock_gate": {
+    "cpu_quota_percent": 100,
+    "exit_status": 0,
+    "invocation_id": "ab0cf3a119e64171bd0b6eab951161cb",
+    "memory_limit_bytes": 268435456,
+    "native_executed": false,
+    "original_exec_session": 69593,
+    "reported_peak": "91.7M",
+    "reported_swap": "0B",
+    "runtime_seconds": 4.325,
+    "unit": "run-p970907-i487436895.service"
+  },
+  "schema": "borsuk-cohere1024-controller-parent-check-v1",
+  "science_qualified": false,
+  "six_stage_names": [
+    "generation-tests",
+    "generation-release-test",
+    "router-tests",
+    "release",
+    "clippy",
+    "test-build"
+  ],
+  "source_file_count": 409,
+  "source_identity_sha256": "87fa736b332f081aa627d2833c0b88c521531652c12188b2e300ba3d2eec02bb"
+}
