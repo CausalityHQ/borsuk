@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-co-selection-closed-root-verification-v1",
+  "status": "VALID_REJECT",
+  "instance_id": "i-09ab7f20a64016329",
+  "native_exit": 0,
+  "controller_exit": 0,
+  "all_artifacts_authenticated": 29,
+  "per_panel_fits": [
+    48,
+    33
+  ],
+  "native_peak_bytes": 219144192,
+  "swap_peak_bytes": 0,
+  "native_seconds": 86.375015485,
+  "termination_before_collection": true,
+  "truth_opened": false,
+  "quality_or_performance_claim": false
+}
