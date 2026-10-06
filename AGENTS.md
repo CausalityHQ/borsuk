@@ -80,6 +80,19 @@ first release, schema stability and backward compatibility are non-goals.
 
 ## Experiment admission order
 
+## Current benchmark focus
+
+The operator narrowed prospective benchmarking on 2026-10-06 to one dataset
+used by Turbopuffer: Cohere Wikipedia embed-multilingual-v3, D1024, k=10.
+Use the same frozen corpus and query bytes for BORSUK, Turbopuffer, and S3
+Vectors. Start small and scale this corpus; do not launch new ReLAION or
+multi-dataset campaigns. Preserve historical receipts and existing bounded
+Rust correctness work. See `docs/research/performance-architecture-20260930/single-dataset-focus.md`.
+Published Turbopuffer results do not disclose exact selected IDs/query split;
+dataset-family agreement alone does not establish a matched measured win.
+
+## Experiment admission order
+
 Before each new paid cold or performance experiment:
 
 1. Run a bounded source-bound admission check on the experiment's exact authenticated inputs through its runtime validator. For ANN measurements this includes real requests, records and truth; a preregistered query-free source-neighborhood diagnostic must keep requests and truth unopened and check its source/layout pins instead. Synthetic checks alone are insufficient.

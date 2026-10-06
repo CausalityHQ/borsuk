@@ -17,3 +17,9 @@ Use one immutable corpus selection and disjoint query split for BORSUK, Turbopuf
 5. Optimize one native bottleneck demonstrated by that workload, then scale this dataset to 1M and 10M. Preserve the 100M feasibility and lifecycle requirements without introducing more datasets.
 
 No algorithm win, dataset readiness, service access, matched baseline or measured performance is claimed by this decision. Historical receipts and protocols remain immutable. No new ReLAION or paired multi-dataset campaign is authorized by the current benchmark direction.
+
+## Source identity checked before acquisition
+
+Turbopuffer's dataset link resolves to [CohereLabs/wikipedia-2023-11-embed-multilingual-v3](https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3). The embedding column is `emb`; the viewer reports 1024 entries. A bounded read of the publisher's dataset API on 2026-10-06 resolved revision `ade45fb52bd549f5e8c065636fe4160a43c2af36`. Use immutable revision URLs for subsequent schema and shard validation. No parquet body was downloaded in this check.
+
+The public Turbopuffer methodology does not disclose selected document IDs or query bytes. Reproduce a matched comparison by uploading our frozen cohort to each service; label comparisons with their published chart as dataset-family targets, not exact reproductions. The dataset revision alone is not a corpus, query, or ground-truth seal.
