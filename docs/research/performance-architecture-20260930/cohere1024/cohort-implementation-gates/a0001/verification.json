@@ -1,0 +1,96 @@
+{
+  "status": "NATIVE_QUALIFIED",
+  "source_commit": "8a5e0594dc52c2b94a8e8bedebdcfba34f7df992",
+  "native_source_identity_sha256": "009119a720892f06139fd717f6e55ae9e3b865ebb3667b143a966002ef734e64",
+  "source_file_count": 411,
+  "full_source_before_after_root_match": true,
+  "terminal_artifacts_authenticated": 15,
+  "terminal_sha256": "4305b44c20daf208caf5118cf55cdaa7c1c83bf86515bbc828dc896a89c720a6",
+  "stages": [
+    {
+      "name": "cohere-native-baseline-tests",
+      "exit": 0,
+      "tests": 8,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "check_cohere_native_baseline",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "cohere-native-cohort-tests",
+      "exit": 0,
+      "tests": 8,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "prepare_cohere_native_cohort",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "release",
+      "exit": 0,
+      "tests": null,
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "check_cohere_native_baseline",
+        "--bin",
+        "prepare_cohere_native_cohort"
+      ]
+    },
+    {
+      "name": "clippy",
+      "exit": 0,
+      "tests": null,
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ]
+    },
+    {
+      "name": "test-build",
+      "exit": 0,
+      "tests": null,
+      "command": [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "BORSUK_TEST_BUILD_JOBS=1",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ]
+    }
+  ],
+  "instance_id": "i-0d8798d666acc40b2",
+  "terminated": true,
+  "scope": "16 affected synthetic tests, release two bins, workspace Clippy correctness+suspicious, actual complete workspace test compilation. No full workspace execution, real corpus, ANN recall or latency claim.",
+  "cgroup_peak_bytes": 8589934592,
+  "swap_peak_bytes": 0,
+  "oom": 0
+}
