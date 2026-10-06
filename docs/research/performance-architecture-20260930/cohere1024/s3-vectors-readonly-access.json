@@ -1,0 +1,33 @@
+{
+  "checked_at_utc": "2026-10-06T10:59:52.921492+00:00",
+  "command": [
+    "aws",
+    "--profile",
+    "causality",
+    "--region",
+    "eu-central-1",
+    "s3vectors",
+    "list-vector-buckets",
+    "--max-results",
+    "1",
+    "--output",
+    "json"
+  ],
+  "exit_status": 0,
+  "response": {
+    "vectorBuckets": []
+  },
+  "scope": "Read-only service endpoint and ListVectorBuckets authorization check",
+  "proved": [
+    "S3 Vectors endpoint accessible in chosen AWS region",
+    "current caller can list vector buckets"
+  ],
+  "not_proved": [
+    "create/index/put/query authorization",
+    "dataset ingestion",
+    "service cache control",
+    "recall/latency/QPS/cost parity"
+  ],
+  "resources_created": false,
+  "vector_or_truth_body_read": false
+}
