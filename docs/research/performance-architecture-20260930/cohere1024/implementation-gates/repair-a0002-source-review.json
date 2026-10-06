@@ -1,0 +1,9 @@
+{
+  "native_source_commit": "e5f4a34d700189ac1bd5035954e517583d283bfe",
+  "status": "UNVERIFIED_PENDING_NATIVE_GATES",
+  "historical_failure": "a0001/aws-terminal.json",
+  "repair": "Test-only: authenticate corrupted router leaf through full publisher; exact failure kind, no writes/head, restored success. No production algorithm change.",
+  "static_review": "Publisher reads and authenticates router leaves before roster uploads; bounded shared validator authenticates source records and admits semantic artifact lengths.",
+  "next_gate": "Same six serial native gates, stop on first failure. Debug generation tests first, then exact release D1024 regression.",
+  "dataset_focus": "Only Cohere D1024 cosine k10; no corpus or quality/performance claim."
+}
