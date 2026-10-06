@@ -1,0 +1,30 @@
+{
+  "artifacts": {
+    "aws-launch.json": {
+      "bytes": 360,
+      "sha256": "00fb24f50baacc444f2ec6a9cad8e59344c5be8ce07f2dc81afd0753f39942de"
+    },
+    "aws-reservation.json": {
+      "bytes": 445205,
+      "sha256": "2f03392b83a543798e2e007b9221d7b6cea83ca9b2d4c471d080c87d653d8254"
+    },
+    "aws-user-data.sh": {
+      "bytes": 7523,
+      "sha256": "7ca48695d43257dff3ddd67e8854b1a418a9f822e9b9728acd08ee0354373fb4"
+    }
+  },
+  "attempt": "a0001",
+  "config_sha256": "2f42738324112b45183236386f0921e24e186ff7f80591ca509d9611a7e80fc8",
+  "corpus_read": false,
+  "instance_id": "i-01ef5ea874c823f6b",
+  "native_qualified": false,
+  "native_source_commit": "1d8f16ac0ad96c5cac8d711751a4a71ba15ce819",
+  "original_exec_session": 42166,
+  "schema": "borsuk-cohere1024-native-launch-checkpoint-v1",
+  "science_qualified": false,
+  "source_archive_sha256": "08a7b8c7b7f6d9e0eccebd68c0d6b7c46325a84a7d6adcf22e6f55d127f48ba0",
+  "source_bundle_commit": "d35db8b98ba8e87605dd7e32e81b02b8d4f15eed",
+  "source_file_count": 409,
+  "source_identity_sha256": "87fa736b332f081aa627d2833c0b88c521531652c12188b2e300ba3d2eec02bb",
+  "state_at_checkpoint": "RUNNING_UNQUALIFIED"
+}
