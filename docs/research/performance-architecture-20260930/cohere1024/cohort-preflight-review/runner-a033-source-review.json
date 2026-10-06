@@ -1,0 +1,15 @@
+{
+  "source_commit": "a033b30983816cbe2fe6efff904b9989c37ece84",
+  "source_sha256": "15f06f8b28ec23c9cd29c850a50acfea0ebb889fa053f2da09ab8f69a8cf76b5",
+  "production_prefix_identical": true,
+  "review": "Distinct directions/norms, nonunit queries, reversed physical IDs, tail and k10 tie; independent stored SQ8 scalar oracle. Native tests remain UNRUN.",
+  "status": "SOURCE_REVIEWED_NATIVE_UNVERIFIED",
+  "contract_sha256": "80186a15edbb2bf92587770bee3d80cf436bb92e733619fc02994dde1d2152bd",
+  "test_names_preserved": 8,
+  "qualification_required": [
+    "affected runner and preparer tests",
+    "two release binaries",
+    "workspace Clippy correctness and suspicious",
+    "real workspace test compilation"
+  ]
+}
