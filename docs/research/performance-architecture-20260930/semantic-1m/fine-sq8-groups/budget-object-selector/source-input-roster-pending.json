@@ -1,0 +1,180 @@
+{
+  "schema": "borsuk-budget-object-source-input-roster-v1",
+  "authority_pending": true,
+  "scope": "Metadata preparation only; not execution/configuration/quality authority",
+  "closed_terminal": {
+    "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/aws-terminal.json",
+    "bytes": 19405,
+    "sha256": "f8169d66b71fcdcf92f9b97a875b5a8e70bc73312b3bf99505576cc626ebc5a2"
+  },
+  "terminal_descriptor_matches": true,
+  "fine_roots_whole_sha_verified": true,
+  "datasets": {
+    "relaion": {
+      "rows": 100000,
+      "dimensions": 768,
+      "inputs": {
+        "fine_root": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/manifest.json",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/fine/layouts/relaion/manifest.json",
+          "bytes": 22721,
+          "sha256": "0a2a2dff6a7abc48143d08eb491a150bbed03957b81b0261c2b8a0434612afec"
+        },
+        "primary_root": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/fine/inputs/relaion/layout/manifest.json",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/fine/inputs/relaion/layout/manifest.json",
+          "bytes": 31500,
+          "sha256": "3244e7bbd5e27eb1f3fe52cbddc450d08d45d25256eec98dc942ba42cf2808f1"
+        },
+        "original_generation": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/measurement/relaion-generation/manifest.json",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/measurement/relaion-generation/manifest.json",
+          "bytes": 34630,
+          "sha256": "60893e05a256c8f04c633aa600828ba06d2cbc16cd9269f3c713d92b6e7796c9"
+        },
+        "original_plane": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/measurement/relaion-generation/plane/manifest.json",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/measurement/relaion-generation/plane/manifest.json",
+          "bytes": 651,
+          "sha256": "762eb65ab8a4f6da9b0c96c71c1908e0c9abde4368f0124c879c267b18a8eefe"
+        },
+        "original_canonical": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/measurement/relaion-generation/canonical.bin",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/measurement/relaion-generation/canonical.bin",
+          "bytes": 308000000,
+          "sha256": "c260b7fe0b6a54de98dfba3f2599d272242f724421064ed5ca18c0cd63e6283d"
+        },
+        "original_order": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/scratch/relaion/order",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/scratch/relaion/order",
+          "bytes": 800000,
+          "sha256": "22abeb087000ea2978c4fef8e85c2f7fda4e4b22c4e5126ba37a1c19816fab18"
+        },
+        "original_records": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/measurement/relaion-generation/plane/records.bin",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/measurement/relaion-generation/plane/records.bin",
+          "bytes": 20000000,
+          "sha256": "624e63de5905210bde24a4e7752573d6811d9fa5142e5b529ff0e9f65054ce83"
+        },
+        "original_mean": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/measurement/relaion-generation/plane/mean.bin",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/measurement/relaion-generation/plane/mean.bin",
+          "bytes": 3072,
+          "sha256": "197a8ead172a5a41e029c8f0c9d39b981150c69fc3b0367316fb89c920eb1beb"
+        },
+        "original_sq8": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/scratch/relaion/sq8",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/scratch/relaion/sq8",
+          "bytes": 78000000,
+          "sha256": "be4b19a8f60cb537e3daf4e27c0e2d0f79123e1f602dc0f4f75d470687377e3b"
+        },
+        "fine_records": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/records.bin",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/fine/layouts/relaion/records.bin",
+          "bytes": 78000000,
+          "sha256": "0788700751fb243927e66ebcb6b9023d5d342e726e409b5827971d03277b4fae"
+        },
+        "fine_groups": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/groups.bin",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/fine/layouts/relaion/groups.bin",
+          "bytes": 200000,
+          "sha256": "a19930fbdcfa596f5e10434563ddee55806210cf5873db384a06cfa40281814c"
+        },
+        "fine_order": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/order.bin",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/fine/layouts/relaion/order.bin",
+          "bytes": 800000,
+          "sha256": "5c7c552d0aef860803fa32b36764858fb3b251c1ee51a04af8ecda018365df53"
+        }
+      },
+      "declared_staged_bytes": 485892574,
+      "large_bodies_reauthenticated_this_check": false
+    },
+    "cohere": {
+      "rows": 100000,
+      "dimensions": 768,
+      "inputs": {
+        "fine_root": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/manifest.json",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/fine/layouts/cohere/manifest.json",
+          "bytes": 22815,
+          "sha256": "ea1a792a841014ef08ed805d2872403739ba778ea8b8d3a9e5eab1b7f831c8bb"
+        },
+        "primary_root": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/fine/inputs/cohere/layout/manifest.json",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/fine/inputs/cohere/layout/manifest.json",
+          "bytes": 30456,
+          "sha256": "c2bf337290f7713139903f398ac6b4007ed01faf47ff093e7e397b2715b7b4fc"
+        },
+        "original_generation": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/measurement/cohere-generation/manifest.json",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/measurement/cohere-generation/manifest.json",
+          "bytes": 34667,
+          "sha256": "233226f08d589f4d263c06aef8849ef3d57756c0625a5067608d889b40a270df"
+        },
+        "original_plane": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/measurement/cohere-generation/plane/manifest.json",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/measurement/cohere-generation/plane/manifest.json",
+          "bytes": 651,
+          "sha256": "310ee747fcdd22adb98c55870e255fbc9a91531241e7bf4bd228828a713557ce"
+        },
+        "original_canonical": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/measurement/cohere-generation/canonical.bin",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/measurement/cohere-generation/canonical.bin",
+          "bytes": 308000000,
+          "sha256": "38304c3b448f2f62b32da8b443bbe52f20ccc63f5472d0e7885d5c268dd7a6df"
+        },
+        "original_order": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/scratch/cohere/order",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/scratch/cohere/order",
+          "bytes": 800000,
+          "sha256": "e2314ca14f5aa6f08b02cc328b863c921e55b1461a413ad6d3d66e781ff42d50"
+        },
+        "original_records": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/measurement/cohere-generation/plane/records.bin",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/measurement/cohere-generation/plane/records.bin",
+          "bytes": 20000000,
+          "sha256": "f47e344a6a959bfe1e9fe301785410b06667cf07d2bc0386892f510c7f5c6cf8"
+        },
+        "original_mean": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/measurement/cohere-generation/plane/mean.bin",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/measurement/cohere-generation/plane/mean.bin",
+          "bytes": 3072,
+          "sha256": "b50ffae3e16cc5e155ceee3adffcac0dc04d6812b0a1bb8fc01cbd259b58440a"
+        },
+        "original_sq8": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/scratch/cohere/sq8",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/scratch/cohere/sq8",
+          "bytes": 78000000,
+          "sha256": "c16929252705c831c6846022eec46481fc004f521f0c0814a53d49fece8771e0"
+        },
+        "fine_records": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/records.bin",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/fine/layouts/cohere/records.bin",
+          "bytes": 78000000,
+          "sha256": "d9d8c8137cd17e738fb9b871974a14a916dbc460508f5c7c0d3212d6cc4995bf"
+        },
+        "fine_groups": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/groups.bin",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/fine/layouts/cohere/groups.bin",
+          "bytes": 200000,
+          "sha256": "729c46e01e598d43a38d4927246d1a63de36485eddb9e744a4938e05de447deb"
+        },
+        "fine_order": {
+          "required_worker_path": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/order.bin",
+          "closed_artifact_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/paired100k/a0002/screen/fine/layouts/cohere/order.bin",
+          "bytes": 800000,
+          "sha256": "75e22683a589429729f23ff1641c58cbcba8021fcb8bcfab9a256a30c2c572bf"
+        }
+      },
+      "declared_staged_bytes": 485891661,
+      "large_bodies_reauthenticated_this_check": false
+    }
+  },
+  "training_anchors": 256,
+  "held_anchors": 64,
+  "truth_used": false,
+  "pq_graph_bodies_required": false,
+  "native_source_pending": true,
+  "transport_and_full_body_admission_pending": true
+}
