@@ -74,9 +74,9 @@ def _write(path, value):
         os.fsync(output.fileno())
 
 
-def main(cargo, repo, out, *, semantic_1m=False, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False, cohere1024=False, cohere_cohort=False):
+def main(cargo, repo, out, *, semantic_1m=False, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False, cohere1024=False, cohere_cohort=False, cohere_sq8_builder=False):
     from scripts import launch_native_workspace_execution_spot as controller
-    with controller.execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort):
+    with controller.execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort, cohere_sq8_builder=cohere_sq8_builder):
         return _execute(cargo, repo, out, controller)
 
 
@@ -87,6 +87,8 @@ def _execute(cargo, repo, out, controller):
     assert controller.qualify(repo) == proof, 'worker authority drift'
     assert artifact(out/'config.json') == artifact(repo/controller.CONFIG)
     assert artifact(out/'native-source-manifest.json') == artifact(repo/proof['native_source_manifest']['path'])
+    if controller.COHERE_SQ8_BUILDER:
+        controller.completed_native_qualification(out, proof, retained=True)
     environment = controller.FIXED['environment']
     if controller.TEST_BUILD or controller.IMPLEMENTATION:
         assert not os.environ.get('BORSUK_TEST_BUILD_COMMAND'), 'test-only build shim forbidden'
@@ -121,8 +123,10 @@ def _execute(cargo, repo, out, controller):
     if controller.CONSTRAINED_SPLIT:
         report.update({key:proof[key] for key in ('mandatory_test_names_pending', 'mandatory_tests',
             'control_native_source_commit', 'control_module_prefix')})
-    if controller.CELL_OVERLAP or controller.FINE_SQ8 or controller.PQ_RESIDUAL or controller.CO_SELECTION or controller.BUDGET_OBJECT_SELECTOR or controller.BUDGET_OBJECT_FITTER or controller.COHERE1024 or controller.COHERE_COHORT:
+    if controller.CELL_OVERLAP or controller.FINE_SQ8 or controller.PQ_RESIDUAL or controller.CO_SELECTION or controller.BUDGET_OBJECT_SELECTOR or controller.BUDGET_OBJECT_FITTER or controller.COHERE1024 or controller.COHERE_COHORT or controller.COHERE_SQ8_BUILDER:
         report.update({key:proof[key] for key in ('mandatory_test_names_pending', 'mandatory_tests')})
+    if controller.COHERE_SQ8_BUILDER:
+        report['completed_native_qualification'] = proof['completed_native_qualification']
     # Bound the Python orchestrator, while restoring Cargo's original address space limit.
     original_limit = resource.getrlimit(resource.RLIMIT_AS)
     resource.setrlimit(resource.RLIMIT_AS, (min(200*1024**2, original_limit[0])
@@ -151,7 +155,7 @@ def _execute(cargo, repo, out, controller):
         if controller.IMPLEMENTATION and report['exit_status'] == 0:
             (out/'binaries').mkdir(exist_ok=False)
             for name in controller.RELEASE_ARTIFACTS:
-                source = target/'release'/('examples' if name.endswith('/two_bit_http') else '')/Path(name).name
+                source = target/'release'/('examples' if name.endswith(('/two_bit_http', '/build_sq8_source')) else '')/Path(name).name
                 assert source.is_file() and not source.is_symlink(), 'regular release binary: '+name
                 identity = artifact(source)
                 assert identity['bytes'] > 4, 'empty release binary: '+name
@@ -175,9 +179,11 @@ def _execute(cargo, repo, out, controller):
             validate_cgroup(resources)
             assert report['source_unchanged'], 'source changed during execution'
             assert controller.qualify(repo) == proof, 'config/code authority changed during execution'
+            if controller.COHERE_SQ8_BUILDER:
+                controller.completed_native_qualification(out, proof, retained=True)
             assert report['command_completed'] and type(report['exit_status']) is int
             if (controller.BOUNDED_PUBLICATION or controller.FIXED48 or controller.MINIMAL_ARCHIVE) and report['exit_status'] == report['gate_status'] == 0:
-                report['stages'] = controller.validate_bounded_publication_stages(out/'test.log', fixed48=controller.FIXED48, hierarchical_cells=controller.HIERARCHICAL_CELLS, constrained_split=controller.CONSTRAINED_SPLIT, cell_overlap=controller.CELL_OVERLAP, fine_sq8=controller.FINE_SQ8, pq_residual=controller.PQ_RESIDUAL, co_selection=controller.CO_SELECTION, budget_object_selector=controller.BUDGET_OBJECT_SELECTOR, budget_object_fitter=controller.BUDGET_OBJECT_FITTER, cohere1024=controller.COHERE1024, cohere_cohort=controller.COHERE_COHORT)
+                report['stages'] = controller.validate_bounded_publication_stages(out/'test.log', fixed48=controller.FIXED48, hierarchical_cells=controller.HIERARCHICAL_CELLS, constrained_split=controller.CONSTRAINED_SPLIT, cell_overlap=controller.CELL_OVERLAP, fine_sq8=controller.FINE_SQ8, pq_residual=controller.PQ_RESIDUAL, co_selection=controller.CO_SELECTION, budget_object_selector=controller.BUDGET_OBJECT_SELECTOR, budget_object_fitter=controller.BUDGET_OBJECT_FITTER, cohere1024=controller.COHERE1024, cohere_cohort=controller.COHERE_COHORT, cohere_sq8_builder=controller.COHERE_SQ8_BUILDER)
             report['qualified'] = report['exit_status'] == report['gate_status'] == 0
         except BaseException as error:
             report['validation_error'] = dict(type=type(error).__name__, message=str(error))
@@ -192,6 +198,7 @@ def _execute(cargo, repo, out, controller):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
+    cohere_sq8_builder = args[:1] == ['--cohere-sq8-builder']
     cohere_cohort = args[:1] == ['--cohere-cohort-implementation']
     cohere1024 = args[:1] == ['--cohere1024-implementation']
     budget_object_fitter = args[:1] == ['--budget-object-fitter-implementation']
@@ -206,12 +213,12 @@ if __name__ == '__main__':
     bounded_publication = args[:1] == ['--bounded-publication-implementation']
     root_reuse = args[:1] == ['--root-reuse-implementation']
     startup_wave8 = args[:1] == ['--startup-wave8-implementation']
-    implementation = cohere_cohort or cohere1024 or budget_object_fitter or budget_object_selector or co_selection or pq_residual or fine_sq8 or cell_overlap or constrained_split or hierarchical_cells or fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
+    implementation = cohere_sq8_builder or cohere_cohort or cohere1024 or budget_object_fitter or budget_object_selector or co_selection or pq_residual or fine_sq8 or cell_overlap or constrained_split or hierarchical_cells or fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
     test_build = args[:1] == ['--semantic-1m-test-build']
     semantic_1m = implementation or test_build or args[:1] == ['--semantic-1m']
     if semantic_1m:
         args = args[1:]
-    assert len(args) == 3, 'usage: check_native_workspace_execution.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation | --fixed48-implementation | --hierarchical-cells-implementation | --constrained-split-implementation | --cell-overlap-implementation | --fine-sq8-implementation | --pq-residual-implementation | --co-selection-implementation | --budget-object-selector-implementation | --budget-object-fitter-implementation | --cohere1024-implementation | --cohere-cohort-implementation] CARGO REPO OUTPUT'
-    result = main(*args, semantic_1m=semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort)
+    assert len(args) == 3, 'usage: check_native_workspace_execution.py [--cohere-sq8-builder | --semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation | --fixed48-implementation | --hierarchical-cells-implementation | --constrained-split-implementation | --cell-overlap-implementation | --fine-sq8-implementation | --pq-residual-implementation | --co-selection-implementation | --budget-object-selector-implementation | --budget-object-fitter-implementation | --cohere1024-implementation | --cohere-cohort-implementation] CARGO REPO OUTPUT'
+    result = main(*args, semantic_1m=semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort, cohere_sq8_builder=cohere_sq8_builder)
     print(json.dumps(result, sort_keys=True))
     sys.exit(result['gate_status'] if result['gate_status'] >= 0 else 128-result['gate_status'])

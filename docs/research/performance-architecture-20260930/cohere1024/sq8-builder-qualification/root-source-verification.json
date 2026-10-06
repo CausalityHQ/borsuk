@@ -1,0 +1,55 @@
+{
+  "status": "SOURCE_CHECK_PASS",
+  "candidate_commit": "6a8b420a21ee0adfa0bd919675c0dfee646fb4e6",
+  "preserved_original_commit": "f3c4e0e3a260aa1c95e28d904b4d18c1756be5be",
+  "owned_files": {
+    "scripts/launch_native_workspace_execution_spot.py": "5bcdbec1c0421e6586e217564722fa9dbfbb97501b462fd753c7ac89b31803ad",
+    "scripts/check_native_workspace_execution.py": "ba71e83a5bb3a97bf97c1faacf13964caf11bd31ff1c78e609c7a0039619c394",
+    "scripts/check_cohere_sq8_builder.sh": "b6ac97f0f0b32247df9d4edec752d8d6778615d203ee21454e2702412124c26e"
+  },
+  "checks": [
+    {
+      "name": "builder",
+      "exit": 0,
+      "log": {
+        "path": "docs/research/performance-architecture-20260930/cohere1024/sq8-builder-qualification/builder-root-check.log",
+        "bytes": 1440,
+        "sha256": "9400228f531ebd960a36afc9bfe4d5f8bb19eadbf4124589f76959d2d77bf91a"
+      },
+      "process_max_rss_kib": 92900
+    },
+    {
+      "name": "historical-cohort",
+      "exit": 0,
+      "log": {
+        "path": "docs/research/performance-architecture-20260930/cohere1024/sq8-builder-qualification/historical-cohort-root-check.log",
+        "bytes": 1334,
+        "sha256": "50c6793cbd060fa3b02fc39be6e56ae1b822fc459f7c474226731b34b40c3ffa"
+      },
+      "process_max_rss_kib": 92328
+    },
+    {
+      "name": "actual-receipt",
+      "exit": 0,
+      "log": {
+        "path": "docs/research/performance-architecture-20260930/cohere1024/sq8-builder-qualification/actual-receipt-root-check.log",
+        "bytes": 1199,
+        "sha256": "a849ac0e04f7913af70b27aff46bbe3ec97c28c86b86249d9cb7817e9a8c1a76"
+      },
+      "process_max_rss_kib": 59168
+    }
+  ],
+  "requested_scope": {
+    "cpu_percent": 100,
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "tasks": 512,
+    "seconds": 120
+  },
+  "scope": "Python/Bash source mocks and actual small qualification admission only; no Cargo, dataset, ANN or AWS execution",
+  "review_group": "c7afda2324744d54",
+  "required_repair": "Completed dynamic native qualification descriptor bound before Cargo/archive/receipt/replay; integrated origin/main native commit required",
+  "native_commit": "99b821319a43e4b32290e1480762b9b2a01415c0",
+  "native_source_identity_sha256": "0fae950fcfb3221804fc7c307474fc66604b18cd021c2af3e0caa71269ecdc7e",
+  "paid_builder_launched": false
+}

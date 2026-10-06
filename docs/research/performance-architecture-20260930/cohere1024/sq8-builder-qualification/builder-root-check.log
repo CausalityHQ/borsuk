@@ -1,0 +1,30 @@
+Running as unit: borsuk-sq8-builder-root-repair-check-20261006.service; invocation ID: 0f5eeeca060745308da12718588cfcfa
+PASS cohere-sq8-builder glue: completed six-gate native receipt bound before Cargo; one recorded build; empty native delta/test roster; source/archive/binary/exit/tee/receipt/cgroup/ACK/termination-wait negatives; historical modes preserved; SYNTHETIC MOCKS ONLY, Rust UNRUN
+	Command being timed: "python3 scripts/launch_native_workspace_execution_spot.py --cohere-sq8-builder --self-check"
+	User time (seconds): 2.34
+	System time (seconds): 0.60
+	Percent of CPU this job got: 97%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:03.01
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 92900
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 10
+	Minor (reclaiming a frame) page faults: 116623
+	Voluntary context switches: 675
+	Involuntary context switches: 258
+	Swaps: 0
+	File system inputs: 20952
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 3.034s
+             CPU time consumed: 2.964s
+                   Memory peak: 125M (swap: 0B)
