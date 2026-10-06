@@ -1,0 +1,21 @@
+{
+  "actual_bash_lifecycle_exit": 0,
+  "all19_actual_start_records_exit": 0,
+  "bundle": "3e622f335e2ecb04e4d2f1d4befeab1e35886bec",
+  "config_commit": "6cb6f816a9ca97a3e74417ff8d66a9a85a746999",
+  "config_sha256": "ebb437fb91648d2252f07e172cf04242d38d74dd50167af93d2ac2e771a3161d",
+  "controller": "59e15600a305953990c78eb89e9e40eb48b52de1",
+  "exec_session": 22098,
+  "instance_id": "i-099e68884f33f5975",
+  "native": "7bb862b273151e91a49d1d4a8f1ba4dce8c8328b",
+  "preflight_exit": 0,
+  "preview": "1244f9b3bea154a6fc88f7a20f5fd6a05f8a5aea",
+  "prior_attempt": "a0001 INVALID_HARNESS_BEFORE_CARGO; terminated and authenticated",
+  "repair_commit": "40df742f967a60992c79dae70f5978d3428084bf",
+  "rust_source_unchanged": true,
+  "schema": "borsuk-pq-residual-parent-freeze-v1",
+  "source_archive_sha256": "f1c6d76b96faa176b31ddf529f86f46e1e1b719d429487b1356373ac653816dd",
+  "source_identity": "b3bc0fe24aa74da1338465adf357ff1e6f5cec48e2d9092177cbcd670675351f",
+  "status": "QUALIFICATION_RUNNING_NATIVE_RESULT_UNVERIFIED",
+  "worktree": "/home/rb/worktrees/borsuk-pq-residual-qualification-bundle-a0002"
+}
