@@ -1,0 +1,291 @@
+{
+  "schema": "borsuk-budget-object-fitter-native-contract-v1",
+  "status": "SOURCE_ONLY_CONSOLIDATED_REPAIRS_COMMITTED_UNVERIFIED_HOLD_FOR_ROOT_NATIVE_GATES",
+  "base": "2d13d63442645421438be9cf9944e9c84428b6cf",
+  "owned_paths": [
+    "crates/borsuk/src/budget_object_selector.rs",
+    "crates/borsuk/src/budget_object_fitter.rs",
+    "crates/borsuk/src/lib.rs"
+  ],
+  "api": {
+    "selector": [
+      "prepare_query(Model, raw_query, Limits) -> Result<PreparedQuery,Error>",
+      "select_prepared(PreparedQuery, Model, Membership, raw_query, neighbors, Snapshot, Budget, requested_rows, Limits) -> Result<Plan,Error>",
+      "evaluate_prepared_checkpoint(before, after, before_cache, after_cache, samples, Budget, Limits) -> Result<Acceptance,Error>",
+      "prepare_training(Model, Membership, samples, Limits) -> PreparedTraining",
+      "prepare_observed_query(Model, PreparedObservation, Limits) -> PreparedQuery",
+      "select_observed(PreparedQuery, Model, Membership, PreparedObservation, Snapshot, Budget, Limits) -> Plan",
+      "evaluate_observed(Model, Membership, PreparedTraining, cache, Snapshot, Budget, Limits) -> PreparedCoverage",
+      "PreparedCoverage.validate checks model/membership/snapshot/training/budget identities",
+      "compare_coverage(before, after, Limits) -> Acceptance; actual work records comparison only",
+      "PreparedCoverage.complete() -> bool: readonly serving completeness; initial incomplete baseline refuses before epochs"
+    ],
+    "fitter": [
+      "fit(FitInput {source,dimension,rows,anchors,snapshot,budget}, Limits, FnMut(Progress)->bool) -> Result<FitResult,FitFailure>",
+      "FitResult owns accepted parameters/owners/diagnostic_tokens/events, source/training/model/membership hashes, explicit Snapshot/Budget pins, charged work/capacity and borrowed input bytes",
+      "FitFailure {error,work,memory,completed:false,stage:FitStage,accepted:Option<FitIdentity>} drops every partial model/membership; FitIdentity records source/training/model/membership/Snapshot/Budget of the initial declared state or last accepted checkpoint/proposal; no parameter or owner output"
+    ]
+  },
+  "resources": {
+    "operations_cap": 512000000000,
+    "capacity_bytes_cap": 8589934592,
+    "pre_reserve_and_actual_capacity": true,
+    "coexistence_admitted": true,
+    "prepared_inference": "immutable model/raw-query hashes; all Cartesian scores before occupancy, construction charged once, each membership evaluation separately charged",
+    "parity": "all serving/identity/acceptance receipt fields exact; execution work/capacity fields record different cached execution and are compared separately",
+    "refusal_work": "Admission-backed selector helpers fold consumed child work and admitted peak into cumulative fitting ledger on both Ok and Err; rejected training/proposals remain charged; incomplete computation returns no model/membership."
+  },
+  "local_allowed": [
+    "rustfmt",
+    "git diff/source checks"
+  ],
+  "local_forbidden": [
+    "Cargo",
+    "rustc",
+    "native tests",
+    "corpus/query/GT",
+    "AWS/network",
+    "consult/review/children",
+    "merge/push"
+  ],
+  "remote_commands": [
+    "cargo test --locked -p borsuk --lib budget_object_ -- --test-threads=1",
+    "cargo build --release --locked -p borsuk --lib --bin hierarchical_semantic_cells",
+    "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  ],
+  "test_names": [
+    "budget_object_selector::tests::oracle_exhaustive_six_group_four_label_capacity_two",
+    "budget_object_selector::tests::oracle_mixture_33_omitted_global_winner_and_ties",
+    "budget_object_selector::tests::oracle_scale_s335_bounded_candidates_and_charges",
+    "budget_object_selector::tests::oracle_finite_mlp_nonunit_query_matches_independent_scalar",
+    "budget_object_selector::tests::oracle_budget_boundaries_overflow_and_finite_validation",
+    "budget_object_selector::tests::oracle_identity_binding_and_determinism",
+    "budget_object_selector::tests::oracle_move_swap_and_checkpoint_strict_acceptance",
+    "budget_object_selector::tests::oracle_prepared_full_receipts_new_occupancy_tails_and_identity",
+    "budget_object_selector::tests::oracle_prepared_checkpoint_full_receipts_and_lower_tail",
+    "budget_object_selector::tests::oracle_prepared_scale_s335_exact_serving_receipt",
+    "budget_object_selector::tests::oracle_observed_selection_full_receipts_identity_and_no_repeat_validation",
+    "budget_object_selector::tests::oracle_observed_unrelated_occupancy_displacement_and_row_underfill",
+    "budget_object_selector::tests::oracle_observed_baseline_acceptance_full_receipts_tail_and_stale_state",
+    "budget_object_fitter::tests::oracle_fitter_asymmetric_forward_gradient_and_finite_difference",
+    "budget_object_fitter::tests::oracle_fitter_sha_initialization_and_fixed_batch_update_order",
+    "budget_object_fitter::tests::oracle_fitter_tiny_actual_pipeline_determinism_acceptance_and_rollback",
+    "budget_object_fitter::tests::oracle_fitter_actual_lower_tail_checkpoint_rollback_and_current_state",
+    "budget_object_fitter::tests::oracle_fitter_capacity_move_smallest_swap_and_production_mass",
+    "budget_object_fitter::tests::oracle_fitter_weighted_destinations_anchor_order_and_label_ties",
+    "budget_object_fitter::tests::oracle_fitter_diagnostic_tokens_bind_source_and_complete_membership",
+    "budget_object_fitter::tests::oracle_fitter_refusal_caps_coexistence_corruption_and_source_unchanged"
+  ],
+  "qualified_old_test_bodies_byte_identical": [
+    "oracle_exhaustive_six_group_four_label_capacity_two",
+    "oracle_mixture_33_omitted_global_winner_and_ties",
+    "oracle_scale_s335_bounded_candidates_and_charges",
+    "oracle_finite_mlp_nonunit_query_matches_independent_scalar",
+    "oracle_budget_boundaries_overflow_and_finite_validation",
+    "oracle_identity_binding_and_determinism",
+    "oracle_move_swap_and_checkpoint_strict_acceptance"
+  ],
+  "owned_sha256": {
+    "crates/borsuk/src/budget_object_selector.rs": "79158becf9a0bdbd7aacce84abf46a37fe6013836fcdb3984105a374e61be682",
+    "crates/borsuk/src/budget_object_fitter.rs": "0d25feb6e8adfb9d995fc2039931c28ed012d7777b2bee8a4a3d0f97b202379e",
+    "crates/borsuk/src/lib.rs": "40be49046e4f292c5c62101c8e2e08333e1a6c6d6715cf1c8d9c5da661aaefa8"
+  },
+  "remote_environment": {
+    "CARGO_BUILD_JOBS": "1",
+    "BORSUK_TEST_BUILD_JOBS": "1",
+    "RUST_TEST_THREADS": "1",
+    "BORSUK_CPU_THREADS": "1",
+    "RAYON_NUM_THREADS": "1",
+    "TOKIO_WORKER_THREADS": "1",
+    "RUSTC_WRAPPER": "",
+    "RUSTC_WORKSPACE_WRAPPER": "",
+    "LC_ALL": "C",
+    "unset": [
+      "BORSUK_TEST_BUILD_COMMAND",
+      "BORSUK_FINE_TEST_ROOT",
+      "BORSUK_FINE_TEST_REMOTE"
+    ]
+  },
+  "init_domain": "BORSUK-budget-fitter-init-v1 || LEu64(20260923) || source_raw32 || LEu64(parameter_index)",
+  "destination_aggregation": "Sequential f64 teacher-count-weighted sum of f32 label probability in anchor order over ALL labels including empty/outside serving Cartesian set; label-ascending ties",
+  "capacity_includes_borrowed_input": true,
+  "fit_return": "Result<FitResult,FitFailure>; initial incomplete serving baseline refuses BEFORE epochs; every failure preserves reason/charged work/admitted peak/stage/last accepted identities/completed=false, with no partial model/membership output",
+  "commit": "693989978444884638790802e3da232b0a3bc7e2",
+  "parent": "7c0463068b27f855478b17c1a8e7a6d235a9af90",
+  "local_verification": {
+    "rustfmt_check": 0,
+    "rustfmt_max_rss_kib": 45096,
+    "rustfmt_resource_receipt": "/tmp/borsuk-budget-object-fitter-native-rustfmt-resources.txt",
+    "git_diff_check": 0,
+    "source_ownership_and_base": true,
+    "old_seven_test_bodies_byte_identical": true,
+    "operator_identity_no_trailers": true,
+    "worktree_clean": true,
+    "verification_systemd_scope_properties": {
+      "MemoryMax": "256M",
+      "MemorySwapMax": 0,
+      "CPUQuota": "100%"
+    },
+    "source_check_cpu_count": 1,
+    "source_check_process_swap_kib": 0,
+    "cargo_rustc_native_executed": false,
+    "earlier_address_space_wrapper": "rustfmt loader refused at RLIMIT_AS256MiB; replaced by physical MemoryMax256M scope, checked exit0",
+    "last_checked_commit": "693989978444884638790802e3da232b0a3bc7e2",
+    "rustfmt_elapsed_seconds": 0.07,
+    "rustfmt_swaps": 0,
+    "rustfmt_config": "skip_children=true,reorder_modules=false",
+    "rustfmt_recursive_attempt": "Stopped original lib.rs-recursive formatting/check jobs; both terminal exit143 collected. Restored incidental lib module ordering. Owned-file-only rustfmt completed exit0 with 44756KiB RSS and0 swaps.",
+    "borrowed_method_compile_hazard_absent_by_source": true,
+    "initial_incomplete_check_precedes_epochs": true
+  },
+  "native_gate_status": "UNVERIFIED: run all21 tests (13 selector +8 fitter) from this exact source, required release/workspaceClippy/real env-unset testbuild, and verify terminal exits0. Mock-check/compile-only are not native qualification.",
+  "completion": "Hold same worker; agent_complete only after parent actual mandatory remote gates exit0",
+  "branch": "devbox/budget-object-fitter-native-exact",
+  "prepared_observation_seam": "prepare_training -> PreparedTraining: validate borrowed immutable teachers/raw-query identity and normalize once; prepare_observed_query computes full pre-occupancy Cartesian score order per model; select_observed only checks immutable population/model identities and current membership/occupancy/budget/coverage",
+  "baseline_seam": "evaluate_observed -> PreparedCoverage for initial and proposed states; validate current accepted identity; compare_coverage charges only comparison; accepted baseline replaced only on strict total/no-tail-regression acceptance",
+  "repair_findings": [
+    "No repeated teacher validation/query hashing/normalization or score sorting in fitter proposals",
+    "Accepted-state coverage baseline reused instead of evaluating both arms",
+    "Teacher-count weighted destination ranking",
+    "Exact runnable 18-test roster published; native execution remains root-owned",
+    "ALL-anchor occupancy displacement and row-underfill falsifier",
+    "Current owner excluded before top8 across full destination universe; sequential current-state traversal documented",
+    "Membership-derived diagnostic_tokens bind complete layout separately from authenticated payload hashes",
+    "Literal canonical SHA initialization vectors; epsilon-boundary and negative/positive/exact-zero ReLU derivatives",
+    "Actual fixed fitter 256-anchor lower-tail rollback and sequential current-state identity fixture",
+    "Consumed-work and admitted-peak evidence retained after helper refusal",
+    "Immediate incomplete-baseline refusal before epochs under unchanged scientific rule",
+    "Typed failure completed=false/stage/last accepted source-training-model-membership-Snapshot-Budget pins",
+    "Initial Progress.operations reports already charged work",
+    "Consolidated21-name roster unchanged; source-inspected borrowed-byte method hazard removed without new API"
+  ],
+  "commits_since_base": [
+    "65ee264baade2af21f5099bb77bd030a0f6b6d79",
+    "f54eb839fe8cafff00b61b755d4374d390177286",
+    "7c0463068b27f855478b17c1a8e7a6d235a9af90",
+    "693989978444884638790802e3da232b0a3bc7e2"
+  ],
+  "owned_git_blob_sha": {
+    "crates/borsuk/src/budget_object_selector.rs": "dbed087b1a82cef24a2399d09e9fb2400ae55e69",
+    "crates/borsuk/src/budget_object_fitter.rs": "5d16b420059653db0ec2ab764cbc652d8abdc0a5",
+    "crates/borsuk/src/lib.rs": "5951173a8099971d6cc1f2e0c4f7ec873bef5769"
+  },
+  "fitter_test_names": [
+    "budget_object_fitter::tests::oracle_fitter_asymmetric_forward_gradient_and_finite_difference",
+    "budget_object_fitter::tests::oracle_fitter_sha_initialization_and_fixed_batch_update_order",
+    "budget_object_fitter::tests::oracle_fitter_tiny_actual_pipeline_determinism_acceptance_and_rollback",
+    "budget_object_fitter::tests::oracle_fitter_actual_lower_tail_checkpoint_rollback_and_current_state",
+    "budget_object_fitter::tests::oracle_fitter_capacity_move_smallest_swap_and_production_mass",
+    "budget_object_fitter::tests::oracle_fitter_weighted_destinations_anchor_order_and_label_ties",
+    "budget_object_fitter::tests::oracle_fitter_diagnostic_tokens_bind_source_and_complete_membership",
+    "budget_object_fitter::tests::oracle_fitter_refusal_caps_coexistence_corruption_and_source_unchanged"
+  ],
+  "native_tests_executed": false,
+  "source_freeze_status": "Consolidated committed source candidate ready for ROOT exact-source native gates; root owns freeze/qualification/integration; no native success claimed",
+  "training_identity": "PreparedTraining canonical BORSUK-budget-training-v1 identity reused in FitResult and acceptance receipts; source/model/membership identities separate",
+  "proposal_schedule": "Two rounds; each has one trained model checkpoint and groups ascending. At each group visit exclude then-current owner before top8; freeze ranked list for that visit; traverse rank order, evaluate every proposal against current accepted state, sequentially accept strict total gain without lower-tail regression, continue after acceptance. Move if both capacities permit; otherwise smallest ordinal capacity-preserving single donor swap; no loss-based donor ranking. Evaluate ALL anchors each proposal; NoTeacher and CapacityRefused explicit.",
+  "diagnostic_token_encoding": "Layout SHA256(BORSUK-budget-fitter-layout-v1 || source_raw32 || LEu32(dimension) || LEu32(side) || LEu64(rows) || LEu64(owner_count) || owner LEu32s). Each occupied label token is SHA256(BORSUK-budget-fitter-offline-body-v1 || source_raw32 || layout_SHA_raw32 || LEu32(label)), with first4 bytes replaced by LEu32(label+1); empty token allzero32. Tokens are membership diagnostics, not authenticated payload hashes.",
+  "init_test_vectors": {
+    "dimension": 1,
+    "side": 2,
+    "source_hex": "0707070707070707070707070707070707070707070707070707070707070707",
+    "seed": 20260923,
+    "raw_first_LEu32_by_parameter": {
+      "0": "cff57efa",
+      "63": "82805a70",
+      "128": "988d16e0",
+      "388": "a3dd2af7",
+      "899": "1d8efa58",
+      "908": "7bbe2f83",
+      "1419": "58a6f40c"
+    },
+    "f32_parameter_bits": {
+      "0": "3b1feafe",
+      "63": "38a0169c",
+      "128": "3a4468b7",
+      "388": "3a8f74ac",
+      "899": "bb44e20b",
+      "908": "b9083a10",
+      "1419": "ba9d6430",
+      "64": "3b800000",
+      "384": "00000000",
+      "900": "00000000",
+      "1420": "00000000"
+    },
+    "rule": "center exact LEu32 word as signed widened integer word-2^31, multiply by 2^-39, store f32. Hidden biases 2^-8; all output biases zero."
+  },
+  "gradient_convention": "Analytic f64 backward through saved sequential f32 forward intermediates, treating casts/rounding as identity; f32 model score promoted to f64 before adding epsilon2^-24 in BOTH loss and derivative; explicit softmax Jacobians; ReLU derivative zero at nonpositive preactivation.",
+  "engineering_report_read": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/budget-object-selector/fitter-engineering-review.md",
+  "failure_stage_variants": [
+    "Admission",
+    "Initialization",
+    "ObservationPreparation",
+    "InitialCoverage",
+    "Training {round}",
+    "Checkpoint {round}",
+    "Destinations {round,group}",
+    "Proposal {round,group,destination}",
+    "Finalization"
+  ],
+  "initial_incomplete_refusal": {
+    "reason": "initial incomplete serving coverage",
+    "stage": "InitialCoverage",
+    "completed": false,
+    "epochs_executed": 0,
+    "params_or_membership_output": false,
+    "initial_declared_identities_retained": true,
+    "test": "budget_object_fitter::tests::oracle_fitter_refusal_caps_coexistence_corruption_and_source_unchanged",
+    "fixture_variants": [
+      "mass1 tiny library fixture",
+      "production mass100,rows113,requested114"
+    ]
+  },
+  "candidate_before_acceptance_refusal_test": "Same refusal oracle cancels after actual fixed SGD and candidate inference/coverage but before acceptance; charged work matches latest callback; original canonical model SHA and context pins preserved; no parameter/membership output",
+  "reconciled_message_ids": [
+    "1791265996406076855-2748870",
+    "1791266050008572408-2748870",
+    "1791266126635898617-2748870",
+    "1791266197826452442-2748870",
+    "1791267321444721023-2748870",
+    "1791267974219423968-2748870",
+    "immediate-1791268972918390037-2748870",
+    "immediate-1791269378484837637-2748870"
+  ],
+  "reconciliation": {
+    "605": "Full research report read; immutable validated observations/accepted baseline/full current-state evaluation retained; targets rebuilt from current owners every train batch; production sum100/unique/positive/row bounds preserved; context pins exposed; cap unchanged",
+    "612": "Typed failure extended with completed=false, stage and last accepted identities; consumed child work/peak preserved on helper Err; candidate-before-acceptance cancellation and late exhaustion fixtures",
+    "619": "Existing initialization test adds literal D2 weight0 bits3b1feafe and weight1 bitsb82a59ac, no new test name",
+    "732": "Readonly completeness seam and immediate initial incomplete refusal before epochs; SAME refusal test asserts callbacks/no epochs/work/peak/no partial output, including production mass100",
+    "797": "Original redundant rg background session37041 already collected terminal exit143; no restart/resend; exact reports used",
+    "937": "Nonexistent FitFailure.borrowed_input_bytes() call removed; independent expected borrowed bytes computed from fixture type sizes; no public API added for the assertion"
+  },
+  "reports_read": {
+    "fitter-engineering-review.md": {
+      "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/budget-object-selector/fitter-engineering-review.md",
+      "sha256": "825b964b9320797fef27e37f2e5f6d4f095aa86f3b69a1702b664ed4961aade3"
+    },
+    "fitter-research-review.md": {
+      "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/budget-object-selector/fitter-research-review.md",
+      "sha256": "ea0ce1c623aca6ca2b3829a74142eaa621d4e2f2838abf85f78177ede5bb82b3"
+    },
+    "fitter-native-plan.md": {
+      "path": "/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/budget-object-selector/fitter-native-plan.md",
+      "sha256": "0b122ad2619e73ef6dd06e24957984c0446f790c3898279af69b7a01da595e57"
+    }
+  },
+  "root_pre_execution_choices": "Read appended prospective clarification; declared method matches it. Reports are plan critiques, not executed candidate review/qualification.",
+  "init_additional_parent_golden_vectors": {
+    "dimension": 2,
+    "side": 2,
+    "source_hex": "0707070707070707070707070707070707070707070707070707070707070707",
+    "parameter0": {
+      "sha256": "fa7ef5cf24eb02951778b0c4688153007d16795e84acde586774a7569f9d5df0",
+      "f32_bits": "3b1feafe"
+    },
+    "parameter1": {
+      "sha256": "a94cab7eea23cee33217f9168faa60cdf30b5b07541c687ba9e5b18d10cf368f",
+      "f32_bits": "b82a59ac"
+    }
+  }
+}
