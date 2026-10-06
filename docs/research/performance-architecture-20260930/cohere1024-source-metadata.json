@@ -33,5 +33,13 @@
   ],
   "next_admission": "Authenticate whole shard bytes, validate Arrow schema and each selected f32 vector, extract declared corpus/query ordinals, compute exact cosine ground truth and seal all identities remotely. ETags and footer hashes alone do not authenticate whole shards.",
   "document_id_column": "_id",
-  "footer_schemas_equal": true
+  "footer_schemas_equal": true,
+  "publisher_population_metadata": {
+    "source": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/raw/ade45fb52bd549f5e8c065636fe4160a43c2af36/README.md",
+    "bytes": 30174,
+    "sha256": "bad1dd6af10df0514f064669af2ca69c908475cb6353aed9862b6bfd5196434a",
+    "english_passages_reported": 41488110,
+    "scope": "PUBLISHER_README_COUNT_ONLY; not whole-shard or selected-row authentication",
+    "turbopuffer_exact_population_known": false
+  }
 }
