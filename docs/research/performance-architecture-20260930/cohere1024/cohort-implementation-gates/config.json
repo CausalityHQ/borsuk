@@ -8,18 +8,18 @@
   "compute_cap_usd": 1.25,
   "controller_authority_pending": false,
   "controller_code_sha256": {
-    "scripts/check_cohere_cohort_implementation.sh": "2973c19c34f4880defb32a43c310753383ba2a6513de71b69f9e971dd76f5007",
+    "scripts/check_cohere_cohort_implementation.sh": "d8ae6398392c69c75cc6214b84696b2a31fb2c346c71541b912228871ed42d28",
     "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
     "scripts/check_native_semantic_router_stats.py": "d1fb970c0ab6ec98ec5311204a54277180631116d48a29a564ed3bbd68e5c5c2",
     "scripts/check_native_startup_build.py": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52",
     "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
-    "scripts/check_native_workspace_execution.py": "fc31531058efef3823b6bce324a6f3c7fef22b36e9021866800ca84f3f814edd",
+    "scripts/check_native_workspace_execution.py": "ba71e83a5bb3a97bf97c1faacf13964caf11bd31ff1c78e609c7a0039619c394",
     "scripts/check_rust_test_build.sh": "a41d6498d84a26816a868ff96b93aae36c329fcf0630fbfc8438471ef28ba681",
     "scripts/launch_native_metadata_ranges_cold_spot.py": "f1dfdb56d08f864594c4dadbdbae593b61d5285f60703712e91865ebd0a9d0e2",
     "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
     "scripts/launch_native_semantic_router_cold_spot.py": "b26b778537c97f4f7a3e7abf56352786e2429734f54d00ba50a33502a77a2180",
     "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
-    "scripts/launch_native_workspace_execution_spot.py": "e343902f6a8a9c86eba505491bff0aaea06d5072bba48b1b91995e18918963f3",
+    "scripts/launch_native_workspace_execution_spot.py": "60af3bf25fe1a62d998072d4ff3243ebec8a7513791a621de77a9dd8348d06ad",
     "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b",
     "scripts/launch_v174_relaid_bind_compile_spot.py": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a",
     "scripts/package_semantic_native_generation.py": "cb6a540c810e3a75381d22339eb72f00382b0972a2d3ee687bbb1d97d5a1b594",
@@ -33,7 +33,7 @@
     "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
     "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6"
   },
-  "controller_source_commit": "b3ee8fc6a19430aad7cfa2b5715bb033343d9f25",
+  "controller_source_commit": "6e7473a5234bd7dfb18ef4160ef0fbc6e34d24bb",
   "cpu_quota_percent": 200,
   "ebs_s3_allowance_usd": 0.15,
   "environment": {
@@ -75,19 +75,23 @@
       "tests::metadata_and_batch_memory_caps",
       "tests::missing_rows_and_occupied_output",
       "tests::sync_failure_removes_complete_marker"
+    ],
+    "cohere-native-publisher-tests": [
+      "tests::publishes_real_generation_and_receipt_then_refuses_replay",
+      "tests::rejects_wrong_root_cap_existing_head_and_bad_config"
     ]
   },
   "memory_bytes": 8589934592,
   "native_source_manifest": {
-    "bytes": 48112,
+    "bytes": 48176,
     "path": "docs/research/performance-architecture-20260930/cohere1024/cohort-implementation-gates/native-source-manifest.json",
-    "sha256": "f2f5cc55c3eb8b0e4a8b53b0007e6c05443318f5276acc6ba24fb394286077a6"
+    "sha256": "62ad02833992f729085e82103cf9de220a318edf209e5a8d66885f45fc3da00a"
   },
   "region": "eu-central-1",
   "root_device_name": "/dev/sda1",
   "schema": "borsuk-cohere-cohort-implementation-gates-v1",
   "service_limit_seconds": 7260,
-  "source_archive_file_count": 2443,
+  "source_archive_file_count": 2445,
   "source_archive_paths": [
     ".githooks/pre-commit",
     ".githooks/pre-push",
@@ -225,6 +229,7 @@
     "crates/borsuk/src/bin/check_semantic_router_scorer.rs",
     "crates/borsuk/src/bin/hierarchical_semantic_cells.rs",
     "crates/borsuk/src/bin/prepare_cohere_native_cohort.rs",
+    "crates/borsuk/src/bin/publish_two_bit_generation.rs",
     "crates/borsuk/src/bin/repackage_semantic_generation.rs",
     "crates/borsuk/src/bin/two_bit_plan_demo.rs",
     "crates/borsuk/src/bin/two_bit_union_nomination.rs",
@@ -1125,6 +1130,7 @@
     "scripts/check_cohere1024_implementation.sh",
     "scripts/check_cohere_closed_panel_construction.py",
     "scripts/check_cohere_cohort_implementation.sh",
+    "scripts/check_cohere_sq8_builder.sh",
     "scripts/check_constrained_split_implementation.sh",
     "scripts/check_fine_source_layout.py",
     "scripts/check_fine_sq8_implementation.sh",
@@ -2533,7 +2539,7 @@
     "work.md",
     "work_state.md"
   ],
-  "source_archive_paths_sha256": "97b847824f077bfc1a051b564b1848cd2182d1ace10eea64262772015c6c459e",
+  "source_archive_paths_sha256": "05da51414f3cf152ac4d0981de62d4d3d496c8891c66d066adf113d265445503",
   "source_archive_support_sha256": {
     ".githooks/pre-commit": "7e0e97541239770ea40ffabff5c44bd652b195c2bdb0b92d3e0aebbb6e7fe7c1",
     ".githooks/pre-push": "6f7a2b97fa9de746594f79e8391ef1b3079c3f229c47a6ec968a367daca74e14",
@@ -2545,7 +2551,7 @@
     ".pre-commit-config.yaml": "e84c08cdcdbc48327427dbc05db047f54bf6951a21ca346c94fbb1d626a9791e",
     ".prettierignore": "52bd6b65c527beb5d96542038742f6a7ddc020b811555f931cf21e46ad4f299c",
     ".prettierrc.json": "397a82eecfef896217e66bd56e9ccd99cb445af63a2d96bff368eab96431de06",
-    "AGENTS.md": "e21086bbb3f4b9f850e762e42babdeed6ff49fa2bfb6a0a00f53a9c415488865",
+    "AGENTS.md": "b0527bb3829fabbd26966cf2d0d7d6d471f25b97f9151b37ba894fe298d2bf34",
     "LICENSE": "55d0f54151154971764f9c643ed833ff6393138cc95575ea758053528d083a04",
     "README.md": "5504a194dc77332d56ee44d8efff279e14da564742f8c3e8961122230bb7f8b5",
     "crates/borsuk/tests/fixtures/market-filter/dataset.json": "a3927bf2138f9e77e2629506c20da6864a57176c39d5cd0e919e40abc6c40d90",
@@ -3164,6 +3170,7 @@
     "scripts/check_co_selection_implementation.sh": "6da055649984333a51e21a97c6e31ca01b3147c7bf338e6a4b6ffe0200c608eb",
     "scripts/check_cohere1024_implementation.sh": "4f55d033ca21e487b41afe6bcc3c8a3ccb1badd9b995755b8e64548ccf9ead9e",
     "scripts/check_cohere_closed_panel_construction.py": "330e4f5510b6d5e72a83614c39c9e95533b9e0e79256890b551e67a1b82fc0e6",
+    "scripts/check_cohere_sq8_builder.sh": "b6ac97f0f0b32247df9d4edec752d8d6778615d203ee21454e2702412124c26e",
     "scripts/check_constrained_split_implementation.sh": "7c404096c3dd4b098c6def7c2265564878fe68c1410c6a0f73719f5a9e9bf187",
     "scripts/check_fine_source_layout.py": "7e10678189413f30b8bd06fc2edfca663c1736b897d9c2e55c48a63b685e1c42",
     "scripts/check_fine_sq8_implementation.sh": "e339ae20a945314973dc6aa8a57f13b75e886b8e8e06c61e27db6167f9243317",
