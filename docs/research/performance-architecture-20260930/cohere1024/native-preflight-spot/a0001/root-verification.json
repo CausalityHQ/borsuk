@@ -1,0 +1,13 @@
+{
+  "status": "INVALID_TRANSPORT",
+  "controller_exit": 1,
+  "native_calls": 0,
+  "queries": 0,
+  "quality_claim": false,
+  "instance_id": "i-08a89962e30961da2",
+  "instance_state": "terminated",
+  "terminal_sha256": "e53e664d10d8233da4a319646b519c60272de27f375ce4be28045155d0fd90cf",
+  "failure": "AWS CLI binary transfer: cannot start new thread",
+  "source_evidence": "--transport inherits adapter hard RLIMIT_AS 400MiB; threaded AWS CLI transfer fails; repair pending",
+  "algorithm_disposition": "not evaluated"
+}
