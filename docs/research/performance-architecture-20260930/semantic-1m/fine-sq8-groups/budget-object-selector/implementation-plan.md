@@ -27,7 +27,7 @@ Only crates/borsuk/src/budget_object_selector.rs and lib.rs registration. Exact6
 Files: new module and one lib registration. Inline tests.
 
 - [ ] Define immutable validated Model/Membership, Limits/Budget, bound Plan/Receipt and explicit Refused/Underfill dispositions; publish exact API in /tmp contract before handoff.
-- [ ] Write independent tests for all six oracle groups in native-spec.md. Tests construct model probabilities/weights independently and do not call production coverage/selection helpers for expected answers.
+- [ ] Write independent tests for all seven oracle groups in native-spec.md. Tests construct model probabilities/weights independently and do not call production coverage/selection helpers for expected answers; the seventh uses nonzero input-dependent weights to test the actual MLP rather than constant logits alone.
 - [ ] Implement query normalization, finite MLP/softmax, actual Cartesian selection, empty filtering, stable ties and modeled reservations.
 - [ ] Implement separately charged full-grid model diagnostic and tiny exhaustive legal/candidate-restricted cover diagnostic, with strict size ceilings.
 - [ ] Implement pure move/swap before/after coverage receipts and checkpoint acceptance; no actual fitting.

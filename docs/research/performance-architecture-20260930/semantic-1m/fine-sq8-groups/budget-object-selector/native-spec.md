@@ -37,6 +37,7 @@ Tests inline and independent from production selection/move helpers:
 4.Exact byte boundary, metadata/delta reducing body count, insufficient rows, checked overflow/invalid geometry/nonfinite logits.
 5.Root/model/query/delta identity mutation refusal and deterministic result/repetition.
 6.Capacity-preserving move acceptance: strictly greater total training coverage and no lower-tail regression; zero-gain refused. Independent enumerator computes expected before/after.
+7.Nonzero-input MLP scalar oracle: D3 original query[3,-4,12], norm13, nonzero hidden/mixture/both-head weights and biases, positive/negative preactivations and nonuniform mixture. Independently encode parameter order, sequential f32 normalization/dot/ReLU/softmax/mixture arithmetic; compare occupied full-grid probability bits and actual shortlist ordering. Do not call production offsets, inference, normalization or scoring helpers for expected values. Mandatory name: oracle_finite_mlp_nonunit_query_matches_independent_scalar.
 
 Oracle source must not call production score/coverage/move helpers. The full-grid model ranking is not the neighbor-coverage oracle. A model missing its own highest score is measured approximation loss, not concealed implementation error.
 
