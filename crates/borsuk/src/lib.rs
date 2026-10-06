@@ -80,6 +80,7 @@ mod positioned_materializer;
 pub mod pq64_nominee;
 pub mod pq_residual_four_bit;
 pub mod fine_sq8_groups;
+pub mod co_selection_layout;
 pub mod pq64_router_artifact;
 mod quantizer_sidecar;
 mod record;

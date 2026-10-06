@@ -326,6 +326,40 @@ pub struct FineSq8Index {
     delta_budget: usize,
     pub resources: ResourceReceipt,
 }
+
+/// Metadata for the source-only virtual-layout falsifier. This does not open
+/// canonical vectors, request vectors or SQ8 bodies, nor alter nomination.
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct CoSelectionSources {
+    pub identity: PqGraphIdentity,
+    pub original: BuildConfig,
+    pub primary_root: Artifact,
+    pub pq: Artifact,
+    pub graph: Artifact,
+    pub order: Artifact,
+    pub groups: Artifact,
+    pub records: Artifact,
+}
+impl FineSq8Index {
+    pub(crate) fn co_selection_sources(root: &Artifact) -> Result<CoSelectionSources> {
+        let manifest: Manifest =
+            serde_json::from_slice(&read_source_probe_artifact(root, ROOT_CAP)?)?;
+        validate_manifest(&manifest, root)?;
+        Ok(CoSelectionSources {
+            identity: manifest.identity,
+            original: manifest.original,
+            primary_root: manifest.primary_root,
+            pq: manifest.pq,
+            graph: manifest.graph,
+            order: manifest.order,
+            groups: manifest.groups,
+            records: manifest.records,
+        })
+    }
+    pub(crate) fn co_selection_logical_ids(&self) -> &[i64] {
+        &self.ids
+    }
+}
 impl FineSq8Index {
     /// Metadata-only admission, for aggregate evaluator/multiple-pin reservation.
     /// Does not open graph, codes, group table or record payload.
@@ -848,6 +882,9 @@ pub struct FineFetchPlan {
     old_page_bytes: usize,
 }
 impl FineFetchPlan {
+    pub(crate) fn co_selection_work(&self) -> (usize, usize) {
+        (self.evaluations, self.base_visits)
+    }
     pub fn feasible(&self) -> bool {
         self.feasible
     }

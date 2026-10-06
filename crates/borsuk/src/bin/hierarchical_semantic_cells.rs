@@ -1641,6 +1641,12 @@ fn execute() -> Result<()> {
     execute_args(&std::env::args().collect::<Vec<_>>())
 }
 fn execute_args(args: &[String]) -> Result<()> {
+    if args.get(1).is_some_and(|action| action == "check-co-selection-layout") {
+        require(args.len() == 5, "usage: hierarchical_semantic_cells check-co-selection-layout CONFIG CONFIG_SHA256 NEW_OUTPUT")?;
+        return borsuk::co_selection_layout::check_co_selection_layout(
+            Path::new(&args[2]), &args[3], Path::new(&args[4]),
+        );
+    }
     if args.get(1).is_some_and(|action| action == "check-pq-residual-source") {
         require(args.len() == 5, "usage: hierarchical_semantic_cells check-pq-residual-source CONFIG CONFIG_SHA256 NEW_OUTPUT")?;
         return borsuk::fine_sq8_groups::pq_residual_source::check_pq_residual_source(
@@ -1806,6 +1812,21 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn co_selection_layout_strict_cli_dispatch_no_geometry_truth_or_selection_override() {
+        let tmp=tempfile::tempdir().unwrap();
+        let pin=probe_artifact(&tmp.path().join("config.json"),br#"{"schema":"borsuk-co-selection-config-v1","geometry":2,"truth":"forbidden","training_selections":[]}"#);
+        let output=tmp.path().join("report.json");
+        let mut args=vec!["hierarchical_semantic_cells".into(),"check-co-selection-layout".into(),
+            pin.path.display().to_string(),pin.sha256,output.display().to_string()];
+        assert!(execute_args(&args[..4]).is_err());assert!(!output.exists());
+        args.push("--fixture".into());assert!(execute_args(&args).is_err());assert!(!output.exists());args.pop();
+        assert!(execute_args(&args).is_err());
+        let report:Value=serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+        assert_eq!(report["schema"],borsuk::co_selection_layout::REPORT_SCHEMA);assert_eq!(report["status"],"INVALID");
+        let body=fs::read(&output).unwrap();assert!(execute_args(&args).is_err());assert_eq!(body,fs::read(output).unwrap());
+    }
 
     #[test]
     fn pq_residual_source_strict_cli_dispatch_no_geometry_or_truth_override() {
