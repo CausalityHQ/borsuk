@@ -1,0 +1,27 @@
+{
+  "schema": "borsuk-co-selection-primary-root-body-preflight-v1",
+  "status": "PASS",
+  "get_attempts": 2,
+  "bytes": 61956,
+  "native_execution": false,
+  "corpus_reads": 0,
+  "truth_reads": 0,
+  "panels": [
+    {
+      "dataset": "relaion",
+      "bytes": 31500,
+      "sha256": "3244e7bbd5e27eb1f3fe52cbddc450d08d45d25256eec98dc942ba42cf2808f1",
+      "rows": 100000,
+      "dimensions": 768,
+      "canonical_and_order_match": true
+    },
+    {
+      "dataset": "cohere",
+      "bytes": 30456,
+      "sha256": "c2bf337290f7713139903f398ac6b4007ed01faf47ff093e7e397b2715b7b4fc",
+      "rows": 100000,
+      "dimensions": 768,
+      "canonical_and_order_match": true
+    }
+  ]
+}
