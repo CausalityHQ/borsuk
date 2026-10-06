@@ -5,6 +5,7 @@ CLI: aNNNN | --self-check | --replay OUT. Remote --remote is bootstrap-only.
 --histogram-sq4 selects the separate learned-codebook experiment.
 --corrected-four-bit selects the separately qualified direction codec.
 --pq-residual-source selects the separately qualified truth-free source probe.
+--co-selection-layout selects the qualified source-only virtual layout falsifier.
 --corrected-four-bit --canary aNNNN runs only disposable infrastructure admission.
 --remote-canary is bootstrap-only; --replay-canary OUT authenticates its closure.
 No compiler, query runner, packing algorithm, retries or replacement instances.
@@ -98,6 +99,27 @@ HISTOGRAM_SQ4 = False
 CORRECTED_FOUR_BIT = False
 CANARY = False
 PQ_RESIDUAL_SOURCE = False
+CO_SELECTION_LAYOUT = False
+CO_ROOT = ROOT.parent/'co-selection-layout'
+CO_GATES = CO_ROOT/'implementation-gates'
+CO_RECEIPTS = ('source-qualification.json.gz', 'workspace-receipt.json.gz',
+    'aws-terminal.json', 'aws-closeout.json', 'source-before.json.gz',
+    'source-after.json.gz', 'workspace-cgroup.json.gz')
+CO_EVIDENCE = (CO_GATES/'config.json', CO_GATES/'native-source-manifest.json',
+    Path('scripts/check_co_selection_implementation.sh'),
+    *(CO_GATES/'a0001'/n for n in CO_RECEIPTS))
+CO_COMMIT = '510bde198af4f28952db2fc85a42018472b23fdc'
+CO_SOURCE_ID = '64fe7b41484ece6a6379c716727e9407c9a1d48e0a44e71669c8994c3e32289c'
+CO_BINARY_PIN = dict(bytes=13549088, sha256='1db976a4a29de491cf03c14fe7246330124e1fa4d479d4895dd30f84507d7672')
+CO_CAPS = dict(memory_bytes=512*1024**2, source_auth_bytes=1024**3,
+    construction_operations=512000000000, replay_operations=20000000000,
+    output_bytes=64*1024**2, cpu_threads=1, swap_bytes=0)
+CO_MANIFEST, CO_PROTOCOL, CO_EVIDENCE_PINS, CO_QUALIFICATION = {}, {}, {}, ()
+CO_ORIGINAL_PINS = INPUT_PINS
+CO_SOURCE_NAMES = ('co_selection_layout.rs', 'fine_sq8_groups.rs', 'pq64_nominee.rs',
+    'resident_vector_graph.rs', 'hierarchical_semantic_cells.rs', 'budgeted_page_rank.rs',
+    'sq8_page_authority.rs', 'returned_sq8.rs', 'exact_sq8_nominee.rs', 'centroid_hnsw.rs',
+    'sq8_source.rs', 'bin/hierarchical_semantic_cells.rs', 'lib.rs')
 PQ_ROOT = ROOT.parent/'sq4-refinement/pq-residual'
 PQ_EVIDENCE = (PQ_ROOT/'implementation-gates/source-contract-7bb862b2.json',
     PQ_ROOT/'implementation-gates/native-source-manifest.json',
@@ -227,6 +249,220 @@ def configure_sq4(*, histogram=False, corrected=False):
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def qualification_body(path):
+    if str(path).endswith('.gz'):
+        with regular(path) as raw, gzip.GzipFile(fileobj=raw) as source:
+            body = source.read(4*1024**2+1)
+        require(len(body) <= 4*1024**2, 'qualification decompression cap')
+        return body
+    return read(path)
+
+
+def configure_co_selection_layout():
+    """Only diagnostic glue; root must supply the still-absent run authority."""
+    global CO_SELECTION_LAYOUT, SQ4, ROOT, CONFIG, SCHEMA, PREFIX, TOKEN_PREFIX, TAG, REMOTE_ROOT
+    global CAPS, FIXED, WALL, COMPUTE_CAP, SQ4_CLI, SQ4_OUTPUTS, ARTIFACTS, ROSTER_SHA
+    global NATIVE_COMMIT, SOURCE_ID, INPUT_PINS, SQ4_SCRATCH_CAP
+    global CO_MANIFEST, CO_PROTOCOL, CO_EVIDENCE_PINS, CO_QUALIFICATION
+    require(not SQ4 or CO_SELECTION_LAYOUT, 'one native experiment')
+    if CO_SELECTION_LAYOUT:
+        return
+    import shlex
+    repo = Path(__file__).resolve().parents[1]
+    bodies = [read(repo/p) for p in CO_EVIDENCE]
+    gates, CO_MANIFEST = map(decode, bodies[:2])
+    stages = [shlex.split(line)[1:] for line in bodies[2].decode().splitlines() if line.startswith('run_stage ')]
+    CO_PROTOCOL = dict(stages=[(s[0],s[1:]) for s in stages], mandatory_tests=gates['mandatory_tests'])
+    require(len(stages) == len({s[0] for s in stages}) == 21
+        and len(CO_PROTOCOL['mandatory_tests']['co-selection-tests']) == 11
+        and len(CO_PROTOCOL['mandatory_tests']['co-selection-bin-tests']) == 1
+        and CO_MANIFEST['native_source_commit'] == CO_COMMIT
+        and CO_MANIFEST['source_file_count'] == len(CO_MANIFEST['source_sha256']) == 407
+        and CO_MANIFEST['source_identity_sha256'] == CO_SOURCE_ID
+        == sha(json.dumps(CO_MANIFEST['source_sha256'],sort_keys=True,separators=(',',':')).encode()),
+        'co-selection exact qualified source407/all21 protocol')
+    CO_EVIDENCE_PINS = {str(p):pin(b) for p,b in zip(CO_EVIDENCE,bodies)}
+    CO_QUALIFICATION = tuple(dict(path=str(p),**CO_EVIDENCE_PINS[str(p)]) for p in CO_EVIDENCE[3:])
+    CO_SELECTION_LAYOUT = SQ4 = True  # Reuse opaque staging, scratch and supervisor.
+    ROOT = CO_ROOT/'native-diagnostic'; CONFIG = ROOT/'config.json'
+    SCHEMA = 'borsuk-co-selection-layout-diagnostic-spot-v1'
+    PREFIX = 'research/hierarchical-cells/20261006/co-selection-layout-diagnostic-'
+    TOKEN_PREFIX, TAG = 'co-selection-layout-', 'borsuk-co-selection-layout-diagnostic'
+    REMOTE_ROOT = Path('/mnt/co-selection-layout-diagnostic')
+    CAPS = dict(CO_CAPS, caller_pinned_bytes=0, deadline_seconds=0)
+    WALL = COMPUTE_CAP = SQ4_SCRATCH_CAP = 0  # No inferred runtime/cost/scratch admission.
+    FIXED = dict(FIXED, machine_limit_seconds=WALL, compute_cap_usd=COMPUTE_CAP, native_caps=CAPS)
+    NATIVE_COMMIT, SOURCE_ID, INPUT_PINS = CO_COMMIT, CO_SOURCE_ID, ()
+    SQ4_CLI = 'check-co-selection-layout'
+    SQ4_OUTPUTS = ('screen/report.json', *(f'screen/report.{dataset}.{suffix}'
+        for dataset in ('relaion','cohere') for suffix in ('selections.bin','map.json')),
+        'screen/report.held.jsonl', 'screen/report.prefix.jsonl', 'screen/report.plans.jsonl')
+    ARTIFACTS = (*ARTIFACTS[:12], 'scratch.json', 'imports.json', *SQ4_OUTPUTS,
+        *('qualification/'+n for n in CO_RECEIPTS))
+    ROSTER_SHA = sha(json.dumps(ARTIFACTS,separators=(',',':')).encode())
+
+
+def co_selection_qualification(config, base, collected=False):
+    """Replay the existing qualified source/binary receipts, never requalify."""
+    require(config['native_qualification'] == list(CO_QUALIFICATION), 'co-selection original qualification roster/pins')
+    bodies = {}
+    for descriptor in CO_QUALIFICATION:
+        name = Path(descriptor['path']).name
+        path = Path(base)/('qualification/'+name if collected else descriptor['path'])
+        require(file_pin(path) == {k:descriptor[k] for k in ('bytes','sha256')}, 'co-selection qualification drift: '+name)
+        bodies[name] = qualification_body(path)
+    q,w,t,close,before,after,cgroup = (decode(bodies[n]) for n in CO_RECEIPTS)
+    sources = CO_MANIFEST['source_sha256']
+    require(q['schema'] == 'borsuk-co-selection-implementation-gates-qualification-v1'
+        and w['schema'] == 'borsuk-co-selection-implementation-gates-receipt-v1'
+        and t['schema'] == 'borsuk-co-selection-implementation-gates-spot-v1'
+        and all(v['source_file_count'] == 407 and v['source_identity_sha256'] == CO_SOURCE_ID for v in (q,w,t))
+        and q['native_source_commit'] == t['native_source_commit'] == CO_COMMIT
+        and q['source_sha256'] == w['source_sha256'] == before == after == sources,
+        'co-selection unchanged exact full407 qualification')
+    manifest = dict(path=str(CO_EVIDENCE[1]),**CO_EVIDENCE_PINS[str(CO_EVIDENCE[1])])
+    require(q['native_source_manifest'] == manifest
+        and q['native_source_manifest_sha256'] == t['native_source_manifest_sha256'] == manifest['sha256']
+        and q['code_sha256'][str(CO_EVIDENCE[2])] == CO_EVIDENCE_PINS[str(CO_EVIDENCE[2])]['sha256']
+        and q['config_sha256'] == w['config_sha256'] == t['config_sha256'] == CO_EVIDENCE_PINS[str(CO_EVIDENCE[0])]['sha256'],
+        'co-selection qualified manifest/protocol/config binding')
+    require(q['mandatory_test_names_pending'] is w['mandatory_test_names_pending'] is False
+        and w['qualified'] is w['command_started'] is w['command_completed'] is w['source_unchanged'] is True
+        and all(type(w[k]) is int and w[k] == 0 for k in ('exit_status','gate_status'))
+        and w['qualification_sha256'] == t['source_qualification_sha256'] == sha(bodies[CO_RECEIPTS[0]])
+        and q['mandatory_tests'] == w['mandatory_tests'] == CO_PROTOCOL['mandatory_tests']
+        and [(s['stage'],s['command']) for s in w['stages']] == CO_PROTOCOL['stages'],
+        'co-selection all21 completed original gates')
+    previous = None
+    for stage in w['stages']:
+        started,finished = (datetime.fromisoformat(stage[k]) for k in ('started_at','finished_at'))
+        mandatory = CO_PROTOCOL['mandatory_tests'].get(stage['stage'],())
+        require(started.utcoffset() == finished.utcoffset() == timedelta(0)
+            and finished >= started and (previous is None or started >= previous)
+            and all(type(stage[k]) is int and stage[k] == 0 for k in ('exit_status','gate_status','log_exit_status'))
+            and (type(stage['tests_run']) is int and stage['tests_run'] >= len(mandatory) > 0 if mandatory else stage['tests_run'] is None)
+            and stage['required_test_passes'] == {n:1 for n in mandatory}
+            and all(type(n) is int for n in stage['required_test_passes'].values()), 'co-selection serial original gate/pass counts')
+        previous = finished
+    require(t['status'] == t['phase'] == 'complete'
+        and all(type(t[k]) is int and t[k] == 0 for k in ('exit_code','original_exit_code'))
+        and close['state'] == 'terminated' and close['nodes'] == {'0':{'instance_id':t['instance_id']}}
+        and t['artifacts']['workspace-receipt.json'] == pin(bodies[CO_RECEIPTS[1]])
+        and w['artifacts'][BINARY_NAME] == t['artifacts'][BINARY_NAME] == CO_BINARY_PIN,
+        'co-selection original exit0/binary/SAME-ID qualification closeout')
+    for name in ('source-before.json','source-after.json','workspace-cgroup.json'):
+        require(w['artifacts'][name] == t['artifacts'][name] == pin(bodies[name+'.gz']), 'co-selection qualified artifact: '+name)
+    require(cgroup['closed'] is True, 'co-selection qualification resource closure')
+    for snapshot in (cgroup['before'],cgroup['after']):
+        require(int(snapshot['memory.max']) == 8*1024**3 and int(snapshot['memory.peak']) <= 8*1024**3
+            and snapshot['cpu.max'].split() == ['200000','100000']
+            and int(snapshot['memory.swap.max']) == int(snapshot['memory.swap.peak']) == 0
+            and all(events(snapshot['memory.events'])[k] == 0 for k in ('oom','oom_kill','oom_group_kill')),
+            'co-selection qualified compiler resources')
+    return dict(zip(CO_RECEIPTS,(q,w,t,close,before,after,cgroup)))
+
+
+def validate_co_selection_config(config, base=None):
+    global FIXED, CAPS, WALL, COMPUTE_CAP, SQ4_SCRATCH_CAP, INPUT_PINS
+    require(set(config) == {'schema','authority_pending','fixed','native_config','native_config_sha256',
+        'source_metadata','binary','inputs','native_source','native_qualification','code_sha256',
+        'source_archive_paths','source_archive_paths_sha256'}
+        and config['schema'] == SCHEMA and config['authority_pending'] is False, 'co-selection frozen root authority required')
+    fixed,native = config['fixed'],config['native_config']
+    require(set(native) == {'schema','panels','original_seal','prefix','caps','prior_reads'}
+        and native['schema'] == 'borsuk-co-selection-config-v1' and len(native['panels']) == 2
+        and sha(encoded(native)) == config['native_config_sha256'] and len(encoded(native)) <= 65536,
+        'co-selection strict native Config; no request vectors/GT/SQ8/selection overrides')
+    caps = native['caps']
+    require(set(caps) == set(CO_CAPS)|{'caller_pinned_bytes','deadline_seconds'}
+        and all(type(caps[k]) is int and caps[k] == v for k,v in CO_CAPS.items())
+        and type(caps['caller_pinned_bytes']) is int and 0 <= caps['caller_pinned_bytes'] <= caps['memory_bytes']-64*1024**2
+        and type(caps['deadline_seconds']) is int and 1 <= caps['deadline_seconds'] <= 86400,
+        'co-selection native512MiB/CPU1/noSwap/construction512B/replay20B/auth1GiB/output64MiB')
+    variable = {'scratch','native_caps','machine_limit_seconds','compute_cap_usd'}
+    require(set(fixed) == set(FIXED)|{'scratch'}
+        and all(encoded(fixed[k]) == encoded(FIXED[k]) for k in FIXED if k not in variable)
+        and encoded(fixed['native_caps']) == encoded(caps)
+        and type(fixed['machine_limit_seconds']) is int and caps['deadline_seconds'] < fixed['machine_limit_seconds'] <= 86400
+        and type(fixed['compute_cap_usd']) in (int,float) and 0 < fixed['compute_cap_usd'] < float('inf')
+        and fixed['machine_limit_seconds']*fixed['spot_max_usd_per_hour']/3600 <= fixed['compute_cap_usd'],
+        'co-selection root frozen wall/cost/host/native caps')
+    authority = config['native_source']
+    source_pins = {n:CO_MANIFEST['source_sha256']['crates/borsuk/src/'+n] for n in CO_SOURCE_NAMES}
+    require(authority == dict(commit=CO_COMMIT,full_source_identity_sha256=CO_SOURCE_ID,
+        source_sha256=source_pins,qualification_protocol_sha256=sha(encoded(CO_PROTOCOL))), 'co-selection qualified exact native source')
+    prior = native['prior_reads']
+    require(set(prior) == {'operations','bytes'} and type(prior['operations']) is type(prior['bytes']) is int
+        and 0 <= prior['operations'] <= 32 and 0 <= prior['bytes'] <= 16*1024**2, 'co-selection SAME total32/16MiB prior reads')
+    metadata = config['source_metadata']; descriptors = []
+    require(type(metadata) is list and len(metadata) == 2, 'co-selection opaque primary/group metadata pair')
+    for i,(panel,dataset) in enumerate(zip(native['panels'],('relaion','cohere'))):
+        require(set(panel) == {'dataset','root','identity','canonical','source_order','fine_order','pq','graph'}
+            and panel['dataset'] == dataset and set(metadata[i]) == {'primary_root','groups'}, 'co-selection strict Panel/support fields')
+        identity = panel['identity']
+        require(set(identity) == {'generation','rows','dimensions','source','layout','pq'}
+            and type(identity['generation']) is int and 0 < identity['generation'] < 2**64
+            and type(identity['rows']) is type(identity['dimensions']) is int
+            and identity['rows'] == 100000 and identity['dimensions'] == 768
+            and all(type(identity[k]) is list and len(identity[k]) == 32
+                and all(type(n) is int and 0 <= n <= 255 for n in identity[k]) for k in ('source','layout','pq')),
+            'co-selection original PQ/graph identity100k/D768')
+        for key,size in (('canonical',308000000),('source_order',800000),('fine_order',800000),('pq',7186456)):
+            require(panel[key]['bytes'] == size, 'co-selection source geometry: '+key)
+        require(0 < panel['root']['bytes'] <= 65536 and 0 < panel['graph']['bytes'] <= 51200000
+            and 0 < metadata[i]['primary_root']['bytes'] <= 65536 and metadata[i]['groups']['bytes'] == 200000,
+            'co-selection native metadata/graph bounds')
+        for key,j in (('root',2*i),('graph',2*i+1)):
+            p,n,h = CO_ORIGINAL_PINS[j]
+            require(panel[key] == dict(path=p,bytes=n,sha256=h), 'co-selection original closed root/graph pin')
+        descriptors.extend(panel[k] for k in ('root','canonical','source_order','fine_order','pq','graph'))
+        descriptors.extend(metadata[i][k] for k in ('primary_root','groups'))
+    for key,j in (('original_seal',4),('prefix',5)):
+        p,n,h = CO_ORIGINAL_PINS[j]
+        require(native[key] == dict(path=p,bytes=n,sha256=h), 'co-selection closed seal/prefix pin')
+        descriptors.append(native[key])
+    for d in descriptors:
+        path = Path(d['path'])
+        require(set(d) == {'path','bytes','sha256'} and path.is_absolute() and Path(CO_ORIGINAL_PINS[4][0]).parent in path.parents
+            and str(path) == d['path'] and '..' not in path.parts and len(str(path)) <= 4096,
+            'co-selection retained absolute source path')
+        require(body_pin({k:d[k] for k in ('bytes','sha256')},max_bytes=308000000)['bytes'] > 0, 'co-selection source artifact pin')
+    inputs = config['inputs']
+    require(len(inputs) == 18 and len({d['destination'] for d in inputs}) == len({d['key'] for d in inputs}) == 18,
+        'co-selection exact eighteen distinct opaque sources/metadata')
+    for d,a in zip(inputs,descriptors):
+        require(set(d) == {'destination','key','bytes','sha256'} and {k:d[k] for k in ('bytes','sha256')} == {k:a[k] for k in ('bytes','sha256')}
+            and d['destination'] == a['path'], 'co-selection transport binds native source; no payload/GT/request extras')
+        object_key(d['key'])
+    binary = config['binary']
+    require(set(binary) == {'key','bytes','sha256'} and {k:binary[k] for k in ('bytes','sha256')} == CO_BINARY_PIN,
+        'co-selection exact qualified executable')
+    object_key(binary['key'])
+    require(binary['key'] not in {d['key'] for d in inputs} and config['native_qualification'] == list(CO_QUALIFICATION),
+        'co-selection distinct binary/original completed qualification')
+    paths = sorted([str(CONFIG),*CODE,*(str(p) for p in CO_EVIDENCE)])
+    require(config['source_archive_paths'] == paths and config['source_archive_paths_sha256'] == sha(
+        json.dumps(paths,separators=(',',':')).encode()) and set(config['code_sha256']) == set(CODE), 'co-selection minimal existing import/archive closure')
+    for digest in config['code_sha256'].values():
+        body_pin(dict(bytes=0,sha256=digest))
+    scratch = fixed['scratch']
+    require(set(scratch) == {'input_bytes','native_output_bytes','binary_bytes','source_archive_bytes',
+        'bootstrap_bytes','auxiliary_bytes','cap_bytes'} and all(type(n) is int and n > 0 for n in scratch.values())
+        and scratch['input_bytes'] == sum(d['bytes'] for d in inputs)
+        and scratch['native_output_bytes'] == caps['output_bytes'] and scratch['binary_bytes'] == binary['bytes']
+        and sum(n for k,n in scratch.items() if k != 'cap_bytes') <= scratch['cap_bytes'], 'co-selection root frozen whole-worker scratch')
+    if base is not None:
+        for name,digest in config['code_sha256'].items():
+            require(file_pin(Path(base)/name)['sha256'] == digest, 'co-selection CODE drift: '+name)
+        for name,identity in CO_EVIDENCE_PINS.items():
+            require(file_pin(Path(base)/name) == identity, 'co-selection evidence drift: '+name)
+        co_selection_qualification(config,base)
+    FIXED,CAPS = fixed,caps
+    WALL,COMPUTE_CAP,SQ4_SCRATCH_CAP = fixed['machine_limit_seconds'],fixed['compute_cap_usd'],scratch['cap_bytes']
+    INPUT_PINS = tuple((d['destination'],d['bytes'],d['sha256']) for d in inputs)
+    return native
 
 
 def configure_pq_residual_source():
@@ -516,6 +752,8 @@ def native_inputs(native):
 
 
 def sq4_qualification(config, base, collected=False):
+    if CO_SELECTION_LAYOUT:
+        return co_selection_qualification(config,base,collected)
     receipts = {}
     identities = {}
     for r in config['native_qualification']:
@@ -720,6 +958,8 @@ def scratch_room(root, growth):
 
 
 def validate_config(config, base=None):
+    if CO_SELECTION_LAYOUT:
+        return validate_co_selection_config(config,base)
     if PQ_RESIDUAL_SOURCE:
         return validate_pq_residual_config(config, base)
     if CANARY:
@@ -905,7 +1145,7 @@ PY
 systemd-run --unit={SUPERVISOR_UNIT} --wait --pipe {supervisor_options}-p 'Delegate=cpu memory pids' -p DelegateSubgroup=supervisor -p RuntimeMaxSec={WALL} -p WorkingDirectory="$root" \\
  --setenv=PYTHONPATH="$root/repo" --setenv=AWS_MAX_ATTEMPTS=1 --setenv=AWS_RETRY_MODE=standard \\
  {('--setenv=TMPDIR="$TMPDIR" --setenv=TMP="$TMP" --setenv=TEMP="$TEMP" --setenv=PYTHONPYCACHEPREFIX="$PYTHONPYCACHEPREFIX" '+chr(92)) if SQ4 else chr(92)}
- "$python" -m {MODULE} {'--pq-residual-source ' if PQ_RESIDUAL_SOURCE else '--corrected-four-bit ' if CORRECTED_FOUR_BIT else '--histogram-sq4 ' if HISTOGRAM_SQ4 else '--sq4 ' if SQ4 else ''}{'--remote-canary' if CANARY else '--remote'} "$root/repo" "$root" '{commit}' '{archive_sha}' '{prefix}' '{qualification['config_sha256']}'
+ "$python" -m {MODULE} {'--co-selection-layout ' if CO_SELECTION_LAYOUT else '--pq-residual-source ' if PQ_RESIDUAL_SOURCE else '--corrected-four-bit ' if CORRECTED_FOUR_BIT else '--histogram-sq4 ' if HISTOGRAM_SQ4 else '--sq4 ' if SQ4 else ''}{'--remote-canary' if CANARY else '--remote'} "$root/repo" "$root" '{commit}' '{archive_sha}' '{prefix}' '{qualification['config_sha256']}'
 '''
     if CANARY:
         # The existing bootstrap and supervisor each get an observed kernel cap.
@@ -915,6 +1155,7 @@ fi
 systemd-run --unit=fine-pack-stop''',1)
         body = body.replace('-p RuntimeMaxSec='+str(WALL)+' -p WorkingDirectory=',
             '-p MemoryMax=256M -p MemorySwapMax=0 -p CPUQuota=100% -p TasksMax=128 -p RuntimeMaxSec='+str(WALL)+' -p WorkingDirectory=',1)
+    if CANARY or CO_SELECTION_LAYOUT:
         # Authenticate the extraction roster before any imported code can run.
         paths = qualification['source_archive_paths']
         body = body.replace("    archive.extractall('repo',filter='data')", "    assert sorted(m.name for m in archive.getmembers() if m.isfile()) == "+repr(paths)+", 'canary source archive roster'\n    assert all(m.isfile() or m.isdir() for m in archive.getmembers()), 'canary archive regular files'\n    archive.extractall('repo',filter='data')")
@@ -1343,6 +1584,9 @@ def validate_sq4_result(root, config):
         and sum(scratch['last']['roots'].values()) == scratch['last']['whole_scratch_bytes'], 'SQ4 whole-worker scratch observations')
     require({p.name for p in (root/'screen').iterdir() if not p.name.endswith('.gz')} == {Path(n).name for n in SQ4_OUTPUTS}, 'SQ4 exact native output closure')
     require(sum(file_pin(root/n)['bytes'] for n in SQ4_OUTPUTS) <= CAPS['output_bytes'], 'SQ4 native output cap')
+    if CO_SELECTION_LAYOUT:
+        require(decode(read(root/'imports.json')) == config['code_sha256'], 'co-selection actual existing import closure')
+        return validate_co_selection_outputs(root,config,original,receipt,scratch)
     if PQ_RESIDUAL_SOURCE:
         return validate_pq_residual_outputs(root,config,original,receipt,scratch)
     body = read(root/'screen/report.json', 16384 if CORRECTED_FOUR_BIT else 8192); report = decode(body)
@@ -1456,6 +1700,107 @@ def validate_sq4_result(root, config):
             and startup['packed_row_bytes'] == 396, 'histogram startup separate from payload envelope')
         result['histogram_resources'] = startup
     return result
+
+
+def validate_co_selection_outputs(root, config, original, receipt, scratch):
+    """Bind the native closure; Python does not fit, nominate or score vectors."""
+    body = read(root/'screen/report.json',8192); report = decode(body)
+    sources = {n:CO_MANIFEST['source_sha256']['crates/borsuk/src/'+n] for n in CO_SOURCE_NAMES}
+    require(receipt['report_sha256'] == scratch['report_sha256'] == sha(body)
+        and report['schema'] == 'borsuk-co-selection-diagnostic-v1'
+        and report['config_sha256'] == config['native_config_sha256']
+        and report['diagnostic_source_sha256'] == sources and report['complete'] is True
+        and type(report['queries']) is int and report['queries'] == 128
+        and report['status'] in ('SURVIVED_NECESSARY_LOCALITY','REJECT')
+        and all(report[k] is False for k in ('standalone_authority','quality_or_performance_claim',
+            'truth_opened','request_vectors_opened','sq8_bodies_opened'))
+        and report['source_only_anchor_vectors'] is report['requires_matching_supervisor_exit_receipt'] is True,
+        'co-selection complete native report/source/scope binding')
+    require(file_pin(root/'native.log')['bytes'] <= 4*1024**2, 'co-selection bounded log; silent exit0 supported')
+    details,native = report['details'],config['native_config']
+    require(details['caps'] == native['caps'] and details['prior_reads'] == native['prior_reads']
+        and details['original_seal'] == native['original_seal']
+        and details['delta_bytes'] == details['additional_attempts'] == 0, 'co-selection native authority/no delta/retry')
+    for key,cap in (('construction_operations',CAPS['construction_operations']),('replay_operations',CAPS['replay_operations']),
+                    ('source_auth_bytes',CAPS['source_auth_bytes']),('modeled_peak_owned_bytes',CAPS['memory_bytes']),
+                    ('retained_capacity_bytes',CAPS['memory_bytes']),('wall_ms',CAPS['deadline_seconds']*1000)):
+        require(type(details[key]) is int and 0 <= details[key] <= cap, 'co-selection native resource ledger: '+key)
+    require(type(details['counted_operations']) is int
+        and details['counted_operations'] == details['construction_operations']+details['replay_operations']
+        and CAPS['caller_pinned_bytes'] <= details['retained_capacity_bytes'] <= details['modeled_peak_owned_bytes'],
+        'co-selection persistent phase/memory ledgers')
+    ceiling,output = details['work_preflight'],details['output_preflight']
+    require(all(type(ceiling[k]) is int and details[k+'_operations'] <= ceiling[k] <= CAPS[k+'_operations']
+        for k in ('construction','replay')) and type(output['total']) is int
+        and sum(file_pin(root/n)['bytes'] for n in SQ4_OUTPUTS) <= output['total'] <= CAPS['output_bytes'],
+        'co-selection full-batch work/output admission')
+    def bound(descriptor, name):
+        require(descriptor == dict(path=str(original/name),**file_pin(root/name)), 'co-selection native full-body pin: '+name)
+    for key,name in (('nomination_prefix','screen/report.prefix.jsonl'),('plans','screen/report.plans.jsonl'),
+                     ('held_diagnostics','screen/report.held.jsonl')):
+        bound(details[key],name)
+    require(file_pin(root/'screen/report.prefix.jsonl') == {k:native['prefix'][k] for k in ('bytes','sha256')}
+        and len(details['maps']) == len(details['source_selections']) == 2, 'co-selection original frozen prefix/paired maps')
+    for i,panel in enumerate(native['panels']):
+        stem = 'screen/report.'+panel['dataset']
+        bound(details['maps'][i],stem+'.map.json'); bound(details['source_selections'][i],stem+'.selections.bin')
+        with regular(root/(stem+'.selections.bin')) as selected:
+            header = selected.read(208)
+        require(header == b'BORSCS01'+bytes.fromhex(''.join(panel[k]['sha256']
+            for k in ('root','canonical','source_order','fine_order','pq','graph')))
+            +(4096).to_bytes(4,'little')+(512).to_bytes(4,'little')
+            and 208+4608*52 <= details['source_selections'][i]['bytes'] <= 19114192,
+            'co-selection sealed source selection header/pins/train4096/held512')
+        mapping = decode(read(root/(stem+'.map.json'),4*1024**2))
+        require(mapping['schema'] == 'borsuk-co-selection-map-v1' and mapping['config_sha256'] == config['native_config_sha256']
+            and mapping['diagnostic_source_sha256'] == sources and mapping['source'] == panel
+            and mapping['source_selections'] == details['source_selections'][i] and mapping['caps'] == CAPS
+            and mapping['work_preflight'] == ceiling and mapping['output_preflight'] == output
+            and mapping['held_anchor_count'] == 512 and mapping['held_used_for_fitting'] is False
+            and mapping['group_rows'] == 16 and mapping['blocks_per_object'] == 128 and mapping['replication_factor'] == 1
+            and mapping['short_tail_last'] is mapping['query_blind'] is True and mapping['within_group_order'] == 'unchanged'
+            and all(mapping['original_sources'][k] == config['source_metadata'][i][k] for k in ('primary_root','groups'))
+            and all(obj['payload_materialized'] is False and obj['payload_sha256'] is obj['payload_etag'] is None
+                for obj in mapping['objects']), 'co-selection query-blind maps/source metadata/virtual objects')
+    # Stream the bounded metadata closure; do not decode the selection nominees
+    # or reproduce the qualified Rust cover/fit/expansion algorithm here.
+    for name,per_panel in (('held',512),('plans',64)):
+        counts = [0,0]; fits = [0,0]
+        with regular(root/('screen/report.'+name+'.jsonl')) as rows:
+            for i in range(2*per_panel):
+                line = rows.readline(131073)
+                require(0 < len(line) <= 131072 and line.endswith(b'\n'), 'co-selection bounded complete metadata row')
+                row = decode(line); panel = i//per_panel; counts[panel] += 1
+                require(row['dataset'] == native['panels'][panel]['dataset']
+                    and type(row['held_ordinal' if name=='held' else 'ordinal']) is int
+                    and row['held_ordinal' if name=='held' else 'ordinal'] == i%per_panel
+                    and row['map'] == details['maps'][panel] and row['source_selections'] == details['source_selections'][panel],
+                    'co-selection complete ordered paired metadata/pins')
+                if name == 'held':
+                    require(row['used_for_fitting'] is row['policy_tuning'] is False and type(row['fits']) is bool,
+                        'co-selection held diagnostics cannot fit/tune')
+                    continue
+                plan = row['plan']; p = native['panels'][panel]
+                require(row['phase'] == 'co_selection_plan' and row['root'] == p['root']
+                    and all(row[k] is False for k in ('truth_opened','request_vectors_opened','sq8_bodies_opened'))
+                    and plan['all_nominees_retained'] is True and plan['root_sha256'] == p['root']['sha256']
+                    and plan['source_sha256'] == p['canonical']['sha256'] and plan['prior'] == native['prior_reads']
+                    and type(plan['fits']) is bool, 'co-selection all128 complete nominee retention/no truth/payload')
+                for k,cap in (('total_operations',32),('total_bytes',16*1024**2)):
+                    require(plan[k] is None or type(plan[k]) is int and plan[k] >= 0, 'co-selection total cost type')
+                    if plan['fits']:
+                        require(type(plan[k]) is int and 0 < plan[k] <= cap, 'co-selection SAME total32/16MiB fitted cover')
+                fits[panel] += int(plan['fits'])
+            require(rows.read(1) == b'', 'co-selection no extra metadata rows')
+        if name == 'plans':
+            require(details['per_panel_fits'] == fits and all(type(n) is int for n in details['per_panel_fits'])
+                and report['status'] == ('SURVIVED_NECESSARY_LOCALITY' if fits == [64,64] else 'REJECT'),
+                'co-selection complete scientific REJECT versus INVALID')
+    return dict(valid_diagnostic=True,status=report['status'],standalone_authority=False,
+        requires_matching_supervisor_exit_receipt=True,quality_or_performance_claim=False,
+        native_config_sha256=config['native_config_sha256'],binary=CO_BINARY_PIN,report_sha256=sha(body),
+        per_panel_fits=details['per_panel_fits'],construction_operations=details['construction_operations'],
+        replay_operations=details['replay_operations'])
 
 
 def validate_pq_residual_outputs(root, config, original, receipt, scratch):
@@ -1844,6 +2189,8 @@ def remote(repo, root, commit, archive_sha, prefix, config_sha):
             s3 = canary_transport(s3,config,prefix)
         elif CORRECTED_FOUR_BIT:
             write(root/'canary-admission.json',read(repo/config['canary_admission']['path']))
+        elif CO_SELECTION_LAYOUT:
+            write(root/'imports.json',encoded(canary_imports(repo,config)))
         write(root/'cpu.txt', subprocess.check_output(['lscpu']))
         stage(s3, config, root)
         receipt = supervise(config, root, run_id=prefix+'/'+instance_id)
@@ -1892,6 +2239,9 @@ def replay(out):
             and type(terminal['original_exit_code']) is int
             and terminal['exit_code'] == 0 and terminal['original_exit_code'] == (2 if CANARY else 0)
             and set(terminal['artifacts']) == set(ARTIFACTS), 'complete original terminal/roster')
+    raw = read(out/'config.json')
+    require(sha(raw) == terminal['config_sha256'], 'collected config hash')
+    config = decode(raw); validate_config(config)
     if SQ4:
         closure = terminal['scratch_closure']
         require(closure['cap_bytes'] == SQ4_SCRATCH_CAP and closure['reserve_bytes'] == 4*1024**2
@@ -1903,9 +2253,6 @@ def replay(out):
             and 0 < transport['dispatch_attempts'] <= 128 and transport['scope'] == 'wrapped-worker-s3-sdk-dispatches'
             and transport['unobserved_scopes'] == ['bootstrap','root_ec2','root_control','wire_requests','billed_requests']
             and transport['automatic_retry'] is False, 'canary one attempt worker S3 dispatch cap/scope')
-    raw = read(out/'config.json')
-    require(sha(raw) == terminal['config_sha256'], 'collected config hash')
-    config = decode(raw); validate_config(config)
     proof = decode(read(out/'source-qualification.json'))
     require(proof == reservation['qualification'] == terminal['qualification']
             and proof['config_sha256'] == sha(raw) and proof['code_sha256'] == config['code_sha256']
@@ -1917,7 +2264,7 @@ def replay(out):
 
 
 def collect(s3, prefix, out, instance_id, commit, digest):
-    if CANARY or PQ_RESIDUAL_SOURCE:
+    if CANARY or PQ_RESIDUAL_SOURCE or CO_SELECTION_LAYOUT:
         launch,close = (decode(read(out/n)) for n in ('aws-launch.json','aws-closeout.json'))
         require(close['state'] == 'terminated' and close['nodes'] == launch['nodes'] == {'0':{'instance_id':instance_id}}
             and launch['instance_id'] == instance_id, 'canary collection requires SAME acknowledged ID terminated/waited')
@@ -1930,7 +2277,7 @@ def collect(s3, prefix, out, instance_id, commit, digest):
     require(terminal['instance_id'] == instance_id and terminal['source_commit'] == commit
             and terminal['source_archive_sha256'] == digest and terminal['prefix'] == prefix
             and terminal['schema'] == SCHEMA and set(terminal['artifacts']) <= set(ARTIFACTS), 'original terminal identity')
-    if PQ_RESIDUAL_SOURCE:
+    if PQ_RESIDUAL_SOURCE or CO_SELECTION_LAYOUT:
         require(terminal['artifact_roster_sha256'] == ROSTER_SHA
             and sum(body_pin(v)['bytes'] for n,v in terminal['artifacts'].items() if n.startswith('screen/')) <= CAPS['output_bytes'],
             'PQ bounded original native collection roster')
@@ -3503,6 +3850,219 @@ sys.exit(2 if fault=='exit2' else 0)
     print(f'PASS PQ residual source glue: full406/subset, all19/eleven+doc synthetic gates; eleven opaque transfers; real tiny silent exit0/REJECT/exit2/partial/deadline/cleanup; {failures} refusals; full pins/collection/replay/every-ACK wait. No Rust/native/corpus/GT/network/AWS.')
 
 
+def co_selection_self_check():
+    """Small metadata/mock check only. No native, corpus, GT or cloud calls."""
+    import copy
+    import io
+    import tempfile
+    from contextlib import ExitStack
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+    module = sys.modules[__name__]; repo = Path(__file__).resolve().parents[1]
+    failures = 0
+    def refused(fn):
+        nonlocal failures
+        try: fn()
+        except (ValueError,OSError,AssertionError,KeyError): failures += 1
+        else: raise AssertionError('accepted invalid co-selection closure')
+    native = dict(schema='borsuk-co-selection-config-v1',panels=[],caps=dict(CO_CAPS,caller_pinned_bytes=0,deadline_seconds=600),
+        prior_reads=dict(operations=0,bytes=0))
+    metadata = []
+    for i,dataset in enumerate(('relaion','cohere')):
+        def original(j):
+            p,n,h = CO_ORIGINAL_PINS[j]; return dict(path=p,bytes=n,sha256=h)
+        panel = dict(dataset=dataset,root=original(2*i),graph=original(2*i+1),
+            identity=dict(generation=1,rows=100000,dimensions=768,source=[0]*32,layout=[0]*32,pq=[0]*32))
+        for k,n in (('canonical',308000000),('source_order',800000),('fine_order',800000),('pq',7186456)):
+            panel[k] = dict(path=str(SQ4_INPUT_ROOT/'mock'/dataset/k),bytes=n,sha256='0'*64)
+        native['panels'].append(panel)
+        metadata.append({k:dict(path=str(SQ4_INPUT_ROOT/'mock'/dataset/k),bytes=n,sha256='0'*64)
+            for k,n in (('primary_root',100),('groups',200000))})
+    native.update(original_seal=original(4),prefix=original(5))
+    descriptors = [a for i,p in enumerate(native['panels']) for a in (
+        *(p[k] for k in ('root','canonical','source_order','fine_order','pq','graph')),
+        *(metadata[i][k] for k in ('primary_root','groups')))]+[native['original_seal'],native['prefix']]
+    inputs = [dict(destination=d['path'],key='mock/source-'+str(i),bytes=d['bytes'],sha256=d['sha256']) for i,d in enumerate(descriptors)]
+    fixed = dict(FIXED,machine_limit_seconds=1200,compute_cap_usd=.20,native_caps=native['caps'],scratch=dict(
+        input_bytes=sum(d['bytes'] for d in inputs),native_output_bytes=CO_CAPS['output_bytes'],binary_bytes=CO_BINARY_PIN['bytes'],
+        source_archive_bytes=8*1024**2,bootstrap_bytes=256*1024**2,auxiliary_bytes=16*1024**2,cap_bytes=2*1024**3))
+    paths = sorted([str(CONFIG),*CODE,*(str(p) for p in CO_EVIDENCE)])
+    config = dict(schema=SCHEMA,authority_pending=False,fixed=fixed,native_config=native,native_config_sha256=sha(encoded(native)),
+        source_metadata=metadata,binary=dict(CO_BINARY_PIN,key='mock/qualified-binary'),inputs=inputs,
+        native_source=dict(commit=CO_COMMIT,full_source_identity_sha256=CO_SOURCE_ID,
+            source_sha256={n:CO_MANIFEST['source_sha256']['crates/borsuk/src/'+n] for n in CO_SOURCE_NAMES},
+            qualification_protocol_sha256=sha(encoded(CO_PROTOCOL))),native_qualification=list(CO_QUALIFICATION),
+        code_sha256={n:file_pin(repo/n)['sha256'] for n in CODE},source_archive_paths=paths,
+        source_archive_paths_sha256=sha(json.dumps(paths,separators=(',',':')).encode()))
+    validate_config(config,repo); co_selection_qualification(config,repo); sdk_guard()
+    require(canary_imports(repo,config) == config['code_sha256'], 'actual import/SDK closure')
+    for change in (lambda d:d.update(authority_pending=True),lambda d:d['binary'].update(sha256='0'*64),
+        lambda d:d['native_config'].update(truth={}),lambda d:d['native_config']['panels'][0].update(requests={}),
+        lambda d:d['native_config']['caps'].update(operations=1),lambda d:d['native_config']['caps'].update(memory_bytes=1024**3),
+        lambda d:d['native_config']['prior_reads'].update(operations=33),lambda d:d['inputs'].pop(),
+        lambda d:d['native_qualification'].pop(),lambda d:d['native_source'].update(full_source_identity_sha256='0'*64),
+        lambda d:d['fixed'].update(compute_cap_usd=.01),lambda d:d['fixed']['scratch'].update(cap_bytes=1),
+        lambda d:d['code_sha256'].update({CODE[0]:'0'*64})):
+        bad = copy.deepcopy(config); change(bad); bad['native_config_sha256']=sha(encoded(bad['native_config']))
+        refused(lambda:validate_config(bad,repo))
+    validate_config(config,repo)
+    with tempfile.TemporaryDirectory(prefix='co-selection-glue-') as tmp, ExitStack() as context:
+        base=Path(tmp); archived=base/'archive'
+        for n in (*CODE,*(str(p) for p in CO_EVIDENCE)): write(archived/n,read(repo/n))
+        write(archived/CONFIG,encoded(config)); proof=preflight(archived)
+        bootstrap=user_data('a'*40,'b'*64,'mock/archive',PREFIX+'a0001',proof)
+        require('--co-selection-layout --remote' in bootstrap and 'Delegate=cpu memory pids' in bootstrap
+            and 'on-active=1200s' in bootstrap and '--retries 0' in bootstrap and 'source archive roster' in bootstrap
+            and 'rustc' not in bootstrap and 'cargo ' not in bootstrap, 'existing frozen bootstrap/delegation/SDK/no compiler')
+        (archived/CONFIG).unlink(); refused(lambda:preflight(archived)); write(archived/CONFIG,encoded(config))
+        # The real qualification bytes are replayed, including strict counts,
+        # while all data transfers and native process behavior are synthetic.
+        input_root=base/'inputs'; context.enter_context(patch.object(module,'SQ4_INPUT_ROOT',input_root))
+        tiny=[dict(destination=str(input_root/str(i)),key='mock/'+str(i),**pin(b'x')) for i in range(18)]
+        staged=base/'stage'; staged.mkdir(); write(staged/'bootstrap/scratch.json',encoded(dict(
+            closed=True,cap_exceeded=False,interval_seconds=1,sample_count=2,peak_bytes=4096,reserve=fixed['scratch'])))
+        transferred=[]
+        s3=SimpleNamespace(get_object=lambda **kw:(transferred.append(kw['Key']) or dict(Body=io.BytesIO(b'x'),ContentLength=1)))
+        opaque=dict(config,inputs=tiny,binary=dict(key='mock/binary',**pin(b'x')))
+        real_read=read
+        def no_input_read(path,*args):
+            require(input_root not in Path(path).parents,'Python must never decode retained inputs')
+            return real_read(path,*args)
+        context.enter_context(patch.object(module,'read',side_effect=no_input_read))
+        with patch.object(module,'validate_config'),patch.object(module,'INPUT_PINS',tuple((d['destination'],d['bytes'],d['sha256']) for d in tiny)):
+            stage(s3,opaque,staged); refused(lambda:stage(s3,opaque,staged))
+        require(transferred == ['mock/binary',*(d['key'] for d in tiny)], 'binary/eighteen opaque transfers once')
+        for d in tiny: Path(d['destination']).unlink()
+        real_pin=file_pin
+        def synthetic_pin(path):
+            if str(path).endswith('/'+BINARY_NAME) and real_pin(path) == real_body_pin(b'synthetic executable'):
+                return dict(CO_BINARY_PIN)
+            if str(path).endswith('/screen/report.prefix.jsonl') and real_pin(path) == real_body_pin(b'opaque frozen prefix'):
+                return {k:native['prefix'][k] for k in ('bytes','sha256')}
+            return real_pin(path)
+        real_body_pin=pin
+        context.enter_context(patch.object(module,'pin',side_effect=lambda b:
+            dict(CO_BINARY_PIN) if b==b'synthetic executable' else
+            {k:native['prefix'][k] for k in ('bytes','sha256')} if b==b'opaque frozen prefix' else real_body_pin(b)))
+        context.enter_context(patch.object(module,'file_pin',side_effect=synthetic_pin))
+        files=dict(zip(CGROUP_FILES,(str(CO_CAPS['memory_bytes']),'4096','0','0',
+            'low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n','high 0\nmax 0\nfail 0\n',
+            '100000 100000','usage_usec 1\nuser_usec 1\nsystem_usec 0\n',str(FIXED['tasks_max']),'0','max 0\n','','populated 0\nfrozen 0\n')))
+        def fixture(name,exit_code=0,reject=False,partial=False,deadline=False,cleanup_failure=False):
+            root=base/name; root.mkdir()
+            for n,b in (('config.json',encoded(config)),('source-qualification.json',encoded(proof)),('imports.json',encoded(config['code_sha256'])),
+                        ('native-config.json',encoded(native)),(BINARY_NAME,b'synthetic executable'),('cpu.txt',b'mock'),('run-closed.log',b'')):
+                write(root/n,b)
+            write(root/'runtime-abi.json',encoded(dict(machine='x86_64',python=[3,12],os=dict(ID='ubuntu',VERSION_ID='24.04'),
+                libc=['glibc','2.39'],sdk=dict(boto3='1.40.72',botocore='1.40.72',put_object_if_none_match=True))))
+            for d in CO_QUALIFICATION: write(root/'qualification'/Path(d['path']).name,read(repo/d['path']))
+            admission=dict(config_sha256=config['native_config_sha256'],reserve=fixed['scratch'],charged_bytes=sum(
+                n for k,n in fixed['scratch'].items() if k!='cap_bytes'),free_bytes_before=4*1024**3,projected_peak_bytes=1024**3,
+                source_archive_observed_bytes=4096,bootstrap_observed_bytes=4096,
+                bootstrap=dict(closed=True,cap_exceeded=False,reserve=fixed['scratch'],sample_count=2))
+            write(root/'stage-receipt.json',encoded(dict(binary=CO_BINARY_PIN,native_config=pin(encoded(native)),
+                inputs={d['destination']:{k:d[k] for k in ('bytes','sha256')} for d in inputs},exact_eighteen_inputs=True,
+                compiler_used=False,scratch=admission)))
+            parent=base/(name+'-groups')/(SUPERVISOR_UNIT+'.service'); parent.mkdir(parents=True); group=parent/'native'
+            def delegate(record):
+                record.update(unit=SUPERVISOR_UNIT+'.service',parent=str(parent),observer=str(parent/'supervisor'),observer_pid=os.getpid(),
+                    available=sorted(CONTROLLERS),enabled=sorted(CONTROLLERS),parent_process_ids=[],observer_process_ids=[os.getpid()],parent_type='domain')
+                return group
+            def create(g): (g/'cgroup.procs').write_text('')
+            def drain(g):
+                (g/'cgroup.procs').unlink()
+                if cleanup_failure: raise OSError('synthetic drain failure')
+            def spawn(command,**kwargs):
+                require(command[1:] == [SQ4_CLI,str(root/'native-config.json'),config['native_config_sha256'],str(root/'screen/report.json')],
+                    'strict native CLI CONFIG SHA NEW_OUTPUT')
+                ceiling=dict(construction=1000,replay=1000); output=dict(total=4*1024**2)
+                maps=[]; selections=[]
+                for p in native['panels']:
+                    stem='screen/report.'+p['dataset']; header=b'BORSCS01'+bytes.fromhex(''.join(p[k]['sha256']
+                        for k in ('root','canonical','source_order','fine_order','pq','graph')))+(4096).to_bytes(4,'little')+(512).to_bytes(4,'little')
+                    write(root/(stem+'.selections.bin'),header+bytes(4608*52))
+                    selected=dict(path=str(root/(stem+'.selections.bin')),**real_pin(root/(stem+'.selections.bin'))); selections.append(selected)
+                    mapping=dict(schema='borsuk-co-selection-map-v1',config_sha256=config['native_config_sha256'],
+                        diagnostic_source_sha256=config['native_source']['source_sha256'],source=p,source_selections=selected,caps=native['caps'],
+                        work_preflight=ceiling,output_preflight=output,held_anchor_count=512,held_used_for_fitting=False,group_rows=16,
+                        blocks_per_object=128,replication_factor=1,short_tail_last=True,query_blind=True,within_group_order='unchanged',
+                        original_sources=metadata[len(maps)],objects=[dict(payload_materialized=False,payload_sha256=None,payload_etag=None)])
+                    write(root/(stem+'.map.json'),encoded(mapping)); maps.append(dict(path=str(root/(stem+'.map.json')),**real_pin(root/(stem+'.map.json'))))
+                held=[]; plans=[]
+                for i,p in enumerate(native['panels']):
+                    for j in range(512): held.append(encoded(dict(dataset=p['dataset'],held_ordinal=j,map=maps[i],source_selections=selections[i],
+                        used_for_fitting=False,policy_tuning=False,fits=True)))
+                    for j in range(64): plans.append(encoded(dict(phase='co_selection_plan',dataset=p['dataset'],ordinal=j,root=p['root'],
+                        map=maps[i],source_selections=selections[i],truth_opened=False,request_vectors_opened=False,sq8_bodies_opened=False,
+                        plan=dict(all_nominees_retained=True,root_sha256=p['root']['sha256'],source_sha256=p['canonical']['sha256'],
+                            prior=native['prior_reads'],fits=not (reject and i==1 and j==63),total_operations=33 if reject and i==1 and j==63 else 1,
+                            total_bytes=1))))
+                write(root/'screen/report.held.jsonl',b''.join(held)); write(root/'screen/report.plans.jsonl',b''.join(plans[:-1] if partial else plans))
+                write(root/'screen/report.prefix.jsonl',b'opaque frozen prefix')
+                details=dict(maps=maps,source_selections=selections,nomination_prefix=dict(path=str(root/'screen/report.prefix.jsonl'),
+                    **{k:native['prefix'][k] for k in ('bytes','sha256')}),plans=dict(path=str(root/'screen/report.plans.jsonl'),**real_pin(root/'screen/report.plans.jsonl')),
+                    held_diagnostics=dict(path=str(root/'screen/report.held.jsonl'),**real_pin(root/'screen/report.held.jsonl')),per_panel_fits=[64,63 if reject else 64],
+                    caps=native['caps'],prior_reads=native['prior_reads'],original_seal=native['original_seal'],delta_bytes=0,additional_attempts=0,
+                    construction_operations=1,replay_operations=1,counted_operations=2,source_auth_bytes=1,modeled_peak_owned_bytes=1,
+                    retained_capacity_bytes=0,wall_ms=1,work_preflight=ceiling,output_preflight=output)
+                write(root/'screen/report.json',encoded(dict(schema='borsuk-co-selection-diagnostic-v1',config_sha256=config['native_config_sha256'],
+                    diagnostic_source_sha256=config['native_source']['source_sha256'],complete=True,queries=128,status='REJECT' if reject else 'SURVIVED_NECESSARY_LOCALITY',
+                    standalone_authority=False,quality_or_performance_claim=False,truth_opened=False,request_vectors_opened=False,sq8_bodies_opened=False,
+                    source_only_anchor_vectors=True,requires_matching_supervisor_exit_receipt=True,details=details)))
+                process=Mock(pid=12345); process.poll.return_value=None if deadline else exit_code; process.wait.return_value=exit_code
+                return process
+            with ExitStack() as execution:
+                for method,fn in (('delegated_group',delegate),('create_group',create),('cgroup_snapshot',lambda g:dict(path=str(g),observer_pid=os.getpid(),files=copy.deepcopy(files))),('drain_group',drain)):
+                    execution.enter_context(patch.object(module,method,side_effect=fn))
+                execution.enter_context(patch.object(subprocess,'Popen',side_effect=spawn))
+                execution.enter_context(patch.dict(CAPS,deadline_seconds=.01 if deadline else 600))
+                supervise(config,root,run_id=PREFIX+'a0001/i-original')
+            return root
+        root=fixture('success'); result=validate_result(root,config)
+        require(result['status']=='SURVIVED_NECESSARY_LOCALITY' and read(root/'native.log')==b'', 'silent original exit0')
+        rejected=fixture('reject',reject=True); require(validate_result(rejected,config)['status']=='REJECT','all128 exit0 REJECT admitted')
+        partial=None
+        for name,kwargs in (('exit2',dict(exit_code=2)),('partial',dict(partial=True)),('deadline',dict(deadline=True)),('cleanup',dict(cleanup_failure=True))):
+            denied=fixture(name,**kwargs); refused(lambda:validate_result(denied,config))
+            if name=='partial': partial=denied
+        files['cpu.max']='200000 100000'; denied=fixture('pre-exec-cpu'); files['cpu.max']='100000 100000'
+        require(decode(read(denied/'native-exit.json'))['process_started'] is False, 'kernel CPU mismatch before exec')
+        refused(lambda:validate_result(denied,config))
+        for n in SQ4_OUTPUTS:
+            p=root/n; saved=read(p); p.write_bytes(saved+b'!'); refused(lambda:validate_result(root,config)); p.write_bytes(saved)
+        for n,mutate in (('native-exit.json',lambda d:d.update(process_exit_code=2)),('resources.json',lambda d:d.update(deadline_exceeded=True)),
+            ('resources.json',lambda d:d['after']['files'].update({'memory.swap.peak':'1'})),('cleanup.json',lambda d:d.update(drain_complete=False)),
+            ('scratch.json',lambda d:d.update(cap_exceeded=True)),('imports.json',lambda d:d.clear())):
+            p=root/n; saved=read(p); d=decode(saved); mutate(d); p.write_bytes(encoded(d)); refused(lambda:validate_result(root,config)); p.write_bytes(saved)
+        store={}; gets=[]
+        def get(**kw): gets.append(kw['Key']); b=store[kw['Key']]; return dict(Body=io.BytesIO(b),ContentLength=len(b))
+        def put(**kw): require(kw['IfNoneMatch']=='*' and kw['Key'] not in store,'immutable marker-last publication'); store[kw['Key']]=kw['Body']
+        s3=SimpleNamespace(get_object=get,put_object=put)
+        for index,source,complete in ((1,root,True),(2,partial,False)):
+            prefix=PREFIX+f'a{index:04}'; exit_receipt=decode(read(source/'native-exit.json'))
+            terminal=dict(schema=SCHEMA,source_commit='a'*40,source_archive_sha256='b'*64,instance_id='i-original',prefix=prefix,
+                config_sha256=sha(encoded(config)),artifact_roster_sha256=ROSTER_SHA,status='complete' if complete else 'failed',
+                phase='complete' if complete else 'execution',exit_code=0 if complete else 96,original_exit_code=exit_receipt['process_exit_code'],
+                disposition=result['status'] if complete else 'INVALID',result=result,qualification=proof)
+            if index==2:
+                exit_receipt['run_id']=prefix+'/i-original'; (source/'native-exit.json').write_bytes(encoded(exit_receipt))
+            publish(s3,source,prefix,terminal); out=base/('collected-'+str(index))
+            write(out/'aws-reservation.json',encoded(dict(schema=SCHEMA,source_commit='a'*40,source_archive_sha256='b'*64,config_sha256=sha(encoded(config)),qualification=proof)))
+            write(out/'aws-launch.json',encoded(dict(instance_id='i-original',nodes={'0':{'instance_id':'i-original'}},prefix=prefix,source_commit='a'*40,source_archive_sha256='b'*64)))
+            write(out/'aws-closeout.json',encoded(dict(state='terminated',nodes={'0':{'instance_id':'i-original'}})))
+            collect(s3,prefix,out,'i-original','a'*40,'b'*64)
+            if complete:
+                # A fresh --replay process has no root runtime admission yet.
+                saved_cap=globals()['SQ4_SCRATCH_CAP']; globals()['SQ4_SCRATCH_CAP']=0
+                try: require(replay(out)['status']=='SURVIVED_NECESSARY_LOCALITY','fresh replay loads collected root resource authority')
+                finally: globals()['SQ4_SCRATCH_CAP']=saved_cap
+            require(replay(out)['status']==('SURVIVED_NECESSARY_LOCALITY' if complete else 'INVALID'), 'original complete/partial collect/replay')
+            for close in (dict(state='running',nodes={'0':{'instance_id':'i-original'}}),dict(state='terminated',nodes={'0':{'instance_id':'i-other'}})):
+                (out/'aws-closeout.json').write_bytes(encoded(close)); before=len(gets)
+                refused(lambda:collect(s3,prefix,out,'i-original','a'*40,'b'*64)); require(len(gets)==before,'SAME-ID termination before collection GET')
+    print(f'PASS co-selection glue: real source407/all21 qualification; strict root/native fields; opaque18; import/SDK/bootstrap; silent exit0/complete REJECT; exit2/partial/deadline/cleanup INVALID; {failures} refusals; SAME-ID collection/replay. No native/corpus/GT/cloud.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('attempt', nargs='?')
@@ -3511,13 +4071,16 @@ def main():
     parser.add_argument('--histogram-sq4', action='store_true', help='opt in to the frozen native histogram SQ4 experiment')
     parser.add_argument('--corrected-four-bit', action='store_true', help='opt in to the separately qualified corrected direction codec')
     parser.add_argument('--pq-residual-source', action='store_true', help='opt in to the separately qualified truth-free native source probe')
+    parser.add_argument('--co-selection-layout', action='store_true', help='opt in to the qualified source-only virtual layout diagnostic')
     parser.add_argument('--canary',action='store_true',help='corrected metadata/usage infrastructure admission only')
     parser.add_argument('--remote-canary',nargs=6)
     parser.add_argument('--replay-canary',type=Path)
     parser.add_argument('--replay', type=Path)
     parser.add_argument('--remote', nargs=6)
     args = parser.parse_args()
-    require(sum((args.sq4,args.histogram_sq4,args.corrected_four_bit,args.pq_residual_source)) <= 1, 'one native experiment')
+    require(sum((args.sq4,args.histogram_sq4,args.corrected_four_bit,args.pq_residual_source,args.co_selection_layout)) <= 1, 'one native experiment')
+    if args.co_selection_layout:
+        configure_co_selection_layout()
     if args.pq_residual_source:
         configure_pq_residual_source()
     if args.sq4 or args.histogram_sq4 or args.corrected_four_bit:
@@ -3530,7 +4093,9 @@ def main():
     require(sum((args.attempt is not None,args.self_check,args.replay is not None,args.remote is not None,
         args.remote_canary is not None,args.replay_canary is not None)) == 1, 'one CLI mode')
     if args.self_check:
-        if PQ_RESIDUAL_SOURCE:
+        if CO_SELECTION_LAYOUT:
+            co_selection_self_check()
+        elif PQ_RESIDUAL_SOURCE:
             pq_residual_source_self_check()
         elif CANARY:
             canary_self_check()
@@ -3548,7 +4113,7 @@ def main():
     sdk_guard()
     os.environ['AWS_MAX_ATTEMPTS'] = '1'
     os.environ['AWS_RETRY_MODE'] = 'standard'
-    with open('/tmp/borsuk-pq-residual-source-diagnostic.lock' if PQ_RESIDUAL_SOURCE else '/tmp/borsuk-corrected-four-bit-diagnostic.lock' if CORRECTED_FOUR_BIT else '/tmp/borsuk-histogram-sq4-diagnostic.lock' if HISTOGRAM_SQ4 else '/tmp/borsuk-fixed-sq4-diagnostic.lock' if SQ4 else '/tmp/borsuk-fine-pack-diagnostic.lock', 'w') as lock:
+    with open('/tmp/borsuk-co-selection-layout-diagnostic.lock' if CO_SELECTION_LAYOUT else '/tmp/borsuk-pq-residual-source-diagnostic.lock' if PQ_RESIDUAL_SOURCE else '/tmp/borsuk-corrected-four-bit-diagnostic.lock' if CORRECTED_FOUR_BIT else '/tmp/borsuk-histogram-sq4-diagnostic.lock' if HISTOGRAM_SQ4 else '/tmp/borsuk-fixed-sq4-diagnostic.lock' if SQ4 else '/tmp/borsuk-fine-pack-diagnostic.lock', 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
         lifecycle().main(args.attempt, campaign=sys.modules[__name__])
     return 0
