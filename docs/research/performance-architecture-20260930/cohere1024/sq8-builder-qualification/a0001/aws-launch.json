@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0746913d29f937c39",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0746913d29f937c39"
+    }
+  },
+  "prefix": "research/semantic-router/20261006/cohere-sq8-builder-a0001",
+  "source_commit": "971a6af0c116ec256caf7b59165712983411854f",
+  "source_archive_sha256": "975c9f3f6603f296cebe7eee236c74ab20706e56983a4146da193c87e3926620"
+}
