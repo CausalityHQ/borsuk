@@ -100,6 +100,12 @@
       "sha256": "f817d7f4fbdd640f66590f58f9e07e9218753fbec4517ba95fc405a78d612325"
     },
     {
+      "bytes": 31500,
+      "destination": "/mnt/hierarchical-100k/screen/fine/inputs/relaion/layout/manifest.json",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/inputs/relaion/layout/manifest.json",
+      "sha256": "3244e7bbd5e27eb1f3fe52cbddc450d08d45d25256eec98dc942ba42cf2808f1"
+    },
+    {
       "bytes": 200000,
       "destination": "/mnt/hierarchical-100k/screen/fine/layouts/relaion/groups.bin",
       "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/groups.bin",
@@ -142,6 +148,12 @@
       "sha256": "4afd895f2e684f833437f4e6d4270c4713bbeb54fe67b50919f796e95f896e2e"
     },
     {
+      "bytes": 30456,
+      "destination": "/mnt/hierarchical-100k/screen/fine/inputs/cohere/layout/manifest.json",
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/inputs/cohere/layout/manifest.json",
+      "sha256": "c2bf337290f7713139903f398ac6b4007ed01faf47ff093e7e397b2715b7b4fc"
+    },
+    {
       "bytes": 200000,
       "destination": "/mnt/hierarchical-100k/screen/fine/layouts/cohere/groups.bin",
       "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/groups.bin",
@@ -158,18 +170,6 @@
       "destination": "/mnt/hierarchical-100k/packing-prefix.jsonl",
       "key": "research/fine-pack-diagnostic/inputs/7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025/packing-prefix.jsonl",
       "sha256": "7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025"
-    },
-    {
-      "bytes": 31500,
-      "destination": "/mnt/hierarchical-100k/screen/fine/inputs/relaion/layout/manifest.json",
-      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/inputs/relaion/layout/manifest.json",
-      "sha256": "3244e7bbd5e27eb1f3fe52cbddc450d08d45d25256eec98dc942ba42cf2808f1"
-    },
-    {
-      "bytes": 30456,
-      "destination": "/mnt/hierarchical-100k/screen/fine/inputs/cohere/layout/manifest.json",
-      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/inputs/cohere/layout/manifest.json",
-      "sha256": "c2bf337290f7713139903f398ac6b4007ed01faf47ff093e7e397b2715b7b4fc"
     }
   ],
   "native_config": {
