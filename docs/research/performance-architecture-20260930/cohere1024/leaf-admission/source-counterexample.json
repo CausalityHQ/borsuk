@@ -1,0 +1,22 @@
+{
+  "status": "SOURCE_DERIVED_ADMISSION_DEFECT",
+  "qualified_revision": "2941dfc9578e02404d77c71aed8f12fc8bdcf0a3",
+  "source_sha256": "c4ce39e40095c75d81eb62615b542d2a2c891183e99503f037f407f46739e8d3",
+  "profile": "native100k",
+  "dimensions": 1024,
+  "selected_leaves": 16,
+  "units_per_leaf": 64,
+  "encoded_unit_bytes": 2052,
+  "legal_selected_body_bytes": 2101248,
+  "current_admission_bytes": 2097152,
+  "shortfall_bytes": 4096,
+  "evidence": [
+    "valid_geometry permits D1024",
+    "encoded leaves retain LEu32 unit ID plus D fp16 centroid coefficients",
+    "selected width permits16 leaves",
+    "validate_selected and generation admit_leaves use selected_leaf_bytes before serving"
+  ],
+  "disposition": "Repair byte bound and execute actual authenticated sixteen-leaf native regression before real-data baseline. Keep leaf width, SOURCE/SQ8 query budgets and caller memory unchanged.",
+  "native_reproduction_executed": false,
+  "quality_or_performance_rejection": false
+}
