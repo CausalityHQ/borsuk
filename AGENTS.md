@@ -89,6 +89,15 @@ Rust correctness work. See `docs/research/performance-architecture-20260930/sing
 Published Turbopuffer results do not disclose exact selected IDs/query split;
 dataset-family agreement alone does not establish a matched measured win.
 
+Cohere is an evaluation fixture, not a specialization of the library. Keep
+Rust indexing, routing, scoring, storage and maintenance independent of
+dataset names, model names, fixed corpus populations and benchmark query
+splits. Admit dimensions and resource limits explicitly; any supported
+dimension ceiling must be documented and tested, rather than silently
+assuming D1024. Benchmark-specific choices belong in experiment configuration
+and fixtures. A Cohere result proves performance on that workload only; it
+does not establish generalization to other vector distributions.
+
 ## Experiment admission order
 
 Before each new paid cold or performance experiment:
