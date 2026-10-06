@@ -1,0 +1,122 @@
+{
+  "passed": true,
+  "payload_gets": 0,
+  "requests": 16,
+  "rows": [
+    {
+      "etag": "\"979efa1c4a5acf3cdff1b350a4f4efc0\"",
+      "expected_bytes": 22721,
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/manifest.json",
+      "length_passed": true,
+      "observed_bytes": 22721
+    },
+    {
+      "etag": "\"bef4eddc80334b1d2c36a863193637dc-37\"",
+      "expected_bytes": 308000000,
+      "key": "research/hierarchical-cells/20261004/constrained-split-falsifier-a0002/artifacts/screen/retained/relaion/canonical.bin",
+      "length_passed": true,
+      "observed_bytes": 308000000
+    },
+    {
+      "etag": "\"88e677fadc833d94c35a8c6993581201\"",
+      "expected_bytes": 800000,
+      "key": "research/hierarchical-cells/20261004/constrained-split-falsifier-a0002/artifacts/screen/retained/relaion/order",
+      "length_passed": true,
+      "observed_bytes": 800000
+    },
+    {
+      "etag": "\"0de681f68b3b97a30feba9aea1f77e84\"",
+      "expected_bytes": 800000,
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/order.bin",
+      "length_passed": true,
+      "observed_bytes": 800000
+    },
+    {
+      "etag": "\"b09fd139b3d89527cb6aeb8bef817c44\"",
+      "expected_bytes": 7186456,
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/pq.bin",
+      "length_passed": true,
+      "observed_bytes": 7186456
+    },
+    {
+      "etag": "\"d16d2c07d0935605cb010aa6c94e78e5-4\"",
+      "expected_bytes": 26712462,
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/graph.bin",
+      "length_passed": true,
+      "observed_bytes": 26712462
+    },
+    {
+      "etag": "\"afeba266f78f73ff148f2324560983dc\"",
+      "expected_bytes": 200000,
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/relaion/groups.bin",
+      "length_passed": true,
+      "observed_bytes": 200000
+    },
+    {
+      "etag": "\"0aee3eb9c11ddf0670821fc589666c02\"",
+      "expected_bytes": 22815,
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/manifest.json",
+      "length_passed": true,
+      "observed_bytes": 22815
+    },
+    {
+      "etag": "\"8ec4bd86308d994b4d12f98e8926242d-37\"",
+      "expected_bytes": 308000000,
+      "key": "research/hierarchical-cells/20261004/constrained-split-falsifier-a0002/artifacts/screen/retained/cohere/canonical.bin",
+      "length_passed": true,
+      "observed_bytes": 308000000
+    },
+    {
+      "etag": "\"a4bf1bbbd7fa87e98f4842a5b239fd90\"",
+      "expected_bytes": 800000,
+      "key": "research/hierarchical-cells/20261004/constrained-split-falsifier-a0002/artifacts/screen/retained/cohere/order",
+      "length_passed": true,
+      "observed_bytes": 800000
+    },
+    {
+      "etag": "\"554126f1bf4c87b8bb126ab63669f4c9\"",
+      "expected_bytes": 800000,
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/order.bin",
+      "length_passed": true,
+      "observed_bytes": 800000
+    },
+    {
+      "etag": "\"76f2cfcd71e52909054b02d7385ce846\"",
+      "expected_bytes": 7186456,
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/pq.bin",
+      "length_passed": true,
+      "observed_bytes": 7186456
+    },
+    {
+      "etag": "\"e43efb63a0bacfb2bca4c6d763fb030e-4\"",
+      "expected_bytes": 26844914,
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/graph.bin",
+      "length_passed": true,
+      "observed_bytes": 26844914
+    },
+    {
+      "etag": "\"10250f877d321062800181238e710aca\"",
+      "expected_bytes": 200000,
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/layouts/cohere/groups.bin",
+      "length_passed": true,
+      "observed_bytes": 200000
+    },
+    {
+      "etag": "\"cc96085c430ea6e9b335d852cfeadf07\"",
+      "expected_bytes": 1109,
+      "key": "research/fine-pack-diagnostic/inputs/374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62/packing-original-seal.json",
+      "length_passed": true,
+      "observed_bytes": 1109
+    },
+    {
+      "etag": "\"a41460e8a27b35d6670bd83a2d94c463\"",
+      "expected_bytes": 1665668,
+      "key": "research/fine-pack-diagnostic/inputs/7abcf7830e10d214999b26fb499cebf925e16b8a88a931ddb9f981ad3d28d025/packing-prefix.jsonl",
+      "length_passed": true,
+      "observed_bytes": 1665668
+    }
+  ],
+  "schema": "borsuk-co-selection-input-head-preflight-v1",
+  "time_utc": "2026-10-06T03:25:19.581036+00:00",
+  "whole_body_authenticated": false
+}
