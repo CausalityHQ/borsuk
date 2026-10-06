@@ -418,20 +418,20 @@ def validate_co_selection_config(config, base=None):
             p,n,h = CO_ORIGINAL_PINS[j]
             require(panel[key] == dict(path=p,bytes=n,sha256=h), 'co-selection original closed root/graph pin')
         descriptors.extend(panel[k] for k in ('root','canonical','source_order','fine_order','pq','graph'))
-        descriptors.extend(metadata[i][k] for k in ('primary_root','groups'))
+        descriptors.append(metadata[i]['groups'])  # Native opens groups; primary_root is descriptor-only.
     for key,j in (('original_seal',4),('prefix',5)):
         p,n,h = CO_ORIGINAL_PINS[j]
         require(native[key] == dict(path=p,bytes=n,sha256=h), 'co-selection closed seal/prefix pin')
         descriptors.append(native[key])
-    for d in descriptors:
+    for d in (*descriptors, *(p['primary_root'] for p in metadata)):
         path = Path(d['path'])
         require(set(d) == {'path','bytes','sha256'} and path.is_absolute() and Path(CO_ORIGINAL_PINS[4][0]).parent in path.parents
             and str(path) == d['path'] and '..' not in path.parts and len(str(path)) <= 4096,
             'co-selection retained absolute source path')
         require(body_pin({k:d[k] for k in ('bytes','sha256')},max_bytes=308000000)['bytes'] > 0, 'co-selection source artifact pin')
     inputs = config['inputs']
-    require(len(inputs) == 18 and len({d['destination'] for d in inputs}) == len({d['key'] for d in inputs}) == 18,
-        'co-selection exact eighteen distinct opaque sources/metadata')
+    require(len(inputs) == 16 and len({d['destination'] for d in inputs}) == len({d['key'] for d in inputs}) == 16,
+        'co-selection exact sixteen distinct opaque sources/metadata')
     for d,a in zip(inputs,descriptors):
         require(set(d) == {'destination','key','bytes','sha256'} and {k:d[k] for k in ('bytes','sha256')} == {k:a[k] for k in ('bytes','sha256')}
             and d['destination'] == a['path'], 'co-selection transport binds native source; no payload/GT/request extras')
@@ -1305,7 +1305,7 @@ def stage(s3, config, root):
                   exact_six_inputs=True, compiler_used=False)
     if SQ4:
         del result['exact_six_inputs']
-        result['canary_metadata_only' if CANARY else 'exact_eleven_inputs' if PQ_RESIDUAL_SOURCE else 'exact_nineteen_inputs' if CORRECTED_FOUR_BIT else 'exact_eighteen_inputs'] = True
+        result['canary_metadata_only' if CANARY else 'exact_sixteen_inputs' if CO_SELECTION_LAYOUT else 'exact_eleven_inputs' if PQ_RESIDUAL_SOURCE else 'exact_nineteen_inputs' if CORRECTED_FOUR_BIT else 'exact_eighteen_inputs'] = True
         result['scratch'] = scratch
     if CANARY:
         result.update(heads=heads,dataset_body_gets=0,selected_get_keys=[config['binary']['key'],selected[0]['key']])
@@ -1558,7 +1558,7 @@ def validate_sq4_result(root, config):
     validate_resources(resource)
     require(all(cleanup.get(k) is True for k in ('drain_complete','cleanup_complete','output_durable')), 'SQ4 native cleanup/durability')
     stage_receipt = decode(read(root/'stage-receipt.json'))
-    staged_count = 'exact_eleven_inputs' if PQ_RESIDUAL_SOURCE else 'exact_nineteen_inputs' if CORRECTED_FOUR_BIT else 'exact_eighteen_inputs'
+    staged_count = 'exact_sixteen_inputs' if CO_SELECTION_LAYOUT else 'exact_eleven_inputs' if PQ_RESIDUAL_SOURCE else 'exact_nineteen_inputs' if CORRECTED_FOUR_BIT else 'exact_eighteen_inputs'
     require(set(stage_receipt) == {'binary','native_config','inputs',staged_count,'compiler_used','scratch'}
         and stage_receipt['binary'] == binary and stage_receipt['native_config'] == pin(encoded(config['native_config']))
         and stage_receipt['inputs'] == {d['destination']:{k:d[k] for k in ('bytes','sha256')} for d in config['inputs']}
@@ -3881,7 +3881,7 @@ def co_selection_self_check():
     native.update(original_seal=original(4),prefix=original(5))
     descriptors = [a for i,p in enumerate(native['panels']) for a in (
         *(p[k] for k in ('root','canonical','source_order','fine_order','pq','graph')),
-        *(metadata[i][k] for k in ('primary_root','groups')))]+[native['original_seal'],native['prefix']]
+        metadata[i]['groups'])]+[native['original_seal'],native['prefix']]
     inputs = [dict(destination=d['path'],key='mock/source-'+str(i),bytes=d['bytes'],sha256=d['sha256']) for i,d in enumerate(descriptors)]
     fixed = dict(FIXED,machine_limit_seconds=1200,compute_cap_usd=.20,native_caps=native['caps'],scratch=dict(
         input_bytes=sum(d['bytes'] for d in inputs),native_output_bytes=CO_CAPS['output_bytes'],binary_bytes=CO_BINARY_PIN['bytes'],
@@ -3900,6 +3900,10 @@ def co_selection_self_check():
         lambda d:d['native_config'].update(truth={}),lambda d:d['native_config']['panels'][0].update(requests={}),
         lambda d:d['native_config']['caps'].update(operations=1),lambda d:d['native_config']['caps'].update(memory_bytes=1024**3),
         lambda d:d['native_config']['prior_reads'].update(operations=33),lambda d:d['inputs'].pop(),
+        lambda d:d['inputs'].append(dict(destination=d['source_metadata'][0]['primary_root']['path'],
+            key='mock/extra-primary-root',**{k:d['source_metadata'][0]['primary_root'][k] for k in ('bytes','sha256')})),
+        lambda d:d['source_metadata'][0]['primary_root'].update(sha256='invalid'),
+        lambda d:d['source_metadata'][0]['groups'].update(sha256='1'*64),
         lambda d:d['native_qualification'].pop(),lambda d:d['native_source'].update(full_source_identity_sha256='0'*64),
         lambda d:d['fixed'].update(compute_cap_usd=.01),lambda d:d['fixed']['scratch'].update(cap_bytes=1),
         lambda d:d['code_sha256'].update({CODE[0]:'0'*64})):
@@ -3918,7 +3922,7 @@ def co_selection_self_check():
         # The real qualification bytes are replayed, including strict counts,
         # while all data transfers and native process behavior are synthetic.
         input_root=base/'inputs'; context.enter_context(patch.object(module,'SQ4_INPUT_ROOT',input_root))
-        tiny=[dict(destination=str(input_root/str(i)),key='mock/'+str(i),**pin(b'x')) for i in range(18)]
+        tiny=[dict(destination=str(input_root/str(i)),key='mock/'+str(i),**pin(b'x')) for i in range(16)]
         staged=base/'stage'; staged.mkdir(); write(staged/'bootstrap/scratch.json',encoded(dict(
             closed=True,cap_exceeded=False,interval_seconds=1,sample_count=2,peak_bytes=4096,reserve=fixed['scratch'])))
         transferred=[]
@@ -3930,8 +3934,9 @@ def co_selection_self_check():
             return real_read(path,*args)
         context.enter_context(patch.object(module,'read',side_effect=no_input_read))
         with patch.object(module,'validate_config'),patch.object(module,'INPUT_PINS',tuple((d['destination'],d['bytes'],d['sha256']) for d in tiny)):
-            stage(s3,opaque,staged); refused(lambda:stage(s3,opaque,staged))
-        require(transferred == ['mock/binary',*(d['key'] for d in tiny)], 'binary/eighteen opaque transfers once')
+            staged_receipt=stage(s3,opaque,staged); refused(lambda:stage(s3,opaque,staged))
+        require(transferred == ['mock/binary',*(d['key'] for d in tiny)] and staged_receipt['exact_sixteen_inputs'] is True,
+            'binary/sixteen opaque transfers once; primary_root body never fetched')
         for d in tiny: Path(d['destination']).unlink()
         real_pin=file_pin
         def synthetic_pin(path):
@@ -3961,7 +3966,7 @@ def co_selection_self_check():
                 source_archive_observed_bytes=4096,bootstrap_observed_bytes=4096,
                 bootstrap=dict(closed=True,cap_exceeded=False,reserve=fixed['scratch'],sample_count=2))
             write(root/'stage-receipt.json',encoded(dict(binary=CO_BINARY_PIN,native_config=pin(encoded(native)),
-                inputs={d['destination']:{k:d[k] for k in ('bytes','sha256')} for d in inputs},exact_eighteen_inputs=True,
+                inputs={d['destination']:{k:d[k] for k in ('bytes','sha256')} for d in inputs},exact_sixteen_inputs=True,
                 compiler_used=False,scratch=admission)))
             parent=base/(name+'-groups')/(SUPERVISOR_UNIT+'.service'); parent.mkdir(parents=True); group=parent/'native'
             def delegate(record):
@@ -4060,7 +4065,7 @@ def co_selection_self_check():
             for close in (dict(state='running',nodes={'0':{'instance_id':'i-original'}}),dict(state='terminated',nodes={'0':{'instance_id':'i-other'}})):
                 (out/'aws-closeout.json').write_bytes(encoded(close)); before=len(gets)
                 refused(lambda:collect(s3,prefix,out,'i-original','a'*40,'b'*64)); require(len(gets)==before,'SAME-ID termination before collection GET')
-    print(f'PASS co-selection glue: real source407/all21 qualification; strict root/native fields; opaque18; import/SDK/bootstrap; silent exit0/complete REJECT; exit2/partial/deadline/cleanup INVALID; {failures} refusals; SAME-ID collection/replay. No native/corpus/GT/cloud.')
+    print(f'PASS co-selection glue: real source407/all21 qualification; strict root/native fields; opaque16/primary-root descriptor-only; import/SDK/bootstrap; silent exit0/complete REJECT; exit2/partial/deadline/cleanup INVALID; {failures} refusals; SAME-ID collection/replay. No native/corpus/GT/cloud.')
 
 
 def main():
