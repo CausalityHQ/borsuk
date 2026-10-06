@@ -86,5 +86,16 @@
   "drained": true,
   "actual_full_workspace_execution": false,
   "ann_quality_or_performance_measured": false,
-  "next_gate": "Authenticated source teachers, fixed fitting, sealed held-source top100 agreement; no vendor win claim."
+  "next_gate": "Authenticated source teachers, fixed fitting, sealed held-source top100 agreement; no vendor win claim.",
+  "actual_log_start_completed_pairs_verified": 4,
+  "independent_ec2_state": "terminated",
+  "compiler_stage_wall_times": [
+    "4:40.86",
+    "14:57.59",
+    "4:41.56",
+    "6:55.23"
+  ],
+  "compiler_scope_peak_bytes": 8589934592,
+  "compiler_memory_max_reclaim_events": 5352,
+  "compiler_times_are_not_ann_latency": true
 }
