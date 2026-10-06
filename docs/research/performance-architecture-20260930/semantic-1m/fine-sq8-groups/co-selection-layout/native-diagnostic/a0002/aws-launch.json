@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-09ab7f20a64016329",
+  "nodes": {
+    "0": {
+      "instance_id": "i-09ab7f20a64016329"
+    }
+  },
+  "prefix": "research/hierarchical-cells/20261006/co-selection-layout-diagnostic-a0002",
+  "source_commit": "7cbcdce671da7c4a25b3ff19cd755cacdd3a9aa4",
+  "source_archive_sha256": "b17f5ddc8599ae54048cd2d8f389927d6d91583c72f862c14bc7ab94c3cefd70"
+}

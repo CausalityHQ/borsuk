@@ -1,0 +1,131 @@
+{
+  "schema": "borsuk-co-selection-layout-diagnostic-spot-v1",
+  "source_commit": "7cbcdce671da7c4a25b3ff19cd755cacdd3a9aa4",
+  "source_archive_sha256": "b17f5ddc8599ae54048cd2d8f389927d6d91583c72f862c14bc7ab94c3cefd70",
+  "source_archive_key": "research/native-library-check/sources/b17f5ddc8599ae54048cd2d8f389927d6d91583c72f862c14bc7ab94c3cefd70.tar.gz",
+  "wall_seconds": 9000,
+  "instance_type": "c7i.2xlarge",
+  "image_id": "ami-0b8a830d6339a9758",
+  "root_device_name": "/dev/sda1",
+  "availability_zone": "eu-central-1a",
+  "subnet_id": "subnet-034528fbd6977848f",
+  "spot_price_observed_usd_per_hour": "0.216000",
+  "spot_quote_timestamp": "2026-10-06T04:00:00+00:00",
+  "spot_max_usd_per_hour": 0.6,
+  "compute_cap_usd": 1.5,
+  "ebs_s3_allowance_usd": 0.15,
+  "total_cost_measured": false,
+  "cost_scope": "9000s at capped Spot rate; boot/termination overhead and EBS/S3 allowance estimated",
+  "qualification": {
+    "config_path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/native-diagnostic/config.json",
+    "config_sha256": "0aecf0091a391502bb08df7cf2fff469989b7f906e80fa620231d12527d1810a",
+    "campaign_schema": "borsuk-co-selection-layout-diagnostic-spot-v1",
+    "artifact_roster_sha256": "c4d5ad51504c16c97bde2adb117d58a432946098fba5cfe9b8ff0a2c8452a930",
+    "native_config_sha256": "c3e2df5a8c821d3890351f8d3b73d5b8efc4348653962072f993594bc72efd71",
+    "binary": {
+      "bytes": 13549088,
+      "key": "research/semantic-router/20261006/co-selection-implementation-a0001/artifacts/binaries/hierarchical_semantic_cells",
+      "sha256": "1db976a4a29de491cf03c14fe7246330124e1fa4d479d4895dd30f84507d7672"
+    },
+    "native_source_commit": "510bde198af4f28952db2fc85a42018472b23fdc",
+    "source_identity_sha256": "64fe7b41484ece6a6379c716727e9407c9a1d48e0a44e71669c8994c3e32289c",
+    "code_sha256": {
+      "scripts/check_native_metadata_ranges_build.py": "da48c53562220026c8024ba2400dca2ba897aa12d49c3e27c3c2fb40b9f0770e",
+      "scripts/check_native_metadata_ranges_stats.py": "3c17d3202d7d67247d6502428f17a8e981414f58261007ad6fcf794367aea8f3",
+      "scripts/check_native_startup_build.py": "5abfe3678bf59454871277238baa1de0901610a04b1e3712cbb09b563c48ef52",
+      "scripts/check_native_startup_stats.py": "56b4989f5be09f5fdfee424862c32372e42762a7a0b7b8290e6f4b35c3354a29",
+      "scripts/launch_fine_pack_diagnostic.py": "332772710781ed4c7d9f549281baee6ff783a1c01bcc02b2a21a8f2da02de38b",
+      "scripts/launch_native_metadata_ranges_cold_spot.py": "f1dfdb56d08f864594c4dadbdbae593b61d5285f60703712e91865ebd0a9d0e2",
+      "scripts/launch_native_peer_1m_spot.py": "2400984ffd1ca0073f19978dd9b6453c44b62ec4e2c2dca7c1bbbfc5df988b0c",
+      "scripts/launch_native_startup_profile_spot.py": "4a36bef97d45e8a12efffd8861a8be7e455f513fed495fcbeeb88a81975ba94d",
+      "scripts/launch_v157_primary_feasibility_spot.py": "882319282e6f496c1634daf1692f38c8694c3ebdf2918725dfb3c0ec5afe198b",
+      "scripts/launch_v174_relaid_bind_compile_spot.py": "bd8edfedd68567a715f98824ce4e43a29a5dcde564b45eb47517f5182383c43a",
+      "scripts/rest_coexistence_load.py": "04c0eed4709d569509ad89012754fbfe996170b2ee6f49388790357af6a70fdd",
+      "scripts/run_native_cold_first_query.py": "b4afffd43df8e2ab617749a50fd099fd279e57631e0dcb749b75169ad269a99f",
+      "scripts/run_native_metadata_ranges_cold.py": "1322fe19b705caeab275bce69ea6b4a9f2ed84cb6505dcbfe01b25301fdb71b8",
+      "scripts/run_native_peer_1m_worker.py": "8c84ed799fc0a2e00e991bfcf8ac81102dede8c9a505ac55e5c220d09cad93d3",
+      "scripts/run_native_peer_offered_http.py": "7c86bab8c78a75ef42b20f54c0e91ab5e247e0b521f47de06f89b7b6fdc4610b",
+      "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
+      "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6"
+    },
+    "native_qualification": [
+      {
+        "bytes": 139307,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates/a0001/source-qualification.json.gz",
+        "sha256": "b547d9720456a5bd3d51da0994111820b77982261c1061687b51eeb0280ab6a0"
+      },
+      {
+        "bytes": 27807,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates/a0001/workspace-receipt.json.gz",
+        "sha256": "9f5c8c4a92dfd78a819b5e2bb949bfa458f4da19b4f492b431f7e53ff0d89998"
+      },
+      {
+        "bytes": 3163,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates/a0001/aws-terminal.json",
+        "sha256": "9e90853c5eee44753d4508491794386bec675ff1ece0dee0742481b006acdafb"
+      },
+      {
+        "bytes": 136,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates/a0001/aws-closeout.json",
+        "sha256": "df0fe523c0499b7c7fa7a3e2580e7e66444d8239bcd7e850510234f1146e2b84"
+      },
+      {
+        "bytes": 19775,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates/a0001/source-before.json.gz",
+        "sha256": "ac19fb465ca2198b9be97d43b531e9c4983c942dd03bad18bcce3889fb2b134a"
+      },
+      {
+        "bytes": 19774,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates/a0001/source-after.json.gz",
+        "sha256": "5335f338e9e086e69794d64ddb3785d2645d384a8347137d1d6a3cc6ae8ff6a1"
+      },
+      {
+        "bytes": 466,
+        "path": "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates/a0001/workspace-cgroup.json.gz",
+        "sha256": "16499eee2dc4a47c5b16eec5a413ea01e56764e6dbe2bbdecbe042ccf8b6cb97"
+      }
+    ],
+    "source_archive_paths": [
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates/a0001/aws-closeout.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates/a0001/aws-terminal.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates/a0001/source-after.json.gz",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates/a0001/source-before.json.gz",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates/a0001/source-qualification.json.gz",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates/a0001/workspace-cgroup.json.gz",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates/a0001/workspace-receipt.json.gz",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates/config.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/implementation-gates/native-source-manifest.json",
+      "docs/research/performance-architecture-20260930/semantic-1m/fine-sq8-groups/co-selection-layout/native-diagnostic/config.json",
+      "scripts/check_co_selection_implementation.sh",
+      "scripts/check_native_metadata_ranges_build.py",
+      "scripts/check_native_metadata_ranges_stats.py",
+      "scripts/check_native_startup_build.py",
+      "scripts/check_native_startup_stats.py",
+      "scripts/launch_fine_pack_diagnostic.py",
+      "scripts/launch_native_metadata_ranges_cold_spot.py",
+      "scripts/launch_native_peer_1m_spot.py",
+      "scripts/launch_native_startup_profile_spot.py",
+      "scripts/launch_v157_primary_feasibility_spot.py",
+      "scripts/launch_v174_relaid_bind_compile_spot.py",
+      "scripts/rest_coexistence_load.py",
+      "scripts/run_native_cold_first_query.py",
+      "scripts/run_native_metadata_ranges_cold.py",
+      "scripts/run_native_peer_1m_worker.py",
+      "scripts/run_native_peer_offered_http.py",
+      "scripts/run_native_union_http.py",
+      "scripts/run_native_union_offered_http.py"
+    ],
+    "source_archive_paths_sha256": "85f4fdf4de6bc47b83a2202f34964978e433a478f5af4645ab0163dec7600d26",
+    "scratch": {
+      "auxiliary_bytes": 67108864,
+      "binary_bytes": 13549088,
+      "bootstrap_bytes": 1073741824,
+      "cap_bytes": 4294967296,
+      "input_bytes": 689304557,
+      "native_output_bytes": 67108864,
+      "source_archive_bytes": 134217728
+    }
+  },
+  "config_sha256": "0aecf0091a391502bb08df7cf2fff469989b7f906e80fa620231d12527d1810a",
+  "interruption_policy": "Discard interrupted worker; no automatic replacement"
+}
