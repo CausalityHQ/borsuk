@@ -1,0 +1,14 @@
+{
+  "action": "same qualifier worker minimal boolean/start-record regression repair; unchanged Rust candidate; refreeze distinct a0002",
+  "disposition": "INVALID_HARNESS_BEFORE_CARGO",
+  "independent_ec2_state": "terminated",
+  "instance_id": "i-077610ae471d88abe",
+  "native_tests_run": 0,
+  "original_exec": 66198,
+  "original_exit_status": 1,
+  "root_cause": "start-record finished empty string propagates into evidence_invalid then |= bool raises TypeError",
+  "schema": "borsuk-pq-residual-parent-verification-v1",
+  "source_before_equals_after": true,
+  "source_file_count": 406,
+  "whole_terminal_artifacts_authenticated": 13
+}
