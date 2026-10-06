@@ -1,0 +1,29 @@
+{
+  "schema": "borsuk-co-selection-closed-mandatory-dispersion-v1",
+  "source_report_sha256": "df9a0837e675f01bf6011872d80c7c1e039532033f05e3708fe1af272d797784",
+  "row_bytes": 780,
+  "byte_cap": 16777216,
+  "panels": [
+    {
+      "dataset": "relaion",
+      "queries": 64,
+      "failed": 16,
+      "max_mandatory_row_bytes": 8224320,
+      "max_mandatory_cover_bytes": 34831680,
+      "failed_with_intrinsic_mandatory_bytes_over_cap": 0,
+      "max_cover_to_mandatory_ratio": 4.643926788685524,
+      "request_cap_infeasible": 0
+    },
+    {
+      "dataset": "cohere",
+      "queries": 64,
+      "failed": 31,
+      "max_mandatory_row_bytes": 8748480,
+      "max_mandatory_cover_bytes": 28928640,
+      "failed_with_intrinsic_mandatory_bytes_over_cap": 0,
+      "max_cover_to_mandatory_ratio": 3.351118760757315,
+      "request_cap_infeasible": 0
+    }
+  ],
+  "interpretation": "Closed cover failure includes overfetch above intrinsic mandatory row bytes; no universal rearrangement feasibility, quality or 100M inference."
+}
