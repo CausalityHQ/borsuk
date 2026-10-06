@@ -1,0 +1,25 @@
+{
+  "schema": "borsuk-selector-root-launch-receipt-v1",
+  "attempt": "a0001",
+  "exec_session": 77933,
+  "instance_id": "i-072a4527e3a43ef9b",
+  "bundle_commit": "3769d22a88f9c57e9ce3b9557e3cafccb2a96d62",
+  "source_archive_sha256": "c0965e75f185597baafce07171b01e8368d9ead61ac7cc20b61006272b4e49ef",
+  "source_file_count": 408,
+  "source_identity_sha256": "919ae78c976aa080ca8fa9c3a4e9909c50ac7bcb91b14dda545d09bcf22d2075",
+  "preflight": {
+    "exit_status": 0,
+    "runtime_seconds": 1.373,
+    "reported_memory_peak": "64.6M",
+    "swap_bytes": 0,
+    "invocation": "782306bc06df4881bd61d71c06fb242d"
+  },
+  "bootstrap_preflight_original": {
+    "exit_status": 1,
+    "cause": "unmaterialized sparse worktree; no scripts import",
+    "invocation": "3deebbb763034ad78d2db64504df8e21",
+    "native_execution": false
+  },
+  "native_result": "PENDING",
+  "production_qualified": false
+}

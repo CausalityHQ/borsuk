@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-072a4527e3a43ef9b",
+  "nodes": {
+    "0": {
+      "instance_id": "i-072a4527e3a43ef9b"
+    }
+  },
+  "prefix": "research/semantic-router/20261006/budget-object-selector-implementation-a0001",
+  "source_commit": "3769d22a88f9c57e9ce3b9557e3cafccb2a96d62",
+  "source_archive_sha256": "c0965e75f185597baafce07171b01e8368d9ead61ac7cc20b61006272b4e49ef"
+}
