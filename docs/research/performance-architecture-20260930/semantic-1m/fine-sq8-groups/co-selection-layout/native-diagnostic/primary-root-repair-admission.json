@@ -1,0 +1,28 @@
+{
+  "schema": "borsuk-co-selection-primary-root-repair-admission-v1",
+  "status": "HEAD_LENGTH_PASS",
+  "whole_body_authenticated": false,
+  "heads": 2,
+  "gets": 0,
+  "additional_bytes": 61956,
+  "repaired_input_bytes": 689304557,
+  "required_inputs": 18,
+  "inputs": [
+    {
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/inputs/relaion/layout/manifest.json",
+      "destination": "/mnt/hierarchical-100k/screen/fine/inputs/relaion/layout/manifest.json",
+      "bytes": 31500,
+      "sha256": "3244e7bbd5e27eb1f3fe52cbddc450d08d45d25256eec98dc942ba42cf2808f1",
+      "observed_bytes": 31500
+    },
+    {
+      "key": "research/hierarchical-cells/20261005/fine-sq8-paired100k-a0002/artifacts/screen/fine/inputs/cohere/layout/manifest.json",
+      "destination": "/mnt/hierarchical-100k/screen/fine/inputs/cohere/layout/manifest.json",
+      "bytes": 30456,
+      "sha256": "c2bf337290f7713139903f398ac6b4007ed01faf47ff093e7e397b2715b7b4fc",
+      "observed_bytes": 30456
+    }
+  ],
+  "failed_attempt": "a0001",
+  "native_config_unchanged": true
+}
