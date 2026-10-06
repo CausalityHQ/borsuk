@@ -470,7 +470,7 @@
     },
     "schema": "borsuk-co-selection-config-v1"
   },
-  "native_config_sha256": "2d7484dc322ce67ae3460a2bdd189de2ef36962c03485833f095c5b3d6533111",
+  "native_config_sha256": "c3e2df5a8c821d3890351f8d3b73d5b8efc4348653962072f993594bc72efd71",
   "native_qualification": [
     {
       "bytes": 139307,
