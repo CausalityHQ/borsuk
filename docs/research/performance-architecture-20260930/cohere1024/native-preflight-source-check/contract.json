@@ -1,0 +1,235 @@
+{
+  "status": "SOURCE_COMMITTED_UNVERIFIED",
+  "base": "d3f163f498beb26c58ee1155bd82092100c2c50b",
+  "branch": "devbox/native-preflight-glue (this worktree, from d3f163f4; 9b656e05 branch devbox/native-generation-publisher preserved)",
+  "owned_file": "scripts/run_cohere_native_preflight.py (new; nothing else changes)",
+  "cli": [
+    "run_cohere_native_preflight.py CONFIG CONFIG_SHA NEW_OUTPUT",
+    "run_cohere_native_preflight.py --owned-stage SPEC SPEC_SHA RECEIPT   (internal re-exec used by probe.native_stage; same as the source-witness runner)",
+    "run_cohere_native_preflight.py --self-check   (mocks only, CPU1/256MiB/noSwap/120s)"
+  ],
+  "reuse": {
+    "supervisor": "scripts.run_hierarchical_global_leaf_probe.native_stage (systemd-run unit, MemoryMax/MemorySwapMax=0/CPUQuota/TasksMax/KillMode, kill+stop+drain, closure json)",
+    "silent_success_log": "scripts.run_source_witness_paired_coverage.owned_stage (empty-log tolerated only when exit0+cleanup+resource gate passed and the 0-byte log SHA is authenticated) -- imported unchanged, patching probe.__file__ exactly as source-witness does so --owned-stage re-enters THIS file; used because the publisher prints nothing on success",
+    "helpers": "prepare_hierarchical_cells_100k (local.*: identity/authenticate/read_json/write_json/load_config), prepare_semantic_positive_inputs (positive.*), prepare_native_semantic_publication (publication.transfer)",
+    "needs_env": "BORSUK_GLOBAL_LEAF_SLICE root-owned systemd slice (already required by native_stage)",
+    "not_changed": "no edits to shared modules; if the silent-log seam cannot be reused narrowly I will consult root rather than fork it"
+  },
+  "config": {
+    "format": "JSON <= 128KiB via local.load_config, SHA must equal CONFIG_SHA, deny unknown fields",
+    "schema": "borsuk-cohere-native-preflight-config-v1",
+    "fields": {
+      "run_id": "[a-z0-9-]{1,128}",
+      "source_identity_sha256": "root-supplied qualified native source identity, recorded verbatim",
+      "binaries": "{preparer, sq8, generation, publisher, baseline}: each {path (absolute),bytes,sha256}, <=256MiB, authenticated before spawn and after each stage (run_stage does this); roles: prepare_cohere_native_cohort, build_sq8_source example (modes normalize/fit/build), build_two_bit_generation, publish_two_bit_generation, check_cohere_native_baseline",
+      "shards": "[2] {publisher_path:'en/0000.parquet'|'en/0001.parquet', path (absolute local), bytes, sha256}; whole bodies already authenticated by root; passed through to the preparer which re-authenticates them; Python never opens/decodes Parquet",
+      "document_id_column": "string passed to preparer config (embedding column fixed 'emb')",
+      "preparer_limits": "{modeled_memory_bytes,max_footer_bytes,max_row_group_rows,max_row_group_compressed_bytes,max_row_group_uncompressed_bytes,batch_rows,max_batch_bytes,max_id_bytes} copied into preparer config; runner fixes cpu_limit=4, actual_memory_bytes=8GiB, swap_bytes=0, scratch_bytes=8GiB, timeout_seconds=2400 (the preparer's own frozen envelope)",
+      "payload_cap_bytes": "MAX_PAYLOAD_BYTES passed to normalize/fit/build_sq8_source and MAX_MEMORY_BYTES to build_two_bit_generation",
+      "publisher_limits": "all 10 TwoBitGenerationLimits fields, explicit, forwarded to the publisher config",
+      "phase_seconds": "{prepare<=2400,normalize<=600,fit<=1800,sq8<=600,generation<=1200,publish<=600,baseline<=1800}; deadline_seconds<=9600 (root proposal maxima, hard caps in helper)",
+      "deadline_seconds": "whole-run wall deadline (root-owned)",
+      "admission": "{path,bytes,sha256} root-supplied completed admission receipt (<=64KiB), schema borsuk-cohere-native-preflight-v1-admission; REPLACES authority_pending/qualification; rejected before ANY native call"
+    }
+  },
+  "fixed_constants": {
+    "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+    "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+    "rows": 100000,
+    "queries": 1000,
+    "dimensions": 1024,
+    "k": 10,
+    "corpus_bytes": 409600000,
+    "queries_bytes": 4096000,
+    "truth_bytes": 80000,
+    "profile": "native100k",
+    "discovery": "semantic",
+    "generation": 1,
+    "base_epoch": 0,
+    "store_prefix": "semantic/index",
+    "sq8_key": "semantic/objects/<sq8_sha256>",
+    "fit": "ordinary `fit` (NOT hier-fit)"
+  },
+  "output_layout": "NEW_OUTPUT created exclusively (mkdir exist_ok=False, outside /mnt/hierarchical-100k); never overwritten/resumed. Children: config.json, prepared/ (preparer NEW_OUTPUT_DIR: corpus.f32 queries.f32 truth.u64 ... complete.json), normalized.f32, order.u64, sq8.bin, store/ (LocalFileSystem root: semantic/objects/<sq8_sha256> staged copy + semantic/index/ head), generation/, configs/*.json (per-stage frozen configs/invocation specs), publish-receipt.json, scratch/, baseline-result.jsonl, <stage>.log/-stage.json/-closure.json/-stage-receipt.json/-unit.log (supervisor), execution-receipt.json, terminal.json (last, inventory of every file with bytes+sha256)",
+  "serial_native_calls": [
+    {
+      "name": "prepare",
+      "cpu": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "memory": "8GiB",
+      "argv": "preparer CONFIG SHA OUT/prepared",
+      "config": "runner-generated preparer config; output_parent = {path: OUT, device, inode} of the actual created directory",
+      "reads": "prepared/complete.json only (native marker receipt: outputs[].name/bytes/sha256 for corpus.f32, queries.f32, truth.u64)",
+      "checks": "byte lengths equal the fixed constants; each output streamed through local.authenticate against the receipt SHA; contents never decoded"
+    },
+    {
+      "name": "normalize",
+      "cpu": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "memory": "8GiB",
+      "argv": "sq8 normalize prepared/corpus.f32 CORPUS_SHA 100000 1024 CAP OUT/normalized.f32",
+      "reads": "stdout JSON {normalized_sha256}; output re-authenticated by streaming SHA AND must be exactly ROWS*DIMS*4 = 409600000 bytes before fit starts"
+    },
+    {
+      "name": "fit",
+      "cpu": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "memory": "8GiB",
+      "argv": "sq8 fit OUT/normalized.f32 NORM_SHA 100000 1024 CAP OUT/order.u64",
+      "reads": "stdout JSON {order_sha256,rows:100000}; order.u64 must be 800000 bytes with that SHA"
+    },
+    {
+      "name": "sq8",
+      "cpu": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "memory": "8GiB",
+      "argv": "sq8 OUT/normalized.f32 NORM_SHA 1024 OUT/order.u64 ORDER_SHA CAP OUT/sq8.bin",
+      "reads": "stdout JSON {low[1024],step[1024],sq8_sha256,rows}; low/step kept as raw JSON number tokens (never float-reserialized)"
+    },
+    {
+      "name": "stage-sq8 (Python, no native process)",
+      "action": "streamed authenticated publication.transfer of sq8.bin to store/semantic/objects/<sq8_sha256>, then ETag = '\"%x-%x-%x\"' % (st_ino, st_mtime_ns//1000, st_size) from the FINAL key (object_store 0.14.1 local.rs get_etag, verified in the locked registry source); no later mutation/touch"
+    },
+    {
+      "name": "generation",
+      "cpu": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "memory": "8GiB",
+      "argv": "generation CONFIG SHA CAP OUT/generation",
+      "config": "build_two_bit_generation config: discovery semantic, semantic_profile native100k, order{path,sha256}, raw=normalized, sq8, rows 100000, dimensions 1024, generation 1, base_epoch 0, low, step, sq8_object_key, sq8_etag",
+      "reads": "stdout = generation root SHA (64 hex)"
+    },
+    {
+      "name": "publish",
+      "cpu": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "memory": "8GiB",
+      "argv": "publisher CONFIG SHA OUT/publish-receipt.json",
+      "config": "borsuk-two-bit-local-publication-config-v1: root{path: OUT/generation, sha256}, store_root OUT/store, prefix semantic/index, limits=publisher_limits",
+      "reads": "publish-receipt.json (native receipt: root_sha256, generation 1, control_epoch, metadata_prefix); log is legitimately EMPTY -> the imported silent-success handling"
+    },
+    {
+      "name": "baseline",
+      "cpu": [
+        0
+      ],
+      "memory": "512MiB",
+      "scratch": "8GiB",
+      "argv": "baseline CONFIG SHA OUT/baseline-result.jsonl",
+      "config": "borsuk-cohere-native-baseline-config-v1: store_root OUT/store, generation_prefix=receipt.metadata_prefix, generation_root_sha256, scratch_parent OUT/scratch, requests=prepared/queries.f32 (unchanged original), truth=prepared/truth.u64, native_source{source_sha256=NORM_SHA, sq8_sha256, source_order_sha256 from generation/plane/manifest.json}, max_memory_bytes=512MiB",
+      "reads": "nothing semantic: baseline-result.jsonl and stdout are pinned (bytes+sha256) as opaque bytes"
+    }
+  ],
+  "per_call_closure": "native_stage + stage_closure-style verification of the recorded closure: original exit 0, exact argv, unit drained, cgroup drained, inactive unit, memory.max<=cap, swap 0, exact affinity, no new OOM, wall<=phase budget, retained log byte-identical; failures keep partial evidence",
+  "resource_seam": {
+    "build_prep": {
+      "cpu_affinity": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "memory_max_bytes": 8589934592,
+      "scratch_max_bytes": 8589934592,
+      "max_log_bytes": 16777216,
+      "swap": 0,
+      "tasks": 512
+    },
+    "query": {
+      "cpu_affinity": [
+        0
+      ],
+      "memory_max_bytes": 536870912,
+      "scratch_max_bytes": 8589934592,
+      "max_log_bytes": 16777216,
+      "swap": 0,
+      "tasks": 512
+    },
+    "note": "scratch counted over the whole NEW_OUTPUT (run_stage directory_bytes(out)); timeouts per phase_seconds, whole run deadline_seconds; costs/deadlines are root-prospective, nothing hard-coded beyond the preparer's own 2400s"
+  },
+  "terminal_states": {
+    "NATIVE_CHAIN_CLOSED": "all 7 native calls exit 0 with closed/drained units and authenticated outputs; makes NO quality claim (baseline bytes pinned, not read)",
+    "BASELINE_NONZERO_EXIT": "baseline native exit != 0 after a clean closed unit; native exit code recorded verbatim, no interpretation",
+    "INVALID": "pending/pin/binary/input mismatch, resource/cgroup/OOM/timeout/log-cap, unit not drained, receipt/length/SHA mismatch, SIGTERM; error + error_type recorded; completed stage evidence preserved; later stages not run",
+    "files": "execution-receipt.json then terminal.json (status, complete, exit code 0 only for NATIVE_CHAIN_CLOSED, inventory)"
+  },
+  "never": [
+    "network/download",
+    "Parquet/f32/GT/result decoding in Python",
+    "overwrite/resume",
+    "concurrent native units",
+    "new controller/launcher/mode",
+    "edits to native source or the 9b656e05 frozen glue"
+  ],
+  "tests": "--self-check only: mocked native_stage/owned boundary + a fake native tree; negatives for pending flag, wrong binary SHA, short/oversize outputs, ETag formula vs a real temp file stat, occupied output, nonzero/closure failures, terminal inventory; no Rust, no network",
+  "unverified": true,
+  "commit": "df24af9c419dedd4ae9ac6606e999cd47d033260",
+  "file_sha256": {
+    "scripts/run_cohere_native_preflight.py": "7f19132e7fc913d3c9a5bb0450567d235506a14908ca7a80ff57cf9803aa9d2c"
+  },
+  "implementation_notes": {
+    "argv_exact": "normalize/fit/sq8 argv verified against examples/build_sq8_source.rs main (8 args incl. exe); generation = CONFIG SHA MAX_MEMORY NEW_OUTPUT; publisher = CONFIG SHA NEW_RECEIPT; baseline = CONFIG SHA NEW_OUTPUT",
+    "per_stage_config_pin": "normalize/fit/sq8 use a runner-written canonical invocation-spec JSON (borsuk-cohere-native-preflight-v1-invocation) as the run_stage config pin",
+    "closure": "native_stage verifications plus closure(): exact argv, unit inactive/MainPID 0, drained cgroup, inner CLOSED/complete, memory/peak<=cap, swap 0, exact affinity, no new OOM, wall<=phase",
+    "silent_log": "publisher success log is 0 bytes; handled by witness.owned_stage unchanged, 0-byte SHA authenticated and asserted in the self-check",
+    "baseline_nonzero": "clean closed unit + plain native exit 1..127 with no OOM/swap -> BASELINE_NONZERO_EXIT (complete=true, exit code 2, native code recorded); everything else INVALID",
+    "no_changes_to": [
+      "scripts/run_source_witness_paired_coverage.py",
+      "scripts/run_hierarchical_global_leaf_probe.py",
+      "scripts/prepare_hierarchical_cells_100k.py",
+      "native Rust",
+      "the 9b656e05 glue"
+    ]
+  },
+  "source_only_check_receipt": {
+    "command": "taskset -c 1, ulimit -d 262144, timeout 120, python3 -B scripts/run_cohere_native_preflight.py --self-check",
+    "result": "PASS rc=0 (after admission); py_compile OK",
+    "covers": [
+      "real orchestration through probe.native_stage + local.run_stage with mocked systemd/cgroup and fixture native programs (tiny geometry via patched constants)",
+      "7 calls in order with role/CPU/memory seams (build CPU0-3/8GiB, baseline CPU0/512MiB)",
+      "prepare/normalize/fit/sq8/generation/publisher/baseline argv+config consumed by fixture natives with their own assertions (low/step raw tokens, ETag shape, ids, prefixes)",
+      "negatives: prep exit/short/sha, normalize sha lie, native exit3, sq8 short, generation root lie, publish mismatch, undrained unit, baseline exit2, pending/binary/shard/column/unknown/limit/phase/qualification/cap pin errors, nooverwrite"
+    ],
+    "admission_negatives": "pending/failed status, source/prior/gate identity, nonzero or bool exit, stage count, unterminated, gate pointer SHA, role/gate binding, role SHA, basename, role swap, unknown/missing fields, old pending-false shortcut, phase/deadline over proposal maxima; every refusal asserts native_stage spy == [] and zero supervisor spawns",
+    "normalized_size_negative": "fixture norm-short: authenticated short normalized file whose reported SHA matches -> INVALID after normalize, native_stage spy == [prepare, normalize] (zero fit calls)"
+  },
+  "not_exercised": "real systemd/cgroup, real Rust natives, real Parquet/corpus; terminal inventory hashes every output byte (~1GiB at production size)",
+  "previous_commit": "946ffc6b944bcbb7ea70040bcc0814361bc6cfdd",
+  "admission_receipt": {
+    "schema": "borsuk-cohere-native-preflight-v1-admission",
+    "status": "READY_NATIVE_PREFLIGHT",
+    "fields": {
+      "source_identity_sha256": "must equal config.source_identity_sha256 (current full412)",
+      "prior_source": "{identity_sha256 (full411), relevant_source_unchanged: true}",
+      "gates": "{native_publisher (80402, current source, stage_count==6), sq8_builder (89644, prior source), generation_builder (12009, prior source)}: each {session, instance_id, source_identity_sha256, stage_count, stage_exit_statuses (all int 0, len==count), terminated:true, receipt:{path,bytes,sha256} authenticated pointer}",
+      "roles": "{preparer,publisher,baseline -> native_publisher; sq8 -> sq8_builder; generation -> generation_builder}: each {gate, binary:{path (original), bytes, sha256, local_basename}}"
+    },
+    "binding": "configured role bytes/sha256 must equal the admitted role Artifact; Path(configured.path).name must equal local_basename (root chooses exact local paths); five admitted SHAs distinct (no role swap)",
+    "scope": "helper validates the pinned root admission schema/status/identity/roles and gate exits0/terminated; it does NOT recreate the native assurance verifier. Root creates the receipt only after the closed gates."
+  },
+  "durability_note": "receipt records that only the publish receipt file and parent dir are fsynced; LocalFileSystem receipt readback is no guarantee that object bodies were fsynced"
+}
