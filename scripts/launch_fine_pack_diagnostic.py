@@ -4,6 +4,7 @@ CLI: aNNNN | --self-check | --replay OUT. Remote --remote is bootstrap-only.
 --sq4 explicitly selects the root-frozen native SQ4 experiment.
 --histogram-sq4 selects the separate learned-codebook experiment.
 --corrected-four-bit selects the separately qualified direction codec.
+--pq-residual-source selects the separately qualified truth-free source probe.
 --corrected-four-bit --canary aNNNN runs only disposable infrastructure admission.
 --remote-canary is bootstrap-only; --replay-canary OUT authenticates its closure.
 No compiler, query runner, packing algorithm, retries or replacement instances.
@@ -96,6 +97,13 @@ SQ4 = False
 HISTOGRAM_SQ4 = False
 CORRECTED_FOUR_BIT = False
 CANARY = False
+PQ_RESIDUAL_SOURCE = False
+PQ_ROOT = ROOT.parent/'sq4-refinement/pq-residual'
+PQ_EVIDENCE = (PQ_ROOT/'implementation-gates/source-contract-7bb862b2.json',
+    PQ_ROOT/'implementation-gates/native-source-manifest.json',
+    PQ_ROOT/'implementation-gates/config.json', PQ_ROOT/'source-probe/native-config-draft.json',
+    PQ_ROOT/'source-probe/transport-draft.json', Path('scripts/check_pq_residual_implementation.sh'))
+PQ_CONTRACT, PQ_MANIFEST, PQ_DRAFT, PQ_TRANSPORT, PQ_PROTOCOL, PQ_EVIDENCE_PINS = {}, {}, {}, {}, {}, {}
 SCIENCE_STATE = {}
 CANARY_BINARY_PIN = dict(bytes=10608320, sha256='1cba6503a6a51fad193110b2c2dd6cee324b1cdb8f4235761a9afa6c4b24d00c')
 CORRECTED_ROOT = ROOT.parent/'sq4-refinement/corrected-rabitq'
@@ -219,6 +227,103 @@ def configure_sq4(*, histogram=False, corrected=False):
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def configure_pq_residual_source():
+    """Reuse the packing transport/supervisor; never qualify a pending binary."""
+    global PQ_RESIDUAL_SOURCE, SQ4, ROOT, CONFIG, SCHEMA, PREFIX, TOKEN_PREFIX, TAG, REMOTE_ROOT
+    global CAPS, FIXED, WALL, COMPUTE_CAP, NATIVE_COMMIT, SOURCE_ID, INPUT_PINS
+    global SQ4_CLI, SQ4_OUTPUTS, ARTIFACTS, ROSTER_SHA, SQ4_SCRATCH_CAP
+    global PQ_CONTRACT, PQ_MANIFEST, PQ_DRAFT, PQ_TRANSPORT, PQ_PROTOCOL, PQ_EVIDENCE_PINS
+    require(not SQ4 or PQ_RESIDUAL_SOURCE, 'one native experiment')
+    if PQ_RESIDUAL_SOURCE:
+        return
+    import shlex
+    repo = Path(__file__).resolve().parents[1]
+    bodies = [read(repo/p) for p in PQ_EVIDENCE]
+    PQ_CONTRACT, PQ_MANIFEST, gates, PQ_DRAFT, PQ_TRANSPORT = map(decode, bodies[:5])
+    stages = [shlex.split(line)[1:] for line in bodies[5].decode().splitlines() if line.startswith('run_stage ')]
+    PQ_PROTOCOL = dict(stages=[(s[0],s[1:]) for s in stages], mandatory_tests=gates['mandatory_tests'])
+    require(len(stages) == 19 and len({s[0] for s in stages}) == 19
+        and set(PQ_CONTRACT['test_names']) == {n for k,v in gates['mandatory_tests'].items()
+            if k.startswith('pq-residual-') and k != 'pq-residual-doc-tests' for n in v}
+        and len(gates['mandatory_tests']['pq-residual-doc-tests']) == 1, 'PQ all19 and eleven+doc native protocol')
+    PQ_EVIDENCE_PINS = {str(p):pin(b) for p,b in zip(PQ_EVIDENCE,bodies)}
+    PQ_RESIDUAL_SOURCE = SQ4 = True  # Shared scratch/opaque staging and supervisor only.
+    ROOT = PQ_ROOT/'source-probe/native-diagnostic'; CONFIG = ROOT/'config.json'
+    SCHEMA = 'borsuk-pq-residual-source-diagnostic-spot-v1'
+    PREFIX = 'research/hierarchical-cells/20261006/pq-residual-source-diagnostic-'
+    TOKEN_PREFIX, TAG = 'pq-residual-source-', 'borsuk-pq-residual-source-diagnostic'
+    REMOTE_ROOT = Path('/mnt/pq-residual-source-diagnostic')
+    CAPS = dict(cpu_threads=1, memory_bytes=1024**3, swap_bytes=0,
+        deadline_seconds=600, operations=20000000000, output_bytes=64*1024**2)
+    SQ4_SCRATCH_CAP = 4*1024**3
+    WALL, COMPUTE_CAP = 1500, .25
+    FIXED = dict(FIXED, machine_limit_seconds=WALL, compute_cap_usd=COMPUTE_CAP, native_caps=CAPS)
+    NATIVE_COMMIT, SOURCE_ID = '', ''  # Completed root qualification supplies executable pins.
+    INPUT_PINS = tuple((d['destination'],d['bytes'],d['sha256']) for d in PQ_TRANSPORT['inputs'])
+    require(len(INPUT_PINS) == 11 and sum(p[1] for p in INPUT_PINS) == 172419557, 'PQ exact eleven opaque inputs')
+    SQ4_CLI = 'check-pq-residual-source'
+    SQ4_OUTPUTS = ('screen/report.json', *(f'screen/report.pq-residual-{i}-{suffix}' for i in range(2)
+        for suffix in ('book.bin','groups.bin','sq8.bin','cohort.bin','root.json')),
+        *(f'screen/report.pq-residual-{suffix}.json' for suffix in ('selections','anchors','results','freeze')))
+    ARTIFACTS = (*ARTIFACTS[:12], 'scratch.json', *SQ4_OUTPUTS,
+        *('qualification/'+n for n in SQ4_RECEIPTS))
+    ROSTER_SHA = sha(json.dumps(ARTIFACTS,separators=(',',':')).encode())
+
+
+def validate_pq_residual_config(config, base=None):
+    global FIXED, NATIVE_COMMIT, SOURCE_ID
+    require(set(config) == {'schema','authority_pending','fixed','native_config','native_config_sha256',
+        'binary','inputs','native_source','native_qualification','code_sha256','source_archive_paths',
+        'source_archive_paths_sha256'} and config['schema'] == SCHEMA and config['authority_pending'] is False,
+        'PQ frozen root authority; pending qualification cannot launch')
+    fixed = config['fixed']
+    require(set(fixed) == set(FIXED)|{'scratch'} and all(encoded(fixed[k]) == encoded(FIXED[k])
+        for k in FIXED if k != 'scratch'), 'PQ CPU1/1GiB/noSwap/600s; machine1500s/.25+.15/Spot.60')
+    authority = config['native_source']
+    require(set(authority) == {'commit','full_source_identity_sha256','source_identity_sha256','source_sha256',
+        'qualification_protocol_sha256'} and authority['commit'] == PQ_MANIFEST['native_source_commit']
+        and authority['full_source_identity_sha256'] == PQ_MANIFEST['source_identity_sha256']
+        and authority['source_identity_sha256'] == PQ_CONTRACT['source_identity_sha256']
+        and authority['source_identity_sha256'] != authority['full_source_identity_sha256']
+        and authority['source_sha256'] == PQ_CONTRACT['owned_source_sha256']
+        and authority['qualification_protocol_sha256'] == sha(encoded(PQ_PROTOCOL)), 'PQ exact full406/subset source authority')
+    native = config['native_config']
+    require(encoded(native) == encoded(PQ_DRAFT) and encoded(native['caps']) == encoded(CAPS)
+        and native['source_identity_sha256'] == authority['source_identity_sha256']
+        and sha(encoded(native)) == config['native_config_sha256'], 'PQ unchanged strict native config/root paths')
+    require(encoded(config['inputs']) == encoded(PQ_TRANSPORT['inputs']), 'PQ exact eleven opaque transports; no graph/requests/GT/prefix')
+    binary = config['binary']
+    require(set(binary) == {'key','bytes','sha256'} and body_pin({k:binary[k] for k in ('bytes','sha256')})['bytes'] > 0,
+        'PQ completed root binary pin required')
+    object_key(binary['key'])
+    receipts = config['native_qualification']
+    require(len(receipts) == 5 and tuple(Path(r['path']).name for r in receipts) == SQ4_RECEIPTS, 'PQ five completed root receipts')
+    for r in receipts:
+        require(set(r) == {'path','bytes','sha256'} and r['bytes'] > 0, 'PQ qualification descriptor')
+        object_key(r['path']); body_pin({k:r[k] for k in ('bytes','sha256')})
+    paths = sorted([str(CONFIG),*CODE,*(str(p) for p in PQ_EVIDENCE),*(r['path'] for r in receipts)])
+    require(config['source_archive_paths'] == paths and config['source_archive_paths_sha256'] == sha(
+        json.dumps(paths,separators=(',',':')).encode()) and set(config['code_sha256']) == set(CODE), 'PQ minimal source archive/CODE')
+    for digest in config['code_sha256'].values():
+        body_pin(dict(bytes=0,sha256=digest))
+    scratch = fixed['scratch']
+    require(set(scratch) == {'input_bytes','native_output_bytes','binary_bytes','source_archive_bytes',
+        'bootstrap_bytes','auxiliary_bytes','cap_bytes'} and all(type(n) is int and n > 0 for n in scratch.values())
+        and scratch['input_bytes'] == sum(p[1] for p in INPUT_PINS)
+        and scratch['native_output_bytes'] == CAPS['output_bytes'] and scratch['binary_bytes'] == binary['bytes']
+        and sum(n for k,n in scratch.items() if k != 'cap_bytes') <= scratch['cap_bytes'] == SQ4_SCRATCH_CAP,
+        'PQ whole-worker scratch including source/archive/venv/input/binary/output')
+    if base is not None:
+        for name,digest in config['code_sha256'].items():
+            require(file_pin(Path(base)/name)['sha256'] == digest, 'PQ CODE drift: '+name)
+        for name,identity in PQ_EVIDENCE_PINS.items():
+            require(file_pin(Path(base)/name) == identity, 'PQ evidence drift: '+name)
+        sq4_qualification(config,base)
+    FIXED = fixed
+    NATIVE_COMMIT, SOURCE_ID = authority['commit'],authority['source_identity_sha256']
+    return native
 
 
 def configure_canary():
@@ -424,7 +529,7 @@ def sq4_qualification(config, base, collected=False):
     sources = q['source_sha256']
     source_id = sha(json.dumps(sources, sort_keys=True, separators=(',', ':')).encode())
     authority = config['native_source']
-    count = 405 if CORRECTED_FOUR_BIT else 404
+    count = 406 if PQ_RESIDUAL_SOURCE else 405 if CORRECTED_FOUR_BIT else 404
     require(source_id == authority['full_source_identity_sha256'] and len(sources) == q['source_file_count'] == w['source_file_count'] == v['source_file_count'] == count
             and all(sources.get(n) == h for n,h in authority['source_sha256'].items())
             and w['source_sha256'] == sources, 'SQ4 full404 source proof')
@@ -439,6 +544,20 @@ def sq4_qualification(config, base, collected=False):
         require(before['bytes'] > 0 and before == w['artifacts']['source-after.json']
                 == t['artifacts']['source-before.json'] == t['artifacts']['source-after.json']
                 and w['artifacts'][BINARY_NAME] == binary, 'corrected original unchanged source/binary artifacts')
+    if PQ_RESIDUAL_SOURCE:
+        require(sources == PQ_MANIFEST['source_sha256'] and source_id == PQ_MANIFEST['source_identity_sha256']
+            and q['schema'] == 'borsuk-pq-residual-implementation-gates-qualification-v1'
+            and w['schema'] == 'borsuk-pq-residual-implementation-gates-receipt-v1'
+            and t['schema'] == 'borsuk-pq-residual-implementation-gates-spot-v1'
+            and t['source_file_count'] == 406 and v['qualified'] is True, 'PQ completed full406 root proof')
+        before = body_pin(w['artifacts']['source-before.json'])
+        require(before['bytes'] > 0 and before == w['artifacts']['source-after.json']
+            == t['artifacts']['source-before.json'] == t['artifacts']['source-after.json']
+            and w['artifacts'][BINARY_NAME] == binary, 'PQ unchanged source and compiled binary')
+        require(v['stages'] == w['stages'] and q['mandatory_tests'] == PQ_PROTOCOL['mandatory_tests']
+            and [(s['stage'],s['command']) for s in w['stages']] == PQ_PROTOCOL['stages'], 'PQ exact all19 stages/eleven+doc mandatory names')
+        require(q['native_source_manifest'] == dict(path=str(PQ_EVIDENCE[1]),**PQ_EVIDENCE_PINS[str(PQ_EVIDENCE[1])])
+            and q['native_source_manifest_sha256'] == PQ_EVIDENCE_PINS[str(PQ_EVIDENCE[1])]['sha256'], 'PQ qualified exact manifest')
     for value in (v, q, t):
         require(value['native_source_commit'] == authority['commit'], 'SQ4 exact native revision')
     require(all(value['source_identity_sha256'] == source_id for value in (v,q,w,t)), 'SQ4 full404 identity')
@@ -448,7 +567,7 @@ def sq4_qualification(config, base, collected=False):
             and w['qualification_sha256'] == identities['source-qualification.json']['sha256'], 'SQ4 completed qualification')
     stages = w['stages']
     required = q['mandatory_tests']
-    protocol_sha = authority['qualification_protocol_sha256'] if HISTOGRAM_SQ4 or CORRECTED_FOUR_BIT else SQ4_QUALIFICATION_PROTOCOL_SHA
+    protocol_sha = authority['qualification_protocol_sha256'] if PQ_RESIDUAL_SOURCE or HISTOGRAM_SQ4 or CORRECTED_FOUR_BIT else SQ4_QUALIFICATION_PROTOCOL_SHA
     require(stages == v['stages'] and w['mandatory_tests'] == required
             and sha(encoded(dict(stages=[(s['stage'],s['command']) for s in stages],
                                  mandatory_tests=required))) == protocol_sha, 'SQ4 exact all14 commands and mandatory roster')
@@ -601,6 +720,8 @@ def scratch_room(root, growth):
 
 
 def validate_config(config, base=None):
+    if PQ_RESIDUAL_SOURCE:
+        return validate_pq_residual_config(config, base)
     if CANARY:
         return validate_canary_config(config, base)
     if SQ4:
@@ -784,7 +905,7 @@ PY
 systemd-run --unit={SUPERVISOR_UNIT} --wait --pipe {supervisor_options}-p 'Delegate=cpu memory pids' -p DelegateSubgroup=supervisor -p RuntimeMaxSec={WALL} -p WorkingDirectory="$root" \\
  --setenv=PYTHONPATH="$root/repo" --setenv=AWS_MAX_ATTEMPTS=1 --setenv=AWS_RETRY_MODE=standard \\
  {('--setenv=TMPDIR="$TMPDIR" --setenv=TMP="$TMP" --setenv=TEMP="$TEMP" --setenv=PYTHONPYCACHEPREFIX="$PYTHONPYCACHEPREFIX" '+chr(92)) if SQ4 else chr(92)}
- "$python" -m {MODULE} {'--corrected-four-bit ' if CORRECTED_FOUR_BIT else '--histogram-sq4 ' if HISTOGRAM_SQ4 else '--sq4 ' if SQ4 else ''}{'--remote-canary' if CANARY else '--remote'} "$root/repo" "$root" '{commit}' '{archive_sha}' '{prefix}' '{qualification['config_sha256']}'
+ "$python" -m {MODULE} {'--pq-residual-source ' if PQ_RESIDUAL_SOURCE else '--corrected-four-bit ' if CORRECTED_FOUR_BIT else '--histogram-sq4 ' if HISTOGRAM_SQ4 else '--sq4 ' if SQ4 else ''}{'--remote-canary' if CANARY else '--remote'} "$root/repo" "$root" '{commit}' '{archive_sha}' '{prefix}' '{qualification['config_sha256']}'
 '''
     if CANARY:
         # The existing bootstrap and supervisor each get an observed kernel cap.
@@ -943,7 +1064,7 @@ def stage(s3, config, root):
                   exact_six_inputs=True, compiler_used=False)
     if SQ4:
         del result['exact_six_inputs']
-        result['canary_metadata_only' if CANARY else 'exact_nineteen_inputs' if CORRECTED_FOUR_BIT else 'exact_eighteen_inputs'] = True
+        result['canary_metadata_only' if CANARY else 'exact_eleven_inputs' if PQ_RESIDUAL_SOURCE else 'exact_nineteen_inputs' if CORRECTED_FOUR_BIT else 'exact_eighteen_inputs'] = True
         result['scratch'] = scratch
     if CANARY:
         result.update(heads=heads,dataset_body_gets=0,selected_get_keys=[config['binary']['key'],selected[0]['key']])
@@ -1196,7 +1317,7 @@ def validate_sq4_result(root, config):
     validate_resources(resource)
     require(all(cleanup.get(k) is True for k in ('drain_complete','cleanup_complete','output_durable')), 'SQ4 native cleanup/durability')
     stage_receipt = decode(read(root/'stage-receipt.json'))
-    staged_count = 'exact_nineteen_inputs' if CORRECTED_FOUR_BIT else 'exact_eighteen_inputs'
+    staged_count = 'exact_eleven_inputs' if PQ_RESIDUAL_SOURCE else 'exact_nineteen_inputs' if CORRECTED_FOUR_BIT else 'exact_eighteen_inputs'
     require(set(stage_receipt) == {'binary','native_config','inputs',staged_count,'compiler_used','scratch'}
         and stage_receipt['binary'] == binary and stage_receipt['native_config'] == pin(encoded(config['native_config']))
         and stage_receipt['inputs'] == {d['destination']:{k:d[k] for k in ('bytes','sha256')} for d in config['inputs']}
@@ -1222,6 +1343,8 @@ def validate_sq4_result(root, config):
         and sum(scratch['last']['roots'].values()) == scratch['last']['whole_scratch_bytes'], 'SQ4 whole-worker scratch observations')
     require({p.name for p in (root/'screen').iterdir() if not p.name.endswith('.gz')} == {Path(n).name for n in SQ4_OUTPUTS}, 'SQ4 exact native output closure')
     require(sum(file_pin(root/n)['bytes'] for n in SQ4_OUTPUTS) <= CAPS['output_bytes'], 'SQ4 native output cap')
+    if PQ_RESIDUAL_SOURCE:
+        return validate_pq_residual_outputs(root,config,original,receipt,scratch)
     body = read(root/'screen/report.json', 16384 if CORRECTED_FOUR_BIT else 8192); report = decode(body)
     require(receipt['report_sha256'] == scratch['report_sha256'] == sha(body)
         and report['schema'] == SQ4_SCHEMA+'-report-v1' and report['codec'] == SQ4_CODEC
@@ -1333,6 +1456,65 @@ def validate_sq4_result(root, config):
             and startup['packed_row_bytes'] == 396, 'histogram startup separate from payload envelope')
         result['histogram_resources'] = startup
     return result
+
+
+def validate_pq_residual_outputs(root, config, original, receipt, scratch):
+    """Authenticate Rust's sealed closure, without decoding scores or reducing hits."""
+    body = read(root/'screen/report.json',16384)
+    report = decode(body)
+    require(receipt['report_sha256'] == scratch['report_sha256'] == sha(body)
+        and report['schema'] == 'borsuk-pq-residual-source-report-v1'
+        and report['codec'] == 'borsuk-pq64-residual4-original-norm-v1'
+        and report['source_identity_sha256'] == SOURCE_ID and report['config_sha256'] == config['native_config_sha256']
+        and report['complete'] is True and report['status'] in ('SURVIVED_SOURCE_NEIGHBORHOODS','REJECT')
+        and report['standalone_authority'] is report['quality_or_performance_claim'] is False
+        and report['requests_opened'] is report['truth_opened'] is False
+        and report['requires_matching_supervisor_exit_receipt'] is True, 'PQ original native report binding/scope')
+    require(file_pin(root/'native.log')['bytes'] <= 4*1024**2, 'PQ bounded native log (silent exit0 supported)')
+    details = report['details']
+    require(all(type(details[k]) is int and details[k] == n for k,n in
+        (('rows',100000),('dimensions',768),('cohort',4096),('anchors',64),('k',100),('scratch_bytes',0)))
+        and details['strict_retained_authority'] is True and details['native_query_constant'] is True
+        and details['candidate_query_constant'] is False, 'PQ frozen native mechanism geometry/conventions')
+    admission = details['admission']
+    require(set(admission) == {'cumulative_read_bytes','operations','coexisting_bytes','output_bytes','scratch_bytes'}
+        and type(admission['cumulative_read_bytes']) is int and admission['cumulative_read_bytes'] >= 0
+        and all(type(admission[k]) is int and 0 <= admission[k] <= n for k,n in
+        (('operations',CAPS['operations']),('coexisting_bytes',CAPS['memory_bytes']),
+         ('output_bytes',CAPS['output_bytes']),('scratch_bytes',config['native_config']['scratch_bytes'])))
+        and type(details['operations']) is int and 0 <= details['operations'] <= admission['operations'], 'PQ native admitted resource bounds')
+    def bound(descriptor, name):
+        require(descriptor == dict(path=str(original/name),**file_pin(root/name)), 'PQ sealed full-body pin: '+name)
+    freeze_name = 'screen/report.pq-residual-freeze.json'
+    bound(details['freeze'],freeze_name)
+    freeze = decode(read(root/freeze_name))
+    require(freeze['schema'] == 'borsuk-pq-residual-freeze-v1'
+        and freeze['config_sha256'] == config['native_config_sha256'] and freeze['source_identity_sha256'] == SOURCE_ID
+        and freeze['requests_opened'] is freeze['truth_opened'] is False
+        and freeze['all_results_sealed_before_reduction'] is True, 'PQ native pre-reduction closure')
+    for field in ('selection','anchors','results'):
+        bound(freeze[field],f'screen/report.pq-residual-{"selections" if field == "selection" else field}.json')
+    generations = [n for n in SQ4_OUTPUTS if re.search(r'pq-residual-[01]-',n)]
+    require(freeze['artifacts'] == [dict(path=str(original/n),**file_pin(root/n)) for n in generations]
+        and freeze['generations'] == [dict(path=str(original/n),**file_pin(root/n)) for n in generations if n.endswith('-root.json')],
+        'PQ exact ten generation artifacts/two roots')
+    for i,panel in enumerate(config['native_config']['panels']):
+        generation = decode(read(root/f'screen/report.pq-residual-{i}-root.json'))
+        require(generation['schema'] == 'borsuk-pq-residual-source-generation-v1'
+            and generation['codec'] == report['codec'] and generation['trainer'] == 'extrema-f64-endpoint256-even-dp16-nearest-lowest-v1'
+            and generation['config_sha256'] == config['native_config_sha256'] and generation['source_identity_sha256'] == SOURCE_ID
+            and generation['source_root'] == panel['root'] and generation['requests_opened'] is generation['truth_opened'] is False
+            and generation['rows'] == 100000 and generation['dimensions'] == 768
+            and generation['source_passes_authenticated'] == 3 and generation['encoded_rows'] == 4096, 'PQ native generation/source binding')
+        for field,offset in (('source_groups',1),('source_order',2),('source_pq',3),('source_records',4)):
+            d = config['inputs'][i*5+offset]
+            require(generation[field] == dict(path=d['destination'],bytes=d['bytes'],sha256=d['sha256']), 'PQ original opaque source descriptor')
+        for field,suffix in (('book','book.bin'),('cohort_residual_groups','groups.bin'),('cohort_native','sq8.bin'),('cohort_residual','cohort.bin')):
+            bound(generation[field],f'screen/report.pq-residual-{i}-{suffix}')
+    return dict(valid_diagnostic=True,status=report['status'],standalone_authority=False,
+        requires_matching_supervisor_exit_receipt=True,quality_or_performance_claim=False,
+        native_config_sha256=config['native_config_sha256'],binary={k:config['binary'][k] for k in ('bytes','sha256')},
+        report_sha256=sha(body),freeze=details['freeze'])
 
 
 def validate_corrected_outputs(root, config, original, report, body):
@@ -1735,7 +1917,7 @@ def replay(out):
 
 
 def collect(s3, prefix, out, instance_id, commit, digest):
-    if CANARY:
+    if CANARY or PQ_RESIDUAL_SOURCE:
         launch,close = (decode(read(out/n)) for n in ('aws-launch.json','aws-closeout.json'))
         require(close['state'] == 'terminated' and close['nodes'] == launch['nodes'] == {'0':{'instance_id':instance_id}}
             and launch['instance_id'] == instance_id, 'canary collection requires SAME acknowledged ID terminated/waited')
@@ -1748,6 +1930,10 @@ def collect(s3, prefix, out, instance_id, commit, digest):
     require(terminal['instance_id'] == instance_id and terminal['source_commit'] == commit
             and terminal['source_archive_sha256'] == digest and terminal['prefix'] == prefix
             and terminal['schema'] == SCHEMA and set(terminal['artifacts']) <= set(ARTIFACTS), 'original terminal identity')
+    if PQ_RESIDUAL_SOURCE:
+        require(terminal['artifact_roster_sha256'] == ROSTER_SHA
+            and sum(body_pin(v)['bytes'] for n,v in terminal['artifacts'].items() if n.startswith('screen/')) <= CAPS['output_bytes'],
+            'PQ bounded original native collection roster')
     for name, identity in terminal['artifacts'].items():
         body_pin(identity)
         response = s3.get_object(Bucket=BUCKET, Key=prefix+'/artifacts/'+name)
@@ -3035,6 +3221,288 @@ def canary_self_check():
     print('PASS corrected canary source-only: actual all405/all15 metadata and real imports/SDK; synthetic usage exit2; HEAD20/GET2; pending/drift/SHA/noGT/resource/cleanup/ACK/collection/replay/GO mismatch refusals. No AWS/network/native science.')
 
 
+def pq_residual_source_self_check():
+    """Synthetic receipts/opaque bytes and real tiny subprocesses; no native/data/AWS."""
+    import copy
+    import io
+    import tempfile
+    from contextlib import ExitStack
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+    from datetime import timezone
+    module = sys.modules[__name__]
+    require(PQ_RESIDUAL_SOURCE and len(INPUT_PINS) == 11 and sum(p[1] for p in INPUT_PINS) == 172419557,
+        'actual committed eleven-input roster')
+    # Native source is read only through git show. No Rust compiler or binary runs.
+    identity = hashlib.sha256(b'borsuk-pq-residual-source-closure-v1')
+    for name in ('lib.rs','pq_residual_four_bit.rs','pq64_nominee.rs','fine_sq8_groups.rs','sq8_source.rs',
+                 'exact_sq8_nominee.rs','hierarchical_semantic_cells.rs','bin/hierarchical_semantic_cells.rs'):
+        body = subprocess.check_output(['git','show',PQ_MANIFEST['native_source_commit']+':crates/borsuk/src/'+name])
+        identity.update(len(name).to_bytes(8,'little')); identity.update(name.encode())
+        identity.update(len(body).to_bytes(8,'little')); identity.update(body)
+        if name == 'fine_sq8_groups.rs':
+            for suffix in ('book.bin','groups.bin','sq8.bin','cohort.bin','root.json'):
+                require(('pq-residual-{index}-'+suffix).encode() in body, 'actual Rust generation output name')
+            for suffix in ('selections','anchors','results','freeze'):
+                require(('pq-residual-'+suffix+'.json').encode() in body, 'actual Rust seal output name')
+    require(identity.hexdigest() == PQ_CONTRACT['source_identity_sha256']
+        and sha(json.dumps(PQ_MANIFEST['source_sha256'],sort_keys=True,separators=(',',':')).encode())
+            == PQ_MANIFEST['source_identity_sha256'] != identity.hexdigest(), 'actual distinct full406 and compiled subset identities')
+    failures = 0
+    def refused(fn):
+        nonlocal failures
+        try:fn()
+        except (ValueError,OSError,AssertionError,KeyError):failures += 1
+        else:raise AssertionError('unsafe closure accepted')
+    fake = (f'#!{sys.executable}\n'+r'''
+import hashlib,json,os,sys,time
+from pathlib import Path
+assert sys.argv[1]=='check-pq-residual-source' and len(sys.argv)==5
+config=Path(sys.argv[2]);digest=sys.argv[3];report=Path(sys.argv[4]);c=json.loads(config.read_bytes())
+assert hashlib.sha256(config.read_bytes()).hexdigest()==digest
+assert os.environ['BORSUK_CPU_THREADS']==os.environ['RAYON_NUM_THREADS']=='1'
+source=c['source_identity_sha256'];codec='borsuk-pq64-residual4-original-norm-v1';fault=os.environ.get('PQ_GLUE_FAKE','')
+def emit(suffix,v):
+ p=report if suffix is None else report.with_suffix('.pq-residual-'+suffix)
+ b=v if isinstance(v,bytes) else (json.dumps(v,sort_keys=True,separators=(',',':'))+'\n').encode()
+ p.write_bytes(b)
+ return dict(path=str(p),bytes=len(b),sha256=hashlib.sha256(b).hexdigest())
+selection=emit('selections.json',b'opaque native selections')
+if fault in ('partial','deadline'):
+ emit(None,dict(status='INVALID',complete=False))
+ if fault=='deadline':time.sleep(10)
+ sys.exit(2)
+assets=[];roots=[]
+for i,panel in enumerate(c['panels']):
+ pins=[emit(str(i)+'-'+s,b'opaque native '+s.encode()) for s in ('book.bin','groups.bin','sq8.bin','cohort.bin')]
+ root=dict(schema='borsuk-pq-residual-source-generation-v1',codec=codec,trainer='extrema-f64-endpoint256-even-dp16-nearest-lowest-v1',
+  config_sha256=digest,source_identity_sha256=source,source_root=panel['root'],requests_opened=False,truth_opened=False,
+  rows=100000,dimensions=768,source_passes_authenticated=3,encoded_rows=4096)
+ for field,pin in zip(('book','cohort_residual_groups','cohort_native','cohort_residual'),pins):root[field]=pin
+ for field,name in (('source_groups','groups.bin'),('source_order','order.bin'),('source_pq','pq.bin'),('source_records','records.bin')):
+  p=Path(panel['root']['path']).parent/name;b=p.read_bytes();root[field]=dict(path=str(p),bytes=len(b),sha256=hashlib.sha256(b).hexdigest())
+ rp=emit(str(i)+'-root.json',root);assets.extend(pins+[rp]);roots.append(rp)
+anchors=emit('anchors.json',b'opaque native anchors');results=emit('results.json',b'opaque native results')
+freeze=emit('freeze.json',dict(schema='borsuk-pq-residual-freeze-v1',config_sha256=digest,source_identity_sha256=source,
+ selection=selection,anchors=anchors,results=results,artifacts=assets,generations=roots,requests_opened=False,truth_opened=False,
+ all_results_sealed_before_reduction=True))
+emit(None,dict(schema='borsuk-pq-residual-source-report-v1',codec=codec,source_identity_sha256=source,config_sha256=digest,
+ status='REJECT' if fault=='REJECT' else 'SURVIVED_SOURCE_NEIGHBORHOODS',complete=True,standalone_authority=False,
+ requires_matching_supervisor_exit_receipt=True,quality_or_performance_claim=False,requests_opened=False,truth_opened=False,
+ details=dict(rows=100000,dimensions=768,cohort=4096,anchors=64,k=100,scratch_bytes=0,strict_retained_authority=True,
+ native_query_constant=True,candidate_query_constant=False,freeze=freeze,operations=1,
+ admission=dict(cumulative_read_bytes=11,operations=1,coexisting_bytes=4096,output_bytes=1048576,scratch_bytes=0))))
+sys.exit(2 if fault=='exit2' else 0)
+''').encode()
+    retained = copy.deepcopy(PQ_TRANSPORT['inputs'])
+    with tempfile.TemporaryDirectory(prefix='pq-glue-check-') as tmp, ExitStack() as context:
+        base = Path(tmp); input_root = base/'inputs'
+        inputs = [dict(d,key='mock/input-'+str(i),bytes=1,sha256=sha(b'x'),
+            destination=str(input_root/Path(d['destination']).relative_to(SQ4_INPUT_ROOT))) for i,d in enumerate(retained)]
+        native = copy.deepcopy(PQ_DRAFT)
+        for i in range(2):native['panels'][i]['root'] = dict(path=inputs[i*5]['destination'],bytes=1,sha256=sha(b'x'))
+        native['original_seal'] = dict(path=inputs[-1]['destination'],bytes=1,sha256=sha(b'x'))
+        context.enter_context(patch.object(module,'SQ4_INPUT_ROOT',input_root))
+        context.enter_context(patch.object(module,'INPUT_PINS',tuple((d['destination'],1,sha(b'x')) for d in inputs)))
+        context.enter_context(patch.object(module,'PQ_TRANSPORT',dict(PQ_TRANSPORT,inputs=inputs)))
+        context.enter_context(patch.object(module,'PQ_DRAFT',native))
+        binary = dict(pin(fake),key='mock/native')
+        authority = dict(commit=PQ_MANIFEST['native_source_commit'],full_source_identity_sha256=PQ_MANIFEST['source_identity_sha256'],
+            source_identity_sha256=PQ_CONTRACT['source_identity_sha256'],source_sha256=PQ_CONTRACT['owned_source_sha256'],
+            qualification_protocol_sha256=sha(encoded(PQ_PROTOCOL)))
+        stages = []
+        for i,(name,command) in enumerate(PQ_PROTOCOL['stages']):
+            required = PQ_PROTOCOL['mandatory_tests'].get(name,[])
+            stages.append(dict(stage=name,command=command,started_at=f'2026-10-06T00:00:{i:02}Z',finished_at=f'2026-10-06T00:00:{i:02}Z',
+                exit_status=0,gate_status=0,log_exit_status=0,tests_run=len(required) if required else None,
+                required_test_passes={n:1 for n in required}))
+        common = dict(native_source_commit=authority['commit'],source_identity_sha256=authority['full_source_identity_sha256'],source_file_count=406)
+        q = dict(common,schema='borsuk-pq-residual-implementation-gates-qualification-v1',mandatory_test_names_pending=False,
+            source_sha256=PQ_MANIFEST['source_sha256'],mandatory_tests=PQ_PROTOCOL['mandatory_tests'],
+            native_source_manifest=dict(path=str(PQ_EVIDENCE[1]),**PQ_EVIDENCE_PINS[str(PQ_EVIDENCE[1])]),
+            native_source_manifest_sha256=PQ_EVIDENCE_PINS[str(PQ_EVIDENCE[1])]['sha256'])
+        old = pin(b'unchanged source inventory')
+        w = dict(common,schema='borsuk-pq-residual-implementation-gates-receipt-v1',mandatory_test_names_pending=False,
+            qualified=True,command_started=True,command_completed=True,source_unchanged=True,exit_status=0,gate_status=0,
+            qualification_sha256=sha(encoded(q)),source_sha256=PQ_MANIFEST['source_sha256'],stages=stages,
+            mandatory_tests=PQ_PROTOCOL['mandatory_tests'],artifacts={'source-before.json':old,'source-after.json':old,BINARY_NAME:pin(fake)})
+        close = dict(state='terminated',nodes={'0':{'instance_id':'i-qualified-synthetic'}})
+        t = dict(common,schema='borsuk-pq-residual-implementation-gates-spot-v1',status='complete',phase='complete',exit_code=0,
+            original_exit_code=0,instance_id='i-qualified-synthetic',source_qualification_sha256=sha(encoded(q)),
+            native_source_manifest_sha256=q['native_source_manifest_sha256'],
+            artifacts={'source-before.json':old,'source-after.json':old,'workspace-receipt.json':pin(encoded(w)),BINARY_NAME:pin(fake)})
+        v = dict(common,qualified=True,stages=stages,source_before_equals_after=True,all_source_blobs_independently_matched=True,
+            artifact_hashes_independently_verified=True,descendants_drained=True,original_controller_exit_status=0,
+            swap_peak_bytes=0,oom=0,binary=pin(fake),instance_closeout=close)
+        receipts = []
+        for name,value in zip(SQ4_RECEIPTS,(v,q,w,t,close)):
+            path=Path('synthetic-qualification')/name;write(base/path,encoded(value));receipts.append(dict(path=str(path),**pin(encoded(value))))
+        fixed = copy.deepcopy(FIXED)
+        fixed['scratch'] = dict(input_bytes=11,native_output_bytes=CAPS['output_bytes'],binary_bytes=len(fake),
+            source_archive_bytes=8*1024**2,bootstrap_bytes=256*1024**2,auxiliary_bytes=16*1024**2,cap_bytes=SQ4_SCRATCH_CAP)
+        paths = sorted([str(CONFIG),*CODE,*(str(p) for p in PQ_EVIDENCE),*(r['path'] for r in receipts)])
+        config = dict(schema=SCHEMA,authority_pending=False,fixed=fixed,native_config=native,native_config_sha256=sha(encoded(native)),
+            binary=binary,inputs=inputs,native_source=authority,native_qualification=receipts,
+            code_sha256={n:file_pin(n)['sha256'] for n in CODE},source_archive_paths=paths,
+            source_archive_paths_sha256=sha(json.dumps(paths,separators=(',',':')).encode()))
+        for name in (*CODE,*(str(p) for p in PQ_EVIDENCE)):write(base/name,read(name))
+        write(base/CONFIG,encoded(config));validate_config(config,base)
+        proof = preflight(base)
+        bootstrap = user_data('a'*40,'b'*64,'mock/source',PREFIX+'a0001',proof)
+        require('--pq-residual-source --remote' in bootstrap and 'Delegate=cpu memory pids' in bootstrap
+            and 'on-active=1500s' in bootstrap and '--retries 0' in bootstrap and 'rustc' not in bootstrap, 'existing bounded bootstrap/SDK/delegation')
+        for field,value in (('authority_pending',True),('binary',{}),('native_qualification',[]),('inputs',inputs[:-1]),
+                            ('native_config_sha256','0'*64)):
+            bad=copy.deepcopy(config);bad[field]=value;refused(lambda:validate_config(bad,base))
+        for field,value in (('full_source_identity_sha256',authority['source_identity_sha256']),('qualification_protocol_sha256','0'*64)):
+            bad=copy.deepcopy(config);bad['native_source'][field]=value;refused(lambda:validate_config(bad,base))
+        for change in (lambda d:d['inputs'][0].update(key='drift/key'),lambda d:d['native_config'].update(truth={}),
+            lambda d:d['code_sha256'].update({CODE[0]:'0'*64}),lambda d:d['fixed']['native_caps'].update(memory_bytes=2*1024**3)):
+            bad=copy.deepcopy(config);change(bad);refused(lambda:validate_config(bad,base))
+        for change in (lambda d:d.update(qualified=False),lambda d:d['stages'].pop(),
+                       lambda d:d['stages'][0].update(tests_run=0),lambda d:d['stages'][0]['required_test_passes'].clear(),
+                       lambda d:d['stages'][0].update(exit_status=2),lambda d:d.update(mandatory_test_names_pending=True)):
+            bad=copy.deepcopy(w);change(bad)
+            path=base/receipts[2]['path'];saved=read(path);path.write_bytes(encoded(bad))
+            bad_config=copy.deepcopy(config);bad_config['native_qualification'][2].update(pin(encoded(bad)))
+            refused(lambda:validate_config(bad_config,base));path.write_bytes(saved)
+        store={};bodies={'mock/native':fake,**{d['key']:b'x' for d in inputs}};gets=[]
+        def get(**kw):
+            key=kw['Key'];gets.append(key);body=store[key] if key in store else bodies[key]
+            return dict(Body=io.BytesIO(body),ContentLength=len(body))
+        def put(**kw):
+            require(kw['IfNoneMatch']=='*' and kw['Key'] not in store,'immutable marker-last publication');store[kw['Key']]=kw['Body']
+        s3=SimpleNamespace(get_object=get,put_object=put)
+        files=dict(zip(CGROUP_FILES,(str(CAPS['memory_bytes']),'4096','0','0',
+            'low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n','high 0\nmax 0\nfail 0\n',
+            '100000 100000','usage_usec 1\nuser_usec 1\nsystem_usec 0\n',str(FIXED['tasks_max']),'0','max 0\n','','populated 0\nfrozen 0\n')))
+        real_read=read
+        def no_input_read(path,*args):
+            require(input_root not in Path(path).parents,'Python must not decode retained inputs')
+            return real_read(path,*args)
+        context.enter_context(patch.object(module,'read',side_effect=no_input_read))
+        def fixture(name,fault='',deadline=False,cleanup_failure=False):
+            root=base/name;root.mkdir()
+            for n,b in (('config.json',encoded(config)),('source-qualification.json',encoded(proof)),('cpu.txt',b'mock'),('run-closed.log',b'')):
+                write(root/n,b)
+            write(root/'runtime-abi.json',encoded(dict(machine='x86_64',python=[3,12],os=dict(ID='ubuntu',VERSION_ID='24.04'),
+                libc=['glibc','2.39'],sdk=dict(boto3='1.40.72',botocore='1.40.72',put_object_if_none_match=True))))
+            for r in receipts:write(root/'qualification'/Path(r['path']).name,read(base/r['path']))
+            write(root/'bootstrap/scratch.json',encoded(dict(closed=True,cap_exceeded=False,interval_seconds=1,
+                sample_count=2,peak_bytes=65536,reserve=fixed['scratch'])))
+            for d in inputs:
+                if Path(d['destination']).exists():Path(d['destination']).unlink()
+            start=len(gets);stage(s3,config,root)
+            require(gets[start:] == ['mock/native',*(d['key'] for d in inputs)],'exact eleven opaque GETs and binary only')
+            refused(lambda:stage(s3,config,root))
+            parent=base/(name+'-cgroups')/(SUPERVISOR_UNIT+'.service');parent.mkdir(parents=True);group=parent/'native';owned=[]
+            def delegate(record):
+                record.update(unit=SUPERVISOR_UNIT+'.service',parent=str(parent),observer=str(parent/'supervisor'),observer_pid=os.getpid(),
+                    available=sorted(CONTROLLERS),enabled=sorted(CONTROLLERS),parent_process_ids=[],observer_process_ids=[os.getpid()],parent_type='domain')
+                return group
+            def create(g):(g/'cgroup.procs').write_text('')
+            def snapshot(g):return dict(path=str(g),observer_pid=os.getpid(),files=copy.deepcopy(files))
+            def drain(g):
+                if owned and owned[0].poll() is None:os.killpg(owned[0].pid,signal.SIGKILL)
+                (g/'cgroup.procs').unlink()
+                if cleanup_failure:raise OSError('synthetic cleanup failure')
+            real_popen=subprocess.Popen
+            def spawn(command,**kwargs):
+                p=real_popen(command,**kwargs);owned.append(p);(group/'cgroup.procs').write_text('');return p
+            with ExitStack() as execution:
+                for method,fn in (('delegated_group',delegate),('create_group',create),('cgroup_snapshot',snapshot),('drain_group',drain)):
+                    execution.enter_context(patch.object(module,method,side_effect=fn))
+                execution.enter_context(patch.object(subprocess,'Popen',side_effect=spawn))
+                execution.enter_context(patch.object(os,'sched_setaffinity',return_value=None))
+                execution.enter_context(patch.dict(os.environ,PQ_GLUE_FAKE=fault))
+                execution.enter_context(patch.dict(CAPS,deadline_seconds=.2 if deadline else 600))
+                supervise(config,root,run_id=PREFIX+'a0001/i-original')
+            return root
+        root=fixture('success');result=validate_result(root,config)
+        require(result['status']=='SURVIVED_SOURCE_NEIGHBORHOODS' and read(root/'native.log')==b'', 'silent real original exit0/report binding')
+        files['cpu.max']='200000 100000';denied=fixture('pre-exec-cpu');files['cpu.max']='100000 100000'
+        require(decode(read(denied/'native-exit.json'))['process_started'] is False and not (denied/'native.log').exists(),
+            'kernel CPU mismatch refuses before native exec')
+        refused(lambda:validate_result(denied,config))
+        rejected=fixture('reject','REJECT');require(validate_result(rejected,config)['status']=='REJECT','completed native exit0 REJECT is valid')
+        for name,fault,deadline,cleanup_failure in (('exit2','exit2',False,False),('partial','partial',False,False),
+            ('deadline','deadline',True,False),('cleanup','',False,True)):
+            denied=fixture(name,fault,deadline,cleanup_failure);refused(lambda:validate_result(denied,config))
+            if name=='exit2':require(decode(read(denied/'screen/report.json'))['complete'] is True
+                and decode(read(denied/'native-exit.json'))['process_exit_code']==2,'PASS body cannot override exit2')
+            if name=='partial':partial=denied
+        for name,change in (('native-exit.json',lambda d:d.update(process_exit_code=2)),
+            ('native-exit.json',lambda d:d.update(report_sha256='0'*64)),('resources.json',lambda d:d.update(deadline_exceeded=True)),
+            ('resources.json',lambda d:d['after']['files'].update({'memory.peak':str(2*1024**3)})),
+            ('resources.json',lambda d:d['after']['files'].update({'memory.swap.peak':'1'})),
+            ('cleanup.json',lambda d:d.update(drain_complete=False)),('scratch.json',lambda d:d.update(cap_exceeded=True)),
+            ('screen/report.json',lambda d:d.update(standalone_authority=True))):
+            p=root/name;saved=read(p);v=decode(saved);change(v);p.write_bytes(encoded(v));refused(lambda:validate_result(root,config));p.write_bytes(saved)
+        for name in SQ4_OUTPUTS:
+            p=root/name;saved=read(p);p.write_bytes(saved+b'!');refused(lambda:validate_result(root,config));p.write_bytes(saved)
+        for name in ('screen/report.json',BINARY_NAME,'resources.json','cleanup.json','qualification/source-qualification.json'):
+            p=root/name;saved=read(p);p.unlink();refused(lambda:validate_result(root,config));write(p,saved)
+        def terminal(root,prefix,complete=True):
+            return dict(schema=SCHEMA,source_commit='a'*40,source_archive_sha256='b'*64,instance_id='i-original',prefix=prefix,
+                config_sha256=sha(encoded(config)),artifact_roster_sha256=ROSTER_SHA,status='complete' if complete else 'failed',
+                phase='complete' if complete else 'execution',exit_code=0 if complete else 96,
+                original_exit_code=decode(read(root/'native-exit.json'))['process_exit_code'],
+                disposition=result['status'] if complete else 'INVALID',result=result,qualification=proof)
+        def controller(out,prefix):
+            write(out/'aws-reservation.json',encoded(dict(schema=SCHEMA,source_commit='a'*40,source_archive_sha256='b'*64,
+                config_sha256=sha(encoded(config)),qualification=proof)))
+            write(out/'aws-launch.json',encoded(dict(instance_id='i-original',nodes={'0':{'instance_id':'i-original'}},prefix=prefix,
+                source_commit='a'*40,source_archive_sha256='b'*64)))
+            write(out/'aws-closeout.json',encoded(dict(state='terminated',nodes={'0':{'instance_id':'i-original'}})))
+        for index,source,complete in ((1,root,True),(2,partial,False)):
+            prefix=PREFIX+f'a{index:04}';publish(s3,source,prefix,terminal(source,prefix,complete))
+            out=base/('collected-'+str(index));controller(out,prefix)
+            collect(s3,prefix,out,'i-original','a'*40,'b'*64)
+            require(replay(out)['status'] == ('SURVIVED_SOURCE_NEIGHBORHOODS' if complete else 'INVALID'), 'complete/partial collection replay')
+            require(read(out/'screen/report.json')==read(source/'screen/report.json'),'partial raw body preserved')
+            p=out/'aws-closeout.json';saved=read(p)
+            for close in (dict(state='running',nodes={'0':{'instance_id':'i-original'}}),dict(state='terminated',nodes={'0':{'instance_id':'i-other'}})):
+                p.write_bytes(encoded(close));before=len(gets)
+                refused(lambda:collect(s3,prefix,out,'i-original','a'*40,'b'*64));require(len(gets)==before,'wait/SAME-ID refusal before GET')
+            p.write_bytes(saved)
+        shared=lifecycle()
+        import boto3
+        campaign=Mock(ROOT=base,NAME='lifecycle',SCHEMA=SCHEMA,WALL=WALL,ARTIFACTS=ARTIFACTS,PREFIX=PREFIX,
+            TOKEN_PREFIX=TOKEN_PREFIX,TAG=TAG,SUBNET=SUBNET,INSTANCE_TYPE=INSTANCE_TYPE,IMAGE_ID=IMAGE_ID,
+            ROOT_DEVICE_NAME=ROOT_DEVICE_NAME,SPOT_MAX_USD_PER_HOUR=.60,COMPUTE_CAP=.25)
+        campaign.preflight.return_value=proof;campaign.user_data.return_value=bootstrap
+        for mode in ('success','poll','launch-fsync','launch-upload','extra-ack','wait'):
+            campaign.ROOT=base/('lifecycle-'+mode);campaign.poll.side_effect=OSError('synthetic poll') if mode=='poll' else None
+            ec2=Mock();session=Mock();session.client.side_effect=lambda name:ec2 if name=='ec2' else Mock()
+            ec2.describe_instances.return_value={'Reservations':[]};ec2.describe_subnets.return_value={'Subnets':[{'AvailabilityZone':'mock'}]}
+            ec2.describe_spot_price_history.return_value={'SpotPriceHistory':[{'SpotPrice':'.01','Timestamp':datetime.now(timezone.utc)}]}
+            ack=['i-original','i-extra'] if mode=='extra-ack' else ['i-original']
+            ec2.run_instances.return_value={'Instances':[{'InstanceId':i} for i in ack]};chronology=[]
+            ec2.terminate_instances.side_effect=lambda **kw:chronology.append(('terminate',kw['InstanceIds']))
+            def waited(**kw):
+                chronology.append(('wait',kw['InstanceIds']))
+                if mode=='wait':raise ValueError('synthetic wait failure')
+            ec2.get_waiter.return_value.wait.side_effect=waited
+            def collected(*args):
+                require(chronology==[('terminate',ack),('wait',ack)] and mode!='wait','collection only after original ACK wait')
+                return dict(status='complete',phase='complete',exit_code=0,artifacts={n:pin(b'') for n in ARTIFACTS})
+            campaign.collect.side_effect=collected;campaign.collect.reset_mock()
+            real_fsync=os.fsync
+            def persisted(fd):
+                if mode=='launch-fsync':raise OSError('synthetic ACK persistence failure')
+                real_fsync(fd)
+            def upload(key,body):
+                if mode=='launch-upload' and key.endswith('/launch.json'):raise OSError('synthetic launch upload failure')
+            with patch.object(boto3,'Session',return_value=session),patch.object(shared.subprocess,'check_output',side_effect=['','a'*40]), \
+                patch.object(shared,'source_archive',return_value=b'synthetic archive'),patch.object(shared.peer,'missing',return_value=True), \
+                patch.object(shared.peer,'put_if_absent',side_effect=upload),patch.object(shared.os,'fsync',side_effect=persisted):
+                if mode in ('success','extra-ack'):shared.main('a0001',campaign=campaign)
+                else:refused(lambda:shared.main('a0001',campaign=campaign))
+            require(ec2.run_instances.call_count==1 and chronology==[('terminate',ack),('wait',ack)],'every ACK original ID terminate/wait, no replacement')
+            if mode=='wait':campaign.collect.assert_not_called()
+    print(f'PASS PQ residual source glue: full406/subset, all19/eleven+doc synthetic gates; eleven opaque transfers; real tiny silent exit0/REJECT/exit2/partial/deadline/cleanup; {failures} refusals; full pins/collection/replay/every-ACK wait. No Rust/native/corpus/GT/network/AWS.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('attempt', nargs='?')
@@ -3042,13 +3510,16 @@ def main():
     parser.add_argument('--sq4', action='store_true', help='opt in to the frozen native SQ4 experiment')
     parser.add_argument('--histogram-sq4', action='store_true', help='opt in to the frozen native histogram SQ4 experiment')
     parser.add_argument('--corrected-four-bit', action='store_true', help='opt in to the separately qualified corrected direction codec')
+    parser.add_argument('--pq-residual-source', action='store_true', help='opt in to the separately qualified truth-free native source probe')
     parser.add_argument('--canary',action='store_true',help='corrected metadata/usage infrastructure admission only')
     parser.add_argument('--remote-canary',nargs=6)
     parser.add_argument('--replay-canary',type=Path)
     parser.add_argument('--replay', type=Path)
     parser.add_argument('--remote', nargs=6)
     args = parser.parse_args()
-    require(sum((args.sq4,args.histogram_sq4,args.corrected_four_bit)) <= 1, 'one SQ4 experiment')
+    require(sum((args.sq4,args.histogram_sq4,args.corrected_four_bit,args.pq_residual_source)) <= 1, 'one native experiment')
+    if args.pq_residual_source:
+        configure_pq_residual_source()
     if args.sq4 or args.histogram_sq4 or args.corrected_four_bit:
         configure_sq4(histogram=args.histogram_sq4, corrected=args.corrected_four_bit)
     require(not (args.canary or args.remote_canary or args.replay_canary) or args.corrected_four_bit, 'canary only in corrected mode')
@@ -3059,7 +3530,9 @@ def main():
     require(sum((args.attempt is not None,args.self_check,args.replay is not None,args.remote is not None,
         args.remote_canary is not None,args.replay_canary is not None)) == 1, 'one CLI mode')
     if args.self_check:
-        if CANARY:
+        if PQ_RESIDUAL_SOURCE:
+            pq_residual_source_self_check()
+        elif CANARY:
             canary_self_check()
         elif SQ4:
             sq4_self_check(histogram=HISTOGRAM_SQ4, corrected=CORRECTED_FOUR_BIT)
@@ -3075,7 +3548,7 @@ def main():
     sdk_guard()
     os.environ['AWS_MAX_ATTEMPTS'] = '1'
     os.environ['AWS_RETRY_MODE'] = 'standard'
-    with open('/tmp/borsuk-corrected-four-bit-diagnostic.lock' if CORRECTED_FOUR_BIT else '/tmp/borsuk-histogram-sq4-diagnostic.lock' if HISTOGRAM_SQ4 else '/tmp/borsuk-fixed-sq4-diagnostic.lock' if SQ4 else '/tmp/borsuk-fine-pack-diagnostic.lock', 'w') as lock:
+    with open('/tmp/borsuk-pq-residual-source-diagnostic.lock' if PQ_RESIDUAL_SOURCE else '/tmp/borsuk-corrected-four-bit-diagnostic.lock' if CORRECTED_FOUR_BIT else '/tmp/borsuk-histogram-sq4-diagnostic.lock' if HISTOGRAM_SQ4 else '/tmp/borsuk-fixed-sq4-diagnostic.lock' if SQ4 else '/tmp/borsuk-fine-pack-diagnostic.lock', 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
         lifecycle().main(args.attempt, campaign=sys.modules[__name__])
     return 0
