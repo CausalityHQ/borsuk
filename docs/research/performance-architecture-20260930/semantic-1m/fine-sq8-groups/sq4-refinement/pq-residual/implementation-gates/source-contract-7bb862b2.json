@@ -1,0 +1,97 @@
+{
+  "status": "SOURCE_ONLY_UNVERIFIED_CANDIDATE",
+  "base": "e3569b821b97813c26d6078b03039a6229a80356",
+  "candidate_commit": "7bb862b273151e91a49d1d4a8f1ba4dce8c8328b",
+  "source_identity_sha256": "37582e8bc512637d41ca671a0a48b7e12a47ec317b19d8b8362733a6080b6661",
+  "owned_source_sha256": {
+    "crates/borsuk/src/pq_residual_four_bit.rs": "1daffa92bf652e96add9b2b19c0246fb3a1a5da6427df8febf40b2174e38e949",
+    "crates/borsuk/src/lib.rs": "f13bdb730e6060549e0d1a1923645cdab9ec8e55aaba2b938b94295f8c862747",
+    "crates/borsuk/src/pq64_nominee.rs": "221513d1a709583a293fa1820c82a489827d3ee8531a7e1e02c4c46e133be95a",
+    "crates/borsuk/src/fine_sq8_groups.rs": "ed36d595d3016e5f09a113dc0638d606bdfcf51e5ae3be348dfff71f104ae400",
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs": "0f776e9e8bcd727bd004eb00af1fc87f037b611fd3de6f4fb24fc749b86ec454"
+  },
+  "method_corrections_read_without_base_change": "d437cc37 prospective method and both closed reviews; a595 probe count audit; all seven queued parent corrections",
+  "owned_paths": [
+    "crates/borsuk/src/pq_residual_four_bit.rs",
+    "crates/borsuk/src/lib.rs",
+    "crates/borsuk/src/pq64_nominee.rs",
+    "crates/borsuk/src/fine_sq8_groups.rs",
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs"
+  ],
+  "cli": "hierarchical_semantic_cells check-pq-residual-source CONFIG CONFIG_SHA256 NEW_OUTPUT",
+  "api": {
+    "pure": "pq_residual_four_bit::{Axis, Codebook, PreparedQuery}; Pq64Codes::reconstruct_raw(physical, output)",
+    "diagnostic": "fine_sq8_groups::pq_residual_source::{Config, Panel, source_identity, check_pq_residual_source, admit_survival}",
+    "config": "strict schema/source_identity_sha256/panels[2]{dataset,root}/original_seal/caps/scratch_bytes; no requests, truth, or tunable geometry",
+    "geometry": "production exactly N100000 D768 cohort4096 anchors64 k100; smaller geometry private to cfg(test)",
+    "authority": "original retained seal SHA 374cbd0e8700c85c2b4229468c3a9fa20283deb969b661386fb0078024b9de62 binds both root descriptors; requests in that historical seal are metadata only and never opened"
+  },
+  "numeric": {
+    "predictor": "raw physical PQ64 floor subspaces and padded word width; no renormalization",
+    "decode": "separate ordered f32 product then addition; residual f32 subtraction",
+    "bins": "256 endpoint-inclusive bins: f64 normalized position times255, nearest ties-even, clamp0..255; constant axes bin0; no f32 step underflow",
+    "centers": "existing weighted contiguous DP, smallest predecessor on exact cost ties; f32 bin centers lifted by f64 affine endpoint interpolation and rounded to f32 once; actual residual nearest center, lowest index ties",
+    "query": "unchanged sq8_source::cosine_vector",
+    "candidate": "original norm minus2 times coordinate-ordered f32 dot(query,predictor+residualcenter); no query norm constant",
+    "control": "unchanged exact_sq8_nominee::score_nominees including its existing query-norm constant; score conventions separately identified"
+  },
+  "resources": {
+    "cpu_threads": 1, "memory_bytes": 1073741824, "swap_bytes": 0,
+    "deadline_seconds": 600, "operations": 20000000000,
+    "scratch_bytes": 1073741824, "output_bytes": 67108864,
+    "storage": "three complete streamed SQ8 source hash/group/EOF passes; pass1/2 reconstruct every source row for extrema/histograms; pass3 reconstructs and encodes ONLY fixed4096 cohort rows. Persist only cohort SQ8/residual payloads, cohort residual group digests, book/root/query/selection/result/closure bodies; zero scratch files and no full-N dense vectors or residual payload digest claims",
+    "admission": "bounded config/seal/root metadata first, then actual aggregate cumulative read/work/output and coexisting allocation model before PQ/order/groups/records bodies; lower caps reject; no cap uplift",
+    "authority": "original supervisor exit/resource/drain/cleanup receipt required; process-only report never grants survival"
+  },
+  "admission_formulas": {
+    "symbols": "N=rows,D=dimensions,S=cohort,A=anchors,K=topk; production N100000,D768,S4096,A64,K100; all size arithmetic checked or preceded by these bounded dimensions",
+    "P": "24+64*256*ceil(D/64)*4+64*N (actual pinned PQ bytes)",
+    "H": "256*D*4+256*D+65*D+256*256*8+2*257*8+17*257*2+3*257*8+512+16*(24+D+ceil(D/2))+2*65536 (unchanged histogram scratch model)",
+    "R": "2*A*2*K*128 (complete result JSON bound)",
+    "O": "2*S*(24+D+ceil(D/2))+R+2*ceil(S/16)*32+2*65536+8*65536+2*S*128+2*A*D*24+8192",
+    "B": "actual config+original seal+two root metadata bytes + sum_panel(3*source_records.bytes+pq.bytes+order.bytes+groups.bytes+16) +2*O",
+    "M": "67108864 +2*S*(24+D+ceil(D/2)+4*D+64)+max_panel(3*P+4*N+65536)+32*N+2*ceil(N/16)*32+H+128*D+8*R+512*S+16*(24+D+ceil(D/2))",
+    "W_axis": "4096+8*256*257/2+6*16*256*257/2",
+    "W": "2*B+2*N*(34*D+256)+2*S*(32*D+64)+2*D*W_axis+2*A*(S*(14*D+128)+32*D)+67108864+16*O",
+    "operation_units": "conservative scalar numeric/check/comparison work plus source byte authentication/read work; pass1=12D+64 per row, pass2=22D+64, pass3=64 all rows plus32D+64 selected rows; DP precharge plus historical transition ticks, scoring/sorts per anchor, fixed source-closure/serialization reserve. One cumulative Guard and one deadline from entry; no per-helper budget reset",
+    "maximum_fixed_geometry": {
+      "metadata_assumption": "config and each root <=65536B, seal<=4096B; actual admitted values are read from pins",
+      "source_pass_bytes": 468000000,
+      "cohort_residual_bytes": 3244032,
+      "cohort_native_bytes": 6389760,
+      "read_bound_bytes": 518570448,
+      "coexisting_bound_bytes": 158213010,
+      "output_bound_bytes": 16998400,
+      "operation_bound": 17820304288,
+      "scratch_bytes": 0
+    }
+  },
+  "seals": "logical ordinal/ID/original physical cohort+anchor selections durable before scoring; original-SQ8 decoded and native-prepared anchor bits separately durable before scoring; all top100 IDs/physical rows/score bits for both panels sealed before reduction; source/predictor/order/coefficient/book/cohort/group/config/source/query identities bound and output bodies reauthenticated before freeze/reduction",
+  "gate": "each panel intersection sum>=6336/6400 and fourth smallest>=98; completed failure REJECT, execution/auth/resource failure INVALID",
+  "local_checks": "source inspection and rustfmt parser only, systemd CPUQuota100% MemoryMax256M MemorySwapMax0 RuntimeMaxSec55 RestrictAddressFamiliesAF_UNIX; git diff --check; byte-for-byte original source restoration comparison after removing the additive blocks and reversing only fit_axis visibility. No Cargo/rustc/native/corpus/network executions; tests not run",
+  "test_names": [
+    "pq_residual_four_bit::tests::pq_residual_raw_pq_floor_padding_and_physical_order",
+    "pq_residual_four_bit::tests::pq_residual_bins_constants_endpoints_subnormal_and_center_ties",
+    "pq_residual_four_bit::tests::pq_residual_original_norm_nonunit_near_ulp_scalar_oracle",
+    "pq_residual_four_bit::tests::pq_residual_book_binding_corruption_padding_and_caps",
+    "pq_residual_four_bit::tests::pq_residual_literal_d1_d3_d65_roundtrip_and_native_constant_ties",
+    "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_dp_independent_brute_cost_and_ties",
+    "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_actual_native_pipeline_selection_no_gt_and_sealed_recount",
+    "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_admission_underflow_and_same_size_bindings",
+    "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_pipeline_pass_mutation_eof_partial_sync_seal_and_late_invalid",
+    "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_frozen_thresholds_cohort_membership_ties_and_supervisor",
+    "tests::pq_residual_source_strict_cli_dispatch_no_geometry_or_truth_override"
+  ],
+  "remote_gate_commands_NOT_RUN": [
+    "cargo test --locked -p borsuk --lib pq_residual_ -- --test-threads=1",
+    "cargo test --locked -p borsuk --bin hierarchical_semantic_cells pq_residual_ -- --test-threads=1",
+    "cargo test --locked -p borsuk --doc pq_residual_four_bit -- --test-threads=1",
+    "cargo test --locked -p borsuk --lib fine_sq8_groups:: -- --test-threads=1",
+    "cargo test --locked -p borsuk --bin hierarchical_semantic_cells -- --test-threads=1",
+    "cargo test --locked -p borsuk --lib pq64_nominee:: -- --test-threads=1",
+    "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "cargo build --release --locked -p borsuk --bin hierarchical_semantic_cells",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  ],
+  "handoff": "Parent owns exact remote authority/plumbing, all gates and real probe. SAME child remains available for fixes. No push, merge or agent_complete before actual disposition. No mathematical or scientific survival claimed."
+}
