@@ -1,0 +1,15 @@
+{
+  "binary": {
+    "bytes": 13549088,
+    "etag": "\"54bf26fbf49416dd327fd43fee36a602-2\"",
+    "key": "research/semantic-router/20261006/co-selection-implementation-a0001/artifacts/binaries/hierarchical_semantic_cells",
+    "sha256": "1db976a4a29de491cf03c14fe7246330124e1fa4d479d4895dd30f84507d7672"
+  },
+  "instance_id": "i-0138fe480f4178e19",
+  "metadata_only": true,
+  "payload_gets": 0,
+  "schema": "borsuk-co-selection-qualification-external-closeout-v1",
+  "state": "terminated",
+  "time_utc": "2026-10-06T03:27:28.519054+00:00",
+  "whole_binary_authenticated_by_closed_terminal": true
+}
