@@ -7,8 +7,8 @@
     "sha256": "bad1dd6af10df0514f064669af2ca69c908475cb6353aed9862b6bfd5196434a"
   },
   "observed_example_document_identity_field": "_id",
-  "actual_parquet_document_id_schema_verified": "FIRST_SHARD_FOOTER_ONLY",
-  "decision": "Use _id for first shard; verify second footer and full authenticated selected bodies, every D1024 row and unique ID before sealing. No vector body or whole-shard authentication yet.",
+  "actual_parquet_document_id_schema_verified": true,
+  "decision": "Use _id; both pinned footer schemas agree. Full authenticated bodies, every selected D1024 row and unique ID remain mandatory before sealing. No vector body or whole-shard authentication yet.",
   "vector_bodies_read": false,
   "ann_or_truth_execution": false,
   "first_shard_authenticated_footer": {
@@ -72,5 +72,66 @@
   },
   "first_shard_document_id_column": "_id",
   "first_shard_document_id_storage": "BYTE_ARRAY converted UTF8",
-  "first_shard_embedding_storage": "LIST of FLOAT"
+  "first_shard_embedding_storage": "LIST of FLOAT",
+  "second_shard_authenticated_footer": {
+    "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+    "shard": "en/0001.parquet",
+    "footer_bytes": 14522,
+    "footer_sha256": "cee28862a7f9bc5744eac39c503c11fe7f992a5c45a01d2b97a163326da92ad8",
+    "rows": 100000,
+    "rowgroups": 10,
+    "schema": [
+      {
+        "name": "schema",
+        "physical_type": null,
+        "children": 5,
+        "converted_type": null
+      },
+      {
+        "name": "_id",
+        "physical_type": 6,
+        "children": null,
+        "converted_type": 0
+      },
+      {
+        "name": "url",
+        "physical_type": 6,
+        "children": null,
+        "converted_type": 0
+      },
+      {
+        "name": "title",
+        "physical_type": 6,
+        "children": null,
+        "converted_type": 0
+      },
+      {
+        "name": "text",
+        "physical_type": 6,
+        "children": null,
+        "converted_type": 0
+      },
+      {
+        "name": "emb",
+        "physical_type": null,
+        "children": 1,
+        "converted_type": 3
+      },
+      {
+        "name": "list",
+        "physical_type": null,
+        "children": 1,
+        "converted_type": null
+      },
+      {
+        "name": "item",
+        "physical_type": 4,
+        "children": null,
+        "converted_type": null
+      }
+    ],
+    "whole_shard_authenticated": false,
+    "vector_bodies_read": false
+  },
+  "verification_scope": "BOTH_PINNED_SHARD_FOOTERS_ONLY"
 }
