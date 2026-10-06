@@ -1,0 +1,16 @@
+{
+  "status": "LAUNCHED_UNQUALIFIED",
+  "exec_session": 62254,
+  "instance_id": "i-05d1bccc1f60d4647",
+  "native_source_commit": "e5f4a34d700189ac1bd5035954e517583d283bfe",
+  "bundle_commit": "ed2be3846e6e0b228d41b6560de70d488e3dc0b5",
+  "source_archive_sha256": "76667dd9f83b604b73384f94fcd2c3de5e664da2443477ddaf0bf3e1a5fad28e",
+  "preflight": {
+    "exit": 0,
+    "source_files": 409,
+    "runtime_seconds": 1.182,
+    "memory_peak": "67.1M",
+    "swap_bytes": 0
+  },
+  "science": "NO_CORPUS_OR_QUALITY_MEASUREMENT"
+}
