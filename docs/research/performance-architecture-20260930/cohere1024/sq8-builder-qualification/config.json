@@ -37,7 +37,7 @@
     "scripts/run_native_union_http.py": "886f84ea639b822668a848e8f085027aec12818e316d0839fbf607844d18f880",
     "scripts/run_native_union_offered_http.py": "8a2c5993d282c3f67d841544828793989550157d3ac70091a18a26f2074517d6"
   },
-  "controller_source_commit": "4e834ab30e7752cc9b9f83fe2acd6ca56f3c03a1",
+  "controller_source_commit": "de43286f801fbc383adf378779b94fc214d3e075",
   "cpu_quota_percent": 200,
   "ebs_s3_allowance_usd": 0.15,
   "environment": {
@@ -61,9 +61,9 @@
   "mandatory_tests": {},
   "memory_bytes": 8589934592,
   "native_source_manifest": {
-    "bytes": 45470,
+    "bytes": 45469,
     "path": "docs/research/performance-architecture-20260930/cohere1024/sq8-builder-qualification/native-source-manifest.json",
-    "sha256": "676507338a459ee3be5f20723d43ddeff19da958fe7e5a69aad2d6baa75c7b7b"
+    "sha256": "10c582c920116b812f65c370f7f40b70c4750b48a21acf892eaf8bf78199122a"
   },
   "region": "eu-central-1",
   "root_device_name": "/dev/sda1",
