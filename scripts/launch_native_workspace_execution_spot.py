@@ -79,6 +79,7 @@ BUDGET_OBJECT_FITTER = False
 COHERE1024 = False
 COHERE_COHORT = False
 COHERE_SQ8_BUILDER = False
+EXACT_SQ8_RUNTIME = False
 MINIMAL_ARCHIVE = False
 HIERARCHICAL_CELLS_DELTA = ('crates/borsuk/src/bin/hierarchical_semantic_cells.rs',
                           'crates/borsuk/src/hierarchical_semantic_cells.rs')
@@ -502,6 +503,48 @@ COHERE_COHORT_STAGES = tuple((name, command.split()) for name, command in (
     ('release', 'cargo build --release --locked -p borsuk --bin check_cohere_native_baseline --bin prepare_cohere_native_cohort --bin publish_two_bit_generation'),
     ('clippy', 'cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious'),
     ('test-build', 'env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh')))
+NON_TEST_STAGES = ('release', 'clippy', 'test-build', 'exact-sq8-probe')
+EXACT_SQ8_HISTORICAL_BASE = 'd6b8e1f7b1998292460c2dbc214f45c16905e96c'  # controller before this mode: every earlier mode must stay byte-identical
+EXAMPLE_BINARIES = ('/two_bit_http', '/build_sq8_source', '/exact_sq8_runtime_probe')  # copied from target/release/examples
+
+# Exact SQ8 row-blocking runtime probe: a DATA variant of the cohort-family lifecycle. configure()
+# rebinds only COHERE_COHORT_{STAGES,STAGE_SCHEMA,REQUIRED_TESTS} below, and restores them for every other mode.
+EXACT_SQ8_RUNTIME_DELTA = ('crates/borsuk/Cargo.toml', 'crates/borsuk/examples/exact_sq8_runtime_probe.rs',
+                           'crates/borsuk/src/exact_sq8_nominee.rs')
+EXACT_SQ8_RUNTIME_STAGE_SCHEMA = 'borsuk-exact-sq8-runtime-gates-stage-v1'
+EXACT_SQ8_SCORER_TESTS = tuple('exact_sq8_nominee::tests::' + name for name in (
+    'exact_rows_score_and_tie_by_id',
+    'rejects_short_final_row_invalid_ordinal_and_nonfinite_query',
+    'file_and_ram_placements_score_the_same_bytes',
+    'blocked_scores_equal_independent_scalar_oracle_bits',
+    'rosters_keep_requested_order_ids_and_ordinals_across_blocks',
+    'signed_zero_negative_nonunit_and_near_ties_keep_bits_and_id_order',
+    'corrupt_inputs_keep_error_classes_in_every_block_position'))
+EXACT_SQ8_RUNTIME_REQUIRED_TESTS = {'exact-sq8-scorer-tests': EXACT_SQ8_SCORER_TESTS,
+                                    'exact-sq8-scorer-release-tests': EXACT_SQ8_SCORER_TESTS}
+EXACT_SQ8_PROBE_COMMAND = ['bash', '-c', 'exec taskset -c 0 "$CARGO_TARGET_DIR/release/examples/exact_sq8_runtime_probe"']
+EXACT_SQ8_RUNTIME_STAGES = tuple((name, command if type(command) is list else command.split()) for name, command in (
+    ('exact-sq8-scorer-tests', 'cargo test --locked -p borsuk --lib exact_sq8_nominee:: -- --test-threads=1'),
+    ('exact-sq8-scorer-release-tests', 'cargo test --release --locked -p borsuk --lib exact_sq8_nominee:: -- --test-threads=1'),
+    ('returned-sq8-tests', 'cargo test --locked -p borsuk --lib returned_sq8:: -- --test-threads=1'),
+    ('release', 'cargo build --release --locked -p borsuk --example exact_sq8_runtime_probe --bin check_cohere_native_baseline'),
+    ('exact-sq8-probe', EXACT_SQ8_PROBE_COMMAND),
+    ('clippy', 'cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious'),
+    ('test-build', 'env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh')))
+EXACT_SQ8_RUNTIME_RELEASE = ('binaries/check_cohere_native_baseline', 'binaries/exact_sq8_runtime_probe')
+EXACT_SQ8_PROBE_ARTIFACT = 'exact-sq8-probe.jsonl'
+EXACT_SQ8_PROBE_SHAPES = {(d, r) for d in (128, 768, 1024) for r in (1, 7, 8, 9, 257, 16192)}
+_COHORT_PROTOCOL = (COHERE_COHORT_STAGES, COHERE_COHORT_STAGE_SCHEMA, COHERE_COHORT_REQUIRED_TESTS)
+_COHORT_REBOUND = False
+
+
+def probe_lines(body):
+    """Verbatim probe JSON lines from the raw stage log; exact fixed shapes and parity flags, no timing interpretation."""
+    lines = [line for line in body.splitlines(keepends=True) if line.startswith(b'{') and b'"candidate_over_baseline_median"' in line]
+    parsed = [json.loads(line) for line in lines]
+    assert {(row['dimensions'], row['rows']) for row in parsed} == EXACT_SQ8_PROBE_SHAPES and len(parsed) == len(EXACT_SQ8_PROBE_SHAPES), 'exact probe shapes'
+    assert all(row['identical_ids_ordinals_score_bits'] is True for row in parsed), 'probe scalar/baseline/candidate parity'
+    return b''.join(lines if all(line.endswith(b'\n') for line in lines) else [line.rstrip(b'\n') + b'\n' for line in lines])
 
 
 COHERE_SQ8_BUILDER_STAGE_SCHEMA = 'borsuk-cohere-sq8-builder-stage-v1'
@@ -546,6 +589,11 @@ def completed_native_qualification(base, authority, *, retained=False):
 
 def cohere_cohort_required_tests():
     required = COHERE_COHORT_REQUIRED_TESTS
+    if EXACT_SQ8_RUNTIME:
+        assert required == EXACT_SQ8_RUNTIME_REQUIRED_TESTS and set(required) == {'exact-sq8-scorer-tests', 'exact-sq8-scorer-release-tests'}, 'two scorer test rosters required'
+        assert all(len(tests) == 7 == len(set(tests)) for tests in required.values()), 'seven unique scorer tests per stage'
+        assert all(type(name) is str and re.fullmatch(r'exact_sq8_nominee::tests::[a-zA-Z0-9_]+', name) for tests in required.values() for name in tests), 'exact scorer test names'
+        return required
     assert set(required) == {'cohere-native-publisher-tests', 'cohere-native-baseline-tests', 'cohere-native-cohort-tests'}, 'three cohort test rosters required'
     names = [test for tests in required.values() for test in tests]
     assert len(required['cohere-native-publisher-tests']) == 2 and all(len(tests) == 8 for name, tests in required.items() if name != 'cohere-native-publisher-tests') and len(set(names)) == 18, 'two publisher plus eight unique tests per old cohort bin'
@@ -761,18 +809,29 @@ def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 
 
-def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False, cohere1024=False, cohere_cohort=False, cohere_sq8_builder=False):
+def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False, cohere1024=False, cohere_cohort=False, cohere_sq8_builder=False, exact_sq8_runtime=False):
     """Select the protocol explicitly in every controller/worker process."""
     global SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, CONSTRAINED_SPLIT, CELL_OVERLAP, FINE_SQ8, PQ_RESIDUAL, CO_SELECTION, MINIMAL_ARCHIVE, NATIVE_DELTA, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
     global SCHEMA, CONFIG_SCHEMA, RECEIPT_SCHEMA, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, TERMINAL_IDENTITIES
-    global BUDGET_OBJECT_SELECTOR, BUDGET_OBJECT_FITTER, COHERE1024, COHERE_COHORT, COHERE_SQ8_BUILDER
-    assert type(budget_object_selector) is type(budget_object_fitter) is type(cohere1024) is type(cohere_cohort) is type(cohere_sq8_builder) is bool
+    global BUDGET_OBJECT_SELECTOR, BUDGET_OBJECT_FITTER, COHERE1024, COHERE_COHORT, COHERE_SQ8_BUILDER, EXACT_SQ8_RUNTIME
+    global COHERE_COHORT_STAGES, COHERE_COHORT_STAGE_SCHEMA, COHERE_COHORT_REQUIRED_TESTS, _COHORT_REBOUND
+    assert type(budget_object_selector) is type(budget_object_fitter) is type(cohere1024) is type(cohere_cohort) is type(cohere_sq8_builder) is type(exact_sq8_runtime) is bool
     assert type(semantic_1m) is type(test_build) is type(implementation) is type(startup_wave8) is type(root_reuse) is type(bounded_publication) is type(fixed48) is type(hierarchical_cells) is type(constrained_split) is type(cell_overlap) is type(fine_sq8) is type(pq_residual) is type(co_selection) is bool
-    scoped = startup_wave8 or root_reuse or bounded_publication or fixed48 or hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter or cohere1024 or cohere_cohort or cohere_sq8_builder
-    assert sum((startup_wave8, root_reuse, bounded_publication, fixed48, hierarchical_cells, constrained_split, cell_overlap, fine_sq8, pq_residual, co_selection, budget_object_selector, budget_object_fitter, cohere1024, cohere_cohort, cohere_sq8_builder)) <= 1 and not (scoped and test_build), 'mutually exclusive execution modes'
+    scoped = startup_wave8 or root_reuse or bounded_publication or fixed48 or hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter or cohere1024 or cohere_cohort or cohere_sq8_builder or exact_sq8_runtime
+    assert sum((startup_wave8, root_reuse, bounded_publication, fixed48, hierarchical_cells, constrained_split, cell_overlap, fine_sq8, pq_residual, co_selection, budget_object_selector, budget_object_fitter, cohere1024, cohere_cohort, cohere_sq8_builder, exact_sq8_runtime)) <= 1 and not (scoped and test_build), 'mutually exclusive execution modes'
     if scoped:
         semantic_1m = implementation = True
     assert not (test_build and implementation), 'mutually exclusive execution modes'
+    # The exact SQ8 mode reuses the cohort-family lifecycle with its own protocol data.
+    EXACT_SQ8_RUNTIME = exact_sq8_runtime
+    if exact_sq8_runtime:
+        cohere_cohort = True
+        COHERE_COHORT_STAGES, COHERE_COHORT_STAGE_SCHEMA, COHERE_COHORT_REQUIRED_TESTS = (
+            EXACT_SQ8_RUNTIME_STAGES, EXACT_SQ8_RUNTIME_STAGE_SCHEMA, EXACT_SQ8_RUNTIME_REQUIRED_TESTS)
+        _COHORT_REBOUND = True
+    elif _COHORT_REBOUND:
+        COHERE_COHORT_STAGES, COHERE_COHORT_STAGE_SCHEMA, COHERE_COHORT_REQUIRED_TESTS = _COHORT_PROTOCOL
+        _COHORT_REBOUND = False
     assert not (test_build or implementation) or semantic_1m, 'script requires explicit semantic-1m mode'
     SEMANTIC_1M = semantic_1m
     TEST_BUILD = test_build
@@ -793,12 +852,12 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
     COHERE_COHORT = cohere_cohort
     COHERE_SQ8_BUILDER = cohere_sq8_builder
     MINIMAL_ARCHIVE = hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter or cohere1024 or cohere_cohort or cohere_sq8_builder
-    NATIVE_DELTA = () if cohere_sq8_builder else COHERE_COHORT_DELTA if cohere_cohort else COHERE1024_DELTA if cohere1024 else BUDGET_OBJECT_FITTER_DELTA if budget_object_fitter else BUDGET_OBJECT_SELECTOR_DELTA if budget_object_selector else CO_SELECTION_DELTA if co_selection else PQ_RESIDUAL_DELTA if pq_residual else FINE_SQ8_DELTA if fine_sq8 else CELL_OVERLAP_DELTA if cell_overlap else CONSTRAINED_SPLIT_DELTA if constrained_split else HIERARCHICAL_CELLS_DELTA if hierarchical_cells else FIXED48_DELTA if fixed48 else BOUNDED_PUBLICATION_DELTA if bounded_publication else ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
-    RELEASE_ARTIFACTS = ('binaries/build_sq8_source',) if cohere_sq8_builder else ('binaries/check_cohere_native_baseline', 'binaries/prepare_cohere_native_cohort', 'binaries/publish_two_bit_generation') if cohere_cohort else FULL_RELEASE_ARTIFACTS if cohere1024 else ('binaries/hierarchical_semantic_cells',) if cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter else ('binaries/check_hierarchical_split_balance', 'binaries/hierarchical_semantic_cells', 'binaries/two_bit_http') if constrained_split else ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation', 'binaries/check_semantic_router_scorer') if hierarchical_cells else ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
+    NATIVE_DELTA = EXACT_SQ8_RUNTIME_DELTA if exact_sq8_runtime else () if cohere_sq8_builder else COHERE_COHORT_DELTA if cohere_cohort else COHERE1024_DELTA if cohere1024 else BUDGET_OBJECT_FITTER_DELTA if budget_object_fitter else BUDGET_OBJECT_SELECTOR_DELTA if budget_object_selector else CO_SELECTION_DELTA if co_selection else PQ_RESIDUAL_DELTA if pq_residual else FINE_SQ8_DELTA if fine_sq8 else CELL_OVERLAP_DELTA if cell_overlap else CONSTRAINED_SPLIT_DELTA if constrained_split else HIERARCHICAL_CELLS_DELTA if hierarchical_cells else FIXED48_DELTA if fixed48 else BOUNDED_PUBLICATION_DELTA if bounded_publication else ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
+    RELEASE_ARTIFACTS = EXACT_SQ8_RUNTIME_RELEASE if exact_sq8_runtime else ('binaries/build_sq8_source',) if cohere_sq8_builder else ('binaries/check_cohere_native_baseline', 'binaries/prepare_cohere_native_cohort', 'binaries/publish_two_bit_generation') if cohere_cohort else FULL_RELEASE_ARTIFACTS if cohere1024 else ('binaries/hierarchical_semantic_cells',) if cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter else ('binaries/check_hierarchical_split_balance', 'binaries/hierarchical_semantic_cells', 'binaries/two_bit_http') if constrained_split else ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation', 'binaries/check_semantic_router_scorer') if hierarchical_cells else ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
     TERMINAL_IDENTITIES = (*FULL_TERMINAL_IDENTITIES, 'controller_source_commit', 'candidate_delta_paths') if scoped else FULL_TERMINAL_IDENTITIES
     if MINIMAL_ARCHIVE:
         TERMINAL_IDENTITIES += ARCHIVE_IDENTITIES
-    ARTIFACTS = (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS) if implementation else FULL_ARTIFACTS
+    ARTIFACTS = (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS, *((EXACT_SQ8_PROBE_ARTIFACT,) if exact_sq8_runtime else ())) if implementation else FULL_ARTIFACTS
     ROOT = (semantic.ROOT.parent/'semantic-1m' if semantic_1m else semantic.ROOT/'metadata-waves') / ('implementation-gates/remote-implementation' if implementation else 'implementation-gates/remote-test-build' if test_build else 'implementation-gates/remote-full')
     CONFIG = ROOT/'config.json'
     TOKEN_PREFIX = ('semantic-1m-implementation-' if implementation else 'semantic-1m-test-build-' if test_build else
@@ -1042,6 +1101,19 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
                 if COHERE_COHORT_REQUIRED_TESTS else {})
 
 
+    if exact_sq8_runtime:
+        ROOT = Path('docs/research/performance-architecture-20260930/cohere1024/exact-sq8-runtime-gates')
+        CONFIG = ROOT/'config.json'
+        TOKEN_PREFIX = 'exact-sq8-runtime-gates-'
+        PREFIX = 'research/semantic-router/20261006/' + TOKEN_PREFIX
+        TAG = 'borsuk-exact-sq8-runtime-gates'
+        SCHEMA = 'borsuk-exact-sq8-runtime-gates-spot-v1'
+        CONFIG_SCHEMA = 'borsuk-exact-sq8-runtime-gates-v1'
+        RECEIPT_SCHEMA = 'borsuk-exact-sq8-runtime-gates-receipt-v1'
+        CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_exact_sq8_runtime.sh')
+        FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_exact_sq8_runtime.sh'])
+
+
     if cohere_sq8_builder:
         ROOT = Path('docs/research/performance-architecture-20260930/cohere1024/sq8-builder-qualification')
         CONFIG = ROOT/'config.json'
@@ -1062,17 +1134,19 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
 
 
 @contextlib.contextmanager
-def execution_mode(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False, cohere1024=False, cohere_cohort=False, cohere_sq8_builder=False):
+def execution_mode(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False, cohere1024=False, cohere_cohort=False, cohere_sq8_builder=False, exact_sq8_runtime=False):
     """Restore the caller's protocol after a worker or synthetic check."""
-    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, CONSTRAINED_SPLIT, CELL_OVERLAP, FINE_SQ8, PQ_RESIDUAL, CO_SELECTION, BUDGET_OBJECT_SELECTOR, BUDGET_OBJECT_FITTER, COHERE1024, COHERE_COHORT, COHERE_SQ8_BUILDER
-    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort, cohere_sq8_builder=cohere_sq8_builder)
+    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, CONSTRAINED_SPLIT, CELL_OVERLAP, FINE_SQ8, PQ_RESIDUAL, CO_SELECTION, BUDGET_OBJECT_SELECTOR, BUDGET_OBJECT_FITTER, COHERE1024, COHERE_COHORT, COHERE_SQ8_BUILDER, EXACT_SQ8_RUNTIME
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort, cohere_sq8_builder=cohere_sq8_builder, exact_sq8_runtime=exact_sq8_runtime)
     try:
         yield
     finally:
-        configure(previous[0], test_build=previous[1], implementation=previous[2], startup_wave8=previous[3], root_reuse=previous[4], bounded_publication=previous[5], fixed48=previous[6], hierarchical_cells=previous[7], constrained_split=previous[8], cell_overlap=previous[9], fine_sq8=previous[10], pq_residual=previous[11], co_selection=previous[12], budget_object_selector=previous[13], budget_object_fitter=previous[14], cohere1024=previous[15], cohere_cohort=previous[16], cohere_sq8_builder=previous[17])
+        configure(previous[0], test_build=previous[1], implementation=previous[2], startup_wave8=previous[3], root_reuse=previous[4], bounded_publication=previous[5], fixed48=previous[6], hierarchical_cells=previous[7], constrained_split=previous[8], cell_overlap=previous[9], fine_sq8=previous[10], pq_residual=previous[11], co_selection=previous[12], budget_object_selector=previous[13], budget_object_fitter=previous[14], cohere1024=previous[15], cohere_cohort=previous[16] and not previous[18], cohere_sq8_builder=previous[17], exact_sq8_runtime=previous[18])
 
 
 def mode_flag():
+    if EXACT_SQ8_RUNTIME:
+        return ' --exact-sq8-runtime'
     if COHERE_SQ8_BUILDER:
         return ' --cohere-sq8-builder'
     if COHERE_COHORT:
@@ -1087,6 +1161,8 @@ def mode_flag():
 
 
 def archive_binding_prefix():
+    if EXACT_SQ8_RUNTIME:
+        return 'BORSUK_EXACT_SQ8_RUNTIME_'
     if COHERE_SQ8_BUILDER:
         return 'BORSUK_COHERE_SQ8_BUILDER_'
     if COHERE_COHORT:
@@ -1283,7 +1359,7 @@ def qualify(base=Path('.')):
     manifest = json.loads((base/path).read_bytes())
     if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
         assert re.fullmatch('[0-9a-f]{40}', config['controller_source_commit']), 'frozen controller commit'
-        assert manifest['schema'] == ('borsuk-cohere-sq8-builder-native-source-manifest-v1' if COHERE_SQ8_BUILDER else 'borsuk-cohere-cohort-implementation-gates-native-source-manifest-v1' if COHERE_COHORT else 'borsuk-cohere1024-implementation-gates-native-source-manifest-v1' if COHERE1024 else 'borsuk-budget-object-fitter-native-source-manifest-v1' if BUDGET_OBJECT_FITTER else 'borsuk-budget-object-selector-native-source-manifest-v1' if BUDGET_OBJECT_SELECTOR else 'borsuk-co-selection-native-source-manifest-v1' if CO_SELECTION else 'borsuk-pq-residual-native-source-manifest-v1' if PQ_RESIDUAL else 'borsuk-corrected-four-bit-native-source-manifest-v1' if FINE_SQ8 else 'borsuk-cell-overlap-native-source-manifest-v1' if CELL_OVERLAP else 'borsuk-constrained-split-native-source-manifest-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-native-source-manifest-v1' if HIERARCHICAL_CELLS else 'borsuk-fixed48-native-source-manifest-v1' if FIXED48 else 'borsuk-bounded-publication-native-source-manifest-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
+        assert manifest['schema'] == ('borsuk-exact-sq8-runtime-gates-native-source-manifest-v1' if EXACT_SQ8_RUNTIME else 'borsuk-cohere-sq8-builder-native-source-manifest-v1' if COHERE_SQ8_BUILDER else 'borsuk-cohere-cohort-implementation-gates-native-source-manifest-v1' if COHERE_COHORT else 'borsuk-cohere1024-implementation-gates-native-source-manifest-v1' if COHERE1024 else 'borsuk-budget-object-fitter-native-source-manifest-v1' if BUDGET_OBJECT_FITTER else 'borsuk-budget-object-selector-native-source-manifest-v1' if BUDGET_OBJECT_SELECTOR else 'borsuk-co-selection-native-source-manifest-v1' if CO_SELECTION else 'borsuk-pq-residual-native-source-manifest-v1' if PQ_RESIDUAL else 'borsuk-corrected-four-bit-native-source-manifest-v1' if FINE_SQ8 else 'borsuk-cell-overlap-native-source-manifest-v1' if CELL_OVERLAP else 'borsuk-constrained-split-native-source-manifest-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-native-source-manifest-v1' if HIERARCHICAL_CELLS else 'borsuk-fixed48-native-source-manifest-v1' if FIXED48 else 'borsuk-bounded-publication-native-source-manifest-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
         assert manifest['candidate_qualification_pending'] is True, 'source authority is not completed assurance'
         validate_candidate_delta(manifest['candidate_delta_paths'])
         if STARTUP_WAVE8:
@@ -1306,7 +1382,7 @@ def qualify(base=Path('.')):
     assert identity == manifest['source_identity_sha256']
     assert SEMANTIC_1M or identity == SOURCE_IDENTITY, 'historical native source identity'
     assert re.fullmatch('[0-9a-f]{40}', manifest['native_source_commit'])
-    proof = dict(schema='borsuk-cohere-sq8-builder-qualification-v1' if COHERE_SQ8_BUILDER else 'borsuk-cohere-cohort-implementation-gates-qualification-v1' if COHERE_COHORT else 'borsuk-cohere1024-implementation-gates-qualification-v1' if COHERE1024 else 'borsuk-budget-object-fitter-implementation-gates-qualification-v1' if BUDGET_OBJECT_FITTER else 'borsuk-budget-object-selector-implementation-gates-qualification-v1' if BUDGET_OBJECT_SELECTOR else 'borsuk-co-selection-implementation-gates-qualification-v1' if CO_SELECTION else 'borsuk-pq-residual-implementation-gates-qualification-v1' if PQ_RESIDUAL else 'borsuk-corrected-four-bit-implementation-gates-qualification-v1' if FINE_SQ8 else 'borsuk-cell-overlap-implementation-gates-qualification-v1' if CELL_OVERLAP else 'borsuk-constrained-split-implementation-gates-qualification-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-implementation-gates-qualification-v2' if HIERARCHICAL_CELLS else 'borsuk-fixed48-implementation-gates-qualification-v1' if FIXED48 else 'borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
+    proof = dict(schema='borsuk-exact-sq8-runtime-gates-qualification-v1' if EXACT_SQ8_RUNTIME else 'borsuk-cohere-sq8-builder-qualification-v1' if COHERE_SQ8_BUILDER else 'borsuk-cohere-cohort-implementation-gates-qualification-v1' if COHERE_COHORT else 'borsuk-cohere1024-implementation-gates-qualification-v1' if COHERE1024 else 'borsuk-budget-object-fitter-implementation-gates-qualification-v1' if BUDGET_OBJECT_FITTER else 'borsuk-budget-object-selector-implementation-gates-qualification-v1' if BUDGET_OBJECT_SELECTOR else 'borsuk-co-selection-implementation-gates-qualification-v1' if CO_SELECTION else 'borsuk-pq-residual-implementation-gates-qualification-v1' if PQ_RESIDUAL else 'borsuk-corrected-four-bit-implementation-gates-qualification-v1' if FINE_SQ8 else 'borsuk-cell-overlap-implementation-gates-qualification-v1' if CELL_OVERLAP else 'borsuk-constrained-split-implementation-gates-qualification-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-implementation-gates-qualification-v2' if HIERARCHICAL_CELLS else 'borsuk-fixed48-implementation-gates-qualification-v1' if FIXED48 else 'borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
         config_path=str(CONFIG), config_sha256=worker.sha(body), campaign_schema=SCHEMA,
         source_sha256=inventory, source_identity_sha256=identity, source_file_count=len(inventory),
         native_source_commit=manifest['native_source_commit'], native_source_manifest=pointer,
@@ -1368,7 +1444,7 @@ def preflight(base=Path('.')):
                 assert set(native) == set(proof['source_sha256']), 'complete committed native roster'
                 native_trees.append(native)
             assert native_trees[0] == native_trees[1], 'native source changed from qualified commit'
-        if COHERE_COHORT:
+        if COHERE_COHORT and not EXACT_SQ8_RUNTIME:
             assert subprocess.check_output(['git','diff','--no-renames','--diff-filter=A','--name-only',
                 config_commit,'HEAD'], cwd=base, text=True).splitlines() == list(NATIVE_DELTA), 'one NEW publisher native bin'
         for name in proof['candidate_delta_paths']:
@@ -1424,7 +1500,7 @@ def record_constrained_split_stage(argv, *, cell_overlap=False, fine_sq8=False, 
     wrong_stage = False
     if finished:
         passes = dict.fromkeys(required.get(stage, ()), 0)
-        if stage not in ('release', 'clippy', 'test-build') or strict_counts and stage == 'test-build':
+        if stage not in NON_TEST_STAGES or strict_counts and stage == 'test-build':
             is_test = stage != 'test-build'
             if is_test:
                 tests = 0
@@ -1451,10 +1527,10 @@ def record_constrained_split_stage(argv, *, cell_overlap=False, fine_sq8=False, 
         with Path(log).open() as source:
             failed += any(re.match(r'(?:test .+ \.\.\. |test result:|rust-test-build )', line) for line in source)
     evidence_invalid = strict_counts and bool(finished) and (
-        (stage not in ('release', 'clippy', 'test-build') and (summaries != 1 or passed_lines != tests)) or
+        (stage not in NON_TEST_STAGES and (summaries != 1 or passed_lines != tests)) or
         (stage == 'test-build' and test_builds != 1))
     evidence_invalid |= (pq_residual or co_selection or budget_object_selector or budget_object_fitter or cohere1024 or cohere_cohort) and bool(finished) and (wrong_stage or
-        stage.startswith(('cohere-native-', 'pq-residual-', 'co-selection-', 'budget-object-selector-', 'budget-object-fitter-')) and (seen != set(passes) or tests != len(passes)))
+        stage.startswith(('cohere-native-', 'exact-sq8-scorer', 'pq-residual-', 'co-selection-', 'budget-object-selector-', 'budget-object-fitter-')) and (seen != set(passes) or tests != len(passes)))
     evidence_invalid |= cohere1024 and bool(finished) and stage == 'generation-release-test' and (seen != set(passes) or tests != len(passes))
     gate = (int(status) or int(log_status) or
         (96 if tests == 0 or failed or ignored or duplicate or evidence_invalid or any(count != 1 for count in passes.values()) else 0)) if finished else None
@@ -1490,7 +1566,7 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
     schema = COHERE_SQ8_BUILDER_STAGE_SCHEMA if cohere_sq8_builder else COHERE_COHORT_STAGE_SCHEMA if cohere_cohort else COHERE1024_STAGE_SCHEMA if cohere1024 else BUDGET_OBJECT_FITTER_STAGE_SCHEMA if budget_object_fitter else BUDGET_OBJECT_SELECTOR_STAGE_SCHEMA if budget_object_selector else CO_SELECTION_STAGE_SCHEMA if co_selection else PQ_RESIDUAL_STAGE_SCHEMA if pq_residual else FINE_SQ8_STAGE_SCHEMA if fine_sq8 else CELL_OVERLAP_STAGE_SCHEMA if cell_overlap else CONSTRAINED_SPLIT_STAGE_SCHEMA if constrained_split else HIERARCHICAL_CELLS_STAGE_SCHEMA if hierarchical_cells else FIXED48_STAGE_SCHEMA if fixed48 else BOUNDED_PUBLICATION_STAGE_SCHEMA
     required = {} if cohere_sq8_builder else cohere_cohort_required_tests() if cohere_cohort else cohere1024_required_tests() if cohere1024 else budget_object_fitter_required_tests() if budget_object_fitter else budget_object_selector_required_tests() if budget_object_selector else co_selection_required_tests() if co_selection else pq_residual_required_tests() if pq_residual else fine_sq8_required_tests() if fine_sq8 else cell_overlap_required_tests() if cell_overlap else constrained_split_required_tests() if constrained_split else HIERARCHICAL_CELLS_REQUIRED_TESTS if hierarchical_cells else FIXED48_REQUIRED_TESTS
     named_protocol = fixed48 or hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter or cohere1024 or cohere_cohort or cohere_sq8_builder
-    test_stage_indices = {index for index, (name, _) in enumerate(stages) if name not in ('release', 'clippy', 'test-build')}
+    test_stage_indices = {index for index, (name, _) in enumerate(stages) if name not in NON_TEST_STAGES}
     test_record_positions = {2*index+1 for index in test_stage_indices}
     named_stages = {test: index for index, (name, _) in enumerate(stages)
         for test in required.get(name, ())} if named_protocol else {BOUNDED_PUBLICATION_CAP_TEST: 1}
@@ -1516,8 +1592,8 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
                 test = match[1]
                 # Module regressions deliberately rerun overlap tests. The
                 # mandatory roster is counted only in its narrow owning stage.
-                if cohere1024:
-                    assert test in required.get(stages[len(records)//2][0], ()), 'D1024 test in wrong stage'
+                if cohere1024 or EXACT_SQ8_RUNTIME:  # the same names are owned by two stages (debug and release)
+                    assert test in required.get(stages[len(records)//2][0], ()), 'shared-roster test in wrong stage'
                 elif cell_overlap and len(records) in (5, 7):
                     pass
                 else:
@@ -1547,11 +1623,11 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
                 assert len(records) <= 2*len(stages), 'extra gate stage records'
     assert len(records) == 2*len(stages), 'all completed stages required'
     assert (all(test in seen[index] for index, (name, _) in enumerate(stages) for test in required.get(name, ()))
-        if cohere1024 else all(count == 1 for count in passes.values())), 'named tests must pass exactly once in each required stage'
+        if cohere1024 or EXACT_SQ8_RUNTIME else all(count == 1 for count in passes.values())), 'named tests must pass exactly once in each required stage'
     assert not cohere1024 or seen[1] == set(required['generation-release-test']) and test_counts[1] == 1, 'exact release oracle count'
     assert not strict_counts or all(summaries[index] == 1 and passed_lines[index] == test_counts[index] for index in test_stage_indices), 'actual nonzero test counts'
     assert not (pq_residual or co_selection or budget_object_selector or budget_object_fitter or cohere1024 or cohere_cohort) or all(seen[index] == set(required[name]) and test_counts[index] == len(required[name])
-        for index, (name, _) in enumerate(stages) if name.startswith(('cohere-native-', 'pq-residual-', 'co-selection-', 'budget-object-selector-', 'budget-object-fitter-'))), 'exact selector stage tests' if budget_object_selector else 'exact PQ residual stage tests'
+        for index, (name, _) in enumerate(stages) if name.startswith(('cohere-native-', 'exact-sq8-scorer', 'pq-residual-', 'co-selection-', 'budget-object-selector-', 'budget-object-fitter-'))), 'exact selector stage tests' if budget_object_selector else 'exact PQ residual stage tests'
     assert cohere_sq8_builder or not (hierarchical_cells or constrained_split or strict_counts) or test_builds == 1, 'actual unshimmed test-build completion'
     previous_finish = None
     for index, (name, command) in enumerate(stages):
@@ -1571,7 +1647,7 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
         assert (type(end['tests_run']) is int and end['tests_run'] > 0) if index in test_stage_indices else end['tests_run'] is None
         if named_protocol:
             assert index not in test_stage_indices or end['tests_run'] == test_counts[index], 'actual test count'
-            expected = {test: int(test in seen[index]) if cohere1024 else passes[test] for test in required.get(name, ())}
+            expected = {test: int(test in seen[index]) if cohere1024 or EXACT_SQ8_RUNTIME else passes[test] for test in required.get(name, ())}
             assert end[test_field] == expected and all(type(count) is int for count in end[test_field].values()), 'actual named test passes'
             started, finished = datetime.fromisoformat(start['started_at']), datetime.fromisoformat(end['finished_at'])
             assert started.utcoffset().total_seconds() == finished.utcoffset().total_seconds() == 0, 'UTC stage timestamps'
@@ -1665,6 +1741,8 @@ def validate_receipt(out, proof):
             assert path.is_file() and not path.is_symlink(), 'regular release binary: '+name
             with path.open('rb') as binary:
                 assert binary.read(4) == b'\x7fELF', 'ELF release binary: '+name
+    if EXACT_SQ8_RUNTIME:
+        assert (out/EXACT_SQ8_PROBE_ARTIFACT).read_bytes() == probe_lines((out/'test.log').read_bytes()), 'retained exact probe JSON lines'
     assert worker.artifact(out/'config.json')['sha256'] == proof['config_sha256']
     assert worker.artifact(out/'native-source-manifest.json')['sha256'] == proof['native_source_manifest_sha256']
     for name in ('source-before.json','source-after.json'):
@@ -1876,6 +1954,8 @@ def _worker_self_check(proof, config_body, manifest_body, completed_native_body=
         failures += ('swap', 'cpu', 'tasks', 'qualification-body', 'qualification-missing')
     if CONSTRAINED_SPLIT or CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR or BUDGET_OBJECT_FITTER or COHERE1024 or COHERE_COHORT or COHERE_SQ8_BUILDER:
         failures += ('gate-failure', 'tee-failure', 'ignored-tests')
+    if EXACT_SQ8_RUNTIME:
+        failures += ('probe-parity', 'probe-missing')
     for failure in failures:
         with tempfile.TemporaryDirectory() as tmp:
             repo, out = Path(tmp)/'repo', Path(tmp)/'out'
@@ -1947,16 +2027,20 @@ def _worker_self_check(proof, config_body, manifest_body, completed_native_body=
                             if failure != 'missing-cap-proof':
                                 for test in named:
                                     kw['stdout'].write(('test '+test+' ... ok\n').encode())
-                            if (CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR or BUDGET_OBJECT_FITTER or COHERE1024 or COHERE_COHORT) and not named and name not in ('release', 'clippy', 'test-build'):
+                            if (CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR or BUDGET_OBJECT_FITTER or COHERE1024 or COHERE_COHORT) and not named and name not in NON_TEST_STAGES:
                                 kw['stdout'].write(b'test tests::regression ... ok\n')
-                            if name not in ('release', 'clippy', 'test-build'):
+                            if name not in NON_TEST_STAGES:
                                 kw['stdout'].write(f'test result: ok. {max(1, len(named))} passed; 0 failed; {int(failure == "ignored-tests")} ignored; 0 measured; 100 filtered out; finished in 0.00s\n'.encode())
                         elif index == 1 and failure != 'missing-cap-proof':
                             kw['stdout'].write(('test '+BOUNDED_PUBLICATION_CAP_TEST+' ... ok\n').encode())
+                        if EXACT_SQ8_RUNTIME and name == 'exact-sq8-probe' and failure != 'probe-missing':
+                            for dimensions, rows_ in sorted(EXACT_SQ8_PROBE_SHAPES):
+                                kw['stdout'].write(encoded(dict(dimensions=dimensions, rows=rows_, candidate_over_baseline_median=1.0,
+                                    identical_ids_ordinals_score_bits=not (failure == 'probe-parity' and (dimensions, rows_) == (128, 1))))+b'\n')
                         if MINIMAL_ARCHIVE and name == 'test-build':
                             kw['stdout'].write(b'rust-test-build status=0 elapsed_seconds=0 jobs=1\n')
                         record.update(finished_at=record['started_at'], exit_status=0, gate_status=0,
-                            tests_run=(0 if failure == 'zero-stage-record' else False if failure == 'stage-bool' else max(1, len(named))) if name not in ('release', 'clippy', 'test-build') else None)
+                            tests_run=(0 if failure == 'zero-stage-record' else False if failure == 'stage-bool' else max(1, len(named))) if name not in NON_TEST_STAGES else None)
                         if CONSTRAINED_SPLIT or CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR or BUDGET_OBJECT_FITTER or COHERE1024 or COHERE_COHORT or COHERE_SQ8_BUILDER:
                             record['gate_status'] = 96 if failure == 'gate-failure' else 0
                             record['log_exit_status'] = 18 if failure == 'tee-failure' else 0
@@ -1973,7 +2057,7 @@ def _worker_self_check(proof, config_body, manifest_body, completed_native_body=
                 Path(args[args.index('-o')+1]).write_text('GNU time mocked resources\n')
                 if IMPLEMENTATION:
                     for name in RELEASE_ARTIFACTS:
-                        source = Path(kw['env']['CARGO_TARGET_DIR'])/'release'/('examples' if name.endswith(('/two_bit_http', '/build_sq8_source')) else '')/Path(name).name
+                        source = Path(kw['env']['CARGO_TARGET_DIR'])/'release'/('examples' if name.endswith(EXAMPLE_BINARIES) else '')/Path(name).name
                         source.parent.mkdir(parents=True, exist_ok=True)
                         if failure == 'missing-binary' and name == RELEASE_ARTIFACTS[-1]:
                             continue
@@ -2001,7 +2085,7 @@ def _worker_self_check(proof, config_body, manifest_body, completed_native_body=
                     assert not calls and not (out/'target').exists(), 'invalid qualification reached Cargo/target'
                     continue
                 result = worker.main('cargo' if TEST_BUILD or IMPLEMENTATION else 'fake-cargo', repo, out,
-                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION, startup_wave8=STARTUP_WAVE8, root_reuse=ROOT_REUSE, bounded_publication=BOUNDED_PUBLICATION, fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS, constrained_split=CONSTRAINED_SPLIT, cell_overlap=CELL_OVERLAP, fine_sq8=FINE_SQ8, pq_residual=PQ_RESIDUAL, co_selection=CO_SELECTION, budget_object_selector=BUDGET_OBJECT_SELECTOR, budget_object_fitter=BUDGET_OBJECT_FITTER, cohere1024=COHERE1024, cohere_cohort=COHERE_COHORT, cohere_sq8_builder=COHERE_SQ8_BUILDER)
+                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION, startup_wave8=STARTUP_WAVE8, root_reuse=ROOT_REUSE, bounded_publication=BOUNDED_PUBLICATION, fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS, constrained_split=CONSTRAINED_SPLIT, cell_overlap=CELL_OVERLAP, fine_sq8=FINE_SQ8, pq_residual=PQ_RESIDUAL, co_selection=CO_SELECTION, budget_object_selector=BUDGET_OBJECT_SELECTOR, budget_object_fitter=BUDGET_OBJECT_FITTER, cohere1024=COHERE1024, cohere_cohort=COHERE_COHORT and not EXACT_SQ8_RUNTIME, cohere_sq8_builder=COHERE_SQ8_BUILDER, exact_sq8_runtime=EXACT_SQ8_RUNTIME)
                 assert previous == (authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.HIERARCHICAL_CELLS, authority.CONSTRAINED_SPLIT, authority.CELL_OVERLAP, authority.FINE_SQ8, authority.PQ_RESIDUAL, authority.CO_SELECTION, authority.CONFIG, authority.CODE, authority.FIXED)
             assert len(calls) == 1, 'full test repeated'
             assert type(result['exit_status']) is int
@@ -2029,7 +2113,7 @@ def _worker_self_check(proof, config_body, manifest_body, completed_native_body=
                         assert set(result['artifacts']) & set(RELEASE_ARTIFACTS) == set(RELEASE_ARTIFACTS)
                         for name in RELEASE_ARTIFACTS:
                             data = (out/name).read_bytes()
-                            source = out/'target/release'/('examples' if name.endswith(('/two_bit_http', '/build_sq8_source')) else '')/Path(name).name
+                            source = out/'target/release'/('examples' if name.endswith(EXAMPLE_BINARIES) else '')/Path(name).name
                             assert worker.artifact(out/name) == worker.artifact(source)
                             assert (out/name).stat().st_mode & 0o111
                             (out/name).write_bytes(b'tampered binary')
@@ -2040,6 +2124,18 @@ def _worker_self_check(proof, config_body, manifest_body, completed_native_body=
                             (out/'workspace-receipt.json').write_bytes(encoded(altered))
                             rejected(lambda: validate_receipt(out, proof))
                             (out/'workspace-receipt.json').write_bytes(encoded(result))
+                    if EXACT_SQ8_RUNTIME:
+                        original_probe = (out/EXACT_SQ8_PROBE_ARTIFACT).read_bytes()
+                        assert original_probe == probe_lines((out/'test.log').read_bytes()) and EXACT_SQ8_PROBE_ARTIFACT in result['artifacts']
+                        for changed_probe in (b'', original_probe.splitlines(True)[0], original_probe+original_probe):
+                            (out/EXACT_SQ8_PROBE_ARTIFACT).write_bytes(changed_probe)
+                            rejected(lambda: validate_receipt(out, proof))
+                        (out/EXACT_SQ8_PROBE_ARTIFACT).write_bytes(original_probe)
+                        altered = copy.deepcopy(result)
+                        del altered['artifacts'][EXACT_SQ8_PROBE_ARTIFACT]
+                        (out/'workspace-receipt.json').write_bytes(encoded(altered))
+                        rejected(lambda: validate_receipt(out, proof))
+                        (out/'workspace-receipt.json').write_bytes(encoded(result))
                     if COHERE_SQ8_BUILDER:
                         (out/'workspace-receipt.json').write_bytes(encoded(dict(result, completed_native_qualification={})))
                         rejected(lambda:validate_receipt(out, proof))
@@ -2064,7 +2160,7 @@ def _worker_self_check(proof, config_body, manifest_body, completed_native_body=
                             rejected(lambda:validate_receipt(out, proof))
                         (out/'workspace-receipt.json').write_bytes(encoded(result))
                     if BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
-                        assert len(result['stages']) == (1 if COHERE_SQ8_BUILDER else len(COHERE_COHORT_STAGES) if COHERE_COHORT else len(COHERE1024_STAGES) if COHERE1024 else len(BUDGET_OBJECT_FITTER_STAGES) if BUDGET_OBJECT_FITTER else len(BUDGET_OBJECT_SELECTOR_STAGES) if BUDGET_OBJECT_SELECTOR else len(CO_SELECTION_STAGES) if CO_SELECTION else len(PQ_RESIDUAL_STAGES) if PQ_RESIDUAL else len(FINE_SQ8_STAGES) if FINE_SQ8 else 7 if CELL_OVERLAP else 6 if MINIMAL_ARCHIVE else 7) and all(record['tests_run'] > 0 for record in result['stages'] if record['stage'] not in ('release', 'clippy', 'test-build'))
+                        assert len(result['stages']) == (1 if COHERE_SQ8_BUILDER else len(COHERE_COHORT_STAGES) if COHERE_COHORT else len(COHERE1024_STAGES) if COHERE1024 else len(BUDGET_OBJECT_FITTER_STAGES) if BUDGET_OBJECT_FITTER else len(BUDGET_OBJECT_SELECTOR_STAGES) if BUDGET_OBJECT_SELECTOR else len(CO_SELECTION_STAGES) if CO_SELECTION else len(PQ_RESIDUAL_STAGES) if PQ_RESIDUAL else len(FINE_SQ8_STAGES) if FINE_SQ8 else 7 if CELL_OVERLAP else 6 if MINIMAL_ARCHIVE else 7) and all(record['tests_run'] > 0 for record in result['stages'] if record['stage'] not in NON_TEST_STAGES)
                         for stages in ([], result['stages'][:-1], result['stages']*2 if COHERE_SQ8_BUILDER else list(reversed(result['stages']))):
                             (out/'workspace-receipt.json').write_bytes(encoded(dict(result, stages=stages)))
                             rejected(lambda:validate_receipt(out, proof))
@@ -2516,7 +2612,7 @@ with patch.object(Path, 'read_text', read):
                 elif failure == 'success':
                     assert set(receipt['artifacts']) & set(RELEASE_ARTIFACTS) == set(RELEASE_ARTIFACTS)
                     for name in RELEASE_ARTIFACTS:
-                        source = out/'target/release'/('examples' if name.endswith(('/two_bit_http', '/build_sq8_source')) else '')/Path(name).name
+                        source = out/'target/release'/('examples' if name.endswith(EXAMPLE_BINARIES) else '')/Path(name).name
                         assert worker.artifact(out/name) == worker.artifact(source)
                         assert (out/name).stat().st_mode & 0o111
             else:
@@ -3005,7 +3101,7 @@ def _cohere_sq8_builder_self_check():
     base = Path(__file__).resolve().parents[1]
     old = types.ModuleType('sq8_historical_protocol')
     old.__file__ = __file__
-    original = subprocess.check_output(['git', 'show', '2941dfc9578e02404d77c71aed8f12fc8bdcf0a3:scripts/launch_native_workspace_execution_spot.py'], cwd=base)
+    original = subprocess.check_output([*ARCHIVE_GIT, 'show', '2941dfc9578e02404d77c71aed8f12fc8bdcf0a3:scripts/launch_native_workspace_execution_spot.py'], cwd=base)
     exec(compile(original, '<historical-protocol>', 'exec'), old.__dict__)
     fields = ('ROOT', 'CONFIG', 'PREFIX', 'TOKEN_PREFIX', 'TAG', 'SCHEMA', 'CONFIG_SCHEMA',
               'RECEIPT_SCHEMA', 'CODE', 'FIXED', 'ARTIFACTS', 'RELEASE_ARTIFACTS', 'TERMINAL_IDENTITIES', 'NATIVE_DELTA')
@@ -3220,38 +3316,38 @@ def _cohere_sq8_builder_self_check():
     print('PASS cohere-sq8-builder glue: completed six-gate native receipt bound before Cargo; one recorded build; empty native delta/test roster; source/archive/binary/exit/tee/receipt/cgroup/ACK/termination-wait negatives; historical modes preserved; SYNTHETIC MOCKS ONLY, Rust UNRUN')
 
 
-def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024=False, cohere_cohort=False):
+def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024=False, cohere_cohort=False, exact_sq8_runtime=False):
     """Minimal source-bound fixtures only; Rust and cloud execution are mocked."""
     if __name__ == '__main__':
         from scripts import launch_native_workspace_execution_spot as authority
-        return authority._budget_object_selector_self_check(budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort)
+        return authority._budget_object_selector_self_check(budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort, exact_sq8_runtime=exact_sq8_runtime)
     import inspect
     from shlex import split
     import types
     module = sys.modules[__name__]
     base = Path(__file__).resolve().parents[1]
-    mode_name = 'cohere_cohort' if cohere_cohort else 'cohere1024' if cohere1024 else 'budget_object_fitter' if budget_object_fitter else 'budget_object_selector'
+    mode_name = 'exact_sq8_runtime' if exact_sq8_runtime else 'cohere_cohort' if cohere_cohort else 'cohere1024' if cohere1024 else 'budget_object_fitter' if budget_object_fitter else 'budget_object_selector'
     mode = {mode_name: True}
-    tag = 'cohere-cohort' if cohere_cohort else 'cohere1024' if cohere1024 else 'budget-object-fitter' if budget_object_fitter else 'budget-object-selector'
-    required_attr = 'COHERE_COHORT_REQUIRED_TESTS' if cohere_cohort else 'COHERE1024_REQUIRED_TESTS' if cohere1024 else 'BUDGET_OBJECT_FITTER_REQUIRED_TESTS' if budget_object_fitter else 'BUDGET_OBJECT_SELECTOR_REQUIRED_TESTS'
+    tag = 'exact-sq8-runtime' if exact_sq8_runtime else 'cohere-cohort' if cohere_cohort else 'cohere1024' if cohere1024 else 'budget-object-fitter' if budget_object_fitter else 'budget-object-selector'
+    required_attr = 'EXACT_SQ8_RUNTIME_REQUIRED_TESTS' if exact_sq8_runtime else 'COHERE_COHORT_REQUIRED_TESTS' if cohere_cohort else 'COHERE1024_REQUIRED_TESTS' if cohere1024 else 'BUDGET_OBJECT_FITTER_REQUIRED_TESTS' if budget_object_fitter else 'BUDGET_OBJECT_SELECTOR_REQUIRED_TESTS'
     required_tests = cohere_cohort_required_tests if cohere_cohort else cohere1024_required_tests if cohere1024 else budget_object_fitter_required_tests if budget_object_fitter else budget_object_selector_required_tests
     validate_config = validate_cohere_cohort_config if cohere_cohort else validate_cohere1024_config if cohere1024 else validate_budget_object_fitter_config if budget_object_fitter else validate_budget_object_selector_config
-    stages = COHERE_COHORT_STAGES if cohere_cohort else COHERE1024_STAGES if cohere1024 else BUDGET_OBJECT_FITTER_STAGES if budget_object_fitter else BUDGET_OBJECT_SELECTOR_STAGES
-    stage_name = 'cohere-native-publisher-tests' if cohere_cohort else 'generation-tests' if cohere1024 else tag+'-tests'
+    stages = EXACT_SQ8_RUNTIME_STAGES if exact_sq8_runtime else COHERE_COHORT_STAGES if cohere_cohort else COHERE1024_STAGES if cohere1024 else BUDGET_OBJECT_FITTER_STAGES if budget_object_fitter else BUDGET_OBJECT_SELECTOR_STAGES
+    stage_name = 'exact-sq8-scorer-tests' if exact_sq8_runtime else 'cohere-native-publisher-tests' if cohere_cohort else 'generation-tests' if cohere1024 else tag+'-tests'
     assert mode_name in inspect.signature(configure).parameters, 'execution mode missing'
     assert mode_name in inspect.signature(execution_mode).parameters
     assert mode_name in inspect.signature(worker.main).parameters
     # Compare every historical config/roster byte with the exact opening base.
     old = types.ModuleType('selector_historical_protocol')
     old.__file__ = __file__
-    exec(compile(subprocess.check_output(['git', 'show', ('a76d2bb4cde8c7daafd93eafb09b5c7264bbcfee' if cohere_cohort else 'e68b9493041daa5562b566b92ef23bddcd1e093d' if cohere1024 else 'bb8fe89f30e8e5dcf9fbb6a5bf4440704dc01f66' if budget_object_fitter else BUDGET_OBJECT_SELECTOR_CHECK_BASE)+':scripts/launch_native_workspace_execution_spot.py'], cwd=base), '<historical-protocol>', 'exec'), old.__dict__)
+    exec(compile(subprocess.check_output([*ARCHIVE_GIT, 'show', (EXACT_SQ8_HISTORICAL_BASE if exact_sq8_runtime else 'a76d2bb4cde8c7daafd93eafb09b5c7264bbcfee' if cohere_cohort else 'e68b9493041daa5562b566b92ef23bddcd1e093d' if cohere1024 else 'bb8fe89f30e8e5dcf9fbb6a5bf4440704dc01f66' if budget_object_fitter else BUDGET_OBJECT_SELECTOR_CHECK_BASE)+':scripts/launch_native_workspace_execution_spot.py'], cwd=base), '<historical-protocol>', 'exec'), old.__dict__)
     fields = ('ROOT', 'CONFIG', 'PREFIX', 'TOKEN_PREFIX', 'TAG', 'SCHEMA', 'CONFIG_SCHEMA',
               'RECEIPT_SCHEMA', 'CODE', 'FIXED', 'ARTIFACTS', 'RELEASE_ARTIFACTS', 'TERMINAL_IDENTITIES', 'NATIVE_DELTA')
     modes = [{}, {'semantic_1m':True}, {'semantic_1m':True, 'test_build':True},
              {'semantic_1m':True, 'implementation':True}]
     modes += [{name:True} for name in ('startup_wave8', 'root_reuse', 'bounded_publication',
         'fixed48', 'hierarchical_cells', 'constrained_split', 'cell_overlap', 'fine_sq8', 'pq_residual', 'co_selection')]
-    historical_modes = [*modes, {'budget_object_selector':True}, {'budget_object_fitter':True}, {'cohere1024':True}] if cohere_cohort else [*modes, {"budget_object_selector":True}, {"budget_object_fitter":True}] if cohere1024 else [*modes, {"budget_object_selector":True}] if budget_object_fitter else modes
+    historical_modes = [*modes, {'budget_object_selector':True}, {'budget_object_fitter':True}, {'cohere1024':True}, {'cohere_cohort':True}, {'cohere_sq8_builder':True}] if exact_sq8_runtime else [*modes, {'budget_object_selector':True}, {'budget_object_fitter':True}, {'cohere1024':True}] if cohere_cohort else [*modes, {"budget_object_selector":True}, {"budget_object_fitter":True}] if cohere1024 else [*modes, {"budget_object_selector":True}] if budget_object_fitter else modes
     for historical_mode in historical_modes:
         old.configure(**historical_mode)
         with execution_mode(**historical_mode):
@@ -3263,12 +3359,26 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
         assert FIXED['mandatory_test_names_pending'] is True
         rejected(required_tests)
         rejected(lambda:validate_config(FIXED))
-    synthetic_names = COHERE_COHORT_REQUIRED_TESTS[stage_name] if cohere_cohort else COHERE1024_REQUIRED_TESTS[stage_name] if cohere1024 else (*BUDGET_OBJECT_SELECTOR_REQUIRED_TESTS['budget-object-selector-tests'],
+    synthetic_names = EXACT_SQ8_RUNTIME_REQUIRED_TESTS[stage_name] if exact_sq8_runtime else COHERE_COHORT_REQUIRED_TESTS[stage_name] if cohere_cohort else COHERE1024_REQUIRED_TESTS[stage_name] if cohere1024 else (*BUDGET_OBJECT_SELECTOR_REQUIRED_TESTS['budget-object-selector-tests'],
         'budget_object_selector::tests::synthetic_prepared_fixture', 'budget_object_fitter::tests::synthetic_contract_fixture') if budget_object_fitter else ('budget_object_selector::tests::synthetic_contract_fixture',)
-    synthetic = COHERE_COHORT_REQUIRED_TESTS if cohere_cohort else COHERE1024_REQUIRED_TESTS if cohere1024 else {stage_name: synthetic_names}
+    synthetic = EXACT_SQ8_RUNTIME_REQUIRED_TESTS if exact_sq8_runtime else COHERE_COHORT_REQUIRED_TESTS if cohere_cohort else COHERE1024_REQUIRED_TESTS if cohere1024 else {stage_name: synthetic_names}
     with patch.object(module, required_attr, synthetic), execution_mode(**mode):
-        assert len(stages) == (6 if cohere_cohort else 6 if cohere1024 else 4)
-        if cohere_cohort:
+        assert len(stages) == (7 if exact_sq8_runtime else 6 if cohere_cohort else 6 if cohere1024 else 4)
+        if exact_sq8_runtime:
+            assert NATIVE_DELTA == EXACT_SQ8_RUNTIME_DELTA == tuple(sorted(EXACT_SQ8_RUNTIME_DELTA)) and len(NATIVE_DELTA) == 3
+            assert RELEASE_ARTIFACTS == EXACT_SQ8_RUNTIME_RELEASE == ('binaries/check_cohere_native_baseline', 'binaries/exact_sq8_runtime_probe')
+            assert str(ROOT) == 'docs/research/performance-architecture-20260930/cohere1024/exact-sq8-runtime-gates'
+            assert COHERE_COHORT_STAGES is EXACT_SQ8_RUNTIME_STAGES and dict(stages)['exact-sq8-probe'] == EXACT_SQ8_PROBE_COMMAND
+            assert [name for name, _ in stages] == ['exact-sq8-scorer-tests', 'exact-sq8-scorer-release-tests', 'returned-sq8-tests', 'release', 'exact-sq8-probe', 'clippy', 'test-build']
+            assert sum(len(tests) for tests in synthetic.values()) == 14 and all(len(tests) == 7 for tests in synthetic.values())
+            good_probe = b''.join(encoded(dict(dimensions=d, rows=r, candidate_over_baseline_median=1.0, identical_ids_ordinals_score_bits=True))+b'\n'
+                                  for d, r in sorted(EXACT_SQ8_PROBE_SHAPES))
+            assert probe_lines(b'noise\n'+good_probe+b'tail without newline') == good_probe and len(good_probe.splitlines()) == 18
+            for bad_probe in (b'', b'no json lines\n', good_probe.replace(b'true', b'false', 1), good_probe.splitlines(True)[0] * 18,
+                              b''.join(good_probe.splitlines(True)[1:]), good_probe + good_probe.splitlines(True)[0],
+                              good_probe.replace(b'"dimensions":128', b'"dimensions":129', 1), good_probe.replace(b'true', b'1', 1)):
+                rejected(lambda: probe_lines(bad_probe))
+        elif cohere_cohort:
             assert NATIVE_DELTA == COHERE_COHORT_DELTA == tuple(sorted(COHERE_COHORT_DELTA))
             assert RELEASE_ARTIFACTS == ('binaries/check_cohere_native_baseline', 'binaries/prepare_cohere_native_cohort', 'binaries/publish_two_bit_generation')
             assert len(NATIVE_DELTA) == 1 and sum(len(tests) for tests in synthetic.values()) == 18
@@ -3281,11 +3391,11 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
             assert set(NATIVE_DELTA) == {'crates/borsuk/src/budget_object_selector.rs', 'crates/borsuk/src/lib.rs'} | ({'crates/borsuk/src/budget_object_fitter.rs'} if budget_object_fitter else set())
             assert RELEASE_ARTIFACTS == ('binaries/hierarchical_semantic_cells',)
             assert str(ROOT).endswith('fine-sq8-groups/budget-object-selector/'+('fitter-implementation-gates' if budget_object_fitter else 'implementation-gates'))
-        assert mode_flag() == ' --'+tag+'-implementation'
+        assert mode_flag() == (' --exact-sq8-runtime' if exact_sq8_runtime else ' --'+tag+'-implementation')
         assert archive_binding_prefix() == 'BORSUK_'+tag.replace('-','_').upper()+'_'
-        assert CONFIG_SCHEMA == FIXED['schema'] == 'borsuk-'+tag+'-implementation-gates-v1'
-        assert CODE == (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_'+mode_name+'_implementation.sh')
-        assert ARTIFACTS == (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS)
+        assert CONFIG_SCHEMA == FIXED['schema'] == ('borsuk-exact-sq8-runtime-gates-v1' if exact_sq8_runtime else 'borsuk-'+tag+'-implementation-gates-v1')
+        assert CODE == (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_exact_sq8_runtime.sh' if exact_sq8_runtime else 'scripts/check_'+mode_name+'_implementation.sh')
+        assert ARTIFACTS == (*FULL_ARTIFACTS, *RELEASE_ARTIFACTS, *((EXACT_SQ8_PROBE_ARTIFACT,) if exact_sq8_runtime else ()))
         if cohere1024 or cohere_cohort:
             from unittest.mock import Mock
             dispatch = Mock(return_value={'gate_status':0})
@@ -3299,7 +3409,7 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
             assert dispatch.call_count == 1 and args == ('cargo', 'repo', 'out')
             assert kwargs == {name: name in ('semantic_1m', 'implementation', mode_name)
                 for name in inspect.signature(worker.main).parameters if name not in ('cargo', 'repo', 'out')}
-        for conflicting_mode in historical_modes[2:3]+historical_modes[4:]:
+        for conflicting_mode in (historical_modes[2:3]+historical_modes[4:] if not exact_sq8_runtime else [{'cohere_cohort':True}, {'cohere_sq8_builder':True}, {'cohere1024':True}, {'budget_object_selector':True}]):
             rejected(lambda:configure(**mode, **conflicting_mode))
         rejected(lambda:configure(**{mode_name:1}))
         for invalid in ({}, {stage_name: ()},
@@ -3325,7 +3435,7 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
         if not (cohere1024 or cohere_cohort):
             functions = functions.replace('sys.exit(record_constrained_split_stage',
                 'from scripts import launch_native_workspace_execution_spot as c\nc.'+required_attr+' = '+encoded(synthetic).decode()+'\nsys.exit(record_constrained_split_stage')
-        for name, command in (stages[:3] if cohere_cohort else stages[:1]):
+        for name, command in (stages[:2] if exact_sq8_runtime else stages[:3] if cohere_cohort else stages[:1]):
             fake_output = ''.join('test '+test+' ... ok\n' for test in synthetic[name])+f'test result: ok. {len(synthetic[name])} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s\n'
             with tempfile.TemporaryDirectory() as tmp:
                 fake = Path(tmp)/'cargo'
@@ -3350,7 +3460,7 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
             log, usage, combined = (Path(tmp)/name for name in ('stage.log', 'usage.txt', 'test.log'))
             lines = []
             for name, command in stages:
-                names = ('semantic_unit_router::tests::synthetic_contract_fixture',) if cohere1024 and name == 'router-tests' else synthetic.get(name, ())
+                names = ('semantic_unit_router::tests::synthetic_contract_fixture',) if cohere1024 and name == 'router-tests' else ('returned_sq8::tests::synthetic_nonzero_fixture',) if exact_sq8_runtime and name == 'returned-sq8-tests' else synthetic.get(name, ())
                 if cohere1024 and name == 'generation-tests':
                     names += ('two_bit_generation::source_walk_tests::synthetic_regression',)
                 good = ''.join('test '+test+' ... ok\n' for test in names)
@@ -3364,11 +3474,14 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
                 cases = [(good, '0', '0', 0), (good, '17', '0', 17), (good, '0', '18', 18)]
                 if names:
                     test = 'test '+names[0]+' ... ok'
-                    cases += [(good.replace(test, replacement), '0', '0', 96) for replacement in ('', test+'\n'+test, test.replace('ok', 'FAILED'), test.replace('ok', 'ignored'), *(() if cohere1024 and name == 'router-tests' else ('test budget_object_selector::tests::foreign ... ok',)))]
+                    cases += [(good.replace(test, replacement), '0', '0', 96) for replacement in ('', test+'\n'+test, test.replace('ok', 'FAILED'), test.replace('ok', 'ignored'), *(() if (cohere1024 and name == 'router-tests') or (exact_sq8_runtime and name == 'returned-sq8-tests') else ('test budget_object_selector::tests::foreign ... ok',)))]
                     cases += [(good.replace(str(len(names))+' passed', '0 passed'), '0', '0', 96), (good.replace('0 ignored', '1 ignored'), '0', '0', 96), (good+good, '0', '0', 96)]
                 if cohere_cohort and names:
-                    cases.append(('test tests::extra ... ok\n'+good.replace(f'{len(names)} passed', f'{len(names)+1} passed'), '0', '0', 96))
-                    cases.append((good.replace(names[0], next(test for tests in synthetic.values() for test in tests if test not in names)), '0', '0', 96))
+                    if not (exact_sq8_runtime and name == 'returned-sq8-tests'):  # nonzero-count stage admits any extra test
+                        cases.append(('test tests::extra ... ok\n'+good.replace(f'{len(names)} passed', f'{len(names)+1} passed'), '0', '0', 96))
+                    alternatives = [test for tests in synthetic.values() for test in tests if test not in names]
+                    if alternatives:
+                        cases.append((good.replace(names[0], alternatives[0]), '0', '0', 96))
                 if cohere1024 and name == 'router-tests':
                     cases.append((good.replace(names[0], synthetic_names[0]), '0', '0', 96))
                 if cohere1024 and name == 'generation-release-test':
@@ -3406,7 +3519,7 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
             repo, out = Path(tmp)/'repo', Path(tmp)/'out'
             repo.mkdir(); out.mkdir()
             bodies = {name:b'// temporary native fixture\n' for name in NATIVE_DELTA}
-            if cohere_cohort:
+            if cohere_cohort and not exact_sq8_runtime:
                 bodies[NATIVE_DELTA[0]] = (base/NATIVE_DELTA[0]).read_bytes()
                 # Every mandatory name must be a real test function in its own bin source.
                 for roster_stage, source in (('cohere-native-publisher-tests', NATIVE_DELTA[0]),
@@ -3423,7 +3536,7 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
                 path = repo/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(body)
             inventory = worker.source_hashes(repo)
             manifest_path = ROOT/'native-source-manifest.json'
-            manifest = dict(schema='borsuk-'+tag+('-implementation-gates' if cohere1024 or cohere_cohort else '')+'-native-source-manifest-v1',
+            manifest = dict(schema='borsuk-'+tag+('-gates' if exact_sq8_runtime else '-implementation-gates' if cohere1024 or cohere_cohort else '')+'-native-source-manifest-v1',
                 native_source_commit='7'*40, control_native_source_commit='8'*40,
                 candidate_qualification_pending=True, candidate_delta_paths=list(NATIVE_DELTA),
                 source_sha256=inventory, source_file_count=len(inventory), source_identity_sha256=worker.source_identity(inventory))
@@ -3438,7 +3551,7 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
                 source_archive_file_count=len(paths), source_archive_support_sha256=support)
             config_body = encoded(config); (repo/CONFIG).write_bytes(config_body)
             proof = qualify(repo)
-            assert proof['schema'] == 'borsuk-'+tag+'-implementation-gates-qualification-v1'
+            assert proof['schema'] == ('borsuk-exact-sq8-runtime-gates-qualification-v1' if exact_sq8_runtime else 'borsuk-'+tag+'-implementation-gates-qualification-v1')
             assert stage(repo, out) == proof
             for key, value in (('mandatory_test_names_pending',True), ('mandatory_tests',{}),
                     ('controller_authority_pending',True), ('source_archive_paths_sha256','0'*64),
@@ -3485,7 +3598,7 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
                 (('diff','--no-renames','--name-only','5'*40,'HEAD'),'' if len(NATIVE_DELTA) == 1 else NATIVE_DELTA[0]),
                 (('diff','--no-renames','--name-only','5'*40,'HEAD'),'\n'.join((*NATIVE_DELTA,'extra.rs'))),
                 (('show','7'*40+':'+NATIVE_DELTA[0]),b'wrong native blob'))]
-            if cohere_cohort:
+            if cohere_cohort and not exact_sq8_runtime:
                 failures.append((('diff','--no-renames','--diff-filter=A','--name-only','5'*40,'HEAD'), ''))
             for key, value in failures:
                 changed = dict(answers)
@@ -3502,7 +3615,7 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
             files = _worker_self_check(proof, config_body, manifest_body)
             _collection_self_check(proof, files, body)
             _lifecycle_self_check(proof)
-    print('PASS '+tag+(' glue: six serial bin gates (publisher 2 + old 16 names, release 3 bins);' if cohere_cohort else ' glue: six serial gates; debug/release oracle once per stage;' if cohere1024 else ' glue: four serial gates;')+' exact names/counts/resources; pending/source/archive/tee/ACK/termination refusals; historical protocol bytes preserved; SYNTHETIC MOCKS ONLY, Rust UNRUN')
+    print('PASS '+tag+(' glue: seven serial gates (7 scorer tests debug+release, returned nonzero, release baseline+probe binaries, one-CPU probe, clippy, test-build);' if exact_sq8_runtime else ' glue: six serial bin gates (publisher 2 + old 16 names, release 3 bins);' if cohere_cohort else ' glue: six serial gates; debug/release oracle once per stage;' if cohere1024 else ' glue: four serial gates;')+' exact names/counts/resources; pending/source/archive/tee/ACK/termination refusals; historical protocol bytes preserved; SYNTHETIC MOCKS ONLY, Rust UNRUN')
 
 
 def _budget_object_fitter_self_check():
@@ -3996,10 +4109,13 @@ def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication
                     rejected(lambda:preflight())
 
 
-def self_check(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False, cohere1024=False, cohere_cohort=False, cohere_sq8_builder=False):
-    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort, cohere_sq8_builder=cohere_sq8_builder):
+def self_check(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False, cohere1024=False, cohere_cohort=False, cohere_sq8_builder=False, exact_sq8_runtime=False):
+    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort, cohere_sq8_builder=cohere_sq8_builder, exact_sq8_runtime=exact_sq8_runtime):
         if cohere_sq8_builder:
             return _cohere_sq8_builder_self_check()
+        if exact_sq8_runtime:
+            _budget_object_selector_self_check(cohere_cohort=True, exact_sq8_runtime=True)
+            return
         if cohere_cohort:
             _budget_object_selector_self_check(cohere_cohort=True)
             return
@@ -4222,6 +4338,7 @@ def _self_check():
 if __name__ == '__main__':
     args = sys.argv[1:]
     cohere_sq8_builder = args[:1] == ['--cohere-sq8-builder']
+    exact_sq8_runtime = args[:1] == ['--exact-sq8-runtime']
     cohere_cohort = args[:1] == ['--cohere-cohort-implementation']
     cohere1024 = args[:1] == ['--cohere1024-implementation']
     budget_object_fitter = args[:1] == ['--budget-object-fitter-implementation']
@@ -4236,16 +4353,18 @@ if __name__ == '__main__':
     bounded_publication = args[:1] == ['--bounded-publication-implementation']
     root_reuse = args[:1] == ['--root-reuse-implementation']
     startup_wave8 = args[:1] == ['--startup-wave8-implementation']
-    implementation = cohere_sq8_builder or cohere_cohort or cohere1024 or budget_object_fitter or budget_object_selector or co_selection or pq_residual or fine_sq8 or cell_overlap or constrained_split or hierarchical_cells or fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
+    implementation = cohere_sq8_builder or exact_sq8_runtime or cohere_cohort or cohere1024 or budget_object_fitter or budget_object_selector or co_selection or pq_residual or fine_sq8 or cell_overlap or constrained_split or hierarchical_cells or fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
     test_build = args[:1] == ['--semantic-1m-test-build']
     semantic_1m = implementation or test_build or args[:1] == ['--semantic-1m']
     if semantic_1m:
         args = args[1:]
-    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort, cohere_sq8_builder=cohere_sq8_builder)
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort, cohere_sq8_builder=cohere_sq8_builder, exact_sq8_runtime=exact_sq8_runtime)
     if args[:1] and args[0].startswith('--'):
         resource.setrlimit(resource.RLIMIT_AS, (200*1024**2,200*1024**2))
     if args == ['--self-check'] and cohere_sq8_builder:
         _cohere_sq8_builder_self_check()
+    elif args == ['--self-check'] and exact_sq8_runtime:
+        _budget_object_selector_self_check(cohere_cohort=True, exact_sq8_runtime=True)
     elif args == ['--self-check'] and cohere_cohort:
         _budget_object_selector_self_check(cohere_cohort=True)
     elif args == ['--self-check'] and cohere1024:

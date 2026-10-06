@@ -1,0 +1,26 @@
+{
+  "schema": "borsuk-controller-root-source-check-v1",
+  "controller_commit": "c15cf263b9a19ef6fafd9a619ada5fdb18e8b314",
+  "owned_sha256": {
+    "scripts/launch_native_workspace_execution_spot.py": "1edee4fbc495d5a25869b026d454239e3d2aefb141febfbcc30f7c1c0fcf38e1",
+    "scripts/check_native_workspace_execution.py": "857c9e3688dacc71579a83f909da9d2da98ac63899c55539ccb63ea58ebe5398",
+    "scripts/check_exact_sq8_runtime.sh": "e81a22214b37f28344226b3d728f5ed32a78b80a06d76a0633f343a43961a125"
+  },
+  "original_service": "borsuk-exact-sq8-root-source-gate-20261006.service",
+  "invocation_id": "260183887e794397b954c46e1126c548",
+  "exit_code": 0,
+  "runtime_seconds": 8.211,
+  "cpu_seconds": 7.381,
+  "reported_memory_peak": "121.3M",
+  "reported_swap_peak": "0B",
+  "requested_limits": {
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "cpu_quota_percent": 100,
+    "allowed_cpus": "1",
+    "runtime_seconds": 120
+  },
+  "post_exit_property_readback": "unit unloaded; raw runner completion retained in tool transcript",
+  "native_tests_run": false,
+  "qualification_scope": "synthetic controller only"
+}

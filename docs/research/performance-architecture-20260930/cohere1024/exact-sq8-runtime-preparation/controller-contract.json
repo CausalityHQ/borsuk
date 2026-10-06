@@ -1,0 +1,164 @@
+{
+  "status": "SOURCE_COMMITTED_UNVERIFIED_MOCKS_ONLY",
+  "base": "origin/main d6b8e1f7 (scripts unchanged since 747b71bf); Rust candidate frozen at 9d540e52/8da8bd4e/cac7ef36 on devbox/exact-sq8-simd (root integrates; this glue never edits Rust)",
+  "branch": "devbox/exact-sq8-gates (this worktree)",
+  "owned_files": [
+    "scripts/launch_native_workspace_execution_spot.py",
+    "scripts/check_native_workspace_execution.py",
+    "scripts/check_exact_sq8_runtime.sh (new)"
+  ],
+  "approach": "ONE new mode flag --exact-sq8-runtime, implemented as a data-variant of the existing minimal-archive cohort mode lifecycle (same systemd/stage/ELF/ACK/termination/replay paths, no new controller): configure(exact_sq8_runtime=True) aliases the cohort-family code paths and rebinds only the protocol data (root, schemas, CODE, FIXED command, NATIVE_DELTA, RELEASE_ARTIFACTS, stage roster, required-test roster). Every historical mode (including cohere_cohort) is byte-identical: existing --self-check runs for all modes are the regression gate, and the mode data rebind is reset on every configure().",
+  "root_and_schemas": {
+    "ROOT": "docs/research/performance-architecture-20260930/cohere1024/exact-sq8-runtime-gates",
+    "CONFIG": "ROOT/config.json  (root-supplied; controller_authority_pending must be false)",
+    "TOKEN_PREFIX": "exact-sq8-runtime-gates-",
+    "PREFIX": "research/semantic-router/20261006/exact-sq8-runtime-gates-",
+    "TAG": "borsuk-exact-sq8-runtime-gates",
+    "SCHEMA": "borsuk-exact-sq8-runtime-gates-spot-v1",
+    "CONFIG_SCHEMA": "borsuk-exact-sq8-runtime-gates-v1",
+    "RECEIPT_SCHEMA": "borsuk-exact-sq8-runtime-gates-receipt-v1",
+    "STAGE_SCHEMA": "borsuk-exact-sq8-runtime-gates-stage-v1",
+    "manifest_schema": "borsuk-exact-sq8-runtime-gates-native-source-manifest-v1",
+    "qualification_schema": "borsuk-exact-sq8-runtime-gates-qualification-v1",
+    "mode_flag": "--exact-sq8-runtime",
+    "archive_env_prefix": "BORSUK_EXACT_SQ8_RUNTIME_"
+  },
+  "native_source": {
+    "inventory": "derived from the committed tree (worker.source_hashes), never a fixed count; manifest.source_file_count must equal the derived count and manifest.source_sha256 the derived map (root supplies the manifest)",
+    "NATIVE_DELTA_exact_sorted_3": [
+      "crates/borsuk/Cargo.toml",
+      "crates/borsuk/examples/exact_sq8_runtime_probe.rs",
+      "crates/borsuk/src/exact_sq8_nominee.rs"
+    ],
+    "delta_rule": "candidate_delta_paths must equal this sorted tuple (Cargo.toml and the scorer are MODIFIED, the example is ADDED, so the cohort-only added-files diff assertion is not applied to this mode); every delta file must exist in the inventory and its committed blob SHA must equal the root manifest"
+  },
+  "FIXED_resources": "unchanged FULL_FIXED: 8GiB memory, swap 0, CPUQuota 200% (compiler CPU2), TasksMax 512, test/service/machine limits and environment (RUSTC_WRAPPER empty, CARGO_BUILD_JOBS=1, BORSUK_TEST_BUILD_JOBS=1, threads 1, BORSUK_TEST_BUILD_COMMAND forbidden); instance type/image/subnet/Spot cap/compute cap are the existing module values; root selects the fresh quote and final resources and owns paid execution",
+  "serial_stages_jobs1": [
+    [
+      "exact-sq8-scorer-tests",
+      "cargo test --locked -p borsuk --lib exact_sq8_nominee:: -- --test-threads=1"
+    ],
+    [
+      "exact-sq8-scorer-release-tests",
+      "cargo test --release --locked -p borsuk --lib exact_sq8_nominee:: -- --test-threads=1"
+    ],
+    [
+      "returned-sq8-tests",
+      "cargo test --locked -p borsuk --lib returned_sq8:: -- --test-threads=1"
+    ],
+    [
+      "release",
+      "cargo build --release --locked -p borsuk --example exact_sq8_runtime_probe --bin check_cohere_native_baseline"
+    ],
+    [
+      "exact-sq8-probe",
+      "bash -c 'exec taskset -c 0 \"$CARGO_TARGET_DIR/release/examples/exact_sq8_runtime_probe\"'"
+    ],
+    [
+      "clippy",
+      "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious"
+    ],
+    [
+      "test-build",
+      "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+    ]
+  ],
+  "required_test_rosters": {
+    "exact-sq8-scorer-tests and exact-sq8-scorer-release-tests (identical, each name exactly once per stage, exact set, tests_run == 7, no failed/ignored)": [
+      "exact_sq8_nominee::tests::exact_rows_score_and_tie_by_id",
+      "exact_sq8_nominee::tests::rejects_short_final_row_invalid_ordinal_and_nonfinite_query",
+      "exact_sq8_nominee::tests::file_and_ram_placements_score_the_same_bytes",
+      "exact_sq8_nominee::tests::blocked_scores_equal_independent_scalar_oracle_bits",
+      "exact_sq8_nominee::tests::rosters_keep_requested_order_ids_and_ordinals_across_blocks",
+      "exact_sq8_nominee::tests::signed_zero_negative_nonunit_and_near_ties_keep_bits_and_id_order",
+      "exact_sq8_nominee::tests::corrupt_inputs_keep_error_classes_in_every_block_position"
+    ],
+    "returned-sq8-tests": "nonzero tests_run, exactly one summary, no failed/ignored (no name roster)",
+    "exact-sq8-probe": "no test lines (like release/clippy); the probe exits 2 with INVALID on any scalar/baseline/candidate mismatch, which fails the stage",
+    "release/clippy/test-build": "existing rules (exactly one unshimmed rust-test-build status=0 jobs=1 line in test-build)"
+  },
+  "retained_artifacts": {
+    "binaries": [
+      "binaries/check_cohere_native_baseline (release baseline)",
+      "binaries/exact_sq8_runtime_probe (release runtime probe, copied from target/release/examples, ELF-checked)"
+    ],
+    "timing": "the probe JSON lines stay in the raw test.log stage record and are also extracted verbatim to exact-sq8-probe.jsonl by the stage script (grep of lines containing candidate_over_baseline_median); both are authenticated terminal artifacts; they are not parsed as competitor/recall evidence and no speedup acceptance is invented",
+    "receipts": "source-qualification.json, config.json, native-source-manifest.json, source-before/after, workspace-receipt.json (stage records with resources), test.log, test-resources.txt, workspace-cgroup.json, cpu.txt, rustc/cargo versions, run-closed.log"
+  },
+  "CODE": "FULL_CODE + scripts/check_rust_test_build.sh + scripts/check_exact_sq8_runtime.sh (code hashes frozen by the root in config.controller_code_sha256)",
+  "ARTIFACTS": "FULL_ARTIFACTS + the two retained binaries + exact-sq8-probe.jsonl; exact roster asserted at collection",
+  "exits": "stage runner exits nonzero on any stage failure, bad parity (probe exit 2), wrong/missing/duplicate/ignored/extra test, missing/duplicate summary, or an unshimmed test-build count != 1",
+  "synthetic_tests_planned": [
+    "configure/execution_mode distinctness and mutual exclusion, historical modes unchanged (existing historical-protocol byte comparison in every mode's self-check)",
+    "stage roster/argv equality with the shell script, bash -n, real bash/time/tee run with fake cargo for each stage kind incl. nonzero, tee failure and probe parity failure",
+    "mandatory test roster negatives (missing, duplicated, foreign, ignored, failed, wrong stage, count mismatch) for both scorer stages; returned nonzero positive and zero-test negative",
+    "tiny real-file qualify/stage/replay through the existing portable path, exact 3-path delta negatives, derived (not fixed) inventory count, drift negatives, archive/terminal/ACK negatives via the existing lifecycle fixtures",
+    "limits CPU1/256MiB/noSwap/120s; no Cargo, native, data, network or AWS"
+  ],
+  "not_done_here": [
+    "no Rust edits",
+    "no paid launch, cost quote or final resources (root)",
+    "no performance, recall or competitor claim"
+  ],
+  "unverified": true,
+  "commit": "c15cf263b9a19ef6fafd9a619ada5fdb18e8b314",
+  "owned_sha256": {
+    "scripts/launch_native_workspace_execution_spot.py": "1edee4fbc495d5a25869b026d454239e3d2aefb141febfbcc30f7c1c0fcf38e1",
+    "scripts/check_native_workspace_execution.py": "857c9e3688dacc71579a83f909da9d2da98ac63899c55539ccb63ea58ebe5398",
+    "scripts/check_exact_sq8_runtime.sh": "e81a22214b37f28344226b3d728f5ed32a78b80a06d76a0633f343a43961a125"
+  },
+  "implemented": {
+    "mode": "--exact-sq8-runtime (configure/execution_mode/self_check/worker.main/CLI parameter exact_sq8_runtime); aliases the cohort-family lifecycle (cohere_cohort=True inside configure) and rebinds ONLY COHERE_COHORT_{STAGES,STAGE_SCHEMA,REQUIRED_TESTS}; restored by the next configure() of any other mode; mutual exclusion with every other mode enforced before the alias",
+    "native_delta": "EXACT_SQ8_RUNTIME_DELTA sorted 3 paths; cohort-only added-files git diff assertion skipped for this mode (modified Cargo.toml/scorer)",
+    "inventory": "derived from the committed tree and compared with the root manifest count/map; no fixed count anywhere in this mode",
+    "stage5_deviation_from_message": "stage 5 argv is the fixed list [\"bash\",\"-c\",\"exec taskset -c 0 \\\"$CARGO_TARGET_DIR/release/examples/exact_sq8_runtime_probe\\\"\"] because the worker builds into CARGO_TARGET_DIR outside the repo (out/target), so the literal relative path target/release/... would not exist; same one-CPU taskset command otherwise",
+    "rosters": "7 scorer names bound exactly once per stage in debug and in release (seen == roster, tests_run == 7); returned_sq8 nonzero (one summary, no failed/ignored); probe/release/clippy/test-build are non-test stages (NON_TEST_STAGES) except test-build keeps its exactly-one unshimmed rust-test-build rule",
+    "retention": "EXAMPLE_BINARIES now includes /exact_sq8_runtime_probe (copied from target/release/examples, ELF-checked); worker writes exact-sq8-probe.jsonl verbatim from test.log via probe_lines (exactly the 18 fixed D x rows shapes, every identical_ids_ordinals_score_bits true, never parsed for timing/recall); validate_receipt re-derives it from test.log and compares; release baseline binary retained",
+    "bad_parity": "the probe exits 2 on any mismatch (stage fails) and probe_lines also refuses a false parity flag; no speedup acceptance exists",
+    "unchanged": "FIXED resources (8GiB/swap0/CPUQuota200/tasks512, machine and test caps), instance/Spot/compute values, all other modes; two historical-protocol git show calls now use the existing ARCHIVE_GIT window limits because the shared repo has a 691MB pack that cannot be mapped under the self-check RLIMIT_AS 200MiB"
+  },
+  "source_only_check_receipt": {
+    "env": "taskset -c 1, ulimit -d 256MiB, timeout 120s, python3 -B; no Cargo/native/network/AWS",
+    "new_mode": "--exact-sq8-runtime --self-check PASS (~7.4s, ~93MB rss): configure/mutual exclusion, roster/argv equality with the shell script, bash -n, real bash/time/tee stage runs with fake cargo, mandatory-test negatives for both scorer stages, returned nonzero, probe parity/missing/shape/tamper negatives, derived-inventory qualification with the exact 3-path delta and drift negatives, historical-protocol byte comparison of every earlier mode against d6b8e1f7 (incl. cohere_cohort and cohere_sq8_builder), worker/receipt/ACK/termination/collection lifecycle fixtures",
+    "regression_PASS_unchanged": [
+      "(default)",
+      "--semantic-1m",
+      "--semantic-1m-test-build",
+      "--semantic-1m-implementation",
+      "--hierarchical-cells-implementation",
+      "--cell-overlap-implementation",
+      "--fine-sq8-implementation",
+      "--pq-residual-implementation",
+      "--co-selection-implementation",
+      "--budget-object-selector-implementation",
+      "--budget-object-fitter-implementation",
+      "--cohere1024-implementation",
+      "--cohere-cohort-implementation",
+      "--cohere-sq8-builder"
+    ],
+    "preexisting_failures_identical_at_origin_main_d6b8e1f7": [
+      "--startup-wave8-implementation",
+      "--root-reuse-implementation",
+      "--bounded-publication-implementation",
+      "--fixed48-implementation",
+      "--constrained-split-implementation"
+    ],
+    "note": "those five fail identically with the original two scripts restored (verified), i.e. not caused by this change"
+  },
+  "exact_stage_argv_as_implemented": {
+    "script_line": "run_stage exact-sq8-probe bash -c 'exec taskset -c 0 \"$CARGO_TARGET_DIR/release/examples/exact_sq8_runtime_probe\"'",
+    "constant": "EXACT_SQ8_PROBE_COMMAND = [\"bash\", \"-c\", \"exec taskset -c 0 \\\"$CARGO_TARGET_DIR/release/examples/exact_sq8_runtime_probe\\\"\"]",
+    "why": "the worker configures CARGO_TARGET_DIR outside the source tree; script, constant and recorded stage argv are identical (asserted by the self-check)"
+  },
+  "git_window_edit_justification": {
+    "what": "exactly two self-check-only git show calls (historical-protocol loaders for the cohort/cohere1024/budget modes and the sq8-builder mode) use the existing ARCHIVE_GIT prefix (core.packedGitWindowSize=16m, core.packedGitLimit=32m)",
+    "why": "bounded Git reads: the shared repository now has a 691MB pack that cannot be mapped under the self-check process RLIMIT_AS of 200MiB, which made those pre-existing self-checks fail before reaching any protocol logic",
+    "not_changed": "no protocol, roster, mode policy, preflight/runtime git call, or historical-mode data; the runtime preflight git show calls keep their original argv (their mocks depend on it)"
+  },
+  "config_template": {
+    "file": "/tmp/borsuk-exact-sq8-runtime-gates-config-template.json",
+    "sha256": "a53c1eb534f06f3d39854d053372856221f50d2bd2daabb50f9027ec71d4097d",
+    "generated_by": "configure(exact_sq8_runtime=True) at commit c15cf263: CONFIG path, schemas, 24-path CODE roster, 3-path native delta, 16-name artifact roster, FIXED values (resources unchanged), mandatory_tests (2 stages x 7 names, pending=false), terminal identities, 31 exact config keys, manifest schema/keys, 7 stage names",
+    "root_freeze_seam": "config = FIXED values + controller_authority_pending=false + controller_source_commit + controller_code_sha256 {24 CODE paths: sha256} + native_source_manifest {path,bytes,sha256} + the 4 ARCHIVE_FIELDS from the existing hierarchical_archive_authority(base, commit, inventory, manifest_path) (derived from the committed tree; no archive built by this glue); manifest = schema borsuk-exact-sq8-runtime-gates-native-source-manifest-v1 with candidate_delta_paths == the sorted 3 paths and source_sha256/source_file_count/source_identity_sha256 derived from the actual tree"
+  }
+}

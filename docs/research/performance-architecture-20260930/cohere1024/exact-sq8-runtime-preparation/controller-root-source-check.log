@@ -1,0 +1,1 @@
+PASS exact-sq8-runtime glue: seven serial gates (7 scorer tests debug+release, returned nonzero, release baseline+probe binaries, one-CPU probe, clippy, test-build); exact names/counts/resources; pending/source/archive/tee/ACK/termination refusals; historical protocol bytes preserved; SYNTHETIC MOCKS ONLY, Rust UNRUN
