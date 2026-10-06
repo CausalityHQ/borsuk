@@ -1,0 +1,30 @@
+{
+  "schema": "borsuk-cohere1024-publisher-whole-body-pins-v1",
+  "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+  "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+  "authority": "immutable revision publisher LFS SHA256 metadata; downloaded bodies remain UNVERIFIED",
+  "metadata_body": {
+    "path": "docs/research/performance-architecture-20260930/cohere1024-publisher-lfs-metadata.json",
+    "bytes": 601,
+    "sha256": "be21f9e5423315422c7418da2516961db1dfd02b0680043cdddfae21e50c18c3"
+  },
+  "metadata_url": "https://huggingface.co/api/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/tree/ade45fb52bd549f5e8c065636fe4160a43c2af36/en?limit=2",
+  "shards": [
+    {
+      "publisher_path": "en/0000.parquet",
+      "bytes": 216612385,
+      "sha256": "2c6abfffa7dd336113251b3e6f3fe4ee16688ead7c67b99593cbadc5589e28b3",
+      "xet_hash_not_body_sha256": "f1ff780275d453157966a0e8a08362e536ebf32a45422a831e0a8c5f9222980e"
+    },
+    {
+      "publisher_path": "en/0001.parquet",
+      "bytes": 216746705,
+      "sha256": "1ce373d5730494429a64a0f788c62f71226ded2bc670aaf9399204e91e544c3b",
+      "xet_hash_not_body_sha256": "b08ca8183b8ddc8b447591d7e1d5544e3b034436263efd529863d7723f3a5a53"
+    }
+  ],
+  "vector_bodies_read": false,
+  "whole_shard_sha256_verified": false,
+  "cohort_sealed": false,
+  "next_gate": "After native qualification, download each immutable revision body remotely, stream SHA256/exact EOF, then native prepare and authenticate marker-last outputs. No ETag substitution."
+}
