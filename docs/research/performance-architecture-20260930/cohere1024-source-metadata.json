@@ -1,0 +1,32 @@
+{
+  "schema": "borsuk-cohere1024-source-metadata-v1",
+  "checked_date": "2026-10-06",
+  "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+  "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+  "metadata_only": true,
+  "vector_bodies_read": false,
+  "whole_shard_sha256_verified": false,
+  "cohort_sealed": false,
+  "shards": [
+    {
+      "path": "en/0000.parquet",
+      "bytes": 216612385,
+      "http_etag": "f1ff780275d453157966a0e8a08362e536ebf32a45422a831e0a8c5f9222980e",
+      "footer_bytes": 12971,
+      "footer_sha256": "b270b5d906529cbdfe71dd0a615c6646dd09ac6e58b081369b4682fb66048f26",
+      "footer_rows": 100000,
+      "embedding_leaf_storage": "FLOAT",
+      "actual_vector_dimensions_verified": false
+    },
+    {
+      "path": "en/0001.parquet",
+      "bytes": 216746705,
+      "http_etag": "b08ca8183b8ddc8b447591d7e1d5544e3b034436263efd529863d7723f3a5a53",
+      "footer_bytes": 14522,
+      "footer_sha256": "cee28862a7f9bc5744eac39c503c11fe7f992a5c45a01d2b97a163326da92ad8",
+      "footer_rows": null,
+      "actual_vector_dimensions_verified": false
+    }
+  ],
+  "next_admission": "Authenticate whole shard bytes, validate Arrow schema and each selected f32 vector, extract declared corpus/query ordinals, compute exact cosine ground truth and seal all identities remotely. ETags and footer hashes alone do not authenticate whole shards."
+}
