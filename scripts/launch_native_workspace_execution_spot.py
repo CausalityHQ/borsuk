@@ -465,11 +465,15 @@ COHERE1024_STAGES = tuple((name, command.split()) for name, command in (
     ('test-build', 'env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh')))
 
 
-# Two prospective source-only preflight bins; final native identity is root-owned.
-COHERE_COHORT_DELTA = ('crates/borsuk/src/bin/check_cohere_native_baseline.rs',
-                       'crates/borsuk/src/bin/prepare_cohere_native_cohort.rs')
+# One prospective source-only publisher bin; the control root already holds the baseline
+# runner and cohort preparer. Final native identity is root-owned.
+COHERE_COHORT_DELTA = ('crates/borsuk/src/bin/publish_two_bit_generation.rs',)
 COHERE_COHORT_STAGE_SCHEMA = 'borsuk-cohere-cohort-implementation-gates-stage-v1'
 COHERE_COHORT_REQUIRED_TESTS = {
+    'cohere-native-publisher-tests': (
+        'tests::publishes_real_generation_and_receipt_then_refuses_replay',
+        'tests::rejects_wrong_root_cap_existing_head_and_bad_config',
+    ),
     'cohere-native-baseline-tests': (
         'tests::production_contract_rejects_unknown_hash_geometry_and_caps',
         'tests::secure_artifacts_reject_hash_length_eof_symlink_fifo_and_bad_rows',
@@ -492,9 +496,10 @@ COHERE_COHORT_REQUIRED_TESTS = {
     ),
 }
 COHERE_COHORT_STAGES = tuple((name, command.split()) for name, command in (
+    ('cohere-native-publisher-tests', 'cargo test --locked -p borsuk --bin publish_two_bit_generation -- --test-threads=1'),
     ('cohere-native-baseline-tests', 'cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1'),
     ('cohere-native-cohort-tests', 'cargo test --locked -p borsuk --bin prepare_cohere_native_cohort -- --test-threads=1'),
-    ('release', 'cargo build --release --locked -p borsuk --bin check_cohere_native_baseline --bin prepare_cohere_native_cohort'),
+    ('release', 'cargo build --release --locked -p borsuk --bin check_cohere_native_baseline --bin prepare_cohere_native_cohort --bin publish_two_bit_generation'),
     ('clippy', 'cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious'),
     ('test-build', 'env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh')))
 
@@ -541,9 +546,9 @@ def completed_native_qualification(base, authority, *, retained=False):
 
 def cohere_cohort_required_tests():
     required = COHERE_COHORT_REQUIRED_TESTS
-    assert set(required) == {'cohere-native-baseline-tests', 'cohere-native-cohort-tests'}, 'two cohort test rosters required'
+    assert set(required) == {'cohere-native-publisher-tests', 'cohere-native-baseline-tests', 'cohere-native-cohort-tests'}, 'three cohort test rosters required'
     names = [test for tests in required.values() for test in tests]
-    assert all(len(tests) == 8 for tests in required.values()) and len(set(names)) == 16, 'eight unique tests per cohort bin'
+    assert len(required['cohere-native-publisher-tests']) == 2 and all(len(tests) == 8 for name, tests in required.items() if name != 'cohere-native-publisher-tests') and len(set(names)) == 18, 'two publisher plus eight unique tests per old cohort bin'
     assert all(type(name) is str and re.fullmatch(r'tests::[a-zA-Z0-9_]+', name) for name in names), 'exact cohort bin test names'
     return required
 
@@ -789,7 +794,7 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
     COHERE_SQ8_BUILDER = cohere_sq8_builder
     MINIMAL_ARCHIVE = hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter or cohere1024 or cohere_cohort or cohere_sq8_builder
     NATIVE_DELTA = () if cohere_sq8_builder else COHERE_COHORT_DELTA if cohere_cohort else COHERE1024_DELTA if cohere1024 else BUDGET_OBJECT_FITTER_DELTA if budget_object_fitter else BUDGET_OBJECT_SELECTOR_DELTA if budget_object_selector else CO_SELECTION_DELTA if co_selection else PQ_RESIDUAL_DELTA if pq_residual else FINE_SQ8_DELTA if fine_sq8 else CELL_OVERLAP_DELTA if cell_overlap else CONSTRAINED_SPLIT_DELTA if constrained_split else HIERARCHICAL_CELLS_DELTA if hierarchical_cells else FIXED48_DELTA if fixed48 else BOUNDED_PUBLICATION_DELTA if bounded_publication else ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
-    RELEASE_ARTIFACTS = ('binaries/build_sq8_source',) if cohere_sq8_builder else ('binaries/check_cohere_native_baseline', 'binaries/prepare_cohere_native_cohort') if cohere_cohort else FULL_RELEASE_ARTIFACTS if cohere1024 else ('binaries/hierarchical_semantic_cells',) if cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter else ('binaries/check_hierarchical_split_balance', 'binaries/hierarchical_semantic_cells', 'binaries/two_bit_http') if constrained_split else ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation', 'binaries/check_semantic_router_scorer') if hierarchical_cells else ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
+    RELEASE_ARTIFACTS = ('binaries/build_sq8_source',) if cohere_sq8_builder else ('binaries/check_cohere_native_baseline', 'binaries/prepare_cohere_native_cohort', 'binaries/publish_two_bit_generation') if cohere_cohort else FULL_RELEASE_ARTIFACTS if cohere1024 else ('binaries/hierarchical_semantic_cells',) if cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter else ('binaries/check_hierarchical_split_balance', 'binaries/hierarchical_semantic_cells', 'binaries/two_bit_http') if constrained_split else ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation', 'binaries/check_semantic_router_scorer') if hierarchical_cells else ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
     TERMINAL_IDENTITIES = (*FULL_TERMINAL_IDENTITIES, 'controller_source_commit', 'candidate_delta_paths') if scoped else FULL_TERMINAL_IDENTITIES
     if MINIMAL_ARCHIVE:
         TERMINAL_IDENTITIES += ARCHIVE_IDENTITIES
@@ -1365,7 +1370,7 @@ def preflight(base=Path('.')):
             assert native_trees[0] == native_trees[1], 'native source changed from qualified commit'
         if COHERE_COHORT:
             assert subprocess.check_output(['git','diff','--no-renames','--diff-filter=A','--name-only',
-                config_commit,'HEAD'], cwd=base, text=True).splitlines() == list(NATIVE_DELTA), 'two NEW cohort native bins'
+                config_commit,'HEAD'], cwd=base, text=True).splitlines() == list(NATIVE_DELTA), 'one NEW publisher native bin'
         for name in proof['candidate_delta_paths']:
             assert worker.sha(subprocess.check_output(['git','show',proof['native_source_commit']+':'+name], cwd=base)) == proof['source_sha256'][name], 'candidate commit blob: '+name
         if CONSTRAINED_SPLIT:
@@ -3008,7 +3013,7 @@ def _cohere_sq8_builder_self_check():
              dict(semantic_1m=True, implementation=True)]
     modes += [{name:True} for name in ('startup_wave8', 'root_reuse', 'bounded_publication',
         'fixed48', 'hierarchical_cells', 'constrained_split', 'cell_overlap', 'fine_sq8',
-        'pq_residual', 'co_selection', 'budget_object_selector', 'budget_object_fitter', 'cohere1024', 'cohere_cohort')]
+        'pq_residual', 'co_selection', 'budget_object_selector', 'budget_object_fitter', 'cohere1024')]  # cohere_cohort intentionally changed to the publisher delta
     for mode in modes:
         old.configure(**mode)
         with execution_mode(**mode):
@@ -3232,7 +3237,7 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
     required_tests = cohere_cohort_required_tests if cohere_cohort else cohere1024_required_tests if cohere1024 else budget_object_fitter_required_tests if budget_object_fitter else budget_object_selector_required_tests
     validate_config = validate_cohere_cohort_config if cohere_cohort else validate_cohere1024_config if cohere1024 else validate_budget_object_fitter_config if budget_object_fitter else validate_budget_object_selector_config
     stages = COHERE_COHORT_STAGES if cohere_cohort else COHERE1024_STAGES if cohere1024 else BUDGET_OBJECT_FITTER_STAGES if budget_object_fitter else BUDGET_OBJECT_SELECTOR_STAGES
-    stage_name = 'cohere-native-baseline-tests' if cohere_cohort else 'generation-tests' if cohere1024 else tag+'-tests'
+    stage_name = 'cohere-native-publisher-tests' if cohere_cohort else 'generation-tests' if cohere1024 else tag+'-tests'
     assert mode_name in inspect.signature(configure).parameters, 'execution mode missing'
     assert mode_name in inspect.signature(execution_mode).parameters
     assert mode_name in inspect.signature(worker.main).parameters
@@ -3262,10 +3267,11 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
         'budget_object_selector::tests::synthetic_prepared_fixture', 'budget_object_fitter::tests::synthetic_contract_fixture') if budget_object_fitter else ('budget_object_selector::tests::synthetic_contract_fixture',)
     synthetic = COHERE_COHORT_REQUIRED_TESTS if cohere_cohort else COHERE1024_REQUIRED_TESTS if cohere1024 else {stage_name: synthetic_names}
     with patch.object(module, required_attr, synthetic), execution_mode(**mode):
-        assert len(stages) == (5 if cohere_cohort else 6 if cohere1024 else 4)
+        assert len(stages) == (6 if cohere_cohort else 6 if cohere1024 else 4)
         if cohere_cohort:
             assert NATIVE_DELTA == COHERE_COHORT_DELTA == tuple(sorted(COHERE_COHORT_DELTA))
-            assert RELEASE_ARTIFACTS == ('binaries/check_cohere_native_baseline', 'binaries/prepare_cohere_native_cohort')
+            assert RELEASE_ARTIFACTS == ('binaries/check_cohere_native_baseline', 'binaries/prepare_cohere_native_cohort', 'binaries/publish_two_bit_generation')
+            assert len(NATIVE_DELTA) == 1 and sum(len(tests) for tests in synthetic.values()) == 18
             assert str(ROOT) == 'docs/research/performance-architecture-20260930/cohere1024/cohort-implementation-gates'
         elif cohere1024:
             assert NATIVE_DELTA == COHERE1024_DELTA == tuple(sorted(COHERE1024_DELTA))
@@ -3319,7 +3325,7 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
         if not (cohere1024 or cohere_cohort):
             functions = functions.replace('sys.exit(record_constrained_split_stage',
                 'from scripts import launch_native_workspace_execution_spot as c\nc.'+required_attr+' = '+encoded(synthetic).decode()+'\nsys.exit(record_constrained_split_stage')
-        for name, command in (stages[:2] if cohere_cohort else stages[:1]):
+        for name, command in (stages[:3] if cohere_cohort else stages[:1]):
             fake_output = ''.join('test '+test+' ... ok\n' for test in synthetic[name])+f'test result: ok. {len(synthetic[name])} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s\n'
             with tempfile.TemporaryDirectory() as tmp:
                 fake = Path(tmp)/'cargo'
@@ -3361,7 +3367,7 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
                     cases += [(good.replace(test, replacement), '0', '0', 96) for replacement in ('', test+'\n'+test, test.replace('ok', 'FAILED'), test.replace('ok', 'ignored'), *(() if cohere1024 and name == 'router-tests' else ('test budget_object_selector::tests::foreign ... ok',)))]
                     cases += [(good.replace(str(len(names))+' passed', '0 passed'), '0', '0', 96), (good.replace('0 ignored', '1 ignored'), '0', '0', 96), (good+good, '0', '0', 96)]
                 if cohere_cohort and names:
-                    cases.append(('test tests::extra ... ok\n'+good.replace('8 passed', '9 passed'), '0', '0', 96))
+                    cases.append(('test tests::extra ... ok\n'+good.replace(f'{len(names)} passed', f'{len(names)+1} passed'), '0', '0', 96))
                     cases.append((good.replace(names[0], next(test for tests in synthetic.values() for test in tests if test not in names)), '0', '0', 96))
                 if cohere1024 and name == 'router-tests':
                     cases.append((good.replace(names[0], synthetic_names[0]), '0', '0', 96))
@@ -3401,15 +3407,13 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
             repo.mkdir(); out.mkdir()
             bodies = {name:b'// temporary native fixture\n' for name in NATIVE_DELTA}
             if cohere_cohort:
-                contracts = [json.loads(Path('/tmp/'+name).read_text()) for name in (
-                    'borsuk-cohere1024-native-runner-contract.json',
-                    'borsuk-cohere1024-native-cohort-preparer-contract.json')]
-                roots = (Path('/home/rb/worktrees/borsuk-cohere1024-native-runner'),
-                         Path(contracts[1]['source_root']))
-                bodies.update({name:(source_root/name).read_bytes() for name,source_root in zip(NATIVE_DELTA, roots)})
-                for names,contract in zip(synthetic.values(), contracts):
-                    assert list(names) == ['tests::'+name for name in (
-                        contract['test_seam']['tests'] if 'test_seam' in contract else contract['test_names'])]
+                bodies[NATIVE_DELTA[0]] = (base/NATIVE_DELTA[0]).read_bytes()
+                # Every mandatory name must be a real test function in its own bin source.
+                for roster_stage, source in (('cohere-native-publisher-tests', NATIVE_DELTA[0]),
+                        ('cohere-native-baseline-tests', 'crates/borsuk/src/bin/check_cohere_native_baseline.rs'),
+                        ('cohere-native-cohort-tests', 'crates/borsuk/src/bin/prepare_cohere_native_cohort.rs')):
+                    text = (base/source).read_text()
+                    assert all('fn '+name.removeprefix('tests::')+'(' in text for name in synthetic[roster_stage]), roster_stage
 
             bodies.update({'Cargo.toml':b'[workspace]\n', 'Cargo.lock':b'version = 4\n',
                 'docs/research/fixture.rs':b'// native fixture in docs\n',
@@ -3448,6 +3452,8 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
             extra = repo/'extra.rs'; extra.write_bytes(b'// new source drift\n')
             rejected(lambda:qualify(repo)); extra.unlink()
             for delta in ([], list(NATIVE_DELTA[:1]), list(reversed(NATIVE_DELTA)), [*NATIVE_DELTA, 'extra.rs']):
+                if delta == list(NATIVE_DELTA):
+                    continue  # one-file delta: its prefix/reverse is the accepted value
                 rejected(lambda:validate_candidate_delta(delta))
             bindings = {archive_binding_prefix()+key.upper():str(proof[key]) for key in ARCHIVE_IDENTITIES}
             for key in bindings:
@@ -3476,11 +3482,11 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
                 (('rev-list','--parents','-n','1','5'*40),'5'*40+' '+'8'*40),
                 (('for-each-ref','--contains='+'5'*40,'--format=%(refname)','refs/remotes/origin/'),''),
                 (('diff','--no-renames','--name-only','4'*40,'5'*40),str(CONFIG)+'\nextra'),
-                (('diff','--no-renames','--name-only','5'*40,'HEAD'),NATIVE_DELTA[0]),
+                (('diff','--no-renames','--name-only','5'*40,'HEAD'),'' if len(NATIVE_DELTA) == 1 else NATIVE_DELTA[0]),
                 (('diff','--no-renames','--name-only','5'*40,'HEAD'),'\n'.join((*NATIVE_DELTA,'extra.rs'))),
                 (('show','7'*40+':'+NATIVE_DELTA[0]),b'wrong native blob'))]
             if cohere_cohort:
-                failures.append((('diff','--no-renames','--diff-filter=A','--name-only','5'*40,'HEAD'), NATIVE_DELTA[0]))
+                failures.append((('diff','--no-renames','--diff-filter=A','--name-only','5'*40,'HEAD'), ''))
             for key, value in failures:
                 changed = dict(answers)
                 if key is not None:
@@ -3496,7 +3502,7 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
             files = _worker_self_check(proof, config_body, manifest_body)
             _collection_self_check(proof, files, body)
             _lifecycle_self_check(proof)
-    print('PASS '+tag+(' glue: five serial bin gates;' if cohere_cohort else ' glue: six serial gates; debug/release oracle once per stage;' if cohere1024 else ' glue: four serial gates;')+' exact names/counts/resources; pending/source/archive/tee/ACK/termination refusals; historical protocol bytes preserved; SYNTHETIC MOCKS ONLY, Rust UNRUN')
+    print('PASS '+tag+(' glue: six serial bin gates (publisher 2 + old 16 names, release 3 bins);' if cohere_cohort else ' glue: six serial gates; debug/release oracle once per stage;' if cohere1024 else ' glue: four serial gates;')+' exact names/counts/resources; pending/source/archive/tee/ACK/termination refusals; historical protocol bytes preserved; SYNTHETIC MOCKS ONLY, Rust UNRUN')
 
 
 def _budget_object_fitter_self_check():

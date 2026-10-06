@@ -1,14 +1,13 @@
 {
   "candidate_delta_paths": [
-    "crates/borsuk/src/bin/check_cohere_native_baseline.rs",
-    "crates/borsuk/src/bin/prepare_cohere_native_cohort.rs"
+    "crates/borsuk/src/bin/publish_two_bit_generation.rs"
   ],
   "candidate_qualification_pending": true,
-  "control_native_source_commit": "e5f4a34d700189ac1bd5035954e517583d283bfe",
-  "native_source_commit": "62574b7ac8732dfb9aac6b4456ce137b0e6d45ce",
+  "control_native_source_commit": "5a9d67c5a5dafe544b6adef474d37c95fc159725",
+  "native_source_commit": "9b656e05599e19d0094cc5e7e3eee28226ea7f08",
   "schema": "borsuk-cohere-cohort-implementation-gates-native-source-manifest-v1",
-  "source_file_count": 411,
-  "source_identity_sha256": "009119a720892f06139fd717f6e55ae9e3b865ebb3667b143a966002ef734e64",
+  "source_file_count": 412,
+  "source_identity_sha256": "d0e7029d484db02904505b7c83c57a13a3258ab9db804e54338ff3fca0f39676",
   "source_sha256": {
     "Cargo.lock": "d479ad62c5c9441757f5f8b37be5ffa824a7cabd155b00b8bc08d8710fa4d7d3",
     "Cargo.toml": "1ec9ac514515662a0f3a371b1a65d72bf825d67f218dc3f6cc1e5fb0925547d6",
@@ -133,6 +132,7 @@
     "crates/borsuk/src/bin/check_semantic_router_scorer.rs": "f236050e0f04eb489da857ea913ec97e1eafd2787bace58340e7a9cbb8c2be2a",
     "crates/borsuk/src/bin/hierarchical_semantic_cells.rs": "34a4e63e77bd2ce5aaede845f2b2c00ef27876d9b2b2dc4112290dc0b004eb05",
     "crates/borsuk/src/bin/prepare_cohere_native_cohort.rs": "c1846e06542eeaf496c47d77f7620cc740b4f997988733e8f6d1ba0aa27a9a48",
+    "crates/borsuk/src/bin/publish_two_bit_generation.rs": "9f05fcce725b3261b60fa25b187d56ca69ddee0e5d9aba20d58599416b9c9c1c",
     "crates/borsuk/src/bin/repackage_semantic_generation.rs": "109870b354ab9d4e5c3786e27779648ace768f2c2f3425ecf641a81c8b0927e6",
     "crates/borsuk/src/bin/two_bit_plan_demo.rs": "2a89f80da6ba650cb9b3c3de5650c43d9facdbfb0a6c5ce00c41522d37b0ef54",
     "crates/borsuk/src/bin/two_bit_union_nomination.rs": "79ed545cdee7183e921295e2cb40fa9371bd1078b8a930c2db7a6cdbb68b03e9",
@@ -256,7 +256,7 @@
     "crates/borsuk/src/segment.rs": "976ddee5aaa91ec026ed84b1029a307184ca3a02cc939b46384cb358b547afc9",
     "crates/borsuk/src/segment_cache.rs": "f572ba1f8549f6d96a14521cf2bc8af4461b3d1205fc9c390672b55a2f27e27a",
     "crates/borsuk/src/semantic_cell_overlap.rs": "1376105dc4145260ee3b43b91f0c39a00af78beb9f04162f8eb36fd9659c57c5",
-    "crates/borsuk/src/semantic_unit_router.rs": "c4ce39e40095c75d81eb62615b542d2a2c891183e99503f037f407f46739e8d3",
+    "crates/borsuk/src/semantic_unit_router.rs": "b9abd271db66d45665304e72dc1a61b176fdbc47cd6f1a5618868a3c7443d0c2",
     "crates/borsuk/src/serving_generation.rs": "3a4c5b39a441fffac325050c1c1614b2aa221278ec6579bf732dd884e2a91737",
     "crates/borsuk/src/simd_control.rs": "82bf82bed5167662439160cb0ea8b3db2870e8322c196e50f439ddcadc514b56",
     "crates/borsuk/src/source_order.rs": "1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4",
@@ -272,7 +272,7 @@
     "crates/borsuk/src/two_bit_build.rs": "bd6ecf83d418a346926829ab329ac071ed138c6ac931ba11ed76694bad74ad52",
     "crates/borsuk/src/two_bit_compaction.rs": "8f35f1493172abcd1faee17e599806084f078e216fef3761a79fc7e28980e1ca",
     "crates/borsuk/src/two_bit_gc.rs": "43b9ffe08bcbb742e5cd3fbff04305b854ae64b548e883f56332e69940d14017",
-    "crates/borsuk/src/two_bit_generation.rs": "9b147a3be77bb043f69fc96a3f577d6d967bf98be7c0de548a40473b979f26b4",
+    "crates/borsuk/src/two_bit_generation.rs": "70a1e6956e4d18eacccc1205c644cbaa5dbb1eb763a2958da666be60d17bc4e3",
     "crates/borsuk/src/two_bit_index.rs": "45b61f069b416f4e171ac5a5bf102fac2945072345ab6680e27f5de521b7a702",
     "crates/borsuk/src/two_bit_mutations.rs": "b8a43b8bbb12f3f5edf8ac04d8382a8cf1a75949dc4f22a78b39d60fd45a6553",
     "crates/borsuk/src/two_bit_source.rs": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",

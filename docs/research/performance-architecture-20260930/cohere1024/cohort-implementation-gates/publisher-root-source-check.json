@@ -1,0 +1,19 @@
+{
+  "status": "SOURCE_CHECK_PASS_NATIVE_UNRUN",
+  "source_commit": "9b656e05599e19d0094cc5e7e3eee28226ea7f08",
+  "root_glue_exit_status": 0,
+  "root_unit_invocation": "34c2d13a4eab4833a0db6e63946879c8",
+  "service_runtime_seconds": 9.872,
+  "peak_reported": "115.7M",
+  "swap_peak_bytes": 0,
+  "requested_memory_bytes": 268435456,
+  "command": [
+    "python3",
+    "-B",
+    "scripts/launch_native_workspace_execution_spot.py",
+    "--cohere-cohort-implementation",
+    "--self-check"
+  ],
+  "native_tests": 18,
+  "native_gate_stages": 6
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Five serial exact-source cohort bin gates; root owns execution and source freeze.
+# Six serial exact-source cohort bin gates; root owns execution and source freeze.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 if [[ -n "${BORSUK_TEST_BUILD_COMMAND:-}" ]]; then
@@ -43,8 +43,9 @@ run_stage() {
   return "$status"
 }
 
+run_stage cohere-native-publisher-tests cargo test --locked -p borsuk --bin publish_two_bit_generation -- --test-threads=1
 run_stage cohere-native-baseline-tests cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1
 run_stage cohere-native-cohort-tests cargo test --locked -p borsuk --bin prepare_cohere_native_cohort -- --test-threads=1
-run_stage release cargo build --release --locked -p borsuk --bin check_cohere_native_baseline --bin prepare_cohere_native_cohort
+run_stage release cargo build --release --locked -p borsuk --bin check_cohere_native_baseline --bin prepare_cohere_native_cohort --bin publish_two_bit_generation
 run_stage clippy cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
 run_stage test-build env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh
