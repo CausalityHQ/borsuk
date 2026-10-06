@@ -18,6 +18,14 @@ Use one immutable corpus selection and disjoint query split for BORSUK, Turbopuf
 
 No algorithm win, dataset readiness, service access, matched baseline or measured performance is claimed by this decision. Historical receipts and protocols remain immutable. No new ReLAION or paired multi-dataset campaign is authorized by the current benchmark direction.
 
+## First cohort selection, declared before vector acquisition
+
+For the first baseline, enumerate English `en/*.parquet` files in lexicographic path order at revision `ade45fb52bd549f5e8c065636fe4160a43c2af36`, preserving row order within each file. Corpus source ordinals are `[0,100000)`; query source ordinals are `[100000,101000)`. Read only enough whole authenticated shards to supply these rows. Missing rows, duplicate document IDs, null/nonfinite embeddings, zero norms, or a dimension other than 1024 invalidate preparation; do not silently replace rows or switch datasets. These are our cohort choices, not disclosed Turbopuffer document/query IDs.
+
+Retain original embedding values as little-endian f32 and stable source locators/document IDs. Use cosine distance, k=10, no filters. Ground truth is exhaustive cosine distance over the corpus computed in f64 from those same f32 values, with stable corpus ordinal as the tie breaker. Seal source shard bytes/SHA256, corpus and query ID/byte hashes, ground-truth bytes, metric and tie rule before service ingestion or ANN evaluation. All services receive identical vector values and IDs. This selection declaration is not a completed data seal or a claim of corpus readiness.
+
+First require native correctness and measured recall on all 1000 queries; retain per-query results. Then freeze a separate latency/load protocol against the same sealed cohort. Do not choose another split based on recall, inspect an incomplete performance campaign, or claim cold-cache equivalence where a service does not expose it. Scale later by extending the corpus from this same source while permanently excluding these query document IDs; ground truth must be recomputed for each corpus size.
+
 ## Source identity checked before acquisition
 
 Turbopuffer's dataset link resolves to [CohereLabs/wikipedia-2023-11-embed-multilingual-v3](https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3). The embedding column is `emb`; the viewer reports 1024 entries. A bounded read of the publisher's dataset API on 2026-10-06 resolved revision `ade45fb52bd549f5e8c065636fe4160a43c2af36`. Use immutable revision URLs for subsequent schema and shard validation. No parquet body was downloaded in this check.
