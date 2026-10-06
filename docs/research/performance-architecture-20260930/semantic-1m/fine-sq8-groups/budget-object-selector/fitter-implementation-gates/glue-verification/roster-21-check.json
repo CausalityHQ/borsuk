@@ -1,0 +1,32 @@
+{
+  "schema": "borsuk-fitter-roster-glue-check-v1",
+  "base_commit": "d9697e87efd7ce768d49a0e58f807f70fb212f4a",
+  "source_sha256": "0a3efabae3bd6939fa576f52bab5e959849f7c30f20cad48c29055d11037a28c",
+  "mandatory_tests": 21,
+  "roster_matches_current_worker_source": true,
+  "native_source_frozen": false,
+  "rust_execution": false,
+  "ann_quality_verified": false,
+  "command": "python3 scripts/launch_native_workspace_execution_spot.py --budget-object-fitter-implementation --self-check",
+  "original_session": 12586,
+  "unit": "borsuk-fitter-roster-check.service",
+  "invocation_id": "205edf554307472e91c17461cbca9a51",
+  "exit_status": 0,
+  "runtime_seconds": 4.504,
+  "cpu_seconds": 4.219,
+  "memory_peak_display": "105.8M",
+  "swap_bytes": 0,
+  "caps": {
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "cpu_percent": 100,
+    "tasks": 512,
+    "runtime_seconds": 120
+  },
+  "terminal": {
+    "active_state": "inactive",
+    "main_pid": 0,
+    "result": "success"
+  },
+  "scope": "Synthetic qualification glue only; final roster/source rechecked before freeze"
+}
