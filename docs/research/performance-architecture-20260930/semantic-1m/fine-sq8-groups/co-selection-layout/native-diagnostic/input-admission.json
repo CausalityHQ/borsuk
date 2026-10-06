@@ -1,0 +1,30 @@
+{
+  "authority_pending": true,
+  "full_large_bodies_read": false,
+  "gt_reads": 0,
+  "input_bytes": 689242601,
+  "inputs": 16,
+  "metadata_relations_passed": true,
+  "native_config_sha256": "c3e2df5a8c821d3890351f8d3b73d5b8efc4348653962072f993594bc72efd71",
+  "native_execution": false,
+  "panels": [
+    {
+      "canonical_source_digest_matches": true,
+      "dataset": "relaion",
+      "dimensions": 768,
+      "root_seal_and_pq_graph_order_bindings": true,
+      "rows": 100000
+    },
+    {
+      "canonical_source_digest_matches": true,
+      "dataset": "cohere",
+      "dimensions": 768,
+      "root_seal_and_pq_graph_order_bindings": true,
+      "rows": 100000
+    }
+  ],
+  "query_vector_reads": 0,
+  "schema": "borsuk-co-selection-root-input-admission-v1",
+  "scientific_survival": false,
+  "transport_sha256": "34fe9db0f79a2d110463e5958f1c366b228845cd42228dc05495c3187275f54c"
+}
