@@ -78,8 +78,6 @@ first release, schema stability and backward compatibility are non-goals.
 - Use commercial first-party or paper numbers only. Product comparisons must
   be honest paired reproductions under disclosed equivalent conditions.
 
-## Experiment admission order
-
 ## Current benchmark focus
 
 The operator narrowed prospective benchmarking on 2026-10-06 to one dataset
