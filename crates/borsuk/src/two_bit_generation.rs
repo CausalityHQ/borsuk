@@ -2533,6 +2533,485 @@ mod source_walk_tests {
     }
 
     #[tokio::test]
+    async fn native_100k_d1024_generation_serving_scalar_oracle() {
+        use crate::semantic_unit_router::{Geometry, admit};
+        use crate::two_bit_build::TwoBitGenerationBuilder;
+        use crate::two_bit_source::TwoBitSource;
+        use sha2::{Digest, Sha256};
+
+        let hash = |body: &[u8]| format!("{:x}", Sha256::digest(body));
+        let rows = 257_usize;
+        let dimensions = 1024_usize;
+        let profile = SemanticProfile::Native100k;
+        assert!(profile.valid_geometry(100_000, dimensions));
+        assert!(!profile.valid_geometry(rows, dimensions + 1));
+        assert!(!profile.valid_geometry(100_001, dimensions));
+        assert!(SemanticProfile::Fresh1m.valid_geometry(1_000_000, 768));
+        assert!(!SemanticProfile::Fresh1m.valid_geometry(1_000_000, dimensions));
+        // Admit the maximum geometry without constructing a 100k-row fixture.
+        let geometry = Geometry {
+            rows: 100_000,
+            dimensions,
+            units: 100_000_usize.div_ceil(32),
+            blob_bytes: 32 + 100_000_usize.div_ceil(32) * dimensions * 2,
+        };
+        let peak = admit(geometry, profile.allocation_cap(), profile).unwrap();
+        assert_eq!(admit(geometry, peak, profile).unwrap(), peak);
+        assert!(admit(geometry, peak - 1, profile).is_err());
+        assert!(
+            admit(
+                Geometry {
+                    dimensions: 1025,
+                    ..geometry
+                },
+                usize::MAX,
+                profile
+            )
+            .is_err()
+        );
+
+        let low = (0..dimensions)
+            .map(|d| (d as i32 % 7 - 3) as f32 / 1024.)
+            .collect::<Vec<_>>();
+        let step = (0..dimensions)
+            .map(|d| (1 + d % 5) as f32 / 8192.)
+            .collect::<Vec<_>>();
+        let code = |row: usize, d: usize| (1 + (row * 17 + d * 29) % 239) as u8;
+        let order = (0..rows as u64).rev().collect::<Vec<_>>();
+        let mut raw = Vec::new();
+        for row in 0..rows {
+            for d in 0..dimensions {
+                let value = low[d] + f32::from(code(row, d)) * step[d];
+                raw.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        let mut sq8 = Vec::new();
+        for (ordinal, &row) in order.iter().enumerate() {
+            let row = row as usize;
+            let id = (1000 + row * 73 % rows) as i64;
+            let mut norm = 0_f32;
+            for d in 0..dimensions {
+                let value = low[d] + f32::from(code(row, d)) * step[d];
+                norm += value * value;
+            }
+            // The partial final page has an authoritative norm sentinel:
+            // recomputing it from codes must change the returned score bits.
+            if ordinal == rows - 1 {
+                norm = 0.125;
+            }
+            sq8.extend_from_slice(&id.to_le_bytes());
+            sq8.extend_from_slice(&norm.to_le_bytes());
+            sq8.extend((0..dimensions).map(|d| code(row, d)));
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let raw_path = temp.path().join("raw");
+        let sq8_path = temp.path().join("sq8");
+        fs::write(&raw_path, &raw).unwrap();
+        fs::write(&sq8_path, &sq8).unwrap();
+        let store = RecordedStore::default();
+        let sq8_sha = hash(&sq8);
+        let key = ObjectPath::from(format!("semantic/objects/{sq8_sha}"));
+        store.put(&key, sq8.clone().into()).await.unwrap();
+        let etag = store.head(&key).await.unwrap().e_tag.unwrap();
+        let root = temp.path().join("generation");
+        let builder = TwoBitGenerationBuilder {
+            source: TwoBitSource {
+                raw: &raw_path,
+                raw_sha256: &hash(&raw),
+                sq8: &sq8_path,
+                sq8_sha256: &sq8_sha,
+                rows,
+                dimensions,
+            },
+            base_epoch: 0,
+            generation: 1,
+            low: &low,
+            step: &step,
+            sq8_object_key: key.as_ref(),
+            sq8_etag: &etag,
+        };
+        let rejected = temp.path().join("rejected");
+        assert!(
+            builder
+                .build_with_discovery(Some(&order), DiscoveryMode::Semantic, &rejected, 1)
+                .is_err()
+        );
+        assert!(!rejected.exists());
+        let root_sha = builder
+            .build_with_discovery(
+                Some(&order),
+                DiscoveryMode::Semantic,
+                &root,
+                128 * 1024 * 1024,
+            )
+            .unwrap();
+        // Four complete 256-coordinate rotation blocks; the last unit/page has one row.
+        let source_width = dimensions / 4 + 8;
+        let prepare_bytes = (dimensions / 4 * 256 + dimensions) * size_of::<f64>();
+        let trace_bytes = TwoBitPlanTrace::scratch_bytes(rows);
+        let limits = TwoBitGenerationLimits {
+            max_memory_bytes: 128 * 1024 * 1024,
+            max_active_queries: 1,
+            max_query_bytes: sq8.len(),
+            max_query_gets: 1,
+            max_parallel_gets: 1,
+            max_source_bytes: rows * source_width,
+            max_source_gets: 1,
+            max_parallel_source_gets: 1,
+            max_query_scratch_bytes: prepare_bytes + trace_bytes,
+            already_pinned_bytes: 0,
+        };
+        let local = TwoBitGeneration::open(&root, &root_sha, limits).unwrap();
+        assert_eq!(local.semantic_profile(), Some(profile));
+        assert_eq!(local.plane.receipt().record_bytes, source_width);
+        assert!(
+            TwoBitGeneration::open(
+                &root,
+                &root_sha,
+                TwoBitGenerationLimits {
+                    max_memory_bytes: local.modeled_memory_bytes - 1,
+                    ..limits
+                }
+            )
+            .is_err()
+        );
+        let head = crate::two_bit_store::publish_two_bit_generation(
+            &store,
+            &ObjectPath::from("semantic/index"),
+            &root,
+            &root_sha,
+            limits,
+            None,
+        )
+        .await
+        .unwrap();
+        let prefix = head.metadata_prefix();
+        let mut remote =
+            TwoBitGeneration::open_remote_from_head(&store, &head, limits, temp.path())
+                .await
+                .unwrap();
+        let queries = [
+            (0..dimensions)
+                .map(|d| 0.25 + (d % 13) as f32 / 7.)
+                .collect::<Vec<_>>(),
+            (0..dimensions)
+                .map(|d| (d as i32 % 17 - 8) as f32 / 3.)
+                .collect::<Vec<_>>(),
+        ];
+        for query in &queries {
+            // Independent scalar normalization and stored-norm/code oracle;
+            // no production scorer or query-preparation helper is used here.
+            let query_norm = query
+                .iter()
+                .fold(0_f64, |sum, &q| sum + f64::from(q).powi(2))
+                .sqrt();
+            let normalized = query
+                .iter()
+                .map(|&q| (f64::from(q) / query_norm) as f32)
+                .collect::<Vec<_>>();
+            let mut shift = 0_f32;
+            let mut qnorm = 0_f32;
+            for d in 0..dimensions {
+                shift += normalized[d] * low[d];
+                qnorm += normalized[d] * normalized[d];
+            }
+            shift -= qnorm / 2.;
+            let mut oracle = sq8
+                .chunks_exact(dimensions + 12)
+                .enumerate()
+                .map(|(ordinal, record)| {
+                    let id = i64::from_le_bytes(record[..8].try_into().unwrap());
+                    let norm = f32::from_le_bytes(record[8..12].try_into().unwrap());
+                    let mut inner = 0_f32;
+                    for d in 0..dimensions {
+                        inner += f32::from(record[12 + d]) * (normalized[d] * step[d]);
+                    }
+                    (ordinal, id, norm - 2. * (inner + shift))
+                })
+                .collect::<Vec<_>>();
+            oracle.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.1.cmp(&b.1)));
+            let local_result = local
+                .search_with_store(&store, query, 10, None)
+                .await
+                .unwrap();
+            store.reads.lock().unwrap().clear();
+            let direct = remote
+                .search_with_store(&store, query, 10, None)
+                .await
+                .unwrap();
+            let direct_reads = store.reads.lock().unwrap().clone();
+            store.reads.lock().unwrap().clear();
+            let (diagnosed, trace) = remote
+                .diagnostic_search_with_store(&store, query, 10)
+                .await
+                .unwrap();
+            let bits = |result: &TwoBitSearchResult| {
+                result
+                    .ranked
+                    .candidates
+                    .iter()
+                    .map(|hit| (hit.ordinal, hit.id, hit.score.to_bits()))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                bits(&direct),
+                oracle[..10]
+                    .iter()
+                    .map(|&(ordinal, id, score)| (ordinal, id, score.to_bits()))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(bits(&direct), bits(&local_result));
+            assert_eq!(bits(&direct), bits(&diagnosed));
+            assert!(
+                direct
+                    .ranked
+                    .candidates
+                    .iter()
+                    .any(|hit| hit.ordinal == rows - 1)
+            );
+            assert_eq!(direct.plan.selected_pages, [0, 1]);
+            assert_eq!(direct.plan, diagnosed.plan);
+            assert_eq!(direct.source_stats, diagnosed.source_stats);
+            assert_eq!(direct.router_stats, diagnosed.router_stats);
+            assert_eq!(direct.ranked.stats, diagnosed.ranked.stats);
+            assert_eq!(*store.reads.lock().unwrap(), direct_reads);
+            assert_eq!(
+                trace.semantic_units,
+                (0..rows.div_ceil(32)).collect::<Vec<_>>()
+            );
+            for (name, stats, bytes) in [
+                (
+                    "router/leaves.bin",
+                    direct.router_stats,
+                    rows.div_ceil(32) * (4 + dimensions * 2),
+                ),
+                (
+                    "plane/records.bin",
+                    direct.source_stats,
+                    rows * source_width,
+                ),
+                (key.as_ref(), direct.ranked.stats, sq8.len()),
+            ] {
+                let reads = direct_reads
+                    .iter()
+                    .filter(|read| read.0.ends_with(name))
+                    .collect::<Vec<_>>();
+                assert_eq!(stats.submitted_gets, 1);
+                assert_eq!(stats.failed_gets, 0);
+                assert_eq!(stats.verified_bytes, bytes);
+                assert_eq!(reads.len(), stats.submitted_gets);
+                assert_eq!(
+                    reads
+                        .iter()
+                        .map(|read| (read.2.end - read.2.start) as usize)
+                        .sum::<usize>(),
+                    bytes
+                );
+                assert!(reads.iter().all(|read| !read.1 && read.3.is_some()));
+            }
+            assert_eq!(direct_reads.len(), 3);
+        }
+
+        let query = &queries[0];
+        // Refusal precedes the excluded class of reads; codec scratch precedes all I/O.
+        for cap in [
+            "scratch",
+            "source_gets",
+            "source_bytes",
+            "sq8_gets",
+            "sq8_bytes",
+        ] {
+            remote.limits = limits;
+            match cap {
+                "scratch" => remote.limits.max_query_scratch_bytes = prepare_bytes - 1,
+                "source_gets" => remote.limits.max_source_gets = 0,
+                "source_bytes" => remote.limits.max_source_bytes -= 1,
+                "sq8_gets" => remote.limits.max_query_gets = 0,
+                _ => remote.limits.max_query_bytes = 1,
+            }
+            store.reads.lock().unwrap().clear();
+            let error = remote
+                .search_with_store(&store, query, 10, None)
+                .await
+                .err()
+                .unwrap();
+            let reads = store.reads.lock().unwrap();
+            assert!(!reads.iter().any(|read| read.0 == key.as_ref()), "{cap}");
+            if cap == "scratch" {
+                assert!(reads.is_empty());
+            } else if cap.starts_with("source") {
+                assert!(
+                    reads
+                        .iter()
+                        .all(|read| read.0.ends_with("router/leaves.bin"))
+                );
+                assert_eq!(
+                    error.read_stats(),
+                    (Sq8ReadStats::default(), Sq8ReadStats::default())
+                );
+            }
+        }
+        remote.limits = limits;
+        remote.limits.max_query_scratch_bytes = prepare_bytes + trace_bytes - 1;
+        store.reads.lock().unwrap().clear();
+        assert!(
+            remote
+                .diagnostic_search_with_store(&store, query, 10)
+                .await
+                .is_err()
+        );
+        assert!(store.reads.lock().unwrap().is_empty());
+        remote.limits = limits;
+
+        // The bounded validator streams source records; complete leaf authentication
+        // belongs to the publisher. Exercise it before transport ETags are mutated.
+        let publication_index = ObjectPath::from("semantic/corruption");
+        for name in ["plane/records.bin", "router/leaves.bin"] {
+            let path = root.join(name);
+            let original = fs::read(&path).unwrap();
+            let mut damaged = original.clone();
+            *damaged.last_mut().unwrap() ^= 1;
+            fs::write(&path, damaged).unwrap();
+            store.writes.lock().unwrap().clear();
+            let error = crate::two_bit_store::publish_two_bit_generation(
+                &store,
+                &publication_index,
+                &root,
+                &root_sha,
+                limits,
+                None,
+            )
+            .await
+            .err()
+            .unwrap();
+            let expected = if name == "plane/records.bin" {
+                "source page digest"
+            } else {
+                "artifact identity"
+            };
+            assert!(
+                matches!(
+                    &error,
+                    crate::two_bit_store::TwoBitStoreError::Generation(
+                        TwoBitGenerationError::Plane(SourceBuildError::Invalid(reason))
+                    ) if *reason == expected
+                ),
+                "{name}: {error:?}"
+            );
+            assert!(store.writes.lock().unwrap().is_empty());
+            assert!(
+                crate::two_bit_store::read_two_bit_head(&store, &publication_index)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "{name}"
+            );
+            fs::write(path, original).unwrap();
+        }
+        // The same publisher, namespace and limits must accept the restored artifacts.
+        crate::two_bit_store::publish_two_bit_generation(
+            &store,
+            &publication_index,
+            &root,
+            &root_sha,
+            limits,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Update transport ETags after damage so authentication must reject the bytes.
+        for name in ["router/leaves.bin", "plane/records.bin", "sq8"] {
+            let (location, original) = if name == "sq8" {
+                (key.clone(), sq8.clone())
+            } else {
+                (
+                    metadata_location(&prefix, name),
+                    fs::read(root.join(name)).unwrap(),
+                )
+            };
+            let mut damaged = original.clone();
+            *damaged.last_mut().unwrap() ^= 1;
+            for (rejecting, body) in [(true, damaged), (false, original)] {
+                store.put(&location, body.into()).await.unwrap();
+                let tag = store.head(&location).await.unwrap().e_tag.unwrap();
+                match name {
+                    "sq8" => remote.manifest.sq8_etag = tag,
+                    "plane/records.bin" => remote.source.as_mut().unwrap().etag = tag,
+                    _ => {
+                        let LoadedDiscovery::Semantic {
+                            remote: Some((_, etag)),
+                            ..
+                        } = &mut remote.discovery
+                        else {
+                            panic!("semantic remote missing")
+                        };
+                        *etag = tag;
+                    }
+                }
+                if rejecting {
+                    store.reads.lock().unwrap().clear();
+                    let error = remote
+                        .search_with_store(&store, query, 10, None)
+                        .await
+                        .err()
+                        .unwrap();
+                    let (source, sq8) = error.read_stats();
+                    match name {
+                        "router/leaves.bin" => {
+                            assert_eq!(error.router_stats().failed_gets, 1);
+                            assert_eq!(
+                                (source, sq8),
+                                (Sq8ReadStats::default(), Sq8ReadStats::default())
+                            );
+                        }
+                        "plane/records.bin" => {
+                            assert_eq!(source.failed_gets, 1);
+                            assert_eq!(sq8, Sq8ReadStats::default());
+                        }
+                        _ => {
+                            assert_eq!(source.verified_bytes, rows * source_width);
+                            assert_eq!(sq8.failed_gets, 1);
+                        }
+                    }
+                }
+            }
+        }
+        remote
+            .search_with_store(&store, query, 10, None)
+            .await
+            .unwrap();
+        let root_path = root.join("manifest.json");
+        let original = fs::read(&root_path).unwrap();
+        assert!(TwoBitGeneration::open(&root, &"0".repeat(64), limits).is_err());
+        // Rehash the outer root: mismatched authenticated inner identities still fail.
+        for field in [
+            "source_sha256",
+            "source_order_sha256",
+            "mean_sha256",
+            "records_sha256",
+            "sq8_sha256",
+            "input_root_sha256",
+            "generation",
+        ] {
+            let mut manifest: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            if field == "generation" {
+                manifest[field] = 2.into();
+            } else {
+                manifest["discovery"][field] = "0".repeat(64).into();
+            }
+            let body = serde_json::to_vec(&manifest).unwrap();
+            fs::write(&root_path, &body).unwrap();
+            assert!(
+                TwoBitGeneration::open(&root, &hash(&body), limits).is_err(),
+                "{field}"
+            );
+        }
+        fs::write(root_path, original).unwrap();
+        TwoBitGeneration::validate_local_publication(&root, &root_sha, limits).unwrap();
+    }
+
+    #[tokio::test]
     async fn semantic_object_store_parity() {
         use crate::two_bit_build::TwoBitGenerationBuilder;
         use crate::two_bit_source::TwoBitSource;

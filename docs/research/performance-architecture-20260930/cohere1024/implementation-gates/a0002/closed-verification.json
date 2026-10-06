@@ -1,0 +1,56 @@
+{
+  "status": "QUALIFIED_NATIVE_ONLY",
+  "exec_session": 62254,
+  "instance_id": "i-05d1bccc1f60d4647",
+  "instance_state": "terminated",
+  "candidate_commit": "e5f4a34d700189ac1bd5035954e517583d283bfe",
+  "source_file_count": 409,
+  "source_before_after_equal": true,
+  "current_root_plus_exact_delta_matches_full_source": true,
+  "all_terminal_artifacts_and_gzip_bodies_verified": 18,
+  "stages": [
+    {
+      "name": "generation-tests",
+      "exit": 0,
+      "gate": 0,
+      "tests_run": 14
+    },
+    {
+      "name": "generation-release-test",
+      "exit": 0,
+      "gate": 0,
+      "tests_run": 1
+    },
+    {
+      "name": "router-tests",
+      "exit": 0,
+      "gate": 0,
+      "tests_run": 7
+    },
+    {
+      "name": "release",
+      "exit": 0,
+      "gate": 0,
+      "tests_run": null
+    },
+    {
+      "name": "clippy",
+      "exit": 0,
+      "gate": 0,
+      "tests_run": null
+    },
+    {
+      "name": "test-build",
+      "exit": 0,
+      "gate": 0,
+      "tests_run": null
+    }
+  ],
+  "memory_peak_bytes": 8589934592,
+  "swap_peak_bytes": 0,
+  "oom_kills": 0,
+  "observed_instance_elapsed_seconds": 2469,
+  "terminal_sha256": "8f31f74629fd0dcacf4202e50de9e9b5e4da4f05a99b8e39544b42d1e56462df",
+  "science": "NO_REAL_COHERE_CORPUS_RECALL_LATENCY_QPS_OR_VENDOR_PARITY_MEASURED",
+  "full_workspace_execution": false
+}

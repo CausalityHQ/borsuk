@@ -28,7 +28,7 @@ const SCHEMA: &str = "BORSUSR2";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SemanticProfile {
-    /// Existing 1–100,000 rows, 1–768 coordinates.
+    /// Existing 1–100,000 rows, 1–1024 coordinates.
     Native100k,
     /// Fresh research arm: exactly one million rows and 768 coordinates.
     Fresh1m,
@@ -51,7 +51,7 @@ impl SemanticProfile {
     /// Whether the supplied source geometry belongs to this profile.
     pub fn valid_geometry(self, rows: usize, dimensions: usize) -> bool {
         match self {
-            Self::Native100k => (1..=100_000).contains(&rows) && (1..=768).contains(&dimensions),
+            Self::Native100k => (1..=100_000).contains(&rows) && (1..=1024).contains(&dimensions),
             Self::Fresh1m => rows == 1_000_000 && dimensions == 768,
         }
     }
