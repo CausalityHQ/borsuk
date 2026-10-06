@@ -1,0 +1,69 @@
+{
+  "status": "PENDING_NOT_EXECUTABLE",
+  "config_template": {
+    "schema": "borsuk-cohere-native-cohort-config-v1",
+    "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+    "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+    "embedding_column": "emb",
+    "document_id_column": "_id",
+    "shards": [
+      {
+        "publisher_path": "en/0000.parquet",
+        "path": "/mnt/borsuk-cohere/input/en/0000.parquet",
+        "bytes": 216612385,
+        "sha256": "2c6abfffa7dd336113251b3e6f3fe4ee16688ead7c67b99593cbadc5589e28b3"
+      },
+      {
+        "publisher_path": "en/0001.parquet",
+        "path": "/mnt/borsuk-cohere/input/en/0001.parquet",
+        "bytes": 216746705,
+        "sha256": "1ce373d5730494429a64a0f788c62f71226ded2bc670aaf9399204e91e544c3b"
+      }
+    ],
+    "output_parent": {
+      "path": "/mnt/borsuk-cohere/output",
+      "device": null,
+      "inode": null
+    },
+    "resources": {
+      "cpu_limit": 4,
+      "actual_memory_bytes": 8589934592,
+      "modeled_memory_bytes": 7516192768,
+      "swap_bytes": 0,
+      "scratch_bytes": 8589934592,
+      "timeout_seconds": 2400,
+      "max_footer_bytes": 1048576,
+      "max_row_group_rows": 10000,
+      "max_row_group_compressed_bytes": 268435456,
+      "max_row_group_uncompressed_bytes": 1073741824,
+      "batch_rows": 256,
+      "max_batch_bytes": 268435456,
+      "max_id_bytes": 1024
+    }
+  },
+  "remaining": [
+    "Actual exact-source native gates exit0",
+    "Download and authenticate whole shards",
+    "Create output parent on execution host and freeze actual device/inode",
+    "Validate actual metadata allocation limits before preparation",
+    "Freeze final config bytes/SHA before native execution"
+  ],
+  "qualification_job_unchanged": 12009,
+  "body_verification": false,
+  "source_inspection": "Config resource scalars checked against preparer validate; compressed group ceiling corrected to 256MiB. Native config admission still pending actual output-parent pins and qualified execution.",
+  "metadata_batch_config_correction": {
+    "previous_bytes": 16777216,
+    "new_prospective_bytes": 268435456,
+    "reason": "source guard charges all projected group values before Arrow allocation; 16MiB cannot admit D1024 with10000 rows",
+    "embedding_and_id_value_lower_bound_bytes": 83370632,
+    "additional_dictionary_id_expansion_unmeasured": true,
+    "actual_metadata_admission_required_before_execution": true,
+    "native_memory_scratch_caps_unchanged": true,
+    "quality_failure": false
+  },
+  "source_guard": {
+    "path": "crates/borsuk/src/bin/prepare_cohere_native_cohort.rs",
+    "sha256": "c1846e06542eeaf496c47d77f7620cc740b4f997988733e8f6d1ba0aa27a9a48",
+    "mechanism": "worst_batch = 8*projected_values +32*group_rows +batch_rows*id_uncompressed +8*(batch_rows+1)+1MiB"
+  }
+}
