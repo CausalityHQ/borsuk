@@ -13,6 +13,7 @@ controller_code_sha256={every CODE path:SHA256}, native_source_manifest=
 --constrained-split-implementation qualifies the additive source-neighborhood diagnostic.
 --cell-overlap-implementation qualifies bounded boundary overlap; no full test execution.
 --fine-sq8-implementation qualifies the native fine-group candidate, without a corpus run.
+--pq-residual-implementation qualifies the native raw-PQ residual candidate, without a corpus run.
 --hierarchical-cells-implementation uses a separate minimal-archive v2 root.
 Its config additionally carries hierarchical_archive_authority(...)'s four
 ARCHIVE_FIELDS, derived from the committed controller tree before config freeze.
@@ -64,6 +65,7 @@ HIERARCHICAL_CELLS = False
 CONSTRAINED_SPLIT = False
 CELL_OVERLAP = False
 FINE_SQ8 = False
+PQ_RESIDUAL = False
 MINIMAL_ARCHIVE = False
 HIERARCHICAL_CELLS_DELTA = ('crates/borsuk/src/bin/hierarchical_semantic_cells.rs',
                           'crates/borsuk/src/hierarchical_semantic_cells.rs')
@@ -306,6 +308,61 @@ FINE_SQ8_STAGES = tuple((name, command.split()) for name, command in (
     ('test-build', 'env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh')))
 
 
+PQ_RESIDUAL_DELTA = ('crates/borsuk/src/bin/hierarchical_semantic_cells.rs',
+                     'crates/borsuk/src/fine_sq8_groups.rs',
+                     'crates/borsuk/src/lib.rs',
+                     'crates/borsuk/src/pq64_nominee.rs',
+                     'crates/borsuk/src/pq_residual_four_bit.rs')
+PQ_RESIDUAL_STAGE_SCHEMA = 'borsuk-pq-residual-implementation-stage-v1'
+# Final native sibling contract; the root supplies the native commit and full inventory.
+PQ_RESIDUAL_REQUIRED_TESTS = {
+    'pq-residual-codec-tests': tuple('pq_residual_four_bit::tests::' + name for name in (
+        'pq_residual_raw_pq_floor_padding_and_physical_order',
+        'pq_residual_bins_constants_endpoints_subnormal_and_center_ties',
+        'pq_residual_original_norm_nonunit_near_ulp_scalar_oracle',
+        'pq_residual_book_binding_corruption_padding_and_caps',
+        'pq_residual_literal_d1_d3_d65_roundtrip_and_native_constant_ties',
+    )),
+    'pq-residual-source-tests': tuple('fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::' + name for name in (
+        'pq_residual_dp_independent_brute_cost_and_ties',
+        'pq_residual_actual_native_pipeline_selection_no_gt_and_sealed_recount',
+        'pq_residual_admission_underflow_and_same_size_bindings',
+        'pq_residual_pipeline_pass_mutation_eof_partial_sync_seal_and_late_invalid',
+        'pq_residual_frozen_thresholds_cohort_membership_ties_and_supervisor',
+    )),
+    'pq-residual-bin-tests': ('tests::pq_residual_source_strict_cli_dispatch_no_geometry_or_truth_override',),
+    'pq-residual-doc-tests': ('src/pq_residual_four_bit.rs - pq_residual_four_bit::Axis (line 13) - compile fail',),
+    **FINE_SQ8_REQUIRED_TESTS,
+}
+PQ_RESIDUAL_STAGES = (
+    ('pq-residual-codec-tests', 'cargo test --locked -p borsuk --lib pq_residual_four_bit::tests -- --test-threads=1'.split()),
+    ('pq-residual-source-tests', 'cargo test --locked -p borsuk --lib fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests -- --test-threads=1'.split()),
+    ('pq-residual-bin-tests', 'cargo test --locked -p borsuk --bin hierarchical_semantic_cells pq_residual_source_strict_cli_dispatch_no_geometry_or_truth_override -- --test-threads=1'.split()),
+    ('pq-residual-doc-tests', 'cargo test --locked -p borsuk --doc pq_residual_four_bit -- --test-threads=1'.split()),
+    *((name, command + (['--skip', 'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::'] if name == 'fine-sq8-tests'
+        else ['--skip', 'tests::pq_residual_source_strict_cli_dispatch_no_geometry_or_truth_override'] if name == 'hierarchical-bin-regressions' else []))
+      for name, command in FINE_SQ8_STAGES if name not in ('clippy', 'test-build')),
+    *tuple((name, command) for name, command in FINE_SQ8_STAGES if name in ('clippy', 'test-build')),
+)
+
+
+def pq_residual_required_tests():
+    required = PQ_RESIDUAL_REQUIRED_TESTS
+    assert set(required) == {name for name, _ in PQ_RESIDUAL_STAGES if name not in ('release', 'clippy', 'test-build')} and all(required.values()), 'native PQ residual mandatory test names pending'
+    names = [test for tests in required.values() for test in tests]
+    assert len(names) == len(set(names)), 'exact unique native PQ residual tests'
+    for stage, tests in required.items():
+        pattern = r'src/pq_residual_four_bit\.rs - pq_residual_four_bit::Axis \(line [1-9][0-9]*\) - compile fail' if stage == 'pq-residual-doc-tests' else r'[a-zA-Z0-9_]+(?:::[a-zA-Z0-9_]+)+'
+        assert all(type(name) is str and re.fullmatch(pattern, name) for name in tests), 'exact native PQ residual test names'
+    return required
+
+
+def validate_pq_residual_config(config):
+    assert {'mandatory_test_names_pending', 'mandatory_tests'} <= set(config), 'complete PQ residual test authority'
+    assert config['mandatory_test_names_pending'] is False, 'native mandatory test names pending'
+    assert config['mandatory_tests'] == {name:list(tests) for name,tests in pq_residual_required_tests().items()}, 'exact native PQ residual test roster'
+
+
 def fine_sq8_required_tests():
     required = FINE_SQ8_REQUIRED_TESTS
     assert set(required) == {name for name, _ in FINE_SQ8_STAGES if name not in ('release', 'clippy', 'test-build')} and all(required.values()), 'native fine SQ8 mandatory test names pending'
@@ -433,13 +490,13 @@ def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 
 
-def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False):
+def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False):
     """Select the protocol explicitly in every controller/worker process."""
-    global SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, CONSTRAINED_SPLIT, CELL_OVERLAP, FINE_SQ8, MINIMAL_ARCHIVE, NATIVE_DELTA, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
+    global SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, CONSTRAINED_SPLIT, CELL_OVERLAP, FINE_SQ8, PQ_RESIDUAL, MINIMAL_ARCHIVE, NATIVE_DELTA, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
     global SCHEMA, CONFIG_SCHEMA, RECEIPT_SCHEMA, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, TERMINAL_IDENTITIES
-    assert type(semantic_1m) is type(test_build) is type(implementation) is type(startup_wave8) is type(root_reuse) is type(bounded_publication) is type(fixed48) is type(hierarchical_cells) is type(constrained_split) is type(cell_overlap) is type(fine_sq8) is bool
-    scoped = startup_wave8 or root_reuse or bounded_publication or fixed48 or hierarchical_cells or constrained_split or cell_overlap or fine_sq8
-    assert sum((startup_wave8, root_reuse, bounded_publication, fixed48, hierarchical_cells, constrained_split, cell_overlap, fine_sq8)) <= 1 and not (scoped and test_build), 'mutually exclusive execution modes'
+    assert type(semantic_1m) is type(test_build) is type(implementation) is type(startup_wave8) is type(root_reuse) is type(bounded_publication) is type(fixed48) is type(hierarchical_cells) is type(constrained_split) is type(cell_overlap) is type(fine_sq8) is type(pq_residual) is bool
+    scoped = startup_wave8 or root_reuse or bounded_publication or fixed48 or hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual
+    assert sum((startup_wave8, root_reuse, bounded_publication, fixed48, hierarchical_cells, constrained_split, cell_overlap, fine_sq8, pq_residual)) <= 1 and not (scoped and test_build), 'mutually exclusive execution modes'
     if scoped:
         semantic_1m = implementation = True
     assert not (test_build and implementation), 'mutually exclusive execution modes'
@@ -455,9 +512,10 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
     CONSTRAINED_SPLIT = constrained_split
     CELL_OVERLAP = cell_overlap
     FINE_SQ8 = fine_sq8
-    MINIMAL_ARCHIVE = hierarchical_cells or constrained_split or cell_overlap or fine_sq8
-    NATIVE_DELTA = FINE_SQ8_DELTA if fine_sq8 else CELL_OVERLAP_DELTA if cell_overlap else CONSTRAINED_SPLIT_DELTA if constrained_split else HIERARCHICAL_CELLS_DELTA if hierarchical_cells else FIXED48_DELTA if fixed48 else BOUNDED_PUBLICATION_DELTA if bounded_publication else ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
-    RELEASE_ARTIFACTS = ('binaries/hierarchical_semantic_cells',) if cell_overlap or fine_sq8 else ('binaries/check_hierarchical_split_balance', 'binaries/hierarchical_semantic_cells', 'binaries/two_bit_http') if constrained_split else ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation', 'binaries/check_semantic_router_scorer') if hierarchical_cells else ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
+    PQ_RESIDUAL = pq_residual
+    MINIMAL_ARCHIVE = hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual
+    NATIVE_DELTA = PQ_RESIDUAL_DELTA if pq_residual else FINE_SQ8_DELTA if fine_sq8 else CELL_OVERLAP_DELTA if cell_overlap else CONSTRAINED_SPLIT_DELTA if constrained_split else HIERARCHICAL_CELLS_DELTA if hierarchical_cells else FIXED48_DELTA if fixed48 else BOUNDED_PUBLICATION_DELTA if bounded_publication else ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
+    RELEASE_ARTIFACTS = ('binaries/hierarchical_semantic_cells',) if cell_overlap or fine_sq8 or pq_residual else ('binaries/check_hierarchical_split_balance', 'binaries/hierarchical_semantic_cells', 'binaries/two_bit_http') if constrained_split else ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation', 'binaries/check_semantic_router_scorer') if hierarchical_cells else ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
     TERMINAL_IDENTITIES = (*FULL_TERMINAL_IDENTITIES, 'controller_source_commit', 'candidate_delta_paths') if scoped else FULL_TERMINAL_IDENTITIES
     if MINIMAL_ARCHIVE:
         TERMINAL_IDENTITIES += ARCHIVE_IDENTITIES
@@ -591,23 +649,42 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
                 if FINE_SQ8_REQUIRED_TESTS else {})
 
 
+    if pq_residual:
+        ROOT = semantic.ROOT.parent/'semantic-1m/fine-sq8-groups/sq4-refinement/pq-residual/implementation-gates'
+        CONFIG = ROOT/'config.json'
+        TOKEN_PREFIX = 'pq-residual-implementation-'
+        PREFIX = 'research/semantic-router/20261006/' + TOKEN_PREFIX
+        TAG = 'borsuk-pq-residual-implementation'
+        SCHEMA = 'borsuk-pq-residual-implementation-gates-spot-v1'
+        CONFIG_SCHEMA = 'borsuk-pq-residual-implementation-gates-v1'
+        RECEIPT_SCHEMA = 'borsuk-pq-residual-implementation-gates-receipt-v1'
+        CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_pq_residual_implementation.sh')
+        FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_pq_residual_implementation.sh'],
+            environment=dict(worker.ENVIRONMENT, BORSUK_TEST_BUILD_JOBS='1', BORSUK_TEST_BUILD_COMMAND=None,
+                BORSUK_CPU_THREADS='1', RAYON_NUM_THREADS='1', TOKIO_WORKER_THREADS='1',
+                BORSUK_FINE_TEST_ROOT=None, BORSUK_FINE_TEST_REMOTE=None),
+            mandatory_test_names_pending=not bool(PQ_RESIDUAL_REQUIRED_TESTS),
+            mandatory_tests={name:list(tests) for name,tests in pq_residual_required_tests().items()}
+                if PQ_RESIDUAL_REQUIRED_TESTS else {})
+
+
 @contextlib.contextmanager
-def execution_mode(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False):
+def execution_mode(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False):
     """Restore the caller's protocol after a worker or synthetic check."""
-    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, CONSTRAINED_SPLIT, CELL_OVERLAP, FINE_SQ8
-    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8)
+    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, CONSTRAINED_SPLIT, CELL_OVERLAP, FINE_SQ8, PQ_RESIDUAL
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual)
     try:
         yield
     finally:
-        configure(previous[0], test_build=previous[1], implementation=previous[2], startup_wave8=previous[3], root_reuse=previous[4], bounded_publication=previous[5], fixed48=previous[6], hierarchical_cells=previous[7], constrained_split=previous[8], cell_overlap=previous[9], fine_sq8=previous[10])
+        configure(previous[0], test_build=previous[1], implementation=previous[2], startup_wave8=previous[3], root_reuse=previous[4], bounded_publication=previous[5], fixed48=previous[6], hierarchical_cells=previous[7], constrained_split=previous[8], cell_overlap=previous[9], fine_sq8=previous[10], pq_residual=previous[11])
 
 
 def mode_flag():
-    return ' --fine-sq8-implementation' if FINE_SQ8 else ' --cell-overlap-implementation' if CELL_OVERLAP else ' --constrained-split-implementation' if CONSTRAINED_SPLIT else ' --hierarchical-cells-implementation' if HIERARCHICAL_CELLS else ' --fixed48-implementation' if FIXED48 else ' --bounded-publication-implementation' if BOUNDED_PUBLICATION else ' --root-reuse-implementation' if ROOT_REUSE else ' --startup-wave8-implementation' if STARTUP_WAVE8 else ' --semantic-1m-implementation' if IMPLEMENTATION else ' --semantic-1m-test-build' if TEST_BUILD else ' --semantic-1m' if SEMANTIC_1M else ''
+    return ' --pq-residual-implementation' if PQ_RESIDUAL else ' --fine-sq8-implementation' if FINE_SQ8 else ' --cell-overlap-implementation' if CELL_OVERLAP else ' --constrained-split-implementation' if CONSTRAINED_SPLIT else ' --hierarchical-cells-implementation' if HIERARCHICAL_CELLS else ' --fixed48-implementation' if FIXED48 else ' --bounded-publication-implementation' if BOUNDED_PUBLICATION else ' --root-reuse-implementation' if ROOT_REUSE else ' --startup-wave8-implementation' if STARTUP_WAVE8 else ' --semantic-1m-implementation' if IMPLEMENTATION else ' --semantic-1m-test-build' if TEST_BUILD else ' --semantic-1m' if SEMANTIC_1M else ''
 
 
 def archive_binding_prefix():
-    return 'BORSUK_FINE_SQ8_' if FINE_SQ8 else 'BORSUK_CELL_OVERLAP_' if CELL_OVERLAP else 'BORSUK_CONSTRAINED_SPLIT_' if CONSTRAINED_SPLIT else 'BORSUK_HIERARCHICAL_'
+    return 'BORSUK_PQ_RESIDUAL_' if PQ_RESIDUAL else 'BORSUK_FINE_SQ8_' if FINE_SQ8 else 'BORSUK_CELL_OVERLAP_' if CELL_OVERLAP else 'BORSUK_CONSTRAINED_SPLIT_' if CONSTRAINED_SPLIT else 'BORSUK_HIERARCHICAL_'
 
 
 def validate_constrained_split_config(config):
@@ -734,6 +811,10 @@ def qualify(base=Path('.')):
     body = (base/CONFIG).read_bytes()
     config = json.loads(body)
     assert config['controller_authority_pending'] is False, 'root authority freeze pending'
+    if PQ_RESIDUAL:
+        validate_pq_residual_config(config)
+        assert set(config) == set(FIXED) | {'controller_authority_pending', 'controller_source_commit',
+            'controller_code_sha256', 'native_source_manifest', *ARCHIVE_FIELDS}, 'exact PQ residual config'
     if FINE_SQ8:
         validate_fine_sq8_config(config)
         assert set(config) == set(FIXED) | {'controller_authority_pending', 'controller_source_commit',
@@ -758,7 +839,7 @@ def qualify(base=Path('.')):
     manifest = json.loads((base/path).read_bytes())
     if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
         assert re.fullmatch('[0-9a-f]{40}', config['controller_source_commit']), 'frozen controller commit'
-        assert manifest['schema'] == ('borsuk-corrected-four-bit-native-source-manifest-v1' if FINE_SQ8 else 'borsuk-cell-overlap-native-source-manifest-v1' if CELL_OVERLAP else 'borsuk-constrained-split-native-source-manifest-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-native-source-manifest-v1' if HIERARCHICAL_CELLS else 'borsuk-fixed48-native-source-manifest-v1' if FIXED48 else 'borsuk-bounded-publication-native-source-manifest-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
+        assert manifest['schema'] == ('borsuk-pq-residual-native-source-manifest-v1' if PQ_RESIDUAL else 'borsuk-corrected-four-bit-native-source-manifest-v1' if FINE_SQ8 else 'borsuk-cell-overlap-native-source-manifest-v1' if CELL_OVERLAP else 'borsuk-constrained-split-native-source-manifest-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-native-source-manifest-v1' if HIERARCHICAL_CELLS else 'borsuk-fixed48-native-source-manifest-v1' if FIXED48 else 'borsuk-bounded-publication-native-source-manifest-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
         assert manifest['candidate_qualification_pending'] is True, 'source authority is not completed assurance'
         validate_candidate_delta(manifest['candidate_delta_paths'])
         if STARTUP_WAVE8:
@@ -769,7 +850,7 @@ def qualify(base=Path('.')):
             assert manifest['control_native_source_commit'] == CONSTRAINED_SPLIT_CONTROL, 'exact original native control'
             validate_constrained_split_prefix(base)
     inventory = worker.source_hashes(base)
-    if FINE_SQ8:
+    if FINE_SQ8 or PQ_RESIDUAL:
         assert set(NATIVE_DELTA) <= set(inventory), 'complete corrected four-bit native source roster'
     assert type(manifest['source_file_count']) is int and manifest['source_file_count'] == len(inventory) > 0
     assert manifest['source_sha256'] == inventory, 'full native source drift'
@@ -777,7 +858,7 @@ def qualify(base=Path('.')):
     assert identity == manifest['source_identity_sha256']
     assert SEMANTIC_1M or identity == SOURCE_IDENTITY, 'historical native source identity'
     assert re.fullmatch('[0-9a-f]{40}', manifest['native_source_commit'])
-    proof = dict(schema='borsuk-corrected-four-bit-implementation-gates-qualification-v1' if FINE_SQ8 else 'borsuk-cell-overlap-implementation-gates-qualification-v1' if CELL_OVERLAP else 'borsuk-constrained-split-implementation-gates-qualification-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-implementation-gates-qualification-v2' if HIERARCHICAL_CELLS else 'borsuk-fixed48-implementation-gates-qualification-v1' if FIXED48 else 'borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
+    proof = dict(schema='borsuk-pq-residual-implementation-gates-qualification-v1' if PQ_RESIDUAL else 'borsuk-corrected-four-bit-implementation-gates-qualification-v1' if FINE_SQ8 else 'borsuk-cell-overlap-implementation-gates-qualification-v1' if CELL_OVERLAP else 'borsuk-constrained-split-implementation-gates-qualification-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-implementation-gates-qualification-v2' if HIERARCHICAL_CELLS else 'borsuk-fixed48-implementation-gates-qualification-v1' if FIXED48 else 'borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
         config_path=str(CONFIG), config_sha256=worker.sha(body), campaign_schema=SCHEMA,
         source_sha256=inventory, source_identity_sha256=identity, source_file_count=len(inventory),
         native_source_commit=manifest['native_source_commit'], native_source_manifest=pointer,
@@ -797,7 +878,7 @@ def qualify(base=Path('.')):
         proof.update(mandatory_test_names_pending=False, mandatory_tests=config['mandatory_tests'],
                      control_native_source_commit=CONSTRAINED_SPLIT_CONTROL,
                      control_module_prefix=CONSTRAINED_SPLIT_PREFIX)
-    if CELL_OVERLAP or FINE_SQ8:
+    if CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL:
         proof.update(mandatory_test_names_pending=False, mandatory_tests=config['mandatory_tests'])
     if MINIMAL_ARCHIVE:
         proof.update(validate_hierarchical_archive(config, inventory, pointer['path'], base))
@@ -848,17 +929,18 @@ def stage(repo, out):
     return proof
 
 
-def record_constrained_split_stage(argv, *, cell_overlap=False, fine_sq8=False):
+def record_constrained_split_stage(argv, *, cell_overlap=False, fine_sq8=False, pq_residual=False):
     """Stage gate shared by the serial shell runner and bounded Python checks."""
-    strict_counts = cell_overlap or fine_sq8
-    required = fine_sq8_required_tests() if fine_sq8 else cell_overlap_required_tests() if cell_overlap else constrained_split_required_tests()
-    stages = FINE_SQ8_STAGES if fine_sq8 else CELL_OVERLAP_STAGES if cell_overlap else CONSTRAINED_SPLIT_STAGES
+    strict_counts = cell_overlap or fine_sq8 or pq_residual
+    required = pq_residual_required_tests() if pq_residual else fine_sq8_required_tests() if fine_sq8 else cell_overlap_required_tests() if cell_overlap else constrained_split_required_tests()
+    stages = PQ_RESIDUAL_STAGES if pq_residual else FINE_SQ8_STAGES if fine_sq8 else CELL_OVERLAP_STAGES if cell_overlap else CONSTRAINED_SPLIT_STAGES
     stage, started, finished, status, log, log_status, *command = argv
     assert dict(stages)[stage] == command, 'exact stage argv'
     tests = passes = None
     failed = ignored = summaries = passed_lines = test_builds = 0
     seen = set()
     duplicate = False
+    wrong_stage = False
     if finished:
         passes = dict.fromkeys(required.get(stage, ()), 0)
         if stage not in ('release', 'clippy', 'test-build') or strict_counts and stage == 'test-build':
@@ -867,11 +949,15 @@ def record_constrained_split_stage(argv, *, cell_overlap=False, fine_sq8=False):
                 tests = 0
             with Path(log).open() as source:
                 for line in source:
-                    test = re.fullmatch(r'test (\S+) \.\.\. ok\n?', line)
+                    if pq_residual:
+                        failed += bool(re.fullmatch(r'test .+ \.\.\. (?:FAILED|ignored)\n?', line))
+                        failed += line.startswith('test result: FAILED.')
+                    test = re.fullmatch(r'test (?:crates/borsuk/)?(.+) \.\.\. ok\n?' if pq_residual else r'test (\S+) \.\.\. ok\n?', line)
                     passed_lines += bool(test)
                     if strict_counts and test:
                         duplicate |= test[1] in seen
                         seen.add(test[1])
+                        wrong_stage |= pq_residual and any(test[1] in names for name, names in required.items() if name != stage)
                     if test and test[1] in passes:
                         passes[test[1]] += 1
                     summary = re.fullmatch(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; \d+ filtered out;.*\n?', line)
@@ -883,23 +969,25 @@ def record_constrained_split_stage(argv, *, cell_overlap=False, fine_sq8=False):
     evidence_invalid = strict_counts and finished and (
         (stage not in ('release', 'clippy', 'test-build') and (summaries != 1 or passed_lines != tests)) or
         (stage == 'test-build' and test_builds != 1))
+    evidence_invalid |= pq_residual and bool(finished) and (wrong_stage or
+        stage.startswith('pq-residual-') and (seen != set(passes) or tests != len(passes)))
     gate = (int(status) or int(log_status) or
         (96 if tests == 0 or failed or ignored or duplicate or evidence_invalid or any(count != 1 for count in passes.values()) else 0)) if finished else None
-    print(json.dumps(dict(schema=FINE_SQ8_STAGE_SCHEMA if fine_sq8 else CELL_OVERLAP_STAGE_SCHEMA if cell_overlap else CONSTRAINED_SPLIT_STAGE_SCHEMA, stage=stage,
+    print(json.dumps(dict(schema=PQ_RESIDUAL_STAGE_SCHEMA if pq_residual else FINE_SQ8_STAGE_SCHEMA if fine_sq8 else CELL_OVERLAP_STAGE_SCHEMA if cell_overlap else CONSTRAINED_SPLIT_STAGE_SCHEMA, stage=stage,
         started_at=started, finished_at=finished or None, exit_status=int(status) if finished else None,
         log_exit_status=int(log_status) if finished else None, gate_status=gate,
         tests_run=tests, required_test_passes=passes, command=command), sort_keys=True), flush=True)
     return gate or 0
 
 
-def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False):
+def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False):
     from datetime import datetime
-    strict_counts = cell_overlap or fine_sq8
-    assert sum((fixed48, hierarchical_cells, constrained_split, cell_overlap, fine_sq8)) <= 1, 'mutually exclusive stage protocols'
-    stages = FINE_SQ8_STAGES if fine_sq8 else CELL_OVERLAP_STAGES if cell_overlap else CONSTRAINED_SPLIT_STAGES if constrained_split else HIERARCHICAL_CELLS_STAGES if hierarchical_cells else FIXED48_STAGES if fixed48 else BOUNDED_PUBLICATION_STAGES
-    schema = FINE_SQ8_STAGE_SCHEMA if fine_sq8 else CELL_OVERLAP_STAGE_SCHEMA if cell_overlap else CONSTRAINED_SPLIT_STAGE_SCHEMA if constrained_split else HIERARCHICAL_CELLS_STAGE_SCHEMA if hierarchical_cells else FIXED48_STAGE_SCHEMA if fixed48 else BOUNDED_PUBLICATION_STAGE_SCHEMA
-    required = fine_sq8_required_tests() if fine_sq8 else cell_overlap_required_tests() if cell_overlap else constrained_split_required_tests() if constrained_split else HIERARCHICAL_CELLS_REQUIRED_TESTS if hierarchical_cells else FIXED48_REQUIRED_TESTS
-    named_protocol = fixed48 or hierarchical_cells or constrained_split or cell_overlap or fine_sq8
+    strict_counts = cell_overlap or fine_sq8 or pq_residual
+    assert sum((fixed48, hierarchical_cells, constrained_split, cell_overlap, fine_sq8, pq_residual)) <= 1, 'mutually exclusive stage protocols'
+    stages = PQ_RESIDUAL_STAGES if pq_residual else FINE_SQ8_STAGES if fine_sq8 else CELL_OVERLAP_STAGES if cell_overlap else CONSTRAINED_SPLIT_STAGES if constrained_split else HIERARCHICAL_CELLS_STAGES if hierarchical_cells else FIXED48_STAGES if fixed48 else BOUNDED_PUBLICATION_STAGES
+    schema = PQ_RESIDUAL_STAGE_SCHEMA if pq_residual else FINE_SQ8_STAGE_SCHEMA if fine_sq8 else CELL_OVERLAP_STAGE_SCHEMA if cell_overlap else CONSTRAINED_SPLIT_STAGE_SCHEMA if constrained_split else HIERARCHICAL_CELLS_STAGE_SCHEMA if hierarchical_cells else FIXED48_STAGE_SCHEMA if fixed48 else BOUNDED_PUBLICATION_STAGE_SCHEMA
+    required = pq_residual_required_tests() if pq_residual else fine_sq8_required_tests() if fine_sq8 else cell_overlap_required_tests() if cell_overlap else constrained_split_required_tests() if constrained_split else HIERARCHICAL_CELLS_REQUIRED_TESTS if hierarchical_cells else FIXED48_REQUIRED_TESTS
+    named_protocol = fixed48 or hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual
     test_stage_indices = {index for index, (name, _) in enumerate(stages) if name not in ('release', 'clippy', 'test-build')}
     test_record_positions = {2*index+1 for index in test_stage_indices}
     named_stages = {test: index for index, (name, _) in enumerate(stages)
@@ -913,7 +1001,9 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
     records = []
     with Path(log).open() as source:
         for line in source:
-            match = re.fullmatch(r'test (\S+) \.\.\. ok\n?', line)
+            assert not pq_residual or not re.fullmatch(r'test .+ \.\.\. (?:FAILED|ignored)\n?', line), 'unsuccessful PQ residual stage test'
+            assert not pq_residual or not line.startswith('test result: FAILED.'), 'failed PQ residual stage summary'
+            match = re.fullmatch(r'test (?:crates/borsuk/)?(.+) \.\.\. ok\n?' if pq_residual else r'test (\S+) \.\.\. ok\n?', line)
             if strict_counts and match:
                 assert len(records) in test_record_positions, 'test outside execution stage'
                 assert match[1] not in seen[len(records)//2], 'duplicate test in stage: '+match[1]
@@ -933,10 +1023,10 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
                 if summary:
                     assert len(records) in test_record_positions, 'tests outside execution stages'
                     assert int(summary[2]) == 0, 'failed tests'
-                    assert not (constrained_split or cell_overlap or fine_sq8) or int(summary[3]) == 0, 'ignored tests forbidden'
+                    assert not (constrained_split or cell_overlap or fine_sq8 or pq_residual) or int(summary[3]) == 0, 'ignored tests forbidden'
                     test_counts[len(records)//2] += int(summary[1])
                     summaries[len(records)//2] += 1
-            if (hierarchical_cells or constrained_split or cell_overlap or fine_sq8) and re.fullmatch(r'rust-test-build status=0 elapsed_seconds=\d+ jobs=1\n?', line):
+            if (hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual) and re.fullmatch(r'rust-test-build status=0 elapsed_seconds=\d+ jobs=1\n?', line):
                 assert len(records) == 2*len(stages)-1, 'test-build proof in wrong stage'
                 test_builds += 1
             if not line.startswith('{'):
@@ -951,7 +1041,9 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
     assert len(records) == 2*len(stages), 'all completed stages required'
     assert all(count == 1 for count in passes.values()), 'named tests must pass exactly once'
     assert not strict_counts or all(summaries[index] == 1 and passed_lines[index] == test_counts[index] for index in test_stage_indices), 'actual nonzero test counts'
-    assert not (hierarchical_cells or constrained_split or cell_overlap or fine_sq8) or test_builds == 1, 'actual unshimmed test-build completion'
+    assert not pq_residual or all(seen[index] == set(required[name]) and test_counts[index] == len(required[name])
+        for index, (name, _) in enumerate(stages) if name.startswith('pq-residual-')), 'exact PQ residual stage tests'
+    assert not (hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual) or test_builds == 1, 'actual unshimmed test-build completion'
     previous_finish = None
     for index, (name, command) in enumerate(stages):
         start, end = records[2*index:2*index+2]
@@ -981,6 +1073,8 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
 def validate_receipt(out, proof):
     out = Path(out)
     assert proof['config_path'] == str(CONFIG) and proof['campaign_schema'] == SCHEMA, 'receipt mode'
+    if PQ_RESIDUAL:
+        validate_pq_residual_config(proof)
     if FINE_SQ8:
         validate_fine_sq8_config(proof)
     if CELL_OVERLAP:
@@ -991,6 +1085,8 @@ def validate_receipt(out, proof):
         validate_hierarchical_archive(proof, proof['source_sha256'], proof['native_source_manifest']['path'])
     receipt = json.loads((out/'workspace-receipt.json').read_bytes())
     assert receipt['schema'] == RECEIPT_SCHEMA
+    if PQ_RESIDUAL:
+        validate_pq_residual_config(receipt)
     if FINE_SQ8:
         validate_fine_sq8_config(receipt)
     if CELL_OVERLAP:
@@ -1036,7 +1132,7 @@ def validate_receipt(out, proof):
     for name in ('source-before.json','source-after.json'):
         assert json.loads((out/name).read_bytes()) == proof['source_sha256']
     if BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
-        assert receipt['stages'] == validate_bounded_publication_stages(out/'test.log', fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS, constrained_split=CONSTRAINED_SPLIT, cell_overlap=CELL_OVERLAP, fine_sq8=FINE_SQ8), 'actual stage receipt'
+        assert receipt['stages'] == validate_bounded_publication_stages(out/'test.log', fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS, constrained_split=CONSTRAINED_SPLIT, cell_overlap=CELL_OVERLAP, fine_sq8=FINE_SQ8, pq_residual=PQ_RESIDUAL), 'actual stage receipt'
     worker.validate_cgroup(json.loads((out/'workspace-cgroup.json').read_bytes()))
     return receipt
 
@@ -1045,6 +1141,8 @@ def user_data(commit, archive_sha, archive_key, prefix, qualification):
     assert re.fullmatch('[0-9a-f]{40}', commit) and re.fullmatch('[0-9a-f]{64}', archive_sha)
     assert re.fullmatch(re.escape(PREFIX)+r'a[0-9]{4}', prefix)
     assert qualification['campaign_schema'] == SCHEMA and qualification['config_path'] == str(CONFIG)
+    if PQ_RESIDUAL:
+        validate_pq_residual_config(qualification)
     if FINE_SQ8:
         validate_fine_sq8_config(qualification)
     if CELL_OVERLAP:
@@ -1209,7 +1307,7 @@ def _worker_self_check(proof, config_body, manifest_body):
         failures += ('missing-binary', 'bad-binary', 'symlink-binary', 'copy-failure')
     if BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
         failures += ('missing-stage', 'zero-stage-record', 'stage-order', 'stage-bool', 'missing-cap-proof')
-    if CONSTRAINED_SPLIT or CELL_OVERLAP or FINE_SQ8:
+    if CONSTRAINED_SPLIT or CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL:
         failures += ('gate-failure', 'tee-failure', 'ignored-tests')
     for failure in failures:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1249,26 +1347,26 @@ def _worker_self_check(proof, config_body, manifest_body):
                 assert not Path(kw['env']['CARGO_TARGET_DIR']).is_relative_to(repo)
                 kw['stdout'].write(b'full mocked cargo log\n')
                 if BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
-                    stages = list(FINE_SQ8_STAGES if FINE_SQ8 else CELL_OVERLAP_STAGES if CELL_OVERLAP else CONSTRAINED_SPLIT_STAGES if CONSTRAINED_SPLIT else HIERARCHICAL_CELLS_STAGES if HIERARCHICAL_CELLS else FIXED48_STAGES if FIXED48 else BOUNDED_PUBLICATION_STAGES)
+                    stages = list(PQ_RESIDUAL_STAGES if PQ_RESIDUAL else FINE_SQ8_STAGES if FINE_SQ8 else CELL_OVERLAP_STAGES if CELL_OVERLAP else CONSTRAINED_SPLIT_STAGES if CONSTRAINED_SPLIT else HIERARCHICAL_CELLS_STAGES if HIERARCHICAL_CELLS else FIXED48_STAGES if FIXED48 else BOUNDED_PUBLICATION_STAGES)
                     if failure == 'stage-order':
                         stages.reverse()
                     for index, (name, command) in enumerate(stages):
                         if failure == 'missing-stage' and index == len(stages)-1:
                             continue
-                        record = dict(schema=FINE_SQ8_STAGE_SCHEMA if FINE_SQ8 else CELL_OVERLAP_STAGE_SCHEMA if CELL_OVERLAP else CONSTRAINED_SPLIT_STAGE_SCHEMA if CONSTRAINED_SPLIT else HIERARCHICAL_CELLS_STAGE_SCHEMA if HIERARCHICAL_CELLS else FIXED48_STAGE_SCHEMA if FIXED48 else BOUNDED_PUBLICATION_STAGE_SCHEMA, stage=name,
+                        record = dict(schema=PQ_RESIDUAL_STAGE_SCHEMA if PQ_RESIDUAL else FINE_SQ8_STAGE_SCHEMA if FINE_SQ8 else CELL_OVERLAP_STAGE_SCHEMA if CELL_OVERLAP else CONSTRAINED_SPLIT_STAGE_SCHEMA if CONSTRAINED_SPLIT else HIERARCHICAL_CELLS_STAGE_SCHEMA if HIERARCHICAL_CELLS else FIXED48_STAGE_SCHEMA if FIXED48 else BOUNDED_PUBLICATION_STAGE_SCHEMA, stage=name,
                             command=command, started_at='2026-10-02T00:00:00Z',
                             finished_at=None, exit_status=None, gate_status=None, tests_run=None)
                         field = 'required_test_passes' if FIXED48 or MINIMAL_ARCHIVE else 'publication_cap_test_passed'
                         record[field] = None
-                        if CONSTRAINED_SPLIT or CELL_OVERLAP or FINE_SQ8:
+                        if CONSTRAINED_SPLIT or CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL:
                             record['log_exit_status'] = None
                         kw['stdout'].write(encoded(record)+b'\n')
-                        named = (fine_sq8_required_tests() if FINE_SQ8 else cell_overlap_required_tests() if CELL_OVERLAP else constrained_split_required_tests() if CONSTRAINED_SPLIT else HIERARCHICAL_CELLS_REQUIRED_TESTS if HIERARCHICAL_CELLS else FIXED48_REQUIRED_TESTS).get(name, ()) if FIXED48 or MINIMAL_ARCHIVE else ()
+                        named = (pq_residual_required_tests() if PQ_RESIDUAL else fine_sq8_required_tests() if FINE_SQ8 else cell_overlap_required_tests() if CELL_OVERLAP else constrained_split_required_tests() if CONSTRAINED_SPLIT else HIERARCHICAL_CELLS_REQUIRED_TESTS if HIERARCHICAL_CELLS else FIXED48_REQUIRED_TESTS).get(name, ()) if FIXED48 or MINIMAL_ARCHIVE else ()
                         if FIXED48 or MINIMAL_ARCHIVE:
                             if failure != 'missing-cap-proof':
                                 for test in named:
                                     kw['stdout'].write(('test '+test+' ... ok\n').encode())
-                            if (CELL_OVERLAP or FINE_SQ8) and not named and name not in ('release', 'clippy', 'test-build'):
+                            if (CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL) and not named and name not in ('release', 'clippy', 'test-build'):
                                 kw['stdout'].write(b'test tests::regression ... ok\n')
                             if name not in ('release', 'clippy', 'test-build'):
                                 kw['stdout'].write(f'test result: ok. {max(1, len(named))} passed; 0 failed; {int(failure == "ignored-tests")} ignored; 0 measured; 100 filtered out; finished in 0.00s\n'.encode())
@@ -1278,7 +1376,7 @@ def _worker_self_check(proof, config_body, manifest_body):
                             kw['stdout'].write(b'rust-test-build status=0 elapsed_seconds=0 jobs=1\n')
                         record.update(finished_at=record['started_at'], exit_status=0, gate_status=0,
                             tests_run=(0 if failure == 'zero-stage-record' else False if failure == 'stage-bool' else max(1, len(named))) if name not in ('release', 'clippy', 'test-build') else None)
-                        if CONSTRAINED_SPLIT or CELL_OVERLAP or FINE_SQ8:
+                        if CONSTRAINED_SPLIT or CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL:
                             record['gate_status'] = 96 if failure == 'gate-failure' else 0
                             record['log_exit_status'] = 18 if failure == 'tee-failure' else 0
                         record[field] = {test: int(failure != 'missing-cap-proof') for test in named} if FIXED48 or MINIMAL_ARCHIVE else (failure != 'missing-cap-proof') if index == 1 else None
@@ -1308,10 +1406,10 @@ def _worker_self_check(proof, config_body, manifest_body):
                     contextlib.ExitStack() as patches:
                 if failure == 'copy-failure':
                     patches.enter_context(patch.object(worker.shutil, 'copyfileobj', side_effect=OSError('binary copy failed')))
-                previous = authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.HIERARCHICAL_CELLS, authority.CONSTRAINED_SPLIT, authority.CELL_OVERLAP, authority.FINE_SQ8, authority.CONFIG, authority.CODE, authority.FIXED
+                previous = authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.HIERARCHICAL_CELLS, authority.CONSTRAINED_SPLIT, authority.CELL_OVERLAP, authority.FINE_SQ8, authority.PQ_RESIDUAL, authority.CONFIG, authority.CODE, authority.FIXED
                 result = worker.main('cargo' if TEST_BUILD or IMPLEMENTATION else 'fake-cargo', repo, out,
-                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION, startup_wave8=STARTUP_WAVE8, root_reuse=ROOT_REUSE, bounded_publication=BOUNDED_PUBLICATION, fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS, constrained_split=CONSTRAINED_SPLIT, cell_overlap=CELL_OVERLAP, fine_sq8=FINE_SQ8)
-                assert previous == (authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.HIERARCHICAL_CELLS, authority.CONSTRAINED_SPLIT, authority.CELL_OVERLAP, authority.FINE_SQ8, authority.CONFIG, authority.CODE, authority.FIXED)
+                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION, startup_wave8=STARTUP_WAVE8, root_reuse=ROOT_REUSE, bounded_publication=BOUNDED_PUBLICATION, fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS, constrained_split=CONSTRAINED_SPLIT, cell_overlap=CELL_OVERLAP, fine_sq8=FINE_SQ8, pq_residual=PQ_RESIDUAL)
+                assert previous == (authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.HIERARCHICAL_CELLS, authority.CONSTRAINED_SPLIT, authority.CELL_OVERLAP, authority.FINE_SQ8, authority.PQ_RESIDUAL, authority.CONFIG, authority.CODE, authority.FIXED)
             assert len(calls) == 1, 'full test repeated'
             assert type(result['exit_status']) is int
             assert result['exit_status'] == {'exit17':17, 'timeout':124}.get(failure,0)
@@ -1360,13 +1458,13 @@ def _worker_self_check(proof, config_body, manifest_body):
                             (out/'workspace-receipt.json').write_bytes(encoded(dict(result, **{key:value})))
                             rejected(lambda:validate_receipt(out, proof))
                         (out/'workspace-receipt.json').write_bytes(encoded(result))
-                    if CELL_OVERLAP or FINE_SQ8:
+                    if CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL:
                         for key,value in (('mandatory_test_names_pending', True), ('mandatory_tests', {})):
                             (out/'workspace-receipt.json').write_bytes(encoded(dict(result, **{key:value})))
                             rejected(lambda:validate_receipt(out, proof))
                         (out/'workspace-receipt.json').write_bytes(encoded(result))
                     if BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
-                        assert len(result['stages']) == (len(FINE_SQ8_STAGES) if FINE_SQ8 else 7 if CELL_OVERLAP else 6 if MINIMAL_ARCHIVE else 7) and all(record['tests_run'] > 0 for record in result['stages'] if record['stage'] not in ('release', 'clippy', 'test-build'))
+                        assert len(result['stages']) == (len(PQ_RESIDUAL_STAGES) if PQ_RESIDUAL else len(FINE_SQ8_STAGES) if FINE_SQ8 else 7 if CELL_OVERLAP else 6 if MINIMAL_ARCHIVE else 7) and all(record['tests_run'] > 0 for record in result['stages'] if record['stage'] not in ('release', 'clippy', 'test-build'))
                         for stages in ([], result['stages'][:-1], list(reversed(result['stages']))):
                             (out/'workspace-receipt.json').write_bytes(encoded(dict(result, stages=stages)))
                             rejected(lambda:validate_receipt(out, proof))
@@ -2053,10 +2151,10 @@ def _fixed48_protocol_self_check():
     assert previous == (CONFIG, PREFIX, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, NATIVE_DELTA, mode_flag())
 
 
-def _hierarchical_archive_self_check(*, constrained_split=False, cell_overlap=False, fine_sq8=False):
+def _hierarchical_archive_self_check(*, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False):
     """Tiny committed closure; no production archive, native tools or network."""
     module = sys.modules[__name__]
-    with execution_mode(hierarchical_cells=not (constrained_split or cell_overlap or fine_sq8), constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8), tempfile.TemporaryDirectory() as tmp:
+    with execution_mode(hierarchical_cells=not (constrained_split or cell_overlap or fine_sq8 or pq_residual), constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual), tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp)/'repo'; repo.mkdir()
         code = ('scripts/controller.py',)
         manifest_path = ROOT/'native-source-manifest.json'
@@ -2071,7 +2169,7 @@ def _hierarchical_archive_self_check(*, constrained_split=False, cell_overlap=Fa
         for name, body in bodies.items():
             path = repo/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(body)
         inventory = worker.source_hashes(repo)
-        manifest = dict(schema='borsuk-corrected-four-bit-native-source-manifest-v1' if fine_sq8 else 'borsuk-cell-overlap-native-source-manifest-v1' if cell_overlap else 'borsuk-constrained-split-native-source-manifest-v1' if constrained_split else 'borsuk-hierarchical-cells-native-source-manifest-v1',
+        manifest = dict(schema='borsuk-pq-residual-native-source-manifest-v1' if pq_residual else 'borsuk-corrected-four-bit-native-source-manifest-v1' if fine_sq8 else 'borsuk-cell-overlap-native-source-manifest-v1' if cell_overlap else 'borsuk-constrained-split-native-source-manifest-v1' if constrained_split else 'borsuk-hierarchical-cells-native-source-manifest-v1',
             source_sha256=inventory, source_file_count=len(inventory),
             source_identity_sha256=worker.source_identity(inventory), native_source_commit='7'*40,
             controller_source_commit='4'*40, control_native_source_commit=CONSTRAINED_SPLIT_CONTROL if constrained_split else '8'*40,
@@ -2091,7 +2189,7 @@ def _hierarchical_archive_self_check(*, constrained_split=False, cell_overlap=Fa
             proof = qualify(repo)
             assert set(authority) <= set(proof), 'hierarchical qualification must bind the minimal archive roster'
             assert {k: proof[k] for k in authority} == authority
-            if fine_sq8:
+            if fine_sq8 or pq_residual:
                 # Even a self-consistent shortened inventory must include OWN4.
                 for name in NATIVE_DELTA:
                     (repo/name).unlink()
@@ -2282,6 +2380,59 @@ def _constrained_split_self_check():
     print('PASS constrained split exact config/native prefix/test names; six serial gates/log exits; existing hierarchical mode preserved')
 
 
+def _pq_residual_self_check():
+    """Bounded Python qualification mocks; native work remains root-owned."""
+    import inspect
+    module = sys.modules[__name__]
+    previous = CONFIG, CODE, FIXED, ARTIFACTS, NATIVE_DELTA, mode_flag()
+    for function in (configure, execution_mode, worker.main, self_check):
+        assert 'pq_residual' in inspect.signature(function).parameters
+    with execution_mode(pq_residual=True):
+        assert PQ_RESIDUAL and MINIMAL_ARCHIVE and not FINE_SQ8
+        assert str(ROOT).endswith('semantic-1m/fine-sq8-groups/sq4-refinement/pq-residual/implementation-gates')
+        assert PREFIX == 'research/semantic-router/20261006/pq-residual-implementation-'
+        assert mode_flag() == ' --pq-residual-implementation'
+        assert CONFIG_SCHEMA == FIXED['schema'] == 'borsuk-pq-residual-implementation-gates-v1'
+        assert SCHEMA == 'borsuk-pq-residual-implementation-gates-spot-v1'
+        assert RECEIPT_SCHEMA == 'borsuk-pq-residual-implementation-gates-receipt-v1'
+        assert CODE == (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_pq_residual_implementation.sh')
+        assert NATIVE_DELTA == PQ_RESIDUAL_DELTA and len(NATIVE_DELTA) == 5 and list(NATIVE_DELTA) == sorted(NATIVE_DELTA)
+        assert validate_candidate_delta(list(NATIVE_DELTA)) == list(NATIVE_DELTA)
+        for index in range(len(NATIVE_DELTA)):
+            rejected(lambda:validate_candidate_delta(list(NATIVE_DELTA[:index]+NATIVE_DELTA[index+1:])))
+        rejected(lambda:validate_candidate_delta(sorted((*NATIVE_DELTA, 'crates/borsuk/src/resident_vector_graph.rs'))))
+        required = pq_residual_required_tests()
+        assert [len(required[name]) for name, _ in PQ_RESIDUAL_STAGES[:4]] == [5, 5, 1, 1]
+        assert all('--test-threads=1' in command for _,command in PQ_RESIDUAL_STAGES if command[:2] == ['cargo', 'test'])
+        assert RELEASE_ARTIFACTS == ('binaries/hierarchical_semantic_cells',)
+        assert TERMINAL_IDENTITIES == (*FULL_TERMINAL_IDENTITIES, 'controller_source_commit', 'candidate_delta_paths', *ARCHIVE_IDENTITIES)
+        for key in ('CARGO_BUILD_JOBS', 'BORSUK_TEST_BUILD_JOBS', 'RUST_TEST_THREADS',
+                    'BORSUK_CPU_THREADS', 'RAYON_NUM_THREADS', 'TOKIO_WORKER_THREADS'):
+            assert FIXED['environment'][key] == '1'
+        assert FIXED['environment']['RUSTC_WRAPPER'] == FIXED['environment']['RUSTC_WORKSPACE_WRAPPER'] == ''
+        assert all(FIXED['environment'][key] is None for key in ('BORSUK_TEST_BUILD_COMMAND', 'BORSUK_FINE_TEST_ROOT', 'BORSUK_FINE_TEST_REMOTE'))
+        for mode in ('test_build', 'startup_wave8', 'root_reuse', 'bounded_publication',
+                     'fixed48', 'hierarchical_cells', 'constrained_split', 'cell_overlap', 'fine_sq8'):
+            rejected(lambda:configure(pq_residual=True, **{mode:True}))
+        rejected(lambda:configure(pq_residual=1))
+        with patch.object(module, 'PQ_RESIDUAL_REQUIRED_TESTS', {}):
+            rejected(pq_residual_required_tests)
+            rejected(lambda:record_constrained_split_stage(['release', 'start', '', '', '', '', *dict(PQ_RESIDUAL_STAGES)['release']], pq_residual=True))
+        duplicate = dict(required, **{'pq-residual-codec-tests': required['pq-residual-codec-tests']*2})
+        with patch.object(module, 'PQ_RESIDUAL_REQUIRED_TESTS', duplicate):
+            rejected(pq_residual_required_tests)
+        for key,value in (('mandatory_test_names_pending', True), ('mandatory_tests', {})):
+            rejected(lambda:validate_pq_residual_config(dict(FIXED, **{key:value})))
+            rejected(lambda:validate_pq_residual_config({k:v for k,v in FIXED.items() if k != key}))
+        _hierarchical_cells_script_self_check(pq_residual=True)
+        _fixed48_stages_self_check(pq_residual=True)
+        _startup_wave8_preflight_self_check(pq_residual=True)
+        _hierarchical_archive_self_check(pq_residual=True)
+        _self_check()
+    assert previous == (CONFIG, CODE, FIXED, ARTIFACTS, NATIVE_DELTA, mode_flag())
+    print('PASS PQ residual qualification MOCKS ONLY: exact 5+5+1+doc, serial regressions, dynamic native/archive inventory, drift/tee/cleanup/terminal refusals; Rust UNRUN')
+
+
 def _fine_sq8_self_check():
     """Bounded qualification mocks; never invoke native tools or a corpus run."""
     import inspect
@@ -2373,14 +2524,14 @@ def _cell_overlap_self_check():
     print('PASS cell overlap qualification MOCKS ONLY: exact names, seven serial stages, dynamic inventory/archive, native exit/closure; no native qualification claimed')
 
 
-def _hierarchical_cells_script_self_check(*, constrained_split=False, cell_overlap=False, fine_sq8=False):
+def _hierarchical_cells_script_self_check(*, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False):
     """Execute the real stage recorder as Python; never invoke Cargo or Bash."""
     from shlex import split
-    script = (Path(__file__).resolve().parent/('check_fine_sq8_implementation.sh' if fine_sq8 else 'check_cell_overlap_implementation.sh' if cell_overlap else 'check_constrained_split_implementation.sh' if constrained_split else 'check_hierarchical_cells_implementation.sh')).read_text()
+    script = (Path(__file__).resolve().parent/('check_pq_residual_implementation.sh' if pq_residual else 'check_fine_sq8_implementation.sh' if fine_sq8 else 'check_cell_overlap_implementation.sh' if cell_overlap else 'check_constrained_split_implementation.sh' if constrained_split else 'check_hierarchical_cells_implementation.sh')).read_text()
     actual = tuple((args[1], args[2:]) for line in script.splitlines()
         if line.startswith('run_stage ') for args in (split(line),))
-    stages = FINE_SQ8_STAGES if fine_sq8 else CELL_OVERLAP_STAGES if cell_overlap else CONSTRAINED_SPLIT_STAGES if constrained_split else HIERARCHICAL_CELLS_STAGES
-    required = fine_sq8_required_tests() if fine_sq8 else cell_overlap_required_tests() if cell_overlap else constrained_split_required_tests() if constrained_split else HIERARCHICAL_CELLS_REQUIRED_TESTS
+    stages = PQ_RESIDUAL_STAGES if pq_residual else FINE_SQ8_STAGES if fine_sq8 else CELL_OVERLAP_STAGES if cell_overlap else CONSTRAINED_SPLIT_STAGES if constrained_split else HIERARCHICAL_CELLS_STAGES
+    required = pq_residual_required_tests() if pq_residual else fine_sq8_required_tests() if fine_sq8 else cell_overlap_required_tests() if cell_overlap else constrained_split_required_tests() if constrained_split else HIERARCHICAL_CELLS_REQUIRED_TESTS
     assert actual == stages, 'exact shell stage commands'
     assert 'set -euo pipefail' in script and 'return "$status"' in script and 'statuses=("${PIPESTATUS[@]}")' in script
     assert 'env -u BORSUK_TEST_BUILD_COMMAND' in script
@@ -2391,19 +2542,30 @@ def _hierarchical_cells_script_self_check(*, constrained_split=False, cell_overl
         for index, (name, command) in enumerate(stages):
             names = required.get(name, ())
             lines = ['test '+test+' ... ok' for test in names]
-            if (cell_overlap or fine_sq8) and not names and name not in ('release', 'clippy', 'test-build'):
+            if (cell_overlap or fine_sq8 or pq_residual) and not names and name not in ('release', 'clippy', 'test-build'):
                 lines.append('test tests::regression ... ok')
             if name not in ('release', 'clippy', 'test-build'):
                 lines.append(f'test result: ok. {max(1, len(names))} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s')
-            if (cell_overlap or fine_sq8) and name == 'test-build':
+            if (cell_overlap or fine_sq8 or pq_residual) and name == 'test-build':
                 lines.append('rust-test-build status=0 elapsed_seconds=0 jobs=1')
             good = '\n'.join(lines)+'\n'
             cases = [(good, '0', '0', 0), (good, '17', '0', 17), (good, '0', '18', 18)]
+            if pq_residual and name.startswith('pq-residual-'):
+                extra = good.replace(f'{len(names)} passed', f'{len(names)+1} passed')
+                cases.append(('test tests::unexpected ... ok\n'+extra, '0', '0', 96))
+                cases.extend(('test tests::unexpected ... '+result+'\n'+good, '0', '0', 96) for result in ('FAILED', 'ignored'))
+                cases.append((good.replace('test result: ok.', 'test result: FAILED.'), '0', '0', 96))
+            if pq_residual and name == 'pq-residual-doc-tests':
+                cases.append((good.replace('test src/', 'test crates/borsuk/src/'), '0', '0', 0))
+                cases.append((good.replace('(line 13)', '(line 14)'), '0', '0', 96))
+            if pq_residual and name == 'fine-sq8-tests':
+                extra = good.replace(f'{len(names)} passed', f'{len(names)+1} passed')
+                cases.append(('test '+required['pq-residual-source-tests'][0]+' ... ok\n'+extra, '0', '0', 96))
             if name not in ('release', 'clippy', 'test-build'):
                 cases.append(('', '0', '0', 96))
-                if constrained_split or cell_overlap or fine_sq8:
+                if constrained_split or cell_overlap or fine_sq8 or pq_residual:
                     cases.append((good.replace('0 ignored', '1 ignored'), '0', '0', 96))
-            if (cell_overlap or fine_sq8) and name == 'test-build':
+            if (cell_overlap or fine_sq8 or pq_residual) and name == 'test-build':
                 cases.extend((body, '0', '0', 96) for body in ('', good+good, good.replace('jobs=1', 'jobs=2')))
             for test in names:
                 passed = 'test '+test+' ... ok'
@@ -2419,15 +2581,15 @@ def _hierarchical_cells_script_self_check(*, constrained_split=False, cell_overl
                         assert result.code == expected
                 record = json.loads(output.getvalue())
                 assert record['gate_status'] == expected and record['command'] == command
-                assert record['schema'] == (FINE_SQ8_STAGE_SCHEMA if fine_sq8 else CELL_OVERLAP_STAGE_SCHEMA if cell_overlap else CONSTRAINED_SPLIT_STAGE_SCHEMA if constrained_split else HIERARCHICAL_CELLS_STAGE_SCHEMA)
+                assert record['schema'] == (PQ_RESIDUAL_STAGE_SCHEMA if pq_residual else FINE_SQ8_STAGE_SCHEMA if fine_sq8 else CELL_OVERLAP_STAGE_SCHEMA if cell_overlap else CONSTRAINED_SPLIT_STAGE_SCHEMA if constrained_split else HIERARCHICAL_CELLS_STAGE_SCHEMA)
 
 
-def _fixed48_stages_self_check(*, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False):
+def _fixed48_stages_self_check(*, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False):
     import inspect
     assert 'fixed48' in inspect.signature(validate_bounded_publication_stages).parameters, 'fixed48 stage authentication missing'
-    stages = FINE_SQ8_STAGES if fine_sq8 else CELL_OVERLAP_STAGES if cell_overlap else CONSTRAINED_SPLIT_STAGES if constrained_split else HIERARCHICAL_CELLS_STAGES if hierarchical_cells else FIXED48_STAGES
-    schema = FINE_SQ8_STAGE_SCHEMA if fine_sq8 else CELL_OVERLAP_STAGE_SCHEMA if cell_overlap else CONSTRAINED_SPLIT_STAGE_SCHEMA if constrained_split else HIERARCHICAL_CELLS_STAGE_SCHEMA if hierarchical_cells else FIXED48_STAGE_SCHEMA
-    required = fine_sq8_required_tests() if fine_sq8 else cell_overlap_required_tests() if cell_overlap else constrained_split_required_tests() if constrained_split else HIERARCHICAL_CELLS_REQUIRED_TESTS if hierarchical_cells else FIXED48_REQUIRED_TESTS
+    stages = PQ_RESIDUAL_STAGES if pq_residual else FINE_SQ8_STAGES if fine_sq8 else CELL_OVERLAP_STAGES if cell_overlap else CONSTRAINED_SPLIT_STAGES if constrained_split else HIERARCHICAL_CELLS_STAGES if hierarchical_cells else FIXED48_STAGES
+    schema = PQ_RESIDUAL_STAGE_SCHEMA if pq_residual else FINE_SQ8_STAGE_SCHEMA if fine_sq8 else CELL_OVERLAP_STAGE_SCHEMA if cell_overlap else CONSTRAINED_SPLIT_STAGE_SCHEMA if constrained_split else HIERARCHICAL_CELLS_STAGE_SCHEMA if hierarchical_cells else FIXED48_STAGE_SCHEMA
+    required = pq_residual_required_tests() if pq_residual else fine_sq8_required_tests() if fine_sq8 else cell_overlap_required_tests() if cell_overlap else constrained_split_required_tests() if constrained_split else HIERARCHICAL_CELLS_REQUIRED_TESTS if hierarchical_cells else FIXED48_REQUIRED_TESTS
     with tempfile.TemporaryDirectory() as tmp:
         log = Path(tmp)/'test.log'
         lines = []
@@ -2435,36 +2597,55 @@ def _fixed48_stages_self_check(*, hierarchical_cells=False, constrained_split=Fa
             record = dict(schema=schema, stage=name, command=command,
                 started_at='2026-10-02T00:00:00Z', finished_at=None,
                 exit_status=None, gate_status=None, tests_run=None, required_test_passes=None)
-            if constrained_split or cell_overlap or fine_sq8:
+            if constrained_split or cell_overlap or fine_sq8 or pq_residual:
                 record['log_exit_status'] = None
             lines.append(encoded(record).decode())
             names = required.get(name, ())
             lines.extend('test '+test+' ... ok' for test in names)
-            if (cell_overlap or fine_sq8) and not names and name not in ('release', 'clippy', 'test-build'):
+            if (cell_overlap or fine_sq8 or pq_residual) and not names and name not in ('release', 'clippy', 'test-build'):
                 lines.append('test tests::regression ... ok')
             tests = max(1, len(names)) if name not in ('release', 'clippy', 'test-build') else None
             if name not in ('release', 'clippy', 'test-build'):
                 lines.append(f'test result: ok. {tests} passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.00s')
-            if (hierarchical_cells or constrained_split or cell_overlap or fine_sq8) and name == 'test-build':
+            if (hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual) and name == 'test-build':
                 lines.append('rust-test-build status=0 elapsed_seconds=0 jobs=1')
             record.update(finished_at=record['started_at'], exit_status=0, gate_status=0,
                 tests_run=tests, required_test_passes={test: 1 for test in names})
-            if constrained_split or cell_overlap or fine_sq8:
+            if constrained_split or cell_overlap or fine_sq8 or pq_residual:
                 record['log_exit_status'] = 0
             lines.append(encoded(record).decode())
         log.write_text('\n'.join(lines)+'\n')
-        records = validate_bounded_publication_stages(log, fixed48=not (hierarchical_cells or constrained_split or cell_overlap or fine_sq8), hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8)
+        records = validate_bounded_publication_stages(log, fixed48=not (hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual), hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual)
         assert len(records) == len(stages) and [r['tests_run'] for r in records if r['stage'] not in ('release', 'clippy', 'test-build')] == [max(1,len(required.get(name, ()))) for name,_ in stages if name not in ('release', 'clippy', 'test-build')]
+        if pq_residual:
+            doc = next(test for test in required['pq-residual-doc-tests'])
+            log.write_text('\n'.join(lines).replace('test '+doc, 'test crates/borsuk/'+doc)+'\n')
+            assert len(validate_bounded_publication_stages(log, pq_residual=True)) == len(stages)
+            # Reject coherent-looking count/receipt inflation and foreign failures.
+            for index, (name, _) in enumerate(stages[:4]):
+                end = 2*index+1
+                positions = [i for i,line in enumerate(lines) if line.startswith('{')]
+                for status in ('ok', 'FAILED', 'ignored'):
+                    changed = list(lines)
+                    if status == 'ok':
+                        summary = positions[end]-1
+                        count = len(required[name])
+                        changed[summary] = changed[summary].replace(f'{count} passed', f'{count+1} passed')
+                        record = json.loads(changed[positions[end]])
+                        changed[positions[end]] = encoded(dict(record, tests_run=count+1)).decode()
+                    changed.insert(positions[2*index]+1, 'test tests::unexpected ... '+status)
+                    log.write_text('\n'.join(changed)+'\n')
+                    rejected(lambda:validate_bounded_publication_stages(log, pq_residual=True))
         for names in required.values():
             for name in names:
                 passed = 'test '+name+' ... ok'
                 for replacement in ('', passed.replace('ok', 'ignored'), passed.replace('ok', 'FAILED'), passed+'\n'+passed):
                     log.write_text('\n'.join(lines).replace(passed, replacement)+'\n')
-                    rejected(lambda: validate_bounded_publication_stages(log, fixed48=not (hierarchical_cells or constrained_split or cell_overlap or fine_sq8), hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8))
+                    rejected(lambda: validate_bounded_publication_stages(log, fixed48=not (hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual), hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual))
                 misplaced = [line for line in lines if line != passed]
                 misplaced.insert(0, passed)
                 log.write_text('\n'.join(misplaced)+'\n')
-                rejected(lambda: validate_bounded_publication_stages(log, fixed48=not (hierarchical_cells or constrained_split or cell_overlap or fine_sq8), hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8))
+                rejected(lambda: validate_bounded_publication_stages(log, fixed48=not (hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual), hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual))
         for index, line in enumerate(lines):
             if not line.startswith('{'):
                 continue
@@ -2473,7 +2654,7 @@ def _fixed48_stages_self_check(*, hierarchical_cells=False, constrained_split=Fa
             if record['finished_at']:
                 changes += [('exit_status', 17), ('exit_status', False), ('gate_status', 96),
                             ('required_test_passes', {}), ('finished_at', '2026-10-01T00:00:00Z')]
-                if constrained_split or cell_overlap or fine_sq8:
+                if constrained_split or cell_overlap or fine_sq8 or pq_residual:
                     changes += [('log_exit_status', 18), ('log_exit_status', False)]
                 if record['tests_run'] is not None:
                     changes += [('tests_run', 0), ('tests_run', False), ('tests_run', 99)]
@@ -2485,15 +2666,15 @@ def _fixed48_stages_self_check(*, hierarchical_cells=False, constrained_split=Fa
                 changed = list(lines)
                 changed[index] = encoded(dict(record, **{key: value})).decode()
                 log.write_text('\n'.join(changed)+'\n')
-                rejected(lambda: validate_bounded_publication_stages(log, fixed48=not (hierarchical_cells or constrained_split or cell_overlap or fine_sq8), hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8))
-        if hierarchical_cells or constrained_split or cell_overlap or fine_sq8:
+                rejected(lambda: validate_bounded_publication_stages(log, fixed48=not (hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual), hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual))
+        if hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual:
             build_proof = 'rust-test-build status=0 elapsed_seconds=0 jobs=1'
             for replacement in ('', 'rust-test-build status=0 elapsed_seconds=0 jobs=2', build_proof+'\n'+build_proof):
                 log.write_text('\n'.join(lines).replace(build_proof, replacement)+'\n')
-                rejected(lambda: validate_bounded_publication_stages(log, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8))
+                rejected(lambda: validate_bounded_publication_stages(log, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual))
         for changed in (lines[:-1], lines+lines[-2:], list(reversed(lines))):
             log.write_text('\n'.join(changed)+'\n')
-            rejected(lambda: validate_bounded_publication_stages(log, fixed48=not (hierarchical_cells or constrained_split or cell_overlap or fine_sq8), hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8))
+            rejected(lambda: validate_bounded_publication_stages(log, fixed48=not (hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual), hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual))
         if cell_overlap:
             # Narrow test passes may recur once in the two module regressions.
             changed = list(lines)
@@ -2514,14 +2695,14 @@ def _fixed48_stages_self_check(*, hierarchical_cells=False, constrained_split=Fa
                 rejected(lambda:validate_bounded_publication_stages(log, cell_overlap=True))
 
 
-def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False):
+def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False):
     controller, config_commit, bundle = '4'*40, '5'*40, '6'*40
     blob = b'mocked exact candidate blob'
-    with execution_mode(startup_wave8=not (root_reuse or bounded_publication or fixed48 or hierarchical_cells or constrained_split or cell_overlap or fine_sq8), root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8):
+    with execution_mode(startup_wave8=not (root_reuse or bounded_publication or fixed48 or hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual), root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual):
         proof = dict(controller_source_commit=controller, candidate_delta_paths=list(NATIVE_DELTA),
-                     native_source_commit='7'*40 if hierarchical_cells or constrained_split or cell_overlap or fine_sq8 else FIXED48_CHECK_COMMIT if fixed48 else BOUNDED_PUBLICATION_CHECK_COMMIT if bounded_publication else '7'*40 if root_reuse else STARTUP_WAVE8_COMMIT,
+                     native_source_commit='7'*40 if hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual else FIXED48_CHECK_COMMIT if fixed48 else BOUNDED_PUBLICATION_CHECK_COMMIT if bounded_publication else '7'*40 if root_reuse else STARTUP_WAVE8_COMMIT,
                      source_sha256={name:worker.sha(blob) for name in NATIVE_DELTA})
-        if hierarchical_cells or constrained_split or cell_overlap or fine_sq8:
+        if hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual:
             proof.update(source_archive_paths=[], source_archive_paths_sha256='0'*64,
                          source_archive_file_count=0, source_archive_support_sha256={},
                          native_source_manifest=dict(path=str(ROOT/'native-source-manifest.json')))
@@ -2540,7 +2721,7 @@ def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication
         failures = ('success','dirty','merge-bundle','wrong-controller','unpublished-config','extra-config-delta','missing-native-delta','extra-native-delta','wrong-candidate-blob')
         if fixed48:
             failures += ('historical-two-path-bundle',)
-        if hierarchical_cells or constrained_split or cell_overlap or fine_sq8:
+        if hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual:
             failures += ('wrong-archive-authority',)
         if constrained_split:
             failures += ('extra-original-delta', 'wrong-original-prefix')
@@ -2568,15 +2749,15 @@ def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication
             with patch.object(sys.modules[__name__], 'qualify', return_value=proof), \
                     patch.object(subprocess,'check_output',side_effect=git), \
                     patch.object(sys.modules[__name__], 'hierarchical_archive_authority',
-                                 return_value={key: ('1'*64 if failure == 'wrong-archive-authority' and key == 'source_archive_paths_sha256' else proof[key]) for key in ARCHIVE_FIELDS} if hierarchical_cells or constrained_split or cell_overlap or fine_sq8 else {}):
+                                 return_value={key: ('1'*64 if failure == 'wrong-archive-authority' and key == 'source_archive_paths_sha256' else proof[key]) for key in ARCHIVE_FIELDS} if hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual else {}):
                 if failure == 'success':
                     assert preflight() == proof
                 else:
                     rejected(lambda:preflight())
 
 
-def self_check(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False):
-    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8):
+def self_check(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False):
+    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual):
         _self_check()
 
 
@@ -2591,7 +2772,7 @@ def _self_check():
         inventory = worker.source_hashes(base)
         for name in NATIVE_DELTA:
             inventory.setdefault(name, worker.sha(b'// synthetic new native source\n'))
-        manifest = dict(schema='borsuk-corrected-four-bit-native-source-manifest-v1' if FINE_SQ8 else 'borsuk-cell-overlap-native-source-manifest-v1' if CELL_OVERLAP else 'borsuk-constrained-split-native-source-manifest-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-native-source-manifest-v1', source_sha256=inventory,
+        manifest = dict(schema='borsuk-pq-residual-native-source-manifest-v1' if PQ_RESIDUAL else 'borsuk-corrected-four-bit-native-source-manifest-v1' if FINE_SQ8 else 'borsuk-cell-overlap-native-source-manifest-v1' if CELL_OVERLAP else 'borsuk-constrained-split-native-source-manifest-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-native-source-manifest-v1', source_sha256=inventory,
             source_identity_sha256=worker.source_identity(inventory), source_file_count=len(inventory),
             native_source_commit='7'*40, candidate_delta_paths=list(NATIVE_DELTA),
             candidate_qualification_pending=True, control_native_source_commit=CONSTRAINED_SPLIT_CONTROL if CONSTRAINED_SPLIT else '8'*40)
@@ -2668,6 +2849,8 @@ def _self_check():
         with patch.object(worker,'source_hashes',return_value=inventory):
             proof = qualify(repo)
             assert proof['source_identity_sha256'] == manifest['source_identity_sha256']
+            if PQ_RESIDUAL:
+                assert proof['schema'] == 'borsuk-pq-residual-implementation-gates-qualification-v1'
             if FINE_SQ8:
                 assert proof['schema'] == 'borsuk-corrected-four-bit-implementation-gates-qualification-v1'
             assert proof['actual_full_workspace_execution'] is False
@@ -2681,7 +2864,7 @@ def _self_check():
                               ('native_source_manifest',dict(config['native_source_manifest'],sha256='0'*64))):
                 (repo/CONFIG).write_bytes(encoded(dict(config,**{key:value})))
                 rejected(lambda:qualify(repo))
-            if CELL_OVERLAP or FINE_SQ8:
+            if CELL_OVERLAP or FINE_SQ8 or PQ_RESIDUAL:
                 for key,value in (('mandatory_test_names_pending', True), ('mandatory_tests', {}),
                         ('mandatory_tests', {k:v[:-1] for k,v in config['mandatory_tests'].items()}),
                         ('unexpected_config_key', True)):
@@ -2716,7 +2899,7 @@ def _self_check():
                     ('schema','wrong-manifest-mode'),('control_native_source_commit','not-a-commit')))
                 if FIXED48:
                     bad_manifest.append(('candidate_delta_paths',list(FIXED48_DELTA[1:])))
-                if FINE_SQ8:
+                if FINE_SQ8 or PQ_RESIDUAL:
                     bad_manifest.extend(('candidate_delta_paths',list(NATIVE_DELTA[:index]+NATIVE_DELTA[index+1:]))
                         for index in range(len(NATIVE_DELTA)))
                     bad_manifest.append(('candidate_delta_paths', sorted((*NATIVE_DELTA, 'crates/borsuk/src/resident_vector_graph.rs'))))
@@ -2749,7 +2932,7 @@ def _self_check():
             rejected(lambda:preflight(repo))
         body = user_data('0'*40,'1'*64,'sources/mock',PREFIX+'a0001',proof)
         assert len(CODE) == len(set(CODE)) == (24 if IMPLEMENTATION else 23 if TEST_BUILD else 22)
-        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == (14 if FINE_SQ8 or CELL_OVERLAP else 16 if CONSTRAINED_SPLIT else 17 if HIERARCHICAL_CELLS else 16 if FIXED48 else 14 if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION else 18 if IMPLEMENTATION else 13)
+        assert len(ARTIFACTS) == len(set(ARTIFACTS)) == (14 if PQ_RESIDUAL or FINE_SQ8 or CELL_OVERLAP else 16 if CONSTRAINED_SPLIT else 17 if HIERARCHICAL_CELLS else 16 if FIXED48 else 14 if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION else 18 if IMPLEMENTATION else 13)
         assert '--on-active=9000s' in body and 'RuntimeMaxSec=7260' in body
         assert all(k in body for k in ('MemoryMax=8G','MemorySwapMax=0','CPUQuota=200%','TasksMax=512'))
         assert 'build-essential' in body and 'python3-dev' in body
@@ -2777,11 +2960,12 @@ def _self_check():
     if semantic_1m and not MINIMAL_ARCHIVE:
         _remote_self_check(manifest)
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024
-    print(f'PASS workspace {"implementation-gates" if IMPLEMENTATION else "test-build" if TEST_BUILD else "execution"} ({"fine-sq8" if FINE_SQ8 else "cell-overlap" if CELL_OVERLAP else "constrained-split" if CONSTRAINED_SPLIT else "hierarchical-cells" if HIERARCHICAL_CELLS else "fixed48" if FIXED48 else "bounded-publication" if BOUNDED_PUBLICATION else "root-reuse" if ROOT_REUSE else "startup-wave8" if STARTUP_WAVE8 else "semantic-1m" if semantic_1m else "metadata-waves"}): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli={semantic_1m and not MINIMAL_ARCHIVE}; code={len(CODE)} artifacts={len(ARTIFACTS)} release_copy={IMPLEMENTATION}; userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
+    print(f'PASS workspace {"implementation-gates" if IMPLEMENTATION else "test-build" if TEST_BUILD else "execution"} ({"pq-residual" if PQ_RESIDUAL else "fine-sq8" if FINE_SQ8 else "cell-overlap" if CELL_OVERLAP else "constrained-split" if CONSTRAINED_SPLIT else "hierarchical-cells" if HIERARCHICAL_CELLS else "fixed48" if FIXED48 else "bounded-publication" if BOUNDED_PUBLICATION else "root-reuse" if ROOT_REUSE else "startup-wave8" if STARTUP_WAVE8 else "semantic-1m" if semantic_1m else "metadata-waves"}): command once; exit17/timeout/drift/OOM/peak/orphan/persistence/tamper rejected; max reclaim admitted; full/compile/implementation authority checked; all-ACK/fsync/wait-before-collection; remote_cli={semantic_1m and not MINIMAL_ARCHIVE}; code={len(CODE)} artifacts={len(ARTIFACTS)} release_copy={IMPLEMENTATION}; userdata={len(body.encode())} peak_bytes={peak}; AWS/Cargo/cgroup MOCKED')
 
 
 if __name__ == '__main__':
     args = sys.argv[1:]
+    pq_residual = args[:1] == ['--pq-residual-implementation']
     fine_sq8 = args[:1] == ['--fine-sq8-implementation']
     cell_overlap = args[:1] == ['--cell-overlap-implementation']
     constrained_split = args[:1] == ['--constrained-split-implementation']
@@ -2790,15 +2974,17 @@ if __name__ == '__main__':
     bounded_publication = args[:1] == ['--bounded-publication-implementation']
     root_reuse = args[:1] == ['--root-reuse-implementation']
     startup_wave8 = args[:1] == ['--startup-wave8-implementation']
-    implementation = fine_sq8 or cell_overlap or constrained_split or hierarchical_cells or fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
+    implementation = pq_residual or fine_sq8 or cell_overlap or constrained_split or hierarchical_cells or fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
     test_build = args[:1] == ['--semantic-1m-test-build']
     semantic_1m = implementation or test_build or args[:1] == ['--semantic-1m']
     if semantic_1m:
         args = args[1:]
-    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8)
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual)
     if args[:1] and args[0].startswith('--'):
         resource.setrlimit(resource.RLIMIT_AS, (200*1024**2,200*1024**2))
-    if args == ['--self-check'] and fine_sq8:
+    if args == ['--self-check'] and pq_residual:
+        _pq_residual_self_check()
+    elif args == ['--self-check'] and fine_sq8:
         _fine_sq8_self_check()
     elif args == ['--self-check'] and cell_overlap:
         _cell_overlap_self_check()
@@ -2823,7 +3009,7 @@ if __name__ == '__main__':
             _hierarchical_cells_script_self_check()
             _startup_wave8_preflight_self_check(hierarchical_cells=True)
             self_check(hierarchical_cells=True)
-        self_check(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8)
+        self_check(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual)
     elif args[:1] == ['--stage']:
         assert len(args) == 3
         stage(*args[1:])
@@ -2835,7 +3021,7 @@ if __name__ == '__main__':
         assert len(args) == 2
         print(json.dumps(replay(args[1]),sort_keys=True))
     else:
-        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation | --fixed48-implementation | --hierarchical-cells-implementation | --constrained-split-implementation | --cell-overlap-implementation | --fine-sq8-implementation] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
+        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation | --fixed48-implementation | --hierarchical-cells-implementation | --constrained-split-implementation | --cell-overlap-implementation | --fine-sq8-implementation | --pq-residual-implementation] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
         with open('/tmp/borsuk-native-workspace-execution-launch.lock','a+') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             main(args[0])
