@@ -1,0 +1,24 @@
+{
+  "schema": "borsuk-co-selection-surrogate-audit-v1",
+  "panels": [
+    {
+      "dataset": "relaion",
+      "objective_before": "1303046038583059402",
+      "objective_after": "1237544842341075584",
+      "objective_reduction_fraction": 0.05026775286712835,
+      "held_count": 512,
+      "held_fits": 381,
+      "held_used_for_fitting": false
+    },
+    {
+      "dataset": "cohere",
+      "objective_before": "1768820627011103968",
+      "objective_after": "1660045189328881056",
+      "objective_reduction_fraction": 0.06149602510347708,
+      "held_count": 512,
+      "held_fits": 216,
+      "held_used_for_fitting": false
+    }
+  ],
+  "interpretation": "Training fanout improves but held physical cover fails; objective improvement does not qualify request/byte feasibility."
+}
