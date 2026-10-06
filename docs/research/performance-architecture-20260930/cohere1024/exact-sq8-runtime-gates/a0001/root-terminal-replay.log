@@ -1,0 +1,7 @@
+Running as unit: borsuk-exact-sq8-terminal-replay-20261006.service; invocation ID: e0bde8bff14d4618b317d973210b2ab9
+{"actual_full_workspace_execution": false, "execution_kind": "implementation-gates", "exit_status": 0, "qualified": true, "source_identity_sha256": "4ed25e42ab6caabb94c76e1c7a909cf82a31a15887f06e41a6801ddcda409e03"}
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 662ms
+             CPU time consumed: 602ms
+                   Memory peak: 71.9M (swap: 0B)

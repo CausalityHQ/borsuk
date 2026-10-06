@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-08769cc86a13173d8",
+  "nodes": {
+    "0": {
+      "instance_id": "i-08769cc86a13173d8"
+    }
+  },
+  "prefix": "research/semantic-router/20261006/exact-sq8-runtime-gates-a0001",
+  "source_commit": "0d3e3f0ddbb1a46eaba3cb52c0594579265c6f5e",
+  "source_archive_sha256": "e4c43c05a1602fda16898641ccf59e0ff7d294527864d35074d27895a19488a4"
+}

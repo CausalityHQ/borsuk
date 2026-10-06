@@ -1,0 +1,183 @@
+{
+  "schema": "borsuk-exact-sq8-root-verification-v1",
+  "native_source_commit": "9d540e527f3a6e7ce22009302fa1187498476d3c",
+  "source_identity_sha256": "4ed25e42ab6caabb94c76e1c7a909cf82a31a15887f06e41a6801ddcda409e03",
+  "source_file_count": 413,
+  "source_before_after_and_root410_candidate3_match": true,
+  "authenticated_terminal_artifacts": 16,
+  "all_available_gzip_raw_parity": true,
+  "controller_original_exec": 79718,
+  "controller_exit": 0,
+  "instance_id": "i-08769cc86a13173d8",
+  "instance_terminated_independently_observed": true,
+  "stages": [
+    {
+      "stage": "exact-sq8-scorer-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "exact_sq8_nominee::",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": 0,
+      "gate_status": 0,
+      "log_exit_status": 0
+    },
+    {
+      "stage": "exact-sq8-scorer-release-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "exact_sq8_nominee::",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": 0,
+      "gate_status": 0,
+      "log_exit_status": 0
+    },
+    {
+      "stage": "returned-sq8-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "returned_sq8::",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": 0,
+      "gate_status": 0,
+      "log_exit_status": 0
+    },
+    {
+      "stage": "release",
+      "command": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--example",
+        "exact_sq8_runtime_probe",
+        "--bin",
+        "check_cohere_native_baseline"
+      ],
+      "exit_status": 0,
+      "gate_status": 0,
+      "log_exit_status": 0
+    },
+    {
+      "stage": "exact-sq8-probe",
+      "command": [
+        "bash",
+        "-c",
+        "exec taskset -c 0 \"$CARGO_TARGET_DIR/release/examples/exact_sq8_runtime_probe\""
+      ],
+      "exit_status": 0,
+      "gate_status": 0,
+      "log_exit_status": 0
+    },
+    {
+      "stage": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "exit_status": 0,
+      "gate_status": 0,
+      "log_exit_status": 0
+    },
+    {
+      "stage": "test-build",
+      "command": [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "BORSUK_TEST_BUILD_JOBS=1",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ],
+      "exit_status": 0,
+      "gate_status": 0,
+      "log_exit_status": 0
+    }
+  ],
+  "all_seven_stages_exit_gate_tee_zero": true,
+  "independent_frozen_replay": {
+    "unit": "borsuk-exact-sq8-terminal-replay-20261006.service",
+    "invocation": "e0bde8bff14d4618b317d973210b2ab9",
+    "exit": 0,
+    "runtime_seconds": 0.662,
+    "reported_memory_peak": "71.9M",
+    "reported_swap_peak": 0,
+    "requested_memory_max": 268435456,
+    "requested_swap_max": 0,
+    "requested_cpu_quota": 100,
+    "requested_runtime_seconds": 120
+  },
+  "probe_all_18_exact_scalar_oracle_parity": true,
+  "probe_dataset": "synthetic fixed bytes",
+  "probe_1024_rows16192": {
+    "avx2_compile_time": false,
+    "baseline_checksum": "c94beb27b1f86e9a",
+    "baseline_commit": "747b71bf101e10bdb6f4b24a07d8177b0f76dde6",
+    "baseline_median_ns": 10913126,
+    "baseline_min_ns": 10840188,
+    "baseline_ns_per_row_coordinate": 0.6581861171797802,
+    "candidate_checksum": "c94beb27b1f86e9a",
+    "candidate_median_ns": 6263345,
+    "candidate_min_ns": 6235642,
+    "candidate_ns_per_row_coordinate": 0.3777512260105299,
+    "candidate_over_baseline_median": 0.5739276720529022,
+    "claim": "kernel timing on fixed synthetic bytes only; no end-to-end or gain claim",
+    "dimensions": 1024,
+    "identical_ids_ordinals_score_bits": true,
+    "oracle_checksum": "c94beb27b1f86e9a",
+    "repetitions": 2,
+    "row_coordinates": 16580608,
+    "rows": 16192,
+    "target_arch": "x86_64",
+    "trial_order": "alternating AB/BA, one untimed warmup call per arm",
+    "trials": 9
+  },
+  "decision": "Integrate exact qualified native scorer; admit prospective matched retained Cohere replay only after transport rebinding qualification. No end-to-end or competitor win.",
+  "physical_s3_measured": false,
+  "compiler_resources": "CPU2/8GiB/noSwap; cgroup peak8GiB includes file cache, OOM0; closed/drained; see workspace-cgroup.json",
+  "binary_transport": {
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "prefix": "research/semantic-router/20261006/exact-sq8-runtime-gates-a0001",
+    "artifacts": {
+      "binaries/check_cohere_native_baseline": {
+        "bytes": 6764512,
+        "sha256": "3911839ba9ef68604e2c487d802a3b3e125bdc1121aee9af268db3ba8a9ca8cf"
+      },
+      "binaries/exact_sq8_runtime_probe": {
+        "bytes": 3570416,
+        "sha256": "ad35a2d2e676f5c81ccc8168b1fb42cddd3bd502e18443edb289bbace8631d91"
+      }
+    }
+  }
+}

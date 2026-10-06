@@ -77,6 +77,9 @@ workspace = true
 name = "build_sq8_source"
 
 [[example]]
+name = "exact_sq8_runtime_probe"
+
+[[example]]
 name = "two_bit_http"
 
 [[example]]
