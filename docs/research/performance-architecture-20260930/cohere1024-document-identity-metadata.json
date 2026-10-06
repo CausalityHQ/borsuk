@@ -1,0 +1,14 @@
+{
+  "schema": "borsuk-cohere1024-document-identity-metadata-v1",
+  "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+  "publisher_readme": {
+    "url": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/raw/ade45fb52bd549f5e8c065636fe4160a43c2af36/README.md",
+    "bytes": 30174,
+    "sha256": "bad1dd6af10df0514f064669af2ca69c908475cb6353aed9862b6bfd5196434a"
+  },
+  "observed_example_document_identity_field": "_id",
+  "actual_parquet_document_id_schema_verified": false,
+  "decision": "Keep identity column explicit; authenticate actual projected Parquet schema before a paid preparation run. Do not assume id or silently replace rows.",
+  "vector_bodies_read": false,
+  "ann_or_truth_execution": false
+}
