@@ -1,0 +1,159 @@
+{
+  "status": "SOURCE_COMMITTED_UNVERIFIED",
+  "base": "6e638da653ddef94b572771b6f59f038ebcfab76",
+  "branch": "devbox/native-preflight-spot (this worktree)",
+  "owned_file": "scripts/launch_cohere_native_preflight_spot.py (new; no shared/Rust edits)",
+  "role": "campaign adapter for scripts.launch_native_metadata_ranges_cold_spot.main(attempt, campaign=module); same shape as launch_native_workspace_execution_spot (bootstrap = launch_native_semantic_router_cold_spot.user_data patched, startup.poll, ACK/terminate+wait+collect in shared.main)",
+  "cli": [
+    "launch_cohere_native_preflight_spot.py aNNNN        (controller: shared.main; refuses until config READY)",
+    "--self-check                                         (synthetic, CPU1/256MiB/noSwap/120s)",
+    "--stage REPO OUT                                     (instance: write source-qualification.json/config copies; re-run preflight checks on the archived source)",
+    "--transport ROOT                                     (instance: fetch 2 shards + 5 binaries, stream SHA/exact length, no decoding)",
+    "--check-closed ROOT                                  (instance: authenticate the helper terminal/inventory and map exit status)",
+    "--replay OUT                                         (offline: authenticate collected artifacts vs the helper terminal inventory)"
+  ],
+  "campaign_attributes": {
+    "ROOT": "docs/research/performance-architecture-20260930/cohere1024/native-preflight-spot",
+    "CONFIG": "ROOT/config.json  (root-supplied, PENDING until frozen)",
+    "NAME": "''",
+    "SCHEMA": "borsuk-cohere-native-preflight-spot-v1",
+    "CONFIG_SCHEMA": "borsuk-cohere-native-preflight-spot-config-v1",
+    "PREFIX": "research/semantic-router/20261006/cohere-native-preflight-",
+    "TOKEN_PREFIX": "cohere-native-preflight-",
+    "TAG": "borsuk-cohere-native-preflight",
+    "WALL": "10800 (machine), helper RuntimeMaxSec 9660 vs helper deadline_seconds<=9600",
+    "INSTANCE_TYPE/IMAGE/SUBNET": "reuse launch_native_workspace_execution_spot values (c7i.2xlarge x86_64 Ubuntu 24.04); SPOT_MAX_USD_PER_HOUR .50, COMPUTE_CAP 1.50, ebs_s3_allowance .15 (shared main)",
+    "instance_root": "/mnt/borsuk-cohere (root template layout: repo/, input/en/<shard>, bin/<role>, preflight/, transport-receipt.json, retention-receipt.json)"
+  },
+  "root_supplied_config": {
+    "format": "JSON at CONFIG; exact key set, no defaults",
+    "schema": "borsuk-cohere-native-preflight-spot-config-v1",
+    "keys": {
+      "controller_authority_pending": "must be false else REFUSE launch (no pending shortcut for gates; admission is separately READY-checked)",
+      "controller_source_commit": "40-hex frozen controller commit (config commit immediately follows it, as the workspace seam)",
+      "controller_code_sha256": "{every CODE path: sha256}; CODE = shared bootstrap chain + this launcher + scripts/run_cohere_native_preflight.py and its imported helpers",
+      "source_identity_sha256": "current full412 native source identity; must equal the helper config and the admission receipt",
+      "helper_config": "{path (repo-relative), bytes, sha256}: the frozen run_cohere_native_preflight CONFIG whose paths are absolute under /mnt/cohere-native-preflight; the launcher passes its SHA verbatim",
+      "transports": "{shards: {publisher_path -> locator}, binaries: {role -> s3 key}}: locators only. bytes/SHA come from the helper config pins (shards pinned to 216612385/216746705; five roles)",
+      "source_archive_paths / source_archive_paths_sha256 / source_archive_file_count / source_archive_support_sha256": "existing minimal-archive roster; must contain the helper, CODE, helper_config, admission receipt and gate receipt files",
+      "resources": "fixed echo of the root proposal: helper_deadline 9600, machine 10800, compute 1.50, ancillary .15, build CPU4/8GiB, query CPU1/512MiB, swap 0, scratch 8GiB (launcher refuses any other value)"
+    }
+  },
+  "launch_refusals_before_any_AWS_call": [
+    "controller_authority_pending != false",
+    "dirty tree / controller or code hash drift",
+    "source identity mismatch (config vs helper config vs admission)",
+    "admission receipt status != READY_NATIVE_PREFLIGHT, gate not all-zero/terminated, gate/role source identity mismatch, role bytes/SHA != helper config binary pin, basename != local_basename",
+    "helper config resources/limits outside the proposal maxima or paths outside /mnt/cohere-native-preflight",
+    "shard locator not exactly https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/<publisher_path> (or the root's s3:// staging key in the bucket), wrong publisher_path order/length, binary key outside research/",
+    "archive roster missing a required file or not committed regular files (shared source_archive check)"
+  ],
+  "instance_phases": [
+    "install: python3.12 -c 'import boto3' (shared bootstrap; no Rust toolchain, no Cargo)",
+    "source-qualification: --stage re-validates the archived source and writes source-qualification.json",
+    "transport: --transport; urllib/boto3 streaming, per body exact length cap + SHA256 before atomic rename; redirects to other hosts refused; destinations must not exist; failure removes the partial file; writes transport-receipt.json; binaries chmod 0500; never decodes bytes",
+    "preflight: systemctl start borsuk-global-leaf-<attempt>.slice; set-property --runtime MemoryMax=8448M MemorySwapMax=0 CPUQuota=400% TasksMax=512; systemd-run --slice=... --setenv=BORSUK_GLOBAL_LEAF_SLICE=<slice> RuntimeMaxSec=9660 python3.12 scripts/run_cohere_native_preflight.py HELPER_CONFIG HELPER_CONFIG_SHA $root/preflight (delegated-supervisor pattern of launch_hierarchical_cells_100k_spot); /usr/bin/time -v resource file; helper exit code preserved",
+    "check-closed: --check-closed authenticates preflight/terminal.json inventory against every retained file and maps status NATIVE_CHAIN_CLOSED(exit0)/BASELINE_NONZERO_EXIT(2)/INVALID(2); bootstrap exits with the helper's code after collection",
+    "slice cleanup: systemctl stop <slice> in the existing EXIT trap before collection"
+  ],
+  "collection": {
+    "artifacts": "small evidence only: source-qualification.json, config copies, transport-receipt.json, cpu.txt, helper log/resources, preflight/{config,admission,execution-receipt,terminal,publish-receipt}.json, prepared/complete.json, generation manifests, 7x(<stage>.log, -closure, -stage, -stage-receipt, -unit.log, configs/<stage>.json), baseline-result.jsonl (opaque per-query bytes), run-closed.log. Corpus/queries/truth/normalized/order/SQ8/store stay on the instance and are pinned by sha256 in the helper terminal inventory only.",
+    "replay": "offline: every collected preflight/* file must equal the helper terminal.inventory entry; terminal.status/exit code/complete consistent; reservation qualification == proof; no quality is interpreted",
+    "terminate": "shared.main: terminate_owned + waiter BEFORE collection; ACK/launch receipts fsynced; same instance IDs asserted in terminal/closeout"
+  },
+  "synthetic_tests": [
+    "preflight refusals: pending flag, hash/identity drift, admission PENDING/FAILED/nonzero gate/role SHA mismatch, wrong/short shard length, bad locator host/revision/path, resource widening, roster gaps",
+    "transport on fake sources: success; wrong SHA; short; overlong; redirect/other host; occupied destination; partial removed; binaries mode",
+    "fake helper closure: NATIVE_CHAIN_CLOSED exit0, BASELINE_NONZERO_EXIT, INVALID, truncated/tampered inventory, extra file",
+    "real shared.main lifecycle with mocked boto3/EC2: success, multi-ACK same IDs, fsync fail, upload fail, SIGTERM/interrupt, waiter failure: terminate+wait strictly before collect",
+    "bootstrap: bash -n, <16KiB user data, exact helper argv/slice/resource flags, terminal script run on synthetic artifacts",
+    "limits CPU1/256MiB/noSwap/120s; no native, Cargo, network, AWS, corpus"
+  ],
+  "remaining_root_pins_before_freeze": [
+    "helper config body+sha (absolute instance paths) after original 80402 closes 0",
+    "completed READY_NATIVE_PREFLIGHT admission receipt + gate receipt pointers",
+    "shard locators (HF pinned or root-staged s3) and 5 binary S3 keys; full SHA/length are already helper-config pins",
+    "controller commit, native source manifest identity, archive roster and code hashes, cost quote",
+    "paid launch authority (this adapter never launches by itself)"
+  ],
+  "never": [
+    "Python decoding of Parquet/vectors/truth/results",
+    "quality interpretation",
+    "native/Cargo/network/AWS execution in tests",
+    "edits to shared modules, Rust, run_cohere_native_preflight.py, or original 80402"
+  ],
+  "unverified": true,
+  "commit": "a4fe9a053d080103c21e5384f9c42dcf5c87a70e",
+  "file_sha256": {
+    "scripts/launch_cohere_native_preflight_spot.py": "9544f6e8b579cbc92de4f8f2ffb27e41ecaad2d3ed31e75c2726791cbf09f462"
+  },
+  "file_bytes": 76815,
+  "implementation": {
+    "seam": "shared.main(attempt, campaign=module) with module-level preflight/user_data/poll/collect/replay + ROOT/NAME/SCHEMA/PREFIX/TOKEN_PREFIX/TAG/WALL/INSTANCE_TYPE/IMAGE_ID/ROOT_DEVICE_NAME/SUBNET/SPOT_MAX_USD_PER_HOUR/COMPUTE_CAP/ARTIFACTS",
+    "qualify": "portable (no Git/AWS): exact config keys, controller_authority_pending is False, exact CODE roster+hashes (CODE == exact transitive import closure, asserted in the self-check), full native source identity, helper config pin (identity, deadlines<=proposal maxima, instance paths, shard lengths), READY admission via helper.admit on a locally path-mapped copy, locator allow-list, sorted archive roster + hash/count + required-file closure + support SHA map",
+    "preflight": "qualify + clean tree, one source-bundle parent, config-only commit after controller, origin ref, committed support blobs",
+    "locators": "shards: exactly https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/<publisher_path> or s3://<bucket>/research/...; binaries: research/... keys, distinct; curl uses --proto =https --proto-redir =https --max-redirs 5 --max-filesize <exact bytes>; aws s3 cp for s3",
+    "instance_cli": {
+      "--stage": "qualify archived source, env-bound roster, write source-qualification.json/config.json/helper-config.json",
+      "--transport": "fetch to .part, exact length + streaming SHA256, atomic rename, binaries 0500, transport-receipt.json; stops at the first bad body; destinations/.part must not exist",
+      "--check-closed ROOT EXIT": "helper terminal-last inventory re-hashed; exit/status/complete mapping (NATIVE_CHAIN_CLOSED 0, BASELINE_NONZERO_EXIT 2 complete, INVALID 2 incomplete)"
+    },
+    "artifacts": 59,
+    "empty_ok": [
+      "preflight/publish.log"
+    ],
+    "exit": "bootstrap exits with the helper exit code after collection (nonzero helper code => terminal failed, evidence still collected and replayable)"
+  },
+  "source_only_check_receipt": {
+    "command": "taskset -c 1, ulimit -d 262144, timeout 120, python3 -B scripts/launch_cohere_native_preflight_spot.py --self-check",
+    "result": "PASS rc=0 (~8.4s wall in a contended run, ~84MB rss); py_compile OK",
+    "new_checks": "redirect policy (allowed CDN hop; refusal before any body for other host/http/suffix/userinfo/file/loop/403/duplicate Location; --max-redirs 0 final GET), root redirect_hosts validation (wildcard/initial host/unsorted/scheme/missing), retention (bounded sequential uploads, head-object size, metadata sha, first-failure stop without receipt, exclusive receipt, bootstrap ordering transport<helper<check-closed<retain), collect head_object verification and tampered receipt/inventory/size/sha rejection",
+    "mocked": "EC2/S3/boto3, curl/aws, systemd, native programs; no AWS/network/Cargo/Rust/corpus",
+    "redirect_repair": "probe command asserted --head with no -r/--range/-o; refusals for other host, http, suffix, userinfo (user:pass, user-only, empty userinfo, @ host trick), ports 8443/0/non-numeric, file, loop, 403, duplicate Location all assert calls == [probe(first)] (offending hop never probed/fetched); explicit :443 accepted"
+  },
+  "previous_commit": "5d56f25447ec644621b7557260f97566c52f8186",
+  "transport_policy": {
+    "initial_url": "exactly https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/<publisher_path> (or a root-staged s3://<bucket>/research/... key)",
+    "redirects": "HTTPS only, at most 5 hops; every hop is probed with a body-free `curl --head` (no Range/GET/-o probe) and must have scheme https, hostname exactly huggingface.co or a root-specified entry of config.transports.redirect_hosts (<=4, sorted, no wildcards), NO userinfo (no @ in netloc, username/password None) and port None or 443; invalid/zero/other ports refused; the offending hop is never probed or fetched; final status must be 200; final GET uses --max-redirs 0 --max-filesize <exact bytes>; exact length and SHA256 remain the final authority",
+    "refused_before_any_body": [
+      "other host",
+      "http scheme",
+      "suffix/userinfo host tricks",
+      "file scheme",
+      "loops/too many hops",
+      "non-2xx final status",
+      "ambiguous Location"
+    ],
+    "root_checks": "HEAD metadata only; the root supplies the exact CDN host list in config.transports.redirect_hosts",
+    "allowlist_authorized_by_root": "huggingface.co + us.aws.cdn.hf.co (body-free HEAD verified by the root for both shards)"
+  },
+  "retention": {
+    "when": "after --check-closed validates the helper terminal-last inventory and before the bootstrap exit/trap; runs for NATIVE_CHAIN_CLOSED, BASELINE_NONZERO_EXIT and INVALID-with-terminal; retention failure => exit 96",
+    "what": "inventory entries under prepared/ (corpus.f32, queries.f32, truth.u64, corpus/queries IDs, complete.json), normalized.f32, order.u64, sq8.bin, generation/**, store/** (final-key SQ8 + head) that are not already small collected artifacts; scratch/** and baseline scratch excluded",
+    "how": "aws s3 cp streaming per object to s3://<bucket>/<prefix>/retained/<relative path> with --metadata sha256=<helper inventory SHA>; then s3api head-object ContentLength must equal the inventory bytes; no Python decoding; no extra local scratch (reads existing files)",
+    "bounds": "<=1GiB per object, <=4GiB total; receipt retention-receipt.json (key, path, bytes, sha256 per object) is an authenticated collected artifact pinned in the terminal; never overwritten",
+    "collection_replay": "collect() head_object-verifies ContentLength and sha256 metadata of every retained object; replay requires the full retained set for a closed run and equality with the helper inventory",
+    "reuse": "retained queries.f32/truth.u64/IDs + normalized/order/SQ8/generation/store allow an S3 Vectors comparison on the identical corpus/queries without rerunning cohort/GT/index",
+    "s3_cost_estimate_usd": {
+      "retained_bytes_approx": "~1.04GB known (corpus 409.6MB + normalized 409.6MB + SQ8 103.6MB + store SQ8 103.6MB + queries 4.1MB + order .8MB + truth .08MB) + generation (unmeasured, capped by the 4GiB total)",
+      "storage_per_month": "<= $0.10 at the 4GiB cap ($0.023/GB-mo), ~$0.03 at ~1.1GB",
+      "requests": "~15 PUT/HEAD pairs, negligible",
+      "in_region_transfer": "free",
+      "ebs_80GiB_gp3_3h": "~$0.03",
+      "verdict": "fits the $0.15 ancillary allowance; monthly retention storage continues until the root deletes the prefix"
+    }
+  },
+  "scratch": "retention reads files in place; the 8GiB helper scratch cap is unchanged",
+  "root_template_alignment": "layout adapted to /tmp/borsuk-cohere-native-preflight-pending-config.json (input/en/<shard>, bin/<role>); the template remains PENDING_NOT_EXECUTABLE",
+  "s3_transport_repair": {
+    "observed_failure": "closed original a0001 transport log SHA 055552b88d6eae0a1b23691ce0b557d468a870296d7dc981f70fcedb9aa69546: aws s3 cp reported \"can't start new thread\" under the adapter __main__ RLIMIT_AS 400MiB inherited by the aws subprocess; helper/native never reached",
+    "fix": "no aws CLI anywhere in the adapter. S3 downloads use one botocore get_object stream (s3_client(): max_attempts=1, max_pool_connections=1, connect/read timeouts) read in 1MiB chunks into a new .part file with ContentLength==pinned size, total<=size and a TRANSFER_SECONDS deadline, body always closed, then the unchanged exact length/SHA256/atomic rename/failure cleanup. Retention uses head_object (key must be absent) + one sequential put_object from the open file (Metadata sha256) + head_object length/sha verification; no TransferManager/thread pool, no IfNoneMatch (older python3-boto3), no retry policy. curl paths unchanged.",
+    "limits_preserved": "adapter RLIMIT_AS 400MiB for every -- mode, helper/native caps and methods untouched, no-retry policy preserved",
+    "regression": "_rlimit_regression (test-only repair after root RED at 5d56f254): the child no longer relies on the host failing to start a 256MiB-stack thread under RLIMIT_AS 400MiB (host dependent). It deterministically refuses thread start (threading.Thread.start and _thread.start_new_thread raise \"can't start new thread\"), asserts the refusal, then proves fetch('s3://...') completes (get_object stream, exact length/SHA, atomic rename, no .part) with threading.active_count()==1; production code unchanged",
+    "retain_same_cause": "retain() (the --retain mode, same inherited RLIMIT_AS) no longer uses aws s3 cp/s3api; it was converted in the same repair commit e07a99ce: absent-key head_object probe, one sequential put_object with Metadata sha256, head_object ContentLength+sha256 verification, exclusive retention-receipt.json, unchanged roster/caps/lifecycle (exit 96 on failure)",
+    "static_regression": "_no_threaded_transfer_regression: source of transport/fetch/resolve/s3_get/retain/s3_client contains no aws CLI, TransferConfig, upload_file/download_file or ThreadPool, and the only subprocess spawned in those functions is curl; plus the runtime fixtures that forbid any aws subprocess and assert threading.active_count()==1 in both --transport and --retain",
+    "no_retry": "botocore Config retries={'total_max_attempts': 1, 'mode': 'standard'} (max_attempts=1 would still allow one retry); asserted on the REAL client object",
+    "atomic_no_overwrite": "every PutObject carries 'If-None-Match: *' via a before-call.s3.PutObject hook registered in s3_client() (the IfNoneMatch API parameter does not exist in the instance's older python3-boto3); HEAD absence probe kept for a clear error; asserted by emitting the real client's before-call events (PutObject gets the header, GetObject does not)",
+    "put_wall_time": "retain() sends Body=DeadlineStream(open file, TRANSFER_SECONDS): every body read (checksum/MD5 pass and the send loop) raises TimeoutError once the per-object deadline passes, so one PUT is bounded by TRANSFER_SECONDS (+ at most one 60s socket read_timeout); the whole phase also stays inside the 10800s machine deadline; fixture patches TRANSFER_SECONDS=-1 and asserts TimeoutError, no put, no receipt"
+  }
+}

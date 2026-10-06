@@ -18,6 +18,7 @@ import resource
 import subprocess
 import sys
 import tempfile
+import time
 from unittest.mock import patch
 from urllib.parse import urljoin, urlsplit
 
@@ -254,6 +255,54 @@ def resolve(url, hosts):
     raise AssertionError('too many redirects')
 
 
+def s3_client():
+    """Single-connection, no-retry client. The aws CLI/boto3 transfer manager start thread pools, which the
+    adapter's RLIMIT_AS (set for every -- mode) refuses ("can't start new thread"); plain get/put/head use none."""
+    import boto3
+    from botocore.config import Config
+    client = boto3.client('s3', region_name=peer.REGION, config=Config(retries=dict(total_max_attempts=1, mode='standard'),
+        connect_timeout=10, read_timeout=60, max_pool_connections=1))
+    # Atomic no-overwrite on every PUT without the IfNoneMatch parameter (absent from the instance's older python3-boto3).
+    client.meta.events.register('before-call.s3.PutObject', if_none_match)
+    return client
+
+
+def if_none_match(params, **kwargs):
+    params['headers']['If-None-Match'] = '*'
+
+
+class DeadlineStream:
+    """Open-file wrapper: every body read (signing/MD5 pass and send loop) checks the PUT wall-time deadline."""
+    def __init__(self, stream, seconds):
+        self.stream, self.deadline = stream, time.monotonic() + seconds
+
+    def read(self, *args):
+        if time.monotonic() >= self.deadline:
+            raise TimeoutError('retained PUT exceeded TRANSFER_SECONDS')
+        return self.stream.read(*args)
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+
+def s3_get(locator, part, size):
+    """One bounded sequential get_object stream into a new file; never decodes, never exceeds the pinned length."""
+    bucket, _, key = locator[len('s3://'):].partition('/')
+    assert bucket == peer.BUCKET and key, 'S3 locator bucket'
+    response = s3_client().get_object(Bucket=bucket, Key=key)
+    body, total, deadline = response['Body'], 0, time.monotonic() + TRANSFER_SECONDS
+    try:
+        assert response['ContentLength'] == size, 'S3 object length'
+        with part.open('xb') as output:
+            for chunk in iter(lambda: body.read(1 << 20), b''):
+                total += len(chunk)
+                assert total <= size and time.monotonic() < deadline, 'bounded S3 stream'
+                output.write(chunk)
+            output.flush(); os.fsync(output.fileno())
+    finally:
+        body.close()
+
+
 def fetch(locator, destination, size, digest, hosts=()):
     """Bounded streaming transfer; exact length and SHA256 before atomic publication. Never decodes."""
     destination = Path(destination)
@@ -261,11 +310,12 @@ def fetch(locator, destination, size, digest, hosts=()):
     assert not destination.exists() and not part.exists() and destination.parent.is_dir(), 'transport destination'
     try:
         if locator.startswith('https://'):
-            command = ['curl', '-fsS', '--proto', '=https', '--max-redirs', '0', '--connect-timeout', '10',
-                       '--max-time', str(TRANSFER_SECONDS), '--max-filesize', str(size), '--output', str(part), resolve(locator, hosts)]
+            subprocess.run(['curl', '-fsS', '--proto', '=https', '--max-redirs', '0', '--connect-timeout', '10',
+                            '--max-time', str(TRANSFER_SECONDS), '--max-filesize', str(size), '--output', str(part),
+                            resolve(locator, hosts)], check=True, timeout=TRANSFER_SECONDS + 60)
         else:
-            command = ['aws', 's3', 'cp', locator, str(part), '--only-show-errors']
-        subprocess.run(command, check=True, timeout=TRANSFER_SECONDS + 60)
+            assert locator.startswith('s3://'), 'transport scheme'
+            s3_get(locator, part, size)
         metadata = os.lstat(part)
         assert os.path.isfile(part) and not os.path.islink(part) and metadata.st_size == size, 'exact transported length'
         hasher = hashlib.sha256()
@@ -317,6 +367,7 @@ def retained_names(inventory):
 
 def retain(root, prefix):
     """Instance: stream bounded uploads of the helper's retained bodies, then verify S3 sizes; no decoding."""
+    from botocore.exceptions import ClientError
     root = Path(root)
     assert re.fullmatch(re.escape(PREFIX) + r'a[0-9]{4}', prefix), 'retention prefix'
     assert not (root / 'retention-receipt.json').exists(), 'retention receipt never overwritten'
@@ -325,15 +376,22 @@ def retain(root, prefix):
     assert sum(terminal['inventory'][n]['bytes'] for n in names) <= RETAIN_TOTAL_CAP and all(
         terminal['inventory'][n]['bytes'] <= RETAIN_FILE_CAP for n in names), 'bounded retention'
     receipt = dict(schema=SCHEMA + '-retention', bucket=peer.BUCKET, prefix=prefix, objects=[])
+    client = s3_client()
     for name in names:
         pin, key = terminal['inventory'][name], prefix + '/retained/' + name
         path = root / 'preflight' / name
         assert os.lstat(path).st_size == pin['bytes'], 'retained body length'
-        subprocess.run(['aws', 's3', 'cp', str(path), 's3://' + peer.BUCKET + '/' + key, '--metadata', 'sha256=' + pin['sha256'],
-                        '--only-show-errors'], check=True, timeout=TRANSFER_SECONDS)
-        size = subprocess.run(['aws', 's3api', 'head-object', '--bucket', peer.BUCKET, '--key', key, '--query', 'ContentLength',
-                               '--output', 'text'], check=True, capture_output=True, text=True, timeout=120).stdout.strip()
-        assert size == str(pin['bytes']), 'uploaded object length'
+        try:
+            client.head_object(Bucket=peer.BUCKET, Key=key)
+        except ClientError as error:
+            assert error.response['Error']['Code'] in ('404', 'NoSuchKey', 'NotFound'), 'retention key probe'
+        else:
+            raise AssertionError('retained key already exists')
+        with path.open('rb') as stream:  # one sequential conditional PUT (If-None-Match: *) bounded by TRANSFER_SECONDS
+            client.put_object(Bucket=peer.BUCKET, Key=key, Body=DeadlineStream(stream, TRANSFER_SECONDS), ContentLength=pin['bytes'],
+                              Metadata={'sha256': pin['sha256']})
+        head = client.head_object(Bucket=peer.BUCKET, Key=key)
+        assert head['ContentLength'] == pin['bytes'] and head['Metadata']['sha256'] == pin['sha256'], 'uploaded object length'
         receipt['objects'].append(dict(key=key, path=name, bytes=pin['bytes'], sha256=pin['sha256']))
     with (root / 'retention-receipt.json').open('xb') as stream:
         stream.write(encoded(receipt) + b'\n'); stream.flush(); os.fsync(stream.fileno())
@@ -587,7 +645,16 @@ def _transport_self_check(root, base):
     cdn = 'https://cas-bridge.xethub.hf.co/object?sig=1'
     ok = 'HTTP/2 200\r\ncontent-length: 6\r\n\r\n'
     redirect = lambda target: 'HTTP/2 302\r\nLocation: ' + target + '\r\n\r\n'
-    def attempt(label, *, wrong=None, short=None, long=None, occupied=False, expect_ok=True, routes=None, hops=None):
+    import threading
+    class Body:
+        def __init__(self, data):
+            self.stream, self.closed = io.BytesIO(data), False
+        def read(self, n):
+            return self.stream.read(n)
+        def close(self):
+            self.closed = True
+    bodies_open = []
+    def attempt(label, *, wrong=None, short=None, long=None, lie=None, occupied=False, expect_ok=True, routes=None, hops=None):
         inst = Path(root) / label
         inst.mkdir(parents=True)
         (inst / 'repo').symlink_to(base)
@@ -597,19 +664,29 @@ def _transport_self_check(root, base):
                 calls.append(('probe', command[-1]))
                 assert '=https' in command and '--proto' in command and '-r' not in command and '--range' not in command and '-o' not in command
                 return subprocess.CompletedProcess(command, 0, stdout=(routes or {}).get(command[-1], ok))
-            locator = command[-1] if command[0] == 'curl' else command[3]
-            output = command[command.index('--output') + 1] if command[0] == 'curl' else command[4]
-            calls.append((command[0], locator))
-            if command[0] == 'curl':
-                assert '--max-redirs' in command and command[command.index('--max-redirs') + 1] == '0' and '--max-filesize' in command
+            assert command[0] == 'curl', 'S3 transport must not spawn the aws CLI (thread pool under RLIMIT_AS)'
+            locator, output = command[-1], command[command.index('--output') + 1]
+            calls.append(('curl', locator))
+            assert '--max-redirs' in command and command[command.index('--max-redirs') + 1] == '0' and '--max-filesize' in command
             origin = first if locator.startswith('https://cas-bridge.xethub.hf.co') else locator
             data = bodies[origin]
             data = b'tampered' + data[8:] if origin == wrong else data[:-1] if origin == short else data + b'x' if origin == long else data
             Path(output).write_bytes(data)
             return subprocess.CompletedProcess(command, 0)
+        class Client:
+            def get_object(self, Bucket, Key):
+                locator = 's3://' + Bucket + '/' + Key
+                calls.append(('s3', locator))
+                data = bodies[locator]
+                data = b'tampered' + data[8:] if locator == wrong else data[:-1] if locator == short else data + b'x' if locator == long else data
+                declared = len(data) - 1 if locator == lie else len(data)
+                body = Body(data)
+                bodies_open.append(body)
+                return dict(ContentLength=declared if locator != long else len(bodies[locator]) , Body=body)
         if occupied:
             (inst / 'input/en').mkdir(parents=True); (inst / 'input/en/s0.parquet').write_bytes(b'x')
-        with mock_patch.object(module.subprocess, 'run', fake_run):
+        threads = threading.active_count()
+        with mock_patch.object(module.subprocess, 'run', fake_run), mock_patch.object(module, 's3_client', lambda: Client()):
             if expect_ok:
                 receipt = transport(inst)
                 assert [t['kind'] for t in receipt['transfers']] == ['shard'] * 2 + ['binary'] * 5
@@ -622,9 +699,11 @@ def _transport_self_check(root, base):
                 rejected(lambda: transport(inst))
                 assert not list(inst.rglob('*.part')), 'partial transport removed'
                 assert not (inst / 'transport-receipt.json').exists()
+        assert threading.active_count() == threads == 1, 'no transfer thread pool'
+        assert all(body.closed for body in bodies_open), 'S3 body closed'
         return inst, calls
     _, calls = attempt('ok')
-    assert [c[0] for c in calls if c[0] != 'probe'] == ['curl'] * 2 + ['aws'] * 5
+    assert [c[0] for c in calls if c[0] != 'probe'] == ['curl'] * 2 + ['s3'] * 5
     # Pinned initial revision URL may redirect to the exact root-allowed publisher CDN host.
     _, calls = attempt('cdn', routes={first: redirect(cdn), cdn: ok})
     assert ('curl', cdn) in calls and ('probe', cdn) in calls
@@ -654,8 +733,10 @@ def _transport_self_check(root, base):
     attempt('long-shard', long=first, expect_ok=False)
     binary = 's3://' + peer.BUCKET + '/research/test/' + helper.ROLES[2]
     _, calls = attempt('wrong-binary', wrong=binary, expect_ok=False)
-    assert [c[0] for c in calls if c[0] != 'probe'] == ['curl'] * 2 + ['aws'] * 3, 'transport stops at the first bad body'
+    assert [c[0] for c in calls if c[0] != 'probe'] == ['curl'] * 2 + ['s3'] * 3, 'transport stops at the first bad body'
     attempt('short-binary', short=binary, expect_ok=False)
+    attempt('long-binary', long=binary, expect_ok=False)
+    attempt('lying-length-binary', lie=binary, expect_ok=False)
     _, calls = attempt('occupied', occupied=True, expect_ok=False)
     assert calls == [], 'occupied destination refused before any transfer'
     # fetch() itself refuses an existing destination or stale partial before spawning any downloader.
@@ -793,54 +874,146 @@ def _collection_self_check(root, proof, body):
 
 
 def _retain_self_check(root):
+    from botocore.exceptions import ClientError
     from unittest.mock import patch as mock_patch
+    import threading
     module = sys.modules[__name__]
     inst = Path(root) / 'retain'
     inst.mkdir()
     terminal = _closure_tree(inst, 'NATIVE_CHAIN_CLOSED', True)
     names = retained_names(terminal['inventory'])
     prefix = PREFIX + 'a0001'
-    uploads = []
-    def runner(wrong_size=False, fail_at=None):
-        def fake_run(command, **kwargs):
-            if command[:3] == ['aws', 's3', 'cp']:
-                assert command[3].startswith(str(inst / 'preflight')) and '--metadata' in command and '--only-show-errors' in command
-                uploads.append((command[4], command[command.index('--metadata') + 1]))
-                if fail_at == len(uploads):
-                    raise subprocess.CalledProcessError(1, command)
-                return subprocess.CompletedProcess(command, 0)
-            assert command[:3] == ['aws', 's3api', 'head-object']
-            name = command[command.index('--key') + 1][len(prefix + '/retained/'):]
-            return subprocess.CompletedProcess(command, 0, stdout=f"{terminal['inventory'][name]['bytes'] + (1 if wrong_size else 0)}\n")
-        return mock_patch.object(module.subprocess, 'run', fake_run)
-    with runner(wrong_size=True):
+    objects, puts = {}, []
+    class Client:
+        def __init__(self, wrong_size=False, fail_at=None, existing=None):
+            self.wrong_size, self.fail_at, self.existing = wrong_size, fail_at, existing
+        def head_object(self, Bucket, Key):
+            assert Bucket == peer.BUCKET
+            if Key not in objects and Key != self.existing:
+                raise ClientError(dict(Error=dict(Code='404')), 'HeadObject')
+            if Key == self.existing:
+                return dict(ContentLength=1, Metadata={})
+            size, metadata = objects[Key]
+            return dict(ContentLength=size + (1 if self.wrong_size else 0), Metadata=metadata)
+        def put_object(self, Bucket, Key, Body, ContentLength, Metadata):
+            assert Bucket == peer.BUCKET and isinstance(Body, DeadlineStream)
+            assert Body.read(1) is not None and Body.seek(0) == 0 and Body.tell() == 0  # delegated file protocol
+            assert len(Body.read()) == ContentLength
+            puts.append((Key, ContentLength, Metadata))
+            if self.fail_at == len(puts):
+                raise OSError('put failed')
+            objects[Key] = (ContentLength, Metadata)
+    def run(client):
+        def no_subprocess(*args, **kwargs):
+            raise AssertionError('retention must not spawn the aws CLI')
+        threads = threading.active_count()
+        with mock_patch.object(module.subprocess, 'run', no_subprocess), mock_patch.object(module, 's3_client', lambda: client):
+            try:
+                return retain(inst, prefix)
+            finally:
+                assert threading.active_count() == threads == 1, 'no transfer thread pool'
+    for label, client, message in (('wrong-size', Client(wrong_size=True), 'uploaded object length'),
+                                   ('existing-key', Client(existing=prefix + '/retained/' + names[1]), 'retained key already exists')):
+        objects.clear(); puts.clear()
         try:
-            retain(inst, prefix)
+            run(client)
         except AssertionError as error:
-            assert 'uploaded object length' in str(error)
+            assert message in str(error), (label, error)
         else:
-            raise AssertionError('wrong uploaded length accepted')
-    assert len(uploads) == 1 and not (inst / 'retention-receipt.json').exists(), 'stops at the first bad object, no receipt'
-    uploads.clear()
-    with runner(fail_at=3):
+            raise AssertionError(label + ' accepted')
+        assert not (inst / 'retention-receipt.json').exists()
+    assert len(puts) == 1 or len(puts) == 2, 'stops at the first bad object'
+    objects.clear(); puts.clear()
+    try:
+        run(Client(fail_at=3))
+    except OSError:
+        pass
+    else:
+        raise AssertionError('failed put accepted')
+    assert len(puts) == 3 and not (inst / 'retention-receipt.json').exists()
+    objects.clear(); puts.clear()
+    with mock_patch.object(module, 'TRANSFER_SECONDS', -1):  # PUT wall-time deadline already expired
         try:
-            retain(inst, prefix)
-        except subprocess.CalledProcessError:
+            run(Client())
+        except TimeoutError:
             pass
         else:
-            raise AssertionError('failed upload accepted')
-    assert len(uploads) == 3 and not (inst / 'retention-receipt.json').exists()
-    uploads.clear()
-    with runner():
+            raise AssertionError('expired PUT deadline accepted')
+    assert not puts and not (inst / 'retention-receipt.json').exists()
+    objects.clear(); puts.clear()
+    with mock_patch.object(module.subprocess, 'run', side_effect=AssertionError('no CLI')):
         rejected(lambda: retain(inst, PREFIX + 'a00x1'))
-        assert uploads == []
-        receipt = retain(inst, prefix)
-        count = len(uploads)
-        rejected(lambda: retain(inst, prefix))
-        assert len(uploads) == count, 'second retention refused before any upload'
+    receipt = run(Client())
+    uploaded = len(puts)
+    rejected(lambda: run(Client()))
+    assert len(puts) == uploaded, 'second retention refused before any upload'
     assert [o['path'] for o in receipt['objects']] == names and len(names) == 11 and 'scratch/ignored.bin' not in names
-    assert uploads == [('s3://' + peer.BUCKET + '/' + prefix + '/retained/' + n, 'sha256=' + terminal['inventory'][n]['sha256']) for n in names]
+    assert puts == [(prefix + '/retained/' + n, terminal['inventory'][n]['bytes'], dict(sha256=terminal['inventory'][n]['sha256'])) for n in names]
     assert json.loads((inst / 'retention-receipt.json').read_bytes()) == receipt
+
+
+def _client_policy_regression():
+    """The REAL client object: true no-retry and atomic If-None-Match on every PutObject; no network is contacted."""
+    with patch.dict(os.environ, dict(AWS_ACCESS_KEY_ID='x', AWS_SECRET_ACCESS_KEY='y', AWS_EC2_METADATA_DISABLED='true')):
+        client = s3_client()
+    retries = client.meta.config.retries
+    assert retries['total_max_attempts'] == 1 and retries['mode'] == 'standard' and 'max_attempts' not in retries, retries
+    assert client.meta.config.max_pool_connections == 1 and client.meta.config.read_timeout == 60
+    def emitted(operation):
+        params = dict(headers={}, body=b'', url='https://example/key', method='PUT', context={}, url_path='/key', query_string={})
+        client.meta.events.emit('before-call.s3.' + operation, model=client.meta.service_model.operation_model(operation),
+                                params=params, request_signer=client._request_signer, context={})
+        return params['headers']
+    assert emitted('PutObject')['If-None-Match'] == '*'
+    assert 'If-None-Match' not in emitted('GetObject'), 'conditional write only on PutObject'
+    stream = DeadlineStream(io.BytesIO(b'abc'), 60)
+    assert stream.read(2) == b'ab' and stream.tell() == 2 and stream.seek(0) == 0
+    expired = DeadlineStream(io.BytesIO(b'abc'), -1)
+    rejected(lambda: expired.read(1))
+
+
+def _no_threaded_transfer_regression():
+    """Both runtime modes that inherit RLIMIT_AS (--transport, --retain) may only spawn curl or none; never the aws CLI."""
+    import inspect
+    for function in (transport, fetch, resolve, s3_get, retain, s3_client):
+        source = inspect.getsource(function)
+        assert "'aws'" not in source and '"aws"' not in source and 'TransferConfig' not in source and 'upload_file' not in source \
+            and 'download_file' not in source and 'ThreadPool' not in source, function.__name__
+    spawned = [call for function in (fetch, resolve, retain, transport) for call in re.findall(r"subprocess\.run\(\[\s*'([^']+)'", inspect.getsource(function))]
+    assert set(spawned) == {'curl'}, spawned
+
+
+def _rlimit_regression(base):
+    """Thread-start refusal is emulated deterministically (the AWS CLI transfer pool failed under RLIMIT_AS); the single stream must not need a thread."""
+    code = r"""
+import hashlib, io, resource, sys, tempfile, threading, _thread
+from pathlib import Path
+sys.path.insert(0, %r)
+import scripts.launch_cohere_native_preflight_spot as m
+resource.setrlimit(resource.RLIMIT_AS, (400 * 1024 ** 2, 400 * 1024 ** 2))  # the adapter's production bound, inherited by children
+def refuse(*args, **kwargs):
+    raise RuntimeError("can't start new thread")
+threading.Thread.start = refuse
+_thread.start_new_thread = refuse
+try:
+    threading.Thread(target=lambda: None).start()
+except RuntimeError as error:
+    assert "can't start new thread" in str(error)  # the observed failure class, now deterministic on every host
+else:
+    raise SystemExit('thread start was not refused')
+class Body(io.BytesIO): pass
+class Client:
+    def get_object(self, Bucket, Key):
+        return dict(ContentLength=4, Body=Body(b'abcd'))
+m.s3_client = lambda: Client()
+with tempfile.TemporaryDirectory() as tmp:
+    result = m.fetch('s3://' + m.peer.BUCKET + '/research/x', Path(tmp) / 'object', 4, hashlib.sha256(b'abcd').hexdigest())
+    assert (Path(tmp) / 'object').read_bytes() == b'abcd' and result['bytes'] == 4 and not list(Path(tmp).glob('*.part'))
+assert threading.active_count() == 1
+print('single-stream S3 fetch completes while thread start is refused')
+""" % str(base)
+    result = subprocess.run([sys.executable, '-B', '-c', code], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0 and 'single-stream' in result.stdout, result.stderr
 
 
 def _lifecycle_self_check(proof):
@@ -967,6 +1140,9 @@ def self_check():
         _transport_self_check(root / 'transport', base)
         _collection_self_check(root, proof, body)
         _retain_self_check(root)
+        _client_policy_regression()
+        _no_threaded_transfer_regression()
+        _rlimit_regression(Path(__file__).resolve().parents[1])
         _lifecycle_self_check(proof)
         with contextlib.redirect_stdout(io.StringIO()):
             shared.self_check(lifecycle_only=True)

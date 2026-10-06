@@ -1,0 +1,16 @@
+{
+  "source_commit": "a4fe9a053d080103c21e5384f9c42dcf5c87a70e",
+  "source_sha256": "9544f6e8b579cbc92de4f8f2ffb27e41ecaad2d3ed31e75c2726791cbf09f462",
+  "unit": "borsuk-preflight-stream-root-green-20261006.service",
+  "invocation": "672b898a801549f2b2ab2599f1e33355",
+  "exit_status": 0,
+  "runtime_seconds": 3.389,
+  "cpu_seconds": 2.672,
+  "memory_peak_display": "164.6M",
+  "swap_bytes": 0,
+  "memory_max_bytes": 268435456,
+  "cpu_quota_percent": 100,
+  "runtime_max_seconds": 120,
+  "synthetic_only": true,
+  "native_binary_or_method_change": false
+}

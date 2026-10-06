@@ -1,0 +1,14 @@
+{
+  "source_commit": "5d56f25447ec644621b7557260f97566c52f8186",
+  "unit": "borsuk-preflight-stream-root-check-20261006.service",
+  "invocation": "2d3ae065a51b42ca82f14ca235db8ea7",
+  "command": "python3 -B scripts/launch_cohere_native_preflight_spot.py --self-check",
+  "exit_status": 1,
+  "memory_peak_bytes": 172445696,
+  "swap_peak_bytes": 0,
+  "cpu_quota_percent": 100,
+  "memory_max_bytes": 268435456,
+  "runtime_max_seconds": 120,
+  "failure": "portable regression expected thread failure but thread started",
+  "production_or_science_result": false
+}
