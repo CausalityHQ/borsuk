@@ -1,0 +1,25 @@
+{
+  "status": "FAILED_NATIVE_QUALIFICATION",
+  "native_source_commit": "1d8f16ac0ad96c5cac8d711751a4a71ba15ce819",
+  "original_exit_code": 101,
+  "instance_id": "i-01ef5ea874c823f6b",
+  "authenticated_terminal_artifacts": 13,
+  "source_before_after_equal": true,
+  "test_result": {
+    "passed": 13,
+    "failed": 1,
+    "failed_test": "two_bit_generation::source_walk_tests::native_100k_d1024_generation_serving_scalar_oracle"
+  },
+  "remaining_gate_stages": "UNRUN",
+  "quality_and_performance": "UNMEASURED",
+  "cleanup": {
+    "nodes": {
+      "0": {
+        "instance_id": "i-01ef5ea874c823f6b"
+      }
+    },
+    "state": "terminated",
+    "observed_elapsed_s": 360
+  },
+  "repair_owner": "same cohere1024-native-baseline worker"
+}
