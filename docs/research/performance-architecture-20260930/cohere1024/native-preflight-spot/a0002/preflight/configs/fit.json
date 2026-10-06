@@ -1,0 +1,1 @@
+{"argv":["fit","/mnt/borsuk-cohere/preflight/normalized.f32","20936913f31e48ea67d462dfffc7a831569ff7467baebc63f2d622c8ff417dce","100000","1024","7516192768","/mnt/borsuk-cohere/preflight/order.u64"],"name":"fit","role":"sq8","schema":"borsuk-cohere-native-preflight-v1-invocation"}

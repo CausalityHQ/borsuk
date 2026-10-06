@@ -1,0 +1,1 @@
+{"argv":["/mnt/borsuk-cohere/preflight/normalized.f32","20936913f31e48ea67d462dfffc7a831569ff7467baebc63f2d622c8ff417dce","1024","/mnt/borsuk-cohere/preflight/order.u64","6b6a67098330c76bfb89340065d9326fb3f23a1f6016fbae5b9fa7f0e29759c2","7516192768","/mnt/borsuk-cohere/preflight/sq8.bin"],"name":"sq8","role":"sq8","schema":"borsuk-cohere-native-preflight-v1-invocation"}

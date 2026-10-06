@@ -1,0 +1,8 @@
+Running as unit: cohere-native-preflight.service
+{"complete": true, "output": "/mnt/borsuk-cohere/preflight", "status": "NATIVE_CHAIN_CLOSED"}
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 3min 3.647s
+CPU time consumed: 4.558s
+Memory peak: 256.0K
+Memory swap peak: 0B

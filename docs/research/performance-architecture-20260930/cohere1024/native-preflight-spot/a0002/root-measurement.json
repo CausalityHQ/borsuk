@@ -1,0 +1,70 @@
+{
+  "status": "VERIFIED_LOCAL_NATIVE_BASELINE",
+  "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+  "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+  "corpus_ordinals": [
+    0,
+    100000
+  ],
+  "query_ordinals": [
+    100000,
+    101000
+  ],
+  "dimensions": 1024,
+  "metric": "cosine",
+  "k": 10,
+  "queries": 1000,
+  "mean_recall10": 0.9723,
+  "p05_hits10": 8,
+  "underfilled_queries": 0,
+  "quantile_method": "nearest rank",
+  "latency_ms": {
+    "0.5": 74.250384,
+    "0.9": 80.403322,
+    "0.95": 82.41107,
+    "0.99": 87.88388
+  },
+  "sequential_query_qps": 13.332298068655879,
+  "process_wall_seconds": 76.893329158,
+  "native_process_peak_bytes": 40521728,
+  "baseline_cgroup_peak_bytes": 72519680,
+  "physical_s3_measured": false,
+  "cache_state": "local file provider; not controlled cold service cache",
+  "cpu": 1,
+  "comparison_baseline": "first same-cohort native baseline; no matched competitor run",
+  "stages": {
+    "discovery": {
+      "mean_ms": 4.919299587,
+      "p95_ms": 7.526159
+    },
+    "source": {
+      "mean_ms": 18.021308255,
+      "p95_ms": 23.746282
+    },
+    "planning": {
+      "mean_ms": 6.982548489,
+      "p95_ms": 11.726129
+    },
+    "sq8": {
+      "mean_ms": 44.977512798999996,
+      "p95_ms": 49.721652
+    }
+  },
+  "logical_total_gets": 67943,
+  "logical_total_bytes": 27259427868,
+  "logical_mean_gets": 67.943,
+  "logical_mean_bytes": 27259427.868,
+  "terminal_sha256": "af1e5c9d1499988a9a2f1d42e6ad13276698554c3d6e7c0a9be29f69187a8871",
+  "baseline_sha256": "9317c19dda6401668649cebcc2430035c430fe5ad148c8a545d0ea12a0b02e52",
+  "instance_id": "i-0728efce4cb175f72",
+  "instance_state": "terminated",
+  "campaign_elapsed_seconds": 323,
+  "root_replay": {
+    "exit_status": 0,
+    "unit": "borsuk-cohere-preflight-closed-replay-20261006",
+    "invocation": "b06d58db5edb4523ac5f9b88c1e84b08",
+    "memory_peak_display": "56.4M",
+    "swap": 0
+  },
+  "next_action": "Investigate measured SQ8 stage before selecting one native scoring/layout intervention; no 10M readiness or competitor win claim"
+}

@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0728efce4cb175f72",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0728efce4cb175f72"
+    }
+  },
+  "prefix": "research/semantic-router/20261006/cohere-native-preflight-a0002",
+  "source_commit": "4df75b5f6cc536dbed1842abe01c2ac1b8af1e79",
+  "source_archive_sha256": "eeb635c8b1a8ae6058594e82a57e0cf134ea025e64f689c59170b0ea88688a75"
+}
