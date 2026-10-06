@@ -1,0 +1,17 @@
+{
+  "status": "SOURCE_REVIEWED_NATIVE_UNVERIFIED",
+  "source_commit": "0060af5a04188af3cddc598d6e5f125fb189477b",
+  "source_sha256": "c1846e06542eeaf496c47d77f7620cc740b4f997988733e8f6d1ba0aa27a9a48",
+  "contract_sha256": "0de3c01fe73656282c40403a9cd07119d56bed112bab07383be44da7240cc5ff",
+  "required_tests": [
+    "two_shard_original_bits_scalar_truth_and_locators",
+    "fixed_list_and_integer_ids",
+    "invalid_embeddings_and_duplicate_ids",
+    "strict_config_and_missing_columns",
+    "secure_hash_eof_link_fifo_inputs",
+    "metadata_and_batch_memory_caps",
+    "missing_rows_and_occupied_output",
+    "sync_failure_removes_complete_marker"
+  ],
+  "reviewed": "Dictionary expansion, stable descriptor timestamps, bounded selected-column page-header admission and forged compressed-page refusal before Arrow decode. Native gates remain required."
+}

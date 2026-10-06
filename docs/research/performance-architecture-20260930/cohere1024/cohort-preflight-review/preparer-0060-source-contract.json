@@ -1,0 +1,330 @@
+{
+  "schema": "borsuk-cohere1024-native-cohort-preparer-contract-v1",
+  "phase": "source-only-repair-UNVERIFIED-awaiting-parent-gates",
+  "base_commit": "e0a4295a57548d012db43711766770feb3f70137",
+  "source_file": "crates/borsuk/src/bin/prepare_cohere_native_cohort.rs",
+  "source_sha256": "c1846e06542eeaf496c47d77f7620cc740b4f997988733e8f6d1ba0aa27a9a48",
+  "commit": "0060af5a04188af3cddc598d6e5f125fb189477b",
+  "cli": "prepare_cohere_native_cohort CONFIG CONFIG_SHA NEW_OUTPUT_DIR",
+  "config_fields": [
+    "schema",
+    "dataset",
+    "revision",
+    "embedding_column",
+    "document_id_column",
+    "shards",
+    "output_parent",
+    "resources"
+  ],
+  "config_schema": "borsuk-cohere-native-cohort-config-v1",
+  "shard_fields": [
+    "publisher_path",
+    "path",
+    "bytes",
+    "sha256"
+  ],
+  "shards_order": [
+    "en/0000.parquet",
+    "en/0001.parquet"
+  ],
+  "shards_bytes": [
+    216612385,
+    216746705
+  ],
+  "full_shard_hashes": "parent-supplied whole-body SHA256 only; no ETag/footer substitution",
+  "output_parent_fields": [
+    "path",
+    "device",
+    "inode"
+  ],
+  "resource_fields": [
+    "cpu_limit",
+    "actual_memory_bytes",
+    "modeled_memory_bytes",
+    "swap_bytes",
+    "scratch_bytes",
+    "timeout_seconds",
+    "max_footer_bytes",
+    "max_row_group_rows",
+    "max_row_group_compressed_bytes",
+    "max_row_group_uncompressed_bytes",
+    "batch_rows",
+    "max_batch_bytes",
+    "max_id_bytes"
+  ],
+  "runtime_resources": {
+    "cpu_limit": 4,
+    "actual_memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "scratch_bytes": 8589934592,
+    "timeout_seconds": 2400
+  },
+  "local_resources": {
+    "cpu_limit": 1,
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "allowed": [
+      "source inspection/edit",
+      "rustfmt",
+      "git diff/check/commit"
+    ],
+    "forbidden": [
+      "cargo",
+      "rustc",
+      "native execution",
+      "corpus/GT execution",
+      "network/AWS",
+      "consult/review/children",
+      "push"
+    ]
+  },
+  "geometry": {
+    "corpus_rows": 100000,
+    "query_rows": 1000,
+    "dimensions": 1024,
+    "k": 10,
+    "corpus_source_ordinals": [
+      0,
+      100000
+    ],
+    "query_source_ordinals": [
+      100000,
+      101000
+    ]
+  },
+  "outputs": {
+    "corpus.f32": 409600000,
+    "queries.f32": 4096000,
+    "truth.u64": 80000,
+    "corpus.ids.jsonl": "one typed publisher ID and shard/row locator per corpus ordinal",
+    "queries.ids.jsonl": "one typed publisher ID and shard/row locator per query ordinal",
+    "complete.json": "marker-last receipt; absent on failure"
+  },
+  "formulas": {
+    "resident": "4*D*(N+Q)+8*N+(N+Q)*(max_id_bytes+256)+64MiB+2*64*max_footer_bytes",
+    "decode": "resident+4*(selected_compressed+selected_uncompressed)+24*selected_num_values+32*row_group_rows+2*max_batch_bytes <= modeled_memory_bytes; the two batch charges admit coexistence of expanded ID construction/storage and emitted Arrow batch with dictionary/page decoder buffers",
+    "truth": "sequential f64 dot and squared norms from original f32; distance=1-dot/(sqrt(cnorm2)*sqrt(qnorm2)); ascending distance then corpus ordinal; bounded max-heap k",
+    "id_output_cap": "(N+Q)*(6*max_id_bytes+1024)",
+    "metadata_batch": "IDexp=checked(batch_rows*id_column_uncompressed_bytes+8*(batch_rows+1)); W=8*selected_num_values+32*row_group_rows+IDexp+1MiB <= max_batch_bytes; batch_rows*(4*D+max_id_bytes+128) <= max_batch_bytes; all checks before any Arrow reader construction",
+    "metadata_topology": "footer <= pinned max_footer_bytes <=1MiB; <=4096 groups, <=64 leaves/root fields; selected leaf count exactly2",
+    "scratch": "source_shard_bytes+4*D*(N+Q)+8*Q*k+(N+Q)*(6*max_id_bytes+1024)+64KiB <= scratch_bytes",
+    "selected_column_pages": "For every selected column in every admitted row group BEFORE Arrow reader construction: checked sum(header_bytes+compressed_page_bytes)==column.compressed_size and sum(header_bytes+uncompressed_page_bytes)==column.uncompressed_size; exact span exhaustion; each page uncompressed allocation <= admitted column uncompressed bytes; sum(data_page.num_values)==column.num_values; dictionary count <= column.num_values and checked dictionary_count*(8 for INT64, else 4) <= dictionary_uncompressed_bytes. DataV2 nulls<=values, rows<=group_rows, checked definition+repetition prefix<=both raw and compressed bytes; uncompressed codec or V2 is_compressed=false requires identical raw/compressed byte counts."
+  },
+  "test_names": [
+    "two_shard_original_bits_scalar_truth_and_locators",
+    "fixed_list_and_integer_ids",
+    "invalid_embeddings_and_duplicate_ids",
+    "strict_config_and_missing_columns",
+    "secure_hash_eof_link_fifo_inputs",
+    "metadata_and_batch_memory_caps",
+    "missing_rows_and_occupied_output",
+    "sync_failure_removes_complete_marker"
+  ],
+  "verification": "source-only repair UNVERIFIED; same worker holds; parent locked bin tests, paired locked release, locked workspace/all-target Clippy correctness+suspicious, and actual un-overridden scripts/check_rust_test_build.sh gates must all exit 0 on exact repaired source; illustrative cargo --no-run is not the test-build gate",
+  "source_root": "/home/rb/worktrees/borsuk-cohere1024-native-cohort-preparer",
+  "source_bytes": 78840,
+  "source_lines": 2109,
+  "evidence_sha256": {
+    "docs/research/performance-architecture-20260930/single-dataset-focus.md": "62e993e3208e822e46de2abd3558dfac9c8216fd994e0dee2b18b7e44d13e580",
+    "docs/research/performance-architecture-20260930/cohere1024-source-metadata.json": "73a7be6266cbbfbcbe62d2eb0b09d79eb3bd40e6f0fb733ac7353304e356bae7"
+  },
+  "runtime_enforcement": "Linux cgroup v2; effective ancestor CPU quota<=4, memory.max<=8GiB, memory.swap.max=0 required for production. VmHWM checked before/after decode and each query; monotonic wall-clock checked during streams/scan. Private test geometry skips cgroup launch guard only.",
+  "config_example": {
+    "schema": "borsuk-cohere-native-cohort-config-v1",
+    "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+    "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+    "embedding_column": "emb",
+    "document_id_column": "_id",
+    "shards": [
+      {
+        "publisher_path": "en/0000.parquet",
+        "path": "/scratch/en/0000.parquet",
+        "bytes": 216612385,
+        "sha256": "PARENT_SUPPLIES_WHOLE_BODY_SHA256"
+      },
+      {
+        "publisher_path": "en/0001.parquet",
+        "path": "/scratch/en/0001.parquet",
+        "bytes": 216746705,
+        "sha256": "PARENT_SUPPLIES_WHOLE_BODY_SHA256"
+      }
+    ],
+    "output_parent": {
+      "path": "/scratch",
+      "device": "PARENT_STAT_DEVICE_INTEGER",
+      "inode": "PARENT_STAT_INODE_INTEGER"
+    },
+    "resources": {
+      "cpu_limit": 4,
+      "actual_memory_bytes": 8589934592,
+      "modeled_memory_bytes": 8589934592,
+      "swap_bytes": 0,
+      "scratch_bytes": 8589934592,
+      "timeout_seconds": 2400,
+      "max_footer_bytes": 65536,
+      "max_row_group_rows": 100000,
+      "max_row_group_compressed_bytes": 268435456,
+      "max_row_group_uncompressed_bytes": 1073741824,
+      "batch_rows": 128,
+      "max_batch_bytes": 1073741824,
+      "max_id_bytes": 1024
+    }
+  },
+  "config_example_status": "document-ID column frozen to _id by parent from first pinned footer; example remains non-executable until parent supplies paths/whole-body hashes/output-parent stat pins and prospectively freezes resource caps",
+  "identity_record_fields": [
+    "service_id",
+    "source_ordinal",
+    "corpus_ordinal",
+    "query_ordinal",
+    "publisher_id",
+    "shard",
+    "shard_row"
+  ],
+  "publisher_identity": "typed {kind:string|integer,value:UTF8-or-canonical-decimal-string}; null/missing/empty/duplicate/oversized selected IDs invalidate; ID type must agree across shards",
+  "receipt_schema": "borsuk-cohere-native-cohort-receipt-v1",
+  "receipt_fields": [
+    "schema",
+    "status",
+    "dataset",
+    "revision",
+    "columns",
+    "config",
+    "sources",
+    "outputs",
+    "output_parent",
+    "geometry",
+    "values",
+    "service_ids",
+    "metric",
+    "truth_arithmetic",
+    "truth_ties",
+    "truth_method",
+    "resources",
+    "runtime_limits",
+    "modeled_peak_bytes",
+    "observed_peak_rss_at_receipt_bytes",
+    "elapsed_seconds_at_receipt",
+    "readiness"
+  ],
+  "source_receipt_fields": [
+    "publisher_path",
+    "path",
+    "bytes",
+    "sha256",
+    "rows",
+    "footer_bytes",
+    "device",
+    "inode"
+  ],
+  "output_receipt_fields": [
+    "name",
+    "bytes",
+    "sha256"
+  ],
+  "marker_protocol": "O_EXCL outputs, readback exact EOF/SHA and file fsync; output directory and pinned parent fsync before marker; fsync/readback temporary receipt, RENAME_NOREPLACE to complete.json, output directory+parent fsync; remove marker on post-rename failure; preserve INVALID partial directory",
+  "commands_for_parent": [
+    "cargo test --locked -p borsuk --bin prepare_cohere_native_cohort",
+    "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  ],
+  "local_checks": {
+    "rustfmt_check_exit": 0,
+    "git_diff_check_exit": 0,
+    "worktree_clean": true,
+    "resource_enforcement": "CPUQuota=100%; MemoryMax=256MiB; MemorySwapMax=0 for source/rustfmt/diff/commit commands",
+    "builds_tests_clippy": "NOT RUN; prohibited locally",
+    "eight_test_names_unchanged": true,
+    "owned_tracked_files": [
+      "crates/borsuk/src/bin/prepare_cohere_native_cohort.rs"
+    ],
+    "source_commit_worktree_clean": true
+  },
+  "commit_parent": "7066206f49a7987317391584358a8d2e7526d745",
+  "required_parent_gates": {
+    "exact_source_commit": "0060af5a04188af3cddc598d6e5f125fb189477b",
+    "exact_source_sha256": "c1846e06542eeaf496c47d77f7620cc740b4f997988733e8f6d1ba0aa27a9a48",
+    "locked_affected_bin_tests": null,
+    "locked_release_both_bins": null,
+    "locked_workspace_all_target_clippy": null,
+    "actual_unoverridden_check_rust_test_build_script": null
+  },
+  "parent_first_shard_schema": {
+    "evidence": "/tmp/borsuk-cohere1024-first-shard-schema.json",
+    "document_id_column": "_id",
+    "document_id_type": "UTF8 BYTE_ARRAY",
+    "embedding_type": "Float32 ListArray, per-row dimension validation mandatory",
+    "rows": 100000,
+    "row_groups": 10,
+    "whole_body_authenticated": false,
+    "second_shard_schema_authenticated": true
+  },
+  "parent_second_shard_schema": {
+    "evidence": "/tmp/borsuk-cohere1024-second-shard-schema.json",
+    "document_id_column": "_id",
+    "document_id_type": "UTF8 BYTE_ARRAY",
+    "embedding_type": "Float32 ListArray, per-row dimension validation mandatory",
+    "rows": 100000,
+    "row_groups": 10,
+    "footer_bytes": 14522,
+    "footer_sha256": "cee28862a7f9bc5744eac39c503c11fe7f992a5c45a01d2b97a163326da92ad8",
+    "whole_body_authenticated": false,
+    "qualification": "parent-reported authenticated footer only; source bin independently revalidates both schemas after whole-body authentication"
+  },
+  "source_commits_in_order": [
+    {
+      "commit": "9d5b3dc0d1af31ccad32e82d0a83fd73967ee43e",
+      "parent": "e0a4295a57548d012db43711766770feb3f70137",
+      "source_sha256": "487707b0645531c8af5703e9a4522f29d8d9cff4cb323921b1f52d223d124f78",
+      "verification": "source-only UNVERIFIED original, preserved"
+    },
+    {
+      "commit": "7066206f49a7987317391584358a8d2e7526d745",
+      "parent": "9d5b3dc0d1af31ccad32e82d0a83fd73967ee43e",
+      "source_sha256": "42145a42f11d7bcbb225f3cff859239b38e3e74213134670c12f05212087b719",
+      "verification": "source-only UNVERIFIED P1 repair"
+    },
+    {
+      "commit": "0060af5a04188af3cddc598d6e5f125fb189477b",
+      "parent": "7066206f49a7987317391584358a8d2e7526d745",
+      "source_sha256": "c1846e06542eeaf496c47d77f7620cc740b4f997988733e8f6d1ba0aa27a9a48",
+      "verification": "source-only UNVERIFIED P1 selected-column page-header predecode admission repair; earlier commits preserved"
+    }
+  ],
+  "parent_review_findings": {
+    "engineering_review_id": "e3248968663947ba",
+    "requested_repairs": [
+      "P1 repeated dictionary string expansion before Arrow decode",
+      "P1 source A/hash/decode B/restore A accepted as COMPLETE",
+      "P1 authenticated contradictory compressed-page header bypasses footer memory admission before decoder allocation"
+    ],
+    "research_review": "0026f14e; parent verified page allocation finding against exact locked Parquet 58.4.0"
+  },
+  "source_stability": "Capture descriptor dev/ino/len/mtime(sec+nsec)/ctime(sec+nsec) BEFORE first whole hash; enforce after that hash and metadata admission, before/after each selected-column page scan, before/after reader construction, around each decoded batch, after each group, before/after final whole hash, and around marker publication. Shared authenticate also pins and compares descriptors within every source/output/receipt hash. Reading atime is excluded; restoring bytes/mtime cannot reset ctime.",
+  "repair_test_cases": {
+    "metadata_and_batch_memory_caps": "real dictionary-encoded four repeated 768KiB oversized strings; dictionary offset asserted; 2MiB batch cap; require metadata batch allocation admission error and output directory absent before Arrow/body decode; also small real SNAPPY DataV1 page, valid header scan asserted first, then public Thrift output creates uncompressed_page_size=i32::MAX and shortens encoded payload by header growth to retain exact original column spans/file length/footer; recompute whole-file SHA and require page uncompressed-size admission with output directory absent before Arrow/decompression",
+    "secure_hash_eof_link_fifo_inputs": "valid equal-length changed Parquet B injected after A authentication before decode and restored to A before final authentication or failure cleanup; require timestamp guard INVALID/no marker/full A restoration; separate actual write+restore bytes/mtime then matching whole SHA still fails retained ctime pin"
+  },
+  "parent_release_gate": "Parent owns the exact locked release command building BOTH preparer and native runner. Worker source commands do not replace that paired release gate.",
+  "page_header_preflight": {
+    "order": "whole-body SHA/EOF and lifetime descriptor pin -> footer/schema/group/batch memory admission -> bounded selected-column header scan -> Arrow reader construction/decode; lifetime dev/ino/len/mtime/ctime checked before/after every scan and across decode/final authentication/marker",
+    "bounds": {
+      "header_bytes": 65536,
+      "fields_total_per_header": 64,
+      "struct_depth_max_inclusive_root_zero": 4,
+      "pages_per_selected_column": 65536,
+      "field_ids": "1..15; duplicates rejected",
+      "integer_bits": "bounded 16/32/64-bit variable-length integers; checked zigzag signed sizes/counts; required i32 fields nonnegative"
+    },
+    "bounds_reason": "Current standard PageHeader/DataV1/Dictionary/DataV2/Statistics fields fit these fixed caps with depth <=2 and fewer than 64 fields; 64KiB admits bounded statistics while preventing metadata headers from constructing arbitrary binary allocations. Page-count cap bounds scan work within the fixed time envelope. No new configuration or dependency. Unsupported index/unknown page types and compact collections fail closed.",
+    "payload": "Never decompresses or allocates payloads; seek over exact checked encoded page spans and bounded statistics binary lengths; header bytes read into a single stack byte. Capture arrays/field bitsets and recursion depth are fixed. Error objects are bounded.",
+    "reused_public_apis": [
+      "ColumnChunkMetaData dictionary/data offsets, compressed/uncompressed sizes, num_values, compression and physical column type",
+      "ParquetMetaDataReader::decode_metadata and ArrowReaderMetadata::try_new remain existing bounded footer/schema path",
+      "std File Read+Seek and existing checked arithmetic/descriptor timestamp guards"
+    ],
+    "api_constraint": "Exact locked parquet-58.4.0 SerializedPageReader page-header routine and parquet_thrift input protocol/Header are private; public PageMetadata lacks allocation sizes. Existing public legacy TSerializable input needs a transitive thrift input protocol not directly exposed to this package. Therefore a narrow scalar/struct compact page-header scanner is in this bin, not a generic parser/framework or dependency change.",
+    "test_api": "Only the existing metadata_and_batch_memory_caps test uses deprecated locked public parquet::format PageHeader/DataPageHeader plus parquet::thrift::TCompactOutputProtocol/TSerializable output to encode a genuine malicious header; #[allow(deprecated)] is scoped to that test. Production uses no deprecated format API.",
+    "locked_writer_evidence": "parquet-58.4.0/src/file/writer.rs SerializedPageWriter::write_page charges PageWriteSpec uncompressed/compressed totals as payload size plus actual serialized header size; column/writer/mod.rs accumulates these specs into footer totals.",
+    "status": "UNVERIFIED source only; required native gates remain parent-owned"
+  }
+}
