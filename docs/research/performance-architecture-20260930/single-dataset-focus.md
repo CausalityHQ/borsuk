@@ -23,3 +23,9 @@ No algorithm win, dataset readiness, service access, matched baseline or measure
 Turbopuffer's dataset link resolves to [CohereLabs/wikipedia-2023-11-embed-multilingual-v3](https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3). The embedding column is `emb`; the viewer reports 1024 entries. A bounded read of the publisher's dataset API on 2026-10-06 resolved revision `ade45fb52bd549f5e8c065636fe4160a43c2af36`. Use immutable revision URLs for subsequent schema and shard validation. No parquet body was downloaded in this check.
 
 The public Turbopuffer methodology does not disclose selected document IDs or query bytes. Reproduce a matched comparison by uploading our frozen cohort to each service; label comparisons with their published chart as dataset-family targets, not exact reproductions. The dataset revision alone is not a corpus, query, or ground-truth seal.
+
+## Common region and service admission
+
+Use AWS Frankfurt (`eu-central-1`), with Turbopuffer region `aws-eu-central-1`, and place the benchmark client there. Both [Turbopuffer's region list](https://turbopuffer.com/docs/regions) and [S3 Vectors' region list](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors-regions-quotas.html) advertise this region (checked 2026-10-06). This differs from the published GCP experiment and must be disclosed.
+
+A read-only SDK check using AWS profile `causality` in this region returned HTTP 200 for `ListVectorBuckets(maxResults=1)` with no buckets in that page. This establishes that operation's access only; index creation, ingestion and querying remain unverified. No resources were created. Turbopuffer credentials are not yet provisioned. Continue native correctness work while that access is pending; do not substitute published charts for a matched service run.
