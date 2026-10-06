@@ -1,0 +1,8 @@
+{
+  "baseline_commit": "747b71bf101e10bdb6f4b24a07d8177b0f76dde6",
+  "candidate_commit": "9d540e527f3a6e7ce22009302fa1187498476d3c",
+  "scalar_baseline_function_exact_after_name_replacement": true,
+  "function_sha256": "af4e450b20e7332abaf9daae45306352a891b02319828f8397b930e3d7498075",
+  "native_execution": false,
+  "candidate_native_qualification": "UNVERIFIED"
+}
