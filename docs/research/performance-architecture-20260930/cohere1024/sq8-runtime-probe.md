@@ -12,3 +12,6 @@ Author affected library tests and one standalone Rust example comparing exact ca
 Then replay the SAME retained real cohort,queries,GT and generation with the old and candidate binaries,identical one-CPU limits. Require identical returnedIDs/scorebits and all1000 recall results before reporting end-to-end gain. Reuse authenticated retained objects; no Parquet preparation/retraining or new dataset. No10M paid benchmark until generic scale admission is implemented and qualified.
 
 Root owns remote execution,cost/freeze,verification,integration and push. No local Cargo/native/data/GT; child source-only checks CPU1/256MiB/noSwap.
+
+## Source inspection amendment
+The main borsuk crate forbids unsafe code; std::arch runtime intrinsics cannot live in the owned scorer without an extra unsafe boundary. Probe the simpler safe eight-row independent-accumulator implementation first. LLVM may vectorize it, but no AVX2 backend claim is made without generated-code/native evidence. Preserve the existing safety policy, generic dimensions and exact score bits; accept only measured benefit. autoexamples=false requires a minimal Cargo.toml example registration; this third owned file is authorized solely for that registration.
