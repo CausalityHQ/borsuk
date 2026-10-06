@@ -1641,6 +1641,12 @@ fn execute() -> Result<()> {
     execute_args(&std::env::args().collect::<Vec<_>>())
 }
 fn execute_args(args: &[String]) -> Result<()> {
+    if args.get(1).is_some_and(|action| action == "check-pq-residual-source") {
+        require(args.len() == 5, "usage: hierarchical_semantic_cells check-pq-residual-source CONFIG CONFIG_SHA256 NEW_OUTPUT")?;
+        return borsuk::fine_sq8_groups::pq_residual_source::check_pq_residual_source(
+            Path::new(&args[2]), &args[3], Path::new(&args[4]),
+        );
+    }
     if args
         .get(1)
         .is_some_and(|action| action == "check-fine-corrected-four-bit")
@@ -1800,6 +1806,32 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pq_residual_source_strict_cli_dispatch_no_geometry_or_truth_override() {
+        use borsuk::fine_sq8_groups::pq_residual_source as residual;
+        let tmp = tempfile::tempdir().unwrap();
+        let pin = probe_artifact(&tmp.path().join("config.json"),
+            br#"{"schema":"borsuk-pq-residual-source-config-v1","geometry":3,"truth":"forbidden"}"#);
+        let output = tmp.path().join("report.json");
+        let mut args = vec!["hierarchical_semantic_cells".into(), "check-pq-residual-source".into(),
+            pin.path.display().to_string(), pin.sha256, output.display().to_string()];
+        assert!(execute_args(&args[..4]).is_err());
+        assert!(!output.exists());
+        args.push("--fixture".into());
+        assert!(execute_args(&args).is_err());
+        assert!(!output.exists());
+        args.pop();
+        assert!(execute_args(&args).is_err());
+        let body = fs::read(&output).unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["schema"], residual::REPORT_SCHEMA);
+        assert_eq!(value["codec"], residual::CODEC);
+        assert_eq!(value["status"], "INVALID");
+        assert_eq!(value["truth_opened"], false);
+        assert!(execute_args(&args).is_err());
+        assert_eq!(fs::read(&output).unwrap(), body);
+    }
 
     #[test]
     fn fine_corrected_four_bit_strict_cli_dispatch() {

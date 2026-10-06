@@ -107,6 +107,22 @@ impl Pq64Codes {
     pub(crate) fn books(&self) -> &[f32] { &self.router.books }
     pub(crate) fn codes(&self) -> &[u8] { &self.router.codes }
     pub(crate) fn artifact_digest(&self) -> [u8; 32] { self.artifact_digest }
+
+    /// Reconstruct the existing physical row without cosine normalization.
+    /// Floor subspace boundaries differ from padded codeword storage widths.
+    pub fn reconstruct_raw(&self, row: usize, out: &mut [f32]) -> Result<(), Pq64Error> {
+        if row >= self.rows() || out.len() != self.dimensions() {
+            return Err(Pq64Error::InvalidRequest);
+        }
+        for subspace in 0..64 {
+            let first = subspace * self.dimensions() / 64;
+            let last = (subspace + 1) * self.dimensions() / 64;
+            let word = usize::from(self.router.codes[row * 64 + subspace]);
+            let start = (subspace * 256 + word) * self.router.width;
+            out[first..last].copy_from_slice(&self.router.books[start..start + last - first]);
+        }
+        Ok(())
+    }
 }
 
 /// Fixed source-only PQ64 fit. Ordinals are an authenticated bijection supplied

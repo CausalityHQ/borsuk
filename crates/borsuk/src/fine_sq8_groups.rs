@@ -27,6 +27,7 @@ use std::{
 pub const BUILD_SCHEMA: &str = "borsuk-fine-sq8-build-v1";
 pub use pack_diagnostic::sq4_diagnostic;
 pub use pack_diagnostic::sq4_diagnostic::histogram as histogram_sq4_diagnostic;
+pub use pack_diagnostic::sq4_diagnostic::pq_residual_source;
 pub const SCHEMA: &str = "borsuk-fine-sq8-v1";
 pub const GROUP_ROWS: usize = 16;
 pub const MAX_GETS: usize = 256;
@@ -4156,6 +4157,1792 @@ pub mod pack_diagnostic {
             }
         }
 
+        /// Truth-free, fixed-cohort source falsifier; no serving or ANN claim.
+        pub mod pq_residual_source {
+            use super::*;
+            pub use super::{Caps, SupervisorReceipt};
+            use crate::pq_residual_four_bit::{self as codec, Axis, Codebook};
+            pub const CONFIG_SCHEMA: &str = "borsuk-pq-residual-source-config-v1";
+            pub const REPORT_SCHEMA: &str = "borsuk-pq-residual-source-report-v1";
+            pub const ROOT_SCHEMA: &str = "borsuk-pq-residual-source-generation-v1";
+            pub const CODEC: &str = codec::CODEC;
+            const OUTPUT_LIMIT: usize = 64 * 1024 * 1024;
+            const HOST_LIMIT: usize = 1024 * 1024 * 1024;
+            const BOOK_LIMIT: usize = 65536;
+
+            #[derive(Clone, Debug, Serialize, Deserialize)]
+            #[serde(deny_unknown_fields)]
+            pub struct Panel {
+                pub dataset: String,
+                pub root: Artifact,
+            }
+            #[derive(Clone, Debug, Serialize, Deserialize)]
+            #[serde(deny_unknown_fields)]
+            pub struct Config {
+                pub schema: String,
+                pub source_identity_sha256: String,
+                pub panels: [Panel; 2],
+                pub original_seal: Artifact,
+                pub caps: Caps,
+                pub scratch_bytes: usize,
+            }
+            /// No public fixture mode or geometry override is reachable from CLI.
+            struct Geometry {
+                rows: usize,
+                dimensions: usize,
+                cohort: usize,
+                anchors: usize,
+                k: usize,
+                seal_sha: String,
+            }
+            impl Geometry {
+                fn frozen() -> Self {
+                    Self {
+                        rows: 100_000,
+                        dimensions: 768,
+                        cohort: 4096,
+                        anchors: 64,
+                        k: 100,
+                        seal_sha: SEAL_SHA.into(),
+                    }
+                }
+            }
+            pub fn source_identity() -> String {
+                let mut h = Sha256::new();
+                h.update(b"borsuk-pq-residual-source-closure-v1");
+                for (name, body) in [
+                    ("lib.rs", include_bytes!("lib.rs").as_slice()),
+                    (
+                        "pq_residual_four_bit.rs",
+                        include_bytes!("pq_residual_four_bit.rs").as_slice(),
+                    ),
+                    (
+                        "pq64_nominee.rs",
+                        include_bytes!("pq64_nominee.rs").as_slice(),
+                    ),
+                    (
+                        "fine_sq8_groups.rs",
+                        include_bytes!("fine_sq8_groups.rs").as_slice(),
+                    ),
+                    ("sq8_source.rs", include_bytes!("sq8_source.rs").as_slice()),
+                    (
+                        "exact_sq8_nominee.rs",
+                        include_bytes!("exact_sq8_nominee.rs").as_slice(),
+                    ),
+                    (
+                        "hierarchical_semantic_cells.rs",
+                        include_bytes!("hierarchical_semantic_cells.rs").as_slice(),
+                    ),
+                    (
+                        "bin/hierarchical_semantic_cells.rs",
+                        include_bytes!("bin/hierarchical_semantic_cells.rs").as_slice(),
+                    ),
+                ] {
+                    h.update((name.len() as u64).to_le_bytes());
+                    h.update(name);
+                    h.update((body.len() as u64).to_le_bytes());
+                    h.update(body);
+                }
+                format!("{:x}", h.finalize())
+            }
+            fn valid(c: &Config) -> Result<()> {
+                require(
+                    c.schema == CONFIG_SCHEMA
+                        && c.source_identity_sha256 == source_identity()
+                        && c.panels[0].dataset == "relaion"
+                        && c.panels[1].dataset == "cohere"
+                        && (FIXED..=HOST_LIMIT).contains(&c.caps.memory_bytes)
+                        && (RESERVE..=OUTPUT_LIMIT).contains(&c.caps.output_bytes)
+                        && (1..=600).contains(&c.caps.deadline_seconds)
+                        && (1..=20_000_000_000).contains(&c.caps.operations)
+                        && c.caps.cpu_threads == 1
+                        && c.caps.swap_bytes == 0
+                        && c.scratch_bytes <= HOST_LIMIT
+                        && (1..=4096).contains(&c.original_seal.bytes),
+                    "residual fixed source/resource contract",
+                )?;
+                for a in [&c.original_seal, &c.panels[0].root, &c.panels[1].root] {
+                    digest(&a.sha256)?;
+                    require((1..=ROOT_CAP).contains(&a.bytes), "residual metadata cap")?;
+                }
+                Ok(())
+            }
+            #[derive(Debug, Serialize)]
+            struct Admission {
+                cumulative_read_bytes: usize,
+                operations: u64,
+                coexisting_bytes: usize,
+                output_bytes: usize,
+                scratch_bytes: usize,
+            }
+            fn mul(a: usize, b: usize) -> Result<usize> {
+                a.checked_mul(b)
+                    .ok_or_else(|| "residual size overflow".into())
+            }
+            fn axis_work() -> u64 {
+                // Each interval: prefix differences/moments/tolerance; each DP
+                // transition: load/add/compare/update plus historical guard unit.
+                4096 + 8 * 256 * 257 / 2 + 6 * 16 * 256 * 257 / 2
+            }
+            fn admit(
+                c: &Config,
+                g: &Geometry,
+                m: &[Manifest],
+                config_bytes: usize,
+            ) -> Result<Admission> {
+                require(
+                    m.len() == 2
+                        && (2..=100_000).contains(&g.rows)
+                        && (1..=768).contains(&g.dimensions)
+                        && g.cohort > g.k
+                        && g.cohort <= g.rows
+                        && g.anchors >= 4
+                        && g.anchors <= 64
+                        && g.cohort % g.anchors == 0
+                        && g.k > 0
+                        && g.k <= 100,
+                    "residual fixed geometry",
+                )?;
+                let (n, d, s, a, k) = (g.rows, g.dimensions, g.cohort, g.anchors, g.k);
+                let metadata = sum(&[
+                    config_bytes,
+                    c.original_seal.bytes,
+                    c.panels[0].root.bytes,
+                    c.panels[1].root.bytes,
+                ])?;
+                let mut reads = metadata;
+                let mut pq_peak = 0;
+                for manifest in m {
+                    require(
+                        manifest.identity.rows == n && manifest.identity.dimensions == d,
+                        "residual source geometry",
+                    )?;
+                    reads = sum(&[
+                        reads,
+                        mul(3, manifest.records.bytes)?,
+                        manifest.pq.bytes,
+                        manifest.order.bytes,
+                        manifest.groups.bytes,
+                        16,
+                    ])?;
+                    // Encoded PQ, decoded books/codes/norms, reconstruction norm
+                    // table and the digesting temporary all coexist at open.
+                    pq_peak = pq_peak.max(sum(&[mul(3, manifest.pq.bytes)?, mul(n, 4)?, 65536])?);
+                }
+                let cohorts = mul(
+                    2,
+                    mul(s, sum(&[12 + d, 12 + d.div_ceil(2), mul(d, 4)?, 64])?)?,
+                )?;
+                // Full top100 IDs/physical ordinals/score bits, JSON parse and
+                // serialization coexistence, selections/roots, all group hashes.
+                let results = mul(mul(2 * a, 2 * k)?, 128)?;
+                let output_bytes = sum(&[
+                    mul(2, mul(s, 24 + d + d.div_ceil(2))?)?,
+                    results,
+                    mul(2, s.div_ceil(16) * 32)?,
+                    2 * BOOK_LIMIT,
+                    8 * ROOT_CAP,
+                    mul(2 * s, 128)?,
+                    mul(2 * a * d, 24)?,
+                    RESERVE,
+                ])?;
+                reads = sum(&[reads, mul(2, output_bytes)?])?; // reopens, closure and reduction
+                let coexisting_bytes = memory(
+                    &c.caps,
+                    &[
+                        FIXED,
+                        cohorts,
+                        pq_peak,
+                        mul(n, 32)?,
+                        mul(2, n.div_ceil(16) * 32)?,
+                        histogram::training_bytes(d)?,
+                        mul(d, 128)?,
+                        mul(results, 8)?,
+                        mul(s, 512)?,
+                        mul(16, 24 + d + d.div_ceil(2))?,
+                    ],
+                )?;
+                // Counted units include body bytes hashed/read, scalar numeric
+                // operations/comparisons, all DP transitions and sort comparisons.
+                let operations = (reads as u64)
+                    .checked_mul(2)
+                    .and_then(|x| x.checked_add(2 * n as u64 * (34 * d as u64 + 256)))
+                    .and_then(|x| x.checked_add(2 * s as u64 * (32 * d as u64 + 64)))
+                    .and_then(|x| x.checked_add(2 * d as u64 * axis_work()))
+                    .and_then(|x| {
+                        x.checked_add(
+                            2 * a as u64 * (s as u64 * (14 * d as u64 + 128) + 32 * d as u64),
+                        )
+                    })
+                    .and_then(|x| x.checked_add(64 * 1024 * 1024 + 16 * output_bytes as u64))
+                    .ok_or("residual operation overflow")?;
+                require(
+                    operations <= c.caps.operations && output_bytes <= c.caps.output_bytes,
+                    "INPUT_UNAVAILABLE: residual cumulative work/output admission",
+                )?;
+                Ok(Admission {
+                    cumulative_read_bytes: reads,
+                    operations,
+                    coexisting_bytes,
+                    output_bytes,
+                    scratch_bytes: 0,
+                })
+            }
+            #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+            #[serde(deny_unknown_fields)]
+            struct Selection {
+                logical: usize,
+                physical: usize,
+                id: i64,
+            }
+            fn select(ids: &[usize], g: &Geometry) -> Result<Vec<Selection>> {
+                require(
+                    ids.len() == g.rows && g.cohort <= ids.len(),
+                    "residual selection geometry",
+                )?;
+                let mut physical = filled(g.rows, usize::MAX)?;
+                for (row, &id) in ids.iter().enumerate() {
+                    require(
+                        id < g.rows && physical[id] == usize::MAX,
+                        "residual order bijection",
+                    )?;
+                    physical[id] = row;
+                }
+                Ok((0..g.cohort)
+                    .map(|j| {
+                        let logical = j * g.rows / g.cohort;
+                        Selection {
+                            logical,
+                            physical: physical[logical],
+                            id: logical as i64,
+                        }
+                    })
+                    .collect())
+            }
+            struct Input {
+                manifest: Manifest,
+                ids: Vec<usize>,
+                selection: Vec<Selection>,
+            }
+            struct Generation {
+                input: Input,
+                book: Codebook,
+                native: Vec<u8>,
+                packed: Vec<u8>,
+                predictors: Vec<f32>,
+                root: Artifact,
+                artifacts: Vec<Artifact>,
+            }
+
+            fn train(
+                h: &[[u32; 256]],
+                axes: &[Axis],
+                n: usize,
+                binding: [u8; 32],
+                guard: &mut Guard,
+            ) -> Result<Codebook> {
+                require(h.len() == axes.len(), "residual histogram axes")?;
+                let mut costs = filled(256 * 256, 0_f64)?;
+                let mut previous = filled(257, 0_f64)?;
+                let mut next = filled(257, 0_f64)?;
+                let mut back = filled(17 * 257, 0_u16)?;
+                let mut centers = reserved(h.len())?;
+                let mut counts = reserved(h.len())?;
+                for (axis, hist) in axes.iter().zip(h) {
+                    // Historical DP already ticks one per transition; precharge
+                    // the remaining scalar work without changing that algorithm.
+                    guard.tick(axis_work() - (256 + 256 * 257 / 2 + 16 * 256 * 257 / 2))?;
+                    let (bins, count) = histogram::fit_axis(
+                        hist,
+                        n,
+                        16,
+                        &mut costs,
+                        &mut previous,
+                        &mut next,
+                        &mut back,
+                        guard,
+                    )?;
+                    let mut lifted = [0.; 16];
+                    for (dst, bin) in lifted.iter_mut().zip(bins) {
+                        *dst = axis.center(bin)?;
+                    }
+                    centers.push(lifted);
+                    counts.push(count as u8);
+                }
+                Ok(Codebook::new(binding, centers, counts)?)
+            }
+            fn root_check(body: &[u8], expected: &Value) -> Result<()> {
+                let found: Value = serde_json::from_slice(body)?;
+                require(
+                    found == *expected && found["schema"] == ROOT_SCHEMA && found["codec"] == CODEC,
+                    "residual exact root identity",
+                )
+            }
+            fn build(
+                input: Input,
+                c: &Config,
+                sha: &str,
+                index: usize,
+                g: &Geometry,
+                out: &mut Outputs,
+                guard: &mut Guard,
+            ) -> Result<Generation> {
+                let m = &input.manifest;
+                let (n, d, s) = (g.rows, g.dimensions, g.cohort);
+                let old = 12 + d;
+                let width = 12 + d.div_ceil(2);
+                let pq_body = read_pinned(&m.pq, m.pq.bytes, false, guard)?;
+                let pq = decode_pq(&pq_body, n, d)?;
+                require(
+                    pq.artifact_digest() == digest(&m.pq.sha256)?,
+                    "residual PQ physical body identity",
+                )?;
+                drop(pq_body);
+                let groups = read_pinned(&m.groups, m.groups.bytes, false, guard)?;
+                let file = descriptor(&m.records, false)?;
+                let mut buffer = filled(16 * old, 0u8)?;
+                let mut predictor = filled(d, 0_f32)?;
+                let mut residual = filled(d, 0_f32)?;
+                let mut low = filled(d, f32::INFINITY)?;
+                let mut high = filled(d, f32::NEG_INFINITY)?;
+                let mut hist = filled(d, [0u32; 256])?;
+                let mut axes: Vec<Axis> = Vec::new();
+                let mut book: Option<Codebook> = None;
+                let mut binding = [0; 32];
+                let mut book_pin = None;
+                let mut native = filled(s * old, 0u8)?;
+                let mut packed = filled(s * width, 0u8)?;
+                let mut predictors = filled(s * d, 0_f32)?;
+                let mut slots = filled(n, usize::MAX)?;
+                for (slot, row) in input.selection.iter().enumerate() {
+                    slots[row.physical] = slot;
+                }
+                let mut hist_sha = String::new();
+                let mut extrema_sha = String::new();
+                for pass in 0..3 {
+                    let mut source_hash = Sha256::new();
+                    for first in (0..n).step_by(16) {
+                        let count = (n - first).min(16);
+                        let source = &mut buffer[..count * old];
+                        guard.tick(
+                            (2 * source.len() + count * (d * [12, 22, 0][pass] + 64)) as u64,
+                        )?;
+                        file.read_exact_at(source, (first * old) as u64)?;
+                        #[cfg(test)]
+                        super::super::READS
+                            .with(|r| r.borrow_mut().push((m.records.path.clone(), source.len())));
+                        require(
+                            Sha256::digest(&*source).as_slice()
+                                == &groups[first / 16 * 32..(first / 16 + 1) * 32],
+                            "residual source group authentication",
+                        )?;
+                        source_hash.update(&*source);
+                        for (slot, row) in source.chunks_exact(old).enumerate() {
+                            let physical = first + slot;
+                            require(
+                                i64::from_le_bytes(row[..8].try_into()?)
+                                    == input.ids[physical] as i64,
+                                "residual source/PQ/order binding",
+                            )?;
+                            let selected = slots[physical];
+                            if pass == 2 && selected == usize::MAX {
+                                continue;
+                            }
+                            if pass == 2 {
+                                guard.tick((32 * d + 64) as u64)?;
+                            }
+                            pq.reconstruct_raw(physical, &mut predictor)
+                                .map_err(|e| format!("residual raw PQ: {e:?}"))?;
+                            if pass < 2 {
+                                codec::residuals(row, &predictor, &m.low, &m.step, &mut residual)?;
+                                for j in 0..d {
+                                    if pass == 0 {
+                                        if residual[j].total_cmp(&low[j]).is_lt() {
+                                            low[j] = residual[j];
+                                        }
+                                        if residual[j].total_cmp(&high[j]).is_gt() {
+                                            high[j] = residual[j];
+                                        }
+                                    } else {
+                                        let bin = usize::from(axes[j].bin(residual[j])?);
+                                        hist[j][bin] = hist[j][bin]
+                                            .checked_add(1)
+                                            .ok_or("residual histogram overflow")?;
+                                    }
+                                }
+                            } else {
+                                let target = &mut packed[selected * width..(selected + 1) * width];
+                                book.as_ref()
+                                    .ok_or("residual fitted book")?
+                                    .encode(row, &predictor, &m.low, &m.step, target)?;
+                                native[selected * old..(selected + 1) * old].copy_from_slice(row);
+                                predictors[selected * d..(selected + 1) * d]
+                                    .copy_from_slice(&predictor);
+                            }
+                        }
+                    }
+                    require(
+                        format!("{:x}", source_hash.finalize()) == m.records.sha256,
+                        "residual complete source pass digest",
+                    )?;
+                    #[cfg(test)]
+                    MUTATE_PASS.with(|fault| -> Result<()> {
+                        if fault.get().is_some_and(|(p, _)| p == pass) {
+                            let (_, grow) = fault.take().ok_or("residual mutation fault")?;
+                            let f = OpenOptions::new().write(true).open(&m.records.path)?;
+                            if grow {
+                                f.set_len(m.records.bytes as u64 + 1)?;
+                            } else {
+                                f.write_all_at(&[255], 0)?;
+                            }
+                        }
+                        Ok(())
+                    })?;
+                    exact_eof(&file, m.records.bytes)?;
+                    if pass == 0 {
+                        axes = low
+                            .iter()
+                            .zip(&high)
+                            .map(|(&a, &b)| Axis::new(a, b))
+                            .collect::<std::result::Result<Vec<_>, _>>()?;
+                        extrema_sha = hash(
+                            &low.iter()
+                                .chain(&high)
+                                .flat_map(|v| v.to_le_bytes())
+                                .collect::<Vec<_>>(),
+                        );
+                    } else if pass == 1 {
+                        let mut h = Sha256::new();
+                        for axis in &hist {
+                            for count in axis {
+                                h.update(count.to_le_bytes());
+                            }
+                        }
+                        hist_sha = format!("{:x}", h.finalize());
+                        binding = digest(&hash(&serde_json::to_vec(
+                            &json!({"codec":CODEC,"trainer":codec::TRAINER,
+                            "source":source_identity(),"config":sha,"root":c.panels[index].root,"pq":m.pq,"order":m.order,
+                            "records":m.records,"groups":m.groups,"low_bits":m.low.iter().map(|v|v.to_bits()).collect::<Vec<_>>(),
+                            "step_bits":m.step.iter().map(|v|v.to_bits()).collect::<Vec<_>>(),"histogram":hist_sha,"extrema":extrema_sha,
+                            "query":"sq8_source::cosine_vector","norm":"unchanged-source-f32","score":"ordered-f32-norm-minus-two-dot-no-query-constant"}),
+                        )?))?;
+                        let fitted = train(&hist, &axes, n, binding, guard)?;
+                        let pin = out.publish(
+                            &format!("pq-residual-{index}-book.bin"),
+                            &fitted.to_bytes(),
+                        )?;
+                        drop(fitted);
+                        book = Some(Codebook::from_bytes(
+                            &read_pinned(&pin, BOOK_LIMIT, false, guard)?,
+                            binding,
+                            digest(&pin.sha256)?,
+                            BOOK_LIMIT,
+                        )?);
+                        book_pin = Some(pin);
+                    }
+                }
+                drop(pq);
+                drop(file);
+                let hashes = packed
+                    .chunks(16 * width)
+                    .flat_map(|group| <[u8; 32]>::from(Sha256::digest(group)))
+                    .collect::<Vec<_>>();
+                let group_pin = out.publish(&format!("pq-residual-{index}-groups.bin"), &hashes)?;
+                let native_pin = out.publish(&format!("pq-residual-{index}-sq8.bin"), &native)?;
+                let packed_pin =
+                    out.publish(&format!("pq-residual-{index}-cohort.bin"), &packed)?;
+                let root = json!({"schema":ROOT_SCHEMA,"codec":CODEC,"trainer":codec::TRAINER,"config_sha256":sha,
+                    "source_identity_sha256":source_identity(),"source_root":c.panels[index].root,"source_pq":m.pq,"source_order":m.order,
+                    "source_records":m.records,"source_groups":m.groups,"book":book_pin,"binding":binding,
+                    "rows":n,"dimensions":d,"histogram_sha256":hist_sha,"extrema_sha256":extrema_sha,
+                    "source_passes_authenticated":3,"encoded_rows":s,
+                    "cohort_residual_groups":group_pin,"cohort_native":native_pin,"cohort_residual":packed_pin,
+                    "selection":input.selection,"query_preparation":"sq8_source::cosine_vector",
+                    "native_score":"unchanged exact_sq8_nominee::score_nominees including query constant",
+                    "candidate_score":"original_norm - 2 * ordered_f32_dot(q,p+rhat)","requests_opened":false,"truth_opened":false});
+                let root_pin = out.publish(
+                    &format!("pq-residual-{index}-root.json"),
+                    &serde_json::to_vec(&root)?,
+                )?;
+                root_check(&read_pinned(&root_pin, ROOT_CAP * 8, false, guard)?, &root)?;
+                drop(native);
+                drop(packed);
+                let native = read_pinned(&native_pin, s * old, false, guard)?;
+                let packed = read_pinned(&packed_pin, s * width, false, guard)?;
+                let artifacts = vec![
+                    book_pin.ok_or("residual book pin")?,
+                    group_pin,
+                    native_pin,
+                    packed_pin,
+                    root_pin.clone(),
+                ];
+                Ok(Generation {
+                    input,
+                    book: book.ok_or("residual book missing")?,
+                    native,
+                    packed,
+                    predictors,
+                    root: root_pin,
+                    artifacts,
+                })
+            }
+
+            #[derive(Serialize, Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Ranked {
+                id: i64,
+                physical: usize,
+                score_bits: u32,
+            }
+            #[derive(Serialize, Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct AnchorResult {
+                dataset: String,
+                anchor_cohort_index: usize,
+                anchor_logical: usize,
+                query_sha256: String,
+                native: Vec<Ranked>,
+                candidate: Vec<Ranked>,
+            }
+            fn anchor_query(generation: &Generation, anchor: usize, d: usize) -> Vec<f32> {
+                let row = &generation.native[anchor * (12 + d)..(anchor + 1) * (12 + d)];
+                let m = &generation.input.manifest;
+                (0..d)
+                    .map(|j| {
+                        let product = f32::from(row[12 + j]) * m.step[j];
+                        m.low[j] + product
+                    })
+                    .collect()
+            }
+            fn scores(
+                generation: &Generation,
+                panel: &Panel,
+                g: &Geometry,
+                guard: &mut Guard,
+            ) -> Result<Vec<AnchorResult>> {
+                let (d, s, k) = (g.dimensions, g.cohort, g.k);
+                let width = 12 + d.div_ceil(2);
+                let mut results = reserved(g.anchors)?;
+                for a in 0..g.anchors {
+                    let anchor = a * (s / g.anchors);
+                    let selected = &generation.input.selection;
+                    let m = &generation.input.manifest;
+                    let query = anchor_query(generation, anchor, d);
+                    guard.tick((s * (14 * d + 128) + 32 * d) as u64)?;
+                    let normalized = cosine_vector(&query)?;
+                    let prepared = generation.book.prepare_query(&query)?;
+                    let ordinals = (0..s).filter(|&j| j != anchor).collect::<Vec<_>>();
+                    let mut native = score_nominees(
+                        &generation.native,
+                        Sq8Geometry {
+                            rows: s,
+                            dimensions: d,
+                        },
+                        &ordinals,
+                        &normalized,
+                        &m.low,
+                        &m.step,
+                    )
+                    .map_err(|e| format!("residual native control: {e:?}"))?;
+                    let mut candidate = reserved(s - 1)?;
+                    for &j in &ordinals {
+                        let row = &generation.packed[j * width..(j + 1) * width];
+                        require(
+                            i64::from_le_bytes(row[..8].try_into()?) == selected[j].logical as i64,
+                            "residual cohort identity",
+                        )?;
+                        let score = prepared.score(
+                            &generation.book,
+                            &generation.predictors[j * d..(j + 1) * d],
+                            row,
+                        )?;
+                        candidate.push(ScoredNominee {
+                            id: selected[j].logical as i64,
+                            ordinal: j,
+                            score,
+                        });
+                    }
+                    let compare = |a: &ScoredNominee, b: &ScoredNominee| {
+                        a.score.total_cmp(&b.score).then(a.id.cmp(&b.id))
+                    };
+                    native.sort_unstable_by(compare);
+                    candidate.sort_unstable_by(compare);
+                    let ranked = |rows: Vec<ScoredNominee>| {
+                        rows.into_iter()
+                            .take(k)
+                            .map(|r| Ranked {
+                                id: r.id,
+                                physical: selected[r.ordinal].physical,
+                                score_bits: r.score.to_bits(),
+                            })
+                            .collect()
+                    };
+                    results.push(AnchorResult {
+                        dataset: panel.dataset.clone(),
+                        anchor_cohort_index: anchor,
+                        anchor_logical: selected[anchor].logical,
+                        query_sha256: query_digest(&normalized),
+                        native: ranked(native),
+                        candidate: ranked(candidate),
+                    });
+                }
+                Ok(results)
+            }
+            fn reduce(
+                results: &[AnchorResult],
+                g: &Geometry,
+                selections: &[Vec<Selection>],
+            ) -> Result<Value> {
+                require(
+                    results.len() == 2 * g.anchors && selections.len() == 2,
+                    "residual complete result roster",
+                )?;
+                let mut panels = Vec::new();
+                for (panel, rows) in results.chunks_exact(g.anchors).enumerate() {
+                    let mut overlaps = Vec::new();
+                    for (a, row) in rows.iter().enumerate() {
+                        require(
+                            row.dataset == ["relaion", "cohere"][panel]
+                                && row.anchor_cohort_index == a * g.cohort / g.anchors
+                                && row.anchor_logical
+                                    == row.anchor_cohort_index * g.rows / g.cohort,
+                            "residual anchor result order",
+                        )?;
+                        for ranked in [&row.native, &row.candidate] {
+                            let ids = ranked.iter().map(|r| r.id).collect::<BTreeSet<_>>();
+                            require(
+                                ranked.len() == g.k
+                                    && ids.len() == g.k
+                                    && !ids.contains(&(row.anchor_logical as i64))
+                                    && ranked.iter().all(|r| {
+                                        r.physical < g.rows
+                                            && r.id >= 0
+                                            && (r.id as usize) < g.rows
+                                            && f32::from_bits(r.score_bits).is_finite()
+                                            && selections[panel]
+                                                .binary_search_by_key(&(r.id as usize), |s| {
+                                                    s.logical
+                                                })
+                                                .is_ok_and(|j| {
+                                                    selections[panel][j].physical == r.physical
+                                                })
+                                    })
+                                    && ranked.windows(2).all(|w| {
+                                        f32::from_bits(w[0].score_bits)
+                                            .total_cmp(&f32::from_bits(w[1].score_bits))
+                                            .then(w[0].id.cmp(&w[1].id))
+                                            .is_lt()
+                                    }),
+                                "residual full ranking identity/self exclusion",
+                            )?;
+                        }
+                        let native = row.native.iter().map(|r| r.id).collect::<BTreeSet<_>>();
+                        overlaps.push(
+                            row.candidate
+                                .iter()
+                                .filter(|r| native.contains(&r.id))
+                                .count(),
+                        );
+                    }
+                    let sum: usize = overlaps.iter().sum();
+                    let mut sorted = overlaps.clone();
+                    sorted.sort_unstable();
+                    let p05 = sorted[g.anchors * 5 / 100];
+                    // Tiny fixtures exercise exactly the same proportions. CLI
+                    // constants give 6336/6400 and fourth-smallest >=98.
+                    let passed = sum * 100 >= g.anchors * g.k * 99 && p05 * 100 >= g.k * 98;
+                    panels.push(json!({"dataset":(["relaion","cohere"][panel]),"overlaps":overlaps,"sum":sum,"p05":p05,"passed":passed}));
+                }
+                Ok(json!(panels))
+            }
+            fn terminal(sha: &str, status: &str, complete: bool, details: Value) -> Value {
+                json!({"schema":REPORT_SCHEMA,"codec":CODEC,"source_identity_sha256":source_identity(),"config_sha256":sha,
+                    "status":status,"complete":complete,"standalone_authority":false,"requires_matching_supervisor_exit_receipt":true,
+                    "quality_or_performance_claim":false,"requests_opened":false,"truth_opened":false,"details":details})
+            }
+            #[cfg(test)]
+            thread_local! {
+                static FAIL_AFTER_SEAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+                static FAIL_SYNC: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+                static FAIL_WRITE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+                static MUTATE_PASS: std::cell::Cell<Option<(usize,bool)>> = const { std::cell::Cell::new(None) };
+                static CORRUPT_SEAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+                static CORRUPT_GENERATION: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+                static LATE_DEADLINE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+            }
+            pub fn check_pq_residual_source(path: &Path, sha: &str, output: &Path) -> Result<()> {
+                execute(path, sha, output, &Geometry::frozen(), true)
+            }
+            fn execute(
+                path: &Path,
+                sha: &str,
+                output: &Path,
+                geometry: &Geometry,
+                strict: bool,
+            ) -> Result<()> {
+                let started = Instant::now();
+                let mut out = Outputs::create(output)?;
+                #[cfg(test)]
+                FAIL_SYNC.with(|f| out.fail_sync = f.take());
+                #[cfg(test)]
+                FAIL_WRITE.with(|f| out.fail_write = f.take());
+                let mut stage = "config";
+                let mut freeze = None;
+                let mut guard = Guard::new(&Caps {
+                    memory_bytes: HOST_LIMIT,
+                    output_bytes: OUTPUT_LIMIT,
+                    deadline_seconds: 600,
+                    operations: 20_000_000_000,
+                    cpu_threads: 1,
+                    swap_bytes: 0,
+                });
+                guard.start = started;
+                let result = (|| -> Result<()> {
+                    digest(sha)?;
+                    let file = secure_open(path, rustix::fs::OFlags::RDONLY)?;
+                    let bytes = usize::try_from(file.metadata()?.len())?;
+                    require(
+                        file.metadata()?.is_file() && (1..=ROOT_CAP).contains(&bytes),
+                        "residual config bounded regular file",
+                    )?;
+                    let mut body = filled(bytes, 0u8)?;
+                    file.read_exact_at(&mut body, 0)?;
+                    exact_eof(&file, bytes)?;
+                    require(hash(&body) == sha, "residual config SHA256")?;
+                    let c: Config = serde_json::from_slice(&body)?;
+                    valid(&c)?;
+                    if strict {
+                        require(
+                            crate::configured_cpu_threads() == 1,
+                            "residual requires CPU1",
+                        )?;
+                    }
+                    out.cap = c.caps.output_bytes;
+                    // Bound path escaping/terminal metadata before source bodies.
+                    require(
+                        serde_json::to_vec(&json!({"output":output,"sha":sha}))?.len() + 4096
+                            <= RESERVE,
+                        "residual terminal path reserve",
+                    )?;
+                    guard.deadline = Duration::from_secs(c.caps.deadline_seconds);
+                    guard.limit = c.caps.operations;
+                    guard.tick((2 * bytes) as u64)?;
+                    stage = "source metadata";
+                    require(
+                        c.original_seal.sha256 == geometry.seal_sha,
+                        "residual retained seal authority",
+                    )?;
+                    let seal: OriginalSeal = serde_json::from_slice(&read_pinned(
+                        &c.original_seal,
+                        4096,
+                        false,
+                        &mut guard,
+                    )?)?;
+                    require(
+                        seal.schema == "borsuk-fine-sq8-seal-v1"
+                            && !seal.truth_opened
+                            && seal.plans_per_panel == 64
+                            && seal.prefix_bytes == PREFIX_BYTES
+                            && seal.prefix_sha256 == PREFIX_SHA,
+                        "residual retained source seal",
+                    )?;
+                    let mut manifests = reserved(2)?;
+                    for (panel, old) in c.panels.iter().zip(&seal.panels) {
+                        require(
+                            panel.dataset == old.dataset && same_artifact(&panel.root, &old.root),
+                            "residual retained root identity",
+                        )?;
+                        let m: Manifest = serde_json::from_slice(&read_pinned(
+                            &panel.root,
+                            ROOT_CAP,
+                            false,
+                            &mut guard,
+                        )?)?;
+                        validate_manifest(&m, &panel.root)?;
+                        manifests.push(m);
+                    }
+                    stage = "aggregate admission";
+                    let admission = admit(&c, geometry, &manifests, bytes)?;
+                    guard.tick(64 * 1024 * 1024 + 16 * admission.output_bytes as u64)?;
+                    guard.tick(0)?;
+                    let mut inputs = reserved(2)?;
+                    for m in manifests {
+                        let body = read_pinned(&m.order, m.order.bytes, false, &mut guard)?;
+                        let ids = body
+                            .chunks_exact(8)
+                            .map(|b| usize::try_from(u64::from_le_bytes(b.try_into().unwrap())))
+                            .collect::<std::result::Result<Vec<_>, _>>()?;
+                        let selection = select(&ids, geometry)?;
+                        inputs.push(Input {
+                            manifest: m,
+                            ids,
+                            selection,
+                        });
+                    }
+                    stage = "selection seal";
+                    let selection=out.publish("pq-residual-selections.json",&serde_json::to_vec(&json!({
+                        "schema":"borsuk-pq-residual-selections-v1","source_identity_sha256":source_identity(),"config_sha256":sha,
+                        "rule":"floor(j*N/cohort); anchor cohort index a*(cohort/anchors)","self_excluded":true,
+                        "panels":inputs.iter().enumerate().map(|(i,p)|json!({"dataset":c.panels[i].dataset,"root":c.panels[i].root,
+                            "cohort":p.selection,"anchors":(0..geometry.anchors).map(|a|a*geometry.cohort/geometry.anchors).collect::<Vec<_>>() })).collect::<Vec<_>>() }))?)?;
+                    stage = "three source passes";
+                    let mut generations = reserved(2)?;
+                    for (i, input) in inputs.into_iter().enumerate() {
+                        generations.push(build(input, &c, sha, i, geometry, &mut out, &mut guard)?);
+                    }
+                    stage = "anchor query seal";
+                    let mut anchors = reserved(2 * geometry.anchors)?;
+                    for (i, generation) in generations.iter().enumerate() {
+                        for a in 0..geometry.anchors {
+                            let slot = a * geometry.cohort / geometry.anchors;
+                            let raw = anchor_query(generation, slot, geometry.dimensions);
+                            let prepared = cosine_vector(&raw)?;
+                            anchors.push(json!({"dataset":c.panels[i].dataset,"cohort_index":slot,
+                                "row":generation.input.selection[slot],"raw_bits":raw.iter().map(|x|x.to_bits()).collect::<Vec<_>>(),
+                                "prepared_bits":prepared.iter().map(|x|x.to_bits()).collect::<Vec<_>>(),"prepared_sha256":query_digest(&prepared)}));
+                        }
+                    }
+                    let anchor_pin =
+                        out.publish("pq-residual-anchors.json", &serde_json::to_vec(&anchors)?)?;
+                    drop(anchors);
+                    stage = "native scoring";
+                    let mut results = reserved(2 * geometry.anchors)?;
+                    for (i, generation) in generations.iter().enumerate() {
+                        results.extend(scores(generation, &c.panels[i], geometry, &mut guard)?);
+                    }
+                    let roots = generations
+                        .iter()
+                        .map(|g| g.root.clone())
+                        .collect::<Vec<_>>();
+                    let selections = generations
+                        .iter()
+                        .map(|g| g.input.selection.clone())
+                        .collect::<Vec<_>>();
+                    let artifacts = generations
+                        .iter()
+                        .flat_map(|g| g.artifacts.clone())
+                        .collect::<Vec<_>>();
+                    drop(generations);
+                    stage = "result seal";
+                    let result_pin =
+                        out.publish("pq-residual-results.json", &serde_json::to_vec(&results)?)?;
+                    drop(results);
+                    #[cfg(test)]
+                    CORRUPT_GENERATION.with(|f| -> Result<()> {
+                        if let Some(index) = f.take() {
+                            let pin = &artifacts[index];
+                            let mut byte = [0];
+                            File::open(&pin.path)?.read_exact_at(&mut byte, 0)?;
+                            byte[0] ^= 1;
+                            OpenOptions::new()
+                                .write(true)
+                                .open(&pin.path)?
+                                .write_all_at(&byte, 0)?;
+                        }
+                        Ok(())
+                    })?;
+                    // Authenticate all durable generation bodies and the exact
+                    // selections again before claiming complete output closure.
+                    for pin in artifacts.iter().chain([&selection, &anchor_pin]) {
+                        authenticate(pin, &mut guard)?;
+                    }
+                    freeze=Some(out.publish("pq-residual-freeze.json",&serde_json::to_vec(&json!({
+                        "schema":"borsuk-pq-residual-freeze-v1","config_sha256":sha,"source_identity_sha256":source_identity(),
+                        "selection":selection,"anchors":anchor_pin,"generations":roots,"artifacts":artifacts,"results":result_pin,"requests_opened":false,"truth_opened":false,
+                        "all_results_sealed_before_reduction":true}))?)?);
+                    #[cfg(test)]
+                    FAIL_AFTER_SEAL
+                        .with(|f| require(!f.replace(false), "residual injected late failure"))?;
+                    #[cfg(test)]
+                    CORRUPT_SEAL.with(|f| -> Result<()> {
+                        if f.replace(false) {
+                            OpenOptions::new()
+                                .write(true)
+                                .open(&result_pin.path)?
+                                .write_all_at(b"!", 0)?;
+                        }
+                        Ok(())
+                    })?;
+                    #[cfg(test)]
+                    LATE_DEADLINE.with(|f| {
+                        if f.replace(false) {
+                            guard.deadline = Duration::ZERO;
+                        }
+                    });
+                    stage = "sealed reduction";
+                    authenticate(freeze.as_ref().ok_or("residual freeze pin")?, &mut guard)?;
+                    let results: Vec<AnchorResult> = serde_json::from_slice(&read_pinned(
+                        &result_pin,
+                        admission.output_bytes,
+                        false,
+                        &mut guard,
+                    )?)?;
+                    let panels = reduce(&results, geometry, &selections)?;
+                    let passed = panels
+                        .as_array()
+                        .ok_or("residual panels")?
+                        .iter()
+                        .all(|p| p["passed"] == true);
+                    let operations = guard.operations;
+                    require(
+                        operations <= admission.operations,
+                        "residual actual work exceeds preadmission",
+                    )?;
+                    guard.tick(0)?;
+                    stage = "terminal";
+                    let report = terminal(
+                        sha,
+                        if passed {
+                            "SURVIVED_SOURCE_NEIGHBORHOODS"
+                        } else {
+                            "REJECT"
+                        },
+                        true,
+                        json!({"rows":geometry.rows,"dimensions":geometry.dimensions,"cohort":geometry.cohort,"anchors":geometry.anchors,"k":geometry.k,
+                            "strict_retained_authority":strict,"panels":panels,"freeze":freeze,"admission":admission,"operations":operations,
+                            "native_query_constant":true,"candidate_query_constant":false,"scratch_bytes":0}),
+                    );
+                    require(
+                        serde_json::to_vec(&report)?.len() <= RESERVE,
+                        "residual terminal reserve",
+                    )?;
+                    out.finish(&report)?;
+                    guard.tick(0)
+                })();
+                if let Err(error) = &result {
+                    let invalid = terminal(
+                        sha,
+                        "INVALID",
+                        false,
+                        json!({"stage":stage,"error":error.to_string().chars().take(512).collect::<String>(),
+                        "freeze":freeze,"operations":guard.operations,"published_bytes":out.published_bytes,"known_written_bytes":out.bytes,
+                        "written_bytes":if out.written_unknown {None} else {Some(out.bytes)},"unsealed_output":out.unsealed}),
+                    );
+                    if let Ok(body) = serde_json::to_vec(&invalid) {
+                        let _ = out.report.set_len(0);
+                        let _ = out.report.seek(SeekFrom::Start(0));
+                        let _ = out.report.write_all(&body);
+                        let _ = out.report.sync_all();
+                        let _ = out.parent.sync_all();
+                    }
+                }
+                result
+            }
+            /// Caller must authenticate the ORIGINAL supervisor receipt. A
+            /// process report or caller-invented receipt supplies no authority.
+            pub fn admit_survival(
+                body: &[u8],
+                run_id: &str,
+                receipt: &SupervisorReceipt,
+            ) -> Result<()> {
+                require(body.len() <= RESERVE, "residual report cap")?;
+                let v: Value = serde_json::from_slice(body)?;
+                digest(&receipt.config_sha256)?;
+                digest(&receipt.report_sha256)?;
+                let panels = v["details"]["panels"]
+                    .as_array()
+                    .ok_or("residual panel receipt")?;
+                require(panels.len() == 2, "residual two panel receipts")?;
+                for (i, panel) in panels.iter().enumerate() {
+                    let mut hits: Vec<usize> = serde_json::from_value(panel["overlaps"].clone())?;
+                    require(
+                        hits.len() == 64 && hits.iter().all(|&n| n <= 100),
+                        "residual overlap receipt geometry",
+                    )?;
+                    let sum: usize = hits.iter().sum();
+                    hits.sort_unstable();
+                    require(
+                        panel["dataset"] == ["relaion", "cohere"][i]
+                            && sum >= 6336
+                            && hits[3] >= 98
+                            && panel["sum"] == sum
+                            && panel["p05"] == hits[3]
+                            && panel["passed"] == true,
+                        "residual per panel survival receipt",
+                    )?;
+                }
+                let freeze: Artifact = serde_json::from_value(v["details"]["freeze"].clone())?;
+                digest(&freeze.sha256)?;
+                require(
+                    (1..=ROOT_CAP).contains(&freeze.bytes),
+                    "residual freeze receipt geometry",
+                )?;
+                require(
+                    !run_id.is_empty()
+                        && receipt.run_id == run_id
+                        && receipt.report_sha256 == hash(body)
+                        && receipt.config_sha256 == v["config_sha256"]
+                        && receipt.process_exit_code == 0
+                        && receipt.resource_limits_observed
+                        && receipt.drain_complete
+                        && receipt.cleanup_complete
+                        && v["schema"] == REPORT_SCHEMA
+                        && v["codec"] == CODEC
+                        && v["source_identity_sha256"] == source_identity()
+                        && v["status"] == "SURVIVED_SOURCE_NEIGHBORHOODS"
+                        && v["complete"] == true
+                        && v["standalone_authority"] == false
+                        && v["requires_matching_supervisor_exit_receipt"] == true
+                        && v["quality_or_performance_claim"] == false
+                        && v["requests_opened"] == false
+                        && v["truth_opened"] == false
+                        && v["details"]["strict_retained_authority"] == true
+                        && v["details"]["rows"] == 100000
+                        && v["details"]["dimensions"] == 768
+                        && v["details"]["cohort"] == 4096
+                        && v["details"]["anchors"] == 64
+                        && v["details"]["k"] == 100,
+                    "residual survival requires original supervisor closure",
+                )
+            }
+
+            #[cfg(test)]
+            mod tests {
+                use super::*;
+                use std::fs;
+
+                fn pin(path: &Path, bytes: &[u8]) -> Artifact {
+                    fs::write(path, bytes).unwrap();
+                    Artifact {
+                        path: path.into(),
+                        bytes: bytes.len(),
+                        sha256: hash(bytes),
+                    }
+                }
+                fn caps() -> Caps {
+                    Caps {
+                        memory_bytes: HOST_LIMIT,
+                        output_bytes: OUTPUT_LIMIT,
+                        deadline_seconds: 600,
+                        operations: 20_000_000_000,
+                        cpu_threads: 1,
+                        swap_bytes: 0,
+                    }
+                }
+                fn fit(h: &[u32; 256], k: usize) -> ([f32; 16], usize) {
+                    let mut guard = Guard::new(&caps());
+                    histogram::fit_axis(
+                        h,
+                        h.iter().map(|&x| x as usize).sum(),
+                        k,
+                        &mut vec![0.; 65536],
+                        &mut vec![0.; 257],
+                        &mut vec![0.; 257],
+                        &mut vec![0; 17 * 257],
+                        &mut guard,
+                    )
+                    .unwrap()
+                }
+                #[test]
+                fn pq_residual_dp_independent_brute_cost_and_ties() {
+                    // Exhaust all contiguous partitions using direct deviations,
+                    // independent of prefix moments and the production recurrence.
+                    fn brute(points: &[(f64, f64)], k: usize) -> f64 {
+                        if k == 1 {
+                            let weight: f64 = points.iter().map(|p| p.1).sum();
+                            let mean = points.iter().map(|p| p.0 * p.1).sum::<f64>() / weight;
+                            return points.iter().map(|p| p.1 * (p.0 - mean).powi(2)).sum();
+                        }
+                        (1..=points.len() - k + 1)
+                            .map(|split| {
+                                brute(&points[..split], 1) + brute(&points[split..], k - 1)
+                            })
+                            .fold(f64::INFINITY, f64::min)
+                    }
+                    for (count, k) in [(6, 2), (7, 3), (18, 16)] {
+                        let mut h = [0; 256];
+                        let points = (0..count)
+                            .map(|i| ((i * 7) as f64, (i % 3 + 1) as f64))
+                            .collect::<Vec<_>>();
+                        for &(x, w) in &points {
+                            h[x as usize] = w as u32;
+                        }
+                        let (centers, active) = fit(&h, k);
+                        assert_eq!(active, k);
+                        let actual: f64 = points
+                            .iter()
+                            .map(|&(x, w)| {
+                                w * centers[..k]
+                                    .iter()
+                                    .map(|&c| (x - f64::from(c)).powi(2))
+                                    .fold(f64::INFINITY, f64::min)
+                            })
+                            .sum();
+                        assert!((actual - brute(&points, k)).abs() < 1e-7);
+                    }
+                    let mut ties = [0; 256];
+                    ties[0] = 1;
+                    ties[2] = 1;
+                    ties[4] = 1;
+                    let (centers, k) = fit(&ties, 2);
+                    assert_eq!(k, 2);
+                    assert_eq!(&centers[..2], &[0., 3.]);
+                    assert!(centers[2..].iter().all(|&v| v == 3.));
+                    let constant = Axis::new(f32::from_bits(1), f32::from_bits(1)).unwrap();
+                    let mut h = [0; 256];
+                    h[0] = 7;
+                    let b = train(&[h], &[constant], 7, [1; 32], &mut Guard::new(&caps())).unwrap();
+                    let bytes = b.to_bytes();
+                    assert_eq!(bytes[48], 1);
+                    for center in bytes[52..].chunks_exact(4) {
+                        assert_eq!(center, &1u32.to_le_bytes());
+                    }
+                }
+
+                // Real native primary and fine builders. Only the final probe's
+                // private geometry differs from the production CLI protocol.
+                fn fixture(dir: &Path) -> (Config, Geometry) {
+                    let n = 135;
+                    let low = [-1_f32; 3];
+                    let step = [0.01_f32; 3];
+                    let codec = crate::rotated_two_bit::RotatedTwoBitCodec::new(&[0.; 3], 20260923)
+                        .unwrap();
+                    let mut canonical = Vec::new();
+                    let mut records = Vec::new();
+                    let mut sq8 = Vec::new();
+                    let mut order = Vec::new();
+                    for id in (0..n).rev() {
+                        let angle = id as f32 * 0.31;
+                        let height = ((id * 37) % n) as f32 / n as f32 * 1.8 - 0.9;
+                        let radius = (1. - height * height).sqrt();
+                        let vector = [radius * angle.cos(), radius * angle.sin(), height];
+                        canonical.extend((id as i64).to_le_bytes());
+                        canonical.extend(vector.into_iter().flat_map(f32::to_le_bytes));
+                        records.extend(codec.encode(&vector).unwrap());
+                        let codes = vector.map(|v| ((v + 1.) / 0.01).round() as u8);
+                        let mut norm = 0_f32;
+                        for j in 0..3 {
+                            let x = low[j] + f32::from(codes[j]) * step[j];
+                            norm += x * x;
+                        }
+                        sq8.extend((id as i64).to_le_bytes());
+                        sq8.extend(norm.to_le_bytes());
+                        sq8.extend(codes);
+                        order.extend((id as u64).to_le_bytes());
+                    }
+                    let canonical = pin(&dir.join("canonical"), &canonical);
+                    let records = pin(&dir.join("codes"), &records);
+                    let sq8 = pin(&dir.join("sq8"), &sq8);
+                    let order = pin(&dir.join("order"), &order);
+                    let mean = pin(&dir.join("mean"), &[0; 12]);
+                    let plane = pin(
+                        &dir.join("plane"),
+                        &serde_json::to_vec(&crate::two_bit_source::SourcePlaneReceipt {
+                            schema: "borsuk-two-bit-plane-v3".into(),
+                            rows: n,
+                            dimensions: 3,
+                            seed: 20260923,
+                            record_bytes: codec.record_bytes(),
+                            source_sha256: "0".repeat(64),
+                            sq8_sha256: sq8.sha256.clone(),
+                            source_order_sha256: order.sha256.clone(),
+                            mean_sha256: mean.sha256.clone(),
+                            records_sha256: records.sha256.clone(),
+                            page_rows: 32,
+                            page_digest_sha256: "0".repeat(64),
+                            query_or_truth_used: false,
+                        })
+                        .unwrap(),
+                    );
+                    let generation=pin(&dir.join("generation"),&serde_json::to_vec(&json!({
+                        "schema":"borsuk-two-bit-generation-v8","generation":1,"base_epoch":0,"plane_manifest_sha256":plane.sha256,"page_manifest_sha256":"0".repeat(64),
+                        "discovery":{"mode":"graph","centroids_sha256":"0".repeat(64),"graph_sha256":"0".repeat(64),"graph_resident_bytes":1,
+                        "diverse_graph_sha256":"0".repeat(64),"diverse_graph_resident_bytes":1},"sq8_object_sha256":sq8.sha256,"sq8_object_key":format!("objects/{}",sq8.sha256),"sq8_etag":"fixture",
+                        "canonical":{"rows":n,"dimensions":3,"bytes":canonical.bytes,"sha256":canonical.sha256,"object_key":format!("objects/{}",canonical.sha256)},"low":low,"step":step
+                    })).unwrap());
+                    let primary = dir.join("primary");
+                    let receipt = crate::hierarchical_semantic_cells::build(
+                        &BuildConfig {
+                            schema: crate::hierarchical_semantic_cells::BUILD_SCHEMA.into(),
+                            generation,
+                            plane,
+                            canonical,
+                            order,
+                            records,
+                            mean,
+                            sq8,
+                            cell_rows: 32,
+                            sample_rows: 32,
+                            max_depth: 24,
+                            max_build_payload_bytes: 64 * 1024 * 1024,
+                            max_output_bytes: 16 * 1024 * 1024,
+                        },
+                        &primary,
+                    )
+                    .unwrap();
+                    let primary_root = Artifact {
+                        path: primary.join("manifest.json"),
+                        bytes: fs::metadata(primary.join("manifest.json")).unwrap().len() as usize,
+                        sha256: receipt.root_sha256,
+                    };
+                    let panels = ["relaion", "cohere"].map(|dataset| Panel {
+                        dataset: dataset.into(),
+                        root: FineSq8Index::build(
+                            &FineBuildConfig {
+                                schema: BUILD_SCHEMA.into(),
+                                primary_root: primary_root.clone(),
+                                max_build_payload_bytes: 128 * 1024 * 1024,
+                                max_output_bytes: 16 * 1024 * 1024,
+                            },
+                            &dir.join(dataset),
+                        )
+                        .unwrap(),
+                    });
+                    let forbidden = Artifact {
+                        path: dir.join("NEVER-OPEN-REQUESTS-OR-TRUTH"),
+                        bytes: 1,
+                        sha256: "0".repeat(64),
+                    };
+                    let seal=pin(&dir.join("seal"),&serde_json::to_vec(&json!({"schema":"borsuk-fine-sq8-seal-v1","config_sha256":"1".repeat(64),
+                        "source_identity_sha256":"2".repeat(64),"prefix_bytes":PREFIX_BYTES,"prefix_sha256":PREFIX_SHA,"plans_per_panel":64,"truth_opened":false,
+                        "panels":panels.iter().map(|p|json!({"dataset":p.dataset,"root":p.root,"requests":forbidden})).collect::<Vec<_>>() })).unwrap());
+                    let geometry = Geometry {
+                        rows: n,
+                        dimensions: 3,
+                        cohort: 128,
+                        anchors: 4,
+                        k: 100,
+                        seal_sha: seal.sha256.clone(),
+                    };
+                    (
+                        Config {
+                            schema: CONFIG_SCHEMA.into(),
+                            source_identity_sha256: source_identity(),
+                            panels,
+                            original_seal: seal,
+                            caps: caps(),
+                            scratch_bytes: HOST_LIMIT,
+                        },
+                        geometry,
+                    )
+                }
+                fn run(c: &Config, g: &Geometry, dir: &Path, name: &str) -> (Result<()>, Value) {
+                    let config = pin(
+                        &dir.join(format!("{name}-config.json")),
+                        &serde_json::to_vec(c).unwrap(),
+                    );
+                    let path = dir.join(format!("{name}.json"));
+                    let result = execute(&config.path, &config.sha256, &path, g, false);
+                    let body = fs::read(path).unwrap();
+                    (result, serde_json::from_slice(&body).unwrap())
+                }
+                #[test]
+                fn pq_residual_actual_native_pipeline_selection_no_gt_and_sealed_recount() {
+                    let dir = tempfile::tempdir().unwrap();
+                    let (c, g) = fixture(dir.path());
+                    super::super::super::OPENS.with(|r| r.borrow_mut().clear());
+                    super::super::super::READS.with(|r| r.borrow_mut().clear());
+                    let (result, report) = run(&c, &g, dir.path(), "probe");
+                    result.unwrap();
+                    assert_eq!(report["complete"], true);
+                    assert_eq!(report["truth_opened"], false);
+                    let frozen: Value = serde_json::from_slice(
+                        &fs::read(dir.path().join("probe.pq-residual-freeze.json")).unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(frozen["all_results_sealed_before_reduction"], true);
+                    let selection: Value = serde_json::from_slice(
+                        &fs::read(dir.path().join("probe.pq-residual-selections.json")).unwrap(),
+                    )
+                    .unwrap();
+                    let anchors: Value = serde_json::from_slice(
+                        &fs::read(dir.path().join("probe.pq-residual-anchors.json")).unwrap(),
+                    )
+                    .unwrap();
+                    let body = fs::read(dir.path().join("probe.pq-residual-results.json")).unwrap();
+                    assert_eq!(frozen["results"]["sha256"], hash(&body));
+                    let results: Vec<AnchorResult> = serde_json::from_slice(&body).unwrap();
+                    let mut nonidentity = false;
+                    for panel in 0..2 {
+                        let manifest: Manifest =
+                            serde_json::from_slice(&fs::read(&c.panels[panel].root.path).unwrap())
+                                .unwrap();
+                        let order = fs::read(&manifest.order.path).unwrap();
+                        let records = fs::read(&manifest.records.path).unwrap();
+                        let pq = fs::read(&manifest.pq.path).unwrap();
+                        let book = fs::read(
+                            dir.path()
+                                .join(format!("probe.pq-residual-{panel}-book.bin")),
+                        )
+                        .unwrap();
+                        let packed = fs::read(
+                            dir.path()
+                                .join(format!("probe.pq-residual-{panel}-cohort.bin")),
+                        )
+                        .unwrap();
+                        let cohort_native = fs::read(
+                            dir.path()
+                                .join(format!("probe.pq-residual-{panel}-sq8.bin")),
+                        )
+                        .unwrap();
+                        let ids = order
+                            .chunks_exact(8)
+                            .map(|b| u64::from_le_bytes(b.try_into().unwrap()) as usize)
+                            .collect::<Vec<_>>();
+                        let mut total = 0;
+                        let mut intersections = Vec::new();
+                        for j in 0..g.cohort {
+                            let logical = (j as u128 * g.rows as u128 / g.cohort as u128) as usize;
+                            let physical = ids.iter().position(|&id| id == logical).unwrap();
+                            let selected = &selection["panels"][panel]["cohort"][j];
+                            assert_eq!(selected["logical"], logical);
+                            assert_eq!(selected["id"], logical);
+                            assert_eq!(selected["physical"], physical);
+                            assert_eq!(
+                                &cohort_native[j * 15..(j + 1) * 15],
+                                &records[physical * 15..(physical + 1) * 15]
+                            );
+                            nonidentity |= physical != j;
+                        }
+                        for a in 0..g.anchors {
+                            let row = &results[panel * g.anchors + a];
+                            let anchor_slot = a * 32;
+                            let logical = anchor_slot * g.rows / g.cohort;
+                            assert_eq!(row.anchor_logical, logical);
+                            let physical = ids.iter().position(|&id| id == logical).unwrap();
+                            let raw = (0..3)
+                                .map(|j| {
+                                    manifest.low[j]
+                                        + f32::from(records[physical * 15 + 12 + j])
+                                            * manifest.step[j]
+                                })
+                                .collect::<Vec<_>>();
+                            let norm = raw
+                                .iter()
+                                .map(|&v| f64::from(v) * f64::from(v))
+                                .sum::<f64>();
+                            let prepared = raw
+                                .iter()
+                                .map(|&v| {
+                                    if (norm - 1.).abs() <= 1e-6 {
+                                        v
+                                    } else {
+                                        (f64::from(v) / norm.sqrt()) as f32
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+                            assert_eq!(
+                                anchors[panel * g.anchors + a]["raw_bits"],
+                                json!(raw.iter().map(|v| v.to_bits()).collect::<Vec<_>>())
+                            );
+                            assert_eq!(
+                                anchors[panel * g.anchors + a]["prepared_bits"],
+                                json!(prepared.iter().map(|v| v.to_bits()).collect::<Vec<_>>())
+                            );
+                            // Independent literal scalar implementations read
+                            // PQ words/packed books directly, retaining original
+                            // physical addresses rather than cohort slot indices.
+                            let mut candidate_oracle = Vec::new();
+                            let mut native_oracle = Vec::new();
+                            let mut shift = 0_f32;
+                            let mut qnorm = 0_f32;
+                            for j in 0..3 {
+                                shift += prepared[j] * manifest.low[j];
+                                qnorm += prepared[j] * prepared[j];
+                            }
+                            shift -= qnorm / 2.;
+                            for slot in 0..g.cohort {
+                                if slot == anchor_slot {
+                                    continue;
+                                }
+                                let id = slot * g.rows / g.cohort;
+                                let physical = ids.iter().position(|&x| x == id).unwrap();
+                                let mut dot = 0_f32;
+                                let mut inner = 0_f32;
+                                for j in 0..3 {
+                                    let sub = (0..64).find(|s| j < (s + 1) * 3 / 64).unwrap();
+                                    let word =
+                                        usize::from(pq[24 + 64 * 256 * 4 + physical * 64 + sub]);
+                                    let offset = 24 + (sub * 256 + word) * 4;
+                                    let predictor = f32::from_le_bytes(
+                                        pq[offset..offset + 4].try_into().unwrap(),
+                                    );
+                                    let code = usize::from(
+                                        (packed[slot * 14 + 12 + j / 2] >> (4 * (j % 2))) & 15,
+                                    );
+                                    let center_offset = 48 + j * 68 + 4 + code * 4;
+                                    let center = f32::from_le_bytes(
+                                        book[center_offset..center_offset + 4].try_into().unwrap(),
+                                    );
+                                    let reconstruction = predictor + center;
+                                    let product = prepared[j] * reconstruction;
+                                    dot += product;
+                                    let weight = prepared[j] * manifest.step[j];
+                                    inner += f32::from(records[physical * 15 + 12 + j]) * weight;
+                                }
+                                let norm = f32::from_le_bytes(
+                                    records[physical * 15 + 8..physical * 15 + 12]
+                                        .try_into()
+                                        .unwrap(),
+                                );
+                                candidate_oracle.push((norm - 2. * dot, id as i64, physical));
+                                native_oracle.push((
+                                    norm - 2. * (inner + shift),
+                                    id as i64,
+                                    physical,
+                                ));
+                            }
+                            for (expected, actual) in [
+                                (&mut native_oracle, &row.native),
+                                (&mut candidate_oracle, &row.candidate),
+                            ] {
+                                expected.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+                                for (expected, actual) in expected.iter().take(100).zip(actual) {
+                                    assert_eq!(
+                                        (actual.score_bits, actual.id, actual.physical),
+                                        (expected.0.to_bits(), expected.1, expected.2)
+                                    );
+                                }
+                            }
+                            for ranked in [&row.native, &row.candidate] {
+                                assert_eq!(ranked.len(), 100);
+                                assert_eq!(
+                                    ranked.iter().map(|r| r.id).collect::<BTreeSet<_>>().len(),
+                                    100
+                                );
+                                assert!(ranked.iter().all(|r| r.id != logical as i64));
+                            }
+                            let overlap = row
+                                .native
+                                .iter()
+                                .filter(|x| row.candidate.iter().any(|y| y.id == x.id))
+                                .count();
+                            intersections.push(overlap);
+                            total += overlap;
+                        }
+                        intersections.sort_unstable();
+                        assert_eq!(report["details"]["panels"][panel]["sum"], total);
+                        assert_eq!(report["details"]["panels"][panel]["p05"], intersections[0]);
+                        super::super::super::READS.with(|r| {
+                            assert_eq!(
+                                r.borrow()
+                                    .iter()
+                                    .filter(|(p, _)| p == &manifest.records.path)
+                                    .map(|(_, n)| n)
+                                    .sum::<usize>(),
+                                3 * manifest.records.bytes
+                            )
+                        });
+                    }
+                    assert!(nonidentity);
+                    super::super::super::OPENS.with(|r| {
+                        assert!(
+                            r.borrow()
+                                .iter()
+                                .all(|p| !p.to_string_lossy().contains("NEVER-OPEN"))
+                        )
+                    });
+                    // The public entrypoint cannot inherit this tiny fixture escape.
+                    let strict_config = pin(
+                        &dir.path().join("strict-config"),
+                        &serde_json::to_vec(&c).unwrap(),
+                    );
+                    assert!(
+                        check_pq_residual_source(
+                            &strict_config.path,
+                            &strict_config.sha256,
+                            &dir.path().join("strict.json")
+                        )
+                        .is_err()
+                    );
+                }
+
+                #[test]
+                fn pq_residual_admission_underflow_and_same_size_bindings() {
+                    let dir = tempfile::tempdir().unwrap();
+                    let (mut c, g) = fixture(dir.path());
+                    let manifests = c
+                        .panels
+                        .iter()
+                        .map(|p| {
+                            serde_json::from_slice::<Manifest>(&fs::read(&p.root.path).unwrap())
+                                .unwrap()
+                        })
+                        .collect::<Vec<_>>();
+                    let admitted = admit(&c, &g, &manifests, ROOT_CAP).unwrap();
+                    for which in 0..3 {
+                        let mut low = c.clone();
+                        match which {
+                            0 => low.caps.operations = admitted.operations - 1,
+                            1 => low.caps.output_bytes = admitted.output_bytes - 1,
+                            _ => low.caps.memory_bytes = admitted.coexisting_bytes - 1,
+                        }
+                        assert!(admit(&low, &g, &manifests, ROOT_CAP).is_err());
+                    }
+                    c.caps.operations = 70_000_000;
+                    super::super::super::OPENS.with(|r| r.borrow_mut().clear());
+                    let (result, report) = run(&c, &g, dir.path(), "cap");
+                    assert!(result.is_err());
+                    assert_eq!(report["status"], "INVALID");
+                    super::super::super::OPENS.with(|r| {
+                        assert!(r.borrow().iter().all(|p| manifests.iter().all(|m| p
+                            != &m.pq.path
+                            && p != &m.order.path
+                            && p != &m.groups.path
+                            && p != &m.records.path)))
+                    });
+                    c.caps = caps();
+                    // Same-size source, PQ and physical order substitutions must
+                    // fail against the retained root, not merely match geometry.
+                    for (i, artifact) in [
+                        &manifests[0].pq,
+                        &manifests[0].order,
+                        &manifests[0].groups,
+                        &manifests[0].records,
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let body = fs::read(&artifact.path).unwrap();
+                        let mut bad = body.clone();
+                        let last = bad.len() - 1;
+                        bad[last] ^= 1;
+                        fs::write(&artifact.path, &bad).unwrap();
+                        let (result, report) = run(&c, &g, dir.path(), &format!("binding{i}"));
+                        assert!(result.is_err());
+                        assert_eq!(report["status"], "INVALID");
+                        fs::write(&artifact.path, body).unwrap();
+                    }
+                    let norm_path = &manifests[0].records.path;
+                    let original = fs::read(norm_path).unwrap();
+                    let mut bad = original.clone();
+                    bad[8] ^= 1;
+                    fs::write(norm_path, &bad).unwrap();
+                    let (result, v) = run(&c, &g, dir.path(), "norm-binding");
+                    assert!(result.is_err());
+                    assert_eq!(v["status"], "INVALID");
+                    fs::write(norm_path, original).unwrap();
+                    let root = json!({"schema":ROOT_SCHEMA,"codec":CODEC,"pq":"a","order":"b","norm":"original","book":"c"});
+                    root_check(&serde_json::to_vec(&root).unwrap(), &root).unwrap();
+                    for field in ["schema", "codec", "pq", "order", "norm", "book"] {
+                        let mut changed = root.clone();
+                        changed[field] = json!("wrong");
+                        assert!(root_check(&serde_json::to_vec(&changed).unwrap(), &root).is_err());
+                    }
+                    // The actual frozen geometry must fit without lifting caps.
+                    let mut large = c
+                        .panels
+                        .iter()
+                        .map(|p| {
+                            serde_json::from_slice::<Manifest>(&fs::read(&p.root.path).unwrap())
+                                .unwrap()
+                        })
+                        .collect::<Vec<_>>();
+                    for m in &mut large {
+                        m.identity.rows = 100000;
+                        m.identity.dimensions = 768;
+                        m.records.bytes = 78_000_000;
+                        m.pq.bytes = 24 + 64 * 256 * 12 * 4 + 100000 * 64;
+                        m.order.bytes = 800000;
+                        m.groups.bytes = 200000;
+                    }
+                    let admitted = admit(&c, &Geometry::frozen(), &large, ROOT_CAP).unwrap();
+                    assert!(admitted.operations <= 20_000_000_000);
+                    assert!(admitted.cumulative_read_bytes >= 468_000_000);
+                    assert!(admitted.output_bytes <= OUTPUT_LIMIT);
+                    assert!(admitted.coexisting_bytes <= HOST_LIMIT);
+                    assert_eq!(admitted.scratch_bytes, 0);
+                }
+
+                #[test]
+                fn pq_residual_pipeline_pass_mutation_eof_partial_sync_seal_and_late_invalid() {
+                    let dir = tempfile::tempdir().unwrap();
+                    let (c, g) = fixture(dir.path());
+                    let m: Manifest =
+                        serde_json::from_slice(&fs::read(&c.panels[0].root.path).unwrap()).unwrap();
+                    let original = fs::read(&m.records.path).unwrap();
+                    for (i, length) in [original.len() - 1, original.len() + 1]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        OpenOptions::new()
+                            .write(true)
+                            .open(&m.records.path)
+                            .unwrap()
+                            .set_len(length as u64)
+                            .unwrap();
+                        let (result, v) = run(&c, &g, dir.path(), &format!("length{i}"));
+                        assert!(result.is_err());
+                        assert_eq!(v["status"], "INVALID");
+                        fs::write(&m.records.path, &original).unwrap();
+                    }
+                    for (i, (pass, grow)) in
+                        [(0, false), (1, false), (0, true), (1, true), (2, true)]
+                            .into_iter()
+                            .enumerate()
+                    {
+                        MUTATE_PASS.with(|f| f.set(Some((pass, grow))));
+                        let (result, v) = run(&c, &g, dir.path(), &format!("pass{i}"));
+                        assert!(result.is_err());
+                        assert_eq!(v["status"], "INVALID");
+                        fs::write(&m.records.path, &original).unwrap();
+                    }
+                    for (i, mode) in [
+                        "partial",
+                        "file-sync",
+                        "directory-sync",
+                        "late",
+                        "corrupt",
+                        "deadline",
+                        "second-panel",
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        match mode {
+                            "partial" => FAIL_WRITE.with(|f| f.set(Some(3))),
+                            "file-sync" => FAIL_SYNC.with(|f| f.set(Some(1))),
+                            "directory-sync" => FAIL_SYNC.with(|f| f.set(Some(2))),
+                            "late" => FAIL_AFTER_SEAL.with(|f| f.set(true)),
+                            "corrupt" => CORRUPT_SEAL.with(|f| f.set(true)),
+                            "second-panel" => FAIL_SYNC.with(|f| f.set(Some(13))),
+                            _ => LATE_DEADLINE.with(|f| f.set(true)),
+                        }
+                        let (result, v) = run(&c, &g, dir.path(), &format!("fault{i}"));
+                        assert!(result.is_err(), "{mode}");
+                        assert_eq!(v["status"], "INVALID");
+                        assert_eq!(v["complete"], false);
+                        if (3..=5).contains(&i) {
+                            assert!(v["details"]["freeze"].is_object());
+                        }
+                        if i == 0 {
+                            assert_eq!(v["details"]["known_written_bytes"], 3);
+                        }
+                        let config = dir.path().join(format!("fault{i}-config.json"));
+                        let body = fs::read(&config).unwrap();
+                        let output = dir.path().join(format!("fault{i}.json"));
+                        let before = fs::read(&output).unwrap();
+                        assert!(execute(&config, &hash(&body), &output, &g, false).is_err());
+                        assert_eq!(fs::read(output).unwrap(), before);
+                    }
+                    for index in 0..5 {
+                        CORRUPT_GENERATION.with(|f| f.set(Some(index)));
+                        let (result, v) =
+                            run(&c, &g, dir.path(), &format!("generation-corrupt{index}"));
+                        assert!(result.is_err());
+                        assert_eq!(v["status"], "INVALID");
+                        assert_eq!(v["complete"], false);
+                    }
+                }
+
+                #[test]
+                fn pq_residual_frozen_thresholds_cohort_membership_ties_and_supervisor() {
+                    let g = Geometry::frozen();
+                    let selections = (0..2)
+                        .map(|_| {
+                            (0..g.cohort)
+                                .map(|j| {
+                                    let logical = j * g.rows / g.cohort;
+                                    Selection {
+                                        logical,
+                                        id: logical as i64,
+                                        physical: g.rows - 1 - logical,
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>();
+                    let make = |hits: &[usize]| {
+                        (0..128)
+                            .map(|r| {
+                                let panel = r / 64;
+                                let a = r % 64;
+                                let anchor = a * 64;
+                                let selected = &selections[panel];
+                                let available = selected
+                                    .iter()
+                                    .filter(|s| s.logical != selected[anchor].logical)
+                                    .collect::<Vec<_>>();
+                                let ranked = |s: &&Selection| Ranked {
+                                    id: s.id,
+                                    physical: s.physical,
+                                    score_bits: 0,
+                                };
+                                let native =
+                                    available[..100].iter().map(ranked).collect::<Vec<_>>();
+                                let mut candidate = available[..hits[a]]
+                                    .iter()
+                                    .chain(&available[100..200 - hits[a]])
+                                    .map(ranked)
+                                    .collect::<Vec<_>>();
+                                candidate.sort_by_key(|r| r.id);
+                                AnchorResult {
+                                    dataset: ["relaion", "cohere"][panel].into(),
+                                    anchor_cohort_index: anchor,
+                                    anchor_logical: selected[anchor].logical,
+                                    query_sha256: "0".repeat(64),
+                                    native,
+                                    candidate,
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                    };
+                    let mut hits = vec![99; 64];
+                    let passed = reduce(&make(&hits), &g, &selections).unwrap();
+                    assert_eq!(passed[0]["sum"], 6336);
+                    assert_eq!(passed[0]["passed"], true);
+                    hits[0] = 98;
+                    assert_eq!(
+                        reduce(&make(&hits), &g, &selections).unwrap()[0]["passed"],
+                        false
+                    );
+                    hits.fill(100);
+                    hits[..4].fill(97);
+                    assert_eq!(reduce(&make(&hits), &g, &selections).unwrap()[0]["p05"], 97);
+                    assert_eq!(
+                        reduce(&make(&hits), &g, &selections).unwrap()[0]["passed"],
+                        false
+                    );
+                    hits[3] = 98;
+                    assert_eq!(
+                        reduce(&make(&hits), &g, &selections).unwrap()[0]["passed"],
+                        true
+                    );
+                    let mut invalid = make(&hits);
+                    invalid[0].native[0].id = invalid[0].anchor_logical as i64;
+                    assert!(reduce(&invalid, &g, &selections).is_err());
+                    invalid = make(&hits);
+                    invalid[0].native[0].id = 1;
+                    assert!(reduce(&invalid, &g, &selections).is_err());
+                    invalid = make(&hits);
+                    invalid[0].native.swap(0, 1);
+                    assert!(reduce(&invalid, &g, &selections).is_err());
+                    let value = terminal(
+                        &"a".repeat(64),
+                        "SURVIVED_SOURCE_NEIGHBORHOODS",
+                        true,
+                        json!({
+                        "rows":100000,"dimensions":768,"cohort":4096,"anchors":64,"k":100,"strict_retained_authority":true,
+                        "panels":passed,"freeze":{"path":"/frozen","bytes":100,"sha256":"b".repeat(64)}}),
+                    );
+                    let body = serde_json::to_vec(&value).unwrap();
+                    let mut receipt = SupervisorReceipt {
+                        run_id: "original".into(),
+                        config_sha256: "a".repeat(64),
+                        report_sha256: hash(&body),
+                        process_exit_code: 0,
+                        resource_limits_observed: true,
+                        drain_complete: true,
+                        cleanup_complete: true,
+                    };
+                    admit_survival(&body, "original", &receipt).unwrap();
+                    for field in 0..5 {
+                        let mut bad = receipt.clone();
+                        match field {
+                            0 => bad.process_exit_code = 2,
+                            1 => bad.resource_limits_observed = false,
+                            2 => bad.drain_complete = false,
+                            3 => bad.cleanup_complete = false,
+                            _ => bad.run_id = "copied".into(),
+                        }
+                        assert!(admit_survival(&body, "original", &bad).is_err());
+                    }
+                    receipt.report_sha256 = "c".repeat(64);
+                    assert!(admit_survival(&body, "original", &receipt).is_err());
+                }
+            }
+        }
+
         /// Corpus-only histogram training and immutable generation mapping.
         /// This diagnostic does not integrate updates or garbage collection.
         pub mod histogram {
@@ -4632,7 +6419,7 @@ pub mod pack_diagnostic {
                     })
                 }
             }
-            fn fit_axis(
+            pub(super) fn fit_axis(
                 h: &[u32; 256],
                 rows: usize,
                 clusters: usize,
