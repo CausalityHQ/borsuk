@@ -1,0 +1,46 @@
+{
+  "status": "SOURCE_REVIEWED_NATIVE_UNVERIFIED_NOT_LAUNCHED",
+  "root_head": "81db281216084956ff74cf03df35d46c5f5117f3",
+  "worker_commit": "478caab70d9657aac9bb2f1ff1f1c91b1f85e5e1",
+  "native_preview_commit": "0cd1d93b0813331c7be0c506a323ec1d42cf6275",
+  "native_delta_paths": [
+    "crates/borsuk/src/semantic_unit_router.rs",
+    "crates/borsuk/src/two_bit_generation.rs"
+  ],
+  "source_files": [
+    {
+      "path": "crates/borsuk/src/semantic_unit_router.rs",
+      "base_sha256": "c4ce39e40095c75d81eb62615b542d2a2c891183e99503f037f407f46739e8d3",
+      "implementation_sha256": "b9abd271db66d45665304e72dc1a61b176fdbc47cd6f1a5618868a3c7443d0c2"
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_generation.rs",
+      "base_sha256": "9b147a3be77bb043f69fc96a3f577d6d967bf98be7c0de548a40473b979f26b4",
+      "implementation_sha256": "70a1e6956e4d18eacccc1205c644cbaa5dbb1eb763a2958da666be60d17bc4e3"
+    }
+  ],
+  "required_actual_new_test_names": [
+    "two_bit_generation::source_walk_tests::native_full_sixteen_leaf_router_validation_d1024_and_d768",
+    "two_bit_generation::source_walk_tests::native_full_sixteen_leaf_generation_admission_d1024_and_d768"
+  ],
+  "production_change": {
+    "api": "SemanticProfile::selected_leaf_bytes(self) -> usize",
+    "visibility": "pub(crate), unchanged",
+    "native100k_old_bytes": 2097152,
+    "native100k_new_bytes": 2101248,
+    "formula": "16 * LEAF_UNITS * (4 + 1024 * 2)",
+    "fresh1m_bytes_unchanged": 4730880,
+    "consumers": [
+      "SemanticUnitRouter::validate_selected",
+      "TwoBitGeneration::admit_leaves",
+      "TwoBitGeneration serving memory model"
+    ],
+    "other_production_changes": []
+  },
+  "next_gate": "existing --cohere1024-implementation six serial stages plus exact once log verification of both new regressions",
+  "native_execution_started": false,
+  "full_source_count": 411,
+  "full_source_identity_sha256": "0fae950fcfb3221804fc7c307474fc66604b18cd021c2af3e0caa71269ecdc7e",
+  "source_manifest": "docs/research/performance-architecture-20260930/cohere1024/implementation-gates/native-source-manifest.json",
+  "quality_performance_measurement": false
+}
