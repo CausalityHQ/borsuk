@@ -1,0 +1,26 @@
+{
+  "checked_at": "2026-10-07T18:00:24.926445+00:00",
+  "purpose": "published context only, never measured parity or win",
+  "turbopuffer": {
+    "source": "https://turbopuffer.com/v3",
+    "corpus_family": "Cohere Wikipedia embed-multilingual-v3",
+    "dimensions": 1024,
+    "population": 10000000,
+    "region": "gcp-us-central1",
+    "client": "c4a-highmem-32 us-central1-c",
+    "query_rate": 8,
+    "duration_seconds": 600,
+    "hot": "100% cache hit ratio",
+    "cold": "cache disabled",
+    "published_metric": "nightly v3/v2 p90 latency ratio",
+    "absolute_p90_not_disclosed": true,
+    "selected_ids_queries_k_metric_recall_not_disclosed_on_page": true,
+    "match_to_current": "unmatched:100k/serial1000/AWS-eu-central-1, uncontrolled provider caches"
+  },
+  "s3_vectors": {
+    "source": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors-query.html",
+    "published_context": "infrequent query latency below one second; repeated/frequent queries can be as low as100ms",
+    "matched_dataset_recall_p90_p95_not_established": true
+  },
+  "decision": "Direct benchmark both vendors on our exact frozen bytes/IDs/query split/cosine/k10/region/cache/concurrency before any measured win; current job is BORSUK correctness admission."
+}

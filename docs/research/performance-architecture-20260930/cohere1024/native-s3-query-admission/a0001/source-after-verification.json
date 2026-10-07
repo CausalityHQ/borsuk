@@ -1,0 +1,59 @@
+{
+  "observed_at": "2026-10-07T18:07:08.280937+00:00",
+  "head_and_root_exact_bytes_unchanged": true,
+  "sq8_unchanged": true,
+  "request_truth_object_etags_sizes_unchanged": true,
+  "head": {
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-07T17:38:46+00:00",
+    "ContentLength": 170,
+    "ETag": "\"dd9443419e182f8592f477ac648762df\"",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+  },
+  "root": {
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-07T17:38:45+00:00",
+    "ContentLength": 27655,
+    "ETag": "\"bda679d149f8bd22bce8286dbd289682\"",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+  },
+  "sq8": {
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-06T14:37:45+00:00",
+    "ContentLength": 103600000,
+    "ETag": "\"f808095a3a2e788df2ae7d7d0e5423fa\"",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {
+      "sha256": "07a14360b06add9a35f82b97f4e031690ff878ff497ee047902818823992337b"
+    }
+  },
+  "input_heads": [
+    {
+      "AcceptRanges": "bytes",
+      "LastModified": "2026-10-06T14:37:43+00:00",
+      "ContentLength": 4096000,
+      "ETag": "\"1553426815b5dbf6d916ccd12f1c227a\"",
+      "ContentType": "binary/octet-stream",
+      "ServerSideEncryption": "AES256",
+      "Metadata": {
+        "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+      }
+    },
+    {
+      "AcceptRanges": "bytes",
+      "LastModified": "2026-10-06T14:37:43+00:00",
+      "ContentLength": 80000,
+      "ETag": "\"04fc7819a26ce9b269bd25b23b514607\"",
+      "ContentType": "binary/octet-stream",
+      "ServerSideEncryption": "AES256",
+      "Metadata": {
+        "sha256": "479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c"
+      }
+    }
+  ]
+}

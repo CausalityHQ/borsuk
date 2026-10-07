@@ -1,0 +1,6 @@
+{
+  "reason": "terminal_present",
+  "exit": 0,
+  "stdout": "{\n    \"TerminatingInstances\": [\n        {\n            \"InstanceId\": \"i-0ef7d2ef2273fcb96\",\n            \"CurrentState\": {\n                \"Code\": 32,\n                \"Name\": \"shutting-down\"\n            },\n            \"PreviousState\": {\n                \"Code\": 16,\n                \"Name\": \"running\"\n            }\n        }\n    ]\n}\n",
+  "stderr": ""
+}
