@@ -1,0 +1,45 @@
+{
+  "schema": "borsuk-generic-http-qualification-preregistration-v1",
+  "status": "FROZEN_NOT_LAUNCHED",
+  "source_commit": "b4cd5e8d759775bd77ff437cd714367d71df90fa",
+  "specialist_commit": "01dab234de817d87e49e7105235a4fb0fde9af5c",
+  "native_file_count": 414,
+  "native_identity": "6ba6c1415cfb38e3d2aa366e424813b5fe9881ed84ea8d7e9a2157826ea310f0",
+  "archive_sha256": "9c1500b47e2ad12277b22b7c329d7ab0cf772808f761c00f4b7afb9d38e87bca",
+  "userdata_sha256": "f77e1a6b2a5144c687cfac539033497e731998d6566d135b5ff84eb1732355be",
+  "gates_sha256": "d4ab3f8abac22484e601b22dce715f81ad0e445bed5afee440a49b19f6f64d51",
+  "resources": {
+    "cpu": 2,
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "tasks": 512,
+    "native_seconds": 7200,
+    "machine_seconds": 9000
+  },
+  "spot": {
+    "region": "eu-central-1",
+    "az": "eu-central-1c",
+    "type": "c7i.2xlarge",
+    "max_bid_usd_hour": 0.50,
+    "quoted_usd_hour": 0.2065,
+    "compute_cap_usd": 1.25,
+    "ancillary_cap_usd": 0.15
+  },
+  "interruption": "Preserve original attempt and evidence; interrupted gates are INVALID, no automatic replacement. Stop first failing layer. Terminate immediately at terminal, verify termination before collection and integration.",
+  "gates": [
+    "cargo test --locked -p borsuk --lib rotated_two_bit::tests:: -- --test-threads=1",
+    "cargo test --locked -p borsuk --test rotated_two_bit -- --test-threads=1",
+    "cargo test --locked -p borsuk --example two_bit_http -- --test-threads=1",
+    "cargo build --locked --release -p borsuk --example two_bit_http",
+    "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  ],
+  "tests": [
+    "rotated_two_bit::tests::required_query_scratch_matches_exact_prepare_query_budget",
+    "rotated_two_bit::tests::required_query_scratch_rejects_invalid_or_overflowing_geometry",
+    "tests::request_identity_geometry_and_nonqueued_admission"
+  ],
+  "acceptance": "All exact tests once, zero failed/ignored, all four native and tee exits zero, full source before/after/current equality, artifact authentication, enforced limits, zero swap/OOM, same instance terminated. Compiler/correctness only.",
+  "corpus_reads": false,
+  "performance_claim": false
+}
