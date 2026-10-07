@@ -1,0 +1,10 @@
+{
+  "schema": "borsuk-generic-s3-namespace-launch-v1",
+  "instance_id": "i-03a20d59b69cdd623",
+  "launch_time": "2026-10-07T13:43:06+00:00",
+  "campaign": "generic-s3-namespace-gates-a0002",
+  "protocol_commit": "552d73c90998601a2fe3fca2a134b5224c4e44c3",
+  "source_commit": "7fa4677213832b6d635aad7da2f1297fcb8b8713",
+  "native_qualified": false,
+  "performance_claim": false
+}
