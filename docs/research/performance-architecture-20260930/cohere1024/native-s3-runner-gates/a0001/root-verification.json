@@ -1,0 +1,66 @@
+{
+  "status": "NATIVE_GATES_PASSED_REVIEW_REPAIRS_PENDING",
+  "source_commit": "02dbee3a59584d6146849917dffdd8d494a9e0e9",
+  "instance_id": "i-012affcc64ee5fe97",
+  "terminated": true,
+  "artifact_count": 53,
+  "native_source_file_count": 414,
+  "full_source_count": 2449,
+  "full_before_after_match": true,
+  "mandatory_tests": [
+    "actual_native_queries_seal_and_reduce_against_literal_oracles",
+    "missing_or_tampered_truth_is_invalid_only_after_all_queries_are_sealed",
+    "namespaced_pipeline_faults_preserve_binding_accounting_and_seal",
+    "prefix_or_requests_tampering_blocks_first_truth_open",
+    "production_contract_rejects_unknown_hash_geometry_and_caps",
+    "reporting_underfill_keeps_fixed_ten_denominator_and_bounded_output",
+    "scratch_formula_keeps_codec_and_trace_separate",
+    "secure_artifacts_reject_hash_length_eof_symlink_fifo_and_bad_rows",
+    "source_binding_and_all_request_rows_fail_before_queries"
+  ],
+  "stages": [
+    {
+      "name": "runner-tests",
+      "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "runner-release",
+      "command": "cargo build --locked --release -p borsuk --bin check_cohere_native_baseline",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "workspace-clippy",
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "workspace-test-build",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "native_exit": 0,
+      "tee_exit": 0
+    }
+  ],
+  "binary": {
+    "bytes": 16128712,
+    "sha256": "b455ad2f728aa297dda5d98d2d72f5c75a930260e5da36973deaf5d0cda81e21"
+  },
+  "memory_peak_bytes": 8589934592,
+  "memory_events": {
+    "low": "0",
+    "high": "0",
+    "max": "3546",
+    "oom": "0",
+    "oom_kill": "0",
+    "oom_group_kill": "0",
+    "sock_throttled": "0"
+  },
+  "swap_peak_bytes": 0,
+  "systemd_after": "MainPID=0\nResult=success\nExecMainStatus=0\nLoadState=not-found\nActiveState=inactive\nSubState=dead\n",
+  "repaired_source": "bccd8b7a477bf6e80a8f87c9ad740dacb2dde0ed",
+  "repaired_source_native_qualified": false,
+  "performance_claim": false
+}
