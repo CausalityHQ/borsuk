@@ -1,0 +1,24 @@
+{
+  "status": "NATIVE_TEST_FIXTURE_ADMISSION_FAILURE",
+  "qualified": false,
+  "session": 26310,
+  "instance_id": "i-0ed718498e5b4f409",
+  "terminated": true,
+  "termination_verification": "Independent AWS DescribeInstances returned terminated",
+  "native_source_commit": "b99ea620559fb33aeaa66ece639e8b06baab255a",
+  "source_file_count": 413,
+  "source_before_after_equal": true,
+  "terminal_artifacts_sha256_verified": 13,
+  "native_exit": 101,
+  "controller_exit": 1,
+  "compiled_affected_target": true,
+  "tests": {
+    "passed": 1,
+    "failed": 1
+  },
+  "passed": "retained_semantic_republication_refuses_unapproved_changed_or_unbounded_inputs",
+  "failure": "preserves_payload_and_score_bits: original search before republication at integration line370 Plane(Codec(MemoryBudget)); other query stages zero",
+  "test_log_sha256": "35bdb9cb83645e870bf54c30482d1fc939e1f924a8b6813399dd7bf25b0b8acd",
+  "remaining_stages": "UNRUN",
+  "decision": "Trace exact D1024 prepared query scratch against fixture allowance; fix demonstrated fixture only if justified, preserve algorithm/science/host caps and cap negatives."
+}
