@@ -1,0 +1,23 @@
+{
+  "controller": "6ece902ed4e357a265e2b956ac47f365ce16f9eb",
+  "config": "24c3f8f4ce438773730587fd492e145806a83df8",
+  "bundle": "63fc205d894ed6cdfbfdc098c11f61baf4e85a57",
+  "preview": "5c76efefbb887cb125c661d3759b831663fbb4a4",
+  "native": "cc3025962392604ac1419fb2f4959f5b0c31894d",
+  "source_identity_sha256": "6e60329efa2901eaf72def2424671096ac98d49227c4bc0a9d3e18e737d24c03",
+  "config_sha256": "e253f2da1fed7f1c485870a21449ad4d2dcd387195c3d90474103edd3f22332d",
+  "archive_file_count": 2450,
+  "status": "PREFLIGHT_OK",
+  "unit": "borsuk-retained-rebind-a0003-preflight.service",
+  "invocation": "bdc6e67e700f4858b44c48fc53a60779",
+  "exit_status": 0,
+  "cpu_quota_percent": 100,
+  "memory_max_bytes": 268435456,
+  "swap_max_bytes": 0,
+  "runtime_max_seconds": 120,
+  "elapsed_seconds": 1.241,
+  "memory_peak": "68.3M",
+  "source_file_count": 413,
+  "production_library_and_cli_unchanged": true,
+  "scope": "Compiler/synthetic correctness only; no ANN performance"
+}
