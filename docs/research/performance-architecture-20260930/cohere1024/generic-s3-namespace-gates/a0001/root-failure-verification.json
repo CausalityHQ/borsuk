@@ -1,0 +1,21 @@
+{
+  "schema": "borsuk-generic-s3-namespace-failure-v1",
+  "status": "COMPILATION_INVALID",
+  "instance_id": "i-0df699ed9934160b2",
+  "terminated": true,
+  "termination_wait_exit": 0,
+  "source_commit": "0fe9f9a5de391f2ce69063bca65892f934125edd",
+  "failed_stage": "s3-range-tests",
+  "cargo_exit": 101,
+  "remaining_stages": "UNRUN",
+  "cause": "E0283 at sq8_s3_range.rs:962: Option<impl Into<String>> with explicit .into() leaves type ambiguous",
+  "production_change": false,
+  "repair_source_commit": "7fa4677213832b6d635aad7da2f1297fcb8b8713",
+  "repair_native_gates": "UNRUN",
+  "evidence": {
+    "bytes": 190524,
+    "sha256": "c361086db3e0943b83f409505ebcadd74e1c9e6aa967119c85551ad16d831ac0"
+  },
+  "log_sha256": "02676c40526a3dcb95538baa635e3936cd6bf819e99fe3f30ae9a0c7d041a6af",
+  "performance_claim": false
+}
