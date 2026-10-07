@@ -1,0 +1,13 @@
+{
+  "status": "AUTHENTICATED_FIXTURE_INVALID",
+  "source_before_after_checked_files": 2450,
+  "compile_exit": 0,
+  "fixture_exit": 101,
+  "remaining_gates": "UNRUN",
+  "library_qualification": false,
+  "performance_rejection": false,
+  "terminated": true,
+  "sourceID_root_cause": "fixture rows-row emits rows for first row; validator requires ID<rows",
+  "memory_peak_bytes": 7487492096,
+  "swap_oom": 0
+}

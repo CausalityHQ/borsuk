@@ -1,0 +1,30 @@
+{
+  "status": "FROZEN_NOT_LAUNCHED",
+  "preview": "185f61caf8a801147fd98682e4d8637e1b082b8c",
+  "support_count": 2450,
+  "native_count": 415,
+  "native_identity": "3dee9d0ca81e4b69c7f304879dd500bdd01c45a946b292d841a115c9b310901d",
+  "archive_bytes": 13225746,
+  "archive_sha256": "1910d3e476d736dff57c459a95bd556a190c013f7282ad530d2001ffbed585bd",
+  "native_seconds": 7200,
+  "machine_seconds": 9000,
+  "compiler_jobs": 1,
+  "cpu": 2,
+  "memory_bytes": 8589934592,
+  "swap_bytes": 0,
+  "pids": 512,
+  "reservation_usd": {
+    "compute": "1.25",
+    "ancillary": ".15",
+    "total": "1.40"
+  },
+  "spot_max_bid_usd_per_hour": ".50",
+  "support_sha256": {
+    "gates.sh": "8b7f4c8ee42773042c2148f8a9e469fdd158d43ad709eceabb9c3d79076a5fb1",
+    "user-data.sh": "09a64b7923da21c7e1209fd389355cab1c89d892a54de8afc4c637e81d37dd2b",
+    "source-files.sha256": "c40783691a19de4bff75c9b65fad5a4f50ee5cd77fb3e996eb486d07e99a9a2e",
+    "native-source.json": "f8337363be1899b12014bf45a340da9f6c017854306e4cf5080f0ddf9ecfc652",
+    "run-instances.json": "002103d289db501cac93ee137313ffc692e69069ad1501952ce706a921c42585"
+  },
+  "performance_claim": false
+}
