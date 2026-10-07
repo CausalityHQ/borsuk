@@ -1,0 +1,44 @@
+{
+  "status": "SOURCE_ONLY_UNVERIFIED",
+  "commit": "f5be387879db1e8b3c2d8550422b28ebdf390e96",
+  "parent": "5ed527567b8d46a7d5a5c63820fab6ee9946fcae",
+  "files": [
+    {
+      "path": "crates/borsuk/src/sq8_s3_range.rs",
+      "bytes": 77604,
+      "sha256": "90517ba0ef562210e684d80e30d55d591f61c0fd9f944f114e55af1ecc7d0f5b"
+    },
+    {
+      "path": "crates/borsuk/src/bin/publish_two_bit_generation.rs",
+      "bytes": 34915,
+      "sha256": "cb3dd549a0c14d936a44a17165b9c99045218a05be2be6e5740d3ede85bbfbfb"
+    }
+  ],
+  "integrated": false,
+  "native_execution": false,
+  "source_check": "rustfmt edition2024 exit0 CPU1/256MiB/noSwap/120s; private-index diffcheck exit0",
+  "preserved_worker": "371b462b-0dc1-42e4-80c3-db2b40ad5512",
+  "remaining": [
+    "independent review",
+    "exact remote affected tests/release/workspace Clippy/actual shim-unset test compilation",
+    "real S3 admission and disposable publication canary"
+  ],
+  "new_tests": [
+    "sq8_s3_range::tests::native_s3_create_copy_uses_conditional_multipart",
+    "sq8_s3_range::tests::publication_request_deadline_allows_progressing_whole_body",
+    "tests::retained_backend_descriptors_are_strict_before_store_operations"
+  ],
+  "review_group": "bc7a4234ecf54fd1",
+  "review_reconciliation": {
+    "whole_body_deadline": "Publication-only explicit required 1..600s total request deadline; queries still30s. Authored progressing-body regression with shortened deadlines. No empirical scale feasibility claim.",
+    "credential_source": "Instance-role IMDS documented in API and receipt; no profile/env credential mode added.",
+    "copy_test": "Actual NativeConnector/PrefixStore success and412 AlreadyExists/abort; namespace, conditional completion, method/query, attempt count; authored UNRUN.",
+    "descriptor": "Bucket length/characters and region characters, normalized nonempty namespace; mixed backend and deadline refusal fixtures.",
+    "single_part_limit": "Documented installed SDK5GiB copied-sidecar ceiling; current100k sidecars below it, no future-scale qualification.",
+    "cleanup": "Best effort; verify bucket MPU cleanup/IAM/actual RSS in real disposable canary. No automatic retry or lost-response recovery.",
+    "scratch": "Existing library conservatively charges remote copies as scratch, unchanged.",
+    "scale_scope": "Current100k only; published10M qualification is a separate prospectively admitted experiment."
+  },
+  "qualification_source_commit": "4c2e535fef1fdc2e61fa003358614287bb8ed488",
+  "qualification_base": "59ceb5e1b07af7c4f0cd67af02e2a1d576688501"
+}

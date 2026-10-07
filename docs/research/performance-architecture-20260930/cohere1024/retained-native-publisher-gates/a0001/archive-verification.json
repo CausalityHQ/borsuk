@@ -1,0 +1,14 @@
+{
+  "status": "PREPARED_NOT_LAUNCHED",
+  "source_commit": "4c2e535fef1fdc2e61fa003358614287bb8ed488",
+  "source_count": 2449,
+  "native_count": 414,
+  "native_identity": "07fe340f2e449e970cb04891a4509a1d766cd8498e93757ac4e11e8ce6f63fd7",
+  "source_archive_sha256": "dc29619b1e252f28dbc7a08236d304886360aa17a0e39ba039eb6d1c0a637515",
+  "changed_native": [
+    "crates/borsuk/src/bin/publish_two_bit_generation.rs",
+    "crates/borsuk/src/sq8_s3_range.rs"
+  ],
+  "prior_instance_terminated": true,
+  "performance_claim": false
+}

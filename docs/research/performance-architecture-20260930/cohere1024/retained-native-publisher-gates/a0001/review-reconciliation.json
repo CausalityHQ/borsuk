@@ -1,0 +1,10 @@
+{
+  "whole_body_deadline": "Publication-only explicit required 1..600s total request deadline; queries still30s. Authored progressing-body regression with shortened deadlines. No empirical scale feasibility claim.",
+  "credential_source": "Instance-role IMDS documented in API and receipt; no profile/env credential mode added.",
+  "copy_test": "Actual NativeConnector/PrefixStore success and412 AlreadyExists/abort; namespace, conditional completion, method/query, attempt count; authored UNRUN.",
+  "descriptor": "Bucket length/characters and region characters, normalized nonempty namespace; mixed backend and deadline refusal fixtures.",
+  "single_part_limit": "Documented installed SDK5GiB copied-sidecar ceiling; current100k sidecars below it, no future-scale qualification.",
+  "cleanup": "Best effort; verify bucket MPU cleanup/IAM/actual RSS in real disposable canary. No automatic retry or lost-response recovery.",
+  "scratch": "Existing library conservatively charges remote copies as scratch, unchanged.",
+  "scale_scope": "Current100k only; published10M qualification is a separate prospectively admitted experiment."
+}
