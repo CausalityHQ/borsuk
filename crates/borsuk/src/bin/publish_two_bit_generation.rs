@@ -1,7 +1,10 @@
 //! Publish one authenticated local two-bit generation as a fresh LocalFileSystem head.
 use borsuk::{
     two_bit_generation::TwoBitGenerationLimits,
-    two_bit_store::{publish_two_bit_generation, read_two_bit_head},
+    two_bit_store::{
+        RetainedTwoBitApproval, publish_two_bit_generation, read_two_bit_head,
+        republish_retained_two_bit_generation,
+    },
 };
 use object_store::{local::LocalFileSystem, path::Path as ObjectPath};
 use serde::Deserialize;
@@ -19,6 +22,8 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const CONFIG_CAP: u64 = 65_536;
 const CONFIG_SCHEMA: &str = "borsuk-two-bit-local-publication-config-v1";
 const RECEIPT_SCHEMA: &str = "borsuk-two-bit-local-publication-receipt-v1";
+const RETAINED_CONFIG_SCHEMA: &str = "borsuk-two-bit-retained-local-publication-config-v1";
+const RETAINED_RECEIPT_SCHEMA: &str = "borsuk-two-bit-retained-local-publication-receipt-v1";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -34,6 +39,22 @@ struct Config {
 struct Root {
     path: PathBuf,
     sha256: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RetainedConfig {
+    schema: String,
+    store_root: PathBuf,
+    retained_prefix: String,
+    original_root_sha256: String,
+    original_generation: u64,
+    original_control_epoch: u64,
+    sq8_object_key: String,
+    sq8_etag: String,
+    destination_prefix: String,
+    scratch_parent: PathBuf,
+    max_scratch_bytes: u64,
+    limits: Limits,
 }
 // Every field is mandatory: the caller states the admission, nothing is defaulted.
 #[derive(Deserialize)]
@@ -73,7 +94,7 @@ fn sha_hex(bytes: &[u8]) -> String {
 fn is_sha(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
 }
-fn config(path: &Path, trusted_sha: &str) -> Result<Config> {
+fn config_bytes(path: &Path, trusted_sha: &str) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     File::open(path)?
         .take(CONFIG_CAP + 1)
@@ -81,7 +102,10 @@ fn config(path: &Path, trusted_sha: &str) -> Result<Config> {
     if bytes.len() as u64 > CONFIG_CAP || sha_hex(&bytes) != trusted_sha {
         return Err("config identity or cap".into());
     }
-    let c: Config = serde_json::from_slice(&bytes)?;
+    Ok(bytes)
+}
+fn config(path: &Path, trusted_sha: &str) -> Result<Config> {
+    let c: Config = serde_json::from_slice(&config_bytes(path, trusted_sha)?)?;
     if c.schema != CONFIG_SCHEMA {
         return Err("config schema".into());
     }
@@ -90,6 +114,22 @@ fn config(path: &Path, trusted_sha: &str) -> Result<Config> {
     }
     if !c.store_root.is_dir() {
         return Err("store_root not a directory".into());
+    }
+    Ok(c)
+}
+fn retained_config(path: &Path, trusted_sha: &str) -> Result<RetainedConfig> {
+    let c: RetainedConfig = serde_json::from_slice(&config_bytes(path, trusted_sha)?)?;
+    if c.schema != RETAINED_CONFIG_SCHEMA {
+        return Err("retained config schema".into());
+    }
+    if !is_sha(&c.original_root_sha256)
+        || c.original_generation == 0
+        || c.original_control_epoch == 0
+    {
+        return Err("invalid retained approval".into());
+    }
+    if !c.store_root.is_dir() || !c.scratch_parent.is_dir() {
+        return Err("retained store/scratch not a directory".into());
     }
     Ok(c)
 }
@@ -167,14 +207,97 @@ async fn publish(config_path: &Path, config_sha: &str, receipt: &Path) -> Result
     }))?;
     write_receipt(receipt, &body)
 }
-fn run(args: &[String]) -> Result<()> {
-    if args.len() != 4 {
-        return Err("usage: publish_two_bit_generation CONFIG CONFIG_SHA NEW_RECEIPT".into());
+async fn publish_retained(config_path: &Path, config_sha: &str, receipt: &Path) -> Result<()> {
+    let c = retained_config(config_path, config_sha)?;
+    receipt_parent(receipt)?;
+    if receipt.symlink_metadata().is_ok() {
+        return Err("receipt exists".into());
     }
-    tokio::runtime::Builder::new_current_thread()
+    // Fixed schemas/capped config, path clones, escaped receipt Value/Vec copies
+    // and independent head readback coexist with the library's caller pins.
+    let mut limits = TwoBitGenerationLimits::from(&c.limits);
+    limits.already_pinned_bytes = limits
+        .already_pinned_bytes
+        .checked_add(CONFIG_CAP * 16 + 131072)
+        .filter(|&n| n < limits.max_memory_bytes)
+        .ok_or("retained CLI memory admission")?;
+    let source = ObjectPath::parse(&c.retained_prefix)?;
+    let destination = ObjectPath::parse(&c.destination_prefix)?;
+    if source.as_ref().is_empty() || destination.as_ref().is_empty() {
+        return Err("invalid retained prefix".into());
+    }
+    let store = LocalFileSystem::new_with_prefix(&c.store_root)?;
+    let retained = read_two_bit_head(&store, &source)
+        .await?
+        .ok_or("retained head missing")?;
+    let published = republish_retained_two_bit_generation(
+        &store,
+        &retained,
+        RetainedTwoBitApproval {
+            root_sha256: &c.original_root_sha256,
+            generation: c.original_generation,
+            control_epoch: c.original_control_epoch,
+            sq8_object_key: &c.sq8_object_key,
+            sq8_etag: &c.sq8_etag,
+        },
+        &destination,
+        limits,
+        &c.scratch_parent,
+        c.max_scratch_bytes,
+    )
+    .await?;
+    let head = read_two_bit_head(&store, &destination)
+        .await?
+        .ok_or("published retained head missing")?;
+    if head.root_sha256() != published.root_sha256()
+        || head.generation() != c.original_generation
+        || head.generation() != published.generation()
+        || head.control_epoch() != 1
+        || head.control_epoch() != published.control_epoch()
+        || head.metadata_prefix() != published.metadata_prefix()
+    {
+        return Err("published retained head authority changed".into());
+    }
+    let body = serde_json::to_vec_pretty(&json!({
+        "schema": RETAINED_RECEIPT_SCHEMA,
+        "config_sha256": config_sha,
+        "store_root": c.store_root,
+        "retained_prefix": c.retained_prefix,
+        "original_root_sha256": c.original_root_sha256,
+        "original_generation": c.original_generation,
+        "original_control_epoch": c.original_control_epoch,
+        "sq8_object_key": c.sq8_object_key,
+        "sq8_etag": c.sq8_etag,
+        "destination_prefix": c.destination_prefix,
+        "head_key": destination.clone().join("head.json").to_string(),
+        "metadata_prefix": head.metadata_prefix().to_string(),
+        "root_sha256": head.root_sha256(),
+        "generation": head.generation(),
+        "control_epoch": head.control_epoch(),
+        "local_file_only": true,
+        "performance_claim": false,
+    }))?;
+    write_receipt(receipt, &body)
+}
+fn run(args: &[String]) -> Result<()> {
+    let retained = args.get(1).is_some_and(|arg| arg == "--retained");
+    if args.len() != if retained { 5 } else { 4 } {
+        return Err(
+            "usage: publish_two_bit_generation [--retained] CONFIG CONFIG_SHA NEW_RECEIPT".into(),
+        );
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .build()?
-        .block_on(publish(Path::new(&args[1]), &args[2], Path::new(&args[3])))
+        .build()?;
+    if retained {
+        runtime.block_on(publish_retained(
+            Path::new(&args[2]),
+            &args[3],
+            Path::new(&args[4]),
+        ))
+    } else {
+        runtime.block_on(publish(Path::new(&args[1]), &args[2], Path::new(&args[3])))
+    }
 }
 fn main() {
     if let Err(e) = run(&std::env::args().collect::<Vec<_>>()) {
@@ -197,19 +320,19 @@ mod tests {
     const D: usize = 768;
 
     /// Real builder output plus the SQ8 object staged in a real LocalFileSystem store.
-    async fn fixture() -> (tempfile::TempDir, Value) {
+    async fn fixture(rows: usize, dimensions: usize) -> (tempfile::TempDir, Value) {
         let dir = tempfile::tempdir().unwrap();
         let store_root = dir.path().join("store");
         fs::create_dir(&store_root).unwrap();
         let (mut raw, mut sq8) = (Vec::new(), Vec::new());
-        for row in 0..ROWS {
+        for row in 0..rows {
             let value = (1 + row % 7) as u8;
-            for _ in 0..D {
+            for _ in 0..dimensions {
                 raw.extend_from_slice(&(value as f32).to_le_bytes());
             }
-            sq8.extend_from_slice(&((ROWS - row + 1000) as i64).to_le_bytes());
-            sq8.extend_from_slice(&(D as f32 * (value as f32).powi(2)).to_le_bytes());
-            sq8.extend(std::iter::repeat_n(value, D));
+            sq8.extend_from_slice(&((rows - row + 1000) as i64).to_le_bytes());
+            sq8.extend_from_slice(&(dimensions as f32 * (value as f32).powi(2)).to_le_bytes());
+            sq8.extend(std::iter::repeat_n(value, dimensions));
         }
         let (raw_path, sq8_path) = (dir.path().join("raw"), dir.path().join("sq8"));
         fs::write(&raw_path, &raw).unwrap();
@@ -220,20 +343,20 @@ mod tests {
         store.put(&key, sq8.into()).await.unwrap();
         let etag = store.head(&key).await.unwrap().e_tag.unwrap();
         let root = dir.path().join("generation");
-        let order = (0..ROWS as u64).collect::<Vec<_>>();
+        let order = (0..rows as u64).collect::<Vec<_>>();
         let root_sha = TwoBitGenerationBuilder {
             source: TwoBitSource {
                 raw: &raw_path,
                 raw_sha256: &sha_hex(&raw),
                 sq8: &sq8_path,
                 sq8_sha256: &sq8_sha,
-                rows: ROWS,
-                dimensions: D,
+                rows,
+                dimensions,
             },
             base_epoch: 0,
             generation: 1,
-            low: &[0.; D],
-            step: &[1.; D],
+            low: &vec![0.; dimensions],
+            step: &vec![1.; dimensions],
             sq8_object_key: key.as_ref(),
             sq8_etag: &etag,
         }
@@ -271,9 +394,256 @@ mod tests {
         read_two_bit_head(&store, &prefix).await.unwrap().is_some()
     }
 
+    // Real publication, exact retained roster, then remove construction/source.
+    async fn retained_fixture() -> (tempfile::TempDir, Value) {
+        let (dir, fresh) = fixture(64, 1024).await;
+        let (path, sha) = write_config(dir.path(), &fresh);
+        publish(&path, &sha, &dir.path().join("original-receipt.json"))
+            .await
+            .unwrap();
+        let source_root = dir.path().join("store");
+        let copied_root = dir.path().join("copied");
+        fs::create_dir(&copied_root).unwrap();
+        let source = LocalFileSystem::new_with_prefix(&source_root).unwrap();
+        let head = read_two_bit_head(&source, &ObjectPath::from("semantic/index"))
+            .await
+            .unwrap()
+            .unwrap();
+        let root: Value =
+            serde_json::from_slice(&fs::read(dir.path().join("generation/manifest.json")).unwrap())
+                .unwrap();
+        let metadata = head.metadata_prefix();
+        let mut roster = [
+            "manifest.json",
+            "page_manifest.json",
+            "page_digests.bin",
+            "plane/manifest.json",
+            "plane/mean.bin",
+            "plane/records.bin",
+            "plane/page_digests.bin",
+            "router/root.bin",
+            "router/membership.bin",
+            "router/leaves.bin",
+        ]
+        .map(|name| metadata.clone().join(name))
+        .to_vec();
+        roster.extend([
+            ObjectPath::from("semantic/index/head.json"),
+            ObjectPath::from(root["sq8_object_key"].as_str().unwrap()),
+            ObjectPath::from(root["canonical"]["object_key"].as_str().unwrap()),
+        ]);
+        for object in roster {
+            let target = copied_root.join(object.as_ref());
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            fs::copy(source_root.join(object.as_ref()), target).unwrap();
+        }
+        assert!(
+            !copied_root
+                .join(metadata.as_ref())
+                .join("centroids.bin")
+                .exists()
+        );
+        let copied = LocalFileSystem::new_with_prefix(&copied_root).unwrap();
+        let etag = copied
+            .head(&ObjectPath::from(root["sq8_object_key"].as_str().unwrap()))
+            .await
+            .unwrap()
+            .e_tag
+            .unwrap();
+        assert_ne!(etag, root["sq8_etag"].as_str().unwrap());
+        let scratch = dir.path().join("scratch");
+        fs::create_dir(&scratch).unwrap();
+        let c = json!({
+            "schema": RETAINED_CONFIG_SCHEMA,
+            "store_root": copied_root,
+            "retained_prefix": "semantic/index",
+            "original_root_sha256": head.root_sha256(),
+            "original_generation": head.generation(),
+            "original_control_epoch": head.control_epoch(),
+            "sq8_object_key": root["sq8_object_key"],
+            "sq8_etag": etag,
+            "destination_prefix": "rebound/index",
+            "scratch_parent": scratch,
+            "max_scratch_bytes": 4_000_000,
+            "limits": fresh["limits"],
+        });
+        drop(source);
+        for name in ["store", "generation"] {
+            fs::remove_dir_all(dir.path().join(name)).unwrap();
+        }
+        for name in ["raw", "sq8"] {
+            fs::remove_file(dir.path().join(name)).unwrap();
+        }
+        (dir, c)
+    }
+
+    fn retained_args(path: &Path, sha: &str, receipt: &Path) -> Vec<String> {
+        vec![
+            "publish_two_bit_generation".into(),
+            "--retained".into(),
+            path.to_str().unwrap().into(),
+            sha.into(),
+            receipt.to_str().unwrap().into(),
+        ]
+    }
+
+    // A wrong dispatch/schema/approval or omitted receipt binding breaks this.
+    #[test]
+    fn retained_publishes_copied_source_gone_generation_and_bound_receipt() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (dir, c) = runtime.block_on(retained_fixture());
+        let (path, sha) = write_config(dir.path(), &c);
+        let receipt = dir.path().join("retained-receipt.json");
+        run(&retained_args(&path, &sha, &receipt)).unwrap();
+        let body: Value = serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
+        assert_eq!(body["schema"], RETAINED_RECEIPT_SCHEMA);
+        assert_eq!(body["config_sha256"], sha);
+        for field in [
+            "store_root",
+            "retained_prefix",
+            "original_root_sha256",
+            "original_generation",
+            "original_control_epoch",
+            "sq8_object_key",
+            "sq8_etag",
+            "destination_prefix",
+        ] {
+            assert_eq!(body[field], c[field], "{field}");
+        }
+        assert_eq!(body["local_file_only"], true);
+        assert_eq!(body["performance_claim"], false);
+        assert_ne!(body["root_sha256"], c["original_root_sha256"]);
+        assert_eq!(body["generation"], 1);
+        assert_eq!(body["control_epoch"], 1);
+        let store = LocalFileSystem::new_with_prefix(c["store_root"].as_str().unwrap()).unwrap();
+        let prefix = ObjectPath::from("rebound/index");
+        runtime.block_on(async {
+            let head = read_two_bit_head(&store, &prefix).await.unwrap().unwrap();
+            assert_eq!(body["root_sha256"], head.root_sha256());
+            assert_eq!(body["metadata_prefix"], head.metadata_prefix().to_string());
+            assert_eq!(body["head_key"], "rebound/index/head.json");
+            let generation = borsuk::two_bit_generation::TwoBitGeneration::open_remote_from_head(
+                &store,
+                &head,
+                (&retained_config(&path, &sha).unwrap().limits).into(),
+                Path::new(c["scratch_parent"].as_str().unwrap()),
+            )
+            .await
+            .unwrap();
+            assert_eq!(generation.rows(), 64);
+            drop(generation);
+        });
+        let first = fs::read(&receipt).unwrap();
+        assert!(run(&retained_args(&path, &sha, &receipt)).is_err());
+        assert_eq!(fs::read(&receipt).unwrap(), first);
+        let another = dir.path().join("another.json");
+        assert!(run(&retained_args(&path, &sha, &another)).is_err());
+        assert!(!another.exists());
+    }
+
+    // Removing strict config, output preflight, SHA or pending-head refusal breaks this.
+    #[test]
+    fn retained_refuses_bad_config_pending_head_and_occupied_output_without_head() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (dir, good) = runtime.block_on(retained_fixture());
+        let receipt = dir.path().join("retained-receipt.json");
+        let store = LocalFileSystem::new_with_prefix(good["store_root"].as_str().unwrap()).unwrap();
+        let prefix = ObjectPath::from("rebound/index");
+        let no_head = || {
+            assert!(
+                runtime
+                    .block_on(read_two_bit_head(&store, &prefix))
+                    .unwrap()
+                    .is_none()
+            )
+        };
+        let (path, sha) = write_config(dir.path(), &good);
+        assert!(run(&retained_args(&path, &"0".repeat(64), &receipt)).is_err());
+        fs::write(&receipt, b"occupied").unwrap();
+        assert!(run(&retained_args(&path, &sha, &receipt)).is_err());
+        assert_eq!(fs::read(&receipt).unwrap(), b"occupied");
+        no_head();
+        fs::remove_file(&receipt).unwrap();
+        let missing_parent = dir.path().join("absent/receipt.json");
+        assert!(run(&retained_args(&path, &sha, &missing_parent)).is_err());
+        no_head();
+        for (field, value) in [
+            ("schema", json!(CONFIG_SCHEMA)),
+            ("pending", json!(true)),
+            ("original_root_sha256", json!("0".repeat(64))),
+            ("original_generation", json!(2)),
+            ("original_control_epoch", json!(2)),
+            ("sq8_etag", json!("unapproved")),
+            ("sq8_object_key", json!("unapproved/object")),
+            ("destination_prefix", json!("../bad")),
+            ("max_scratch_bytes", json!(0)),
+        ] {
+            let mut bad = good.clone();
+            bad[field] = value;
+            let (path, sha) = write_config(dir.path(), &bad);
+            assert!(
+                run(&retained_args(&path, &sha, &receipt)).is_err(),
+                "{field}"
+            );
+            assert!(!receipt.exists());
+            no_head();
+        }
+        for missing_limit in [false, true] {
+            let mut bad = good.clone();
+            if missing_limit {
+                bad["limits"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("max_source_gets");
+            } else {
+                bad["limits"]["max_memory_bytes"] = json!(0);
+            }
+            let (path, sha) = write_config(dir.path(), &bad);
+            assert!(run(&retained_args(&path, &sha, &receipt)).is_err());
+            assert!(!receipt.exists());
+            no_head();
+        }
+        for field in good.as_object().unwrap().keys() {
+            let mut bad = good.clone();
+            bad.as_object_mut().unwrap().remove(field);
+            let (path, sha) = write_config(dir.path(), &bad);
+            assert!(
+                run(&retained_args(&path, &sha, &receipt)).is_err(),
+                "missing {field}"
+            );
+            no_head();
+        }
+        let (path, sha) = write_config(dir.path(), &good);
+        fs::write(&path, [b' '; 65_537]).unwrap();
+        assert!(run(&retained_args(&path, &sha_hex(&[b' '; 65_537]), &receipt)).is_err());
+        write_config(dir.path(), &good);
+        let head_path = dir.path().join("copied/semantic/index/head.json");
+        let original = fs::read(&head_path).unwrap();
+        let mut pending: Value = serde_json::from_slice(&original).unwrap();
+        pending["mutation"] = json!({"revision":1,"sha256":"1".repeat(64),"sealed":false});
+        fs::write(&head_path, serde_json::to_vec(&pending).unwrap()).unwrap();
+        assert!(run(&retained_args(&path, &sha, &receipt)).is_err());
+        no_head();
+        assert!(!receipt.exists());
+        fs::write(&head_path, original).unwrap();
+        let occupied = dir.path().join("copied/rebound/index/occupied");
+        fs::create_dir_all(occupied.parent().unwrap()).unwrap();
+        fs::write(&occupied, b"occupied").unwrap();
+        assert!(run(&retained_args(&path, &sha, &receipt)).is_err());
+        no_head();
+        assert!(!receipt.exists());
+        assert_eq!(fs::read(&occupied).unwrap(), b"occupied");
+    }
+
     #[tokio::test]
     async fn publishes_real_generation_and_receipt_then_refuses_replay() {
-        let (dir, c) = fixture().await;
+        let (dir, c) = fixture(ROWS, D).await;
         let (path, sha) = write_config(dir.path(), &c);
         let receipt = dir.path().join("receipt.json");
         // An existing receipt is refused before anything is published.
@@ -322,7 +692,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_wrong_root_cap_existing_head_and_bad_config() {
-        let (dir, good) = fixture().await;
+        let (dir, good) = fixture(ROWS, D).await;
         let receipt = dir.path().join("receipt.json");
         let mut wrong_root = good.clone();
         wrong_root["root"]["sha256"] = json!("0".repeat(64));
