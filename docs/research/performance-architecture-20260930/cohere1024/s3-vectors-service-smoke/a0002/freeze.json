@@ -1,0 +1,45 @@
+{
+  "status": "PREREGISTERED_NOT_LAUNCHED",
+  "purpose": "actual SDK permission/assets/CLI/seal/reduce/cleanup smoke, synthetic257/D1024/twoqueries, not performance",
+  "qualified_revision": "32183a2b609d5279a64fd7ae72ee60ba3d032575",
+  "binary": {
+    "bytes": 19424240,
+    "sha256": "6884da8048c01b2018844b6cd0d4355d9b0fb3b1495edcbfa4efd7691c2456c1"
+  },
+  "runner_sha256": "1ff974d107e1947aa7a76dfd06155017e624848d4d2be68feeb5b60ca9a819a0",
+  "instance_type": "c7i.large",
+  "spot": true,
+  "max_bid_usd_per_hour": "0.25",
+  "region": "eu-central-1",
+  "instance_role": "borsuk-bench-profile",
+  "native": {
+    "cpu": 1,
+    "memory_bytes": 536870912,
+    "swap_bytes": 0,
+    "pids": 64,
+    "deadline_seconds": 600
+  },
+  "machine_deadline_seconds": 1800,
+  "reserved_usd": {
+    "compute": "0.125",
+    "ancillary": "0.15",
+    "s3_vectors": "0.25",
+    "total": "0.525"
+  },
+  "interruption": "INVALID smoke; preserve receipts and reconcile exact namespace before any new attempt",
+  "termination": "terminate and wait original instance immediately after terminal, collect after termination",
+  "credentials": "IMDSv2 temporary role credentials only; private0600 named profile, expiry covers native deadline, no credentials in archive/logs, remove on finish",
+  "pending": [],
+  "service_calls_started": false,
+  "cost_basis": "4096 cumulative SDK calls at Frankfurt nonquery $.000059/request plus tiny put/storage/query; compute maxbid $.25/hour *30min; ancillary $.15",
+  "frozen": {
+    "config_sha256": "056901290197d8beefe072229813258ccb38f82674818aab04610e57a59326f5",
+    "manifest_sha256": "9ba19b31ff7c20bc0d9bcf5f5e490b4ec3920f1824e48e1125de4f2abc484e12",
+    "bootstrap_sha256": "2970a204011697bf2709ee4c17b996e942b3363284a83fed07165e39093ade3b",
+    "runner_sha256": "10a5a75b94e803955149e766f1f04599c9d6740e235a60aa0404a2b2f6883f10",
+    "namespace": "borsuk-s3v-fb24a4be2809c2ff74f0f4a3b4f5910d",
+    "qualified_main": "32183a2b609d5279a64fd7ae72ee60ba3d032575"
+  },
+  "attempt": "a0002",
+  "supersedes_environment_invalid": "a0001: duplicate evidence mkdir, no native/API calls"
+}

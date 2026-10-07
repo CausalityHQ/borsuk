@@ -1,0 +1,36 @@
+{
+  "schema": "borsuk-s3-vectors-config-v1",
+  "mode": "canary",
+  "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+  "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+  "rows": 257,
+  "count": 2,
+  "dimensions": 1024,
+  "k": 10,
+  "metric": "cosine",
+  "state_dir": "/mnt/borsuk-s3-vectors-canary/state",
+  "run_id": "fb24a4be2809c2ff74f0f4a3b4f5910d",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "account_id": "453182569524",
+  "bucket": "borsuk-s3v-fb24a4be2809c2ff74f0f4a3b4f5910d",
+  "index": "baseline-fb24a4be2809c2ff74f0f4a3b4f5910d",
+  "idle_seconds": 0,
+  "query_interval_ms": 0,
+  "host_identity": "disposable EC2 synthetic SDK smoke; exact IMDSv2 instance identity bound in host-identity.json and terminal receipt",
+  "corpus": {
+    "path": "/mnt/borsuk-s3-vectors-canary/inputs/corpus.f32",
+    "bytes": 1052672,
+    "sha256": "d201c8116ba23d4ef5d352acef59fab57de4140e9071961fa9be1bebffa172f1"
+  },
+  "queries": {
+    "path": "/mnt/borsuk-s3-vectors-canary/inputs/queries.f32",
+    "bytes": 8192,
+    "sha256": "578802a76a952e38ccb28f8c35377d669dbd5fab50e941e3fbec419918ad6783"
+  },
+  "truth": {
+    "path": "/mnt/borsuk-s3-vectors-canary/inputs/truth.u64",
+    "bytes": 160,
+    "sha256": "ec19673019513fd1b8447e9a92e6969cbdc846335b82f9e599e6be703c79b046"
+  }
+}

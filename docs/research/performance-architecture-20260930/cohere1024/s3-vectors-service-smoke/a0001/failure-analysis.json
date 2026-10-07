@@ -1,0 +1,14 @@
+{
+  "status": "EXECUTION_INVALID_ENVIRONMENT",
+  "instance_id": "i-0852f31ef0a7fc552",
+  "terminated": true,
+  "original_exit": 1,
+  "native_binary_started": false,
+  "service_calls": 0,
+  "resource_creation": false,
+  "root_cause": "runner mkdir evidence conflicts with bootstrap-created evidence directory",
+  "repair": "mkdir state remains exclusive; mkdir -p evidence reuses bootstrap evidence directory",
+  "algorithm_changed": false,
+  "scientific_limits_changed": false,
+  "performance_claim": false
+}

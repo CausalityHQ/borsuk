@@ -1,0 +1,30 @@
+{
+  "status": "SDK_SERVICE_SMOKE_VERIFIED",
+  "instance_id": "i-003b7f7411750cb4f",
+  "terminated": true,
+  "qualified_main": "32183a2b609d5279a64fd7ae72ee60ba3d032575",
+  "config_sha256": "056901290197d8beefe072229813258ccb38f82674818aab04610e57a59326f5",
+  "stage_exits": {
+    "admit": 0,
+    "publish": 0,
+    "measure": 0,
+    "reduce": 0,
+    "cleanup": 0
+  },
+  "synthetic": true,
+  "rows": 257,
+  "queries": 2,
+  "full_bit_exact_readback": true,
+  "response_seal_verified": true,
+  "truth_after_seal": true,
+  "owned_index_and_bucket_absence_verified": true,
+  "observed_wrapped_sdk_transmits": 20,
+  "unconfirmed_reservations": 0,
+  "memory_peak_bytes": 7327744,
+  "swap_peak_bytes": 0,
+  "oom": 0,
+  "service_index_mode": "ENHANCED",
+  "performance_claim": false,
+  "service_billed_cost": null,
+  "prior_environment_invalid_preserved": "a0001"
+}

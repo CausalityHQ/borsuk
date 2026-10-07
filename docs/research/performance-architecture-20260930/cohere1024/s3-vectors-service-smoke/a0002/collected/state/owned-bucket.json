@@ -1,0 +1,1 @@
+{"config_sha256":"056901290197d8beefe072229813258ccb38f82674818aab04610e57a59326f5","data":{"arn":"arn:aws:s3vectors:eu-central-1:453182569524:bucket/borsuk-s3v-fb24a4be2809c2ff74f0f4a3b4f5910d","at_ms":1791414881326,"create_request_id":"128a7e64-ae5b-8130-9bf0-234dfd7b4b67"},"kind":"owned-bucket.json","schema":"borsuk-s3-vectors-receipt-v1"}

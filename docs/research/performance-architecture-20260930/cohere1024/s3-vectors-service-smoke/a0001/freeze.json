@@ -1,0 +1,19 @@
+{
+  "status": "FROZEN_PRELAUNCH_NOT_STARTED",
+  "config_sha256": "af3365d28f626e589d89071b459c0b496009d104cea83718564f7a9cd85468bf",
+  "manifest_sha256": "102eee32426f37922055651251926455f1f8c8516e316f8b50795a3422d761f6",
+  "bootstrap_sha256": "8b1e3b9249eb8cc9553d7e8b3ad8d5cc48498ef234c85dda26422aead711a877",
+  "runner_sha256": "1ff974d107e1947aa7a76dfd06155017e624848d4d2be68feeb5b60ca9a819a0",
+  "namespace": "borsuk-s3v-70d9a896bbff60af32b26077ac4ccd89",
+  "qualified_main": "32183a2b609d5279a64fd7ae72ee60ba3d032575",
+  "synthetic": true,
+  "performance_claim": false,
+  "spot_quote": {
+    "AvailabilityZone": "eu-central-1a",
+    "AvailabilityZoneId": "euc1-az2",
+    "InstanceType": "c7i.large",
+    "ProductDescription": "Linux/UNIX",
+    "SpotPrice": "0.045800",
+    "Timestamp": "2026-10-07T22:00:00+00:00"
+  }
+}

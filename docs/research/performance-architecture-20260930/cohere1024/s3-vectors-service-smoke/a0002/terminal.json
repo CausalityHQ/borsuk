@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-s3-vectors-sdk-canary-v1",
+  "instance_id": "i-003b7f7411750cb4f",
+  "original_exit": 0,
+  "native_exit": 0,
+  "upload_exit": 0,
+  "evidence": {
+    "sha256": "02d95c33d804c9c8e8dd1b22114ede6f367d53ffc453d73a5f414b6d5fbb217d",
+    "bytes": 9594
+  },
+  "synthetic": true,
+  "performance_claim": false
+}
