@@ -1,0 +1,28 @@
+{
+  "status": "ENVIRONMENT_INVALID_SPOT_CAPACITY",
+  "qualified": false,
+  "session": 57312,
+  "instance_id": null,
+  "nodes": {},
+  "instance_created": false,
+  "native_execution_started": false,
+  "native_source_commit": "cc3025962392604ac1419fb2f4959f5b0c31894d",
+  "source_bundle": "63fc205d894ed6cdfbfdc098c11f61baf4e85a57",
+  "source_identity_sha256": "6e60329efa2901eaf72def2424671096ac98d49227c4bc0a9d3e18e737d24c03",
+  "controller_exit": 1,
+  "aws_error": "InsufficientInstanceCapacity",
+  "aws_error_message": "We currently do not have sufficient c7i.2xlarge capacity in the Availability Zone you requested (eu-central-1a). AWS suggested eu-central-1b/eu-central-1c. RunInstances reached max retries: 4.",
+  "cleanup_receipt": "aws-closeout.json",
+  "all_native_stages": "UNRUN",
+  "original_subnet": "subnet-034528fbd6977848f",
+  "alternative_subnet": {
+    "id": "subnet-0a12dbed0ca6fac25",
+    "availability_zone": "eu-central-1c",
+    "vpc": "vpc-02bed5aadbc3c0a2d",
+    "state": "available",
+    "public": true,
+    "same_vpc_as_original": true,
+    "spot_usd_per_hour": "0.206500"
+  },
+  "decision": "Change only retained qualification subnet, freeze controller/config and retry unchanged native source/algorithm/limits in new recorded attempt."
+}
