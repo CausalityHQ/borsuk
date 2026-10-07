@@ -1,0 +1,56 @@
+{
+  "schema": "borsuk-generic-s3-namespace-root-verification-v1",
+  "status": "NATIVE_QUALIFIED",
+  "source_commit": "7fa4677213832b6d635aad7da2f1297fcb8b8713",
+  "root_before_integration": "195eba84bfad2c41819cbce22c8453212a0de5f5",
+  "instance_id": "i-03a20d59b69cdd623",
+  "terminated": true,
+  "termination_wait_exit": 0,
+  "artifact_count": 60,
+  "source_file_count": 414,
+  "support_file_count": 2449,
+  "native_source_identity_sha256": "eb45996d56a10c2cc5a40f51f35bee837c6a736b99e572c975c8540aed2d509c",
+  "full_source_before_after_root_with_owned_overlay_match": true,
+  "stages": [
+    {
+      "name": "s3-range-tests",
+      "exit": 0,
+      "tee_exit": 0,
+      "command": "cargo test --locked -p borsuk --lib sq8_s3_range::tests:: -- --test-threads=1"
+    },
+    {
+      "name": "http-tests",
+      "exit": 0,
+      "tee_exit": 0,
+      "command": "cargo test --locked -p borsuk --example two_bit_http -- --test-threads=1"
+    },
+    {
+      "name": "http-release",
+      "exit": 0,
+      "tee_exit": 0,
+      "command": "cargo build --locked --release -p borsuk --example two_bit_http"
+    },
+    {
+      "name": "workspace-clippy",
+      "exit": 0,
+      "tee_exit": 0,
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious"
+    },
+    {
+      "name": "workspace-test-build",
+      "exit": 0,
+      "tee_exit": 0,
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+    }
+  ],
+  "mandatory_tests": [
+    "sq8_s3_range::tests::physical_namespace_preserves_logical_paths_and_read_accounting",
+    "sq8_s3_range::tests::physical_namespace_rejects_bad_range_etag_and_sha_without_retries",
+    "tests::optional_physical_namespace_args_preserve_logical_prefix"
+  ],
+  "memory_peak_bytes": 8589934592,
+  "swap_peak_bytes": 0,
+  "oom": 0,
+  "binary_sha256": "ed588d09c049ed08514ad893357717e17404bd43f341c8d80dcfcef03755532b",
+  "performance_claim": false
+}

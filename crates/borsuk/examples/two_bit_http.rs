@@ -1,4 +1,6 @@
 //! Development HTTP boundary for an authenticated, immutable native S3 generation.
+//! PREFIX remains the logical generation key; optional PHYSICAL_NAMESPACE places
+//! every S3 operation below a caller-owned prefix without rewriting authenticated keys.
 
 #[path = "../src/native_development_memory.rs"]
 mod native_development_memory;
@@ -176,12 +178,17 @@ async fn search(
         "source_failed_gets":result.source_stats.failed_gets})))
 }
 
+fn physical_namespace(args: &[String]) -> Result<ObjectPath, Box<dyn Error>> {
+    if !matches!(args.len(), 8 | 9) {
+        return Err("usage: two_bit_http BUCKET REGION PREFIX TRUSTED_ROOT_SHA GENERATION CONTROL_EPOCH LOCAL_LISTEN [PHYSICAL_NAMESPACE]".into());
+    }
+    Ok(ObjectPath::parse(args.get(8).map_or("", String::as_str))?)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
-    if args.len() != 8 {
-        return Err("usage: two_bit_http BUCKET REGION PREFIX TRUSTED_ROOT_SHA GENERATION CONTROL_EPOCH LOCAL_LISTEN".into());
-    }
+    let physical_namespace = physical_namespace(&args)?;
     let listen: SocketAddr = args[7].parse()?;
     if !listen.ip().is_loopback()
         && !matches!(listen.ip(), std::net::IpAddr::V4(ip) if ip.is_private())
@@ -193,8 +200,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         generation: args[5].parse()?,
         control_epoch: args[6].parse()?,
     };
-    let reader =
-        OneAttemptS3::new(&args[1], &args[2]).map_err(|error| format!("reader: {error:?}"))?;
+    let reader = OneAttemptS3::new_with_prefix(&args[1], &args[2], physical_namespace.clone())
+        .map_err(|error| format!("reader: {error:?}"))?;
     let store = reader.store();
     let started = Instant::now();
     let head = read_two_bit_head(store, &ObjectPath::from(args[3].as_str()))
@@ -257,6 +264,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!(
         "{}",
         json!({"phase":"ready","listen":listener.local_addr()?,
+        "logical_generation_prefix":args[3],"physical_namespace":physical_namespace.as_ref(),
         "transport":transport_report(&state.reader),
         "authority":state.authority,"head_read_wall_ns":head_read_wall_ns,
         "remote_open_wall_ns":remote_open_wall_ns,
@@ -269,6 +277,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_physical_namespace_args_preserve_logical_prefix() {
+        let mut args = [
+            "two_bit_http",
+            "bucket",
+            "region",
+            "generation",
+            "sha",
+            "1",
+            "1",
+            "127.0.0.1:3000",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(physical_namespace(&args).unwrap(), ObjectPath::default());
+        args.push("tenant/import".into());
+        assert_eq!(physical_namespace(&args).unwrap().as_ref(), "tenant/import");
+        assert_eq!(args[3], "generation");
+        args[8].clear();
+        assert_eq!(physical_namespace(&args).unwrap(), ObjectPath::default());
+        for invalid in [
+            "tenant/../other",
+            "tenant//other",
+            "s3://other-bucket/key",
+            "tenant/\0",
+        ] {
+            args[8] = invalid.into();
+            assert!(physical_namespace(&args).is_err());
+        }
+        args.push("extra".into());
+        assert!(physical_namespace(&args).is_err());
+        assert!(physical_namespace(&args[..7]).is_err());
+    }
 
     #[tokio::test]
     async fn request_identity_geometry_and_nonqueued_admission() {
@@ -300,6 +342,18 @@ mod tests {
         request.k = 10;
         assert_eq!(validate(&request, &authority, 768), Ok(()));
         request.k = 100;
+        request.root_sha256 = "b".repeat(64);
+        assert_eq!(
+            validate(&request, &authority, 768),
+            Err(StatusCode::CONFLICT)
+        );
+        request.root_sha256 = authority.root_sha256.clone();
+        request.generation = 2;
+        assert_eq!(
+            validate(&request, &authority, 768),
+            Err(StatusCode::CONFLICT)
+        );
+        request.generation = authority.generation;
         request.control_epoch = 2;
         assert_eq!(
             validate(&request, &authority, 768),

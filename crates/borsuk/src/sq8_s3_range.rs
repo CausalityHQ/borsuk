@@ -13,7 +13,9 @@ use object_store::client::{
     ClientConfigKey, ClientOptions, HttpClient, HttpConnector, HttpError, HttpErrorKind,
     HttpRequest, HttpResponse, HttpResponseBody, HttpService,
 };
-use object_store::{GetOptions, GetResultPayload, ObjectStore, RetryConfig, path::Path};
+use object_store::{
+    GetOptions, GetResultPayload, ObjectStore, RetryConfig, path::Path, prefix::PrefixStore,
+};
 use std::sync::{Arc, LazyLock, Mutex};
 
 #[derive(Debug)]
@@ -106,7 +108,7 @@ static PROCESS_TRANSPORT: LazyLock<Arc<Mutex<TransportCounters>>> =
 /// against the physical cap. A live HTTP fixture must still verify this
 /// transport's request accounting before a bounded-cost claim.
 pub struct OneAttemptS3 {
-    store: AmazonS3,
+    store: PrefixStore<AmazonS3>,
     counters: Arc<Mutex<TransportCounters>>,
 }
 
@@ -271,11 +273,25 @@ impl OneAttemptS3 {
         &self.store
     }
     pub fn new(bucket: &str, region: &str) -> Result<Self, RangeFetchError> {
+        Self::new_with_prefix(bucket, region, Path::default())
+    }
+
+    /// Resolve logical generation keys beneath a physical S3 namespace.
+    /// Returned object paths remain logical; metadata and range reads share
+    /// the same no-retry transport and process counters. Empty prefix is identity.
+    pub fn new_with_prefix(
+        bucket: &str,
+        region: &str,
+        prefix: Path,
+    ) -> Result<Self, RangeFetchError> {
         let counters = PROCESS_TRANSPORT.clone();
         let store = one_attempt_builder(bucket, region, counters.clone())?
             .build()
             .map_err(RangeFetchError::Store)?;
-        Ok(Self { store, counters })
+        Ok(Self {
+            store: PrefixStore::new(store, prefix),
+            counters,
+        })
     }
 
     pub async fn fetch_verified_pages(
@@ -832,6 +848,19 @@ mod tests {
         Arc<Mutex<Vec<String>>>,
         thread::JoinHandle<()>,
     ) {
+        http_fixture_responses_with_prefix(response, source_response, Path::default())
+    }
+
+    fn http_fixture_responses_with_prefix(
+        response: Vec<u8>,
+        source_response: Option<Vec<u8>>,
+        prefix: Path,
+    ) -> (
+        OneAttemptS3,
+        Arc<AtomicBool>,
+        Arc<Mutex<Vec<String>>>,
+        thread::JoinHandle<()>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -895,8 +924,186 @@ mod tests {
             .with_secret_access_key("fixture")
             .build()
             .unwrap();
-        let reader = OneAttemptS3 { store, counters };
+        let reader = OneAttemptS3 {
+            store: PrefixStore::new(store, prefix),
+            counters,
+        };
         (reader, stop, requests, server)
+    }
+
+    #[tokio::test]
+    async fn physical_namespace_preserves_logical_paths_and_read_accounting() {
+        let (authority, object) = short_tail_authority();
+        let tail = &object[3328..];
+        for prefix in ["", "tenant/import"] {
+            let (reader, stop, requests, server) = http_fixture_responses_with_prefix(
+                http_response("200 OK", None, "\"frozen\"", object.len(), &[]),
+                Some(http_response(
+                    "206 Partial Content",
+                    Some("bytes 3328-3548/3549"),
+                    "\"frozen\"",
+                    tail.len(),
+                    tail,
+                )),
+                Path::parse(prefix).unwrap(),
+            );
+            let head_location = Path::from("generation/head.bin");
+            let location = Path::from("generation/plane/records.bin");
+            let head = reader.store().head(&head_location).await.unwrap();
+            assert_eq!(head.location, head_location);
+            assert_eq!(head.size, object.len() as u64);
+            assert_eq!(head.e_tag.as_deref(), Some("\"frozen\""));
+            let result = reader
+                .store()
+                .get_opts(
+                    &location,
+                    GetOptions::new()
+                        .with_range(Some(3328..3549))
+                        .with_if_match(Some("\"frozen\"")),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.meta.location, location);
+            assert_eq!(result.meta.size, object.len() as u64);
+            assert_eq!(result.meta.e_tag.as_deref(), Some("\"frozen\""));
+            assert_eq!(result.range, 3328..3549);
+            assert_eq!(result.bytes().await.unwrap().as_ref(), tail);
+            let (ranges, stats) = reader
+                .fetch_verified_ranges(
+                    &location,
+                    &authority,
+                    &[(1, 1)],
+                    "\"frozen\"",
+                    1,
+                    tail.len(),
+                    1,
+                )
+                .await
+                .unwrap();
+            assert_eq!(ranges[0].start, 3328);
+            assert_eq!(ranges[0].bytes.as_ref(), tail);
+            assert_eq!(
+                stats,
+                Sq8ReadStats {
+                    submitted_gets: 1,
+                    verified_bytes: tail.len(),
+                    failed_gets: 0,
+                }
+            );
+            // A source-plane authority cannot authorize SQ8 reads, even under a namespace.
+            let (foreign, _) = source_tail_authority();
+            let failure = reader
+                .rank_verified_sq8_pages(
+                    &location,
+                    &foreign,
+                    &[(1, 1)],
+                    "\"frozen\"",
+                    &[1.0; 5],
+                    &[0.0; 5],
+                    &[1.0; 5],
+                    1,
+                    1,
+                    tail.len(),
+                    1,
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(failure.error, RangeFetchError::UnexpectedMetadata));
+            assert_eq!(failure.stats, Sq8ReadStats::default());
+            stop.store(true, Ordering::Relaxed);
+            server.join().unwrap();
+            let physical = if prefix.is_empty() {
+                String::new()
+            } else {
+                format!("{prefix}/")
+            };
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), 3);
+            assert_eq!(
+                requests[0].lines().next().unwrap(),
+                format!("HEAD /fixture/{physical}generation/head.bin HTTP/1.1")
+            );
+            for request in &requests[1..] {
+                assert_eq!(
+                    request.lines().next().unwrap(),
+                    format!("GET /fixture/{physical}generation/plane/records.bin HTTP/1.1")
+                );
+                let headers = request.to_ascii_lowercase();
+                assert!(headers.contains("range: bytes=3328-3548\r\n"));
+                assert!(headers.contains("if-match: \"frozen\"\r\n"));
+            }
+            let transport = reader.transport_stats();
+            assert_eq!(transport.attempts, 3);
+            assert_eq!(transport.method_counts, [2, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+            assert_eq!(transport.status_counts, vec![(200, 1), (206, 2)]);
+            assert_eq!(transport.consumed_payload_bytes, 2 * tail.len() as u64);
+            assert_eq!(
+                transport.transport_failures
+                    + transport.stream_failures
+                    + transport.dropped_error_bodies,
+                0
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn physical_namespace_rejects_bad_range_etag_and_sha_without_retries() {
+        let (authority, object) = short_tail_authority();
+        let tail = &object[3328..];
+        let mut corrupt = tail.to_vec();
+        corrupt[0] ^= 1;
+        for (range, etag, body) in [
+            ("bytes 0-220/3549", "\"frozen\"", tail),
+            ("bytes 3328-3548/3549", "\"foreign\"", tail),
+            ("bytes 3328-3548/3549", "\"frozen\"", corrupt.as_slice()),
+        ] {
+            let (reader, stop, requests, server) = http_fixture_responses_with_prefix(
+                http_response("206 Partial Content", Some(range), etag, body.len(), body),
+                None,
+                Path::parse("tenant/import").unwrap(),
+            );
+            let failure = reader
+                .fetch_verified_ranges(
+                    &Path::from("generation/sq8.bin"),
+                    &authority,
+                    &[(1, 1)],
+                    "\"frozen\"",
+                    1,
+                    tail.len(),
+                    1,
+                )
+                .await
+                .err()
+                .unwrap();
+            stop.store(true, Ordering::Relaxed);
+            server.join().unwrap();
+            assert_eq!(
+                failure.stats,
+                Sq8ReadStats {
+                    submitted_gets: 1,
+                    verified_bytes: 0,
+                    failed_gets: 1,
+                }
+            );
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(
+                requests[0].lines().next().unwrap(),
+                "GET /fixture/tenant/import/generation/sq8.bin HTTP/1.1"
+            );
+            let transport = reader.transport_stats();
+            assert_eq!(transport.attempts, 1);
+            assert_eq!(transport.method_counts, [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+            assert_eq!(transport.status_counts, vec![(206, 1)]);
+            assert_eq!(
+                transport.consumed_payload_bytes,
+                if body == corrupt.as_slice() {
+                    tail.len() as u64
+                } else {
+                    0
+                }
+            );
+        }
     }
 
     async fn request_fixture_once(
