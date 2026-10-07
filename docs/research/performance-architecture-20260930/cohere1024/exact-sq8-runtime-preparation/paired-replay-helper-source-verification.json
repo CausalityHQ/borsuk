@@ -1,0 +1,27 @@
+{
+  "status": "SOURCE_GLUE_VERIFIED_NATIVE_RUNTIME_UNRUN",
+  "source_commit": "eb095876f7fd665c667fce64cc03cbca10a970d9",
+  "source_sha256": "7412f75349e66a8045e9cc84bb53028663327e79a1848c8f5d32537d1fd4583d",
+  "exact_owned_one_file": true,
+  "independent_reviews": [
+    "792013084da04245",
+    "93cfdf2cc5e449bc"
+  ],
+  "required_repairs_resolved": [
+    "current publisher source binding",
+    "distinct historical A/B source bindings",
+    "native and unit log cap before ordinary-exit classification"
+  ],
+  "source_check_log_sha256": "863ccd212b30b095306ce62ed868aedb23dec0dc4a7916b0259b39090430b8f1",
+  "source_check_original": true,
+  "actual_ceiling_cpu": "100000 100000",
+  "memory_max": 268435456,
+  "swap_max": 0,
+  "exit_status": 0,
+  "actual_elapsed_seconds": 10.229311772,
+  "actual_peak_bytes": 141074432,
+  "systemd_and_native_fixture_mocked": true,
+  "native_runtime_unrun": true,
+  "paid_launch_authorized_by_this_receipt": false,
+  "root_freeze_requirement": "Authenticate actual full completed publisher gate ELF/source before admission; actual inputs admission and separate canary mandatory before measurement."
+}

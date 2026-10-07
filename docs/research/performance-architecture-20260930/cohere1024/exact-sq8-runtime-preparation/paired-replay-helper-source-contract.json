@@ -1,0 +1,193 @@
+{
+  "status": "HELPER_COMMITTED_WITH_THREE_REPAIRS_SOURCE_ONLY_UNVERIFIED_NATIVE_HOLD_FOR_ROOT",
+  "updated_utc": "2026-10-07T08:43:36Z",
+  "commit": "eb095876f7fd665c667fce64cc03cbca10a970d9",
+  "parent": "9120e4a794ebef4ff33e98a9f2a5ba31ded9223a",
+  "file": "scripts/run_cohere_retained_paired_replay.py",
+  "file_sha256": "7412f75349e66a8045e9cc84bb53028663327e79a1848c8f5d32537d1fd4583d",
+  "git_blob": "fa0799429450f3ce754f5bcfaca8071aac99c482",
+  "size": "about 830 lines (helper plus self-check/fixture); one NEW file, no shared/transport/adapter edits",
+  "authority": "parent borsuk/prod-ready-v9 immediate-1791360480632739185-966615 + confirmation immediate-1791360520951225982-966615; plan = committed paired-retained-replay-execution-plan.md @191944fa59fa6c5e3a19a642fb14c274903cedff (supersedes the missing-head draft: the 15 assets include the authenticated 170-byte head)",
+  "api": {
+    "cli": "python3 scripts/run_cohere_retained_paired_replay.py CONFIG CONFIG_SHA256 NEW_OUTPUT | --self-check",
+    "owned_stage_reexec": "native_stage re-execs scripts/run_cohere_native_preflight.py --owned-stage (probe.__file__ patched for the call); that entry already runs witness.owned_stage, which authenticates the legitimately empty publisher log",
+    "exit_codes": "0 only NATIVE_CHAIN_CLOSED; 2 for BASELINE_NONZERO_EXIT (only with both retained logs within the 16MiB cap), INVALID and any CLI error; terminal.json is written last",
+    "reused": "probe.native_stage, witness.owned_stage/retain/body, local.* (load_config/authenticate/identity/canonical/read_json/directory_bytes/fields/exact/require), base.closure/local_etag/nonzero_native_exit/inventory/finish/QUERY/PUBLISHER_LIMITS (finish via patch.object(base,SCHEMA))",
+    "not_touched": "launch_cohere_native_preflight_spot, launch_native_workspace_execution_spot, run_cohere_native_preflight, any shared script"
+  },
+  "config": {
+    "schema": "borsuk-cohere-retained-paired-replay-v1-config",
+    "exact_fields": [
+      "schema",
+      "run_id",
+      "source_identity_sha256",
+      "admission{path,bytes,sha256}",
+      "ledger{path,bytes,sha256}",
+      "work_root (absolute)",
+      "binaries{publisher,baseline_a,baseline_b: {path,bytes,sha256}, each directly under work_root/bin}",
+      "publisher_limits (10 base.PUBLISHER_LIMITS ints, max_memory_bytes <= 512MiB)",
+      "phase_seconds{publish,a1,b1,b2,a2: 6..300}",
+      "deadline_seconds (6..1800)"
+    ],
+    "output_rule": "NEW_OUTPUT must equal work_root/output and must not exist (create-only, never resumed)",
+    "constants_not_config": {
+      "retained_prefix": "semantic/index",
+      "destination_prefix": "semantic/rebound",
+      "publisher_max_scratch_bytes": 67108864,
+      "outer_scratch_bytes": 4294967296,
+      "assets": 15,
+      "asset_bytes": 551480739,
+      "call_max_seconds": 300,
+      "deadline_max_seconds": 1800
+    }
+  },
+  "admission": {
+    "schema": "borsuk-cohere-retained-paired-replay-v1-admission",
+    "status": "READY_PAIRED_RETAINED_REPLAY",
+    "fields": [
+      "schema",
+      "status",
+      "source_identity_sha256 (== config)",
+      "gates",
+      "roles"
+    ],
+    "gates": "retained_publisher (5 stages; source_identity_sha256 == config.source_identity_sha256), original_baseline (6; == d0e7029d...), blocked_scorer (7; == 4ed25e42...); each {session,instance_id,source_identity_sha256,stage_count,stage_exit_statuses (all int 0),terminated true,receipt pin}",
+    "roles": "publisher->retained_publisher, baseline_a->original_baseline, baseline_b->blocked_scorer; each {gate,binary{path,bytes,sha256,local_basename}} with distinct SHAs equal to config.binaries; baseline_a/b must equal ledger.query_binaries A/B",
+    "scope": "permission and binary qualification ONLY; carries no body-authentication or rebound-root claim; root freezes it only after the actual qualification gates"
+  },
+  "ledger_rule": {
+    "authority": "committed paired-retained-replay-inputs.json (sha256 a8bf8f0c2b1dcf2d623f3c7e9398effcd00019ad26f8c3fdda6bce96bffd61ae @191944fa)",
+    "required": "schema borsuk-retained-cohere-replay-input-ledger-v1; status PROSPECTIVE_NOT_LAUNCHED; body_authentication_pending is True AND runtime_rebound_root_pending is True (False is refused: no self-asserted runtime gate); order [A1,B1,B2,A2]; exactly 15 assets totalling 551480739 B incl. store/semantic/index/head.json; head asset == ordered compact original_head_authenticated (key order fixed by the helper, 170 B, sha 617af5f1...); head root/generation/epoch == retained_approval; original runner config canonical == pinned 1285 B / sha 64038c4f...; sq8/root manifest/requests/truth bindings; input byte total",
+    "real_ledger_check": "helper check_ledger accepts the committed ledger (15 objects, 551480739 B, head 170 B sha 617af5f1..., config sha 64038c4f...), survives sorted re-serialisation, and refuses either pending flag set False"
+  },
+  "layout": {
+    "work_root/input": "the 15 ledger paths exactly (prepared/queries.f32, prepared/truth.u64, store/...) staged by root; no other file",
+    "work_root/bin": "exactly the three binaries",
+    "work_root/output": "new; configs/, scratch/ (empty between calls), results, receipts, terminal.json last"
+  },
+  "sequence": [
+    "qualify config, ledger, admission (no native yet)",
+    "tree(input)==15 ledger paths; tree(bin)==3 binaries; stream SHA/length/EOF all 15 assets and 3 binaries; staged head bytes equal the authenticated head; scratch empty",
+    "derive SQ8 ETag with base.local_etag on the staged SQ8 object (after authentication)",
+    "publish: [publisher,--retained,configs/publish.json,SHA,output/publish-receipt.json]; config schema borsuk-two-bit-retained-local-publication-config-v1 with store_root=work_root/input/store, retained_prefix=semantic/index, original root/generation/control_epoch and sq8 key from the ledger approval, sq8_etag=<derived>, destination_prefix=semantic/rebound, scratch_parent=output/scratch, max_scratch_bytes=67108864, limits=config.publisher_limits",
+    "read the bounded native receipt (exact 17 fields, echoes, head_key semantic/rebound/head.json, local_file_only true, performance_claim false, new root != original and == sha of the rebound manifest) and the rebound head; pin the rebound roster once; originals unchanged by publication",
+    "baseline config = ledger original config with ONLY requests.path, truth.path, store_root, scratch_parent, generation_prefix, generation_root_sha256 changed (neutral() equality enforced); canonical bytes identical for all four arms",
+    "a1 [baseline_a], b1 [baseline_b], b2 [baseline_b], a2 [baseline_a]: [binary, configs/<arm>.json, SHA, output/<arm>-result.jsonl]; after each arm: scratch empty, tree/stat fingerprints of originals and rebound unchanged, earlier result pins re-authenticated",
+    "after the chain: stream SHA/EOF all assets, binaries, rebound roster, result pins again; then body_authentication.complete=true"
+  ],
+  "resources": {
+    "per_native_call": "cpu_affinity [0], CPUQuota 100%, MemoryMax 512MiB, MemorySwapMax 0, TasksMax 512 (native_stage), <=300 s per call, max_log_bytes 16MiB",
+    "whole_run": "<=1800 s deadline",
+    "scratch": "<=4GiB over the whole work_root (inputs, binaries, outputs) checked at every supervisor poll",
+    "host": "root must provide BORSUK_GLOBAL_LEAF_SLICE=borsuk-global-leaf-*.slice (as preflight); slice MemoryMax>=1G, swap 0, CPUQuota>=200%, RuntimeMaxSec 1860/timeout 1830, machine 3600 s",
+    "page_cache": "shared and uncontrolled across arms; labelled in the receipt"
+  },
+  "opacity": "Python never parses result JSONL, native stdout/logs, truth, scores or IDs: they are pinned by stream SHA/length/EOF only (read_json is spied in the self-check: no result/log path ever read). The native baseline owns the query seal and ground-truth order; root alone checks collected results/parity/metrics. No parity, quality, performance, S3 or vendor claim (receipt.claims all false).",
+  "terminal_statuses": {
+    "NATIVE_CHAIN_CLOSED": "all five calls closed, assets/rebound/results unchanged (exit 0)",
+    "BASELINE_NONZERO_EXIT": "first arm whose unit closed cleanly with plain native exit 1..127 AND whose retained native and unit logs are each <= 16MiB; recorded verbatim with failed_arm/native_exit_status; later arms never start; complete true, exit 2",
+    "INVALID": "anything else incl. publisher failure, closure/resource/drain failure, integrity change, config/ledger/admission refusal; late integrity failure overrides BASELINE_NONZERO_EXIT; exit 2"
+  },
+  "receipt": {
+    "terminal": "borsuk-cohere-retained-paired-replay-v1-terminal (config, inventory, execution_receipt pin)",
+    "execution_receipt_fields": [
+      "schema (\u2026-v1-receipt)",
+      "output",
+      "status",
+      "complete",
+      "stages (supervisor records)",
+      "calls[{name,role,command,config,closure,log}]",
+      "results{arm: {path,bytes,sha256}} opaque",
+      "sampled_peak_scratch_bytes",
+      "claims",
+      "page_cache",
+      "config/admission/ledger retained copies",
+      "source_identity_sha256",
+      "gates{name:{session,instance_id,source_identity_sha256,receipt}}",
+      "binaries",
+      "body_authentication{complete,objects[15],binaries,reauthenticated_after_chain} (complete true only after the post-chain re-authentication: DERIVED OUTPUT evidence)",
+      "runtime_rebound_root{root_sha256,metadata_prefix,head_key,receipt pin,roster} (DERIVED OUTPUT evidence)",
+      "baseline_config_sha256",
+      "native_exit_status/failed_arm/error/error_type when applicable",
+      "wall_seconds",
+      "cleanup{native_units_drained,native_processes_concurrent_max,partial_artifacts_preserved}"
+    ]
+  },
+  "verification": {
+    "environment": "systemd-run --user, MemoryMax=256M MemorySwapMax=0 CPUQuota=100% RuntimeMaxSec=120; cgroup readback memory.max=268435456 swap.max=0 cpu.max=100000 100000; no Cargo/rustc/native/data/network/AWS",
+    "self_check": "PASS exit 0, 8.5 s, memory.peak 56467456 B on the committed revision (unit borsuk-retained-replay-helper-final): real orchestration through the real supervisor/run_stage and preflight closure; only systemd and cgroup files are mocked; fake publisher/baselines are labelled fixtures",
+    "coverage": "success path with exact argv/config/etag/roster/opaque-result assertions; 45 pre-native refusals (admission 5/6/7 gates, exits incl. bool, terminated, role/gate/binary/basename/swap, config fields/limits/phase/deadline/work_root/binary drift, ledger flags/status/order/count/duplicate/bytes/head/approval/config drift/binary A, staged flips/strays/missing/extra bin, scratch cap) each pinned to its intended reason with no native stage entered, plus the 4GiB scratch-cap refusal before the first native stage and the output-must-be-work_root/output refusal; 18 native-side refusals at the exact stage (10 publisher: exit, same/wrong root, receipt head_key/local_file_only/performance_claim/etag/extra field, head root, publisher mutating an original; 6 after a call: missing result, scratch left, stray store file, rebound mutation, original mutation, tamper of an earlier result; bad drain; deadline kill); stop-at-first-failing-arm for a1/b1/b2/a2; bad drain; deadline kill (exit -9); output collision (no overwrite); output must be work_root/output",
+    "mutation_testing": "20 single-point mutations of the helper (scratch-empty, fingerprint, both pending-flag checks, gate count, no-break, new-root, scratch cap, memory limit, call order, pre-auth, roster, originals-unchanged, head key, result re-auth, performance claim, etag, binary roster, publisher scratch, destination prefix): 20 killed, 0 survived",
+    "not_run": [
+      "Cargo/rustc/clippy",
+      "any native binary",
+      "real systemd/cgroup",
+      "S3/AWS/network",
+      "real 551 MB asset hashing",
+      "a paid replay or admission canary"
+    ],
+    "final": {
+      "environment": "systemd-run --user unit borsuk-retained-replay-helper-ab-bind (invocation 88d419f311f44d02b259cef2d8b64764): MemoryMax=256M MemorySwapMax=0 CPUQuota=100% RuntimeMaxSec=120; in-unit cgroup readback memory.max=268435456 swap.max=0 cpu.max=100000 100000",
+      "saved_original_stdout": {
+        "path": "/tmp/borsuk-retained-paired-replay-helper-check-ab-bind.log",
+        "sha256": "863ccd212b30b095306ce62ed868aedb23dec0dc4a7916b0259b39090430b8f1",
+        "contains": "source_sha256, git head/status, cgroup readbacks, the PASS line, exit=0 elapsed=10.229311772s peak=141074432"
+      },
+      "source_sha256_checked": "7412f75349e66a8045e9cc84bb53028663327e79a1848c8f5d32537d1fd4583d",
+      "source_equals_committed_blob": true,
+      "self_check": "PASS exit 0 on the exact bytes committed at eb095876 (one bounded check, no repeat gates, no optional mutants)",
+      "earlier_logcap_check_provenance": "per root message 1791362492232025055: the logcap-4 resource stdout was recovered read-only from this worker transcript (line 942, uuid 7f42721a-a674-45bd-9652-5f3ab589fdc8, 08:37:06Z): 256Mi/swap0/cpu.max 100000 100000, exit 0, 10.400872884s, 140562432 B; not independently re-read by this worker"
+    }
+  },
+  "assumptions_for_root": [
+    "root stages the 15 assets under work_root/input at the ledger paths and the 3 binaries under work_root/bin using the existing transport (no adapter copy here); the SQ8 object file must never be touched after staging (its ETag is inode-mtime-size)",
+    "original and rebound assets are checked between calls by stat fingerprints (inode,size,mtime,ctime,nlink) and by full SHA before publication and after the chain; this avoids re-reading 551 MB between arms (page-cache perturbation) at the cost of trusting ctime between calls",
+    "arm A (ce43842c...) has never been shown to open a rebound root: A1 runs first and a refusal there is recorded as BASELINE_NONZERO_EXIT, not retuned",
+    "publisher limits max_memory_bytes must stay within the 512MiB cgroup; an OOM is closure INVALID (environment), not a scientific result",
+    "admission, gate qualification, the staging canary, freeze and the one paid replay remain root-owned and pending (retained publisher 5-stage gate not yet qualified); a0004 exec55275 untouched"
+  ],
+  "superseded_first_commit": {
+    "commit": "34e906fd4adec0a0ffd04fbffedba04d0d65eda9",
+    "file_sha256": "1bccd6ba628bc0f0086f78210a7be31225b7e87e5e475f4af98f90e57a137ef0"
+  },
+  "commit_chain": [
+    "34e906fd4adec0a0ffd04fbffedba04d0d65eda9 initial helper (parent 67b03fc3)",
+    "578d8e4fc14862922e47e8a5e01a62545b9f9e15 bind retained_publisher gate source to config source",
+    "9120e4a794ebef4ff33e98a9f2a5ba31ded9223a oversized-log guard on exit classification",
+    "eb095876f7fd665c667fce64cc03cbca10a970d9 bind historical A/B gate sources to fixed qualified identities"
+  ],
+  "repairs": {
+    "source_binding": {
+      "commit": "578d8e4f",
+      "authority": "root immediate-1791361695605541926 / confirmed 1791361943387766858",
+      "change": "admit() requires retained_publisher gate.source_identity_sha256 == config.source_identity_sha256 exactly; original_baseline and blocked_scorer gates keep their own (distinct) source identities and are not bound to the configured source",
+      "fixture": "positive fixture publisher gate source = a*64 (== config), original_baseline b*64, blocked_scorer d*64",
+      "negative": "adm-publisher-source: valid digest c*64 on the publisher gate -> refused pre-native (spy 0) with 'retained publisher gate source identity equals the configured current source'"
+    },
+    "log_cap": {
+      "commit": "9120e4a7",
+      "authority": "root immediate-1791362157 / message 1791361959348901822",
+      "change": "before promoting base.nonzero_native_exit to BASELINE_NONZERO_EXIT the helper requires BOTH retained logs (record.native_log and record.log, the unit log) to be <= RESOURCES['max_log_bytes'] (16MiB); otherwise INVALID with 'retained native and unit logs within the supervisor log cap'. The shared classifier is untouched (it ignores the cap); an ordinary clean exit 2 is classified as before",
+      "cases": [
+        "bigexit2-a1 and bigexit2-b2: native log 16MiB+1 then exit 2 -> INVALID (asserts the shared classifier alone would return 2)",
+        "bigunit-b1: oversized unit log with native exit 2 -> INVALID",
+        "edgeexit2-b2: native log exactly 16MiB and exit 2 -> BASELINE_NONZERO_EXIT (cap is inclusive)"
+      ]
+    },
+    "historical_gate_sources": {
+      "commit": "eb095876",
+      "authority": "root immediate-1791362492232025055 / confirmed 1791362560416599054",
+      "change": "GATE_SOURCE constants: original_baseline = d0e7029d484db02904505b7c83c57a13a3258ab9db804e54338ff3fca0f39676 (native-preflight admission + cohort/a0002 verification), blocked_scorer = 4ed25e42ab6caabb94c76e1c7a909cf82a31a15887f06e41a6801ddcda409e03 (exact-sq8/a0001 terminal and root verification); admit() binds each historical gate to its constant and the publisher gate to config.source_identity_sha256; nothing else is bound to the current source (no bind-all)",
+      "fixture": "positive fixture uses GATE_SOURCE for A/B and a*64 (== config) for the publisher",
+      "negatives": [
+        "adm-baseline-source (valid digest e*64) -> historical gate source identity: original_baseline",
+        "adm-blocked-source (valid digest f*64) -> historical gate source identity: blocked_scorer",
+        "pre-existing adm-publisher-source and adm-gate-source (invalid digest) unchanged"
+      ]
+    }
+  },
+  "previous_head": {
+    "commit": "9120e4a794ebef4ff33e98a9f2a5ba31ded9223a",
+    "file_sha256": "b9a92cfa12e4516db1a09690580899b49b20c8b82998b357e35e75ba4cb57496"
+  }
+}

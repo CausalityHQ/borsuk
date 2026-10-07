@@ -1,0 +1,8 @@
+unit=borsuk-retained-replay-helper-ab-bind invocation=88d419f311f44d02b259cef2d8b64764
+source_file=scripts/run_cohere_retained_paired_replay.py
+source_sha256=7412f75349e66a8045e9cc84bb53028663327e79a1848c8f5d32537d1fd4583d
+git_head=9120e4a794ebef4ff33e98a9f2a5ba31ded9223a git_status= M scripts/run_cohere_retained_paired_replay.py;
+cgroup=/sys/fs/cgroup//user.slice/user-1001.slice/user@1001.service/app.slice/borsuk-retained-replay-helper-ab-bind.service
+cgroup memory.max=268435456 swap.max=0 cpu.max=100000 100000
+PASS retained paired replay glue: publisher + A1 B1 B2 A2 through the real supervisor/run_stage and preflight closure; admission 5/6/7 gates and role drift; ledger pending flags never self-asserted; fifteen assets incl. authenticated head; ETag formula; exact publisher/baseline configs (six slots only); opaque results; stop at first failing arm; changed original/rebound files, scratch, deadline, closure refusals; terminal-last. systemd/cgroup and natives are MOCKED; no Cargo/native/data/network.
+exit=0 elapsed=10.229311772s peak=141074432
