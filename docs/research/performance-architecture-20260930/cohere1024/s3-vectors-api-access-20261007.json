@@ -1,0 +1,28 @@
+{
+  "schema": "borsuk-s3-vectors-api-access-v1",
+  "checked_at": "2026-10-07T07:44:38Z",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "command": [
+    "aws",
+    "--profile",
+    "causality",
+    "--region",
+    "eu-central-1",
+    "s3vectors",
+    "list-vector-buckets",
+    "--max-results",
+    "1",
+    "--output",
+    "json"
+  ],
+  "exit_status": 0,
+  "response": {
+    "vectorBuckets": []
+  },
+  "resource_creation": false,
+  "data_upload": false,
+  "query_execution": false,
+  "performance_claim": false,
+  "scope": "Read-only account API access; future matched corpus/index/configuration and experiment admission remain pending."
+}
