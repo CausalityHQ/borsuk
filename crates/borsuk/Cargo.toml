@@ -74,6 +74,9 @@ workspace = true
 # Historical campaign examples are preserved in their source archives. Keep the
 # current package's examples limited to supported API and smoke paths.
 [[example]]
+name = "compare_native_replay"
+
+[[example]]
 name = "build_sq8_source"
 
 [[example]]

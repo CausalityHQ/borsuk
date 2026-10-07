@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-native-replay-reducer-gates-v1",
+  "instance_id": "i-07956b73c4123b5de",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 0,
+  "source_commit": "8bc3d18911e62a73e9a9edcb4cd61e47baa27caf",
+  "specialist_commit": "915858d7215b5d6cf6f7804a6f32b6749caff01b",
+  "native_source_file_count": 414,
+  "native_source_identity_sha256": "70c4080b954ff4b23f3cb026712763f9f1abdc2dfc923df8384b7a0d3753ea02",
+  "source_archive_sha256": "dca3a214d1a1ee0703c561e1c2bb3d40248ae1dc8030ca708135067ad0f06fb8",
+  "evidence": {
+    "bytes": 819792,
+    "sha256": "c44b084df367e0d35732eca8be3496cc8e3302fc603e85642fb9f0179075f61b"
+  },
+  "performance_claim": false
+}

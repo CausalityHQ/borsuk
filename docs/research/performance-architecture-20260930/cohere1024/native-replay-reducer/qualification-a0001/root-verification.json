@@ -1,0 +1,86 @@
+{
+  "schema": "borsuk-native-replay-reducer-root-verification-v1",
+  "status": "NATIVE_QUALIFIED",
+  "scope": "COMPILER_AND_SYNTHETIC_CORRECTNESS",
+  "source_commit": "8bc3d18911e62a73e9a9edcb4cd61e47baa27caf",
+  "specialist_commit": "915858d7215b5d6cf6f7804a6f32b6749caff01b",
+  "prospective_root_tree": "7272ab4e998b101538ef6764b787b7a528756175",
+  "native_source_file_count": 414,
+  "native_source_identity_sha256": "70c4080b954ff4b23f3cb026712763f9f1abdc2dfc923df8384b7a0d3753ea02",
+  "full_source_before_after_current_tree_match": true,
+  "support_files_checked_before_and_after": 2449,
+  "authenticated_artifact_count": 53,
+  "all_artifact_hashes_match": true,
+  "original_exit": 0,
+  "native_exit": 0,
+  "stage_count": 4,
+  "stages": [
+    {
+      "name": "reducer-tests",
+      "command": "cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "reducer-release",
+      "command": "cargo build --locked -p borsuk --release --example compare_native_replay",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "workspace-clippy",
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "workspace-test-build",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "native_exit": 0,
+      "tee_exit": 0
+    }
+  ],
+  "mandatory_test_pass_counts": {
+    "tests::nearest_rank_and_sequential_qps_literal_golden": 1,
+    "tests::four_authenticated_native_runs_and_completed_no_win": 1,
+    "tests::invalid_tampered_out_of_order_and_semantic_mismatch": 1,
+    "tests::bounded_files_reject_links_fifo_oversize_and_duplicate_evidence": 1
+  },
+  "resources": {
+    "cpu_max": "200000 100000",
+    "memory_max_bytes": 8589934592,
+    "memory_peak_bytes": 8589934592,
+    "swap_max_bytes": 0,
+    "swap_peak_bytes": 0,
+    "oom": 0,
+    "oom_kill": 0,
+    "pids_max": 512,
+    "pids_peak": 21
+  },
+  "instance_id": "i-07956b73c4123b5de",
+  "terminated": true,
+  "termination_wait_passed": true,
+  "service_main_pid": 0,
+  "service_result": "success",
+  "evidence_archive": {
+    "bytes": 819792,
+    "sha256": "c44b084df367e0d35732eca8be3496cc8e3302fc603e85642fb9f0179075f61b",
+    "key": "research/semantic-router/20261007/native-replay-reducer-gates-a0001/evidence.tar.gz"
+  },
+  "binary": {
+    "bytes": 915688,
+    "sha256": "a808fa537855bab2f3757fc459674e13a8954e59aee3aca1bbaa1b66c996c253",
+    "key": "research/semantic-router/20261007/native-replay-reducer-gates-a0001/artifacts/compare_native_replay"
+  },
+  "root_source_verification": {
+    "unit": "borsuk-reducer-root-source-verification-1",
+    "invocation": "fb9eec8bda15456fbf411c0616dbe8c7",
+    "exit": 0,
+    "cpu": 1,
+    "memory_max_bytes": 268435456,
+    "swap_max_bytes": 0
+  },
+  "performance_qualified": false,
+  "real_corpus_replay_run": false,
+  "matched_vendor_comparison_run": false
+}

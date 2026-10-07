@@ -1,0 +1,23 @@
+	Command being timed: "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+	User time (seconds): 406.26
+	System time (seconds): 51.80
+	Percent of CPU this job got: 103%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 7:21.03
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 5388600
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 15511
+	Minor (reclaiming a frame) page faults: 24831705
+	Voluntary context switches: 86520
+	Involuntary context switches: 14780
+	Swaps: 0
+	File system inputs: 130160
+	File system outputs: 18666232
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
