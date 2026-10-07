@@ -1,0 +1,14 @@
+{
+  "status": "SPOT_CAPACITY_REFUSAL_NO_NATIVE_EXECUTION",
+  "attempt": "a0007",
+  "original_session": 91405,
+  "controller_exit": 1,
+  "instance_created": false,
+  "nodes": {},
+  "native_source_commit": "7096b5b943946a473eab0dd88adea99aae24ecc5",
+  "source_identity_sha256": "410776276d6e5fc38f221cc84312043c3d46eb2e0afd1aa900e807812a36fe6d",
+  "all_five_native_stages": "UNRUN",
+  "algorithm_rejection": false,
+  "reason": "RunInstances InsufficientInstanceCapacity eu-central-1b; AWS response suggested eu-central-1a/eu-central-1c",
+  "next_action": "Use already frozen unchanged-source eu-central-1c bundle0c9f48e2 for fresh a0008, without Python edits"
+}
