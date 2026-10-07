@@ -1,0 +1,23 @@
+{
+  "controller": "7141ca15bfc9c2346aa34b7c9aff059df3a47e26",
+  "config": "7199dc8620b55016187f77152224f0ef3e192720",
+  "bundle": "ec198926bb3eb6e86c5255c9b29468b447976ca1",
+  "preview": "803eddc72c5d847f7b4a7dc886629814cb11c4ea",
+  "native": "cc3025962392604ac1419fb2f4959f5b0c31894d",
+  "source_identity_sha256": "6e60329efa2901eaf72def2424671096ac98d49227c4bc0a9d3e18e737d24c03",
+  "config_sha256": "6f99918e1c07a3325373e48911f296fe04bac90f8279f746330e9e1bd5e4a196",
+  "archive_file_count": 2450,
+  "subnet_id": "subnet-0a12dbed0ca6fac25",
+  "status": "PREFLIGHT_PASS_NATIVE_UNRUN",
+  "unit": "borsuk-retained-rebind-a0004-preflight.service",
+  "invocation": "6416e81f1d5f4fd09e9460b62f262cda",
+  "exit": 0,
+  "cpu_quota_percent": 100,
+  "memory_max": 268435456,
+  "swap_max": 0,
+  "deadline_seconds": 120,
+  "elapsed_seconds": 1.116,
+  "peak": "68.8M",
+  "spot_quote_usd_hour": "0.206500",
+  "algorithm_and_native_limits_unchanged": true
+}
