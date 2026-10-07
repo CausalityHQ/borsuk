@@ -1,0 +1,59 @@
+{
+  "schema": "borsuk-cohere-retained-input-admission-preregistration-v1",
+  "status": "FROZEN_NOT_LAUNCHED",
+  "root_source": "e03bc1856f50ff922d645981002d31f2b1a54dbb",
+  "inputs_sha256": "cb4a475b5987c1562384f73a73692b8e6b7ad9ffb4a5d10d295b7787e7c6d829",
+  "input_objects": 15,
+  "input_bytes": 551480739,
+  "binary_bytes": 19753528,
+  "total_staged_bytes": 571234267,
+  "commands": {
+    "userdata_sha256": "0261c6e48baf6639b23ed8d135450c650d67d9bbdff03c0d07b0e7ea5642e622",
+    "staging_sha256": "70d0770724100003750f9cc58d57b2ef0bd9061f53233edc211f4bbf34c3117d",
+    "admission_sha256": "3ac5c74fe0ae676f8db37e3ecadbd1783dd59cebd4b67d2355defeebfd40f6ce"
+  },
+  "resources": {
+    "cpu": 1,
+    "native_memory_bytes": 536870912,
+    "aggregate_memory_bytes": 1073741824,
+    "swap_bytes": 0,
+    "native_tasks": 128,
+    "aggregate_tasks": 256,
+    "publisher_seconds": 300,
+    "admission_seconds": 300,
+    "aggregate_seconds": 900,
+    "machine_seconds": 1800,
+    "scratch_bytes": 4294967296
+  },
+  "spot": {
+    "region": "eu-central-1",
+    "az": "eu-central-1c",
+    "type": "c7i.2xlarge",
+    "ebs_gib": 20,
+    "max_bid_usd_hour": 0.5,
+    "quoted_usd_hour": 0.2065,
+    "compute_reservation_usd": 0.25,
+    "ancillary_reservation_usd": 0.15,
+    "total_reservation_usd": 0.4
+  },
+  "native_calls": [
+    "qualified retained publisher --retained; original fixed root/generation/epoch plus authenticated runtime SQ8 ETag; fresh destination",
+    "original frozen A baseline over all1000 fixed queries and truth; output opaque; exit0 only complete MEASURED"
+  ],
+  "acceptance": "Exact body SHA/length of15 retained assets and3 binaries; publisher and baseline original native/service exits0; saved ExecStopPost terminal equals success/exited/0; full original input hashes unchanged; native/aggregate caps enforced before calls; zero OOM/swap; drained process groups; original instance terminated and waited before collection. Root independently authenticates complete terminal evidence. This is input admission only; separate disposable canary required before measured replay.",
+  "interruption": "INVALID; preserve original instance/terminal/output and cost. No automatic replacement or duplicate. Environment failure requires demonstrated repair and a new recorded attempt without changing algorithm/scientific limits.",
+  "collection": "Metadata/resources/logs/opaque native admission output only. No corpus,requests,truth,SQ8 or partial transport bodies collected.",
+  "canary": false,
+  "performance_claim": false,
+  "physical_s3_query": false,
+  "attempt": "a0002",
+  "supersedes_environment_invalid": {
+    "attempt": "a0001",
+    "instance_id": "i-0d8574f8a9b00affb",
+    "original_exit": 0,
+    "terminal_exit": 96,
+    "environment_error": "Hardcoded aggregate cgroup path omitted systemd slice ancestors; missing aggregate receipts",
+    "algorithm_rejected": false
+  },
+  "repair": "Runtime cgroup dirname and before-exit aggregate counter capture, actual bounded platform fixture PASS; native binaries/commands/scientific and host limits unchanged"
+}

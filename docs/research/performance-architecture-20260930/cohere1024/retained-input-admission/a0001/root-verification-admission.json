@@ -1,0 +1,31 @@
+{
+  "schema": "borsuk-cohere-retained-input-admission-root-verification-v1",
+  "status": "INVALID",
+  "instance_id": "i-0d8574f8a9b00affb",
+  "terminated": true,
+  "waiter_exit": 0,
+  "original_exit": 0,
+  "terminal_exit": 96,
+  "phase": "complete",
+  "authenticated_artifact_count": 103,
+  "evidence": {
+    "bytes": 1175433,
+    "sha256": "a04653a29cd857e05b6ec009abe6d94e89fd693c491c048341e6edb459905567",
+    "key": "research/semantic-router/20261007/cohere-retained-input-admission-a0001/evidence.tar.gz"
+  },
+  "native_original_exits": {
+    "publisher": 0,
+    "input_admission": 0
+  },
+  "native_memory_peaks": {
+    "publisher": 3072000,
+    "input_admission": 46231552
+  },
+  "native_swap_oom_zero": true,
+  "aggregate_resource_proof": false,
+  "environment_error": "Cleanup read /sys/fs/cgroup/borsuk-retained-admission.slice, but actual native group was /borsuk.slice/borsuk-retained.slice/borsuk-retained-admission.slice/borsuk-retained-input-admission.service. Aggregate counter receipts were absent; no aggregate resource or performance qualification claimed.",
+  "repair": "Derive aggregate slice path from the actual parent service cgroup dirname; save and enforce aggregate counters before the live parent service exits. Retain them through cleanup. Same library, binaries, input bytes, native commands, scientific limits and host limits.",
+  "canary": false,
+  "performance_claim": false,
+  "physical_s3_query": false
+}

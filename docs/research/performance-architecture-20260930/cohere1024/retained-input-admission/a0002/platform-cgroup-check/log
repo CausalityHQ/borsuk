@@ -1,0 +1,6 @@
+Running as unit: borsuk-retained-runtime-path-check-1.service; invocation ID: 307bd1203cc34722ba4c7130aeb4f1aa
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 30ms
+             CPU time consumed: 21ms
+                   Memory peak: 2.8M (swap: 0B)
