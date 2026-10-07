@@ -1,0 +1,65 @@
+{
+  "status": "VERIFIED_COMPLETED_NO_WIN",
+  "source_revision": "6df5bcbb72cae5cfba31a6bc4dd2ce83ab2342e2",
+  "instance_id": "i-094a81edf7ca569a1",
+  "terminated": true,
+  "artifact_count": 238,
+  "artifacts_authenticated": true,
+  "native_and_service_exits_zero": true,
+  "immutable_inputs_and_runtime_freeze_match": true,
+  "zero_swap_and_oom": true,
+  "aggregate_peak_bytes": 682110976,
+  "aggregate_limit_bytes": 1073741824,
+  "semantic_parity": true,
+  "trace_plan_parity": true,
+  "timing_gate_passed": false,
+  "disposition": "COMPLETED_NO_WIN",
+  "recall10": 0.9723,
+  "pooled": {
+    "A": {
+      "count": 2000,
+      "p50_ms": 66.167831,
+      "p90_ms": 70.631958,
+      "p90_ns": 70631958,
+      "p95_ms": 72.047765,
+      "p95_ns": 72047765,
+      "p99_ms": 74.537809,
+      "query_wall_ns": 132374046049,
+      "sequential_qps": 15.108701892058763,
+      "stage_wall_sums": {
+        "discovery_ns": 8972666395,
+        "max_leaf_peak_inflight": 16,
+        "planning_ns": 12205675513,
+        "source_ns": 31775373503,
+        "sq8_ns": 79322456954
+      }
+    },
+    "B": {
+      "count": 2000,
+      "p50_ms": 63.484718,
+      "p90_ms": 68.399188,
+      "p90_ns": 68399188,
+      "p95_ms": 69.600866,
+      "p95_ns": 69600866,
+      "p99_ms": 73.979472,
+      "query_wall_ns": 126908388397,
+      "sequential_qps": 15.759399557919831,
+      "stage_wall_sums": {
+        "discovery_ns": 9049260115,
+        "max_leaf_peak_inflight": 16,
+        "planning_ns": 11983190723,
+        "source_ns": 31959110824,
+        "sq8_ns": 73826516499
+      }
+    }
+  },
+  "evidence": {
+    "bytes": 5861638,
+    "sha256": "1c39347ae0e7a3016b383fb2b62baa2931b10aff9935736f6a3c000659145d6a"
+  },
+  "local_file_only": true,
+  "cache_state": "shared OS page cache uncontrolled; prior admission warmed inputs",
+  "physical_s3_measured": false,
+  "competitor_comparison": false,
+  "incurred_cost_measured": false
+}
