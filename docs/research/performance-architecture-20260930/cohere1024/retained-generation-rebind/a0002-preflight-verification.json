@@ -1,0 +1,35 @@
+{
+  "controller": "9408eb9bcb6306e5c93b25e8ae2e0a5c6a08e288",
+  "config": "8f9644f39573d109b0f27f73c75ab2b063b6ef3a",
+  "bundle": "d72351123ddee776cf66ba731f598c6d0c88d056",
+  "preview": "ee2a6fbc6934d4d8f7fbcfa68e4cfac1097aaf4d",
+  "native": "b99ea620559fb33aeaa66ece639e8b06baab255a",
+  "source_identity_sha256": "1279f18abe7f24c94c8e495a26f812782dba04660f0418ab05b6fed4c51d8563",
+  "config_sha256": "42854a6733b83539f65484d1991ec66e7c74ce4871b01c51cf9c0542271968ab",
+  "archive_file_count": 2450,
+  "status": "PREFLIGHT_OK",
+  "unit": "borsuk-retained-rebind-a0002-preflight-2.service",
+  "invocation": "9a66a4a009494910aa7a1e6292fc1381",
+  "exit_status": 0,
+  "cpu_quota_percent": 100,
+  "memory_max_bytes": 268435456,
+  "swap_max_bytes": 0,
+  "runtime_max_seconds": 120,
+  "elapsed_seconds": 1.235,
+  "memory_peak": "69.9M",
+  "source_file_count": 413,
+  "environment_failure_preserved": {
+    "unit": "borsuk-retained-rebind-a0002-preflight.service",
+    "invocation": "03d4e4e44a8b4376b9567ba80fb14823",
+    "exit": 1,
+    "reason": "no-checkout worktree had not materialized sparse files",
+    "repair": "materialize exact frozen bundle in same clean isolated worktree"
+  },
+  "algorithm_and_limits_unchanged": true,
+  "spot_quote": {
+    "AZ": "eu-central-1a",
+    "usd_per_hour": "0.216700",
+    "timestamp": "2026-10-07T07:00:00+00:00"
+  },
+  "scope": "compiler/synthetic correctness only; no corpus or performance"
+}
