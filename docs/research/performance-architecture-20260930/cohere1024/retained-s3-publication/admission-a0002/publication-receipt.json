@@ -1,0 +1,26 @@
+{
+  "backend": {
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "kind": "S3",
+    "namespace": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store",
+    "region": "eu-central-1",
+    "request_timeout_seconds": 300
+  },
+  "config_sha256": "bce8df643fc8bd996939ab1cd3c9c8362c279c76d215690aa6d6ae462cbbad9a",
+  "control_epoch": 1,
+  "credential_mode": "instance_role_imds",
+  "destination_prefix": "semantic/s3-native-publication-smoke-a0002",
+  "generation": 1,
+  "head_key": "semantic/s3-native-publication-smoke-a0002/head.json",
+  "local_file_only": false,
+  "metadata_prefix": "semantic/s3-native-publication-smoke-a0002/generations/ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df",
+  "original_control_epoch": 1,
+  "original_generation": 1,
+  "original_root_sha256": "4ec270e5ddaf588ab637321ba8ff807712f146817d93d3780eeb54b084b27982",
+  "performance_claim": false,
+  "retained_prefix": "semantic/index",
+  "root_sha256": "ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df",
+  "schema": "borsuk-two-bit-retained-publication-receipt-v2",
+  "sq8_etag": "\"f808095a3a2e788df2ae7d7d0e5423fa\"",
+  "sq8_object_key": "semantic/objects/07a14360b06add9a35f82b97f4e031690ff878ff497ee047902818823992337b"
+}

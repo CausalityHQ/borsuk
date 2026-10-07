@@ -1,0 +1,162 @@
+{
+  "status": "ADMITTED",
+  "reason": "native and closeout0; exact terminal independently fetched; terminated and source unchanged",
+  "source_unchanged": true,
+  "sq8_unchanged": true,
+  "destination_head": {
+    "schema": "borsuk-two-bit-head-v2",
+    "epoch": 1,
+    "generation": 1,
+    "root_sha256": "ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df",
+    "mutation": null,
+    "fence": null
+  },
+  "root_whitelist_diff": {
+    "sq8_etag": {
+      "before": "\"8002b-65d2ceab8b769-62ccf80\"",
+      "after": "\"f808095a3a2e788df2ae7d7d0e5423fa\""
+    }
+  },
+  "all_2048_coefficient_f32_bits_equal": true,
+  "destination_objects": {
+    "Contents": [
+      {
+        "Key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/s3-native-publication-smoke-a0002/generations/ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df/manifest.json",
+        "LastModified": "2026-10-07T17:38:45+00:00",
+        "ETag": "\"bda679d149f8bd22bce8286dbd289682\"",
+        "ChecksumAlgorithm": [
+          "CRC64NVME"
+        ],
+        "ChecksumType": "FULL_OBJECT",
+        "Size": 27655,
+        "StorageClass": "STANDARD"
+      },
+      {
+        "Key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/s3-native-publication-smoke-a0002/generations/ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df/page_digests.bin",
+        "LastModified": "2026-10-07T17:38:43+00:00",
+        "ETag": "\"4e8b04054b143f0500846d6dd05ddcc4-1\"",
+        "ChecksumAlgorithm": [
+          "CRC64NVME"
+        ],
+        "ChecksumType": "FULL_OBJECT",
+        "Size": 12512,
+        "StorageClass": "STANDARD"
+      },
+      {
+        "Key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/s3-native-publication-smoke-a0002/generations/ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df/page_manifest.json",
+        "LastModified": "2026-10-07T17:38:43+00:00",
+        "ETag": "\"ba0f086105e9ec0b70c84407aa730257-1\"",
+        "ChecksumAlgorithm": [
+          "CRC64NVME"
+        ],
+        "ChecksumType": "FULL_OBJECT",
+        "Size": 280,
+        "StorageClass": "STANDARD"
+      },
+      {
+        "Key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/s3-native-publication-smoke-a0002/generations/ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df/plane/manifest.json",
+        "LastModified": "2026-10-07T17:38:43+00:00",
+        "ETag": "\"4d1b458aa4c0ca55ad4796cd3d14ee03-1\"",
+        "ChecksumAlgorithm": [
+          "CRC64NVME"
+        ],
+        "ChecksumType": "FULL_OBJECT",
+        "Size": 652,
+        "StorageClass": "STANDARD"
+      },
+      {
+        "Key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/s3-native-publication-smoke-a0002/generations/ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df/plane/mean.bin",
+        "LastModified": "2026-10-07T17:38:43+00:00",
+        "ETag": "\"f9faea0d277eecffe4e83e2527ffa903-1\"",
+        "ChecksumAlgorithm": [
+          "CRC64NVME"
+        ],
+        "ChecksumType": "FULL_OBJECT",
+        "Size": 4096,
+        "StorageClass": "STANDARD"
+      },
+      {
+        "Key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/s3-native-publication-smoke-a0002/generations/ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df/plane/page_digests.bin",
+        "LastModified": "2026-10-07T17:38:44+00:00",
+        "ETag": "\"88e2b8589478af57c6b6dbe0aca8a322-1\"",
+        "ChecksumAlgorithm": [
+          "CRC64NVME"
+        ],
+        "ChecksumType": "FULL_OBJECT",
+        "Size": 100000,
+        "StorageClass": "STANDARD"
+      },
+      {
+        "Key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/s3-native-publication-smoke-a0002/generations/ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df/plane/records.bin",
+        "LastModified": "2026-10-07T17:38:44+00:00",
+        "ETag": "\"c8f7250e2afcdbe31b27e5297d4fd5e9-1\"",
+        "ChecksumAlgorithm": [
+          "CRC64NVME"
+        ],
+        "ChecksumType": "FULL_OBJECT",
+        "Size": 26400000,
+        "StorageClass": "STANDARD"
+      },
+      {
+        "Key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/s3-native-publication-smoke-a0002/generations/ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df/router/leaves.bin",
+        "LastModified": "2026-10-07T17:38:45+00:00",
+        "ETag": "\"e8ed7a08f2007713d964464bbe780379-1\"",
+        "ChecksumAlgorithm": [
+          "CRC64NVME"
+        ],
+        "ChecksumType": "FULL_OBJECT",
+        "Size": 6412500,
+        "StorageClass": "STANDARD"
+      },
+      {
+        "Key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/s3-native-publication-smoke-a0002/generations/ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df/router/membership.bin",
+        "LastModified": "2026-10-07T17:38:45+00:00",
+        "ETag": "\"797a69c7425730867d4c789e8ab8c291-1\"",
+        "ChecksumAlgorithm": [
+          "CRC64NVME"
+        ],
+        "ChecksumType": "FULL_OBJECT",
+        "Size": 12500,
+        "StorageClass": "STANDARD"
+      },
+      {
+        "Key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/s3-native-publication-smoke-a0002/generations/ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df/router/root.bin",
+        "LastModified": "2026-10-07T17:38:44+00:00",
+        "ETag": "\"be25b48e6e1d651ab08a49812d87be19-1\"",
+        "ChecksumAlgorithm": [
+          "CRC64NVME"
+        ],
+        "ChecksumType": "FULL_OBJECT",
+        "Size": 316672,
+        "StorageClass": "STANDARD"
+      },
+      {
+        "Key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/s3-native-publication-smoke-a0002/head.json",
+        "LastModified": "2026-10-07T17:38:46+00:00",
+        "ETag": "\"dd9443419e182f8592f477ac648762df\"",
+        "ChecksumAlgorithm": [
+          "CRC64NVME"
+        ],
+        "ChecksumType": "FULL_OBJECT",
+        "Size": 170,
+        "StorageClass": "STANDARD"
+      }
+    ],
+    "RequestCharged": null,
+    "Prefix": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/s3-native-publication-smoke-a0002/"
+  },
+  "multipart": {
+    "RequestCharged": null,
+    "Prefix": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/s3-native-publication-smoke-a0002/"
+  },
+  "terminated": true,
+  "performance_claim": false,
+  "console_delivered_marker_observed": null,
+  "adopted": true,
+  "prefix_burned": false,
+  "exact_destination_key_and_size_roster_equal": true,
+  "original_native_exit": 0,
+  "original_closeout_exit": 0,
+  "original_instance_id": "i-0eee47c7b5d35518c",
+  "root_wait_exit": 0
+}

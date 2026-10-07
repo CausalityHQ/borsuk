@@ -1,0 +1,8 @@
+{
+  "instance_id": "i-0eee47c7b5d35518c",
+  "launch_time": "2026-10-07T17:38:02+00:00",
+  "terminate_cutoff": "2026-10-07T18:07:02+00:00",
+  "hard_cap": "2026-10-07T18:08:02+00:00",
+  "protocol_commit": "cc7a006170148966ef5a9e428673f9c2e23cf0ab",
+  "status": "LAUNCHED_NOT_QUALIFIED"
+}

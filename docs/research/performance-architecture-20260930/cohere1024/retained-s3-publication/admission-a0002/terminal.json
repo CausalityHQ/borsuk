@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-retained-s3-publication-admission-v1",
+  "instance_id": "i-0eee47c7b5d35518c",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 0,
+  "binary_source_commit": "4c2e535fef1fdc2e61fa003358614287bb8ed488",
+  "integration_commit": "910b8b093e95e69fb96b5a749f4c75c55e296fa6",
+  "qualified_source_identity_sha256": "07fe340f2e449e970cb04891a4509a1d766cd8498e93757ac4e11e8ce6f63fd7",
+  "evidence": {
+    "bytes": 3869,
+    "sha256": "85500a43220bd9d31843a36e3472ab0f986fcd8e92cfafad17db8dfc0787786f"
+  },
+  "terminal_delivery": "attempted",
+  "performance_claim": false
+}
