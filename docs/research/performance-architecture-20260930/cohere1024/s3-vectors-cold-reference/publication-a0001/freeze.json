@@ -1,0 +1,48 @@
+{
+  "status": "FROZEN_NOT_LAUNCHED",
+  "phase": "admit-and-publish-no-query",
+  "qualified_main": "5407b81f6302707d8348ca638ab64c22a783bbfe",
+  "service_smoke": "a0002 verified closed0/cleanup absence",
+  "config_sha256": "f7bc9f1f6797b4cbd8104904333de35c03b596cfe9a3b23b0b58a294912b9c43",
+  "runner_sha256": "03595aca6410825935b4cf08bfc8dec5b6ea8e6bf725c02672e59cd6900e2549",
+  "manifest_sha256": "c1fbcb04ab01345e6d099113a594e8872a9c2aab1fed2e0c4951c691d606e277",
+  "bootstrap_sha256": "1a6e8878d7e95307bcad79fe588b937c44281d657a4a2c8b3023afb59fa20916",
+  "inputs": {
+    "corpus": {
+      "path": "/mnt/borsuk-s3-vectors-reference/inputs/corpus.f32",
+      "bytes": 409600000,
+      "sha256": "3c95fa49a7d3f9d4bf6178f5ac2493e700a30fbcfe91da97a5fcf16a1f5fc09c"
+    },
+    "queries": {
+      "path": "/mnt/borsuk-s3-vectors-reference/inputs/queries.f32",
+      "bytes": 4096000,
+      "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+    },
+    "truth": {
+      "path": "/mnt/borsuk-s3-vectors-reference/inputs/truth.u64",
+      "bytes": 80000,
+      "sha256": "479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c"
+    }
+  },
+  "native_limits": {
+    "cpu": 1,
+    "memory_bytes": 536870912,
+    "swap_bytes": 0,
+    "pids": 64,
+    "deadline_seconds": 1800
+  },
+  "machine_deadline_seconds": 3600,
+  "reservation_usd": {
+    "compute": ".25",
+    "ancillary": ".15",
+    "service": ".35",
+    "total": ".75"
+  },
+  "cost_basis": "max Spot bid$.25/hour*1h; service4096calls+raw.382GiB put+full-month storage+readback allowance; actual billing unknown",
+  "spot": true,
+  "query_calls": 0,
+  "interruption": "INVALID; retain exact namespace/ownership and reconcile before retry",
+  "publication_success": "retain authenticated ownership/state/index, terminate host, no idle compute; later fresh measurement after >=3600s",
+  "publication_failure": "attempt bounded ownership-checked cleanup; retain receipt/manual reconciliation if refused",
+  "performance_claim": false
+}

@@ -1,0 +1,18 @@
+{
+  "status": "MATCHED100K_PUBLICATION_VERIFIED",
+  "instance_id": "i-09d5d6170c62f2098",
+  "terminated": true,
+  "config_sha256": "f7bc9f1f6797b4cbd8104904333de35c03b596cfe9a3b23b0b58a294912b9c43",
+  "verified_at_ms": 1791415873740,
+  "measurement_not_before_utc": "2026-10-08T00:31:13.740000+00:00",
+  "rows_bit_exact": 100000,
+  "puts": 200,
+  "gets": 1000,
+  "list_pages": 200,
+  "observed_sdk_transmits": 1405,
+  "query_calls": 0,
+  "index_mode": "ENHANCED",
+  "memory_peak_bytes": 19509248,
+  "swap_oom": 0,
+  "performance_claim": false
+}

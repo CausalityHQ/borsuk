@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-s3-vectors-cold-publication-v1",
+  "instance_id": "i-09d5d6170c62f2098",
+  "original_exit": 0,
+  "native_exit": 0,
+  "upload_exit": 0,
+  "evidence": {
+    "sha256": "7a50a5b08468718561fa686e74bd49c721df5b9aca6d760ebf042e1a39523f6a",
+    "bytes": 128583
+  },
+  "synthetic": false,
+  "performance_claim": false
+}
