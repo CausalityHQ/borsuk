@@ -1,0 +1,85 @@
+{
+  "status": "SPOT_INTERRUPTED_EXECUTION_INVALID_NO_ALGORITHM_INFERENCE",
+  "attempt": "a0006",
+  "original_session": 82618,
+  "instance_id": "i-02f03aa55c097a3a0",
+  "terminated": true,
+  "aws_state": {
+    "State": "terminated",
+    "Reason": {
+      "Code": "Server.SpotInstanceTermination",
+      "Message": "Server.SpotInstanceTermination: Spot instance termination"
+    },
+    "Transition": "Service initiated (2026-10-07 08:42:49 GMT)"
+  },
+  "native_source_commit": "7096b5b943946a473eab0dd88adea99aae24ecc5",
+  "source_identity_sha256": "410776276d6e5fc38f221cc84312043c3d46eb2e0afd1aa900e807812a36fe6d",
+  "all_10_retained_terminal_artifacts_authenticated": true,
+  "full_413_source_before_bundle_match": true,
+  "source_after_missing": true,
+  "workspace_receipt_missing": true,
+  "completed_native_stages": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--test",
+        "two_bit_generation",
+        "retained_semantic_",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-07T08:30:30Z",
+      "gate_status": 0,
+      "log_exit_status": 0,
+      "required_test_passes": {
+        "retained_semantic_republication_preserves_payload_and_score_bits": 1,
+        "retained_semantic_republication_refuses_unapproved_changed_or_unbounded_inputs": 1
+      },
+      "resources": "\tCommand being timed: \"cargo test --locked -p borsuk --test two_bit_generation retained_semantic_ -- --test-threads=1\"\n\tUser time (seconds): 220.41\n\tSystem time (seconds): 28.08\n\tPercent of CPU this job got: 92%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 4:29.34\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3966796\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 2875\n\tMinor (reclaiming a frame) page faults: 14618436\n\tVoluntary context switches: 244585\n\tInvoluntary context switches: 3227\n\tSwaps: 0\n\tFile system inputs: 464\n\tFile system outputs: 6427824\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n",
+      "schema": "borsuk-retained-generation-rebind-implementation-gates-stage-v1",
+      "stage": "retained-rebind-integration-tests",
+      "started_at": "2026-10-07T08:26:01Z",
+      "tests_run": 2
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "publish_two_bit_generation",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_status": 0,
+      "finished_at": "2026-10-07T08:30:33Z",
+      "gate_status": 0,
+      "log_exit_status": 0,
+      "required_test_passes": {
+        "tests::publishes_real_generation_and_receipt_then_refuses_replay": 1,
+        "tests::rejects_wrong_root_cap_existing_head_and_bad_config": 1,
+        "tests::retained_publishes_copied_source_gone_generation_and_bound_receipt": 1,
+        "tests::retained_refuses_bad_config_pending_head_and_occupied_output_without_head": 1
+      },
+      "resources": "\tCommand being timed: \"cargo test --locked -p borsuk --bin publish_two_bit_generation -- --test-threads=1\"\n\tUser time (seconds): 1.88\n\tSystem time (seconds): 0.31\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:02.20\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 854592\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 69\n\tMinor (reclaiming a frame) page faults: 149748\n\tVoluntary context switches: 6674\n\tInvoluntary context switches: 36\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 59008\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n",
+      "schema": "borsuk-retained-generation-rebind-implementation-gates-stage-v1",
+      "stage": "retained-rebind-publisher-tests",
+      "started_at": "2026-10-07T08:30:31Z",
+      "tests_run": 4
+    }
+  ],
+  "release_interrupted": true,
+  "clippy_and_testbuild_unrun": true,
+  "all_5_gate_qualification_incomplete": true,
+  "service": "native-workspace-execution.service killed TERM after16min50s; observed6.9GiB peak/swap0; original run-closed.log retained",
+  "test_log_sha256": "ce1b6c9482bf50cd6d596fbf4a73348052729d747dec2ad67bf4cb486f224992",
+  "algorithm_rejection": false,
+  "next_action": "Restart interrupted qualification in a new frozen attempt on identical source and limits after original termination. Two stages/six tests passed but missing full closure cannot qualify source."
+}
