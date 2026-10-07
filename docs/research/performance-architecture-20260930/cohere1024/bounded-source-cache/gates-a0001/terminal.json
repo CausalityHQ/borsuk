@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-bounded-source-cache-gates-v1",
+  "instance_id": "i-0ad0cffa253fefc0d",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 0,
+  "source_commit": "461ba972611347aa7c90bd941535f6ca43b0589b",
+  "candidate_commit": "461ba972611347aa7c90bd941535f6ca43b0589b",
+  "native_source_file_count": 414,
+  "native_source_identity_sha256": "cfc6fb6b48f2dc605054d8883dc82e122451aab7c6fabfc6672b71a67c32dd31",
+  "source_archive_sha256": "84ab8e541a67a413e38a5ea77bb4af60b174bca66cc756930377705a2077c7f9",
+  "evidence": {
+    "bytes": 617786,
+    "sha256": "a9a15e7f1ce86f057dd53110ffc8173f3ee9b1ce749062beb9b742667d3c7bd8"
+  },
+  "performance_claim": false
+}

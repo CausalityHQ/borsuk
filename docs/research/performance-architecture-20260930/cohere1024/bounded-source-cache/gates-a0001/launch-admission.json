@@ -1,0 +1,14 @@
+{
+  "status": "READY_NATIVE_COMPILER_QUALIFICATION",
+  "protocol_commit": "70d9210cac87942c04b34d893fd5eb340b01c6e3",
+  "qualified_main": "9639bb29d6a39942681c47eb602b1bba741765da",
+  "source_snapshot": "461ba972611347aa7c90bd941535f6ca43b0589b",
+  "root_native_full414_match": true,
+  "changed_native_vs_qualified_main": [
+    "crates/borsuk/src/two_bit_generation.rs"
+  ],
+  "prior_instance_terminated": true,
+  "no_existing_borsuk_pending_or_running": true,
+  "maximum_reserved_usd": 1.4,
+  "canary_requirement_scope": "Compiler/synthetic test gate; no ANN performance/cold/data measurement. Existing qualified minimal shell bootstrap reused. Performance requires separate future real-input admission and disposable canary."
+}

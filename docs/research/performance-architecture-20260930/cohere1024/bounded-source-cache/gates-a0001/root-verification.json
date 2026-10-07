@@ -1,0 +1,121 @@
+{
+  "status": "NATIVE_QUALIFIED",
+  "source_commit": "461ba972611347aa7c90bd941535f6ca43b0589b",
+  "source_file_count": 414,
+  "native_source_identity_sha256": "cfc6fb6b48f2dc605054d8883dc82e122451aab7c6fabfc6672b71a67c32dd31",
+  "full_source_before_after_root_match": true,
+  "build_support_count": 2449,
+  "instance_id": "i-0ad0cffa253fefc0d",
+  "terminated": true,
+  "stage_count": 8,
+  "stages": [
+    {
+      "name": "source-walks-debug",
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests -- --test-threads=1",
+      "exit": 0,
+      "tee_exit": 0,
+      "test_counts": [
+        [
+          "17",
+          "0",
+          "0"
+        ]
+      ],
+      "started": "2026-10-07T21:03:12Z",
+      "finished": "2026-10-07T21:07:45Z"
+    },
+    {
+      "name": "cache-release-oracle",
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked --release -p borsuk --lib two_bit_generation::source_walk_tests::paged_source_cache_preserves_parity_admission_and_failure_drains -- --exact --test-threads=1",
+      "exit": 0,
+      "tee_exit": 0,
+      "test_counts": [
+        [
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "started": "2026-10-07T21:07:45Z",
+      "finished": "2026-10-07T21:25:12Z"
+    },
+    {
+      "name": "source-fetch-tests",
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib sq8_s3_range::tests -- --test-threads=1",
+      "exit": 0,
+      "tee_exit": 0,
+      "test_counts": [
+        [
+          "12",
+          "0",
+          "0"
+        ]
+      ],
+      "started": "2026-10-07T21:25:12Z",
+      "finished": "2026-10-07T21:25:13Z"
+    },
+    {
+      "name": "baseline-tests",
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+      "exit": 0,
+      "tee_exit": 0,
+      "test_counts": [
+        [
+          "9",
+          "0",
+          "0"
+        ]
+      ],
+      "started": "2026-10-07T21:25:13Z",
+      "finished": "2026-10-07T21:26:28Z"
+    },
+    {
+      "name": "reducer-tests",
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1",
+      "exit": 0,
+      "tee_exit": 0,
+      "test_counts": [
+        [
+          "8",
+          "0",
+          "0"
+        ]
+      ],
+      "started": "2026-10-07T21:26:28Z",
+      "finished": "2026-10-07T21:27:25Z"
+    },
+    {
+      "name": "affected-release",
+      "command": "env CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk --bin check_cohere_native_baseline --example compare_native_replay",
+      "exit": 0,
+      "tee_exit": 0,
+      "test_counts": [],
+      "started": "2026-10-07T21:27:25Z",
+      "finished": "2026-10-07T21:34:16Z"
+    },
+    {
+      "name": "workspace-clippy",
+      "command": "env CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "exit": 0,
+      "tee_exit": 0,
+      "test_counts": [],
+      "started": "2026-10-07T21:34:16Z",
+      "finished": "2026-10-07T21:38:17Z"
+    },
+    {
+      "name": "workspace-test-build",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND CARGO_BUILD_JOBS=1 BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "exit": 0,
+      "tee_exit": 0,
+      "test_counts": [],
+      "started": "2026-10-07T21:38:17Z",
+      "finished": "2026-10-07T21:45:11Z"
+    }
+  ],
+  "artifacts": 79,
+  "compiler_memory_peak_bytes": 8589934592,
+  "swap_peak_bytes": 0,
+  "oom_kill": 0,
+  "main_pid_after": 0,
+  "scope": "Compiler and synthetic source-cache correctness only. No cache performance, serving RAM, cold vendor or production-readiness claim."
+}

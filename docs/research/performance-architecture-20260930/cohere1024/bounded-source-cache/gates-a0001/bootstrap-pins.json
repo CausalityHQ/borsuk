@@ -1,0 +1,27 @@
+{
+  "source_commit": "461ba972611347aa7c90bd941535f6ca43b0589b",
+  "archive": {
+    "bytes": 13187402,
+    "sha256": "84ab8e541a67a413e38a5ea77bb4af60b174bca66cc756930377705a2077c7f9"
+  },
+  "full_native_identity_sha256": "cfc6fb6b48f2dc605054d8883dc82e122451aab7c6fabfc6672b71a67c32dd31",
+  "files": {
+    "gates.sh": {
+      "bytes": 3188,
+      "sha256": "9f212508cfc12e2962a362b20426e7d341a017f4f394630e5700df4b745a845a"
+    },
+    "source-files.sha256": {
+      "bytes": 277916,
+      "sha256": "4eda2b0addfbe5933837f045931c13755748390da4973258b37a486ffebeaeaa"
+    },
+    "native-source.json": {
+      "bytes": 47081,
+      "sha256": "830c9c3e21e90c7f3239b8b0ea1d7cbc0d37e96b0bfef3b1ac6fc95f6d366144"
+    },
+    "user-data-draft.sh": {
+      "bytes": 5141,
+      "sha256": "8ccb7880361b20ada96004c9717973b8fe954d021e67af515e755b9c98019a2e"
+    }
+  },
+  "status": "DRAFT_NO_LAUNCH_PRIOR_RUN_ACTIVE"
+}

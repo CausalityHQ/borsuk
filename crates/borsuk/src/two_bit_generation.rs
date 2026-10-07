@@ -11,8 +11,8 @@ use crate::{
     rotated_two_bit::PreparedTwoBit,
     sq8_page_authority::{PageAuthority, PageError},
     sq8_s3_range::{
-        OneAttemptS3, RankedSq8, RankedSq8Failure, Sq8ReadStats, fetch_verified_ranges_inner,
-        rank_verified_sq8_pages_inner,
+        OneAttemptS3, RankedSq8, RankedSq8Failure, Sq8ReadStats, VerifiedRange,
+        fetch_verified_ranges_inner, rank_verified_sq8_pages_inner,
     },
     two_bit_mutations::{TwoBitMutationHit, TwoBitMutationSnapshot},
     two_bit_source::{SourceBuildError, SourcePlaneReceipt, TwoBitPlane, read_authenticated},
@@ -378,6 +378,90 @@ struct RemoteSource {
     location: ObjectPath,
     etag: String,
 }
+
+/// Cumulative generation-local cache observations, separate from transport reads.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SourceCacheStats {
+    /// Modeled cache storage, tags/control and additional concurrent query metadata.
+    pub charged_bytes: usize,
+    /// Preallocated compressed-source payload capacity (including tail padding).
+    pub capacity_bytes: usize,
+    /// Authenticated payload currently held, excluding unused slots/tail padding.
+    pub occupied_bytes: usize,
+    /// Original planned ranges served entirely from the cache.
+    pub hits: u64,
+    /// Original planned ranges requiring their unchanged full fetch.
+    pub misses: u64,
+    /// Authenticated blocks replaced by another block in the same slot.
+    pub evictions: u64,
+}
+
+// Owned only by its immutable generation: root/source location/ETag/authority
+// cannot change while any query borrows the cache. Reopening always starts empty.
+struct SourceCache {
+    block_bytes: usize,
+    object_bytes: usize,
+    tags: Box<[usize]>,
+    bytes: Box<[u8]>,
+    stats: SourceCacheStats,
+}
+impl SourceCache {
+    fn block_len(&self, block: usize) -> usize {
+        self.block_bytes
+            .min(self.object_bytes - block * self.block_bytes)
+    }
+
+    fn lookup(&mut self, range: &std::ops::Range<usize>) -> Option<VerifiedRange> {
+        let first = range.start / self.block_bytes;
+        let end = range.end.div_ceil(self.block_bytes);
+        if !range.start.is_multiple_of(self.block_bytes)
+            || (range.end != self.object_bytes && !range.end.is_multiple_of(self.block_bytes))
+            || (first..end).any(|block| self.tags[block % self.tags.len()] != block)
+        {
+            self.stats.misses = self.stats.misses.saturating_add(1);
+            return None;
+        }
+        // One lock covers all tags AND the copy. No borrowed/sliced cache Bytes
+        // survives it, and the existing full-cover query payload charge applies.
+        let mut bytes = bytes::BytesMut::with_capacity(range.len());
+        for block in first..end {
+            let offset = (block % self.tags.len()) * self.block_bytes;
+            bytes.extend_from_slice(&self.bytes[offset..offset + self.block_len(block)]);
+        }
+        self.stats.hits = self.stats.hits.saturating_add(1);
+        Some(VerifiedRange {
+            start: range.start,
+            bytes: bytes.freeze(),
+        })
+    }
+
+    fn insert(&mut self, range: &VerifiedRange) {
+        if !range.start.is_multiple_of(self.block_bytes) {
+            return;
+        }
+        for (index, bytes) in range.bytes.chunks(self.block_bytes).enumerate() {
+            let block = range.start / self.block_bytes + index;
+            if bytes.len() != self.block_len(block) {
+                continue;
+            }
+            let slot = block % self.tags.len();
+            let old = self.tags[slot];
+            if old == block {
+                continue;
+            }
+            if old != usize::MAX {
+                self.stats.evictions = self.stats.evictions.saturating_add(1);
+                self.stats.occupied_bytes -= self.block_len(old);
+            }
+            // Invalidate before copying; poison recovery cannot expose a partial block.
+            self.tags[slot] = usize::MAX;
+            let offset = slot * self.block_bytes;
+            self.bytes[offset..offset + bytes.len()].copy_from_slice(bytes);
+            self.tags[slot] = block;
+            self.stats.occupied_bytes += bytes.len();
+        }
+    }
+}
 /// Monotonic stage boundaries relative to the admitted query's start.
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct StageInterval {
@@ -391,7 +475,7 @@ pub struct StageInterval {
 pub struct QueryStages {
     /// Query preparation and graph/semantic discovery, including leaf reads.
     pub discovery: StageInterval,
-    /// Authenticated source range fetch, after releasing leaf bodies.
+    /// Authenticated source fetch plus cache lookup/copy/insertion, after leaf release.
     pub source: StageInterval,
     /// Shared source scoring and physical SQ8 plan.
     pub planning: StageInterval,
@@ -444,6 +528,7 @@ pub struct TwoBitGeneration {
     slots: Semaphore,
     remote_open_stats: Option<RemoteOpenStats>,
     source: Option<RemoteSource>,
+    source_cache: Option<std::sync::Mutex<SourceCache>>,
 }
 
 /// One generation-pinned base fetch merged with a bounded immutable delta.
@@ -806,6 +891,110 @@ impl TwoBitGeneration {
     }
     pub(crate) fn modeled_memory_bytes(&self) -> u64 {
         self.modeled_memory_bytes
+    }
+
+    /// Opt in to a generation-local cache of authenticated 256-row source blocks.
+    /// Zero disables it; positive budgets require a remote source and at least
+    /// one slot. The cap includes tags/control and extra query metadata, not just
+    /// payload. Existing full-cover admission and query concurrency remain in force.
+    /// Configure before sharing the generation; replacement drops the old cache
+    /// before allocation. Include this generation's model in subsequent pinned
+    /// generation admission. A hit does not probe current object-store availability.
+    pub fn with_source_cache(mut self, max_bytes: usize) -> Result<Self> {
+        let bad = TwoBitGenerationError::Invalid;
+        if let Some(old) = self.source_cache.take() {
+            let old = old
+                .into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.modeled_memory_bytes -= old.stats.charged_bytes as u64;
+        }
+        if max_bytes == 0 {
+            return Ok(self);
+        }
+        let source = self
+            .source
+            .as_ref()
+            .ok_or(bad("source cache requires remote source"))?;
+        let block_bytes = self
+            .plane
+            .receipt()
+            .record_bytes
+            .checked_mul(256)
+            .ok_or(bad("source cache geometry"))?;
+        let slot_bytes = block_bytes
+            .checked_add(std::mem::size_of::<usize>())
+            .ok_or(bad("source cache geometry"))?;
+        // Fixed boxed capacities never grow. Allow 64 bytes per allocation in
+        // addition to control structures and both cache-path query Vec capacities.
+        // Payload copies already fit the existing 2 * full source cover per query.
+        let query_metadata = self
+            .limits
+            .max_source_gets
+            .min(self.rows().div_ceil(256))
+            .checked_mul(
+                std::mem::size_of::<VerifiedRange>() + std::mem::size_of::<(usize, usize)>(),
+            )
+            .and_then(|n| n.checked_add(2 * (std::mem::size_of::<Vec<usize>>() + 64)))
+            .and_then(|n| n.checked_mul(self.limits.max_active_queries))
+            .ok_or(bad("source cache memory"))?;
+        let fixed = std::mem::size_of::<Option<std::sync::Mutex<SourceCache>>>()
+            .checked_add(2 * 64)
+            .and_then(|n| n.checked_add(query_metadata))
+            .ok_or(bad("source cache memory"))?;
+        let slots = max_bytes
+            .checked_sub(fixed)
+            .ok_or(bad("source cache capacity"))?
+            / slot_bytes;
+        let slots = slots.min(self.rows().div_ceil(256));
+        if slots == 0 {
+            return Err(bad("source cache capacity"));
+        }
+        let charged_bytes = slots
+            .checked_mul(slot_bytes)
+            .and_then(|n| n.checked_add(fixed))
+            .ok_or(bad("source cache memory"))?;
+        let modeled = self
+            .modeled_memory_bytes
+            .checked_add(charged_bytes as u64)
+            .filter(|&n| n <= self.limits.max_memory_bytes)
+            .ok_or(bad("source cache memory cap"))?;
+        // All cache and concurrent query capacity is admitted before either allocation.
+        let capacity_bytes = slots * block_bytes;
+        let mut tags = Vec::new();
+        tags.try_reserve_exact(slots)
+            .map_err(|_| bad("source cache allocation"))?;
+        tags.resize(slots, usize::MAX);
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(capacity_bytes)
+            .map_err(|_| bad("source cache allocation"))?;
+        bytes.resize(capacity_bytes, 0);
+        self.source_cache = Some(std::sync::Mutex::new(SourceCache {
+            block_bytes,
+            object_bytes: source.authority.object_bytes(),
+            tags: tags.into_boxed_slice(),
+            bytes: bytes.into_boxed_slice(),
+            stats: SourceCacheStats {
+                charged_bytes,
+                capacity_bytes,
+                ..SourceCacheStats::default()
+            },
+        }));
+        self.modeled_memory_bytes = modeled;
+        Ok(self)
+    }
+
+    /// Snapshot of cumulative range hits/misses and block occupancy/evictions.
+    /// Disabled caches return zeros; these counters do not describe network billing.
+    pub fn source_cache_stats(&self) -> SourceCacheStats {
+        self.source_cache
+            .as_ref()
+            .map_or(SourceCacheStats::default(), |cache| {
+                cache
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .stats
+            })
     }
 
     /// Stream only generation metadata from an authorized immutable prefix,
@@ -1349,6 +1538,7 @@ impl TwoBitGeneration {
             slots: Semaphore::new(limits.max_active_queries),
             remote_open_stats: None,
             source,
+            source_cache: None,
         })
     }
     /// Authenticated concrete discovery mode.
@@ -1560,6 +1750,79 @@ impl TwoBitGeneration {
         )
         .await
     }
+
+    async fn fetch_source_ranges(
+        &self,
+        store: &dyn ObjectStore,
+        ranges: &[(usize, usize)],
+    ) -> Result<(Vec<VerifiedRange>, Sq8ReadStats)> {
+        let source = self
+            .source
+            .as_ref()
+            .ok_or(TwoBitGenerationError::Invalid("source binding"))?;
+        let Some(cache) = &self.source_cache else {
+            return fetch_verified_ranges_inner(
+                store,
+                &source.location,
+                &source.authority,
+                ranges,
+                &source.etag,
+                self.limits.max_source_gets,
+                self.limits.max_source_bytes,
+                self.limits.max_parallel_source_gets,
+            )
+            .await
+            .map_err(TwoBitGenerationError::SourceRead);
+        };
+        let mut verified = Vec::with_capacity(ranges.len());
+        let mut misses = Vec::with_capacity(ranges.len());
+        {
+            // ponytail: one generation mutex serializes bounded copies; shard
+            // only if measured concurrent copy contention warrants more state.
+            let mut cache = cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for &(first, last) in ranges {
+                let range = source
+                    .authority
+                    .byte_range(first, last)
+                    .map_err(TwoBitGenerationError::Page)?;
+                if let Some(hit) = cache.lookup(&range) {
+                    verified.push(hit);
+                } else {
+                    misses.push((first, last));
+                }
+            }
+        }
+        let mut stats = Sq8ReadStats::default();
+        if !misses.is_empty() {
+            // The shared fetcher preserves ordered errors and drains every
+            // admitted original miss. A failed batch inserts nothing.
+            let (fetched, charged) = fetch_verified_ranges_inner(
+                store,
+                &source.location,
+                &source.authority,
+                &misses,
+                &source.etag,
+                self.limits.max_source_gets,
+                self.limits.max_source_bytes,
+                self.limits.max_parallel_source_gets,
+            )
+            .await
+            .map_err(TwoBitGenerationError::SourceRead)?;
+            stats = charged;
+            let mut cache = cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for range in &fetched {
+                cache.insert(range);
+            }
+            verified.extend(fetched);
+        }
+        verified.sort_unstable_by_key(|range| range.start);
+        Ok((verified, stats))
+    }
+
     async fn plan_paged_measured<'a>(
         &self,
         store: &dyn ObjectStore,
@@ -1569,8 +1832,7 @@ impl TwoBitGeneration {
         started: std::time::Instant,
     ) -> Result<(BudgetedPagePlan, Cow<'a, [f32]>, Sq8ReadStats, Sq8ReadStats)> {
         stages.discovery.start_ns = started.elapsed().as_nanos().max(1);
-        let source = self
-            .source
+        self.source
             .as_ref()
             .ok_or(TwoBitGenerationError::Invalid("source binding"))?;
         let trace_bytes = if trace.is_some() {
@@ -1617,19 +1879,9 @@ impl TwoBitGeneration {
                 .map(|r| (r.start / unit_bytes, (r.end - 1) / unit_bytes))
                 .collect::<Vec<_>>();
             stages.source.start_ns = started.elapsed().as_nanos().max(1);
-            let fetched = fetch_verified_ranges_inner(
-                store,
-                &source.location,
-                &source.authority,
-                &ranges,
-                &source.etag,
-                self.limits.max_source_gets,
-                self.limits.max_source_bytes,
-                self.limits.max_parallel_source_gets,
-            )
-            .await;
+            let fetched = self.fetch_source_ranges(store, &ranges).await;
             stages.source.end_ns = started.elapsed().as_nanos();
-            let (verified, stats) = fetched.map_err(TwoBitGenerationError::SourceRead)?;
+            let (verified, stats) = fetched?;
             stages.planning.start_ns = started.elapsed().as_nanos().max(1);
             let plan = self
                 .plan_walks(
@@ -2243,6 +2495,8 @@ mod source_walk_tests {
         metadata_fault: std::sync::Mutex<Option<&'static str>>,
         root_read_budget: std::sync::Mutex<Option<(String, usize)>>,
         bad_etag_suffix: std::sync::Mutex<Option<&'static str>>,
+        source_fault: std::sync::Mutex<Option<(usize, &'static str)>>,
+        source_completed: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
     impl std::fmt::Display for RecordedStore {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -2313,6 +2567,51 @@ mod source_walk_tests {
                         );
                     }
                     _ => {}
+                }
+            }
+            let source_fault = *self.source_fault.lock().unwrap();
+            if !head
+                && path.as_ref().ends_with("/plane/records.bin")
+                && let Some((start, fault)) = source_fault
+            {
+                let affected = result.range.start == start as u64;
+                if affected && fault == "etag" {
+                    result.meta.e_tag = Some("wrong-source-etag".into());
+                } else {
+                    let original = result.payload;
+                    let completed = self.source_completed.clone();
+                    result.payload = object_store::GetResultPayload::Stream(
+                        stream::once(async move {
+                            let object_store::GetResultPayload::Stream(mut body) = original else {
+                                unreachable!()
+                            };
+                            let mut bytes = Vec::new();
+                            while let Some(chunk) = body.next().await {
+                                bytes.extend_from_slice(&chunk?);
+                            }
+                            if fault == "delayed" {
+                                // The later admitted success must finish after the first error.
+                                tokio::time::sleep(std::time::Duration::from_millis(if affected {
+                                    5
+                                } else {
+                                    20
+                                }))
+                                .await;
+                            }
+                            completed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            if affected && fault == "delayed" {
+                                return Err(object_store::Error::Generic {
+                                    store: "recorded",
+                                    source: std::io::Error::other("delayed source miss").into(),
+                                });
+                            }
+                            if affected && fault == "corrupt" {
+                                bytes[0] ^= 1;
+                            }
+                            Ok(bytes::Bytes::from(bytes))
+                        })
+                        .boxed(),
+                    );
                 }
             }
             tokio::task::yield_now().await;
@@ -4495,7 +4794,16 @@ mod source_walk_tests {
 
     #[tokio::test]
     async fn paged_source_matches_reference_and_preserves_failure_charges() {
-        assert_paged_source(513, false).await;
+        assert_paged_source(513, false, 2, false).await;
+    }
+
+    // Catches partial-range hits, unauthenticated insertion, uncharged cache
+    // capacity, lost failure drains and cache-dependent nomination/score changes.
+    #[tokio::test]
+    async fn paged_source_cache_preserves_parity_admission_and_failure_drains() {
+        for dimensions in [2, 5] {
+            assert_paged_source(513, false, dimensions, true).await;
+        }
     }
 
     #[tokio::test]
@@ -4584,29 +4892,32 @@ mod source_walk_tests {
 
     #[tokio::test]
     async fn fragmented_paged_source_preserves_trace_and_rank_across_get_caps() {
-        assert_paged_source(262_145, true).await;
+        assert_paged_source(262_145, true, 2, false).await;
     }
 
-    async fn assert_paged_source(rows: usize, fragmented: bool) {
+    async fn assert_paged_source(rows: usize, fragmented: bool, dimensions: usize, cache: bool) {
         use object_store::PutPayload;
         use sha2::{Digest, Sha256};
         let hash = |body: &[u8]| format!("{:x}", Sha256::digest(body));
         let temp = tempfile::tempdir().unwrap();
         let raw = (0..rows)
             .flat_map(|id| {
-                [
-                    1.0_f32 + (id % 7) as f32 * 0.2,
-                    0.1 + (id % 11) as f32 * 0.1,
-                ]
-                .into_iter()
-                .flat_map(f32::to_le_bytes)
+                (0..dimensions)
+                    .map(move |d| match d {
+                        0 => 1.0_f32 + (id % 7) as f32 * 0.2,
+                        _ => 0.1 + (id % 11) as f32 * 0.1,
+                    })
+                    .flat_map(f32::to_le_bytes)
             })
             .collect::<Vec<_>>();
         let sq8 = (0..rows)
             .flat_map(|id| {
                 let mut record = (id as i64).to_le_bytes().to_vec();
-                record.extend_from_slice(&5.0_f32.to_le_bytes());
-                record.extend_from_slice(&[1, 2]);
+                let norm = (1..=dimensions)
+                    .map(|value| (value * value) as f32)
+                    .sum::<f32>();
+                record.extend_from_slice(&norm.to_le_bytes());
+                record.extend((0..dimensions).map(|d| (d + 1) as u8));
                 record
             })
             .collect::<Vec<_>>();
@@ -4627,12 +4938,12 @@ mod source_walk_tests {
                 sq8: &sq8_path,
                 sq8_sha256: &sq8_sha,
                 rows,
-                dimensions: 2,
+                dimensions,
             },
             base_epoch: 0,
             generation: 7,
-            low: &[0.0; 2],
-            step: &[1.0; 2],
+            low: &vec![0.0; dimensions],
+            step: &vec![1.0; dimensions],
             sq8_object_key: key.as_ref(),
             sq8_etag: &etag,
         }
@@ -4640,8 +4951,8 @@ mod source_walk_tests {
         .unwrap();
         let limits = TwoBitGenerationLimits {
             max_memory_bytes: 256_000_000,
-            max_active_queries: 1,
-            max_query_bytes: rows * 14,
+            max_active_queries: if cache { 2 } else { 1 },
+            max_query_bytes: rows * (dimensions + 12),
             max_query_gets: 32,
             max_parallel_gets: 2,
             max_source_bytes: 64 * 1024 * 1024,
@@ -4709,7 +5020,12 @@ mod source_walk_tests {
                 .iter()
                 .any(|entry| entry.name == "plane/records.bin")
         );
-        let query = [0.5, 0.25];
+        let mut query = vec![0.25; dimensions];
+        query[0] = 0.5;
+        if cache {
+            assert_source_cache(local, remote, &store, &query, &root, &prefix, &root_sha).await;
+            return;
+        }
         let mut expected_trace = TwoBitPlanTrace::default();
         let (expected_plan, _) = local.plan_inner(&query, Some(&mut expected_trace)).unwrap();
         if !fragmented {
@@ -4921,6 +5237,434 @@ mod source_walk_tests {
         ));
         assert!(error.read_stats().0.failed_gets > 0);
     }
+    async fn assert_source_cache(
+        local: TwoBitGeneration,
+        mut remote: TwoBitGeneration,
+        store: &RecordedStore,
+        query: &[f32],
+        root: &Path,
+        prefix: &ObjectPath,
+        root_sha: &str,
+    ) {
+        use std::sync::atomic::Ordering;
+        let width = remote.plane.receipt().record_bytes;
+        let block_bytes = 256 * width;
+        let payload = fs::read(root.join("plane/records.bin")).unwrap();
+        let expected = local
+            .diagnostic_search_with_store(store, query, 10)
+            .await
+            .unwrap();
+        let parity = |actual: &(TwoBitSearchResult, TwoBitPlanTrace)| {
+            assert_eq!(actual.0.plan, expected.0.plan);
+            assert_eq!(
+                serde_json::to_value(&actual.1).unwrap(),
+                serde_json::to_value(&expected.1).unwrap()
+            );
+            let bits = |result: &TwoBitSearchResult| {
+                result
+                    .ranked
+                    .candidates
+                    .iter()
+                    .map(|hit| (hit.ordinal, hit.id, hit.score.to_bits()))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(bits(&actual.0), bits(&expected.0));
+            assert_eq!(actual.0.ranked.stats, expected.0.ranked.stats);
+            assert_eq!(actual.0.router_stats, expected.0.router_stats);
+        };
+        let source_reads = || {
+            store
+                .reads
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|read| !read.1 && read.0.ends_with("/plane/records.bin"))
+                .map(|read| read.2.clone())
+                .collect::<Vec<_>>()
+        };
+        let uncached_bytes = remote.modeled_memory_bytes();
+        for _ in 0..2 {
+            let actual = remote
+                .diagnostic_search_with_store(store, query, 10)
+                .await
+                .unwrap();
+            parity(&actual);
+            assert_eq!(
+                actual.0.source_stats,
+                Sq8ReadStats {
+                    submitted_gets: 1,
+                    verified_bytes: payload.len(),
+                    failed_gets: 0,
+                }
+            );
+            assert_eq!(remote.source_cache_stats(), SourceCacheStats::default());
+        }
+        remote = remote.with_source_cache(1_048_576).unwrap();
+        let capacity = remote.source_cache_stats();
+        assert_eq!(capacity.capacity_bytes, 3 * block_bytes);
+        assert_eq!(capacity.occupied_bytes, 0);
+        assert_eq!(
+            remote.modeled_memory_bytes(),
+            uncached_bytes + capacity.charged_bytes as u64
+        );
+        assert!(capacity.charged_bytes <= 1_048_576);
+        let one_slot = capacity.charged_bytes - 2 * (block_bytes + std::mem::size_of::<usize>());
+
+        // Check memory and cache-cap admission after open, before any query I/O.
+        let mut rejected = TwoBitGeneration::open_remote(
+            store,
+            prefix,
+            root_sha,
+            remote.limits,
+            root.parent().unwrap(),
+        )
+        .await
+        .unwrap();
+        rejected.limits.max_memory_bytes = uncached_bytes + capacity.charged_bytes as u64 - 1;
+        store.reads.lock().unwrap().clear();
+        assert!(rejected.with_source_cache(1_048_576).is_err());
+        assert!(store.reads.lock().unwrap().is_empty());
+        let rejected = TwoBitGeneration::open_remote(
+            store,
+            prefix,
+            root_sha,
+            remote.limits,
+            root.parent().unwrap(),
+        )
+        .await
+        .unwrap();
+        store.reads.lock().unwrap().clear();
+        assert!(rejected.with_source_cache(one_slot - 1).is_err());
+        assert!(store.reads.lock().unwrap().is_empty());
+
+        for phase in ["empty", "full", "mixed", "eviction"] {
+            if phase == "mixed" || phase == "eviction" {
+                remote = remote
+                    .with_source_cache(if phase == "mixed" {
+                        1_048_576
+                    } else {
+                        one_slot
+                    })
+                    .unwrap();
+                let (ranges, stats) = remote
+                    .fetch_source_ranges(store, &[(16, 16)])
+                    .await
+                    .unwrap();
+                assert_eq!(stats.verified_bytes, width);
+                assert_eq!(ranges[0].bytes.as_ref(), &payload[2 * block_bytes..]);
+                assert_eq!(remote.source_cache_stats().occupied_bytes, width);
+            }
+            store.reads.lock().unwrap().clear();
+            let actual = remote
+                .diagnostic_search_with_store(store, query, 10)
+                .await
+                .unwrap();
+            parity(&actual);
+            assert!(actual.0.stages.source.end_ns >= actual.0.stages.source.start_ns);
+            if phase == "full" {
+                assert_eq!(actual.0.source_stats, Sq8ReadStats::default());
+                assert!(source_reads().is_empty());
+                assert_eq!(
+                    (
+                        remote.source_cache_stats().hits,
+                        remote.source_cache_stats().misses
+                    ),
+                    (1, 1)
+                );
+                let (ranges, stats) = remote.fetch_source_ranges(store, &[(0, 16)]).await.unwrap();
+                assert_eq!(stats, Sq8ReadStats::default());
+                assert!(source_reads().is_empty());
+                assert_eq!(ranges.len(), 1);
+                assert_eq!(ranges[0].start, 0);
+                assert_eq!(ranges[0].bytes.as_ref(), payload.as_slice());
+            } else {
+                // Even one cached tail block cannot fragment the original range.
+                assert_eq!(source_reads(), vec![0..payload.len() as u64]);
+                assert_eq!(
+                    actual.0.source_stats,
+                    Sq8ReadStats {
+                        submitted_gets: 1,
+                        verified_bytes: payload.len(),
+                        failed_gets: 0,
+                    }
+                );
+            }
+            let stats = remote.source_cache_stats();
+            if phase == "eviction" {
+                assert_eq!(stats.occupied_bytes, width);
+                assert_eq!(stats.evictions, 3);
+                let (_, stats) = remote.fetch_source_ranges(store, &[(0, 7)]).await.unwrap();
+                assert_eq!(stats.verified_bytes, block_bytes);
+                assert_eq!(remote.source_cache_stats().evictions, 4);
+            } else {
+                assert_eq!(stats.occupied_bytes, payload.len());
+            }
+        }
+        // A hit in the later original range skips only that range; output is
+        // reassembled in source order even though the earlier range arrives later.
+        remote = remote.with_source_cache(1_048_576).unwrap();
+        remote
+            .fetch_source_ranges(store, &[(16, 16)])
+            .await
+            .unwrap();
+        store.reads.lock().unwrap().clear();
+        let (ranges, stats) = remote
+            .fetch_source_ranges(store, &[(0, 7), (16, 16)])
+            .await
+            .unwrap();
+        assert_eq!(
+            stats,
+            Sq8ReadStats {
+                submitted_gets: 1,
+                verified_bytes: block_bytes,
+                failed_gets: 0,
+            }
+        );
+        assert_eq!(source_reads(), vec![0..block_bytes as u64]);
+        assert_eq!((ranges[0].start, ranges[1].start), (0, 2 * block_bytes));
+        assert_eq!(ranges[0].bytes.as_ref(), &payload[..block_bytes]);
+        assert_eq!(ranges[1].bytes.as_ref(), &payload[2 * block_bytes..]);
+        assert_eq!(
+            (
+                remote.source_cache_stats().hits,
+                remote.source_cache_stats().misses
+            ),
+            (1, 2)
+        );
+
+        // Full-cache hits still undergo the original full cover admission.
+        remote = remote.with_source_cache(1_048_576).unwrap();
+        remote
+            .diagnostic_search_with_store(store, query, 10)
+            .await
+            .unwrap();
+        let source_cap = remote.limits.max_source_bytes;
+        remote.limits.max_source_bytes = payload.len() - 1;
+        store.reads.lock().unwrap().clear();
+        assert!(
+            remote
+                .search_with_store(store, query, 10, None)
+                .await
+                .is_err()
+        );
+        assert!(store.reads.lock().unwrap().is_empty());
+        remote.limits.max_source_bytes = source_cap;
+
+        // Retain a full-block hit while another task overwrites its only slot.
+        // The cloned in-memory transport shares the original authenticated object.
+        let shared = std::sync::Arc::new(remote.with_source_cache(one_slot).unwrap());
+        shared.fetch_source_ranges(store, &[(0, 7)]).await.unwrap();
+        assert_eq!(shared.source_cache_stats().capacity_bytes, block_bytes);
+        assert_ne!(
+            &payload[..block_bytes],
+            &payload[block_bytes..2 * block_bytes]
+        );
+        store.reads.lock().unwrap().clear();
+        let (hit_ready, wait_for_hit) = tokio::sync::oneshot::channel::<()>();
+        let colliding_generation = shared.clone();
+        let colliding_store = store.inner.clone();
+        let eviction = tokio::spawn(async move {
+            wait_for_hit.await.unwrap();
+            let before = colliding_generation.source_cache_stats();
+            assert_eq!((before.hits, before.misses, before.evictions), (1, 1, 0));
+            colliding_generation
+                .fetch_source_ranges(&colliding_store, &[(8, 15)])
+                .await
+                .unwrap()
+        });
+        let (retained, hit_stats) = shared.fetch_source_ranges(store, &[(0, 7)]).await.unwrap();
+        assert_eq!(hit_stats, Sq8ReadStats::default());
+        assert!(source_reads().is_empty());
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].start, 0);
+        assert_eq!(retained[0].bytes.as_ref(), &payload[..block_bytes]);
+        hit_ready.send(()).unwrap();
+        let (colliding, miss_stats) = eviction.await.unwrap();
+        assert_eq!(
+            miss_stats,
+            Sq8ReadStats {
+                submitted_gets: 1,
+                verified_bytes: block_bytes,
+                failed_gets: 0,
+            }
+        );
+        assert_eq!(colliding.len(), 1);
+        assert_eq!(colliding[0].start, block_bytes);
+        assert_eq!(
+            colliding[0].bytes.as_ref(),
+            &payload[block_bytes..2 * block_bytes]
+        );
+        let after = shared.source_cache_stats();
+        assert_eq!((after.hits, after.misses, after.evictions), (1, 2, 1));
+        assert_eq!(after.occupied_bytes, block_bytes);
+        assert_eq!(retained[0].bytes.as_ref(), &payload[..block_bytes]);
+        remote = std::sync::Arc::try_unwrap(shared).ok().unwrap();
+
+        // Owned query copies survive concurrent lookup/insertion/eviction.
+        for budget in [one_slot, 1_048_576] {
+            remote = remote.with_source_cache(budget).unwrap();
+            store.reads.lock().unwrap().clear();
+            let (a, b) = tokio::join!(
+                remote.diagnostic_search_with_store(store, query, 10),
+                remote.diagnostic_search_with_store(store, query, 10),
+            );
+            let (a, b) = (a.unwrap(), b.unwrap());
+            parity(&a);
+            parity(&b);
+            assert_eq!(
+                a.0.source_stats.submitted_gets + b.0.source_stats.submitted_gets,
+                source_reads().len()
+            );
+            assert_eq!(
+                a.0.source_stats.verified_bytes + b.0.source_stats.verified_bytes,
+                source_reads().len() * payload.len()
+            );
+            assert!(
+                remote.source_cache_stats().occupied_bytes
+                    <= remote.source_cache_stats().capacity_bytes
+            );
+        }
+
+        for fault in ["etag", "corrupt", "delayed"] {
+            remote = remote.with_source_cache(1_048_576).unwrap();
+            remote.fetch_source_ranges(store, &[(8, 15)]).await.unwrap();
+            *store.source_fault.lock().unwrap() = Some((0, fault));
+            store.source_completed.store(0, Ordering::SeqCst);
+            store.reads.lock().unwrap().clear();
+            let error = remote
+                .fetch_source_ranges(store, &[(0, 7), (16, 16)])
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(
+                error.read_stats(),
+                (
+                    Sq8ReadStats {
+                        submitted_gets: 2,
+                        verified_bytes: width,
+                        failed_gets: 1,
+                    },
+                    Sq8ReadStats::default()
+                )
+            );
+            assert_eq!(
+                source_reads(),
+                vec![
+                    0..block_bytes as u64,
+                    (2 * block_bytes) as u64..payload.len() as u64
+                ]
+            );
+            assert_eq!(
+                store.source_completed.load(Ordering::SeqCst),
+                if fault == "etag" { 1 } else { 2 }
+            );
+            assert_eq!(remote.source_cache_stats().occupied_bytes, block_bytes);
+            store.reads.lock().unwrap().clear();
+            let error = remote
+                .search_with_store(store, query, 10, None)
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(
+                error.read_stats(),
+                (
+                    Sq8ReadStats {
+                        submitted_gets: 1,
+                        verified_bytes: 0,
+                        failed_gets: 1,
+                    },
+                    Sq8ReadStats::default()
+                )
+            );
+            assert!(
+                store
+                    .reads
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|read| read.0.ends_with("/plane/records.bin"))
+            );
+            assert!(
+                error.stages().unwrap().source.end_ns >= error.stages().unwrap().source.start_ns
+            );
+            assert_eq!(remote.source_cache_stats().occupied_bytes, block_bytes);
+            *store.source_fault.lock().unwrap() = None;
+            let (ranges, stats) = remote
+                .fetch_source_ranges(store, &[(0, 7), (16, 16)])
+                .await
+                .unwrap();
+            assert_eq!(
+                stats.submitted_gets, 2,
+                "failed batches must not poison or populate entries"
+            );
+            assert_eq!(ranges[0].bytes.as_ref(), &payload[..block_bytes]);
+            assert_eq!(ranges[1].bytes.as_ref(), &payload[2 * block_bytes..]);
+            let actual = remote
+                .diagnostic_search_with_store(store, query, 10)
+                .await
+                .unwrap();
+            parity(&actual);
+            assert_eq!(actual.0.source_stats, Sq8ReadStats::default());
+        }
+
+        // An old pinned cache remains charged when another generation opens.
+        let pins = remote.modeled_memory_bytes();
+        let mut next = TwoBitGeneration::open_remote(
+            store,
+            prefix,
+            root_sha,
+            TwoBitGenerationLimits {
+                already_pinned_bytes: pins,
+                ..remote.limits
+            },
+            root.parent().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(next.modeled_memory_bytes(), uncached_bytes + pins);
+        next.limits.max_memory_bytes = uncached_bytes + pins + capacity.charged_bytes as u64 - 1;
+        store.reads.lock().unwrap().clear();
+        assert!(next.with_source_cache(1_048_576).is_err());
+        assert!(store.reads.lock().unwrap().is_empty());
+        let next = TwoBitGeneration::open_remote(
+            store,
+            prefix,
+            root_sha,
+            TwoBitGenerationLimits {
+                already_pinned_bytes: pins,
+                max_memory_bytes: uncached_bytes + pins + capacity.charged_bytes as u64,
+                ..remote.limits
+            },
+            root.parent().unwrap(),
+        )
+        .await
+        .unwrap()
+        .with_source_cache(1_048_576)
+        .unwrap();
+        assert_eq!(
+            next.modeled_memory_bytes(),
+            uncached_bytes + pins + capacity.charged_bytes as u64
+        );
+        let actual = next
+            .diagnostic_search_with_store(store, query, 10)
+            .await
+            .unwrap();
+        parity(&actual);
+        assert_eq!(
+            actual.0.source_stats.submitted_gets, 1,
+            "reopening must start empty"
+        );
+        remote = remote.with_source_cache(0).unwrap();
+        assert_eq!(remote.modeled_memory_bytes(), uncached_bytes);
+        assert_eq!(remote.source_cache_stats(), SourceCacheStats::default());
+        let actual = remote
+            .diagnostic_search_with_store(store, query, 10)
+            .await
+            .unwrap();
+        parity(&actual);
+        assert_eq!(actual.0.source_stats.submitted_gets, 1);
+    }
+
     #[test]
     fn diagnostic_page_limit_admits_short_closure_without_relaxing_control() {
         let codec = crate::rotated_two_bit::RotatedTwoBitCodec::new(&[0.0; 2], 20260923).unwrap();
