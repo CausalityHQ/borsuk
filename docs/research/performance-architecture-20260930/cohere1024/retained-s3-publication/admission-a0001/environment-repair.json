@@ -1,0 +1,22 @@
+{
+  "status": "REPAIRED_WRAPPER_MOCK_CHECK_PASS_PENDING_NEW_NATIVE_ATTEMPT",
+  "original_attempt": "a0001",
+  "original_disposition": "INVALID_COMMITTED",
+  "root_cause": "successful transient unit unloaded before final stop",
+  "repair": "only accept failed stop when fresh bounded show proves not-found/inactive/MainPID0",
+  "algorithm_binary_config_limits_unchanged": true,
+  "repaired_userdata_sha256": "9634dbde6d50f8f1bab31eaaca9b027528ac47104b6ca62442a2a7572075807b",
+  "remain_after_exit_rejected": "incompatible with systemd-run --wait; local bounded demonstration manually stopped and drained",
+  "remaining": "narrow wrapper regression, fresh destination and new recorded unchanged-algorithm attempt",
+  "check": {
+    "unit": "borsuk-retained-closeout-repair-check-r2",
+    "invocation": "59d67f57462a495ba20f18b3926b21ff",
+    "exit": 0,
+    "cases": 10,
+    "runtime_seconds": 15.371,
+    "memory_peak_approx": 17100000,
+    "memory_cap_bytes": 268435456,
+    "swap_peak": 0,
+    "native_cloud_mocked": true
+  }
+}
