@@ -1,0 +1,15 @@
+{
+  "status": "ENVIRONMENT_CAPACITY_REFUSAL_NATIVE_UNRUN",
+  "attempt": "a0005",
+  "original_session": 95735,
+  "instance_created": false,
+  "nodes": {},
+  "native_stages_run": 0,
+  "source_commit": "0c9f48e2cd9392d5fd8030b4e2ef6c83ff7bc460",
+  "native_commit": "7096b5b943946a473eab0dd88adea99aae24ecc5",
+  "subnet": "subnet-0a12dbed0ca6fac25",
+  "zone": "eu-central-1c",
+  "error": "InsufficientInstanceCapacity: There is no Spot capacity available that matches your request.",
+  "algorithm_rejection": false,
+  "next_environment_check": "Same-VPC public eu-central-1b subnet-00243d923761c047c. No change to source algorithm or host limits."
+}
