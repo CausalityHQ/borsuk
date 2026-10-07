@@ -1,6 +1,10 @@
 # Thin retained paired replay execution
 
-Status: source glue implementation authorized; native publication qualification and runtime launch remain pending. This does not authorize a paid replay or competitor claim.
+Status: implementation direction superseded by the operator on 2026-10-07: use Rust for benchmark execution, validation, metrics and result output; stop new Python/controller work. The unlaunched Python helper was removed from the current tree. Its exact source, reviews and bounded-check evidence remain in commits ebecb552/8f802bb8 and the source contract. Existing frozen launch tooling may run native binaries without edits.
+
+The scientific paired method and fifteen-input ledger remain authoritative. No real paired replay was launched. The section below preserves the earlier helper design for audit; it is not a current implementation assignment.
+
+## Historical helper design
 
 Reuse the existing native_stage / owned_stage supervisor and native-preflight local authentication, closure, inventory and terminal helpers. Add only scripts/run_cohere_retained_paired_replay.py. Keep the existing transport/lifecycle untouched in this slice. The helper accepts already staged opaque assets and three qualified binaries.
 
