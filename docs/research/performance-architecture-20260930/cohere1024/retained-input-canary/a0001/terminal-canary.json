@@ -1,0 +1,16 @@
+{
+  "schema": "borsuk-cohere-retained-input-canary-v1",
+  "instance_id": "i-04bdeb0ca651a1655",
+  "phase": "complete",
+  "status": "NATIVE_STAGE_CANARY_CLOSED",
+  "original_exit": 0,
+  "exit": 0,
+  "inputs_sha256": "cb4a475b5987c1562384f73a73692b8e6b7ad9ffb4a5d10d295b7787e7c6d829",
+  "evidence": {
+    "bytes": 15063,
+    "sha256": "e59b5ebb8f3496409839b37b08b35001902586229aa9e6c5358af312177b7bda"
+  },
+  "canary": true,
+  "performance_claim": false,
+  "physical_s3_query": false
+}

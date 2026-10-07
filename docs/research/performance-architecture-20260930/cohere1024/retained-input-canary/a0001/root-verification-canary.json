@@ -1,0 +1,35 @@
+{
+  "schema": "borsuk-cohere-retained-input-canary-root-verification-v1",
+  "status": "CANARY_ADMITTED",
+  "instance_id": "i-04bdeb0ca651a1655",
+  "terminated": true,
+  "waiter_exit": 0,
+  "original_exit": 0,
+  "terminal_exit": 0,
+  "authenticated_artifact_count": 131,
+  "inputs_sha256": "cb4a475b5987c1562384f73a73692b8e6b7ad9ffb4a5d10d295b7787e7c6d829",
+  "evidence": {
+    "bytes": 15063,
+    "sha256": "e59b5ebb8f3496409839b37b08b35001902586229aa9e6c5358af312177b7bda",
+    "key": "research/semantic-router/20261007/cohere-retained-input-canary-a0001-v2/evidence.tar.gz"
+  },
+  "native_original_exits": {
+    "canary_A": 2,
+    "canary_B": 2,
+    "canary_publisher": 2
+  },
+  "exact_usage_messages": true,
+  "original_native_service_terminal_receipts_equal": true,
+  "aggregate_memory_peak": 652328960,
+  "native_memory_max": 536870912,
+  "aggregate_memory_max": 1073741824,
+  "cpu": 1,
+  "swap_oom_zero": true,
+  "original_inputs_before_after_equal": true,
+  "ann_queries": false,
+  "native_request_truth_open": false,
+  "requests_truth_transport": "opaque S3 GET plus full SHA/length only",
+  "canary": true,
+  "performance_claim": false,
+  "physical_s3_query": false
+}
