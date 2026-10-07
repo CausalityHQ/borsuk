@@ -57,8 +57,13 @@ stage() {
   printf '%s\n' "$service_result" exited "$expected" > "$dir/systemd-terminal-expected"
   cmp "$dir/systemd-terminal-expected" "$dir/systemd-terminal"
   test "$(systemctl show "borsuk-retained-$name.service" --value -p MainPID)" = 0
-  grep -Fx ActiveState=inactive "$dir/systemd-after"
-  grep -Fx SubState=dead "$dir/systemd-after"
+  if grep -Fxq LoadState=not-found "$dir/systemd-after" || [[ "$expected" = 0 ]]; then
+    grep -Fx ActiveState=inactive "$dir/systemd-after"
+    grep -Fx SubState=dead "$dir/systemd-after"
+  else
+    grep -Fx ActiveState=failed "$dir/systemd-after"
+    grep -Fx SubState=failed "$dir/systemd-after"
+  fi
   cg_after="/sys/fs/cgroup$(cat "$dir/cgroup-path")"
   if [[ -d "$cg_after" ]]; then test "$(cat "$cg_after/pids.current")" = 0; fi
   printf '%s\n' NO_REMAINING_CGROUP_PROCESSES > "$dir/drained"

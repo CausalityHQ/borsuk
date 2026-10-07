@@ -6,7 +6,7 @@ mkdir "$root"
 cd "$root"
 export DEBIAN_FRONTEND=noninteractive AWS_MAX_ATTEMPTS=1 AWS_DEFAULT_REGION=eu-central-1
 bucket=borsuk-bench-453182569524-euc1
-prefix=research/semantic-router/20261007/cohere-retained-input-canary-a0001
+prefix=research/semantic-router/20261007/cohere-retained-input-canary-a0001-v2
 phase=bootstrap
 finish() {
   original=$?
@@ -68,7 +68,7 @@ phase=commands
 for file in inputs.json stage-assets.sh run-canary.sh; do
   aws --cli-connect-timeout 10 --cli-read-timeout 30 s3api get-object --bucket "$bucket" --key "$prefix/inputs/$file" "$file" > "$file.get.json"
 done
-printf '%s  %s\n' cb4a475b5987c1562384f73a73692b8e6b7ad9ffb4a5d10d295b7787e7c6d829 inputs.json 70d0770724100003750f9cc58d57b2ef0bd9061f53233edc211f4bbf34c3117d stage-assets.sh 86c99d2bff08925be75784a0b6fb6307ada7f6d30ed615e40780783727440734 run-canary.sh | sha256sum -c -
+printf '%s  %s\n' cb4a475b5987c1562384f73a73692b8e6b7ad9ffb4a5d10d295b7787e7c6d829 inputs.json 70d0770724100003750f9cc58d57b2ef0bd9061f53233edc211f4bbf34c3117d stage-assets.sh 32f2e631e819f9ff31e7dd67124740cb2c7eb3d06dcec393cde0d0a76c9a6e8e run-canary.sh | sha256sum -c -
 cat > /run/systemd/system/borsuk-retained-admission.slice <<'UNIT'
 [Unit]
 Description=Bounded retained native admission
