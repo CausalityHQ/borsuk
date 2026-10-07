@@ -1,0 +1,44 @@
+{
+  "schema": "borsuk-native-replay-reducer-qualification-preregistration-v1",
+  "status": "FROZEN_NOT_LAUNCHED",
+  "source_commit": "8bc3d18911e62a73e9a9edcb4cd61e47baa27caf",
+  "specialist_commit": "915858d7215b5d6cf6f7804a6f32b6749caff01b",
+  "native_file_count": 414,
+  "native_identity": "70c4080b954ff4b23f3cb026712763f9f1abdc2dfc923df8384b7a0d3753ea02",
+  "archive_sha256": "dca3a214d1a1ee0703c561e1c2bb3d40248ae1dc8030ca708135067ad0f06fb8",
+  "userdata_sha256": "a590543fe52e5b89f958636e57f2fe560774330725d879c4e8f3961db6f8c961",
+  "gates_sha256": "728519d6947a651c7e2e8ab2ad1e265ff3afbc04f889ba01893ec5e79fda2f58",
+  "resources": {
+    "cpu": 2,
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "tasks": 512,
+    "native_seconds": 7200,
+    "machine_seconds": 9000
+  },
+  "spot": {
+    "region": "eu-central-1",
+    "az": "eu-central-1c",
+    "type": "c7i.2xlarge",
+    "max_bid_usd_hour": 0.50,
+    "quoted_usd_hour": 0.2065,
+    "compute_cap_usd": 1.25,
+    "ancillary_cap_usd": 0.15
+  },
+  "interruption": "Preserve original attempt and evidence; interrupted gates are INVALID, no automatic replacement. Stop first failing layer. Terminate immediately at terminal, verify termination before collection and integration.",
+  "gates": [
+    "cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1",
+    "cargo build --locked -p borsuk --release --example compare_native_replay",
+    "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  ],
+  "tests": [
+    "tests::nearest_rank_and_sequential_qps_literal_golden",
+    "tests::four_authenticated_native_runs_and_completed_no_win",
+    "tests::invalid_tampered_out_of_order_and_semantic_mismatch",
+    "tests::bounded_files_reject_links_fifo_oversize_and_duplicate_evidence"
+  ],
+  "acceptance": "All exact tests once, zero failed/ignored, all four native and tee exits zero, full source before/after/current equality, artifact authentication, enforced limits, zero swap/OOM, same instance terminated. Compiler/correctness only.",
+  "corpus_reads": false,
+  "performance_claim": false
+}
