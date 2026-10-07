@@ -14,6 +14,7 @@ use axum::{
     routing::{get, post},
 };
 use borsuk::{
+    rotated_two_bit::RotatedTwoBitCodec,
     sq8_s3_range::OneAttemptS3,
     two_bit_generation::{TwoBitGeneration, TwoBitGenerationLimits},
     two_bit_store::read_two_bit_head,
@@ -24,6 +25,9 @@ use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 const QUERY_SLOTS: usize = 4;
+// Development HTTP admits Native100k's dimension range. Opening the generation
+// still validates its actual profile, including Fresh1m's fixed D768 geometry.
+const HTTP_DIMENSIONS: std::ops::RangeInclusive<usize> = 1..=1024;
 
 #[derive(Clone, Serialize)]
 struct Authority {
@@ -76,7 +80,8 @@ fn validate(
     {
         return Err(StatusCode::CONFLICT);
     }
-    if !matches!(request.k, 10 | 100)
+    if !HTTP_DIMENSIONS.contains(&dimensions)
+        || !matches!(request.k, 10 | 100)
         || request.query.len() != dimensions
         || request.query.iter().any(|x| !x.is_finite())
         || !request.query.iter().any(|x| *x != 0.0)
@@ -199,9 +204,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         || head.root_sha256() != authority.root_sha256
         || head.generation() != authority.generation
         || head.control_epoch() != authority.control_epoch
-        || head.dimensions() != 768
     {
         return Err("trusted head authority mismatch".into());
+    }
+    if !HTTP_DIMENSIONS.contains(&head.dimensions()) {
+        return Err("development HTTP dimensions must be in 1..=1024".into());
     }
     let head_read_wall_ns = started.elapsed().as_nanos();
     let scratch = tempfile::tempdir()?;
@@ -214,7 +221,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         max_source_bytes: 64 * 1024 * 1024,
         max_source_gets: 128,
         max_parallel_source_gets: 16,
-        max_query_scratch_bytes: 400_000,
+        max_query_scratch_bytes: RotatedTwoBitCodec::required_query_scratch_bytes(
+            head.dimensions(),
+        )?,
         already_pinned_bytes: 0,
     };
     let started = Instant::now();
@@ -275,6 +284,18 @@ mod tests {
             generation: 1,
             control_epoch: 1,
         };
+        for dimensions in [1, 5, 768, 1024] {
+            request.query = vec![1.0; dimensions];
+            assert_eq!(validate(&request, &authority, dimensions), Ok(()));
+        }
+        for dimensions in [0, 1025] {
+            request.query = vec![1.0; dimensions];
+            assert_eq!(
+                validate(&request, &authority, dimensions),
+                Err(StatusCode::BAD_REQUEST)
+            );
+        }
+        request.query = vec![1.0; 768];
         assert_eq!(validate(&request, &authority, 768), Ok(()));
         request.k = 10;
         assert_eq!(validate(&request, &authority, 768), Ok(()));

@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-generic-http-native-gates-v1",
+  "instance_id": "i-025718850bf4305a0",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 0,
+  "source_commit": "b4cd5e8d759775bd77ff437cd714367d71df90fa",
+  "specialist_commit": "01dab234de817d87e49e7105235a4fb0fde9af5c",
+  "native_source_file_count": 414,
+  "native_source_identity_sha256": "6ba6c1415cfb38e3d2aa366e424813b5fe9881ed84ea8d7e9a2157826ea310f0",
+  "source_archive_sha256": "9c1500b47e2ad12277b22b7c329d7ab0cf772808f761c00f4b7afb9d38e87bca",
+  "evidence": {
+    "bytes": 6491653,
+    "sha256": "864fe8aa74210f9f498190bed761fa6a38398d00c9e59261836d52b74450350c"
+  },
+  "performance_claim": false
+}

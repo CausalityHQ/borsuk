@@ -1,0 +1,67 @@
+{
+  "schema": "borsuk-generic-http-native-gates-root-verification-v1",
+  "status": "NATIVE_QUALIFIED",
+  "instance_id": "i-025718850bf4305a0",
+  "terminated": true,
+  "termination_wait_exit": 0,
+  "source_commit": "b4cd5e8d759775bd77ff437cd714367d71df90fa",
+  "specialist_commit": "01dab234de817d87e49e7105235a4fb0fde9af5c",
+  "source_file_count": 414,
+  "native_source_identity_sha256": "6ba6c1415cfb38e3d2aa366e424813b5fe9881ed84ea8d7e9a2157826ea310f0",
+  "full_source_before_after_root_match": true,
+  "support_file_count": 2449,
+  "authenticated_artifact_count": 67,
+  "stages": [
+    {
+      "name": "codec-tests",
+      "command": "cargo test --locked -p borsuk --lib rotated_two_bit::tests:: -- --test-threads=1",
+      "exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "codec-integration",
+      "command": "cargo test --locked -p borsuk --test rotated_two_bit -- --test-threads=1",
+      "exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "http-tests",
+      "command": "cargo test --locked -p borsuk --example two_bit_http -- --test-threads=1",
+      "exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "http-release",
+      "command": "cargo build --locked -p borsuk --release --example two_bit_http",
+      "exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "workspace-clippy",
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "workspace-test-build",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "exit": 0,
+      "tee_exit": 0
+    }
+  ],
+  "mandatory_named_tests_passed": 3,
+  "memory_peak_bytes": 8589934592,
+  "memory_limit_bytes": 8589934592,
+  "swap_peak_bytes": 0,
+  "oom": 0,
+  "oom_kill": 0,
+  "binary": {
+    "bytes": 16357152,
+    "sha256": "c8f1b20f308a3d0b8a15cca71ef5130e0c8349feb0a634da36015f12d3a60fdb"
+  },
+  "evidence": {
+    "bytes": 6491653,
+    "sha256": "864fe8aa74210f9f498190bed761fa6a38398d00c9e59261836d52b74450350c"
+  },
+  "performance_claim": false
+}

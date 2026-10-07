@@ -126,6 +126,21 @@ impl RotatedTwoBitCodec {
             .ok_or(TwoBitError::Geometry)
     }
 
+    /// Required peak query scratch bytes for a source dimension, without allocating.
+    /// Includes the packed-byte lookup table and temporary rotated query:
+    /// `(ceil(padded_dimensions / 4) * 256 + padded_dimensions) * size_of::<f64>()`.
+    /// Uses the constructor's block padding; rejects invalid geometry or overflow.
+    /// Allocator overhead and immutable codec metadata are charged separately.
+    pub fn required_query_scratch_bytes(dimensions: usize) -> Result<usize, TwoBitError> {
+        let padded = Self::padded_dimensions(dimensions)?;
+        padded
+            .div_ceil(4)
+            .checked_mul(256)
+            .and_then(|values| values.checked_add(padded))
+            .and_then(|values| values.checked_mul(std::mem::size_of::<f64>()))
+            .ok_or(TwoBitError::Geometry)
+    }
+
     /// Original source coordinate width, excluding block padding.
     pub fn dimensions(&self) -> usize {
         self.dimensions
@@ -230,10 +245,7 @@ impl RotatedTwoBitCodec {
             .packed_bytes
             .checked_mul(256)
             .ok_or(TwoBitError::Geometry)?;
-        let peak_scratch = table_len
-            .checked_add(self.mean.len())
-            .and_then(|values| values.checked_mul(std::mem::size_of::<f64>()))
-            .ok_or(TwoBitError::Geometry)?;
+        let peak_scratch = Self::required_query_scratch_bytes(self.dimensions)?;
         if peak_scratch > max_scratch_bytes {
             return Err(TwoBitError::MemoryBudget);
         }
@@ -311,5 +323,48 @@ impl PreparedTwoBit {
             return Err(TwoBitError::Record);
         }
         Ok(score)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn required_query_scratch_matches_exact_prepare_query_budget() {
+        for (dimensions, expected) in [(1, 2056), (5, 4160), (768, 399_360), (1024, 532_480)] {
+            let required = RotatedTwoBitCodec::required_query_scratch_bytes(dimensions).unwrap();
+            assert_eq!(required, expected);
+            let codec = RotatedTwoBitCodec::new(&vec![0.0; dimensions], 7).unwrap();
+            let query = vec![1.0; dimensions];
+            assert!(codec.prepare_query(&query, required).is_ok());
+            assert!(matches!(
+                codec.prepare_query(&query, required - 1),
+                Err(TwoBitError::MemoryBudget)
+            ));
+        }
+    }
+
+    #[test]
+    fn required_query_scratch_rejects_invalid_or_overflowing_geometry() {
+        for dimensions in [0, u32::MAX as usize, usize::MAX] {
+            assert_eq!(
+                RotatedTwoBitCodec::required_query_scratch_bytes(dimensions),
+                Err(TwoBitError::Geometry)
+            );
+        }
+        if let Some(dimensions) = (u32::MAX as usize).checked_add(1) {
+            assert_eq!(
+                RotatedTwoBitCodec::required_query_scratch_bytes(dimensions),
+                Err(TwoBitError::Geometry)
+            );
+        }
+        // Valid padding can still overflow the scratch calculation on 32-bit hosts.
+        if usize::BITS == 32 {
+            assert_eq!(
+                RotatedTwoBitCodec::required_query_scratch_bytes(u32::MAX as usize - 255),
+                Err(TwoBitError::Geometry)
+            );
+        }
     }
 }

@@ -1,0 +1,23 @@
+	Command being timed: "cargo build --locked -p borsuk --release --example two_bit_http"
+	User time (seconds): 775.52
+	System time (seconds): 22.01
+	Percent of CPU this job got: 95%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 13:52.22
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 4345536
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 296
+	Minor (reclaiming a frame) page faults: 13322133
+	Voluntary context switches: 27020
+	Involuntary context switches: 13849
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 3312376
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
