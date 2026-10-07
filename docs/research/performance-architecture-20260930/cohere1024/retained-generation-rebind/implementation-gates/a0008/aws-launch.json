@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-04abe163b1d38905e",
+  "nodes": {
+    "0": {
+      "instance_id": "i-04abe163b1d38905e"
+    }
+  },
+  "prefix": "research/semantic-router/20261006/retained-generation-rebind-gates-a0008",
+  "source_commit": "0c9f48e2cd9392d5fd8030b4e2ef6c83ff7bc460",
+  "source_archive_sha256": "5a0ca05703529a07fd7c9be0ce1612e944293539760389003d91f053b61ce5a8"
+}
