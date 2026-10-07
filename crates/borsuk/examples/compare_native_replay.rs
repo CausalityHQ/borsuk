@@ -1,5 +1,7 @@
-//! Offline reduction of four completed native A1/B1/B2/A2 result files.
+//! Offline reduction of four historical A1/B1/B2/A2 files or one sealed v2 file.
 //! This does not qualify resources, cost, cache state, or a vendor comparison.
+//! Single-file CLI: --completed-v2 CONFIG CONFIG_SHA256 NEW_OUTPUT_JSON.
+//! CONFIG pins the exact identity/bound_inputs rows and input path/bytes/SHA256.
 
 use rustix::fs::{Mode, OFlags, openat};
 use serde::{
@@ -63,6 +65,434 @@ fn valid_sha(s: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+const COMPLETED_SCHEMA: &str = "borsuk-completed-native-reduction-v1";
+const CONFIG_CAP: u64 = 32 * 1024;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompletedInput {
+    path: PathBuf,
+    bytes: u64,
+    sha256: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompletedConfig {
+    schema: String,
+    input: CompletedInput,
+    // Exact native rows, including phase, backend, and all source/input pins.
+    expected_identity: Value,
+    expected_bound_inputs: Value,
+}
+
+// Value normally accepts duplicate keys. Reject them recursively before using
+// exact expected rows or checking the v2 field roster (including opaque traces).
+struct UniqueJson(Value);
+impl<'de> Deserialize<'de> for UniqueJson {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = UniqueJson;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("JSON with unique object keys")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut a: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
+                let mut map = serde_json::Map::new();
+                while let Some((key, UniqueJson(value))) = a.next_entry::<String, UniqueJson>()? {
+                    if map.insert(key, value).is_some() {
+                        return Err(serde::de::Error::custom("duplicate JSON key"));
+                    }
+                }
+                Ok(UniqueJson(Value::Object(map)))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut a: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
+                let mut values = Vec::new();
+                while let Some(UniqueJson(v)) = a.next_element()? {
+                    values.push(v);
+                }
+                Ok(UniqueJson(Value::Array(values)))
+            }
+            fn visit_bool<E: serde::de::Error>(
+                self,
+                v: bool,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(UniqueJson(v.into()))
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> std::result::Result<Self::Value, E> {
+                Ok(UniqueJson(v.into()))
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> std::result::Result<Self::Value, E> {
+                Ok(UniqueJson(v.into()))
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> std::result::Result<Self::Value, E> {
+                serde_json::Number::from_f64(v)
+                    .map(|n| UniqueJson(Value::Number(n)))
+                    .ok_or_else(|| E::custom("finite number"))
+            }
+            fn visit_str<E: serde::de::Error>(
+                self,
+                v: &str,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(UniqueJson(v.into()))
+            }
+            fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<Self::Value, E> {
+                Ok(UniqueJson(Value::Null))
+            }
+        }
+        d.deserialize_any(Visitor)
+    }
+}
+
+fn fields(v: &Value, names: &str) -> Result<()> {
+    let object = v.as_object().ok_or("expected JSON object")?;
+    require(
+        object.len() == names.split_whitespace().count()
+            && names
+                .split_whitespace()
+                .all(|name| object.contains_key(name)),
+        "unknown/missing v2 field",
+    )
+}
+
+fn validate_v2_row(line: &[u8], phase: &str) -> Result<()> {
+    let UniqueJson(v) = serde_json::from_slice(line)?;
+    let names = match phase {
+        "identity" => {
+            "phase schema config_sha256 binary_sha256 runner_source_sha256 generation_source_sha256 router_source_sha256 codec_source_sha256 source_plane_source_sha256 scope physical_s3_measured io_measurement s3_credential_source native_transport_includes wire_bytes unread_bytes billed_bytes billed_requests external_gate_required truth_opened"
+        }
+        "bound_inputs" => {
+            "phase dataset revision metric tie_rule rows dimensions count k corpus_source_first query_source_first profile backend credential_source generation_prefix generation_root_sha256 requests_bytes requests_sha256 truth_bytes truth_sha256 native_source_sha256 native_sq8_sha256 native_order_sha256 truth_opened"
+        }
+        "source_binding" => "phase transport charges success truth_opened",
+        "generation_open" => "phase transport success truth_opened",
+        "startup" => {
+            "phase metadata library_cap_bytes caller_pinned_bytes codec_scratch_bytes trace_scratch_bytes query_scratch_bytes truth_opened"
+        }
+        "query" => {
+            "phase ordinal truth_opened returned returned_count underfill charges sum stages query_wall_ns query_process_cpu_ns trace transport"
+        }
+        "all_queries_sealed" => {
+            "phase count truth_opened prefix_bytes prefix_sha256 requests_sha256 generation_root_sha256 requires_successful_sync requires_successful_directory_sync"
+        }
+        "recall" => "phase ordinal hits10 recall10 returned_count underfill",
+        "terminal" => "phase summary",
+        _ => return Err("unknown v2 phase".into()),
+    };
+    fields(&v, names)?;
+    if matches!(phase, "source_binding" | "generation_open" | "query") {
+        fields(&v["transport"], "stage ordinal before after")?;
+    }
+    match phase {
+        "source_binding" | "generation_open" => require(
+            v["success"] == true && v["truth_opened"] == false,
+            "successful pre-truth admission",
+        )?,
+        "startup" => {
+            for name in [
+                "library_cap_bytes",
+                "caller_pinned_bytes",
+                "codec_scratch_bytes",
+                "trace_scratch_bytes",
+                "query_scratch_bytes",
+            ] {
+                require(v[name].as_u64().is_some(), "startup byte count")?;
+            }
+            let m = &v["metadata"];
+            fields(
+                m,
+                "metadata staging_wall_ns decode_wall_ns source_head_requests source_head_wall_ns router_head_requests router_head_wall_ns",
+            )?;
+            for (key, value) in m.as_object().ok_or("startup metadata")? {
+                if key != "metadata" {
+                    require(value.as_u64().is_some(), "startup timing/count")?;
+                }
+            }
+            for entry in m["metadata"].as_array().ok_or("metadata roster")? {
+                fields(
+                    entry,
+                    "name metadata_wave metadata_wave_wall_ns bytes reused_root_bytes retained_root_bytes local_auth_wall_ns local_copy_wall_ns chunks head_wall_ns logical_head_requests logical_get_requests payload_buffer_bound_bytes get_wall_ns stream_wall_ns write_wall_ns",
+                )?;
+                for (key, value) in entry.as_object().ok_or("metadata entry")? {
+                    require(
+                        if key == "name" {
+                            value.as_str().is_some_and(|s| !s.is_empty())
+                        } else {
+                            value.as_u64().is_some()
+                        },
+                        "metadata name/counter",
+                    )?;
+                }
+            }
+        }
+        "query" => {
+            let t = &v["trace"];
+            fields(
+                t,
+                "ranked_candidate_pages nomination_evaluated_units primary_page discoveries semantic_leaves semantic_units semantic_seed_additions",
+            )?;
+            require(t["primary_page"].as_u64().is_some(), "trace primary page")?;
+            for key in [
+                "ranked_candidate_pages",
+                "nomination_evaluated_units",
+                "semantic_leaves",
+                "semantic_units",
+                "semantic_seed_additions",
+            ] {
+                require(
+                    t[key]
+                        .as_array()
+                        .is_some_and(|a| a.iter().all(|n| n.as_u64().is_some())),
+                    "trace ordinals",
+                )?;
+            }
+            for d in t["discoveries"].as_array().ok_or("trace discoveries")? {
+                fields(
+                    d,
+                    "seed_page seed_evaluated_units walk_evaluated_units seed_work_exhausted walk_work_exhausted",
+                )?;
+                require(
+                    d["seed_page"].as_u64().is_some()
+                        && d["seed_work_exhausted"].is_boolean()
+                        && d["walk_work_exhausted"].is_boolean(),
+                    "trace discovery",
+                )?;
+                for key in ["seed_evaluated_units", "walk_evaluated_units"] {
+                    require(
+                        d[key]
+                            .as_array()
+                            .is_some_and(|a| a.iter().all(|n| n.as_u64().is_some())),
+                        "discovery ordinals",
+                    )?;
+                }
+            }
+        }
+        "terminal" => fields(
+            &v["summary"],
+            "status complete queries k total_hits10 recall_numerator recall_denominator mean_recall10 underfilled_queries all_queries_sealed prefix_bytes prefix_sha256 sealed_bytes sealed_sha256 requests_sha256 truth_sha256 generation_root_sha256 charges sum query_wall_ns query_process_cpu_ns physical_s3_measured external_gate_required process_wall_ns process_cpu_ns observed_process_peak_bytes binding_charge transport_last_boundary",
+        )?,
+        _ => (),
+    }
+    Ok(())
+}
+
+fn validate_v2_identity(i: &Identity, raw: &Value) -> Result<()> {
+    require(
+        i.schema == "borsuk-cohere-native-baseline-result-v2"
+            && i.scope == "AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS"
+            && i.io_measurement
+                == "logical_GET_charges_separate_from_cumulative_process_native_transport"
+            && !i.physical_s3_measured
+            && i.external_gate_required
+            && !i.truth_opened
+            && raw["s3_credential_source"] == "imds_instance_role_only"
+            && raw["native_transport_includes"] == "S3_and_IMDS_credential_requests_including_PUT",
+        "v2 native identity/scope",
+    )?;
+    for pin in [
+        &i.config_sha256,
+        &i.binary_sha256,
+        &i.runner_source_sha256,
+        &i.generation_source_sha256,
+        &i.router_source_sha256,
+        &i.codec_source_sha256,
+        &i.source_plane_source_sha256,
+    ] {
+        require(valid_sha(pin), "expected identity SHA256")?;
+    }
+    for key in [
+        "wire_bytes",
+        "unread_bytes",
+        "billed_bytes",
+        "billed_requests",
+    ] {
+        require(raw[key].is_null(), "unknown wire/billed accounting")?;
+    }
+    Ok(())
+}
+
+fn validate_v2_inputs(i: &Inputs, raw: &Value) -> Result<()> {
+    require(
+        !i.dataset.is_empty()
+            && !i.revision.is_empty()
+            && !i.profile.is_empty()
+            && i.metric == "cosine"
+            && i.tie_rule == "corpus_ordinal_ascending"
+            && i.rows >= K
+            && (1..=1024).contains(&i.dimensions)
+            && i.count == COUNT
+            && i.k == K
+            && !i.truth_opened
+            && i.requests_bytes == (COUNT * i.dimensions * 4) as u64
+            && i.truth_bytes == (COUNT * K * 8) as u64
+            && !i.generation_prefix.is_empty()
+            && raw["credential_source"] == "imds_instance_role_only",
+        "v2 expected population/geometry",
+    )?;
+    for pin in [
+        &i.generation_root_sha256,
+        &i.requests_sha256,
+        &i.truth_sha256,
+        &i.native_source_sha256,
+        &i.native_sq8_sha256,
+        &i.native_order_sha256,
+    ] {
+        require(valid_sha(pin), "expected input/root SHA256")?;
+    }
+    let backend = &raw["backend"];
+    fields(
+        backend,
+        "kind bucket region physical_prefix sq8_object_key sq8_etag",
+    )?;
+    require(backend["kind"] == "s3", "completed v2 S3 backend")?;
+    for key in [
+        "bucket",
+        "region",
+        "physical_prefix",
+        "sq8_object_key",
+        "sq8_etag",
+    ] {
+        require(
+            backend[key]
+                .as_str()
+                .is_some_and(|s| !s.is_empty() && s.len() <= 512),
+            "bound S3 descriptor",
+        )?;
+    }
+    require(
+        backend["sq8_object_key"]
+            .as_str()
+            .is_some_and(|s| s.ends_with(&format!("/objects/{}", i.native_sq8_sha256))),
+        "bound SQ8 key/hash",
+    )
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct TransportStats {
+    attempts: u64,
+    method_counts: [u64; 10],
+    status_counts: Vec<(u16, u64)>,
+    transport_failures: u64,
+    stream_failures: u64,
+    consumed_payload_bytes: u64,
+    dropped_error_bodies: u64,
+}
+
+impl TransportStats {
+    fn validate(&self) -> Result<()> {
+        require(
+            self.method_counts.iter().try_fold(0, |n, &v| plus(n, v))? == self.attempts
+                && self.status_counts.len() <= 900
+                && self
+                    .status_counts
+                    .iter()
+                    .all(|&(code, n)| (100..=999).contains(&code) && n > 0)
+                && self.status_counts.windows(2).all(|a| a[0].0 < a[1].0)
+                && plus(
+                    self.status_counts
+                        .iter()
+                        .try_fold(0, |n, &(_, v)| plus(n, v))?,
+                    self.transport_failures,
+                )? == self.attempts
+                && self.stream_failures <= self.attempts
+                && self
+                    .status_counts
+                    .iter()
+                    .filter(|(code, _)| !(200..300).contains(code))
+                    .try_fold(0, |n, &(_, v)| plus(n, v))?
+                    == self.dropped_error_bodies,
+            "cumulative SDK counter consistency",
+        )
+    }
+    fn follows(&self, before: &Self) -> Result<()> {
+        require(
+            self.attempts >= before.attempts
+                && self.consumed_payload_bytes >= before.consumed_payload_bytes
+                && self.transport_failures >= before.transport_failures
+                && self.stream_failures >= before.stream_failures
+                && self.dropped_error_bodies >= before.dropped_error_bodies
+                && self
+                    .method_counts
+                    .iter()
+                    .zip(before.method_counts)
+                    .all(|(&a, b)| a >= b)
+                && before
+                    .status_counts
+                    .iter()
+                    .all(|&(code, n)| self.status_counts.iter().any(|&(c, v)| c == code && v >= n)),
+            "monotonic cumulative SDK counters",
+        )
+    }
+    fn compact(&self) -> Value {
+        let mut v = serde_json::to_value(self).expect("integer transport serialization");
+        v["status_counts"] = Value::Null;
+        v["status_counts_entries"] = json!(self.status_counts.len());
+        v
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TransportSpan {
+    stage: String,
+    ordinal: Option<usize>,
+    before: TransportStats,
+    after: TransportStats,
+}
+impl TransportSpan {
+    fn compact(&self) -> Value {
+        json!({"stage":self.stage,"ordinal":self.ordinal,"before":self.before.compact(),
+            "after":self.after.compact(),"scope":"cumulative_process_native_transport",
+            "status_counts_omitted_from_terminal":true,"wire_bytes":null,"unread_bytes":null,
+            "billed_bytes":null,"billed_requests":null})
+    }
+}
+
+struct CompletedEvidence {
+    binding_charge: Charge,
+    last: Option<TransportSpan>,
+    stage_samples: [Vec<u64>; 4],
+    startup: Value,
+    terminal: Value,
+}
+impl CompletedEvidence {
+    fn new(binding_charge: Charge) -> Self {
+        Self {
+            binding_charge,
+            last: None,
+            stage_samples: std::array::from_fn(|_| Vec::with_capacity(COUNT)),
+            startup: Value::Null,
+            terminal: Value::Null,
+        }
+    }
+    fn transport(&mut self, line: &[u8], stage: &str, ordinal: Option<usize>) -> Result<()> {
+        #[derive(Deserialize)]
+        struct Record {
+            transport: TransportSpan,
+        }
+        let span = serde_json::from_slice::<Record>(line)?.transport;
+        require(
+            span.stage == stage && span.ordinal == ordinal,
+            "transport stage/ordinal",
+        )?;
+        span.before.validate()?;
+        span.after.validate()?;
+        span.after.follows(&span.before)?;
+        if let Some(last) = &self.last {
+            span.before.follows(&last.after)?;
+        }
+        self.last = Some(span);
+        Ok(())
+    }
+}
+
 #[derive(Deserialize, Serialize, PartialEq, Eq)]
 struct Identity {
     schema: String,
@@ -120,6 +550,7 @@ struct Inputs {
     corpus_source_first: usize,
     query_source_first: usize,
     profile: String,
+    #[serde(default)]
     store_root: String,
     generation_prefix: String,
     generation_root_sha256: String,
@@ -189,6 +620,13 @@ struct Charge {
 }
 
 impl Charge {
+    fn validate(self) -> Result<()> {
+        require(
+            self.failed_gets <= self.submitted_gets,
+            "logical failed GETs exceed submitted GETs",
+        )
+    }
+
     fn add(&mut self, other: Self) -> Result<()> {
         self.submitted_gets = plus(self.submitted_gets, other.submitted_gets)?;
         self.verified_bytes = plus(self.verified_bytes, other.verified_bytes)?;
@@ -284,7 +722,7 @@ impl StageTotals {
 struct Query {
     ordinal: usize,
     truth_opened: bool,
-    returned: [Hit; K],
+    returned: Vec<Hit>,
     returned_count: usize,
     underfill: bool,
     charges: Charges,
@@ -348,7 +786,7 @@ struct Terminal {
 }
 
 struct Sample {
-    returned: [Hit; K],
+    returned: Vec<Hit>,
     charges: Charges,
     hits10: u64,
     wall_ns: u64,
@@ -362,6 +800,7 @@ struct Run {
     stages: StageTotals,
     terminal: Terminal,
     file_identity: FileIdentity,
+    completed: Option<CompletedEvidence>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -430,6 +869,7 @@ struct Rows {
     bytes: u64,
     digest: Sha256,
     original: FileIdentity,
+    v2: bool,
 }
 
 impl Rows {
@@ -446,6 +886,7 @@ impl Rows {
             bytes: 0,
             digest: Sha256::new(),
             original,
+            v2: false,
         })
     }
 
@@ -474,6 +915,9 @@ impl Rows {
             header.phase == phase,
             &format!("expected {phase}, got {}", header.phase),
         )?;
+        if self.v2 {
+            validate_v2_row(&self.line, phase)?;
+        }
         // Two direct struct passes avoid internally-tagged enum Content buffering of traces.
         let row = serde_json::from_slice(&self.line)?;
         self.digest.update(&self.line);
@@ -518,29 +962,83 @@ fn trace_fingerprint(line: &[u8]) -> Result<[u8; 32]> {
 }
 
 fn read_run(path: &Path, sha: &str) -> Result<Run> {
+    read_run_with(path, sha, None)
+}
+
+fn read_run_with(path: &Path, sha: &str, expected: Option<&CompletedConfig>) -> Result<Run> {
     require(valid_sha(sha), "result lowercase SHA256")?;
     let mut rows = Rows::open(path)?;
+    rows.v2 = expected.is_some();
+    if let Some(c) = expected {
+        require(rows.original.len == c.input.bytes, "expected result bytes")?;
+    }
     let identity: Identity = rows.row("identity")?;
-    identity.validate()?;
+    if let Some(c) = expected {
+        require(
+            serde_json::from_slice::<Value>(&rows.line)? == c.expected_identity,
+            "expected v2 identity pins",
+        )?;
+        validate_v2_identity(&identity, &c.expected_identity)?;
+    } else {
+        identity.validate()?;
+    }
     let inputs: Inputs = rows.row("bound_inputs")?;
-    inputs.validate()?;
+    let mut completed = if let Some(c) = expected {
+        require(
+            serde_json::from_slice::<Value>(&rows.line)? == c.expected_bound_inputs,
+            "expected v2 input/root/backend pins",
+        )?;
+        validate_v2_inputs(&inputs, &c.expected_bound_inputs)?;
+        let binding: Value = rows.row("source_binding")?;
+        let binding_charge: Charge = serde_json::from_value(binding["charges"].clone())?;
+        binding_charge.validate()?;
+        require(
+            binding_charge.submitted_gets == 2
+                && binding_charge.verified_bytes > 0
+                && binding_charge.failed_gets == 0,
+            "successful source binding charges",
+        )?;
+        let mut evidence = CompletedEvidence::new(binding_charge);
+        evidence.transport(&rows.line, "native_source", None)?;
+        rows.row::<IgnoredAny>("generation_open")?;
+        evidence.transport(&rows.line, "generation_open", None)?;
+        Some(evidence)
+    } else {
+        inputs.validate()?;
+        None
+    };
     #[derive(Deserialize)]
     struct Startup {
         truth_opened: bool,
     }
     let startup: Startup = rows.row("startup")?;
     require(!startup.truth_opened, "startup truth boundary")?;
+    if let Some(e) = &mut completed {
+        e.startup = serde_json::from_slice(&rows.line)?;
+    }
     let mut samples = Vec::with_capacity(COUNT);
     let mut charges = Charges::default();
     let mut stages = StageTotals::default();
     let (mut wall, mut cpu) = (0, 0);
+    let mut underfilled = 0;
     for ordinal in 0..COUNT {
         let q: Query = rows.row("query")?;
-        let trace_sha256 = trace_fingerprint(&rows.line)?;
+        let trace_sha256 = if completed.is_some() {
+            [0; 32]
+        } else {
+            trace_fingerprint(&rows.line)?
+        };
         require(
-            q.ordinal == ordinal && !q.truth_opened && q.returned_count == K && !q.underfill,
+            q.ordinal == ordinal
+                && !q.truth_opened
+                && q.returned.len() <= K
+                && q.returned_count == q.returned.len()
+                && q.underfill == (q.returned.len() < K)
+                // Historical four-arm v1 comparison still requires full-k results.
+                && (completed.is_some() || !q.underfill),
             "query order/truth/count/underfill",
         )?;
+        underfilled += usize::from(q.underfill);
         for (i, hit) in q.returned.iter().enumerate() {
             require(
                 hit.id < inputs.rows as u64
@@ -558,6 +1056,11 @@ fn read_run(path: &Path, sha: &str) -> Result<Run> {
             }),
             "returned ranking order",
         )?;
+        if completed.is_some() {
+            for charge in [q.charges.router, q.charges.source, q.charges.sq8, q.sum] {
+                charge.validate()?;
+            }
+        }
         require(q.charges.sum()? == q.sum, "query charge total")?;
         require(
             q.query_wall_ns > 0 && q.query_wall_ns <= i64::MAX as u64,
@@ -565,6 +1068,17 @@ fn read_run(path: &Path, sha: &str) -> Result<Run> {
         )?;
         charges.add(q.charges)?;
         stages.add(&q.stages, q.query_wall_ns)?;
+        if let Some(e) = &mut completed {
+            e.transport(&rows.line, "query", Some(ordinal))?;
+            for (samples, interval) in e.stage_samples.iter_mut().zip([
+                &q.stages.discovery,
+                &q.stages.source,
+                &q.stages.planning,
+                &q.stages.sq8,
+            ]) {
+                samples.push(interval.end_ns - interval.start_ns);
+            }
+        }
         wall = plus(wall, q.query_wall_ns)?;
         cpu = plus(cpu, q.query_process_cpu_ns)?;
         samples.push(Sample {
@@ -594,10 +1108,10 @@ fn read_run(path: &Path, sha: &str) -> Result<Run> {
         let recall: Recall = rows.row("recall")?;
         require(
             recall.ordinal == ordinal
-                && recall.hits10 <= K as u64
+                && recall.hits10 <= sample.returned.len() as u64
                 && recall.recall10 == recall.hits10 as f64 / K as f64
-                && recall.returned_count == K
-                && !recall.underfill,
+                && recall.returned_count == sample.returned.len()
+                && recall.underfill == (sample.returned.len() < K),
             "recall order/hits/count",
         )?;
         sample.hits10 = recall.hits10;
@@ -608,6 +1122,11 @@ fn read_run(path: &Path, sha: &str) -> Result<Run> {
         summary: Terminal,
     }
     let t = rows.row::<Final>("terminal")?.summary;
+    if completed.is_some() {
+        for charge in [t.charges.router, t.charges.source, t.charges.sq8, t.sum] {
+            charge.validate()?;
+        }
+    }
     require(
         t.status == "MEASURED"
             && t.complete
@@ -617,7 +1136,7 @@ fn read_run(path: &Path, sha: &str) -> Result<Run> {
             && t.recall_numerator == hits
             && t.recall_denominator == (COUNT * K) as u64
             && t.mean_recall10 == hits as f64 / (COUNT * K) as f64
-            && t.underfilled_queries == 0
+            && t.underfilled_queries == underfilled
             && t.all_queries_sealed
             && !t.physical_s3_measured
             && t.external_gate_required,
@@ -642,6 +1161,21 @@ fn read_run(path: &Path, sha: &str) -> Result<Run> {
             && t.process_cpu_ns >= cpu,
         "terminal charge/time totals",
     )?;
+    if let Some(e) = &mut completed {
+        let raw: Value = serde_json::from_slice(&rows.line)?;
+        e.terminal = raw["summary"].clone();
+        let binding_charge: Charge = serde_json::from_value(e.terminal["binding_charge"].clone())?;
+        binding_charge.validate()?;
+        require(
+            binding_charge == e.binding_charge,
+            "terminal source binding charge",
+        )?;
+        require(
+            e.terminal["transport_last_boundary"]
+                == e.last.as_ref().ok_or("missing transport")?.compact(),
+            "terminal cumulative transport boundary",
+        )?;
+    }
     let file_identity = rows.finish(path, sha)?;
     Ok(Run {
         identity,
@@ -650,6 +1184,7 @@ fn read_run(path: &Path, sha: &str) -> Result<Run> {
         stages,
         terminal: t,
         file_identity,
+        completed,
     })
 }
 
@@ -672,22 +1207,90 @@ fn statistics(samples: &[u64]) -> Result<Statistics> {
         !samples.is_empty() && samples.len() <= 2 * COUNT && samples.iter().all(|&n| n > 0),
         "nonempty bounded positive samples",
     )?;
-    let total = samples.iter().try_fold(0, |sum, &n| plus(sum, n))?;
-    let mut sorted = samples.to_vec();
-    sorted.sort_unstable();
-    // Same integer nearest-rank rule as native_ann_100k_qualify.rs.
-    let percentile = |p: usize| sorted[(sorted.len() * p).div_ceil(100).saturating_sub(1)];
+    let (total, [p50, p90, p95, p99]) = quantiles(samples)?;
     Ok(Statistics {
         count: samples.len(),
         query_wall_ns: total,
         sequential_qps: samples.len() as f64 * 1e9 / total as f64,
-        p50_ms: percentile(50) as f64 / 1e6,
-        p90_ms: percentile(90) as f64 / 1e6,
-        p95_ms: percentile(95) as f64 / 1e6,
-        p99_ms: percentile(99) as f64 / 1e6,
-        p90_ns: percentile(90),
-        p95_ns: percentile(95),
+        p50_ms: p50 as f64 / 1e6,
+        p90_ms: p90 as f64 / 1e6,
+        p95_ms: p95 as f64 / 1e6,
+        p99_ms: p99 as f64 / 1e6,
+        p90_ns: p90,
+        p95_ns: p95,
     })
+}
+
+fn quantiles(samples: &[u64]) -> Result<(u64, [u64; 4])> {
+    require(
+        !samples.is_empty() && samples.len() <= 2 * COUNT,
+        "bounded quantile population",
+    )?;
+    let total = samples.iter().try_fold(0, |sum, &n| plus(sum, n))?;
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    // Same integer nearest-rank rule as native_ann_100k_qualify.rs. Stage
+    // intervals may legitimately have zero duration; query walls may not.
+    Ok((
+        total,
+        [50, 90, 95, 99].map(|p| sorted[(sorted.len() * p).div_ceil(100) - 1]),
+    ))
+}
+
+fn reduce_completed(config_path: &Path, config_sha: &str) -> Result<Value> {
+    require(valid_sha(config_sha), "reduction config SHA256")?;
+    let config_label = config_path.to_str().ok_or("config path must be UTF-8")?;
+    let mut file = open_input(config_path)?;
+    let original = file_identity(&file)?;
+    require(
+        original.len > 0 && original.len <= CONFIG_CAP,
+        "small reduction config",
+    )?;
+    let mut body = Vec::with_capacity(original.len as usize);
+    Read::take(&mut file, CONFIG_CAP + 1).read_to_end(&mut body)?;
+    require(
+        body.len() as u64 == original.len
+            && file_identity(&file)? == original
+            && file_identity(&open_input(config_path)?)? == original
+            && format!("{:x}", Sha256::digest(&body)) == config_sha,
+        "config SHA/length/identity",
+    )?;
+    let UniqueJson(value) = serde_json::from_slice(&body)?;
+    let c: CompletedConfig = serde_json::from_value(value)?;
+    require(
+        c.schema == "borsuk-completed-native-reduction-config-v1",
+        "reduction config schema",
+    )?;
+    let run = read_run_with(&c.input.path, &c.input.sha256, Some(&c))?;
+    let e = run.completed.as_ref().ok_or("missing completed evidence")?;
+    let stats = statistics(&run.samples.iter().map(|s| s.wall_ns).collect::<Vec<_>>())?;
+    let mut distributions = serde_json::Map::new();
+    let mut accounted = 0;
+    for (name, samples) in ["discovery", "source", "planning", "sq8"]
+        .into_iter()
+        .zip(&e.stage_samples)
+    {
+        let (total, [p50, p90, p95, p99]) = quantiles(samples)?;
+        accounted = plus(accounted, total)?;
+        distributions.insert(name.into(), json!({"count":samples.len(),"total_ns":total,
+            "p50_ns":p50,"p90_ns":p90,"p95_ns":p95,"p99_ns":p99,
+            "p50_ms":p50 as f64/1e6,"p90_ms":p90 as f64/1e6,"p95_ms":p95 as f64/1e6,"p99_ms":p99 as f64/1e6}));
+    }
+    Ok(
+        json!({"schema":COMPLETED_SCHEMA,"status":"MEASURED","complete":true,
+        "config_path":config_label,"config_sha256":config_sha,"config_bytes":original.len,
+        "result_path":c.input.path,"result_bytes":run.file_identity.len,"result_sha256":c.input.sha256,
+        "identity":c.expected_identity,"inputs":c.expected_bound_inputs,"statistics":stats,
+        "percentile_method":"nearest_rank","sequential_qps_definition":"query_count * 1e9 / sum(query_wall_ns); not concurrent service QPS",
+        "stage_wall_sums":run.stages,"stage_statistics":distributions,
+        "unattributed_query_wall_ns":stats.query_wall_ns.checked_sub(accounted).ok_or("stage sum exceeds query wall")?,
+        "stage_scope":"recorded query intervals; discovery includes preparation/router reads, source is authenticated source fetch, planning is source scoring/SQ8 planning, sq8 is fetch/rank; no inferred network-only costs",
+        "startup":e.startup,"native_terminal":e.terminal,"recall_source":"authenticated native terminal checked against ordered sealed recall rows; truth bodies not reopened",
+        "transport_scope":"cumulative process SDK observations including S3 and IMDS credential requests including PUT; not per-query logical charges or wire/billed accounting",
+        "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
+        "local_file_only":true,"external_resources_and_cost_gate_required":true,"qualified":false,
+        "vendor_or_scientific_win_claim":false,"performance_pass_claim":false}),
+    )
 }
 
 fn paired(a: &Run, b: &Run, label: &str) -> Result<Value> {
@@ -825,6 +1428,14 @@ impl Write for Output {
 }
 
 fn execute(paths: &[(PathBuf, String); 4], output: &Path) -> Result<bool> {
+    execute_report(output, "borsuk-compare-native-replay-v1", || compare(paths))
+}
+
+fn execute_report(
+    output: &Path,
+    schema: &str,
+    reduce: impl FnOnce() -> Result<Value>,
+) -> Result<bool> {
     let dir = parent(output)?;
     let file = File::from(openat(
         &dir,
@@ -838,10 +1449,10 @@ fn execute(paths: &[(PathBuf, String); 4], output: &Path) -> Result<bool> {
         Mode::RUSR | Mode::WUSR,
     )?);
     let original = file_identity(&file)?;
-    let report = match compare(paths) {
+    let report = match reduce() {
         Ok(report) => report,
         Err(e) => {
-            json!({"schema":"borsuk-compare-native-replay-v1","status":"INVALID","complete":false,
+            json!({"schema":schema,"status":"INVALID","complete":false,
             "error":e.to_string().chars().take(512).collect::<String>(),"local_file_only":true,
             "physical_s3":false,"external_resources_and_cost_gate_required":true,
             "frozen_runtime_root_config_admission_required":true,"qualified":false,
@@ -867,6 +1478,18 @@ fn execute(paths: &[(PathBuf, String); 4], output: &Path) -> Result<bool> {
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
     let result = (|| -> Result<bool> {
+        if args.get(1).is_some_and(|arg| arg == "--completed-v2") {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --completed-v2 CONFIG CONFIG_SHA256 NEW_OUTPUT_JSON",
+            )?;
+            return execute_report(Path::new(&args[4]), COMPLETED_SCHEMA, || {
+                reduce_completed(
+                    Path::new(&args[2]),
+                    args[3].to_str().ok_or("config SHA256 encoding")?,
+                )
+            });
+        }
         require(
             args.len() == 10,
             "usage: compare_native_replay A1 SHA256 B1 SHA256 B2 SHA256 A2 SHA256 NEW_OUTPUT_JSON",
@@ -897,7 +1520,7 @@ fn main() {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::os::unix::fs::symlink;
+    use std::os::unix::{ffi::OsStringExt, fs::symlink};
 
     fn sha(bytes: &[u8]) -> String {
         format!("{:x}", Sha256::digest(bytes))
@@ -1009,10 +1632,15 @@ mod tests {
                 // Match the native Record writer's final trace field, not Value's key sorting.
                 let mut prefix = row.clone();
                 let trace = prefix.as_object_mut().unwrap().remove("trace").unwrap();
+                let transport = prefix.as_object_mut().unwrap().remove("transport");
                 serde_json::to_writer(&mut bytes, &prefix).unwrap();
                 assert_eq!(bytes.pop(), Some(b'}'));
                 bytes.extend_from_slice(b",\"trace\":");
                 serde_json::to_writer(&mut bytes, &trace).unwrap();
+                if let Some(transport) = transport {
+                    bytes.extend_from_slice(b",\"transport\":");
+                    serde_json::to_writer(&mut bytes, &transport).unwrap();
+                }
                 bytes.push(b'}');
             } else {
                 serde_json::to_writer(&mut bytes, row).unwrap();
@@ -1023,10 +1651,14 @@ mod tests {
     }
 
     fn authenticate(rows: &mut [Value]) {
-        let prefix = encode(&rows[..1003]);
-        rows[1003]["prefix_bytes"] = json!(prefix.len());
-        rows[1003]["prefix_sha256"] = json!(sha(&prefix));
-        let sealed = encode(&rows[..1004]);
+        let seal = rows
+            .iter()
+            .position(|v| v["phase"] == "all_queries_sealed")
+            .unwrap();
+        let prefix = encode(&rows[..seal]);
+        rows[seal]["prefix_bytes"] = json!(prefix.len());
+        rows[seal]["prefix_sha256"] = json!(sha(&prefix));
+        let sealed = encode(&rows[..seal + 1]);
         let summary = &mut rows.last_mut().unwrap()["summary"];
         summary["prefix_bytes"] = json!(prefix.len());
         summary["prefix_sha256"] = json!(sha(&prefix));
@@ -1050,6 +1682,457 @@ mod tests {
             rows.last_mut().unwrap()["summary"]["process_cpu_ns"] = json!(1100 + i);
             write_fixture(dir, &format!("run-{i}"), rows)
         })
+    }
+
+    fn v2_fixture() -> Vec<Value> {
+        fn snapshot(n: u64) -> Value {
+            json!({"attempts":n,"method_counts":[n.saturating_sub(1),0,u64::from(n > 0),0,0,0,0,0,0,0],
+                "status_counts":if n == 0 {json!([])} else {json!([[200,n]])},
+                "transport_failures":0,"stream_failures":0,"consumed_payload_bytes":n*100,"dropped_error_bodies":0})
+        }
+        fn transport(stage: &str, ordinal: Option<usize>, before: u64, after: u64) -> Value {
+            json!({"stage":stage,"ordinal":ordinal,"before":snapshot(before),"after":snapshot(after)})
+        }
+        let mut rows = fixture(false, 1_000_000);
+        let identity = &mut rows[0];
+        identity["schema"] = json!("borsuk-cohere-native-baseline-result-v2");
+        identity["scope"] = json!("AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS");
+        identity["io_measurement"] =
+            json!("logical_GET_charges_separate_from_cumulative_process_native_transport");
+        identity["s3_credential_source"] = json!("imds_instance_role_only");
+        identity["native_transport_includes"] =
+            json!("S3_and_IMDS_credential_requests_including_PUT");
+        for key in [
+            "wire_bytes",
+            "unread_bytes",
+            "billed_bytes",
+            "billed_requests",
+        ] {
+            identity[key] = Value::Null;
+        }
+        for key in [
+            "config_sha256",
+            "binary_sha256",
+            "runner_source_sha256",
+            "generation_source_sha256",
+            "router_source_sha256",
+            "codec_source_sha256",
+            "source_plane_source_sha256",
+        ] {
+            identity[key] = json!("9".repeat(64));
+        }
+        let inputs = &mut rows[1];
+        inputs.as_object_mut().unwrap().remove("store_root");
+        inputs["dataset"] = json!("synthetic/native-fixture");
+        inputs["revision"] = json!("fixture-revision");
+        inputs["rows"] = json!(32);
+        inputs["dimensions"] = json!(16);
+        inputs["query_source_first"] = json!(32);
+        inputs["requests_bytes"] = json!(64_000);
+        inputs["credential_source"] = json!("imds_instance_role_only");
+        for (key, c) in [
+            ("requests_sha256", "c"),
+            ("truth_sha256", "d"),
+            ("native_source_sha256", "e"),
+            ("native_sq8_sha256", "f"),
+            ("native_order_sha256", "b"),
+        ] {
+            inputs[key] = json!(c.repeat(64));
+        }
+        inputs["backend"] = json!({"kind":"s3","bucket":"fixture-bucket","region":"test-region-1",
+            "physical_prefix":"fixture/run","sq8_object_key":format!("fixture/objects/{}", "f".repeat(64)),"sq8_etag":"\"fixture-etag\""});
+        for (ordinal, row) in rows[3..1003].iter_mut().enumerate() {
+            let n = ordinal as u64 + 1;
+            row["stages"] = json!({"discovery":{"start_ns":1,"end_ns":n+1},
+                "source":{"start_ns":n+1,"end_ns":2*n+1},"planning":{"start_ns":2*n+1,"end_ns":2*n+1},
+                "sq8":{"start_ns":2*n+1,"end_ns":3*n+1},"leaf_peak_inflight":1});
+            row["transport"] = transport(
+                "query",
+                Some(ordinal),
+                5 + ordinal as u64 * 3,
+                8 + ordinal as u64 * 3,
+            );
+        }
+        rows[1003]["requests_sha256"] = json!("c".repeat(64));
+        let mut last = rows[1002]["transport"].clone();
+        for key in ["before", "after"] {
+            last[key]["status_counts"] = Value::Null;
+            last[key]["status_counts_entries"] = json!(1);
+        }
+        last["scope"] = json!("cumulative_process_native_transport");
+        last["status_counts_omitted_from_terminal"] = json!(true);
+        for key in [
+            "wire_bytes",
+            "unread_bytes",
+            "billed_bytes",
+            "billed_requests",
+        ] {
+            last[key] = Value::Null;
+        }
+        let terminal = &mut rows.last_mut().unwrap()["summary"];
+        terminal["requests_sha256"] = json!("c".repeat(64));
+        terminal["truth_sha256"] = json!("d".repeat(64));
+        terminal["binding_charge"] = charge(2);
+        terminal["transport_last_boundary"] = last;
+        rows.insert(
+            2,
+            json!({"phase":"source_binding","transport":transport("native_source",None,0,3),
+            "charges":charge(2),"success":true,"truth_opened":false}),
+        );
+        rows.insert(
+            3,
+            json!({"phase":"generation_open","transport":transport("generation_open",None,3,5),
+            "success":true,"truth_opened":false}),
+        );
+        rows[4]["metadata"]["staging_wall_ns"] = json!(10);
+        rows[4]["metadata"]["metadata"] = json!([{"name":"manifest.json",
+            "metadata_wave":0,"metadata_wave_wall_ns":6,"bytes":100,"reused_root_bytes":0,
+            "retained_root_bytes":0,"local_auth_wall_ns":0,"local_copy_wall_ns":0,"chunks":1,
+            "head_wall_ns":1,"logical_head_requests":1,"logical_get_requests":1,
+            "payload_buffer_bound_bytes":100,"get_wall_ns":2,"stream_wall_ns":3,"write_wall_ns":1}]);
+        rows
+    }
+
+    fn v2_config(dir: &Path, bytes: &[u8], expected: &[Value]) -> (PathBuf, String) {
+        let input = dir.join("completed-v2.jsonl");
+        std::fs::write(&input, bytes).unwrap();
+        let config = json!({"schema":"borsuk-completed-native-reduction-config-v1",
+            "input":{"path":input,"bytes":bytes.len(),"sha256":sha(bytes)},
+            "expected_identity":expected[0],"expected_bound_inputs":expected[1]});
+        let bytes = serde_json::to_vec(&config).unwrap();
+        let path = dir.join("completed-config.json");
+        std::fs::write(&path, &bytes).unwrap();
+        (path, sha(&bytes))
+    }
+
+    #[test]
+    fn completed_v2_quantiles_stages_and_create_only_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rows = v2_fixture();
+        authenticate(&mut rows);
+        let (config, config_sha) = v2_config(dir.path(), &encode(&rows), &rows);
+        let report = reduce_completed(&config, &config_sha).unwrap();
+        assert_eq!(report["statistics"]["p50_ms"], 500.0);
+        assert_eq!(report["statistics"]["p90_ms"], 900.0);
+        assert_eq!(report["statistics"]["p95_ms"], 950.0);
+        assert_eq!(report["statistics"]["p99_ms"], 990.0);
+        assert!(
+            (report["statistics"]["sequential_qps"].as_f64().unwrap() - 1.998001998001998).abs()
+                < 1e-12
+        );
+        for stage in ["discovery", "source", "sq8"] {
+            assert_eq!(report["stage_statistics"][stage]["total_ns"], 500500);
+            for (p, n) in [
+                ("p50_ns", 500),
+                ("p90_ns", 900),
+                ("p95_ns", 950),
+                ("p99_ns", 990),
+            ] {
+                assert_eq!(report["stage_statistics"][stage][p], n);
+            }
+            assert!(
+                report["stage_statistics"][stage]
+                    .get("sequential_qps")
+                    .is_none()
+            );
+        }
+        assert_eq!(report["stage_statistics"]["planning"]["total_ns"], 0);
+        assert_eq!(report["stage_statistics"]["planning"]["p99_ns"], 0);
+        assert_eq!(report["unattributed_query_wall_ns"], 500498498500_u64);
+        assert_eq!(report["native_terminal"]["recall_numerator"], 9000);
+        assert_eq!(report["native_terminal"]["sum"]["submitted_gets"], 3000);
+        assert_eq!(
+            report["native_terminal"]["transport_last_boundary"]["after"]["attempts"],
+            3005
+        );
+        assert!(report["billed_requests"].is_null());
+        assert_eq!(report["performance_pass_claim"], false);
+        assert_eq!(report["qualified"], false);
+        assert_eq!(
+            report["startup"]["metadata"]["metadata"],
+            rows[4]["metadata"]["metadata"]
+        );
+        let output = dir.path().join("completed-report");
+        assert!(
+            execute_report(&output, COMPLETED_SCHEMA, || reduce_completed(
+                &config,
+                &config_sha
+            ))
+            .unwrap()
+        );
+        let original = std::fs::read(&output).unwrap();
+        assert!(
+            execute_report(&output, COMPLETED_SCHEMA, || reduce_completed(
+                &config,
+                &config_sha
+            ))
+            .is_err()
+        );
+        assert_eq!(std::fs::read(output).unwrap(), original);
+        assert!(read_run(&dir.path().join("completed-v2.jsonl"), &sha(&encode(&rows))).is_err());
+
+        // A complete weak-quality result remains MEASURED, with the fixed k10
+        // denominator. Its three returned IDs contain two authenticated hits.
+        rows[5]["returned"].as_array_mut().unwrap().truncate(3);
+        rows[5]["returned_count"] = json!(3);
+        rows[5]["underfill"] = json!(true);
+        rows[1006]["returned_count"] = json!(3);
+        rows[1006]["underfill"] = json!(true);
+        rows[1006]["hits10"] = json!(2);
+        rows[1006]["recall10"] = json!(0.2);
+        let terminal = &mut rows.last_mut().unwrap()["summary"];
+        terminal["total_hits10"] = json!(8993);
+        terminal["recall_numerator"] = json!(8993);
+        terminal["mean_recall10"] = json!(0.8993);
+        terminal["underfilled_queries"] = json!(1);
+        authenticate(&mut rows);
+        let (config, pin) = v2_config(dir.path(), &encode(&rows), &rows);
+        let underfilled = reduce_completed(&config, &pin).unwrap();
+        assert_eq!(underfilled["status"], "MEASURED");
+        assert_eq!(underfilled["complete"], true);
+        assert_eq!(underfilled["native_terminal"]["underfilled_queries"], 1);
+        assert_eq!(underfilled["native_terminal"]["recall_numerator"], 8993);
+        assert_eq!(underfilled["native_terminal"]["recall_denominator"], 10000);
+        assert_eq!(underfilled["native_terminal"]["mean_recall10"], 0.8993);
+        assert_eq!(underfilled["statistics"], report["statistics"]);
+        let mut historical = fixture(false, 1_000_000);
+        historical[3]["returned"]
+            .as_array_mut()
+            .unwrap()
+            .truncate(3);
+        historical[3]["returned_count"] = json!(3);
+        historical[3]["underfill"] = json!(true);
+        historical[1004] = rows[1006].clone();
+        for key in [
+            "total_hits10",
+            "recall_numerator",
+            "mean_recall10",
+            "underfilled_queries",
+        ] {
+            historical.last_mut().unwrap()["summary"][key] =
+                rows.last().unwrap()["summary"][key].clone();
+        }
+        let (path, pin) = write_fixture(dir.path(), "v1-underfill", historical);
+        assert!(read_run(&path, &pin).is_err());
+    }
+
+    #[test]
+    fn completed_v2_rejects_prefix_seal_and_full_file_tamper() {
+        let dir = tempfile::tempdir().unwrap();
+        let expected = v2_fixture();
+        for case in 0..5 {
+            let mut rows = v2_fixture();
+            authenticate(&mut rows);
+            match case {
+                0 => rows[1005]["prefix_sha256"] = json!("0".repeat(64)),
+                1 => rows[1005]["prefix_bytes"] = json!(1),
+                2 => rows.last_mut().unwrap()["summary"]["sealed_sha256"] = json!("0".repeat(64)),
+                3 => rows.last_mut().unwrap()["summary"]["sealed_bytes"] = json!(1),
+                _ => rows.last_mut().unwrap()["summary"]["prefix_sha256"] = json!("0".repeat(64)),
+            }
+            let (config, pin) = v2_config(dir.path(), &encode(&rows), &expected);
+            assert!(
+                reduce_completed(&config, &pin).is_err(),
+                "seal tamper {case}"
+            );
+        }
+        let mut rows = v2_fixture();
+        authenticate(&mut rows);
+        let bytes = encode(&rows);
+        let (config, pin) = v2_config(dir.path(), &bytes, &expected);
+        assert!(reduce_completed(&config, &"0".repeat(64)).is_err());
+        let altered = String::from_utf8(bytes).unwrap().replacen(
+            "\"observed_process_peak_bytes\":12345",
+            "\"observed_process_peak_bytes\":12346",
+            1,
+        );
+        std::fs::write(dir.path().join("completed-v2.jsonl"), altered).unwrap();
+        assert!(reduce_completed(&config, &pin).is_err());
+    }
+
+    #[test]
+    fn completed_v2_rejects_incomplete_reordered_and_unknown_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let expected = v2_fixture();
+        for case in 0..10 {
+            let mut rows = v2_fixture();
+            match case {
+                0 => {
+                    rows.remove(5);
+                }
+                1 => rows.swap(5, 6),
+                2 => rows.swap(5, 1006),
+                3 => rows[5]["truth_opened"] = json!(true),
+                4 => rows[2]["success"] = json!(false),
+                5 => rows[5]["unrecognized"] = json!(true),
+                6 => rows[0]["wire_bytes"] = json!(123),
+                7 => rows[5]["trace"]["truth_opened"] = json!(true),
+                8 => rows[3]["phase"] = json!("unknown"),
+                _ => rows[1005]["requires_successful_directory_sync"] = json!(false),
+            }
+            authenticate(&mut rows);
+            let (config, pin) = v2_config(dir.path(), &encode(&rows), &expected);
+            assert!(
+                reduce_completed(&config, &pin).is_err(),
+                "order/schema {case}"
+            );
+        }
+        let mut rows = v2_fixture();
+        rows[4]["metadata"]["metadata"][0]["unknown"] = json!(1);
+        authenticate(&mut rows);
+        let (config, pin) = v2_config(dir.path(), &encode(&rows), &expected);
+        assert_eq!(
+            reduce_completed(&config, &pin).unwrap_err().to_string(),
+            "unknown/missing v2 field"
+        );
+        let mut rows = v2_fixture();
+        authenticate(&mut rows);
+        let bytes = encode(&rows);
+        for bytes in [
+            bytes[..bytes.len() - 1].to_vec(),
+            encode(&rows[..rows.len() - 1]),
+            [bytes.clone(), b"{}\n".to_vec()].concat(),
+            String::from_utf8(bytes)
+                .unwrap()
+                .replacen("\"ordinal\":0", "\"ordinal\":0,\"ordinal\":0", 1)
+                .into_bytes(),
+        ] {
+            let (config, pin) = v2_config(dir.path(), &bytes, &expected);
+            assert!(reduce_completed(&config, &pin).is_err());
+        }
+    }
+
+    #[test]
+    fn completed_v2_rejects_pins_sums_and_transport_contradictions() {
+        let dir = tempfile::tempdir().unwrap();
+        let expected = v2_fixture();
+        for stage in ["router", "source", "sq8"] {
+            let mut rows = v2_fixture();
+            // Keep every charge sum and authentication pin self-consistent;
+            // only the per-stage two failures for one submission is impossible.
+            rows[5]["charges"][stage]["failed_gets"] = json!(2);
+            rows[5]["sum"]["failed_gets"] = json!(2);
+            let terminal = &mut rows.last_mut().unwrap()["summary"];
+            terminal["charges"][stage]["failed_gets"] = json!(2);
+            terminal["sum"]["failed_gets"] = json!(2);
+            authenticate(&mut rows);
+            let (config, pin) = v2_config(dir.path(), &encode(&rows), &expected);
+            assert_eq!(
+                reduce_completed(&config, &pin).unwrap_err().to_string(),
+                "logical failed GETs exceed submitted GETs",
+                "{stage}"
+            );
+        }
+        let mut rows = v2_fixture();
+        rows[2]["charges"]["failed_gets"] = json!(3);
+        rows.last_mut().unwrap()["summary"]["binding_charge"]["failed_gets"] = json!(3);
+        authenticate(&mut rows);
+        let (config, pin) = v2_config(dir.path(), &encode(&rows), &expected);
+        assert_eq!(
+            reduce_completed(&config, &pin).unwrap_err().to_string(),
+            "logical failed GETs exceed submitted GETs"
+        );
+        for (index, keys) in [
+            (
+                0,
+                "config_sha256 binary_sha256 runner_source_sha256 generation_source_sha256 router_source_sha256 codec_source_sha256 source_plane_source_sha256",
+            ),
+            (
+                1,
+                "generation_root_sha256 requests_sha256 truth_sha256 native_source_sha256 native_sq8_sha256 native_order_sha256",
+            ),
+        ] {
+            for key in keys.split_whitespace() {
+                let mut rows = v2_fixture();
+                rows[index][key] = json!("0".repeat(64));
+                authenticate(&mut rows);
+                let (config, pin) = v2_config(dir.path(), &encode(&rows), &expected);
+                assert!(reduce_completed(&config, &pin).is_err(), "pin {key}");
+            }
+        }
+        for case in 0..18 {
+            let mut rows = v2_fixture();
+            match case {
+                0 => rows[5]["sum"]["verified_bytes"] = json!(1),
+                1 => rows.last_mut().unwrap()["summary"]["query_wall_ns"] = json!(1),
+                2 => rows.last_mut().unwrap()["summary"]["recall_numerator"] = json!(1),
+                3 => rows.last_mut().unwrap()["summary"]["binding_charge"] = charge(3),
+                4 => {
+                    rows.last_mut().unwrap()["summary"]["transport_last_boundary"]["wire_bytes"] =
+                        json!(1)
+                }
+                5 => rows[5]["transport"]["after"]["attempts"] = json!(1),
+                6 => rows[5]["transport"]["ordinal"] = json!(1),
+                7 => rows[5]["transport"]["after"]["consumed_payload_bytes"] = json!(1),
+                8 => rows[5]["stages"]["source"]["start_ns"] = json!(1),
+                9 => rows[1006]["hits10"] = json!(11),
+                10 => rows[1]["backend"]["physical_prefix"] = json!("other/run"),
+                11 => rows.last_mut().unwrap()["summary"]["complete"] = json!(false),
+                12 => rows[5]["returned"].as_array_mut().unwrap().truncate(3),
+                13 => rows[5]["underfill"] = json!(true),
+                14 => rows[1006]["returned_count"] = json!(9),
+                15 => rows[1006]["underfill"] = json!(true),
+                16 => rows.last_mut().unwrap()["summary"]["underfilled_queries"] = json!(1),
+                _ => {
+                    // Consistent sums/flags cannot legitimize more hits than IDs.
+                    rows[5]["returned"].as_array_mut().unwrap().truncate(3);
+                    rows[5]["returned_count"] = json!(3);
+                    rows[5]["underfill"] = json!(true);
+                    rows[1006]["returned_count"] = json!(3);
+                    rows[1006]["underfill"] = json!(true);
+                    rows[1006]["hits10"] = json!(4);
+                    rows[1006]["recall10"] = json!(0.4);
+                    let terminal = &mut rows.last_mut().unwrap()["summary"];
+                    terminal["total_hits10"] = json!(8995);
+                    terminal["recall_numerator"] = json!(8995);
+                    terminal["mean_recall10"] = json!(0.8995);
+                    terminal["underfilled_queries"] = json!(1);
+                }
+            }
+            authenticate(&mut rows);
+            let (config, pin) = v2_config(dir.path(), &encode(&rows), &expected);
+            assert!(
+                reduce_completed(&config, &pin).is_err(),
+                "totals/transport {case}"
+            );
+        }
+        let mut rows = v2_fixture();
+        authenticate(&mut rows);
+        let (config, _) = v2_config(dir.path(), &encode(&rows), &expected);
+        let mut c: Value = serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+        c["input"]["bytes"] = json!(1);
+        let bytes = serde_json::to_vec(&c).unwrap();
+        std::fs::write(&config, &bytes).unwrap();
+        let output = dir.path().join("invalid-v2-report");
+        assert!(
+            !execute_report(&output, COMPLETED_SCHEMA, || reduce_completed(
+                &config,
+                &sha(&bytes)
+            ))
+            .unwrap()
+        );
+        let report: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        assert_eq!(report["status"], "INVALID");
+        assert_eq!(report["complete"], false);
+
+        let mut rows = v2_fixture();
+        authenticate(&mut rows);
+        let (config, pin) = v2_config(dir.path(), &encode(&rows), &expected);
+        let non_utf8 = dir
+            .path()
+            .join(std::ffi::OsString::from_vec(b"config-\xff.json".to_vec()));
+        std::fs::copy(config, &non_utf8).unwrap();
+        let output = dir.path().join("non-utf8-config-report");
+        let result = std::panic::catch_unwind(|| {
+            execute_report(&output, COMPLETED_SCHEMA, || {
+                reduce_completed(&non_utf8, &pin)
+            })
+        });
+        assert!(!result.expect("non-UTF8 config must not panic").unwrap());
+        let report: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        assert_eq!(report["status"], "INVALID");
+        assert_eq!(report["complete"], false);
+        assert_eq!(report["error"], "config path must be UTF-8");
     }
 
     #[test]

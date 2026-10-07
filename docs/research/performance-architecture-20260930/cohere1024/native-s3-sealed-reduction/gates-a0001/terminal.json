@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-native-s3-sealed-reduction-gates-v1",
+  "instance_id": "i-06a549287a154dfd5",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 0,
+  "source_commit": "c5591b3807fa641fa0a12765947714ead2fe0089",
+  "candidate_commit": "c5591b3807fa641fa0a12765947714ead2fe0089",
+  "native_source_file_count": 414,
+  "native_source_identity_sha256": "3af8435755919655bcf9e18179ce1fc8621a95a0abf14b98c26801783f76d391",
+  "source_archive_sha256": "23e9ec20a574598659b1b44dd0dbf132375b26b8223b64fd34b7dab225a9c124",
+  "evidence": {
+    "bytes": 886401,
+    "sha256": "2dab4df70e9204ce20039b222aa4fec44e773cc84b82c8cab8c5e70392873f76"
+  },
+  "performance_claim": false
+}

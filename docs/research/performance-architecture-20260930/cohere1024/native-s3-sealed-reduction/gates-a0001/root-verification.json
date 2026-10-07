@@ -1,0 +1,76 @@
+{
+  "status": "NATIVE_QUALIFIED_OFFLINE_COMPLETED_REDUCTION_VERIFIED",
+  "instance_id": "i-06a549287a154dfd5",
+  "terminated": true,
+  "wait_exit": 0,
+  "source_commit": "c5591b3807fa641fa0a12765947714ead2fe0089",
+  "full_source_count": 414,
+  "full_source_identity_sha256": "3af8435755919655bcf9e18179ce1fc8621a95a0abf14b98c26801783f76d391",
+  "source_before_after_root_match": true,
+  "support_count": 2449,
+  "mandatory_tests": [
+    "tests::completed_v2_quantiles_stages_and_create_only_report",
+    "tests::completed_v2_rejects_prefix_seal_and_full_file_tamper",
+    "tests::completed_v2_rejects_incomplete_reordered_and_unknown_rows",
+    "tests::completed_v2_rejects_pins_sums_and_transport_contradictions",
+    "tests::nearest_rank_and_sequential_qps_literal_golden",
+    "tests::four_authenticated_native_runs_and_completed_no_win",
+    "tests::invalid_tampered_out_of_order_and_semantic_mismatch",
+    "tests::bounded_files_reject_links_fifo_oversize_and_duplicate_evidence"
+  ],
+  "stages": {
+    "reducer-tests": {
+      "exit": 0,
+      "tee_exit": 0,
+      "command": "cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1"
+    },
+    "reducer-release": {
+      "exit": 0,
+      "tee_exit": 0,
+      "command": "cargo build --locked --release -p borsuk --example compare_native_replay"
+    },
+    "workspace-clippy": {
+      "exit": 0,
+      "tee_exit": 0,
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious"
+    },
+    "workspace-test-build": {
+      "exit": 0,
+      "tee_exit": 0,
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+    },
+    "completed-reduction": {
+      "exit": 0,
+      "tee_exit": 0,
+      "command": "target/release/examples/compare_native_replay --completed-v2 /mnt/borsuk-http/reduction-config.json c6edb6b14b9d2f36366aafc53cd1e81328f30547a2c8742e3c3a34dbb6ed8dae /mnt/borsuk-http/evidence/completed-reduction.json"
+    }
+  },
+  "binary": {
+    "bytes": 1086680,
+    "sha256": "7fb988bdb52ed6b68f0a3ca2a5d0a15e62adf000cc29dd22c48d4a5a646d5379"
+  },
+  "statistics": {
+    "count": 1000,
+    "p50_ms": 181.364815,
+    "p90_ms": 207.87074,
+    "p90_ns": 207870740,
+    "p95_ms": 219.460046,
+    "p95_ns": 219460046,
+    "p99_ms": 245.017774,
+    "query_wall_ns": 185679262298,
+    "sequential_qps": 5.385631047990065
+  },
+  "recall10": 0.9723,
+  "stage_sums_ns": {
+    "discovery_ns": 35294565502,
+    "max_leaf_peak_inflight": 16,
+    "planning_ns": 6173261584,
+    "source_ns": 66437953731,
+    "sq8_ns": 77738017586
+  },
+  "memory_peak_bytes": 8589934592,
+  "swap_peak_bytes": 0,
+  "oom": 0,
+  "vendor_win": false,
+  "scope": "Compiler/correctness and native offline reduction of previously completed admission telemetry, not a new performance panel."
+}

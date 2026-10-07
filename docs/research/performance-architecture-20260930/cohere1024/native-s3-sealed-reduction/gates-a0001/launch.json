@@ -1,0 +1,12 @@
+{
+  "status": "RUNNING_ORIGINAL_REMOTE_GATES",
+  "instance_id": "i-06a549287a154dfd5",
+  "session_id": 67407,
+  "protocol_commit": "e67e861b3075e5a40e80734abead48f8e65466d6",
+  "source_commit": "c5591b3807fa641fa0a12765947714ead2fe0089",
+  "started_utc": "2026-10-07T19:05:46Z",
+  "duplicate_launch": false,
+  "maximum_reserved_usd": 1.4,
+  "ann_queries": false,
+  "completed_result_only": true
+}
