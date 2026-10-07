@@ -1,0 +1,11 @@
+{
+  "schema": "borsuk-s3-vectors-access-preflight-v1",
+  "observed_at": "2026-10-07T14:25:13.701253+00:00",
+  "region": "eu-central-1",
+  "profile": "causality",
+  "command": "AWS_MAX_ATTEMPTS=1 aws --profile causality --region eu-central-1 s3vectors list-vector-buckets --query vectorBuckets[].vectorBucketName --output json",
+  "exit": 0,
+  "vector_bucket_names": [],
+  "scope": "Read-only ListVectorBuckets access verified; no vector bucket/index created, no vector ingestion/query, no native or benchmark run. This does not establish write permissions, service performance or a matched competitor baseline.",
+  "performance_claim": false
+}
