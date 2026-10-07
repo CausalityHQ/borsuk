@@ -1,0 +1,61 @@
+{
+  "schema": "borsuk-native-sealed-reduction-gates-prospective-v1",
+  "status": "FROZEN_SOURCE_REVIEW_REPAIRS_READY_FOR_REMOTE_GATES",
+  "base": "841167a0af043c1bc57ca6d89446c8eb03c93507",
+  "owned_delta": [
+    "crates/borsuk/examples/compare_native_replay.rs"
+  ],
+  "source_commit": "c5591b3807fa641fa0a12765947714ead2fe0089",
+  "source_archive_sha256": "23e9ec20a574598659b1b44dd0dbf132375b26b8223b64fd34b7dab225a9c124",
+  "resources": {
+    "cpu": 2,
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "tasks": 512,
+    "build_jobs": 1,
+    "native_seconds": 7200,
+    "machine_seconds": 9000
+  },
+  "spot": {
+    "region": "eu-central-1",
+    "az": "eu-central-1c",
+    "type": "c7i.2xlarge",
+    "quote_usd_hour": "0.206600",
+    "max_bid_usd_hour": "0.50",
+    "compute_cap_usd": 1.25,
+    "ancillary_cap_usd": 0.15
+  },
+  "commands": [
+    "cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1",
+    "cargo build --release --locked -p borsuk --example compare_native_replay",
+    "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  ],
+  "mandatory_names": [
+    "tests::completed_v2_quantiles_stages_and_create_only_report",
+    "tests::completed_v2_rejects_prefix_seal_and_full_file_tamper",
+    "tests::completed_v2_rejects_incomplete_reordered_and_unknown_rows",
+    "tests::completed_v2_rejects_pins_sums_and_transport_contradictions",
+    "tests::nearest_rank_and_sequential_qps_literal_golden",
+    "tests::four_authenticated_native_runs_and_completed_no_win",
+    "tests::invalid_tampered_out_of_order_and_semantic_mismatch",
+    "tests::bounded_files_reject_links_fifo_oversize_and_duplicate_evidence"
+  ],
+  "completed_input_sha256": "c9f69e0338e920d03b4d0b4ae8c00afdcda5fb5ba6be55b686fec0ea865e2aa8",
+  "execution": "After source review and frozen pins: compile/test serially then run qualified release reducer once on completed authenticated input; no ANN queries, corpus/truth bodies or vendor calls. Full source before/after verification. Stop first failing layer; preserve original attempt. Terminate and wait same instance at terminal before collecting. No automatic replacement.",
+  "claim": "Offline descriptive timing reduction only; no matched vendor win or formal measured panel.",
+  "native_identity_sha256": "3af8435755919655bcf9e18179ce1fc8621a95a0abf14b98c26801783f76d391",
+  "offline_reduction": {
+    "config_sha256": "c6edb6b14b9d2f36366aafc53cd1e81328f30547a2c8742e3c3a34dbb6ed8dae",
+    "input_sha256": "c9f69e0338e920d03b4d0b4ae8c00afdcda5fb5ba6be55b686fec0ea865e2aa8",
+    "input_bytes": 10793761,
+    "native_execution_not_yet_run": true
+  },
+  "review_reconciliation": {
+    "group": "0060dd743c774c05",
+    "charge_and_path_repairs": "verified in c5591b38",
+    "underfill_repair": "verified in b4a55891",
+    "canonical_cli": "--completed-v2; no alias",
+    "python_crosscheck": "not authoritative native statistics"
+  }
+}

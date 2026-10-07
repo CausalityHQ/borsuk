@@ -1,0 +1,108 @@
+{
+  "status": "UNVERIFIED_SOURCE_ONLY_HOLD_FOR_PARENT_REMOTE_GATES",
+  "commit": "c5591b3807fa641fa0a12765947714ead2fe0089",
+  "parent": "b4a55891229d0f4df02b2465584e3b301f3ac8c1",
+  "base_commit": "841167a0af043c1bc57ca6d89446c8eb03c93507",
+  "worktree": "/home/rb/worktrees/borsuk-native-s3-sealed-reduction",
+  "branch": "devbox/native-s3-sealed-reduction",
+  "author": "Roman Bartusiak <riomus@gmail.com>",
+  "owned_files": [
+    {
+      "path": "crates/borsuk/examples/compare_native_replay.rs",
+      "bytes": 104643,
+      "sha256": "2af87867269e4fa9d30356526fdfe8928054308ca94cd021777aff8df4015020"
+    }
+  ],
+  "api": {
+    "cli": "compare_native_replay --completed-v2 CONFIG CONFIG_SHA256 NEW_OUTPUT_JSON",
+    "config_schema": "borsuk-completed-native-reduction-config-v1",
+    "config_shape": {
+      "schema": "borsuk-completed-native-reduction-config-v1",
+      "input": {
+        "path": "explicit uncompressed native JSONL path",
+        "bytes": "exact u64 byte length",
+        "sha256": "exact lowercase SHA256 of full JSONL"
+      },
+      "expected_identity": "entire expected native identity row as JSON object, including phase and all seven SHA pins",
+      "expected_bound_inputs": "entire expected native bound_inputs row as JSON object, including phase, population, backend and all six SHA pins"
+    },
+    "expected_rows_rule": "Root must independently bind/approve every expected row against committed receipts; these are exact expected JSON objects, not wildcards or paths. All emitted v2 fields are mandatory, unknown/duplicate fields are rejected. Identity schema is borsuk-cohere-native-baseline-result-v2. New mode requires the emitted S3 backend and IMDS-only credential scope. Dataset/revision/source/binary/config/root/input hashes are explicit expectations, not hardcoded Cohere pins.",
+    "input_policy": "Config at most 32768 bytes; JSONL at most 67108864 bytes; row at most 262144 bytes. Descriptor-anchored no-symlink reads, regular file/EOF/length/identity/SHA validation; output uses existing create-only EXCL/no-follow/sync writer capped at 2097152 bytes. Root supplies decompressed JSONL; this code never decompresses or opens request/truth/source objects.",
+    "report_schema": "borsuk-completed-native-reduction-v1",
+    "success_exit": 0,
+    "invalid_exit": 2
+  },
+  "implementation": [
+    "All initial authenticated v2 single-file functionality and historical v1 comparison retained.",
+    "Underfill repair retained: v2 query rosters may contain0..K IDs with exact count/underfill flags; recall bounded by actual roster length and fixed k10 denominator; terminal counts observed underfilled queries. Historical v1 still requires full K.",
+    "New v2-only Charge::validate requires failed_gets<=submitted_gets for router/source/SQ8 query charges and their sum, terminal stage charges and sum, source-binding and terminal source-binding charges. Existing charge sum and all seal/truth/order/timing/pin checks remain.",
+    "Trace evidence: check_cohere_native_baseline metadata records one submission before each request and one failure on error; bind_source emits root and plane metadata charges. sq8_s3_range::fetch_verified_ranges_with_limit charges ranges.len submissions and one failure per outcome. two_bit_generation leaf reads similarly charge ids.len submissions and failed outcomes. Valid failed counts cannot exceed submissions.",
+    "reduce_completed validates config_path.to_str before opening/serialization and emits the validated str. Non-UTF8 OS config paths now produce INVALID via existing create-only report writer rather than a json! panic.",
+    "v2 fixture includes one full startup metadata entry; positive report preserves it. Resealed unknown metadata field fails with the intended exact error."
+  ],
+  "mandatory_authored_test_names": [
+    "tests::completed_v2_quantiles_stages_and_create_only_report",
+    "tests::completed_v2_rejects_prefix_seal_and_full_file_tamper",
+    "tests::completed_v2_rejects_incomplete_reordered_and_unknown_rows",
+    "tests::completed_v2_rejects_pins_sums_and_transport_contradictions"
+  ],
+  "existing_test_names_preserved": [
+    "tests::nearest_rank_and_sequential_qps_literal_golden",
+    "tests::four_authenticated_native_runs_and_completed_no_win",
+    "tests::invalid_tampered_out_of_order_and_semantic_mismatch",
+    "tests::bounded_files_reject_links_fifo_oversize_and_duplicate_evidence"
+  ],
+  "test_witnesses": [
+    "All eight names retained. No tests executed locally.",
+    "Existing completed_v2_rejects_pins_sums_and_transport_contradictions now reseals each router/source/SQ8 case with2 failures for1 submission and matching query/terminal aggregate sums, preserving exact expected identity and bindings; asserts logical failed GETs exceed submitted GETs. Matching impossible source/terminal binding charges have a targeted assertion too.",
+    "Same existing test copies an otherwise valid config to a non-UTF8 OS filename, catches unwinding around create-only execution, and requires no panic plus an INVALID, complete:false report with config path must be UTF-8.",
+    "Existing completed_v2_quantiles_stages_and_create_only_report preserves literal quantiles and valid underfill8993/10000 witness, and now asserts the populated startup metadata roster is retained.",
+    "Existing completed_v2_rejects_incomplete_reordered_and_unknown_rows reseals the populated metadata entry with an unknown field and requires unknown/missing v2 field."
+  ],
+  "local_source_checks": {
+    "resource_envelope": "systemd-run --user --scope --quiet -p CPUQuota=100% -p MemoryMax=256M -p MemorySwapMax=0 timeout 120s",
+    "rustfmt": "rustfmt --edition 2024 --config skip_children=true --check crates/borsuk/examples/compare_native_replay.rs",
+    "rustfmt_exit": 0,
+    "diff_check_exit": 0,
+    "ownership_base_hash_exit": 0,
+    "commit_exit": 0,
+    "clean_after_commit": true,
+    "checkout_repair": "No checkout/rebase during final repair; clean exactb4a55891 parent verified before edits.",
+    "qualification": "Source-only bounded rustfmt/check, diff/ownership, parent, hashes/bytes and clean Roman-attributed commit verified. No Cargo/rustc/native tests/reduction/data/object bodies/network/AWS/new reviews/children/push/merge/control/launch.",
+    "delta": "87 insertions/4 deletions in OWN1 only.",
+    "eight_test_names_unchanged": true,
+    "prior_contract_hashes_unchanged": true
+  },
+  "parent_remote_gate_commands_not_run_locally": [
+    "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1",
+    "env CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk --example compare_native_replay",
+    "env CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  ],
+  "completed_run_evidence": {
+    "directory": "docs/research/performance-architecture-20260930/cohere1024/native-s3-query-admission/a0001",
+    "full_uncompressed_result_sha256": "c9f69e0338e920d03b4d0b4ae8c00afdcda5fb5ba6be55b686fec0ea865e2aa8",
+    "disposition": "Only committed root-verification/native-summary/config metadata and current Rust emitter were read. Original gzip remains opaque and unchanged; root owns decompression and exact remote offline reduction."
+  },
+  "disposition": "HOLD SAME worker for root exact remote gates/compiler feedback. Original reviews and both prior source/contract snapshots preserved. No agent_complete/archive before parent disposition.",
+  "preserved_snapshots": [
+    {
+      "commit": "0efe5dfd5d6a05dec14aea16e218c1277d1ffc5c",
+      "contract": "/tmp/borsuk-native-s3-sealed-reduction-contract.json",
+      "contract_sha256": "be212c4580fc0b40df854133a0a079dc59e878d6d1e561f6ae38f096cf257b9b"
+    },
+    {
+      "commit": "b4a55891229d0f4df02b2465584e3b301f3ac8c1",
+      "contract": "/tmp/borsuk-native-s3-sealed-reduction-underfill-contract.json",
+      "contract_sha256": "b0aca14143fd9628c6324a58f916ba64a08b51c8377abb1853ea49104bbd82ff"
+    }
+  ],
+  "repair_scope": "Root-directed minimal review repair only, atop preserved underfill repair. Same OWN1 and eight test names. Canonical --completed-v2 unchanged; no alias, dependency, API, cap or algorithm changes.",
+  "review_evidence_read": {
+    "group": "0060dd743c774c05",
+    "research_critic": "c12ff59541a14da1",
+    "engineering_critic": "16adc78950314e97",
+    "method": "Read both full, untruncated completed result texts via critique_result for the existing group; no consultation/review started.",
+    "reconciliation": "Charge and non-UTF8 findings independently confirmed against source and addressed. Startup metadata coverage added. CLI spelling criticism was review-prompt shorthand; root explicitly retained --completed-v2. Other nonblocking policies remain unchanged."
+  }
+}

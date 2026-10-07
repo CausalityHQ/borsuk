@@ -1,0 +1,15 @@
+{
+  "status": "ARCHIVED_SOURCE_UNVERIFIED_REVIEWS_PENDING_NO_LAUNCH",
+  "source_commit": "c5591b3807fa641fa0a12765947714ead2fe0089",
+  "support_file_count": 2449,
+  "full_native_file_count": 414,
+  "full_native_identity_sha256": "3af8435755919655bcf9e18179ce1fc8621a95a0abf14b98c26801783f76d391",
+  "archive": {
+    "bytes": 13178447,
+    "sha256": "23e9ec20a574598659b1b44dd0dbf132375b26b8223b64fd34b7dab225a9c124"
+  },
+  "changed_native": [
+    "crates/borsuk/examples/compare_native_replay.rs"
+  ],
+  "support_scope": "Exact current-candidate blobs at explicit existing2449 build-support paths; every tracked Rust/Cargo source included. New research receipt documents are outside this build-support archive."
+}
