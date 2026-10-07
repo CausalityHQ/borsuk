@@ -1,0 +1,51 @@
+{
+  "schema": "borsuk-generic-s3-namespace-qualification-preregistration-v1",
+  "status": "FROZEN_NOT_LAUNCHED",
+  "source_commit": "0fe9f9a5de391f2ce69063bca65892f934125edd",
+  "specialist_commit": "d8b9bd516c0ac7a8c11e2db25e86576013428f45",
+  "native_file_count": 414,
+  "native_identity": "43a9ce6d24d444ffbe3d35685f8e6ad57939ea0f8b3cd9be641942f8e395fba8",
+  "archive_sha256": "ea27c53e3cde324e230d2669b54edc01af113e45d6e9cde2721c9106c01d608c",
+  "userdata_sha256": "ceeac235ecb2c877597e95c85865e390a07b6e5cb7d3c3714434bf5a2699db35",
+  "gates_sha256": "98971eae4166d65a25d24660af44c383e5fe24a97468fbef736f3fe982d9b58d",
+  "resources": {
+    "cpu": 2,
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "tasks": 512,
+    "native_seconds": 7200,
+    "machine_seconds": 9000
+  },
+  "spot": {
+    "region": "eu-central-1",
+    "az": "eu-central-1c",
+    "type": "c7i.2xlarge",
+    "max_bid_usd_hour": 0.5,
+    "quoted_usd_hour": 0.2065,
+    "compute_cap_usd": 1.25,
+    "ancillary_cap_usd": 0.15,
+    "quote_timestamp": "2026-10-07T12:00:00+00:00"
+  },
+  "interruption": "Preserve original attempt and evidence; interrupted gates are INVALID, no automatic replacement. Stop first failing layer. Terminate immediately at terminal, verify termination before collection and integration.",
+  "gates": [
+    "cargo test --locked -p borsuk --lib sq8_s3_range::tests:: -- --test-threads=1",
+    "cargo test --locked -p borsuk --example two_bit_http -- --test-threads=1",
+    "cargo build --locked --release -p borsuk --example two_bit_http",
+    "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  ],
+  "tests": [
+    "sq8_s3_range::tests::physical_namespace_preserves_logical_paths_and_read_accounting",
+    "sq8_s3_range::tests::physical_namespace_rejects_bad_range_etag_and_sha_without_retries",
+    "tests::optional_physical_namespace_args_preserve_logical_prefix"
+  ],
+  "acceptance": "All three exact tests once in owning broad stages, zero failed/ignored; all five native and tee exits zero; full source before/after/current equality; authenticated artifacts; enforced limits; zero swap/OOM; original instance terminated before collection. Compiler/correctness only; no actual S3 performance.",
+  "corpus_reads": false,
+  "performance_claim": false,
+  "prior_gate": {
+    "status": "NATIVE_QUALIFIED",
+    "instance_id": "i-025718850bf4305a0",
+    "terminated": true,
+    "verification_sha256": "9544aea07035ce8f852be6f2710e53134ab77f73b655b326c27c1c85a928b723"
+  }
+}
