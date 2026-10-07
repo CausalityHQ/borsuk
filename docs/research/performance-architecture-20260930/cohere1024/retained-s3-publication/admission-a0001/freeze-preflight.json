@@ -1,0 +1,39 @@
+{
+  "observed_at": "2026-10-07T17:25:22.340773+00:00",
+  "source_head": {
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-06T14:37:45+00:00",
+    "ContentLength": 170,
+    "ETag": "\"dbbc487949f5de646d98dc85331b4ee1\"",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {
+      "sha256": "617af5f166065f2b95b1459866493f75a7ab2f5793f5ffc5c4492692766c97a3"
+    }
+  },
+  "sq8": {
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-06T14:37:45+00:00",
+    "ContentLength": 103600000,
+    "ETag": "\"f808095a3a2e788df2ae7d7d0e5423fa\"",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {
+      "sha256": "07a14360b06add9a35f82b97f4e031690ff878ff497ee047902818823992337b"
+    }
+  },
+  "destination_head": "404_NOT_RESERVED",
+  "destination_multipart": {
+    "Bucket": "borsuk-bench-453182569524-euc1",
+    "KeyMarker": "",
+    "UploadIdMarker": "",
+    "NextKeyMarker": "",
+    "Prefix": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/s3-native-publication-smoke-a0001/",
+    "NextUploadIdMarker": "",
+    "MaxUploads": 100,
+    "IsTruncated": false
+  },
+  "source_head_body_sha256": "617af5f166065f2b95b1459866493f75a7ab2f5793f5ffc5c4492692766c97a3",
+  "query_truth_reads": 0,
+  "payload_body_reads": 0
+}

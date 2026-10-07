@@ -1,0 +1,31 @@
+{
+  "review_group": "b43e92d8f31548a3",
+  "research": "5f3a73d6466c44f8",
+  "engineering": "0f292ac8be474639",
+  "both_full_reports_read": true,
+  "required_repairs": {
+    "early_failures": "Dependency-free early trap/fallback before timer/setup; explicit shutdown retains original failure.",
+    "deadlines": "Absolute pendingTime-derived cutoff plus root EC2 LaunchTime watch; Accuracy1s, bounded downloads, startup remaining-time gate and stop grace10; native timeout570/kill10 inside unit600.",
+    "terminal_delivery": "Identity validated before native; every closeout failure records nonzero96; conditional create-only evidence/terminal uploads and exact successful delivery console marker; no native success inferred from missing terminal.",
+    "OS_launch_pins": "Ubuntu24.04/x86_64 guards restored; exact request body/hash/settings preregistered.",
+    "all_outcome_closeout": "Frozen ADMITTED/INVALID/INVALID_COMMITTED/MISSING_TERMINAL table; every outcome requires independent destination head/root/source/MPU/termination check.",
+    "MPUs": "Attempt-scoped list-record-abort-relist, only exact destination; never delete referenced committed metadata.",
+    "source_inputs": "Actual13 retained metadata HEAD sizes audited, SQ8 ETag same; no payload/body qualification claimed.",
+    "private_index": "Freeze will use separate index and assert no crates/Cargo diff from qualified source."
+  },
+  "additional_recommendations": {
+    "timeout_metrics": "Inner timeout lets wrapper retain code and postmetrics before unit deadline.",
+    "scratch": "64MiB tmpfs and unchanged native cumulative scratch; all remaining entries including dirs cause failure.",
+    "provenance": "Terminal separates original binary source candidate4c2e535 from integrated910b8b09; no runtime source archive hydration.",
+    "fresh_assets": "Conditional output uploads and unique one-attempt request prefix; staged asset bytes authenticated by frozen pins."
+  },
+  "not_claimed": [
+    "real S3 smoke passed",
+    "physical publication request/byte counts",
+    "ANN/recall/performance",
+    "competitor win",
+    "large-scale feasibility"
+  ],
+  "repository_source_changes": false,
+  "check": "wrapper-check.json9mockcasesPASS; actual native admission still pending"
+}

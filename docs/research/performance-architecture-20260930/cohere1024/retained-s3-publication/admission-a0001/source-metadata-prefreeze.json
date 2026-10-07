@@ -1,0 +1,102 @@
+{
+  "observed_at": "2026-10-07T17:22:46.390189+00:00",
+  "status": "METADATA_SIZES_MATCH_BODY_AUTHENTICATION_PENDING",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "records": [
+    {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/index/generations/4ec270e5ddaf588ab637321ba8ff807712f146817d93d3780eeb54b084b27982/manifest.json",
+      "bytes": 45357,
+      "etag": "\"7c1091f7cf1614b6a1d22b8c6a54cbf6\"",
+      "version_id": null,
+      "approved_sha256": "4ec270e5ddaf588ab637321ba8ff807712f146817d93d3780eeb54b084b27982"
+    },
+    {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/index/generations/4ec270e5ddaf588ab637321ba8ff807712f146817d93d3780eeb54b084b27982/page_digests.bin",
+      "bytes": 12512,
+      "etag": "\"edde1ecdd3cbc6ae9d0cc7cc56e3baf0\"",
+      "version_id": null,
+      "approved_sha256": "5910a7e57f375e08c9d5ca5fe6b4154bc1607c293313bc755aeb2ef29e8f8cc6"
+    },
+    {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/index/generations/4ec270e5ddaf588ab637321ba8ff807712f146817d93d3780eeb54b084b27982/page_manifest.json",
+      "bytes": 280,
+      "etag": "\"f20446ebbb45fa17527b35715ea42c77\"",
+      "version_id": null,
+      "approved_sha256": "fa2b34ee141041a8e89ccb522b883b689c07646bc9441dd01c56dc94c9571984"
+    },
+    {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/index/generations/4ec270e5ddaf588ab637321ba8ff807712f146817d93d3780eeb54b084b27982/plane/manifest.json",
+      "bytes": 652,
+      "etag": "\"751a30f21d4f4725e4ee4266c7148bcb\"",
+      "version_id": null,
+      "approved_sha256": "96c8f40a3b863d5a011c13c90cba326e3c38a820801d8d126041dfaa41c002bb"
+    },
+    {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/index/generations/4ec270e5ddaf588ab637321ba8ff807712f146817d93d3780eeb54b084b27982/plane/mean.bin",
+      "bytes": 4096,
+      "etag": "\"90d90ed2051209079939a9ff03f499ab\"",
+      "version_id": null,
+      "approved_sha256": "e84716e26af17b4cffb153d0a8694a97b1711822080b388ebf0def1bb86b07f3"
+    },
+    {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/index/generations/4ec270e5ddaf588ab637321ba8ff807712f146817d93d3780eeb54b084b27982/plane/page_digests.bin",
+      "bytes": 100000,
+      "etag": "\"2a8a4f1204b769c1a73a457f34cd8fd1\"",
+      "version_id": null,
+      "approved_sha256": "c66610149b2fab4c6e6e8f1a353d132ea0788ff578c54f6c87128a3451dc264b"
+    },
+    {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/index/generations/4ec270e5ddaf588ab637321ba8ff807712f146817d93d3780eeb54b084b27982/plane/records.bin",
+      "bytes": 26400000,
+      "etag": "\"c392652f468a94c5271943f2201851b7\"",
+      "version_id": null,
+      "approved_sha256": "393afcbc297b03639dc3743eef3afe6a644a2a820bd06647d32fa088970fb971"
+    },
+    {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/index/generations/4ec270e5ddaf588ab637321ba8ff807712f146817d93d3780eeb54b084b27982/router/leaves.bin",
+      "bytes": 6412500,
+      "etag": "\"98936ba44d76bca642bbdd8739908432\"",
+      "version_id": null,
+      "approved_sha256": "39c61be4b76f0f39a88c349286a910891f6d71d72d6034f4342eaf1bb6eed173"
+    },
+    {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/index/generations/4ec270e5ddaf588ab637321ba8ff807712f146817d93d3780eeb54b084b27982/router/membership.bin",
+      "bytes": 12500,
+      "etag": "\"4dd63259ca3221d7b7b7e002cb6e5b07\"",
+      "version_id": null,
+      "approved_sha256": "f99345ca41706f4ff4bbf3a6f5179b49e504b517a49d3b764508d5946eaa97dc"
+    },
+    {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/index/generations/4ec270e5ddaf588ab637321ba8ff807712f146817d93d3780eeb54b084b27982/router/root.bin",
+      "bytes": 316672,
+      "etag": "\"c9453b558aa4493d3df37282861ed937\"",
+      "version_id": null,
+      "approved_sha256": "593ea265b95a5a738177e3116f889ee63758fc28fc462a6b7e8c86332ca6a4c7"
+    },
+    {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/index/head.json",
+      "bytes": 170,
+      "etag": "\"dbbc487949f5de646d98dc85331b4ee1\"",
+      "version_id": null,
+      "approved_sha256": "617af5f166065f2b95b1459866493f75a7ab2f5793f5ffc5c4492692766c97a3"
+    },
+    {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/objects/07a14360b06add9a35f82b97f4e031690ff878ff497ee047902818823992337b",
+      "bytes": 103600000,
+      "etag": "\"f808095a3a2e788df2ae7d7d0e5423fa\"",
+      "version_id": null,
+      "approved_sha256": "07a14360b06add9a35f82b97f4e031690ff878ff497ee047902818823992337b"
+    },
+    {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/objects/84169ab56042dae4f9fbcdfe1bd0d6d0161f1ba3a827fff687999ef78381057a",
+      "bytes": 410400000,
+      "etag": "\"20f3394e6166b6fda7dd93150c08d159\"",
+      "version_id": null,
+      "approved_sha256": "84169ab56042dae4f9fbcdfe1bd0d6d0161f1ba3a827fff687999ef78381057a"
+    }
+  ],
+  "count": 13,
+  "query_and_truth_requests": 0,
+  "payload_body_reads": 0,
+  "native_authentication_required": true
+}

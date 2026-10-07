@@ -1,0 +1,141 @@
+{
+  "status": "FROZEN_ONE_ATTEMPT_NOT_LAUNCHED",
+  "source_commit": "910b8b093e95e69fb96b5a749f4c75c55e296fa6",
+  "qualified_candidate": "4c2e535fef1fdc2e61fa003358614287bb8ed488",
+  "binary": {
+    "bytes": 15674840,
+    "sha256": "85ca006a941679fb1daf839e253f413fbaad5ac83feabdf04ad09ce9d4e77597"
+  },
+  "config_sha256": "b2688d8095ebecb4ff92b6984f1b670b4e6fc849736b898281ce0d5a41e91459",
+  "stage_sha256": "ae311b3960b08b044b21e84697babfda2ed208db676fdd3cb6218db08cb3fd21",
+  "userdata_sha256": "8467c2a9b5444df801c79df0e662b9d164fb1d1b08f727c13dea6fb9658679a9",
+  "instance_seconds": 1800,
+  "native_seconds": 600,
+  "cpu": 1,
+  "memory_bytes": 536870912,
+  "swap_bytes": 0,
+  "tasks": 256,
+  "scratch_bytes": 67108864,
+  "maximum_attempts": 1,
+  "spot_max_usd_hour": 0.5,
+  "compute_cap_usd": 0.25,
+  "ancillary_cap_usd": 0.15,
+  "total_reservation_usd": 0.4,
+  "purpose": "actual query-free retained body authentication/publication admission; no ANN/performance run",
+  "requests_and_truth_unopened": true,
+  "no_retraining": true,
+  "create_only_destination": "semantic/s3-native-publication-smoke-a0001",
+  "failure": "preserve original INVALID and any attempted head outcome; no automatic retry or destination overwrite",
+  "remaining": [
+    "Upload exact three inputs create-only",
+    "Launch original single attempt",
+    "Independent all-outcome closeout verification"
+  ],
+  "launch_request_sha256": "187714d1489ceb30790e3fba79adf13ada87b9d0a2a0734f0380911bafbf68de",
+  "launch_settings": {
+    "ImageId": "ami-0b8a830d6339a9758",
+    "InstanceType": "c7i.2xlarge",
+    "MinCount": 1,
+    "MaxCount": 1,
+    "ClientToken": "borsuk-retained-s3-publication-admission-a0001",
+    "SubnetId": "subnet-0a12dbed0ca6fac25",
+    "SecurityGroupIds": [
+      "sg-0b1fd3e4fbde4af0d"
+    ],
+    "IamInstanceProfile": {
+      "Arn": "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile"
+    },
+    "InstanceMarketOptions": {
+      "MarketType": "spot",
+      "SpotOptions": {
+        "MaxPrice": "0.50",
+        "SpotInstanceType": "one-time",
+        "InstanceInterruptionBehavior": "terminate"
+      }
+    },
+    "InstanceInitiatedShutdownBehavior": "terminate",
+    "MetadataOptions": {
+      "HttpTokens": "required",
+      "HttpEndpoint": "enabled"
+    },
+    "BlockDeviceMappings": [
+      {
+        "DeviceName": "/dev/sda1",
+        "Ebs": {
+          "VolumeSize": 80,
+          "VolumeType": "gp3",
+          "Encrypted": true,
+          "DeleteOnTermination": true
+        }
+      }
+    ],
+    "TagSpecifications": [
+      {
+        "ResourceType": "instance",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "borsuk-retained-s3-publication-admission-a0001"
+          },
+          {
+            "Key": "Purpose",
+            "Value": "query-free-native-s3-publication-admission"
+          }
+        ]
+      }
+    ]
+  },
+  "scratch_enforcement": "64MiB tmpfs plus unchanged cumulative native library admission; cgroup swap0",
+  "deadline": "root watches recorded EC2 LaunchTime; termination cutoff1740s with60s margin below1800s cap; provisional on-boot1740s Accuracy1s, replaced by identity pendingTime+1740s calendar timer; native refuses unless600+10+240seconds remain; inner timeout570s/kill10s and unit600s/stop10s",
+  "outcomes": {
+    "ADMITTED": "native/final/terminal exits0, delivered marker, authenticated receipt+head/root, exact11 destinationobjects, immutable source heads/tags, noMPUs, swap/OOM0, terminated",
+    "INVALID": "any failure with destination head absent; prefix burned",
+    "INVALID_COMMITTED": "head exists after any failure/unknown outcome; not adopted, prefix burned, referenced metadata preserved",
+    "MISSING_TERMINAL": "root obtains console and infrastructure termination evidence, records INVALID/UNKNOWN and independently checks destination head+MPUs; never assumes no publication"
+  },
+  "postclose_cleanup": "After original instance terminated and before disposition, list MPUs only under exact frozen destination, record full upload IDs, abort only those attempt-owned uploads, list again until empty or record unresolved INVALID; never delete a committed head/referenced metadata or shared source.",
+  "source_metadata_preflight": "All13 retained publication object HEAD sizes matched original approved ledger; exact quoted SQ8 ETag matched. No query/truth requests or payload body reads; full source and copied body authentication remains native runtime requirement.",
+  "review_group": "b43e92d8f31548a3",
+  "mock_wrapper_check": {
+    "path": "wrapper-check.json",
+    "sha256": "e7944359d3875a0791e84f3ada13a640e876ce61e49d7a7755e76eaea1db5459",
+    "unit": "borsuk-retained-s3-wrapper-check-a0001",
+    "invocation": "7b8025219fad410db3548e39f2c251ee",
+    "exit": 0,
+    "runtime_seconds": 12.971,
+    "memory_peak_bytes_approx": 16900000,
+    "swap_bytes": 0,
+    "cpu": 1,
+    "memory_cap_bytes": 268435456,
+    "case_count": 9,
+    "cloud_native_runtime_qualification": false
+  },
+  "frozen_at": "2026-10-07T17:29:10.973332+00:00",
+  "spot_quote": {
+    "usd_hour": "0.206600",
+    "timestamp": "2026-10-07T16:00:00Z",
+    "availability_zone": "eu-central-1c"
+  },
+  "evidence_pins": {
+    "freeze-preflight.json": {
+      "bytes": 1352,
+      "sha256": "ccbce9c8d0a6da65db8518bffbe86e5a5ad75666b4dbccebd3f0009cf3b3479c"
+    },
+    "source-head-prefreeze.json": {
+      "bytes": 170,
+      "sha256": "617af5f166065f2b95b1459866493f75a7ab2f5793f5ffc5c4492692766c97a3"
+    },
+    "source-metadata-prefreeze.json": {
+      "bytes": 5527,
+      "sha256": "16e88dd242be47ef353cb292d1893fd9dc56c0ada458ed9e0ea2de180046dc78"
+    },
+    "review-reconciliation.json": {
+      "bytes": 2257,
+      "sha256": "7d11d9d9f6640caabf969d1e21bdf7ae104bbb0dcb09b131845a929726f3a171"
+    },
+    "wrapper-check.json": {
+      "bytes": 1333,
+      "sha256": "e7944359d3875a0791e84f3ada13a640e876ce61e49d7a7755e76eaea1db5459"
+    }
+  }
+}
