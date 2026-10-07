@@ -1,0 +1,29 @@
+{
+  "status": "SOURCE_GLUE_VERIFIED_NATIVE_UNRUN",
+  "previous_attempts": [
+    "a0003",
+    "a0005"
+  ],
+  "instance_created_in_previous_attempt": false,
+  "old_zone": "eu-central-1c",
+  "new_zone": "eu-central-1b",
+  "subnet": "subnet-00243d923761c047c",
+  "vpc": "vpc-02bed5aadbc3c0a2d",
+  "public_and_available": true,
+  "native_source": "7096b5b943946a473eab0dd88adea99aae24ecc5",
+  "source_algorithm_and_limits_unchanged": true,
+  "launcher_sha256": "5768dbb41defd843336503f027a4f6b1e51ab7a7ed3eda384edad4c989158d27",
+  "source_check": {
+    "unit": "borsuk-retained-subnet-1b-source-check.service",
+    "invocation": "099002a5a745403cadc3b89af51fd294",
+    "exit": 0,
+    "cpu_quota_percent": 100,
+    "memory_max": 268435456,
+    "swap_max": 0,
+    "deadline_seconds": 120,
+    "runtime_seconds": 6.466,
+    "peak": "115.8M",
+    "historical_protocol_and_switch_back": "PASS"
+  },
+  "native_checks_run_here": false
+}

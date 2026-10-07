@@ -565,9 +565,9 @@ RETAINED_REBIND_STAGES = tuple((name, command.split()) for name, command in (
     ('clippy', 'cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious'),
     ('test-build', 'env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh')))
 RETAINED_REBIND_RELEASE = ('binaries/check_cohere_native_baseline', 'binaries/publish_two_bit_generation')
-# Environment only: a0003 RunInstances hit InsufficientInstanceCapacity in eu-central-1a. This eu-central-1c subnet is in the
+# Environment only: a0003/a0005 RunInstances lacked Spot capacity in zones 1a/1c. This eu-central-1b subnet is in the
 # same VPC as SUBNET; the retained mode alone uses it and configure() restores SUBNET for every other mode.
-RETAINED_REBIND_SUBNET = 'subnet-0a12dbed0ca6fac25'
+RETAINED_REBIND_SUBNET = 'subnet-00243d923761c047c'
 
 
 def retained_rebind_required_tests(required):
@@ -3454,7 +3454,7 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
             assert NATIVE_DELTA == RETAINED_REBIND_DELTA == tuple(sorted(RETAINED_REBIND_DELTA)) and len(NATIVE_DELTA) == 3 and set(RETAINED_REBIND_TEST_SOURCES.values()) <= set(NATIVE_DELTA)
             assert RELEASE_ARTIFACTS == RETAINED_REBIND_RELEASE == ('binaries/check_cohere_native_baseline', 'binaries/publish_two_bit_generation')
             assert str(ROOT) == 'docs/research/performance-architecture-20260930/cohere1024/retained-generation-rebind/implementation-gates'
-            assert SUBNET == FIXED['subnet_id'] == RETAINED_REBIND_SUBNET != FULL_FIXED['subnet_id'], 'retained mode alone uses the 1c subnet'
+            assert SUBNET == FIXED['subnet_id'] == RETAINED_REBIND_SUBNET != FULL_FIXED['subnet_id'], 'retained mode alone uses the selected subnet'
             assert PREFIX == 'research/semantic-router/20261006/retained-generation-rebind-gates-' and COHERE_COHORT_STAGES is RETAINED_REBIND_STAGES
             assert [name for name, _ in stages] == ['retained-rebind-integration-tests', 'retained-rebind-publisher-tests', 'release', 'clippy', 'test-build']
             assert all('--locked' in command for _, command in stages if command[0] == 'cargo') and all(command[-2:] == ['--', '--test-threads=1'] for _, command in stages[:2])
