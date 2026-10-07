@@ -1,0 +1,12 @@
+{
+  "status": "SOURCE_ARCHIVE_AUTHENTICATED_NATIVE_UNRUN",
+  "source_commit": "02dbee3a59584d6146849917dffdd8d494a9e0e9",
+  "support_count": 2449,
+  "native_count": 414,
+  "native_identity": "1dda90aef014c7737dd1d5d7eac64e4507cdea168d06c4969501960c286db5ff",
+  "archive_sha256": "e724a7c367ab28d8c2dd946a20150413ce465a943d13ff30740cb970db173f86",
+  "changed_native": [
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs"
+  ],
+  "prior_archive_attempt": "tmp quota failure preserved as source-quota-failed.partial.gz"
+}

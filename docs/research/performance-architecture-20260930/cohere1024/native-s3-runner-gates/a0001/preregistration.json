@@ -1,0 +1,58 @@
+{
+  "schema": "borsuk-native-s3-cohort-runner-qualification-preregistration-v1",
+  "status": "SOURCE_ARCHIVE_AUTHENTICATED_NATIVE_UNRUN",
+  "source_commit": "02dbee3a59584d6146849917dffdd8d494a9e0e9",
+  "support_count": 2449,
+  "native_count": 414,
+  "native_identity": "1dda90aef014c7737dd1d5d7eac64e4507cdea168d06c4969501960c286db5ff",
+  "archive_sha256": "e724a7c367ab28d8c2dd946a20150413ce465a943d13ff30740cb970db173f86",
+  "changed_native": [
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs"
+  ],
+  "prior_archive_attempt": "tmp quota failure preserved as source-quota-failed.partial.gz",
+  "source_contract_sha256": "95de1657f8f2b7c44e507b38d795d224aaea038ba3494ead6c230a7ec96e93d9",
+  "gates_sha256": "f8658ea1e635247a8c28f9dcac025dc2be90eba70ef851dba94fcb9c5788cc1d",
+  "userdata_sha256": "0b80f36d735105b122c9627a79fc56a5562c96dbfa4e504f743fc3f192e58c8e",
+  "resources": {
+    "cpu": 2,
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "tasks": 512,
+    "native_seconds": 7200,
+    "machine_seconds": 9000
+  },
+  "spot": {
+    "region": "eu-central-1",
+    "az": "eu-central-1c",
+    "type": "c7i.2xlarge",
+    "max_bid_usd_hour": 0.5,
+    "quoted_usd_hour": "0.206500",
+    "quote_timestamp": "2026-10-07T12:00:00+00:00",
+    "compute_cap_usd": 1.25,
+    "ancillary_cap_usd": 0.15
+  },
+  "gates": [
+    "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+    "env CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk --bin check_cohere_native_baseline",
+    "env CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  ],
+  "tests": [
+    "tests::production_contract_rejects_unknown_hash_geometry_and_caps",
+    "tests::secure_artifacts_reject_hash_length_eof_symlink_fifo_and_bad_rows",
+    "tests::scratch_formula_keeps_codec_and_trace_separate",
+    "tests::actual_native_queries_seal_and_reduce_against_literal_oracles",
+    "tests::missing_or_tampered_truth_is_invalid_only_after_all_queries_are_sealed",
+    "tests::prefix_or_requests_tampering_blocks_first_truth_open",
+    "tests::source_binding_and_all_request_rows_fail_before_queries",
+    "tests::reporting_underfill_keeps_fixed_ten_denominator_and_bounded_output",
+    "tests::namespaced_pipeline_faults_preserve_binding_accounting_and_seal"
+  ],
+  "acceptance": "All nine exact tests once in affected-bin stage; zero failed/ignored; four native and tee exits zero; full source before/after/current equality; authenticated artifacts; enforced caps; swap/OOM zero; original instance terminated before collection/integration. Reviews reconciled before integration.",
+  "interruption": "Preserve original interrupted attempt as INVALID; no automatic replacement; stop first failing gate; terminate immediately at terminal and independently wait.",
+  "corpus_reads": false,
+  "performance_claim": false,
+  "review_group": "6901bfd6f4984cc5",
+  "review_status": "RUNNING_NOT_YET_ACCEPTED",
+  "archive_staging_failure": "First full-tree archive failed tmp quota before launch; partial preserved. Retry used exact2449 established support closure and independently checked414 native files."
+}
