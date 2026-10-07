@@ -1,0 +1,137 @@
+{
+  "status": "NATIVE_QUALIFIED",
+  "source_commit": "68c6243a0c560f875e33fcc31d83e80ffc6c8813",
+  "source_file_count": 414,
+  "native_source_identity_sha256": "db32f28f71a5544eb9485c6323ba002a2e62df5df210f78209a9ea2a630e8adc",
+  "full_source_before_after_root_match": true,
+  "build_support_count": 2449,
+  "instance_id": "i-0ab2c3a35c4304516",
+  "terminated": true,
+  "stage_count": 9,
+  "stages": [
+    {
+      "name": "application-ids-debug",
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --test two_bit_application_ids -- --test-threads=1",
+      "exit": 0,
+      "tee_exit": 0,
+      "test_counts": [
+        [
+          "7",
+          "0",
+          "1"
+        ]
+      ],
+      "started": "2026-10-07T19:58:40Z",
+      "finished": "2026-10-07T20:03:03Z"
+    },
+    {
+      "name": "compaction-debug",
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_compaction::tests:: -- --test-threads=1",
+      "exit": 0,
+      "tee_exit": 0,
+      "test_counts": [
+        [
+          "2",
+          "0",
+          "0"
+        ]
+      ],
+      "started": "2026-10-07T20:03:03Z",
+      "finished": "2026-10-07T20:04:41Z"
+    },
+    {
+      "name": "semantic-parity-debug",
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::semantic_object_store_parity -- --exact --test-threads=1",
+      "exit": 0,
+      "tee_exit": 0,
+      "test_counts": [
+        [
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "started": "2026-10-07T20:04:41Z",
+      "finished": "2026-10-07T20:04:42Z"
+    },
+    {
+      "name": "application-ids-release",
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked --release -p borsuk --test two_bit_application_ids -- --test-threads=1",
+      "exit": 0,
+      "tee_exit": 0,
+      "test_counts": [
+        [
+          "7",
+          "0",
+          "1"
+        ]
+      ],
+      "started": "2026-10-07T20:04:42Z",
+      "finished": "2026-10-07T20:20:57Z"
+    },
+    {
+      "name": "compaction-release",
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked --release -p borsuk --lib two_bit_compaction::tests:: -- --test-threads=1",
+      "exit": 0,
+      "tee_exit": 0,
+      "test_counts": [
+        [
+          "2",
+          "0",
+          "0"
+        ]
+      ],
+      "started": "2026-10-07T20:20:57Z",
+      "finished": "2026-10-07T20:31:04Z"
+    },
+    {
+      "name": "semantic-parity-release",
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked --release -p borsuk --lib two_bit_generation::source_walk_tests::semantic_object_store_parity -- --exact --test-threads=1",
+      "exit": 0,
+      "tee_exit": 0,
+      "test_counts": [
+        [
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "started": "2026-10-07T20:31:04Z",
+      "finished": "2026-10-07T20:31:06Z"
+    },
+    {
+      "name": "library-release",
+      "command": "env CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk",
+      "exit": 0,
+      "tee_exit": 0,
+      "test_counts": [],
+      "started": "2026-10-07T20:31:06Z",
+      "finished": "2026-10-07T20:42:57Z"
+    },
+    {
+      "name": "workspace-clippy",
+      "command": "env CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "exit": 0,
+      "tee_exit": 0,
+      "test_counts": [],
+      "started": "2026-10-07T20:42:57Z",
+      "finished": "2026-10-07T20:46:50Z"
+    },
+    {
+      "name": "workspace-test-build",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "exit": 0,
+      "tee_exit": 0,
+      "test_counts": [],
+      "started": "2026-10-07T20:46:50Z",
+      "finished": "2026-10-07T20:53:06Z"
+    }
+  ],
+  "artifacts": 86,
+  "compiler_memory_peak_bytes": 8589934592,
+  "swap_peak_bytes": 0,
+  "oom_kill": 0,
+  "main_pid_after": 0,
+  "historical_ignored_test": "native_s3_conditional_fence_and_gc_smoke remains unexecuted; existing owned-AWS smoke explicitly ignored in unchanged base",
+  "scope": "Compiler and synthetic D1024/D768 in-process compaction/recovery correctness. No real-S3 maintenance, performance, serving RAM or vendor claim."
+}

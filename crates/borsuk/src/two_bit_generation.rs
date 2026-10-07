@@ -4445,7 +4445,7 @@ mod source_walk_tests {
         let wide = crate::two_bit_store::publish_empty_with_mode(
             store.as_ref(),
             &wide_prefix,
-            769,
+            1025,
             1,
             None,
             Some(DiscoveryMode::Graph),
@@ -4455,11 +4455,11 @@ mod source_walk_tests {
         let mutations = apply_two_bit_mutations(
             store.as_ref(),
             &wide,
-            769,
+            1025,
             None,
             &[TwoBitMutation {
                 id: 17,
-                vector: Some(vec![1.; 769]),
+                vector: Some(vec![1.; 1025]),
             }],
             mutation_limits,
         )
@@ -4481,11 +4481,11 @@ mod source_walk_tests {
         apply_two_bit_mutations(
             store.as_ref(),
             &wide,
-            769,
+            1025,
             Some(&mutations),
             &[TwoBitMutation {
                 id: 18,
-                vector: Some(vec![1.; 769]),
+                vector: Some(vec![1.; 1025]),
             }],
             mutation_limits,
         )

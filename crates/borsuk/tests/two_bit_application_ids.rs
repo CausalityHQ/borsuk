@@ -2272,3 +2272,537 @@ async fn gc_rejects_inconsistent_mutation_caps_before_remote_io() {
         "invalid payload caps must cause no remote IO: {error}"
     );
 }
+
+async fn semantic_compaction_fixture(
+    store: std::sync::Arc<dyn ObjectStore>,
+    dimensions: usize,
+    interrupt_publication: bool,
+) {
+    use borsuk::{
+        canonical_source::{TwoBitCompactionLimits, recover_two_bit_source},
+        rotated_two_bit::RotatedTwoBitCodec,
+        semantic_unit_router::SemanticProfile,
+        two_bit_compaction::{TwoBitCompactionOptions, compact_two_bit_index},
+        two_bit_generation::DiscoveryMode,
+        two_bit_mutations::{
+            TwoBitMutation, TwoBitMutationLimits, apply_two_bit_mutations, read_two_bit_mutations,
+        },
+    };
+    let temp = tempfile::tempdir().unwrap();
+    assert_eq!(dimensions % 256, 0, "fixture uses complete rotation blocks");
+    let vector = |components: &[(usize, f32)]| {
+        let mut values = vec![0.; dimensions];
+        for &(coordinate, value) in components {
+            values[coordinate] = value;
+        }
+        values
+    };
+    let vectors = [
+        vector(&[(0, 2.)]),
+        vector(&[(dimensions - 1, 3.)]),
+        vector(&[(0, -4.), (dimensions / 2, 3.)]),
+        vector(&[(dimensions / 2, -7.), (dimensions - 1, 2.)]),
+    ];
+    let ids = [i64::MIN + 3, 71, -19, i64::MAX - 9];
+    let order = [2, 0, 3, 1];
+    let body = vectors
+        .iter()
+        .flat_map(|vector| {
+            let norm = vector
+                .iter()
+                .map(|&v| f64::from(v).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            vector
+                .iter()
+                .flat_map(move |&v| ((f64::from(v) / norm) as f32).to_le_bytes())
+        })
+        .collect::<Vec<_>>();
+    let raw = temp.path().join("raw");
+    let sq8 = temp.path().join("sq8");
+    std::fs::write(&raw, &body).unwrap();
+    let raw_sha = hash(&body);
+    let encoding =
+        build_sq8_source_with_ids(&raw, &raw_sha, dimensions, &order, &ids, &sq8, 1_000_000)
+            .unwrap();
+    let key = ObjectPath::from(format!("semantic/objects/{}", encoding.sha256));
+    let etag = store
+        .put(&key, PutPayload::from(std::fs::read(&sq8).unwrap()))
+        .await
+        .unwrap()
+        .e_tag
+        .unwrap();
+    let root = temp.path().join("generation");
+    let root_sha = TwoBitGenerationBuilder {
+        source: TwoBitSource {
+            raw: &raw,
+            raw_sha256: &raw_sha,
+            sq8: &sq8,
+            sq8_sha256: &encoding.sha256,
+            rows: ids.len(),
+            dimensions,
+        },
+        generation: 1,
+        base_epoch: 0,
+        low: &encoding.low,
+        step: &encoding.step,
+        sq8_object_key: key.as_ref(),
+        sq8_etag: &etag,
+    }
+    .build_with_discovery(
+        Some(&order),
+        DiscoveryMode::Semantic,
+        &root,
+        32 * 1024 * 1024,
+    )
+    .unwrap();
+    let limits = TwoBitGenerationLimits {
+        max_memory_bytes: 32 * 1024 * 1024,
+        max_active_queries: 1,
+        max_query_bytes: ids.len() * (dimensions + 12),
+        max_query_gets: 1,
+        max_parallel_gets: 1,
+        max_source_bytes: ids.len() * (dimensions.div_ceil(4) + 8),
+        max_source_gets: 1,
+        max_parallel_source_gets: 1,
+        // Ordinary search retains no diagnostic trace; charge the codec's exact peak.
+        max_query_scratch_bytes: RotatedTwoBitCodec::required_query_scratch_bytes(dimensions)
+            .unwrap(),
+        already_pinned_bytes: 0,
+    };
+    let prefix = ObjectPath::from("semantic/index");
+    let head = publish_two_bit_generation(store.as_ref(), &prefix, &root, &root_sha, limits, None)
+        .await
+        .unwrap();
+    let mutation_limits = TwoBitMutationLimits {
+        max_snapshot_bytes: 32768,
+        max_memory_bytes: 1_000_000,
+    };
+    let updated = vector(&[(0, -4.), (dimensions - 1, -9.)]);
+    let inserted = vector(&[(0, 5.), (dimensions / 2, 2.), (dimensions - 1, 1.)]);
+    let mutations = apply_two_bit_mutations(
+        store.as_ref(),
+        &head,
+        dimensions,
+        None,
+        &[
+            TwoBitMutation {
+                id: ids[0],
+                vector: None,
+            },
+            TwoBitMutation {
+                id: 71,
+                vector: Some(updated.clone()),
+            },
+            TwoBitMutation {
+                id: i64::MAX,
+                vector: Some(inserted.clone()),
+            },
+        ],
+        mutation_limits,
+    )
+    .await
+    .unwrap();
+    let expected_ids = vec![-19, 71, i64::MAX - 9, i64::MAX];
+    let mutable = TwoBitGeneration::open(
+        &root,
+        &root_sha,
+        TwoBitGenerationLimits {
+            already_pinned_bytes: mutations.resident_payload_bytes() as u64,
+            ..limits
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        mutable.semantic_profile(),
+        Some(SemanticProfile::Native100k)
+    );
+    let visible = mutable
+        .search_with_mutations_store(store.as_ref(), &updated, 4, &mutations)
+        .await
+        .unwrap();
+    let mut visible_ids = visible
+        .candidates
+        .iter()
+        .map(|hit| hit.id)
+        .collect::<Vec<_>>();
+    visible_ids.sort_unstable();
+    assert_eq!(visible_ids, expected_ids);
+    assert_eq!(visible.mutation_rows_scanned, 3);
+    assert_eq!(visible.mutation_put_rows_scored, 2);
+    assert_eq!(visible.candidates[0].id, 71);
+    drop(mutable);
+    drop(mutations);
+    drop(visible);
+    let options = TwoBitCompactionOptions {
+        mutations: mutation_limits,
+        source: TwoBitCompactionLimits {
+            max_memory_bytes: 32 * 1024 * 1024,
+            max_disk_bytes: 4 * 1024 * 1024,
+            max_source_chunk_bytes: 65536,
+        },
+        generation: limits,
+    };
+    let maintenance = temp.path().join("maintenance");
+    let job = maintenance.join(&root_sha);
+    let mut saved_ready = None;
+    let mut saved_sq8 = None;
+    if interrupt_publication {
+        let (failing, attempts) = common::FaultInjectingObjectStore::fail_nth_matching(
+            store.clone(),
+            // The first head write seals the delta; the second publishes the base.
+            2,
+            true,
+            |op, path| op == common::StoreOperation::Put && path.as_ref().ends_with("/head.json"),
+        )
+        .with_operation_log();
+        let error =
+            compact_two_bit_index(std::sync::Arc::new(failing), &prefix, &maintenance, options)
+                .await
+                .unwrap_err();
+        match &error {
+            borsuk::two_bit_store::TwoBitStoreError::Store(object_store::Error::Generic {
+                store: "fault-injecting",
+                source,
+            }) => assert_eq!(
+                source.to_string(),
+                format!("injected Put failure at {prefix}/head.json")
+            ),
+            _ => panic!("unexpected publication fault: {error}"),
+        }
+        assert_eq!(
+            attempts.count_matching(|op, path| op == common::StoreOperation::Put
+                && path == format!("{prefix}/head.json")),
+            2
+        );
+        assert!(
+            job.join("ready.json").exists(),
+            "must interrupt after durable ready: {error}"
+        );
+        saved_ready = Some(std::fs::read(job.join("ready.json")).unwrap());
+        let target: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(job.join("generation/manifest.json")).unwrap())
+                .unwrap();
+        let staged_key = ObjectPath::from(target["sq8_object_key"].as_str().unwrap());
+        saved_sq8 = Some((
+            staged_key.clone(),
+            store.head(&staged_key).await.unwrap().e_tag,
+        ));
+        let unchanged = read_two_bit_head(store.as_ref(), &prefix)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged.root_sha256(), root_sha);
+        let sealed =
+            read_two_bit_mutations(store.as_ref(), &unchanged, dimensions, mutation_limits)
+                .await
+                .unwrap()
+                .unwrap();
+        assert!(sealed.is_sealed());
+        assert_eq!(sealed.rows().len(), 3);
+        // Independently reload the old semantic base while its durable delta is sealed.
+        let reopened = TwoBitGeneration::open_remote_from_head(
+            store.as_ref(),
+            &unchanged,
+            TwoBitGenerationLimits {
+                already_pinned_bytes: sealed.resident_payload_bytes() as u64,
+                ..limits
+            },
+            temp.path(),
+        )
+        .await
+        .unwrap();
+        let visible = reopened
+            .search_with_mutations_store(store.as_ref(), &updated, 4, &sealed)
+            .await
+            .unwrap();
+        assert_eq!(visible.candidates[0].id, 71);
+    }
+    let (observed, operations) =
+        common::FaultInjectingObjectStore::new(store.clone()).with_operation_log();
+    let compacted = compact_two_bit_index(
+        std::sync::Arc::new(observed),
+        &prefix,
+        &maintenance,
+        options,
+    )
+    .await
+    .unwrap();
+    assert_eq!(compacted.generation(), 2);
+    assert_ne!(compacted.root_sha256(), root_sha);
+    assert!(!job.exists());
+    if let Some(ready) = saved_ready {
+        let ready: serde_json::Value = serde_json::from_slice(&ready).unwrap();
+        assert_eq!(ready["target_root_sha256"], compacted.root_sha256());
+        let (key, etag) = saved_sq8.unwrap();
+        assert_eq!(store.head(&key).await.unwrap().e_tag, etag);
+        assert_eq!(
+            operations.count_matching(
+                |op, path| op == common::StoreOperation::MultipartPut && path == key.as_ref()
+            ),
+            0
+        );
+        assert_eq!(
+            operations.count_matching(
+                |op, path| op == common::StoreOperation::Put && path.ends_with("/claim.json")
+            ),
+            0
+        );
+    }
+    let authorized = read_two_bit_head(store.as_ref(), &prefix)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(authorized.root_sha256(), compacted.root_sha256());
+    assert!(
+        read_two_bit_mutations(store.as_ref(), &authorized, dimensions, mutation_limits)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let reopened =
+        TwoBitGeneration::open_remote_from_head(store.as_ref(), &authorized, limits, temp.path())
+            .await
+            .unwrap();
+    assert_eq!(
+        reopened.semantic_profile(),
+        Some(SemanticProfile::Native100k)
+    );
+    assert_eq!(reopened.rows(), 4);
+    let canonical = temp.path().join("recovered-canonical");
+    recover_two_bit_source(store.as_ref(), &authorized, &canonical, 65536, 65536)
+        .await
+        .unwrap();
+    let canonical = std::fs::read(canonical).unwrap();
+    assert_eq!(canonical.len(), 4 * (8 + dimensions * 4));
+    let mut recovered_ids = Vec::new();
+    for record in canonical.chunks_exact(8 + dimensions * 4) {
+        let id = i64::from_le_bytes(record[..8].try_into().unwrap());
+        recovered_ids.push(id);
+        let expected = match id {
+            -19 => &vectors[2],
+            71 => &updated,
+            id if id == i64::MAX - 9 => &vectors[3],
+            i64::MAX => &inserted,
+            _ => panic!("unexpected compacted ID {id}"),
+        };
+        let norm = expected
+            .iter()
+            .map(|&v| f64::from(v).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        for (bytes, &value) in record[8..].chunks_exact(4).zip(expected) {
+            let actual = f32::from_le_bytes(bytes.try_into().unwrap());
+            assert!(
+                (actual - (f64::from(value) / norm) as f32).abs() <= 1e-7,
+                "ID {id}: update/source not incorporated"
+            );
+        }
+    }
+    recovered_ids.sort_unstable();
+    assert_eq!(recovered_ids, expected_ids);
+    // Independent sequential scalar SQ8 oracle, including authenticated stored norms.
+    let manifest = store
+        .get(&authorized.metadata_prefix().join("manifest.json"))
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+    let low: Vec<f32> = serde_json::from_value(manifest["low"].clone()).unwrap();
+    let step: Vec<f32> = serde_json::from_value(manifest["step"].clone()).unwrap();
+    let sq8 = store
+        .get(&ObjectPath::from(
+            manifest["sq8_object_key"].as_str().unwrap(),
+        ))
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    for query in [&updated, &inserted] {
+        let norm = query
+            .iter()
+            .map(|&v| f64::from(v).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        let normalized = query
+            .iter()
+            .map(|&v| (f64::from(v) / norm) as f32)
+            .collect::<Vec<_>>();
+        let mut shift = 0_f32;
+        let mut qnorm = 0_f32;
+        for d in 0..dimensions {
+            shift += normalized[d] * low[d];
+            qnorm += normalized[d] * normalized[d];
+        }
+        shift -= qnorm / 2.;
+        let mut oracle = sq8
+            .chunks_exact(dimensions + 12)
+            .enumerate()
+            .map(|(ordinal, row)| {
+                let id = i64::from_le_bytes(row[..8].try_into().unwrap());
+                let norm = f32::from_le_bytes(row[8..12].try_into().unwrap());
+                let mut inner = 0_f32;
+                for d in 0..dimensions {
+                    inner += f32::from(row[12 + d]) * (normalized[d] * step[d]);
+                }
+                (ordinal, id, norm - 2. * (inner + shift))
+            })
+            .collect::<Vec<_>>();
+        oracle.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.1.cmp(&b.1)));
+        let found = reopened
+            .search_with_store(store.as_ref(), query, 4, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            found
+                .ranked
+                .candidates
+                .iter()
+                .map(|hit| (hit.ordinal, hit.id, hit.score.to_bits()))
+                .collect::<Vec<_>>(),
+            oracle
+                .iter()
+                .map(|&(ordinal, id, score)| (ordinal, id, score.to_bits()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(found.ranked.candidates.len(), 4);
+        assert!(found.ranked.candidates.iter().all(|hit| hit.id != ids[0]));
+    }
+    drop(reopened);
+    let (observed, operations) =
+        common::FaultInjectingObjectStore::new(store.clone()).with_operation_log();
+    let no_work = compact_two_bit_index(
+        std::sync::Arc::new(observed),
+        &prefix,
+        &maintenance,
+        options,
+    )
+    .await
+    .unwrap();
+    assert_eq!(no_work.root_sha256(), compacted.root_sha256());
+    assert_eq!(no_work.generation(), 2);
+    assert!(operations.entries().iter().all(|entry| matches!(
+        entry.operation,
+        common::StoreOperation::Get | common::StoreOperation::Head
+    )));
+}
+
+#[tokio::test]
+async fn semantic_d1024_compaction_reopens_with_application_ids_and_score_bits() {
+    semantic_compaction_fixture(std::sync::Arc::new(InMemory::new()), 1024, false).await;
+}
+
+#[tokio::test]
+async fn semantic_d1024_compaction_recovers_ready_publication_in_memory() {
+    semantic_compaction_fixture(std::sync::Arc::new(InMemory::new()), 1024, true).await;
+}
+
+#[tokio::test]
+async fn semantic_d768_compaction_reopens_with_application_ids_and_score_bits() {
+    semantic_compaction_fixture(std::sync::Arc::new(InMemory::new()), 768, false).await;
+}
+
+#[tokio::test]
+async fn semantic_d1025_compaction_refuses_before_side_effects() {
+    use borsuk::{
+        canonical_source::TwoBitCompactionLimits,
+        rotated_two_bit::RotatedTwoBitCodec,
+        two_bit_compaction::{TwoBitCompactionOptions, compact_two_bit_index_with_discovery},
+        two_bit_generation::DiscoveryMode,
+        two_bit_mutations::{
+            TwoBitMutation, TwoBitMutationLimits, apply_two_bit_mutations, read_two_bit_mutations,
+        },
+        two_bit_store::{TwoBitStoreError, publish_empty_two_bit_generation},
+    };
+    let store = std::sync::Arc::new(InMemory::new());
+    let prefix = ObjectPath::from("semantic-refusal/index");
+    let head = publish_empty_two_bit_generation(store.as_ref(), &prefix, 1025, 1, None)
+        .await
+        .unwrap();
+    let mutations = TwoBitMutationLimits {
+        max_snapshot_bytes: 32768,
+        max_memory_bytes: 1_000_000,
+    };
+    let snapshot = apply_two_bit_mutations(
+        store.as_ref(),
+        &head,
+        1025,
+        None,
+        &[TwoBitMutation {
+            id: -71,
+            vector: Some(vec![1.; 1025]),
+        }],
+        mutations,
+    )
+    .await
+    .unwrap();
+    let control = store
+        .get(&prefix.clone().join("head.json"))
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    let (observed, operations) =
+        common::FaultInjectingObjectStore::new(store.clone()).with_operation_log();
+    let temp = tempfile::tempdir().unwrap();
+    let maintenance = temp.path().join("absent");
+    let error = compact_two_bit_index_with_discovery(
+        std::sync::Arc::new(observed),
+        &prefix,
+        &maintenance,
+        TwoBitCompactionOptions {
+            mutations,
+            source: TwoBitCompactionLimits {
+                max_memory_bytes: 32 * 1024 * 1024,
+                max_disk_bytes: 4 * 1024 * 1024,
+                max_source_chunk_bytes: 65536,
+            },
+            generation: TwoBitGenerationLimits {
+                max_memory_bytes: 32 * 1024 * 1024,
+                max_active_queries: 1,
+                max_query_bytes: 65536,
+                max_query_gets: 1,
+                max_parallel_gets: 1,
+                max_source_bytes: 65536,
+                max_source_gets: 1,
+                max_parallel_source_gets: 1,
+                max_query_scratch_bytes: RotatedTwoBitCodec::required_query_scratch_bytes(1025)
+                    .unwrap(),
+                already_pinned_bytes: 0,
+            },
+        },
+        Some(DiscoveryMode::Semantic),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        TwoBitStoreError::Invalid("semantic compaction dimensions")
+    ));
+    assert!(!maintenance.exists());
+    assert!(operations.entries().iter().all(|entry| matches!(
+        entry.operation,
+        common::StoreOperation::Get | common::StoreOperation::Head
+    )));
+    assert_eq!(
+        store
+            .get(&prefix.join("head.json"))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap(),
+        control
+    );
+    let current = read_two_bit_mutations(store.as_ref(), &head, 1025, mutations)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!current.is_sealed());
+    assert_eq!(current.sha256(), snapshot.sha256());
+    assert_eq!(current.revision(), snapshot.revision());
+}

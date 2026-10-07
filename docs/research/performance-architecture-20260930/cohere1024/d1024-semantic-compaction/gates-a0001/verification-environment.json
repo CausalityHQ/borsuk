@@ -1,0 +1,13 @@
+{
+  "native_original_exit": 0,
+  "first_verifier": "Overstrictly rejected existing ignored AWS smoke; raw artifacts fully authenticated before rejection",
+  "second_verifier": "Exact ignored-name matcher was overescaped; no native change or rerun",
+  "final_verifier_unit": "borsuk-compaction-terminal-verify-a0003",
+  "final_invocation": "70b45232759a48c483d951af5a3d08be",
+  "final_exit": 0,
+  "cpu_quota": "100%",
+  "memory_max_bytes": 268435456,
+  "swap_max_bytes": 0,
+  "reported_peak": "27.5M",
+  "scope": "Metadata and source/receipt authentication only; no local Cargo/rustc/native execution"
+}

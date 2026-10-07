@@ -354,7 +354,9 @@ pub async fn compact_two_bit_index_with_discovery(
     let base = read_two_bit_head(store.as_ref(), prefix)
         .await?
         .ok_or(bad("compaction index absent"))?;
-    reject_unsupported_profile(discovery_profile(store.as_ref(), &base).await?.1)?;
+    let (base_discovery, profile) = discovery_profile(store.as_ref(), &base).await?;
+    reject_unsupported_profile(profile)?;
+    admit_compaction_dimensions(requested.unwrap_or(base_discovery), base.dimensions())?;
     let prefix = prefix.clone();
     let directory = maintenance_directory.to_path_buf();
     tokio::task::spawn_blocking(move || {
@@ -391,6 +393,17 @@ fn reject_unsupported_profile(
 ) -> Result<()> {
     if profile == Some(crate::semantic_unit_router::SemanticProfile::Fresh1m) {
         return Err(bad("Fresh1m maintenance is unsupported"));
+    }
+    Ok(())
+}
+
+fn admit_compaction_dimensions(discovery: DiscoveryMode, dimensions: usize) -> Result<()> {
+    // build_with_discovery uses Native100k. Validate its dimension bound before
+    // sealing; the builder admits the actual merged row count (or an empty root).
+    if discovery == DiscoveryMode::Semantic
+        && !crate::semantic_unit_router::SemanticProfile::Native100k.valid_geometry(1, dimensions)
+    {
+        return Err(bad("semantic compaction dimensions"));
     }
     Ok(())
 }
@@ -462,9 +475,7 @@ async fn compact_owned(
         None
     };
     let discovery = requested.or(captured).unwrap_or(base_discovery);
-    if discovery == DiscoveryMode::Semantic && base.dimensions() > 768 {
-        return Err(bad("semantic compaction dimensions"));
-    }
+    admit_compaction_dimensions(discovery, base.dimensions())?;
     let latest = read_two_bit_mutations(store, &base, base.dimensions(), options.mutations).await?;
     let Some(latest) = latest else {
         if requested.is_some_and(|mode| mode != base_discovery) {
@@ -843,7 +854,8 @@ mod tests {
                 max_source_bytes: 100000,
                 max_source_gets: 128,
                 max_parallel_source_gets: 16,
-                max_query_scratch_bytes: 400000,
+                max_query_scratch_bytes: RotatedTwoBitCodec::required_query_scratch_bytes(768)
+                    .unwrap(),
                 already_pinned_bytes: 0,
             },
         };
