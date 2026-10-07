@@ -1,0 +1,110 @@
+{
+  "state": "SOURCE_ONLY_COMMITTED_UNVERIFIED_ALL_NATIVE_CHECKS_UNRUN",
+  "base": "98dd8c3a87e36994cfc9275e26666780ad54db3e",
+  "owned_file": "crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+  "commit": "bccd8b7a477bf6e80a8f87c9ad740dacb2dde0ed",
+  "OWN1SHA": "376366d16f50ee3f21d719c443f68bf4c798032c33be77844c26f1407b9d0f0f",
+  "parent_commit": "b4c89698f59e24669f6f3b6bfff2533ee456e771",
+  "repair_chain": ["02dbee3a59584d6146849917dffdd8d494a9e0e9", "b4c89698f59e24669f6f3b6bfff2533ee456e771", "bccd8b7a477bf6e80a8f87c9ad740dacb2dde0ed"],
+  "preserved_contracts": {
+    "02dbee3a":"/tmp/borsuk-native-s3-cohort-runner-contract-02dbee3a.json; copied byte-exact from root-owned a0001/source-contract.json, cmp exit0",
+    "b4c89698":"/tmp/borsuk-native-s3-cohort-runner-contract-b4c89698.json; copied before latest canonical update"
+  },
+  "research_review_repair": {
+    "evidence":"Full /data/target/borsuk-native-s3-cohort-runner-gates-a0001/research-review-02dbee3a.md read. Exact pinned one_attempt_builder, aws/builder.rs and aws/credential.rs IMDS fallback/PUT inspected.",
+    "accounting":"Metadata parse now follows the fetch/authentication failure-accounting block. Authenticated malformed JSON retains verified bytes without incrementing failed_gets. Existing namespaced table adds authenticated malformed-root parse refusal (submitted1/verified1/failed0) and exact query charges/sum parity for equivalent local/namespaced arms.",
+    "credentials":"Identity row labels s3_credential_source=imds_instance_role_only and native_transport_includes=S3_and_IMDS_credential_requests_including_PUT. bound_inputs credential_source is imds_instance_role_only for S3 and null for Local. No new env/profile support, connector or credential override. Actual EC2 IMDS canary remains root-owned and UNRUN here.",
+    "scope":"No optional histogram/provenance/framework changes, no library changes. Nine names/caps/algorithm/science unchanged. Root owns total-composition documentation and prospective transient INVALID rerun rule.",
+    "verification":"Repaired final source passed CPU1/256MiB/noSwap/120s rustfmt --check and git diff --check, exit0. All native builds/tests remain UNRUN locally; root-owned original a0001 untouched."
+  },
+  "preserved_initial_candidate": {"commit":"02dbee3a59584d6146849917dffdd8d494a9e0e9","OWN1SHA":"4f97265e3606ccd76c04605219bc22c761fa3ab1d690ac24fda75e292cfb75c0"},
+  "engineering_review_repair": {
+    "evidence":"Full /data/target/borsuk-native-s3-cohort-runner-gates-a0001/engineering-review-02dbee3a.md read; pinned object_store local.rs ordinary second open independently verified.",
+    "local":"Local binding reads/hash-checks/exact-EOF-checks the same guarded NOFOLLOW|NONBLOCK regular FD through checked_file. FD length/cap revalidated before allocation. Local metadata no longer reopens through store.get; S3 still streams through the same OneAttemptS3 store. Direct Local FD reads are not charged as store GETs.",
+    "regressions":"Existing secure_artifacts test deterministically renames the metadata path and substitutes a no-writer FIFO immediately after guarded open, without sleep or second pathname stat; the retained FD supplies original authenticated bytes. Existing namespaced pipeline test now uses execute_paths' shared actual finalization path (execute_paths_with) after a real 17-byte partial query record: terminal append, successful sync, after-snapshot/counters, INVALID/no-GT/no-seal checked. Nine test names unchanged; ALL UNRUN locally.",
+    "test_seams":"cfg(test) one-shot thread-local after-open hook; execute_paths_with injects the query stage while preserving the exact production config/identity/reduction/terminal append+sync body. Production execute_paths supplies the unchanged runtime/query stage.",
+    "verification":"CPU1/256MiB/noSwap/120s rustfmt --check and git diff --check exit0 on repaired source. No native tests/builds or new jobs. Original root-owned a0001 remains untouched."
+  },
+  "scope": "Only the runner changed. sq8_s3_range.rs and publish_two_bit_generation.rs untouched. Configured Roman identity preserved. No push/merge/PR/children/consult/native/data/network/AWS/operator/paid jobs.",
+  "api": {
+    "reader": "OneAttemptS3::new_with_prefix(bucket: &str, region: &str, prefix: object_store::path::Path)",
+    "shared_store": "OneAttemptS3::store() -> &dyn ObjectStore for bind_source, open_remote, diagnostic_search_with_store",
+    "snapshots": "OneAttemptS3::transport_stats() -> NativeTransportStats; cumulative process totals, never additive per-query charges",
+    "binder": "async fn bind_source(c: &Config, store: &dyn ObjectStore, charge: &mut Charge) -> Result<()>",
+    "metadata": "async fn metadata<T: DeserializeOwned>(c: &Config, store: &dyn ObjectStore, name: &str, sha: &str, charge: &mut Charge) -> Result<T>",
+    "test_seam": "query_and_seal_with(..., reader: impl FnOnce() -> Result<Reader>); cfg(test) Reader::Stub supplies store and injected snapshots; factory invoked after all descriptors and request rows validate"
+  },
+  "config_schema": "borsuk-cohere-native-baseline-config-v2",
+  "result_schema": "borsuk-cohere-native-baseline-result-v2",
+  "backend_examples": [
+    {"kind":"local", "store_root":"/absolute/store"},
+    {"kind":"s3", "bucket":"qualified-bucket", "region":"eu-central-1", "physical_prefix":"qualified/namespace", "sq8_object_key":"semantic/objects/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sq8_etag":"\"actual-current-etag\""}
+  ],
+  "config_change": "Replace store_root with backend. All other fixed cohort fields remain required. generation_prefix stays logical; reject old/unknown/mixed config.",
+  "example_status": "ILLUSTRATIVE PLACEHOLDERS ONLY, NOT ADMITTED INPUT. Parent substitutes qualified rebound root/metadata prefix, current actual quoted ETag and real authenticated artifacts before admission.",
+  "full_s3_config_example": {
+    "schema":"borsuk-cohere-native-baseline-config-v2",
+    "dataset":"CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+    "revision":"ade45fb52bd549f5e8c065636fe4160a43c2af36",
+    "metric":"cosine","tie_rule":"corpus_ordinal_ascending",
+    "corpus_source_first":0,"query_source_first":100000,"rows":100000,
+    "dimensions":1024,"count":1000,"k":10,"profile":"native100k",
+    "backend":{"kind":"s3","bucket":"qualified-bucket","region":"eu-central-1",
+      "physical_prefix":"qualified/namespace",
+      "sq8_object_key":"semantic/objects/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "sq8_etag":"\"REPLACE_WITH_ACTUAL_CURRENT_ETAG\""},
+    "generation_prefix":"semantic/index/qualified-metadata-prefix",
+    "generation_root_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "scratch_parent":"/admitted/scratch",
+    "requests":{"path":"/admitted/requests.f32","bytes":4096000,"sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+    "truth":{"path":"/admitted/truth.u64","bytes":80000,"sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+    "native_source":{"source_sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "sq8_sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source_order_sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},
+    "max_memory_bytes":536870912
+  },
+  "descriptor_rules": "Absolute paths <=4096. Canonical nonempty slash-separated ASCII alnum/underscore/hyphen/dot keys/prefixes <=512, excluding empty/dot/dot-dot components. Bucket DNS-like lowercase 3..63 without IPv4 literals. Region lowercase/digits/hyphens 3..63, no edge hyphens. ETag 3..256 including double quotes, nonempty printable ASCII interior excluding another quote; exact root equality. Logical SQ8 key ends objects/<native_source.sq8_sha256>. No endpoint or credential override fields.",
+  "accounting": {
+    "logical":"Existing query router/source/SQ8 charges and sum preserved. binding_charge records S3 metadata GETs/authenticated bytes/failures separately; Local binder reads its guarded FDs directly with no store GET charge. Library startup metadata remains separate.",
+    "native":"Full before/after snapshots in source_binding, generation_open and query/query_failure records, captured before propagating errors. Local before/after are null. Existing query timing interval excludes snapshot work.",
+    "terminal":"Latest boundary only; all scalar/method counters retained even on output failure. Full status histograms omitted explicitly: status_counts:null, status_counts_entries and status_counts_omitted_from_terminal:true preserve the 8192-byte reserve.",
+    "unknown":"wire_bytes/unread_bytes/billed_bytes/billed_requests are null; process attempts do not prove wire or billed S3 requests.",
+    "scientific":"All requests validate before reader/store reads. Full query-file and directory sync seal precedes GT; fixed k10 underfill denominator preserved. No algorithm or population changes."
+  },
+  "testnames": [
+    "production_contract_rejects_unknown_hash_geometry_and_caps",
+    "secure_artifacts_reject_hash_length_eof_symlink_fifo_and_bad_rows",
+    "scratch_formula_keeps_codec_and_trace_separate",
+    "actual_native_queries_seal_and_reduce_against_literal_oracles",
+    "missing_or_tampered_truth_is_invalid_only_after_all_queries_are_sealed",
+    "prefix_or_requests_tampering_blocks_first_truth_open",
+    "source_binding_and_all_request_rows_fail_before_queries",
+    "reporting_underfill_keeps_fixed_ten_denominator_and_bounded_output",
+    "namespaced_pipeline_faults_preserve_binding_accounting_and_seal"
+  ],
+  "checked_resource_formulas": {
+    "library_cap": "512 * 1024 * 1024 unchanged",
+    "codec_scratch": "((1024 / 4) * 256 + 1024) * sizeof(f64) = 532480; plus TwoBitPlanTrace::scratch_bytes(rows)",
+    "metadata": "nonzero <=65536 bytes, checked chunk-length sum, exact EOF, SHA before parse; root dropped before plane",
+    "backend_descriptors": "sizeof(Config) + existing String/PathBuf capacities + 2*sum(backend capacities) + sizeof(Reader)",
+    "snapshot_capacity": "S3 only: 3*(sizeof(NativeTransportStats) + 2*900*sizeof((u16,u64))) + 900*sizeof(u64); two retained snapshots plus transient, doubled Vec capacity, fixed process histogram",
+    "returned": "TwoBitPlanTrace::scratch_bytes(rows) + 2*ceil(rows/256)*(sizeof(usize)+sizeof(Range<usize>)) + 10*(sizeof(ScoredNominee)+sizeof(Hit))",
+    "caller_pins": "descriptors + snapshot_capacity + sizeof(Progress) + 5*65536 + 65536 + max(requests.bytes + sizeof([f32;1024]) + returned, 262144+1 + truth.bytes + 8192 + 20*sizeof(Hit))",
+    "query_caps": "max_active_queries=1; SQ8 bytes=16773120/GETs=32/parallel=16; source bytes=67108864/GETs=128/parallel=16, unchanged",
+    "query_and_output": "LINE_CAP=262144; OUTPUT_CAP=67108864; TERMINAL_RESERVE=8192, unchanged; external cgroup required for SDK/TLS actual RSS"
+  },
+  "test_evidence": "ALL NINE TESTS UNRUN. Eight existing tests and literal numeric/tail/tie oracles retained. New single table-driven tiny257/D1024/two-query test covers local/namespaced parity, physical row256 ID8 and ID9 boundary tie, prefix once, pre-reader invalid requests/descriptors, root-before-plane, metadata size/location/range/EOF/SHA/stream faults, source/order/key/ETag mismatch, startup/query/output/seal failures, nonzero initial process counters, seal/no-GT/tampering/missing-GT, underfill and worst-width 900-status terminal bound. Stub is runner integration only; existing library HTTP gates e7aa9e67 are separate transport evidence and were not repeated.",
+  "local_source_checks": [
+    {"command":"systemd-run --user --scope --quiet --collect -p CPUQuota=100% -p MemoryMax=256M -p MemorySwapMax=0 timeout 120s taskset -c 0 rustfmt --edition 2024 --check crates/borsuk/src/bin/check_cohere_native_baseline.rs","exit":0},
+    {"command":"git -c core.packedGitWindowSize=16m -c core.packedGitLimit=32m diff --check","envelope":"same CPU1/256MiB/noSwap/120s scope","exit":0},
+    {"command":"sha256sum crates/borsuk/src/bin/check_cohere_native_baseline.rs; git status --short; git rev-parse HEAD^; git show --format=fuller --stat HEAD","exit":0,"result":"exact OWN1 SHA/base, clean, only owned file, Roman identity, no AI trailers"}
+  ],
+  "check_notes":"Initial rustfmt under a 256MiB address-space cap could not map LLVM (exit127); original result collected. Authorized 256MiB memory/noSwap cgroup retry passed. Original broad dependency source lookup completed (overall exit2 on final nonexistent path), terminal collected; no further broad cache scans.",
+  "remote_commands_serial_jobs1": [
+    "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+    "env CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk --bin check_cohere_native_baseline",
+    "env CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  ],
+  "disposition": "UNVERIFIED. HOLD same child for parent native gates; no agent_complete/archive. No S3 or performance evidence. No native/corpus/query/GT/network/paid execution authorized locally."
+}

@@ -1,0 +1,13 @@
+{
+  "status": "SOURCE_ARCHIVE_AUTHENTICATED_NATIVE_UNRUN",
+  "source_commit": "bccd8b7a477bf6e80a8f87c9ad740dacb2dde0ed",
+  "support_count": 2449,
+  "native_count": 414,
+  "native_identity": "945fac5997c46074b9d9618c7d3470ab5a8bf8d10c88955a687746c0ef3eca8f",
+  "archive_sha256": "76b9abafec40a15079a11a4e73bfea30c15321d9ba3bc3c301c8b9a62eb5e43b",
+  "changed_native": [
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs"
+  ],
+  "launch_authorized": false,
+  "original_live_attempt": "a0001/i-012affcc64ee5fe97"
+}

@@ -1,0 +1,64 @@
+{
+  "schema": "borsuk-native-s3-cohort-runner-qualification-preregistration-v1",
+  "status": "SOURCE_ARCHIVE_AUTHENTICATED_NATIVE_UNRUN",
+  "source_commit": "bccd8b7a477bf6e80a8f87c9ad740dacb2dde0ed",
+  "support_count": 2449,
+  "native_count": 414,
+  "native_identity": "945fac5997c46074b9d9618c7d3470ab5a8bf8d10c88955a687746c0ef3eca8f",
+  "archive_sha256": "76b9abafec40a15079a11a4e73bfea30c15321d9ba3bc3c301c8b9a62eb5e43b",
+  "changed_native": [
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs"
+  ],
+  "source_contract_sha256": "1a98e2be625dbf78439dfd1a33cae9799d1b66a205b79e65af427af6468bba4d",
+  "gates_sha256": "f8658ea1e635247a8c28f9dcac025dc2be90eba70ef851dba94fcb9c5788cc1d",
+  "userdata_sha256": "1e4c7572356ed1810e3909cccf22addc10020490b30116254a7cff17c5260b35",
+  "resources": {
+    "cpu": 2,
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "tasks": 512,
+    "native_seconds": 7200,
+    "machine_seconds": 9000
+  },
+  "spot": {
+    "region": "eu-central-1",
+    "az": "eu-central-1c",
+    "type": "c7i.2xlarge",
+    "max_bid_usd_hour": 0.5,
+    "quoted_usd_hour": "0.206500",
+    "quote_timestamp": "2026-10-07T12:00:00+00:00",
+    "compute_cap_usd": 1.25,
+    "ancillary_cap_usd": 0.15
+  },
+  "gates": [
+    "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+    "env CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk --bin check_cohere_native_baseline",
+    "env CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  ],
+  "tests": [
+    "tests::production_contract_rejects_unknown_hash_geometry_and_caps",
+    "tests::secure_artifacts_reject_hash_length_eof_symlink_fifo_and_bad_rows",
+    "tests::scratch_formula_keeps_codec_and_trace_separate",
+    "tests::actual_native_queries_seal_and_reduce_against_literal_oracles",
+    "tests::missing_or_tampered_truth_is_invalid_only_after_all_queries_are_sealed",
+    "tests::prefix_or_requests_tampering_blocks_first_truth_open",
+    "tests::source_binding_and_all_request_rows_fail_before_queries",
+    "tests::reporting_underfill_keeps_fixed_ten_denominator_and_bounded_output",
+    "tests::namespaced_pipeline_faults_preserve_binding_accounting_and_seal"
+  ],
+  "acceptance": "All nine exact tests once in affected-bin stage; zero failed/ignored; four native and tee exits zero; full source before/after/current equality; authenticated artifacts; enforced caps; swap/OOM zero; original instance terminated before collection/integration. Reviews reconciled before integration.",
+  "interruption": "Preserve original interrupted attempt as INVALID; no automatic replacement; stop first failing gate; terminate immediately at terminal and independently wait.",
+  "corpus_reads": false,
+  "performance_claim": false,
+  "review_group": "6901bfd6f4984cc5",
+  "review_status": "BOTH_COMPLETE_CONCRETE_FINDINGS_REPAIRED_SOURCE_NOT_NATIVE_QUALIFIED",
+  "preserved_original": {
+    "commit": "02dbee3a59584d6146849917dffdd8d494a9e0e9",
+    "instance_id": "i-012affcc64ee5fe97",
+    "terminated": true,
+    "all_four_gates_exit": 0,
+    "root_receipt_commit": "282a88b1ff4f4621bce38e686442fd475ea48c6d"
+  },
+  "review_repair_scope": "Guarded Local descriptor read; actual partial-output terminal path fixture; parse-vs-GET accounting; credential labels and charge parity. Algorithm and scientific caps unchanged."
+}
