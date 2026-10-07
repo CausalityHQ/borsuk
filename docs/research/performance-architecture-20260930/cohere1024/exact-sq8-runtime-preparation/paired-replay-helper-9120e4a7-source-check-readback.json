@@ -1,0 +1,13 @@
+{
+  "source": "Preserved original provider tool_result, not rerun or reconstructed output",
+  "transcript_path": "/home/rb/.claude/projects/-home-rb-worktrees-borsuk-retained-generation-rebind-native-gates/4f08f1cd-a3fd-4f61-b277-207855a84fef.jsonl",
+  "line": 942,
+  "uuid": "7f42721a-a674-45bd-9652-5f3ab589fdc8",
+  "timestamp": "2026-10-07T08:37:06.761Z",
+  "tool_use_id": "toolu_0121swxefKLAoTS3TxcxHwvT",
+  "content": "cgroup memory.max=268435456 swap.max=0 cpu.max=100000 100000\nPASS retained paired replay glue: publisher + A1 B1 B2 A2 through the real supervisor/run_stage and preflight closure; admission 5/6/7 gates and role drift; ledger pending flags never self-asserted; f\nexit=0 elapsed=10.400872884s peak=140562432\nM23-no-log-require exit=2\nM24-native-log-only exit=2\nM25-unit-log-only exit=2\nM26-strict-cap exit=2\nM27-lt-cap exit=2\nM28-double-cap exit=2",
+  "source_commit": "9120e4a794ebef4ff33e98a9f2a5ba31ded9223a",
+  "source_sha256": "b9a92cfa12e4516db1a09690580899b49b20c8b82998b357e35e75ba4cb57496",
+  "root_checks": "Git blob SHA matched; original unit journal Resultsuccess/ExecMainStatus0/10.446s/134Mi peak; inactive unit properties were garbage-collected so resource ceilings are proved by this original readback.",
+  "native_execution": false
+}
