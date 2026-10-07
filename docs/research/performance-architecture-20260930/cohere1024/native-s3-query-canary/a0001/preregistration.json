@@ -1,0 +1,63 @@
+{
+  "schema": "borsuk-native-s3-query-canary-preregistration-v1",
+  "status": "FROZEN_NOT_LAUNCHED",
+  "maximum_attempts": 1,
+  "binary_source_commit": "4c2e535fef1fdc2e61fa003358614287bb8ed488",
+  "binary_sha256": "9a65fd6137eaa3929a1ee05fc798ef12c8fb8ab9970099c9b6de3c1031d15f72",
+  "stage_sha256": "8f62d2dc787a6962988b62b69a8f74855134a1dc2992e172c8569dc5985044e3",
+  "config_sha256": "0ddf1006203ef64505ecbb83eb03f79642a78ae74fe1d88e9f81947cf9fb15eb",
+  "invoked_config_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "native_expected_exit": 2,
+  "canary_expected_exit": 0,
+  "resources": {
+    "cpu": 1,
+    "memory_bytes": 536870912,
+    "swap_bytes": 0,
+    "pids": 256,
+    "native_seconds": 120,
+    "inner_seconds": 90,
+    "machine_seconds": 1800,
+    "scratch_bytes": 67108864
+  },
+  "cost_reservation": {
+    "compute_usd": 0.25,
+    "ancillary_usd": 0.15,
+    "total_usd": 0.4
+  },
+  "real_operations": [
+    "AWSCLI installation/IMDS credentials and staged binary/config/stage plus opaque request/truth transfers; full SHA checks, no native request/truth opening",
+    "runtime cgroup before-exec/readback",
+    "qualified runner CLI/config-SHA refusal",
+    "original exit2 and exact INVALID config/zero-query/zero-GET/truth-unopened receipt",
+    "scratch/pin cleanup, publication, same-instance termination/wait/collection"
+  ],
+  "not_exercised": [
+    "native IMDS/store creation; config refuses before backend construction",
+    "ANN query/scoring or GT decode",
+    "performance/recall/cost comparison"
+  ],
+  "claims_quality": false,
+  "failure_policy": "Expected SHA refusal alone is GO canary; unexpected native0/other failure, malformed output, nonzero queries/GET/truth-open, resource or cleanup drift INVALID. Preserve original and stop; no automatic repeat.",
+  "userdata_sha256": "8b7862edd66a84725ed015d31afd8b7b729671616334548ec4beed89f6bc30c9",
+  "prior_admission": {
+    "status": "ADMITTED_SOURCE_BOUND_REAL_S3_QUERY",
+    "receipt_sha256": "fb56b962fd3476f51ad10eb20d3606d53bec4db11be7fe0597b76487480cc393",
+    "instance_terminated": true
+  },
+  "mock_checks": {
+    "stage-check.json": "7d0a6aebeca1d0db6e08c3b3d810a95d97c5abd3f8da4bed225accfda57b14ed",
+    "wrapper-check.json": "bb49976fb4ff4bda003eaae09d4082431f68b4edbba53fffcb82870603f6ccfc",
+    "wrapper-kernel-limits.json": "3451af6df573f38bc5092d4318f7057f5bf5a0e1b4d234aff0dfee9bf16d1773"
+  },
+  "mock_check_resources": {
+    "memory_max_bytes": 268435456,
+    "swap_max_bytes": 0,
+    "cpu_max": "100000 100000",
+    "wrapper_runtime_seconds": 16.489,
+    "wrapper_peak_reported": "15.8M",
+    "wrapper_invocation": "0a3e5be6e47d469cbd0e83e0733f9312",
+    "stage_runtime_seconds": 2.965,
+    "stage_peak_reported": "15.3M",
+    "stage_invocation": "69c3b663efdc40aca0e8d3c535df6ccc"
+  }
+}
