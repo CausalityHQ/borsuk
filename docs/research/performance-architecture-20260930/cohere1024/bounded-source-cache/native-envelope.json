@@ -1,0 +1,65 @@
+{
+  "status": "PREREGISTERED_NO_LAUNCH_ORIGINAL_COMPACTION_TERMINAL_PENDING",
+  "native_source_commit": "461ba972611347aa7c90bd941535f6ca43b0589b",
+  "source_identity_sha256": "cfc6fb6b48f2dc605054d8883dc82e122451aab7c6fabfc6672b71a67c32dd31",
+  "stages": [
+    {
+      "name": "source-walks-debug",
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests -- --test-threads=1"
+    },
+    {
+      "name": "cache-release-oracle",
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked --release -p borsuk --lib two_bit_generation::source_walk_tests::paged_source_cache_preserves_parity_admission_and_failure_drains -- --exact --test-threads=1"
+    },
+    {
+      "name": "source-fetch-tests",
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib sq8_s3_range::tests -- --test-threads=1"
+    },
+    {
+      "name": "baseline-tests",
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1"
+    },
+    {
+      "name": "reducer-tests",
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1"
+    },
+    {
+      "name": "affected-release",
+      "command": "env CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk --bin check_cohere_native_baseline --example compare_native_replay"
+    },
+    {
+      "name": "workspace-clippy",
+      "command": "env CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious"
+    },
+    {
+      "name": "workspace-test-build",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND CARGO_BUILD_JOBS=1 BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+    }
+  ],
+  "native_seconds": 7200,
+  "machine_seconds": 9000,
+  "cpu_quota": "200%",
+  "memory_bytes": 8589934592,
+  "swap_bytes": 0,
+  "pids": 512,
+  "jobs": 1,
+  "spot_type": "c7i.2xlarge",
+  "max_bid_usd": 0.5,
+  "compute_reserved_usd": 1.25,
+  "ancillary_reserved_usd": 0.15,
+  "region": "eu-central-1",
+  "native_tests": "Exact new cache oracle once in each owning debug/release stage; all three contract source-walk test names once in debug; nonzero exact affected stage counts; no ignored or failed required tests",
+  "source_scope": "Qualified root main plus exact repaired OWN1 cache plus preserved five sibling dimensional-refusal constants",
+  "runtime_claim": false,
+  "dataset_or_query_or_truth_reads": false,
+  "reuse": "Existing minimal native-gate shell bootstrap/terminal/termination/evidence pattern; no new Python controller",
+  "protected_original": "i-0ab2c3a35c4304516 watcher83397; collect/terminate before this launch",
+  "source_archive": {
+    "bytes": 13187402,
+    "sha256": "84ab8e541a67a413e38a5ea77bb4af60b174bca66cc756930377705a2077c7f9"
+  },
+  "cache_candidate": "9934588b5e8ad02a9274f3f264554425ca41cdc8",
+  "compaction_candidate": "230e8639850002fc4645311f231e1ec5c90d0b16",
+  "review_group": "1f4e679045d5495b",
+  "reviews_reconciled": "No demonstrated production defect; engineering test gaps repaired in9934588b and exact complete diff independently read"
+}

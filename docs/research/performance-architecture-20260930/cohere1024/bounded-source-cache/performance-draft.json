@@ -1,0 +1,96 @@
+{
+  "status": "PROSPECTIVE_DRAFT_NOT_LAUNCHABLE_NATIVE_SOURCE_AND_CANARY_PENDING",
+  "one_causal_change": "generation-local authenticated compressed-source cache",
+  "control_cache_bytes": 0,
+  "candidate_cache_bytes": 33554432,
+  "default_adoption": false,
+  "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+  "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+  "rows": 100000,
+  "dimensions": 1024,
+  "metric": "cosine",
+  "k": 10,
+  "generation_root_sha256": "ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df",
+  "requests": {
+    "bytes": 4096000,
+    "path": "/mnt/borsuk-retained-s3/queries.f32",
+    "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+  },
+  "truth": {
+    "bytes": 80000,
+    "path": "/mnt/borsuk-retained-s3/truth.u64",
+    "sha256": "479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c"
+  },
+  "execution": {
+    "arms": [
+      "disabled",
+      "32MiB"
+    ],
+    "maximum_query_executions": 2000,
+    "cache_reset": "Fresh process/generation at each arm start; retain cache from warmup into disjoint evaluation",
+    "cpu": 1,
+    "memory_bytes": 536870912,
+    "swap_bytes": 0,
+    "native_seconds": 1800,
+    "machine_seconds": 3600,
+    "max_active_queries": 1,
+    "max_query_bytes": 16773120,
+    "max_query_gets": 32,
+    "max_parallel_gets": 16,
+    "max_source_bytes": 67108864,
+    "max_source_gets": 128,
+    "max_parallel_source_gets": 16,
+    "service_qps_claim": false,
+    "phases": [
+      {
+        "name": "warmup",
+        "query_ordinals": "0..500",
+        "measured_tail_population": false
+      },
+      {
+        "name": "disjoint_evaluation",
+        "query_ordinals": "500..1000",
+        "measured_tail_population": true
+      }
+    ]
+  },
+  "correctness": {
+    "underfill": 0,
+    "all_results_sealed_before_truth": true,
+    "actual_GET_and_bytes_vs_cache_hits_accounted_separately": true,
+    "memory_and_generation_lifetime_coexistence_admission": true,
+    "comparison_population": "Both arms same per-query IDs/scorebits/plans for all1000; aggregate recall9723/10000 preserved, evaluation-subset recall separately reduced by native code after full1000 seal",
+    "recall_numerator_all_queries": 9723,
+    "recall_denominator_all_queries": 10000,
+    "all_queries_exact_per_query_ids_scorebits_plans": true
+  },
+  "provisional_survival": {
+    "warm_source_time_reduction_min_fraction": 0.5,
+    "warm_source_GET_and_byte_reduction_min_fraction": 0.5,
+    "warm_p90_and_p95_reduction_min_fraction": 0.05,
+    "valid_timing_miss": "stop candidate; preserve valid Pareto point",
+    "setup_or_transport_failure": "INVALID; preserve attempt and fix demonstrated environment",
+    "survivor_next": "reverse-order confirmation before win/default claim",
+    "primary_population": "Only disjoint evaluation500 queries; warmup excluded from primary latency distributions",
+    "pass_interpretation": "Full-residency ceiling only; GET/byte reduction not evidence for eventual partial-cache workload"
+  },
+  "required_before_launch": [
+    "exact combined Rust source and binary qualification",
+    "native Rust runner implements exact warmup/evaluation labels, counters and all1000 pretruth seal",
+    "source-bound actual runtime input admission",
+    "separate disposable staging/canary",
+    "freeze source/configuration/resources/cost/instance identities"
+  ],
+  "excluded": [
+    "vendor service runs",
+    "different datasets",
+    "raw/canonical/SQ8 hydration",
+    "production default approval",
+    "10M feasibility claim",
+    "cache-disabled implies physically cold S3"
+  ],
+  "native_source_commit": null,
+  "qualified_binary": null,
+  "review_group": "1f4e679045d5495b",
+  "interpretation": "100k fully-resident compressed-source ceiling experiment; no partial-cache locality or 10M inference"
+}

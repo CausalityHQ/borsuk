@@ -1,0 +1,142 @@
+{
+  "schema": "borsuk-bounded-compressed-source-cache-contract-v1",
+  "status": "SOURCE_ONLY_UNVERIFIED_HOLD_SAME_WORKER",
+  "final_commit": "9934588b5e8ad02a9274f3f264554425ca41cdc8",
+  "commit_parent": "93d806c7e1d44b1a9c3b2232925fbac905e55289",
+  "owner": "borsuk/bounded-compressed-source-cache",
+  "parent": "borsuk/prod-ready-v9",
+  "own1": "crates/borsuk/src/two_bit_generation.rs",
+  "own1_sha256": "bbf29735331b69897106b90a64833fa5e19dfb0e9a56a7e1d71e8c084934bf0a",
+  "author": "Roman Bartusiak <riomus@gmail.com>",
+  "worktree": "/home/rb/worktrees/borsuk-bounded-compressed-source-cache",
+  "api": [
+    "TwoBitGeneration::with_source_cache(self, max_bytes: usize) -> Result<Self>",
+    "TwoBitGeneration::source_cache_stats(&self) -> SourceCacheStats",
+    "SourceCacheStats { charged_bytes: usize, capacity_bytes: usize, occupied_bytes: usize, hits: u64, misses: u64, evictions: u64 }"
+  ],
+  "semantics": {
+    "default": "Disabled; max_bytes=0 drops cache and removes its modeled charge.",
+    "positive_budget": "Remote generation only; must admit at least one full-width 256-row slot plus all overhead. No fixed product cap.",
+    "identity": "No shared entries; contained immutable generation owns root SHA/source location/ETag/PageAuthority. Every reopen starts empty.",
+    "mapping": "Direct mapped: slot = source_block_id % slot_count. Partial final block uses actual authenticated object tail bytes.",
+    "fetching": "Keep full original source cover/admission. Skip an original planned range only if every block is cached. Fetch all remaining original ranges unchanged through sq8_s3_range::fetch_verified_ranges_inner; preserve concurrency, ordered errors and draining.",
+    "failure": "Failed fetch batch inserts no entries (even successful sibling responses are discarded by the shared fetcher); shared source charges preserved, no subsequent SQ8.",
+    "counters": "hits/misses count original ranges; evictions count replaced blocks; occupied_bytes excludes padding. Cache observations are cumulative, not per-query or billed/network requests.",
+    "timing": "Lookup, copy, miss fetch, insertion and original-order reassembly remain inside source stage.",
+    "concurrency": "One std mutex across tag verification and owned range copying; released before await. Queries never borrow/cache-slice a larger allocation.",
+    "tests": "Single new parameterized regression uses existing paged-source fixture at rows=513, dimensions=2 and 5; old disabled negatives remain."
+  },
+  "formulas": {
+    "W": "plane.receipt().record_bytes",
+    "B": "256 * W",
+    "P": "ceil(rows / 256)",
+    "G": "min(limits.max_source_gets, P)",
+    "A": "limits.max_active_queries",
+    "Q": "A * (G * (size_of::<VerifiedRange>() + size_of::<(usize,usize)>()) + 2 * (size_of::<Vec<usize>>() + 64))",
+    "F": "size_of::<Option<std::sync::Mutex<SourceCache>>>() + 2*64 + Q",
+    "S": "min(P, floor((max_bytes - F) / (B + size_of::<usize>()))) ; reject max_bytes<F or S=0",
+    "C": "F + S * (B + size_of::<usize>()) <= max_bytes",
+    "capacity_bytes": "S * B",
+    "occupied_bytes": "sum(min(B, object_bytes - block_id*B)) over valid slot tags",
+    "generation_model": "old_modeled_memory - previous_cache_C + C; checked against total limits.max_memory_bytes before cache allocations",
+    "retired_pins": "Prior generations keep their cache/model until dropped. Subsequent open's already_pinned_bytes includes prior model; regression covers one-byte-under rejection and exact admitted coexistence.",
+    "existing_source_payload": "2 * min(limits.max_source_bytes, source_object_bytes) * A remains charged independently; hit copies + miss fetch buffers fit original full cover.",
+    "allocation_note": "Two fixed boxed allocations; no growth/LRU. Explicit modeled 64-byte allowance per allocation and query vector plus control/capacity sizes; allocator/transport RSS still requires native qualification."
+  },
+  "test_names": [
+    "two_bit_generation::source_walk_tests::paged_source_cache_preserves_parity_admission_and_failure_drains",
+    "two_bit_generation::source_walk_tests::paged_source_matches_reference_and_preserves_failure_charges",
+    "two_bit_generation::source_walk_tests::fragmented_paged_source_preserves_trace_and_rank_across_get_caps"
+  ],
+  "coverage": [
+    "disabled/empty/full hit/mixed blocks in original full range",
+    "mixed whole-range hit and miss with original ordered reassembly",
+    "one-slot eviction and partial tail at two dimensions",
+    "complete plan/serialized trace/ordinal/ID/f32 score-bit parity",
+    "two concurrent admitted queries, reconciled source read counts and verified bytes",
+    "wrong response ETag/corrupt payload/delayed failing miss, drain and exact charges",
+    "no insertion on failed batch/no poisoned entries/no SQ8 after source failure",
+    "insufficient cache budget/total memory before requests; full-cover admission on warm hits",
+    "reopen isolation/disable charge removal/old-current pinned coexistence",
+    "literal full warmed original-range byte oracle; deterministically coordinated spawned collision while full-block hit bytes remain live"
+  ],
+  "local_verification": {
+    "native": "UNRUN: no Cargo/rustc/native tests/builds/Clippy executed as explicitly instructed",
+    "rustfmt_check": "/data/cache/rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustfmt --edition 2024 --check crates/borsuk/src/two_bit_generation.rs",
+    "diff_check": "git diff --check",
+    "terminal_exit": 0,
+    "unit": "borsuk-source-cache-test-repair-check-1",
+    "cpu_quota": "100%",
+    "memory_max_bytes": 268435456,
+    "memory_swap_max_bytes": 0,
+    "runtime_max_seconds": 120,
+    "memory_peak": "13.2M",
+    "worktree_clean_after_commit": true,
+    "note": "Initial rustup shim format command failed due missing default toolchain; direct installed rustfmt succeeded. No toolchain install/configuration.",
+    "invocation": "839117b6c5b04e478a61adeba197b4c9"
+  },
+  "required_parent_gates": [
+    "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests -- --test-threads=1",
+    "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib sq8_s3_range::tests -- --test-threads=1",
+    "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+    "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1",
+    "env CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk --bin check_cohere_native_baseline --example compare_native_replay",
+    "env CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND CARGO_BUILD_JOBS=1 BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  ],
+  "disposition": {
+    "native_qualification": "PARENT_REQUIRED on exact source revision; collect original actual command exits/source identities",
+    "integration_and_push": "Parent only; not merged or pushed",
+    "worker": "HOLD same worker for compiler/critique repairs. No agent_complete before parent actual gates exit 0.",
+    "protected_job": "i-0ab2c3a35c4304516/session83397 untouched",
+    "claims": "No performance, 10M feasibility or default-adoption claim; no runner/schema/controller/dependency changes.",
+    "freeze": "Root owns final freeze and qualification of cache plus sibling dimension repair; both original critics now reconciled in this contract."
+  },
+  "original_base": "088c0594978e0255a2bbea8789a02f1c75529af4",
+  "production_commit": "93d806c7e1d44b1a9c3b2232925fbac905e55289",
+  "original_own1_sha256": "d50c9aed732425e5f3a90cffea79a7a649799751b12b4b61f608a76837094efd",
+  "test_only_repair": {
+    "commit": "9934588b5e8ad02a9274f3f264554425ca41cdc8",
+    "parent": "93d806c7e1d44b1a9c3b2232925fbac905e55289",
+    "review": "/data/target/borsuk-source-cache-paired-a0001/engineering-review-020527fd.md",
+    "reviewed_full_report": true,
+    "added_lines": 56,
+    "removed_lines": 0,
+    "production_changes": false,
+    "test_name_unchanged": "two_bit_generation::source_walk_tests::paged_source_cache_preserves_parity_admission_and_failure_drains",
+    "additions": [
+      "Warmed original source range [(0,16)]: exactly one result with start=0 and complete bytes equal authenticated fixture payload, zero source read charges and recorded source reads.",
+      "One-slot cache: prefill block0; spawned task waits on oneshot. Main future retains full block0 hit and verifies zero reads/exact bytes before signaling. Task asserts hits=1/misses=1/evictions=0, fetches colliding block1 through cloned shared original InMemory transport, and returns. Main asserts one full-block miss, exact block1 bytes, hits=1/misses=2/evictions=1/occupied=B, and retained block0 bytes unchanged.",
+      "Fixture asserts colliding blocks differ; all previous concurrent queries and assertions preserved at dimensions2/5."
+    ],
+    "native_tests": "UNRUN",
+    "freeze": "Both completed original reports read and reconciled at source level. HOLD for root's final freeze decision and exact merged-source native gates; neither review nor test authoring establishes gate success."
+  },
+  "review_reconciliation": {
+    "reviewed_source_commit": "93d806c7e1d44b1a9c3b2232925fbac905e55289",
+    "engineering": {
+      "report": "/data/target/borsuk-source-cache-paired-a0001/engineering-review-020527fd.md",
+      "fully_read": true,
+      "required_findings": "Two test gaps: exact full-block/full-range hit byte oracle; deterministic retained-hit/eviction interleaving.",
+      "repair_commit": "9934588b5e8ad02a9274f3f264554425ca41cdc8",
+      "repair_scope": "56 added test-only lines in the same existing parameterized regression; all prior assertions retained.",
+      "execution": "UNRUN; source additions are not native pass evidence."
+    },
+    "research": {
+      "report": "/data/target/borsuk-source-cache-paired-a0001/research-review-0150351e.md",
+      "fully_read": true,
+      "source_verdict": "No required source fixes; source-level acceptance only, not compilation/runtime qualification.",
+      "optional_deferred": [
+        "Private range debug assertions and cache builder API redesign",
+        "Additional multithreaded/fragmented/semantic fixture coverage",
+        "Mutex sharding, zero-copy storage, alternate eviction, associativity and single-flight"
+      ]
+    },
+    "reconciliation": "No demonstrated production defect in either report. Required engineering coverage fixes are authored in the separate unverified descendant. Both reports preserve exact merged-source native qualification as a release gate; optional work remains deferred.",
+    "root_protocol_only": {
+      "interpretation": "At 100k, 32Mi can hold the complete compressed source; prospective results are a full-residency ceiling, not scale-cache/locality proof.",
+      "draft": "Root warms queries 0..500 and measures disjoint 500..1000, with both arms sealing all 1000 before truth access.",
+      "child_scope": "No runner/protocol/schema or scientific execution changes. No latency/QPS/RSS/10M/vendor/default-adoption claim."
+    }
+  }
+}
