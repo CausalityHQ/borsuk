@@ -1,0 +1,20 @@
+{
+  "status": "NATIVE_TEST_FAILURE_NO_QUALITY_INFERENCE",
+  "attempt": "a0004",
+  "original_session": 55275,
+  "instance_id": "i-0ee8795ff9f638faf",
+  "terminated": true,
+  "native_source_commit": "cc3025962392604ac1419fb2f4959f5b0c31894d",
+  "source_identity_sha256": "6e60329efa2901eaf72def2424671096ac98d49227c4bc0a9d3e18e737d24c03",
+  "all_13_terminal_artifacts_authenticated": true,
+  "full_413_before_after_bundle_match": true,
+  "stages_completed": 1,
+  "remaining_stages_unrun": 4,
+  "integration_tests_passed": 1,
+  "integration_tests_failed": 1,
+  "test_log_sha256": "7d4f95c76d70f13a2bdcc9ffef0787cf49bbe29201f370e19fa72cbf01896102",
+  "failing_location": "crates/borsuk/tests/two_bit_generation.rs:492",
+  "diagnosis": "Only step JSON decimal values differ: all1024 old0.003921568859368563/new0.003921569 entries decode to identical f32 bits8180803b. Existing low/step f32-bit equality passed; remaining whole JSON Value equality compares f64 representations.",
+  "algorithm_rejection": false,
+  "repair": "Test-only normalize already bit-checked coefficient JSON values before remaining manifest equality; preserve all ID/scorebit/payload/refusal assertions."
+}
