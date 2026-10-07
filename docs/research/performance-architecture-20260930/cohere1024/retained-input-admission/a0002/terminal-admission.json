@@ -1,0 +1,16 @@
+{
+  "schema": "borsuk-cohere-retained-input-admission-v1",
+  "instance_id": "i-0316af95b3b412e92",
+  "phase": "complete",
+  "status": "NATIVE_INPUT_ADMISSION_CLOSED",
+  "original_exit": 0,
+  "exit": 0,
+  "inputs_sha256": "cb4a475b5987c1562384f73a73692b8e6b7ad9ffb4a5d10d295b7787e7c6d829",
+  "evidence": {
+    "bytes": 1175978,
+    "sha256": "721535db23d9c3447e7ff1cd8dbd8394ca7dc7a43daaa44f6944c3053b7f24b1"
+  },
+  "canary": false,
+  "performance_claim": false,
+  "physical_s3_query": false
+}

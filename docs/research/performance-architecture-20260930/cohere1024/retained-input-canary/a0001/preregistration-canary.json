@@ -1,0 +1,60 @@
+{
+  "schema": "borsuk-cohere-retained-input-canary-preregistration-v1",
+  "status": "FROZEN_NOT_LAUNCHED",
+  "admission": {
+    "path": "../../retained-input-admission/a0002/root-verification-admission.json",
+    "sha256": "a3ed52dfd32b027cd78c036e3b25bd340ccb2461b6e35f7b64bee76b1a38cd66",
+    "bytes": 1139,
+    "status": "NATIVE_INPUT_ADMITTED",
+    "terminated": true
+  },
+  "inputs_sha256": "cb4a475b5987c1562384f73a73692b8e6b7ad9ffb4a5d10d295b7787e7c6d829",
+  "input_objects": 15,
+  "total_staged_bytes": 571234267,
+  "commands": {
+    "userdata_sha256": "29227c7233cd271d790cb35ae77648b302c566e0fd0b754d048eeb3db97bb250",
+    "staging_sha256": "70d0770724100003750f9cc58d57b2ef0bd9061f53233edc211f4bbf34c3117d",
+    "canary_sha256": "86c99d2bff08925be75784a0b6fb6307ada7f6d30ed615e40780783727440734"
+  },
+  "resources": {
+    "cpu": 1,
+    "native_memory_bytes": 536870912,
+    "aggregate_memory_bytes": 1073741824,
+    "swap_bytes": 0,
+    "native_tasks": 128,
+    "aggregate_tasks": 256,
+    "native_seconds_each": 15,
+    "aggregate_seconds": 900,
+    "machine_seconds": 1800,
+    "scratch_bytes": 4294967296
+  },
+  "spot": {
+    "region": "eu-central-1",
+    "az": "eu-central-1c",
+    "type": "c7i.2xlarge",
+    "ebs_gib": 20,
+    "max_bid_usd_hour": 0.5,
+    "quoted_usd_hour": 0.2065,
+    "compute_reservation_usd": 0.25,
+    "ancillary_reservation_usd": 0.15,
+    "total_reservation_usd": 0.4
+  },
+  "real_operations": [
+    "Ubuntu bootstrap and pinned AWS SDK install",
+    "S3 HEAD/IfMatch bounded ranged GET/full opaque SHA and byte authentication of15 retained objects and3 binaries",
+    "three original native CLI usage calls, each expected exit2 and exact usage stderr",
+    "actual cgroup enforcement/terminal/cleanup and same-instance termination"
+  ],
+  "not_exercised": [
+    "ANN queries",
+    "generation publication",
+    "native request/truth decoding or opening",
+    "cold-cache or performance measurement"
+  ],
+  "truth_and_requests_transport": "Fetched and stream-hashed as opaque bytes only; no no-GT-body-GET claim",
+  "acceptance": "Each exact native/service usage exit2, exit-code/exited/2 ExecStopPost receipt, unchanged input SHA rosters, actual native/aggregate limits, zero swap/OOM, drained groups, complete authenticated original terminal evidence and same disposable instance terminated/waited before collection. Failure is INVALID, no algorithm reject.",
+  "interruption": "Preserve attempt and cost; no automatic replacement. Repair demonstrated environment defect without changing algorithm/scientific caps.",
+  "canary": true,
+  "performance_claim": false,
+  "physical_s3_query": false
+}

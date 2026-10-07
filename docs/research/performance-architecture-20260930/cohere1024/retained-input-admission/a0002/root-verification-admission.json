@@ -1,0 +1,35 @@
+{
+  "schema": "borsuk-cohere-retained-input-admission-root-verification-v1",
+  "status": "NATIVE_INPUT_ADMITTED",
+  "instance_id": "i-0316af95b3b412e92",
+  "terminated": true,
+  "waiter_exit": 0,
+  "original_exit": 0,
+  "terminal_exit": 0,
+  "authenticated_artifact_count": 113,
+  "inputs_sha256": "cb4a475b5987c1562384f73a73692b8e6b7ad9ffb4a5d10d295b7787e7c6d829",
+  "evidence": {
+    "bytes": 1175978,
+    "sha256": "721535db23d9c3447e7ff1cd8dbd8394ca7dc7a43daaa44f6944c3053b7f24b1",
+    "key": "research/semantic-router/20261007/cohere-retained-input-admission-a0002/evidence.tar.gz"
+  },
+  "native_original_exits": {
+    "publisher": 0,
+    "input_admission": 0
+  },
+  "native_memory_peaks": {
+    "publisher": 3035136,
+    "input_admission": 47349760
+  },
+  "aggregate_memory_peak": 652255232,
+  "native_memory_max": 536870912,
+  "aggregate_memory_max": 1073741824,
+  "cpu": 1,
+  "swap_oom_zero": true,
+  "original_inputs_before_after_equal": true,
+  "original_native_service_terminal_receipts_equal": true,
+  "separate_disposable_canary_pending": true,
+  "canary": false,
+  "performance_claim": false,
+  "physical_s3_query": false
+}
