@@ -1,0 +1,32 @@
+{
+  "schema": "borsuk-retained-s3-publication-prerequisites-v1",
+  "status": "METADATA_AUTHENTICATED_NATIVE_GATE_PENDING",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "region": "eu-central-1",
+  "physical_namespace": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store",
+  "logical_retained_prefix": "semantic/index",
+  "head": {
+    "schema": "borsuk-two-bit-head-v2",
+    "epoch": 1,
+    "generation": 1,
+    "root_sha256": "4ec270e5ddaf588ab637321ba8ff807712f146817d93d3780eeb54b084b27982",
+    "mutation": null,
+    "fence": null
+  },
+  "original_root_sha256": "4ec270e5ddaf588ab637321ba8ff807712f146817d93d3780eeb54b084b27982",
+  "current_sq8": {
+    "logical_key": "semantic/objects/07a14360b06add9a35f82b97f4e031690ff878ff497ee047902818823992337b",
+    "bytes": 103600000,
+    "etag": "\"f808095a3a2e788df2ae7d7d0e5423fa\"",
+    "version": null,
+    "sha256": "07a14360b06add9a35f82b97f4e031690ff878ff497ee047902818823992337b",
+    "body_authenticated_this_gate": false
+  },
+  "destination_prefix": "semantic/s3-native-publication-smoke-a0001",
+  "native_publication_pending": true,
+  "payload_reads": false,
+  "performance_claim": false,
+  "required": "Reauthenticate actual ETag immediately before frozen native publication; full payload SHA/EOF through native API; create-only destination/head; same namespace retains authenticated logical keys; no overwrite of historical semantic/index.",
+  "etag_note": "Exact quoted HTTP ETag retained, matching object_store ObjectMeta.e_tag; old manifest LocalFileSystem ETag differs and must be rebound by native publisher.",
+  "destination_head_observation": "S3 HEAD returned404 before publication; not a reservation or publication proof"
+}
