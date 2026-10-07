@@ -1,0 +1,79 @@
+{
+  "status": "VERIFIED",
+  "config_delta_only": "fresh destination prefix",
+  "wrapper_control_flow_byte_identical_after_attempt_and_pin_substitutions": true,
+  "prior_actual_mock_receipt": {
+    "status": "MOCK_WRAPPER_CHECK_PASS",
+    "cases": [
+      {
+        "case": "already-unloaded",
+        "actual_exit": 0,
+        "expected_exit": 0
+      },
+      {
+        "case": "success",
+        "actual_exit": 0,
+        "expected_exit": 0
+      },
+      {
+        "case": "timer-fail",
+        "actual_exit": 17,
+        "expected_exit": 17
+      },
+      {
+        "case": "apt-fail",
+        "actual_exit": 17,
+        "expected_exit": 17
+      },
+      {
+        "case": "identity-fail",
+        "actual_exit": 1,
+        "expected_exit": 1
+      },
+      {
+        "case": "download-fail",
+        "actual_exit": 19,
+        "expected_exit": 19
+      },
+      {
+        "case": "late-start",
+        "actual_exit": 95,
+        "expected_exit": 95
+      },
+      {
+        "case": "native-fail",
+        "actual_exit": 2,
+        "expected_exit": 2
+      },
+      {
+        "case": "terminal-fail",
+        "actual_exit": 96,
+        "expected_exit": 96
+      },
+      {
+        "case": "closeout-fail",
+        "actual_exit": 96,
+        "expected_exit": 96
+      }
+    ],
+    "source_sha256": "9634dbde6d50f8f1bab31eaaca9b027528ac47104b6ca62442a2a7572075807b",
+    "real": [
+      "bash control flow",
+      "jq terminal serialization",
+      "timeouts",
+      "tar",
+      "non-input SHA computation"
+    ],
+    "mocked": [
+      "systemd/cgroup/native publisher",
+      "IMDS/HTTP",
+      "AWS/S3",
+      "apt",
+      "mount/shutdown",
+      "input binary sizes and pin checks"
+    ],
+    "native_runtime_pass": false,
+    "cloud_operations": false
+  },
+  "source_binary_unchanged": true
+}

@@ -1,0 +1,147 @@
+{
+  "status": "FROZEN_ONE_REPAIR_ATTEMPT_NOT_LAUNCHED",
+  "source_commit": "e11c7eb4f4a4cf079c1050c86f11cb91d96d5580",
+  "qualified_candidate": "4c2e535fef1fdc2e61fa003358614287bb8ed488",
+  "binary": {
+    "bytes": 15674840,
+    "sha256": "85ca006a941679fb1daf839e253f413fbaad5ac83feabdf04ad09ce9d4e77597"
+  },
+  "config_sha256": "bce8df643fc8bd996939ab1cd3c9c8362c279c76d215690aa6d6ae462cbbad9a",
+  "stage_sha256": "9f40bdde42d568d3b61b56488964a2fbcda478c677848c45010e53f6440fefbd",
+  "userdata_sha256": "5bbc06805667be78c6bd037a2fb21129c5f2fd5f786a87464545bdff8c32ee81",
+  "instance_seconds": 1800,
+  "native_seconds": 600,
+  "cpu": 1,
+  "memory_bytes": 536870912,
+  "swap_bytes": 0,
+  "tasks": 256,
+  "scratch_bytes": 67108864,
+  "maximum_attempts": 1,
+  "spot_max_usd_hour": 0.5,
+  "compute_cap_usd": 0.25,
+  "ancillary_cap_usd": 0.15,
+  "total_reservation_usd": 0.4,
+  "purpose": "actual query-free retained body authentication/publication admission; no ANN/performance run",
+  "requests_and_truth_unopened": true,
+  "no_retraining": true,
+  "create_only_destination": "semantic/s3-native-publication-smoke-a0002",
+  "failure": "preserve original INVALID and any attempted head outcome; no automatic retry or destination overwrite",
+  "remaining": [
+    "Upload exact three inputs create-only",
+    "ONE original native repair attempt and independent all-outcome closeout"
+  ],
+  "launch_request_sha256": "4ca7351f7d8350066ec04be618ff0893cd9349e91bcd923013bbdc1d189439db",
+  "launch_settings": {
+    "ImageId": "ami-0b8a830d6339a9758",
+    "InstanceType": "c7i.2xlarge",
+    "MinCount": 1,
+    "MaxCount": 1,
+    "ClientToken": "borsuk-retained-s3-publication-admission-a0002",
+    "SubnetId": "subnet-0a12dbed0ca6fac25",
+    "SecurityGroupIds": [
+      "sg-0b1fd3e4fbde4af0d"
+    ],
+    "IamInstanceProfile": {
+      "Arn": "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile"
+    },
+    "InstanceMarketOptions": {
+      "MarketType": "spot",
+      "SpotOptions": {
+        "MaxPrice": "0.50",
+        "SpotInstanceType": "one-time",
+        "InstanceInterruptionBehavior": "terminate"
+      }
+    },
+    "InstanceInitiatedShutdownBehavior": "terminate",
+    "MetadataOptions": {
+      "HttpTokens": "required",
+      "HttpEndpoint": "enabled"
+    },
+    "BlockDeviceMappings": [
+      {
+        "DeviceName": "/dev/sda1",
+        "Ebs": {
+          "VolumeSize": 80,
+          "VolumeType": "gp3",
+          "Encrypted": true,
+          "DeleteOnTermination": true
+        }
+      }
+    ],
+    "TagSpecifications": [
+      {
+        "ResourceType": "instance",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "borsuk-retained-s3-publication-admission-a0002"
+          },
+          {
+            "Key": "Purpose",
+            "Value": "query-free-native-s3-publication-admission"
+          }
+        ]
+      }
+    ]
+  },
+  "scratch_enforcement": "64MiB tmpfs plus unchanged cumulative native library admission; cgroup swap0",
+  "deadline": "root watches recorded EC2 LaunchTime; termination cutoff1740s with60s margin below1800s cap; provisional on-boot1740s Accuracy1s, replaced by identity pendingTime+1740s calendar timer; native refuses unless600+10+240seconds remain; inner timeout570s/kill10s and unit600s/stop10s",
+  "outcomes": {
+    "ADMITTED": "native/final/terminal exits0, independently retrieved SHA-authenticated terminal, authenticated receipt+head/root, exact11 destinationobjects, immutable source heads/tags, noMPUs, swap/OOM0, terminated",
+    "INVALID": "any failure with destination head absent; prefix burned",
+    "INVALID_COMMITTED": "head exists after any failure/unknown outcome; not adopted, prefix burned, referenced metadata preserved",
+    "MISSING_TERMINAL": "root obtains console and infrastructure termination evidence, records INVALID/UNKNOWN and independently checks destination head+MPUs; never assumes no publication"
+  },
+  "postclose_cleanup": "After original instance terminated and before disposition, list MPUs only under exact frozen destination, record full upload IDs, abort only those attempt-owned uploads, list again until empty or record unresolved INVALID; never delete a committed head/referenced metadata or shared source.",
+  "source_metadata_preflight": "All13 retained publication object HEAD sizes matched original approved ledger; exact quoted SQ8 ETag matched. No query/truth requests or payload body reads; full source and copied body authentication remains native runtime requirement.",
+  "review_group": "b43e92d8f31548a3",
+  "mock_wrapper_check": {
+    "path": "wrapper-check.json",
+    "sha256": "e7944359d3875a0791e84f3ada13a640e876ce61e49d7a7755e76eaea1db5459",
+    "unit": "borsuk-retained-s3-wrapper-check-a0001",
+    "invocation": "7b8025219fad410db3548e39f2c251ee",
+    "exit": 0,
+    "runtime_seconds": 12.971,
+    "memory_peak_bytes_approx": 16900000,
+    "swap_bytes": 0,
+    "cpu": 1,
+    "memory_cap_bytes": 268435456,
+    "case_count": 9,
+    "cloud_native_runtime_qualification": false
+  },
+  "frozen_at": "2026-10-07T17:37:25.450041+00:00",
+  "spot_quote": {
+    "AvailabilityZone": "eu-central-1c",
+    "AvailabilityZoneId": "euc1-az1",
+    "InstanceType": "c7i.2xlarge",
+    "ProductDescription": "Linux/UNIX",
+    "SpotPrice": "0.206600",
+    "Timestamp": "2026-10-07T16:00:00+00:00"
+  },
+  "evidence_pins": {
+    "freeze-preflight.json": {
+      "bytes": 1509,
+      "sha256": "081385d4bda54409f155e0dea67412058a9ceacd1243bc81a1dd8b49dd68fd04"
+    },
+    "source-head-prefreeze.json": {
+      "bytes": 170,
+      "sha256": "617af5f166065f2b95b1459866493f75a7ab2f5793f5ffc5c4492692766c97a3"
+    },
+    "unchanged-control-verification.json": {
+      "bytes": 1801,
+      "sha256": "39a705c87370b01b142540bdaf9b603e87e82da7243205496f5135c27536e9bb"
+    }
+  },
+  "attempt": "a0002",
+  "total_attempts_including_preserved_failure": 2,
+  "total_series_reservation_usd": 0.8,
+  "repair_of": {
+    "attempt": "a0001",
+    "status": "INVALID_COMMITTED",
+    "head_preserved": true,
+    "reason": "completed transient service unloaded before stop",
+    "change": "accept stop failure only on fresh not-found/inactive/MainPID0 proof",
+    "native_binary_and_all_limits_unchanged": true
+  },
+  "terminal_observation": "Serial marker retained but not mandatory: first instance console API returned empty. Durable exact terminal object fetched independently proves delivery; failed final exit still INVALID."
+}
