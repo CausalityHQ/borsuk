@@ -1,6 +1,6 @@
 # Prospective paired retained Cohere replay
 
-Status: NOT LAUNCHED. Retained publication is qualified by implementation-gates/a0008; the Rust reducer qualification, actual-input admission, disposable canary and root source/config/transport freeze remain pending. This is an end-to-end local-file optimization gate, not a competitor benchmark or cold-cache result. The library remains generic; dataset constraints belong to this experiment.
+Status: NOT LAUNCHED. Retained publication is qualified by implementation-gates/a0008; the Rust reducer is compiler/synthetic-correctness qualified by [qualification-a0001/root-verification.json](../native-replay-reducer/qualification-a0001/root-verification.json), with all four native gates passed and the original instance terminated. Actual-input admission, the separate disposable canary and root source/config/transport freeze remain pending. This is an end-to-end local-file optimization gate, not a competitor benchmark or cold-cache result. The library remains generic; dataset constraints belong to this experiment.
 
 ## Fixed population
 
