@@ -6,11 +6,1283 @@ use borsuk::{
     unit_centroid_graph::UnitCentroidGraph,
     unit_centroid_pages::UnitCentroidPages,
 };
+use futures_util::StreamExt;
 use object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path as ObjectPath};
 use sha2::{Digest, Sha256};
 use std::{fs, io::Cursor};
 fn hash(b: &[u8]) -> String {
     format!("{:x}", Sha256::digest(b))
+}
+
+// Removing the approved-root check, full-body authentication, create-only head,
+// or the SQ8-only rewrite must break these real retained-publication falsifiers.
+const RETAINED_METADATA: [&str; 10] = [
+    "manifest.json",
+    "page_manifest.json",
+    "page_digests.bin",
+    "plane/manifest.json",
+    "plane/mean.bin",
+    "plane/records.bin",
+    "plane/page_digests.bin",
+    "router/root.bin",
+    "router/membership.bin",
+    "router/leaves.bin",
+];
+
+// ObjectPath::join appends one segment; fixed roster names include directories.
+fn retained_metadata_location(prefix: &ObjectPath, name: &str) -> ObjectPath {
+    name.split('/')
+        .fold(prefix.clone(), |path, segment| path.join(segment))
+}
+
+// The real local Create either succeeds before a lost response or is raced by
+// an identical competing Create immediately before the publisher's attempt.
+#[derive(Debug)]
+struct LostHeadResponse {
+    inner: std::sync::Arc<dyn object_store::ObjectStore>,
+    head: ObjectPath,
+    competing_head: bool,
+}
+
+impl std::fmt::Display for LostHeadResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "LostHeadResponse({})", self.inner)
+    }
+}
+
+#[async_trait::async_trait]
+#[deny(clippy::missing_trait_methods)]
+impl object_store::ObjectStore for LostHeadResponse {
+    async fn put_opts(
+        &self,
+        path: &ObjectPath,
+        payload: PutPayload,
+        options: object_store::PutOptions,
+    ) -> object_store::Result<object_store::PutResult> {
+        let lose_response =
+            *path == self.head && matches!(&options.mode, object_store::PutMode::Create);
+        if lose_response && self.competing_head {
+            self.inner
+                .put_opts(
+                    path,
+                    payload.clone(),
+                    object_store::PutOptions {
+                        mode: object_store::PutMode::Create,
+                        ..Default::default()
+                    },
+                )
+                .await?;
+        }
+        let result = self.inner.put_opts(path, payload, options).await?;
+        if lose_response {
+            return Err(object_store::Error::Generic {
+                store: "LostHeadResponse",
+                source: std::io::Error::other("committed head response lost").into(),
+            });
+        }
+        Ok(result)
+    }
+    async fn put_multipart_opts(
+        &self,
+        path: &ObjectPath,
+        options: object_store::PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+        self.inner.put_multipart_opts(path, options).await
+    }
+    async fn get_opts(
+        &self,
+        path: &ObjectPath,
+        options: object_store::GetOptions,
+    ) -> object_store::Result<object_store::GetResult> {
+        self.inner.get_opts(path, options).await
+    }
+    async fn get_ranges(
+        &self,
+        path: &ObjectPath,
+        ranges: &[std::ops::Range<u64>],
+    ) -> object_store::Result<Vec<bytes::Bytes>> {
+        self.inner.get_ranges(path, ranges).await
+    }
+    fn delete_stream(
+        &self,
+        paths: futures_util::stream::BoxStream<'static, object_store::Result<ObjectPath>>,
+    ) -> futures_util::stream::BoxStream<'static, object_store::Result<ObjectPath>> {
+        self.inner.delete_stream(paths)
+    }
+    fn list(
+        &self,
+        prefix: Option<&ObjectPath>,
+    ) -> futures_util::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>>
+    {
+        self.inner.list(prefix)
+    }
+    fn list_with_offset(
+        &self,
+        prefix: Option<&ObjectPath>,
+        offset: &ObjectPath,
+    ) -> futures_util::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>>
+    {
+        self.inner.list_with_offset(prefix, offset)
+    }
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&ObjectPath>,
+    ) -> object_store::Result<object_store::ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+    async fn copy_opts(
+        &self,
+        from: &ObjectPath,
+        to: &ObjectPath,
+        options: object_store::CopyOptions,
+    ) -> object_store::Result<()> {
+        self.inner.copy_opts(from, to, options).await
+    }
+    async fn rename_opts(
+        &self,
+        from: &ObjectPath,
+        to: &ObjectPath,
+        options: object_store::RenameOptions,
+    ) -> object_store::Result<()> {
+        self.inner.rename_opts(from, to, options).await
+    }
+}
+
+struct RetainedFixture {
+    temp: tempfile::TempDir,
+    original: std::sync::Arc<dyn object_store::ObjectStore>,
+    copied: std::sync::Arc<dyn object_store::ObjectStore>,
+    prefix: ObjectPath,
+    root_sha: String,
+    old_sq8_key: ObjectPath,
+    new_sq8_key: ObjectPath,
+    original_etag: String,
+    limits: TwoBitGenerationLimits,
+}
+
+impl RetainedFixture {
+    async fn new() -> Self {
+        use borsuk::semantic_unit_router::SemanticProfile;
+        use object_store::{chunked::ChunkedStore, local::LocalFileSystem};
+        use std::sync::Arc;
+        let temp = tempfile::tempdir().unwrap();
+        for directory in ["original", "copied", "scratch"] {
+            fs::create_dir(temp.path().join(directory)).unwrap();
+        }
+        let original_files =
+            Arc::new(LocalFileSystem::new_with_prefix(temp.path().join("original")).unwrap());
+        let copied_files =
+            Arc::new(LocalFileSystem::new_with_prefix(temp.path().join("copied")).unwrap());
+        let original: Arc<dyn object_store::ObjectStore> =
+            Arc::new(ChunkedStore::new(original_files.clone(), 8192));
+        let copied: Arc<dyn object_store::ObjectStore> =
+            Arc::new(ChunkedStore::new(copied_files.clone(), 8192));
+        let dimensions = 1024;
+        let rows = 64;
+        let low = vec![-0.0; dimensions];
+        let step = vec![1.0 / 255.0; dimensions];
+        let mut raw = Vec::new();
+        let mut sq8 = Vec::new();
+        for row in 0..rows {
+            let codes = (0..dimensions)
+                .map(|d| ((row * 37 + d * 19) % 251 + 1) as u8)
+                .collect::<Vec<_>>();
+            let values = codes.iter().map(|&v| v as f32 / 255.0).collect::<Vec<_>>();
+            raw.extend(values.iter().flat_map(|v| v.to_le_bytes()));
+            sq8.extend((1000 + row as i64 * 17).to_le_bytes());
+            sq8.extend(values.iter().map(|v| v * v).sum::<f32>().to_le_bytes());
+            sq8.extend(codes);
+        }
+        let raw_path = temp.path().join("raw.f32");
+        let sq8_path = temp.path().join("sq8.bin");
+        fs::write(&raw_path, &raw).unwrap();
+        fs::write(&sq8_path, &sq8).unwrap();
+        let sq8_sha = hash(&sq8);
+        let old_sq8_key = ObjectPath::from(format!("frozen/objects/{sq8_sha}"));
+        let new_sq8_key = ObjectPath::from(format!("rebound/objects/{sq8_sha}"));
+        let original_etag = original
+            .put(&old_sq8_key, PutPayload::from(sq8))
+            .await
+            .unwrap()
+            .e_tag
+            .unwrap();
+        let root_sha = TwoBitGenerationBuilder {
+            base_epoch: 0,
+            source: TwoBitSource {
+                raw: &raw_path,
+                raw_sha256: &hash(&raw),
+                sq8: &sq8_path,
+                sq8_sha256: &sq8_sha,
+                rows,
+                dimensions,
+            },
+            generation: 7,
+            low: &low,
+            step: &step,
+            sq8_object_key: old_sq8_key.as_ref(),
+            sq8_etag: &original_etag,
+        }
+        .build_with_semantic_profile(
+            Some(&(0..rows as u64).collect::<Vec<_>>()),
+            SemanticProfile::Native100k,
+            &temp.path().join("build"),
+            64_000_000,
+        )
+        .unwrap();
+        let limits = TwoBitGenerationLimits {
+            max_memory_bytes: 64_000_000,
+            max_active_queries: 1,
+            max_query_bytes: 1_048_576,
+            max_query_gets: 32,
+            max_parallel_gets: 1,
+            max_source_bytes: 1_048_576,
+            max_source_gets: 128,
+            max_parallel_source_gets: 1,
+            max_query_scratch_bytes: 400_000,
+            // Caller-owned fixture buffers and comparison pins are explicit.
+            already_pinned_bytes: 2_000_000,
+        };
+        let prefix = ObjectPath::from("retained/index");
+        let head = publish_two_bit_generation(
+            original.as_ref(),
+            &prefix,
+            &temp.path().join("build"),
+            &root_sha,
+            limits,
+            None,
+        )
+        .await
+        .unwrap();
+        let metadata = head.metadata_prefix();
+        assert!(
+            original
+                .head(&metadata.clone().join("centroids.bin"))
+                .await
+                .is_err()
+        );
+        let root: serde_json::Value =
+            serde_json::from_slice(&fs::read(temp.path().join("build/manifest.json")).unwrap())
+                .unwrap();
+        let mut roster = RETAINED_METADATA
+            .iter()
+            .map(|name| retained_metadata_location(&metadata, name))
+            .collect::<Vec<_>>();
+        roster.extend([
+            prefix.clone().join("head.json"),
+            old_sq8_key.clone(),
+            ObjectPath::from(root["canonical"]["object_key"].as_str().unwrap()),
+        ]);
+        // Copy exactly the published roster, never the builder's centroids.
+        for location in roster {
+            let source = original_files.path_to_filesystem(&location).unwrap();
+            let destination = copied_files.path_to_filesystem(&location).unwrap();
+            fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            fs::copy(&source, &destination).unwrap_or_else(|error| {
+                panic!("copy {location} from {source:?} to {destination:?}: {error}")
+            });
+        }
+        let new_sq8_path = copied_files.path_to_filesystem(&new_sq8_key).unwrap();
+        fs::create_dir_all(new_sq8_path.parent().unwrap()).unwrap();
+        fs::copy(
+            copied_files.path_to_filesystem(&old_sq8_key).unwrap(),
+            new_sq8_path,
+        )
+        .unwrap();
+        assert!(
+            !temp
+                .path()
+                .join("copied")
+                .join(metadata.as_ref())
+                .join("centroids.bin")
+                .exists()
+        );
+        assert_ne!(
+            copied.head(&old_sq8_key).await.unwrap().e_tag.as_deref(),
+            Some(original_etag.as_str())
+        );
+        Self {
+            temp,
+            original,
+            copied,
+            prefix,
+            root_sha,
+            old_sq8_key,
+            new_sq8_key,
+            original_etag,
+            limits,
+        }
+    }
+
+    fn scratch(&self) -> std::path::PathBuf {
+        self.temp.path().join("scratch")
+    }
+
+    async fn head(&self) -> borsuk::two_bit_store::TwoBitHead {
+        read_two_bit_head(self.copied.as_ref(), &self.prefix)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    fn approval<'a>(&'a self, etag: &'a str) -> borsuk::two_bit_store::RetainedTwoBitApproval<'a> {
+        borsuk::two_bit_store::RetainedTwoBitApproval {
+            root_sha256: &self.root_sha,
+            generation: 7,
+            control_epoch: 1,
+            sq8_object_key: self.new_sq8_key.as_ref(),
+            sq8_etag: etag,
+        }
+    }
+}
+
+#[tokio::test]
+async fn retained_semantic_republication_preserves_payload_and_score_bits() {
+    use borsuk::two_bit_store::republish_retained_two_bit_generation;
+    let fixture = RetainedFixture::new().await;
+    let scratch = fixture.scratch();
+    let original_head = read_two_bit_head(fixture.original.as_ref(), &fixture.prefix)
+        .await
+        .unwrap()
+        .unwrap();
+    let query = (0..1024)
+        .map(|d| 0.25 + (d % 13) as f32 / 7.0)
+        .collect::<Vec<_>>();
+    let original = TwoBitGeneration::open_remote_from_head(
+        fixture.original.as_ref(),
+        &original_head,
+        fixture.limits,
+        &scratch,
+    )
+    .await
+    .unwrap();
+    let bits = |result: borsuk::two_bit_generation::TwoBitSearchResult| {
+        result
+            .ranked
+            .candidates
+            .into_iter()
+            .map(|hit| (hit.id, hit.score.to_bits()))
+            .collect::<Vec<_>>()
+    };
+    let expected = bits(
+        original
+            .search_with_store(fixture.original.as_ref(), &query, 10, None)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(expected.len(), 10);
+    let copied_head = fixture.head().await;
+    let old = TwoBitGeneration::open_remote_from_head(
+        fixture.copied.as_ref(),
+        &copied_head,
+        fixture.limits,
+        &scratch,
+    )
+    .await
+    .unwrap();
+    assert!(
+        old.search_with_store(fixture.copied.as_ref(), &query, 10, None)
+            .await
+            .is_err()
+    );
+    drop(old);
+    drop(original);
+    let destination = ObjectPath::from("rebound/index");
+    assert!(
+        republish_retained_two_bit_generation(
+            fixture.copied.as_ref(),
+            &copied_head,
+            fixture.approval(&fixture.original_etag),
+            &destination,
+            fixture.limits,
+            &scratch,
+            4_000_000
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        read_two_bit_head(fixture.copied.as_ref(), &destination)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let etag = fixture
+        .copied
+        .head(&fixture.new_sq8_key)
+        .await
+        .unwrap()
+        .e_tag
+        .unwrap();
+    let rebound = republish_retained_two_bit_generation(
+        fixture.copied.as_ref(),
+        &copied_head,
+        fixture.approval(&etag),
+        &destination,
+        fixture.limits,
+        &scratch,
+        4_000_000,
+    )
+    .await
+    .unwrap();
+    assert_eq!(rebound.generation(), 7);
+    assert_eq!(rebound.control_epoch(), 1);
+    assert_ne!(rebound.root_sha256(), fixture.root_sha);
+    assert_eq!(fixture.head().await.root_sha256(), fixture.root_sha);
+    assert_eq!(
+        fs::read(
+            fixture
+                .temp
+                .path()
+                .join("copied")
+                .join(fixture.prefix.as_ref())
+                .join("head.json")
+        )
+        .unwrap(),
+        fs::read(
+            fixture
+                .temp
+                .path()
+                .join("original")
+                .join(fixture.prefix.as_ref())
+                .join("head.json")
+        )
+        .unwrap(),
+    );
+    let before = fixture
+        .copied
+        .get(&copied_head.metadata_prefix().join("manifest.json"))
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    let after = fixture
+        .copied
+        .get(&rebound.metadata_prefix().join("manifest.json"))
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    let before_root: serde_json::Value = serde_json::from_slice(&before).unwrap();
+    let mut after_root: serde_json::Value = serde_json::from_slice(&after).unwrap();
+    assert_eq!(after_root["sq8_object_key"], fixture.new_sq8_key.as_ref());
+    assert_eq!(after_root["sq8_etag"], etag);
+    for field in ["low", "step"] {
+        let values = |root: &serde_json::Value| {
+            root[field]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| (v.as_f64().unwrap() as f32).to_bits())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(values(&after_root), values(&before_root));
+    }
+    after_root["sq8_object_key"] = before_root["sq8_object_key"].clone();
+    after_root["sq8_etag"] = before_root["sq8_etag"].clone();
+    assert_eq!(after_root, before_root);
+    for name in RETAINED_METADATA
+        .into_iter()
+        .filter(|name| *name != "manifest.json")
+    {
+        let old = fixture
+            .copied
+            .get(&retained_metadata_location(
+                &copied_head.metadata_prefix(),
+                name,
+            ))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let new = fixture
+            .copied
+            .get(&retained_metadata_location(
+                &rebound.metadata_prefix(),
+                name,
+            ))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(hash(&old), hash(&new), "{name}");
+        assert_eq!(old, new, "{name}");
+    }
+    let canonical = ObjectPath::from(before_root["canonical"]["object_key"].as_str().unwrap());
+    for location in [&canonical, &fixture.old_sq8_key] {
+        let old = fixture
+            .original
+            .get(location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let retained = fixture
+            .copied
+            .get(location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(old, retained);
+    }
+    let new_sq8 = fixture
+        .copied
+        .get(&fixture.new_sq8_key)
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    assert_eq!(
+        hash(&new_sq8),
+        before_root["sq8_object_sha256"].as_str().unwrap()
+    );
+    let open = TwoBitGeneration::open_remote_from_head(
+        fixture.copied.as_ref(),
+        &rebound,
+        fixture.limits,
+        &scratch,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        bits(
+            open.search_with_store(fixture.copied.as_ref(), &query, 10, None)
+                .await
+                .unwrap()
+        ),
+        expected
+    );
+    drop(open);
+    // Copying can also preserve the SQ8 key while changing only its local ETag.
+    let same_key_etag = fixture
+        .copied
+        .head(&fixture.old_sq8_key)
+        .await
+        .unwrap()
+        .e_tag
+        .unwrap();
+    let mut same_key_approval = fixture.approval(&same_key_etag);
+    same_key_approval.sq8_object_key = fixture.old_sq8_key.as_ref();
+    let same_key = republish_retained_two_bit_generation(
+        fixture.copied.as_ref(),
+        &copied_head,
+        same_key_approval,
+        &ObjectPath::from("etag-only/index"),
+        fixture.limits,
+        &scratch,
+        4_000_000,
+    )
+    .await
+    .unwrap();
+    let same_key_generation = TwoBitGeneration::open_remote_from_head(
+        fixture.copied.as_ref(),
+        &same_key,
+        fixture.limits,
+        &scratch,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        bits(
+            same_key_generation
+                .search_with_store(fixture.copied.as_ref(), &query, 10, None)
+                .await
+                .unwrap()
+        ),
+        expected
+    );
+    drop(same_key_generation);
+    for (prefix, competing_head) in [("lost-response/index", false), ("raced-head/index", true)] {
+        let lost_prefix = ObjectPath::from(prefix);
+        let lost = LostHeadResponse {
+            inner: fixture.copied.clone(),
+            head: lost_prefix.clone().join("head.json"),
+            competing_head,
+        };
+        let result = republish_retained_two_bit_generation(
+            &lost,
+            &copied_head,
+            fixture.approval(&etag),
+            &lost_prefix,
+            fixture.limits,
+            &scratch,
+            4_000_000,
+        )
+        .await;
+        if competing_head {
+            assert!(matches!(
+                result,
+                Err(borsuk::two_bit_store::TwoBitStoreError::Store(
+                    object_store::Error::AlreadyExists { .. }
+                ))
+            ));
+        } else {
+            assert!(matches!(
+                result,
+                Err(borsuk::two_bit_store::TwoBitStoreError::Store(
+                    object_store::Error::Generic {
+                        store: "LostHeadResponse",
+                        ..
+                    }
+                ))
+            ));
+        }
+        let committed = read_two_bit_head(fixture.copied.as_ref(), &lost_prefix)
+            .await
+            .unwrap()
+            .unwrap();
+        let committed_generation = TwoBitGeneration::open_remote_from_head(
+            fixture.copied.as_ref(),
+            &committed,
+            fixture.limits,
+            &scratch,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            bits(
+                committed_generation
+                    .search_with_store(fixture.copied.as_ref(), &query, 10, None)
+                    .await
+                    .unwrap()
+            ),
+            expected
+        );
+        drop(committed_generation);
+        // An identical already committed head still refuses; no implicit recovery.
+        assert!(
+            republish_retained_two_bit_generation(
+                fixture.copied.as_ref(),
+                &copied_head,
+                fixture.approval(&etag),
+                &lost_prefix,
+                fixture.limits,
+                &scratch,
+                4_000_000
+            )
+            .await
+            .is_err()
+        );
+    }
+    // The new publication must survive loss of construction and old control/root.
+    fs::remove_dir_all(fixture.temp.path().join("build")).unwrap();
+    fs::remove_dir_all(fixture.temp.path().join("original")).unwrap();
+    fs::remove_file(fixture.temp.path().join("raw.f32")).unwrap();
+    fs::remove_file(fixture.temp.path().join("sq8.bin")).unwrap();
+    for name in RETAINED_METADATA {
+        fixture
+            .copied
+            .delete(&retained_metadata_location(
+                &copied_head.metadata_prefix(),
+                name,
+            ))
+            .await
+            .unwrap();
+    }
+    fixture
+        .copied
+        .delete(&fixture.prefix.clone().join("head.json"))
+        .await
+        .unwrap();
+    let reopened = read_two_bit_head(fixture.copied.as_ref(), &destination)
+        .await
+        .unwrap()
+        .unwrap();
+    let generation = TwoBitGeneration::open_remote_from_head(
+        fixture.copied.as_ref(),
+        &reopened,
+        fixture.limits,
+        &scratch,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        bits(
+            generation
+                .search_with_store(fixture.copied.as_ref(), &query, 10, None)
+                .await
+                .unwrap()
+        ),
+        expected
+    );
+    assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
+    for prefix in ["lost-response/index", "raced-head/index"] {
+        let committed = read_two_bit_head(fixture.copied.as_ref(), &ObjectPath::from(prefix))
+            .await
+            .unwrap()
+            .unwrap();
+        let committed_generation = TwoBitGeneration::open_remote_from_head(
+            fixture.copied.as_ref(),
+            &committed,
+            fixture.limits,
+            &scratch,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            bits(
+                committed_generation
+                    .search_with_store(fixture.copied.as_ref(), &query, 10, None)
+                    .await
+                    .unwrap()
+            ),
+            expected
+        );
+    }
+}
+
+#[tokio::test]
+async fn retained_semantic_republication_refuses_unapproved_changed_or_unbounded_inputs() {
+    use borsuk::two_bit_store::republish_retained_two_bit_generation;
+    let fixture = RetainedFixture::new().await;
+    let scratch = fixture.scratch();
+    let destination = ObjectPath::from("refused/index");
+    let etag = fixture
+        .copied
+        .head(&fixture.new_sq8_key)
+        .await
+        .unwrap()
+        .e_tag
+        .unwrap();
+    let wrong_sha = "0".repeat(64);
+    let nested = fixture.prefix.clone().join("nested");
+    assert!(matches!(
+        republish_retained_two_bit_generation(
+            fixture.copied.as_ref(),
+            &fixture.head().await,
+            fixture.approval(&etag),
+            &nested,
+            fixture.limits,
+            &scratch,
+            4_000_000,
+        )
+        .await,
+        Err(borsuk::two_bit_store::TwoBitStoreError::Invalid(
+            "retained approval/destination"
+        ))
+    ));
+    assert!(
+        read_two_bit_head(fixture.copied.as_ref(), &nested)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    for fault in [
+        "sha",
+        "generation",
+        "epoch",
+        "etag",
+        "weak",
+        "wildcard",
+        "key",
+        "memory",
+        "pins",
+        "scratch",
+        "zero-scratch",
+    ] {
+        let mut approval = fixture.approval(&etag);
+        let mut limits = fixture.limits;
+        let mut scratch_cap = 4_000_000;
+        match fault {
+            "sha" => approval.root_sha256 = &wrong_sha,
+            "generation" => approval.generation += 1,
+            "epoch" => approval.control_epoch += 1,
+            "etag" => approval.sq8_etag = "wrong-etag",
+            "weak" => approval.sq8_etag = "W/weak",
+            "wildcard" => approval.sq8_etag = "*",
+            "key" => approval.sq8_object_key = "bad/objects/wrong-sha",
+            "memory" => limits.max_memory_bytes = 1,
+            "pins" => limits.already_pinned_bytes = limits.max_memory_bytes,
+            "scratch" => scratch_cap = 65536,
+            _ => scratch_cap = 0,
+        }
+        assert!(
+            republish_retained_two_bit_generation(
+                fixture.copied.as_ref(),
+                &fixture.head().await,
+                approval,
+                &destination,
+                limits,
+                &scratch,
+                scratch_cap
+            )
+            .await
+            .is_err(),
+            "{fault}"
+        );
+        assert!(
+            read_two_bit_head(fixture.copied.as_ref(), &destination)
+                .await
+                .unwrap()
+                .is_none(),
+            "{fault}"
+        );
+        assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
+    }
+    let retained = fixture.head().await;
+    let long_prefix = ObjectPath::from("x".repeat(60_000));
+    let long_prefix_result = republish_retained_two_bit_generation(
+        fixture.copied.as_ref(),
+        &retained,
+        fixture.approval(&etag),
+        &long_prefix,
+        TwoBitGenerationLimits {
+            max_memory_bytes: 12_000_000,
+            ..fixture.limits
+        },
+        &scratch,
+        4_000_000,
+    )
+    .await;
+    assert!(matches!(
+        long_prefix_result,
+        Err(borsuk::two_bit_store::TwoBitStoreError::Invalid(
+            "publication memory"
+        ))
+    ));
+    let root: serde_json::Value = serde_json::from_slice(
+        &fixture
+            .copied
+            .get(&retained.metadata_prefix().join("manifest.json"))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let mut objects = RETAINED_METADATA
+        .iter()
+        .map(|name| retained_metadata_location(&retained.metadata_prefix(), name))
+        .collect::<Vec<_>>();
+    objects.extend([
+        fixture.old_sq8_key.clone(),
+        fixture.new_sq8_key.clone(),
+        ObjectPath::from(root["canonical"]["object_key"].as_str().unwrap()),
+    ]);
+    for location in objects {
+        let original = fixture
+            .copied
+            .get(&location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        for fault in ["sha", "truncated", "grown"] {
+            let mut bad = original.to_vec();
+            match fault {
+                "sha" => bad[0] ^= 1,
+                "truncated" => {
+                    bad.pop();
+                }
+                _ => bad.push(0),
+            }
+            fixture
+                .copied
+                .put(&location, PutPayload::from(bad))
+                .await
+                .unwrap();
+            // Read head before corrupting the root; all other cases use current authority.
+            let current = fixture
+                .copied
+                .head(&fixture.new_sq8_key)
+                .await
+                .unwrap()
+                .e_tag
+                .unwrap();
+            assert!(
+                republish_retained_two_bit_generation(
+                    fixture.copied.as_ref(),
+                    &retained,
+                    fixture.approval(&current),
+                    &destination,
+                    fixture.limits,
+                    &scratch,
+                    4_000_000
+                )
+                .await
+                .is_err(),
+                "{location}: {fault}"
+            );
+            assert!(
+                read_two_bit_head(fixture.copied.as_ref(), &destination)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            fixture
+                .copied
+                .put(&location, PutPayload::from(original.clone()))
+                .await
+                .unwrap();
+            assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
+        }
+    }
+    let head_key = fixture.prefix.clone().join("head.json");
+    let head_bytes = fixture
+        .copied
+        .get(&head_key)
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    for fault in ["unknown-page-tree", "nested-page-scalar"] {
+        let original_page = fixture
+            .copied
+            .get(&retained.metadata_prefix().join("page_manifest.json"))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let mut page: serde_json::Value = serde_json::from_slice(&original_page).unwrap();
+        page[if fault == "unknown-page-tree" {
+            "unknown"
+        } else {
+            "rows"
+        }] = serde_json::json!({"nested":[{"more":[0]}]});
+        let page = serde_json::to_vec(&page).unwrap();
+        let mut changed_root = root.clone();
+        changed_root["page_manifest_sha256"] = hash(&page).into();
+        let changed_root = serde_json::to_vec(&changed_root).unwrap();
+        let approved_sha = hash(&changed_root);
+        let changed_prefix = fixture
+            .prefix
+            .clone()
+            .join("generations")
+            .join(approved_sha.as_str());
+        for name in RETAINED_METADATA {
+            let body = match name {
+                "manifest.json" => PutPayload::from(changed_root.clone()),
+                "page_manifest.json" => PutPayload::from(page.clone()),
+                _ => PutPayload::from(
+                    fixture
+                        .copied
+                        .get(&retained_metadata_location(
+                            &retained.metadata_prefix(),
+                            name,
+                        ))
+                        .await
+                        .unwrap()
+                        .bytes()
+                        .await
+                        .unwrap(),
+                ),
+            };
+            fixture
+                .copied
+                .put(&retained_metadata_location(&changed_prefix, name), body)
+                .await
+                .unwrap();
+        }
+        let mut control: serde_json::Value = serde_json::from_slice(&head_bytes).unwrap();
+        control["root_sha256"] = approved_sha.clone().into();
+        fixture
+            .copied
+            .put(
+                &head_key,
+                PutPayload::from(serde_json::to_vec(&control).unwrap()),
+            )
+            .await
+            .unwrap();
+        let current_head = fixture.head().await;
+        let current_etag = fixture
+            .copied
+            .head(&fixture.new_sq8_key)
+            .await
+            .unwrap()
+            .e_tag
+            .unwrap();
+        let mut approval = fixture.approval(&current_etag);
+        approval.root_sha256 = &approved_sha;
+        let refused = republish_retained_two_bit_generation(
+            fixture.copied.as_ref(),
+            &current_head,
+            approval,
+            &destination,
+            fixture.limits,
+            &scratch,
+            4_000_000,
+        )
+        .await;
+        assert!(
+            matches!(
+                refused,
+                Err(borsuk::two_bit_store::TwoBitStoreError::Invalid(
+                    "retained page schema"
+                ))
+            ),
+            "{fault}"
+        );
+        assert!(
+            read_two_bit_head(fixture.copied.as_ref(), &destination)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
+        fixture
+            .copied
+            .put(&head_key, PutPayload::from(head_bytes.clone()))
+            .await
+            .unwrap();
+    }
+    for fault in ["mutation", "fence", "epoch"] {
+        let mut retained = fixture.head().await;
+        let mut control: serde_json::Value = serde_json::from_slice(&head_bytes).unwrap();
+        match fault {
+            "mutation" => {
+                control["mutation"] =
+                    serde_json::json!({"revision":1,"sha256":wrong_sha,"sealed":true})
+            }
+            "fence" => control["fence"] = "1".repeat(32).into(),
+            _ => control["epoch"] = 2.into(),
+        }
+        fixture
+            .copied
+            .put(
+                &head_key,
+                PutPayload::from(serde_json::to_vec(&control).unwrap()),
+            )
+            .await
+            .unwrap();
+        if fault == "mutation" {
+            // A fresh token must reach the mutation predicate, not the ETag guard.
+            retained = fixture.head().await;
+        }
+        let refused = republish_retained_two_bit_generation(
+            fixture.copied.as_ref(),
+            &retained,
+            fixture.approval(
+                &fixture
+                    .copied
+                    .head(&fixture.new_sq8_key)
+                    .await
+                    .unwrap()
+                    .e_tag
+                    .unwrap(),
+            ),
+            &destination,
+            fixture.limits,
+            &scratch,
+            4_000_000,
+        )
+        .await;
+        assert!(
+            matches!(
+                refused,
+                Err(borsuk::two_bit_store::TwoBitStoreError::Invalid(
+                    "retained control changed"
+                ))
+            ),
+            "{fault}"
+        );
+        assert!(
+            read_two_bit_head(fixture.copied.as_ref(), &destination)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        fixture
+            .copied
+            .put(&head_key, PutPayload::from(head_bytes.clone()))
+            .await
+            .unwrap();
+    }
+    // A freshly authenticated copied head is insufficient without original approval.
+    for fault in ["unapproved-root", "base-epoch"] {
+        let mut changed = root.clone();
+        if fault == "base-epoch" {
+            changed["base_epoch"] = 1.into();
+        } else {
+            changed["low"][0] = 0.125.into();
+        }
+        let body = serde_json::to_vec(&changed).unwrap();
+        let changed_sha = hash(&body);
+        let changed_prefix = fixture
+            .prefix
+            .clone()
+            .join("generations")
+            .join(changed_sha.as_str());
+        fixture
+            .copied
+            .put(
+                &changed_prefix.join("manifest.json"),
+                PutPayload::from(body),
+            )
+            .await
+            .unwrap();
+        let mut control: serde_json::Value = serde_json::from_slice(&head_bytes).unwrap();
+        control["root_sha256"] = changed_sha.clone().into();
+        fixture
+            .copied
+            .put(
+                &head_key,
+                PutPayload::from(serde_json::to_vec(&control).unwrap()),
+            )
+            .await
+            .unwrap();
+        let retained = fixture.head().await;
+        let current = fixture
+            .copied
+            .head(&fixture.new_sq8_key)
+            .await
+            .unwrap()
+            .e_tag
+            .unwrap();
+        let mut approval = fixture.approval(&current);
+        if fault == "base-epoch" {
+            approval.root_sha256 = &changed_sha;
+        }
+        let refused = republish_retained_two_bit_generation(
+            fixture.copied.as_ref(),
+            &retained,
+            approval,
+            &destination,
+            fixture.limits,
+            &scratch,
+            4_000_000,
+        )
+        .await;
+        if fault == "base-epoch" {
+            assert!(matches!(
+                refused,
+                Err(borsuk::two_bit_store::TwoBitStoreError::Invalid(
+                    "retained initial semantic generation"
+                ))
+            ));
+        } else {
+            assert!(refused.is_err(), "{fault}");
+        }
+        assert!(
+            read_two_bit_head(fixture.copied.as_ref(), &destination)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        fixture
+            .copied
+            .put(&head_key, PutPayload::from(head_bytes.clone()))
+            .await
+            .unwrap();
+    }
+    fixture
+        .copied
+        .put(
+            &destination.clone().join("occupied"),
+            PutPayload::from("occupied"),
+        )
+        .await
+        .unwrap();
+    let retained = fixture.head().await;
+    let current = fixture
+        .copied
+        .head(&fixture.new_sq8_key)
+        .await
+        .unwrap()
+        .e_tag
+        .unwrap();
+    assert!(
+        republish_retained_two_bit_generation(
+            fixture.copied.as_ref(),
+            &retained,
+            fixture.approval(&current),
+            &destination,
+            fixture.limits,
+            &scratch,
+            4_000_000
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        read_two_bit_head(fixture.copied.as_ref(), &destination)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        fixture
+            .copied
+            .get(&destination.clone().join("occupied"))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap()
+            .as_ref(),
+        b"occupied"
+    );
+    fixture
+        .copied
+        .delete(&destination.clone().join("occupied"))
+        .await
+        .unwrap();
+    // Race real local control after the first destination metadata object appears.
+    let marker = fixture
+        .temp
+        .path()
+        .join("copied")
+        .join(destination.as_ref());
+    // The occupied-object check created an empty local directory. Remove it so
+    // this race waits for actual publication staging, rather than old scratch.
+    if marker.exists() {
+        fs::remove_dir_all(&marker).unwrap();
+    }
+    let mut raced_control: serde_json::Value = serde_json::from_slice(&head_bytes).unwrap();
+    raced_control["epoch"] = 2.into();
+    let raced_control = serde_json::to_vec(&raced_control).unwrap();
+    let control_path = fixture.temp.path().join("copied").join(head_key.as_ref());
+    let race = async {
+        loop {
+            if marker.exists() {
+                fs::write(&control_path, &raced_control).unwrap();
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(
+            republish_retained_two_bit_generation(
+                fixture.copied.as_ref(),
+                &retained,
+                fixture.approval(&current),
+                &destination,
+                fixture.limits,
+                &scratch,
+                4_000_000
+            ),
+            race
+        )
+    })
+    .await
+    .unwrap();
+    assert!(result.is_err());
+    assert!(
+        read_two_bit_head(fixture.copied.as_ref(), &destination)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
+    assert!(
+        fixture
+            .copied
+            .list(Some(&destination))
+            .next()
+            .await
+            .is_none()
+    );
 }
 
 #[tokio::test]
