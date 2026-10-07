@@ -1,0 +1,90 @@
+{
+  "schema": "borsuk-cohere-retained-paired-replay-preregistration-v1",
+  "status": "FROZEN_NOT_LAUNCHED",
+  "root_source": "bcc35d31c0b56dd777b131fdd997888cc6e2b58c",
+  "admission": {
+    "status": "NATIVE_INPUT_ADMITTED",
+    "sha256": "a3ed52dfd32b027cd78c036e3b25bd340ccb2461b6e35f7b64bee76b1a38cd66",
+    "instance_id": "i-0316af95b3b412e92",
+    "terminated": true
+  },
+  "canary": {
+    "status": "CANARY_ADMITTED",
+    "sha256": "662caed0084b25d636109da40ee2ae4f177fa08eae94af952511dc3ccf76ce58",
+    "instance_id": "i-04bdeb0ca651a1655",
+    "terminated": true
+  },
+  "inputs_sha256": "cb4a475b5987c1562384f73a73692b8e6b7ad9ffb4a5d10d295b7787e7c6d829",
+  "input_objects": 15,
+  "total_staged_bytes": 572149955,
+  "commands": {
+    "userdata_sha256": "95d3d6252a04c03fe7af9e9c5c83a1fc48950838c52b50998c92ea54ec2c2f1d",
+    "staging_sha256": "ba3255ab2d397bc866b08eec80b26a5b8c0f27205fb6dd68fe9bb87cf54ca896",
+    "replay_sha256": "5cdf8ed234194c24a8e75946f217b23fb63ee69ca0524b0a9973090500f3f890"
+  },
+  "binaries": {
+    "A": "ce43842caeea9dbb722f3497b237265e71c7d829cbaf0243a81a2a352fcf1221",
+    "B": "3911839ba9ef68604e2c487d802a3b3e125bdc1121aee9af268db3ba8a9ca8cf",
+    "publisher": "733cf976db05b8482ce192251ad25ec203fae9aec4cf8cf519f1dc6658bf0806",
+    "reducer": "a808fa537855bab2f3757fc459674e13a8954e59aee3aca1bbaa1b66c996c253"
+  },
+  "population": {
+    "dataset": "Cohere Wikipedia embed-multilingual-v3",
+    "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+    "corpus": [
+      0,
+      100000
+    ],
+    "queries": [
+      100000,
+      101000
+    ],
+    "dimensions": 1024,
+    "metric": "cosine",
+    "k": 10,
+    "filters": false
+  },
+  "sequence": [
+    "opaque authenticate15 assets+4 frozen binaries",
+    "native retained publication with runtime SQ8 ETag",
+    "full1000 native A input admission, not comparison evidence",
+    "freeze identical runtime root/config before first timed call",
+    "A1",
+    "B1",
+    "B2",
+    "A2",
+    "qualified Rust full-result reduction"
+  ],
+  "resources": {
+    "cpu": 1,
+    "native_memory_bytes": 536870912,
+    "aggregate_memory_bytes": 1073741824,
+    "swap_bytes": 0,
+    "native_tasks": 128,
+    "aggregate_tasks": 256,
+    "native_seconds_each": 300,
+    "reducer_seconds": 60,
+    "aggregate_seconds": 1800,
+    "machine_seconds": 3600,
+    "scratch_bytes": 4294967296
+  },
+  "spot": {
+    "region": "eu-central-1",
+    "az": "eu-central-1c",
+    "type": "c7i.2xlarge",
+    "ebs_gib": 20,
+    "max_bid_usd_hour": 0.5,
+    "quoted_usd_hour": 0.2065,
+    "compute_reservation_usd": 0.5,
+    "ancillary_reservation_usd": 0.15,
+    "total_reservation_usd": 0.65
+  },
+  "acceptance": "All four complete1000-query outputs; same runtime config/root and exact returned IDs/scorebits/recall/logical charges/raw trace parity; CPU1/native512Mi/aggregate1Gi/zero swap+OOM/drained groups/scratch4Gi; all original calls0 and qualified Rust reducer0; full asset+runtime before/after hashes unchanged; same original instance terminated/waited before collection. Complete no-win reducer exit0 is preserved as completed no-win, never INVALID.",
+  "timing_gate": "Both B1/A1 and B2/A2: p90 and p95 <=95% of A and QPS >=105% of A, using checked integer thresholds; report nearest-rank each-run and pooled2000 plus stage sums and paired deltas.",
+  "interruption": "Discard entire paired cell as INVALID; preserve original attempt/IDs/output/cost. No automatic replacement or duplicate. Environment failures require demonstrated setup repair without changing algorithm/scientific limits.",
+  "cache_state": "shared_OS_page_cache_uncontrolled; runtime A admission warms inputs before A1; no hot/cold equivalence",
+  "cost_scope": "Whole c7i.2xlarge reservation despite CPU1 measurement; no extrapolated full-instance concurrency or incurred/billed cost claim",
+  "local_file_only": true,
+  "physical_s3_query": false,
+  "vendor_comparison": false
+}
