@@ -1,0 +1,17 @@
+# Existing native runner: S3 backend
+
+Bounded implementation scope: only `crates/borsuk/src/bin/check_cohere_native_baseline.rs`. Reuse the existing native query, trace, seal, truth and recall reduction. No new harness, controller, dependency, algorithm, cache, retries, dataset or benchmark population.
+
+Planning consultation `8545342daace48b1` completed exit0. Relevant working files were independently compared byte-for-byte with committed `022c57c92e3fb1d566fca3b10bb138b2273253f4`; the stale root index does not represent source changes.
+
+Replace the unreleased config's local store field with a strict tagged Local/S3 backend and update format markers. Reject unknown, mixed and old configs. S3 explicitly pins bucket, region, physical namespace, logical SQ8 key and actual quoted ETag; generation prefix remains logical. No endpoint or credential override. Validate all descriptors before constructing a reader or issuing reads.
+
+Local retains ChunkedStore/LocalFileSystem behavior. S3 owns one existing OneAttemptS3 reader; metadata, open_remote and diagnostic_search_with_store all use its same dyn ObjectStore. Make source binding asynchronous: authenticate capped root metadata before its plane, preserve full source/order/SQ8/geometry checks, and require root SQ8 key/ETag equality with S3 config. Stream metadata with checked nonzero length <=65536, expected location/full range, exact EOF and SHA before parse; retain local regular-file/no-follow checks. All request rows validate before any store reads.
+
+Capture process transport snapshots before/after binding, opening and each serial query. Preserve after-snapshots before propagating failures and in bounded terminal context. Local snapshots are absent. Keep these separate from logical read charges; never sum cumulative snapshots or call SDK attempts billed requests. Wire, unread and billed bytes are unknown. Charge backend descriptors and snapshot capacities; promptly release metadata buffers. Existing library/query/output/terminal caps remain; SDK/TLS process RSS requires external cgroup verification.
+
+Retain all eight existing tests and their numeric/tail/tie oracles. Add the smallest table-driven test using the actual tiny257/D1024/two-query pipeline and an in-file recording/faulting ObjectStore plus test-only snapshot injection. Verify local/namespaced parity, namespace exactly once, invalid second request causes zero reads, bad root prevents plane reads, metadata size/range/EOF/SHA refusals, source/ETag mismatch, startup/query/output failure counters, nonzero starting snapshots, full seal before GT and fixed underfill denominator. This tests runner integration; existing library tests establish HTTP transport behavior.
+
+No local Cargo/rustc/native/data/network execution. Source-only checks: CPU1/256MiB/noSwap/120s. Hand off an UNVERIFIED owned-one-file commit, exact hash/API/config example/test roster/resource formulas and remote commands. Root alone runs serial locked affected-bin tests, release, workspace all-target Clippy correctness+suspicious and actual shim-unset workspace test-build with jobs1 before integration.
+
+Actual S3 execution requires the separately pending retained publisher's qualified receipt, rebound published root/metadata prefix and current S3 ETag, real input admission and disposable canary. The unchanged algorithm's 97.23% local100k recall is historical evidence only. This extension proves no S3 performance or competitor win; matched10M evaluation remains required.
