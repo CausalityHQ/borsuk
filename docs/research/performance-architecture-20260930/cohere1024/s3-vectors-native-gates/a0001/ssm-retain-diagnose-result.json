@@ -1,0 +1,22 @@
+{
+    "CommandId": "2a7421ed-3209-4fa0-abbc-a1b955c0a7c2",
+    "InstanceId": "i-04607d2cf10e8e1bc",
+    "Comment": "Diagnose original auxiliary binary retention only",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-07T23:03:11.440Z",
+    "ExecutionElapsedTime": "PT0.012S",
+    "ExecutionEndDateTime": "2026-10-07T23:03:11.440Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "Result=oom-kill\nExecMainCode=2\nExecMainStatus=15\nMemoryPeak=2019328\nMemorySwapPeak=0\nOct 07 22:34:07 ip-172-31-8-250 systemd[1]: Started borsuk-original-binary-retention.service - /bin/bash /mnt/borsuk-http/retain-original-binary.sh.\nOct 07 22:53:12 ip-172-31-8-250 systemd[1]: borsuk-original-binary-retention.service: A process of this unit has been killed by the OOM killer.\nOct 07 22:53:12 ip-172-31-8-250 systemd[1]: borsuk-original-binary-retention.service: Failed with result 'oom-kill'.\n#!/bin/bash\nset -euo pipefail\nexport AWS_MAX_ATTEMPTS=1 AWS_DEFAULT_REGION=eu-central-1\nroot=/mnt/borsuk-http\nfor ((n=0;n<230;n++)); do\n if [[ -f \"$root/evidence/sdk-release.native-exit\" && -f \"$root/evidence/sdk-release.tee-exit\" ]]; then\n  test \"$(cat \"$root/evidence/sdk-release.native-exit\")\" = 0\n  test \"$(cat \"$root/evidence/sdk-release.tee-exit\")\" = 0\n  mkdir -p \"$root/supplemental-binary\"\n  install -m0755 \"$root/source/target/release/check_s3_vectors_baseline\" \"$root/supplemental-binary/check_s3_vectors_baseline\"\n  cd \"$root/supplemental-binary\"\n  sha256sum check_s3_vectors_baseline > binary.sha256\n  stat -c %s check_s3_vectors_baseline > binary.bytes\n  sha256sum \"$root/evidence/Cargo.lock.resolved\" \"$root/evidence/source-resolved.sha256\" > source-bindings.sha256\n  for artifact in check_s3_vectors_baseline binary.sha256 binary.bytes source-bindings.sha256; do\n   timeout --kill-after=5 90 aws s3 cp \"$artifact\" \"s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261007/s3-vectors-native-gates-a0001/supplemental/$artifact\" --only-show-errors\n  done\n  exit 0\n fi\n if [[ -f \"$root/evidence/final-exit\" ]]; then exit 98; fi\n sleep 30\ndone\nexit 99\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

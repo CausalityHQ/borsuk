@@ -1,0 +1,29 @@
+{
+  "status": "SOURCE_BOUND_COMPILER_INPUTS_PREPARED_NOT_LAUNCHED",
+  "source": {
+    "status": "SOURCE_ONLY_UNVERIFIED_REVIEW_AND_RESOLVED_LOCK_PENDING_NO_LAUNCH",
+    "source_commit": "13a94b193257e31969918bb172ff962cbb48a617",
+    "base": "689d93c4b24bd6f35d58f123b0f6e2183a735980",
+    "support_file_count": 2450,
+    "full_native_file_count": 415,
+    "full_native_identity_sha256": "5ab1710189edb7862998183dd0be2319f5a22ced74e179c53a2636fa56945613",
+    "archive": {
+      "bytes": 13209967,
+      "sha256": "ba6cfd8f91e21fd63dcd627b0717ec09b5341acd1ac567ca2fdcb3b5d4ec914c"
+    },
+    "changed_native_vs_qualified_library": [
+      "crates/borsuk/Cargo.toml",
+      "crates/borsuk/src/bin/check_s3_vectors_baseline.rs"
+    ],
+    "resolved_lock_included": false
+  },
+  "support_sha256": {
+    "source-files.sha256": "e8d03a8e00f0dd749e3c2738fc52385312d97914010c0a9d66c835b0844a63be",
+    "native-source.json": "0be08efd335b6eb53f17b04d8511d2d80efd0321829a963f371371568cc312d5",
+    "gates.sh": "e588e548f344635fbe2bc65b203f5cb4c134db0fe2fdcb9e2fc119ca8879d40b",
+    "resolve-lock.sh": "3ea49e0f846411c07b80a9df992fedf6e38642ef36b8f3f54c883b2da7a33492",
+    "user-data.sh": "c7042c84f67d4e7994997089222c04c8a09bd2708b2f052ec230699046bbf707"
+  },
+  "source_resolution": "Only Cargo.lock may change during preparatory resolution; all subsequent gates locked",
+  "performance_claim": false
+}

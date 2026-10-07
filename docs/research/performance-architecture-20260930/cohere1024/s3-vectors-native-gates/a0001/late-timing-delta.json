@@ -1,0 +1,9 @@
+{
+  "frozen_child": "e0edc4a8fb6f6f768f7ab4bd6b19c2e6d114f071",
+  "later_child": "78a7a50fb972c57aa6f34f591b2e09195fc36fca",
+  "later_native_qualified": false,
+  "decision": "Use e0 for matched typed-input timing against native BORSUK reference. Later78 includes raw decode unlike BORSUK and is preserved as an unselected timing variant, not applied to measurement.",
+  "source_evidence": "BORSUK check_cohere_native_baseline.rs request_row before wall Instant; e0 S3 vector(bytes) before start Instant.",
+  "current_attempt_mutated": false,
+  "performance_claim": false
+}

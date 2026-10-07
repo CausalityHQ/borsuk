@@ -1,0 +1,19 @@
+{
+  "source_commit": "13a94b193257e31969918bb172ff962cbb48a617",
+  "child_commit": "e0edc4a8fb6f6f768f7ab4bd6b19c2e6d114f071",
+  "required_test_names": [
+    "tests::sdk_fixture_identity_recall_and_underfill",
+    "tests::corrupt_inputs_make_zero_api_calls",
+    "tests::sdk_503_is_one_attempt_and_truth_stays_unopened",
+    "tests::sdk_readback_drift_blocks_measurement",
+    "tests::seal_sync_tamper_and_partial_refused",
+    "tests::sdk_cleanup_checks_ownership_and_foreign_indexes",
+    "tests::response_shape_and_nearest_rank"
+  ],
+  "required_pass_count": 7,
+  "full_native_file_count": 415,
+  "frozen_input_identity_sha256": "5ab1710189edb7862998183dd0be2319f5a22ced74e179c53a2636fa56945613",
+  "resolved_lock_review_required": true,
+  "native_status": "PENDING_ORIGINAL_EXEC25602",
+  "performance_claim": false
+}

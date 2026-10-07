@@ -1,0 +1,22 @@
+{
+    "CommandId": "88454493-4139-4260-95ba-194d6e00ae2e",
+    "InstanceId": "i-04607d2cf10e8e1bc",
+    "Comment": "Retain already-built original binary after failed auxiliary service; no rebuild",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-07T23:03:35.591Z",
+    "ExecutionElapsedTime": "PT0.016S",
+    "ExecutionEndDateTime": "2026-10-07T23:03:35.591Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "Running as unit: borsuk-original-binary-retention-repair.service; invocation ID: bb606a702de9457dabe7cc56271a1d0e\n",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}
