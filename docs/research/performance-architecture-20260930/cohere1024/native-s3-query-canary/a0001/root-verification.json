@@ -1,0 +1,75 @@
+{
+  "status": "ADMITTED_DISPOSABLE_NATIVE_QUERY_CLI_CANARY",
+  "instance_id": "i-0c47bd7a364145b3f",
+  "terminated_and_wait_exit": 0,
+  "artifact_count": 31,
+  "native_expected_original_exit": 2,
+  "canary_exit": 0,
+  "stage": "config",
+  "completed_queries": 0,
+  "native_logical_gets": 0,
+  "truth_opened": false,
+  "pins_unchanged": true,
+  "scratch_empty": true,
+  "memory_peak_bytes": 2347008,
+  "swap_oom": 0,
+  "summary": {
+    "all_queries_sealed": false,
+    "binding_charge": {
+      "failed_gets": 0,
+      "submitted_gets": 0,
+      "verified_bytes": 0
+    },
+    "charges": {
+      "router": {
+        "failed_gets": 0,
+        "submitted_gets": 0,
+        "verified_bytes": 0
+      },
+      "source": {
+        "failed_gets": 0,
+        "submitted_gets": 0,
+        "verified_bytes": 0
+      },
+      "sq8": {
+        "failed_gets": 0,
+        "submitted_gets": 0,
+        "verified_bytes": 0
+      }
+    },
+    "complete": false,
+    "completed_queries": 0,
+    "error": "artifact identity/SHA",
+    "external_gate_required": true,
+    "observed_process_peak_bytes": 6836224,
+    "physical_s3_measured": false,
+    "process_cpu_ns": 10688060,
+    "process_wall_ns": 10693234,
+    "stage": "config",
+    "status": "INVALID",
+    "sum": {
+      "failed_gets": 0,
+      "submitted_gets": 0,
+      "verified_bytes": 0
+    },
+    "transport_last_boundary": {
+      "after": null,
+      "before": null,
+      "billed_bytes": null,
+      "billed_requests": null,
+      "ordinal": null,
+      "scope": "cumulative_process_native_transport",
+      "stage": "",
+      "status_counts_omitted_from_terminal": true,
+      "unread_bytes": null,
+      "wire_bytes": null
+    },
+    "truth_opened": false
+  },
+  "claims_quality": false,
+  "scope": "Real AWSCLI/instance-role staging, pinned opaque assets, kernel admission, qualified native config-SHA refusal, cleanup/publication/termination. Native IMDS/store creation and ANN/scoring/GT decoding NOT exercised.",
+  "compiled_component_sources_match_qualified_revision": true,
+  "collected_stage_config_exact": true,
+  "process_reported_peak_bytes": 6836224,
+  "memory_peak_scope": "worker cgroup charged peak; process RSS peak reported separately, not interchangeable"
+}
