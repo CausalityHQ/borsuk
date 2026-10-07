@@ -1,6 +1,6 @@
 //! Prepared two-bit generations: immutable metadata, conditional head last.
 use crate::{
-    object_native_generation::metadata_location,
+    object_native_generation::{metadata_location, valid_object_key},
     resident_graph_generation::{Artifact, valid_sha256},
     resident_graph_store::{ResidentGraphStoreError, upload_authenticated_file},
     two_bit_generation::{
@@ -11,8 +11,8 @@ use crate::{
 };
 use futures_util::StreamExt;
 use object_store::{
-    ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload, UpdateVersion,
-    path::Path as ObjectPath,
+    CopyMode, CopyOptions, GetOptions, ObjectMeta, ObjectStore, ObjectStoreExt, PutMode,
+    PutOptions, PutPayload, UpdateVersion, path::Path as ObjectPath,
 };
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
@@ -422,6 +422,689 @@ fn publication_phase_budget(
         .and_then(|n| n.checked_sub(retained))
         .ok_or(TwoBitStoreError::Invalid("publication memory"))?;
     usize::try_from(remaining).map_err(|_| TwoBitStoreError::Invalid("publication memory"))
+}
+
+/// Independent construction approval and the current, explicitly approved SQ8
+/// transport identity. A copied head alone does not supply this authority.
+#[derive(Clone, Copy)]
+pub struct RetainedTwoBitApproval<'a> {
+    /// Independently approved original generation root, before transport copying.
+    pub root_sha256: &'a str,
+    /// Original generation ID; republishing preserves it.
+    pub generation: u64,
+    /// Approved control epoch of the retained source head.
+    pub control_epoch: u64,
+    /// Current immutable digest-suffixed SQ8 key, already present in this store.
+    pub sq8_object_key: &'a str,
+    /// Strong current SQ8 ETag, independently approved by the caller.
+    pub sq8_etag: &'a str,
+}
+
+fn retained_etag(tag: &str) -> bool {
+    !tag.is_empty()
+        && tag.len() <= 4096
+        && tag != "*"
+        && !tag.contains(',')
+        && !tag.starts_with("W/")
+        && !tag.chars().any(char::is_control)
+}
+
+async fn retained_meta(
+    store: &dyn ObjectStore,
+    location: &ObjectPath,
+    bytes: Option<u64>,
+) -> Result<ObjectMeta> {
+    let meta = store.head(location).await?;
+    if meta.location != *location
+        || meta.size == 0
+        || bytes.is_some_and(|size| size != meta.size)
+        || !meta
+            .e_tag
+            .as_ref()
+            .is_some_and(|v| retained_etag(v) && v.capacity() <= 4096)
+        || meta.version.as_ref().is_some_and(|v| v.capacity() > 4096)
+    {
+        return Err(TwoBitStoreError::Invalid("retained object identity"));
+    }
+    Ok(meta)
+}
+
+// One conditional full-body stream, drained through EOF even at the declared
+// length. No whole payload allocation; only the three capped JSON bodies collect.
+async fn authenticate_retained_body(
+    store: &dyn ObjectStore,
+    meta: &ObjectMeta,
+    digest: &str,
+    buffer_bytes: usize,
+    collect: bool,
+) -> Result<Vec<u8>> {
+    use sha2::{Digest, Sha256};
+    if !valid_sha256(digest) || buffer_bytes == 0 || (collect && meta.size > 65536) {
+        return Err(TwoBitStoreError::Invalid("retained body admission"));
+    }
+    let result = store
+        .get_opts(
+            &meta.location,
+            GetOptions {
+                if_match: meta.e_tag.clone(),
+                version: meta.version.clone(),
+                ..Default::default()
+            },
+        )
+        .await?;
+    if result.meta != *meta || result.range != (0..meta.size) {
+        return Err(TwoBitStoreError::Invalid("retained response identity"));
+    }
+    let mut body = if collect {
+        Vec::with_capacity(meta.size as usize)
+    } else {
+        Vec::new()
+    };
+    let mut count = 0_u64;
+    let mut sha = Sha256::new();
+    let mut stream = result.into_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        count = count
+            .checked_add(chunk.len() as u64)
+            .filter(|&n| n <= meta.size)
+            .ok_or(TwoBitStoreError::Invalid("retained body length"))?;
+        if chunk.len() > buffer_bytes {
+            return Err(TwoBitStoreError::Invalid("retained transport buffer"));
+        }
+        sha.update(&chunk);
+        if collect {
+            body.extend_from_slice(&chunk);
+        }
+    }
+    if count != meta.size || format!("{:x}", sha.finalize()) != digest {
+        return Err(TwoBitStoreError::Invalid("retained body SHA/length/EOF"));
+    }
+    Ok(body)
+}
+
+async fn recheck_retained_control(store: &dyn ObjectStore, retained: &TwoBitHead) -> Result<()> {
+    let bad = TwoBitStoreError::Invalid;
+    let location = retained.prefix.clone().join("head.json");
+    let meta = retained_meta(store, &location, None).await?;
+    if meta.size > 4096
+        || meta.e_tag != retained.version.e_tag
+        || meta.version != retained.version.version
+    {
+        return Err(bad("retained control changed"));
+    }
+    // Check bounded header capacities BEFORE copying conditional tokens. Unlike
+    // small_object/read_control this cannot clone an arbitrarily long new tag.
+    let response = store
+        .get_opts(
+            &location,
+            GetOptions {
+                if_match: meta.e_tag.clone(),
+                version: meta.version.clone(),
+                ..Default::default()
+            },
+        )
+        .await?;
+    if response.meta != meta || response.range != (0..meta.size) {
+        return Err(bad("retained control response"));
+    }
+    let mut bytes = Vec::with_capacity(meta.size as usize);
+    let mut stream = response.into_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if chunk.len() > meta.size as usize - bytes.len() {
+            return Err(bad("retained control length"));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.len() != meta.size as usize {
+        return Err(bad("retained control length"));
+    }
+    let control: HeadBody =
+        serde_json::from_slice(&bytes).map_err(|_| bad("retained control schema"))?;
+    if control.schema != "borsuk-two-bit-head-v2"
+        || control.epoch != retained.epoch
+        || control.generation != retained.generation
+        || control.root_sha256 != retained.root_sha256
+        || control.mutation.is_some()
+        || control.fence.is_some()
+    {
+        return Err(TwoBitStoreError::Invalid("retained control changed"));
+    }
+    Ok(())
+}
+
+/// Republish an independently approved initial semantic generation after copying.
+/// Authenticates every retained body, including canonical/source/leaves/SQ8, then
+/// changes only the SQ8 key/ETag. No centroids, rebuild, fitting or query changes.
+/// The destination must be fresh and disjoint; every object and the last head
+/// use create-only writes. Source control/objects remain immutable throughout.
+/// Native copies do not condition on a source version: the modeled scratch
+/// admission requires immutable source assets and cannot bound concurrent raw
+/// file replacement. Shared payloads must remain live while the destination does.
+/// LocalFileSystem Create copies hard-link files on the same writable filesystem;
+/// staged assets prohibit in-place writes. EXDEV/EROFS are environment INVALID.
+///
+/// The provider must support `copy_opts(CopyMode::Create)` and create-only puts.
+/// In object_store 0.14.1, AmazonS3 requires `copy_if_not_exists` configuration
+/// (for example `S3CopyIfNotExists::Multipart`); without it create-only copy returns
+/// `NotSupported`. Such a propagated store error is a provider/configuration
+/// failure, not a scientific rejection. There is no overwrite-copy fallback.
+///
+/// Memory includes caller pins, the retained head, conservative JSON/control/
+/// roster copies, bounded transport chunks and the existing serving validator.
+/// `max_scratch_bytes` cumulatively admits serving scratch and all new metadata
+/// (including unreachable objects) before staging. Serving scratch is RAII owned;
+/// failed copies are removed best-effort only before attempting the head create.
+/// Once the head create is attempted, preserve all admitted metadata even on Err:
+/// a lost response may hide a committed head. There is no implicit recovery.
+/// Cancellation/cleanup failures can leave admitted objects for reclamation.
+/// Transport implementations must supply bounded chunks (at most 1MiB); runtime,
+/// allocator and backend-internal overhead require separate resource measurement.
+pub async fn republish_retained_two_bit_generation(
+    store: &dyn ObjectStore,
+    retained: &TwoBitHead,
+    approved: RetainedTwoBitApproval<'_>,
+    destination: &ObjectPath,
+    limits: TwoBitGenerationLimits,
+    scratch_parent: &Path,
+    max_scratch_bytes: u64,
+) -> Result<TwoBitHead> {
+    let bad = TwoBitStoreError::Invalid;
+    [
+        retained.prefix.as_ref().len(),
+        destination.as_ref().len(),
+        approved.sq8_object_key.len(),
+        approved.sq8_etag.len(),
+        scratch_parent.as_os_str().len(),
+    ]
+    .into_iter()
+    .try_fold(0_usize, usize::checked_add)
+    .filter(|&n| n <= 65536)
+    .ok_or(bad("retained namespace admission"))?;
+    let pinned = limits
+        .already_pinned_bytes
+        .checked_add(retained.retained_root_bytes())
+        .ok_or(bad("retained pin memory"))?;
+    let root_bytes = retained.root.len();
+    if root_bytes == 0 || root_bytes > 65536 {
+        return Err(bad("retained root memory admission"));
+    }
+    // Every metadata path adds <128 bytes to its namespace; object keys decoded
+    // from the approved root have at most root_bytes bytes. String/PathBuf growth
+    // is charged at twice the longest final path, not eight namespace copies.
+    let path_bytes = [
+        retained.prefix.as_ref().len(),
+        destination.as_ref().len(),
+        approved.sq8_object_key.len(),
+        scratch_parent.as_os_str().len(),
+        root_bytes,
+    ]
+    .into_iter()
+    .max()
+    .unwrap()
+    .checked_add(128)
+    .ok_or(bad("retained path memory"))?;
+    // Ten source ObjectMeta paths + ten destination pins + ten created clones;
+    // three payload pins, four prefixes/returned-head paths, eight temporaries;
+    // eight serving-wave objects each reserve eight path/parent/response copies.
+    // Staged destination rosters coexist with the serving validation wave.
+    let path_slots = 10_usize + 10 + 10 + 3 + 4 + 8 + 8 * 8;
+    let paths = path_bytes
+        .checked_mul(2)
+        .and_then(|n| n.checked_mul(path_slots))
+        .ok_or(bad("retained path memory"))?;
+    // Source/destination/payload tokens, two control views, a conditional response
+    // and its GetOptions clones, and eight serving-wave responses. Each strong
+    // ETag/version String capacity is capped at 4096 before any clone we own.
+    let token_slots = 10_usize + 10 + 3 + 2 + 1 + 1 + 8;
+    let tokens = token_slots
+        .checked_mul(2 * 4096)
+        .ok_or(bad("retained token memory"))?;
+    // Each coefficient serializes in <=32 bytes, including sign/exponent. Root
+    // strings already occupy <=root_bytes encoded bytes; new key/tag escaping is
+    // charged separately (six bytes per tag byte). Bound to_vec growth BEFORE it
+    // allocates, plus the capped payload clone/boxed-root copy and head buffers.
+    let serialized = retained
+        .dimensions
+        .checked_mul(2 * 32)
+        .and_then(|n| n.checked_add(root_bytes))
+        .and_then(|n| n.checked_add(approved.sq8_object_key.len()))
+        .and_then(|n| n.checked_add(approved.sq8_etag.len().checked_mul(6)?))
+        .and_then(|n| n.checked_add(256))
+        .and_then(|n| n.checked_mul(2))
+        .and_then(|n| n.checked_add(2 * 65536 + 2 * 4096))
+        .ok_or(bad("retained serialization memory"))?;
+    let bookkeeping = paths
+        .checked_add(tokens)
+        .and_then(|n| n.checked_add(serialized))
+        .and_then(|n| n.checked_add(8 * 4096))
+        .ok_or(bad("retained cumulative memory"))?;
+    // Scalar-only schemas, control/roster structs and allocator growth are in
+    // addition to these explicit paths/tokens/serializers and all caller pins.
+    let available = publication_phase_budget(
+        limits.max_memory_bytes,
+        pinned,
+        [root_bytes, 65536, 65536],
+        bookkeeping,
+        0,
+    )?;
+    let buffer_bytes = available.min(1024 * 1024);
+    if buffer_bytes == 0
+        || max_scratch_bytes == 0
+        || retained.empty
+        || retained.root_sha256 != approved.root_sha256
+        || retained.generation != approved.generation
+        || retained.epoch != approved.control_epoch
+        || retained
+            .version
+            .e_tag
+            .as_ref()
+            .is_some_and(|v| v.capacity() > 4096)
+        || retained
+            .version
+            .version
+            .as_ref()
+            .is_some_and(|v| v.capacity() > 4096)
+        || !retained_etag(approved.sq8_etag)
+        || destination.as_ref().is_empty()
+        || retained.prefix.as_ref().is_empty()
+        || destination == &retained.prefix
+        || destination
+            .as_ref()
+            .starts_with(&format!("{}/", retained.prefix))
+        || retained
+            .prefix
+            .as_ref()
+            .starts_with(&format!("{destination}/"))
+    {
+        return Err(bad("retained approval/destination"));
+    }
+    let source_prefix = retained.metadata_prefix();
+    retained.authenticated_root(&source_prefix, approved.root_sha256)?;
+    recheck_retained_control(store, retained).await?;
+    if store
+        .list(Some(destination))
+        .next()
+        .await
+        .transpose()?
+        .is_some()
+    {
+        return Err(bad("retained destination occupied"));
+    }
+    let root_meta = retained_meta(
+        store,
+        &metadata_location(&source_prefix, "manifest.json"),
+        Some(retained.retained_root_bytes()),
+    )
+    .await?;
+    let root =
+        authenticate_retained_body(store, &root_meta, approved.root_sha256, buffer_bytes, true)
+            .await?;
+    let manifest: Manifest =
+        serde_json::from_slice(&root).map_err(|_| bad("retained root schema"))?;
+    if manifest.schema != crate::two_bit_generation::SCHEMA
+        || manifest.base_epoch != 0
+        || manifest.generation != approved.generation
+        || manifest.discovery.mode() != DiscoveryMode::Semantic
+        || !manifest.canonical.valid()
+        || manifest.canonical.dimensions != retained.dimensions
+        || !manifest
+            .discovery
+            .valid(manifest.canonical.rows, retained.dimensions)
+        || !valid_object_key(&manifest.sq8_object_key, &manifest.sq8_object_sha256)
+        || !valid_object_key(approved.sq8_object_key, &manifest.sq8_object_sha256)
+        || (manifest.sq8_object_key == approved.sq8_object_key
+            && manifest.sq8_etag == approved.sq8_etag)
+        || [
+            manifest.sq8_object_key.as_str(),
+            approved.sq8_object_key,
+            manifest.canonical.object_key.as_str(),
+        ]
+        .into_iter()
+        .any(|key| key.starts_with(&format!("{destination}/")))
+    {
+        return Err(bad("retained initial semantic generation"));
+    }
+    validate_owned_object(store, destination, &manifest.sq8_object_key, 0).await?;
+    validate_owned_object(store, destination, approved.sq8_object_key, 0).await?;
+    validate_owned_object(store, destination, &manifest.canonical.object_key, 0).await?;
+    let plane_meta = retained_meta(
+        store,
+        &metadata_location(&source_prefix, "plane/manifest.json"),
+        None,
+    )
+    .await?;
+    let plane_body = authenticate_retained_body(
+        store,
+        &plane_meta,
+        &manifest.plane_manifest_sha256,
+        buffer_bytes,
+        true,
+    )
+    .await?;
+    let plane: SourcePlaneReceipt =
+        serde_json::from_slice(&plane_body).map_err(|_| bad("retained plane schema"))?;
+    let page_meta = retained_meta(
+        store,
+        &metadata_location(&source_prefix, "page_manifest.json"),
+        None,
+    )
+    .await?;
+    let page_body = authenticate_retained_body(
+        store,
+        &page_meta,
+        &manifest.page_manifest_sha256,
+        buffer_bytes,
+        true,
+    )
+    .await?;
+    // Scalar-only parsing rejects unknown fields before their values and rejects
+    // nested values for known fields. No unbounded JSON Value tree is allocated.
+    // The shared serving PageAuthority validator below still validates sidecars.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RetainedPages {
+        schema: String,
+        generation: u64,
+        rows: usize,
+        dimensions: usize,
+        page_rows: usize,
+        object_sha256: String,
+        page_digest_sha256: String,
+    }
+    let pages: RetainedPages =
+        serde_json::from_slice(&page_body).map_err(|_| bad("retained page schema"))?;
+    if plane.rows != manifest.canonical.rows
+        || plane.dimensions != retained.dimensions
+        || pages.schema != "borsuk-v115-sq8-page-authority-v2"
+        || pages.generation != manifest.generation
+        || pages.rows != plane.rows
+        || pages.dimensions != plane.dimensions
+        || pages.page_rows != 256
+        || pages.object_sha256 != manifest.sq8_object_sha256
+        || !valid_sha256(&pages.page_digest_sha256)
+    {
+        return Err(bad("retained source geometry"));
+    }
+    let padded = crate::rotated_two_bit::RotatedTwoBitCodec::padded_dimensions(plane.dimensions)
+        .map_err(|_| bad("retained codec geometry"))?;
+    let records_bytes = plane
+        .rows
+        .checked_mul(padded.div_ceil(4) + 8)
+        .ok_or(bad("retained record geometry"))?;
+    let sq8_bytes = plane
+        .rows
+        .checked_mul(
+            plane
+                .dimensions
+                .checked_add(12)
+                .ok_or(bad("retained SQ8 geometry"))?,
+        )
+        .ok_or(bad("retained SQ8 geometry"))?;
+    let Discovery::Semantic {
+        root_sha256,
+        root_bytes,
+        membership_sha256,
+        membership_bytes,
+        leaves_sha256,
+        leaves_bytes,
+        ..
+    } = &manifest.discovery
+    else {
+        return Err(bad("retained semantic descriptor"));
+    };
+    let descriptors = [
+        (
+            "page_digests.bin",
+            plane.rows.div_ceil(256).checked_mul(32),
+            pages.page_digest_sha256.as_str(),
+        ),
+        (
+            "plane/mean.bin",
+            plane.dimensions.checked_mul(4),
+            plane.mean_sha256.as_str(),
+        ),
+        (
+            "plane/records.bin",
+            Some(records_bytes),
+            plane.records_sha256.as_str(),
+        ),
+        (
+            "plane/page_digests.bin",
+            plane.rows.div_ceil(32).checked_mul(32),
+            plane.page_digest_sha256.as_str(),
+        ),
+        ("router/root.bin", Some(*root_bytes), root_sha256.as_str()),
+        (
+            "router/membership.bin",
+            Some(*membership_bytes),
+            membership_sha256.as_str(),
+        ),
+        (
+            "router/leaves.bin",
+            Some(*leaves_bytes),
+            leaves_sha256.as_str(),
+        ),
+    ];
+    let mut roster = Vec::with_capacity(10);
+    roster.extend([
+        ("manifest.json", approved.root_sha256, root_meta),
+        (
+            "plane/manifest.json",
+            manifest.plane_manifest_sha256.as_str(),
+            plane_meta,
+        ),
+        (
+            "page_manifest.json",
+            manifest.page_manifest_sha256.as_str(),
+            page_meta,
+        ),
+    ]);
+    for (name, size, digest) in descriptors {
+        let size = size.ok_or(bad("retained artifact geometry"))? as u64;
+        let meta =
+            retained_meta(store, &metadata_location(&source_prefix, name), Some(size)).await?;
+        roster.push((name, digest, meta));
+    }
+    let sq8_meta = retained_meta(
+        store,
+        &ObjectPath::from(manifest.sq8_object_key.as_str()),
+        Some(sq8_bytes as u64),
+    )
+    .await?;
+    let current_sq8_meta = retained_meta(
+        store,
+        &ObjectPath::from(approved.sq8_object_key),
+        Some(sq8_bytes as u64),
+    )
+    .await?;
+    if current_sq8_meta.e_tag.as_deref() != Some(approved.sq8_etag) {
+        return Err(bad("retained approved SQ8 ETag"));
+    }
+    let canonical_meta = retained_meta(
+        store,
+        &ObjectPath::from(manifest.canonical.object_key.as_str()),
+        Some(manifest.canonical.bytes),
+    )
+    .await?;
+    // Startup stages no records/leaves; all publication metadata is charged,
+    // including the maximum new root, before any scratch or destination write.
+    roster
+        .iter()
+        .try_fold(2 * 65536_u64 + 4096, |total, (name, _, meta)| {
+            // New root can grow: separately reserve both destination and serving
+            // copies at the root cap, rather than charging the old root length.
+            let copies = if *name == "manifest.json" {
+                0
+            } else {
+                1 + u64::from(!["plane/records.bin", "router/leaves.bin"].contains(name))
+            };
+            total.checked_add(meta.size.checked_mul(copies)?)
+        })
+        .filter(|&n| n <= max_scratch_bytes)
+        .ok_or(bad("retained cumulative scratch"))?;
+    for (name, digest, meta) in &roster {
+        if !["manifest.json", "plane/manifest.json", "page_manifest.json"].contains(name) {
+            authenticate_retained_body(store, meta, digest, buffer_bytes, false).await?;
+        }
+    }
+    for (meta, digest) in [
+        (&sq8_meta, manifest.sq8_object_sha256.as_str()),
+        (&current_sq8_meta, manifest.sq8_object_sha256.as_str()),
+        (&canonical_meta, manifest.canonical.sha256.as_str()),
+    ] {
+        authenticate_retained_body(store, meta, digest, buffer_bytes, false).await?;
+    }
+    let mut created = Vec::with_capacity(10);
+    let mut head_attempted = false;
+    let result = async {
+        // Native create-only copies retain every payload byte; copied identity is
+        // independently authenticated, since transport copy changes local ETags.
+        let mut new_manifest: Manifest =
+            serde_json::from_slice(&root).map_err(|_| bad("retained root schema"))?;
+        new_manifest.sq8_object_key = approved.sq8_object_key.to_owned();
+        new_manifest.sq8_etag = approved.sq8_etag.to_owned();
+        let new_root =
+            serde_json::to_vec(&new_manifest).map_err(|_| bad("retained root serialization"))?;
+        if new_root.is_empty() || new_root.len() > 65536 {
+            return Err(bad("retained new root length"));
+        }
+        // Replace the already admitted second parsed root; do not retain a third.
+        drop(new_manifest);
+        let roundtrip: Manifest =
+            serde_json::from_slice(&new_root).map_err(|_| bad("retained new root schema"))?;
+        for (original, rewritten) in [
+            (&manifest.low, &roundtrip.low),
+            (&manifest.step, &roundtrip.step),
+        ] {
+            if !original
+                .iter()
+                .map(|v| v.to_bits())
+                .eq(rewritten.iter().map(|v| v.to_bits()))
+            {
+                return Err(bad("retained coefficient bits"));
+            }
+        }
+        drop(roundtrip);
+        use sha2::{Digest, Sha256};
+        let new_sha = format!("{:x}", Sha256::digest(&new_root));
+        let new_prefix = destination
+            .clone()
+            .join("generations")
+            .join(new_sha.as_str());
+        let mut destination_pins = Vec::with_capacity(10);
+        for (name, digest, meta) in &roster {
+            if *name == "manifest.json" {
+                continue;
+            }
+            let location = metadata_location(&new_prefix, name);
+            store
+                .copy_opts(
+                    &meta.location,
+                    &location,
+                    CopyOptions::new().with_mode(CopyMode::Create),
+                )
+                .await?;
+            created.push(location.clone());
+            let copied = retained_meta(store, &location, Some(meta.size)).await?;
+            authenticate_retained_body(store, &copied, digest, buffer_bytes, false).await?;
+            destination_pins.push(copied);
+        }
+        let location = metadata_location(&new_prefix, "manifest.json");
+        store
+            .put_opts(
+                &location,
+                PutPayload::from(new_root.clone()),
+                PutOptions {
+                    mode: PutMode::Create,
+                    ..Default::default()
+                },
+            )
+            .await?;
+        created.push(location.clone());
+        let copied = retained_meta(store, &location, Some(new_root.len() as u64)).await?;
+        authenticate_retained_body(store, &copied, &new_sha, buffer_bytes, false).await?;
+        destination_pins.push(copied);
+        // Validate the exact staged root/metadata that the head will publish.
+        // One serving pass, no centroids; caller bodies/rosters/pins are already
+        // subtracted from this budget. Its temporary scratch is RAII owned.
+        drop(
+            TwoBitGeneration::open_remote(
+                store,
+                &new_prefix,
+                &new_sha,
+                TwoBitGenerationLimits {
+                    max_memory_bytes: available as u64,
+                    already_pinned_bytes: 0,
+                    ..limits
+                },
+                scratch_parent,
+            )
+            .await?,
+        );
+        for meta in roster
+            .iter()
+            .map(|(_, _, meta)| meta)
+            .chain([&sq8_meta, &current_sq8_meta, &canonical_meta])
+            .chain(destination_pins.iter())
+        {
+            if store.head(&meta.location).await? != *meta {
+                return Err(bad("retained object changed"));
+            }
+        }
+        recheck_retained_control(store, retained).await?;
+        let control = HeadBody {
+            schema: "borsuk-two-bit-head-v2".into(),
+            epoch: 1,
+            generation: approved.generation,
+            root_sha256: new_sha.clone(),
+            mutation: None,
+            fence: None,
+        };
+        let body = serde_json::to_vec(&control).map_err(|_| bad("retained head serialization"))?;
+        // Mark BEFORE polling the create: its response may be lost after commit.
+        // Propagate its original failure; keep metadata for independent recovery.
+        head_attempted = true;
+        let version = UpdateVersion::from(
+            store
+                .put_opts(
+                    &destination.clone().join("head.json"),
+                    PutPayload::from(body),
+                    PutOptions {
+                        mode: PutMode::Create,
+                        ..Default::default()
+                    },
+                )
+                .await?,
+        );
+        if (version.e_tag.is_none() && version.version.is_none())
+            || version.e_tag.as_ref().is_some_and(|v| v.capacity() > 4096)
+            || version
+                .version
+                .as_ref()
+                .is_some_and(|v| v.capacity() > 4096)
+        {
+            return Err(bad("retained head token admission"));
+        }
+        Ok(TwoBitHead {
+            epoch: 1,
+            dimensions: retained.dimensions,
+            empty: false,
+            generation: approved.generation,
+            root_sha256: new_sha,
+            root: new_root.into_boxed_slice(),
+            prefix: destination.clone(),
+            version,
+        })
+    }
+    .await;
+    if result.is_err() && !head_attempted {
+        for location in created.into_iter().rev() {
+            let _ = store.delete(&location).await;
+        }
+    }
+    result
 }
 
 /// Validate prepared local metadata, stream/hash it to an immutable root prefix,
