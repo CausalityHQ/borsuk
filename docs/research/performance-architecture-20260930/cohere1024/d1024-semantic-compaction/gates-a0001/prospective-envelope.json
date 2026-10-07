@@ -1,0 +1,61 @@
+{
+  "scope": "Native compiler and synthetic maintenance correctness only; no corpus/query/vendor performance experiment",
+  "cpu": 2,
+  "memory_bytes": 8589934592,
+  "swap_bytes": 0,
+  "pids": 512,
+  "build_jobs": 1,
+  "native_seconds": 7200,
+  "machine_seconds": 9000,
+  "spot": true,
+  "compute_reservation_usd": 1.25,
+  "ancillary_reservation_usd": 0.15,
+  "stages": {
+    "application-ids-debug": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --test two_bit_application_ids -- --test-threads=1",
+    "compaction-debug": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_compaction::tests:: -- --test-threads=1",
+    "semantic-parity-debug": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::semantic_object_store_parity -- --exact --test-threads=1",
+    "application-ids-release": "env CARGO_BUILD_JOBS=1 cargo test --locked --release -p borsuk --test two_bit_application_ids -- --test-threads=1",
+    "compaction-release": "env CARGO_BUILD_JOBS=1 cargo test --locked --release -p borsuk --lib two_bit_compaction::tests:: -- --test-threads=1",
+    "semantic-parity-release": "env CARGO_BUILD_JOBS=1 cargo test --locked --release -p borsuk --lib two_bit_generation::source_walk_tests::semantic_object_store_parity -- --exact --test-threads=1",
+    "library-release": "env CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk",
+    "workspace-clippy": "env CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "workspace-test-build": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  },
+  "required_new_test_names": [
+    "semantic_d1024_compaction_reopens_with_application_ids_and_score_bits",
+    "semantic_d1024_compaction_recovers_ready_publication_in_memory",
+    "semantic_d768_compaction_reopens_with_application_ids_and_score_bits",
+    "semantic_d1025_compaction_refuses_before_side_effects"
+  ],
+  "required_existing_exact_test": "two_bit_generation::source_walk_tests::semantic_object_store_parity",
+  "source_preview": {
+    "status": "UNVERIFIED_COMBINED_SOURCE_PREVIEW_NO_LAUNCH",
+    "root_base": "1a464820e7904c7c5ad4c45885b9b3663cabc869",
+    "child_commit": "230e8639850002fc4645311f231e1ec5c90d0b16",
+    "preview_commit": "68c6243a0c560f875e33fcc31d83e80ffc6c8813",
+    "owned_paths": [
+      "crates/borsuk/src/two_bit_compaction.rs",
+      "crates/borsuk/src/two_bit_generation.rs",
+      "crates/borsuk/tests/two_bit_application_ids.rs"
+    ],
+    "reducer_integrated": true
+  },
+  "source_archive": {
+    "status": "ARCHIVED_SOURCE_UNVERIFIED_REVIEWS_PENDING_NO_LAUNCH",
+    "source_commit": "68c6243a0c560f875e33fcc31d83e80ffc6c8813",
+    "support_file_count": 2449,
+    "full_native_file_count": 414,
+    "full_native_identity_sha256": "db32f28f71a5544eb9485c6323ba002a2e62df5df210f78209a9ea2a630e8adc",
+    "archive": {
+      "bytes": 13180824,
+      "sha256": "5bd1dc71698c2529f8eddb63e7729d975d1c4fc06e18a54f5d208a0782498db1"
+    },
+    "changed_native": [
+      "crates/borsuk/src/two_bit_compaction.rs",
+      "crates/borsuk/src/two_bit_generation.rs",
+      "crates/borsuk/tests/two_bit_application_ids.rs"
+    ],
+    "support_scope": "Exact current-candidate blobs at explicit existing2449 build-support paths; every tracked Rust/Cargo source included. New research receipt documents are outside this build-support archive."
+  },
+  "status": "PREREGISTERED_NO_LAUNCH"
+}

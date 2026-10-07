@@ -1,0 +1,12 @@
+{
+  "status": "UNVERIFIED_COMBINED_SOURCE_PREVIEW_NO_LAUNCH",
+  "root_base": "1a464820e7904c7c5ad4c45885b9b3663cabc869",
+  "child_commit": "230e8639850002fc4645311f231e1ec5c90d0b16",
+  "preview_commit": "68c6243a0c560f875e33fcc31d83e80ffc6c8813",
+  "owned_paths": [
+    "crates/borsuk/src/two_bit_compaction.rs",
+    "crates/borsuk/src/two_bit_generation.rs",
+    "crates/borsuk/tests/two_bit_application_ids.rs"
+  ],
+  "reducer_integrated": true
+}

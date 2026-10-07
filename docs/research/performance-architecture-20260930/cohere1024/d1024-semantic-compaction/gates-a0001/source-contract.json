@@ -1,0 +1,85 @@
+{
+  "status": "UNVERIFIED_SOURCE_ONLY_REPAIR_HOLD_FOR_PARENT_NATIVE_GATES",
+  "commit": "230e8639850002fc4645311f231e1ec5c90d0b16",
+  "parent_commit": "2b1239beca4eb19f067f4f88d17268785ebdcd00",
+  "original_base": "e67e861b3075e5a40e80734abead48f8e65466d6",
+  "original_contract_preserved": {
+    "path": "/tmp/borsuk-d1024-semantic-compaction-contract.json",
+    "sha256": "d370ac9ae6404bfd2482c5fe7955c7e3259fa9afdd5b93e90524523248c0cf4e",
+    "qualification": "Original2b snapshot retained; this repair contract supersedes its fixture/gate descriptions for the repaired descendant."
+  },
+  "source_reviews_read_in_full": "/data/target/borsuk-d1024-semantic-compaction-gates-a0001/source-reviews.json",
+  "worktree": "/home/rb/worktrees/borsuk-d1024-semantic-compaction",
+  "branch": "devbox/d1024-semantic-compaction",
+  "author": "Roman Bartusiak <riomus@gmail.com>",
+  "owned3_final_roster": [
+    {
+      "path": "crates/borsuk/src/two_bit_compaction.rs",
+      "bytes": 38094,
+      "sha256": "77bc811bd9d11da31c1726b4c5edd7080f6755b0dcac74227e469ebcf79015b8",
+      "repair_changed": false
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_generation.rs",
+      "bytes": 205307,
+      "sha256": "0c1d9e41e6952a38e10f5579ee701aa3020502cdd4f527e9989fe7c5f849c7c1",
+      "repair_changed": true
+    },
+    {
+      "path": "crates/borsuk/tests/two_bit_application_ids.rs",
+      "bytes": 88042,
+      "sha256": "458dbd036a2d278aaff6400be5e1e906476bb85bd778db514bc1d3719da2434c",
+      "repair_changed": true
+    }
+  ],
+  "api_and_production": "No new API or production changes in repair. Original2b Native100k shared dimension guard and separate Fresh1m refusal preserved exactly; no query/profile/scoring/format/resource/scientific cap change.",
+  "mandatory_new_integration_test_names": [
+    "semantic_d1024_compaction_reopens_with_application_ids_and_score_bits",
+    "semantic_d1024_compaction_recovers_ready_publication_in_memory",
+    "semantic_d768_compaction_reopens_with_application_ids_and_score_bits",
+    "semantic_d1025_compaction_refuses_before_side_effects"
+  ],
+  "mandatory_affected_existing_library_test": "two_bit_generation::source_walk_tests::semantic_object_store_parity",
+  "test_repairs": {
+    "base_vectors": "Persist each original varied-norm base row normalized using independently derived f64 norm before SQ8/hash. Raw vectors remain for independent canonical expectations; raw mutations retain their varied norms.",
+    "mutation_order": "Strict ascending ID batch: deletei64::MIN+3, update71, inserti64::MAX.",
+    "source_geometry": "Assert dimensions%256==0 for tested768/1024; use dimensions.div_ceil(4)+8 for source record width, no private padded_dimensions call or new public API.",
+    "backend": "InMemory conditional CAS and streamed bodies for bothD1024 fixtures; no LocalFileSystem lifecycle qualification claimed, backend wrapper/framework or unconditional overwrite added.",
+    "recovery": "Existing real fault seam fails second head PUT after ready: match TwoBitStoreError::Store(Error::Generic{store:fault-injecting}) and exact source error text; operation log asserts2head PUT attempts. Old root/sealed delta independently reopened; retry same directory asserts ready root identity/unchanged SQ8 ETag/0newclaim PUTs/0old-key SQ8 multipart reuploads.",
+    "content_and_scores": "Existing exact logical-ID roster, independent normalized canonical update/insert content, deleted absence, sequential scalar SQ8 ordinal/ID/score bits for2queries, and second no-work compaction assertions retained.",
+    "existing_boundary": "Only semantic_object_store_parity unsupported-dimension block: all five D769 values replaced by1025 consistently; every prior refusal/no-job/still-writable assertion preserved."
+  },
+  "test_resource_envelopes": {
+    "builder_payload_bytes": 33554432,
+    "generation_payload_bytes": 33554432,
+    "maintenance_payload_bytes": 33554432,
+    "maintenance_disk_bytes": 4194304,
+    "mutation_payload_bytes": 1000000,
+    "mutation_snapshot_bytes": 32768,
+    "source_recovery_chunk_bytes": 65536,
+    "scratch": "Existing RotatedTwoBitCodec::required_query_scratch_bytes: D768399360,D1024532480; ordinary queries retain no diagnostic trace.",
+    "query": "4rows, one active query,1query GET/parallel GET,4*(D+12) max response bytes;1source GET/parallel GET,4*(ceil(D/4)+8) source bytes with complete256-coordinate blocks. Generation32Mi admits fixed12.7Mi semantic emit; fixture budget only."
+  },
+  "local_source_checks": {
+    "resource_envelope": "systemd-run --user --scope --quiet -p CPUQuota=100% -p MemoryMax=256M -p MemorySwapMax=0 timeout 120s",
+    "rustfmt": "rustfmt --edition 2024 --config skip_children=true --check crates/borsuk/src/two_bit_compaction.rs crates/borsuk/src/two_bit_generation.rs crates/borsuk/tests/two_bit_application_ids.rs",
+    "rustfmt_exit": 0,
+    "diff_check_exit": 0,
+    "ownership_parent_hash_and_frozen_contract_check_exit": 0,
+    "clean_after_commit": true,
+    "qualification": "Source checks only; no native compilation/tests/Cargo/rustc/Python/newreviews/consults/children/jobs/network/cloud/deps/push/merge."
+  },
+  "parent_mandatory_native_gate_commands_not_run_locally": [
+    "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --test two_bit_application_ids -- --test-threads=1",
+    "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_compaction::tests:: -- --test-threads=1",
+    "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::semantic_object_store_parity -- --exact --test-threads=1",
+    "env CARGO_BUILD_JOBS=1 cargo test --locked --release -p borsuk --test two_bit_application_ids -- --test-threads=1",
+    "env CARGO_BUILD_JOBS=1 cargo test --locked --release -p borsuk --lib two_bit_compaction::tests:: -- --test-threads=1",
+    "env CARGO_BUILD_JOBS=1 cargo test --locked --release -p borsuk --lib two_bit_generation::source_walk_tests::semantic_object_store_parity -- --exact --test-threads=1",
+    "env CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk",
+    "env CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  ],
+  "live_reducer_untouched": "i-06a549287a154dfd5/session67407, original reducerb07ae258; no job control or qualification claim",
+  "disposition": "HOLD SAME worker for root exact native gate feedback. No merge/push/agent_complete/archive. No distributed GC/readers/10M/performance claim."
+}
