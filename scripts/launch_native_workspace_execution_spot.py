@@ -565,6 +565,9 @@ RETAINED_REBIND_STAGES = tuple((name, command.split()) for name, command in (
     ('clippy', 'cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious'),
     ('test-build', 'env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh')))
 RETAINED_REBIND_RELEASE = ('binaries/check_cohere_native_baseline', 'binaries/publish_two_bit_generation')
+# Environment only: a0003 RunInstances hit InsufficientInstanceCapacity in eu-central-1a. This eu-central-1c subnet is in the
+# same VPC as SUBNET; the retained mode alone uses it and configure() restores SUBNET for every other mode.
+RETAINED_REBIND_SUBNET = 'subnet-0a12dbed0ca6fac25'
 
 
 def retained_rebind_required_tests(required):
@@ -865,7 +868,7 @@ def encoded(value):
 def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False, cohere1024=False, cohere_cohort=False, cohere_sq8_builder=False, exact_sq8_runtime=False, retained_generation_rebind=False):
     """Select the protocol explicitly in every controller/worker process."""
     global SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, CONSTRAINED_SPLIT, CELL_OVERLAP, FINE_SQ8, PQ_RESIDUAL, CO_SELECTION, MINIMAL_ARCHIVE, NATIVE_DELTA, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
-    global SCHEMA, CONFIG_SCHEMA, RECEIPT_SCHEMA, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, TERMINAL_IDENTITIES
+    global SCHEMA, CONFIG_SCHEMA, RECEIPT_SCHEMA, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, TERMINAL_IDENTITIES, SUBNET
     global BUDGET_OBJECT_SELECTOR, BUDGET_OBJECT_FITTER, COHERE1024, COHERE_COHORT, COHERE_SQ8_BUILDER, EXACT_SQ8_RUNTIME, RETAINED_GENERATION_REBIND
     global COHERE_COHORT_STAGES, COHERE_COHORT_STAGE_SCHEMA, COHERE_COHORT_REQUIRED_TESTS, _COHORT_REBOUND
     assert type(budget_object_selector) is type(budget_object_fitter) is type(cohere1024) is type(cohere_cohort) is type(cohere_sq8_builder) is type(exact_sq8_runtime) is type(retained_generation_rebind) is bool
@@ -878,6 +881,7 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
     # The exact SQ8 and retained rebind modes reuse the cohort-family lifecycle with their own protocol data.
     EXACT_SQ8_RUNTIME = exact_sq8_runtime
     RETAINED_GENERATION_REBIND = retained_generation_rebind
+    SUBNET = RETAINED_REBIND_SUBNET if retained_generation_rebind else FULL_FIXED['subnet_id']
     if exact_sq8_runtime or retained_generation_rebind:
         cohere_cohort = True
         COHERE_COHORT_STAGES, COHERE_COHORT_STAGE_SCHEMA, COHERE_COHORT_REQUIRED_TESTS = (
@@ -1179,7 +1183,7 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
         CONFIG_SCHEMA = 'borsuk-retained-generation-rebind-implementation-gates-v1'
         RECEIPT_SCHEMA = 'borsuk-retained-generation-rebind-implementation-gates-receipt-v1'
         CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_retained_generation_rebind_implementation.sh')
-        FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_retained_generation_rebind_implementation.sh'])
+        FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_retained_generation_rebind_implementation.sh'], subnet_id=SUBNET)
 
 
     if cohere_sq8_builder:
@@ -3430,6 +3434,8 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
         with execution_mode(**historical_mode):
             assert all(encoded(str(globals()[name]) if isinstance(globals()[name], Path) else globals()[name]) ==
                 encoded(str(getattr(old, name)) if isinstance(getattr(old, name), Path) else getattr(old, name)) for name in fields), 'historical protocol bytes changed'
+            if retained_generation_rebind:  # switch-back: every other mode keeps the original subnet, FIXED matches SUBNET
+                assert SUBNET == FIXED['subnet_id'] == old.SUBNET == old.FIXED['subnet_id'] == FULL_FIXED['subnet_id'], 'historical subnet changed'
     for regression_mode in ('fixed48', 'hierarchical_cells', 'constrained_split', 'cell_overlap', 'fine_sq8', 'pq_residual', 'co_selection'):
         _fixed48_stages_self_check(**{regression_mode:True}) if regression_mode != 'fixed48' else _fixed48_stages_self_check()
     with patch.object(module, required_attr, {}), execution_mode(**mode):
@@ -3448,6 +3454,7 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
             assert NATIVE_DELTA == RETAINED_REBIND_DELTA == tuple(sorted(RETAINED_REBIND_DELTA)) and len(NATIVE_DELTA) == 3 and set(RETAINED_REBIND_TEST_SOURCES.values()) <= set(NATIVE_DELTA)
             assert RELEASE_ARTIFACTS == RETAINED_REBIND_RELEASE == ('binaries/check_cohere_native_baseline', 'binaries/publish_two_bit_generation')
             assert str(ROOT) == 'docs/research/performance-architecture-20260930/cohere1024/retained-generation-rebind/implementation-gates'
+            assert SUBNET == FIXED['subnet_id'] == RETAINED_REBIND_SUBNET != FULL_FIXED['subnet_id'], 'retained mode alone uses the 1c subnet'
             assert PREFIX == 'research/semantic-router/20261006/retained-generation-rebind-gates-' and COHERE_COHORT_STAGES is RETAINED_REBIND_STAGES
             assert [name for name, _ in stages] == ['retained-rebind-integration-tests', 'retained-rebind-publisher-tests', 'release', 'clippy', 'test-build']
             assert all('--locked' in command for _, command in stages if command[0] == 'cargo') and all(command[-2:] == ['--', '--test-threads=1'] for _, command in stages[:2])
@@ -3747,6 +3754,9 @@ def _budget_object_selector_self_check(*, budget_object_fitter=False, cohere1024
             files = _worker_self_check(proof, config_body, manifest_body)
             _collection_self_check(proof, files, body)
             _lifecycle_self_check(proof)
+    if retained_generation_rebind:  # restoring the default mode puts the original subnet back
+        with execution_mode():
+            assert SUBNET == FIXED['subnet_id'] == old.SUBNET == FULL_FIXED['subnet_id']
     print('PASS '+tag+(' glue: five serial gates (retained_semantic_ integration tests, publisher bin old+new tests, release publisher+baseline, clippy, test-build); roster='+('FROZEN' if RETAINED_REBIND_REQUIRED_TESTS else 'PENDING (synthetic names)')+'; native roster names must be real fns;' if retained_generation_rebind else ' glue: seven serial gates (7 scorer tests debug+release, returned nonzero, release baseline+probe binaries, one-CPU probe, clippy, test-build);' if exact_sq8_runtime else ' glue: six serial bin gates (publisher 2 + old 16 names, release 3 bins);' if cohere_cohort else ' glue: six serial gates; debug/release oracle once per stage;' if cohere1024 else ' glue: four serial gates;')+' exact names/counts/resources; pending/source/archive/tee/ACK/termination refusals; historical protocol bytes preserved; SYNTHETIC MOCKS ONLY, Rust UNRUN')
 
 

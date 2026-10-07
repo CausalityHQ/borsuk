@@ -1,0 +1,13 @@
+{
+  "status": "SOURCE_GLUE_VERIFIED_NATIVE_PENDING",
+  "child_commit": "67b03fc3b2ecb872be8eaf4a3e7fe1a96e14d34b",
+  "parent": "6d02970e026af61c24027c718d18110c044c6ce4",
+  "launcher_sha256": "0152e1fad2fd2e3af5ede5269fc1d4ab00c0995ab7d05e6d55284784b805c8a3",
+  "previous_attempt": "a0003",
+  "failure": "InsufficientInstanceCapacity before instance launch",
+  "new_subnet": "subnet-0a12dbed0ca6fac25",
+  "zone": "eu-central-1c",
+  "algorithm_and_native_limits_unchanged": true,
+  "native_source": "cc3025962392604ac1419fb2f4959f5b0c31894d",
+  "verification": "Original bounded worker self-check exit0; historical subnet restore and direct switch probe passed; root independently reviewed exact OWN1 diff and Git blob."
+}
