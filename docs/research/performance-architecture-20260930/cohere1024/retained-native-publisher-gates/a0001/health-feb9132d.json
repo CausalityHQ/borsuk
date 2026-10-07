@@ -1,0 +1,22 @@
+{
+    "CommandId": "feb9132d-326e-4641-9d95-57d8bec7f181",
+    "InstanceId": "i-066e9b43ae41cfe0d",
+    "Comment": "",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-07T16:38:44.750Z",
+    "ExecutionElapsedTime": "PT0.006S",
+    "ExecutionEndDateTime": "2026-10-07T16:38:44.750Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "MainPID=3322\nResult=success\nMemoryCurrent=3466350592\nMemoryPeak=6810382336\nActiveState=active\nSubState=running\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

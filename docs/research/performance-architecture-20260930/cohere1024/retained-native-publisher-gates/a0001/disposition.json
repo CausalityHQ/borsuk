@@ -1,0 +1,17 @@
+{
+  "status": "NATIVE_QUALIFIED",
+  "candidate": "4c2e535fef1fdc2e61fa003358614287bb8ed488",
+  "original_instance": "i-066e9b43ae41cfe0d",
+  "terminated": true,
+  "verification_exit": 0,
+  "verification_unit": "borsuk-retained-s3-publisher-verify-a0001",
+  "verification_invocation": "fb8ec7d534ba430298dec5a28fede7a7",
+  "scope": "Rust compiler/HTTP fixture/retained correctness only; real S3 publication and ANN performance pending",
+  "gate_count": 7,
+  "artifact_count": 76,
+  "native_count": 414,
+  "native_identity": "07fe340f2e449e970cb04891a4509a1d766cd8498e93757ac4e11e8ce6f63fd7",
+  "reviews": "bc7a4234ecf54fd1 both complete; required source repairs reconciled before original launch",
+  "original_ambiguous_child_preserved": true,
+  "next": "Exact real retained S3 publication/input admission, separate disposable canary, then frozen serial1000 measurement; no competitor win claim."
+}

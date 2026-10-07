@@ -1,0 +1,117 @@
+{
+  "status": "NATIVE_QUALIFIED",
+  "source_commit": "4c2e535fef1fdc2e61fa003358614287bb8ed488",
+  "instance_id": "i-066e9b43ae41cfe0d",
+  "terminated": true,
+  "artifact_count": 76,
+  "native_source_file_count": 414,
+  "native_source_identity_sha256": "07fe340f2e449e970cb04891a4509a1d766cd8498e93757ac4e11e8ce6f63fd7",
+  "full_source_count": 2449,
+  "full_before_after_match": true,
+  "native_git_bytes_match": true,
+  "mandatory_tests_by_stage": {
+    "transport-tests": [
+      "sq8_s3_range::tests::bounded_query_reads_only_verified_pages_and_charges_failures",
+      "sq8_s3_range::tests::bounded_range_query_future_is_send",
+      "sq8_s3_range::tests::bounded_source_ranges_authenticate_tail_and_charge_failures",
+      "sq8_s3_range::tests::conditional_short_tail_rejects_mutated_object",
+      "sq8_s3_range::tests::generation_publish_reload_and_http_search_fail_closed",
+      "sq8_s3_range::tests::native_s3_create_copy_uses_conditional_multipart",
+      "sq8_s3_range::tests::physical_namespace_preserves_logical_paths_and_read_accounting",
+      "sq8_s3_range::tests::physical_namespace_rejects_bad_range_etag_and_sha_without_retries",
+      "sq8_s3_range::tests::publication_request_deadline_allows_progressing_whole_body",
+      "sq8_s3_range::tests::real_http_range_faults_fail_closed_without_hidden_retries",
+      "sq8_s3_range::tests::redirects_and_unfinished_error_bodies_fail_after_one_request",
+      "sq8_s3_range::tests::source_authority_is_rejected_before_sq8_get"
+    ],
+    "retained-integration-tests": [
+      "retained_semantic_republication_preserves_payload_and_score_bits",
+      "retained_semantic_republication_refuses_unapproved_changed_or_unbounded_inputs"
+    ],
+    "publisher-tests": [
+      "tests::publishes_real_generation_and_receipt_then_refuses_replay",
+      "tests::rejects_wrong_root_cap_existing_head_and_bad_config",
+      "tests::retained_backend_descriptors_are_strict_before_store_operations",
+      "tests::retained_publishes_copied_source_gone_generation_and_bound_receipt",
+      "tests::retained_refuses_bad_config_pending_head_and_occupied_output_without_head"
+    ],
+    "runner-tests": [
+      "tests::actual_native_queries_seal_and_reduce_against_literal_oracles",
+      "tests::missing_or_tampered_truth_is_invalid_only_after_all_queries_are_sealed",
+      "tests::namespaced_pipeline_faults_preserve_binding_accounting_and_seal",
+      "tests::prefix_or_requests_tampering_blocks_first_truth_open",
+      "tests::production_contract_rejects_unknown_hash_geometry_and_caps",
+      "tests::reporting_underfill_keeps_fixed_ten_denominator_and_bounded_output",
+      "tests::scratch_formula_keeps_codec_and_trace_separate",
+      "tests::secure_artifacts_reject_hash_length_eof_symlink_fifo_and_bad_rows",
+      "tests::source_binding_and_all_request_rows_fail_before_queries"
+    ]
+  },
+  "stages": [
+    {
+      "name": "transport-tests",
+      "command": "cargo test --locked -p borsuk --lib sq8_s3_range:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "retained-integration-tests",
+      "command": "cargo test --locked -p borsuk --test two_bit_generation retained_semantic_ -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "publisher-tests",
+      "command": "cargo test --locked -p borsuk --bin publish_two_bit_generation -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "runner-tests",
+      "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "publisher-release",
+      "command": "cargo build --locked --release -p borsuk --bin publish_two_bit_generation --bin check_cohere_native_baseline",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "workspace-clippy",
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "workspace-test-build",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "native_exit": 0,
+      "tee_exit": 0
+    }
+  ],
+  "binaries": {
+    "check_cohere_native_baseline": {
+      "bytes": 16135912,
+      "sha256": "9a65fd6137eaa3929a1ee05fc798ef12c8fb8ab9970099c9b6de3c1031d15f72"
+    },
+    "publish_two_bit_generation": {
+      "bytes": 15674840,
+      "sha256": "85ca006a941679fb1daf839e253f413fbaad5ac83feabdf04ad09ce9d4e77597"
+    }
+  },
+  "memory_peak_bytes": 8589934592,
+  "memory_events": {
+    "low": "0",
+    "high": "0",
+    "max": "4541",
+    "oom": "0",
+    "oom_kill": "0",
+    "oom_group_kill": "0",
+    "sock_throttled": "0"
+  },
+  "swap_peak_bytes": 0,
+  "systemd_after": "MainPID=0\nResult=success\nExecMainStatus=0\nLoadState=not-found\nActiveState=inactive\nSubState=dead\n",
+  "performance_claim": false
+}

@@ -1,5 +1,6 @@
-//! Publish one authenticated local two-bit generation as a fresh LocalFileSystem head.
+//! Publish a fresh local generation or rebind an authenticated retained generation to Local/S3.
 use borsuk::{
+    sq8_s3_range::OneAttemptS3,
     two_bit_generation::TwoBitGenerationLimits,
     two_bit_store::{
         RetainedTwoBitApproval, publish_two_bit_generation, read_two_bit_head,
@@ -7,7 +8,7 @@ use borsuk::{
     },
 };
 use object_store::{local::LocalFileSystem, path::Path as ObjectPath};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
@@ -22,8 +23,8 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const CONFIG_CAP: u64 = 65_536;
 const CONFIG_SCHEMA: &str = "borsuk-two-bit-local-publication-config-v1";
 const RECEIPT_SCHEMA: &str = "borsuk-two-bit-local-publication-receipt-v1";
-const RETAINED_CONFIG_SCHEMA: &str = "borsuk-two-bit-retained-local-publication-config-v1";
-const RETAINED_RECEIPT_SCHEMA: &str = "borsuk-two-bit-retained-local-publication-receipt-v1";
+const RETAINED_CONFIG_SCHEMA: &str = "borsuk-two-bit-retained-publication-config-v2";
+const RETAINED_RECEIPT_SCHEMA: &str = "borsuk-two-bit-retained-publication-receipt-v2";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -44,7 +45,7 @@ struct Root {
 #[serde(deny_unknown_fields)]
 struct RetainedConfig {
     schema: String,
-    store_root: PathBuf,
+    backend: RetainedBackend,
     retained_prefix: String,
     original_root_sha256: String,
     original_generation: u64,
@@ -55,6 +56,19 @@ struct RetainedConfig {
     scratch_parent: PathBuf,
     max_scratch_bytes: u64,
     limits: Limits,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "kind", deny_unknown_fields)]
+enum RetainedBackend {
+    Local {
+        store_root: PathBuf,
+    },
+    S3 {
+        bucket: String,
+        region: String,
+        namespace: String,
+        request_timeout_seconds: u64,
+    },
 }
 // Every field is mandatory: the caller states the admission, nothing is defaulted.
 #[derive(Deserialize)]
@@ -128,8 +142,35 @@ fn retained_config(path: &Path, trusted_sha: &str) -> Result<RetainedConfig> {
     {
         return Err("invalid retained approval".into());
     }
-    if !c.store_root.is_dir() || !c.scratch_parent.is_dir() {
-        return Err("retained store/scratch not a directory".into());
+    if !c.scratch_parent.is_dir() {
+        return Err("retained scratch not a directory".into());
+    }
+    match &c.backend {
+        RetainedBackend::Local { store_root } if !store_root.is_dir() => {
+            return Err("retained store not a directory".into());
+        }
+        RetainedBackend::S3 {
+            bucket,
+            region,
+            namespace,
+            request_timeout_seconds,
+        } => {
+            if !(3..=63).contains(&bucket.len())
+                || !bucket.bytes().all(|c| {
+                    c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'.' | b'-')
+                })
+                || region.is_empty()
+                || !region
+                    .bytes()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+                || !(1..=600).contains(request_timeout_seconds)
+                || namespace.is_empty()
+                || ObjectPath::parse(namespace)?.as_ref() != namespace.as_str()
+            {
+                return Err("retained S3 descriptor".into());
+            }
+        }
+        _ => {}
     }
     Ok(c)
 }
@@ -226,12 +267,34 @@ async fn publish_retained(config_path: &Path, config_sha: &str, receipt: &Path) 
     if source.as_ref().is_empty() || destination.as_ref().is_empty() {
         return Err("invalid retained prefix".into());
     }
-    let store = LocalFileSystem::new_with_prefix(&c.store_root)?;
-    let retained = read_two_bit_head(&store, &source)
+    let local;
+    let remote;
+    let store: &dyn object_store::ObjectStore = match &c.backend {
+        RetainedBackend::Local { store_root } => {
+            local = LocalFileSystem::new_with_prefix(store_root)?;
+            &local
+        }
+        RetainedBackend::S3 {
+            bucket,
+            region,
+            namespace,
+            request_timeout_seconds,
+        } => {
+            remote = OneAttemptS3::new_with_prefix_and_timeout(
+                bucket,
+                region,
+                ObjectPath::parse(namespace)?,
+                std::time::Duration::from_secs(*request_timeout_seconds),
+            )
+            .map_err(|error| format!("retained S3 transport: {error:?}"))?;
+            remote.store()
+        }
+    };
+    let retained = read_two_bit_head(store, &source)
         .await?
         .ok_or("retained head missing")?;
     let published = republish_retained_two_bit_generation(
-        &store,
+        store,
         &retained,
         RetainedTwoBitApproval {
             root_sha256: &c.original_root_sha256,
@@ -246,7 +309,7 @@ async fn publish_retained(config_path: &Path, config_sha: &str, receipt: &Path) 
         c.max_scratch_bytes,
     )
     .await?;
-    let head = read_two_bit_head(&store, &destination)
+    let head = read_two_bit_head(store, &destination)
         .await?
         .ok_or("published retained head missing")?;
     if head.root_sha256() != published.root_sha256()
@@ -261,7 +324,7 @@ async fn publish_retained(config_path: &Path, config_sha: &str, receipt: &Path) 
     let body = serde_json::to_vec_pretty(&json!({
         "schema": RETAINED_RECEIPT_SCHEMA,
         "config_sha256": config_sha,
-        "store_root": c.store_root,
+        "backend": c.backend,
         "retained_prefix": c.retained_prefix,
         "original_root_sha256": c.original_root_sha256,
         "original_generation": c.original_generation,
@@ -274,7 +337,8 @@ async fn publish_retained(config_path: &Path, config_sha: &str, receipt: &Path) 
         "root_sha256": head.root_sha256(),
         "generation": head.generation(),
         "control_epoch": head.control_epoch(),
-        "local_file_only": true,
+        "local_file_only": matches!(&c.backend, RetainedBackend::Local { .. }),
+        "credential_mode": match &c.backend { RetainedBackend::Local { .. } => "none", RetainedBackend::S3 { .. } => "instance_role_imds" },
         "performance_claim": false,
     }))?;
     write_receipt(receipt, &body)
@@ -470,7 +534,7 @@ mod tests {
         fs::create_dir(&scratch).unwrap();
         let c = json!({
             "schema": RETAINED_CONFIG_SCHEMA,
-            "store_root": copied_root,
+            "backend": {"kind": "Local", "store_root": copied_root},
             "retained_prefix": "semantic/index",
             "original_root_sha256": head.root_sha256(),
             "original_generation": head.generation(),
@@ -502,6 +566,40 @@ mod tests {
         ]
     }
 
+    #[test]
+    fn retained_backend_descriptors_are_strict_before_store_operations() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut value = json!({
+            "schema": RETAINED_CONFIG_SCHEMA,
+            "backend": {"kind": "S3", "bucket": "fixture", "region": "eu-central-1", "namespace": "tenant/import", "request_timeout_seconds": 120},
+            "retained_prefix": "semantic/index",
+            "original_root_sha256": "1".repeat(64),
+            "original_generation": 1, "original_control_epoch": 1,
+            "sq8_object_key": "semantic/objects/frozen", "sq8_etag": "\"actual\"",
+            "destination_prefix": "semantic/rebound",
+            "scratch_parent": dir.path(), "max_scratch_bytes": 4_000_000,
+            "limits": {"max_memory_bytes": 16_000_000, "max_active_queries": 1,
+                "max_query_bytes": 1, "max_query_gets": 1, "max_parallel_gets": 1,
+                "max_source_bytes": 1, "max_source_gets": 1, "max_parallel_source_gets": 1,
+                "max_query_scratch_bytes": 1, "already_pinned_bytes": 0}
+        });
+        let (path, sha) = write_config(dir.path(), &value);
+        assert!(retained_config(&path, &sha).is_ok());
+        for backend in [
+            json!({"kind": "S3", "bucket": "", "region": "eu-central-1", "namespace": "tenant", "request_timeout_seconds": 120}),
+            json!({"kind": "S3", "bucket": "fixture", "region": "eu-central-1", "namespace": "", "request_timeout_seconds": 120}),
+            json!({"kind": "S3", "bucket": "fixture", "region": "eu-central-1", "namespace": "tenant", "request_timeout_seconds": 120, "store_root": dir.path()}),
+            json!({"kind": "Local", "store_root": dir.path(), "bucket": "fixture"}),
+            json!({"kind": "S3", "bucket": "fixture", "region": "invalid region", "namespace": "tenant", "request_timeout_seconds": 120}),
+            json!({"kind": "S3", "bucket": "fixture", "region": "eu-central-1", "namespace": "tenant", "request_timeout_seconds": 0}),
+            json!({"kind": "S3", "bucket": "fixture", "region": "eu-central-1", "namespace": "tenant", "request_timeout_seconds": 601}),
+        ] {
+            value["backend"] = backend;
+            let (path, sha) = write_config(dir.path(), &value);
+            assert!(retained_config(&path, &sha).is_err());
+        }
+    }
+
     // A wrong dispatch/schema/approval or omitted receipt binding breaks this.
     #[test]
     fn retained_publishes_copied_source_gone_generation_and_bound_receipt() {
@@ -517,7 +615,7 @@ mod tests {
         assert_eq!(body["schema"], RETAINED_RECEIPT_SCHEMA);
         assert_eq!(body["config_sha256"], sha);
         for field in [
-            "store_root",
+            "backend",
             "retained_prefix",
             "original_root_sha256",
             "original_generation",
@@ -533,7 +631,8 @@ mod tests {
         assert_ne!(body["root_sha256"], c["original_root_sha256"]);
         assert_eq!(body["generation"], 1);
         assert_eq!(body["control_epoch"], 1);
-        let store = LocalFileSystem::new_with_prefix(c["store_root"].as_str().unwrap()).unwrap();
+        let store =
+            LocalFileSystem::new_with_prefix(c["backend"]["store_root"].as_str().unwrap()).unwrap();
         let prefix = ObjectPath::from("rebound/index");
         runtime.block_on(async {
             let head = read_two_bit_head(&store, &prefix).await.unwrap().unwrap();
@@ -568,7 +667,9 @@ mod tests {
             .unwrap();
         let (dir, good) = runtime.block_on(retained_fixture());
         let receipt = dir.path().join("retained-receipt.json");
-        let store = LocalFileSystem::new_with_prefix(good["store_root"].as_str().unwrap()).unwrap();
+        let store =
+            LocalFileSystem::new_with_prefix(good["backend"]["store_root"].as_str().unwrap())
+                .unwrap();
         let prefix = ObjectPath::from("rebound/index");
         let no_head = || {
             assert!(

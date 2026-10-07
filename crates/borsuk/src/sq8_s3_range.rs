@@ -8,7 +8,7 @@ use crate::{
 use bytes::{Bytes, BytesMut};
 use futures_util::{StreamExt, stream};
 use http_body_util::BodyExt;
-use object_store::aws::{AmazonS3, AmazonS3Builder};
+use object_store::aws::{AmazonS3, AmazonS3Builder, S3CopyIfNotExists};
 use object_store::client::{
     ClientConfigKey, ClientOptions, HttpClient, HttpConnector, HttpError, HttpErrorKind,
     HttpRequest, HttpResponse, HttpResponseBody, HttpService,
@@ -215,17 +215,18 @@ fn one_attempt_builder(
     bucket: &str,
     region: &str,
     counters: Arc<Mutex<TransportCounters>>,
+    timeout: std::time::Duration,
 ) -> Result<AmazonS3Builder, RangeFetchError> {
-    if bucket.is_empty() || region.is_empty() {
+    if bucket.is_empty() || region.is_empty() || timeout.is_zero() {
         return Err(RangeFetchError::UnexpectedMetadata);
     }
-    // Fixed native transport: SDK-default 30s request/5s connect, HTTP/1,
+    // Fixed native transport: caller-bounded request/5s connect, HTTP/1,
     // verified system TLS, and no redirects or transport-level retries.
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
         .http1_only()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(timeout)
         .connect_timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|source| {
@@ -237,6 +238,9 @@ fn one_attempt_builder(
     Ok(AmazonS3Builder::new()
         .with_bucket_name(bucket)
         .with_region(region)
+        // ponytail: one copy part, at most 5 GiB per copied sidecar; split parts
+        // only when an admitted workload requires larger sidecars.
+        .with_copy_if_not_exists(S3CopyIfNotExists::Multipart)
         .with_http_connector(NativeConnector { client, counters })
         .with_retry(RetryConfig {
             max_retries: 0,
@@ -284,8 +288,25 @@ impl OneAttemptS3 {
         region: &str,
         prefix: Path,
     ) -> Result<Self, RangeFetchError> {
+        Self::new_with_prefix_and_timeout(
+            bucket,
+            region,
+            prefix,
+            std::time::Duration::from_secs(30),
+        )
+    }
+
+    /// Whole-object publication may need a longer, prospectively admitted total
+    /// request deadline. Queries retain the default 30 seconds. Credentials are
+    /// instance-role IMDS only; no environment/profile credential discovery.
+    pub fn new_with_prefix_and_timeout(
+        bucket: &str,
+        region: &str,
+        prefix: Path,
+        timeout: std::time::Duration,
+    ) -> Result<Self, RangeFetchError> {
         let counters = PROCESS_TRANSPORT.clone();
-        let store = one_attempt_builder(bucket, region, counters.clone())?
+        let store = one_attempt_builder(bucket, region, counters.clone(), timeout)?
             .build()
             .map_err(RangeFetchError::Store)?;
         Ok(Self {
@@ -861,6 +882,29 @@ mod tests {
         Arc<Mutex<Vec<String>>>,
         thread::JoinHandle<()>,
     ) {
+        http_fixture_with_copy_response(
+            response,
+            source_response,
+            prefix,
+            None,
+            Duration::from_secs(30),
+            None,
+        )
+    }
+
+    fn http_fixture_with_copy_response(
+        response: Vec<u8>,
+        source_response: Option<Vec<u8>>,
+        prefix: Path,
+        copy_success: Option<bool>,
+        request_timeout: Duration,
+        response_byte_delay: Option<Duration>,
+    ) -> (
+        OneAttemptS3,
+        Arc<AtomicBool>,
+        Arc<Mutex<Vec<String>>>,
+        thread::JoinHandle<()>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -886,19 +930,68 @@ mod tests {
                             raw.extend_from_slice(&buffer[..count]);
                             assert!(raw.len() < 64 * 1024);
                         }
+                        if copy_success.is_some() {
+                            let header_end =
+                                raw.windows(4).position(|v| v == b"\r\n\r\n").unwrap() + 4;
+                            let headers = std::str::from_utf8(&raw[..header_end]).unwrap();
+                            let body_len = headers
+                                .lines()
+                                .find_map(|line| {
+                                    let (key, value) = line.split_once(':')?;
+                                    key.eq_ignore_ascii_case("content-length")
+                                        .then(|| value.trim().parse::<usize>().unwrap())
+                                })
+                                .unwrap_or(0);
+                            assert!(header_end + body_len < 64 * 1024);
+                            while raw.len() < header_end + body_len {
+                                let count = socket.read(&mut buffer).unwrap();
+                                assert!(count > 0);
+                                raw.extend_from_slice(&buffer[..count]);
+                            }
+                        }
                         let request = String::from_utf8(raw).unwrap();
+                        let copy_response = copy_success.map(|success| {
+                            let line = request.lines().next().unwrap();
+                            let (status, body): (&str, &[u8]) = if line.starts_with("DELETE ") {
+                                ("204 No Content", b"")
+                            } else if line.contains("uploads") {
+                                ("200 OK", b"<InitiateMultipartUploadResult><UploadId>fixture-upload</UploadId></InitiateMultipartUploadResult>")
+                            } else if line.starts_with("PUT ") {
+                                ("200 OK", b"<CopyPartResult><ETag>part-etag</ETag></CopyPartResult>")
+                            } else if success {
+                                ("200 OK", b"<CompleteMultipartUploadResult><ETag>new-etag</ETag></CompleteMultipartUploadResult>")
+                            } else {
+                                ("412 Precondition Failed", b"<Error><Code>PreconditionFailed</Code></Error>")
+                            };
+                            http_response(status, None, "\"fixture\"", body.len(), body)
+                        });
                         let source = request
                             .lines()
                             .next()
                             .unwrap()
                             .contains("/plane/records.bin ");
                         server_requests.lock().unwrap().push(request);
-                        let body = if source {
+                        let body = if let Some(body) = &copy_response {
+                            body
+                        } else if source {
                             source_response.as_ref().unwrap_or(&response)
                         } else {
                             &response
                         };
-                        socket.write_all(body).unwrap();
+                        if let Some(delay) = response_byte_delay {
+                            let header_end =
+                                body.windows(4).position(|v| v == b"\r\n\r\n").unwrap() + 4;
+                            if socket.write_all(&body[..header_end]).is_ok() {
+                                for byte in &body[header_end..] {
+                                    thread::sleep(delay);
+                                    if socket.write_all(&[*byte]).is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                        } else {
+                            socket.write_all(body).unwrap();
+                        }
                         let unfinished = b"Content-Length: 1073741824\r\n";
                         if body.windows(unfinished.len()).any(|v| v == unfinished) {
                             while !server_stop.load(Ordering::Relaxed) && Instant::now() < deadline
@@ -916,19 +1009,129 @@ mod tests {
         });
         // Isolate live fixtures from each other while exercising the same boundary.
         let counters = Arc::new(Mutex::new(TransportCounters::default()));
-        let store = one_attempt_builder("fixture", "eu-central-1", counters.clone())
-            .unwrap()
-            .with_endpoint(format!("http://{address}"))
-            .with_allow_http(true)
-            .with_access_key_id("fixture")
-            .with_secret_access_key("fixture")
-            .build()
-            .unwrap();
+        let store =
+            one_attempt_builder("fixture", "eu-central-1", counters.clone(), request_timeout)
+                .unwrap()
+                .with_endpoint(format!("http://{address}"))
+                .with_allow_http(true)
+                .with_access_key_id("fixture")
+                .with_secret_access_key("fixture")
+                .build()
+                .unwrap();
         let reader = OneAttemptS3 {
             store: PrefixStore::new(store, prefix),
             counters,
         };
         (reader, stop, requests, server)
+    }
+
+    #[tokio::test]
+    async fn native_s3_create_copy_uses_conditional_multipart() {
+        for success in [true, false] {
+            let (reader, stop, requests, server) = http_fixture_with_copy_response(
+                Vec::new(),
+                None,
+                Path::from("tenant/import"),
+                Some(success),
+                Duration::from_secs(30),
+                None,
+            );
+            let result = reader
+                .store()
+                .copy_opts(
+                    &Path::from("source.bin"),
+                    &Path::from("copy.bin"),
+                    object_store::CopyOptions::new().with_mode(object_store::CopyMode::Create),
+                )
+                .await;
+            stop.store(true, Ordering::Relaxed);
+            server.join().unwrap();
+            if success {
+                assert!(result.is_ok(), "{result:?}");
+            } else {
+                assert!(
+                    matches!(result, Err(object_store::Error::AlreadyExists { .. })),
+                    "{result:?}"
+                );
+            }
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), if success { 3 } else { 4 });
+            assert!(
+                requests[0]
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .contains("tenant/import/copy.bin?uploads")
+            );
+            assert!(requests[0].starts_with("POST "));
+            assert!(requests[1].starts_with("PUT "));
+            assert!(
+                requests[1]
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .contains("partNumber=1&uploadId=fixture-upload")
+            );
+            assert!(requests[2].starts_with("POST "));
+            assert!(
+                requests[2]
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .contains("uploadId=fixture-upload")
+            );
+            assert!(
+                requests[1]
+                    .to_ascii_lowercase()
+                    .contains("x-amz-copy-source: fixture/tenant/import/source.bin")
+            );
+            assert!(
+                requests[2]
+                    .to_ascii_lowercase()
+                    .contains("if-none-match: *")
+            );
+            if !success {
+                assert!(requests[3].starts_with("DELETE "));
+            }
+            assert_eq!(reader.transport_stats().attempts, requests.len() as u64);
+        }
+    }
+
+    #[tokio::test]
+    async fn publication_request_deadline_allows_progressing_whole_body() {
+        for (deadline, success) in [
+            (Duration::from_millis(20), false),
+            (Duration::from_secs(1), true),
+        ] {
+            let (reader, stop, _, server) = http_fixture_with_copy_response(
+                http_response("200 OK", None, "\"frozen\"", 3, b"abc"),
+                None,
+                Path::default(),
+                None,
+                deadline,
+                Some(Duration::from_millis(40)),
+            );
+            let result = match reader.store().get(&Path::from("whole.bin")).await {
+                Ok(body) => body.bytes().await,
+                Err(error) => Err(error),
+            };
+            stop.store(true, Ordering::Relaxed);
+            server.join().unwrap();
+            if success {
+                assert_eq!(result.unwrap().as_ref(), b"abc");
+            } else {
+                assert!(result.is_err());
+            }
+        }
+        assert!(
+            OneAttemptS3::new_with_prefix_and_timeout(
+                "fixture",
+                "eu-central-1",
+                Path::default(),
+                Duration::ZERO
+            )
+            .is_err()
+        );
     }
 
     #[tokio::test]
