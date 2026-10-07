@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-native-s3-cohort-runner-gates-v1",
+  "instance_id": "i-0af242e6d7666a5e5",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 0,
+  "source_commit": "bccd8b7a477bf6e80a8f87c9ad740dacb2dde0ed",
+  "specialist_commit": "bccd8b7a477bf6e80a8f87c9ad740dacb2dde0ed",
+  "native_source_file_count": 414,
+  "native_source_identity_sha256": "945fac5997c46074b9d9618c7d3470ab5a8bf8d10c88955a687746c0ef3eca8f",
+  "source_archive_sha256": "76b9abafec40a15079a11a4e73bfea30c15321d9ba3bc3c301c8b9a62eb5e43b",
+  "evidence": {
+    "bytes": 6270493,
+    "sha256": "faaf2c3ddc5789222df01afa903434fac7f515a00a40feecaf251057d07ad720"
+  },
+  "performance_claim": false
+}

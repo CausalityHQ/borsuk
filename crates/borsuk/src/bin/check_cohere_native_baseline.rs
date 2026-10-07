@@ -1,14 +1,18 @@
-//! Authenticated local-file Cohere quality baseline; external scientific gates required.
+//! Authenticated Local/S3 Cohere quality baseline; external scientific gates required.
 use borsuk::{
     exact_sq8_nominee::ScoredNominee,
     semantic_unit_router::SemanticProfile,
-    sq8_s3_range::Sq8ReadStats,
+    sq8_s3_range::{NativeTransportStats, OneAttemptS3, Sq8ReadStats},
     two_bit_generation::{
         DiscoveryMode, TwoBitGeneration, TwoBitGenerationLimits, TwoBitPlanTrace,
     },
     two_bit_source::SourcePlaneReceipt,
 };
-use object_store::{chunked::ChunkedStore, local::LocalFileSystem, path::Path as ObjectPath};
+use futures_util::StreamExt;
+use object_store::{
+    ObjectStore, ObjectStoreExt, chunked::ChunkedStore, local::LocalFileSystem,
+    path::Path as ObjectPath,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -34,8 +38,72 @@ const MEMORY_CAP: u64 = 512 * 1024 * 1024;
 const BLOCK: usize = 65_536;
 const DATASET: &str = "CohereLabs/wikipedia-2023-11-embed-multilingual-v3";
 const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
-const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v1";
-const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v1";
+const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v2";
+const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v2";
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+enum Backend {
+    Local {
+        store_root: PathBuf,
+    },
+    S3 {
+        bucket: String,
+        region: String,
+        physical_prefix: String,
+        sq8_object_key: String,
+        sq8_etag: String,
+    },
+}
+
+enum Reader {
+    Local(ChunkedStore),
+    S3(OneAttemptS3),
+    #[cfg(test)]
+    Stub {
+        store: Arc<dyn ObjectStore>,
+        stats: Arc<std::sync::Mutex<NativeTransportStats>>,
+    },
+}
+impl Reader {
+    fn new(backend: &Backend) -> Result<Self> {
+        Ok(match backend {
+            Backend::Local { store_root } => Self::Local(ChunkedStore::new(
+                Arc::new(LocalFileSystem::new_with_prefix(store_root)?),
+                8192,
+            )),
+            Backend::S3 {
+                bucket,
+                region,
+                physical_prefix,
+                ..
+            } => Self::S3(
+                OneAttemptS3::new_with_prefix(
+                    bucket,
+                    region,
+                    ObjectPath::from(physical_prefix.as_str()),
+                )
+                .map_err(|e| format!("S3 reader: {e:?}"))?,
+            ),
+        })
+    }
+    fn store(&self) -> &dyn ObjectStore {
+        match self {
+            Self::Local(store) => store,
+            Self::S3(reader) => reader.store(),
+            #[cfg(test)]
+            Self::Stub { store, .. } => store.as_ref(),
+        }
+    }
+    fn snapshot(&self) -> Option<NativeTransportStats> {
+        match self {
+            Self::Local(_) => None,
+            Self::S3(reader) => Some(reader.transport_stats()),
+            #[cfg(test)]
+            Self::Stub { stats, .. } => Some(stats.lock().unwrap().clone()),
+        }
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -66,7 +134,7 @@ struct Config {
     count: usize,
     k: usize,
     profile: SemanticProfile,
-    store_root: PathBuf,
+    backend: Backend,
     generation_prefix: String,
     generation_root_sha256: String,
     scratch_parent: PathBuf,
@@ -156,13 +224,29 @@ fn checked(a: &Artifact, cap: usize) -> Result<(Vec<u8>, FileIdentity)> {
         a.bytes > 0 && a.bytes <= cap && valid_sha(&a.sha256),
         "artifact descriptor/cap",
     )?;
-    let mut file = regular(&a.path, Some(a.bytes), cap)?;
+    checked_file(
+        regular(&a.path, Some(a.bytes), cap)?,
+        Some(a.bytes),
+        cap,
+        &a.sha256,
+    )
+}
+fn checked_file(
+    mut file: File,
+    length: Option<usize>,
+    cap: usize,
+    sha: &str,
+) -> Result<(Vec<u8>, FileIdentity)> {
     let before = file_identity(&file)?;
-    let mut body = vec![0; a.bytes];
+    require(
+        before.len > 0 && before.len <= cap as u64 && length.is_none_or(|n| before.len == n as u64),
+        "artifact descriptor length/cap",
+    )?;
+    let mut body = vec![0; usize::try_from(before.len)?];
     file.read_exact(&mut body)?;
     require(file.read(&mut [0])? == 0, "artifact EOF")?;
     require(
-        file_identity(&file)? == before && hash(&body) == a.sha256,
+        file_identity(&file)? == before && hash(&body) == sha,
         "artifact identity/SHA",
     )?;
     Ok((body, before))
@@ -189,6 +273,23 @@ fn reauthenticate(a: &Artifact, bound: &FileIdentity) -> Result<()> {
         "request reauthentication EOF/SHA",
     )
 }
+fn valid_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 512
+        && key.split('/').all(|p| {
+            !p.is_empty()
+                && p != "."
+                && p != ".."
+                && p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+        })
+}
+fn bounded_path(path: &Path) -> Result<()> {
+    require(
+        path.is_absolute() && path.as_os_str().len() <= 4096,
+        "absolute bounded path",
+    )
+}
 fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     require(
         c.schema == CONFIG_SCHEMA
@@ -206,16 +307,60 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
             && c.max_memory_bytes == MEMORY_CAP,
         "fixed Cohere corpus/query/D1024/k10/profile/cap",
     )?;
-    for path in [
-        &c.store_root,
-        &c.scratch_parent,
-        &c.requests.path,
-        &c.truth.path,
-    ] {
-        require(
-            path.is_absolute() && path.as_os_str().len() <= 4096,
-            "absolute bounded path",
-        )?;
+    for path in [&c.scratch_parent, &c.requests.path, &c.truth.path] {
+        bounded_path(path)?;
+    }
+    match &c.backend {
+        Backend::Local { store_root } => bounded_path(store_root)?,
+        Backend::S3 {
+            bucket,
+            region,
+            physical_prefix,
+            sq8_object_key,
+            sq8_etag,
+        } => {
+            require(
+                (3..=63).contains(&bucket.len())
+                    && bucket.parse::<std::net::Ipv4Addr>().is_err()
+                    && bucket.split('.').all(|label| {
+                        !label.is_empty()
+                            && !label.starts_with('-')
+                            && !label.ends_with('-')
+                            && label
+                                .bytes()
+                                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                    }),
+                "S3 bucket descriptor",
+            )?;
+            require(
+                (3..=63).contains(&region.len())
+                    && !region.starts_with('-')
+                    && !region.ends_with('-')
+                    && region
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
+                "S3 region descriptor",
+            )?;
+            require(
+                valid_key(physical_prefix) && valid_key(sq8_object_key),
+                "S3 namespace/logical key",
+            )?;
+            let mut parts = sq8_object_key.rsplit('/');
+            require(
+                parts.next() == Some(c.native_source.sq8_sha256.as_str())
+                    && parts.next() == Some("objects"),
+                "S3 SQ8 key/SHA binding",
+            )?;
+            require(
+                (3..=256).contains(&sq8_etag.len())
+                    && sq8_etag.starts_with('"')
+                    && sq8_etag.ends_with('"')
+                    && sq8_etag.as_bytes()[1..sq8_etag.len() - 1]
+                        .iter()
+                        .all(|&b| (0x21..=0x7e).contains(&b) && b != b'"'),
+                "S3 actual quoted ETag required",
+            )?;
+        }
     }
     require(
         c.requests.path != c.truth.path
@@ -223,18 +368,7 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
             && c.truth.bytes == shape.count * K * 8,
         "request/truth exact geometry/distinct paths",
     )?;
-    require(
-        !c.generation_prefix.is_empty()
-            && c.generation_prefix.len() <= 512
-            && c.generation_prefix.split('/').all(|p| {
-                !p.is_empty()
-                    && p != "."
-                    && p != ".."
-                    && p.bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
-            }),
-        "generation prefix",
-    )?;
+    require(valid_key(&c.generation_prefix), "generation prefix")?;
     for sha in [
         &c.generation_root_sha256,
         &c.requests.sha256,
@@ -281,52 +415,114 @@ fn request_row(body: &[u8], ordinal: usize) -> Result<[f32; D]> {
     )?;
     Ok(values)
 }
-fn bind_source(c: &Config) -> Result<()> {
+#[cfg(test)]
+thread_local! {
+    // Runs between the guarded metadata open and its read, without a race or sleep.
+    static LOCAL_METADATA_OPEN_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> =
+        std::cell::RefCell::new(None);
+}
+async fn metadata<T: serde::de::DeserializeOwned>(
+    c: &Config,
+    store: &dyn ObjectStore,
+    name: &str,
+    sha: &str,
+    charge: &mut Charge,
+) -> Result<T> {
+    require(valid_sha(sha), "metadata SHA descriptor")?;
+    let location = ObjectPath::from(format!("{}/{name}", c.generation_prefix));
+    if let Backend::Local { store_root } = &c.backend {
+        let path = store_root.join(location.as_ref());
+        let file = regular(&path, None, CONFIG_CAP)?;
+        #[cfg(test)]
+        LOCAL_METADATA_OPEN_HOOK.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().take() {
+                hook(&path);
+            }
+        });
+        // Read the descriptor we guarded. LocalFileSystem::get would independently
+        // reopen the path without NOFOLLOW/NONBLOCK, allowing a FIFO swap to hang.
+        return Ok(serde_json::from_slice(
+            &checked_file(file, None, CONFIG_CAP, sha)?.0,
+        )?);
+    }
+    charge.add(Sq8ReadStats {
+        submitted_gets: 1,
+        ..Default::default()
+    })?;
+    let result: Result<Vec<u8>> = async {
+        let response = store.get(&location).await?;
+        let size = usize::try_from(response.meta.size)?;
+        require(
+            response.meta.location == location
+                && size > 0
+                && size <= CONFIG_CAP
+                && response.range == (0..response.meta.size),
+            "metadata location/length/full range",
+        )?;
+        let mut body = Vec::with_capacity(size);
+        let mut stream = response.into_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            let end = body
+                .len()
+                .checked_add(chunk.len())
+                .ok_or("metadata length overflow")?;
+            require(end <= size, "metadata long EOF")?;
+            body.extend_from_slice(&chunk);
+        }
+        require(body.len() == size && hash(&body) == sha, "metadata EOF/SHA")?;
+        charge.add(Sq8ReadStats {
+            verified_bytes: size,
+            ..Default::default()
+        })?;
+        Ok(body)
+    }
+    .await;
+    if result.is_err() {
+        charge.add(Sq8ReadStats {
+            failed_gets: 1,
+            ..Default::default()
+        })?;
+    }
+    // Schema refusal does not turn a successfully authenticated GET into a failed GET.
+    // Neither root nor plane body survives this call.
+    Ok(serde_json::from_slice(&result?)?)
+}
+async fn bind_source(c: &Config, store: &dyn ObjectStore, charge: &mut Charge) -> Result<()> {
     #[derive(Deserialize)]
     struct Root {
         plane_manifest_sha256: String,
         sq8_object_sha256: String,
+        sq8_object_key: String,
+        sq8_etag: String,
     }
-    let root_path = c
-        .store_root
-        .join(&c.generation_prefix)
-        .join("manifest.json");
-    let root_file = regular(&root_path, None, CONFIG_CAP)?;
-    let root: Root = serde_json::from_slice(
-        &checked(
-            &Artifact {
-                path: root_path,
-                bytes: usize::try_from(root_file.metadata()?.len())?,
-                sha256: c.generation_root_sha256.clone(),
-            },
-            CONFIG_CAP,
-        )?
-        .0,
+    let root: Root = metadata(c, store, "manifest.json", &c.generation_root_sha256, charge).await?;
+    require(
+        root.sq8_object_sha256 == c.native_source.sq8_sha256,
+        "root SQ8 source binding",
     )?;
-    let plane_path = c
-        .store_root
-        .join(&c.generation_prefix)
-        .join("plane/manifest.json");
-    let plane_file = regular(&plane_path, None, CONFIG_CAP)?;
-    let plane: SourcePlaneReceipt = serde_json::from_slice(
-        &checked(
-            &Artifact {
-                path: plane_path,
-                bytes: usize::try_from(plane_file.metadata()?.len())?,
-                sha256: root.plane_manifest_sha256,
-            },
-            CONFIG_CAP,
-        )?
-        .0,
-    )?;
+    if let Backend::S3 {
+        sq8_object_key,
+        sq8_etag,
+        ..
+    } = &c.backend
+    {
+        require(
+            root.sq8_object_key == *sq8_object_key && root.sq8_etag == *sq8_etag,
+            "root S3 SQ8 key/ETag binding",
+        )?;
+    }
+    let plane_sha = root.plane_manifest_sha256.clone();
+    drop(root);
+    let plane: SourcePlaneReceipt =
+        metadata(c, store, "plane/manifest.json", &plane_sha, charge).await?;
     require(
         plane.rows == c.rows
             && plane.dimensions == D
             && !plane.query_or_truth_used
             && plane.source_sha256 == c.native_source.source_sha256
             && plane.sq8_sha256 == c.native_source.sq8_sha256
-            && plane.source_order_sha256 == c.native_source.source_order_sha256
-            && root.sq8_object_sha256 == c.native_source.sq8_sha256,
+            && plane.source_order_sha256 == c.native_source.source_order_sha256,
         "native source receipt binding",
     )
 }
@@ -343,6 +539,19 @@ fn scratch_bytes(rows: usize) -> Result<usize> {
         .ok_or_else(|| "trace scratch overflow".into())
 }
 fn caller_bytes(c: &Config) -> usize {
+    let backend = match &c.backend {
+        Backend::Local { store_root } => store_root.capacity(),
+        Backend::S3 {
+            bucket,
+            region,
+            physical_prefix,
+            sq8_object_key,
+            sq8_etag,
+        } => [bucket, region, physical_prefix, sq8_object_key, sq8_etag]
+            .iter()
+            .map(|s| s.capacity())
+            .sum(),
+    };
     let descriptors = size_of::<Config>()
         + [
             &c.schema,
@@ -361,15 +570,12 @@ fn caller_bytes(c: &Config) -> usize {
         .iter()
         .map(|s| s.capacity())
         .sum::<usize>()
-        + [
-            &c.store_root,
-            &c.scratch_parent,
-            &c.requests.path,
-            &c.truth.path,
-        ]
-        .iter()
-        .map(|p| p.capacity())
-        .sum::<usize>();
+        + [&c.scratch_parent, &c.requests.path, &c.truth.path]
+            .iter()
+            .map(|p| p.capacity())
+            .sum::<usize>()
+        + 2 * backend
+        + size_of::<Reader>();
     // Returned trace/result remain caller-owned while streaming, then drop before the next query.
     // Vec growth is bounded by twice the entire page roster; ranking retains only k entries.
     let returned = TwoBitPlanTrace::scratch_bytes(c.rows)
@@ -381,7 +587,16 @@ fn caller_bytes(c: &Config) -> usize {
     let reduction = LINE_CAP + 1 + c.truth.bytes + 8192 + 2 * K * size_of::<Hit>();
     // Four capped receipt/config bodies cover sequential authentication/decoding; identity,
     // descriptors duplicated by store/path/runtime setup fit another CONFIG_CAP.
-    descriptors + 5 * CONFIG_CAP + BLOCK + query.max(reduction)
+    // Native histogram has 900 possible codes; allow doubled Vec capacity and a
+    // transient snapshot alongside the retained before/after pair. The fixed process
+    // histogram is also charged. SDK/TLS RSS still requires an external cgroup gate.
+    let transport = if matches!(&c.backend, Backend::S3 { .. }) {
+        3 * (size_of::<NativeTransportStats>() + 2 * 900 * size_of::<(u16, u64)>())
+            + 900 * size_of::<u64>()
+    } else {
+        0
+    };
+    descriptors + transport + size_of::<Progress>() + 5 * CONFIG_CAP + BLOCK + query.max(reduction)
 }
 fn limits(c: &Config) -> Result<TwoBitGenerationLimits> {
     Ok(TwoBitGenerationLimits {
@@ -438,6 +653,8 @@ struct Output {
     cap: u64,
     #[cfg(test)]
     directory_synced: bool,
+    #[cfg(test)]
+    fail_query_output: bool,
 }
 fn output_directory(path: &Path) -> Result<File> {
     Ok(OpenOptions::new()
@@ -487,6 +704,8 @@ impl Output {
             cap: OUTPUT_CAP - TERMINAL_RESERVE,
             #[cfg(test)]
             directory_synced: false,
+            #[cfg(test)]
+            fail_query_output: false,
         })
     }
     fn emit(&mut self, value: &impl Serialize) -> Result<()> {
@@ -587,8 +806,47 @@ struct Progress {
     truth_opened: bool,
     underfilled: usize,
     charges: Charges,
+    binding_charge: Charge,
     query_wall_ns: u128,
     query_cpu_ns: i128,
+    transport: TransportSpan,
+}
+
+#[derive(Default, Serialize)]
+struct TransportSpan {
+    stage: &'static str,
+    ordinal: Option<usize>,
+    before: Option<NativeTransportStats>,
+    after: Option<NativeTransportStats>,
+}
+impl TransportSpan {
+    fn begin(&mut self, reader: &Reader, stage: &'static str, ordinal: Option<usize>) {
+        // Drop the old pair before allocating its successor; never retain a panel.
+        *self = Self::default();
+        self.stage = stage;
+        self.ordinal = ordinal;
+        self.before = reader.snapshot();
+    }
+    fn finish(&mut self, reader: &Reader) {
+        self.after = reader.snapshot();
+    }
+    fn terminal(&self) -> Value {
+        fn compact(s: &Option<NativeTransportStats>) -> Value {
+            match s {
+                None => Value::Null,
+                Some(s) => json!({"attempts":s.attempts,"method_counts":s.method_counts,
+                    "transport_failures":s.transport_failures,"stream_failures":s.stream_failures,
+                    "consumed_payload_bytes":s.consumed_payload_bytes,"dropped_error_bodies":s.dropped_error_bodies,
+                    "status_counts":null,"status_counts_entries":s.status_counts.len()}),
+            }
+        }
+        // Full histograms belong in phase records (up to 900 codes). Retain every
+        // scalar/method counter on output failure without exceeding the 8KiB reserve.
+        json!({"stage":self.stage,"ordinal":self.ordinal,"before":compact(&self.before),
+            "after":compact(&self.after),"scope":"cumulative_process_native_transport",
+            "status_counts_omitted_from_terminal":true,
+            "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null})
+    }
 }
 impl Default for Progress {
     fn default() -> Self {
@@ -599,8 +857,10 @@ impl Default for Progress {
             truth_opened: false,
             underfilled: 0,
             charges: Charges::default(),
+            binding_charge: Charge::default(),
             query_wall_ns: 0,
             query_cpu_ns: 0,
+            transport: TransportSpan::default(),
         }
     }
 }
@@ -651,6 +911,15 @@ async fn query_and_seal(
     out: &mut Output,
     p: &mut Progress,
 ) -> Result<Seal> {
+    query_and_seal_with(c, shape, out, p, || Reader::new(&c.backend)).await
+}
+async fn query_and_seal_with(
+    c: &Config,
+    shape: Shape,
+    out: &mut Output,
+    p: &mut Progress,
+    reader: impl FnOnce() -> Result<Reader>,
+) -> Result<Seal> {
     validate_config(c, shape)?;
     p.stage = "requests";
     let (requests, request_identity) = checked(&c.requests, c.count * D * 4)?;
@@ -658,22 +927,33 @@ async fn query_and_seal(
     for ordinal in 0..c.count {
         request_row(&requests, ordinal).map_err(|e| format!("request {ordinal}: {e}"))?;
     }
-    p.stage = "native_source";
-    bind_source(c)?;
     let admission = limits(c)?;
-    let store = ChunkedStore::new(
-        Arc::new(LocalFileSystem::new_with_prefix(&c.store_root)?),
-        8192,
-    );
+    p.stage = "backend";
+    let reader = reader()?;
+    let store = reader.store();
+    p.stage = "native_source";
+    p.transport.begin(&reader, p.stage, None);
+    let binding = bind_source(c, store, &mut p.binding_charge).await;
+    p.transport.finish(&reader);
+    out.emit(
+        &json!({"phase":"source_binding","transport":p.transport,"charges":p.binding_charge,"success":binding.is_ok(),
+        "truth_opened":false}),
+    )?;
+    binding?;
     p.stage = "generation_open";
+    p.transport.begin(&reader, p.stage, None);
     let generation = TwoBitGeneration::open_remote(
-        &store,
+        store,
         &ObjectPath::from(c.generation_prefix.clone()),
         &c.generation_root_sha256,
         admission,
         &c.scratch_parent,
     )
-    .await?;
+    .await;
+    p.transport.finish(&reader);
+    out.emit(&json!({"phase":"generation_open","transport":p.transport,
+        "success":generation.is_ok(),"truth_opened":false}))?;
+    let generation = generation?;
     require(
         generation.rows() == c.rows
             && generation.discovery_mode() == DiscoveryMode::Semantic
@@ -689,13 +969,15 @@ async fn query_and_seal(
     for ordinal in 0..c.count {
         p.stage = "query";
         let query = request_row(&requests, ordinal)?;
+        p.transport.begin(&reader, p.stage, Some(ordinal));
         let wall = Instant::now();
         let cpu = cpu_ns();
         let result = generation
-            .diagnostic_search_with_store(&store, &query, K)
+            .diagnostic_search_with_store(store, &query, K)
             .await;
         let wall_ns = wall.elapsed().as_nanos();
         let cpu_ns = cpu_ns() - cpu;
+        p.transport.finish(&reader);
         p.query_wall_ns += wall_ns;
         p.query_cpu_ns += cpu_ns;
         let (result, trace) = match result {
@@ -706,7 +988,8 @@ async fn query_and_seal(
                 out.emit(
                     &json!({"phase":"query_failure","ordinal":ordinal,"error":e.to_string(),
                     "charges_so_far":p.charges,"sum_so_far":p.charges.sum(),"stages":e.stages(),
-                    "query_wall_ns":wall_ns,"query_process_cpu_ns":cpu_ns,"truth_opened":false}),
+                    "query_wall_ns":wall_ns,"query_process_cpu_ns":cpu_ns,"truth_opened":false,
+                    "transport":p.transport}),
                 )?;
                 return Err(format!("native query {ordinal}: {e}").into());
             }
@@ -755,6 +1038,11 @@ async fn query_and_seal(
             query_wall_ns: u128,
             query_process_cpu_ns: i128,
             trace: &'a TwoBitPlanTrace,
+            transport: &'a TransportSpan,
+        }
+        #[cfg(test)]
+        if out.fail_query_output {
+            out.cap = out.bytes + 17; // Leave an actual partial query record.
         }
         out.emit(&Record {
             phase: "query",
@@ -769,6 +1057,7 @@ async fn query_and_seal(
             query_wall_ns: wall_ns,
             query_process_cpu_ns: cpu_ns,
             trace: &trace,
+            transport: &p.transport,
         })?;
         p.completed += 1;
         p.underfilled += usize::from(underfill);
@@ -917,6 +1206,7 @@ fn reduce(c: &Config, out: &mut Output, seal: &Seal, p: &mut Progress) -> Result
         "sealed_bytes":seal.sealed_bytes,"sealed_sha256":seal.sealed_sha256,
         "requests_sha256":c.requests.sha256,"truth_sha256":c.truth.sha256,
         "generation_root_sha256":c.generation_root_sha256,"charges":p.charges,"sum":p.charges.sum(),
+        "binding_charge":p.binding_charge,
         "query_wall_ns":p.query_wall_ns,"query_process_cpu_ns":p.query_cpu_ns,
         "physical_s3_measured":false,"external_gate_required":true}),
     )
@@ -926,6 +1216,26 @@ fn execute_paths(
     config_sha: &str,
     output_path: &Path,
     shape: Shape,
+) -> Result<bool> {
+    execute_paths_with(
+        config_path,
+        config_sha,
+        output_path,
+        shape,
+        |c, shape, out, p| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(query_and_seal(c, shape, out, p))
+        },
+    )
+}
+fn execute_paths_with(
+    config_path: &Path,
+    config_sha: &str,
+    output_path: &Path,
+    shape: Shape,
+    query: impl FnOnce(&Config, Shape, &mut Output, &mut Progress) -> Result<Seal>,
 ) -> Result<bool> {
     require(
         config_path.as_os_str().len() <= 4096
@@ -944,23 +1254,24 @@ fn execute_paths(
             "router_source_sha256":hash(include_bytes!("../semantic_unit_router.rs")),
             "codec_source_sha256":hash(include_bytes!("../rotated_two_bit.rs")),
             "source_plane_source_sha256":hash(include_bytes!("../two_bit_source.rs")),
-            "scope":"LOCAL_AUTHENTICATED_FILE_QUALITY_CORRECTNESS","physical_s3_measured":false,
-            "io_measurement":"logical_object_store_GETs_and_authenticated_payload_bytes",
+            "scope":"AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS","physical_s3_measured":false,
+            "io_measurement":"logical_GET_charges_separate_from_cumulative_process_native_transport",
+            "s3_credential_source":"imds_instance_role_only",
+            "native_transport_includes":"S3_and_IMDS_credential_requests_including_PUT",
+            "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
             "external_gate_required":true,"truth_opened":false}))?;
         let c = config(config_path, config_sha, shape)?;
         out.emit(&json!({"phase":"bound_inputs","dataset":c.dataset,"revision":c.revision,
             "metric":c.metric,"tie_rule":c.tie_rule,"rows":c.rows,"dimensions":D,"count":c.count,"k":K,
             "corpus_source_first":c.corpus_source_first,"query_source_first":c.query_source_first,
-            "profile":c.profile,"store_root":c.store_root,"generation_prefix":c.generation_prefix,
+            "profile":c.profile,"backend":c.backend,"generation_prefix":c.generation_prefix,
+            "credential_source":matches!(&c.backend, Backend::S3 { .. }).then_some("imds_instance_role_only"),
             "generation_root_sha256":c.generation_root_sha256,
             "requests_bytes":c.requests.bytes,"requests_sha256":c.requests.sha256,
             "truth_bytes":c.truth.bytes,"truth_sha256":c.truth.sha256,
             "native_source_sha256":c.native_source.source_sha256,"native_sq8_sha256":c.native_source.sq8_sha256,
             "native_order_sha256":c.native_source.source_order_sha256,"truth_opened":false}))?;
-        let seal = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?
-            .block_on(query_and_seal(&c, shape, &mut out, &mut p))?;
+        let seal = query(&c, shape, &mut out, &mut p)?;
         let summary = reduce(&c, &mut out, &seal, &mut p)?;
         p.stage = "reduction_sync";
         out.file.sync_all()?;
@@ -968,11 +1279,9 @@ fn execute_paths(
     })();
     let mut summary = match result {
         Ok(summary) => summary,
-        Err(e) => json!({"status":"INVALID","complete":false,"stage":p.stage,
-            "error":e.to_string().chars().take(512).collect::<String>(),"completed_queries":p.completed,
-            "all_queries_sealed":p.sealed,"truth_opened":p.truth_opened,"charges":p.charges,"sum":p.charges.sum(),
-            "physical_s3_measured":false,"external_gate_required":true}),
+        Err(e) => invalid_summary(&p, &e.to_string()),
     };
+    summary["transport_last_boundary"] = p.transport.terminal();
     summary["process_wall_ns"] = json!(started.elapsed().as_nanos());
     summary["process_cpu_ns"] = json!(cpu_ns() - cpu);
     summary["observed_process_peak_bytes"] = json!(peak_bytes());
@@ -985,16 +1294,20 @@ fn execute_paths(
     out.emit(&json!({"phase":"terminal","summary":summary}))?;
     if let Err(e) = out.file.sync_all() {
         // Never print a successful measurement when its final durable write failed.
-        out.emit(
-            &json!({"phase":"terminal","summary":{"status":"INVALID","complete":false,
-            "stage":"terminal_sync","error":e.to_string(),"all_queries_sealed":p.sealed,
-            "external_gate_required":true}}),
-        )?;
+        p.stage = "terminal_sync";
+        out.emit(&json!({"phase":"terminal","summary":invalid_summary(&p, &e.to_string())}))?;
         let _ = out.file.sync_all();
         return Err(format!("terminal sync: {e}").into());
     }
     println!("{summary}");
     Ok(summary["status"] == "MEASURED")
+}
+fn invalid_summary(p: &Progress, error: &str) -> Value {
+    json!({"status":"INVALID","complete":false,"stage":p.stage,
+        "error":error.chars().take(512).collect::<String>(),"completed_queries":p.completed,
+        "all_queries_sealed":p.sealed,"truth_opened":p.truth_opened,"charges":p.charges,"sum":p.charges.sum(),
+        "binding_charge":p.binding_charge,"transport_last_boundary":p.transport.terminal(),
+        "physical_s3_measured":false,"external_gate_required":true})
 }
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();
@@ -1025,7 +1338,6 @@ mod tests {
         two_bit_build::TwoBitGenerationBuilder, two_bit_source::TwoBitSource,
         two_bit_store::publish_two_bit_generation,
     };
-    use object_store::ObjectStoreExt;
 
     fn artifact(path: &Path, bytes: &[u8]) -> Value {
         std::fs::write(path, bytes).unwrap();
@@ -1036,7 +1348,7 @@ mod tests {
             "metric":"cosine","tie_rule":"corpus_ordinal_ascending",
             "corpus_source_first":0,"query_source_first":shape.rows,"rows":shape.rows,
             "dimensions":D,"count":shape.count,"k":K,"profile":"native100k",
-            "store_root":dir.join("store"),"generation_prefix":"semantic/index",
+            "backend":{"kind":"local","store_root":dir.join("store")},"generation_prefix":"semantic/index",
             "generation_root_sha256":"a".repeat(64),"scratch_parent":dir.join("scratch"),
             "requests":{"path":dir.join("requests.f32"),"bytes":shape.count*D*4,"sha256":"b".repeat(64)},
             "truth":{"path":dir.join("truth.u64"),"bytes":shape.count*K*8,"sha256":"c".repeat(64)},
@@ -1215,6 +1527,16 @@ mod tests {
             invalid[field]["unknown"] = json!(0);
             assert!(serde_json::from_value::<Config>(invalid).is_err());
         }
+        for (field, value) in [("bucket", json!("unexpected")), ("unknown", json!(0))] {
+            let mut invalid = good.clone();
+            invalid["backend"][field] = value;
+            assert!(serde_json::from_value::<Config>(invalid).is_err());
+        }
+        let mut old = good.clone();
+        old.as_object_mut().unwrap().remove("backend");
+        old["store_root"] = json!(dir.path().join("store"));
+        old["schema"] = json!("borsuk-cohere-native-baseline-config-v1");
+        assert!(serde_json::from_value::<Config>(old).is_err());
         let mut invalid = good;
         invalid["requests"]["bytes"] = json!(4_095_999);
         let (path, sha) = write_config(dir.path(), &invalid);
@@ -1259,6 +1581,48 @@ mod tests {
             assert!(request_row(&body, 0).is_err());
         }
         assert!(request_row(&[0; D * 4 - 1], 0).is_err());
+        // Replace the metadata name deterministically after its guarded open.
+        // A store.get here would reopen the FIFO and block with no writer.
+        let c: Config = serde_json::from_value(config_value(dir.path(), Shape::tiny(32))).unwrap();
+        let root = dir.path().join("store").join(&c.generation_prefix);
+        std::fs::create_dir_all(&root).unwrap();
+        let metadata_path = root.join("manifest.json");
+        let body = br#"{"guarded":true}"#;
+        std::fs::write(&metadata_path, body).unwrap();
+        LOCAL_METADATA_OPEN_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(|path| {
+                std::fs::rename(path, path.with_extension("retained")).unwrap();
+                rustix::fs::mknodat(
+                    rustix::fs::CWD,
+                    path,
+                    rustix::fs::FileType::Fifo,
+                    rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+                    0,
+                )
+                .unwrap();
+            }));
+        });
+        let store = ChunkedStore::new(
+            Arc::new(LocalFileSystem::new_with_prefix(dir.path().join("store")).unwrap()),
+            8192,
+        );
+        let mut charge = Charge::default();
+        let value: Value = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(metadata(
+                &c,
+                &store,
+                "manifest.json",
+                &hash(body),
+                &mut charge,
+            ))
+            .unwrap();
+        assert_eq!(value, json!({"guarded":true}));
+        assert_eq!(charge.submitted_gets, 0); // Direct Local FD reads are not store GETs.
+        LOCAL_METADATA_OPEN_HOOK.with(|hook| assert!(hook.borrow().is_none()));
+        assert!(regular(&metadata_path, None, CONFIG_CAP).is_err());
     }
     #[test]
     fn scratch_formula_keeps_codec_and_trace_separate() {
@@ -1534,5 +1898,686 @@ mod tests {
         };
         assert!(super::seal(&c, &mut unsynced, &mut p, seal.requests).is_err());
         assert!(!p.sealed && !p.truth_opened);
+    }
+
+    // Integration stub only. sq8_s3_range's real HTTP tests own transport evidence.
+    const STUB_ETAG: &str = "\"fixture-current-etag\"";
+    #[derive(Debug)]
+    struct RecordingStore {
+        inner: object_store::memory::InMemory,
+        reads: std::sync::Mutex<Vec<(String, bool)>>,
+        stats: Arc<std::sync::Mutex<NativeTransportStats>>,
+        fault: std::sync::Mutex<&'static str>,
+        root: String,
+        sq8: String,
+    }
+    impl std::fmt::Display for RecordingStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("recording-fixture-only")
+        }
+    }
+    fn stub_error() -> object_store::Error {
+        object_store::Error::Generic {
+            store: "recording-fixture-only",
+            source: io::Error::other("injected fault").into(),
+        }
+    }
+    #[async_trait::async_trait]
+    impl ObjectStore for RecordingStore {
+        async fn get_opts(
+            &self,
+            path: &ObjectPath,
+            mut options: object_store::GetOptions,
+        ) -> object_store::Result<object_store::GetResult> {
+            let head = options.head;
+            let fault = *self.fault.lock().unwrap();
+            self.reads.lock().unwrap().push((path.to_string(), head));
+            {
+                let mut stats = self.stats.lock().unwrap();
+                stats.attempts += 1;
+                stats.method_counts[usize::from(head)] += 1;
+            }
+            if options.if_match.take().is_some_and(|tag| tag != STUB_ETAG)
+                || (fault == "startup" && path.as_ref().ends_with("/plane/mean.bin"))
+                || (fault == "query" && !head && path.as_ref() == self.sq8)
+            {
+                self.stats.lock().unwrap().transport_failures += 1;
+                return Err(stub_error());
+            }
+            let mut result = self.inner.get_opts(path, options).await?;
+            result.meta.e_tag = Some(STUB_ETAG.into());
+            {
+                let mut stats = self.stats.lock().unwrap();
+                stats.status_counts[0].1 += 1;
+            }
+            let root = path.as_ref() == self.root && !head;
+            if root {
+                match fault {
+                    "parse" => {
+                        result.meta.size = 1;
+                        result.range = 0..1;
+                        result.payload = object_store::GetResultPayload::Stream(
+                            futures_util::stream::once(async {
+                                Ok(bytes::Bytes::from_static(b"{"))
+                            })
+                            .boxed(),
+                        );
+                    }
+                    "zero" => result.meta.size = 0,
+                    "size" => result.meta.size = CONFIG_CAP as u64 + 1,
+                    "location" => result.meta.location = ObjectPath::from("physical/ns/wrong"),
+                    "range" => result.range.start += 1,
+                    "end" => result.range.end -= 1,
+                    _ => (),
+                }
+            }
+            if fault == "actual_etag" && !head && path.as_ref() == self.sq8 {
+                result.meta.e_tag = Some("\"replaced\"".into());
+            }
+            let object_store::GetResultPayload::Stream(body) = result.payload else {
+                unreachable!()
+            };
+            let stats = self.stats.clone();
+            result.payload = object_store::GetResultPayload::Stream(
+                body.map(move |chunk| {
+                    let mut bytes = chunk?.to_vec();
+                    if fault == "plane_sha" && !root && bytes.first() == Some(&b'{') {
+                        bytes[0] ^= 1;
+                    }
+                    if root {
+                        match fault {
+                            "short" => {
+                                bytes.pop();
+                            }
+                            "long" => bytes.push(0),
+                            "sha" => bytes[0] ^= 1,
+                            "stream" => {
+                                stats.lock().unwrap().stream_failures += 1;
+                                return Err(stub_error());
+                            }
+                            _ => (),
+                        }
+                    }
+                    stats.lock().unwrap().consumed_payload_bytes += bytes.len() as u64;
+                    Ok(bytes::Bytes::from(bytes))
+                })
+                .boxed(),
+            );
+            Ok(result)
+        }
+        async fn put_opts(
+            &self,
+            path: &ObjectPath,
+            body: object_store::PutPayload,
+            options: object_store::PutOptions,
+        ) -> object_store::Result<object_store::PutResult> {
+            self.inner.put_opts(path, body, options).await
+        }
+        async fn put_multipart_opts(
+            &self,
+            path: &ObjectPath,
+            options: object_store::PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+            self.inner.put_multipart_opts(path, options).await
+        }
+        fn delete_stream(
+            &self,
+            paths: futures_util::stream::BoxStream<'static, object_store::Result<ObjectPath>>,
+        ) -> futures_util::stream::BoxStream<'static, object_store::Result<ObjectPath>> {
+            self.inner.delete_stream(paths)
+        }
+        fn list(
+            &self,
+            prefix: Option<&ObjectPath>,
+        ) -> futures_util::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>>
+        {
+            self.inner.list(prefix)
+        }
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&ObjectPath>,
+        ) -> object_store::Result<object_store::ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+        async fn copy_opts(
+            &self,
+            from: &ObjectPath,
+            to: &ObjectPath,
+            options: object_store::CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+
+    #[tokio::test]
+    async fn namespaced_pipeline_faults_preserve_binding_accounting_and_seal() {
+        let shape = Shape::tiny(257);
+        let (dir, local) = fixture(shape).await;
+        let c: Config = serde_json::from_value(local.clone()).unwrap();
+        let mut out = Output::create(&dir.path().join("local-parity")).unwrap();
+        let mut p = Progress::default();
+        let sealed = query_and_seal(&c, shape, &mut out, &mut p).await.unwrap();
+        assert!(p.transport.before.is_none() && p.transport.after.is_none());
+        assert!(p.sealed && out.directory_synced && !p.truth_opened);
+        assert_eq!(
+            reduce(&c, &mut out, &sealed, &mut p).unwrap()["total_hits10"],
+            20
+        );
+        let local_rows = records(&out.path);
+        let local_hits = local_rows
+            .iter()
+            .filter(|r| r["phase"] == "query")
+            .map(|r| r["returned"].clone())
+            .collect::<Vec<_>>();
+        for (i, hits) in local_hits.iter().enumerate() {
+            for (rank, hit) in hits.as_array().unwrap().iter().enumerate() {
+                assert_eq!(hit["id"], TRUTH_IDS[i][rank]);
+                assert_eq!(
+                    hit["score_bits"],
+                    if rank == 0 {
+                        0x3d80_0000_u32
+                    } else if rank < 9 {
+                        0x3f00_0000
+                    } else {
+                        0x3f80_0000
+                    }
+                );
+            }
+        }
+        // ID8 occupies physical row256 and wins the ID9 score tie at rank10.
+        let sq8 = std::fs::read(dir.path().join("sq8")).unwrap();
+        assert_eq!(
+            u64::from_le_bytes(sq8[256 * (D + 12)..256 * (D + 12) + 8].try_into().unwrap()),
+            8
+        );
+        let direct = LocalFileSystem::new_with_prefix(dir.path().join("store")).unwrap();
+        let root_key = format!("{}/manifest.json", c.generation_prefix);
+        let mut root: Value = serde_json::from_slice(
+            &direct
+                .get(&ObjectPath::from(root_key.clone()))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        root["sq8_etag"] = json!(STUB_ETAG);
+        let root_body = serde_json::to_vec(&root).unwrap();
+        let initial = NativeTransportStats {
+            attempts: 37,
+            method_counts: [31, 6, 0, 0, 0, 0, 0, 0, 0, 0],
+            status_counts: vec![(200, 34)],
+            transport_failures: 3,
+            stream_failures: 2,
+            consumed_payload_bytes: 12345,
+            dropped_error_bodies: 1,
+        };
+        let recorded = Arc::new(RecordingStore {
+            inner: object_store::memory::InMemory::new(),
+            reads: Default::default(),
+            stats: Arc::new(std::sync::Mutex::new(initial.clone())),
+            fault: std::sync::Mutex::new("ok"),
+            root: format!("physical/ns/{root_key}"),
+            sq8: format!("physical/ns/{}", root["sq8_object_key"].as_str().unwrap()),
+        });
+        let mut objects = direct.list(None);
+        while let Some(meta) = objects.next().await {
+            let meta = meta.unwrap();
+            let body = direct
+                .get(&meta.location)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            recorded
+                .inner
+                .put(
+                    &ObjectPath::from(format!("physical/ns/{}", meta.location)),
+                    body.into(),
+                )
+                .await
+                .unwrap();
+        }
+        recorded
+            .inner
+            .put(
+                &ObjectPath::from(recorded.root.clone()),
+                root_body.clone().into(),
+            )
+            .await
+            .unwrap();
+        let mut remote = local.clone();
+        remote["generation_root_sha256"] = json!(hash(&root_body));
+        remote["backend"] = json!({"kind":"s3","bucket":"fixture-bucket","region":"eu-central-1",
+            "physical_prefix":"physical/ns","sq8_object_key":root["sq8_object_key"],"sq8_etag":STUB_ETAG});
+
+        for fault in [
+            "ok",
+            "underfill",
+            "invalid_request",
+            "invalid_etag",
+            "invalid_key",
+            "invalid_namespace",
+            "invalid_bucket",
+            "invalid_region",
+            "mixed",
+            "unknown",
+            "old",
+            "root_sha",
+            "root_etag",
+            "root_key",
+            "root_source",
+            "source",
+            "order",
+            "zero",
+            "size",
+            "location",
+            "range",
+            "end",
+            "short",
+            "long",
+            "sha",
+            "plane_sha",
+            "parse",
+            "stream",
+            "startup",
+            "query",
+            "actual_etag",
+            "output",
+            "query_output",
+            "seal",
+            "tamper",
+            "truth",
+        ] {
+            let mut value = remote.clone();
+            match fault {
+                "invalid_request" => {
+                    let mut body = std::fs::read(&c.requests.path).unwrap();
+                    body[D * 4..].fill(0);
+                    value["requests"] = artifact(&dir.path().join("bad-request"), &body);
+                }
+                "invalid_etag" => value["backend"]["sq8_etag"] = json!("unquoted"),
+                "invalid_key" => value["backend"]["sq8_object_key"] = json!("../bad"),
+                "invalid_namespace" => value["backend"]["physical_prefix"] = json!("physical//ns"),
+                "invalid_bucket" => value["backend"]["bucket"] = json!("BAD"),
+                "invalid_region" => value["backend"]["region"] = json!("https://override"),
+                "mixed" => value["backend"]["store_root"] = json!("/unexpected"),
+                "unknown" => value["backend"]["endpoint"] = json!("https://override"),
+                "old" => value["schema"] = json!("borsuk-cohere-native-baseline-config-v1"),
+                "root_sha" => value["generation_root_sha256"] = json!("0".repeat(64)),
+                "parse" => value["generation_root_sha256"] = json!(hash(b"{")),
+                "root_etag" => value["backend"]["sq8_etag"] = json!("\"wrong\""),
+                "root_key" => {
+                    value["backend"]["sq8_object_key"] =
+                        json!(format!("other/objects/{}", c.native_source.sq8_sha256))
+                }
+                "root_source" => {
+                    value["native_source"]["sq8_sha256"] = json!("0".repeat(64));
+                    value["backend"]["sq8_object_key"] =
+                        json!(format!("semantic/objects/{}", "0".repeat(64)));
+                }
+                "source" => value["native_source"]["source_sha256"] = json!("0".repeat(64)),
+                "order" => value["native_source"]["source_order_sha256"] = json!("0".repeat(64)),
+                _ => (),
+            }
+            recorded.reads.lock().unwrap().clear();
+            *recorded.stats.lock().unwrap() = initial.clone();
+            *recorded.fault.lock().unwrap() = fault;
+            let parsed = serde_json::from_value::<Config>(value);
+            if matches!(fault, "mixed" | "unknown") {
+                assert!(parsed.is_err(), "{fault}");
+                assert!(recorded.reads.lock().unwrap().is_empty());
+                continue;
+            }
+            let config = parsed.unwrap();
+            let mut out = Output::create(&dir.path().join(format!("stub-{fault}"))).unwrap();
+            if fault == "output" {
+                out.cap = 1;
+            }
+            if fault == "query_output" {
+                out.fail_query_output = true;
+            }
+            if fault == "seal" {
+                out.directory = OpenOptions::new()
+                    .read(true)
+                    .custom_flags(rustix::fs::OFlags::PATH.bits() as i32)
+                    .open(dir.path())
+                    .unwrap();
+            }
+            let mut p = Progress::default();
+            let test_shape = Shape {
+                returned_limit: if fault == "underfill" { 3 } else { K },
+                ..shape
+            };
+            let reader_created = std::cell::Cell::new(false);
+            let result = query_and_seal_with(&config, test_shape, &mut out, &mut p, || {
+                reader_created.set(true);
+                Ok(Reader::Stub {
+                    store: Arc::new(ChunkedStore::new(
+                        Arc::new(object_store::prefix::PrefixStore::new(
+                            recorded.clone(),
+                            ObjectPath::from("physical/ns"),
+                        )),
+                        8192,
+                    )),
+                    stats: recorded.stats.clone(),
+                })
+            })
+            .await;
+            assert!(!p.truth_opened, "{fault}");
+            let reads = recorded.reads.lock().unwrap().clone();
+            if fault.starts_with("invalid_") || fault == "old" {
+                assert!(result.is_err(), "{fault}");
+                assert!(reads.is_empty(), "{fault}: {reads:?}");
+                assert!(!reader_created.get(), "{fault}");
+                continue;
+            }
+            assert_eq!(reads[0], (recorded.root.clone(), false), "{fault}");
+            assert!(
+                reads
+                    .iter()
+                    .all(|(path, _)| path.starts_with("physical/ns/")
+                        && !path.starts_with("physical/ns/physical/ns/")),
+                "{fault}"
+            );
+            let after = p.transport.after.as_ref().unwrap();
+            assert_eq!(after, &*recorded.stats.lock().unwrap(), "{fault}");
+            assert!(after.attempts > initial.attempts, "{fault}");
+            assert_eq!(
+                after.attempts,
+                initial.attempts + reads.len() as u64,
+                "{fault}"
+            );
+            assert!(p.transport.before.as_ref().unwrap().attempts >= initial.attempts);
+            if matches!(
+                fault,
+                "root_sha"
+                    | "root_etag"
+                    | "root_key"
+                    | "root_source"
+                    | "zero"
+                    | "size"
+                    | "location"
+                    | "range"
+                    | "end"
+                    | "short"
+                    | "long"
+                    | "sha"
+                    | "parse"
+                    | "stream"
+                    | "output"
+            ) {
+                assert_eq!(
+                    reads.len(),
+                    if fault == "output" { 2 } else { 1 },
+                    "{fault}"
+                );
+            } else {
+                assert_eq!(
+                    reads[1],
+                    (
+                        format!(
+                            "physical/ns/{}/plane/manifest.json",
+                            config.generation_prefix
+                        ),
+                        false
+                    ),
+                    "{fault}"
+                );
+            }
+            if matches!(fault, "ok" | "underfill" | "tamper" | "truth") {
+                let seal = result.unwrap();
+                assert!(
+                    p.sealed && out.directory_synced && p.completed == 2,
+                    "{fault}"
+                );
+                let rows = records(&out.path);
+                assert_eq!(rows.last().unwrap()["phase"], "all_queries_sealed");
+                assert_eq!(rows[0]["transport"]["before"]["attempts"], 37);
+                assert_eq!(rows[0]["charges"]["submitted_gets"], 2);
+                let mut previous = serde_json::to_value(&initial).unwrap();
+                for row in rows.iter().filter(|r| r["transport"].is_object()) {
+                    assert_eq!(row["transport"]["before"], previous, "{fault}");
+                    previous = row["transport"]["after"].clone();
+                }
+                assert_eq!(previous, serde_json::to_value(after).unwrap());
+                let queries = rows
+                    .iter()
+                    .filter(|r| r["phase"] == "query")
+                    .collect::<Vec<_>>();
+                for (i, row) in queries.iter().enumerate() {
+                    let local_query = local_rows
+                        .iter()
+                        .filter(|r| r["phase"] == "query")
+                        .nth(i)
+                        .unwrap();
+                    assert_eq!(row["charges"], local_query["charges"], "{fault}");
+                    assert_eq!(row["sum"], local_query["sum"], "{fault}");
+                    assert_eq!(
+                        row["returned"],
+                        if fault == "underfill" {
+                            json!(&local_hits[i].as_array().unwrap()[..3])
+                        } else {
+                            local_hits[i].clone()
+                        }
+                    );
+                }
+                if fault == "tamper" {
+                    OpenOptions::new()
+                        .write(true)
+                        .open(&out.path)
+                        .unwrap()
+                        .write_all(b"!")
+                        .unwrap();
+                    assert!(reduce(&config, &mut out, &seal, &mut p).is_err());
+                    assert!(!p.truth_opened);
+                } else if fault == "truth" {
+                    std::fs::remove_file(&config.truth.path).unwrap();
+                    assert!(reduce(&config, &mut out, &seal, &mut p).is_err());
+                    assert!(p.truth_opened && p.sealed);
+                } else {
+                    let summary = reduce(&config, &mut out, &seal, &mut p).unwrap();
+                    assert_eq!(summary["recall_denominator"], 20);
+                    assert_eq!(
+                        summary["total_hits10"],
+                        if fault == "underfill" { 6 } else { 20 }
+                    );
+                    assert_eq!(
+                        summary["mean_recall10"],
+                        if fault == "underfill" { 0.3 } else { 1.0 }
+                    );
+                }
+            } else {
+                assert!(result.is_err(), "{fault}");
+                if fault == "parse" {
+                    assert_eq!(p.binding_charge.submitted_gets, 1);
+                    assert_eq!(p.binding_charge.verified_bytes, 1);
+                    assert_eq!(p.binding_charge.failed_gets, 0);
+                    assert!(
+                        result
+                            .as_ref()
+                            .err()
+                            .unwrap()
+                            .to_string()
+                            .contains("EOF while parsing")
+                    );
+                }
+                if matches!(fault, "root_sha" | "sha" | "plane_sha" | "short") {
+                    assert!(
+                        result
+                            .as_ref()
+                            .err()
+                            .unwrap()
+                            .to_string()
+                            .contains("metadata EOF/SHA"),
+                        "{fault}"
+                    );
+                    assert_eq!(p.binding_charge.failed_gets, 1);
+                }
+                if fault == "long" {
+                    assert!(
+                        result
+                            .as_ref()
+                            .err()
+                            .unwrap()
+                            .to_string()
+                            .contains("metadata long EOF")
+                    );
+                }
+                assert!(!p.sealed && !p.truth_opened, "{fault}");
+                if matches!(fault, "query" | "actual_etag") {
+                    assert!(p.charges.sum().submitted_gets > 0 && p.charges.sum().failed_gets > 0);
+                    assert_eq!(p.transport.stage, "query");
+                }
+                if fault == "query" || fault == "startup" {
+                    assert!(after.transport_failures > initial.transport_failures);
+                }
+                if fault == "stream" {
+                    assert!(after.stream_failures > initial.stream_failures);
+                }
+                if fault == "query_output" {
+                    assert_eq!(p.transport.stage, "query");
+                    assert!(p.charges.sum().verified_bytes > 0);
+                }
+                if fault == "seal" {
+                    assert_eq!(p.completed, 2);
+                    assert!(!out.directory_synced);
+                }
+                let terminal = invalid_summary(&p, "injected failure");
+                assert_eq!(
+                    terminal["transport_last_boundary"]["after"]["attempts"],
+                    after.attempts
+                );
+                for field in [
+                    "wire_bytes",
+                    "unread_bytes",
+                    "billed_bytes",
+                    "billed_requests",
+                ] {
+                    assert!(terminal["transport_last_boundary"][field].is_null());
+                }
+                assert!(serde_json::to_vec(&terminal).unwrap().len() < TERMINAL_RESERVE as usize);
+            }
+        }
+        // Even a full native histogram and worst-width scalars cannot exhaust the
+        // terminal reserve: full histograms remain in phase records, never here.
+        let maximal = NativeTransportStats {
+            attempts: u64::MAX,
+            method_counts: [u64::MAX; 10],
+            status_counts: (100..=999).map(|code| (code, u64::MAX)).collect(),
+            transport_failures: u64::MAX,
+            stream_failures: u64::MAX,
+            consumed_payload_bytes: u64::MAX,
+            dropped_error_bodies: u64::MAX,
+        };
+        let p = Progress {
+            transport: TransportSpan {
+                stage: "generation_open",
+                ordinal: Some(999),
+                before: Some(maximal.clone()),
+                after: Some(maximal),
+            },
+            ..Progress::default()
+        };
+        let terminal = json!({"phase":"terminal","summary":invalid_summary(&p, &"\0".repeat(512))});
+        // Include room for execute_paths' process timings/peak and terminating newline.
+        assert!(serde_json::to_vec(&terminal).unwrap().len() + 512 < TERMINAL_RESERVE as usize);
+
+        // Exercise execute_paths' actual terminal append and successful fsync after
+        // a partial query record, with the real tiny257 pipeline and injected store.
+        *recorded.fault.lock().unwrap() = "ok";
+        *recorded.stats.lock().unwrap() = initial.clone();
+        recorded.reads.lock().unwrap().clear();
+        let (config_path, config_sha) = write_config(dir.path(), &remote);
+        let output_path = dir.path().join("partial-query-terminal");
+        let output_for_thread = output_path.clone();
+        let counters = recorded.stats.clone();
+        // execute_paths creates a runtime; use another thread, not a nested runtime.
+        let status = std::thread::spawn(move || {
+            execute_paths_with(
+                &config_path,
+                &config_sha,
+                &output_for_thread,
+                shape,
+                |c, shape, out, p| {
+                    out.fail_query_output = true;
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap()
+                        .block_on(query_and_seal_with(c, shape, out, p, || {
+                            Ok(Reader::Stub {
+                                store: Arc::new(ChunkedStore::new(
+                                    Arc::new(object_store::prefix::PrefixStore::new(
+                                        recorded.clone(),
+                                        ObjectPath::from("physical/ns"),
+                                    )),
+                                    8192,
+                                )),
+                                stats: recorded.stats.clone(),
+                            })
+                        }))
+                },
+            )
+        })
+        .join()
+        .unwrap()
+        .unwrap();
+        assert!(!status); // Ok(false) is returned only after the terminal fsync succeeds.
+        let output = std::fs::read_to_string(&output_path).unwrap();
+        assert!(output.ends_with('\n'));
+        let identities = output
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            identities[0]["s3_credential_source"],
+            "imds_instance_role_only"
+        );
+        assert_eq!(
+            identities[0]["native_transport_includes"],
+            "S3_and_IMDS_credential_requests_including_PUT"
+        );
+        assert_eq!(
+            identities[1]["credential_source"],
+            "imds_instance_role_only"
+        );
+        assert!(
+            output
+                .lines()
+                .any(|line| line.starts_with("{\"phase\":\"query\"")
+                    && serde_json::from_str::<Value>(line).is_err())
+        );
+        let terminal: Value = serde_json::from_str(output.lines().last().unwrap()).unwrap();
+        assert_eq!(terminal["phase"], "terminal");
+        let summary = &terminal["summary"];
+        assert_eq!(summary["status"], "INVALID");
+        assert_eq!(summary["stage"], "query");
+        assert_eq!(summary["truth_opened"], false);
+        assert_eq!(summary["all_queries_sealed"], false);
+        assert_eq!(summary["completed_queries"], 0);
+        assert!(summary["sum"]["verified_bytes"].as_u64().unwrap() > 0);
+        let final_stats = counters.lock().unwrap();
+        let transport = &summary["transport_last_boundary"];
+        assert_eq!(transport["after"]["attempts"], final_stats.attempts);
+        assert_eq!(
+            transport["after"]["consumed_payload_bytes"],
+            final_stats.consumed_payload_bytes
+        );
+        assert!(transport["before"]["attempts"].as_u64().unwrap() >= initial.attempts);
+        assert!(
+            transport["after"]["attempts"].as_u64().unwrap()
+                > transport["before"]["attempts"].as_u64().unwrap()
+        );
+        for field in [
+            "wire_bytes",
+            "unread_bytes",
+            "billed_bytes",
+            "billed_requests",
+        ] {
+            assert!(transport[field].is_null());
+        }
     }
 }
