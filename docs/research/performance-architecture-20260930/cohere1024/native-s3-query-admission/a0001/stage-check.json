@@ -1,0 +1,38 @@
+{
+  "status": "PASS",
+  "source_sha256": "86e0f7861e7452ae870586da007a92747fca9fbbff37350a709b43ed73774a0f",
+  "cases": [
+    {
+      "case": "success",
+      "exit": 0
+    },
+    {
+      "case": "native-fail",
+      "exit": 2
+    },
+    {
+      "case": "scratch-leak",
+      "exit": 96
+    },
+    {
+      "case": "pin-change",
+      "exit": 96
+    },
+    {
+      "case": "bad-cap",
+      "exit": 1
+    }
+  ],
+  "real": [
+    "shell stage",
+    "time/timeout",
+    "config SHA/argv check",
+    "pin rehash",
+    "scratch leak refusal"
+  ],
+  "mocked": [
+    "cgroup file contents",
+    "Rust runner"
+  ],
+  "native_runtime_pass": false
+}

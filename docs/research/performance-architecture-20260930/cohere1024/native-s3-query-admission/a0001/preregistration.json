@@ -1,0 +1,141 @@
+{
+  "status": "FROZEN_NOT_LAUNCHED",
+  "purpose": "full1000 existing Rust real S3 request/source/truth correctness admission; no measured performance claim",
+  "config_sha256": "0ddf1006203ef64505ecbb83eb03f79642a78ae74fe1d88e9f81947cf9fb15eb",
+  "binary": {
+    "source_commit": "4c2e535fef1fdc2e61fa003358614287bb8ed488",
+    "bytes": 16135912,
+    "sha256": "9a65fd6137eaa3929a1ee05fc798ef12c8fb8ab9970099c9b6de3c1031d15f72"
+  },
+  "publication": {
+    "instance_id": "i-0eee47c7b5d35518c",
+    "status": "ADMITTED",
+    "root_verification_sha256": "7bce02b8f90d01c850e17a25c2cbfcb8b6a0722aa78d52dc76aee7f589a3bee4"
+  },
+  "resources": {
+    "cpu": 1,
+    "memory_bytes": 536870912,
+    "swap_bytes": 0,
+    "pids": 256,
+    "native_seconds": 2400,
+    "inner_seconds": 2370,
+    "machine_seconds": 3600,
+    "scratch_bytes": 67108864,
+    "output_bytes": 67108864
+  },
+  "limits_unchanged": true,
+  "maximum_attempts": 1,
+  "compute_reservation_usd": 0.5,
+  "ancillary_reservation_usd": 0.15,
+  "total_reservation_usd": 0.65,
+  "stage_sha256": "86e0f7861e7452ae870586da007a92747fca9fbbff37350a709b43ed73774a0f",
+  "truth_policy": "Rust authenticates and validates all requests before source open; freezes complete1000 query results before any GT body; fixed10000 denominator, underfill counted",
+  "startup": "authenticate accepted root/plane/full native source bindings through same instance-role reader; no publisher/rebuild/retrain or local payload hydration",
+  "read_envelope": "Unchanged native source128GET/64MiB + SQ832GET/16773120B per query, router separately charged. Runtime deadline bounds work; maxima are admission limits, not predictions or a guaranteed completion claim. SDK/IMDS snapshots include credential requests and do not equal wire or billed S3 requests.",
+  "cache": "single process, serial1000; no explicit application payload cache; provider caches uncontrolled; admission timing not vendor comparison",
+  "acceptance": "original native/service/final exit0; authenticated result terminal MEASURED/count1000 plus query seal before truth; all input/binary/config pins unchanged; runtime CPU/memory/swap/pids and drain; original terminated before collection; source/head/SQ8 unchanged; truth/input identity exact; independent acceptance before any measured panel; exact independently precomputed local IDs/scorebits/count/underfill projection and same-plus-logical-charges projection must match; native recall numerator9723/denominator10000; lower recall is not masked by underfill",
+  "followup": "Only after ADMITTED: separately frozen disposable staging/CLI canary, then measured serial S3 panel. Wrong-config canary cannot establish native IMDS; real admission records native first binding transport.",
+  "remaining": [
+    "Root uploads exact three assets create-only",
+    "ONE original native query admission",
+    "Independent terminal/complete seal/parity/runtime/source/termination closeout"
+  ],
+  "scratch_reason": "open_remote stages bounded authenticated metadata only, not records/leaves/SQ8/canonical bodies; 64Mi tmpfs explicit host cap, charged to same512Mi cgroup; original cleanup must empty directory",
+  "source_commit": "c490dfc79a4b52851615ff8f26698b8f51fa9f1d",
+  "commands": {
+    "stage_sha256": "86e0f7861e7452ae870586da007a92747fca9fbbff37350a709b43ed73774a0f",
+    "userdata_sha256": "4a2cdd41d8847bbc9019308b245566d438608dd0ab0c9d99e151d696363f6fab",
+    "launch_request_sha256": "3bfd909106239f67f226fbbc2088e5a5df9a2ce5b86e8df29945570583952556"
+  },
+  "bounded_checks": [
+    {
+      "unit": "borsuk-native-s3-query-admission-wrapper-check-final",
+      "invocation": null,
+      "cases": 10,
+      "exit": 0,
+      "runtime_seconds": 16.74,
+      "memory_peak_approx": 16800000,
+      "cap_bytes": 268435456,
+      "swap_peak": 0,
+      "source_sha256": "4a2cdd41d8847bbc9019308b245566d438608dd0ab0c9d99e151d696363f6fab",
+      "invocation_observation": "not captured for final unit; exact unit/source hash/original exit and resource stdout observed"
+    },
+    {
+      "unit": "borsuk-native-s3-query-admission-stage-check",
+      "invocation": "c410684d31ba4f2294f226e09f513018",
+      "cases": 5,
+      "exit": 0,
+      "runtime_seconds": 2.117,
+      "memory_peak_approx": 16800000,
+      "cap_bytes": 268435456,
+      "swap_peak": 0,
+      "source_sha256": "86e0f7861e7452ae870586da007a92747fca9fbbff37350a709b43ed73774a0f"
+    }
+  ],
+  "planning_consultation": "bb051da9a0c3452e",
+  "terminal": "exact remote terminal independently fetched; native/service/closeout exits0, no mandatory serial-console availability",
+  "interruptions": "INVALID; no automatic retry; preserve source/query seal and original job; new attempt only after demonstrated repair/preregistration",
+  "opaque_collection": "only complete native result/log/resource/config/pin evidence; no corpus, SQ8, canonical, request or truth bodies; never inspect incomplete result rows",
+  "frozen_at": "2026-10-07T17:55:24.791725+00:00",
+  "parity": {
+    "source_commit": "c490dfc7",
+    "artifact": "docs/research/performance-architecture-20260930/cohere1024/native-preflight-spot/a0002/preflight/baseline-result.jsonl",
+    "prefix_sha256": "3f0ea7b646bdac9d23d19e75195e948c11a5ab02784ed2db6cfb058cb9a1a32b",
+    "sealed_sha256": "c211f9074c5e000a25ce9f0342fac6ac47bc395ea318a52ff4495b744b6e8150",
+    "full_sha256": "9317c19dda6401668649cebcc2430035c430fe5ad148c8a545d0ea12a0b02e52",
+    "ids_scores_sha256": "cb37f660415dcde0178af84c7fbe8cee2b2c429587ba40d12f36560bb96cef0a",
+    "ids_scores_and_charges_sha256": "57b72b3806d869dbcdf83a3395a7b7e7024b4109b227cab75d4b7edf8afb3f45",
+    "queries": 1000,
+    "recall_numerator": 9723,
+    "recall_denominator": 10000,
+    "independently_recounted_projection_hashes": true
+  },
+  "evidence_pins": {
+    "input-metadata.json": {
+      "bytes": 1544,
+      "sha256": "8a97debf3d82e54bc9414c8158dc5c34f169ea6f7b605c715c0a0a6c8b5c920d"
+    },
+    "generation-prefreeze.json": {
+      "bytes": 1054,
+      "sha256": "d38d7f0f6ca6711c9ebdb66afa26cb7f24a58d960d94bbbd7199741f36ed80b7"
+    },
+    "generation-head-prefreeze.json": {
+      "bytes": 170,
+      "sha256": "3efeb3071ded56487b5a79778cadd0ff7c23ab4262715a1d204a5f0ea4a39bf9"
+    },
+    "generation-root-prefreeze.json": {
+      "bytes": 27655,
+      "sha256": "ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df"
+    },
+    "plan-reconciliation.json": {
+      "bytes": 2290,
+      "sha256": "bfb9a58312d55e9805f67559a8ddb0c3b8f478ae79a9f95d0433c92370982a78"
+    },
+    "wrapper-check.json": {
+      "bytes": 1429,
+      "sha256": "6c7f327fcb23de25a885a0205e50d2545c68f5ee84d29f226213635d32369918"
+    },
+    "stage-check.json": {
+      "bytes": 638,
+      "sha256": "666b01f9f4d729d0a5213cb52b62c27dab565bb09b664fea07d1c9a6c04cfa28"
+    },
+    "main-route-table.json": {
+      "bytes": 1111,
+      "sha256": "f67dcc637dabdcb92eb9322ae503b41b82cef4038750c230e946fef78fa5e551"
+    },
+    "subnet.json": {
+      "bytes": 1108,
+      "sha256": "7a66dbe57aad4d8520fa960bbee211c226e607823779338323767048b55d66d2"
+    },
+    "dry-run.stderr": {
+      "bytes": 171,
+      "sha256": "ba22f07c6352222943fa39aaafd7ae69c71d54b2d6ee3fe57bbce747abfcc41f"
+    }
+  },
+  "network": "Explicit public IPv4 ENI; exact subnet uses main IGW route, no NAT gateway; source/read traffic same region. No shared route or IAM change.",
+  "spot_quote": {
+    "usd_hour": "0.206600",
+    "timestamp": "2026-10-07T16:00:00Z",
+    "az": "eu-central-1c"
+  }
+}

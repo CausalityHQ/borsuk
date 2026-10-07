@@ -1,0 +1,43 @@
+{
+  "inputs": [
+    {
+      "role": "requests",
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/prepared/queries.f32",
+      "path": "/mnt/borsuk-retained-s3/queries.f32",
+      "bytes": 4096000,
+      "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+      "head": {
+        "AcceptRanges": "bytes",
+        "LastModified": "2026-10-06T14:37:43+00:00",
+        "ContentLength": 4096000,
+        "ETag": "\"1553426815b5dbf6d916ccd12f1c227a\"",
+        "ContentType": "binary/octet-stream",
+        "ServerSideEncryption": "AES256",
+        "Metadata": {
+          "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+        }
+      }
+    },
+    {
+      "role": "truth",
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/prepared/truth.u64",
+      "path": "/mnt/borsuk-retained-s3/truth.u64",
+      "bytes": 80000,
+      "sha256": "479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c",
+      "head": {
+        "AcceptRanges": "bytes",
+        "LastModified": "2026-10-06T14:37:43+00:00",
+        "ContentLength": 80000,
+        "ETag": "\"04fc7819a26ce9b269bd25b23b514607\"",
+        "ContentType": "binary/octet-stream",
+        "ServerSideEncryption": "AES256",
+        "Metadata": {
+          "sha256": "479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c"
+        }
+      }
+    }
+  ],
+  "body_reads": 0,
+  "native_body_authentication_pending": true,
+  "binary_full_sha_checked": true
+}

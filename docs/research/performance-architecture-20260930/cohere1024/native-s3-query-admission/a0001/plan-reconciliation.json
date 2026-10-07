@@ -1,0 +1,39 @@
+{
+  "consultation": "bb051da9a0c3452e",
+  "full_plan_read": true,
+  "plan_sha256": "237ab045de349aa2205a8b039a755e0010b6a2580ae5fe59d51364c3d353099c",
+  "accepted": [
+    "full1000 existing qualified runner; same generation and inputs",
+    "64Mi metadata-only scratch",
+    "raw returned IDs/scorebits/count/underfill and logical charge projection parity",
+    "source and input before/after binding",
+    "NAT avoidance verified against main route because no explicit subnet association"
+  ],
+  "adjustments": [
+    "Keep conservative prospective native2400s/machine3600s vs suggested1500/2700; reserve .65 max for ONE attempt; no auto-retry",
+    "Do not git reset: preserve stale root index and use private index",
+    "Wrong-config canary does not exercise native IMDS; actual admission does. Real AWSCLI staging role path is separate. No false native credential claim",
+    "HTTP/runtime timeout is execution incomplete. Root-cause classification must distinguish environment defect from actual enforced algorithm resource exhaustion",
+    "Historical v1 reducer remains immutable; raw byte projections do no scoring/hit reduction and avoid a new feature"
+  ],
+  "local_reference": {
+    "source_commit": "c490dfc7",
+    "artifact": "docs/research/performance-architecture-20260930/cohere1024/native-preflight-spot/a0002/preflight/baseline-result.jsonl",
+    "prefix_sha256": "3f0ea7b646bdac9d23d19e75195e948c11a5ab02784ed2db6cfb058cb9a1a32b",
+    "sealed_sha256": "c211f9074c5e000a25ce9f0342fac6ac47bc395ea318a52ff4495b744b6e8150",
+    "full_sha256": "9317c19dda6401668649cebcc2430035c430fe5ad148c8a545d0ea12a0b02e52",
+    "ids_scores_sha256": "cb37f660415dcde0178af84c7fbe8cee2b2c429587ba40d12f36560bb96cef0a",
+    "ids_scores_and_charges_sha256": "57b72b3806d869dbcdf83a3395a7b7e7024b4109b227cab75d4b7edf8afb3f45",
+    "queries": 1000,
+    "recall_numerator": 9723,
+    "recall_denominator": 10000,
+    "independently_recounted_projection_hashes": true
+  },
+  "network": {
+    "main_route_id": "rtb-00bee42cca694f79b",
+    "default_igw": true,
+    "no_NAT_routes": true,
+    "public_ip_explicit": true
+  },
+  "binary_source_nonancestor_but_exact_owned_bytes": "4c2e535f source is independent child commit; authoritative full414 qualification map matched root before integration"
+}
