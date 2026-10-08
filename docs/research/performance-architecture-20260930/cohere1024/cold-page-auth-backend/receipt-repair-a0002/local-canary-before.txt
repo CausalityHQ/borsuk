@@ -1,0 +1,8 @@
+LoadState=loaded
+ActiveState=active
+RuntimeMaxUSec=2min
+MainPID=1011261
+MemoryMax=268435456
+MemorySwapMax=0
+TasksMax=128
+LimitCPU=30

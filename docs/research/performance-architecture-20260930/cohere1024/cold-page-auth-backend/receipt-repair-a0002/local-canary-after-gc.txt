@@ -1,0 +1,8 @@
+LoadState=not-found
+ActiveState=inactive
+RuntimeMaxUSec=infinity
+MainPID=0
+MemoryMax=infinity
+MemorySwapMax=infinity
+TasksMax=25369
+LimitCPU=infinity

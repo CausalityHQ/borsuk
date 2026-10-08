@@ -1,0 +1,122 @@
+{
+  "status": "EXECUTION_INVALID",
+  "instance_id": "i-0e6fc14fb0621927d",
+  "terminated_freshly_verified": true,
+  "protocol_commit": "c0a1e8ff1b280db57440a4ba32f3349a4ac32d03",
+  "candidate_commit": "7256ec9b57a6774a1be425990865e35e4fc3c5d9",
+  "source_file_count": 415,
+  "source_identity": "6f07aa976298719e5fa6a642043bad0afe6a1e8f8106fd61eb46fec6c627d663",
+  "all_source_before_after_match": true,
+  "artifact_count": 204,
+  "all_artifact_bytes_authenticated": true,
+  "all_input_pins_match": true,
+  "correctness_complete": true,
+  "mandatory_names": 80,
+  "stages": [
+    {
+      "name": "baseline-metadata",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "candidate-metadata",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "baseline-features",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "candidate-features",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "baseline-sys-features",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "candidate-sys-features",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "correctness-01",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "correctness-02",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "correctness-03",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "correctness-04",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "correctness-05",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "correctness-06",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "correctness-07",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "correctness-08",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "correctness-09",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "correctness-10",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "correctness-11",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "correctness-12",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "release-probe-compile",
+      "native_exit": 0,
+      "tee_exit": 0
+    }
+  ],
+  "unrun_stages": [
+    "qualification-01",
+    "qualification-02",
+    "qualification-03"
+  ],
+  "observed_probe_status_not_accepted": "REJECT",
+  "weighted_cpu_saving": -0.055554437208663154,
+  "supplemental_binary_authentication_pending": true,
+  "cold_or_vendor_performance_claim": false,
+  "goal_complete": false
+}

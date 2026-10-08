@@ -1,0 +1,8 @@
+{
+  "status": "PASS",
+  "path": "/data/target/borsuk-cold-membership-native/page-auth-gate-a0001/probe-libtest.binary",
+  "bytes": 88071816,
+  "sha256": "e5028e38842734f1ecb362587ca21582a67721e1805cf38904ecb691f7f63c56",
+  "same_selected_and_retained_elf": true,
+  "native_execution": false
+}

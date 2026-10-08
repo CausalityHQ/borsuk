@@ -1,0 +1,91 @@
+{
+  "schema": "borsuk-page-auth-backend-receipt-repair-v1-protocol",
+  "status": "FROZEN_NOT_LAUNCHED",
+  "created_at": "2026-10-08T07:48:14.767020+00:00",
+  "control_commit": "c0a1e8ff1b280db57440a4ba32f3349a4ac32d03",
+  "candidate_commit": "7256ec9b57a6774a1be425990865e35e4fc3c5d9",
+  "original_attempt": {
+    "instance_id": "i-0e6fc14fb0621927d",
+    "status": "EXECUTION_INVALID",
+    "reason": "unit was garbage-collected before post-execution systemctl limit query",
+    "all204_artifacts_authenticated": true,
+    "correctness_complete": true,
+    "remaining_release_clippy_testbuild": "UNRUN"
+  },
+  "same_retained_elf": {
+    "status": "PASS",
+    "path": "/data/target/borsuk-cold-membership-native/page-auth-gate-a0001/probe-libtest.binary",
+    "bytes": 88071816,
+    "sha256": "e5028e38842734f1ecb362587ca21582a67721e1805cf38904ecb691f7f63c56",
+    "same_selected_and_retained_elf": true,
+    "native_execution": false
+  },
+  "inputs": {
+    "probe.sh": {
+      "bytes": 1988,
+      "sha256": "39e87f98c1a0d5014cdfa310b4ea03f1b809049e4243b1de2b318508a2d34cf9"
+    },
+    "probe-check.py": {
+      "bytes": 5645,
+      "sha256": "233a120946c97dd52f98a047a7e21fc3b3ade7cc004090aa0c1d5e8019cb4b9e"
+    },
+    "gates.sh": {
+      "bytes": 1624,
+      "sha256": "5a0b21e5d72c712da5d0b6ce5e73d5537e2e084a47cdf222d21e142700a022aa"
+    }
+  },
+  "userdata": {
+    "bytes": 5261,
+    "sha256": "775dd7deef726c3bf538521b2b348f5a66f2e7b64301ea3c67a020f4404dfeb0"
+  },
+  "repair": "capture and validate loaded MainPID/ControlGroup/finite limits before native execution; preserve separate native and tee exits",
+  "scientific_algorithm_and_limits_unchanged": true,
+  "native_builds": 0,
+  "source_or_truth_reads": 0,
+  "probe_caps": {
+    "cpu": 1,
+    "allowed_cpus": [
+      0
+    ],
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "cpu_seconds": 30,
+    "wall_seconds": 120
+  },
+  "screen": {
+    "minimum_weighted_cpu_saving": 0.2,
+    "maximum_full_class_median_ratio": 1.05,
+    "records": 40,
+    "blocks": 5,
+    "class_weights_bytes": [
+      8971573248,
+      16699756416
+    ]
+  },
+  "host": {
+    "type": "c7i.2xlarge",
+    "market": "Spot",
+    "region": "eu-central-1",
+    "profile": "causality",
+    "bid_usd_hour": 0.5,
+    "volume_gib": 20,
+    "machine_seconds": 1200,
+    "aggregate_cpu": 2,
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "pids": 512
+  },
+  "cost_reservation": {
+    "compute_usd": 0.1,
+    "ancillary_usd": 0.15,
+    "fresh_quote_required_before_launch": true
+  },
+  "prefix": "research/semantic-router/20261008/cold-page-auth-native-gates-a0002",
+  "closure": "one instance; terminal upload, terminate and wait before collection; independently authenticate all artifacts and retained ELF before/after; interrupted or setup failures INVALID",
+  "PASS": "remaining native qualification required before integration; no cold benchmark authorized by probe alone",
+  "REJECT": "retain unchanged source unintegrated; select next measured hotspot",
+  "INVALID": "preserve attempt and repair demonstrated setup defect",
+  "vendor_or_cold_performance_claim": false,
+  "saved_s3_rerun": false
+}
