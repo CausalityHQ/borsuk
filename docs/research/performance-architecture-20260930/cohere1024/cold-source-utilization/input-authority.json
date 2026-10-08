@@ -1,0 +1,77 @@
+{
+  "schema": "borsuk-cold-source-utilization-root-input-authority-v1",
+  "status": "CLOSED_INPUTS_PINNED_REDUCER_UNQUALIFIED",
+  "historical_campaign": "cold-membership-abba-a0001",
+  "original_instance_id": "i-0858be8fbbafb673a",
+  "original_instance_terminated": true,
+  "producer_source_commit": "fc8a23dac44ad635fc1236736df68878690a8389",
+  "producer_source_archive_sha256": "3927688ec1344c8c62058bcecd054251c4befcff1c6fd7dd800b1a860587faa2",
+  "producer_native_generation_source_sha256": "194115d67776ad9f620a704b8cb98beda16b4d879019c390b2a0d4a6901003e4",
+  "producer_source_limit_authority": "crates/borsuk/src/bin/check_cohere_native_baseline.rs::limits and crates/borsuk/src/semantic_unit_router.rs::SemanticProfile::source_unit_limit at producer_source_commit",
+  "source_rows": 100000,
+  "dimensions": 1024,
+  "record_bytes": 264,
+  "source_get_cap": 128,
+  "source_byte_cap": 67108864,
+  "source_unit_cap": 2544,
+  "record_bytes_formula": "ceil(dimensions / 256) * 256 / 4 + 8",
+  "cover_arithmetic_unchanged": {
+    "path": "crates/borsuk/src/budgeted_page_rank.rs",
+    "historical_commit": "fc8a23dac44ad635fc1236736df68878690a8389",
+    "reviewed_commit": "7c11957d193a8474c24302c52e94de3f796e9a6e",
+    "git_diff_empty": true
+  },
+  "closed_evidence_archive": {
+    "key": "research/semantic-router/20261008/cold-membership-abba-a0001/evidence.tar.gz",
+    "bytes": 4839309,
+    "sha256": "99c1efb9922fa53e4dd9ea64e9183ad0ba1e21e0e42dd49171776249a6fd4c06"
+  },
+  "historical_reduction_config": {
+    "path": "/data/target/borsuk-cold-membership-native/membership-abba-a0001/collected/reduction.config.json",
+    "sha256": "d8911de7fd59a561257641ced566294fabb114654a437d45b306a9c4c7ad76b0",
+    "expected_identity_and_bound_inputs_source": "runs[1] for B1; runs[2] for B2"
+  },
+  "original_root_verification": {
+    "path": "/data/target/borsuk-cold-membership-native/membership-abba-a0001/independent-verification.json",
+    "sha256": "bb386754478447bb6ece9e1161caa3cfa5ac93d3c059d304413bb127ffedeacc"
+  },
+  "artifact_manifest": {
+    "path": "/data/target/borsuk-cold-membership-native/membership-abba-a0001/artifacts.sha256",
+    "sha256": "dece312422b6c38090760a177a3e9edcc9be354003cf32f4a461d6b85243483b"
+  },
+  "runs": [
+    {
+      "label": "B1",
+      "path": "/data/target/borsuk-cold-membership-native/membership-abba-a0001/collected/B1.jsonl",
+      "bytes": 10777291,
+      "sha256": "29da105428503267e73e9e23e1a61bef9967ccdc9fb4f43ef64b23d306ba0cbb"
+    },
+    {
+      "label": "B2",
+      "path": "/data/target/borsuk-cold-membership-native/membership-abba-a0001/collected/B2.jsonl",
+      "bytes": 10777322,
+      "sha256": "095a0487e1b93112b0c6d4c838d127acadedcb7a49878691208d8f32dc1cd3f5"
+    }
+  ],
+  "input_hash_check": {
+    "unit": "borsuk-source-utilization-input-pins-a0001.service",
+    "invocation_id": "c22ebe4b0afc4b0391620ec971841f74",
+    "exit": 0,
+    "runtime_ms": 98,
+    "cpu_ms": 90,
+    "reported_memory_peak": "21.9M",
+    "reported_swap_peak_bytes": 0,
+    "requested_cpu_quota_percent": 100,
+    "requested_memory_max_bytes": 268435456,
+    "requested_swap_max_bytes": 0,
+    "requested_runtime_max_seconds": 120,
+    "requested_tasks_max": 128,
+    "note": "Static full-file SHA/size check only. Transient unit unloaded after completion; no live kernel limit readback was retained. This is not a native runtime resource qualification."
+  },
+  "corpus_opened": false,
+  "requests_opened": false,
+  "truth_opened": false,
+  "replay_executed": false,
+  "claims_latency": false,
+  "claims_quality": false
+}
