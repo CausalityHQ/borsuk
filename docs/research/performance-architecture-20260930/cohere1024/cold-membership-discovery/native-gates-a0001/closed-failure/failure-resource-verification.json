@@ -1,0 +1,23 @@
+{
+  "source_support_file_count": 2450,
+  "source_before_after_equal": true,
+  "actual_caps": {
+    "cpu.max.before": "200000 100000",
+    "memory.max.before": "8589934592",
+    "memory.swap.max.before": "0",
+    "pids.max.before": "512"
+  },
+  "memory_peak_bytes": 5520666624,
+  "swap_peak_bytes": 0,
+  "memory_events": {
+    "low": 0,
+    "high": 0,
+    "max": 0,
+    "oom": 0,
+    "oom_kill": 0,
+    "oom_group_kill": 0,
+    "sock_throttled": 0
+  },
+  "compile_exit": 101,
+  "performance_claim": false
+}

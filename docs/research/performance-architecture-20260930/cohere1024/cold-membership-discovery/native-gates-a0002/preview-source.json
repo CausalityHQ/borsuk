@@ -1,0 +1,21 @@
+{
+  "status": "EXACT_SOURCE_PREVIEW_NATIVE_UNRUN",
+  "candidate": "2f3c78f0d6076d339a1ded344432a8db0582f22c",
+  "preview": "34fa1f48246992d1ae1983f938f4cbc67faf5af9",
+  "tree": "2458fb99cad3912879b96fe8eba3f455b1b3e6f6",
+  "native_file_count": 415,
+  "support_file_count": 2450,
+  "native_identity_encoding": "sorted path NUL SHA LF",
+  "native_identity_sha256": "90ec35ef11c8f6e2d69374ef2421f331a6e6a26bead98accc27afc3f7ef39324",
+  "archive_sha256": "da891254ee38d8936521d5a69e118a051c49151ef37863310bd113a828f50997",
+  "archive_bytes": 13234452,
+  "root_fixture_sha256": "efc9db7efca6dd7091d59bcafe714740b5cb1d24edbb9b946b16a40eab0612dd",
+  "review_group": "107cf1d64a334d9b",
+  "execution": false,
+  "archive_members_verified": 2450,
+  "changed_files_from_failed_archive": [
+    "crates/borsuk/src/semantic_unit_router.rs"
+  ],
+  "mandatory_name_count": 24,
+  "source_and_runtime_unverified": true
+}
