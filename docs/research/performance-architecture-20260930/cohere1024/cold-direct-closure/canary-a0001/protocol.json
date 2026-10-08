@@ -1,0 +1,53 @@
+{
+  "status": "FROZEN_NOT_LAUNCHED_DISPOSABLE_CANARY_ONLY",
+  "scope": "separate disposable staging/CLI/cleanup canary; not ANN performance",
+  "candidate": "2fb771bdb31f9490a3341bdbfa2b4ad510cfb487",
+  "prior_real_admission": "0b4aca0c613e60336e04bde7a950a478ee1670d8ffb39211fb8741a4be511331",
+  "inputs": {
+    "config.json": {
+      "bytes": 1918,
+      "sha256": "9d493a999392306c7da323fe20ba4bc0eeddf508710dba529736ca80b392dace"
+    },
+    "stage.sh": {
+      "bytes": 1998,
+      "sha256": "4f38a83b132d045082b75415b3ea5be1f6dc0e8fcfc97286337d132b3be9810b"
+    },
+    "user-data.sh": {
+      "bytes": 7749,
+      "sha256": "85bedeed6801b88ad8e7e29392e96ef50171b931174f7bc5debb769de49bcf84"
+    }
+  },
+  "expected_native_exit": 2,
+  "expected_wrapper_exit": 0,
+  "limits": {
+    "cpu": 1,
+    "memory": 536870912,
+    "swap": 0,
+    "pids": 256,
+    "inner_seconds": 90,
+    "unit_seconds": 240,
+    "machine_seconds": 1800,
+    "scratch": 67108864
+  },
+  "reservation": {
+    "compute_usd": 0.25,
+    "ancillary_usd": 0.15
+  },
+  "real": [
+    "binary/config/stage/request/truth opaque S3 transport and authentication",
+    "runtime resource enforcement",
+    "native bad config SHA refusal before backend/query/truth",
+    "cleanup and terminal publication"
+  ],
+  "not_exercised": [
+    "native S3 backend/query SDK in this bad-SHA call (already real in preceding admission)",
+    "ANN or truth scoring",
+    "performance"
+  ],
+  "performance_claim": false,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "prefix": "research/semantic-router/20261008/cold-direct-closure-native-canary-a0001",
+  "spot_quote_usd_per_hour": "0.205600",
+  "spot_bid_usd_per_hour": ".50",
+  "maximum_attempts": 1
+}
