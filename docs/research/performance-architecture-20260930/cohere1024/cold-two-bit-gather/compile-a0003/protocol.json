@@ -1,0 +1,63 @@
+{
+  "status": "FROZEN_ASSETS_LAUNCH_PENDING_ADMISSION",
+  "prefix": "research/semantic-router/20261008/cold-two-bit-gather-compile-a0003",
+  "candidate": "45456b5168043d5405b7b792ed9360be5e657cfc",
+  "source": {
+    "status": "SOURCE_SEALED_NATIVE_UNRUN",
+    "candidate": "45456b5168043d5405b7b792ed9360be5e657cfc",
+    "file_count": 2450,
+    "native_file_count": 415,
+    "native_identity": "687be03f5a5c1cbbb8834d55a2e02c5818c87493cb8fb0099b04eefa62cb3d7e",
+    "changed_native_paths": [
+      "crates/borsuk/src/lib.rs",
+      "crates/borsuk/src/rotated_two_bit.rs",
+      "crates/borsuk/src/two_bit_generation.rs"
+    ],
+    "archive_bytes": 16531920,
+    "archive_sha256": "453514e7f399ebec9eb946e801e01328339fc17a5863ed5e95177ea7e7fbdf62",
+    "support_policy": "exact previous qualified 2450-file support roster; all415 native files retained; current docs excluded from build input",
+    "performance_claim": false
+  },
+  "inputs": {
+    "source-files.sha256": {
+      "bytes": 278033,
+      "sha256": "06c6c199808a28e5189f8abb0c7f84d606899709db28b42869e70195d2c73b24"
+    },
+    "native-source.json": {
+      "bytes": 47205,
+      "sha256": "b5783a03a3945b820f3f2787d32804130b79ce1297a5d180d310a0e41890a25b"
+    },
+    "mandatory-tests.json": {
+      "bytes": 1141,
+      "sha256": "fcab437de97085f436cdc5c29aba79e0e59b13bdd77db3efe886ca9049638f52"
+    },
+    "gates.sh": {
+      "bytes": 3438,
+      "sha256": "e53e003502eb82b0d735602965e13d10fa4110eb97b5453d90f7ff79af757957"
+    },
+    "select-probe.py": {
+      "bytes": 1577,
+      "sha256": "e4c20c6fe56500815507f1ab6c852aae73013eaca49c8ea808776b3f680e14e7"
+    }
+  },
+  "userdata": {
+    "bytes": 8569,
+    "sha256": "7df6a3a1c28b1158020b4117dbed2d49e85109dab4d6ee1d092899ab6502c0cd"
+  },
+  "machine_seconds": 9000,
+  "build_seconds": 7200,
+  "build_memory_bytes": 8589934592,
+  "build_cpu": 2,
+  "build_jobs": 1,
+  "swap": 0,
+  "compute_reservation_usd": 1.5,
+  "ancillary_reservation_usd": 0.15,
+  "ebs_gib": 80,
+  "spot_bid_max_usd_per_hour": 0.5,
+  "native_ANN_corpus_query_truth": false,
+  "primitive_run": false,
+  "full_qualification": false,
+  "interruption": "INVALID; preserve terminal evidence, no automatic duplicate attempt",
+  "repair_of": "cold-two-bit-gather-primitive-a0001",
+  "repair_scope": "test-only timing method v2: 256MiB per cell and >=50ms CPU; production scoring and acceptance ratios unchanged"
+}

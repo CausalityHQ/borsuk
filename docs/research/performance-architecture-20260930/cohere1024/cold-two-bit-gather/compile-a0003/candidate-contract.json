@@ -1,0 +1,60 @@
+{
+  "status": "SOURCE_ONLY_UNVERIFIED",
+  "commit": "45456b5168043d5405b7b792ed9360be5e657cfc",
+  "parent": "751b5327571c7fec17af4bbdd7f1b1594f0aaf9d",
+  "owned": {
+    "crates/borsuk/src/lib.rs": {
+      "bytes": 43404,
+      "sha256": "c06079d89c67a31043acaaa94fc177350dd09d347f88df2d3fa747f3c90b0bce"
+    },
+    "crates/borsuk/src/rotated_two_bit.rs": {
+      "bytes": 48138,
+      "sha256": "6fbb663da232ffc3c6384a2428bdc370f4d6afa6c79ed7d73523040cd7024e68"
+    },
+    "crates/borsuk/src/two_bit_generation.rs": {
+      "bytes": 266712,
+      "sha256": "a05a453f2c7da767f204e98bf4cd5fb9a1b26e1aa5ae4fe69499699504e05a5e"
+    }
+  },
+  "new_names": [
+    "two_bit_gather_codec_dimensions_and_norms",
+    "two_bit_gather_literal_order_signed_zero_and_tails",
+    "two_bit_gather_all_words_and_tile_offsets",
+    "two_bit_gather_record_refusals_and_nonfinite_output",
+    "two_bit_gather_forced_avx2_and_checked_bounds",
+    "two_bit_gather_release_primitive",
+    "two_bit_gather_stateful_callback_prefix_and_plan_trace"
+  ],
+  "production_generation_unchanged": true,
+  "lib_only_lint_change": true,
+  "local_rustfmt_parse_exit": 0,
+  "native_tests_compile_codegen_performance": "NOT_RUN_ON_METHOD_V2",
+  "production_integrated": false,
+  "method": {
+    "status": "SOURCE_ONLY_UNVERIFIED",
+    "base": "751b5327571c7fec17af4bbdd7f1b1594f0aaf9d",
+    "owned_path": "crates/borsuk/src/rotated_two_bit.rs",
+    "production_prefix_byte_identical": true,
+    "changes": "test-only fixed work 4MiB to 256MiB/cell, require >=50ms CPU per cell, v2 timing schema",
+    "sample_count": 80,
+    "expected_CPU_seconds_from_previous_max": 15.36,
+    "CPU_limit_seconds": 30,
+    "wall_limit_seconds": 120,
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "ratios_unchanged": true,
+    "algorithm_unchanged": true,
+    "native_tests": "NOT_RUN",
+    "source_sha256": "6fbb663da232ffc3c6384a2428bdc370f4d6afa6c79ed7d73523040cd7024e68",
+    "candidate_commit": "45456b5168043d5405b7b792ed9360be5e657cfc",
+    "source_check": {
+      "unit": "borsuk-gather-method-v2-source-check-final.service",
+      "exit": 0,
+      "native_execution": false
+    }
+  },
+  "delta_from_parent": [
+    "crates/borsuk/src/rotated_two_bit.rs"
+  ]
+}

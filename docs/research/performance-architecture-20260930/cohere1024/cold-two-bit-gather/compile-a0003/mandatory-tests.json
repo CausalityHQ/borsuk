@@ -1,0 +1,26 @@
+{
+  "codec-debug": [
+    "rotated_two_bit::tests::two_bit_gather_codec_dimensions_and_norms",
+    "rotated_two_bit::tests::two_bit_gather_literal_order_signed_zero_and_tails",
+    "rotated_two_bit::tests::two_bit_gather_all_words_and_tile_offsets",
+    "rotated_two_bit::tests::two_bit_gather_record_refusals_and_nonfinite_output"
+  ],
+  "codec-release": [
+    "rotated_two_bit::tests::two_bit_gather_codec_dimensions_and_norms",
+    "rotated_two_bit::tests::two_bit_gather_literal_order_signed_zero_and_tails",
+    "rotated_two_bit::tests::two_bit_gather_all_words_and_tile_offsets",
+    "rotated_two_bit::tests::two_bit_gather_record_refusals_and_nonfinite_output"
+  ],
+  "planner-debug": [
+    "two_bit_generation::source_walk_tests::two_bit_gather_stateful_callback_prefix_and_plan_trace"
+  ],
+  "planner-release": [
+    "two_bit_generation::source_walk_tests::two_bit_gather_stateful_callback_prefix_and_plan_trace"
+  ],
+  "forced-avx2-debug": [
+    "rotated_two_bit::tests::two_bit_gather_forced_avx2_and_checked_bounds"
+  ],
+  "forced-avx2-release": [
+    "rotated_two_bit::tests::two_bit_gather_forced_avx2_and_checked_bounds"
+  ]
+}

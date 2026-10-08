@@ -1,0 +1,16 @@
+{
+  "status": "ASSET_ADMISSION_AND_MOCK_CANARY_PASS",
+  "native_execution": false,
+  "unit": "borsuk-gather-method-v2-assets-check.service",
+  "invocation": "11b548ab5cf2421ba59874dacddd4fc1",
+  "exit": 0,
+  "runtime_seconds": 1.179,
+  "peak_memory": "40.5M",
+  "swap_bytes": 0,
+  "checks": [
+    "exact 2450 archive bodies",
+    "source and userdata pins",
+    "real Bash/time/tee success and native17 fixture",
+    "bash syntax"
+  ]
+}
