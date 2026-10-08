@@ -1,0 +1,76 @@
+{
+  "schema": "borsuk-cold-cpu-profiler-canary-proposal-v1",
+  "status": "READY_DISPOSABLE_PLATFORM_CANARY",
+  "source": "b5ce2635ff5b63700871fc45f9b8b158f1a0dc7e",
+  "qualified_binary": {
+    "bytes": 16470968,
+    "sha256": "ca1ae2496e110494e7f6c03ae16eea3d5ff262d66945a3c52775749ac0bcaeab"
+  },
+  "purpose": "Validate remote software CPU sampling, DWARF decoding, expected native config-SHA refusal and cleanup; zero ANN queries/GT opens.",
+  "method": {
+    "event": "cpu-clock:u",
+    "frequency_hz": 99,
+    "callgraph": "dwarf,8192",
+    "mmap_pages": 64,
+    "synthetic_workload": "128 SHA256 passes over unchanged 16MiB qualified binary",
+    "record_deadline_seconds": 60,
+    "report_deadline_seconds": 30,
+    "script_deadline_seconds": 30,
+    "cli_deadline_seconds": 20,
+    "profile_file_cap_bytes": 67108864,
+    "native_cli_exit": 2
+  },
+  "resources": {
+    "cpu_quota_percent": 100,
+    "allowed_cpu": 0,
+    "memory_max_bytes": 536870912,
+    "swap_max_bytes": 0,
+    "pids_max": 256,
+    "native_stage_deadline_seconds": 180,
+    "machine_deadline_seconds": 1800
+  },
+  "prospective_reservation_usd": {
+    "compute": 0.25,
+    "ancillary": 0.15,
+    "total": 0.4
+  },
+  "attempt_limit": 1,
+  "instance": "EC2 Spot c7i.2xlarge eu-central-1; terminate/wait after terminal before collection",
+  "environment_failure_policy": "INVALID environment; preserve failed attempt and fix/revalidate, no algorithm rejection",
+  "claims": {
+    "ANN": false,
+    "quality": false,
+    "latency": false,
+    "Rust_stack_unwinding_verified": false
+  },
+  "remaining": [],
+  "stage": {
+    "bytes": 3552,
+    "sha256": "52b954ec3e31be0bb2a9e382e1e97ddd15a01d4899196ef0eaf79e1f37f8ee25"
+  },
+  "user_data": {
+    "bytes": 7181,
+    "sha256": "67fe6c6a27d4c4811e7abb20f3c2cc73f3c6689a4c6288e15148766a227c5604"
+  },
+  "spot_quote": {
+    "availability_zone": "eu-central-1c",
+    "usd_per_hour": "0.206400",
+    "timestamp": "2026-10-08T00:00:00+00:00",
+    "max_bid_usd_per_hour": "0.50"
+  },
+  "runtime_invalid_policy": "Any package/perf/CLI/resource/closeout error is environment INVALID; preserve attempt, repair demonstrated defect and preregister a new attempt; never reject ANN from this smoke.",
+  "verification": {
+    "stage-check.json": {
+      "bytes": 1245,
+      "sha256": "50c4526c65ef1489b1b3c31d8f822f3064f4c762cca27e30ef70e04224e1a3cc"
+    },
+    "wrapper-check.json": {
+      "bytes": 1431,
+      "sha256": "dd4dae2a1a0e375bc86f4152d512c1ac8d7e406687d0f819e9ba726302e63cd0"
+    },
+    "refusal-check.json": {
+      "bytes": 224,
+      "sha256": "7a2454ec5144f00a9defba62ab6ed5962cb76879a5196d5fdf717fbba9836e96"
+    }
+  }
+}

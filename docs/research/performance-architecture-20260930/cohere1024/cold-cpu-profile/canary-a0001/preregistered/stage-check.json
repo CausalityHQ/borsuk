@@ -1,0 +1,72 @@
+{
+  "status": "PASS",
+  "cases": [
+    {
+      "case": "pass",
+      "exit": 0
+    },
+    {
+      "case": "bad-cap",
+      "exit": 1
+    },
+    {
+      "case": "record-fail",
+      "exit": 17
+    },
+    {
+      "case": "report-fail",
+      "exit": 18
+    },
+    {
+      "case": "empty-samples",
+      "exit": 1
+    },
+    {
+      "case": "wrong-error",
+      "exit": 1
+    },
+    {
+      "case": "query-opened",
+      "exit": 1
+    },
+    {
+      "case": "truth-opened",
+      "exit": 1
+    },
+    {
+      "case": "get-submitted",
+      "exit": 1
+    },
+    {
+      "case": "unexpected-native-success",
+      "exit": 1
+    },
+    {
+      "case": "pins-change",
+      "exit": 96
+    },
+    {
+      "case": "scratch-leak",
+      "exit": 96
+    }
+  ],
+  "kernel_limits": {
+    "cpu.max": "100000 100000",
+    "memory.max": "268435456",
+    "memory.swap.max": "0"
+  },
+  "stage_sha256": "52b954ec3e31be0bb2a9e382e1e97ddd15a01d4899196ef0eaf79e1f37f8ee25",
+  "real": [
+    "Bash/timeout control flow",
+    "SHA pins and drift refusal",
+    "jq native refusal predicate",
+    "scratch check",
+    "file limit establishment"
+  ],
+  "mocked": [
+    "perf recording/decoding",
+    "cgroup contents",
+    "Rust CLI"
+  ],
+  "native_perf_execution": false
+}

@@ -1,0 +1,6 @@
+{
+  "status": "PASS",
+  "scope": "Actual historical native refusal accepted; queries/truth/GET/stage/extra-row mutations refused; Bash syntax parsed. No perf/native executed.",
+  "positive_count": 1,
+  "negative_count": 5
+}
