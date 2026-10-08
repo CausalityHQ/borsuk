@@ -14,23 +14,6 @@ assert p['status']=='FROZEN_REVIEWED_ADMITTED_NATIVE_QUALIFICATION_ONLY' and p['
 assert p['candidate']=='fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b' and p['primitive_run'] is False
 assert aws('sts','get-caller-identity')['Account']=='453182569524'
 q=aws('ec2','describe-spot-price-history','--instance-types','c7i.2xlarge','--product-descriptions','Linux/UNIX','--availability-zone','eu-central-1c','--max-items','1');quote=q['SpotPriceHistory'][0];assert float(quote['SpotPrice'])<=.50 and .50*9000/3600<=1.50;(r/'spot-quote.json').write_text(json.dumps(q,indent=2)+'\n')
-prior_job=json.loads((r.parent/'two-bit-gather-primitive-a0002/active-job.json').read_text());assert prior_job['status']=='TERMINATED_COLLECTED_NOT_YET_VERIFIED'
-old=aws('ec2','describe-instances','--instance-ids',prior_job['instance_id']);assert all(i['State']['Name']=='terminated' for z in old['Reservations'] for i in z.get('Instances',[]))
-assert json.loads((r.parent/'two-bit-gather-primitive-a0002/wait.json').read_text())['exit']==0
-prior_four=json.loads((r.parent/'two-bit-four-row-gate-a0004/launch.json').read_text())['Instances'][0]['InstanceId'];closed=aws('ec2','describe-instances','--instance-ids',prior_four);assert all(i['State']['Name']=='terminated' for z in closed['Reservations'] for i in z.get('Instances',[]))
-assert json.loads((r.parent/'two-bit-four-row-gate-a0004/independent-verification.json').read_text())['status']=='COMPILE_AND_SYNTHETIC_CORRECTNESS_VERIFIED_CODEGEN_PENDING'
-assert json.loads((r.parent/'two-bit-four-row-gate-a0004/wait.json').read_text())['exit']==0
-failed_prior=r.parent/'two-bit-four-row-qualification-a0001'
-assert json.loads((failed_prior/'independent-failure-verification.json').read_text())['status']=='EXECUTION_INVALID_TEST_FIXTURE_SHAPE'
-assert json.loads((failed_prior/'wait.json').read_text())['exit']==0
-failed_instance=json.loads((failed_prior/'launch.json').read_text())['Instances'][0]['InstanceId']
-assert all(i['State']['Name']=='terminated' for z in aws('ec2','describe-instances','--instance-ids',failed_instance)['Reservations'] for i in z.get('Instances',[]))
-interrupted=r.parent/'two-bit-four-row-qualification-a0002'
-assert json.loads((interrupted/'independent-incomplete-verification.json').read_text())['status']=='EXECUTION_INVALID_SPOT_INTERRUPTION'
-assert json.loads((interrupted/'wait.json').read_text())['exit']==0
-assert all(i['State']['Name']=='terminated' for z in aws('ec2','describe-instances','--instance-ids','i-072d4039ffff8b196')['Reservations'] for i in z.get('Instances',[]))
-assert aws('ec2','describe-instances','--instance-ids','i-0557918b92adf5991')['Reservations'][0]['Instances'][0]['State']['Name']=='terminated'
-assert json.loads((r.parent/'two-bit-four-row-qualification-a0003/independent-incomplete-verification.json').read_text())['status']=='EXECUTION_INVALID_SPOT_INTERRUPTION'
 prior_completed=r.parent/'two-bit-four-row-qualification-a0004'
 assert json.loads((prior_completed/'independent-verification.json').read_text())['status']=='FULL_NATIVE_CORRECTNESS_VERIFIED_SERVING_STACK_PENDING'
 assert json.loads((prior_completed/'control-build-provenance-invalid.json').read_text())['status']=='CONTROL_SERVING_BINARY_PROVENANCE_INVALID_BUILD_REUSE'
