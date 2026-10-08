@@ -1,0 +1,21 @@
+{
+  "status": "EXECUTION_INVALID_SPOT_INTERRUPTION",
+  "instance_id": "i-0557918b92adf5991",
+  "terminated_verified": true,
+  "all_artifact_hashes_match": true,
+  "artifact_count": 59,
+  "spot_status": {
+    "Code": "instance-terminated-no-capacity",
+    "Message": "Your Spot instance was terminated because there is no Spot capacity available that matches your request.",
+    "UpdateTime": "2026-10-08T15:50:35+00:00"
+  },
+  "completed_stages": {
+    "codec-debug": 0,
+    "runner-debug": 0,
+    "planner-debug": 0
+  },
+  "native_exit": null,
+  "algorithm_rejection": false,
+  "qualification": false,
+  "performance_claim": false
+}

@@ -1,0 +1,24 @@
+{
+  "schema": "borsuk-two-bit-four-row-native-qualification-v1",
+  "instance_id": "i-0557918b92adf5991",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 97,
+  "native_exit": null,
+  "source_commit": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "candidate_commit": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "control_native_identity_sha256": "79ce83fe95557668591ea4e7193f651522b309569cd7988c9aeae56aac5f7b88",
+  "control_library_source": "c49a2e6d2a035bfaf42358fbf7fb60abf11e4222",
+  "native_source_file_count": 415,
+  "native_source_identity_sha256": "a7fe9601a9345da69223d75bf8fb6a765d1607c1f02b144e8e8763c90b0b2e8b",
+  "source_archive_sha256": "3cddd9eb0d2f079765522536f1e7eea88ee0dfc660af8d9ae8eacecd613ba6d8",
+  "resolved_lock_sha256": "null",
+  "resolved_source_map_sha256": "null",
+  "source_identity_scope": "exact immutable full source; no lock mutation admitted",
+  "evidence": {
+    "bytes": 677472,
+    "sha256": "3e429d80519a21f3fa55fb3d54a54e528ac3e6f58480a4a6cf489783ad5d899d"
+  },
+  "scope": "exact native tests and full compiler gates plus matched-profile serving artifacts; production stack and primitive/cold timing pending",
+  "performance_claim": false
+}
