@@ -1,0 +1,12 @@
+[
+  "tests::source_utilization_authenticated_report_and_legacy_preservation",
+  "tests::source_utilization_config_pins_duplicates_and_unknowns",
+  "tests::source_utilization_direct_closure_sq8_charge_refusals",
+  "tests::source_utilization_direct_closure_sq8_hand_counted_costs",
+  "tests::source_utilization_payload_sha_eof_seals_and_descriptor_mutations",
+  "tests::source_utilization_positive_bound_at_historical_completion_cap",
+  "tests::source_utilization_report_cap_refuses_before_publication",
+  "tests::source_utilization_shared_cover_tied_gaps_same_128_gets",
+  "tests::source_utilization_trace_and_charge_refusals",
+  "tests::source_utilization_unwalked_winner_full_completion_and_partial_tail"
+]

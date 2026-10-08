@@ -1,0 +1,44 @@
+{
+  "status": "PASS_BOUNDED_STATIC_ADMISSION_AND_SYNTHETIC_GLUE",
+  "static_admission": {
+    "unit": "borsuk-source-utilization-static-admission-a0001-v2.service",
+    "invocation_id": "43a775e912e44f7a99cf7e6cec6af024",
+    "exit": 0,
+    "runtime_ms": 694,
+    "cpu_ms": 156,
+    "memory_peak": "51.6M",
+    "swap_peak": 0
+  },
+  "glue": {
+    "unit": "borsuk-source-utilization-glue-smoke-a0001.service",
+    "invocation_id": "66765e6d44294da3a270240acb19ac00",
+    "exit": 0,
+    "runtime_ms": 584,
+    "cpu_ms": 278,
+    "memory_peak": "13.3M",
+    "swap_peak": 0,
+    "checks": [
+      "synthetic positive replay",
+      "CLI unexpected exit refuses before data invocation",
+      "original native exit2 retained",
+      "cgroup limit drift refuses before native",
+      "actual stage function success/native17/tee18 stop"
+    ],
+    "cgroup_reads": "mocked",
+    "native_executable": "synthetic Bash fixture",
+    "EC2": "not exercised"
+  },
+  "requested_local_limits": {
+    "cpu_quota_percent": 100,
+    "memory_bytes": 268435456,
+    "swap": 0,
+    "pids": 128,
+    "runtime_seconds": 120,
+    "network": "AF_UNIX"
+  },
+  "native_compilation": "UNRUN",
+  "real_native_replay": "UNRUN",
+  "corpus_vectors_opened": false,
+  "truth_bodies_opened": false,
+  "claims_performance": false
+}

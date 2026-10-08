@@ -1,0 +1,22 @@
+{
+  "status": "REQUIRED_REVIEW_REPAIRS_INDEPENDENTLY_CHECKED_NATIVE_UNRUN",
+  "review_group": "dd1e505d37bc425a",
+  "reviewed_original": "64d519b0da5d0d0d9eb0c4e415ec8a9f244d50ef",
+  "repaired_candidate": "9b98778dec172972c2e57d695e26341a8cfb18be",
+  "candidate_file_sha256": "2a78c0aaa0c39465e3c2482f5d1aec407499d2dec624e280f2a2bface5b22df7",
+  "root_checks": [
+    "whole256-page/actual tail geometry and GET bounds",
+    "original SQ8 explicit historical cap",
+    "full completion zero-saving invariant",
+    "direct cap per-query flags and total",
+    "all13 old tests literal body unchanged",
+    "10 new tests retained",
+    "10 shared cover tests source unchanged",
+    "full dynamic425 native tree packaged"
+  ],
+  "original_closed_campaign_failed_gets": 0,
+  "local_checks_only": true,
+  "native_compilation": "UNRUN",
+  "native_source_integrated": false,
+  "claims_performance": false
+}
