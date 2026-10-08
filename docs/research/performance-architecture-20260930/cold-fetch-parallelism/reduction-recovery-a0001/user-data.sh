@@ -1,0 +1,106 @@
+#!/bin/bash
+set -euo pipefail
+phase=early
+root=/mnt/borsuk-retained-s3
+bucket=borsuk-bench-453182569524-euc1
+prefix=research/semantic-router/20261008/cold-fetch-reduction-recovery-a0001
+fallback() {
+  printf 'BORSUK_FALLBACK {"schema":"borsuk-native-s3-query-canary-fallback-v1","phase":"%s","original_exit":%s,"closeout_exit":%s,"instance_id":"%s","performance_claim":false}\n' "$phase" "$original" "$status" "${instance:-unknown}" > /dev/ttyS0 || true
+}
+early_finish() {
+  original=$?
+  trap - EXIT TERM
+  set +e
+  status=$original
+  ((status != 0)) || status=96
+  fallback
+  /usr/sbin/shutdown -h now
+  exit "$status"
+}
+trap early_finish EXIT
+trap 'exit 97' TERM
+systemd-run --unit=borsuk-retained-s3-shutdown --on-boot=1740s --timer-property=AccuracySec=1s /usr/sbin/shutdown -h now
+mkdir -p "$root/evidence"
+cd "$root"
+export DEBIAN_FRONTEND=noninteractive AWS_MAX_ATTEMPTS=1 AWS_DEFAULT_REGION=eu-central-1
+finish() {
+  original=$?
+  trap - EXIT TERM
+  set +e
+  status=$original
+  if ! timeout --kill-after=5 10 systemctl stop borsuk-retained-s3-gates.service; then
+    if ! timeout --kill-after=5 5 systemctl show borsuk-retained-s3-gates.service -p LoadState -p MainPID -p ActiveState > evidence/stop-failure-state.txt; then
+      status=96
+    elif ! grep -qx 'LoadState=not-found' evidence/stop-failure-state.txt || ! grep -qx 'MainPID=0' evidence/stop-failure-state.txt || ! grep -qx 'ActiveState=inactive' evidence/stop-failure-state.txt; then
+      status=96
+    fi
+  fi
+  timeout --kill-after=5 5 systemctl show borsuk-retained-s3-gates.service -p LoadState -p MainPID -p ActiveState -p SubState -p ExecMainStatus -p Result > evidence/systemd-after.txt || status=96
+  cp run.log evidence/bootstrap.log || status=96
+  [[ ${instance:-} =~ ^i-[0-9a-f]{17}$ ]] || status=96
+  (cd evidence && find . -type f -print0 | sort -z | xargs -0 sha256sum) > artifacts.sha256 || status=96
+  timeout --kill-after=5 30 tar -czf evidence.tar.gz -C evidence . || status=96
+  evidence_sha=$(sha256sum evidence.tar.gz | cut -d' ' -f1) || status=96
+  evidence_bytes=$(stat -c %s evidence.tar.gz) || status=96
+  timeout --kill-after=5 90 aws s3api put-object --bucket "$bucket" --key "$prefix/evidence.tar.gz" --body evidence.tar.gz --if-none-match '*' > evidence-upload.json || status=96
+  timeout --kill-after=5 30 aws s3api put-object --bucket "$bucket" --key "$prefix/artifacts.sha256" --body artifacts.sha256 --if-none-match '*' > artifacts-upload.json || status=96
+  native_exit=null
+  if [[ -f evidence/native-exit ]]; then native_exit=$(cat evidence/native-exit); fi
+  jq -n --arg instance "${instance:-unknown}" --arg phase "$phase" --argjson original "$original" --argjson exit "$status" --argjson native_exit "$native_exit" --arg evidence_sha "$evidence_sha" --argjson evidence_bytes "$evidence_bytes" \
+    '{schema:"borsuk-cold-fetch-reduction-recovery-v1",instance_id:$instance,phase:$phase,original_exit:$original,exit:$exit,native_exit:$native_exit,binary_source_commit:"0f617199cd521590e8760aca41f36bd730c5a5a7",integration_commit:"ee213f5ddb69f679540be573495a1cf109f9c760",qualified_source_identity_sha256:"89e258e26610f2304f063fa64e8597a5a934984e8afe7635358b223152128d50",evidence:{bytes:$evidence_bytes,sha256:$evidence_sha},terminal_delivery:"attempted",performance_claim:false}' > terminal.json || status=96
+  if timeout --kill-after=5 30 aws s3api put-object --bucket "$bucket" --key "$prefix/terminal.json" --body terminal.json --if-none-match '*' > terminal-upload.json; then
+    printf 'BORSUK_TERMINAL_DELIVERED %s\n' "$(sha256sum terminal.json | cut -d' ' -f1)" > /dev/ttyS0 || status=96
+  else
+    status=96
+  fi
+  if ((status != 0)); then fallback; fi
+  umount "$root/query-scratch" || true
+  /usr/sbin/shutdown -h now
+  exit "$status"
+}
+exec >run.log 2>&1
+phase=apt
+ timeout --kill-after=30 180 apt-get -qq -o DPkg::Lock::Timeout=120 update
+ timeout --kill-after=30 300 apt-get -qq -y -o DPkg::Lock::Timeout=120 install curl unzip jq time tar gzip util-linux
+phase=awscli
+curl -fsSL --connect-timeout 10 --max-time 180 --output awscliv2.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.36.11.zip
+printf '%s  awscliv2.zip\n' 50fbb7a2f44a78eab4a210088040e8f0bc4b9937cac8043c2354269d58614df6 | sha256sum -c -
+test "$(stat -c %s awscliv2.zip)" = 73022935
+timeout --kill-after=30 120 unzip -q awscliv2.zip
+timeout --kill-after=30 120 ./aws/install
+[[ "$(aws --version)" == aws-cli/2.36.11\ * ]]
+phase=identity
+token=$(curl -fsS --connect-timeout 2 --max-time 5 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)
+curl -fsS --connect-timeout 2 --max-time 5 --max-filesize 65536 -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/dynamic/instance-identity/document > evidence/instance-identity.json
+instance=$(jq -er .instanceId evidence/instance-identity.json)
+[[ $instance =~ ^i-[0-9a-f]{17}$ ]]
+launch_epoch=$(date -ud "$(jq -er .pendingTime evidence/instance-identity.json)" +%s)
+deadline_epoch=$((launch_epoch+1740))
+(( $(date +%s) < deadline_epoch ))
+printf '%s\n' "$deadline_epoch" > evidence/deadline-epoch.txt
+systemd-run --unit=borsuk-retained-s3-absolute-shutdown --on-calendar="$(date -u -d "@$deadline_epoch" '+%Y-%m-%d %H:%M:%S UTC')" --timer-property=AccuracySec=1s /usr/sbin/shutdown -h now
+systemctl stop borsuk-retained-s3-shutdown.timer
+trap finish EXIT
+phase=stage
+mkdir -p "$root/query-scratch"
+mount -t tmpfs -o size=64M,nosuid,nodev,noexec,mode=700 tmpfs "$root/query-scratch"
+timeout --kill-after=5 90 aws s3 cp "s3://$bucket/research/semantic-router/20261007/cold-fetch-paired-reducer-gates-a0001/supplemental/compare_native_replay" reducer --only-show-errors
+timeout --kill-after=5 90 aws s3 cp "s3://$bucket/research/semantic-router/20261008/cold-fetch-reduction-recovery-a0001/inputs/pair1.config.json" pair1.config.json --only-show-errors
+timeout --kill-after=5 90 aws s3 cp "s3://$bucket/research/semantic-router/20261008/cold-fetch-reduction-recovery-a0001/inputs/pair2.config.json" pair2.config.json --only-show-errors
+timeout --kill-after=5 90 aws s3 cp "s3://$bucket/research/semantic-router/20261008/cold-fetch-reduction-recovery-a0001/inputs/A1.jsonl" A1.jsonl --only-show-errors
+timeout --kill-after=5 90 aws s3 cp "s3://$bucket/research/semantic-router/20261008/cold-fetch-reduction-recovery-a0001/inputs/B1.jsonl" B1.jsonl --only-show-errors
+timeout --kill-after=5 90 aws s3 cp "s3://$bucket/research/semantic-router/20261008/cold-fetch-reduction-recovery-a0001/inputs/B2.jsonl" B2.jsonl --only-show-errors
+timeout --kill-after=5 90 aws s3 cp "s3://$bucket/research/semantic-router/20261008/cold-fetch-reduction-recovery-a0001/inputs/A2.jsonl" A2.jsonl --only-show-errors
+timeout --kill-after=5 90 aws s3 cp "s3://$bucket/research/semantic-router/20261008/cold-fetch-reduction-recovery-a0001/inputs/stage.sh" stage.sh --only-show-errors
+printf '%s  %s\n' 9ad7ce0fe8f461a3b8f7957812c798103f234a83d1df6748d5f04cb870c4694b "$root/reducer" 04c12e968b8dc574477fcd7963db42b4b157a9ad9114c895d188cfe536de4c7c "$root/pair1.config.json" 5c5fcdd4576d22c7dcb71a27e07d868d3859e29b329b20e5a5ab0eb5da7e73ef "$root/pair2.config.json" 65f117c115687fb4d7f1b76a7ca7363c20cf0be170436f1b4fab63f51eafe997 "$root/A1.jsonl" fcbd0ade772061edd5e0fbf8ca75f388ae4afda58d231c03cd8d76fa6ba0bb1b "$root/B1.jsonl" 5c0d07779f99ca83334ee1b5a17b17316ffab0d3a144e3b6ea908347b7428f8a "$root/B2.jsonl" 3d9355303fc2ef31308bc3d9cd991d2e60925c1b56886b333e98a3984b5b8dd3 "$root/A2.jsonl" 67c5baed3ee9e2f1cba5aec091bc71526cd63cb83872f70f3d28971bd6be03d5 "$root/stage.sh" > pins.sha256
+sha256sum -c pins.sha256
+test "$(stat -c %s reducer)" = 1164808
+chmod 755 reducer
+cp pair1.config.json pair2.config.json stage.sh pins.sha256 evidence/
+test "$(uname -m)" = x86_64
+. /etc/os-release
+test "$ID" = ubuntu && test "$VERSION_ID" = 24.04
+(( SECONDS <= 900 && $(date +%s)+360+10+240 <= deadline_epoch )) || exit 95
+phase=native
+systemd-run --unit=borsuk-retained-s3-gates --wait --pipe -p MemoryMax=512M -p MemorySwapMax=0 -p CPUQuota=100% -p AllowedCPUs=0 -p TasksMax=256 -p RuntimeMaxSec=360 -p TimeoutStopSec=10 -p KillMode=control-group -p WorkingDirectory="$root" /bin/bash "$root/stage.sh"
+phase=complete

@@ -1,0 +1,41 @@
+{
+  "schema": "borsuk-cold-fetch-reduction-recovery-preregistration-v1",
+  "status": "FROZEN_BEFORE_LAUNCH",
+  "original_attempt": "cold-fetch-abba-a0001",
+  "original_disposition": "EXECUTION_INVALID_CONFIGURATION",
+  "original_receipts_commit": "4f341c1996045283165626a61190172c0648b9ce",
+  "scope": "Qualified native reduction of four immutable completed outputs; no ANN query rerun, corpus or GT reads",
+  "repairs": [
+    "Add required CompletedConfig.schema to both arms",
+    "Restore exact qualified reducer source identity in terminal metadata"
+  ],
+  "algorithm_and_measurement_limits_unchanged": true,
+  "reducer_source_commit": "0f617199cd521590e8760aca41f36bd730c5a5a7",
+  "reducer_sha256": "9ad7ce0fe8f461a3b8f7957812c798103f234a83d1df6748d5f04cb870c4694b",
+  "assets": {
+    "reducer": "9ad7ce0fe8f461a3b8f7957812c798103f234a83d1df6748d5f04cb870c4694b",
+    "pair1.config.json": "04c12e968b8dc574477fcd7963db42b4b157a9ad9114c895d188cfe536de4c7c",
+    "pair2.config.json": "5c5fcdd4576d22c7dcb71a27e07d868d3859e29b329b20e5a5ab0eb5da7e73ef",
+    "A1.jsonl": "65f117c115687fb4d7f1b76a7ca7363c20cf0be170436f1b4fab63f51eafe997",
+    "B1.jsonl": "fcbd0ade772061edd5e0fbf8ca75f388ae4afda58d231c03cd8d76fa6ba0bb1b",
+    "B2.jsonl": "5c0d07779f99ca83334ee1b5a17b17316ffab0d3a144e3b6ea908347b7428f8a",
+    "A2.jsonl": "3d9355303fc2ef31308bc3d9cd991d2e60925c1b56886b333e98a3984b5b8dd3",
+    "stage.sh": "67c5baed3ee9e2f1cba5aec091bc71526cd63cb83872f70f3d28971bd6be03d5"
+  },
+  "resources": {
+    "cpu": 1,
+    "memory_bytes": 536870912,
+    "swap_bytes": 0,
+    "pids": 256,
+    "native_seconds": 360,
+    "machine_seconds": 1800,
+    "instance_type": "c7i.2xlarge",
+    "spot_bid_usd_per_hour": 0.5,
+    "compute_reservation_usd": 0.25,
+    "ancillary_reservation_usd": 0.15,
+    "total_reservation_usd": 0.4
+  },
+  "decision": "Require both paired reductions complete and exact semantic, trace and charge parity; select width32 only when p90, p95 and reciprocal serial QPS improve in both counterbalanced pairs. Preserve original INVALID and disclose cache/population differences.",
+  "retry": "One recorded attempt; stop on failure, repair failing setup layer only; never repeat original ANN runs automatically",
+  "cold_focus": "Keep local payload/source caches off; defer warm/local-drive cache work. Generic Rust library remains dataset-independent."
+}

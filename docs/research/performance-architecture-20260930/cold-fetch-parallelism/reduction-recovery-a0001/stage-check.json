@@ -1,0 +1,43 @@
+{
+  "status": "MOCK_STAGE_PASS",
+  "cases": [
+    {
+      "case": "success",
+      "exit": 0,
+      "calls": [
+        "pair1.config.json",
+        "pair2.config.json"
+      ]
+    },
+    {
+      "case": "fail-pair1",
+      "exit": 17,
+      "calls": [
+        "pair1.config.json"
+      ]
+    },
+    {
+      "case": "fail-pair2",
+      "exit": 17,
+      "calls": [
+        "pair1.config.json",
+        "pair2.config.json"
+      ]
+    },
+    {
+      "case": "parity-false",
+      "exit": 1,
+      "calls": [
+        "pair1.config.json"
+      ]
+    },
+    {
+      "case": "bad-cap",
+      "exit": 1,
+      "calls": []
+    }
+  ],
+  "required_arm_schema_asserted": true,
+  "native_runtime_pass": false,
+  "source_sha256": "67c5baed3ee9e2f1cba5aec091bc71526cd63cb83872f70f3d28971bd6be03d5"
+}

@@ -1,0 +1,9 @@
+{
+  "status": "STATIC_CONTRACT_REPAIR_PASS_NATIVE_PENDING",
+  "original_arm_schema_check": "RED",
+  "required_arm_schema_check": "GREEN",
+  "only_template_change": "add required CompletedConfig.schema to each arm",
+  "original_terminal_source_check": "RED",
+  "expected_source": "31eca73431901c193aff598f4c6e44d3540594da",
+  "native_rerun_pending": true
+}
