@@ -1,0 +1,21 @@
+{
+  "schema": "borsuk-cold-fetch-native-gates-v1",
+  "instance_id": "i-08ea9aa14c4076479",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 0,
+  "source_commit": "31eca73431901c193aff598f4c6e44d3540594da",
+  "candidate_commit": "31eca73431901c193aff598f4c6e44d3540594da",
+  "native_source_file_count": 415,
+  "native_source_identity_sha256": "6dd4fbe0eeb512ef807868ba4088d35350eaaf93ab67fed6b9e7f204a5397a7b",
+  "source_archive_sha256": "4d57aedcabe782079ed7a4f39d5d6eb6f10e584d298716f73e14f83e8fdbdf86",
+  "resolved_lock_sha256": "null",
+  "resolved_source_map_sha256": "null",
+  "source_identity_scope": "exact immutable full source; no lock mutation admitted",
+  "evidence": {
+    "bytes": 702801,
+    "sha256": "825e20c038750a88bdd501b945ccbbd8cc6b0ac6983cc7ad454c2db17ca79248"
+  },
+  "performance_claim": false
+}

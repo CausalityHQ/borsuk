@@ -224,7 +224,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         max_active_queries: QUERY_SLOTS,
         max_query_bytes: 16_773_120,
         max_query_gets: 32,
-        max_parallel_gets: 32,
+        max_parallel_gets: 16,
         max_source_bytes: 64 * 1024 * 1024,
         max_source_gets: 128,
         max_parallel_source_gets: 16,

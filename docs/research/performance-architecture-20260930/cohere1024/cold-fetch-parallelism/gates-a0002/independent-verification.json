@@ -1,0 +1,130 @@
+{
+  "status": "NATIVE_QUALIFIED",
+  "source_preview": "31eca73431901c193aff598f4c6e44d3540594da",
+  "candidate": "d8e64dbc4a252bb009452922d40affe8321d8c47",
+  "native_file_count": 415,
+  "support_file_count": 2450,
+  "all415_git_blob_hashes_match": true,
+  "full2450_source_before_after_match": true,
+  "terminal_artifact_count": 97,
+  "all_terminal_file_hashes_match": true,
+  "original_session": 65959,
+  "controller_exit": 0,
+  "instance_id": "i-08ea9aa14c4076479",
+  "terminated": true,
+  "wait_exit": 0,
+  "stages": [
+    {
+      "name": "affected-compile",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "command": "cargo test --locked -p borsuk --lib --bin check_cohere_native_baseline --no-run",
+      "passed_counts": []
+    },
+    {
+      "name": "cold-http-fixture",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "command": "timeout 120s cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::native_cold_fetch_parallelism_parity_and_drain -- --exact --test-threads=1",
+      "passed_counts": [
+        "1"
+      ]
+    },
+    {
+      "name": "fresh1m-leaf-fixture",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "command": "timeout 120s cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::native_fresh1m_leaf_fetch_parallelism_parity_and_drain -- --exact --test-threads=1",
+      "passed_counts": [
+        "1"
+      ]
+    },
+    {
+      "name": "selector",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline tests::cold_fetch_parallelism_selector_is_explicit_and_bounded -- --exact --test-threads=1",
+      "passed_counts": [
+        "1"
+      ]
+    },
+    {
+      "name": "range-regressions",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "command": "cargo test --locked -p borsuk --lib sq8_s3_range:: -- --test-threads=1",
+      "passed_counts": [
+        "12"
+      ]
+    },
+    {
+      "name": "generation-regressions",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "command": "cargo test --locked -p borsuk --lib two_bit_generation:: -- --test-threads=1",
+      "passed_counts": [
+        "19"
+      ]
+    },
+    {
+      "name": "baseline-regressions",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+      "passed_counts": [
+        "10"
+      ]
+    },
+    {
+      "name": "release",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "command": "cargo build --locked --release -p borsuk --bin check_cohere_native_baseline --example two_bit_http",
+      "passed_counts": []
+    },
+    {
+      "name": "workspace-clippy",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "passed_counts": []
+    },
+    {
+      "name": "real-test-build",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND CARGO_BUILD_JOBS=1 BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "passed_counts": []
+    }
+  ],
+  "memory_peak_bytes": 8589934592,
+  "memory_events": {
+    "low": "0",
+    "high": "0",
+    "max": "3722",
+    "oom": "0",
+    "oom_kill": "0",
+    "oom_group_kill": "0",
+    "sock_throttled": "0"
+  },
+  "swap_peak_bytes": 0,
+  "drained_pids": 2,
+  "binary_release_pins": {
+    "check_cohere_native_baseline": {
+      "role": "check_cohere_native_baseline",
+      "bytes": 16554032,
+      "sha256": "628f93148d767b7fc456e566139788d67cf98e323ec66ef4e6ebe10ef330e82b"
+    },
+    "two_bit_http": {
+      "role": "two_bit_http",
+      "bytes": 16441280,
+      "sha256": "9453b2a25162a951826f83c434436b2f4ae779c4506a876b302da469c140bf1a"
+    }
+  },
+  "performance_claim": false,
+  "all_recorded_argv_match_frozen_gate": true,
+  "remote_gate_body_matches_frozen_sha": true,
+  "both_downloaded_binaries_hash_verified": true,
+  "actual_aws_describe_state": "terminated",
+  "qualification_scope": "Compiler, scalar/trace/drain correctness and affected regressions only; real Cohere cold recall/latency comparison still unrun"
+}

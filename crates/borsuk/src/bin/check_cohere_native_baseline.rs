@@ -142,6 +142,12 @@ struct Config {
     truth: Artifact,
     native_source: NativeSource,
     max_memory_bytes: u64,
+    #[serde(default = "default_fetch_parallelism")]
+    fetch_parallelism: usize,
+}
+
+fn default_fetch_parallelism() -> usize {
+    16
 }
 
 // Only tests can construct a smaller shape or exercise reporting underfill.
@@ -291,6 +297,10 @@ fn bounded_path(path: &Path) -> Result<()> {
     )
 }
 fn validate_config(c: &Config, shape: Shape) -> Result<()> {
+    require(
+        matches!(c.fetch_parallelism, 16 | 32),
+        "fetch_parallelism must be 16 or 32",
+    )?;
     require(
         c.schema == CONFIG_SCHEMA
             && c.dataset == DATASET
@@ -604,10 +614,10 @@ fn limits(c: &Config) -> Result<TwoBitGenerationLimits> {
         max_active_queries: 1,
         max_query_bytes: 16_773_120,
         max_query_gets: 32,
-        max_parallel_gets: 16,
+        max_parallel_gets: c.fetch_parallelism,
         max_source_bytes: 64 * 1024 * 1024,
         max_source_gets: 128,
-        max_parallel_source_gets: 16,
+        max_parallel_source_gets: c.fetch_parallelism,
         max_query_scratch_bytes: scratch_bytes(c.rows)?,
         already_pinned_bytes: caller_bytes(c) as u64,
     })
@@ -1248,7 +1258,9 @@ fn execute_paths_with(
     let started = Instant::now();
     let cpu = cpu_ns();
     let result = (|| -> Result<Value> {
+        let configured = config(config_path, config_sha, shape);
         out.emit(&json!({"schema":RESULT_SCHEMA,"phase":"identity","config_sha256":config_sha,
+            "fetch_parallelism":configured.as_ref().ok().map(|c| c.fetch_parallelism),
             "binary_sha256":executable_sha()?,"runner_source_sha256":hash(include_bytes!("check_cohere_native_baseline.rs")),
             "generation_source_sha256":hash(include_bytes!("../two_bit_generation.rs")),
             "router_source_sha256":hash(include_bytes!("../semantic_unit_router.rs")),
@@ -1260,8 +1272,9 @@ fn execute_paths_with(
             "native_transport_includes":"S3_and_IMDS_credential_requests_including_PUT",
             "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
             "external_gate_required":true,"truth_opened":false}))?;
-        let c = config(config_path, config_sha, shape)?;
+        let c = configured?;
         out.emit(&json!({"phase":"bound_inputs","dataset":c.dataset,"revision":c.revision,
+            "fetch_parallelism":c.fetch_parallelism,"source_cache":"off",
             "metric":c.metric,"tie_rule":c.tie_rule,"rows":c.rows,"dimensions":D,"count":c.count,"k":K,
             "corpus_source_first":c.corpus_source_first,"query_source_first":c.query_source_first,
             "profile":c.profile,"backend":c.backend,"generation_prefix":c.generation_prefix,
@@ -1360,6 +1373,47 @@ mod tests {
         let body = serde_json::to_vec(value).unwrap();
         std::fs::write(&path, &body).unwrap();
         (path, hash(&body))
+    }
+    #[test]
+    fn cold_fetch_parallelism_selector_is_explicit_and_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let shape = Shape::tiny(32);
+        let mut value = config_value(dir.path(), shape);
+        let default: Config = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(default.fetch_parallelism, 16);
+        for parallelism in [0, 1, 16, 17, 32, 33, usize::MAX] {
+            value["fetch_parallelism"] = json!(parallelism);
+            let config: Config = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(
+                validate_config(&config, shape).is_ok(),
+                matches!(parallelism, 16 | 32)
+            );
+            if matches!(parallelism, 16 | 32) {
+                let admission = limits(&config).unwrap();
+                assert_eq!(admission.max_parallel_gets, parallelism);
+                assert_eq!(admission.max_parallel_source_gets, parallelism);
+                assert_eq!(admission.max_query_gets, 32);
+                assert_eq!(admission.max_source_gets, 128);
+                assert_eq!(admission.max_query_bytes, 16_773_120);
+                assert_eq!(admission.max_source_bytes, 64 * 1024 * 1024);
+                assert_eq!(admission.max_active_queries, 1);
+                assert_eq!(admission.max_memory_bytes, MEMORY_CAP);
+                let (path, sha) = write_config(dir.path(), &value);
+                let output = dir.path().join(format!("fetch-{parallelism}.jsonl"));
+                assert!(
+                    !execute_paths_with(&path, &sha, &output, shape, |_, _, _, _| {
+                        Err("selector-only fixture".into())
+                    })
+                    .unwrap()
+                );
+                let output = records(&output);
+                assert_eq!(output[0]["phase"], "identity");
+                assert_eq!(output[0]["fetch_parallelism"], parallelism);
+                assert_eq!(output[1]["phase"], "bound_inputs");
+                assert_eq!(output[1]["fetch_parallelism"], parallelism);
+                assert_eq!(output[1]["source_cache"], "off");
+            }
+        }
     }
     fn records(path: &Path) -> Vec<Value> {
         std::fs::read_to_string(path)

@@ -562,7 +562,7 @@ pub(crate) async fn fetch_verified_ranges_inner(
     let outcomes = stream::iter(ranges.iter().copied().map(|(first, last)| async move {
         fetch_verified_pages_inner(store, location, authority, first, last, etag, max_bytes).await
     }))
-    .buffered(max_parallel)
+    .buffered(max_parallel.min(ranges.len()))
     .collect::<Vec<_>>()
     .await;
     let mut stats = Sq8ReadStats {
@@ -653,6 +653,371 @@ async fn fetch_verified_pages_inner(
         start: expected.start,
         bytes,
     })
+}
+
+// Real HTTP body barriers for the generation scheduling regression. Kept here
+// so the fixture uses the production OneAttemptS3 builder and private counters.
+#[cfg(test)]
+pub(crate) mod cold_http_fixture {
+    use super::*;
+    use std::{
+        collections::BTreeMap,
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        sync::Condvar,
+        thread::{self, JoinHandle},
+        time::{Duration, Instant},
+    };
+
+    pub const ETAG: &str = "\"cold-fixture\"";
+    pub type Request = (String, bool, Option<(usize, usize)>, Option<String>);
+
+    #[derive(Clone, Default)]
+    pub struct State {
+        pub requests: Vec<Request>,
+        pub active: [usize; 3],
+        pub peak: [usize; 3],
+        pub finished: [Vec<usize>; 3],
+        pub errors: Vec<String>,
+        released: [bool; 3],
+        // Stage, then starts of delayed stream error, early digest error, held sibling.
+        fault: Option<(usize, [usize; 3])>,
+        error_released: bool,
+        sibling_released: bool,
+        stop: bool,
+        bytes: usize,
+    }
+
+    pub struct Fixture {
+        pub reader: OneAttemptS3,
+        state: Arc<(Mutex<State>, Condvar)>,
+        server: Option<JoinHandle<()>>,
+        deadline: Instant,
+    }
+
+    impl Fixture {
+        pub fn new(objects: BTreeMap<String, Vec<u8>>, deadline: Instant) -> Self {
+            // Fresh1m's encoded unit means/leaves fit here; no raw source or
+            // SQ8 corpus is hydrated by the metadata-only leaf fixture.
+            assert!(objects.values().map(Vec::len).sum::<usize>() <= 64 * 1024 * 1024);
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let counters = Arc::new(Mutex::new(TransportCounters::default()));
+            let store = one_attempt_builder(
+                "fixture",
+                "eu-central-1",
+                counters.clone(),
+                Duration::from_secs(10),
+            )
+            .unwrap()
+            .with_endpoint(format!("http://{address}"))
+            .with_allow_http(true)
+            .with_access_key_id("fixture")
+            .with_secret_access_key("fixture")
+            .build()
+            .unwrap();
+            let state = Arc::new((
+                Mutex::new(State {
+                    released: [true; 3],
+                    ..State::default()
+                }),
+                Condvar::new(),
+            ));
+            let shared = state.clone();
+            let objects = Arc::new(objects);
+            let server = thread::spawn(move || {
+                let mut handlers: Vec<JoinHandle<()>> = Vec::new();
+                let mut accepted = 0;
+                while !shared.0.lock().unwrap().stop && Instant::now() < deadline {
+                    while let Some(index) = handlers.iter().position(JoinHandle::is_finished) {
+                        if handlers.swap_remove(index).join().is_err() {
+                            shared.0.lock().unwrap().errors.push("handler panic".into());
+                        }
+                    }
+                    match listener.accept() {
+                        Ok((socket, _)) => {
+                            accepted += 1;
+                            if accepted > 2048 || handlers.len() >= 64 {
+                                shared.0.lock().unwrap().errors.push("handler cap".into());
+                                break;
+                            }
+                            let objects = objects.clone();
+                            let state = shared.clone();
+                            match thread::Builder::new()
+                                .stack_size(128 * 1024)
+                                .spawn(move || {
+                                    if let Err(error) = serve(socket, &objects, &state, deadline) {
+                                        state.0.lock().unwrap().errors.push(error.to_string());
+                                    }
+                                }) {
+                                Ok(handler) => handlers.push(handler),
+                                Err(error) => {
+                                    shared.0.lock().unwrap().errors.push(error.to_string());
+                                    break;
+                                }
+                            }
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(error) => {
+                            shared.0.lock().unwrap().errors.push(error.to_string());
+                            break;
+                        }
+                    }
+                }
+                shared.0.lock().unwrap().stop = true;
+                shared.1.notify_all();
+                for handler in handlers {
+                    if handler.join().is_err() {
+                        shared.0.lock().unwrap().errors.push("handler panic".into());
+                    }
+                }
+            });
+            Self {
+                reader: OneAttemptS3 {
+                    store: PrefixStore::new(store, Path::default()),
+                    counters,
+                },
+                state,
+                server: Some(server),
+                deadline,
+            }
+        }
+
+        pub fn snapshot(&self) -> State {
+            self.state.0.lock().unwrap().clone()
+        }
+
+        pub fn arm(&self, fault: Option<(usize, [usize; 3])>) {
+            let state = self.snapshot();
+            assert_eq!(state.active, [0; 3]);
+            assert!(state.errors.is_empty(), "{:?}", state.errors);
+            assert!(!state.stop);
+            let mut state = self.state.0.lock().unwrap();
+            // Keep the lifetime byte allowance across all arms.
+            *state = State {
+                fault,
+                released: [fault.is_some(), fault.is_some(), true],
+                bytes: state.bytes,
+                ..State::default()
+            };
+        }
+
+        pub fn arm_leaves(&self, fault: Option<[usize; 3]>) {
+            self.arm(fault.map(|starts| (2, starts)));
+            self.state.0.lock().unwrap().released[2] = fault.is_some();
+        }
+
+        pub fn release(&self, stage: usize) {
+            self.state.0.lock().unwrap().released[stage] = true;
+            self.state.1.notify_all();
+        }
+
+        pub fn release_error(&self) {
+            self.state.0.lock().unwrap().error_released = true;
+            self.state.1.notify_all();
+        }
+
+        pub fn release_sibling(&self) {
+            self.state.0.lock().unwrap().sibling_released = true;
+            self.state.1.notify_all();
+        }
+
+        pub async fn wait(&self, ready: impl Fn(&State) -> bool) {
+            let deadline = self.deadline.min(Instant::now() + Duration::from_secs(5));
+            loop {
+                let state = self.snapshot();
+                assert!(state.errors.is_empty(), "{:?}", state.errors);
+                assert!(
+                    !state.stop && Instant::now() < deadline,
+                    "body barrier deadline"
+                );
+                if ready(&state) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        }
+
+        pub fn finish(mut self) {
+            self.shutdown();
+            let state = self.snapshot();
+            assert_eq!(state.active, [0; 3]);
+            assert!(state.errors.is_empty(), "{:?}", state.errors);
+        }
+
+        fn shutdown(&mut self) {
+            self.state.0.lock().unwrap().stop = true;
+            self.state.1.notify_all();
+            if let Some(server) = self.server.take() {
+                // Joining all handlers is mandatory even during an assertion unwind.
+                if server.join().is_err() {
+                    self.state
+                        .0
+                        .lock()
+                        .unwrap()
+                        .errors
+                        .push("server panic".into());
+                }
+            }
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            self.shutdown();
+        }
+    }
+
+    fn serve(
+        mut socket: TcpStream,
+        objects: &BTreeMap<String, Vec<u8>>,
+        shared: &(Mutex<State>, Condvar),
+        deadline: Instant,
+    ) -> std::io::Result<()> {
+        let bad = || std::io::Error::other("invalid fixture request");
+        socket.set_read_timeout(Some(Duration::from_secs(2)))?;
+        socket.set_write_timeout(Some(Duration::from_secs(2)))?;
+        let mut raw = Vec::new();
+        let mut block = [0; 1024];
+        while !raw.windows(4).any(|part| part == b"\r\n\r\n") {
+            let count = socket.read(&mut block)?;
+            if count == 0 || raw.len() + count > 8192 || Instant::now() >= deadline {
+                return Err(bad());
+            }
+            raw.extend_from_slice(&block[..count]);
+        }
+        let request = std::str::from_utf8(&raw).map_err(|_| bad())?;
+        let mut line = request.lines().next().ok_or_else(bad)?.split_whitespace();
+        let method = line.next().ok_or_else(bad)?;
+        if !matches!(method, "GET" | "HEAD") {
+            return Err(bad());
+        }
+        let key = line
+            .next()
+            .and_then(|path| path.strip_prefix("/fixture/"))
+            .ok_or_else(bad)?;
+        let body = objects.get(key).ok_or_else(bad)?;
+        let header = |name: &str| {
+            request.lines().find_map(|line| {
+                let (key, value) = line.split_once(':')?;
+                key.eq_ignore_ascii_case(name).then(|| value.trim())
+            })
+        };
+        if header("authorization").is_none() {
+            return Err(bad());
+        }
+        let range = header("range")
+            .map(|value| -> std::io::Result<_> {
+                let (first, last) = value
+                    .strip_prefix("bytes=")
+                    .and_then(|v| v.split_once('-'))
+                    .ok_or_else(bad)?;
+                let first: usize = first.parse().map_err(|_| bad())?;
+                let end = last
+                    .parse::<usize>()
+                    .map_err(|_| bad())?
+                    .checked_add(1)
+                    .ok_or_else(bad)?;
+                if first >= end || end > body.len() {
+                    return Err(bad());
+                }
+                Ok((first, end))
+            })
+            .transpose()?;
+        let etag = header("if-match").map(str::to_owned);
+        if range.is_some() && etag.as_deref() != Some(ETAG) {
+            return Err(bad());
+        }
+        let head = method == "HEAD";
+        let (first, end) = range.unwrap_or((0, body.len()));
+        let stage = if key.ends_with("/plane/records.bin") {
+            Some(0)
+        } else if key.contains("/objects/") {
+            Some(1)
+        } else if key.ends_with("/router/leaves.bin") {
+            Some(2)
+        } else {
+            None
+        };
+        let mut state = shared.0.lock().unwrap();
+        if state.stop {
+            return Ok(());
+        }
+        state.requests.push((key.into(), head, range, etag));
+        if state.requests.len() > 1024 {
+            return Err(bad());
+        }
+        state.bytes += if head { 0 } else { end - first };
+        if state.bytes > 64 * 1024 * 1024 {
+            return Err(bad());
+        }
+        let fault = state
+            .fault
+            .filter(|(s, _)| Some(*s) == stage)
+            .map(|(_, starts)| starts);
+        drop(state);
+        let status = if range.is_some() {
+            "206 Partial Content"
+        } else {
+            "200 OK"
+        };
+        write!(
+            socket,
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nETag: {ETAG}\r\nLast-Modified: Wed, 23 Sep 2026 00:00:00 GMT\r\nConnection: close\r\n",
+            end - first
+        )?;
+        if range.is_some() {
+            write!(
+                socket,
+                "Content-Range: bytes {first}-{}/{}\r\n",
+                end - 1,
+                body.len()
+            )?;
+        }
+        socket.write_all(b"\r\n")?;
+        if head {
+            return Ok(());
+        }
+        let Some(stage) = stage.filter(|_| range.is_some()) else {
+            socket.write_all(&body[first..end])?;
+            return Ok(());
+        };
+        // A valid prefix followed by a held final byte proves unfinished bodies,
+        // rather than just simultaneous response headers or task starts.
+        socket.write_all(&body[first..end - 1])?;
+        let mut state = shared.0.lock().unwrap();
+        state.active[stage] += 1;
+        state.peak[stage] = state.peak[stage].max(state.active[stage]);
+        while !state.stop && Instant::now() < deadline {
+            let released = match fault {
+                Some(starts) if first == starts[0] => state.error_released,
+                Some(starts) if first == starts[2] => state.sibling_released,
+                _ => state.released[stage],
+            };
+            if released {
+                break;
+            }
+            state = shared
+                .1
+                .wait_timeout(state, Duration::from_millis(50))
+                .unwrap()
+                .0;
+        }
+        let result = if state.stop || Instant::now() >= deadline {
+            Ok(())
+        } else if fault.is_some_and(|starts| first == starts[0]) {
+            // Clean socket EOF with Content-Length still one byte short.
+            socket.shutdown(std::net::Shutdown::Both)
+        } else {
+            let byte = body[end - 1] ^ u8::from(fault.is_some_and(|starts| first == starts[1]));
+            socket.write_all(&[byte])
+        };
+        state.active[stage] -= 1;
+        state.finished[stage].push(first);
+        result
+    }
 }
 
 #[cfg(test)]

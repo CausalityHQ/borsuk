@@ -148,13 +148,14 @@ pub struct TwoBitGenerationLimits {
     pub max_query_bytes: usize,
     /// Physical range GETs per query.
     pub max_query_gets: usize,
-    /// Concurrent GETs per admitted query.
+    /// Concurrent GETs per admitted query, bounded by the admitted batch length.
+    /// Retained payload is charged in full; transport overhead needs an RSS gate.
     pub max_parallel_gets: usize,
     /// Maximum authenticated source bytes per query, separate from SQ8.
     pub max_source_bytes: usize,
     /// Maximum source range GETs per query.
     pub max_source_gets: usize,
-    /// Concurrent source range GETs per query.
+    /// Concurrent source/leaf GETs per query, bounded by the admitted batch length.
     pub max_parallel_source_gets: usize,
     /// Codec lookup scratch per query.
     pub max_query_scratch_bytes: usize,
@@ -1230,10 +1231,8 @@ impl TwoBitGeneration {
         if manifest.discovery.mode() == DiscoveryMode::Semantic {
             limits.max_source_bytes = limits.max_source_bytes.min(64 * 1024 * 1024);
             limits.max_source_gets = limits.max_source_gets.min(128);
-            limits.max_parallel_source_gets = limits.max_parallel_source_gets.min(16);
             limits.max_query_bytes = limits.max_query_bytes.min(16_773_120);
             limits.max_query_gets = limits.max_query_gets.min(32);
-            limits.max_parallel_gets = limits.max_parallel_gets.min(16);
         }
         let files = manifest.discovery.files(paged);
         let mut disk = manifest_size;
@@ -1626,6 +1625,32 @@ impl TwoBitGeneration {
                 Sq8ReadStats::default(),
             ));
         };
+        Self::semantic_walks_remote(
+            store,
+            router,
+            location,
+            etag,
+            normalized,
+            self.limits.max_parallel_source_gets,
+            trace,
+            peak,
+        )
+        .await
+    }
+
+    // Shared production leaf path; metadata-only fixtures need no source/SQ8
+    // payload hydration to exercise the authenticated router's scheduling.
+    #[allow(clippy::too_many_arguments)]
+    async fn semantic_walks_remote(
+        store: &dyn ObjectStore,
+        router: &SemanticUnitRouter,
+        location: &ObjectPath,
+        etag: &str,
+        normalized: &[f32],
+        max_parallel_source_gets: usize,
+        trace: Option<&mut TwoBitPlanTrace>,
+        peak: &std::sync::atomic::AtomicUsize,
+    ) -> Result<(Vec<(usize, Vec<usize>)>, Sq8ReadStats)> {
         let ids = router
             .select_leaves(normalized)
             .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
@@ -1651,13 +1676,13 @@ impl TwoBitGeneration {
                     location,
                     GetOptions::new()
                         .with_range(Some(range.clone()))
-                        .with_if_match(Some(etag.clone())),
+                        .with_if_match(Some(etag.to_owned())),
                 )
                 .await
                 .map_err(TwoBitGenerationError::SourceHead)?;
             if result.range != range
                 || result.meta.size != router.manifest().leaf_payload.bytes as u64
-                || result.meta.e_tag.as_ref() != Some(etag)
+                || result.meta.e_tag.as_deref() != Some(etag)
             {
                 return Err(TwoBitGenerationError::Invalid("leaf response identity"));
             }
@@ -1675,7 +1700,7 @@ impl TwoBitGeneration {
                 .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
             Ok(body)
         }))
-        .buffered(self.limits.max_parallel_source_gets.min(16))
+        .buffered(max_parallel_source_gets.min(ids.len()))
         .collect::<Vec<_>>()
         .await;
         // Drain every admitted read, including after the first error.
@@ -2832,21 +2857,29 @@ mod source_walk_tests {
     }
 
     fn native_full_leaf_fixture(
+        profile: SemanticProfile,
         dimensions: usize,
-    ) -> (SemanticUnitRouter, Vec<usize>, Vec<Vec<u8>>) {
+    ) -> (
+        SemanticUnitRouter,
+        Vec<usize>,
+        Vec<Vec<u8>>,
+        crate::semantic_unit_router::RouterArtifacts,
+    ) {
         use crate::semantic_unit_router::{SourceIdentity, build};
         use sha2::{Digest, Sha256};
 
         let hash = |body: &[u8]| format!("{:x}", Sha256::digest(body));
-        let profile = SemanticProfile::Native100k;
-        let rows = 32_768_usize;
+        let rows = match profile {
+            SemanticProfile::Native100k => 32_768_usize,
+            SemanticProfile::Fresh1m => 1_000_000,
+        };
         // Encode unit means directly; no full canonical vector fixture is needed.
         let mut blob = b"BORSUCP1".to_vec();
         blob.extend_from_slice(&(rows as u64).to_le_bytes());
         for word in [dimensions as u32, 32, 256, 0] {
             blob.extend_from_slice(&word.to_le_bytes());
         }
-        blob.resize(32 + 1024 * dimensions * 2, 0);
+        blob.resize(32 + rows.div_ceil(32) * dimensions * 2, 0);
         let centroid_sha = hash(&blob);
         let input = SourceIdentity {
             profile,
@@ -2865,17 +2898,20 @@ mod source_walk_tests {
             profile.root_cap(),
         )
         .unwrap();
-        assert_eq!(router.manifest().leaves.len(), 16);
+        assert_eq!(
+            router.manifest().leaves.len(),
+            rows.div_ceil(32).div_ceil(64)
+        );
         assert!(
             router
                 .manifest()
                 .leaves
                 .iter()
-                .all(|leaf| leaf.unit_count == 64)
+                .all(|leaf| leaf.unit_count == (rows.div_ceil(32) - leaf.leaf_id * 64).min(64))
         );
-        // Identical means tie all leaves: eight primary plus eight boundary leaves.
+        // Identical means tie all leaves: 16 Native100k or exactly 48 Fresh1m.
         let ids = router.nominate(&vec![1.; dimensions]).unwrap();
-        assert_eq!(ids, (0..16).collect::<Vec<_>>());
+        assert_eq!(ids, (0..profile.selected_leaf_limit()).collect::<Vec<_>>());
         let bodies = ids
             .iter()
             .map(|&id| {
@@ -2883,13 +2919,14 @@ mod source_walk_tests {
                 artifacts.leaves[leaf.offset..leaf.offset + leaf.bytes].to_vec()
             })
             .collect::<Vec<_>>();
-        (router, ids, bodies)
+        (router, ids, bodies, artifacts)
     }
 
     #[test]
     fn native_full_sixteen_leaf_router_validation_d1024_and_d768() {
         for (dimensions, expected_bytes) in [(1024, 2_101_248), (768, 1_576_960)] {
-            let (router, ids, bodies) = native_full_leaf_fixture(dimensions);
+            let (router, ids, bodies, _) =
+                native_full_leaf_fixture(SemanticProfile::Native100k, dimensions);
             assert_eq!(bodies.iter().map(Vec::len).sum::<usize>(), expected_bytes);
             let parts = bodies.iter().map(Vec::as_slice).collect::<Vec<_>>();
             let nomination = router.validate_selected(&ids, &parts).unwrap();
@@ -2910,7 +2947,8 @@ mod source_walk_tests {
     #[test]
     fn native_full_sixteen_leaf_generation_admission_d1024_and_d768() {
         for dimensions in [1024, 768] {
-            let (router, ids, bodies) = native_full_leaf_fixture(dimensions);
+            let (router, ids, bodies, _) =
+                native_full_leaf_fixture(SemanticProfile::Native100k, dimensions);
             TwoBitGeneration::admit_leaves(&router, &ids).unwrap();
             assert_eq!(
                 TwoBitGeneration::semantic_walks(&router, &ids, &bodies, None).unwrap(),
@@ -2924,6 +2962,380 @@ mod source_walk_tests {
                 ));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn native_fresh1m_leaf_fetch_parallelism_parity_and_drain() {
+        use crate::sq8_s3_range::cold_http_fixture::{ETAG, Fixture, Request};
+        use std::{
+            collections::BTreeMap,
+            sync::atomic::{AtomicUsize, Ordering},
+            time::{Duration, Instant},
+        };
+
+        let deadline = Instant::now() + Duration::from_secs(90);
+        tokio::time::timeout(Duration::from_secs(90), async {
+            // Metadata-only synthetic Fresh1m router, built and validated from
+            // encoded unit means. No million-row raw/source/SQ8 corpus exists.
+            // The unchanged Fresh1m profile admits exactly 48 selected leaves.
+            let (router, ids, bodies, artifacts) =
+                native_full_leaf_fixture(SemanticProfile::Fresh1m, 768);
+            assert_eq!(router.manifest().rows, 1_000_000);
+            assert_eq!(router.manifest().dimensions, 768);
+            assert_eq!(ids, (0..48).collect::<Vec<_>>());
+            TwoBitGeneration::admit_leaves(&router, &ids).unwrap();
+            let mut expected_trace = TwoBitPlanTrace::default();
+            let expected_walks = TwoBitGeneration::semantic_walks(
+                &router, &ids, &bodies, Some(&mut expected_trace),
+            ).unwrap();
+            assert_eq!(expected_walks, vec![(0, (0..3072).collect::<Vec<_>>())]);
+            let expected_trace = serde_json::to_value(expected_trace).unwrap();
+            let bytes = bodies.iter().map(Vec::len).sum::<usize>();
+            assert_eq!(bytes, 48 * 64 * (4 + 768 * 2));
+            let location = ObjectPath::from("fresh/router/leaves.bin");
+            let expected_requests = ids.iter().map(|&id| {
+                let leaf = &router.manifest().leaves[id];
+                (location.to_string(), false, Some((leaf.offset, leaf.offset + leaf.bytes)), Some(ETAG.into()))
+            }).collect::<Vec<Request>>();
+            let expected_starts = ids.iter().map(|&id| router.manifest().leaves[id].offset).collect::<Vec<_>>();
+            drop(bodies);
+            // This is the full authenticated 48,125,000-byte leaf object, not a
+            // fabricated shorter object or relaxed Content-Range authority.
+            assert_eq!(artifacts.leaves.len(), router.manifest().leaf_payload.bytes);
+            let fixture = Fixture::new(BTreeMap::from([(location.to_string(), artifacts.leaves)]), deadline);
+            let query = vec![1.; 768];
+            let normalized = normalize_two_bit_diagnostic_query(&query).unwrap();
+            for parallelism in [16, 32] {
+                fixture.arm_leaves(None);
+                let peak = AtomicUsize::new(0);
+                let mut trace = TwoBitPlanTrace::default();
+                let before = fixture.reader.transport_stats();
+                let (result, ()) = tokio::join!(
+                    TwoBitGeneration::semantic_walks_remote(
+                        fixture.reader.store(), &router, &location, ETAG, normalized.as_ref(),
+                        parallelism, Some(&mut trace), &peak,
+                    ),
+                    async {
+                        fixture.wait(|s| s.active[2] >= parallelism).await;
+                        tokio::time::sleep(Duration::from_millis(30)).await;
+                        assert_eq!(fixture.snapshot().active, [0, 0, parallelism]);
+                        fixture.release(2);
+                    }
+                );
+                let (walks, stats) = result.unwrap();
+                assert_eq!(walks, expected_walks);
+                assert_eq!(serde_json::to_value(trace).unwrap(), expected_trace);
+                assert_eq!(stats, Sq8ReadStats { submitted_gets: 48, verified_bytes: bytes, failed_gets: 0 });
+                assert_eq!(peak.load(Ordering::Relaxed), parallelism);
+                let mut state = fixture.snapshot();
+                assert!(state.errors.is_empty(), "{:?}", state.errors);
+                assert_eq!(state.active, [0; 3]);
+                assert_eq!(state.peak, [0, 0, parallelism]);
+                state.requests.sort();
+                state.finished[2].sort_unstable();
+                assert_eq!(state.requests, expected_requests);
+                assert_eq!(state.finished[2], expected_starts);
+                let after = fixture.reader.transport_stats();
+                assert_eq!(after.attempts - before.attempts, 48);
+                assert_eq!(after.consumed_payload_bytes - before.consumed_payload_bytes, bytes as u64);
+
+                // Later leaf digest fails before the earlier truncated stream;
+                // a held valid leaf prevents return, including queued leaves
+                // beyond the 32-wide ordered window. The first ordinal wins.
+                let starts = [expected_starts[0], expected_starts[1], expected_starts[2]];
+                fixture.arm_leaves(Some(starts));
+                let peak = AtomicUsize::new(0);
+                let before = fixture.reader.transport_stats();
+                let mut read = Box::pin(TwoBitGeneration::semantic_walks_remote(
+                    fixture.reader.store(), &router, &location, ETAG, normalized.as_ref(),
+                    parallelism, None, &peak,
+                ));
+                tokio::select! {
+                    _ = &mut read => panic!("leaf result escaped held earlier stream"),
+                    () = fixture.wait(|s| s.finished[2].contains(&starts[1]) && s.active[2] >= 2) => {}
+                }
+                assert!(!fixture.snapshot().finished[2].contains(&starts[0]));
+                fixture.release_error();
+                tokio::select! {
+                    _ = &mut read => panic!("leaf result escaped held valid sibling"),
+                    () = fixture.wait(|s| s.finished[2].contains(&starts[0])) => {}
+                }
+                assert!(!fixture.snapshot().finished[2].contains(&starts[2]));
+                tokio::select! {
+                    _ = &mut read => panic!("leaf failure cancelled an admitted sibling"),
+                    () = tokio::time::sleep(Duration::from_millis(30)) => {}
+                }
+                fixture.release_sibling();
+                let error = read.await.err().unwrap();
+                assert!(matches!(&error, TwoBitGenerationError::RouterCharged { error, .. }
+                    if matches!(error.as_ref(), TwoBitGenerationError::SourceHead(_))), "{error:?}");
+                assert_eq!(error.router_stats(), Sq8ReadStats {
+                    submitted_gets: 48, verified_bytes: bytes - 2 * 64 * (4 + 768 * 2), failed_gets: 2,
+                });
+                let mut state = fixture.snapshot();
+                assert!(state.errors.is_empty(), "{:?}", state.errors);
+                assert_eq!(state.active, [0; 3]);
+                state.requests.sort();
+                state.finished[2].sort_unstable();
+                assert_eq!(state.requests, expected_requests);
+                assert_eq!(state.finished[2], expected_starts);
+                assert!(peak.load(Ordering::Relaxed) <= parallelism);
+                let after = fixture.reader.transport_stats();
+                assert_eq!(after.attempts - before.attempts, 48);
+                assert_eq!(after.stream_failures - before.stream_failures, 1);
+                assert_eq!(after.consumed_payload_bytes - before.consumed_payload_bytes, (bytes - 1) as u64);
+            }
+            fixture.finish();
+        }).await.expect("whole Fresh1m leaf scheduling fixture deadline");
+    }
+
+    #[tokio::test]
+    async fn native_cold_fetch_parallelism_parity_and_drain() {
+        use crate::sq8_s3_range::{
+            RangeFetchError,
+            cold_http_fixture::{ETAG, Fixture, Request},
+        };
+        use sha2::{Digest, Sha256};
+        use std::{
+            collections::BTreeMap,
+            time::{Duration, Instant},
+        };
+
+        let deadline = Instant::now() + Duration::from_secs(90);
+        tokio::time::timeout(Duration::from_secs(90), async {
+            let hash = |body: &[u8]| format!("{:x}", Sha256::digest(body));
+            let rows = 65_536;
+            let dimensions = 32;
+            let temp = tempfile::tempdir().unwrap();
+            // 32 exact orthogonal directions, each occupying eight nonadjacent
+            // physical pages. The transpose gives the trainer 32 distinct
+            // initial seeds (units 0,64,...), while bit 2 alternates selected
+            // positive and unselected negative directions within each block.
+            let mut raw = Vec::with_capacity(rows * dimensions * 4);
+            let mut sq8 = Vec::with_capacity(rows * (dimensions + 12));
+            for row in 0..rows {
+                let page = row / 256;
+                let class = (page / 8 + 4 * (page % 8)) % 32;
+                sq8.extend_from_slice(&((rows - row) as i64).to_le_bytes());
+                sq8.extend_from_slice(&1_f32.to_le_bytes());
+                for d in 0..dimensions {
+                    let value = if d != class { 0_f32 } else if class & 4 == 0 { 1. } else { -1. };
+                    raw.extend_from_slice(&value.to_le_bytes());
+                    sq8.push((value + 1.) as u8);
+                }
+            }
+            let raw_path = temp.path().join("raw");
+            let sq8_path = temp.path().join("sq8");
+            fs::write(&raw_path, &raw).unwrap();
+            fs::write(&sq8_path, &sq8).unwrap();
+            let sq8_sha = hash(&sq8);
+            let key = ObjectPath::from(format!("cold/objects/{sq8_sha}"));
+            let root = temp.path().join("generation");
+            // SQ8 application IDs descend, but its vectors follow raw-row order.
+            let order = (0..rows as u64).collect::<Vec<_>>();
+            let root_sha = crate::two_bit_build::TwoBitGenerationBuilder {
+                source: crate::two_bit_source::TwoBitSource {
+                    raw: &raw_path, raw_sha256: &hash(&raw),
+                    sq8: &sq8_path, sq8_sha256: &sq8_sha, rows, dimensions,
+                },
+                base_epoch: 0, generation: 1, low: &[-1.; 32], step: &[1.; 32],
+                sq8_object_key: key.as_ref(), sq8_etag: ETAG,
+            }
+            .build_with_discovery(Some(&order), DiscoveryMode::Semantic, &root, 128 * 1024 * 1024)
+            .unwrap();
+            drop(order);
+            drop(raw);
+            let limits = TwoBitGenerationLimits {
+                max_memory_bytes: 128 * 1024 * 1024, max_active_queries: 1,
+                max_query_bytes: 32 * 256 * (dimensions + 12), max_query_gets: 32,
+                max_parallel_gets: 16, max_source_bytes: 64 * 1024 * 1024,
+                max_source_gets: 128, max_parallel_source_gets: 16,
+                max_query_scratch_bytes: 1_048_576 + TwoBitPlanTrace::scratch_bytes(rows),
+                already_pinned_bytes: 0,
+            };
+            let query = (0..dimensions).map(|d| if d & 4 == 0 { 0.25 } else { 0. }).collect::<Vec<_>>();
+            let local = TwoBitGeneration::open(&root, &root_sha, limits).unwrap();
+            let (plan, trace) = local.diagnostic_plan(&query).await.unwrap();
+            assert_eq!(local.semantic_profile(), Some(SemanticProfile::Native100k));
+            assert_eq!(trace.semantic_leaves.len(), 16);
+            let width = local.plane.receipt().record_bytes;
+            let closure = trace.semantic_units.iter().map(|unit| unit / 8).collect::<BTreeSet<_>>();
+            let (source_cover, source_bytes) = plan_two_bit_source_cover(
+                &closure, rows, width, limits.max_source_gets, limits.max_source_bytes,
+            ).unwrap();
+            // Prerequisites come from the authenticated router/planner, never
+            // manually replaced walks, limits, authorities or nominated IDs.
+            assert!(source_cover.len() > 32 && source_cover.len() <= 128);
+            assert!((17..=32).contains(&plan.ranges.len()));
+            assert!(source_cover.windows(2).all(|w| w[0].end < w[1].start));
+            assert!(plan.ranges.windows(2).all(|w| w[0].end < w[1].start));
+            let source_ranges = source_cover.iter().map(|r| (r.start / (32 * width), (r.end - 1) / (32 * width))).collect::<Vec<_>>();
+            let sq8_ranges = plan.ranges.iter().map(|r| (r.start / (256 * (dimensions + 12)), (r.end - 1) / (256 * (dimensions + 12)))).collect::<Vec<_>>();
+            let prefix = ObjectPath::from(format!("cold/generations/{root_sha}"));
+            let source_key = metadata_location(&prefix, "plane/records.bin");
+            let leaf_key = metadata_location(&prefix, "router/leaves.bin");
+            let request = |key: &ObjectPath, start, end| -> Request {
+                (key.to_string(), false, Some((start, end)), Some(ETAG.into()))
+            };
+            let mut expected_requests = source_cover.iter().map(|r| request(&source_key, r.start, r.end)).collect::<Vec<_>>();
+            expected_requests.extend(plan.ranges.iter().map(|r| request(&key, r.start, r.end)));
+            let LoadedDiscovery::Semantic { router, .. } = &local.discovery else { unreachable!() };
+            let leaf_bytes = trace.semantic_leaves.iter().map(|&id| {
+                let leaf = &router.manifest().leaves[id];
+                expected_requests.push(request(&leaf_key, leaf.offset, leaf.offset + leaf.bytes));
+                leaf.bytes
+            }).sum::<usize>();
+            expected_requests.sort();
+            let expected_trace = serde_json::to_value(&trace).unwrap();
+            drop(local);
+            let mut objects = BTreeMap::from([(key.to_string(), sq8)]);
+            for name in ["manifest.json", "page_manifest.json", "page_digests.bin", "plane/manifest.json", "plane/mean.bin", "plane/page_digests.bin", "plane/records.bin", "router/root.bin", "router/membership.bin", "router/leaves.bin"] {
+                objects.insert(metadata_location(&prefix, name).to_string(), fs::read(root.join(name)).unwrap());
+            }
+            assert!(Instant::now() < deadline, "fixture construction deadline");
+            let fixture = Fixture::new(objects, deadline);
+            let mut control_bits = None;
+            let mut control_memory = None;
+            for parallelism in [16, 32] {
+                let limits = TwoBitGenerationLimits {
+                    max_parallel_gets: parallelism, max_parallel_source_gets: parallelism, ..limits
+                };
+                let generation = TwoBitGeneration::open_remote(
+                    fixture.reader.store(), &prefix, &root_sha, limits, temp.path(),
+                ).await.unwrap();
+                assert_eq!(generation.limits.max_parallel_gets, parallelism);
+                assert_eq!(generation.limits.max_parallel_source_gets, parallelism);
+                assert!(generation.source_cache.is_none());
+                let modeled = generation.modeled_memory_bytes();
+                if let Some(control) = control_memory { assert_eq!(modeled, control); }
+                control_memory = Some(modeled);
+
+                fixture.arm(None);
+                let rejected = TwoBitGeneration::open_remote(
+                    fixture.reader.store(), &prefix, &root_sha,
+                    TwoBitGenerationLimits { max_memory_bytes: modeled - 1, ..limits }, temp.path(),
+                ).await.err().unwrap();
+                assert!(matches!(rejected, TwoBitGenerationError::Invalid("memory cap")));
+                assert!(fixture.snapshot().requests.iter().all(|(path, head, _, _)| {
+                    *head || (path != source_key.as_ref() && path != leaf_key.as_ref() && path != key.as_ref())
+                }));
+
+                fixture.arm(None);
+                let before = fixture.reader.transport_stats();
+                let (result, ()) = tokio::join!(
+                    generation.diagnostic_search_with_store(fixture.reader.store(), &query, 10),
+                    async {
+                        for (stage, count) in [(0, source_cover.len()), (1, plan.ranges.len())] {
+                            let expected = parallelism.min(count);
+                            fixture.wait(|s| s.active[stage] >= expected).await;
+                            // Keep all valid tails held long enough to catch any
+                            // extra request admitted above the caller's bound.
+                            tokio::time::sleep(Duration::from_millis(30)).await;
+                            let state = fixture.snapshot();
+                            assert_eq!(state.active[stage], expected);
+                            assert_eq!(state.peak[stage], expected);
+                            fixture.release(stage);
+                        }
+                    }
+                );
+                let (result, actual_trace) = result.unwrap();
+                assert_eq!(result.plan, plan);
+                assert_eq!(serde_json::to_value(actual_trace).unwrap(), expected_trace);
+                let bits = result.ranked.candidates.iter().map(|hit| (hit.ordinal, hit.id, hit.score.to_bits())).collect::<Vec<_>>();
+                assert_eq!(bits.len(), 10);
+                if let Some(control) = &control_bits { assert_eq!(&bits, control); }
+                control_bits = Some(bits);
+                let source_stats = Sq8ReadStats { submitted_gets: source_cover.len(), verified_bytes: source_bytes, failed_gets: 0 };
+                let sq8_stats = Sq8ReadStats { submitted_gets: plan.ranges.len(), verified_bytes: plan.planned_bytes, failed_gets: 0 };
+                assert_eq!(result.source_stats, source_stats);
+                assert_eq!(result.ranked.stats, sq8_stats);
+                assert_eq!(result.router_stats, Sq8ReadStats { submitted_gets: 16, verified_bytes: leaf_bytes, failed_gets: 0 });
+                assert_eq!(generation.slots.available_permits(), 1);
+                let mut state = fixture.snapshot();
+                state.requests.sort();
+                assert_eq!(state.requests, expected_requests);
+                assert_eq!(state.active, [0; 3]);
+                assert_eq!(state.peak[..2], [parallelism.min(source_cover.len()), parallelism.min(plan.ranges.len())]);
+                let after = fixture.reader.transport_stats();
+                assert_eq!(after.attempts - before.attempts, expected_requests.len() as u64);
+                assert_eq!(after.consumed_payload_bytes - before.consumed_payload_bytes, (source_bytes + plan.planned_bytes + leaf_bytes) as u64);
+
+                // Refuse the exact admitted rosters before transport; changing
+                // planner caps instead would allow it to bridge or drop pages.
+                let source = generation.source.as_ref().unwrap();
+                for (location, authority, ranges, bytes) in [
+                    (&source.location, &source.authority, &source_ranges, source_bytes),
+                    (&key, &generation.pages, &sq8_ranges, plan.planned_bytes),
+                ] {
+                    for (gets, cap) in [(ranges.len() - 1, bytes), (ranges.len(), bytes - 1)] {
+                        fixture.arm(None);
+                        let before = fixture.reader.transport_stats();
+                        let error = fixture.reader.fetch_verified_ranges(location, authority, ranges, ETAG, gets, cap, parallelism).await.err().unwrap();
+                        assert_eq!(error.stats, Sq8ReadStats::default());
+                        assert!(matches!(error.error, RangeFetchError::UnexpectedMetadata));
+                        assert_eq!(fixture.reader.transport_stats(), before);
+                        assert!(fixture.snapshot().requests.is_empty());
+                    }
+                }
+
+                // Ordinal 1 fails its digest immediately; ordinal 0 remains a
+                // delayed truncated stream, while ordinal 2 is a held valid
+                // sibling. SOURCE also has queued requests beyond ordinal 32.
+                for (stage, cover) in [(0, &source_cover), (1, &plan.ranges)] {
+                    let starts = [cover[0].start, cover[1].start, cover[2].start];
+                    fixture.arm(Some((stage, starts)));
+                    let before = fixture.reader.transport_stats();
+                    let mut query_future = Box::pin(generation.diagnostic_search_with_store(fixture.reader.store(), &query, 10));
+                    tokio::select! {
+                        _ = &mut query_future => panic!("returned before earlier stream error was released"),
+                        () = fixture.wait(|s| s.finished[stage].contains(&starts[1]) && s.active[stage] >= 2) => {}
+                    }
+                    assert!(!fixture.snapshot().finished[stage].contains(&starts[0]));
+                    fixture.release_error();
+                    tokio::select! {
+                        _ = &mut query_future => panic!("returned before valid sibling drained"),
+                        () = fixture.wait(|s| s.finished[stage].contains(&starts[0])) => {}
+                    }
+                    assert!(!fixture.snapshot().finished[stage].contains(&starts[2]));
+                    tokio::select! {
+                        _ = &mut query_future => panic!("cancelled held valid sibling"),
+                        () = tokio::time::sleep(Duration::from_millis(30)) => {}
+                    }
+                    fixture.release_sibling();
+                    let error = query_future.await.err().unwrap();
+                    fn first_error(error: &TwoBitGenerationError) -> &RangeFetchError {
+                        match error {
+                            TwoBitGenerationError::Query { error, .. } | TwoBitGenerationError::RouterCharged { error, .. } => first_error(error),
+                            TwoBitGenerationError::SourceRead(failure) | TwoBitGenerationError::PagedRead { sq8: failure, .. } => &failure.error,
+                            _ => panic!("unexpected error: {error:?}"),
+                        }
+                    }
+                    assert!(matches!(first_error(&error), RangeFetchError::Store(_)), "{error:?}");
+                    let failed = Sq8ReadStats {
+                        submitted_gets: cover.len(),
+                        verified_bytes: cover.iter().map(|r| r.len()).sum::<usize>() - cover[0].len() - cover[1].len(),
+                        failed_gets: 2,
+                    };
+                    assert_eq!(error.read_stats(), if stage == 0 { (failed, Sq8ReadStats::default()) } else { (source_stats, failed) });
+                    assert_eq!(error.router_stats(), result.router_stats);
+                    assert_eq!(generation.slots.available_permits(), 1);
+                    let mut state = fixture.snapshot();
+                    assert!(state.errors.is_empty(), "{:?}", state.errors);
+                    assert_eq!(state.active, [0; 3]);
+                    state.finished[stage].sort_unstable();
+                    assert_eq!(state.finished[stage], cover.iter().map(|r| r.start).collect::<Vec<_>>());
+                    let expected = expected_requests.iter().filter(|(path, _, _, _)| stage == 1 || path != key.as_ref()).cloned().collect::<Vec<_>>();
+                    state.requests.sort();
+                    assert_eq!(state.requests, expected);
+                    let after = fixture.reader.transport_stats();
+                    assert_eq!(after.attempts - before.attempts, expected.len() as u64);
+                    assert_eq!(after.stream_failures - before.stream_failures, 1);
+                    let charged = leaf_bytes + source_bytes + if stage == 1 { plan.planned_bytes } else { 0 };
+                    assert_eq!(after.consumed_payload_bytes - before.consumed_payload_bytes, (charged - 1) as u64);
+                }
+            }
+            fixture.finish();
+        }).await.expect("whole cold scheduling fixture deadline");
     }
 
     #[tokio::test]

@@ -1,0 +1,34 @@
+{
+  "status": "FROZEN_NOT_LAUNCHED",
+  "preview": "31eca73431901c193aff598f4c6e44d3540594da",
+  "root_base": "f4542d841cac56590fe511a7a14b2b9861f7a03c",
+  "candidate": "d8e64dbc4a252bb009452922d40affe8321d8c47",
+  "native_count": 415,
+  "support_count": 2450,
+  "native_identity": "6dd4fbe0eeb512ef807868ba4088d35350eaaf93ab67fed6b9e7f204a5397a7b",
+  "archive_sha256": "4d57aedcabe782079ed7a4f39d5d6eb6f10e584d298716f73e14f83e8fdbdf86",
+  "archive_bytes": 13225641,
+  "native_seconds": 7200,
+  "machine_seconds": 9000,
+  "compiler_jobs": 1,
+  "cpu": 2,
+  "memory_bytes": 8589934592,
+  "swap_bytes": 0,
+  "pids": 512,
+  "reservation_usd": {
+    "compute": "1.25",
+    "ancillary": ".15",
+    "total": "1.40"
+  },
+  "spot_max_bid_usd_per_hour": ".50",
+  "support_sha256": {
+    "gates.sh": "8b7f4c8ee42773042c2148f8a9e469fdd158d43ad709eceabb9c3d79076a5fb1",
+    "user-data.sh": "cc79e41e3345173d65ea4bb7074377e355b1868ed746fe47e73615f15d8a53e3",
+    "source-files.sha256": "99ce96980595979557ed04e4830d7f20fbd3a0b322e5bcddf1ff24aba25ef54b",
+    "native-source.json": "aef44780f813bd5b9bf07cf195f83d33c8c760b0fcd95011e53c6f4a8daeece9",
+    "run-instances.json": "a43b2e0234ccb7e7d6d2d731124bb09b3c2e92e910d4b66ce28526417502faf0"
+  },
+  "performance_claim": false,
+  "repair": "fixture explicit source-row mapping; no production change vs d9",
+  "original_failed_attempt_preserved": true
+}

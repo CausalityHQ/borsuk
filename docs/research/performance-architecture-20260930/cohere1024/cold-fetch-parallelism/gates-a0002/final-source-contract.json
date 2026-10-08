@@ -1,0 +1,273 @@
+{
+  "status": "FIXTURE_ID_REPAIR_SOURCE_ONLY_UNVERIFIED_HOLD_SAME_WORKER",
+  "base": "ca44bea774e6ff233bd462141c2aced30b0ec899",
+  "qualified_library": "689d93c4",
+  "api": {
+    "library": "No new production API. Honor checked nonzero TwoBitGenerationLimits source/SQ8 parallelism with min(limit, batch length), preserving semantic GET/byte/leaf/query-slot bounds. The same shared ordered buffered.collect scheduler drains all admitted ranges. Repair extracts one private semantic_walks_remote function used by production and the metadata-only leaf regression; scheduling/authentication/admission/ordered drain unchanged.",
+    "baseline_config": "One fetch_parallelism integer: 16|32, serde default16. Effective value emitted in identity and bound_inputs; source_cache=off. One binary, unchanged corpus/query/caps. Invalid selectors rejected before input/transport work.",
+    "http_default": "max_parallel_gets explicitly16; source default16 retained."
+  },
+  "resource_limits": {
+    "local": "CPUQuota=100%, MemoryMax=256M, MemorySwapMax=0, timeout120s rustfmt/static only",
+    "native": "ROOT REMOTE ONLY; no local Cargo/rustc/native/network/AWS/consults/children",
+    "fixture": "bounded loopback handlers, header/body/deadline caps; RAII release and joins on panic",
+    "remote_compiler_policy": "Root-owned bounded gates: CARGO_BUILD_JOBS=1 and BORSUK_TEST_BUILD_JOBS=1; actual test-build shim explicitly unset. No local native/compiler launch."
+  },
+  "memory_model": {
+    "source": "2 * min(max_source_bytes, full source records bytes) * max_active_queries retained read/verification buffers (paged open).",
+    "sq8": "(3 * max_query_bytes + planner_bytes + min(rows,max_query_bytes/(D+12))*256 + 4*D) * max_active_queries; planner_bytes=max_query_scratch_bytes+1MiB.",
+    "router": "root_bytes*32 + (profile.selected_leaf_bytes()*2+1MiB)*max_active_queries, plus metadata disk*3, codec mean bytes*64, fixed131072, graph where relevant, local-validation page when applicable, already_pinned_bytes.",
+    "parallelism": "The full retained payload model does not depend on fetch parallelism; fixture asserts16/32 equal modeled bytes. Multiplying full byte allowance by concurrency would double-count admitted retained payload.",
+    "rss_exclusions": "Per-request transport/TLS/socket/kernel/chunk/future/allocator/runtime overhead still scales with concurrent requests; require bounded remote runtime RSS. Concurrent queries and separately pinned generations require their own charges. No changed cap or RSS claim."
+  },
+  "own4_sha256": {
+    "crates/borsuk/src/two_bit_generation.rs": "bc0bc1b2b1ec8314128475e9da06003b93e9e4faea363dd345fba357d24f6c1c",
+    "crates/borsuk/src/sq8_s3_range.rs": "fea3f503ef62a4c608b8cd5b513a9eca0220418d9fef4d28b7e7ebc326df824e",
+    "crates/borsuk/examples/two_bit_http.rs": "ab881ef492fa5db094aa252cfa0c6f1a080ef9695257b463e9551de9ba4494ad",
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs": "de6a9190c321d13423a8ef60191427e2825bc1f0201e0dc848597616d9b6b233"
+  },
+  "exact_test_names": [
+    "two_bit_generation::source_walk_tests::native_cold_fetch_parallelism_parity_and_drain",
+    "tests::cold_fetch_parallelism_selector_is_explicit_and_bounded",
+    "two_bit_generation::source_walk_tests::native_fresh1m_leaf_fetch_parallelism_parity_and_drain"
+  ],
+  "remote_commands": {
+    "affected": "CARGO_BUILD_JOBS=1 timeout 120s cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::native_cold_fetch_parallelism_parity_and_drain -- --exact --nocapture",
+    "release": "CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk --bin check_cohere_native_baseline --example two_bit_http",
+    "workspace_clippy": "CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "real_env_unset_test_build": "env -u BORSUK_TEST_BUILD_COMMAND CARGO_BUILD_JOBS=1 BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+    "baseline_selector": "CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin check_cohere_native_baseline tests::cold_fetch_parallelism_selector_is_explicit_and_bounded -- --exact --nocapture",
+    "affected_compile": "CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib --bin check_cohere_native_baseline --no-run",
+    "affected_sq8_regressions": "CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib sq8_s3_range::tests:: -- --test-threads=1",
+    "baseline_regressions": "CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+    "affected_generation_regressions": "CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests:: -- --test-threads=1",
+    "affected_leaf_fixture": "CARGO_BUILD_JOBS=1 timeout 120s cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::native_fresh1m_leaf_fetch_parallelism_parity_and_drain -- --exact --nocapture"
+  },
+  "native_status": "CURRENT_REPAIR_ALL_UNRUN; predecessor a0001 compiled successfully and cold fixture failed before HTTP (historical receipt below)",
+  "speedup_claim": false,
+  "native_results": {
+    "affected_compile": "UNRUN_ON_CURRENT_REPAIR",
+    "affected_fixture": "UNRUN_ON_CURRENT_REPAIR",
+    "baseline_selector": "UNRUN_ON_CURRENT_REPAIR",
+    "release": "UNRUN_ON_CURRENT_REPAIR",
+    "workspace_clippy": "UNRUN_ON_CURRENT_REPAIR",
+    "real_env_unset_test_build": "UNRUN_ON_CURRENT_REPAIR",
+    "affected_generation_regressions": "UNRUN_ON_CURRENT_REPAIR",
+    "affected_sq8_regressions": "UNRUN_ON_CURRENT_REPAIR",
+    "baseline_regressions": "UNRUN_ON_CURRENT_REPAIR",
+    "affected_leaf_fixture": "UNRUN_ON_CURRENT_REPAIR"
+  },
+  "fixture": {
+    "name": "two_bit_generation::source_walk_tests::native_cold_fetch_parallelism_parity_and_drain",
+    "generation": "Native builder/authenticated root + source + SQ8 + router, 65536 rows D32; 32 exact orthogonal directions. Transposed class=(page/8+4*(page%8))%32 yields 32 distinct trainer seeds and fragmented positive classes selected by class bit2. No modified nominations or generation internals. Explicit identity raw-row order maps physical SQ8 positions to matching raw vectors while preserving descending application IDs65536..1; caller order is charged by existing build admission and dropped before serving.",
+    "prerequisites": "Native100k selects exactly16 leaves; actual source cover >32 and <=128 disjoint fragmented ranges; actual SQ8 plan17..32 disjoint fragmented ranges. Prerequisites assert before HTTP scheduling evidence.",
+    "transport": "OneAttemptS3 using production one_attempt_builder -> AmazonS3/reqwest HTTP1 loopback with static fixture credentials, ETag and authenticated hashes. Full startup metadata/HEAD then query payloads.",
+    "positive": "Held valid final-byte barriers prove active=min(parallelism,batch) for source and SQ8 separately for16 and32. Compare ordered ordinal/ID/scorebits, full trace, plan, exact request roster including ETag/range, source/SQ8/leaf GET and verified bytes, consumed payload, attempts, active0 and query slot returned. Arrival order is intentionally not asserted.",
+    "negative": "Both limits: exact admitted source/SQ8 rosters GET len-1 and bytes need-1 reject with default charges and unchanged native transport snapshot. Remote generation modeled-1 refuses with no source/SQ8/leaf payload GET.",
+    "drain": "Both limits and both stages: ordinal1 early digest error, ordinal0 delayed incomplete body, ordinal2 held valid sibling; future cannot return until sibling release. Earlier Store error wins, failed2, full admitted request and byte charges, source queue beyond32 fully served; all completed starts, active0, slots1, one stream failure, no extra attempts.",
+    "limits": "90s whole test deadline + 5s barrier deadlines; request10s; socket read/write2s; headers8192; objects64MiB; lifetime response payload64MiB; <=64 live handlers with128KiB stack, <=2048 lifetime accepts and1024 requests/arm. RAII stop/notify/join server and every handler on success, failure or assertion unwind; finished handlers reaped continuously.",
+    "native_execution": "Current repaired source UNRUN. Predecessor a0001 cold test selected1 and failed in0.46s during source-plane construction, before HTTP; no concurrency/drain/native qualification inferred."
+  },
+  "explicit32_caller_audit": [
+    {
+      "path": "crates/borsuk/examples/two_bit_http.rs",
+      "effect": "Changed SQ8 request32 to explicit16; preserves semantic serving default16 (also now16 for graph HTTP, as requested)."
+    },
+    {
+      "path": "crates/borsuk/src/bin/two_bit_plan_demo.rs",
+      "effect": "Unedited explicit32: semantic native SQ8 search now effective min(32,roster), formerly min(16,roster); graph behavior unchanged. SOURCE remains explicit16. Historical runs/artifacts unchanged."
+    },
+    {
+      "path": "crates/borsuk/src/bin/build_two_bit_graph_variant.rs",
+      "effect": "Unedited graph-only validator/open; semantic rejected; no changed effective I/O."
+    },
+    {
+      "path": "crates/borsuk/tests/two_bit_generation.rs:2209",
+      "effect": "Unedited graph variant generation-open fixture; no SQ8 fetch here and graph unclamped already."
+    },
+    {
+      "path": "crates/borsuk/src/bin/two_bit_walk_nomination.rs",
+      "effect": "Unedited local admission/open then drops generation; SOURCE offline planning only, no SQ8 transport scheduling."
+    },
+    {
+      "path": "crates/borsuk/src/bin/two_bit_union_nomination.rs",
+      "effect": "Unedited local admission/open then drops generation; offline union planning only, no SQ8 transport scheduling."
+    },
+    {
+      "path": "crates/borsuk/src/bin/v282_local_falsifier.rs",
+      "effect": "Unedited ObjectNativeLimits/ObjectNativeGeneration, separate API already honors32. Shared min(limit,batch) preserves existing effective concurrency."
+    },
+    {
+      "path": "crates/borsuk/src/bin/v291_rust_sq8_parity.rs",
+      "effect": "Unedited ObjectNativeLimits/ObjectNativeGeneration, separate API already honors32. Shared min(limit,batch) preserves existing effective concurrency."
+    },
+    {
+      "path": "crates/borsuk/src/bin/v292_centroid_route.rs",
+      "effect": "Unedited ObjectNativeLimits/ObjectNativeGeneration, separate API already honors32. Shared min(limit,batch) preserves existing effective concurrency."
+    },
+    {
+      "path": "crates/borsuk/src/bin/v296_two_bit_validation_plans.rs",
+      "effect": "Unedited ObjectNativeLimits/ObjectNativeGeneration, separate API already honors32. Shared min(limit,batch) preserves existing effective concurrency."
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_index.rs:99",
+      "effect": "Public nonempty-index open forwards supplied parallelism unchanged in loader_limits; semantic searches now honor caller >16 (bounded by stage roster), including up to48 Fresh1m leaves. Checked zero guards and pin accounting unchanged."
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_store.rs:1037",
+      "effect": "Retained/rebind publication validation forwards supplied parallelism via ..limits while changing only memory/pins. This open-and-drop validation itself performs no query payload scheduling; downstream semantic serving honors supplied >16."
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_store.rs:1153",
+      "effect": "Public local publication validation forwards supplied parallelism via ..limits and adjusts memory only. No query transport at this validation call; formerly silent semantic limit clamp no longer changes accepted caller values."
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_compaction.rs:775",
+      "effect": "Compaction passes ..options.generation into publication limits, adjusting retained pins only. Supplied source/SQ8 parallelism >16 follows new semantic serving behavior; no independent scheduling override."
+    },
+    {
+      "path": "crates/borsuk/src/bin/publish_two_bit_generation.rs:95",
+      "effect": "Config Limits conversion forwards max_parallel_gets and max_parallel_source_gets verbatim. Public configurable values >16 now survive semantic admission; publisher validation remains query-free. Explicit1/16 settings unchanged."
+    }
+  ],
+  "static_validation": {
+    "resource_wrapper": "systemd-run --user --scope --quiet -p CPUQuota=100% -p MemoryMax=256M -p MemorySwapMax=0 timeout 120s",
+    "rustfmt": "rustfmt --edition 2024 --check crates/borsuk/src/two_bit_generation.rs crates/borsuk/src/sq8_s3_range.rs crates/borsuk/examples/two_bit_http.rs crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+    "rustfmt_exit": 0,
+    "diff_check_exit": 0,
+    "scope_and_clamp_assertions": "PASS: repair diff is exactly one fixture in two_bit_generation.rs, four inserted lines and one replaced line; adds explicit identity source-row order and drops it after build. Production bytes, ID/vector encodings, caps, scheduling, all refusal/barrier/drain assertions, Fresh1m leaf fixture, selector test and other OWN4 files unchanged from d9a80f4e.",
+    "commit": "Scoped commit with core.hooksPath=/dev/null to honor explicit ban on local Cargo/native hooks. Root remote gates remain mandatory; not bypassed or claimed passing."
+  },
+  "handoff": "Source-only UNVERIFIED; root owns all remote compilation/native gates, exact-input admission, disposable canary, integration, paid measurement and disposition. Same worker HOLD, no agent_complete until actual root disposition. Original SDK exec25602/i-04607d2cf10e8e1bc and held SDK worker untouched.",
+  "commit": "d8e64dbc4a252bb009452922d40affe8321d8c47",
+  "commit_author": "Roman Bartusiak <riomus@gmail.com>",
+  "worktree_clean": true,
+  "mandatory_test_roster": [
+    {
+      "target": "borsuk library",
+      "exact_name": "two_bit_generation::source_walk_tests::native_cold_fetch_parallelism_parity_and_drain",
+      "command": "CARGO_BUILD_JOBS=1 timeout 120s cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::native_cold_fetch_parallelism_parity_and_drain -- --exact --nocapture",
+      "expected_selected_test_count": 1,
+      "observed_test_count": null,
+      "execution": "UNRUN_ON_CURRENT_REPAIR"
+    },
+    {
+      "target": "borsuk bin check_cohere_native_baseline",
+      "exact_name": "tests::cold_fetch_parallelism_selector_is_explicit_and_bounded",
+      "command": "CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin check_cohere_native_baseline tests::cold_fetch_parallelism_selector_is_explicit_and_bounded -- --exact --nocapture",
+      "expected_selected_test_count": 1,
+      "observed_test_count": null,
+      "execution": "UNRUN_ON_CURRENT_REPAIR"
+    },
+    {
+      "target": "borsuk library",
+      "exact_name": "two_bit_generation::source_walk_tests::native_fresh1m_leaf_fetch_parallelism_parity_and_drain",
+      "command": "CARGO_BUILD_JOBS=1 timeout 120s cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::native_fresh1m_leaf_fetch_parallelism_parity_and_drain -- --exact --nocapture",
+      "expected_selected_test_count": 1,
+      "observed_test_count": null,
+      "execution": "UNRUN_ON_CURRENT_REPAIR"
+    }
+  ],
+  "parent_contract_correction": "Applied authenticated parent message 1791413352596915161-2965865: single compiler job; separate exact fixture/selector commands and expected counts; full affected module/bin regressions, release, workspace Clippy, real shim-unset test-build retained. Native HTTP barriers/refusal spies unchanged. Runtime overhead remains unqualified. Original SDK exec25602/source untouched.",
+  "preserved_implementation_commit": "4cfc799b569ac5dbe03a4bcaae75ddc2ae5eb435",
+  "repair_base": "d9a80f4e92dcdbdfa0c91425a702d29ef1321b59",
+  "remote_gate_order": [
+    "affected_compile",
+    "affected",
+    "affected_leaf_fixture",
+    "baseline_selector",
+    "affected_generation_regressions",
+    "affected_sq8_regressions",
+    "baseline_regressions",
+    "release",
+    "workspace_clippy",
+    "real_env_unset_test_build"
+  ],
+  "remote_gate_protocol": "Failing-layer-first: on the exact integrated repair source run affected_compile --no-run to successful completion, then affected cold HTTP fixture (exactly1 selected test). STOP and collect original failure if either fails; do not rerun full gates or start overlapping jobs. Only after the repaired failing layer passes continue affected_leaf_fixture and baseline_selector (exactly1 each), then full affected generation/SQ8/bin regressions, release, workspace Clippy, actual shim-unset test-build in remote_gate_order. The120s fixture commands run against already-built targets, not compilation budgets. CARGO_BUILD_JOBS=1 and BORSUK_TEST_BUILD_JOBS=1 retained. Compile/setup failure is execution INVALID, never scientific failure. Root owns runtime enforcement/receipts; no local native work.",
+  "leaf_fixture": {
+    "name": "two_bit_generation::source_walk_tests::native_fresh1m_leaf_fetch_parallelism_parity_and_drain",
+    "scope": "Explicit metadata-only synthetic Fresh1m router: existing native_full_leaf_fixture now accepts profile, directly encodes 31,250 unit means (48,000,032 bytes) at D768/1,000,000-row geometry, calls unchanged production build/validate_publication and SemanticUnitRouter::open. No million-row canonical/raw/source/SQ8 corpus is constructed or hydrated; not a full Fresh1m generation/search qualification.",
+    "production_path": "Existing remote_walks delegates its unchanged leaf body to private semantic_walks_remote with the checked caller limit; test calls that SAME function with the validated router and actual OneAttemptS3/AmazonS3 HTTP reader. No substitute scheduler, relaxed authority, profile cap, or source/SQ8 behavior change.",
+    "object": "Full authenticated leaf object 48,125,000 bytes, 489 leaf descriptors with final18-unit leaf; no fabricated Content-Range size. Selected first48 full leaves are 4,730,880 bytes; leaves selected by unchanged Fresh1m policy.",
+    "proof": "Both limits16/32: hold valid leaf tails to prove exact16/32 unfinished bodies and production peak; assert full ordered leaf trace/walk units0..3072, 48 GETs, verified/consumed bytes, exact ETag/range request roster, all completions, active0. Later-index early digest error, earlier-index delayed stream error, held valid sibling; earliest SourceHead error, failed2, full48-request drain including beyond32, expected charges/consumed bytes, active0, no extra transport attempts.",
+    "resources": "Existing Fresh1m router construction model admitted under unchanged512MiB profile cap (not an RSS claim). Shared test HTTP object bound64MiB, transferred payload64MiB lifetime, 64 live handlers/128KiB stack/2048 total accepts, 90s whole fixture with outer120s execution gate after compilation, existing5s barrier/10s request/2s socket limits and RAII joins. Production memory/GET/byte/profile caps unchanged.",
+    "status": "UNRUN_ON_CURRENT_REPAIR; not reached by predecessor fail-fast gate"
+  },
+  "mechanism_preregistration": "Root owns preregistration: ordered buffered is a window including completed-but-not-yielded outputs, so 16vs32 changes width AND head-of-line waiting; transport/TLS pool/connection effects also vary. Use identical warm-up and idle/connection policy for both arms. No width-only causal attribution or speedup/RSS claim; unordered schedulers, new caches and telemetry deferred.",
+  "review_repair": {
+    "instruction": "1791414730825829812-2965865",
+    "reviews_read_in_full": [
+      "/data/target/borsuk-cold-fetch-native-gates-a0001/research_critic.md",
+      "/data/target/borsuk-cold-fetch-native-gates-a0001/engineering_critic.md"
+    ],
+    "scope": "Historical d9a80f4e repair atop4cfc799b, OWN4 only, preserved by subsequent d8e64dbc fixture repair. Original source/SQ8 refusal/body/barrier/drain and bin selector retained. Native was UNRUN at d9 handoff; closed a0001 receipt is recorded separately. HOLD same worker.",
+    "protected_jobs": "Original SDK exec25602/source and root-owned service smoke exec96778/i-0852f31ef0a7fc552 untouched."
+  },
+  "repair_commit": "d8e64dbc4a252bb009452922d40affe8321d8c47",
+  "preserved_leaf_repair_commit": "d9a80f4e92dcdbdfa0c91425a702d29ef1321b59",
+  "historical_native_receipts": [
+    {
+      "run": "borsuk-cold-fetch-native-gates-a0001",
+      "parent_instruction": "1791416060086407347-2965865",
+      "source_preview_reported_by_parent": "185f61caf8",
+      "own4_source_commit": "d9a80f4e92dcdbdfa0c91425a702d29ef1321b59",
+      "source_identity_note": "Authenticated parent reports preview includes d9 OWN4 unchanged. Separate stale watcher pin correction belongs to parent; no watcher or remote source was changed here.",
+      "affected_compile": {
+        "exit_code": 0,
+        "source": "parent authenticated closed receipt; bootstrap.log shows test profile completed in5m32s"
+      },
+      "affected": {
+        "exact_name": "two_bit_generation::source_walk_tests::native_cold_fetch_parallelism_parity_and_drain",
+        "selected_test_count": 1,
+        "passed": 0,
+        "failed": 1,
+        "filtered_out": 1879,
+        "cargo_exit_code": 101,
+        "duration_seconds": 0.46,
+        "failure": "two_bit_generation.rs:3143 build_with_discovery unwrap: Plane(Invalid(\"source ID\"))",
+        "stage": "source-plane fixture construction, before HTTP"
+      },
+      "bootstrap_exit_status": 1,
+      "subsequent_gates": "NOT_REACHED",
+      "host_disposition": "Parent reports SAME host terminated and waited; no rerun yet. Worker did not control host/job.",
+      "logs": {
+        "cold-http-fixture.log": {
+          "path": "/data/target/borsuk-cold-fetch-native-gates-a0001/collected/cold-http-fixture.log",
+          "sha256": "bb4c6217805f2a564068a58f0305723d109a2d6ec1c377b8ea84148cc9b77869",
+          "bytes": 192100,
+          "lines": 6066
+        },
+        "bootstrap.log": {
+          "path": "/data/target/borsuk-cold-fetch-native-gates-a0001/collected/bootstrap.log",
+          "sha256": "d5b0fc81a5f72ae15f93d7bebae241fac3e94c0fec451b788d11f85f1ee00bbb",
+          "bytes": 431878,
+          "lines": 13279
+        }
+      },
+      "qualification": "No HTTP concurrency/drain, speedup or RSS claim. Original closed failure retained; repaired source requires root rerun."
+    }
+  ],
+  "source_id_repair": {
+    "instruction": "1791416060086407347-2965865",
+    "commit": "d8e64dbc4a252bb009452922d40affe8321d8c47",
+    "preserved_predecessor": "d9a80f4e92dcdbdfa0c91425a702d29ef1321b59",
+    "root_cause": "Cold fixture writes unique descending SQ8 application IDs rows-row (65536..1) while raw/SQ8 vectors share identity physical order. Passing None makes TwoBitSource::build_inner interpret those IDs as source ordinals; its first ordinal65536 violates ordinal<rows and yields the observed source ID error.",
+    "trace": [
+      "two_bit_generation.rs cold fixture -> TwoBitGenerationBuilder::build_with_discovery(None)",
+      "two_bit_build.rs build_inner matches None -> source.build -> TwoBitSource::build_inner(None)",
+      "two_bit_source.rs explicit-order validation requires a full permutation; without order IDs are ordinals and checked against rows",
+      "two_bit_build.rs passes the same optional order to write_canonical_source; canonical_source.rs uses order[physical] for raw seek and preserves original SQ8 logical ID"
+    ],
+    "repair": "Reuse existing fixture pattern: identity order (0..rows as u64), build_with_discovery(Some(&order)), drop(order) after build. Descending logical IDs, raw/SQ8 bytes, source/scoring semantics and production validators remain unchanged. Existing build payload admission charges caller-owned order under unchanged128MiB cap.",
+    "analogous_authored_fixture_audit": [
+      "Only authored cold HTTP fixture constructs raw/SQ8 rows via TwoBitGenerationBuilder; repaired here.",
+      "Fresh1m HTTP leaf fixture/native_full_leaf_fixture encode unit means and use production router build/open; no raw/SQ8 application-ID mapping or source-plane build, unaffected.",
+      "New bin selector test exercises config/limits/output through a query stub; no source-plane build, unaffected.",
+      "Shared HTTP fixture serves opaque authenticated object bytes, never creates IDs or source-row order, unaffected.",
+      "Existing neighboring semantic_d768 fixture and native scalar fixtures pass Some(&order); baseline existing source fixture uses explicit reversed/swap permutation, not changed.",
+      "Searched all build_with_discovery/build_with_order/write_canonical_source call sites; generation builder forwards one order to source plane and canonical writer; compaction/publication/scorer/native fixtures already supply their declared order. No shared production change warranted."
+    ],
+    "static_checks": "Full original logs scanned; sole cold fixture failure matches the no-order ordinal check. Scoped rustfmt --check exit0 across OWN4; git diff --check exit0; exact predecessor diff assertion passes. Native reproduction/rerun forbidden locally and remains root-owned.",
+    "scope": "Only two_bit_generation.rs fixture changed; no production/cap/scoring, data hydration, measurement/publication namespace, remote job, watcher, source pin or protected SDK changes."
+  }
+}

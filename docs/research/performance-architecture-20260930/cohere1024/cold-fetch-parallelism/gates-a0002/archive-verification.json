@@ -1,0 +1,11 @@
+{
+  "status": "DRAFT_NOT_LAUNCHED",
+  "preview": "31eca73431901c193aff598f4c6e44d3540594da",
+  "root_base": "f4542d841cac56590fe511a7a14b2b9861f7a03c",
+  "candidate": "d8e64dbc4a252bb009452922d40affe8321d8c47",
+  "native_count": 415,
+  "support_count": 2450,
+  "native_identity": "6dd4fbe0eeb512ef807868ba4088d35350eaaf93ab67fed6b9e7f204a5397a7b",
+  "archive_sha256": "4d57aedcabe782079ed7a4f39d5d6eb6f10e584d298716f73e14f83e8fdbdf86",
+  "archive_bytes": 13225641
+}
