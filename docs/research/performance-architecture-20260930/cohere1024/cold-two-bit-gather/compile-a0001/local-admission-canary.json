@@ -1,0 +1,34 @@
+{
+  "status": "ASSET_ADMISSION_AND_SYNTHETIC_CANARY_PASS",
+  "candidate": "751b5327571c7fec17af4bbdd7f1b1594f0aaf9d",
+  "archive_sha256": "f7c1f66cd85453fd64b1b3f8fa03e7e9590e5de0a290d8fdf7ab21dba41bd513",
+  "full2450_actual_archive_bodies_authenticated": true,
+  "full415_native_manifest": true,
+  "all_support_bytes_bound": true,
+  "bash_stage_actual_native17_and_success_checked": true,
+  "real_operations": [
+    "local archive reads and SHA",
+    "actual Bash/time/tee success and exit17",
+    "read-only AWS account/quote/name checks"
+  ],
+  "mocked_operations": [
+    "native commands replaced with true and exit17"
+  ],
+  "unrun": [
+    "real Rust compilation/tests",
+    "remote cgroup admission",
+    "ANN/corpus/query/truth"
+  ],
+  "at": "2026-10-08T08:49:26.303007+00:00",
+  "bounded_original_unit": {
+    "unit": "borsuk-gather-assets-canary-751b.service",
+    "invocation": "60135b9f6d304b618a7a966ff3969879",
+    "exit": 0,
+    "cpu_quota": "100%",
+    "memory_max": 268435456,
+    "swap_max": 0,
+    "runtime_max_seconds": 120,
+    "runtime_ms": 571,
+    "memory_peak_mib": 24.5
+  }
+}

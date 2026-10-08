@@ -1,0 +1,16 @@
+{
+  "status": "SOURCE_SEALED_NATIVE_UNRUN",
+  "candidate": "751b5327571c7fec17af4bbdd7f1b1594f0aaf9d",
+  "file_count": 2450,
+  "native_file_count": 415,
+  "native_identity": "3b8a5dc5f9f17bfc4780a1ce293e2c347976ae67b6400796ab6269b7fc877b41",
+  "changed_native_paths": [
+    "crates/borsuk/src/lib.rs",
+    "crates/borsuk/src/rotated_two_bit.rs",
+    "crates/borsuk/src/two_bit_generation.rs"
+  ],
+  "archive_bytes": 16531267,
+  "archive_sha256": "f7c1f66cd85453fd64b1b3f8fa03e7e9590e5de0a290d8fdf7ab21dba41bd513",
+  "support_policy": "exact previous qualified 2450-file support roster; all415 native files retained; current docs excluded from build input",
+  "performance_claim": false
+}

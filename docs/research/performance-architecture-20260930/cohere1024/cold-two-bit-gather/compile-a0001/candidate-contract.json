@@ -1,0 +1,33 @@
+{
+  "status": "SOURCE_ONLY_UNVERIFIED",
+  "commit": "751b5327571c7fec17af4bbdd7f1b1594f0aaf9d",
+  "parent": "c676128c10ad1fe912a0b6babd3d67f190b05f92",
+  "owned": {
+    "crates/borsuk/src/lib.rs": {
+      "bytes": 43404,
+      "sha256": "c06079d89c67a31043acaaa94fc177350dd09d347f88df2d3fa747f3c90b0bce"
+    },
+    "crates/borsuk/src/rotated_two_bit.rs": {
+      "bytes": 47942,
+      "sha256": "8ddb638b2fdb1610b05569faf29365911d096d401fc1cc05605a41d36eca959e"
+    },
+    "crates/borsuk/src/two_bit_generation.rs": {
+      "bytes": 266712,
+      "sha256": "a05a453f2c7da767f204e98bf4cd5fb9a1b26e1aa5ae4fe69499699504e05a5e"
+    }
+  },
+  "new_names": [
+    "two_bit_gather_codec_dimensions_and_norms",
+    "two_bit_gather_literal_order_signed_zero_and_tails",
+    "two_bit_gather_all_words_and_tile_offsets",
+    "two_bit_gather_record_refusals_and_nonfinite_output",
+    "two_bit_gather_forced_avx2_and_checked_bounds",
+    "two_bit_gather_release_primitive",
+    "two_bit_gather_stateful_callback_prefix_and_plan_trace"
+  ],
+  "production_generation_unchanged": true,
+  "lib_only_lint_change": true,
+  "local_rustfmt_parse_exit": 0,
+  "native_tests_compile_codegen_performance": "NOT_RUN",
+  "production_integrated": false
+}

@@ -1,0 +1,61 @@
+{
+  "status": "FROZEN_ASSETS_LAUNCH_PENDING_ADMISSION",
+  "prefix": "research/semantic-router/20261008/cold-two-bit-gather-compile-a0001",
+  "candidate": "751b5327571c7fec17af4bbdd7f1b1594f0aaf9d",
+  "source": {
+    "status": "SOURCE_SEALED_NATIVE_UNRUN",
+    "candidate": "751b5327571c7fec17af4bbdd7f1b1594f0aaf9d",
+    "file_count": 2450,
+    "native_file_count": 415,
+    "native_identity": "3b8a5dc5f9f17bfc4780a1ce293e2c347976ae67b6400796ab6269b7fc877b41",
+    "changed_native_paths": [
+      "crates/borsuk/src/lib.rs",
+      "crates/borsuk/src/rotated_two_bit.rs",
+      "crates/borsuk/src/two_bit_generation.rs"
+    ],
+    "archive_bytes": 16531267,
+    "archive_sha256": "f7c1f66cd85453fd64b1b3f8fa03e7e9590e5de0a290d8fdf7ab21dba41bd513",
+    "support_policy": "exact previous qualified 2450-file support roster; all415 native files retained; current docs excluded from build input",
+    "performance_claim": false
+  },
+  "inputs": {
+    "source-files.sha256": {
+      "bytes": 278033,
+      "sha256": "0fbdb2c4fce010265de861f37e8e2866dd6bf53a83abf40f03ebd596d84d9a07"
+    },
+    "native-source.json": {
+      "bytes": 47205,
+      "sha256": "7d11eb0f86e729ef17730b3a4d7e85ca1243faee66ad1c809f5c114c7a5a5b06"
+    },
+    "mandatory-tests.json": {
+      "bytes": 1141,
+      "sha256": "fcab437de97085f436cdc5c29aba79e0e59b13bdd77db3efe886ca9049638f52"
+    },
+    "gates.sh": {
+      "bytes": 3438,
+      "sha256": "e53e003502eb82b0d735602965e13d10fa4110eb97b5453d90f7ff79af757957"
+    },
+    "select-probe.py": {
+      "bytes": 1466,
+      "sha256": "11e06ab85d1fadb816e4f3eaa315f6e518e114e06532d48189385ce917b238eb"
+    }
+  },
+  "userdata": {
+    "bytes": 8569,
+    "sha256": "a59e2173ccb1c6d3f96d970a8f6f74ede6c35679db09309f7f81dea19cfa087b"
+  },
+  "machine_seconds": 9000,
+  "build_seconds": 7200,
+  "build_memory_bytes": 8589934592,
+  "build_cpu": 2,
+  "build_jobs": 1,
+  "swap": 0,
+  "compute_reservation_usd": 1.5,
+  "ancillary_reservation_usd": 0.15,
+  "ebs_gib": 80,
+  "spot_bid_max_usd_per_hour": 0.5,
+  "native_ANN_corpus_query_truth": false,
+  "primitive_run": false,
+  "full_qualification": false,
+  "interruption": "INVALID; preserve terminal evidence, no automatic duplicate attempt"
+}
