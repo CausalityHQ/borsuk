@@ -1,0 +1,12 @@
+RuntimeMaxUSec=2min
+MainPID=1975
+ExecStart={ path=/bin/bash ; argv[]=/bin/bash /mnt/borsuk-http/probe.sh /mnt/borsuk-http/probe-libtest ; ignore_errors=no ; start_time=[Thu 2026-10-08 07:51:27 UTC] ; stop_time=[n/a] ; pid=1975 ; code=(null) ; status=0/0 }
+ControlGroup=/borsukauth.slice/borsuk-auth-probe.service
+AllowedCPUs=0
+MemoryMax=268435456
+MemorySwapMax=0
+TasksMax=128
+LimitCPU=30
+LoadState=loaded
+ActiveState=active
+SubState=running

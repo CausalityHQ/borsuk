@@ -1,0 +1,28 @@
+{
+  "status": "REJECT",
+  "instance_id": "i-000fbf1232f75da92",
+  "terminated_freshly_verified": true,
+  "protocol_commit": "6593ab4efc7ceb1a93ade15415c455ce09f85989",
+  "candidate_commit": "7256ec9b57a6774a1be425990865e35e4fc3c5d9",
+  "same_exact_release_elf": true,
+  "elf_sha256": "e5028e38842734f1ecb362587ca21582a67721e1805cf38904ecb691f7f63c56",
+  "artifact_count": 42,
+  "all_artifacts_authenticated": true,
+  "helper_pins_match": true,
+  "native_exit": 42,
+  "independent_probe": {
+    "status": "REJECT",
+    "weighted_cpu_saving": 0.052563146558400886,
+    "full_class_median_paired_ratios": [
+      0.9473914349200047,
+      0.9474274413797512
+    ],
+    "all40_records_validated": true,
+    "geometry_and_payload_digests_independently_matched": true,
+    "external_leaf_caps_readback": true,
+    "performance_claim": false
+  },
+  "remaining_release_clippy_testbuild": "UNRUN",
+  "cold_or_vendor_performance_claim": false,
+  "goal_complete": false
+}

@@ -1,0 +1,19 @@
+{
+  "status": "READY",
+  "protocol_commit": "6593ab4efc7ceb1a93ade15415c455ce09f85989",
+  "quote": {
+    "AvailabilityZone": "eu-central-1c",
+    "AvailabilityZoneId": "euc1-az1",
+    "InstanceType": "c7i.2xlarge",
+    "ProductDescription": "Linux/UNIX",
+    "SpotPrice": "0.205700",
+    "Timestamp": "2026-10-08T07:00:00+00:00"
+  },
+  "compute_reservation_usd": 0.1,
+  "ancillary_reservation_usd": 0.15,
+  "old_instance_terminated": true,
+  "same_elf": true,
+  "input_hashes_verified": true,
+  "one_unique_client_token": "borsuk-cold-page-auth-native-gates-a0002",
+  "at": "2026-10-08T07:50:50.791267+00:00"
+}

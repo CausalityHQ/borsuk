@@ -1,0 +1,12 @@
+{
+  "status": "REJECT",
+  "weighted_cpu_saving": 0.052563146558400886,
+  "full_class_median_paired_ratios": [
+    0.9473914349200047,
+    0.9474274413797512
+  ],
+  "all40_records_validated": true,
+  "geometry_and_payload_digests_independently_matched": true,
+  "external_leaf_caps_readback": true,
+  "performance_claim": false
+}

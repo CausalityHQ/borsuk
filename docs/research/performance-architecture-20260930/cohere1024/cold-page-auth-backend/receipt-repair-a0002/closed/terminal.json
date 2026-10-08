@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-page-auth-backend-receipt-repair-v1",
+  "instance_id": "i-000fbf1232f75da92",
+  "phase": "probe",
+  "original_exit": 42,
+  "exit": 42,
+  "native_exit": 42,
+  "candidate_commit": "7256ec9b57a6774a1be425990865e35e4fc3c5d9",
+  "elf_sha256": "e5028e38842734f1ecb362587ca21582a67721e1805cf38904ecb691f7f63c56",
+  "elf_bytes": 88071816,
+  "native_source_file_count": 415,
+  "native_source_identity_sha256": "6f07aa976298719e5fa6a642043bad0afe6a1e8f8106fd61eb46fec6c627d663",
+  "evidence": {
+    "bytes": 12588,
+    "sha256": "cbb1955137c6828595e41291eae6b255fe05b28e1a9e38ebbeebbb33433700fc"
+  },
+  "scope": "same exact native verifier; pre-exec unit receipt repair",
+  "performance_claim": false
+}
