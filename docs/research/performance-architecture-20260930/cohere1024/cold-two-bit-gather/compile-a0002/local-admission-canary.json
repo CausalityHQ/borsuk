@@ -1,0 +1,9 @@
+{
+  "status": "PASS_SYNTHETIC_ONLY",
+  "cases": 4,
+  "selector_sha256": "e4c20c6fe56500815507f1ab6c852aae73013eaca49c8ea808776b3f680e14e7",
+  "native_execution": false,
+  "real_disassembly": false,
+  "asset_unit": "borsuk-gather-selector-assets-a0002.service",
+  "asset_exit": 0
+}
