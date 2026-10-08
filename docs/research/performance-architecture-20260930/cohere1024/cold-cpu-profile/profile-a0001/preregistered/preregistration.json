@@ -1,0 +1,108 @@
+{
+  "status": "READY_CANDIDATE_CPU_PROFILE",
+  "scope": "One candidate-only CPU diagnosis; no ABBA, S3 reference rerun or comparison latency claim.",
+  "root_source_commit": "c07889b9c92b3928450bc0d25ecf77aac19494ea",
+  "compiled_source_commit": "fc8a23dac44ad635fc1236736df68878690a8389",
+  "binary_sha256": "ca1ae2496e110494e7f6c03ae16eea3d5ff262d66945a3c52775749ac0bcaeab",
+  "native_config_sha256": "e604a1ca02644329113e6c11a935d67115f784c40008859966f7e332fae53a3a",
+  "native_config_reused_unchanged": true,
+  "real_input_admission": "membership-admission-a0001 full1000; authenticated completed-v2 passed in membership-canary-a0001",
+  "profiler_canary": {
+    "instance_id": "i-00180615e2b84beec",
+    "receipt_bytes": 1041,
+    "receipt_sha256": "db8e77ef0e2be6bf921df1070d7d8ae252bdc860185e8ca45b4d5119b74e14e8",
+    "source_receipt_commit": "c07889b9c92b3928450bc0d25ecf77aac19494ea"
+  },
+  "workload": {
+    "rows": 100000,
+    "dimensions": 1024,
+    "k": 10,
+    "queries": 1000,
+    "active_queries": 1,
+    "source_payload_cache": "off",
+    "backend_cache": "uncontrolled",
+    "fetch_parallelism": 32
+  },
+  "method": {
+    "event": "cpu-clock:u",
+    "frequency_hz": 99,
+    "callgraph": "dwarf,8192",
+    "mmap_pages": 64,
+    "profile_byte_limit": 134217728,
+    "minimum_decoded_query_process_samples": 1000,
+    "performance_latency_use": false,
+    "record_native_timeout_seconds": 1200,
+    "report_seconds": 180,
+    "decode_seconds": 180,
+    "native_reduction_seconds": 180,
+    "whole_stage_seconds": 2100,
+    "maximum_phase_timeout_sum_seconds": 1920,
+    "closeout_reserved_seconds": 390,
+    "raw_stack_retention": "Remote temporary only; hash/length seal then remove perf.data before publication, including failed-stage cleanup. Wrapper excludes it independently. Decoded symbols/timestamps retained."
+  },
+  "resources": {
+    "cpu_max": "100000 100000",
+    "memory_max": 536870912,
+    "memory_swap_max": 0,
+    "pids_max": 256,
+    "scratch_tmpfs_bytes": 67108864,
+    "machine_seconds": 3600
+  },
+  "query_admitted_upper_bounds": {
+    "logical_source_gets": 128000,
+    "logical_sq8_gets": 32000,
+    "logical_router_gets": 0,
+    "source_bytes": 67108864000,
+    "sq8_bytes": 16773120000,
+    "startup": "authenticated separately, not included in these query bounds"
+  },
+  "prospective_reservation_usd": {
+    "compute": 0.5,
+    "ancillary": 0.15,
+    "total": 0.65
+  },
+  "attempt_max": 1,
+  "remaining": [],
+  "decision": "Use known ranking/authentication/scoring call chains and self/children sample shares to choose one causal Rust optimization. Insufficient attribution is diagnostic INVALID/inconclusive, not ANN rejection. Off-CPU time alone does not prove S3 network wait.",
+  "artifacts": {
+    "stage.sh": {
+      "bytes": 4608,
+      "sha256": "3b4b438b9014d28e930cbfa342fc6621f92474b3d0852817a8f2d786f77093c4"
+    },
+    "user-data.sh": {
+      "bytes": 8645,
+      "sha256": "455c6f50c0a50df7cee65ff6783278c0533125d6c9bed95501615fce7e52e00e"
+    },
+    "config.json": {
+      "bytes": 1626,
+      "sha256": "e604a1ca02644329113e6c11a935d67115f784c40008859966f7e332fae53a3a"
+    },
+    "reduction-template.json": {
+      "bytes": 2894,
+      "sha256": "cc9460f5f6ba8229318f103cb038f9dc081cefa6125cb747ae03798b8390a9d3"
+    },
+    "stage-check.json": {
+      "bytes": 1346,
+      "sha256": "6b1cb20977fe000724b4184cb15ad116b0d1d250811b4a8a0b07bf59c2cd079d"
+    },
+    "wrapper-check.json": {
+      "bytes": 1431,
+      "sha256": "60478fcbb6c3b1a00cb94e90f23614c0b3cec601bb6363e9e20bf473d7d4bb43"
+    }
+  },
+  "instrumented_latency_excluded_from_comparison": true,
+  "tool_versions": {
+    "kernel": "7.0.0-1013-aws",
+    "perf": "7.0.14",
+    "linux_tools_common": "6.8.0-146.146",
+    "linux_tools_kernel": "7.0.0-1013.13~24.04.1"
+  },
+  "spot_quote": {
+    "Price": "0.206400",
+    "Time": "2026-10-08T00:00:00+00:00",
+    "AZ": "eu-central-1c"
+  },
+  "qualified_native_source_identity_sha256": "0097af81fbf3e61a2050a77cb046adfbf0b02a745e73a2181e924cd2cb697eae",
+  "local_stage_cases": 12,
+  "local_wrapper_cases": 10
+}

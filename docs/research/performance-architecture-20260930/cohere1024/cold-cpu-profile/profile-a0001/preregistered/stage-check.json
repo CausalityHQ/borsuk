@@ -1,0 +1,74 @@
+{
+  "status": "PASS",
+  "cases": [
+    {
+      "case": "pass",
+      "exit": 0
+    },
+    {
+      "case": "bad-cap",
+      "exit": 1
+    },
+    {
+      "case": "record-fail",
+      "exit": 1
+    },
+    {
+      "case": "oversize-profile",
+      "exit": 1
+    },
+    {
+      "case": "native-fail",
+      "exit": 1
+    },
+    {
+      "case": "record-after-native-fail",
+      "exit": 1
+    },
+    {
+      "case": "report-fail",
+      "exit": 19
+    },
+    {
+      "case": "lost-samples",
+      "exit": 1
+    },
+    {
+      "case": "reducer-fail",
+      "exit": 1
+    },
+    {
+      "case": "wrong-recall",
+      "exit": 1
+    },
+    {
+      "case": "pins-change",
+      "exit": 96
+    },
+    {
+      "case": "scratch-leak",
+      "exit": 96
+    }
+  ],
+  "kernel_limits": {
+    "cpu.max": "100000 100000",
+    "memory.max": "268435456",
+    "memory.swap.max": "0"
+  },
+  "stage_sha256": "3b4b438b9014d28e930cbfa342fc6621f92474b3d0852817a8f2d786f77093c4",
+  "real": [
+    "Bash/time/timeout control flow",
+    "separate native/profiler exit evidence",
+    "SHA pins and drift refusal",
+    "reduction config rebinding and SHA",
+    "jq terminal predicate",
+    "scratch check",
+    "file limit establishment"
+  ],
+  "mocked": [
+    "perf recording/decoding",
+    "cgroup contents",
+    "Rust CLI and reduction"
+  ],
+  "native_perf_execution": false
+}
