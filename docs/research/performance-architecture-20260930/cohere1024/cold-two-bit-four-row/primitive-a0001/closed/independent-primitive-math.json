@@ -1,0 +1,6 @@
+{
+  "status": "REJECT",
+  "all80_geometry_calls_bytes_and_ratios_recomputed": true,
+  "candidate": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "performance_claim": "primitive CPU only; not ANN"
+}

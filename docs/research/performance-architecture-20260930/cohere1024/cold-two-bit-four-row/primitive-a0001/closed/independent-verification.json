@@ -1,0 +1,14 @@
+{
+  "status": "REJECT",
+  "instance_id": "i-099c7b33b9a205ad9",
+  "artifact_count": 46,
+  "candidate": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "original_exit": 42,
+  "native_rust_exit": 101,
+  "native_canary_exit": 0,
+  "terminated_and_waited": true,
+  "all_artifacts_authenticated": true,
+  "all80_math_recomputed": true,
+  "scope": "ordered primitive CPU only; no cold/vendor/production claim",
+  "at": "2026-10-08T17:39:51.955951+00:00"
+}

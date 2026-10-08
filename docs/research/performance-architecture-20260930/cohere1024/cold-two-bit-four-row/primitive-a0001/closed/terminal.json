@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-two-bit-four-row-primitive-v1",
+  "instance_id": "i-099c7b33b9a205ad9",
+  "phase": "probe",
+  "original_exit": 42,
+  "exit": 42,
+  "native_exit": 42,
+  "candidate_commit": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "elf_sha256": "1c1a700d09588f6b423521597cf9dce8af5179557aa63b16a79a0622639355c9",
+  "elf_bytes": 88802352,
+  "native_source_file_count": 415,
+  "native_source_identity_sha256": "a7fe9601a9345da69223d75bf8fb6a765d1607c1f02b144e8e8763c90b0b2e8b",
+  "evidence": {
+    "bytes": 22721,
+    "sha256": "532fc31f4dd445210d296988b0af08de02bfa2540fc000a48314c0754ec83277"
+  },
+  "scope": "bounded same-ELF ordered independent four-row SIMD primitive; no ANN/corpus/query/truth or cold vendor claim",
+  "performance_claim": false
+}

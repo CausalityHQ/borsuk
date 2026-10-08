@@ -1,0 +1,18 @@
+{
+  "protocol_commit": "a7f2a59d333d2974add529d4426404716336a01a",
+  "source": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "quote": {
+    "AvailabilityZone": "eu-central-1c",
+    "AvailabilityZoneId": "euc1-az1",
+    "InstanceType": "c7i.2xlarge",
+    "ProductDescription": "Linux/UNIX",
+    "SpotPrice": "0.205700",
+    "Timestamp": "2026-10-08T12:00:00+00:00"
+  },
+  "compute_cap_usd": 0.2,
+  "ancillary_cap_usd": 0.15,
+  "client_token": "borsuk-cold-two-bit-four-row-primitive-a0001",
+  "at": "2026-10-08T17:38:09.147816+00:00",
+  "native_ANN": false,
+  "micro_timing": true
+}
