@@ -1,0 +1,36 @@
+{
+  "schema": "borsuk-s3-vectors-config-v1",
+  "mode": "measurement",
+  "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+  "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+  "rows": 100000,
+  "count": 1000,
+  "dimensions": 1024,
+  "k": 10,
+  "metric": "cosine",
+  "state_dir": "/mnt/borsuk-s3-vectors-reference/state",
+  "run_id": "1c15e88d82391b504195144b90e07c65",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "account_id": "453182569524",
+  "bucket": "borsuk-s3v-1c15e88d82391b504195144b90e07c65",
+  "index": "baseline-1c15e88d82391b504195144b90e07c65",
+  "idle_seconds": 3600,
+  "query_interval_ms": 0,
+  "host_identity": "matched Cohere100k reference; publisher and fresh measurement EC2 IMDS identities are bound in root terminal receipts; backend cache state unobservable",
+  "corpus": {
+    "path": "/mnt/borsuk-s3-vectors-reference/inputs/corpus.f32",
+    "bytes": 409600000,
+    "sha256": "3c95fa49a7d3f9d4bf6178f5ac2493e700a30fbcfe91da97a5fcf16a1f5fc09c"
+  },
+  "queries": {
+    "path": "/mnt/borsuk-s3-vectors-reference/inputs/queries.f32",
+    "bytes": 4096000,
+    "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+  },
+  "truth": {
+    "path": "/mnt/borsuk-s3-vectors-reference/inputs/truth.u64",
+    "bytes": 80000,
+    "sha256": "479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c"
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "status": "FROZEN_NOT_LAUNCHED_WAIT_IDLE",
+  "config_sha256": "f7bc9f1f6797b4cbd8104904333de35c03b596cfe9a3b23b0b58a294912b9c43",
+  "publication_attempt": "s3-vectors-cold-publication-a0001",
+  "state_archive": {
+    "bytes": 123963,
+    "sha256": "8b2f024e533c41179a4437d7f0e0ee9d916899f5a711e3b273e3c5fb25e7146b"
+  },
+  "not_before": "verified_at_ms + 3600000, checked by Rust before first request",
+  "fresh_measurement_host": true,
+  "queries": 1000,
+  "replications": 1,
+  "cache_state": "service-controlled, no flush API; first request separate; pooled first pass cache-uncontrolled",
+  "readiness_queries": 0,
+  "truth": "native reduction only after all response seal file and parent directory sync",
+  "cleanup": "same owned namespace; bounded native cleanup on failure or successful reduction",
+  "performance_claim": false,
+  "source_checked": {
+    "admitted": "rehashes corpus and queries on fresh host; checks lengths against original admission; no truth FD",
+    "measure": "checks elapsed idle before create-only responses and measure-started; no partial resume",
+    "cleanup": "publication ownership receipts retained, same namespace only"
+  },
+  "measurement_not_before_utc": "2026-10-08T00:31:13.740000+00:00",
+  "verified_at_ms": 1791415873740,
+  "support_sha256": {
+    "config.json": "f7bc9f1f6797b4cbd8104904333de35c03b596cfe9a3b23b0b58a294912b9c43",
+    "run-reference-measurement.sh": "db6a85df61c5b9af854daab35df0360c49953fa013475dbf2873dfb3d56bb320",
+    "staging.sha256": "fdc5fc9aeb58b04ebb8787104cdd667136b4524f4d894862d2f239dee5612b53",
+    "user-data.sh": "5cebfb0a9f17d615e89cc50261edf338a4d6f26744e0bc563fcc16f0bf97160c",
+    "run-instances.json": "9b1386d678ca7b0238fa9b8971e48fb95492f3ce186ce7053b78719d9caa8cab"
+  },
+  "native_seconds": 1800,
+  "machine_seconds": 3600,
+  "reservation_usd": {
+    "compute": ".25",
+    "ancillary": ".15",
+    "service": ".15",
+    "total": ".55"
+  },
+  "expected_new_queries": 1000,
+  "max_cumulative_sdk_calls": 4096,
+  "already_consumed_sdk_calls": 1405,
+  "index_mode": "ENHANCED"
+}

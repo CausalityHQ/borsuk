@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-s3-vectors-cold-measurement-v1",
+  "instance_id": "i-0e12778f9b4316166",
+  "original_exit": 0,
+  "native_exit": 0,
+  "upload_exit": 0,
+  "evidence": {
+    "sha256": "f09eaa29db332daea0c670b0eeca2b70d473d498adf0d61fd622dbfcb1079a1f",
+    "bytes": 507052
+  },
+  "synthetic": false,
+  "performance_claim": false
+}
