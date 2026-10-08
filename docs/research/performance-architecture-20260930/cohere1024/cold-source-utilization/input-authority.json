@@ -16,7 +16,7 @@
   "source_unit_cap": 2544,
   "direct_sq8_get_cap": 32,
   "direct_sq8_cost_only": true,
-  "record_bytes_formula": "ceil(dimensions / 256) * 256 / 4 + 8",
+  "record_bytes_formula": "ceil((floor(dimensions/256)*256 + (tail==0 ? 0 : next_power_of_two(tail)))/4) + 8; tail=dimensions%256",
   "cover_arithmetic_unchanged": {
     "path": "crates/borsuk/src/budgeted_page_rank.rs",
     "historical_commit": "fc8a23dac44ad635fc1236736df68878690a8389",
