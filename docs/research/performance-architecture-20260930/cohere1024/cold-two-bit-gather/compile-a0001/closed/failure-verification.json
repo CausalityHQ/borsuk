@@ -1,0 +1,72 @@
+{
+  "status": "NATIVE_STAGES_PASSED_ASSEMBLY_SELECTOR_INVALID",
+  "candidate": "751b5327571c7fec17af4bbdd7f1b1594f0aaf9d",
+  "instance_id": "i-09700808fa04fe8d7",
+  "stages": [
+    {
+      "name": "codec-debug",
+      "command": "cargo test --locked -p borsuk --lib rotated_two_bit::tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 4
+    },
+    {
+      "name": "forced-avx2-debug",
+      "command": "cargo test --locked -p borsuk --lib rotated_two_bit::tests::two_bit_gather_forced_avx2_and_checked_bounds -- --ignored --exact --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 1
+    },
+    {
+      "name": "planner-debug",
+      "command": "cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 1
+    },
+    {
+      "name": "codec-release",
+      "command": "cargo test --locked --release -p borsuk --lib rotated_two_bit::tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 4
+    },
+    {
+      "name": "forced-avx2-release",
+      "command": "cargo test --locked --release -p borsuk --lib rotated_two_bit::tests::two_bit_gather_forced_avx2_and_checked_bounds -- --ignored --exact --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 1
+    },
+    {
+      "name": "planner-release",
+      "command": "cargo test --locked --release -p borsuk --lib two_bit_generation::source_walk_tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 1
+    },
+    {
+      "name": "integration",
+      "command": "cargo test --locked -p borsuk --test rotated_two_bit --test two_bit_source --test two_bit_generation -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 0
+    },
+    {
+      "name": "probe-compile",
+      "command": "cargo test --locked --release -p borsuk --lib --no-run --message-format=json",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 0
+    }
+  ],
+  "root_cause": "nm demangles method as <Type>::method; selector expected Type::method",
+  "authenticated_symbol": "00000000029913d0 t <borsuk::rotated_two_bit::PreparedTwoBit>::gather_dot",
+  "probe_nm_sha256": "461e930c32f24de0f71cfb059dc59d77bff92e635f6e78f7d616c51a078577f1",
+  "assembly_verified": false,
+  "primitive_run": false,
+  "performance_claim": false,
+  "production_integrated": false,
+  "repair_scope": "selector spelling only; source/algorithm/caps unchanged",
+  "repaired_selector_sha256": "e6307fc727b71a7a7c05a2897327309c079812d5cc87dd3215b25eb04325cee6"
+}
