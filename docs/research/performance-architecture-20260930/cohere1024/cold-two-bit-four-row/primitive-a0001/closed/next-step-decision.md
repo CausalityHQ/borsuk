@@ -1,0 +1,7 @@
+# Close four-row scoring line; return to cold fetch/layout
+
+Root accepts completed read-only specialist fd176352449a4116 (Astra/xhigh, exit0) HOLD after valid primitive REJECT. Full32 and tail17 need another2.91%/4.68% reduction over this candidate to reach the unchanged20% gate. Wider-add instruction-cost predictions are static inference, not measured AVX2 evidence. Root independently checked the held score_four loop, source callsites, four table loads per byte, exact compiled SSE2 loop and core forbid(unsafe_code). No AVX2 rewrite, repeated source qualification, relaxed gate or cold launch is authorized for this arm.
+
+Measured cold priority remains source27343 GETs/8.971GB and SQ824600 GETs/16.700GB per1000 queries; final ranking/recall/pins must remain generic and protected. Further layout work must first reconcile historical V139/V146/V149/V150, boundary-overlap/graph-packing/co-selection failures and the completed Fable result. Co-selection FIRST100k D768 preserved closed comparison: original50/32 fit versus48/33 afterrepacking; it is not a viable recipe to repeat on CohereD1024. Byte/request budgets and any changed architecture need a new prospective envelope derived from exact physical cost, not inherited old-arm arbitrary caps.
+
+No primitive/cold vendor gain, 10M result or total lifecycle-dollar qualification follows from this arm. Saved S3 reference remains unchanged. Full product goal stays active.
