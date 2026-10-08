@@ -1,0 +1,21 @@
+{
+  "status": "DISPOSABLE_CANARY_PASS_AND_FULL_NATIVE_ADMISSION_REDUCTION_PASS",
+  "instance_id": "i-074fd22e24d7bade4",
+  "terminated": true,
+  "original_session": 60751,
+  "native_expected_exit": 2,
+  "controller_exit": 0,
+  "completed_admission_native_reduction": true,
+  "admission_queries": 1000,
+  "admission_recall_numerator": 9723,
+  "admission_router_gets_bytes": 0,
+  "admission_max_leaf_peak_inflight": 0,
+  "canary_queries": 0,
+  "canary_truth_opened": false,
+  "caps_verified": true,
+  "memory_peak": 2576384,
+  "swap": 0,
+  "oom": 0,
+  "native_reduction_report_sha256": "3f52d23561d466a5f0eac024c74e0693930fbc51bd2055257f8750d16da4414d",
+  "performance_claim": false
+}

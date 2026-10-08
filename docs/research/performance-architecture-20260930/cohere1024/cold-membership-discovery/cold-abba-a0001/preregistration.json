@@ -1,0 +1,280 @@
+{
+  "status": "FROZEN_NOT_LAUNCHED",
+  "order": [
+    "A1=control32",
+    "B1=membership32",
+    "B2=membership32",
+    "A2=control32"
+  ],
+  "native_runtime_config_sha256": "0fd76aacea19b51e221f5dfb5d7d42ab0190fca51fe5f95a4ecf2942abad4f92",
+  "attempt_specific_scratch_parent": "/mnt/borsuk-retained-s3/membership-abba-a0001/query-scratch",
+  "corpus": "same frozen Cohere100k/D1024/k10/1000 ordered queries",
+  "cpu": 1,
+  "memory_bytes": 536870912,
+  "swap_bytes": 0,
+  "pids": 256,
+  "active_queries": 1,
+  "fetch_parallelism": 32,
+  "source_cache": "off",
+  "payload_cache": "off",
+  "backend_cache": "uncontrolled; no guaranteed backend cold claim",
+  "fresh_process_and_client_each": true,
+  "each_repetition_seconds": 1200,
+  "outer_native_seconds": 5400,
+  "machine_seconds": 7200,
+  "spot_bid_usd_per_hour": 0.5,
+  "reservation_usd": {
+    "compute": 1.0,
+    "ancillary": 0.5,
+    "total": 1.5
+  },
+  "acceptance": {
+    "all_1000_ordered_ids_scorebits_recall_nomination_trace_equal": true,
+    "source_sq8_aggregate_charges_equal": true,
+    "candidate_router_charge_head_and_leaf_inflight_zero": true,
+    "both_counterbalanced_pairs_p90_ratio_max": 0.95,
+    "both_counterbalanced_pairs_p95_ratio_max": 0.95,
+    "both_counterbalanced_pairs_serial_qps_ratio_min": 1.0
+  },
+  "prediction": "Removed discovery wave previously averaged34.5ms/query; report actual discovery reduction and end-to-end change separately. Do not subtract mean stage time from tail quantiles or assert gain without measurement. Connection-pool and phase interaction remain possible.",
+  "physical_plan_evidence": "exact native request-oracle fixtures plus unchanged source/SQ8 planner; production nomination traces alone do not emit physical ranges",
+  "required_before_launch": [
+    "same-worker reducer repair",
+    "exact full-source native correctness/release/Clippy/real test-build qualification",
+    "real-input candidate admission",
+    "separate disposable canary",
+    "independent root freeze of both producer binaries/components/archives",
+    "source/config/collection/lifecycle mock verification"
+  ],
+  "closure": "collect all stage exits and source/resource evidence through EXIT cleanup even if reduction fails; terminate exact instance and wait before collection",
+  "vendor_win_claim": false,
+  "lifecycle_cost_claim": false,
+  "frozen_at": "2026-10-08T04:08:29.496331+00:00",
+  "native_qualification": {
+    "path": "native-gates-a0003/closed-qualified/independent-verification.json",
+    "sha256": "4185a584e23a5f015a7df21451d357cd294888603f1d9307dc472bab9dc3bcb8"
+  },
+  "real_admission": {
+    "sha256": "78c4e5ff698f450828433cf15b6fac008705d48f4ce4df2e2901c13da62c8521",
+    "full_native_reduction_sha256": "3f52d23561d466a5f0eac024c74e0693930fbc51bd2055257f8750d16da4414d"
+  },
+  "canary": {
+    "status": "PASS",
+    "sha256": "f17c4105a4024c1536cdd610346bd15bb216a19bfb5e873094a05c25b61f866c"
+  },
+  "producer_source_commits": [
+    "31eca73431901c193aff598f4c6e44d3540594da",
+    "fc8a23dac44ad635fc1236736df68878690a8389"
+  ],
+  "producer_source_archive_sha256": [
+    "4d57aedcabe782079ed7a4f39d5d6eb6f10e584d298716f73e14f83e8fdbdf86",
+    "3927688ec1344c8c62058bcecd054251c4befcff1c6fd7dd800b1a860587faa2"
+  ],
+  "binaries": {
+    "control": {
+      "bytes": 16554032,
+      "sha256": "628f93148d767b7fc456e566139788d67cf98e323ec66ef4e6ebe10ef330e82b"
+    },
+    "candidate": {
+      "bytes": 16470968,
+      "sha256": "ca1ae2496e110494e7f6c03ae16eea3d5ff262d66945a3c52775749ac0bcaeab"
+    },
+    "reducer": {
+      "bytes": 1235680,
+      "sha256": "614f2c2afcd7bacf9a87a850147de2ebfd2f9e712219ce8d6438e388b1a50519"
+    }
+  },
+  "mock_checks": {
+    "stage": {
+      "status": "PASS",
+      "source_sha256": "8a7dc65e2cdda44969de8c15a9cd80a0c1e446bdccf9922d25b07381e19bbc99",
+      "cases": [
+        {
+          "case": "success",
+          "exit": 0,
+          "calls": [
+            "A1",
+            "B1",
+            "B2",
+            "A2",
+            "reduction.config.json"
+          ]
+        },
+        {
+          "case": "fail-A1",
+          "exit": 17,
+          "calls": [
+            "A1"
+          ]
+        },
+        {
+          "case": "fail-B2",
+          "exit": 17,
+          "calls": [
+            "A1",
+            "B1",
+            "B2"
+          ]
+        },
+        {
+          "case": "reduce-fail",
+          "exit": 19,
+          "calls": [
+            "A1",
+            "B1",
+            "B2",
+            "A2",
+            "reduction.config.json"
+          ]
+        },
+        {
+          "case": "parity-false",
+          "exit": 1,
+          "calls": [
+            "A1",
+            "B1",
+            "B2",
+            "A2",
+            "reduction.config.json"
+          ]
+        },
+        {
+          "case": "pin-drift",
+          "exit": 1,
+          "calls": [
+            "A1"
+          ]
+        },
+        {
+          "case": "scratch-leak",
+          "exit": 96,
+          "calls": [
+            "A1",
+            "B1",
+            "B2",
+            "A2",
+            "reduction.config.json"
+          ]
+        },
+        {
+          "case": "bad-cap",
+          "exit": 1,
+          "calls": []
+        },
+        {
+          "case": "screen-false",
+          "exit": 0,
+          "calls": [
+            "A1",
+            "B1",
+            "B2",
+            "A2",
+            "reduction.config.json"
+          ]
+        }
+      ],
+      "mocked": [
+        "native runner",
+        "native reducer",
+        "cgroup files"
+      ],
+      "real": [
+        "shell ordering",
+        "SHA/config binding",
+        "time/timeout",
+        "jq template substitution",
+        "failure stop",
+        "pins and scratch cleanup"
+      ],
+      "native_runtime_pass": false
+    },
+    "wrapper": {
+      "status": "MOCK_WRAPPER_CHECK_PASS",
+      "cases": [
+        {
+          "case": "already-unloaded",
+          "actual_exit": 0,
+          "expected_exit": 0
+        },
+        {
+          "case": "success",
+          "actual_exit": 0,
+          "expected_exit": 0
+        },
+        {
+          "case": "timer-fail",
+          "actual_exit": 17,
+          "expected_exit": 17
+        },
+        {
+          "case": "apt-fail",
+          "actual_exit": 17,
+          "expected_exit": 17
+        },
+        {
+          "case": "identity-fail",
+          "actual_exit": 1,
+          "expected_exit": 1
+        },
+        {
+          "case": "download-fail",
+          "actual_exit": 19,
+          "expected_exit": 19
+        },
+        {
+          "case": "late-start",
+          "actual_exit": 95,
+          "expected_exit": 95
+        },
+        {
+          "case": "native-fail",
+          "actual_exit": 2,
+          "expected_exit": 2
+        },
+        {
+          "case": "terminal-fail",
+          "actual_exit": 96,
+          "expected_exit": 96
+        },
+        {
+          "case": "closeout-fail",
+          "actual_exit": 96,
+          "expected_exit": 96
+        }
+      ],
+      "source_sha256": "957d6a9605ef9ccd849083ea13eea9c27938883d60fc25c88125b6697858c49a",
+      "real": [
+        "bash control flow",
+        "jq terminal serialization",
+        "timeouts",
+        "tar",
+        "non-input SHA computation"
+      ],
+      "mocked": [
+        "systemd/cgroup/native publisher",
+        "IMDS/HTTP",
+        "AWS/S3",
+        "apt",
+        "mount/shutdown",
+        "input binary sizes and pin checks"
+      ],
+      "native_runtime_pass": false,
+      "cloud_operations": false
+    }
+  },
+  "asset_sha256": {
+    "config.json": "0fd76aacea19b51e221f5dfb5d7d42ab0190fca51fe5f95a4ecf2942abad4f92",
+    "stage.sh": "8a7dc65e2cdda44969de8c15a9cd80a0c1e446bdccf9922d25b07381e19bbc99",
+    "reduction-template.json": "e2b22755ec393d74c8c7f4b0ef0dd8e71c4ec1a692d5d63b1e25b4c5fba2f115",
+    "user-data-awaiting-canary.sh": "957d6a9605ef9ccd849083ea13eea9c27938883d60fc25c88125b6697858c49a"
+  },
+  "spot_quote": {
+    "az": "eu-central-1c",
+    "usd_hour": ".206400",
+    "timestamp": "2026-10-08T00:00:00Z"
+  },
+  "maximum_attempts": 1,
+  "interruption_policy": "INVALID; preserve original attempt, no automatic duplicate/repeat",
+  "source_and_payload_caches_off": true,
+  "candidate_only_change": "authenticated resident membership directory; query router leaf reads removed; source/SQ8 scoring/plans unchanged"
+}

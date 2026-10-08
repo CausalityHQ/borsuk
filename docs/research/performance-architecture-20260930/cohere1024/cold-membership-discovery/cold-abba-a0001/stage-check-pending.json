@@ -1,0 +1,103 @@
+{
+  "status": "PASS",
+  "source_sha256": "8a7dc65e2cdda44969de8c15a9cd80a0c1e446bdccf9922d25b07381e19bbc99",
+  "cases": [
+    {
+      "case": "success",
+      "exit": 0,
+      "calls": [
+        "A1",
+        "B1",
+        "B2",
+        "A2",
+        "reduction.config.json"
+      ]
+    },
+    {
+      "case": "fail-A1",
+      "exit": 17,
+      "calls": [
+        "A1"
+      ]
+    },
+    {
+      "case": "fail-B2",
+      "exit": 17,
+      "calls": [
+        "A1",
+        "B1",
+        "B2"
+      ]
+    },
+    {
+      "case": "reduce-fail",
+      "exit": 19,
+      "calls": [
+        "A1",
+        "B1",
+        "B2",
+        "A2",
+        "reduction.config.json"
+      ]
+    },
+    {
+      "case": "parity-false",
+      "exit": 1,
+      "calls": [
+        "A1",
+        "B1",
+        "B2",
+        "A2",
+        "reduction.config.json"
+      ]
+    },
+    {
+      "case": "pin-drift",
+      "exit": 1,
+      "calls": [
+        "A1"
+      ]
+    },
+    {
+      "case": "scratch-leak",
+      "exit": 96,
+      "calls": [
+        "A1",
+        "B1",
+        "B2",
+        "A2",
+        "reduction.config.json"
+      ]
+    },
+    {
+      "case": "bad-cap",
+      "exit": 1,
+      "calls": []
+    },
+    {
+      "case": "screen-false",
+      "exit": 0,
+      "calls": [
+        "A1",
+        "B1",
+        "B2",
+        "A2",
+        "reduction.config.json"
+      ]
+    }
+  ],
+  "mocked": [
+    "native runner",
+    "native reducer",
+    "cgroup files"
+  ],
+  "real": [
+    "shell ordering",
+    "SHA/config binding",
+    "time/timeout",
+    "jq template substitution",
+    "failure stop",
+    "pins and scratch cleanup"
+  ],
+  "native_runtime_pass": false
+}

@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-native-s3-query-canary-v1",
+  "instance_id": "i-074fd22e24d7bade4",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 2,
+  "binary_source_commit": "fc8a23dac44ad635fc1236736df68878690a8389",
+  "integration_commit": "2eb3645fecac120d5349e676758708318d891e04",
+  "qualified_source_identity_sha256": "0097af81fbf3e61a2050a77cb046adfbf0b02a745e73a2181e924cd2cb697eae",
+  "evidence": {
+    "bytes": 8056,
+    "sha256": "bc3df5082b98d970891628d76ab81ee86134d4f12e1e5ac9a01a9fa36cdd5382"
+  },
+  "terminal_delivery": "attempted",
+  "performance_claim": false
+}
