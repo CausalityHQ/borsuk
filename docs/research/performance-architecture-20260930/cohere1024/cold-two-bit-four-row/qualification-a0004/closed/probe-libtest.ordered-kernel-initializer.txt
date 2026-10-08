@@ -1,0 +1,5 @@
+
+/data/target/borsuk-cold-membership-native/two-bit-four-row-qualification-a0004/probe-libtest:     file format elf64-x86-64
+
+Contents of section .rodata:
+ 4b8970 00000000 00000080 00000000 00000080  ................

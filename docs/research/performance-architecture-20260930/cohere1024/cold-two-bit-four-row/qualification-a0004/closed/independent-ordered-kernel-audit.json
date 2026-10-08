@@ -1,0 +1,70 @@
+{
+  "status": "ORDERED_CANDIDATE_KERNEL_EMISSION_PASS_MATCHED_SERVING_STACK_PENDING",
+  "candidate": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "qualification_instance_id": "i-05426de087af47c5a",
+  "binaries": [
+    {
+      "role": "probe-libtest",
+      "elf": {
+        "role": "probe-libtest",
+        "bytes": 88802352,
+        "sha256": "1c1a700d09588f6b423521597cf9dce8af5179557aa63b16a79a0622639355c9"
+      },
+      "symbol": "<borsuk::rotated_two_bit::PreparedTwoBit>::score_four",
+      "address": "0x14388f0",
+      "kernel_bytes": 695,
+      "disassembly_sha256": "00f54c2248e59aa369d906efcb8e19db68d356f475d24aec72490afacf253242",
+      "initializer_address": "0x4b8970",
+      "initializer_sha256": "50b90b9a20eb093df7063cfa60dfaec6d213ee0165254135a5c03e907614c517",
+      "standalone_kernel_entry_stack_bytes": 80,
+      "stack_realignment_bytes": 0
+    },
+    {
+      "role": "candidate-check_cohere_native_baseline",
+      "elf": {
+        "role": "candidate-check_cohere_native_baseline",
+        "bytes": 16542424,
+        "sha256": "73ae10b975053bef404cf6ea2ebd87f8eea034f9262c0455f38bde49abd1e5a6"
+      },
+      "symbol": "<borsuk::rotated_two_bit::PreparedTwoBit>::score_four",
+      "address": "0x52a700",
+      "kernel_bytes": 695,
+      "disassembly_sha256": "339f7c7779fe4214246b3333fd091781674fb44610df3cb726071ee9fca7f94d",
+      "initializer_address": "0x215cc0",
+      "initializer_sha256": "859ed5750aefa465a8ac02e8a4229c2fef6cec495fa8d6367a2405532f27a650",
+      "standalone_kernel_entry_stack_bytes": 80,
+      "stack_realignment_bytes": 0
+    },
+    {
+      "role": "candidate-two_bit_http",
+      "elf": {
+        "role": "candidate-two_bit_http",
+        "bytes": 16373808,
+        "sha256": "1739b475478a60ee11789597e542be749a7855bc5b90984faa509fbd9ad34d0c"
+      },
+      "symbol": "<borsuk::rotated_two_bit::PreparedTwoBit>::score_four",
+      "address": "0x4f1d80",
+      "kernel_bytes": 695,
+      "disassembly_sha256": "ad39ac48d906155720511b1fadbfbb8ac29e5371e24a3ee4f37047f02e6c33a9",
+      "initializer_address": "0x222d80",
+      "initializer_sha256": "c15fcfacd7735737a983d9e7a672a3b759c0ad5da759b4fab47e9a09992744c2",
+      "standalone_kernel_entry_stack_bytes": 80,
+      "stack_realignment_bytes": 0
+    }
+  ],
+  "manual_loop_audit": {
+    "index": "rax increments once per packed byte; r11 bounds; r10 table offset increments256",
+    "row01": "row0 and row1 indexed loads packed with unpcklpd; single addpd into xmm9 per byte",
+    "row23": "row2 and row3 indexed loads packed with movsd/movhpd; single addpd into xmm4 per byte",
+    "initializers": "both accumulators start at exact f64 negative zero in both lanes",
+    "sum_order": "one increasing-byte addition chain per lane; no split accumulators, horizontal reduction or FMA",
+    "finalizers": "row0 finite check precedes row1 high-lane extraction, then row2 finite check precedes row3 high-lane extraction; each unchanged scalar multiply/add/multiply/multiply",
+    "lookup_validation": "authenticated geometry and valid record lengths make bounds/panic calls unreachable on the measured valid-score path"
+  },
+  "paired_control_serving_build": "prior control shared-target provenance INVALID; isolated control repair running separately",
+  "production_serving_stack_qualified": false,
+  "primitive_allowed": false,
+  "primitive_run": false,
+  "performance_claim": false,
+  "at": "2026-10-08T17:14:02.442738+00:00"
+}
