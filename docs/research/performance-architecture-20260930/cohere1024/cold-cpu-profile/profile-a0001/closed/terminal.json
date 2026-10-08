@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-cold-cpu-profile-v1",
+  "instance_id": "i-0eef0e01eed8d61cb",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 0,
+  "binary_source_commit": "fc8a23dac44ad635fc1236736df68878690a8389",
+  "integration_commit": "2eb3645fecac120d5349e676758708318d891e04",
+  "qualified_source_identity_sha256": "0097af81fbf3e61a2050a77cb046adfbf0b02a745e73a2181e924cd2cb697eae",
+  "evidence": {
+    "bytes": 1249115,
+    "sha256": "8da3176cc2f870e68e79dcf1909c7d3a33e7ae15ff244c2c91f4819a697f7964"
+  },
+  "terminal_delivery": "attempted",
+  "performance_claim": false
+}

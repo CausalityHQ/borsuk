@@ -1,0 +1,40 @@
+{
+  "status": "CPU_PROFILE_CLOSED_ROOT_VERIFIED",
+  "instance_id": "i-0eef0e01eed8d61cb",
+  "terminated": true,
+  "artifact_manifest_verified": true,
+  "native_exit": 0,
+  "queries": 1000,
+  "semantic_parity_fields": [
+    "ordinal",
+    "returned",
+    "returned_count",
+    "underfill",
+    "charges",
+    "trace"
+  ],
+  "semantic_parity_all_queries": true,
+  "sample_headers": 4104,
+  "lost_samples": 0,
+  "cpu_limit": "100000 100000",
+  "memory_limit_bytes": 536870912,
+  "swap_limit_bytes": 0,
+  "oom_events": 0,
+  "source_config_stage_pins_unchanged": true,
+  "self_cpu_percent": {
+    "sha256_digest_blocks": 34.65,
+    "prepared_two_bit_score": 13.65,
+    "sq8_score_nominees": 13.43
+  },
+  "stack_attribution": "partial",
+  "performance_win_claim": false,
+  "network_wait_attribution": false,
+  "statistics_are_instrumented": true,
+  "result_sha256": "a128f80d94be599f462b194780eca69e79fe1deb6f1d740fb5b01985e7e7de8e",
+  "runner_samples": 4104,
+  "runner_multiframe_samples": 554,
+  "runner_samples_with_unknown_frame": 739,
+  "evidence_archive_bytes": 1249115,
+  "evidence_archive_sha256": "8da3176cc2f870e68e79dcf1909c7d3a33e7ae15ff244c2c91f4819a697f7964",
+  "immutable_s3_prefix": "research/semantic-router/20261008/cold-cpu-profile-a0001"
+}
