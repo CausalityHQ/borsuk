@@ -1,0 +1,21 @@
+{
+  "status": "EXACT_SOURCE_PREVIEW_NATIVE_UNRUN",
+  "candidate": "966a88b59be88cf0051a510c48d348587b801ec2",
+  "preview": "fc8a23dac44ad635fc1236736df68878690a8389",
+  "tree": "bae8b0093beaa19023b1ea62631c5b6491827637",
+  "native_file_count": 415,
+  "support_file_count": 2450,
+  "native_identity_encoding": "sorted path NUL SHA LF",
+  "native_identity_sha256": "0097af81fbf3e61a2050a77cb046adfbf0b02a745e73a2181e924cd2cb697eae",
+  "archive_sha256": "3927688ec1344c8c62058bcecd054251c4befcff1c6fd7dd800b1a860587faa2",
+  "archive_bytes": 13234386,
+  "root_fixture_sha256": "efc9db7efca6dd7091d59bcafe714740b5cb1d24edbb9b946b16a40eab0612dd",
+  "review_group": "107cf1d64a334d9b",
+  "execution": false,
+  "archive_members_verified": 2450,
+  "changed_files_from_failed_archive": [
+    "crates/borsuk/src/two_bit_generation.rs"
+  ],
+  "mandatory_name_count": 24,
+  "source_and_runtime_unverified": true
+}
