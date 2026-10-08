@@ -29,4 +29,3 @@ Local worker checks are source-only CPU1/256MiB/swap0/120s. Native qualification
 Run the qualified evidence mode against a fully authenticated CLOSED membership result. Corpus, request vectors and truth remain unopened. A zero aggregate byte-saving upper bound stops this source-read approach. A positive bound is evidence for a subsequent causal design, not a latency win: score-dependent completion may require another fetch wave and can consume the saving. No 64-query algorithm rerun is authorized until such a design is chosen and preregistered.
 
 The current cold comparison remains recall@10 97.23%, p95 123.88–126.89 ms and serial QPS 10.09–10.12. No overall S3 or matched Turbopuffer win is established.
-
