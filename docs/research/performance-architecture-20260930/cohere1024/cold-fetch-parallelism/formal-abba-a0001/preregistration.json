@@ -1,0 +1,77 @@
+{
+  "status": "FROZEN_NOT_LAUNCHED",
+  "order": [
+    "A1=16",
+    "B1=32",
+    "B2=32",
+    "A2=16"
+  ],
+  "same_binary_sha256": "628f93148d767b7fc456e566139788d67cf98e323ec66ef4e6ebe10ef330e82b",
+  "source_preview": "31eca73431901c193aff598f4c6e44d3540594da",
+  "reducer_binary_sha256": "9ad7ce0fe8f461a3b8f7957812c798103f234a83d1df6748d5f04cb870c4694b",
+  "expected_rows_origin": "qualified source bytes, qualified release receipt and independently frozen input config; never measured identity rows",
+  "cpu": 1,
+  "memory_bytes": 536870912,
+  "swap_bytes": 0,
+  "active_queries": 1,
+  "each_repetition_seconds": 1200,
+  "prospective_machine_seconds": 7200,
+  "prospective_outer_native_seconds": 5400,
+  "fresh_process_and_client_each": true,
+  "application_payload_cache": "off",
+  "backend_cache_state": "uncontrolled",
+  "per_repetition_peak": "process RSS via time; enclosing cgroup peak for entire batch; no false per-run cgroup reset claim",
+  "maximum_attempts": 1,
+  "compute_reservation_usd": 1.0,
+  "ancillary_reservation_usd": 0.5,
+  "total_reservation_usd": 1.5,
+  "pending": [
+    "create-only assets and ONE original measurement",
+    "independent closed-result/source/resource/termination verification"
+  ],
+  "source_commit": "31eca73431901c193aff598f4c6e44d3540594da",
+  "qualified_source_identity_sha256": "6dd4fbe0eeb512ef807868ba4088d35350eaaf93ab67fed6b9e7f204a5397a7b",
+  "stage_sha256": "0de5349111f450f9ad67a872f366aa2805e8845eb1fc07831e5ec92d0ce292e4",
+  "userdata_sha256": "b48a02a33611ab2214771bfe68bc170be36fb7fe6a918d1baea5aa7f7742f972",
+  "native_reduction_template_sha256": "7b1c34e59076db1fe9f0c8a825f0aef67f2fe3502abfed9ea3f51fb2c8525a92",
+  "admission_receipt_sha256": "a7fcdcb65b14f03f2267a277279f4579d70be42f777cd96826bf41100241e3d2",
+  "canary_receipt_sha256": "3bea04a7fe1322b067fc02c9dea277db4fc8b31d2b5e691591683bb8b8be3453",
+  "acceptance": "Both native paired reports must validate all1000 ordered ID/scorebits/recall/underfill/plan traces/logical charges. Choose32 only if both counterbalanced pairs show same improvement direction in p90,p95 and reciprocal serial QPS; report individual repetitions and first queries, never mixture percentiles as a configuration tail.",
+  "failure": "Configuration/environment/resource/transport/parity error INVALID; preserve original; no automatic retry or width selection. No quoted vendor win from unmatched cache/population/timing/cost conditions.",
+  "frozen_at": "2026-10-08T01:08:08.675086+00:00",
+  "spot_quote": {
+    "AvailabilityZone": "eu-central-1c",
+    "AvailabilityZoneId": "euc1-az1",
+    "InstanceType": "c7i.2xlarge",
+    "ProductDescription": "Linux/UNIX",
+    "SpotPrice": "0.206400",
+    "Timestamp": "2026-10-08T00:00:00+00:00"
+  },
+  "mock_checks": {
+    "stage-check.json": "ddbdd5ee386de95528d33474d1f8cfcfc74fb63132939a9ac644d65ff5eac0dd",
+    "wrapper-check.json": "2bf7bc07ffe085d0400f0e3861c5bc92c3f68b85a9d32e9a6a1228e3220b47c0"
+  },
+  "checks": {
+    "stage": {
+      "unit": "borsuk-cold-abba-stage-check-1",
+      "invocation": "6b21a99400de4a2a8948efc788768f08",
+      "cases": 8,
+      "exit": 0,
+      "runtime_seconds": 5.027,
+      "peak": "16.4MiB"
+    },
+    "wrapper": {
+      "unit": "borsuk-cold-abba-wrapper-check-1",
+      "invocation": "2650d7d26f4a4ac680f7608b61fe1d67",
+      "cases": 10,
+      "exit": 0,
+      "runtime_seconds": 18.602,
+      "peak": "17MiB"
+    },
+    "cpu": 1,
+    "memory_max_bytes": 268435456,
+    "swap_max_bytes": 0
+  },
+  "budget_scope": "Compute maximum2h at Spotbid0.50/hour =1.00; ancillary0.50 covers bounded GET/retained evidence and80GiB gp3 horizon. Reservation is a cap, not a measured invoice or throughput/dollar claim.",
+  "interruptions": "Mark incomplete repetition INVALID, preserve original receipts; no automatic restart. A new attempt requires root preregistration and a demonstrated environment/interruption repair."
+}
