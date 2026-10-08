@@ -1,0 +1,42 @@
+{
+  "status": "CONTROL_SERVING_BINARY_PROVENANCE_INVALID_BUILD_REUSE",
+  "candidate": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "control_library_source": "c49a2e6d2a035bfaf42358fbf7fb60abf11e4222",
+  "instance_id": "i-05426de087af47c5a",
+  "candidate_native_correctness": "ALL13_STAGE_EXITS0_SOURCE_AND_161_ARTIFACTS_AUTHENTICATED",
+  "paired_serving_qualification": false,
+  "primitive_allowed": false,
+  "performance_claim": false,
+  "algorithm_rejected": false,
+  "binary_pins": {
+    "candidate-check_cohere_native_baseline": {
+      "role": "candidate-check_cohere_native_baseline",
+      "bytes": 16542424,
+      "sha256": "73ae10b975053bef404cf6ea2ebd87f8eea034f9262c0455f38bde49abd1e5a6"
+    },
+    "control-check_cohere_native_baseline": {
+      "role": "control-check_cohere_native_baseline",
+      "bytes": 16542424,
+      "sha256": "73ae10b975053bef404cf6ea2ebd87f8eea034f9262c0455f38bde49abd1e5a6"
+    },
+    "candidate-two_bit_http": {
+      "role": "candidate-two_bit_http",
+      "bytes": 16373808,
+      "sha256": "1739b475478a60ee11789597e542be749a7855bc5b90984faa509fbd9ad34d0c"
+    },
+    "control-two_bit_http": {
+      "role": "control-two_bit_http",
+      "bytes": 16373808,
+      "sha256": "1739b475478a60ee11789597e542be749a7855bc5b90984faa509fbd9ad34d0c"
+    }
+  },
+  "control_release_log_sha256": "85d7fc967246bebb38fca4684bb501e60668f633a3e2814e1806a91deb845733",
+  "observations": [
+    "control release shared candidate CARGO_TARGET_DIR",
+    "control release finished in0.18s without Compiling borsuk",
+    "both control serving artifacts exactly match candidate bytes/hash",
+    "control source lacks score_four; retained candidate score_four695B contains two addpd loop instructions"
+  ],
+  "next_required": "Build the unchanged control library with isolated build output and authenticate actual produced binaries; then complete matched serving-stack and ordered-codegen audit before timing.",
+  "at": "2026-10-08T17:00:10.277594+00:00"
+}

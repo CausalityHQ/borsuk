@@ -1,0 +1,123 @@
+{
+  "status": "FULL_NATIVE_CORRECTNESS_VERIFIED_SERVING_STACK_PENDING",
+  "candidate": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "instance_id": "i-05426de087af47c5a",
+  "native_file_count": 415,
+  "support_file_count": 2454,
+  "native_identity": "a7fe9601a9345da69223d75bf8fb6a765d1607c1f02b144e8e8763c90b0b2e8b",
+  "full_source_before_after_equal": true,
+  "artifact_count": 161,
+  "stages": [
+    {
+      "name": "runner-debug",
+      "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 3
+    },
+    {
+      "name": "planner-debug",
+      "command": "cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 8
+    },
+    {
+      "name": "codec-debug",
+      "command": "cargo test --locked -p borsuk --lib rotated_two_bit::tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 4
+    },
+    {
+      "name": "probe-compile",
+      "command": "cargo test --locked --release -p borsuk --lib --no-run --message-format=json",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 0
+    },
+    {
+      "name": "codec-release",
+      "command": "cargo test --locked --release -p borsuk --lib rotated_two_bit::tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 4
+    },
+    {
+      "name": "planner-release",
+      "command": "cargo test --locked --release -p borsuk --lib two_bit_generation::source_walk_tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 8
+    },
+    {
+      "name": "runner-release",
+      "command": "cargo test --locked --release -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 3
+    },
+    {
+      "name": "integration",
+      "command": "cargo test --locked -p borsuk --test rotated_two_bit --test two_bit_source --test two_bit_generation -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 0
+    },
+    {
+      "name": "release",
+      "command": "cargo build --locked --release -p borsuk --bin check_cohere_native_baseline --example two_bit_http",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 0
+    },
+    {
+      "name": "control-release",
+      "command": "env CARGO_TARGET_DIR=/mnt/borsuk-http/source/target cargo build --locked --release --manifest-path /mnt/borsuk-http/control-source/Cargo.toml -p borsuk --bin check_cohere_native_baseline --example two_bit_http",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 0
+    },
+    {
+      "name": "clippy",
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 0
+    },
+    {
+      "name": "test-build",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 0
+    },
+    {
+      "name": "scalar-control-release",
+      "command": "env CARGO_TARGET_DIR=/mnt/borsuk-http/target-scalar-control cargo test --locked --release --features scalar-control -p borsuk --lib --message-format=json rotated_two_bit::tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 4
+    }
+  ],
+  "release_elf": {
+    "role": "probe-libtest",
+    "bytes": 88802352,
+    "sha256": "1c1a700d09588f6b423521597cf9dce8af5179557aa63b16a79a0622639355c9"
+  },
+  "early_emission_screen": {
+    "status": "SCREEN_PASS_AUDIT_PENDING",
+    "packed_add_present": true,
+    "forbidden_mnemonics": [],
+    "qualification": false,
+    "primitive_run": false
+  },
+  "release_elf_before_after_equal": true,
+  "scalar_control_target_separate": true,
+  "codegen_qualified": false,
+  "primitive_run": false,
+  "workspace_clippy_and_testbuild": "PASS_EXACT_SOURCE",
+  "production_integrated": false,
+  "performance_claim": false,
+  "at": "2026-10-08T16:58:24.418359+00:00"
+}
