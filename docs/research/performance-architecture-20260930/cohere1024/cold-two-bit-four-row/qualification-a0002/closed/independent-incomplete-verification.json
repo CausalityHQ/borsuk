@@ -1,0 +1,97 @@
+{
+  "status": "EXECUTION_INVALID_SPOT_INTERRUPTION",
+  "instance_id": "i-072d4039ffff8b196",
+  "terminated_verified": true,
+  "artifact_count": 136,
+  "all_artifact_hashes_match": true,
+  "stages": [
+    {
+      "name": "runner-debug",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "planner-debug",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "codec-debug",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "probe-compile",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "codec-release",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "planner-release",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "runner-release",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "integration",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "release",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "control-release",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "clippy",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "test-build",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "scalar-control-release",
+      "native_exit": null,
+      "tee_exit": null
+    }
+  ],
+  "missing": [
+    "source-after.log",
+    "gates-exit",
+    "final-exit",
+    "scalar-control-release.native-exit",
+    "scalar-control-release.tee-exit"
+  ],
+  "observed_service_end": "code=killed/status=TERM; Result=success",
+  "root_cause": "AWS Spot capacity reclaimed during scalar-control release build",
+  "algorithm_rejection": false,
+  "qualification": false,
+  "performance_claim": false,
+  "spot_status": {
+    "Code": "instance-terminated-no-capacity",
+    "Message": "Your Spot instance was terminated because there is no Spot capacity available that matches your request.",
+    "UpdateTime": "2026-10-08T15:28:18+00:00"
+  },
+  "spot_receipt": {
+    "path": "spot-interruption.json",
+    "bytes": 2382,
+    "sha256": "15f9959433d55fa6610c93897b9442f150b44a7048625ac89d74105d7331a50e"
+  },
+  "rerun_policy": "unchanged source and scientific limits; new recorded attempt"
+}
