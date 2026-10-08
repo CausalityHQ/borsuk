@@ -1,0 +1,542 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 0de9b677..b18192d8 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -701,6 +701,7 @@ dependencies = [
+  "arrow-schema",
+  "async-trait",
+  "aws-config",
++ "aws-lc-rs",
+  "aws-sdk-s3vectors",
+  "aws-sdk-sts",
+  "aws-smithy-runtime-api",
+diff --git a/crates/borsuk/Cargo.toml b/crates/borsuk/Cargo.toml
+index fe91f749..607ed1d8 100644
+--- a/crates/borsuk/Cargo.toml
++++ b/crates/borsuk/Cargo.toml
+@@ -35,6 +35,7 @@ arrow-ipc = { version = "58.3", features = ["zstd"] }
+ arrow-schema = "58.3"
+ async-trait = "0.1"
+ aws-config = { version = "1.8", default-features = false, features = ["rt-tokio", "default-https-client"], optional = true }
++aws-lc-rs = { version = "1.18.1", default-features = false, features = ["aws-lc-sys"] }
+ aws-sdk-s3vectors = { version = "1", optional = true }
+ aws-sdk-sts = { version = "1", optional = true }
+ aws-smithy-runtime-api = { version = "1.9", features = ["client"], optional = true }
+diff --git a/crates/borsuk/src/sq8_page_authority.rs b/crates/borsuk/src/sq8_page_authority.rs
+index 68001854..2d535818 100644
+--- a/crates/borsuk/src/sq8_page_authority.rs
++++ b/crates/borsuk/src/sq8_page_authority.rs
+@@ -273,7 +273,13 @@ impl PageAuthority {
+             let local_start = (page - first_page) * self.page_rows * row_bytes;
+             let local_stop =
+                 (page + 1).saturating_mul(self.page_rows).min(self.rows) * row_bytes - range.start;
+-            if Sha256::digest(&payload[local_start..local_stop]).as_slice() != self.digests[page] {
++            if aws_lc_rs::digest::digest(
++                &aws_lc_rs::digest::SHA256,
++                &payload[local_start..local_stop],
++            )
++            .as_ref()
++                != self.digests[page]
++            {
+                 return Err(PageError::HashMismatch);
+             }
+         }
+@@ -313,6 +319,498 @@ impl PageAuthority {
+ mod tests {
+     use super::*;
+ 
++    impl PageAuthority {
++        // Frozen pre-substitution verifier: keep the complete old call as the control.
++        fn verify_payload_sha2(
++            &self,
++            first_page: usize,
++            last_page: usize,
++            payload: &[u8],
++        ) -> Result<(), PageError> {
++            let range = self.byte_range(first_page, last_page)?;
++            if payload.len() != range.end - range.start {
++                return Err(PageError::InvalidResponse);
++            }
++            let row_bytes = self.record_bytes;
++            for page in first_page..=last_page {
++                let local_start = (page - first_page) * self.page_rows * row_bytes;
++                let local_stop = (page + 1).saturating_mul(self.page_rows).min(self.rows)
++                    * row_bytes
++                    - range.start;
++                if Sha256::digest(&payload[local_start..local_stop]).as_slice()
++                    != self.digests[page]
++                {
++                    return Err(PageError::HashMismatch);
++                }
++            }
++            Ok(())
++        }
++    }
++
++    fn fixture_manifest(
++        sq8: bool,
++        dimensions: usize,
++        rows: usize,
++        record_bytes: usize,
++        object: &[u8],
++    ) -> (serde_json::Value, Vec<u8>) {
++        let page_rows = if sq8 { 256 } else { 32 };
++        let sidecar = object
++            .chunks(page_rows * record_bytes)
++            .flat_map(|page| Sha256::digest(page).to_vec())
++            .collect::<Vec<_>>();
++        let object_hash = format!("{:x}", Sha256::digest(object));
++        let sidecar_hash = format!("{:x}", Sha256::digest(&sidecar));
++        let manifest = if sq8 {
++            serde_json::json!({
++                "schema":"borsuk-v115-sq8-page-authority-v2", "generation":9,
++                "rows":rows, "dimensions":dimensions, "page_rows":page_rows,
++                "object_sha256":object_hash, "page_digest_sha256":sidecar_hash,
++            })
++        } else {
++            serde_json::json!({
++                "schema":"borsuk-two-bit-plane-v3", "rows":rows, "dimensions":dimensions,
++                "seed":20260923, "record_bytes":record_bytes, "page_rows":page_rows,
++                "source_sha256":"0".repeat(64), "sq8_sha256":"1".repeat(64),
++                "source_order_sha256":"2".repeat(64), "mean_sha256":"3".repeat(64),
++                "records_sha256":object_hash, "page_digest_sha256":sidecar_hash,
++                "query_or_truth_used":false,
++            })
++        };
++        (manifest, sidecar)
++    }
++
++    fn load_fixture(
++        sq8: bool,
++        manifest: &serde_json::Value,
++        sidecar: &[u8],
++    ) -> Result<PageAuthority, PageError> {
++        let body = serde_json::to_vec(manifest).map_err(|_| PageError::InvalidManifest)?;
++        let hash = format!("{:x}", Sha256::digest(&body));
++        if sq8 {
++            PageAuthority::load(&body, &hash, sidecar)
++        } else {
++            PageAuthority::load_two_bit(&body, &hash, 9, sidecar)
++        }
++    }
++
++    fn fixture_bytes(dimensions: usize, rows: usize, record_bytes: usize) -> Vec<u8> {
++        // Authentication fixtures only; these bytes are never admitted to a scorer.
++        (0..rows * record_bytes)
++            .map(|i| ((i * 37 + i / 251 + dimensions * 11) % 256) as u8)
++            .collect()
++    }
++
++    fn assert_verifiers(
++        authority: &PageAuthority,
++        first: usize,
++        last: usize,
++        payload: &[u8],
++        expected: Result<(), PageError>,
++    ) {
++        assert_eq!(
++            authority.verify_payload_sha2(first, last, payload),
++            expected
++        );
++        assert_eq!(authority.verify_payload(first, last, payload), expected);
++    }
++
++    #[test]
++    fn page_digest_known_answers_cover_sha256_padding_boundaries() {
++        // Literal SHA-256 answers independently checked with GNU sha256sum.
++        for (len, expected) in [
++            (
++                0,
++                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
++            ),
++            (
++                1,
++                "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
++            ),
++            (
++                55,
++                "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318",
++            ),
++            (
++                56,
++                "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a",
++            ),
++            (
++                63,
++                "7d3e74a05d7db15bce4ad9ec0658ea98e3f06eeecf16b4c6fff2da457ddc2f34",
++            ),
++            (
++                64,
++                "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb",
++            ),
++            (
++                65,
++                "635361c48bb9eab14198e76ea8ab7f1a41685d6ad62aa9146d301d4f17eb0ae0",
++            ),
++        ] {
++            let payload = vec![b'a'; len];
++            let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, &payload);
++            let hex = digest
++                .as_ref()
++                .iter()
++                .map(|b| format!("{b:02x}"))
++                .collect::<String>();
++            assert_eq!(hex, expected, "length {len}");
++            assert_eq!(format!("{:x}", Sha256::digest(&payload)), expected);
++            if len >= 13 {
++                let (manifest, sidecar) = fixture_manifest(true, len - 12, 1, len, &payload);
++                let authority = load_fixture(true, &manifest, &sidecar).unwrap();
++                assert_verifiers(&authority, 0, 0, &payload, Ok(()));
++            }
++        }
++    }
++
++    #[test]
++    fn page_verifiers_match_generic_full_tail_and_boundary_rows() {
++        // Literal source record sizes include ceil(padded_D / 4), including D1/D3 tails.
++        for (dimensions, source_record_bytes) in [
++            (1, 9),
++            (3, 9),
++            (5, 10),
++            (255, 72),
++            (256, 72),
++            (257, 73),
++            (768, 200),
++            (1023, 264),
++            (1024, 264),
++            (1025, 265),
++            (4097, 1033),
++        ] {
++            for sq8 in [false, true] {
++                let page_rows = if sq8 { 256 } else { 32 };
++                let record_bytes = if sq8 {
++                    dimensions + 12
++                } else {
++                    source_record_bytes
++                };
++                for rows in [
++                    1,
++                    page_rows - 1,
++                    page_rows,
++                    page_rows + 1,
++                    2 * page_rows - 1,
++                    2 * page_rows,
++                    2 * page_rows + 1,
++                ] {
++                    let object = fixture_bytes(dimensions, rows, record_bytes);
++                    let (manifest, sidecar) =
++                        fixture_manifest(sq8, dimensions, rows, record_bytes, &object);
++                    let authority = load_fixture(sq8, &manifest, &sidecar).unwrap();
++                    let last = rows.div_ceil(page_rows) - 1;
++                    for first in 0..=last {
++                        for end in first..=last {
++                            let start_byte = first * page_rows * record_bytes;
++                            let stop_byte = ((end + 1) * page_rows).min(rows) * record_bytes;
++                            assert_eq!(authority.byte_range(first, end), Ok(start_byte..stop_byte));
++                            assert_verifiers(
++                                &authority,
++                                first,
++                                end,
++                                &object[start_byte..stop_byte],
++                                Ok(()),
++                            );
++                        }
++                    }
++                }
++            }
++        }
++    }
++
++    #[test]
++    fn page_verifiers_preserve_corruption_length_range_and_sidecar_errors() {
++        for sq8 in [false, true] {
++            let (page_rows, record_bytes) = if sq8 { (256, 1036) } else { (32, 264) };
++            let rows = 2 * page_rows + 1;
++            let object = fixture_bytes(1024, rows, record_bytes);
++            let (manifest, sidecar) = fixture_manifest(sq8, 1024, rows, record_bytes, &object);
++            let authority = load_fixture(sq8, &manifest, &sidecar).unwrap();
++            // Row 1 is an unscored cover row even when only row 0 is nominated.
++            for byte in [0, object.len() / 2, object.len() - 1, record_bytes + 7] {
++                let mut changed = object.clone();
++                changed[byte] ^= 1;
++                assert_verifiers(&authority, 0, 2, &changed, Err(PageError::HashMismatch));
++                let page = byte / (page_rows * record_bytes);
++                let range = authority.byte_range(page, page).unwrap();
++                assert_verifiers(
++                    &authority,
++                    page,
++                    page,
++                    &changed[range],
++                    Err(PageError::HashMismatch),
++                );
++            }
++            let mut changed = object.clone();
++            changed[0] ^= 1;
++            assert_verifiers(
++                &authority,
++                0,
++                2,
++                &changed[..changed.len() - 1],
++                Err(PageError::InvalidResponse),
++            );
++            changed.push(0);
++            assert_verifiers(&authority, 0, 2, &changed, Err(PageError::InvalidResponse));
++            for (first, last) in [
++                (1, 0),
++                (0, 3),
++                (3, 3),
++                (0, usize::MAX),
++                (usize::MAX, usize::MAX),
++            ] {
++                assert_verifiers(
++                    &authority,
++                    first,
++                    last,
++                    &changed,
++                    Err(PageError::InvalidRange),
++                );
++            }
++            let mut wrong_sidecar = sidecar.clone();
++            wrong_sidecar[0] ^= 1;
++            assert_eq!(
++                load_fixture(sq8, &manifest, &wrong_sidecar).err(),
++                Some(PageError::InvalidSidecar)
++            );
++            let mut repinned = manifest.clone();
++            repinned["page_digest_sha256"] =
++                serde_json::json!(format!("{:x}", Sha256::digest(&wrong_sidecar)));
++            let wrong = load_fixture(sq8, &repinned, &wrong_sidecar).unwrap();
++            assert_verifiers(&wrong, 0, 2, &object, Err(PageError::HashMismatch));
++            // A bad earlier page does not change which later ranges remain valid.
++            let tail = authority.byte_range(2, 2).unwrap();
++            assert_verifiers(&wrong, 2, 2, &object[tail], Ok(()));
++        }
++    }
++
++    #[test]
++    fn page_authorities_reject_zero_and_overflow_geometry_without_allocation() {
++        for sq8 in [false, true] {
++            let record_bytes = if sq8 { 13 } else { 9 };
++            let object = fixture_bytes(1, 1, record_bytes);
++            let (manifest, sidecar) = fixture_manifest(sq8, 1, 1, record_bytes, &object);
++            for (key, value, expected) in [
++                ("rows", 0, PageError::InvalidManifest),
++                ("dimensions", 0, PageError::InvalidManifest),
++                ("page_rows", 0, PageError::InvalidManifest),
++                ("dimensions", usize::MAX, PageError::InvalidManifest),
++                (
++                    "rows",
++                    usize::MAX,
++                    if sq8 {
++                        PageError::InvalidSidecar
++                    } else {
++                        PageError::InvalidManifest
++                    },
++                ),
++            ] {
++                let mut bad = manifest.clone();
++                bad[key] = serde_json::json!(value);
++                assert_eq!(
++                    load_fixture(sq8, &bad, &sidecar).err(),
++                    Some(expected),
++                    "{key}={value}, sq8={sq8}"
++                );
++            }
++        }
++    }
++
++    #[cfg(target_os = "linux")]
++    #[test]
++    #[ignore = "root-only release verifier probe: CPU1/256MiB/swap0/30 CPU seconds/120 wall seconds"]
++    fn page_auth_backend_release_probe() {
++        use std::{hint::black_box, time::Instant};
++
++        fn cpu_ns() -> u64 {
++            let t = rustix::time::clock_gettime(rustix::time::ClockId::ProcessCPUTime);
++            t.tv_sec as u64 * 1_000_000_000 + t.tv_nsec as u64
++        }
++        fn median(mut values: [f64; 5]) -> f64 {
++            values.sort_by(f64::total_cmp);
++            values[2]
++        }
++
++        let start_wall = Instant::now();
++        let start_cpu = cpu_ns();
++        let run = || -> Result<serde_json::Value, String> {
++            if cfg!(debug_assertions) {
++                return Err("release build required".to_owned());
++            }
++            // Policy and geometry are verifier fixtures from decision.md, not library defaults.
++            let mut fixtures = Vec::new();
++            let mut geometry = Vec::new();
++            let mut semantic_match = true;
++            for (label, sq8, rows, record_bytes, page) in [
++                ("source_full", false, 32, 264, 0),
++                ("sq8_full", true, 256, 1036, 0),
++                ("source_tail", false, 49, 264, 1),
++                ("sq8_tail", true, 273, 1036, 1),
++            ] {
++                let object = fixture_bytes(1024, rows, record_bytes);
++                let (manifest, sidecar) = fixture_manifest(sq8, 1024, rows, record_bytes, &object);
++                let authority = load_fixture(sq8, &manifest, &sidecar)
++                    .map_err(|e| format!("{label} setup: {e:?}"))?;
++                let range = authority
++                    .byte_range(page, page)
++                    .map_err(|e| format!("{label} range: {e:?}"))?;
++                let payload = &object[range.clone()];
++                let control = authority.verify_payload_sha2(page, page, payload);
++                control.map_err(|e| format!("{label} control setup: {e:?}"))?;
++                let candidate = authority.verify_payload(page, page, payload);
++                semantic_match &= candidate == control;
++                let candidate_digest =
++                    aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, payload);
++                semantic_match &= candidate_digest.as_ref() == Sha256::digest(payload).as_slice();
++                geometry.push(serde_json::json!({
++                    "label":label, "dimensions":1024, "rows":rows,
++                    "record_bytes":record_bytes, "page_rows":authority.page_rows(),
++                    "first_page":page, "last_page":page, "range":[range.start,range.end],
++                    "payload_bytes":payload.len(), "object_bytes":object.len(),
++                    "payload_sha256":format!("{:x}", Sha256::digest(payload)),
++                    "candidate_payload_sha256":candidate_digest.as_ref().iter()
++                        .map(|b| format!("{b:02x}")).collect::<String>(),
++                    "object_sha256":authority.object_sha256(),
++                    "sidecar_sha256":format!("{:x}", Sha256::digest(&sidecar)),
++                    "manifest_sha256":format!("{:x}", Sha256::digest(serde_json::to_vec(&manifest)
++                        .map_err(|e| e.to_string())?)),
++                    "page_digests":authority.digests.iter().map(|digest| digest.iter()
++                        .map(|b| format!("{b:02x}")).collect::<String>()).collect::<Vec<_>>(),
++                    "control_result":format!("{control:?}"), "candidate_result":format!("{candidate:?}"),
++                }));
++                fixtures.push((label, authority, object, range, page));
++            }
++            let mut invalid = false;
++            let mut samples = [[[0.0; 2]; 5]; 4];
++            let mut blocks = Vec::new();
++            for block in 0..5 {
++                let order = if block % 2 == 0 { [0, 1] } else { [1, 0] };
++                for (class, (label, authority, object, range, page)) in fixtures.iter().enumerate()
++                {
++                    let payload = &object[range.clone()];
++                    let requested_calls = (32 * 1024 * 1024usize).div_ceil(payload.len());
++                    for (position, backend) in order.into_iter().enumerate() {
++                        let backend_name = if backend == 0 {
++                            "sha2_control"
++                        } else {
++                            "aws_lc_candidate"
++                        };
++                        let verifier = if backend == 0 {
++                            PageAuthority::verify_payload_sha2
++                        } else {
++                            PageAuthority::verify_payload
++                        };
++                        let mut calls = 0;
++                        let mut error = None;
++                        let before_wall = Instant::now();
++                        let before_cpu = cpu_ns();
++                        // Leave time to serialize INVALID before the external hard deadline.
++                        invalid |= before_cpu - start_cpu >= 28_000_000_000
++                            || start_wall.elapsed().as_secs() >= 110;
++                        if !invalid && semantic_match {
++                            for iteration in 0..requested_calls {
++                                if iteration % 128 == 0
++                                    && (cpu_ns() - start_cpu >= 28_000_000_000
++                                        || start_wall.elapsed().as_secs() >= 110)
++                                {
++                                    invalid = true;
++                                    break;
++                                }
++                                let result = black_box(verifier)(
++                                    black_box(authority),
++                                    *page,
++                                    *page,
++                                    black_box(payload),
++                                );
++                                calls += 1;
++                                if let Err(e) = black_box(result) {
++                                    if backend == 0 {
++                                        invalid = true;
++                                    } else {
++                                        semantic_match = false;
++                                    }
++                                    error = Some(format!("{e:?}"));
++                                    break;
++                                }
++                            }
++                        }
++                        let elapsed_cpu = cpu_ns() - before_cpu;
++                        let elapsed_wall = before_wall.elapsed().as_nanos() as u64;
++                        let bytes = calls * payload.len();
++                        if calls == requested_calls && elapsed_cpu == 0 {
++                            invalid = true;
++                        }
++                        if bytes > 0 {
++                            samples[class][block][backend] = elapsed_cpu as f64 / bytes as f64;
++                        }
++                        blocks.push(serde_json::json!({
++                            "block":block, "class":label, "position":position,
++                            "backend":backend_name, "requested_calls":requested_calls,
++                            "calls":calls, "bytes":bytes, "cpu_ns":elapsed_cpu,
++                            "wall_ns":elapsed_wall, "complete":calls == requested_calls,
++                            "error":error,
++                        }));
++                    }
++                }
++            }
++            let mut summaries = Vec::new();
++            let mut weighted_control = 0.0;
++            let mut weighted_candidate = 0.0;
++            let mut full_classes_pass = true;
++            if !invalid && semantic_match {
++                for (class, sample) in samples.iter().enumerate() {
++                    let control = median(sample.map(|pair| pair[0]));
++                    let candidate = median(sample.map(|pair| pair[1]));
++                    let ratio = median(sample.map(|pair| pair[1] / pair[0]));
++                    summaries.push(serde_json::json!({
++                        "class":fixtures[class].0, "control_median_cpu_ns_per_byte":control,
++                        "candidate_median_cpu_ns_per_byte":candidate,
++                        "median_paired_cpu_ratio":ratio,
++                    }));
++                    if class < 2 {
++                        let weight = [8_971_573_248u64, 16_699_756_416][class] as f64;
++                        weighted_control += weight * control;
++                        weighted_candidate += weight * candidate;
++                        full_classes_pass &= ratio <= 1.05;
++                    }
++                }
++            }
++            let saving = if weighted_control > 0.0 {
++                Some(1.0 - weighted_candidate / weighted_control)
++            } else {
++                None
++            };
++            invalid |=
++                cpu_ns() - start_cpu >= 28_000_000_000 || start_wall.elapsed().as_secs() >= 110;
++            let status = if invalid {
++                "INVALID"
++            } else if semantic_match && full_classes_pass && saving.is_some_and(|s| s >= 0.20) {
++                "PASS"
++            } else {
++                "REJECT"
++            };
++            Ok(serde_json::json!({
++                "schema":"borsuk-page-auth-backend-probe-v1", "status":status,
++                "scope":"synthetic warmed verifier fixtures; no ANN or real-input admission",
++                "semantic_match":semantic_match, "geometry":geometry, "blocks":blocks,
++                "summaries":summaries, "weighted_cpu_saving":saving,
++                "full_class_weights_bytes":[8_971_573_248u64,16_699_756_416u64],
++                "screen":{"minimum_weighted_cpu_saving":0.20,"maximum_full_class_median_ratio":1.05},
++                "total_cpu_ns":cpu_ns()-start_cpu, "total_wall_ns":start_wall.elapsed().as_nanos() as u64,
++                "external_limits_required":{"cpu_cores":1,"memory_bytes":268_435_456,
++                    "swap_bytes":0,"cpu_seconds":30,"wall_seconds":120},
++            }))
++        };
++        let report = run().unwrap_or_else(|error| serde_json::json!({
++            "schema":"borsuk-page-auth-backend-probe-v1", "status":"INVALID", "error":error,
++            "total_cpu_ns":cpu_ns()-start_cpu, "total_wall_ns":start_wall.elapsed().as_nanos() as u64,
++        }));
++        println!("{report}");
++    }
++
+     #[test]
+     fn two_bit_unit_pages_bind_geometry_and_authenticate_partial_tail() {
+         let object = vec![7u8; 33 * 10];

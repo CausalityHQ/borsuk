@@ -1,0 +1,167 @@
+{
+  "schema": "borsuk-page-auth-backend-native-gate-v1",
+  "status": "FROZEN_NOT_LAUNCHED",
+  "created_at": "2026-10-08T06:51:03.561681+00:00",
+  "control_commit": "f2a98b7b7f846e632ab9995efd2dc0ce084aa697",
+  "candidate_commit": "7256ec9b57a6774a1be425990865e35e4fc3c5d9",
+  "candidate_parent": "022814a5566ebd49662fb58790eaedf1faf9e3b3",
+  "candidate_implementation_base": "f2a98b7b7f846e632ab9995efd2dc0ce084aa697",
+  "source_seal": {
+    "status": "SOURCE_SEALED_NATIVE_UNRUN",
+    "candidate": "7256ec9b57a6774a1be425990865e35e4fc3c5d9",
+    "file_count": 2450,
+    "native_file_count": 415,
+    "native_identity": "6f07aa976298719e5fa6a642043bad0afe6a1e8f8106fd61eb46fec6c627d663",
+    "changed_native_paths": [
+      "Cargo.lock",
+      "crates/borsuk/Cargo.toml",
+      "crates/borsuk/src/sq8_page_authority.rs"
+    ],
+    "archive_bytes": 16526107,
+    "archive_sha256": "cb38a27fb022ad7bc54eb205b2fae8cf96bc5ae22598b58d31c05f12260fa43d",
+    "support_policy": "exact previous qualified 2450-file support roster; all415 native files retained; current docs excluded from build input",
+    "performance_claim": false
+  },
+  "inputs": {
+    "source-files.sha256": {
+      "bytes": 278033,
+      "sha256": "83f5e7f6c8f1b3fc5a22232679613c44a1054af041124420f04bb81e0433c625"
+    },
+    "native-source.json": {
+      "bytes": 47205,
+      "sha256": "b953d13ac7471bcb5d5fd72dcf40c9e926ebeac9285ead80a0e5aeb3835ccfff"
+    },
+    "mandatory-tests.json": {
+      "bytes": 10603,
+      "sha256": "0e30119e79919a7bef706966c4d47815a6f95c3f0cb6c0fec8baef0c58956d0c"
+    },
+    "gates.sh": {
+      "bytes": 6688,
+      "sha256": "43dafcd5845643e339b808bf48f6ed9114fb39a160dc9b1c23e4deea4eed68bb"
+    },
+    "probe.sh": {
+      "bytes": 1170,
+      "sha256": "6f55a42dbddc774b0f7d1585d7d1dd3c4da3168944bbe93ac8182e31dfe05399"
+    },
+    "feature-check.py": {
+      "bytes": 764,
+      "sha256": "e63138e3874cec35fd14ec1d5732937f762f9e630aa51889debc4e0a811c9927"
+    },
+    "select-probe.py": {
+      "bytes": 1553,
+      "sha256": "56ed616a1da8db53280a1664c619e56086acb11bc4177e9e14c978228dddf15c"
+    },
+    "probe-check.py": {
+      "bytes": 5396,
+      "sha256": "5346d1b575370c362dbeaca1c6892191dbc85726e1da95922aeab3c128a318c5"
+    },
+    "baseline-Cargo.toml": {
+      "bytes": 3464,
+      "sha256": "6cede989f73a46145155576c394366e48b621032f64d0c7388cba5a3e69cf66f"
+    },
+    "baseline-Cargo.lock": {
+      "bytes": 104013,
+      "sha256": "6d5e346aaa225691943eecaeb89ee12106ebdda12dac6278e61312436e4830ce"
+    }
+  },
+  "userdata": {
+    "bytes": 9743,
+    "sha256": "357727cf275db599004978c278ec43737fdc6644fced3dc1c8442d4bae470de6"
+  },
+  "source_support_policy": "Exact2450 previous qualified support paths; complete415 Cargo/Rust manifest independently matched current Git path selection. Candidate archive immutable. No source integration before native qualification.",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "prefix": "research/semantic-router/20261008/cold-page-auth-native-gates-a0001",
+  "aws_profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7i.2xlarge",
+  "market": "Spot",
+  "spot_bid_usd_per_hour": 0.5,
+  "cost_reservation": {
+    "compute_usd": 1.25,
+    "ancillary_usd": 0.15,
+    "volume_gib": 80,
+    "machine_seconds": 9000,
+    "quote": {
+      "SpotPriceHistory": [
+        {
+          "AvailabilityZone": "eu-central-1c",
+          "AvailabilityZoneId": "euc1-az1",
+          "InstanceType": "c7i.2xlarge",
+          "ProductDescription": "Linux/UNIX",
+          "SpotPrice": "0.206400",
+          "Timestamp": "2026-10-08T00:00:00+00:00"
+        }
+      ],
+      "NextToken": "eyJOZXh0VG9rZW4iOiBudWxsLCAiYm90b190cnVuY2F0ZV9hbW91bnQiOiAxfQ=="
+    },
+    "refresh_quote_if_launch_delayed": true
+  },
+  "aggregate_and_build_caps": {
+    "cpu": 2,
+    "allowed_cpus": [
+      0,
+      1
+    ],
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "pids": 512,
+    "cargo_jobs": 1,
+    "native_wall_seconds": 7200
+  },
+  "probe_caps": {
+    "cpu": 1,
+    "allowed_cpus": [
+      0
+    ],
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "cpu_seconds": 30,
+    "wall_seconds": 120
+  },
+  "cpu_admission": {
+    "architecture": "x86_64",
+    "flags": [
+      "sha_ni",
+      "avx512f"
+    ],
+    "OPENSSL_ia32cap": "unset; do not erase override",
+    "record_model_and_flags": true,
+    "selected_release_elf": "Cargo-selected exact optimized libtest, SHA256RNDS2 inside exact sha2 symbol extent plus AWS-LC hardware symbol"
+  },
+  "probe_screen": {
+    "classes": [
+      "source_full",
+      "sq8_full",
+      "source_tail",
+      "sq8_tail"
+    ],
+    "paired_blocks": 5,
+    "records": 40,
+    "per_record_target_bytes": 33554432,
+    "minimum_full_weighted_cpu_saving": 0.2,
+    "maximum_full_class_paired_median_ratio": 1.05,
+    "weights_bytes": [
+      8971573248,
+      16699756416
+    ],
+    "tails": "separate, unweighted",
+    "scope": "synthetic warmed complete verifier; not ANN or real-input admission",
+    "PASS": "finish locked release, workspace Clippy correctness/suspicious and real unshimmed test-build. No cold launch yet.",
+    "REJECT": "original exit42 retained, no integration/cold; remaining qualification may stay UNRUN",
+    "INVALID": "setup/resource/deadline/control failure; preserve attempt and fix demonstrated environment without algorithm rejection"
+  },
+  "correctness_stages": "Exact commands in gates.sh,12 pre-probe stages plus locked release probe compilation. Actual integration two_bit_source is run, unlike historical zero-match lib filter.",
+  "feature_admission": "Baseline/candidate locked metadata, external versions and resolved feature sets equal; both AWS-LC trees retained. No lock changes admitted.",
+  "mandatory_test_roster": {
+    "bytes": 10603,
+    "sha256": "0e30119e79919a7bef706966c4d47815a6f95c3f0cb6c0fec8baef0c58956d0c"
+  },
+  "report_verification": "Exact single native JSON plus libtest proof,40 records/order/calls/bytes, independently recomputed geometry/digests/medians/weighted saving, external readbacks and OOM/max/swap proof. Libtest exit0 is not speed PASS.",
+  "publication_and_collection": "Terminal upload then immediate instance shutdown; root must terminate/wait original instance before collection and authenticate every evidence/binary manifest. Interrupted attempt INVALID; no automatic duplicated job.",
+  "future_cold": "Only after exact-source native qualification and microPASS, separate actual requests/records/truth admission, disposable staging canary and prospective frozen uninstrumented cold ABBA.",
+  "saved_s3_reference_rerun": false,
+  "application_caches": "OFF",
+  "ann_or_vendor_performance_claim": false,
+  "product_goal_complete": false
+}

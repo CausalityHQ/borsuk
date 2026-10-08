@@ -1,0 +1,684 @@
+{
+  "schema": "borsuk-page-auth-backend-native-contract-v1",
+  "status": "SOURCE_ONLY_UNVERIFIED_HOLD_SAME_WORKER",
+  "worker": "borsuk/page-auth-backend-native",
+  "parent_agent": "borsuk/prod-ready-v9",
+  "worktree": "/home/rb/worktrees/borsuk-page-auth-backend-native",
+  "commit": "7256ec9b57a6774a1be425990865e35e4fc3c5d9",
+  "parent_commit": "022814a5566ebd49662fb58790eaedf1faf9e3b3",
+  "author": "Roman Bartusiak <riomus@gmail.com>",
+  "committer": "Roman Bartusiak <riomus@gmail.com>",
+  "trailers": [],
+  "owned_files": [
+    {
+      "path": "Cargo.lock",
+      "bytes": 104027,
+      "sha256": "1d57b0a3cfd4d7faa3b5f731e00783bf7a0dc67379b2dced2f6dbe961bc2c965"
+    },
+    {
+      "path": "crates/borsuk/Cargo.toml",
+      "bytes": 3552,
+      "sha256": "44bad537510793107ced79177fae0751df596b483b4d0e2a526cea950ef8363c"
+    },
+    {
+      "path": "crates/borsuk/src/sq8_page_authority.rs",
+      "bytes": 36980,
+      "sha256": "d85871d47a830ea699e76de8f5b03996ae75064a6cadee0cb846e2c41c8cff35"
+    }
+  ],
+  "production_change": "Only PageAuthority::verify_payload page-byte SHA256 expression uses safe aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, exact_page_slice).as_ref(). Range, lengths, full/tail extents, first-error order, comparison, result, public API and all callers unchanged.",
+  "dependency": {
+    "manifest": "aws-lc-rs = { version = \"1.18.1\", default-features = false, features = [\"aws-lc-sys\"] }",
+    "lockfile_change": "Only borsuk 0.1.0 dependencies adds aws-lc-rs; every package entry, version and checksum unchanged.",
+    "edges": [
+      "borsuk 0.1.0 -> aws-lc-rs 1.18.1 (new direct edge)",
+      "aws-lc-rs 1.18.1 -> aws-lc-sys 0.45.0 (existing)",
+      "aws-lc-rs 1.18.1 -> zeroize (existing)"
+    ],
+    "aws_lc_rs_checksum": "b281d307588d634de920874890732659e2e7672f72b5e10e81badc1a8a83621e",
+    "aws_lc_sys_checksum": "9bff6c3b54fad79a2e60b8102caf565819711497c1f5f092f49508e2f5c31b27",
+    "assumptions": [
+      "Digest API confirmed from installed aws-lc-rs 1.18.1 source; Cargo feature resolution and linking UNRUN.",
+      "Defaults explicitly disabled: default ring-io/ring-sig-verify would introduce untrusted 0.7.1 into the aws-lc-rs lock entry.",
+      "Only existing aws-lc-sys backend explicitly enabled; rustls 0.23.45 already selects aws_lc_rs/aws-lc-sys and prebuilt-nasm. Root must authenticate target-specific union with locked Cargo metadata/tree.",
+      "No FIPS feature or backend selector; sha2 0.10.9 retained for all other hashing, including aarch64 asm configuration.",
+      "rustix fs,time and serde_json are existing direct dependencies; no extra probe dependency.",
+      "Root-requested caret 1.18.1 requirement; exact 1.18.1 remains in unchanged Cargo.lock. All native gate commands remain --locked."
+    ],
+    "root_feature_verification_commands": [
+      "cargo metadata --locked --format-version 1",
+      "cargo tree --locked -e features -i aws-lc-rs@1.18.1",
+      "cargo tree --locked -e features -i aws-lc-sys@0.45.0",
+      "git diff --exit-code -- Cargo.lock"
+    ],
+    "feature_resolution_status": "UNRUN"
+  },
+  "authored_tests": [
+    {
+      "target": "lib",
+      "name": "sq8_page_authority::tests::page_digest_known_answers_cover_sha256_padding_boundaries"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_page_authority::tests::page_verifiers_match_generic_full_tail_and_boundary_rows"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_page_authority::tests::page_verifiers_preserve_corruption_length_range_and_sidecar_errors"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_page_authority::tests::page_authorities_reject_zero_and_overflow_geometry_without_allocation"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_page_authority::tests::page_auth_backend_release_probe"
+    }
+  ],
+  "preserved_prior_test_bodies": [
+    "sq8_page_authority::tests::two_bit_unit_pages_bind_geometry_and_authenticate_partial_tail",
+    "sq8_page_authority::tests::authenticates_short_final_page_and_rejects_changed_bytes_or_etag"
+  ],
+  "coverage": {
+    "known_answers": "Literal GNU sha256sum independently checked SHA256 of ASCII a repeated 0,1,55,56,63,64,65; production authority called for admissible nonempty page sizes 55..65.",
+    "dimensions": [
+      1,
+      3,
+      5,
+      255,
+      256,
+      257,
+      768,
+      1023,
+      1024,
+      1025,
+      4097
+    ],
+    "source_record_bytes": [
+      9,
+      9,
+      10,
+      72,
+      72,
+      73,
+      200,
+      264,
+      264,
+      265,
+      1033
+    ],
+    "rows": "For both source page_rows=32 and SQ8 page_rows=256: 1, P-1, P, P+1, 2P-1, 2P, 2P+1; every contiguous page range with independently calculated extents.",
+    "errors": "First/middle/last/cover-row-byte mutations; exact old/control error parity; corruption combined with short/extra payload (InvalidResponse wins), bad/reversed/usize::MAX range (InvalidRange wins), wrong and repinned sidecars, zero/overflow manifest geometry without large allocation.",
+    "test_only_control": "Exact old verify_payload body, whitespace-normalized verified against parent; cfg(test) only. Existing byte_range unchanged.",
+    "normal_tests": "No timing assertions."
+  },
+  "mandatory_test_names": [
+    {
+      "target": "lib",
+      "name": "sq8_page_authority::tests::page_digest_known_answers_cover_sha256_padding_boundaries"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_page_authority::tests::page_verifiers_match_generic_full_tail_and_boundary_rows"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_page_authority::tests::page_verifiers_preserve_corruption_length_range_and_sidecar_errors"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_page_authority::tests::page_authorities_reject_zero_and_overflow_geometry_without_allocation"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_page_authority::tests::page_auth_backend_release_probe"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_page_authority::tests::two_bit_unit_pages_bind_geometry_and_authenticate_partial_tail"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_page_authority::tests::authenticates_short_final_page_and_rejects_changed_bytes_or_etag"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_s3_range::tests::bounded_range_query_future_is_send"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_s3_range::tests::source_authority_is_rejected_before_sq8_get"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_s3_range::tests::bounded_source_ranges_authenticate_tail_and_charge_failures"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_s3_range::tests::native_s3_create_copy_uses_conditional_multipart"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_s3_range::tests::publication_request_deadline_allows_progressing_whole_body"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_s3_range::tests::physical_namespace_preserves_logical_paths_and_read_accounting"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_s3_range::tests::physical_namespace_rejects_bad_range_etag_and_sha_without_retries"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_s3_range::tests::redirects_and_unfinished_error_bodies_fail_after_one_request"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_s3_range::tests::generation_publish_reload_and_http_search_fail_closed"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_s3_range::tests::real_http_range_faults_fail_closed_without_hidden_retries"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_s3_range::tests::conditional_short_tail_rejects_mutated_object"
+    },
+    {
+      "target": "lib",
+      "name": "sq8_s3_range::tests::bounded_query_reads_only_verified_pages_and_charges_failures"
+    },
+    {
+      "target": "lib",
+      "name": "rotated_two_bit::tests::required_query_scratch_matches_exact_prepare_query_budget"
+    },
+    {
+      "target": "lib",
+      "name": "rotated_two_bit::tests::required_query_scratch_rejects_invalid_or_overflowing_geometry"
+    },
+    {
+      "target": "lib",
+      "name": "exact_sq8_nominee::tests::exact_rows_score_and_tie_by_id"
+    },
+    {
+      "target": "lib",
+      "name": "exact_sq8_nominee::tests::rejects_short_final_row_invalid_ordinal_and_nonfinite_query"
+    },
+    {
+      "target": "lib",
+      "name": "exact_sq8_nominee::tests::file_and_ram_placements_score_the_same_bytes"
+    },
+    {
+      "target": "lib",
+      "name": "exact_sq8_nominee::tests::blocked_scores_equal_independent_scalar_oracle_bits"
+    },
+    {
+      "target": "lib",
+      "name": "exact_sq8_nominee::tests::rosters_keep_requested_order_ids_and_ordinals_across_blocks"
+    },
+    {
+      "target": "lib",
+      "name": "exact_sq8_nominee::tests::signed_zero_negative_nonunit_and_near_ties_keep_bits_and_id_order"
+    },
+    {
+      "target": "lib",
+      "name": "exact_sq8_nominee::tests::corrupt_inputs_keep_error_classes_in_every_block_position"
+    },
+    {
+      "target": "lib",
+      "name": "returned_sq8::tests::overlap_nonunit_sq8_and_duplicate_truncation"
+    },
+    {
+      "target": "lib",
+      "name": "returned_sq8::tests::query_admission_accounts_for_narrow_rows_concurrent_planners_and_overflow"
+    },
+    {
+      "target": "lib",
+      "name": "returned_sq8::tests::ranks_sparse_ranges_and_ties_by_id"
+    },
+    {
+      "target": "lib",
+      "name": "returned_sq8::tests::mutation_visibility_precedes_top_k_and_validates_masked_rows"
+    },
+    {
+      "target": "lib",
+      "name": "returned_sq8::tests::rejects_overlap_unaligned_budget_and_duplicate_ids"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::semantic_d768_diagnostic_scratch_preserves_production_search"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::native_full_sixteen_leaf_router_validation_d1024_and_d768"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::native_full_sixteen_leaf_generation_admission_d1024_and_d768"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::native_fresh1m_membership_nomination_parity_and_bounds"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::native_cold_fetch_parallelism_parity_and_drain"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::native_membership_discovery_leaf_authorized_parity"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::native_100k_d1024_generation_serving_scalar_oracle"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::semantic_object_store_parity"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::paged_source_matches_reference_and_preserves_failure_charges"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::paged_source_cache_preserves_parity_admission_and_failure_drains"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::empty_head_reuse_and_coordinated_restart_charge_retained_body"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::fragmented_paged_source_preserves_trace_and_rank_across_get_caps"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::diagnostic_page_limit_admits_short_closure_without_relaxing_control"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::fresh48_source_walk_completes_512_pages_once_and_rejects_excess_before_io"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::diagnostic_normalization_preserves_native_query_space_and_rejections"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::diagnostic_source_cover_charges_bridges_and_partial_tail_before_scoring"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::diagnostic_source_walks_reject_missing_nonfinite_and_invalid_inputs"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::bounded_completion_recovers_unvisited_rows_without_duplicate_or_extra_work"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::source_nomination_precedes_centroid_cutoff_and_scores_units_once"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_generation::source_walk_tests::source_nomination_handles_one_graph_partial_rows_and_rejects_invalid_walks"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_store::root_seed_tests::publication_reserves_metadata_before_upload_buffers"
+    },
+    {
+      "target": "lib",
+      "name": "two_bit_store::root_seed_tests::root_seed_rechecks_body_namespace_digest_and_generation_before_staging"
+    },
+    {
+      "target": "integration:two_bit_source",
+      "name": "authenticates_full_source_unit_and_partial_tail_on_reopen"
+    },
+    {
+      "target": "integration:two_bit_source",
+      "name": "authentication_backend_matches_sha256_known_answers"
+    },
+    {
+      "target": "integration:two_bit_source",
+      "name": "streams_source_records_and_rejects_wrong_identity_order_budget_and_overwrite"
+    },
+    {
+      "target": "integration:two_bit_source",
+      "name": "opens_authenticated_plane_and_rejects_wrong_generation_corruption_and_budget"
+    },
+    {
+      "target": "integration:rotated_two_bit",
+      "name": "matches_frozen_python_record_and_scores_with_bounded_scratch"
+    },
+    {
+      "target": "integration:rotated_two_bit",
+      "name": "pads_tail_dimensions_and_rejects_nonfinite_or_zero_vectors"
+    },
+    {
+      "target": "integration:two_bit_generation",
+      "name": "retained_semantic_republication_preserves_payload_and_score_bits"
+    },
+    {
+      "target": "integration:two_bit_generation",
+      "name": "retained_semantic_republication_refuses_unapproved_changed_or_unbounded_inputs"
+    },
+    {
+      "target": "integration:two_bit_generation",
+      "name": "pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_budget"
+    },
+    {
+      "target": "integration:two_bit_generation",
+      "name": "graph_variant_adapter_preserves_components_and_rejects_untrusted_roots"
+    },
+    {
+      "target": "integration:exact_sq8_mirror_direct",
+      "name": "authenticated_ram_and_file_score_identically_then_detect_disk_corruption"
+    },
+    {
+      "target": "integration:exact_sq8_mirror_direct",
+      "name": "rejects_wrong_object_or_sidecar_identity"
+    },
+    {
+      "target": "integration:exact_sq8_mirror_direct",
+      "name": "rejects_a_manifest_bound_sidecar_that_describes_other_bytes"
+    },
+    {
+      "target": "integration:exact_sq8_mirror_direct",
+      "name": "verifies_both_blocks_of_a_crossing_final_row"
+    },
+    {
+      "target": "bin:publish_two_bit_generation",
+      "name": "tests::retained_backend_descriptors_are_strict_before_store_operations"
+    },
+    {
+      "target": "bin:publish_two_bit_generation",
+      "name": "tests::retained_publishes_copied_source_gone_generation_and_bound_receipt"
+    },
+    {
+      "target": "bin:publish_two_bit_generation",
+      "name": "tests::retained_refuses_bad_config_pending_head_and_occupied_output_without_head"
+    },
+    {
+      "target": "bin:publish_two_bit_generation",
+      "name": "tests::publishes_real_generation_and_receipt_then_refuses_replay"
+    },
+    {
+      "target": "bin:publish_two_bit_generation",
+      "name": "tests::rejects_wrong_root_cap_existing_head_and_bad_config"
+    },
+    {
+      "target": "lib",
+      "name": "exact_sq8_mirror::range_tests::local_page_ranges_preserve_identity_caps_and_detect_late_corruption"
+    },
+    {
+      "target": "lib",
+      "name": "fine_sq8_groups::tests::fine_remote_failure_preserves_partial_known_stats_and_unknown_bytes"
+    },
+    {
+      "target": "lib",
+      "name": "fine_sq8_groups::tests::fine_cover_matches_independent_bruteforce_with_tail"
+    },
+    {
+      "target": "lib",
+      "name": "fine_sq8_groups::tests::fine_tail_scalar_ties_nonunit_and_pins"
+    },
+    {
+      "target": "lib",
+      "name": "fine_sq8_groups::tests::fine_exhausted_shortlist_is_scored_empty_is_underfilled_and_refusal_reads_nothing"
+    },
+    {
+      "target": "lib",
+      "name": "fine_sq8_groups::tests::fine_nonzero_coefficients_scalar_oracle_extremes_and_near_ties"
+    }
+  ],
+  "native_gates": [
+    {
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib sq8_page_authority::tests:: -- --test-threads=1",
+      "status": "UNRUN",
+      "exit_code": null,
+      "resources": "Authorized remote host only; CPU2/8GiB/jobs1/swap0; root sets finite build/test wall limit before launch."
+    },
+    {
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib sq8_s3_range::tests:: -- --test-threads=1",
+      "status": "UNRUN",
+      "exit_code": null,
+      "resources": "Authorized remote host only; CPU2/8GiB/jobs1/swap0; root sets finite build/test wall limit before launch."
+    },
+    {
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib rotated_two_bit::tests:: -- --test-threads=1",
+      "status": "UNRUN",
+      "exit_code": null,
+      "resources": "Authorized remote host only; CPU2/8GiB/jobs1/swap0; root sets finite build/test wall limit before launch."
+    },
+    {
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib exact_sq8_nominee::tests:: -- --test-threads=1",
+      "status": "UNRUN",
+      "exit_code": null,
+      "resources": "Authorized remote host only; CPU2/8GiB/jobs1/swap0; root sets finite build/test wall limit before launch."
+    },
+    {
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib returned_sq8::tests:: -- --test-threads=1",
+      "status": "UNRUN",
+      "exit_code": null,
+      "resources": "Authorized remote host only; CPU2/8GiB/jobs1/swap0; root sets finite build/test wall limit before launch."
+    },
+    {
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests:: -- --test-threads=1",
+      "status": "UNRUN",
+      "exit_code": null,
+      "resources": "Authorized remote host only; CPU2/8GiB/jobs1/swap0; root sets finite build/test wall limit before launch."
+    },
+    {
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_store::root_seed_tests:: -- --test-threads=1",
+      "status": "UNRUN",
+      "exit_code": null,
+      "resources": "Authorized remote host only; CPU2/8GiB/jobs1/swap0; root sets finite build/test wall limit before launch."
+    },
+    {
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib exact_sq8_mirror::range_tests:: -- --test-threads=1",
+      "status": "UNRUN",
+      "exit_code": null,
+      "resources": "Authorized remote host only; CPU2/8GiB/jobs1/swap0; root sets finite build/test wall limit before launch."
+    },
+    {
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib fine_sq8_groups::tests:: -- --test-threads=1",
+      "status": "UNRUN",
+      "exit_code": null,
+      "resources": "Authorized remote host only; CPU2/8GiB/jobs1/swap0; root sets finite build/test wall limit before launch."
+    },
+    {
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --test rotated_two_bit --test two_bit_source --test two_bit_generation --test exact_sq8_mirror_direct -- --test-threads=1",
+      "status": "UNRUN",
+      "exit_code": null,
+      "resources": "Authorized remote host only; CPU2/8GiB/jobs1/swap0; root sets finite build/test wall limit before launch."
+    },
+    {
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin publish_two_bit_generation -- --test-threads=1",
+      "status": "UNRUN",
+      "exit_code": null,
+      "resources": "Authorized remote host only; CPU2/8GiB/jobs1/swap0; root sets finite build/test wall limit before launch."
+    },
+    {
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --features scalar-control --lib exact_sq8_nominee::tests:: -- --test-threads=1",
+      "status": "UNRUN",
+      "exit_code": null,
+      "resources": "Authorized remote host only; CPU2/8GiB/jobs1/swap0; root sets finite build/test wall limit before launch."
+    },
+    {
+      "command": "env CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk --bin check_cohere_native_baseline --bin check_semantic_router_scorer --bin publish_two_bit_generation --example two_bit_http",
+      "status": "UNRUN",
+      "exit_code": null,
+      "resources": "Authorized remote host only; CPU2/8GiB/jobs1/swap0; root sets finite build/test wall limit before launch."
+    },
+    {
+      "command": "env CARGO_BUILD_JOBS=1 cargo test --locked --release -p borsuk --lib --no-run --message-format=json > /tmp/borsuk-page-auth-release-build.jsonl",
+      "status": "UNRUN",
+      "exit_code": null,
+      "resources": "Authorized remote host only; CPU2/8GiB/jobs1/swap0; root sets finite build/test wall limit before launch."
+    },
+    {
+      "command": "env CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "status": "UNRUN",
+      "exit_code": null,
+      "resources": "Authorized remote host only; CPU2/8GiB/jobs1/swap0; root sets finite build/test wall limit before launch."
+    },
+    {
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "status": "UNRUN",
+      "exit_code": null,
+      "resources": "Authorized remote host only; CPU2/8GiB/jobs1/swap0; root sets finite build/test wall limit before launch."
+    }
+  ],
+  "probe": {
+    "status": "UNRUN",
+    "full_name": "sq8_page_authority::tests::page_auth_backend_release_probe",
+    "platform": "Linux release test ELF, built separately",
+    "build_command": "env CARGO_BUILD_JOBS=1 cargo test --locked --release -p borsuk --lib --no-run --message-format=json > /tmp/borsuk-page-auth-release-build.jsonl",
+    "binary_selection": "From /tmp/borsuk-page-auth-release-build.jsonl require exactly one compiler-artifact with target.name == borsuk, target.kind == [lib], profile.test == true, and executable != null; authenticate executable SHA256. Set BORSUK_AUTH_TEST_BINARY to that path. Do not guess or reuse another revision's ELF.",
+    "literal_invocation": "\"$BORSUK_AUTH_TEST_BINARY\" --ignored --exact sq8_page_authority::tests::page_auth_backend_release_probe --nocapture --test-threads=1",
+    "bounded_invocation": "systemd-run --wait --pipe --collect -p CPUQuota=100% -p MemoryMax=256M -p MemorySwapMax=0 -p RuntimeMaxSec=120s -p LimitCPU=30 \"$BORSUK_AUTH_TEST_BINARY\" --ignored --exact sq8_page_authority::tests::page_auth_backend_release_probe --nocapture --test-threads=1",
+    "resources": {
+      "cpu_cores": 1,
+      "memory_bytes": 268435456,
+      "swap_bytes": 0,
+      "cpu_seconds": 30,
+      "wall_seconds": 120,
+      "internal_cpu_cutoff_seconds": 28,
+      "internal_wall_cutoff_seconds": 110
+    },
+    "geometry": [
+      {
+        "label": "source_full",
+        "dimensions": 1024,
+        "rows": 32,
+        "record_bytes": 264,
+        "page_rows": 32,
+        "first_page": 0,
+        "payload_bytes": 8448
+      },
+      {
+        "label": "sq8_full",
+        "dimensions": 1024,
+        "rows": 256,
+        "record_bytes": 1036,
+        "page_rows": 256,
+        "first_page": 0,
+        "payload_bytes": 265216
+      },
+      {
+        "label": "source_tail",
+        "dimensions": 1024,
+        "rows": 49,
+        "record_bytes": 264,
+        "page_rows": 32,
+        "first_page": 1,
+        "payload_bytes": 4488
+      },
+      {
+        "label": "sq8_tail",
+        "dimensions": 1024,
+        "rows": 273,
+        "record_bytes": 1036,
+        "page_rows": 256,
+        "first_page": 1,
+        "payload_bytes": 17612
+      }
+    ],
+    "source_bytes_formula": "((i * 37 + i / 251 + dimensions * 11) % 256) as u8; authentication-only synthetic fixtures, never scored.",
+    "pair_orders": [
+      [
+        "sha2_control",
+        "aws_lc_candidate"
+      ],
+      [
+        "aws_lc_candidate",
+        "sha2_control"
+      ],
+      [
+        "sha2_control",
+        "aws_lc_candidate"
+      ],
+      [
+        "aws_lc_candidate",
+        "sha2_control"
+      ],
+      [
+        "sha2_control",
+        "aws_lc_candidate"
+      ]
+    ],
+    "measurement": "40 raw records: five blocks x four classes x two complete verifier calls repeated ceil(32MiB/payload_bytes) times. black_box function/input/result, rustix ProcessCPUTime and std Instant. Fixture authentication and identities outside measured blocks.",
+    "report": "One compact strict JSON object emitted by ignored test to stdout amid libtest harness lines; geometry, object/manifest/sidecar/page/payload hashes, all planned blocks including incomplete calls, order, bytes, process CPU, wall, summaries, status. Root must extract exactly one matching schema object and reject missing/duplicate/truncated/nonfinite records.",
+    "weights": {
+      "source_full": 8971573248,
+      "sq8_full": 16699756416
+    },
+    "screen": "Weighted sum of each full class median CPU ns/byte: candidate/control saving >=20%; each full class median paired CPU ratio <=1.05. Tails separate, no weighting. Control verifier failure INVALID (setup before candidate comparison, or timed call); candidate semantic mismatch REJECT. Debug/setup/time/resource failure INVALID. No performance correctness panic.",
+    "invalid_policy": "Nonzero exit, timeout/SIGXCPU/OOM, missing or incomplete report or unenforced limits is INVALID, never REJECT. Successful libtest exit does not imply a passing performance screen; root must read JSON status.",
+    "claims": "Warm synthetic verifier only; no cold ANN, real-input admission, or speed claim.",
+    "root_external_admission": "Root will enforce c7i x86 SHA-NI and AVX512 flags, unset OPENSSL_ia32cap, authenticate selected ELF SHA instructions and hard CPU affinity externally. UNRUN here; no in-probe ISA/affinity or threshold change."
+  },
+  "source_checks": {
+    "status": "PASS",
+    "resources": {
+      "cpu_cores": 1,
+      "memory_bytes": 268435456,
+      "swap_bytes": 0,
+      "wall_seconds": 120
+    },
+    "invocation_id": "1b5a169afd6a4d00bbf17717589c8f99",
+    "exit_code": 0,
+    "cpu_ms": 180,
+    "service_wall_ms": 1538,
+    "memory_peak": "223.5M",
+    "swap_peak_bytes": 0,
+    "checks": [
+      "rustfmt --edition 2024 --check",
+      "git diff --check",
+      "exact repair OWN2 names within original OWN3",
+      "Cargo.lock byte-identical",
+      "authority byte diff exactly control setup/timed INVALID classification; production, thresholds, old verifier and test bodies unchanged",
+      "owned byte sizes and SHA256"
+    ],
+    "command": "test \"$(git rev-parse HEAD)\" = 022814a5566ebd49662fb58790eaedf1faf9e3b3\n/data/cache/rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustfmt --edition 2024 --check crates/borsuk/src/sq8_page_authority.rs\ngit diff --check\ngit diff --exit-code -- Cargo.lock\ntest \"$(git diff --name-only | LC_ALL=C sort)\" = \"$(printf '%s\\n' crates/borsuk/Cargo.toml crates/borsuk/src/sq8_page_authority.rs | LC_ALL=C sort)\"\nperl -0777 -e '\nuse strict;\nuse warnings;\nlocal $/;\nopen my $old_handle, \"-|\", \"git\", \"show\", \"022814a5566ebd49662fb58790eaedf1faf9e3b3:crates/borsuk/src/sq8_page_authority.rs\" or die $!;\nmy $old = <$old_handle>; close $old_handle or die \"git show failed\";\nopen my $new_handle, \"<\", \"crates/borsuk/src/sq8_page_authority.rs\" or die $!;\nmy $new = <$new_handle>;\n$old =~ s/(\\Q                let control = authority.verify_payload_sha2(page, page, payload);\\E\\n)/$1                control.map_err(|e| format!(\"{label} control setup: {e:?}\"))?;\\n/ or die \"missing setup\";\n$old =~ s/\\Qsemantic_match &= control == Ok(()) && candidate == control;\\E/semantic_match \\&= candidate == control;/ or die \"missing comparison\";\n$old =~ s/(\\Q                                if let Err(e) = black_box(result) {\\E\\n)\\Q                                    semantic_match = false;\\E/$1                                    if backend == 0 {\\n                                        invalid = true;\\n                                    } else {\\n                                        semantic_match = false;\\n                                    }/ or die \"missing timed result\";\ndie \"unexpected authority diff\" unless $old eq $new;\nprint \"authority diff exactly limited to requested control failure classification\\n\";\n'\ngit diff -- crates/borsuk/Cargo.toml crates/borsuk/src/sq8_page_authority.rs\nwc -c Cargo.lock crates/borsuk/Cargo.toml crates/borsuk/src/sq8_page_authority.rs\nsha256sum Cargo.lock crates/borsuk/Cargo.toml crates/borsuk/src/sq8_page_authority.rs",
+    "previous_check_evidence": "Preserved in previous_checkpoint.contract_path; no native execution authorized or performed."
+  },
+  "state": {
+    "native_builds": "UNRUN",
+    "native_correctness": "UNRUN",
+    "clippy": "UNRUN",
+    "workspace_test_build": "UNRUN",
+    "micro": "UNRUN",
+    "real_input_admission": "UNRUN",
+    "canary": "UNRUN",
+    "cold_abba": "UNRUN",
+    "merge": false,
+    "push": false,
+    "agent_complete": false,
+    "archive": false,
+    "next": "HOLD SAME worker and exact source for root native/compiler feedback and final disposition.",
+    "root_owned": "All remote build/feature/micro acceptance and later real-input admission, separate canary, frozen cold ABBA, integration. No original job control or saved S3 rerun."
+  },
+  "previous_checkpoint": {
+    "commit": "022814a5566ebd49662fb58790eaedf1faf9e3b3",
+    "parent_commit": "f2a98b7b7f846e632ab9995efd2dc0ce084aa697",
+    "contract_path": "/tmp/borsuk-page-auth-backend-native-contract.022814a5566ebd49662fb58790eaedf1faf9e3b3.json",
+    "contract_sha256": "3ca1f674cfc5ed72f9b4cde58e3480df8f30860486376165bc979523724e4ced"
+  },
+  "original_base_commit": "f2a98b7b7f846e632ab9995efd2dc0ce084aa697",
+  "repair_scope": {
+    "request_message_id": "1791441421067559142-2965865",
+    "changed_files": [
+      "crates/borsuk/Cargo.toml",
+      "crates/borsuk/src/sq8_page_authority.rs"
+    ],
+    "changes": [
+      "Direct aws-lc-rs requirement changed from exact =1.18.1 to caret 1.18.1. Cargo.lock byte-identical to previous checkpoint.",
+      "Probe setup control failure returns INVALID before candidate comparison; timed control failure sets INVALID. Candidate mismatch remains REJECT."
+    ],
+    "preserved": "Original commit 022814a5566ebd49662fb58790eaedf1faf9e3b3, production algorithm/digest expression, thresholds, ordinary test bodies, control verifier and Cargo.lock unchanged."
+  }
+}

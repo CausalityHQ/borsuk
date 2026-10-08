@@ -1,0 +1,125 @@
+[package]
+name = "borsuk"
+version = "0.1.0"
+description = "Blob-Oriented Retrieval with Segmental Unified KNN"
+readme = "../../README.md"
+keywords = ["ann", "similarity-search", "vector-search", "s3", "parquet"]
+categories = ["algorithms", "database-implementations", "science"]
+edition.workspace = true
+autoexamples = false
+license-file = "../../LICENSE"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "borsuk"
+path = "src/lib.rs"
+
+[features]
+default = []
+scalar-control = []
+tracing = ["dep:tracing"]
+s3-vectors-bench = ["dep:aws-config", "dep:aws-sdk-s3vectors", "dep:aws-sdk-sts", "dep:aws-smithy-runtime-api", "dep:aws-smithy-types", "tokio/time"]
+
+[[bin]]
+name = "check_s3_vectors_baseline"
+path = "src/bin/check_s3_vectors_baseline.rs"
+required-features = ["s3-vectors-bench"]
+
+[dependencies]
+arrow-array = "58.3"
+arrow-buffer = "58.3"
+arrow-ipc = { version = "58.3", features = ["zstd"] }
+arrow-schema = "58.3"
+async-trait = "0.1"
+aws-config = { version = "1.8", default-features = false, features = ["rt-tokio", "default-https-client"], optional = true }
+aws-sdk-s3vectors = { version = "1", optional = true }
+aws-sdk-sts = { version = "1", optional = true }
+aws-smithy-runtime-api = { version = "1.9", features = ["client"], optional = true }
+aws-smithy-types = { version = "1.3", optional = true }
+blake3 = "1.8"
+bytes = "1.11"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+futures-util = "0.3"
+half = "2.7"
+http-body-util = "=0.1.3"
+nalgebra = "0.33"
+object_store = { version = "0.14", features = ["aws", "azure", "gcp", "fs", "http"] }
+parquet = { version = "58.3", features = ["async", "object_store"] }
+rand_chacha = "0.9"
+rand_core = "0.9"
+regex = "1"
+rayon = "1.11"
+reqwest = { version = "0.13", default-features = false }
+rustix = { version = "1.1", features = ["fs", "time"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "2.0"
+tempfile = "3.23"
+tokio = { version = "1.48", features = ["fs", "io-util", "rt-multi-thread"] }
+tracing = { version = "0.1", optional = true }
+url = "2.5"
+uuid = { version = "1.18", features = ["v4", "serde"] }
+wide = "0.7"
+borsuk-fma = { version = "0.1.0", path = "../borsuk-fma" }
+borsuk-pq4 = { version = "0.1.0", path = "../borsuk-pq4" }
+zstd = "0.13"
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+# sha2 0.10 requires this feature for runtime-detected ARM SHA instructions.
+sha2 = { version = "0.10", features = ["asm"] }
+
+[dev-dependencies]
+axum = "0.8"
+criterion = "0.7"
+memory-stats = "1.2"
+tokio = { version = "1.48", features = ["macros", "net", "signal", "sync", "time"] }
+tower = { version = "0.5", features = ["util"] }
+
+[lints]
+workspace = true
+
+# Historical campaign examples are preserved in their source archives. Keep the
+# current package's examples limited to supported API and smoke paths.
+[[example]]
+name = "compare_native_replay"
+
+[[example]]
+name = "build_sq8_source"
+
+[[example]]
+name = "exact_sq8_runtime_probe"
+
+[[example]]
+name = "two_bit_http"
+
+[[example]]
+name = "local_index"
+
+[[example]]
+name = "docs_ladder"
+
+[[example]]
+name = "s3_index"
+
+[[example]]
+name = "hybrid_retrieval_bench"
+
+[[example]]
+name = "benchmark_report"
+
+[[example]]
+name = "resident_graph_frontier"
+
+[[example]]
+name = "resident_graph_rc"
+
+[[example]]
+name = "v246_publish_graph_s3"
+
+[[bench]]
+name = "local_search"
+harness = false
