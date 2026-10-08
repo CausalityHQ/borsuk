@@ -1,0 +1,248 @@
+
+/data/target/borsuk-cold-membership-native/two-bit-gather-gate-a0003/probe-libtest.binary:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+00000000020e04e0 <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5tests19frozen_scalar_score>:
+ 20e04e0:	50                   	push   %rax
+ 20e04e1:	48 8b 46 18          	mov    0x18(%rsi),%rax
+ 20e04e5:	4c 8d 40 08          	lea    0x8(%rax),%r8
+ 20e04e9:	4c 39 c1             	cmp    %r8,%rcx
+ 20e04ec:	0f 85 39 01 00 00    	jne    20e062b <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5tests19frozen_scalar_score+0x14b>
+ 20e04f2:	4c 8d 40 04          	lea    0x4(%rax),%r8
+ 20e04f6:	48 83 f8 fb          	cmp    $0xfffffffffffffffb,%rax
+ 20e04fa:	0f 87 46 01 00 00    	ja     20e0646 <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5tests19frozen_scalar_score+0x166>
+ 20e0500:	49 89 c9             	mov    %rcx,%r9
+ 20e0503:	4d 29 c1             	sub    %r8,%r9
+ 20e0506:	0f 82 3a 01 00 00    	jb     20e0646 <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5tests19frozen_scalar_score+0x166>
+ 20e050c:	49 83 f9 04          	cmp    $0x4,%r9
+ 20e0510:	0f 85 5c 01 00 00    	jne    20e0672 <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5tests19frozen_scalar_score+0x192>
+ 20e0516:	66 0f 6e 0c 02       	movd   (%rdx,%rax,1),%xmm1
+ 20e051b:	66 42 0f 6e 04 02    	movd   (%rdx,%r8,1),%xmm0
+ 20e0521:	66 0f 7e c1          	movd   %xmm0,%ecx
+ 20e0525:	66 41 0f 7e c8       	movd   %xmm1,%r8d
+ 20e052a:	45 8d 48 ff          	lea    -0x1(%r8),%r9d
+ 20e052e:	41 81 f9 ff ff 7f 00 	cmp    $0x7fffff,%r9d
+ 20e0535:	41 0f 92 c1          	setb   %r9b
+ 20e0539:	45 89 c2             	mov    %r8d,%r10d
+ 20e053c:	41 81 e2 ff ff ff 7f 	and    $0x7fffffff,%r10d
+ 20e0543:	41 0f 94 c3          	sete   %r11b
+ 20e0547:	45 08 cb             	or     %r9b,%r11b
+ 20e054a:	45 85 c0             	test   %r8d,%r8d
+ 20e054d:	41 0f 99 c0          	setns  %r8b
+ 20e0551:	41 81 c2 00 00 80 ff 	add    $0xff800000,%r10d
+ 20e0558:	41 81 fa 00 00 00 7f 	cmp    $0x7f000000,%r10d
+ 20e055f:	41 0f 92 c1          	setb   %r9b
+ 20e0563:	45 20 c1             	and    %r8b,%r9b
+ 20e0566:	45 08 d9             	or     %r11b,%r9b
+ 20e0569:	85 c9                	test   %ecx,%ecx
+ 20e056b:	41 0f 99 c0          	setns  %r8b
+ 20e056f:	41 89 ca             	mov    %ecx,%r10d
+ 20e0572:	41 81 e2 ff ff ff 7f 	and    $0x7fffffff,%r10d
+ 20e0579:	41 81 c2 00 00 80 ff 	add    $0xff800000,%r10d
+ 20e0580:	41 81 fa 00 00 00 7f 	cmp    $0x7f000000,%r10d
+ 20e0587:	41 0f 92 c2          	setb   %r10b
+ 20e058b:	45 20 c2             	and    %r8b,%r10b
+ 20e058e:	ff c9                	dec    %ecx
+ 20e0590:	81 f9 ff ff 7f 00    	cmp    $0x7fffff,%ecx
+ 20e0596:	0f 92 c1             	setb   %cl
+ 20e0599:	44 08 d1             	or     %r10b,%cl
+ 20e059c:	41 84 c9             	test   %cl,%r9b
+ 20e059f:	0f 84 86 00 00 00    	je     20e062b <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5tests19frozen_scalar_score+0x14b>
+ 20e05a5:	48 85 c0             	test   %rax,%rax
+ 20e05a8:	74 3e                	je     20e05e8 <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5tests19frozen_scalar_score+0x108>
+ 20e05aa:	4c 8b 4e 08          	mov    0x8(%rsi),%r9
+ 20e05ae:	48 8b 4e 10          	mov    0x10(%rsi),%rcx
+ 20e05b2:	f2 0f 10 15 6e e1 3d 	movsd  -0x1c21e92(%rip),%xmm2        # 4be728 <anon.aa80e09cb2158b54db859bbd09b24c86.10.llvm.1496823458274821391+0x10>
+ 20e05b9:	fe 
+ 20e05ba:	45 31 d2             	xor    %r10d,%r10d
+ 20e05bd:	45 31 db             	xor    %r11d,%r11d
+ 20e05c0:	46 0f b6 04 1a       	movzbl (%rdx,%r11,1),%r8d
+ 20e05c5:	4d 01 d0             	add    %r10,%r8
+ 20e05c8:	49 39 c8             	cmp    %rcx,%r8
+ 20e05cb:	0f 83 8e 00 00 00    	jae    20e065f <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5tests19frozen_scalar_score+0x17f>
+ 20e05d1:	f2 43 0f 58 14 c1    	addsd  (%r9,%r8,8),%xmm2
+ 20e05d7:	49 ff c3             	inc    %r11
+ 20e05da:	49 81 c2 00 01 00 00 	add    $0x100,%r10
+ 20e05e1:	4c 39 d8             	cmp    %r11,%rax
+ 20e05e4:	75 da                	jne    20e05c0 <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5tests19frozen_scalar_score+0xe0>
+ 20e05e6:	eb 08                	jmp    20e05f0 <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5tests19frozen_scalar_score+0x110>
+ 20e05e8:	f2 0f 10 15 38 e1 3d 	movsd  -0x1c21ec8(%rip),%xmm2        # 4be728 <anon.aa80e09cb2158b54db859bbd09b24c86.10.llvm.1496823458274821391+0x10>
+ 20e05ef:	fe 
+ 20e05f0:	f3 0f 5a c9          	cvtss2sd %xmm1,%xmm1
+ 20e05f4:	f2 0f 59 ca          	mulsd  %xmm2,%xmm1
+ 20e05f8:	f2 0f 58 4e 20       	addsd  0x20(%rsi),%xmm1
+ 20e05fd:	f2 0f 59 4e 28       	mulsd  0x28(%rsi),%xmm1
+ 20e0602:	f3 0f 5a c0          	cvtss2sd %xmm0,%xmm0
+ 20e0606:	f2 0f 59 c1          	mulsd  %xmm1,%xmm0
+ 20e060a:	66 48 0f 7e c0       	movq   %xmm0,%rax
+ 20e060f:	48 b9 ff ff ff ff ff 	movabs $0x7fffffffffffffff,%rcx
+ 20e0616:	ff ff 7f 
+ 20e0619:	48 21 c1             	and    %rax,%rcx
+ 20e061c:	48 b8 00 00 00 00 00 	movabs $0x7ff0000000000000,%rax
+ 20e0623:	00 f0 7f 
+ 20e0626:	48 39 c1             	cmp    %rax,%rcx
+ 20e0629:	7c 0d                	jl     20e0638 <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5tests19frozen_scalar_score+0x158>
+ 20e062b:	c6 47 01 02          	movb   $0x2,0x1(%rdi)
+ 20e062f:	b0 01                	mov    $0x1,%al
+ 20e0631:	88 07                	mov    %al,(%rdi)
+ 20e0633:	48 89 f8             	mov    %rdi,%rax
+ 20e0636:	59                   	pop    %rcx
+ 20e0637:	c3                   	ret
+ 20e0638:	f2 0f 11 47 08       	movsd  %xmm0,0x8(%rdi)
+ 20e063d:	31 c0                	xor    %eax,%eax
+ 20e063f:	88 07                	mov    %al,(%rdi)
+ 20e0641:	48 89 f8             	mov    %rdi,%rax
+ 20e0644:	59                   	pop    %rcx
+ 20e0645:	c3                   	ret
+ 20e0646:	4c 8d 0d 7b 23 01 02 	lea    0x201237b(%rip),%r9        # 40f29c8 <anon.2d965b29132d13c242af8f89b3a58a7f.2353.llvm.6563420913682974557>
+ 20e064d:	48 89 c7             	mov    %rax,%rdi
+ 20e0650:	4c 89 c6             	mov    %r8,%rsi
+ 20e0653:	48 89 ca             	mov    %rcx,%rdx
+ 20e0656:	4c 89 c9             	mov    %r9,%rcx
+ 20e0659:	ff 15 b1 c2 1f 02    	call   *0x21fc2b1(%rip)        # 42dc910 <_DYNAMIC+0x240>
+ 20e065f:	48 8d 15 d2 c6 00 02 	lea    0x200c6d2(%rip),%rdx        # 40ecd38 <anon.2d965b29132d13c242af8f89b3a58a7f.669.llvm.6563420913682974557>
+ 20e0666:	4c 89 c7             	mov    %r8,%rdi
+ 20e0669:	48 89 ce             	mov    %rcx,%rsi
+ 20e066c:	ff 15 ce c2 1f 02    	call   *0x21fc2ce(%rip)        # 42dc940 <_DYNAMIC+0x270>
+ 20e0672:	48 8d 3d 78 88 6f fe 	lea    -0x1907788(%rip),%rdi        # 7d8ef1 <anon.2d965b29132d13c242af8f89b3a58a7f.853.llvm.6563420913682974557>
+ 20e0679:	48 8d 0d 48 cd 00 02 	lea    0x200cd48(%rip),%rcx        # 40ed3c8 <anon.2d965b29132d13c242af8f89b3a58a7f.852.llvm.6563420913682974557>
+ 20e0680:	4c 8d 05 29 23 01 02 	lea    0x2012329(%rip),%r8        # 40f29b0 <anon.2d965b29132d13c242af8f89b3a58a7f.2352.llvm.6563420913682974557>
+ 20e0687:	48 8d 54 24 07       	lea    0x7(%rsp),%rdx
+ 20e068c:	be 2b 00 00 00       	mov    $0x2b,%esi
+ 20e0691:	ff 15 89 c4 1f 02    	call   *0x21fc489(%rip)        # 42dcb20 <_DYNAMIC+0x450>
+ 20e0697:	cc                   	int3
+ 20e0698:	cc                   	int3
+ 20e0699:	cc                   	int3
+ 20e069a:	cc                   	int3
+ 20e069b:	cc                   	int3
+ 20e069c:	cc                   	int3
+ 20e069d:	cc                   	int3
+ 20e069e:	cc                   	int3
+ 20e069f:	cc                   	int3
+
+00000000020e06a0 <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5testss_32two_bit_gather_release_primitive>:
+ 20e06a0:	55                   	push   %rbp
+ 20e06a1:	41 57                	push   %r15
+ 20e06a3:	41 56                	push   %r14
+ 20e06a5:	41 55                	push   %r13
+ 20e06a7:	41 54                	push   %r12
+ 20e06a9:	53                   	push   %rbx
+ 20e06aa:	48 81 ec e8 02 00 00 	sub    $0x2e8,%rsp
+ 20e06b1:	ff 15 c9 c4 1f 02    	call   *0x21fc4c9(%rip)        # 42dcb80 <_DYNAMIC+0x4b0>
+ 20e06b7:	48 89 84 24 18 02 00 	mov    %rax,0x218(%rsp)
+ 20e06be:	00 
+ 20e06bf:	89 94 24 20 02 00 00 	mov    %edx,0x220(%rsp)
+ 20e06c6:	48 8b 05 53 cf 1f 02 	mov    0x21fcf53(%rip),%rax        # 42dd620 <_DYNAMIC+0xf50>
+ 20e06cd:	48 8b 00             	mov    (%rax),%rax
+ 20e06d0:	48 85 c0             	test   %rax,%rax
+ 20e06d3:	0f 84 4c 27 00 00    	je     20e2e25 <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5testss_32two_bit_gather_release_primitive+0x2785>
+ 20e06d9:	48 8d b4 24 80 00 00 	lea    0x80(%rsp),%rsi
+ 20e06e0:	00 
+ 20e06e1:	bf 02 00 00 00       	mov    $0x2,%edi
+ 20e06e6:	ff d0                	call   *%rax
+ 20e06e8:	89 84 24 30 01 00 00 	mov    %eax,0x130(%rsp)
+ 20e06ef:	85 c0                	test   %eax,%eax
+ 20e06f1:	0f 85 39 27 00 00    	jne    20e2e30 <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5testss_32two_bit_gather_release_primitive+0x2790>
+ 20e06f7:	48 69 9c 24 80 00 00 	imul   $0x3b9aca00,0x80(%rsp),%rbx
+ 20e06fe:	00 00 ca 9a 3b 
+ 20e0703:	48 03 9c 24 88 00 00 	add    0x88(%rsp),%rbx
+ 20e070a:	00 
+ 20e070b:	48 8d 84 24 18 02 00 	lea    0x218(%rsp),%rax
+ 20e0712:	00 
+ 20e0713:	48 89 84 24 28 02 00 	mov    %rax,0x228(%rsp)
+ 20e071a:	00 
+ 20e071b:	ff 15 47 c2 1f 02    	call   *0x21fc247(%rip)        # 42dc968 <_DYNAMIC+0x298>
+ 20e0721:	bf 00 32 00 00       	mov    $0x3200,%edi
+ 20e0726:	be 10 00 00 00       	mov    $0x10,%esi
+ 20e072b:	ff 15 3f c2 1f 02    	call   *0x21fc23f(%rip)        # 42dc970 <_DYNAMIC+0x2a0>
+ 20e0731:	48 85 c0             	test   %rax,%rax
+ 20e0734:	0f 84 38 29 00 00    	je     20e3072 <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5testss_32two_bit_gather_release_primitive+0x29d2>
+ 20e073a:	48 c7 84 24 e8 01 00 	movq   $0x50,0x1e8(%rsp)
+ 20e0741:	00 50 00 00 00 
+ 20e0746:	48 89 84 24 f0 01 00 	mov    %rax,0x1f0(%rsp)
+ 20e074d:	00 
+ 20e074e:	48 c7 84 24 f8 01 00 	movq   $0x0,0x1f8(%rsp)
+ 20e0755:	00 00 00 00 00 
+ 20e075a:	ff 15 08 c2 1f 02    	call   *0x21fc208(%rip)        # 42dc968 <_DYNAMIC+0x298>
+ 20e0760:	bf 00 01 00 00       	mov    $0x100,%edi
+ 20e0765:	be 08 00 00 00       	mov    $0x8,%esi
+ 20e076a:	ff 15 00 c2 1f 02    	call   *0x21fc200(%rip)        # 42dc970 <_DYNAMIC+0x2a0>
+ 20e0770:	48 85 c0             	test   %rax,%rax
+ 20e0773:	0f 84 09 29 00 00    	je     20e3082 <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5testss_32two_bit_gather_release_primitive+0x29e2>
+ 20e0779:	48 89 9c 24 10 02 00 	mov    %rbx,0x210(%rsp)
+ 20e0780:	00 
+ 20e0781:	48 c7 84 24 b8 01 00 	movq   $0x8,0x1b8(%rsp)
+ 20e0788:	00 08 00 00 00 
+ 20e078d:	48 89 84 24 c0 01 00 	mov    %rax,0x1c0(%rsp)
+ 20e0794:	00 
+ 20e0795:	48 c7 84 24 c8 01 00 	movq   $0x0,0x1c8(%rsp)
+ 20e079c:	00 00 00 00 00 
+ 20e07a1:	ff 15 c1 c1 1f 02    	call   *0x21fc1c1(%rip)        # 42dc968 <_DYNAMIC+0x298>
+ 20e07a7:	bf 00 01 00 00       	mov    $0x100,%edi
+ 20e07ac:	be 08 00 00 00       	mov    $0x8,%esi
+ 20e07b1:	ff 15 b9 c1 1f 02    	call   *0x21fc1b9(%rip)        # 42dc970 <_DYNAMIC+0x2a0>
+ 20e07b7:	48 85 c0             	test   %rax,%rax
+ 20e07ba:	0f 84 d7 28 00 00    	je     20e3097 <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5testss_32two_bit_gather_release_primitive+0x29f7>
+ 20e07c0:	48 c7 84 24 d0 01 00 	movq   $0x8,0x1d0(%rsp)
+ 20e07c7:	00 08 00 00 00 
+ 20e07cc:	48 89 84 24 d8 01 00 	mov    %rax,0x1d8(%rsp)
+ 20e07d3:	00 
+ 20e07d4:	48 c7 84 24 e0 01 00 	movq   $0x0,0x1e0(%rsp)
+ 20e07db:	00 00 00 00 00 
+ 20e07e0:	48 c7 44 24 40 00 00 	movq   $0x0,0x40(%rsp)
+ 20e07e7:	00 00 
+ 20e07e9:	48 c7 44 24 50 00 00 	movq   $0x0,0x50(%rsp)
+ 20e07f0:	00 00 
+ 20e07f2:	ff 15 70 c1 1f 02    	call   *0x21fc170(%rip)        # 42dc968 <_DYNAMIC+0x298>
+ 20e07f8:	41 bf 0b 00 00 00    	mov    $0xb,%r15d
+ 20e07fe:	bf 0b 00 00 00       	mov    $0xb,%edi
+ 20e0803:	be 01 00 00 00       	mov    $0x1,%esi
+ 20e0808:	ff 15 62 c1 1f 02    	call   *0x21fc162(%rip)        # 42dc970 <_DYNAMIC+0x2a0>
+ 20e080e:	48 85 c0             	test   %rax,%rax
+ 20e0811:	0f 84 35 28 00 00    	je     20e304c <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5testss_32two_bit_gather_release_primitive+0x29ac>
+ 20e0817:	48 89 c3             	mov    %rax,%rbx
+ 20e081a:	48 b8 62 61 73 65 5f 	movabs $0x6d6f635f65736162,%rax
+ 20e0821:	63 6f 6d 
+ 20e0824:	48 89 03             	mov    %rax,(%rbx)
+ 20e0827:	c7 43 07 6d 6d 69 74 	movl   $0x74696d6d,0x7(%rbx)
+ 20e082e:	48 c7 84 24 f0 00 00 	movq   $0xb,0xf0(%rsp)
+ 20e0835:	00 0b 00 00 00 
+ 20e083a:	48 89 9c 24 f8 00 00 	mov    %rbx,0xf8(%rsp)
+ 20e0841:	00 
+ 20e0842:	48 c7 84 24 00 01 00 	movq   $0xb,0x100(%rsp)
+ 20e0849:	00 0b 00 00 00 
+ 20e084e:	ff 15 14 c1 1f 02    	call   *0x21fc114(%rip)        # 42dc968 <_DYNAMIC+0x298>
+ 20e0854:	bf 28 00 00 00       	mov    $0x28,%edi
+ 20e0859:	be 01 00 00 00       	mov    $0x1,%esi
+ 20e085e:	ff 15 0c c1 1f 02    	call   *0x21fc10c(%rip)        # 42dc970 <_DYNAMIC+0x2a0>
+ 20e0864:	48 85 c0             	test   %rax,%rax
+ 20e0867:	0f 84 3f 28 00 00    	je     20e30ac <_RNvNtNtCs4YbnGVz5TcO_6borsuk15rotated_two_bit5testss_32two_bit_gather_release_primitive+0x2a0c>
+ 20e086d:	0f 10 05 fb d3 6f fe 	movups -0x1902c05(%rip),%xmm0        # 7ddc6f <anon.2d965b29132d13c242af8f89b3a58a7f.2248.llvm.6563420913682974557+0x5d9>
+ 20e0874:	0f 11 40 10          	movups %xmm0,0x10(%rax)
+ 20e0878:	f3 0f 6f 05 df d3 6f 	movdqu -0x1902c21(%rip),%xmm0        # 7ddc5f <anon.2d965b29132d13c242af8f89b3a58a7f.2248.llvm.6563420913682974557+0x5c9>
+ 20e087f:	fe 
+ 20e0880:	f3 0f 7f 00          	movdqu %xmm0,(%rax)
+ 20e0884:	48 b9 34 66 62 39 38 	movabs $0x3533613839626634,%rcx
+ 20e088b:	61 33 35 
+ 20e088e:	48 89 48 20          	mov    %rcx,0x20(%rax)
+ 20e0892:	c6 84 24 80 00 00 00 	movb   $0x3,0x80(%rsp)
+ 20e0899:	03 
+ 20e089a:	48 c7 84 24 88 00 00 	movq   $0x28,0x88(%rsp)
+ 20e08a1:	00 28 00 00 00 
+ 20e08a6:	48 89 84 24 90 00 00 	mov    %rax,0x90(%rsp)
+ 20e08ad:	00 
+ 20e08ae:	48 c7 84 24 98 00 00 	movq   $0x28,0x98(%rsp)
+ 20e08b5:	00 28 00 00 00 
+ 20e08ba:	48 8d bc 24 30 01 00 	lea    0x130(%rsp),%rdi
+ 20e08c1:	00 
+ 20e08c2:	48 8d 74 24 40       	lea    0x40(%rsp),%rsi
+ 20e08c7:	48 8d 94 24 f0 00 00 	lea    0xf0(%rsp),%rdx
+ 20e08ce:	00 
+ 20e08cf:	48 8d 8c 24 80 00 00 	lea    0x80(%rsp),%rcx
+ 20e08d6:	00 
+ 20e08d7:	e8 14 cb f6 ff       	call   204d3f0 <_RNvMsi_NtNtNtCscHgRw1M2fX5_5alloc11collections5btree3mapINtB5_8BTreeMapNtNtBb_6string6StringNtNtCs37Cj5VCkOKp_10serde_json5value5ValueE6insertCs4YbnGVz5TcO_6borsuk>
+ 20e08dc:	80                   	.byte 0x80
+ 20e08dd:	bc                   	.byte 0xbc
+ 20e08de:	24 30                	and    $0x30,%al

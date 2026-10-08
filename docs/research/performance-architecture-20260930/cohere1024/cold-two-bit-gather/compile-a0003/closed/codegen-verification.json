@@ -1,0 +1,14 @@
+{
+  "status": "PASS_EXACT_GATHER_CODEGEN",
+  "elf_sha256": "6ebd599e908ccc94802c8d4c92f647bbbbbb962250f95b48ad4bafe6b0167045",
+  "elf_bytes": 88558264,
+  "gather_address": "0x2991460",
+  "bound_guard_before_gather": "0x29914b0..0x29914ba before 0x29914df",
+  "lane_order": "0,1,2,3 serial vaddsd at 29914e5/29914ee/29914f8/2991501",
+  "initial_accumulator_bits": "8000000000000000",
+  "tail": "checked scalar additions 2991554/2991574/2991594",
+  "no_horizontal_or_fma_in_gather": true,
+  "portable_default_compiler_flags": true,
+  "native_primitive_run": false,
+  "production_qualified": false
+}
