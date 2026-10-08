@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-direct-closure-native-qualification-closed-v1",
+  "instance_id": "i-0f0f5b43b381d7af7",
+  "phase": "native",
+  "original_exit": 1,
+  "exit": 1,
+  "qualification_exit": 1,
+  "source_commit": "92102c7d03a485bd33e1eac1e27cb4f64fb7c09e",
+  "native_source_file_count": 425,
+  "native_source_identity_sha256": "445223b594ac8037db37360e71c6ab03f0c903e560b8727979f07a419b807f82",
+  "source_archive_sha256": "6f046ab8f3ada83748f8a14efffada4fd8c27a7d0029fc9ba29364780664390c",
+  "evidence": {
+    "bytes": 354802,
+    "sha256": "9e6c7611d4efd9c5290021011db627ff6d10f2a1f4441f141ed7d8a2e05cabb7"
+  },
+  "scope": "compiler and synthetic correctness qualification only",
+  "ann_run": false,
+  "performance_claim": false,
+  "quality_claim": false
+}

@@ -1,0 +1,25 @@
+{
+  "status": "CLOSED_NATIVE_TEST_ASSERTION_FAILURE_NOT_ALGORITHM_REJECT",
+  "instance_id": "i-0f0f5b43b381d7af7",
+  "terminated": true,
+  "source_commit": "92102c7d03a485bd33e1eac1e27cb4f64fb7c09e",
+  "source_before_after_manifest_verified": true,
+  "native_file_count": 425,
+  "native_identity": "445223b594ac8037db37360e71c6ab03f0c903e560b8727979f07a419b807f82",
+  "inventory_counts": {
+    "lib": 26,
+    "bin": 13
+  },
+  "library_passed": 25,
+  "library_failed": [
+    "two_bit_generation::source_walk_tests::native_direct_closure_cold_oracle_zero_source_memory_and_caps"
+  ],
+  "failure": "semantic leaf fixture expected16 observed12",
+  "failed_log_sha256": "55f17cbe0012e0a20d5afd47cc529a691053afbe880ee6ab3b4879d381964470",
+  "remaining_gates": "UNRUN",
+  "swap_oom": 0,
+  "ann_run": false,
+  "performance_claim": false,
+  "quality_claim": false,
+  "next": "same-worker minimal diagnosed fixture repair then failing-layer-first exact-source qualification"
+}
