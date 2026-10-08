@@ -1,0 +1,35 @@
+{
+  "status": "EXECUTION_INVALID_TEST_FIXTURE",
+  "native_qualified": false,
+  "performance_claim": false,
+  "instance_id": "i-0720112e6d8f9fb21",
+  "terminated": true,
+  "source_commit": "34fa1f48246992d1ae1983f938f4cbc67faf5af9",
+  "candidate_commit": "2f3c78f0d6076d339a1ded344432a8db0582f22c",
+  "evidence_sha256": "d79cce372048d6e147c992d8b706ba687eb5525c0d201ce096f8f5aa90245b36",
+  "passed_stages": [
+    "affected-compile",
+    "router-regressions"
+  ],
+  "failed_stage": "generation-regressions",
+  "stage_native_exit": 101,
+  "generation_tests_passed": 19,
+  "generation_tests_failed": 1,
+  "remaining_stages": "UNRUN",
+  "cause": "new parity fixture supplies SQ8 IDs outside required [0,rows) permutation; production source validator correctly rejects",
+  "repair_message": "1791428775639650127-2965865",
+  "algorithm_rejected": false,
+  "source_support_file_count": 2450,
+  "source_before_after_equal": true,
+  "memory_peak_bytes": 7474737152,
+  "swap_peak_bytes": 0,
+  "memory_events": {
+    "low": 0,
+    "high": 0,
+    "max": 0,
+    "oom": 0,
+    "oom_kill": 0,
+    "oom_group_kill": 0,
+    "sock_throttled": 0
+  }
+}
