@@ -1,0 +1,24 @@
+{
+  "status": "SOURCE_BUNDLE_ONLY_NO_LAUNCH",
+  "candidate": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "file_count": 2454,
+  "native_file_count": 415,
+  "native_identity": "a7fe9601a9345da69223d75bf8fb6a765d1607c1f02b144e8e8763c90b0b2e8b",
+  "archive_bytes": 13243516,
+  "archive_sha256": "3cddd9eb0d2f079765522536f1e7eea88ee0dfc660af8d9ae8eacecd613ba6d8",
+  "control": {
+    "library_source": "c49a2e6d2a035bfaf42358fbf7fb60abf11e4222",
+    "native_identity": "79ce83fe95557668591ea4e7193f651522b309569cd7988c9aeae56aac5f7b88",
+    "derivation": "exact candidate archive with only the two library files replaced by authenticated c49a2e6d blobs; identical repaired runner and other native/support bytes",
+    "native_delta_paths": [
+      "crates/borsuk/src/rotated_two_bit.rs",
+      "crates/borsuk/src/two_bit_generation.rs"
+    ]
+  },
+  "changed_native_paths": [
+    "crates/borsuk/src/rotated_two_bit.rs",
+    "crates/borsuk/src/two_bit_generation.rs",
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs"
+  ],
+  "performance_claim": false
+}
