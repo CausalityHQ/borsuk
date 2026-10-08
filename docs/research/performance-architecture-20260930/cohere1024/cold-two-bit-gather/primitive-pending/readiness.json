@@ -1,0 +1,16 @@
+{
+  "status": "PENDING_NATIVE_ASSEMBLY_AND_OUTER_ADMISSION",
+  "candidate": "751b5327571c7fec17af4bbdd7f1b1594f0aaf9d",
+  "synthetic_checker_unit": "borsuk-gather-primitive-checker-controls.service",
+  "synthetic_exit": 0,
+  "native_primitive_run": false,
+  "remaining": [
+    "authenticate exact retained release ELF",
+    "inspect gather and ordered addition codegen",
+    "freeze original native/tee/live unit and executable binding",
+    "separate runtime admission and canary",
+    "one bounded native timing attempt"
+  ],
+  "partial_native_semantic_refusal": "not a CPU performance verdict; authenticate source/control/resource evidence and classify separately",
+  "performance_claim": false
+}
