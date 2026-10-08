@@ -1,0 +1,163 @@
+{
+  "status": "FROZEN_NOT_LAUNCHED",
+  "configuration_sha256": "e604a1ca02644329113e6c11a935d67115f784c40008859966f7e332fae53a3a",
+  "stage_sha256": "babac0ed8a61539c3cda25d84cf2433b978c3fcea423955c8bf9a86bc4b5f482",
+  "binary_sha256": "ca1ae2496e110494e7f6c03ae16eea3d5ff262d66945a3c52775749ac0bcaeab",
+  "source_preview": "fc8a23dac44ad635fc1236736df68878690a8389",
+  "external_limits": {
+    "cpu": 1,
+    "memory_bytes": 536870912,
+    "swap_bytes": 0,
+    "pids": 256,
+    "native_deadline_seconds": 2400
+  },
+  "original_stage": "/data/target/borsuk-native-s3-query-admission-a0001/stage.sh",
+  "changes": [
+    "native-qualified resident membership nomination",
+    "attempt-unique scratch/config/prefix",
+    "zero router GET/HEAD/inflight expected; source/SQ8/cold math unchanged"
+  ],
+  "pending": [
+    "create-only transport staging",
+    "one original runtime admission and independent verification",
+    "separate disposable canary",
+    "formal ABBA source/cost freeze"
+  ],
+  "userdata_sha256": "af50e275f80bb54bcf1d54835a3db51b6a8e0f48db93e798458234ff2b06f758",
+  "config_sha256": "e604a1ca02644329113e6c11a935d67115f784c40008859966f7e332fae53a3a",
+  "s3_prefix": "research/semantic-router/20261008/cold-membership-runtime-admission-a0001",
+  "inner_timeout_seconds": 2370,
+  "outer_timeout_seconds": 2400,
+  "whole_machine_seconds": 3540,
+  "maximum_attempts": 1,
+  "compute_reservation_usd": 0.5,
+  "ancillary_reservation_usd": 0.15,
+  "total_reservation_usd": 0.65,
+  "frozen_at": "2026-10-08T03:57:55.210907+00:00",
+  "performance_claim": false,
+  "cache": "all application payload caches off; provider cache state uncontrolled",
+  "quote": {
+    "az": "eu-central-1c",
+    "usd_hour": "0.206400",
+    "timestamp": "2026-10-08T00:00:00+00:00"
+  },
+  "acceptance": "Complete sealed native MEASURED/1000 queries before truth; 9723 hits/underfill0, exact source/SQ8 and query/truth bindings; full zero query router GET/bytes/HEAD/leaf inflight, source/SQ8 parity, native/runtime exits0, CPU1/512MiB/swap0/pids256, clean scratch and stopped service, same instance terminated before collection. No performance selection from this admission.",
+  "interruption": "INVALID; preserve original attempt; no automatic repeat",
+  "measurement": "Admission only; never select width or quote its tails as the formal counterbalanced experiment",
+  "qualification_receipt_sha256": "4185a584e23a5f015a7df21451d357cd294888603f1d9307dc472bab9dc3bcb8",
+  "checks": {
+    "stage": {
+      "status": "PASS",
+      "source_sha256": "babac0ed8a61539c3cda25d84cf2433b978c3fcea423955c8bf9a86bc4b5f482",
+      "cases": [
+        {
+          "case": "success",
+          "exit": 0
+        },
+        {
+          "case": "native-fail",
+          "exit": 2
+        },
+        {
+          "case": "scratch-leak",
+          "exit": 96
+        },
+        {
+          "case": "pin-change",
+          "exit": 96
+        },
+        {
+          "case": "bad-cap",
+          "exit": 1
+        }
+      ],
+      "real": [
+        "shell stage",
+        "time/timeout",
+        "config SHA/argv check",
+        "pin rehash",
+        "scratch leak refusal"
+      ],
+      "mocked": [
+        "cgroup file contents",
+        "Rust runner"
+      ],
+      "native_runtime_pass": false
+    },
+    "wrapper": {
+      "status": "MOCK_WRAPPER_CHECK_PASS",
+      "cases": [
+        {
+          "case": "already-unloaded",
+          "actual_exit": 0,
+          "expected_exit": 0
+        },
+        {
+          "case": "success",
+          "actual_exit": 0,
+          "expected_exit": 0
+        },
+        {
+          "case": "timer-fail",
+          "actual_exit": 17,
+          "expected_exit": 17
+        },
+        {
+          "case": "apt-fail",
+          "actual_exit": 17,
+          "expected_exit": 17
+        },
+        {
+          "case": "identity-fail",
+          "actual_exit": 1,
+          "expected_exit": 1
+        },
+        {
+          "case": "download-fail",
+          "actual_exit": 19,
+          "expected_exit": 19
+        },
+        {
+          "case": "late-start",
+          "actual_exit": 95,
+          "expected_exit": 95
+        },
+        {
+          "case": "native-fail",
+          "actual_exit": 2,
+          "expected_exit": 2
+        },
+        {
+          "case": "terminal-fail",
+          "actual_exit": 96,
+          "expected_exit": 96
+        },
+        {
+          "case": "closeout-fail",
+          "actual_exit": 96,
+          "expected_exit": 96
+        }
+      ],
+      "source_sha256": "af50e275f80bb54bcf1d54835a3db51b6a8e0f48db93e798458234ff2b06f758",
+      "real": [
+        "bash control flow",
+        "jq terminal serialization",
+        "timeouts",
+        "tar",
+        "non-input SHA computation"
+      ],
+      "mocked": [
+        "systemd/cgroup/native publisher",
+        "IMDS/HTTP",
+        "AWS/S3",
+        "apt",
+        "mount/shutdown",
+        "input binary sizes and pin checks"
+      ],
+      "native_runtime_pass": false,
+      "cloud_operations": false
+    }
+  },
+  "binary_bytes": 16470968,
+  "integration_commit": "2eb3645fecac120d5349e676758708318d891e04"
+}
