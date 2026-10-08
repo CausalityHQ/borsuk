@@ -1,0 +1,173 @@
+{
+  "status": "PROSPECTIVE_REVIEWED_PROTOCOL_NO_LAUNCH",
+  "prefix": "research/semantic-router/20261008/cold-two-bit-four-row-compile-a0003",
+  "candidate": "3138bfb0502c986d187e4098718f8b3945fd39c9",
+  "source": {
+    "status": "SOURCE_SEALED_NATIVE_UNRUN",
+    "candidate": "3138bfb0502c986d187e4098718f8b3945fd39c9",
+    "file_count": 2454,
+    "native_file_count": 415,
+    "native_identity": "784599b48775f185e16bdfd221164129dc33c7b65ec62a6f629229264bbb3adb",
+    "changed_native_paths": [
+      "crates/borsuk/src/rotated_two_bit.rs",
+      "crates/borsuk/src/two_bit_generation.rs"
+    ],
+    "archive_bytes": 13242580,
+    "archive_sha256": "279275b31b5df4fcfe94e5034c6ebfd22bc1c76b4064d2008c26dbe4f1c10a97",
+    "support_policy": "prior support plus original2 and new2 committed method docs; exact415 candidate native files",
+    "performance_claim": false
+  },
+  "inputs": {
+    "source-files.sha256": {
+      "bytes": 278704,
+      "sha256": "4c69609c27820d8e41e151d61c8b8c7d7c3beae298c6faef78c9fd07d25b306c"
+    },
+    "native-source.json": {
+      "bytes": 47205,
+      "sha256": "ce4cef36fd52fc3aee9afeee90106cba48887069a27513d626310bb5c0237d0a"
+    },
+    "mandatory-tests.json": {
+      "bytes": 2745,
+      "sha256": "9f9abbae66407bd3e1404c9aa5b1e8a8ddadd4ee7dd4a1ea690fbcc70dfb387a"
+    },
+    "gates.sh": {
+      "bytes": 3490,
+      "sha256": "c4cb7069fa98bbca155389ff8e49f03eaec9cad12454c6eb22f47662f3a85b12"
+    },
+    "select-probe.py": {
+      "bytes": 2855,
+      "sha256": "ccb03fb3adaf5421df2fa7c6b76da9645b9c2de57f7e31b492c973b6e598a14a"
+    }
+  },
+  "userdata": {
+    "bytes": 8582,
+    "sha256": "e8c7cd4fb16fbca0422f67c6c0e31cf38ebc60831f4af6e07a94fc3d5287da29"
+  },
+  "machine_seconds": 9000,
+  "build_seconds": 7200,
+  "build_memory_bytes": 8589934592,
+  "build_cpu": 2,
+  "build_jobs": 1,
+  "swap": 0,
+  "compute_reservation_usd": 1.5,
+  "ancillary_reservation_usd": 0.15,
+  "ebs_gib": 80,
+  "spot_bid_max_usd_per_hour": 0.5,
+  "primitive_run": false,
+  "full_qualification": false,
+  "native_ANN_corpus_query_truth": false,
+  "review_group": "f9b98d02852a459f",
+  "interruption": "INVALID; preserve terminal, no automatic duplicate",
+  "assembly": "early packed-presence/no-FMA/no-horizontal screen only; exact retained release ELF before/after tests; root independent loop and caller/kernel/realignment stack audit mandatory before timing",
+  "paid_launch_authorized": false,
+  "serial_stages": [
+    {
+      "name": "probe-compile",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "borsuk",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ]
+    },
+    {
+      "name": "codec-debug",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "rotated_two_bit::tests::",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "planner-debug",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "two_bit_generation::source_walk_tests::",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "codec-release",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "borsuk",
+        "--lib",
+        "rotated_two_bit::tests::",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "planner-release",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "borsuk",
+        "--lib",
+        "two_bit_generation::source_walk_tests::",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "integration",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--test",
+        "rotated_two_bit",
+        "--test",
+        "two_bit_source",
+        "--test",
+        "two_bit_generation",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "scalar-control-codec",
+      "argv": [
+        "env",
+        "CARGO_TARGET_DIR=/mnt/borsuk-http/target-scalar-control",
+        "cargo",
+        "test",
+        "--locked",
+        "--features",
+        "scalar-control",
+        "-p",
+        "borsuk",
+        "--lib",
+        "rotated_two_bit::tests::",
+        "--",
+        "--test-threads=1"
+      ]
+    }
+  ]
+}

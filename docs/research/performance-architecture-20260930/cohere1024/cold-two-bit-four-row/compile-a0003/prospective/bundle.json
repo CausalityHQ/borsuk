@@ -1,0 +1,13 @@
+{
+  "status": "SOURCE_BUNDLE_ONLY_NO_LAUNCH",
+  "candidate": "3138bfb0502c986d187e4098718f8b3945fd39c9",
+  "support_file_count": 2454,
+  "native_file_count": 415,
+  "native_identity": "784599b48775f185e16bdfd221164129dc33c7b65ec62a6f629229264bbb3adb",
+  "archive": {
+    "bytes": 13242580,
+    "sha256": "279275b31b5df4fcfe94e5034c6ebfd22bc1c76b4064d2008c26dbe4f1c10a97"
+  },
+  "paths": "/tmp/borsuk-four-row-bundle-3138bfb0",
+  "native_execution": false
+}
