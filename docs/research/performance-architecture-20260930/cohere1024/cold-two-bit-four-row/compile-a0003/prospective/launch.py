@@ -1,0 +1,25 @@
+import pathlib,json,subprocess,hashlib,base64,datetime,os
+r=pathlib.Path('/data/target/borsuk-cold-membership-native/two-bit-four-row-gate-a0003');p=json.loads((r/'protocol.json').read_text());env=dict(os.environ,AWS_MAX_ATTEMPTS='1');bucket='borsuk-bench-453182569524-euc1';prefix=p['prefix'];commit=(r/'protocol-commit.txt').read_text().strip()
+def aws(*a):
+ q=subprocess.run(['aws','--profile','causality','--region','eu-central-1',*a],capture_output=True,text=True,timeout=55,env=env);assert q.returncode==0,q.stderr;return json.loads(q.stdout) if q.stdout.strip() else {}
+assert subprocess.check_output(['/usr/bin/git','rev-parse','HEAD'],text=True).strip()==commit==subprocess.check_output(['/usr/bin/git','rev-parse','origin/main'],text=True).strip()
+assert not (r/'launch.json').exists() and not (r/'launch-attempt.json').exists()
+assert json.loads((r/'local-admission-canary.json').read_text())['status']=='PASS_BOUNDED_SOURCE_AND_BOOTSTRAP_ADMISSION'
+assert p['status']=='FROZEN_REVIEWED_ADMITTED_NATIVE_COMPILE_ONLY' and p['paid_launch_authorized'] is True
+assert p['candidate']=='3138bfb0502c986d187e4098718f8b3945fd39c9' and p['primitive_run'] is False
+assert aws('sts','get-caller-identity')['Account']=='453182569524'
+q=aws('ec2','describe-spot-price-history','--instance-types','c7i.2xlarge','--product-descriptions','Linux/UNIX','--availability-zone','eu-central-1b','--max-items','1');quote=q['SpotPriceHistory'][0];assert float(quote['SpotPrice'])<=.50 and .50*9000/3600<=1.50;(r/'spot-quote.json').write_text(json.dumps(q,indent=2)+'\n')
+prior_job=json.loads((r.parent/'two-bit-gather-primitive-a0002/active-job.json').read_text());assert prior_job['status']=='TERMINATED_COLLECTED_NOT_YET_VERIFIED'
+old=aws('ec2','describe-instances','--instance-ids',prior_job['instance_id']);assert all(i['State']['Name']=='terminated' for z in old['Reservations'] for i in z.get('Instances',[]))
+assert json.loads((r.parent/'two-bit-gather-primitive-a0002/wait.json').read_text())['exit']==0
+prior_four=json.loads((r.parent/'two-bit-four-row-gate-a0002/launch.json').read_text())['Instances'][0]['InstanceId'];closed=aws('ec2','describe-instances','--instance-ids',prior_four);assert all(i['State']['Name']=='terminated' for z in closed['Reservations'] for i in z.get('Instances',[]))
+assert json.loads((r.parent/'two-bit-four-row-gate-a0002/independent-verification.json').read_text())['status']=='COMPILE_AND_SYNTHETIC_CORRECTNESS_VERIFIED_CODEGEN_PENDING'
+name='borsuk-cold-two-bit-four-row-compile-a0003';existing=aws('ec2','describe-instances','--filters','Name=tag:Name,Values='+name);assert not any(z.get('Instances') for z in existing['Reservations'])
+for n,pin in p['inputs'].items():
+ data=(r/n).read_bytes();assert len(data)==pin['bytes'] and hashlib.sha256(data).hexdigest()==pin['sha256'];aws('s3','cp',str(r/n),'s3://'+bucket+'/'+prefix+'/inputs/'+n,'--only-show-errors');assert aws('s3api','head-object','--bucket',bucket,'--key',prefix+'/inputs/'+n)['ContentLength']==len(data)
+source=p['source'];assert hashlib.sha256((r/'source.tar.gz').read_bytes()).hexdigest()==source['archive_sha256'];key='research/native-library-check/sources/'+source['archive_sha256']+'.tar.gz';aws('s3','cp',str(r/'source.tar.gz'),'s3://'+bucket+'/'+key,'--only-show-errors');assert aws('s3api','head-object','--bucket',bucket,'--key',key)['ContentLength']==source['archive_bytes']
+data=(r/'user-data.sh').read_bytes();assert len(data)==p['userdata']['bytes'] and hashlib.sha256(data).hexdigest()==p['userdata']['sha256']
+x=json.loads((r.parent/'page-auth-gate-a0001/run-instances.json').read_text());assert json.loads((r.parent/'two-bit-four-row-gate-a0001/launch-failure.json').read_text())['instance_created'] is False;x['NetworkInterfaces'][0]['SubnetId']='subnet-00243d923761c047c';x['ClientToken']=name;x['UserData']=base64.b64encode(data).decode();x['TagSpecifications'][0]['Tags']=[{'Key':'Name','Value':name},{'Key':'Purpose','Value':'exact-four-row-synthetic-correctness-compile-only'}];assert sum(m.get('Ebs',{}).get('VolumeSize',0) for m in x['BlockDeviceMappings'])==80
+assert x['InstanceType']=='c7i.2xlarge' and x['InstanceMarketOptions']['MarketType']=='spot' and x['InstanceInitiatedShutdownBehavior']=='terminate';(r/'run-instances.json').write_text(json.dumps(x,indent=2)+'\n')
+(r/'launch-attempt.json').write_text(json.dumps({'protocol_commit':commit,'source':source['candidate'],'quote':quote,'compute_cap_usd':1.50,'ancillary_cap_usd':.15,'client_token':name,'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'native_ANN':False,'micro_timing':False},indent=2)+'\n')
+launch=aws('ec2','run-instances','--cli-input-json','file://'+str(r/'run-instances.json'));(r/'launch.json').write_text(json.dumps(launch,indent=2)+'\n');assert len(launch['Instances'])==1;i=launch['Instances'][0]['InstanceId'];(r/'active-job.json').write_text(json.dumps({'status':'LAUNCHED','instance_id':i,'protocol_commit':commit,'prefix':prefix,'bucket':bucket,'performance_claim':False},indent=2)+'\n');print(i,flush=True)
