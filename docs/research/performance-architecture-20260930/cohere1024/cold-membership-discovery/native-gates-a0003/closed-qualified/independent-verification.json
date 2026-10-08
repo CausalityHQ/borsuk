@@ -1,0 +1,129 @@
+{
+  "status": "NATIVE_QUALIFIED",
+  "source_commit": "fc8a23dac44ad635fc1236736df68878690a8389",
+  "source_file_count": 415,
+  "support_file_count": 2450,
+  "stages": [
+    {
+      "name": "generation-regressions",
+      "command": "cargo test --locked -p borsuk --lib two_bit_generation:: -- --test-threads=1",
+      "exit": 0,
+      "tests": 20
+    },
+    {
+      "name": "affected-compile",
+      "command": "cargo test --locked -p borsuk --lib --bin check_cohere_native_baseline --bin check_semantic_router_scorer --example compare_native_replay --no-run",
+      "exit": 0,
+      "tests": 0
+    },
+    {
+      "name": "router-regressions",
+      "command": "cargo test --locked -p borsuk --lib semantic_unit_router:: -- --test-threads=1",
+      "exit": 0,
+      "tests": 8
+    },
+    {
+      "name": "source-regressions",
+      "command": "cargo test --locked -p borsuk --lib two_bit_source:: -- --test-threads=1",
+      "exit": 0,
+      "tests": 0
+    },
+    {
+      "name": "store-regressions",
+      "command": "cargo test --locked -p borsuk --lib two_bit_store:: -- --test-threads=1",
+      "exit": 0,
+      "tests": 2
+    },
+    {
+      "name": "range-regressions",
+      "command": "cargo test --locked -p borsuk --lib sq8_s3_range:: -- --test-threads=1",
+      "exit": 0,
+      "tests": 12
+    },
+    {
+      "name": "baseline-regressions",
+      "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+      "exit": 0,
+      "tests": 10
+    },
+    {
+      "name": "scorer-regressions",
+      "command": "cargo test --locked -p borsuk --bin check_semantic_router_scorer -- --test-threads=1",
+      "exit": 0,
+      "tests": 6
+    },
+    {
+      "name": "example-regressions",
+      "command": "cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1",
+      "exit": 0,
+      "tests": 13
+    },
+    {
+      "name": "retained-integration",
+      "command": "cargo test --locked -p borsuk --test two_bit_generation retained_semantic_ -- --test-threads=1",
+      "exit": 0,
+      "tests": 2
+    },
+    {
+      "name": "release",
+      "command": "cargo build --locked --release -p borsuk --bin check_cohere_native_baseline --example compare_native_replay --example two_bit_http",
+      "exit": 0,
+      "tests": 0
+    },
+    {
+      "name": "workspace-clippy",
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "exit": 0,
+      "tests": 0
+    },
+    {
+      "name": "real-test-build",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND CARGO_BUILD_JOBS=1 BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "exit": 0,
+      "tests": 0
+    }
+  ],
+  "mandatory_tests_passed": 24,
+  "full_source_before_after_root_match": true,
+  "terminated": true,
+  "performance_claim": false,
+  "artifacts_verified": 121,
+  "binaries": {
+    "compare_native_replay": {
+      "role": "compare_native_replay",
+      "bytes": 1235680,
+      "sha256": "614f2c2afcd7bacf9a87a850147de2ebfd2f9e712219ce8d6438e388b1a50519"
+    },
+    "check_cohere_native_baseline": {
+      "role": "check_cohere_native_baseline",
+      "bytes": 16470968,
+      "sha256": "ca1ae2496e110494e7f6c03ae16eea3d5ff262d66945a3c52775749ac0bcaeab"
+    },
+    "two_bit_http": {
+      "role": "two_bit_http",
+      "bytes": 16389144,
+      "sha256": "1438b2289dac146d684c08de43b49c7db609d47d0c4372f7c43ecdbd28c1cd21"
+    }
+  },
+  "instance_id": "i-0bd830dfe3440b3b2",
+  "candidate_commit": "966a88b59be88cf0051a510c48d348587b801ec2",
+  "native_source_identity_sha256": "0097af81fbf3e61a2050a77cb046adfbf0b02a745e73a2181e924cd2cb697eae",
+  "source_archive_sha256": "3927688ec1344c8c62058bcecd054251c4befcff1c6fd7dd800b1a860587faa2",
+  "resources": {
+    "cpu_max": "200000 100000",
+    "memory_max": 8589934592,
+    "memory_peak": 8589934592,
+    "memory_max_events": 5125,
+    "swap_peak": 0,
+    "oom": 0,
+    "oom_kill": 0,
+    "pids_max": 512,
+    "pids_after": 2,
+    "systemd_inactive": true
+  },
+  "limitations": [
+    "source-regressions filter matched zero tests; no executed source-test coverage claimed for that stage",
+    "compiler/synthetic correctness only; real-input admission, canary and cold comparison remain pending",
+    "memory cap reached; no OOM or swap observed"
+  ]
+}

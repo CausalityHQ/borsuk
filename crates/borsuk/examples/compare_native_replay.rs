@@ -5,6 +5,10 @@
 //! Paired CLI: --paired-v2 CONFIG CONFIG_SHA256 NEW_OUTPUT_JSON. CONFIG has
 //! schema borsuk-paired-native-reduction-config-v1 and two CompletedConfig arms,
 //! ordered fetch_parallelism 16 then 32, with source_cache off in both.
+//! Membership CLI: --membership-abba-v2 CONFIG CONFIG_SHA256 NEW_OUTPUT_JSON.
+//! Four runs A1/B1/B2/A2 use width32 and one attempt-specific runtime config SHA.
+//! Both arms share the same input authority. Only
+//! the independently frozen binary, generation and router component pins differ.
 
 use rustix::fs::{Mode, OFlags, openat};
 use serde::{
@@ -70,6 +74,7 @@ fn valid_sha(s: &str) -> bool {
 
 const COMPLETED_SCHEMA: &str = "borsuk-completed-native-reduction-v1";
 const PAIRED_SCHEMA: &str = "borsuk-paired-native-reduction-v1";
+const MEMBERSHIP_ABBA_SCHEMA: &str = "borsuk-membership-abba-native-reduction-v1";
 const CONFIG_CAP: u64 = 32 * 1024;
 
 #[derive(Deserialize)]
@@ -95,6 +100,19 @@ struct CompletedConfig {
 struct PairedConfig {
     schema: String,
     arms: [CompletedConfig; 2],
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MembershipAbbaConfig {
+    schema: String,
+    // Declared A1/B1/B2/A2 order; actual execution order is externally attested.
+    runs: [CompletedConfig; 4],
+    // Root freezes an attempt-specific config (including unique scratch_parent).
+    runtime_config_sha256: String,
+    // Control then candidate; provenance binding remains an external root gate.
+    producer_source_commits: [String; 2],
+    producer_source_archive_sha256: [String; 2],
 }
 
 // Value normally accepts duplicate keys. Reject them recursively before using
@@ -1335,7 +1353,7 @@ fn completed_report(c: &CompletedConfig, run: &Run) -> Result<Value> {
         "percentile_method":"nearest_rank","sequential_qps_definition":"query_count * 1e9 / sum(query_wall_ns); not concurrent service QPS",
         "stage_wall_sums":run.stages,"stage_statistics":distributions,
         "unattributed_query_wall_ns":stats.query_wall_ns.checked_sub(accounted).ok_or("stage sum exceeds query wall")?,
-        "stage_scope":"recorded query intervals; discovery includes preparation/router reads, source is authenticated source fetch, planning is source scoring/SQ8 planning, sq8 is fetch/rank; no inferred network-only costs",
+        "stage_scope":"recorded query intervals; discovery includes preparation and metadata nomination, plus router payload reads only when issued; source is authenticated source fetch, planning is source scoring/SQ8 planning, sq8 is fetch/rank; no inferred network-only costs",
         "startup":e.startup,"native_terminal":e.terminal,"recall_source":"authenticated native terminal checked against ordered sealed recall rows; truth bodies not reopened",
         "transport_scope":"cumulative process SDK observations including S3 and IMDS credential requests including PUT; not per-query logical charges or wire/billed accounting",
         "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
@@ -1487,6 +1505,237 @@ fn reduce_paired(config_path: &Path, config_sha: &str) -> Result<Value> {
         "vendor_or_scientific_win_claim":false,"performance_pass_claim":false,
         "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null}),
     )
+}
+
+fn reduce_membership_abba(config_path: &Path, config_sha: &str) -> Result<Value> {
+    let (c, config_bytes): (MembershipAbbaConfig, _) = read_config(config_path, config_sha)?;
+    require(
+        c.schema == "borsuk-membership-abba-native-reduction-config-v1",
+        "membership ABBA config schema",
+    )?;
+    require(
+        valid_sha(&c.runtime_config_sha256),
+        "attempt runtime config SHA256",
+    )?;
+    for commit in &c.producer_source_commits {
+        require(
+            commit.len() == 40
+                && commit
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "producer source commit",
+        )?;
+    }
+    require(
+        c.producer_source_commits[0] != c.producer_source_commits[1]
+            && c.producer_source_archive_sha256
+                .iter()
+                .all(|s| valid_sha(s))
+            && c.producer_source_archive_sha256[0] != c.producer_source_archive_sha256[1],
+        "independently frozen producer sources",
+    )?;
+    for run in &c.runs {
+        require(
+            run.schema == "borsuk-completed-native-reduction-config-v1"
+                && run.expected_identity["fetch_parallelism"] == 32
+                && run.expected_bound_inputs["fetch_parallelism"] == 32
+                && run.expected_bound_inputs["source_cache"] == "off",
+            "membership ABBA width32/cache pins",
+        )?;
+        require(
+            run.expected_identity["config_sha256"] == c.runtime_config_sha256
+                && run.expected_bound_inputs == c.runs[0].expected_bound_inputs,
+            "membership ABBA attempt/config/input binding",
+        )?;
+        let i: Inputs = serde_json::from_value(run.expected_bound_inputs.clone())?;
+        require(
+            i.dataset == "CohereLabs/wikipedia-2023-11-embed-multilingual-v3"
+                && i.revision == "ade45fb52bd549f5e8c065636fe4160a43c2af36"
+                && i.metric == "cosine"
+                && i.tie_rule == "corpus_ordinal_ascending"
+                && i.rows == 100000
+                && i.dimensions == 1024
+                && i.count == COUNT
+                && i.k == K
+                && i.corpus_source_first == 0
+                && i.query_source_first == 100000
+                && i.profile == "native100k"
+                && !i.truth_opened
+                && i.requests_bytes == 4096000
+                && i.truth_bytes == 80000
+                && [
+                    i.requests_sha256.as_str(),
+                    i.truth_sha256.as_str(),
+                    i.native_source_sha256.as_str(),
+                    i.native_sq8_sha256.as_str(),
+                    i.native_order_sha256.as_str(),
+                ] == INPUT_SHA256,
+            "membership ABBA production benchmark pins",
+        )?;
+    }
+    require(
+        c.runs[0].expected_identity == c.runs[3].expected_identity
+            && c.runs[1].expected_identity == c.runs[2].expected_identity,
+        "membership ABBA same-arm identity drift",
+    )?;
+    let mut identity = c.runs[0].expected_identity.clone();
+    for field in [
+        "binary_sha256",
+        "generation_source_sha256",
+        "router_source_sha256",
+    ] {
+        require(
+            identity[field] != c.runs[1].expected_identity[field],
+            "membership ABBA unchanged producer pin",
+        )?;
+        identity[field] = c.runs[1].expected_identity[field].clone();
+    }
+    require(
+        identity == c.runs[1].expected_identity,
+        "membership ABBA unapproved component delta",
+    )?;
+    let mut runs: Vec<Run> = Vec::with_capacity(4);
+    for (index, pinned) in c.runs.iter().enumerate() {
+        let run = read_run_with(&pinned.input.path, &pinned.input.sha256, Some(pinned))
+            .map_err(|e| format!("{}: {e}", LABELS[index]))?;
+        for (old, old_pin) in runs.iter().zip(&c.runs) {
+            require(
+                pinned.input.sha256 != old_pin.input.sha256
+                    && (run.file_identity.dev, run.file_identity.ino)
+                        != (old.file_identity.dev, old.file_identity.ino),
+                "duplicate membership ABBA run evidence",
+            )?;
+        }
+        let control = index == 0 || index == 3;
+        for (ordinal, sample) in run.samples.iter().enumerate() {
+            let router_valid = if control {
+                (1..=16).contains(&sample.charges.router.submitted_gets)
+                    && sample.charges.router.verified_bytes > 0
+            } else {
+                sample.charges.router == Charge::default()
+            };
+            require(
+                router_valid,
+                &format!(
+                    "{} membership ABBA query {ordinal}: router charge",
+                    LABELS[index]
+                ),
+            )?;
+            if let Some(first) = runs.first() {
+                let a = &first.samples[ordinal];
+                require(
+                    a.returned == sample.returned
+                        && a.hits10 == sample.hits10
+                        && a.trace_sha256 == sample.trace_sha256
+                        && a.charges.source == sample.charges.source
+                        && a.charges.sq8 == sample.charges.sq8
+                        && (!control || a.charges.router == sample.charges.router),
+                    &format!(
+                        "{} membership ABBA query {ordinal}: ordered hits/scorebits/recall/nomination trace/source/SQ8 mismatch",
+                        LABELS[index]
+                    ),
+                )?;
+            }
+        }
+        let e = run
+            .completed
+            .as_ref()
+            .ok_or("missing membership evidence")?;
+        let transport = &e.last.as_ref().ok_or("missing transport")?.after;
+        require(
+            transport.transport_failures == 0
+                && transport.stream_failures == 0
+                && transport.dropped_error_bodies == 0
+                && run.terminal.sum.failed_gets == 0
+                && run.terminal.underfilled_queries == 0,
+            "membership ABBA failed/underfilled run",
+        )?;
+        if let Some(first) = runs.first() {
+            require(
+                e.binding_charge
+                    == first
+                        .completed
+                        .as_ref()
+                        .ok_or("missing binding")?
+                        .binding_charge,
+                "membership ABBA source binding charge mismatch",
+            )?;
+        }
+        require(
+            if control {
+                (1..=16).contains(&run.stages.max_leaf_peak_inflight)
+                    && e.startup["metadata"]["router_head_requests"] == 1
+            } else {
+                run.stages.max_leaf_peak_inflight == 0
+                    && e.startup["metadata"]["router_head_requests"] == 0
+                    && e.startup["metadata"]["router_head_wall_ns"] == 0
+            },
+            "membership ABBA leaf I/O boundary",
+        )?;
+        runs.push(run);
+    }
+    let comparisons = [
+        membership_comparison(&runs[0], &runs[1], "B1-A1")?,
+        membership_comparison(&runs[3], &runs[2], "B2-A2")?,
+    ];
+    let screen_passed = comparisons
+        .iter()
+        .all(|pair| pair["timing_gate_passed"] == true);
+    let reports = c
+        .runs
+        .iter()
+        .zip(&runs)
+        .enumerate()
+        .map(|(index, (pinned, run))| {
+            let mut report = completed_report(pinned, run)?;
+            report["run"] = json!(LABELS[index]);
+            Ok(report)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(
+        json!({"schema":MEMBERSHIP_ABBA_SCHEMA,"status":"MEASURED","complete":true,
+        "config_path":config_path,"config_sha256":config_sha,"config_bytes":config_bytes,
+        "runtime_config_sha256":c.runtime_config_sha256,
+        "producer_source_commits":c.producer_source_commits,
+        "producer_source_archive_sha256":c.producer_source_archive_sha256,
+        "producer_provenance_verified":false,
+        "producer_provenance_authority":"external root frozen source/archive/binary qualification receipts; archive bodies not reopened",
+        "declared_run_order":LABELS,"execution_order_verified":false,
+        "execution_order_authority":"external root attempt lifecycle receipts; JSONL files do not attest chronological execution",
+        "attempt_config_authority":"external root freezes unique scratch_parent in the runtime config; all four emitted config SHA256s must match this attempt pin",
+        "semantic_parity":true,"nomination_trace_parity":true,"source_sq8_charge_parity":true,
+        "candidate_router_charge_zero":true,"candidate_leaf_peak_zero":true,"candidate_router_head_zero":true,
+        "physical_range_parity_verified_by_reducer":false,
+        "physical_range_evidence":"external native exact-request parity fixture and unchanged source/SQ8 planner; emitted nomination traces contain no physical ranges",
+        "removed_router_query_charges":[runs[0].terminal.charges.router,runs[3].terminal.charges.router],
+        "runs":reports,"comparisons":comparisons,"performance_screen_passed":screen_passed,
+        "screen":"p90 and p95 at least 5 percent lower AND reciprocal serial QPS no regression in BOTH A1/B1 and A2/B2 pairs",
+        "disposition":if screen_passed {"SCREEN_PASSED_EXTERNAL_GATES_REQUIRED"} else {"SCREEN_FAILED"},
+        "statistics_population":"all 1000 ordered queries per run including first; all four runs retained",
+        "source_cache":"off","payload_cache":"off; frozen runtime gate required",
+        "local_file_only":true,"external_resources_and_cost_gate_required":true,
+        "frozen_runtime_root_config_admission_required":true,"qualified":false,
+        "supervisor_resources_cost_and_cache_qualified":false,"production_win_claim":false,
+        "vendor_or_scientific_win_claim":false}),
+    )
+}
+
+// Reuse the historical ratios, exact integer quantiles and per-query deltas;
+// only this prospective screen uses no QPS regression instead of +5 percent.
+fn membership_comparison(a: &Run, b: &Run, label: &str) -> Result<Value> {
+    let mut comparison = paired(a, b, label)?;
+    let qps_pass = b.terminal.query_wall_ns <= a.terminal.query_wall_ns;
+    comparison
+        .as_object_mut()
+        .ok_or("comparison object")?
+        .remove("sequential_qps_at_least_5_percent_higher");
+    comparison["sequential_qps_no_regression"] = json!(qps_pass);
+    comparison["timing_gate_passed"] = json!(
+        comparison["p90_at_least_5_percent_lower"] == true
+            && comparison["p95_at_least_5_percent_lower"] == true
+            && qps_pass
+    );
+    Ok(comparison)
 }
 
 fn paired(a: &Run, b: &Run, label: &str) -> Result<Value> {
@@ -1674,6 +1923,18 @@ fn execute_report(
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
     let result = (|| -> Result<bool> {
+        if args.get(1).is_some_and(|arg| arg == "--membership-abba-v2") {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --membership-abba-v2 CONFIG CONFIG_SHA256 NEW_OUTPUT_JSON",
+            )?;
+            return execute_report(Path::new(&args[4]), MEMBERSHIP_ABBA_SCHEMA, || {
+                reduce_membership_abba(
+                    Path::new(&args[2]),
+                    args[3].to_str().ok_or("config SHA256 encoding")?,
+                )
+            });
+        }
         if args.get(1).is_some_and(|arg| arg == "--paired-v2") {
             require(
                 args.len() == 5,
@@ -2121,6 +2382,324 @@ mod tests {
         (path, sha(&body))
     }
 
+    #[test]
+    fn membership_abba_v2_parity_screens_and_refusals() {
+        fn timings(rows: &mut [Value], times: &[u64]) {
+            for (row, &time) in rows[5..1005].iter_mut().zip(times) {
+                row["query_wall_ns"] = json!(time);
+            }
+            let total = times.iter().sum::<u64>();
+            let terminal = &mut rows.last_mut().unwrap()["summary"];
+            terminal["query_wall_ns"] = json!(total);
+            terminal["process_wall_ns"] = json!(total + 100);
+        }
+        fn fixture() -> [Vec<Value>; 4] {
+            let mut a = paired_v2_fixture(32);
+            let mut b = a.clone();
+            for field in [
+                "binary_sha256",
+                "generation_source_sha256",
+                "router_source_sha256",
+            ] {
+                b[0][field] = json!("8".repeat(64));
+            }
+            b[4]["metadata"]["router_head_requests"] = json!(0);
+            b[4]["metadata"]["router_head_wall_ns"] = json!(0);
+            for row in &mut b[5..1005] {
+                row["charges"]["router"] = charge(0);
+                row["sum"] = charge(2);
+                row["stages"]["leaf_peak_inflight"] = json!(0);
+            }
+            let t = &mut b.last_mut().unwrap()["summary"];
+            t["charges"]["router"] = charge(0);
+            t["sum"] = charge(2000);
+            timings(&mut a, &[1_000_000; COUNT]);
+            timings(&mut b, &[900_000; COUNT]);
+            let mut runs = [a.clone(), b.clone(), b, a];
+            for (index, rows) in runs.iter_mut().enumerate() {
+                // Independent process observations make all four file identities
+                // distinct without altering the common semantic/query authority.
+                rows.last_mut().unwrap()["summary"]["observed_process_peak_bytes"] =
+                    json!(12345 + index);
+            }
+            runs
+        }
+        fn seal(runs: &mut [Vec<Value>; 4]) {
+            for rows in runs {
+                authenticate(rows);
+            }
+        }
+        fn config(dir: &Path, rows: &[Vec<Value>; 4]) -> (PathBuf, String) {
+            let runs = rows
+                .iter()
+                .zip(LABELS)
+                .map(|(rows, label)| {
+                    let path = dir.join(format!("{label}.jsonl"));
+                    let bytes = encode(rows);
+                    std::fs::write(&path, &bytes).unwrap();
+                    json!({"schema":"borsuk-completed-native-reduction-config-v1",
+                    "input":{"path":path,"bytes":bytes.len(),"sha256":sha(&bytes)},
+                    "expected_identity":rows[0],"expected_bound_inputs":rows[1]})
+                })
+                .collect::<Vec<_>>();
+            let value = json!({"schema":"borsuk-membership-abba-native-reduction-config-v1",
+                "runs":runs,"runtime_config_sha256":"3".repeat(64),
+                "producer_source_commits":["1".repeat(40),"2".repeat(40)],
+                "producer_source_archive_sha256":["3".repeat(64),"4".repeat(64)]});
+            let bytes = serde_json::to_vec(&value).unwrap();
+            let path = dir.join("membership-abba-config.json");
+            std::fs::write(&path, &bytes).unwrap();
+            (path, sha(&bytes))
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut runs = fixture();
+        seal(&mut runs);
+        let (path, pin) = config(dir.path(), &runs);
+        let report = reduce_membership_abba(&path, &pin).unwrap();
+        assert_eq!(report["schema"], MEMBERSHIP_ABBA_SCHEMA);
+        assert_eq!(report["semantic_parity"], true);
+        assert_eq!(report["nomination_trace_parity"], true);
+        assert_eq!(report["source_sq8_charge_parity"], true);
+        assert_eq!(report["candidate_router_charge_zero"], true);
+        assert_eq!(
+            report["removed_router_query_charges"],
+            json!([charge(1000), charge(1000)])
+        );
+        assert_eq!(
+            report["declared_run_order"],
+            json!(["A1", "B1", "B2", "A2"])
+        );
+        assert_eq!(report["runs"].as_array().unwrap().len(), 4);
+        for run in report["runs"].as_array().unwrap() {
+            assert_eq!(run["statistics"]["count"], COUNT);
+        }
+        assert_eq!(report["performance_screen_passed"], true);
+        assert_eq!(report["comparisons"][0]["comparison"], "B1-A1");
+        assert_eq!(report["comparisons"][1]["comparison"], "B2-A2");
+        for field in [
+            "execution_order_verified",
+            "producer_provenance_verified",
+            "physical_range_parity_verified_by_reducer",
+            "qualified",
+            "supervisor_resources_cost_and_cache_qualified",
+            "production_win_claim",
+            "vendor_or_scientific_win_claim",
+        ] {
+            assert_eq!(report[field], false, "{field}");
+        }
+        let output = dir.path().join("membership-report");
+        assert!(
+            execute_report(&output, MEMBERSHIP_ABBA_SCHEMA, || reduce_membership_abba(
+                &path, &pin
+            ))
+            .unwrap()
+        );
+        assert!(
+            execute_report(&output, MEMBERSHIP_ABBA_SCHEMA, || panic!(
+                "occupied output"
+            ))
+            .is_err()
+        );
+
+        // Both pairs must pass. Exercise each integer threshold independently
+        // in the second pair, including exact QPS equality and a 1ns regression.
+        for case in 0..6 {
+            let mut runs = fixture();
+            let mut candidate = vec![950_000; COUNT];
+            match case {
+                0 => (),
+                1 => candidate.fill(950_001),
+                2 | 3 => {
+                    candidate[950..].fill(1_950_000);
+                    if case == 3 {
+                        candidate[999] += 1;
+                    }
+                }
+                4 => {
+                    let mut control = vec![1_000_000; COUNT];
+                    control[900..].fill(2_000_000);
+                    timings(&mut runs[3], &control);
+                    candidate[..900].fill(950_001);
+                    candidate[900..].fill(1_800_000);
+                }
+                _ => {
+                    candidate[..900].fill(900_000);
+                    candidate[900..].fill(950_001);
+                }
+            }
+            timings(&mut runs[2], &candidate);
+            seal(&mut runs);
+            let (path, pin) = config(dir.path(), &runs);
+            let report = reduce_membership_abba(&path, &pin).unwrap();
+            let pair = &report["comparisons"][1];
+            assert_eq!(report["comparisons"][0]["timing_gate_passed"], true);
+            assert_eq!(
+                report["performance_screen_passed"],
+                matches!(case, 0 | 2),
+                "case {case}"
+            );
+            assert_eq!(
+                pair["p90_at_least_5_percent_lower"],
+                !matches!(case, 1 | 4),
+                "case {case}"
+            );
+            assert_eq!(
+                pair["p95_at_least_5_percent_lower"],
+                !matches!(case, 1 | 5),
+                "case {case}"
+            );
+            assert_eq!(
+                pair["sequential_qps_no_regression"],
+                case != 3,
+                "case {case}"
+            );
+            assert!(
+                pair.get("sequential_qps_at_least_5_percent_higher")
+                    .is_none()
+            );
+            if case == 2 {
+                assert_eq!(pair["sequential_qps_ratio"], 1.0);
+            }
+            if case == 1 {
+                runs.swap(0, 3);
+                runs.swap(1, 2);
+                let (path, pin) = config(dir.path(), &runs);
+                let report = reduce_membership_abba(&path, &pin).unwrap();
+                assert_eq!(report["comparisons"][0]["timing_gate_passed"], false);
+                assert_eq!(report["comparisons"][1]["timing_gate_passed"], true);
+                assert_eq!(report["performance_screen_passed"], false);
+            }
+        }
+        for case in 0..34 {
+            let mut runs = fixture();
+            let b = &mut runs[2];
+            match case {
+                // Last ordinal in B2 must be checked, even with a valid first pair.
+                0 => b[1004]["returned"][9]["id"] = json!(11),
+                1 => b[1004]["returned"][9]["score_bits"] = json!(0x4000_0001_u32),
+                2 => b[1004]["trace"]["ranked_candidate_pages"] = json!([1, 0]),
+                3 => {
+                    b[2005]["hits10"] = json!(8);
+                    b[2005]["recall10"] = json!(0.8);
+                    let t = &mut b.last_mut().unwrap()["summary"];
+                    t["total_hits10"] = json!(8999);
+                    t["recall_numerator"] = json!(8999);
+                    t["mean_recall10"] = json!(0.8999);
+                }
+                4..=6 => {
+                    let stage = ["source", "sq8", "router"][case - 4];
+                    for key in ["submitted_gets", "verified_bytes"] {
+                        b[1004]["charges"][stage][key] =
+                            json!(b[1004]["charges"][stage][key].as_u64().unwrap() + 1);
+                        b[1004]["sum"][key] = json!(b[1004]["sum"][key].as_u64().unwrap() + 1);
+                        let t = &mut b.last_mut().unwrap()["summary"];
+                        t["charges"][stage][key] =
+                            json!(t["charges"][stage][key].as_u64().unwrap() + 1);
+                        t["sum"][key] = json!(t["sum"][key].as_u64().unwrap() + 1);
+                    }
+                }
+                7 => b[1004]["stages"]["leaf_peak_inflight"] = json!(1),
+                8..=11 => {
+                    b[0][[
+                        "runner_source_sha256",
+                        "codec_source_sha256",
+                        "source_plane_source_sha256",
+                        "config_sha256",
+                    ][case - 8]] = json!("7".repeat(64))
+                }
+                12 => b[1]["generation_root_sha256"] = json!("7".repeat(64)),
+                13 => b[1]["backend"]["sq8_etag"] = json!("other"),
+                14 => {
+                    b[0]["fetch_parallelism"] = json!(16);
+                    b[1]["fetch_parallelism"] = json!(16);
+                }
+                15 => b[1]["source_cache"] = json!("on"),
+                16 => b.last_mut().unwrap()["summary"]["complete"] = json!(false),
+                17 => {
+                    b.remove(1004);
+                }
+                18 => b[4]["metadata"]["router_head_requests"] = json!(1),
+                19 => b[4]["metadata"]["router_head_wall_ns"] = json!(1),
+                20 => b[1004]["charges"]["source"]["failed_gets"] = json!(1),
+                27 => runs[3][0]["binary_sha256"] = json!("7".repeat(64)),
+                28 => {
+                    for index in [1, 2] {
+                        runs[index][0]["runner_source_sha256"] = json!("7".repeat(64));
+                    }
+                }
+                30 => {
+                    for rows in &mut runs {
+                        rows[0]["config_sha256"] = json!("6".repeat(64));
+                    }
+                }
+                32 => {
+                    b[2]["charges"]["verified_bytes"] = json!(201);
+                    b.last_mut().unwrap()["summary"]["binding_charge"]["verified_bytes"] =
+                        json!(201);
+                }
+                33 => runs[3][1004]["trace"]["semantic_units"] = json!([0, 7]),
+                _ => (),
+            }
+            seal(&mut runs);
+            if case == 21 {
+                runs[2][1005]["prefix_sha256"] = json!("0".repeat(64));
+            }
+            if case == 31 {
+                runs[2].pop();
+            }
+            let (path, mut pin) = config(dir.path(), &runs);
+            if matches!(case, 22..=26 | 29) {
+                let mut value: Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                match case {
+                    22 => {
+                        value["producer_source_commits"][1] =
+                            value["producer_source_commits"][0].clone()
+                    }
+                    23 => {
+                        // Both expected candidate pins agree but don't match either file.
+                        for index in [1, 2] {
+                            value["runs"][index]["expected_identity"]["binary_sha256"] =
+                                json!("5".repeat(64));
+                        }
+                    }
+                    24 => value["selector"] = json!("allow_other_delta"),
+                    25 | 26 => {
+                        let first = value["runs"][0]["input"].clone();
+                        if case == 25 {
+                            value["runs"][3]["input"] = first;
+                        } else {
+                            // A copied file has a distinct inode but reused bytes.
+                            std::fs::copy(dir.path().join("A1.jsonl"), dir.path().join("A2.jsonl"))
+                                .unwrap();
+                            value["runs"][3]["input"]["sha256"] = first["sha256"].clone();
+                            value["runs"][3]["input"]["bytes"] = first["bytes"].clone();
+                        }
+                    }
+                    _ => value["runtime_config_sha256"] = json!("6".repeat(64)),
+                }
+                let bytes = serde_json::to_vec(&value).unwrap();
+                pin = sha(&bytes);
+                std::fs::write(&path, bytes).unwrap();
+            }
+            let error = reduce_membership_abba(&path, &pin).unwrap_err().to_string();
+            if case <= 6 {
+                assert!(
+                    error.contains("B2 membership ABBA query 999:"),
+                    "case {case}: {error}"
+                );
+            }
+            if case == 33 {
+                assert!(error.contains("A2 membership ABBA query 999:"), "{error}");
+            }
+            if matches!(case, 25 | 26) {
+                assert!(
+                    error.contains("duplicate membership ABBA run evidence"),
+                    "{error}"
+                );
+            }
+        }
+    }
     #[test]
     fn paired_v2_sealed_native_rows_statistics_and_create_only() {
         let dir = tempfile::tempdir().unwrap();

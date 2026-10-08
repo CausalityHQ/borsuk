@@ -1,8 +1,8 @@
 //! Deterministic semantic grouping and whole-leaf nomination over original FP16 unit means.
 //!
 //! Construction and complete publication validation read all centroids and leaves.
-//! Serving opens only an authenticated root and membership, then validates selected
-//! whole leaves. The caller owns generation binding, I/O admission and publication;
+//! Serving opens only an authenticated root and membership, then nominates complete
+//! leaves from an inverse directory. The caller owns generation binding and publication;
 //! no generation input schema is hard-coded here. Current geometry is deliberately
 //! admitted through explicit native and fresh-scale profiles.
 use crate::{VectorMetric, train_logical_cell_centroids, unit_centroid_pages::UnitCentroidPages};
@@ -800,11 +800,34 @@ fn decode_root(body: &[u8], input: &SourceIdentity<'_>) -> Result<Manifest> {
     })
 }
 
+/// Checked payload capacities for the inverse directory and its construction peak.
+/// The latter includes both per-leaf counting/cursor and row-count scratch arrays.
+pub(crate) fn directory_allocation_bytes(units: usize, leaves: usize) -> Result<(usize, usize)> {
+    require(
+        size_of::<usize>() == 8
+            && units > 0
+            && units <= u32::MAX as usize
+            && leaves > 0
+            && leaves <= units,
+        "membership directory geometry",
+    )?;
+    let persistent = sum(&[
+        product(&[units, size_of::<u32>()])?,
+        product(&[sum(&[leaves, 1])?, size_of::<usize>()])?,
+    ])?;
+    Ok((
+        persistent,
+        sum(&[persistent, product(&[2, leaves, size_of::<usize>()])?])?,
+    ))
+}
+
 /// Root and membership authenticated without loading the centroid or leaf objects.
 /// Construction limits and the caller's root byte cap bound retained metadata.
 pub struct SemanticUnitRouter {
     manifest: Manifest,
     membership: Vec<usize>,
+    leaf_offsets: Vec<usize>,
+    leaf_units: Vec<u32>,
 }
 
 impl SemanticUnitRouter {
@@ -887,6 +910,12 @@ impl SemanticUnitRouter {
                 && (1..=2 * requested - 1).contains(&manifest.leaves.len()),
             "router body descriptors",
         )?;
+        let (_, directory_peak) =
+            directory_allocation_bytes(geometry.units, manifest.leaves.len())?;
+        require(
+            directory_peak <= manifest.modeled_allocation_limit_bytes,
+            "membership directory allocation cap",
+        )?;
         let membership = membership
             .chunks_exact(4)
             .map(|word| u32::from_le_bytes(word.try_into().unwrap()) as usize)
@@ -931,9 +960,25 @@ impl SemanticUnitRouter {
             offset == manifest.leaf_payload.bytes,
             "incomplete leaf ranges",
         )?;
+        let mut leaf_offsets = Vec::with_capacity(manifest.leaves.len() + 1);
+        leaf_offsets.push(0);
+        for count in &mut counts {
+            let start = *leaf_offsets.last().ok_or("membership directory offset")?;
+            leaf_offsets.push(sum(&[start, *count])?);
+            *count = start;
+        }
+        let mut leaf_units = vec![0_u32; geometry.units];
+        // Scanning in source-unit order makes every directory slice ascending.
+        // Query nomination visits only selected slices, never all membership.
+        for (unit, &leaf) in membership.iter().enumerate() {
+            leaf_units[counts[leaf]] = u32::try_from(unit)?;
+            counts[leaf] += 1;
+        }
         Ok(Self {
             manifest,
             membership,
+            leaf_offsets,
+            leaf_units,
         })
     }
 
@@ -961,9 +1006,32 @@ impl SemanticUnitRouter {
         )
     }
 
+    /// Nominate every unit in the selected root-authenticated membership slices.
+    /// No leaf payload or source record is needed to establish this partition.
+    pub fn nominate_selected(&self, leaf_ids: &[usize]) -> Result<Nomination> {
+        require(
+            !leaf_ids.is_empty()
+                && leaf_ids.len() <= self.manifest.profile.selected_leaf_limit()
+                && (self.manifest.profile != SemanticProfile::Fresh1m || leaf_ids.len() == 48),
+            "selected leaf count",
+        )?;
+        let mut selected = BTreeSet::new();
+        let mut units = BTreeSet::new();
+        for &id in leaf_ids {
+            require(id < self.manifest.leaves.len(), "selected leaf ID")?;
+            require(selected.insert(id), "duplicate selected leaf")?;
+            units.extend(
+                self.leaf_units[self.leaf_offsets[id]..self.leaf_offsets[id + 1]]
+                    .iter()
+                    .map(|&unit| unit as usize),
+            );
+        }
+        Self::complete_nomination(leaf_ids, units, self.manifest.rows, self.manifest.profile)
+    }
+
     /// Validate one exact whole-leaf range. Digest authentication fixes record order.
-    /// Original coefficient/prototype identities are checked at publication, so
-    /// serving needs only IDs and membership, without decoding centroid vectors.
+    /// Publication checks original coefficient/prototype identities separately;
+    /// serving nominates directly from membership without reading these bodies.
     pub fn validate_leaf(&self, leaf_id: usize, body: &[u8]) -> Result<Vec<usize>> {
         let leaf = self
             .manifest
@@ -1017,8 +1085,16 @@ impl SemanticUnitRouter {
                 require(units.insert(unit), "disjoint selected units")?;
             }
         }
-        let (seed_page, walk_units, seed_additions) =
-            seed_walk(&units, self.manifest.rows, self.manifest.profile)?;
+        Self::complete_nomination(leaf_ids, units, self.manifest.rows, self.manifest.profile)
+    }
+
+    fn complete_nomination(
+        leaf_ids: &[usize],
+        units: BTreeSet<usize>,
+        rows: usize,
+        profile: SemanticProfile,
+    ) -> Result<Nomination> {
+        let (seed_page, walk_units, seed_additions) = seed_walk(&units, rows, profile)?;
         let page_closure = units.iter().map(|u| u / 8).collect();
         Ok(Nomination {
             leaf_ids: leaf_ids.to_vec(),
@@ -1031,7 +1107,8 @@ impl SemanticUnitRouter {
     }
 }
 
-/// Complete query nomination after selected leaf authentication.
+/// Complete query nomination from the authenticated partition.
+#[derive(Debug, PartialEq, Eq)]
 pub struct Nomination {
     /// Leaf IDs in nomination order.
     pub leaf_ids: Vec<usize>,
@@ -1243,6 +1320,124 @@ mod tests {
                 &payload[leaf.offset..leaf.offset + leaf.bytes]
             })
             .collect()
+    }
+
+    #[test]
+    fn membership_directory_parity_and_capacity() {
+        assert_eq!(
+            directory_allocation_bytes(3125, 76).unwrap(),
+            (13116, 14332)
+        );
+        for (units, leaves) in [(0, 1), (1, 0), (1, 2), (usize::MAX, 1), (1, usize::MAX)] {
+            assert!(directory_allocation_bytes(units, leaves).is_err());
+        }
+        for rows in [1, 33, 257, 4097] {
+            let mut blob = blob(rows);
+            for unit in 0..rows.div_ceil(32) {
+                for (d, value) in [(unit * 73 % 251) as f32, (unit * 137 % 251) as f32]
+                    .into_iter()
+                    .enumerate()
+                {
+                    blob[32 + unit * 4 + d * 2..34 + unit * 4 + d * 2]
+                        .copy_from_slice(&half::f16::from_f32(value).to_bits().to_le_bytes());
+                }
+            }
+            let digest = hash(&blob);
+            let source = SourceIdentity {
+                centroids_sha256: &digest,
+                ..source(&blob)
+            };
+            let artifacts = build(&blob, &source, ALLOCATION_CAP).unwrap();
+            let router = open(&artifacts, &source);
+            let (persistent, peak) = directory_allocation_bytes(
+                router.manifest.unit_count,
+                router.manifest.leaves.len(),
+            )
+            .unwrap();
+            assert_eq!(
+                persistent,
+                router.leaf_units.capacity() * 4 + router.leaf_offsets.capacity() * 8
+            );
+            assert_eq!(peak, persistent + 16 * router.manifest.leaves.len());
+            let mut scattered = false;
+            for leaf in &router.manifest.leaves {
+                let units = &router.leaf_units
+                    [router.leaf_offsets[leaf.leaf_id]..router.leaf_offsets[leaf.leaf_id + 1]];
+                scattered |= units.windows(2).any(|pair| pair[1] > pair[0] + 1);
+                let ids = [leaf.leaf_id];
+                assert_eq!(
+                    router.nominate_selected(&ids).unwrap(),
+                    router
+                        .validate_selected(&ids, &parts(&router, &artifacts.leaves, &ids))
+                        .unwrap()
+                );
+            }
+            if rows == 4097 {
+                assert!(scattered);
+            }
+            let ids = router.nominate(&[3., 4.]).unwrap();
+            assert_eq!(
+                router.nominate_selected(&ids).unwrap(),
+                router
+                    .validate_selected(&ids, &parts(&router, &artifacts.leaves, &ids))
+                    .unwrap()
+            );
+            for invalid in [
+                vec![],
+                vec![0, 0],
+                vec![router.manifest.leaves.len()],
+                vec![0; 17],
+            ] {
+                assert!(router.nominate_selected(&invalid).is_err());
+            }
+            // The source, root and membership remain the nomination authority.
+            let mut damaged = artifacts.membership.clone();
+            damaged[0] ^= 1;
+            assert!(
+                SemanticUnitRouter::open(
+                    &artifacts.manifest,
+                    &damaged,
+                    &hash(&artifacts.manifest),
+                    &source,
+                    1 << 20
+                )
+                .is_err()
+            );
+            let bad_source = SourceIdentity {
+                root_sha256: &"0".repeat(64),
+                ..source
+            };
+            assert!(
+                SemanticUnitRouter::open(
+                    &artifacts.manifest,
+                    &artifacts.membership,
+                    &hash(&artifacts.manifest),
+                    &bad_source,
+                    1 << 20
+                )
+                .is_err()
+            );
+            assert!(
+                SemanticUnitRouter::open(
+                    &artifacts.manifest,
+                    &artifacts.membership,
+                    &"0".repeat(64),
+                    &source,
+                    1 << 20
+                )
+                .is_err()
+            );
+            assert!(
+                SemanticUnitRouter::open(
+                    &artifacts.manifest,
+                    &artifacts.membership,
+                    &hash(&artifacts.manifest),
+                    &source,
+                    artifacts.manifest.len() - 1
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]
@@ -1530,6 +1725,8 @@ mod tests {
         let distinct = SemanticUnitRouter {
             manifest: distinct,
             membership: router.membership.clone(),
+            leaf_offsets: router.leaf_offsets.clone(),
+            leaf_units: router.leaf_units.clone(),
         };
         assert_eq!(distinct.select_leaves(&[0.; 768]).unwrap(), expected);
         let mut overflow = root.clone();

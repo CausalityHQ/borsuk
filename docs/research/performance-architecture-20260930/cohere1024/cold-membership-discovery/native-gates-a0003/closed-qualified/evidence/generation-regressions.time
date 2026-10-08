@@ -1,0 +1,23 @@
+	Command being timed: "cargo test --locked -p borsuk --lib two_bit_generation:: -- --test-threads=1"
+	User time (seconds): 234.07
+	System time (seconds): 17.96
+	Percent of CPU this job got: 88%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 4:44.12
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 5478716
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 925
+	Minor (reclaiming a frame) page faults: 10592663
+	Voluntary context switches: 27945
+	Involuntary context switches: 12817
+	Swaps: 0
+	File system inputs: 464
+	File system outputs: 5090208
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

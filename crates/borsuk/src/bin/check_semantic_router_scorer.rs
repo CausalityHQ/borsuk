@@ -590,7 +590,7 @@ mod tests {
             format!("{error:?}").contains("UnexpectedMetadata"),
             "{error:?}"
         );
-        assert!(error.router_stats().verified_bytes > 0);
+        assert_eq!(error.router_stats(), Sq8ReadStats::default());
         assert!(error.read_stats().0.failed_gets > 0);
         assert_eq!(error.read_stats().1, Sq8ReadStats::default());
         let expected = generation
