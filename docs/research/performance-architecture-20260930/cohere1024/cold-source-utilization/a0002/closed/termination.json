@@ -1,0 +1,5 @@
+{
+  "exit": 0,
+  "stdout": "{\n    \"TerminatingInstances\": [\n        {\n            \"InstanceId\": \"i-0e69784d7ebc74107\",\n            \"CurrentState\": {\n                \"Code\": 48,\n                \"Name\": \"terminated\"\n            },\n            \"PreviousState\": {\n                \"Code\": 48,\n                \"Name\": \"terminated\"\n            }\n        }\n    ]\n}\n",
+  "stderr": ""
+}

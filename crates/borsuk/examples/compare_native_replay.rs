@@ -9,6 +9,15 @@
 //! Four runs A1/B1/B2/A2 use width32 and one attempt-specific runtime config SHA.
 //! Both arms share the same input authority. Only
 //! the independently frozen binary, generation and router component pins differ.
+//! Evidence CLI: --source-utilization CONFIG CONFIG_SHA256 NEW_REPORT_JSON.
+//! Scored completion is query-dependent: this is a hindsight byte bound only.
+//! Direct closure SQ8 costs are counterfactual; no scores or recall are evaluated.
+#![recursion_limit = "256"]
+
+// Compile the existing checked arithmetic here because cover_pages is crate-private.
+#[allow(dead_code)]
+#[path = "../src/budgeted_page_rank.rs"]
+mod source_cover;
 
 use rustix::fs::{Mode, OFlags, openat};
 use serde::{
@@ -18,6 +27,7 @@ use serde::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeSet,
     error::Error,
     fs::File,
     io::{self, BufRead, BufReader, Read, Write},
@@ -1015,6 +1025,15 @@ fn read_run(path: &Path, sha: &str) -> Result<Run> {
 }
 
 fn read_run_with(path: &Path, sha: &str, expected: Option<&CompletedConfig>) -> Result<Run> {
+    read_run_observed(path, sha, expected, |_, _, _| Ok(()))
+}
+
+fn read_run_observed(
+    path: &Path,
+    sha: &str,
+    expected: Option<&CompletedConfig>,
+    mut query: impl FnMut(&[u8], &Query, &Inputs) -> Result<()>,
+) -> Result<Run> {
     require(valid_sha(sha), "result lowercase SHA256")?;
     let mut rows = Rows::open(path)?;
     rows.v2 = expected.is_some();
@@ -1139,6 +1158,7 @@ fn read_run_with(path: &Path, sha: &str, expected: Option<&CompletedConfig>) -> 
         }
         wall = plus(wall, q.query_wall_ns)?;
         cpu = plus(cpu, q.query_process_cpu_ns)?;
+        query(&rows.line, &q, &inputs)?;
         samples.push(Sample {
             returned: q.returned,
             charges: q.charges,
@@ -1359,6 +1379,497 @@ fn completed_report(c: &CompletedConfig, run: &Run) -> Result<Value> {
         "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
         "local_file_only":true,"external_resources_and_cost_gate_required":true,"qualified":false,
         "vendor_or_scientific_win_claim":false,"performance_pass_claim":false}),
+    )
+}
+
+const SOURCE_UTILIZATION_SCHEMA: &str = "borsuk-source-utilization-evidence-v1";
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceUtilizationConfig {
+    schema: String,
+    input: CompletedInput,
+    expected_identity: Value,
+    expected_bound_inputs: Value,
+    // Root binds these historical pins and limits to the archived producer.
+    producer_source_commit: String,
+    producer_source_archive_sha256: String,
+    record_bytes: usize,
+    source_get_cap: usize,
+    source_byte_cap: usize,
+    source_unit_cap: usize,
+    direct_sq8_get_cap: usize,
+    historical_sq8_query_byte_cap: usize,
+}
+
+fn source_record_bytes(dimensions: usize) -> Result<usize> {
+    require((1..=1024).contains(&dimensions), "source dimensions")?;
+    let tail = dimensions % 256;
+    let padded = (dimensions / 256 * 256)
+        .checked_add(if tail == 0 {
+            0
+        } else {
+            tail.checked_next_power_of_two()
+                .ok_or("source padding overflow")?
+        })
+        .ok_or("source padding overflow")?;
+    padded
+        .div_ceil(4)
+        .checked_add(8)
+        .ok_or_else(|| "source record overflow".into())
+}
+
+impl SourceUtilizationConfig {
+    fn validate(&self) -> Result<()> {
+        require(
+            self.schema == "borsuk-source-utilization-config-v1"
+                && self.input.bytes > 0
+                && self.input.bytes <= FILE_CAP
+                && valid_sha(&self.input.sha256)
+                && self.producer_source_commit.len() == 40
+                && self
+                    .producer_source_commit
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                && valid_sha(&self.producer_source_archive_sha256)
+                && self.source_get_cap == 128
+                && self.source_byte_cap == 64 * 1024 * 1024
+                && self.source_unit_cap == 2544
+                && self.direct_sq8_get_cap == 32
+                && self.historical_sq8_query_byte_cap > 0,
+            "source utilization schema/pins/explicit historical envelopes",
+        )?;
+        validate_v2_row(&serde_json::to_vec(&self.expected_identity)?, "identity")?;
+        validate_v2_row(
+            &serde_json::to_vec(&self.expected_bound_inputs)?,
+            "bound_inputs",
+        )?;
+        let identity: Identity = serde_json::from_value(self.expected_identity.clone())?;
+        let inputs: Inputs = serde_json::from_value(self.expected_bound_inputs.clone())?;
+        validate_v2_identity(&identity, &self.expected_identity)?;
+        validate_v2_inputs(&inputs, &self.expected_bound_inputs)?;
+        require(
+            inputs.profile == "native100k"
+                && inputs.rows <= 100_000
+                && self.record_bytes == source_record_bytes(inputs.dimensions)?
+                && self.expected_identity["phase"] == "identity"
+                && self.expected_bound_inputs["phase"] == "bound_inputs"
+                && self.expected_identity["fetch_parallelism"] == 32
+                && self.expected_bound_inputs["fetch_parallelism"] == 32
+                && self.expected_bound_inputs["source_cache"] == "off",
+            "source workload/padded record geometry/closed membership mode",
+        )?;
+        inputs
+            .rows
+            .checked_mul(self.record_bytes)
+            .ok_or("source geometry overflow")?;
+        Ok(())
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceTrace {
+    ranked_candidate_pages: Vec<usize>,
+    nomination_evaluated_units: Vec<usize>,
+    primary_page: usize,
+    discoveries: Vec<Value>,
+    semantic_leaves: Vec<usize>,
+    semantic_units: Vec<usize>,
+    semantic_seed_additions: Vec<usize>,
+}
+
+#[derive(Serialize)]
+struct SourceUtilizationQuery {
+    ordinal: usize,
+    semantic_units: usize,
+    seed_added_units: usize,
+    walked_units: usize,
+    completion_units: usize,
+    scored_units: usize,
+    closure_pages: usize,
+    baseline_bytes: u64,
+    baseline_gets: u64,
+    walked_payload_bytes: u64,
+    scored_payload_bytes: u64,
+    completion_payload_bytes: u64,
+    closure_payload_bytes: u64,
+    unscored_closure_bytes: u64,
+    baseline_bridge_bytes: u64,
+    ideal_bytes: u64,
+    ideal_gets: u64,
+    ideal_bridge_bytes: u64,
+    potential_saving_bytes: u64,
+    direct_closure_sq8_bytes: u64,
+    direct_closure_sq8_gets: u64,
+    mandatory_closure_sq8_bytes: u64,
+    direct_closure_sq8_bridge_bytes: u64,
+    direct_closure_sq8_exceeds_historical_byte_cap: bool,
+    original_source_sq8_bytes: u64,
+    original_source_sq8_gets: u64,
+    direct_minus_original_bytes: i64,
+    direct_minus_original_gets: i64,
+    completion_limit_reached: bool,
+    completion_limited: bool,
+}
+
+fn source_ordinals(values: &[usize], bound: usize, cap: usize) -> Result<BTreeSet<usize>> {
+    require(values.len() <= cap, "source trace ordinal cap")?;
+    let mut set = BTreeSet::new();
+    for &value in values {
+        require(
+            value < bound && set.insert(value),
+            "duplicate/out-of-range source ordinal",
+        )?;
+    }
+    Ok(set)
+}
+
+fn source_payload_bytes(
+    units: &BTreeSet<usize>,
+    rows: usize,
+    width: usize,
+    unit_rows: usize,
+) -> Result<u64> {
+    units.iter().try_fold(0, |sum, &unit| {
+        let first = unit.checked_mul(unit_rows).ok_or("source row overflow")?;
+        require(first < rows, "source payload unit bounds")?;
+        let bytes = (rows - first)
+            .min(unit_rows)
+            .checked_mul(width)
+            .ok_or("source payload overflow")?;
+        plus(sum, u64::try_from(bytes)?)
+    })
+}
+
+fn source_utilization_query(
+    line: &[u8],
+    q: &Query,
+    inputs: &Inputs,
+    c: &SourceUtilizationConfig,
+) -> Result<SourceUtilizationQuery> {
+    // The shared completed reader already refuses duplicate keys and unknown fields.
+    let raw: Value = serde_json::from_slice(line)?;
+    let t: SourceTrace = serde_json::from_value(raw["trace"].clone())?;
+    require(
+        t.discoveries.is_empty(),
+        "semantic source trace cannot contain graph discoveries",
+    )?;
+    let unit_count = inputs.rows.div_ceil(32);
+    let semantic = source_ordinals(&t.semantic_units, unit_count, 1024)?;
+    require(
+        !semantic.is_empty() && t.semantic_units.windows(2).all(|p| p[0] < p[1]),
+        "sorted nonempty semantic units",
+    )?;
+    let leaves = source_ordinals(&t.semantic_leaves, unit_count, 16)?;
+    require(!leaves.is_empty(), "semantic leaf nomination required")?;
+    let additions = source_ordinals(&t.semantic_seed_additions, unit_count, 7)?;
+    let seed = semantic.first().ok_or("semantic seed")? / 8;
+    let expected_additions = (seed * 8..((seed + 1) * 8).min(unit_count))
+        .filter(|unit| !semantic.contains(unit))
+        .collect::<Vec<_>>();
+    require(
+        t.semantic_seed_additions == expected_additions,
+        "exact lowest-page seed completion",
+    )?;
+    let walked = semantic.union(&additions).copied().collect::<BTreeSet<_>>();
+    require(
+        walked.len() <= 1031 && walked.len() <= c.source_unit_cap,
+        "source walk cap",
+    )?;
+    let closure = walked.iter().map(|unit| unit / 8).collect::<BTreeSet<_>>();
+    let ranked = source_ordinals(&t.ranked_candidate_pages, inputs.rows.div_ceil(256), 1024)?;
+    require(
+        ranked == closure && t.ranked_candidate_pages.first() == Some(&t.primary_page),
+        "ranked source closure/primary",
+    )?;
+    let scored = source_ordinals(&t.nomination_evaluated_units, unit_count, c.source_unit_cap)?;
+    require(
+        t.nomination_evaluated_units.len() >= walked.len()
+            && t.nomination_evaluated_units[..walked.len()]
+                .iter()
+                .copied()
+                .eq(walked.iter().copied())
+            && scored.iter().all(|unit| closure.contains(&(unit / 8))),
+        "ordered walked prefix/scored source closure",
+    )?;
+    // Completion visits each page once, in score-dependent order, and scans its
+    // remaining units ascending. Only the final page can stop at the unit cap.
+    let completion = &t.nomination_evaluated_units[walked.len()..];
+    let mut completed_pages = BTreeSet::new();
+    let mut offset = 0;
+    while offset < completion.len() {
+        let page = completion[offset] / 8;
+        require(completed_pages.insert(page), "repeated completion page")?;
+        for unit in page * 8..((page + 1) * 8).min(unit_count) {
+            if walked.contains(&unit) {
+                continue;
+            }
+            if walked.len() + offset == c.source_unit_cap {
+                break;
+            }
+            require(
+                completion.get(offset) == Some(&unit),
+                "impossible ordered source completion",
+            )?;
+            offset += 1;
+        }
+    }
+    let closure_units = closure
+        .iter()
+        .flat_map(|&page| page * 8..((page + 1) * 8).min(unit_count))
+        .collect::<BTreeSet<_>>();
+    require(
+        scored.len() == closure_units.len().min(c.source_unit_cap),
+        "incomplete source completion accounting",
+    )?;
+    let (baseline, baseline_bytes) =
+        source_cover::cover_pages(&closure, inputs.rows, c.record_bytes, 256, c.source_get_cap)
+            .map_err(|e| format!("baseline source cover: {e:?}"))?;
+    require(
+        baseline_bytes <= c.source_byte_cap
+            && q.charges.source.failed_gets == 0
+            && q.charges.source.submitted_gets == baseline.len() as u64
+            && q.charges.source.verified_bytes == baseline_bytes as u64,
+        "recorded source GET/byte parity/envelope",
+    )?;
+    let (ideal, ideal_bytes) =
+        source_cover::cover_pages(&scored, inputs.rows, c.record_bytes, 32, c.source_get_cap)
+            .map_err(|e| format!("hindsight source cover: {e:?}"))?;
+    require(
+        ideal_bytes <= baseline_bytes,
+        "hindsight source bytes exceed baseline",
+    )?;
+    let completion_limited = scored.len() < closure_units.len();
+    require(
+        completion_limited || ideal_bytes == baseline_bytes,
+        "full source completion must preserve baseline bytes",
+    )?;
+    let walked_bytes = source_payload_bytes(&walked, inputs.rows, c.record_bytes, 32)?;
+    let scored_bytes = source_payload_bytes(&scored, inputs.rows, c.record_bytes, 32)?;
+    let closure_bytes = source_payload_bytes(&closure, inputs.rows, c.record_bytes, 256)?;
+    let sq8_width = inputs
+        .dimensions
+        .checked_add(12)
+        .ok_or("SQ8 record width overflow")?;
+    let sq8_population_bytes = inputs
+        .rows
+        .checked_mul(sq8_width)
+        .ok_or("SQ8 population overflow")?;
+    require(
+        q.charges.sq8.failed_gets == 0
+            && q.charges.sq8.submitted_gets > 0
+            && q.charges.sq8.submitted_gets <= c.direct_sq8_get_cap as u64
+            && q.charges.sq8.verified_bytes > 0
+            && q.charges.sq8.verified_bytes <= sq8_population_bytes as u64
+            && q.charges.sq8.verified_bytes % sq8_width as u64 == 0,
+        "recorded original SQ8 charge geometry/GET envelope",
+    )?;
+    let fetched_rows = q.charges.sq8.verified_bytes / sq8_width as u64;
+    require(
+        q.charges.sq8.verified_bytes <= c.historical_sq8_query_byte_cap as u64,
+        "recorded original SQ8 bytes exceed historical query cap",
+    )?;
+    let fetched_tail_rows = fetched_rows % 256;
+    let fetched_pages = fetched_rows / 256 + u64::from(fetched_tail_rows > 0);
+    require(
+        (fetched_tail_rows == 0 || fetched_tail_rows == (inputs.rows % 256) as u64)
+            && q.charges.sq8.submitted_gets <= fetched_pages,
+        "recorded SQ8 whole-page/tail/GET compatibility",
+    )?;
+    // Cost the whole discovered closure, independently of scored completion.
+    // This calculation admits no future byte envelope or serving schedule.
+    let (direct_sq8, direct_sq8_bytes) =
+        source_cover::cover_pages(&closure, inputs.rows, sq8_width, 256, c.direct_sq8_get_cap)
+            .map_err(|e| format!("counterfactual closure SQ8 cover: {e:?}"))?;
+    let mandatory_sq8_bytes = source_payload_bytes(&closure, inputs.rows, sq8_width, 256)?;
+    let original_source_sq8_bytes = plus(
+        q.charges.source.verified_bytes,
+        q.charges.sq8.verified_bytes,
+    )?;
+    let original_source_sq8_gets = plus(
+        q.charges.source.submitted_gets,
+        q.charges.sq8.submitted_gets,
+    )?;
+    Ok(SourceUtilizationQuery {
+        ordinal: q.ordinal,
+        semantic_units: semantic.len(),
+        seed_added_units: additions.len(),
+        walked_units: walked.len(),
+        completion_units: scored.len() - walked.len(),
+        scored_units: scored.len(),
+        closure_pages: closure.len(),
+        baseline_bytes: baseline_bytes as u64,
+        baseline_gets: baseline.len() as u64,
+        walked_payload_bytes: walked_bytes,
+        scored_payload_bytes: scored_bytes,
+        completion_payload_bytes: scored_bytes
+            .checked_sub(walked_bytes)
+            .ok_or("completion byte accounting")?,
+        closure_payload_bytes: closure_bytes,
+        unscored_closure_bytes: closure_bytes
+            .checked_sub(scored_bytes)
+            .ok_or("closure byte accounting")?,
+        baseline_bridge_bytes: (baseline_bytes as u64)
+            .checked_sub(closure_bytes)
+            .ok_or("baseline bridge accounting")?,
+        ideal_bytes: ideal_bytes as u64,
+        ideal_gets: ideal.len() as u64,
+        ideal_bridge_bytes: (ideal_bytes as u64)
+            .checked_sub(scored_bytes)
+            .ok_or("ideal bridge accounting")?,
+        potential_saving_bytes: (baseline_bytes - ideal_bytes) as u64,
+        direct_closure_sq8_bytes: direct_sq8_bytes as u64,
+        direct_closure_sq8_gets: direct_sq8.len() as u64,
+        mandatory_closure_sq8_bytes: mandatory_sq8_bytes,
+        direct_closure_sq8_bridge_bytes: (direct_sq8_bytes as u64)
+            .checked_sub(mandatory_sq8_bytes)
+            .ok_or("direct SQ8 bridge accounting")?,
+        direct_closure_sq8_exceeds_historical_byte_cap: direct_sq8_bytes
+            > c.historical_sq8_query_byte_cap,
+        original_source_sq8_bytes,
+        original_source_sq8_gets,
+        direct_minus_original_bytes: i64::try_from(direct_sq8_bytes)?
+            - i64::try_from(original_source_sq8_bytes)?,
+        direct_minus_original_gets: i64::try_from(direct_sq8.len())?
+            - i64::try_from(original_source_sq8_gets)?,
+        completion_limit_reached: scored.len() == c.source_unit_cap,
+        completion_limited,
+    })
+}
+
+fn source_utilization_report(
+    c: &SourceUtilizationConfig,
+    queries: &[SourceUtilizationQuery],
+) -> Result<Value> {
+    require(
+        queries.len() == COUNT,
+        "exact source utilization query count",
+    )?;
+    let per_query = serde_json::to_value(queries)?;
+    let mut aggregate = serde_json::Map::new();
+    for name in [
+        "semantic_units",
+        "seed_added_units",
+        "walked_units",
+        "completion_units",
+        "scored_units",
+        "closure_pages",
+        "baseline_bytes",
+        "baseline_gets",
+        "walked_payload_bytes",
+        "scored_payload_bytes",
+        "completion_payload_bytes",
+        "closure_payload_bytes",
+        "unscored_closure_bytes",
+        "baseline_bridge_bytes",
+        "ideal_bytes",
+        "ideal_gets",
+        "ideal_bridge_bytes",
+        "potential_saving_bytes",
+        "direct_closure_sq8_bytes",
+        "direct_closure_sq8_gets",
+        "mandatory_closure_sq8_bytes",
+        "direct_closure_sq8_bridge_bytes",
+        "original_source_sq8_bytes",
+        "original_source_sq8_gets",
+    ] {
+        let samples = per_query
+            .as_array()
+            .ok_or("source query report array")?
+            .iter()
+            .map(|q| q[name].as_u64().ok_or("source query report counter"))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let (total, [median, _, p95, _]) = quantiles(&samples)?;
+        aggregate.insert(name.into(), json!({"total":total,"median":median,"p95":p95,"max":samples.iter().max().ok_or("empty source samples")?}));
+    }
+    for name in ["direct_minus_original_bytes", "direct_minus_original_gets"] {
+        let mut samples = per_query
+            .as_array()
+            .ok_or("source query report array")?
+            .iter()
+            .map(|q| q[name].as_i64().ok_or("signed counterfactual cost delta"))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let total = samples.iter().try_fold(0_i64, |sum, &n| {
+            sum.checked_add(n)
+                .ok_or("counterfactual delta sum overflow")
+        })?;
+        samples.sort_unstable();
+        aggregate.insert(
+            name.into(),
+            json!({"total":total,"median":samples[(COUNT*50).div_ceil(100)-1],
+            "p95":samples[(COUNT*95).div_ceil(100)-1],"max":samples[COUNT-1]}),
+        );
+    }
+    let limited = queries.iter().filter(|q| q.completion_limited).count();
+    let at_limit = queries
+        .iter()
+        .filter(|q| q.completion_limit_reached)
+        .count();
+    Ok(
+        json!({"schema":SOURCE_UTILIZATION_SCHEMA,"status":"MEASURED","complete":true,"count":COUNT,
+        "input":{"path":c.input.path,"bytes":c.input.bytes,"sha256":c.input.sha256},
+        "identity":c.expected_identity,"bound_inputs":c.expected_bound_inputs,
+        "producer_source_commit":c.producer_source_commit,"producer_source_archive_sha256":c.producer_source_archive_sha256,
+        "reducer_source_sha256":format!("{:x}",Sha256::digest(include_bytes!("compare_native_replay.rs"))),
+        "shared_cover_source_sha256":format!("{:x}",Sha256::digest(include_bytes!("../src/budgeted_page_rank.rs"))),
+        "record_bytes":c.record_bytes,"source_get_cap":c.source_get_cap,"source_byte_cap":c.source_byte_cap,"source_unit_cap":c.source_unit_cap,
+        "direct_sq8_get_cap":c.direct_sq8_get_cap,"historical_sq8_query_byte_cap":c.historical_sq8_query_byte_cap,
+        "direct_closure_sq8_exceeds_historical_byte_cap_queries":queries.iter().filter(|q|q.direct_closure_sq8_exceeds_historical_byte_cap).count(),
+        "baseline_page_rows":256,"ideal_unit_rows":32,"percentile_method":"nearest_rank",
+        "aggregate":aggregate,"queries":per_query,
+        "completion_limit_reached_queries":at_limit,"completion_limit_reached_frequency":at_limit as f64/COUNT as f64,
+        "completion_limited_queries":limited,"completion_limited_frequency":limited as f64/COUNT as f64,
+        "optimistic_hindsight":true,"production_change":false,"claims_quality":false,"claims_latency":false,
+        "counterfactual_cost_only":true,"score_or_recall_evaluated":false,
+        "counterfactual_scope":"direct SQ8 fetch of the same complete 256-row discovered source closure under 32 GETs; width dimensions+12; cost only, no future byte envelope admitted; broader scored population and different bridges can change recall",
+        "cost_delta_direction":"direct_closure_sq8 minus recorded original_source_plus_sq8; positive bytes means more payload; negative GETs means fewer logical requests; discovery charges excluded from both",
+        "scope":"minimum cover of actual scored units under the SAME source GET allowance; completion order depends on query scores; not a usable one-wave serving algorithm",
+        "local_file_only":true,"producer_provenance_verified":false,"root_historical_producer_and_limits_admission_required":true,
+        "corpus_queries_truth_bodies_opened":false,"native_ann_called":false,"qualified":false}),
+    )
+}
+
+fn reduce_source_utilization(config_path: &Path, config_sha: &str) -> Result<Value> {
+    let (c, config_bytes): (SourceUtilizationConfig, _) = read_config(config_path, config_sha)?;
+    c.validate()?;
+    let completed = CompletedConfig {
+        schema: "borsuk-completed-native-reduction-config-v1".into(),
+        input: CompletedInput {
+            path: c.input.path.clone(),
+            bytes: c.input.bytes,
+            sha256: c.input.sha256.clone(),
+        },
+        expected_identity: c.expected_identity.clone(),
+        expected_bound_inputs: c.expected_bound_inputs.clone(),
+    };
+    let mut queries = Vec::with_capacity(COUNT);
+    let run = read_run_observed(
+        &c.input.path,
+        &c.input.sha256,
+        Some(&completed),
+        |line, q, inputs| {
+            queries.push(source_utilization_query(line, q, inputs, &c)?);
+            Ok(())
+        },
+    )?;
+    let mut report = source_utilization_report(&c, &queries)?;
+    report["config_path"] = json!(config_path);
+    report["config_sha256"] = json!(config_sha);
+    report["config_bytes"] = json!(config_bytes);
+    source_report_cap(&report)?;
+    require(
+        file_identity(&open_input(&c.input.path)?)? == run.file_identity,
+        "source input changed before publication",
+    )?;
+    read_config::<SourceUtilizationConfig>(config_path, config_sha)?;
+    Ok(report)
+}
+
+fn source_report_cap(report: &Value) -> Result<()> {
+    require(
+        (serde_json::to_vec(report)?.len() as u64) < REPORT_CAP,
+        "source report cap before publication",
     )
 }
 
@@ -1923,6 +2434,18 @@ fn execute_report(
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
     let result = (|| -> Result<bool> {
+        if args.get(1).is_some_and(|arg| arg == "--source-utilization") {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --source-utilization CONFIG CONFIG_SHA256 NEW_REPORT_JSON",
+            )?;
+            return execute_report(Path::new(&args[4]), SOURCE_UTILIZATION_SCHEMA, || {
+                reduce_source_utilization(
+                    Path::new(&args[2]),
+                    args[3].to_str().ok_or("config SHA256 encoding")?,
+                )
+            });
+        }
         if args.get(1).is_some_and(|arg| arg == "--membership-abba-v2") {
             require(
                 args.len() == 5,
@@ -1993,6 +2516,808 @@ mod tests {
 
     fn sha(bytes: &[u8]) -> String {
         format!("{:x}", Sha256::digest(bytes))
+    }
+
+    fn source_fixture() -> Vec<Value> {
+        let mut rows = v2_fixture();
+        rows[0]["fetch_parallelism"] = json!(32);
+        rows[1]["fetch_parallelism"] = json!(32);
+        rows[1]["source_cache"] = json!("off");
+        rows[1]["rows"] = json!(512);
+        rows[1]["query_source_first"] = json!(512);
+        for row in &mut rows[5..1005] {
+            row["trace"] = json!({"ranked_candidate_pages":[1,0],"primary_page":1,
+                "discoveries":[],"semantic_leaves":[0],"semantic_units":[0,8],
+                "semantic_seed_additions":[1,2,3,4,5,6,7],
+                "nomination_evaluated_units":(0..16).collect::<Vec<_>>()});
+            row["charges"]["source"] =
+                json!({"submitted_gets":1,"verified_bytes":6144,"failed_gets":0});
+            row["charges"]["sq8"] =
+                json!({"submitted_gets":1,"verified_bytes":7168,"failed_gets":0});
+            row["sum"] = json!({"submitted_gets":3,"verified_bytes":13412,"failed_gets":0});
+        }
+        let terminal = &mut rows.last_mut().unwrap()["summary"];
+        terminal["charges"]["source"] =
+            json!({"submitted_gets":1000,"verified_bytes":6144000,"failed_gets":0});
+        terminal["charges"]["sq8"] =
+            json!({"submitted_gets":1000,"verified_bytes":7168000,"failed_gets":0});
+        terminal["sum"] = json!({"submitted_gets":3000,"verified_bytes":13412000,"failed_gets":0});
+        authenticate(&mut rows);
+        rows
+    }
+
+    fn source_config_value(dir: &Path, rows: &[Value], bytes: &[u8]) -> Value {
+        let input = dir.join("source-evidence.jsonl");
+        std::fs::write(&input, bytes).unwrap();
+        json!({"schema":"borsuk-source-utilization-config-v1",
+            "input":{"path":input,"bytes":bytes.len(),"sha256":sha(bytes)},
+            "expected_identity":rows[0],"expected_bound_inputs":rows[1],
+            "producer_source_commit":"1".repeat(40),"producer_source_archive_sha256":"2".repeat(64),
+            "record_bytes":12,"source_get_cap":128,"source_byte_cap":67108864,"source_unit_cap":2544,"direct_sq8_get_cap":32,"historical_sq8_query_byte_cap":16773120})
+    }
+
+    fn source_write_config(dir: &Path, config: &Value) -> (PathBuf, String) {
+        let bytes = serde_json::to_vec(config).unwrap();
+        let path = dir.join("source-config.json");
+        std::fs::write(&path, &bytes).unwrap();
+        (path, sha(&bytes))
+    }
+
+    fn source_query_fixture(
+        row: &Value,
+        input: &Value,
+        c: &SourceUtilizationConfig,
+    ) -> Result<SourceUtilizationQuery> {
+        source_utilization_query(
+            &serde_json::to_vec(row)?,
+            &serde_json::from_value(row.clone())?,
+            &serde_json::from_value(input.clone())?,
+            c,
+        )
+    }
+
+    #[test]
+    fn source_utilization_unwalked_winner_full_completion_and_partial_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = source_fixture();
+        let value = source_config_value(dir.path(), &rows, &encode(&rows));
+        let mut c: SourceUtilizationConfig = serde_json::from_value(value.clone()).unwrap();
+        c.validate().unwrap();
+        let full = source_query_fixture(&rows[5], &rows[1], &c).unwrap();
+        assert_eq!(
+            (
+                full.baseline_bytes,
+                full.ideal_bytes,
+                full.potential_saving_bytes
+            ),
+            (6144, 6144, 0)
+        );
+        assert_eq!((full.walked_units, full.completion_units), (9, 7));
+        assert!(!full.completion_limited);
+
+        // A toy score makes unwalked unit 9 change the winning page. The trace
+        // records that completed population; walked-only bytes omit the winner.
+        let scores = [(0, 1), (8, 0), (9, 2)];
+        assert_eq!(
+            scores.iter().max_by_key(|(_, score)| score).unwrap().0 / 8,
+            1
+        );
+        assert_eq!(
+            scores[..2].iter().max_by_key(|(_, score)| score).unwrap().0 / 8,
+            0
+        );
+        let mut bounded = rows[5].clone();
+        bounded["trace"]["nomination_evaluated_units"] = json!((0..12).collect::<Vec<_>>());
+        c.source_unit_cap = 12;
+        let b = source_query_fixture(&bounded, &rows[1], &c).unwrap();
+        assert_eq!(
+            (
+                b.ideal_bytes,
+                b.potential_saving_bytes,
+                b.completion_payload_bytes
+            ),
+            (4608, 1536, 1152)
+        );
+        assert!(b.completion_limit_reached && b.completion_limited);
+        let walked = (0..9).collect::<BTreeSet<_>>();
+        let (_, walked_only) = source_cover::cover_pages(&walked, 512, 12, 32, 128).unwrap();
+        assert_eq!(walked_only, 3456);
+        assert!(walked_only < b.ideal_bytes as usize);
+
+        // The final authenticated unit contains only one row, not 32.
+        let mut tail = rows[5].clone();
+        let mut input = rows[1].clone();
+        input["rows"] = json!(513);
+        tail["trace"]["semantic_units"] = json!([0, 8, 16]);
+        tail["trace"]["ranked_candidate_pages"] = json!([1, 0, 2]);
+        tail["trace"]["nomination_evaluated_units"] = json!([0, 1, 2, 3, 4, 5, 6, 7, 8, 16, 9, 10]);
+        tail["charges"]["source"]["verified_bytes"] = json!(6156);
+        let t = source_query_fixture(&tail, &input, &c).unwrap();
+        assert_eq!(
+            (
+                t.walked_payload_bytes,
+                t.scored_payload_bytes,
+                t.completion_payload_bytes
+            ),
+            (3468, 4236, 768)
+        );
+        assert_eq!(
+            (t.baseline_bytes, t.ideal_bytes, t.potential_saving_bytes),
+            (6156, 4236, 1920)
+        );
+        assert!(t.completion_limited);
+        c.source_unit_cap = 13;
+        assert!(source_query_fixture(&tail, &input, &c).is_err());
+    }
+
+    #[test]
+    fn source_utilization_shared_cover_tied_gaps_same_128_gets() {
+        // 129 disjoint pages force exactly one bridge under the frozen 128 GETs.
+        // All gaps tie, so the shared production helper bridges the first gap.
+        let pages = (0..129).map(|p| p * 2).collect::<BTreeSet<_>>();
+        let (ranges, bytes) = source_cover::cover_pages(&pages, 65537, 12, 256, 128).unwrap();
+        assert_eq!(ranges.len(), 128);
+        assert_eq!(ranges[0], 0..9216);
+        assert_eq!(ranges.last().unwrap(), &(786432..786444));
+        assert_eq!(bytes, 396300);
+        let units = pages
+            .iter()
+            .flat_map(|&p| p * 8..(p + 1) * 8)
+            .filter(|&u| u < 65537_usize.div_ceil(32))
+            .collect::<BTreeSet<_>>();
+        let (ideal, ideal_bytes) = source_cover::cover_pages(&units, 65537, 12, 32, 128).unwrap();
+        assert_eq!((ideal, ideal_bytes), (ranges, bytes));
+        assert!(source_cover::cover_pages(&pages, 65537, 12, 256, 0).is_err());
+        assert!(source_cover::cover_pages(&pages, 65537, usize::MAX, 256, 128).is_err());
+    }
+
+    #[test]
+    fn source_utilization_trace_and_charge_refusals() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = source_fixture();
+        let value = source_config_value(dir.path(), &rows, &encode(&rows));
+        let c: SourceUtilizationConfig = serde_json::from_value(value).unwrap();
+        for case in 0..22 {
+            let mut q = rows[5].clone();
+            match case {
+                0 => q["trace"]["semantic_units"] = json!([0, 0, 8]),
+                1 => q["trace"]["semantic_units"] = json!([0, 16]),
+                2 => q["trace"]["semantic_units"] = json!([8, 0]),
+                3 => q["trace"]["semantic_seed_additions"] = json!([1, 2, 3, 4, 5, 6, 6]),
+                4 => q["trace"]["semantic_seed_additions"] = json!([1, 2, 3, 4, 5, 6]),
+                5 => {
+                    q["trace"]["nomination_evaluated_units"] =
+                        json!([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 11, 12, 13, 14, 15])
+                }
+                6 => q["trace"]["nomination_evaluated_units"][15] = json!(16),
+                7 => q["trace"]["nomination_evaluated_units"]
+                    .as_array_mut()
+                    .unwrap()
+                    .swap(0, 1),
+                8 => q["trace"]["nomination_evaluated_units"]
+                    .as_array_mut()
+                    .unwrap()
+                    .swap(9, 10),
+                9 => {
+                    q["trace"]["nomination_evaluated_units"]
+                        .as_array_mut()
+                        .unwrap()
+                        .pop();
+                }
+                10 => q["trace"]["ranked_candidate_pages"] = json!([1, 1]),
+                11 => q["trace"]["ranked_candidate_pages"] = json!([1, 2]),
+                12 => q["trace"]["primary_page"] = json!(0),
+                13 => q["trace"]["semantic_leaves"] = json!([0, 0]),
+                14 => q["charges"]["source"]["submitted_gets"] = json!(2),
+                15 => q["charges"]["source"]["verified_bytes"] = json!(6143),
+                16 => q["charges"]["source"]["failed_gets"] = json!(1),
+                17 => q["trace"]["discoveries"] = json!([{"seed_page":0}]),
+                18 => q["trace"]["ignored"] = json!(true),
+                19 => {
+                    q["trace"]["semantic_units"] = json!([0]);
+                    q["trace"]["ranked_candidate_pages"] = json!([0]);
+                    q["trace"]["primary_page"] = json!(0);
+                }
+                20 => q["trace"]["semantic_seed_additions"] = json!([0, 1, 2, 3, 4, 5, 6]),
+                _ => q["trace"]["semantic_leaves"] = json!([16]),
+            }
+            assert!(
+                source_query_fixture(&q, &rows[1], &c).is_err(),
+                "case {case}"
+            );
+        }
+        let mut c = c;
+        c.source_byte_cap = 6143;
+        assert!(source_query_fixture(&rows[5], &rows[1], &c).is_err());
+    }
+
+    #[test]
+    fn source_utilization_authenticated_report_and_legacy_preservation() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = source_fixture();
+        let bytes = encode(&rows);
+        let c = source_config_value(dir.path(), &rows, &bytes);
+        let (config, pin) = source_write_config(dir.path(), &c);
+        let report = reduce_source_utilization(&config, &pin).unwrap();
+        assert_eq!(report["count"], 1000);
+        assert_eq!(report["queries"].as_array().unwrap().len(), 1000);
+        assert_eq!(report["queries"][999]["ordinal"], 999);
+        assert_eq!(
+            report["aggregate"]["baseline_bytes"],
+            json!({"total":6144000,"median":6144,"p95":6144,"max":6144})
+        );
+        assert_eq!(
+            report["aggregate"]["completion_payload_bytes"]["total"],
+            2688000
+        );
+        assert_eq!(report["aggregate"]["potential_saving_bytes"]["total"], 0);
+        assert_eq!(report["completion_limited_frequency"], 0.0);
+        assert_eq!(report["optimistic_hindsight"], true);
+        assert_eq!(report["counterfactual_cost_only"], true);
+        assert_eq!(report["score_or_recall_evaluated"], false);
+        assert_eq!(report["direct_sq8_get_cap"], 32);
+        assert_eq!(report["historical_sq8_query_byte_cap"], 16773120);
+        assert_eq!(
+            report["direct_closure_sq8_exceeds_historical_byte_cap_queries"],
+            0
+        );
+        assert_eq!(
+            report["aggregate"]["direct_closure_sq8_bytes"],
+            json!({"total":14336000,"median":14336,"p95":14336,"max":14336})
+        );
+        assert_eq!(
+            report["aggregate"]["mandatory_closure_sq8_bytes"]["total"],
+            14336000
+        );
+        assert_eq!(
+            report["aggregate"]["direct_closure_sq8_bridge_bytes"]["total"],
+            0
+        );
+        assert_eq!(
+            report["aggregate"]["original_source_sq8_bytes"]["total"],
+            13312000
+        );
+        assert_eq!(
+            report["aggregate"]["direct_minus_original_bytes"],
+            json!({"total":1024000,"median":1024,"p95":1024,"max":1024})
+        );
+        assert_eq!(
+            report["aggregate"]["direct_minus_original_gets"],
+            json!({"total":-1000,"median":-1,"p95":-1,"max":-1})
+        );
+        for key in [
+            "production_change",
+            "claims_quality",
+            "claims_latency",
+            "qualified",
+        ] {
+            assert_eq!(report[key], false);
+        }
+        assert_eq!(
+            report["reducer_source_sha256"],
+            sha(include_bytes!("compare_native_replay.rs"))
+        );
+        assert!((serde_json::to_vec(&report).unwrap().len() as u64) < REPORT_CAP);
+        let output = dir.path().join("source-report.json");
+        assert!(
+            execute_report(&output, SOURCE_UTILIZATION_SCHEMA, || {
+                reduce_source_utilization(&config, &pin)
+            })
+            .unwrap()
+        );
+        let original = std::fs::read(&output).unwrap();
+        assert!(
+            execute_report(&output, SOURCE_UTILIZATION_SCHEMA, || panic!(
+                "occupied output invoked reduction"
+            ))
+            .is_err()
+        );
+        assert_eq!(std::fs::read(&output).unwrap(), original);
+        let (legacy, legacy_pin) = v2_config(dir.path(), &bytes, &rows);
+        assert_eq!(
+            reduce_completed(&legacy, &legacy_pin).unwrap()["native_terminal"]["charges"]["source"]
+                ["verified_bytes"],
+            6144000
+        );
+        assert_eq!(
+            compare(&four(dir.path())).unwrap()["schema"],
+            "borsuk-compare-native-replay-v1"
+        );
+    }
+
+    #[test]
+    fn source_utilization_report_cap_refuses_before_publication() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("oversize-report.json");
+        let oversized = json!({"status":"MEASURED","evidence":"x".repeat(REPORT_CAP as usize)});
+        assert!(source_report_cap(&oversized).is_err());
+        assert!(
+            !execute_report(&output, SOURCE_UTILIZATION_SCHEMA, || {
+                source_report_cap(&oversized)?;
+                Ok(oversized)
+            })
+            .unwrap()
+        );
+        let bytes = std::fs::read(&output).unwrap();
+        assert!((bytes.len() as u64) < REPORT_CAP);
+        let report: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(report["status"], "INVALID");
+        assert_eq!(report["error"], "source report cap before publication");
+        assert!(report.get("evidence").is_none());
+    }
+
+    #[test]
+    fn source_utilization_positive_bound_at_historical_completion_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rows = source_fixture();
+        rows[1]["rows"] = json!(100000);
+        rows[1]["query_source_first"] = json!(100000);
+        let semantic = (0..319).map(|page| page * 8).collect::<Vec<_>>();
+        let mut scored = (0..8)
+            .chain(semantic.iter().copied().skip(1))
+            .collect::<Vec<_>>();
+        for page in 1..319 {
+            for unit in page * 8 + 1..(page + 1) * 8 {
+                if scored.len() < 2544 {
+                    scored.push(unit);
+                }
+            }
+        }
+        assert_eq!(scored.len(), 2544);
+        let q = &mut rows[1004];
+        q["trace"]["semantic_units"] = json!(semantic);
+        q["trace"]["nomination_evaluated_units"] = json!(scored);
+        q["trace"]["ranked_candidate_pages"] = json!((0..319).collect::<Vec<_>>());
+        q["trace"]["primary_page"] = json!(0);
+        q["charges"]["source"]["verified_bytes"] = json!(979968);
+        q["sum"]["verified_bytes"] = json!(987236);
+        let t = &mut rows.last_mut().unwrap()["summary"];
+        t["charges"]["source"]["verified_bytes"] = json!(7117824);
+        t["sum"]["verified_bytes"] = json!(14385824);
+        authenticate(&mut rows);
+        let value = source_config_value(dir.path(), &rows, &encode(&rows));
+        let (path, pin) = source_write_config(dir.path(), &value);
+        let report = reduce_source_utilization(&path, &pin).unwrap();
+        assert_eq!(
+            report["aggregate"]["potential_saving_bytes"],
+            json!({"total":3072,"median":0,"p95":0,"max":3072})
+        );
+        assert_eq!(report["queries"][999]["scored_units"], 2544);
+        assert_eq!(report["queries"][999]["completion_units"], 2218);
+        assert_eq!(report["queries"][999]["ideal_gets"], 2);
+        assert_eq!(report["completion_limited_queries"], 1);
+        assert_eq!(report["completion_limited_frequency"], 0.001);
+    }
+
+    #[test]
+    fn source_utilization_direct_closure_sq8_hand_counted_costs() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = source_fixture();
+        let mut config = source_config_value(dir.path(), &rows, &encode(&rows));
+        config["historical_sq8_query_byte_cap"] = json!(14336);
+        let c: SourceUtilizationConfig = serde_json::from_value(config).unwrap();
+        c.validate().unwrap();
+        let contiguous = source_query_fixture(&rows[5], &rows[1], &c).unwrap();
+        assert!(!contiguous.direct_closure_sq8_exceeds_historical_byte_cap);
+        assert!(!contiguous.completion_limited);
+        assert_eq!(contiguous.ideal_bytes, contiguous.baseline_bytes);
+        assert_eq!(
+            (
+                contiguous.direct_closure_sq8_bytes,
+                contiguous.mandatory_closure_sq8_bytes,
+                contiguous.direct_closure_sq8_bridge_bytes
+            ),
+            (14336, 14336, 0)
+        );
+        assert_eq!(
+            (
+                contiguous.original_source_sq8_bytes,
+                contiguous.direct_minus_original_bytes,
+                contiguous.direct_minus_original_gets
+            ),
+            (13312, 1024, -1)
+        );
+        // Two discovered units expand to both complete 256-row pages, even
+        // when fewer units were scored by bounded source completion.
+        let mut bounded = rows[5].clone();
+        bounded["trace"]["nomination_evaluated_units"] = json!((0..12).collect::<Vec<_>>());
+        let mut bounded_config = c;
+        bounded_config.source_unit_cap = 12;
+        let cost = source_query_fixture(&bounded, &rows[1], &bounded_config).unwrap();
+        assert_eq!(cost.scored_units, 12);
+        assert_eq!(cost.direct_closure_sq8_bytes, 14336);
+        bounded_config.source_unit_cap = 2544;
+
+        // Already fetching both pages makes the static byte difference negative.
+        let mut complete = rows[5].clone();
+        complete["charges"]["sq8"]["verified_bytes"] = json!(14336);
+        complete["sum"]["verified_bytes"] = json!(20580);
+        let complete = source_query_fixture(&complete, &rows[1], &bounded_config).unwrap();
+        assert!(!complete.direct_closure_sq8_exceeds_historical_byte_cap);
+        assert_eq!(
+            (
+                complete.original_source_sq8_bytes,
+                complete.direct_minus_original_bytes
+            ),
+            (20480, -6144)
+        );
+
+        let mut tail = rows[5].clone();
+        let mut input = rows[1].clone();
+        input["rows"] = json!(513);
+        tail["trace"]["semantic_units"] = json!([0, 8, 16]);
+        tail["trace"]["ranked_candidate_pages"] = json!([1, 0, 2]);
+        tail["trace"]["nomination_evaluated_units"] =
+            json!([0, 1, 2, 3, 4, 5, 6, 7, 8, 16, 9, 10, 11, 12, 13, 14, 15]);
+        tail["charges"]["source"]["verified_bytes"] = json!(6156);
+        tail["sum"]["verified_bytes"] = json!(13424);
+        let tail = source_query_fixture(&tail, &input, &bounded_config).unwrap();
+        assert!(tail.direct_closure_sq8_exceeds_historical_byte_cap);
+        assert!(!tail.completion_limited);
+        assert_eq!(tail.ideal_bytes, tail.baseline_bytes);
+        assert_eq!(
+            (
+                tail.direct_closure_sq8_bytes,
+                tail.mandatory_closure_sq8_bytes,
+                tail.direct_closure_sq8_bridge_bytes
+            ),
+            (14364, 14364, 0)
+        );
+        assert_eq!(
+            (
+                tail.original_source_sq8_bytes,
+                tail.direct_minus_original_bytes
+            ),
+            (13324, 1040)
+        );
+
+        // 33 fragmented closures exceed 32 GETs by one; tied gaps force one
+        // 256-row bridge. The final mandatory page has just one physical row.
+        let pages = (0..33).map(|p| p * 2).collect::<BTreeSet<_>>();
+        let semantic = pages.iter().map(|&p| p * 8).collect::<Vec<_>>();
+        let mut scored = (0..8)
+            .chain(semantic.iter().copied().skip(1))
+            .collect::<Vec<_>>();
+        for &page in pages.iter().skip(1) {
+            scored.extend(
+                (page * 8 + 1..(page + 1) * 8).filter(|&unit| unit < 16385_usize.div_ceil(32)),
+            );
+        }
+        let mut fragmented = rows[5].clone();
+        input["rows"] = json!(16385);
+        fragmented["trace"]["semantic_units"] = json!(semantic);
+        fragmented["trace"]["ranked_candidate_pages"] = json!(pages);
+        fragmented["trace"]["primary_page"] = json!(0);
+        fragmented["trace"]["nomination_evaluated_units"] = json!(scored);
+        fragmented["charges"]["source"] =
+            json!({"submitted_gets":33,"verified_bytes":98316,"failed_gets":0});
+        fragmented["sum"] = json!({"submitted_gets":35,"verified_bytes":105584,"failed_gets":0});
+        let f = source_query_fixture(&fragmented, &input, &bounded_config).unwrap();
+        assert!(f.direct_closure_sq8_exceeds_historical_byte_cap);
+        assert!(!f.completion_limited);
+        assert_eq!(f.ideal_bytes, f.baseline_bytes);
+        assert_eq!((f.baseline_gets, f.direct_closure_sq8_gets), (33, 32));
+        assert_eq!(
+            (
+                f.direct_closure_sq8_bytes,
+                f.mandatory_closure_sq8_bytes,
+                f.direct_closure_sq8_bridge_bytes
+            ),
+            (236572, 229404, 7168)
+        );
+        assert_eq!(
+            (
+                f.original_source_sq8_bytes,
+                f.original_source_sq8_gets,
+                f.direct_minus_original_bytes,
+                f.direct_minus_original_gets
+            ),
+            (105484, 34, 131088, -2)
+        );
+        let (ranges, bytes) = source_cover::cover_pages(&pages, 16385, 28, 256, 32).unwrap();
+        assert_eq!(ranges[0], 0..21504);
+        assert_eq!(ranges.last().unwrap(), &(458752..458780));
+        assert_eq!(bytes, 236572);
+    }
+
+    #[test]
+    fn source_utilization_direct_closure_sq8_charge_refusals() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = source_fixture();
+        let config = source_config_value(dir.path(), &rows, &encode(&rows));
+        let c: SourceUtilizationConfig = serde_json::from_value(config).unwrap();
+        for (field, value) in [
+            ("failed_gets", 1),
+            ("submitted_gets", 0),
+            ("submitted_gets", 33),
+            ("submitted_gets", 2),
+            ("verified_bytes", 0),
+            ("verified_bytes", 28),
+            ("verified_bytes", 7169),
+            ("verified_bytes", 14364),
+        ] {
+            let mut q = rows[5].clone();
+            q["charges"]["sq8"][field] = json!(value);
+            assert!(
+                source_query_fixture(&q, &rows[1], &c).is_err(),
+                "{field}={value}"
+            );
+        }
+        // Authenticate the unchanged complete fixture/config at the historical
+        // cap boundary; counterfactual exceedances are evidence, not refusals.
+        for cap in [7167, 7168] {
+            let mut config = source_config_value(dir.path(), &rows, &encode(&rows));
+            config["historical_sq8_query_byte_cap"] = json!(cap);
+            let (path, pin) = source_write_config(dir.path(), &config);
+            let result = reduce_source_utilization(&path, &pin);
+            if cap == 7167 {
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    "recorded original SQ8 bytes exceed historical query cap"
+                );
+            } else {
+                let report = result.unwrap();
+                assert_eq!(report["historical_sq8_query_byte_cap"], 7168);
+                assert_eq!(
+                    report["direct_closure_sq8_exceeds_historical_byte_cap_queries"],
+                    1000
+                );
+                assert!(
+                    report["queries"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .all(|q| q["direct_closure_sq8_exceeds_historical_byte_cap"] == true)
+                );
+            }
+        }
+        // Re-seal every mutation and consistently recompute query/terminal
+        // charges: rejection must come from page geometry, not stale hashes.
+        for (population, sq8_bytes, sq8_gets, admitted) in [
+            (512_usize, 28_usize, 1_u64, false),
+            (512, 7168, 1, true),
+            (512, 14336, 1, true),
+            (512, 7168, 2, false),
+            (513, 28, 1, true),
+            (513, 7168, 1, true),
+            (513, 7196, 1, true),
+            (513, 7196, 2, true),
+            (513, 56, 1, false),
+            (513, 7224, 1, false),
+            (513, 14364, 1, true),
+            (513, 7196, 3, false),
+            (600, 2464, 1, true),
+            (600, 9632, 2, true),
+            (600, 28, 1, false),
+        ] {
+            let mut rows = source_fixture();
+            rows[1]["rows"] = json!(population);
+            rows[1]["query_source_first"] = json!(population);
+            let source_bytes = if population > 512 {
+                population * 12
+            } else {
+                6144
+            };
+            let q = &mut rows[5];
+            if population > 512 {
+                let mut scored = (0..9).chain([16]).chain(9..16).collect::<Vec<_>>();
+                scored.extend(17..population.div_ceil(32));
+                q["trace"]["semantic_units"] = json!([0, 8, 16]);
+                q["trace"]["nomination_evaluated_units"] = json!(scored);
+                if (sq8_bytes / 28) % 256 > 0 {
+                    q["trace"]["ranked_candidate_pages"] = json!([2, 0, 1]);
+                    q["trace"]["primary_page"] = json!(2);
+                } else {
+                    q["trace"]["ranked_candidate_pages"] = json!([1, 0, 2]);
+                }
+            }
+            q["charges"]["source"]["verified_bytes"] = json!(source_bytes);
+            q["charges"]["sq8"] =
+                json!({"submitted_gets":sq8_gets,"verified_bytes":sq8_bytes,"failed_gets":0});
+            q["sum"] = json!({"submitted_gets":sq8_gets+2,"verified_bytes":source_bytes+sq8_bytes+100,"failed_gets":0});
+            let source_total = 999 * 6144 + source_bytes;
+            let sq8_total = 999 * 7168 + sq8_bytes;
+            let t = &mut rows.last_mut().unwrap()["summary"];
+            t["charges"]["source"]["verified_bytes"] = json!(source_total);
+            t["charges"]["sq8"] =
+                json!({"submitted_gets":999+sq8_gets,"verified_bytes":sq8_total,"failed_gets":0});
+            t["sum"] = json!({"submitted_gets":2999+sq8_gets,"verified_bytes":source_total+sq8_total+100000,"failed_gets":0});
+            authenticate(&mut rows);
+            let config = source_config_value(dir.path(), &rows, &encode(&rows));
+            let (path, pin) = source_write_config(dir.path(), &config);
+            let result = reduce_source_utilization(&path, &pin);
+            if admitted {
+                assert!(
+                    result.is_ok(),
+                    "legal {population} rows/{sq8_bytes} bytes/{sq8_gets} GETs: {result:?}"
+                );
+            } else {
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    "recorded SQ8 whole-page/tail/GET compatibility",
+                    "illegal {population} rows/{sq8_bytes} bytes/{sq8_gets} GETs"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn source_utilization_config_pins_duplicates_and_unknowns() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = source_fixture();
+        let config = source_config_value(dir.path(), &rows, &encode(&rows));
+        for (name, value) in [
+            ("schema", json!("other")),
+            ("source_get_cap", json!(127)),
+            ("source_byte_cap", json!(67108863)),
+            ("source_unit_cap", json!(2543)),
+            ("direct_sq8_get_cap", json!(31)),
+            ("historical_sq8_query_byte_cap", json!(0)),
+            ("historical_sq8_query_byte_cap", json!(-1)),
+            ("record_bytes", json!(264)),
+            ("producer_source_commit", json!("A".repeat(40))),
+            ("producer_source_archive_sha256", json!("bad")),
+            ("ignored", json!(true)),
+        ] {
+            let mut c = config.clone();
+            c[name] = value;
+            let (path, pin) = source_write_config(dir.path(), &c);
+            assert!(reduce_source_utilization(&path, &pin).is_err(), "{name}");
+        }
+        for field in [
+            "record_bytes",
+            "source_get_cap",
+            "source_byte_cap",
+            "source_unit_cap",
+            "direct_sq8_get_cap",
+            "historical_sq8_query_byte_cap",
+        ] {
+            let mut c = config.clone();
+            c.as_object_mut().unwrap().remove(field);
+            let (path, pin) = source_write_config(dir.path(), &c);
+            assert!(
+                reduce_source_utilization(&path, &pin).is_err(),
+                "missing {field}"
+            );
+        }
+        let (path, pin) = source_write_config(dir.path(), &config);
+        assert!(reduce_source_utilization(&path, &"0".repeat(64)).is_err());
+        assert!(reduce_source_utilization(&path, &pin.to_uppercase()).is_err());
+        for field in [
+            "source_get_cap",
+            "record_bytes",
+            "direct_sq8_get_cap",
+            "historical_sq8_query_byte_cap",
+        ] {
+            let raw = serde_json::to_string(&config).unwrap();
+            let duplicate = raw.replacen(
+                &format!("\"{field}\":"),
+                &format!("\"{field}\":0,\"{field}\":"),
+                1,
+            );
+            std::fs::write(&path, &duplicate).unwrap();
+            let error = reduce_source_utilization(&path, &sha(duplicate.as_bytes()))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("duplicate JSON key"));
+        }
+        let mut generic_cap = config.clone();
+        generic_cap["historical_sq8_query_byte_cap"] = json!(1);
+        serde_json::from_value::<SourceUtilizationConfig>(generic_cap)
+            .unwrap()
+            .validate()
+            .unwrap();
+        for field in ["runner_source_sha256", "config_sha256"] {
+            let mut c = config.clone();
+            c["expected_identity"][field] = json!("8".repeat(64));
+            let (path, pin) = source_write_config(dir.path(), &c);
+            assert!(reduce_source_utilization(&path, &pin).is_err());
+        }
+        for (dimension, expected) in [
+            (1, 9),
+            (16, 12),
+            (257, 73),
+            (300, 88),
+            (768, 200),
+            (1024, 264),
+        ] {
+            assert_eq!(source_record_bytes(dimension).unwrap(), expected);
+        }
+        assert!(source_record_bytes(0).is_err());
+        assert!(source_record_bytes(1025).is_err());
+    }
+
+    #[test]
+    fn source_utilization_payload_sha_eof_seals_and_descriptor_mutations() {
+        let dir = tempfile::tempdir().unwrap();
+        let valid = source_fixture();
+        for case in 0..9 {
+            let mut rows = valid.clone();
+            match case {
+                0 => rows[1005]["prefix_sha256"] = json!("0".repeat(64)),
+                1 => rows[1005]["requires_successful_sync"] = json!(false),
+                2 => rows.last_mut().unwrap()["summary"]["sealed_sha256"] = json!("0".repeat(64)),
+                3 => {
+                    rows.pop();
+                }
+                4 => rows[1004]["ordinal"] = json!(998),
+                _ => (),
+            }
+            let mut bytes = encode(&rows);
+            match case {
+                5 => {
+                    bytes.pop();
+                }
+                6 => bytes.extend_from_slice(b"{}\n"),
+                7 => {
+                    bytes = String::from_utf8(bytes)
+                        .unwrap()
+                        .replacen(
+                            "\"semantic_units\":[0,8]",
+                            "\"semantic_units\":[0,8],\"semantic_units\":[0,8]",
+                            1,
+                        )
+                        .into_bytes()
+                }
+                _ => (),
+            }
+            let mut c = source_config_value(dir.path(), &rows, &bytes);
+            if case == 8 {
+                c["input"]["sha256"] = json!("0".repeat(64));
+            }
+            let (path, pin) = source_write_config(dir.path(), &c);
+            assert!(
+                reduce_source_utilization(&path, &pin).is_err(),
+                "case {case}"
+            );
+        }
+        // Mutation occurs after all queries are read but before seal/EOF: the
+        // same shared reader's original descriptor/stamps must refuse it.
+        for case in 0..3 {
+            let bytes = encode(&valid);
+            let value = source_config_value(dir.path(), &valid, &bytes);
+            let c: SourceUtilizationConfig = serde_json::from_value(value).unwrap();
+            let expected = CompletedConfig {
+                schema: "borsuk-completed-native-reduction-config-v1".into(),
+                input: CompletedInput {
+                    path: c.input.path.clone(),
+                    bytes: c.input.bytes,
+                    sha256: c.input.sha256.clone(),
+                },
+                expected_identity: c.expected_identity.clone(),
+                expected_bound_inputs: c.expected_bound_inputs.clone(),
+            };
+            let result = read_run_observed(
+                &c.input.path,
+                &c.input.sha256,
+                Some(&expected),
+                |_, q, _| {
+                    if q.ordinal == COUNT - 1 {
+                        match case {
+                            0 => {
+                                std::fs::OpenOptions::new()
+                                    .append(true)
+                                    .open(&c.input.path)?
+                                    .write_all(b"{}\n")?;
+                            }
+                            1 => {
+                                std::fs::OpenOptions::new()
+                                    .write(true)
+                                    .open(&c.input.path)?
+                                    .set_len(1)?;
+                            }
+                            _ => {
+                                let replacement = dir.path().join("replacement");
+                                std::fs::write(&replacement, &bytes)?;
+                                std::fs::rename(&replacement, &c.input.path)?;
+                            }
+                        }
+                    }
+                    Ok(())
+                },
+            );
+            assert!(result.is_err(), "descriptor mutation {case}");
+        }
     }
 
     fn charge(n: u64) -> Value {

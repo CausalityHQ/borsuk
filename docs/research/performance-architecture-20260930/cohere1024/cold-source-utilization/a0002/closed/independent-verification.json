@@ -1,0 +1,25 @@
+{
+  "status": "NATIVE_QUALIFIED_AND_CLOSED_METADATA_COST_REPORT_VERIFIED",
+  "instance_id": "i-0e69784d7ebc74107",
+  "terminated_and_waited": true,
+  "candidate": "44e116b9b8754cef0393fad1f96259bd583f3b7b",
+  "full_native_file_count": 425,
+  "native_identity": "ab5b3bee8bd2df8be9de8eff07801227ebd26a4c628c5de9bd4b99ccce999174",
+  "full_source_before_after_match": true,
+  "test_count": 33,
+  "stages": [
+    "inventory",
+    "affected",
+    "release",
+    "clippy",
+    "test-build"
+  ],
+  "binary": {
+    "bytes": 1662696,
+    "sha256": "119d81b59ceda601ead3bee6696020bbfb2df5f91423a8f439ffe870f18834b9"
+  },
+  "replay_exit": 0,
+  "producer_provenance": "root original closed authority and frozen config, not self-claimed by report",
+  "performance_claim": false,
+  "quality_claim": false
+}

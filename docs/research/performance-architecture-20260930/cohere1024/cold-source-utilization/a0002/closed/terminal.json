@@ -1,0 +1,21 @@
+{
+  "schema": "borsuk-source-utilization-closed-execution-v1",
+  "instance_id": "i-0e69784d7ebc74107",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "qualification_exit": 0,
+  "replay_exit": 0,
+  "source_commit": "44e116b9b8754cef0393fad1f96259bd583f3b7b",
+  "native_source_file_count": 425,
+  "native_source_identity_sha256": "ab5b3bee8bd2df8be9de8eff07801227ebd26a4c628c5de9bd4b99ccce999174",
+  "source_archive_sha256": "08868242ab8285fccf56b61b7d9eb94828fb8a6b5bc2bc1a7f6c753781cf9884",
+  "evidence": {
+    "bytes": 604276,
+    "sha256": "158de7ecc9b697ce130e7860e654032f9259edb7c4670f2fc49ead66060dab93"
+  },
+  "scope": "compiler qualification and closed metadata cost analysis only",
+  "ann_run": false,
+  "performance_claim": false,
+  "quality_claim": false
+}
