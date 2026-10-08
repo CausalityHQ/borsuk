@@ -1,0 +1,23 @@
+{
+  "status": "ADMITTED_SOURCE_BOUND_REAL_S3_QUERY",
+  "instance_id": "i-0544ded2e183e470f",
+  "original_session": 17807,
+  "native_exit": 0,
+  "closeout_exit": 0,
+  "terminated": true,
+  "wait_exit": 0,
+  "all_queries_sealed": true,
+  "query_count": 1000,
+  "recall_numerator": 9723,
+  "recall_denominator": 10000,
+  "underfilled_queries": 0,
+  "cgroup_peak_bytes": 53334016,
+  "swap_peak_bytes": 0,
+  "source_config_stage_pins_match": true,
+  "prefix_and_seal_hashes_match": true,
+  "transport_errors": 0,
+  "performance_claim": false,
+  "pending": "Formal cross-width ordered-result/trace/logical-charge parity remains mandatory before selecting a width.",
+  "qualified_native_completed_reduction": true,
+  "native_validation_receipt_sha256": "3bea04a7fe1322b067fc02c9dea277db4fc8b31d2b5e691591683bb8b8be3453"
+}

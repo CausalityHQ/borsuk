@@ -1,0 +1,8 @@
+628f93148d767b7fc456e566139788d67cf98e323ec66ef4e6ebe10ef330e82b  /mnt/borsuk-retained-s3/runner
+a3b8b1f37feb4ff7a812b70ef8b2dff548c93d8eb7639175195338c60e2c0228  /mnt/borsuk-retained-s3/config.json
+235212cd9848d3b43d743d7207835b5b5feb8035323eff31b9b47dc9e1b3d388  /mnt/borsuk-retained-s3/stage.sh
+8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e  /mnt/borsuk-retained-s3/queries.f32
+479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c  /mnt/borsuk-retained-s3/truth.u64
+9ad7ce0fe8f461a3b8f7957812c798103f234a83d1df6748d5f04cb870c4694b  /mnt/borsuk-retained-s3/reducer
+89f7e831cdd648bd0316dea66aef637826c7c35545ee1343f12509a0de5f0d19  /mnt/borsuk-retained-s3/reduction-config.json
+4e91a4873f1dd7e1799dffc816d711caf02cd4237d6693d4d075607e7bb1e848  /mnt/borsuk-retained-s3/admission-result.jsonl

@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-native-s3-query-admission-v1",
+  "instance_id": "i-0544ded2e183e470f",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 0,
+  "binary_source_commit": "31eca73431901c193aff598f4c6e44d3540594da",
+  "integration_commit": "94c53bf44fe709a9bf3fdb64ebc53a3d8efe7056",
+  "qualified_source_identity_sha256": "6dd4fbe0eeb512ef807868ba4088d35350eaaf93ab67fed6b9e7f204a5397a7b",
+  "evidence": {
+    "bytes": 1207229,
+    "sha256": "c93152e8523fadfa13de0ba9d9e357bace092e0523eebf066f86454e746fe27c"
+  },
+  "terminal_delivery": "attempted",
+  "performance_claim": false
+}

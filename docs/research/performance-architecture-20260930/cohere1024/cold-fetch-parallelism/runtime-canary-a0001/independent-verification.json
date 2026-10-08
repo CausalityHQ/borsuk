@@ -1,0 +1,23 @@
+{
+  "status": "NATIVE_ADMISSION_VALIDATED_AND_SEPARATE_CANARY_GO",
+  "instance_id": "i-016154830814d94c8",
+  "original_session": 38787,
+  "terminated": true,
+  "wait_exit": 0,
+  "canary_expected_native_exit": 2,
+  "actual_native_exit": 2,
+  "closeout_exit": 0,
+  "all1000_admission_rows_native_validated": true,
+  "independent_expected_identity_inputs_match": true,
+  "admission_recall_numerator": 9723,
+  "admission_recall_denominator": 10000,
+  "canary_completed_queries": 0,
+  "canary_truth_opened": false,
+  "canary_submitted_gets": 0,
+  "cgroup_peak_bytes": 2584576,
+  "swap_peak_bytes": 0,
+  "archive_file_count": 36,
+  "performance_claim": false,
+  "cross_width_parity": "Still mandatory in formal ABBA; admission timing never selects width.",
+  "root_verifier_note": "Initial JSONL parser rejected existing blank separator. Re-read original immutable bytes using JSON-sequence whitespace handling; no remote rerun or source change."
+}
