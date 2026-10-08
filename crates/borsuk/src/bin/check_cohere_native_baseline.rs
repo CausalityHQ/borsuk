@@ -4,7 +4,8 @@ use borsuk::{
     semantic_unit_router::SemanticProfile,
     sq8_s3_range::{NativeTransportStats, OneAttemptS3, Sq8ReadStats},
     two_bit_generation::{
-        DiscoveryMode, TwoBitGeneration, TwoBitGenerationLimits, TwoBitPlanTrace,
+        DirectClosureLimits, DirectClosureMemory, DirectClosureRejection, DiscoveryMode,
+        TwoBitGeneration, TwoBitGenerationLimits, TwoBitPlanTrace,
     },
     two_bit_source::SourcePlaneReceipt,
 };
@@ -38,8 +39,71 @@ const MEMORY_CAP: u64 = 512 * 1024 * 1024;
 const BLOCK: usize = 65_536;
 const DATASET: &str = "CohereLabs/wikipedia-2023-11-embed-multilingual-v3";
 const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
-const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v2";
-const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v2";
+// v3 adds the required explicit `serving` mode; v2 and older configs refuse.
+const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v3";
+const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v3";
+// One 256-row SQ8 page at the fixed D1024 width, for reporting covered/bridge pages.
+const SQ8_PAGE_BYTES: usize = 256 * (D + 12);
+
+/// Which serving path answers each query. Required in every config: there is no default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+enum Serving {
+    /// Historical SOURCE nomination, then SQ8 under the unchanged baseline caps.
+    Baseline {},
+    /// Opt-in direct closure: no SOURCE I/O. These caps are explicit and independent of
+    /// the baseline `max_query_*` limits.
+    DirectClosure {
+        max_sq8_bytes: usize,
+        max_sq8_gets: usize,
+    },
+}
+impl Serving {
+    fn direct(self) -> Option<DirectClosureLimits> {
+        match self {
+            Self::Baseline {} => None,
+            Self::DirectClosure {
+                max_sq8_bytes,
+                max_sq8_gets,
+            } => Some(DirectClosureLimits {
+                max_sq8_bytes,
+                max_sq8_gets,
+            }),
+        }
+    }
+}
+
+/// A valid-input direct-closure refusal by an enforced library cap. This is a resource
+/// outcome of the candidate, not a malformed-config, authentication or transport defect.
+/// Host OOM, deadline and kill outcomes are never inferred here.
+#[derive(Debug)]
+struct ResourceReject {
+    reason: DirectClosureRejection,
+    message: String,
+}
+impl std::fmt::Display for ResourceReject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "resource rejection {:?}: {}", self.reason, self.message)
+    }
+}
+impl Error for ResourceReject {}
+
+/// Terminal classification. Exit codes: MEASURED 0, INVALID 2, RESOURCE_REJECT 3.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Status {
+    Measured,
+    Invalid,
+    ResourceReject,
+}
+impl Status {
+    fn exit_code(self) -> i32 {
+        match self {
+            Self::Measured => 0,
+            Self::Invalid => 2,
+            Self::ResourceReject => 3,
+        }
+    }
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
@@ -144,6 +208,7 @@ struct Config {
     max_memory_bytes: u64,
     #[serde(default = "default_fetch_parallelism")]
     fetch_parallelism: usize,
+    serving: Serving,
 }
 
 fn default_fetch_parallelism() -> usize {
@@ -301,6 +366,19 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
         matches!(c.fetch_parallelism, 16 | 32),
         "fetch_parallelism must be 16 or 32",
     )?;
+    require(
+        c.schema == CONFIG_SCHEMA,
+        "config format marker must be borsuk-cohere-native-baseline-config-v3; older formats refuse",
+    )?;
+    if let Some(direct) = c.serving.direct() {
+        // Sanity bounds only; the library admits the real envelope (modeled memory and
+        // the planned cover) before any query allocation or I/O.
+        require(
+            (1..=MEMORY_CAP as usize).contains(&direct.max_sq8_bytes)
+                && (1..=128).contains(&direct.max_sq8_gets),
+            "direct closure caps must be explicit, positive and bounded",
+        )?;
+    }
     require(
         c.schema == CONFIG_SCHEMA
             && c.dataset == DATASET
@@ -820,6 +898,7 @@ struct Progress {
     query_wall_ns: u128,
     query_cpu_ns: i128,
     transport: TransportSpan,
+    direct_memory: Option<DirectClosureMemory>,
 }
 
 #[derive(Default, Serialize)]
@@ -871,6 +950,7 @@ impl Default for Progress {
             query_wall_ns: 0,
             query_cpu_ns: 0,
             transport: TransportSpan::default(),
+            direct_memory: None,
         }
     }
 }
@@ -972,19 +1052,51 @@ async fn query_and_seal_with(
     )?;
     out.emit(
         &json!({"phase":"startup","metadata":generation.remote_open_stats(),
+        "serving":c.serving,
         "library_cap_bytes":MEMORY_CAP,"caller_pinned_bytes":admission.already_pinned_bytes,
         "codec_scratch_bytes":532480,"trace_scratch_bytes":TwoBitPlanTrace::scratch_bytes(c.rows),
         "query_scratch_bytes":admission.max_query_scratch_bytes,"truth_opened":false}),
     )?;
+    if let Some(direct) = c.serving.direct() {
+        // Exact modeled memory must fit before any direct query: the existing model is kept
+        // whole (no SOURCE credit) and a full direct query budget is added.
+        p.stage = "direct_admission";
+        let memory = generation.direct_closure_memory(direct)?;
+        let admitted = memory.total_bytes <= memory.cap_bytes;
+        out.emit(
+            &json!({"phase":"direct_admission","limits":c.serving,"memory":memory,
+            "admitted":admitted,"truth_opened":false}),
+        )?;
+        p.direct_memory = Some(memory);
+        if !admitted {
+            return Err(ResourceReject {
+                reason: DirectClosureRejection::ModeledMemory,
+                message: format!(
+                    "modeled {} bytes exceed the {} byte cap before any query",
+                    memory.total_bytes, memory.cap_bytes
+                ),
+            }
+            .into());
+        }
+    }
     for ordinal in 0..c.count {
         p.stage = "query";
         let query = request_row(&requests, ordinal)?;
         p.transport.begin(&reader, p.stage, Some(ordinal));
         let wall = Instant::now();
         let cpu = cpu_ns();
-        let result = generation
-            .diagnostic_search_with_store(store, &query, K)
-            .await;
+        let result = match c.serving.direct() {
+            None => {
+                generation
+                    .diagnostic_search_with_store(store, &query, K)
+                    .await
+            }
+            Some(direct) => {
+                generation
+                    .diagnostic_direct_closure_search_with_store(store, &query, K, direct)
+                    .await
+            }
+        };
         let wall_ns = wall.elapsed().as_nanos();
         let cpu_ns = cpu_ns() - cpu;
         p.transport.finish(&reader);
@@ -995,15 +1107,29 @@ async fn query_and_seal_with(
             Err(e) => {
                 let (source, sq8) = e.read_stats();
                 p.charges.add(e.router_stats(), source, sq8)?;
+                let rejection = e.direct_resource_rejection();
                 out.emit(
                     &json!({"phase":"query_failure","ordinal":ordinal,"error":e.to_string(),
+                    "resource_rejection":rejection,
                     "charges_so_far":p.charges,"sum_so_far":p.charges.sum(),"stages":e.stages(),
                     "query_wall_ns":wall_ns,"query_process_cpu_ns":cpu_ns,"truth_opened":false,
                     "transport":p.transport}),
                 )?;
-                return Err(format!("native query {ordinal}: {e}").into());
+                let message = format!("native query {ordinal}: {e}");
+                return Err(match rejection {
+                    Some(reason) => ResourceReject { reason, message }.into(),
+                    None => message.into(),
+                });
             }
         };
+        if c.serving.direct().is_some() {
+            require(
+                result.source_stats == Sq8ReadStats::default()
+                    && result.router_stats == Sq8ReadStats::default()
+                    && result.source_nomination_skipped,
+                "direct closure SOURCE/router charges must be zero and nomination skipped",
+            )?;
+        }
         p.charges.add(
             result.router_stats,
             result.source_stats,
@@ -1034,16 +1160,56 @@ async fn query_and_seal_with(
             result.source_stats,
             result.ranked.stats,
         )?;
+        // Full ordered range identity, not just totals: `selected_pages` is the required
+        // closure (direct) or the admitted pages (baseline); bridges live only in `ranges`.
+        #[derive(Serialize)]
+        struct PlanRecord<'a> {
+            selected_pages: &'a [usize],
+            ranges: Vec<[usize; 2]>,
+            planned_bytes: usize,
+            target_pages: usize,
+            target_shortfall: usize,
+            primary_pages_retained: usize,
+            covered_pages: usize,
+            bridge_pages: usize,
+        }
+        let covered_pages = result
+            .plan
+            .ranges
+            .iter()
+            .map(|r| r.len().div_ceil(SQ8_PAGE_BYTES))
+            .sum::<usize>();
+        let plan = PlanRecord {
+            selected_pages: &result.plan.selected_pages,
+            ranges: result
+                .plan
+                .ranges
+                .iter()
+                .map(|r| [r.start, r.end])
+                .collect(),
+            planned_bytes: result.plan.planned_bytes,
+            target_pages: result.plan.target_pages,
+            target_shortfall: result.plan.target_shortfall,
+            primary_pages_retained: result.plan.primary_pages_retained,
+            covered_pages,
+            bridge_pages: covered_pages.saturating_sub(result.plan.selected_pages.len()),
+        };
         #[derive(Serialize)]
         struct Record<'a> {
             phase: &'static str,
             ordinal: usize,
             truth_opened: bool,
+            serving: Serving,
+            source_nomination_skipped: bool,
+            // What `stages.planning` measures: baseline = SOURCE nomination plus cover;
+            // direct = the cover computation alone (SOURCE nomination is skipped).
+            planning_scope: &'static str,
             returned: &'a [Hit],
             returned_count: usize,
             underfill: bool,
             charges: &'a Charges,
             sum: Charge,
+            plan: PlanRecord<'a>,
             stages: &'a borsuk::two_bit_generation::QueryStages,
             query_wall_ns: u128,
             query_process_cpu_ns: i128,
@@ -1058,11 +1224,19 @@ async fn query_and_seal_with(
             phase: "query",
             ordinal,
             truth_opened: false,
+            serving: c.serving,
+            source_nomination_skipped: result.source_nomination_skipped,
+            planning_scope: if result.source_nomination_skipped {
+                "direct_cover_only"
+            } else {
+                "source_nomination_and_cover"
+            },
             returned_count: returned.len(),
             underfill,
             returned: &returned,
             charges: &charges,
             sum: charges.sum(),
+            plan,
             stages: &result.stages,
             query_wall_ns: wall_ns,
             query_process_cpu_ns: cpu_ns,
@@ -1217,10 +1391,13 @@ fn reduce(c: &Config, out: &mut Output, seal: &Seal, p: &mut Progress) -> Result
         "requests_sha256":c.requests.sha256,"truth_sha256":c.truth.sha256,
         "generation_root_sha256":c.generation_root_sha256,"charges":p.charges,"sum":p.charges.sum(),
         "binding_charge":p.binding_charge,
+        "serving":c.serving,"direct_memory":p.direct_memory,
         "query_wall_ns":p.query_wall_ns,"query_process_cpu_ns":p.query_cpu_ns,
         "physical_s3_measured":false,"external_gate_required":true}),
     )
 }
+// Test-only conveniences over `execute_paths_status`, which `main` calls directly.
+#[cfg(test)]
 fn execute_paths(
     config_path: &Path,
     config_sha: &str,
@@ -1240,6 +1417,7 @@ fn execute_paths(
         },
     )
 }
+#[cfg(test)]
 fn execute_paths_with(
     config_path: &Path,
     config_sha: &str,
@@ -1247,6 +1425,16 @@ fn execute_paths_with(
     shape: Shape,
     query: impl FnOnce(&Config, Shape, &mut Output, &mut Progress) -> Result<Seal>,
 ) -> Result<bool> {
+    execute_paths_status(config_path, config_sha, output_path, shape, query)
+        .map(|status| status == Status::Measured)
+}
+fn execute_paths_status(
+    config_path: &Path,
+    config_sha: &str,
+    output_path: &Path,
+    shape: Shape,
+    query: impl FnOnce(&Config, Shape, &mut Output, &mut Progress) -> Result<Seal>,
+) -> Result<Status> {
     require(
         config_path.as_os_str().len() <= 4096
             && output_path.as_os_str().len() <= 4096
@@ -1261,6 +1449,7 @@ fn execute_paths_with(
         let configured = config(config_path, config_sha, shape);
         out.emit(&json!({"schema":RESULT_SCHEMA,"phase":"identity","config_sha256":config_sha,
             "fetch_parallelism":configured.as_ref().ok().map(|c| c.fetch_parallelism),
+            "serving":configured.as_ref().ok().map(|c| c.serving),
             "binary_sha256":executable_sha()?,"runner_source_sha256":hash(include_bytes!("check_cohere_native_baseline.rs")),
             "generation_source_sha256":hash(include_bytes!("../two_bit_generation.rs")),
             "router_source_sha256":hash(include_bytes!("../semantic_unit_router.rs")),
@@ -1274,7 +1463,7 @@ fn execute_paths_with(
             "external_gate_required":true,"truth_opened":false}))?;
         let c = configured?;
         out.emit(&json!({"phase":"bound_inputs","dataset":c.dataset,"revision":c.revision,
-            "fetch_parallelism":c.fetch_parallelism,"source_cache":"off",
+            "fetch_parallelism":c.fetch_parallelism,"source_cache":"off","serving":c.serving,
             "metric":c.metric,"tie_rule":c.tie_rule,"rows":c.rows,"dimensions":D,"count":c.count,"k":K,
             "corpus_source_first":c.corpus_source_first,"query_source_first":c.query_source_first,
             "profile":c.profile,"backend":c.backend,"generation_prefix":c.generation_prefix,
@@ -1292,15 +1481,18 @@ fn execute_paths_with(
     })();
     let mut summary = match result {
         Ok(summary) => summary,
-        Err(e) => invalid_summary(&p, &e.to_string()),
+        Err(e) => match e.downcast_ref::<ResourceReject>() {
+            Some(reject) => resource_reject_summary(&p, reject),
+            None => invalid_summary(&p, &e.to_string()),
+        },
     };
     summary["transport_last_boundary"] = p.transport.terminal();
     summary["process_wall_ns"] = json!(started.elapsed().as_nanos());
     summary["process_cpu_ns"] = json!(cpu_ns() - cpu);
     summary["observed_process_peak_bytes"] = json!(peak_bytes());
     out.cap = OUTPUT_CAP;
-    // A cap failure may have left a partial record; start the INVALID terminal on a new line.
-    if summary["status"] == "INVALID" {
+    // A cap failure may have left a partial record; start any non-MEASURED terminal on a new line.
+    if summary["status"] != "MEASURED" {
         out.line_bytes = 0;
         out.write_all(b"\n")?;
     }
@@ -1313,7 +1505,25 @@ fn execute_paths_with(
         return Err(format!("terminal sync: {e}").into());
     }
     println!("{summary}");
-    Ok(summary["status"] == "MEASURED")
+    Ok(match summary["status"].as_str() {
+        Some("MEASURED") => Status::Measured,
+        Some("RESOURCE_REJECT") => Status::ResourceReject,
+        _ => Status::Invalid,
+    })
+}
+// Terminal for a valid-input direct-closure refusal by an enforced library cap: incomplete,
+// never sealed or reduced, and distinct from INVALID (malformed config, authentication,
+// transport or accounting defects). Host OOM, deadline and kill are NOT classified here:
+// the runner cannot observe them, and an exit status never implies them.
+fn resource_reject_summary(p: &Progress, reject: &ResourceReject) -> Value {
+    json!({"status":"RESOURCE_REJECT","complete":false,"resource_rejection":reject.reason,
+        "stage":p.stage,"error":reject.message.chars().take(512).collect::<String>(),
+        "completed_queries":p.completed,"all_queries_sealed":p.sealed,"truth_opened":p.truth_opened,
+        "charges":p.charges,"sum":p.charges.sum(),"binding_charge":p.binding_charge,
+        "direct_memory":p.direct_memory,"transport_last_boundary":p.transport.terminal(),
+        "scope":"library_enforced_modeled_memory_or_planned_byte_cap_only",
+        "host_oom_or_deadline_inferred":false,
+        "physical_s3_measured":false,"external_gate_required":true})
 }
 fn invalid_summary(p: &Progress, error: &str) -> Value {
     json!({"status":"INVALID","complete":false,"stage":p.stage,
@@ -1325,18 +1535,24 @@ fn invalid_summary(p: &Progress, error: &str) -> Value {
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();
     let result = if args.len() == 4 {
-        execute_paths(
+        execute_paths_status(
             Path::new(&args[1]),
             &args[2],
             Path::new(&args[3]),
             Shape::PRODUCTION,
+            |c, shape, out, p| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?
+                    .block_on(query_and_seal(c, shape, out, p))
+            },
         )
     } else {
         Err("usage: check_cohere_native_baseline CONFIG CONFIG_SHA NEW_OUTPUT".into())
     };
     match result {
-        Ok(true) => (),
-        Ok(false) => std::process::exit(2),
+        Ok(Status::Measured) => (),
+        Ok(status) => std::process::exit(status.exit_code()),
         Err(e) => {
             eprintln!("INVALID: {e}; external gate required");
             std::process::exit(2);
@@ -1366,7 +1582,8 @@ mod tests {
             "requests":{"path":dir.join("requests.f32"),"bytes":shape.count*D*4,"sha256":"b".repeat(64)},
             "truth":{"path":dir.join("truth.u64"),"bytes":shape.count*K*8,"sha256":"c".repeat(64)},
             "native_source":{"source_sha256":"d".repeat(64),"sq8_sha256":"e".repeat(64),
-                "source_order_sha256":"f".repeat(64)},"max_memory_bytes":MEMORY_CAP})
+                "source_order_sha256":"f".repeat(64)},"max_memory_bytes":MEMORY_CAP,
+            "serving":{"mode":"baseline"}})
     }
     fn write_config(dir: &Path, value: &Value) -> (PathBuf, String) {
         let path = dir.join("config.json");
@@ -2632,6 +2849,330 @@ mod tests {
             "billed_requests",
         ] {
             assert!(transport[field].is_null());
+        }
+    }
+
+    // ===== Direct-closure serving mode: explicit format, controls, resource outcomes =====
+    fn with_direct(mut value: Value, bytes: usize, gets: usize) -> Value {
+        value["serving"] =
+            json!({"mode":"direct_closure","max_sq8_bytes":bytes,"max_sq8_gets":gets});
+        value
+    }
+    fn run_status(dir: &Path, name: &str, value: &Value, shape: Shape) -> (Status, Vec<Value>) {
+        let (path, sha) = write_config(dir, value);
+        let output = dir.join(name);
+        let status = execute_paths_status(&path, &sha, &output, shape, |c, shape, out, p| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(query_and_seal(c, shape, out, p))
+        })
+        .unwrap();
+        (status, records(&output))
+    }
+    #[test]
+    fn serving_mode_and_format_marker_are_required_explicit_and_strict() {
+        let dir = tempfile::tempdir().unwrap();
+        let shape = Shape::tiny(32);
+        let baseline: Config = serde_json::from_value(config_value(dir.path(), shape)).unwrap();
+        assert_eq!(baseline.serving, Serving::Baseline {});
+        assert_eq!(baseline.serving.direct(), None);
+        validate_config(&baseline, shape).unwrap();
+        let good = with_direct(config_value(dir.path(), shape), 1_000_000, 32);
+        let direct: Config = serde_json::from_value(good.clone()).unwrap();
+        validate_config(&direct, shape).unwrap();
+        assert_eq!(
+            direct.serving.direct(),
+            Some(DirectClosureLimits {
+                max_sq8_bytes: 1_000_000,
+                max_sq8_gets: 32
+            })
+        );
+        // Opening limits are the benchmark's, in both modes: direct caps live elsewhere.
+        for c in [&baseline, &direct] {
+            let admission = limits(c).unwrap();
+            assert_eq!(admission.max_query_bytes, 16_773_120);
+            assert_eq!(admission.max_query_gets, 32);
+            assert_eq!(admission.max_source_bytes, 64 * 1024 * 1024);
+            assert_eq!(admission.max_source_gets, 128);
+            assert_eq!(admission.max_active_queries, 1);
+            assert_eq!(admission.max_memory_bytes, MEMORY_CAP);
+        }
+        // The serving mode has no default: its absence refuses, as does every malformed form.
+        let mut missing = good.clone();
+        missing.as_object_mut().unwrap().remove("serving");
+        assert!(serde_json::from_value::<Config>(missing).is_err());
+        for bad in [
+            json!({"mode":"baseline","max_sq8_bytes":1}),
+            json!({"mode":"baseline","x":0}),
+            json!({"mode":"direct_closure"}),
+            json!({"mode":"direct_closure","max_sq8_bytes":1}),
+            json!({"mode":"direct_closure","max_sq8_gets":1}),
+            json!({"mode":"direct_closure","max_sq8_bytes":1,"max_sq8_gets":1,"x":0}),
+            json!({"mode":"direct_closure","max_sq8_bytes":-1,"max_sq8_gets":1}),
+            json!({"mode":"direct","max_sq8_bytes":1,"max_sq8_gets":1}),
+            json!({"max_sq8_bytes":1,"max_sq8_gets":1}),
+            json!("direct_closure"),
+            json!(null),
+        ] {
+            let mut value = good.clone();
+            value["serving"] = bad.clone();
+            assert!(serde_json::from_value::<Config>(value).is_err(), "{bad}");
+        }
+        // Parsed but out of the sanity bounds: explicit, positive and bounded caps only.
+        for (bytes, gets, ok) in [
+            (1, 1, true),
+            (MEMORY_CAP as usize, 128, true),
+            (0, 32, false),
+            (1_000_000, 0, false),
+            (MEMORY_CAP as usize + 1, 32, false),
+            (1_000_000, 129, false),
+        ] {
+            let c: Config =
+                serde_json::from_value(with_direct(config_value(dir.path(), shape), bytes, gets))
+                    .unwrap();
+            assert_eq!(validate_config(&c, shape).is_ok(), ok, "{bytes}/{gets}");
+        }
+        // Older format markers refuse by name, even with a valid serving mode present.
+        for old in [
+            "borsuk-cohere-native-baseline-config-v2",
+            "borsuk-cohere-native-baseline-config-v1",
+        ] {
+            let mut value = good.clone();
+            value["schema"] = json!(old);
+            let c: Config = serde_json::from_value(value).unwrap();
+            let error = validate_config(&c, shape).unwrap_err().to_string();
+            assert!(error.contains("older formats refuse"), "{error}");
+        }
+        // A v2-shaped config (no serving field) fails to parse at all.
+        let mut v2 = config_value(dir.path(), shape);
+        v2["schema"] = json!("borsuk-cohere-native-baseline-config-v2");
+        v2.as_object_mut().unwrap().remove("serving");
+        assert!(serde_json::from_value::<Config>(v2).is_err());
+    }
+    #[tokio::test]
+    async fn actual_direct_closure_queries_match_the_baseline_control_with_zero_source() {
+        let shape = Shape::tiny(257);
+        let (dir, base) = fixture(shape).await;
+        let object_bytes = 257 * (D + 12);
+        // Baseline control on the same store, unchanged by the serving field.
+        let baseline_config: Config = serde_json::from_value(base.clone()).unwrap();
+        let mut baseline_out = Output::create(&dir.path().join("baseline")).unwrap();
+        let mut baseline_progress = Progress::default();
+        query_and_seal(
+            &baseline_config,
+            shape,
+            &mut baseline_out,
+            &mut baseline_progress,
+        )
+        .await
+        .unwrap();
+        let baseline_rows = records(&dir.path().join("baseline"));
+        let baseline_queries = baseline_rows
+            .iter()
+            .filter(|r| r["phase"] == "query")
+            .collect::<Vec<_>>();
+        assert_eq!(baseline_queries.len(), 2);
+        assert!(baseline_queries.iter().all(|q| {
+            q["serving"] == json!({"mode":"baseline"})
+                && q["charges"]["source"]["verified_bytes"].as_u64().unwrap() > 0
+                && q["source_nomination_skipped"] == false
+                && q["planning_scope"] == "source_nomination_and_cover"
+        }));
+
+        let direct_value = with_direct(base, object_bytes, 2);
+        let (path, sha) = write_config(dir.path(), &direct_value);
+        let c = config(&path, &sha, shape).unwrap();
+        let output = dir.path().join("direct");
+        let mut out = Output::create(&output).unwrap();
+        let mut p = Progress::default();
+        let seal = query_and_seal(&c, shape, &mut out, &mut p).await.unwrap();
+        let rows = records(&output);
+        let admission = rows
+            .iter()
+            .position(|r| r["phase"] == "direct_admission")
+            .unwrap();
+        assert!(rows[..admission].iter().all(|r| r["phase"] != "query"));
+        assert!(rows[admission..].iter().any(|r| r["phase"] == "query"));
+        let record = &rows[admission];
+        assert_eq!(record["admitted"], true);
+        assert_eq!(
+            record["limits"],
+            json!({"mode":"direct_closure","max_sq8_bytes":object_bytes,"max_sq8_gets":2})
+        );
+        // Exact modeled memory: whole existing model plus one full direct query budget.
+        let memory = &record["memory"];
+        let planner =
+            1_048_576 + TwoBitPlanTrace::scratch_bytes(257) as u64 + 4 * D as u64 + 512 * 2;
+        let ranking = 256 * 257 + 4 * D as u64;
+        let direct = 3 * object_bytes as u64 + planner + ranking;
+        assert_eq!(memory["direct_planner_bytes"], planner);
+        assert_eq!(memory["direct_query_bytes"], direct);
+        assert_eq!(
+            memory["total_bytes"].as_u64().unwrap(),
+            memory["resident_bytes"].as_u64().unwrap() + direct
+        );
+        assert_eq!(memory["cap_bytes"], MEMORY_CAP);
+        assert!(memory["total_bytes"].as_u64().unwrap() <= MEMORY_CAP);
+        let queries = rows
+            .iter()
+            .filter(|r| r["phase"] == "query")
+            .collect::<Vec<_>>();
+        assert_eq!(queries.len(), 2);
+        let sq8 = std::fs::read(dir.path().join("sq8")).unwrap();
+        let zero = json!({"submitted_gets":0,"verified_bytes":0,"failed_gets":0});
+        for (i, query) in queries.iter().enumerate() {
+            assert_eq!(query["serving"]["mode"], "direct_closure");
+            assert_eq!(query["charges"]["source"], zero);
+            assert_eq!(query["charges"]["router"], zero);
+            assert_eq!(
+                query["charges"]["sq8"],
+                json!({"submitted_gets":1,"verified_bytes":object_bytes,"failed_gets":0})
+            );
+            assert_eq!(query["sum"]["submitted_gets"], 1);
+            // Required closure vs fetched ranges: both pages, one contiguous range, no bridge.
+            assert_eq!(query["plan"]["selected_pages"], json!([0, 1]));
+            assert_eq!(query["plan"]["ranges"], json!([[0, object_bytes]]));
+            assert_eq!(query["plan"]["planned_bytes"], object_bytes);
+            assert_eq!(query["plan"]["covered_pages"], 2);
+            assert_eq!(query["plan"]["bridge_pages"], 0);
+            assert_eq!(query["source_nomination_skipped"], true);
+            assert_eq!(query["planning_scope"], "direct_cover_only");
+            // SOURCE stays skipped; the real cover time is reported under its own scope.
+            assert!(
+                query["stages"]["planning"]["end_ns"].as_u64().unwrap()
+                    >= query["stages"]["planning"]["start_ns"].as_u64().unwrap()
+            );
+            assert_eq!(query["trace"]["ranked_candidate_pages"], json!([]));
+            assert_eq!(query["trace"]["nomination_evaluated_units"], json!([]));
+            assert_eq!(query["stages"]["source"]["start_ns"], 0);
+            assert_eq!(query["stages"]["source"]["end_ns"], 0);
+            // Independent scalar reference over every row of the one fetched range.
+            let mut oracle = sq8
+                .chunks_exact(D + 12)
+                .enumerate()
+                .map(|(physical, record)| {
+                    let id = u64::from_le_bytes(record[..8].try_into().unwrap());
+                    let norm = f32::from_le_bytes(record[8..12].try_into().unwrap());
+                    let coordinate = -1. + f32::from(record[12 + i]) / 16.;
+                    (physical, id, (norm + 1. - 2. * coordinate).to_bits())
+                })
+                .collect::<Vec<_>>();
+            oracle.sort_by(|a, b| {
+                f32::from_bits(a.2)
+                    .total_cmp(&f32::from_bits(b.2))
+                    .then(a.1.cmp(&b.1))
+            });
+            assert_eq!(query["returned_count"], 10);
+            for (rank, hit) in query["returned"].as_array().unwrap().iter().enumerate() {
+                assert_eq!(hit["id"], oracle[rank].1);
+                assert_eq!(hit["score_bits"], oracle[rank].2);
+                // Same ranking and bits as the SOURCE-nominating control.
+                assert_eq!(hit, &baseline_queries[i]["returned"][rank]);
+            }
+        }
+        let summary = reduce(&c, &mut out, &seal, &mut p).unwrap();
+        assert_eq!(summary["status"], "MEASURED");
+        assert_eq!(summary["total_hits10"], 20);
+        assert_eq!(summary["serving"]["mode"], "direct_closure");
+        assert_eq!(
+            summary["direct_memory"]["total_bytes"],
+            memory["total_bytes"]
+        );
+        assert_eq!(summary["charges"]["source"], zero);
+    }
+    #[test]
+    fn direct_resource_rejections_are_terminal_machine_readable_and_distinct_from_invalid() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let shape = Shape::tiny(257);
+        let (dir, base) = runtime.block_on(fixture(shape));
+        let object_bytes = 257 * (D + 12);
+        assert_eq!(
+            [Status::Measured, Status::Invalid, Status::ResourceReject].map(Status::exit_code),
+            [0, 2, 3]
+        );
+
+        // Cap-minus-one on the planned cover: refused after local discovery, before any GET.
+        let (status, rows) = run_status(
+            dir.path(),
+            "planned-bytes",
+            &with_direct(base.clone(), object_bytes - 1, 2),
+            shape,
+        );
+        assert_eq!(status, Status::ResourceReject);
+        let terminal = &rows.last().unwrap()["summary"];
+        assert_eq!(terminal["status"], "RESOURCE_REJECT");
+        assert_eq!(terminal["resource_rejection"], "planned_bytes");
+        assert_eq!(terminal["complete"], false);
+        assert_eq!(terminal["completed_queries"], 0);
+        assert_eq!(terminal["all_queries_sealed"], false);
+        assert_eq!(terminal["truth_opened"], false);
+        assert_eq!(terminal["host_oom_or_deadline_inferred"], false);
+        assert_eq!(terminal["sum"]["submitted_gets"], 0);
+        assert_eq!(terminal["sum"]["verified_bytes"], 0);
+        let failure = rows.iter().find(|r| r["phase"] == "query_failure").unwrap();
+        assert_eq!(failure["resource_rejection"], "planned_bytes");
+        assert!(rows.iter().all(|r| {
+            r["phase"] != "all_queries_sealed" && r["phase"] != "recall" && r["phase"] != "query"
+        }));
+
+        // Modeled memory over the cap: refused at startup, before any query.
+        let (status, rows) = run_status(
+            dir.path(),
+            "modeled-memory",
+            &with_direct(base.clone(), 200 * 1024 * 1024, 2),
+            shape,
+        );
+        assert_eq!(status, Status::ResourceReject);
+        let terminal = &rows.last().unwrap()["summary"];
+        assert_eq!(terminal["status"], "RESOURCE_REJECT");
+        assert_eq!(terminal["resource_rejection"], "modeled_memory");
+        assert_eq!(terminal["stage"], "direct_admission");
+        assert!(
+            terminal["direct_memory"]["total_bytes"].as_u64().unwrap()
+                > terminal["direct_memory"]["cap_bytes"].as_u64().unwrap()
+        );
+        let admission = rows
+            .iter()
+            .find(|r| r["phase"] == "direct_admission")
+            .unwrap();
+        assert_eq!(admission["admitted"], false);
+        assert!(rows.iter().all(|r| {
+            r["phase"] != "query"
+                && r["phase"] != "query_failure"
+                && r["phase"] != "all_queries_sealed"
+        }));
+
+        // Exact caps measure normally.
+        let (status, rows) = run_status(
+            dir.path(),
+            "exact",
+            &with_direct(base.clone(), object_bytes, 2),
+            shape,
+        );
+        assert_eq!(status, Status::Measured);
+        let terminal = &rows.last().unwrap()["summary"];
+        assert_eq!(terminal["status"], "MEASURED");
+        assert_eq!(terminal["serving"]["mode"], "direct_closure");
+
+        // Malformed format, authentication and arithmetic defects stay INVALID, never a
+        // resource outcome.
+        let mut old = with_direct(base.clone(), object_bytes, 2);
+        old["schema"] = json!("borsuk-cohere-native-baseline-config-v2");
+        let mut wrong_root = with_direct(base.clone(), object_bytes, 2);
+        wrong_root["generation_root_sha256"] = json!("0".repeat(64));
+        let mut zero_cap = with_direct(base, object_bytes, 2);
+        zero_cap["serving"]["max_sq8_gets"] = json!(0);
+        for (name, value) in [("old", old), ("root", wrong_root), ("zero", zero_cap)] {
+            let (status, rows) = run_status(dir.path(), name, &value, shape);
+            assert_eq!(status, Status::Invalid, "{name}");
+            let terminal = &rows.last().unwrap()["summary"];
+            assert_eq!(terminal["status"], "INVALID", "{name}");
+            assert!(terminal["resource_rejection"].is_null(), "{name}");
+            assert!(rows.iter().all(|r| r["phase"] != "query"), "{name}");
         }
     }
 }

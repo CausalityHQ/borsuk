@@ -108,6 +108,22 @@ impl TwoBitGenerationError {
             _ => None,
         }
     }
+    /// Machine-readable reason when a valid direct-closure query was refused by an
+    /// enforced memory/byte cap before any payload I/O; `None` for every other error.
+    pub fn direct_resource_rejection(&self) -> Option<DirectClosureRejection> {
+        match self {
+            Self::Query { error, .. } | Self::RouterCharged { error, .. } => {
+                error.direct_resource_rejection()
+            }
+            Self::Invalid(reason) if *reason == DIRECT_MEMORY_CAP => {
+                Some(DirectClosureRejection::ModeledMemory)
+            }
+            Self::Invalid(reason) if *reason == DIRECT_BYTE_CAP => {
+                Some(DirectClosureRejection::PlannedBytes)
+            }
+            _ => None,
+        }
+    }
     fn with_router(self, stats: Sq8ReadStats) -> Self {
         if stats.submitted_gets == 0 {
             self
@@ -160,6 +176,52 @@ pub struct TwoBitGenerationLimits {
     /// Payload charged to other pinned generations and immutable mutation snapshots.
     pub already_pinned_bytes: u64,
 }
+
+/// Explicit positive SQ8 caps for one opt-in direct-closure query. They are
+/// independent of the historical `max_query_*` limits, which direct search never
+/// reads or relaxes. The library carries no dataset, dimension or benchmark pin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DirectClosureLimits {
+    /// Physical SQ8 bytes, including every bridge page, per query.
+    pub max_sq8_bytes: usize,
+    /// Physical SQ8 range GETs per query.
+    pub max_sq8_gets: usize,
+}
+
+/// Exact modeled memory for direct-closure search. The generation's existing
+/// admitted model is kept whole (no SOURCE or baseline-query credit) and one full
+/// direct query budget per active query is added.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct DirectClosureMemory {
+    /// Existing model: metadata copies, baseline query/source budgets and
+    /// `already_pinned_bytes`.
+    pub resident_bytes: u64,
+    /// Planner term inside `direct_query_bytes`, per active query: 1 MiB
+    /// discovery/closure working set, full trace capacity, normalized query and
+    /// 512 bytes per page of closure/cover roster.
+    pub direct_planner_bytes: u64,
+    /// `(3 * max_sq8_bytes + planner + ranking) * max_active_queries`, where ranking
+    /// is `256 * min(rows, max_sq8_bytes / (D + 12)) + 4 * D`.
+    pub direct_query_bytes: u64,
+    /// `resident_bytes + direct_query_bytes`.
+    pub total_bytes: u64,
+    /// The generation's `max_memory_bytes` admission cap.
+    pub cap_bytes: u64,
+}
+
+/// Valid-input resource refusals enforced by direct-closure admission before any
+/// payload I/O. Host OOM, deadline or kill outcomes are never reported here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DirectClosureRejection {
+    /// `DirectClosureMemory::total_bytes` exceeded the generation memory cap.
+    ModeledMemory,
+    /// The deterministic cover needed more SQ8 bytes than `max_sq8_bytes`.
+    PlannedBytes,
+}
+const DIRECT_MEMORY_CAP: &str = "direct closure memory cap";
+const DIRECT_BYTE_CAP: &str = "direct closure byte cap";
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Manifest {
@@ -493,6 +555,10 @@ pub struct TwoBitSearchResult {
     pub router_stats: Sq8ReadStats,
     /// Stage intervals from the admitted query.
     pub stages: QueryStages,
+    /// True only for direct-closure search: no SOURCE nomination ran, so a trace's
+    /// `primary_page`, `ranked_candidate_pages` and `nomination_evaluated_units` are
+    /// unset (not zero-page evidence) and `plan.selected_pages` is the required closure.
+    pub source_nomination_skipped: bool,
 }
 /// Remote namespace startup accounting; query measurements remain separate.
 #[derive(Debug, serde::Serialize)]
@@ -2175,16 +2241,7 @@ impl TwoBitGeneration {
                 started,
             )
             .await;
-        for stage in [
-            &mut stages.discovery,
-            &mut stages.source,
-            &mut stages.planning,
-            &mut stages.sq8,
-        ] {
-            if stage.start_ns > 0 && stage.end_ns == 0 {
-                stage.end_ns = started.elapsed().as_nanos().max(stage.start_ns);
-            }
-        }
+        Self::close_open_stages(&mut stages, started);
         match result {
             Ok(mut result) => {
                 result.stages = stages;
@@ -2267,7 +2324,333 @@ impl TwoBitGeneration {
             source_stats,
             router_stats,
             stages: *stages,
+            source_nomination_skipped: false,
         })
+    }
+
+    fn close_open_stages(stages: &mut QueryStages, started: std::time::Instant) {
+        for stage in [
+            &mut stages.discovery,
+            &mut stages.source,
+            &mut stages.planning,
+            &mut stages.sq8,
+        ] {
+            if stage.start_ns > 0 && stage.end_ns == 0 {
+                stage.end_ns = started.elapsed().as_nanos().max(stage.start_ns);
+            }
+        }
+    }
+
+    /// Exact modeled memory of opt-in direct-closure search under `limits`. This
+    /// admits nothing: search repeats the `total_bytes <= cap_bytes` check before
+    /// any allocation, slot or I/O.
+    pub fn direct_closure_memory(
+        &self,
+        limits: DirectClosureLimits,
+    ) -> Result<DirectClosureMemory> {
+        let bad = TwoBitGenerationError::Invalid;
+        if limits.max_sq8_bytes == 0 || limits.max_sq8_gets == 0 {
+            return Err(bad("direct closure limits"));
+        }
+        let rows = self.rows();
+        let dimensions = self.pages.dimensions();
+        let planner = (1024 * 1024_u64)
+            .checked_add(TwoBitPlanTrace::scratch_bytes(rows) as u64)
+            .and_then(|n| n.checked_add((dimensions as u64).checked_mul(4)?))
+            .and_then(|n| n.checked_add((rows.div_ceil(256) as u64).checked_mul(512)?))
+            .ok_or(bad("direct closure planner memory"))?;
+        let direct = crate::returned_sq8::query_payload_bytes(
+            crate::exact_sq8_nominee::Sq8Geometry { rows, dimensions },
+            limits.max_sq8_bytes as u64,
+            planner,
+            self.limits.max_active_queries as u64,
+        )
+        .map_err(|_| bad("direct closure query memory"))?;
+        Ok(DirectClosureMemory {
+            resident_bytes: self.modeled_memory_bytes,
+            direct_planner_bytes: planner,
+            direct_query_bytes: direct,
+            total_bytes: self
+                .modeled_memory_bytes
+                .checked_add(direct)
+                .ok_or(bad("direct closure memory"))?,
+            cap_bytes: self.limits.max_memory_bytes,
+        })
+    }
+
+    // Allocation-free admission: no query/plan/payload allocation, no slot and no I/O
+    // precede or occur in it. Input validity comes first and resource classification
+    // last, so a malformed query never masquerades as a resource rejection when memory
+    // is also short. The borrowed query width is bound to the authenticated generation
+    // and its norm is validated here because direct search skips codec preparation.
+    fn admit_direct_closure(
+        &self,
+        query: &[f32],
+        top_k: usize,
+        excluded_ids: Option<&[i64]>,
+        limits: DirectClosureLimits,
+        traced: bool,
+    ) -> Result<()> {
+        let bad = TwoBitGenerationError::Invalid;
+        if query.len() != self.pages.dimensions() {
+            return Err(bad("search admission"));
+        }
+        // The validity `cosine_vector` enforces (finite, positive f64 squared norm),
+        // scanned over the borrowed query; the normalized copy is allocated only later.
+        let squared = query.iter().map(|&x| f64::from(x).powi(2)).sum::<f64>();
+        if !squared.is_finite() || squared <= 0. {
+            return Err(TwoBitGenerationError::Plane(SourceBuildError::Invalid(
+                "cosine vector norm",
+            )));
+        }
+        if self.discovery_mode() != DiscoveryMode::Semantic {
+            return Err(bad("direct closure requires semantic discovery"));
+        }
+        if top_k == 0
+            || top_k > self.rows()
+            || excluded_ids.is_some_and(|ids| {
+                ids.windows(2).any(|v| v[0] >= v[1])
+                    || ids
+                        .len()
+                        .checked_mul(8)
+                        .is_none_or(|n| n as u64 > self.limits.already_pinned_bytes)
+            })
+        {
+            return Err(bad("search admission"));
+        }
+        if limits.max_sq8_bytes == 0 || limits.max_sq8_gets == 0 {
+            return Err(bad("direct closure limits"));
+        }
+        if traced
+            && self.limits.max_query_scratch_bytes < TwoBitPlanTrace::scratch_bytes(self.rows())
+        {
+            return Err(bad("diagnostic scratch"));
+        }
+        // Resource classification: checked modeled-memory arithmetic, then the cap.
+        let memory = self.direct_closure_memory(limits)?;
+        if memory.total_bytes > memory.cap_bytes {
+            return Err(bad(DIRECT_MEMORY_CAP));
+        }
+        Ok(())
+    }
+
+    // The required closure alone defines the population. Bridge pages exist only
+    // inside `ranges`; they are never enumerated or stored.
+    fn direct_closure_plan(
+        &self,
+        walks: &[(usize, Vec<usize>)],
+        limits: DirectClosureLimits,
+    ) -> Result<BudgetedPagePlan> {
+        let closure = admit_source_walks(self.rows(), walks, self.semantic_profile())?
+            .into_iter()
+            .map(|unit| unit / 8)
+            .collect::<BTreeSet<_>>();
+        let row_bytes = self
+            .pages
+            .dimensions()
+            .checked_add(12)
+            .ok_or(TwoBitGenerationError::Invalid("direct closure geometry"))?;
+        // The existing pure checked cover and byte admission; its only budget refusal is
+        // the byte cap, which is the typed resource outcome here.
+        let (ranges, planned_bytes) = plan_two_bit_source_cover(
+            &closure,
+            self.rows(),
+            row_bytes,
+            limits.max_sq8_gets,
+            limits.max_sq8_bytes,
+        )
+        .map_err(|error| match error {
+            TwoBitGenerationError::Budget(BudgetedPageError::InsufficientBudget) => {
+                TwoBitGenerationError::Invalid(DIRECT_BYTE_CAP)
+            }
+            other => other,
+        })?;
+        Ok(BudgetedPagePlan {
+            target_pages: closure.len(),
+            target_shortfall: 0,
+            primary_pages_retained: 0,
+            selected_pages: closure.into_iter().collect(),
+            ranges,
+            planned_bytes,
+        })
+    }
+
+    // The shared authenticated scorer under the caller's explicit direct caps. The
+    // historical (clamped) `max_query_*` limits are deliberately not consulted.
+    async fn direct_closure_rank(
+        &self,
+        store: &dyn ObjectStore,
+        normalized: &[f32],
+        plan: &BudgetedPagePlan,
+        top_k: usize,
+        excluded_ids: Option<&[i64]>,
+        limits: DirectClosureLimits,
+    ) -> Result<RankedSq8> {
+        let page_bytes = 256 * (self.pages.dimensions() + 12);
+        let ranges = plan
+            .ranges
+            .iter()
+            .map(|r| (r.start / page_bytes, (r.end - 1) / page_bytes))
+            .collect::<Vec<_>>();
+        let ranked = rank_verified_sq8_pages_inner(
+            store,
+            &ObjectPath::from(self.manifest.sq8_object_key.clone()),
+            &self.pages,
+            &ranges,
+            &self.manifest.sq8_etag,
+            normalized,
+            &self.manifest.low,
+            &self.manifest.step,
+            top_k,
+            limits.max_sq8_gets,
+            limits.max_sq8_bytes,
+            self.limits.max_parallel_gets,
+            excluded_ids.unwrap_or(&[]),
+        )
+        .await
+        .map_err(|sq8| TwoBitGenerationError::charged_read(Sq8ReadStats::default(), sq8))?;
+        if excluded_ids.is_none() && ranked.candidates.len() < top_k {
+            return Err(TwoBitGenerationError::charged_read(
+                Sq8ReadStats::default(),
+                RankedSq8Failure {
+                    error: crate::sq8_s3_range::RangeFetchError::Score(
+                        crate::exact_sq8_nominee::Sq8ScoreError::InvalidRoster,
+                    ),
+                    stats: ranked.stats,
+                },
+            ));
+        }
+        Ok(ranked)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn direct_closure_measured(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+        top_k: usize,
+        excluded_ids: Option<&[i64]>,
+        limits: DirectClosureLimits,
+        trace: Option<&mut TwoBitPlanTrace>,
+        stages: &mut QueryStages,
+        started: std::time::Instant,
+    ) -> Result<TwoBitSearchResult> {
+        stages.discovery.start_ns = started.elapsed().as_nanos().max(1);
+        let discovered = normalize_two_bit_diagnostic_query(query).and_then(|normalized| {
+            let walks = self.local_walks(normalized.as_ref(), trace)?;
+            Ok((normalized, walks))
+        });
+        stages.discovery.end_ns = started.elapsed().as_nanos();
+        let (normalized, walks) = discovered?;
+        stages.planning.start_ns = started.elapsed().as_nanos().max(1);
+        let plan = self.direct_closure_plan(&walks, limits);
+        stages.planning.end_ns = started.elapsed().as_nanos();
+        let plan = plan?;
+        stages.sq8.start_ns = started.elapsed().as_nanos().max(1);
+        let ranked = self
+            .direct_closure_rank(
+                store,
+                normalized.as_ref(),
+                &plan,
+                top_k,
+                excluded_ids,
+                limits,
+            )
+            .await;
+        stages.sq8.end_ns = started.elapsed().as_nanos();
+        Ok(TwoBitSearchResult {
+            plan,
+            ranked: ranked?,
+            source_stats: Sq8ReadStats::default(),
+            router_stats: Sq8ReadStats::default(),
+            stages: *stages,
+            source_nomination_skipped: true,
+        })
+    }
+
+    async fn direct_closure_search_inner(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+        top_k: usize,
+        excluded_ids: Option<&[i64]>,
+        limits: DirectClosureLimits,
+        trace: Option<&mut TwoBitPlanTrace>,
+    ) -> Result<TwoBitSearchResult> {
+        self.admit_direct_closure(query, top_k, excluded_ids, limits, trace.is_some())?;
+        // The one query slot spans discovery, cover, every drained GET and scoring,
+        // on success and on every failure, exactly like the historical search.
+        let _permit = self
+            .slots
+            .acquire()
+            .await
+            .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
+        let started = std::time::Instant::now();
+        let mut stages = QueryStages::default();
+        let result = self
+            .direct_closure_measured(
+                store,
+                query,
+                top_k,
+                excluded_ids,
+                limits,
+                trace,
+                &mut stages,
+                started,
+            )
+            .await;
+        Self::close_open_stages(&mut stages, started);
+        match result {
+            Ok(mut result) => {
+                result.stages = stages;
+                Ok(result)
+            }
+            Err(error) => Err(TwoBitGenerationError::Query {
+                stages,
+                error: Box::new(error),
+            }),
+        }
+    }
+
+    /// Opt-in direct-closure search: current local semantic discovery and its checked
+    /// 256-row page closure feed a deterministic smallest-gap cover, fetched in one
+    /// authenticated wave and ranked by the shared SQ8 scorer. No SOURCE I/O or
+    /// nomination occurs (`source_stats` and `router_stats` are zero). The cover can
+    /// bridge different gap pages than any other closure, so its population is not
+    /// a superset of another strategy's. `plan.selected_pages` is the required
+    /// closure; `plan.ranges` are the bytes actually fetched, bridges included.
+    /// `limits` are explicit and independent of the generation's `max_query_*`.
+    /// Admission, including `direct_closure_memory`, precedes any allocation or
+    /// I/O. Base rows only: mutation snapshots are not supported by this entry
+    /// point, and ordinary `search*` calls never route here.
+    pub async fn direct_closure_search_with_store(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+        top_k: usize,
+        excluded_ids: Option<&[i64]>,
+        limits: DirectClosureLimits,
+    ) -> Result<TwoBitSearchResult> {
+        self.direct_closure_search_inner(store, query, top_k, excluded_ids, limits, None)
+            .await
+    }
+
+    /// Direct-closure search with a charged trace: `semantic_*` fields are the
+    /// production discovery, the result's `source_nomination_skipped` is set, and the
+    /// nomination fields are unset rather than fabricated.
+    #[doc(hidden)]
+    pub async fn diagnostic_direct_closure_search_with_store(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+        top_k: usize,
+        limits: DirectClosureLimits,
+    ) -> Result<(TwoBitSearchResult, TwoBitPlanTrace)> {
+        let mut trace = TwoBitPlanTrace::default();
+        let result = self
+            .direct_closure_search_inner(store, query, top_k, None, limits, Some(&mut trace))
+            .await?;
+        Ok((result, trace))
     }
 }
 
@@ -6515,5 +6898,1828 @@ mod source_walk_tests {
             assert!(rank_walked_source(rows, &walks, |_| panic!("invalid walk scored")).is_err());
         }
         assert!(rank_walked_source(1, &[(0, vec![0])], |_| Ok(f64::NAN)).is_err());
+    }
+
+    // ===== Direct-closure candidate: actual builder/store/planner/scorer fixtures =====
+    use crate::exact_sq8_nominee::ScoredNominee;
+    use crate::sq8_s3_range::{
+        RangeFetchError as DirectFetchError,
+        cold_http_fixture::{ETAG as DIRECT_ETAG, Fixture as DirectHttp, Request as DirectRequest},
+    };
+    use std::time::{Duration, Instant};
+
+    // Independent smallest-gap cover: bridge the earliest smallest gap until at most
+    // `max_gets` runs remain. Page intervals become byte ranges clipped at the object end.
+    fn smallest_gap_cover(
+        pages: &BTreeSet<usize>,
+        rows: usize,
+        row_bytes: usize,
+        max_gets: usize,
+    ) -> Vec<std::ops::Range<usize>> {
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        for &page in pages {
+            if let Some(run) = runs.last_mut()
+                && run.1 == page
+            {
+                run.1 += 1;
+                continue;
+            }
+            runs.push((page, page + 1));
+        }
+        while runs.len() > max_gets {
+            let (index, _) = (0..runs.len() - 1)
+                .map(|i| (i, runs[i + 1].0 - runs[i].1))
+                .min_by_key(|&(i, gap)| (gap, i))
+                .unwrap();
+            runs[index].1 = runs[index + 1].1;
+            runs.remove(index + 1);
+        }
+        runs.iter()
+            .map(|&(first, end)| first * 256 * row_bytes..(end * 256).min(rows) * row_bytes)
+            .collect()
+    }
+
+    // The native cosine contract: f64 squared norm, f32 quotient, borrowed when already unit.
+    fn cosine_unit(query: &[f32]) -> Vec<f32> {
+        let squared = query.iter().map(|&x| f64::from(x).powi(2)).sum::<f64>();
+        if (squared - 1.).abs() <= 1e-6 {
+            return query.to_vec();
+        }
+        let norm = squared.sqrt();
+        query
+            .iter()
+            .map(|&x| (f64::from(x) / norm) as f32)
+            .collect()
+    }
+
+    // Sequential scalar f32 reference over complete rows of `sq8` (no production scorer,
+    // no blocked lanes): score = norm - 2 * (sum code * (q * step) + (sum q * low - |q|^2 / 2)).
+    fn scalar_rank(
+        sq8: &[u8],
+        dimensions: usize,
+        rows: impl Iterator<Item = usize>,
+        unit_query: &[f32],
+        low: &[f32],
+        step: &[f32],
+    ) -> Vec<(usize, i64, f32)> {
+        let mut shift = 0_f32;
+        let mut qnorm = 0_f32;
+        for d in 0..dimensions {
+            shift += unit_query[d] * low[d];
+            qnorm += unit_query[d] * unit_query[d];
+        }
+        shift -= qnorm / 2.0;
+        let width = dimensions + 12;
+        let mut scored = Vec::new();
+        for ordinal in rows {
+            let row = &sq8[ordinal * width..(ordinal + 1) * width];
+            let id = i64::from_le_bytes(row[..8].try_into().unwrap());
+            let norm = f32::from_le_bytes(row[8..12].try_into().unwrap());
+            let mut inner = 0_f32;
+            for d in 0..dimensions {
+                inner += f32::from(row[12 + d]) * (unit_query[d] * step[d]);
+            }
+            scored.push((ordinal, id, norm - 2.0 * (inner + shift)));
+        }
+        scored.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.1.cmp(&b.1)));
+        scored
+    }
+
+    // The same score as plain geometry, in f64: stored norm - 2 q.x + |q|^2 for
+    // x = low + code * step. This pins the meaning of the f32 reference above.
+    fn geometric_score(
+        sq8: &[u8],
+        dimensions: usize,
+        ordinal: usize,
+        unit_query: &[f32],
+        low: &[f32],
+        step: &[f32],
+    ) -> f64 {
+        let width = dimensions + 12;
+        let row = &sq8[ordinal * width..(ordinal + 1) * width];
+        let norm = f64::from(f32::from_le_bytes(row[8..12].try_into().unwrap()));
+        let (mut dot, mut qq) = (0_f64, 0_f64);
+        for d in 0..dimensions {
+            let x = f64::from(low[d]) + f64::from(row[12 + d]) * f64::from(step[d]);
+            dot += f64::from(unit_query[d]) * x;
+            qq += f64::from(unit_query[d]).powi(2);
+        }
+        norm - 2. * dot + qq
+    }
+
+    fn assert_hits_match(hits: &[ScoredNominee], oracle: &[(usize, i64, f32)]) {
+        assert!(hits.len() <= oracle.len());
+        for (rank, (hit, want)) in hits.iter().zip(oracle).enumerate() {
+            assert_eq!(
+                (hit.ordinal, hit.id, hit.score.to_bits()),
+                (want.0, want.1, want.2.to_bits()),
+                "rank {rank}"
+            );
+        }
+    }
+
+    fn assert_geometry_agrees(
+        sq8: &[u8],
+        dimensions: usize,
+        oracle: &[(usize, i64, f32)],
+        unit_query: &[f32],
+        low: &[f32],
+        step: &[f32],
+    ) {
+        for want in oracle.iter().take(8) {
+            let geometric = geometric_score(sq8, dimensions, want.0, unit_query, low, step);
+            assert!(
+                (f64::from(want.2) - geometric).abs() < 1e-3,
+                "ordinal {}: {} vs {geometric}",
+                want.0,
+                want.2
+            );
+        }
+    }
+
+    // True when equal scores are ordered by ID against ordinal order somewhere.
+    fn has_id_tie_against_ordinal_order(oracle: &[(usize, i64, f32)]) -> bool {
+        oracle
+            .windows(2)
+            .any(|w| w[0].2.to_bits() == w[1].2.to_bits() && w[0].0 > w[1].0 && w[0].1 < w[1].1)
+    }
+
+    #[test]
+    fn direct_bridge_counterexample_changes_population_and_winner_pure() {
+        use crate::exact_sq8_nominee::Sq8Geometry;
+        use crate::returned_sq8::{ReturnedRange, rank_returned_ranges};
+        let dimensions = 7;
+        let row_bytes = dimensions + 12;
+        // Sixteen pages whose last page keeps only 100 rows.
+        let rows = 15 * 256 + 100;
+        let page_bytes = 256 * row_bytes;
+        let end = rows * row_bytes;
+        let first = BTreeSet::from([0, 5, 15]);
+        let second = BTreeSet::from([0, 5, 8, 11, 15]);
+        let (a, a_bytes) = cover_pages(&first, rows, row_bytes, 256, 2).unwrap();
+        let (b, b_bytes) = cover_pages(&second, rows, row_bytes, 256, 2).unwrap();
+        // [0,6) + [15,16) versus [0,1) + [5,16): the shorter final page is clipped.
+        assert_eq!(a, vec![0..6 * page_bytes, 15 * page_bytes..end]);
+        assert_eq!(b, vec![0..page_bytes, 5 * page_bytes..end]);
+        assert_eq!(a_bytes, 6 * page_bytes + end - 15 * page_bytes);
+        assert_eq!(b_bytes, page_bytes + end - 5 * page_bytes);
+        assert_eq!(smallest_gap_cover(&first, rows, row_bytes, 2), a);
+        assert_eq!(smallest_gap_cover(&second, rows, row_bytes, 2), b);
+        // The larger required set loses the earlier incidental pages 1..=4.
+        for page in 1..=4 {
+            let span = page * page_bytes..(page + 1) * page_bytes;
+            assert!(a.iter().any(|r| r.start <= span.start && span.end <= r.end));
+            assert!(b.iter().all(|r| r.end <= span.start || span.end <= r.start));
+        }
+        // One GET covers everything between the first and last required page.
+        assert_eq!(
+            cover_pages(&second, rows, row_bytes, 256, 1).unwrap().0,
+            vec![0..end]
+        );
+
+        // Page 2 holds the only rows that can win: tiny norms against 40+ elsewhere.
+        let low = vec![0_f32; dimensions];
+        let step = vec![0.5_f32; dimensions];
+        let mut object = Vec::new();
+        for row in 0..rows {
+            let id = 9_000 - ((row * 37 + 11) % rows) as i64;
+            let norm = if row / 256 == 2 {
+                0.25 + (row % 5) as f32 * 0.125
+            } else {
+                40. + (row % 5) as f32 * 0.5
+            };
+            object.extend_from_slice(&id.to_le_bytes());
+            object.extend_from_slice(&norm.to_le_bytes());
+            object.extend((0..dimensions).map(|d| 1 + ((row + d) % 3) as u8));
+        }
+        let query = (0..dimensions)
+            .map(|d| 1. + 0.25 * d as f32)
+            .collect::<Vec<_>>();
+        let unit = cosine_unit(&query);
+        let geometry = Sq8Geometry { rows, dimensions };
+        let mut top = Vec::new();
+        for (cover, bytes) in [(&a, a_bytes), (&b, b_bytes)] {
+            let population = cover
+                .iter()
+                .map(|r| ReturnedRange {
+                    start: r.start,
+                    bytes: &object[r.clone()],
+                })
+                .collect::<Vec<_>>();
+            let production =
+                rank_returned_ranges(geometry, &population, &unit, &low, &step, 12, bytes).unwrap();
+            let fetched = cover
+                .iter()
+                .flat_map(|r| r.start / row_bytes..r.end / row_bytes)
+                .collect::<Vec<_>>();
+            assert_eq!(fetched.len(), bytes / row_bytes);
+            let oracle = scalar_rank(&object, dimensions, fetched.into_iter(), &unit, &low, &step);
+            assert_hits_match(&production, &oracle);
+            assert_geometry_agrees(&object, dimensions, &oracle, &unit, &low, &step);
+            top.push(production);
+        }
+        // The first cover's best twelve are all page-2 rows; the second cover cannot see them.
+        assert!(top[0].iter().all(|hit| (512..768).contains(&hit.ordinal)));
+        assert!(top[1].iter().all(|hit| !(512..768).contains(&hit.ordinal)));
+        assert!(top[0][11].score < top[1][0].score);
+        assert!(top[0].iter().all(|a| top[1].iter().all(|b| a.id != b.id)));
+    }
+
+    struct ClassFixture {
+        temp: tempfile::TempDir,
+        root_sha: String,
+        sq8: Vec<u8>,
+        key: ObjectPath,
+        prefix: ObjectPath,
+        objects: std::collections::BTreeMap<String, Vec<u8>>,
+        limits: TwoBitGenerationLimits,
+        rows: usize,
+        dimensions: usize,
+    }
+
+    // The cold-fetch class construction (32 orthogonal directions on eight nonadjacent
+    // pages each) so semantic discovery selects a gapped closure; only application IDs
+    // (a permutation unrelated to ordinals) and stored norms (period-7 ties) differ.
+    fn class_fixture(dimensions: usize) -> ClassFixture {
+        use sha2::{Digest, Sha256};
+        assert!(dimensions >= 32);
+        let hash = |body: &[u8]| format!("{:x}", Sha256::digest(body));
+        let rows = 65_536;
+        let temp = tempfile::tempdir().unwrap();
+        let mut raw = Vec::with_capacity(rows * dimensions * 4);
+        let mut sq8 = Vec::with_capacity(rows * (dimensions + 12));
+        for row in 0..rows {
+            let page = row / 256;
+            let class = (page / 8 + 4 * (page % 8)) % 32;
+            let id = 100_000 + ((row * 40_503 + 12_345) % 65_537) as i64;
+            let norm = 1. + (row % 7) as f32 * 0.25;
+            sq8.extend_from_slice(&id.to_le_bytes());
+            sq8.extend_from_slice(&norm.to_le_bytes());
+            for d in 0..dimensions {
+                let value = if d != class {
+                    0_f32
+                } else if class & 4 == 0 {
+                    1.
+                } else {
+                    -1.
+                };
+                raw.extend_from_slice(&value.to_le_bytes());
+                sq8.push((value + 1.) as u8);
+            }
+        }
+        let raw_path = temp.path().join("raw");
+        let sq8_path = temp.path().join("sq8");
+        fs::write(&raw_path, &raw).unwrap();
+        fs::write(&sq8_path, &sq8).unwrap();
+        let sq8_sha = hash(&sq8);
+        let key = ObjectPath::from(format!("direct/objects/{sq8_sha}"));
+        let root = temp.path().join("generation");
+        let order = (0..rows as u64).collect::<Vec<_>>();
+        let root_sha = crate::two_bit_build::TwoBitGenerationBuilder {
+            source: crate::two_bit_source::TwoBitSource {
+                raw: &raw_path,
+                raw_sha256: &hash(&raw),
+                sq8: &sq8_path,
+                sq8_sha256: &sq8_sha,
+                rows,
+                dimensions,
+            },
+            base_epoch: 0,
+            generation: 1,
+            low: &vec![-1.; dimensions],
+            step: &vec![1.; dimensions],
+            sq8_object_key: key.as_ref(),
+            sq8_etag: DIRECT_ETAG,
+        }
+        .build_with_discovery(
+            Some(&order),
+            DiscoveryMode::Semantic,
+            &root,
+            128 * 1024 * 1024,
+        )
+        .unwrap();
+        drop(order);
+        drop(raw);
+        let limits = TwoBitGenerationLimits {
+            max_memory_bytes: 256 * 1024 * 1024,
+            max_active_queries: 1,
+            max_query_bytes: 32 * 256 * (dimensions + 12),
+            max_query_gets: 32,
+            max_parallel_gets: 16,
+            max_source_bytes: 64 * 1024 * 1024,
+            max_source_gets: 128,
+            max_parallel_source_gets: 16,
+            max_query_scratch_bytes: 1_048_576 + TwoBitPlanTrace::scratch_bytes(rows),
+            already_pinned_bytes: 0,
+        };
+        let prefix = ObjectPath::from(format!("direct/generations/{root_sha}"));
+        let mut objects = std::collections::BTreeMap::from([(key.to_string(), sq8.clone())]);
+        for name in [
+            "manifest.json",
+            "page_manifest.json",
+            "page_digests.bin",
+            "plane/manifest.json",
+            "plane/mean.bin",
+            "plane/page_digests.bin",
+            "plane/records.bin",
+            "router/root.bin",
+            "router/membership.bin",
+            "router/leaves.bin",
+        ] {
+            objects.insert(
+                metadata_location(&prefix, name).to_string(),
+                fs::read(root.join(name)).unwrap(),
+            );
+        }
+        ClassFixture {
+            temp,
+            root_sha,
+            sq8,
+            key,
+            prefix,
+            objects,
+            limits,
+            rows,
+            dimensions,
+        }
+    }
+
+    // Positive weights 0.5 + 0.25 * (d % 4) on exactly the sixteen positive classes pick
+    // the nearest leaves; the unequal weights and nonunit norm keep the query away from
+    // any axis. Coordinates beyond the class directions only dilute it. Native100k keeps
+    // the 8 nearest leaves plus those of the next 8 within 1.15x the 8th squared
+    // distance, so the selected count is not a cap of 16 but 12 here: with prototypes
+    // +e_c, the squared distances are 2 - 2 * q_c = 1.320 (weight 1.25, four classes),
+    // 1.456 (1.0, four), 1.592 (0.75, four) and 1.728 (0.5, four); the 8th distance
+    // 1.456 bounds 1.674, which admits the 1.592 group and excludes the 1.728 group.
+    fn class_query(dimensions: usize) -> Vec<f32> {
+        (0..dimensions)
+            .map(|d| {
+                if d >= 32 {
+                    0.125
+                } else if d & 4 == 0 {
+                    0.5 + 0.25 * (d % 4) as f32
+                } else {
+                    0.
+                }
+            })
+            .collect()
+    }
+
+    // `Fixture::arm(None)` holds SQ8 bodies until released: release them once any is in
+    // flight. A SOURCE or leaf GET from the work would stay held and fail loudly.
+    async fn run_direct_http<T>(
+        fixture: &DirectHttp,
+        work: impl std::future::Future<Output = T>,
+    ) -> T {
+        fixture.arm(None);
+        let (value, ()) = tokio::join!(work, async {
+            fixture.wait(|s| s.active[1] >= 1).await;
+            fixture.release(1);
+        });
+        value
+    }
+
+    // Same, for the historical path that also reads SOURCE: release both stages in order.
+    async fn run_source_and_sq8_http<T>(
+        fixture: &DirectHttp,
+        work: impl std::future::Future<Output = T>,
+    ) -> T {
+        fixture.arm(None);
+        let (value, ()) = tokio::join!(work, async {
+            fixture.wait(|s| s.active[0] >= 1).await;
+            fixture.release(0);
+            fixture.wait(|s| s.active[1] >= 1).await;
+            fixture.release(1);
+        });
+        value
+    }
+
+    #[tokio::test]
+    async fn native_direct_closure_cold_oracle_zero_source_memory_and_caps() {
+        let deadline = Instant::now() + Duration::from_secs(90);
+        tokio::time::timeout(Duration::from_secs(90), async {
+            let ClassFixture {
+                temp,
+                root_sha,
+                sq8,
+                key,
+                prefix,
+                objects,
+                limits,
+                rows,
+                dimensions,
+            } = class_fixture(32);
+            assert!(Instant::now() < deadline, "fixture construction deadline");
+            let row_bytes = dimensions + 12;
+            let key_string = key.to_string();
+            let fixture = DirectHttp::new(objects, deadline);
+            let mut generation = TwoBitGeneration::open_remote(
+                fixture.reader.store(),
+                &prefix,
+                &root_sha,
+                limits,
+                temp.path(),
+            )
+            .await
+            .unwrap();
+            // Startup SOURCE HEAD is accounted separately from query GETs.
+            assert_eq!(
+                generation.remote_open_stats().unwrap().source_head_requests,
+                1
+            );
+            assert!(
+                fixture
+                    .snapshot()
+                    .requests
+                    .iter()
+                    .any(|(path, head, _, _)| { *head && path.ends_with("/plane/records.bin") })
+            );
+            let store = fixture.reader.store();
+            let query = class_query(dimensions);
+            let unit = cosine_unit(&query);
+            let (low, step) = (vec![-1_f32; dimensions], vec![1_f32; dimensions]);
+
+            // Ordinary calls stay historical: SOURCE nomination, clamped SQ8 limits.
+            let ordinary = run_source_and_sq8_http(
+                &fixture,
+                generation.search_with_store(store, &query, 10, None),
+            )
+            .await
+            .unwrap();
+            assert!(ordinary.source_stats.submitted_gets > 0);
+            assert!(!ordinary.source_nomination_skipped);
+            assert!(ordinary.ranked.stats.submitted_gets <= limits.max_query_gets);
+            assert!(!fixture.snapshot().requests.is_empty());
+            let ordinary_bits = ordinary
+                .ranked
+                .candidates
+                .iter()
+                .map(|h| (h.ordinal, h.id, h.score.to_bits()))
+                .collect::<Vec<_>>();
+
+            // Direct search: current discovery, checked closure, deterministic cover.
+            let dlimits = DirectClosureLimits {
+                max_sq8_bytes: rows * row_bytes,
+                max_sq8_gets: 32,
+            };
+            let before = fixture.reader.transport_stats();
+            let (result, trace) = run_direct_http(
+                &fixture,
+                generation.diagnostic_direct_closure_search_with_store(store, &query, 50, dlimits),
+            )
+            .await
+            .unwrap();
+            let state = fixture.snapshot();
+            // ZERO SOURCE and leaf GETs: every request after arming is an SQ8 range.
+            assert!(
+                state.requests.iter().all(|(path, head, range, etag)| {
+                    *path == key_string
+                        && !*head
+                        && range.is_some()
+                        && etag.as_deref() == Some(DIRECT_ETAG)
+                }),
+                "{:?}",
+                state.requests
+            );
+            assert_eq!(state.errors, Vec::<String>::new());
+            // Required closure from the production discovery trace; independent cover.
+            let closure = trace
+                .semantic_units
+                .iter()
+                .map(|unit| unit / 8)
+                .collect::<BTreeSet<_>>();
+            // Twelve leaves (see `class_query`), each a full 64-unit leaf of the 2,048 units.
+            assert_eq!(trace.semantic_leaves.len(), 12);
+            assert_eq!(trace.semantic_units.len(), 12 * 64);
+            assert!(result.source_nomination_skipped);
+            assert!(trace.ranked_candidate_pages.is_empty());
+            assert!(trace.nomination_evaluated_units.is_empty());
+            assert!(trace.discoveries.is_empty());
+            assert_eq!(
+                result.plan.selected_pages,
+                closure.iter().copied().collect::<Vec<_>>()
+            );
+            assert_eq!(result.plan.target_pages, closure.len());
+            assert_eq!(
+                (
+                    result.plan.target_shortfall,
+                    result.plan.primary_pages_retained
+                ),
+                (0, 0)
+            );
+            let cover = smallest_gap_cover(&closure, rows, row_bytes, dlimits.max_sq8_gets);
+            assert_eq!(result.plan.ranges, cover);
+            let planned = cover.iter().map(|r| r.len()).sum::<usize>();
+            assert_eq!(result.plan.planned_bytes, planned);
+            let covered_pages = planned / (256 * row_bytes);
+            assert!(closure.len() < covered_pages && covered_pages < rows / 256);
+            assert!(2 < cover.len() && cover.len() <= dlimits.max_sq8_gets);
+            assert!(cover.windows(2).all(|w| w[0].end < w[1].start));
+            // Full ordered range identity on the wire, not just totals.
+            let mut actual = state.requests.clone();
+            actual.sort();
+            let mut expected = cover
+                .iter()
+                .map(|r| -> DirectRequest {
+                    (
+                        key_string.clone(),
+                        false,
+                        Some((r.start, r.end)),
+                        Some(DIRECT_ETAG.into()),
+                    )
+                })
+                .collect::<Vec<_>>();
+            expected.sort();
+            assert_eq!(actual, expected);
+            assert_eq!(
+                result.ranked.stats,
+                Sq8ReadStats {
+                    submitted_gets: cover.len(),
+                    verified_bytes: planned,
+                    failed_gets: 0
+                }
+            );
+            assert_eq!(result.source_stats, Sq8ReadStats::default());
+            assert_eq!(result.router_stats, Sq8ReadStats::default());
+            let after = fixture.reader.transport_stats();
+            assert_eq!(after.attempts - before.attempts, cover.len() as u64);
+            assert_eq!(
+                after.consumed_payload_bytes - before.consumed_payload_bytes,
+                planned as u64
+            );
+            let stages = result.stages;
+            assert_eq!((stages.source.start_ns, stages.source.end_ns), (0, 0));
+            assert!(
+                0 < stages.discovery.start_ns
+                    && stages.discovery.start_ns <= stages.discovery.end_ns
+            );
+            assert!(stages.discovery.end_ns <= stages.planning.start_ns);
+            assert!(stages.planning.start_ns <= stages.planning.end_ns);
+            assert!(stages.planning.end_ns <= stages.sq8.start_ns);
+            assert!(stages.sq8.start_ns <= stages.sq8.end_ns);
+            assert_eq!(stages.leaf_peak_inflight, 0);
+            assert_eq!(generation.slots.available_permits(), 1);
+
+            // Independent sequential f32 reference over every row of the fetched ranges.
+            let fetched = state
+                .requests
+                .iter()
+                .flat_map(|(_, _, range, _)| {
+                    let (start, end) = range.unwrap();
+                    start / row_bytes..end / row_bytes
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(fetched.len(), planned / row_bytes);
+            let oracle = scalar_rank(&sq8, dimensions, fetched.into_iter(), &unit, &low, &step);
+            assert_eq!(result.ranked.candidates.len(), 50);
+            assert_hits_match(&result.ranked.candidates, &oracle);
+            assert_geometry_agrees(&sq8, dimensions, &oracle, &unit, &low, &step);
+            assert!(has_id_tie_against_ordinal_order(&oracle[..50]));
+            let direct_bits = result
+                .ranked
+                .candidates
+                .iter()
+                .map(|h| (h.ordinal, h.id, h.score.to_bits()))
+                .collect::<Vec<_>>();
+
+            // Exact modeled memory, from independent arithmetic.
+            let memory = generation.direct_closure_memory(dlimits).unwrap();
+            let planner = 1_048_576
+                + TwoBitPlanTrace::scratch_bytes(rows) as u64
+                + 4 * dimensions as u64
+                + 512 * rows.div_ceil(256) as u64;
+            let ranking =
+                256 * rows.min(dlimits.max_sq8_bytes / row_bytes) as u64 + 4 * dimensions as u64;
+            let direct = (3 * dlimits.max_sq8_bytes as u64 + planner + ranking)
+                * limits.max_active_queries as u64;
+            assert_eq!(memory.resident_bytes, generation.modeled_memory_bytes());
+            assert_eq!(memory.direct_planner_bytes, planner);
+            assert_eq!(memory.direct_query_bytes, direct);
+            assert_eq!(memory.total_bytes, memory.resident_bytes + direct);
+            assert_eq!(memory.cap_bytes, limits.max_memory_bytes);
+
+            // Cap minus one is refused before any I/O with a machine-readable reason;
+            // the exact cap is admitted and reproduces the same ranking.
+            let refused = |error: &TwoBitGenerationError, reason: DirectClosureRejection| {
+                assert_eq!(error.direct_resource_rejection(), Some(reason), "{error:?}");
+            };
+            fixture.arm(None);
+            let attempts = fixture.reader.transport_stats().attempts;
+            generation.limits.max_memory_bytes = memory.total_bytes - 1;
+            let error = generation
+                .direct_closure_search_with_store(store, &query, 50, None, dlimits)
+                .await
+                .err()
+                .unwrap();
+            refused(&error, DirectClosureRejection::ModeledMemory);
+            assert!(fixture.snapshot().requests.is_empty());
+            assert_eq!(fixture.reader.transport_stats().attempts, attempts);
+            assert_eq!(generation.slots.available_permits(), 1);
+            generation.limits.max_memory_bytes = memory.total_bytes;
+            let exact = run_direct_http(
+                &fixture,
+                generation.direct_closure_search_with_store(store, &query, 50, None, dlimits),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                exact
+                    .ranked
+                    .candidates
+                    .iter()
+                    .map(|h| (h.ordinal, h.id, h.score.to_bits()))
+                    .collect::<Vec<_>>(),
+                direct_bits
+            );
+            generation.limits.max_memory_bytes = limits.max_memory_bytes;
+
+            // Planned-byte cap minus one: refused after local discovery, before any GET.
+            fixture.arm(None);
+            let error = generation
+                .direct_closure_search_with_store(
+                    store,
+                    &query,
+                    50,
+                    None,
+                    DirectClosureLimits {
+                        max_sq8_bytes: planned - 1,
+                        ..dlimits
+                    },
+                )
+                .await
+                .err()
+                .unwrap();
+            refused(&error, DirectClosureRejection::PlannedBytes);
+            assert!(fixture.snapshot().requests.is_empty());
+            assert_eq!(generation.slots.available_permits(), 1);
+            assert!(error.stages().is_some_and(|s| s.discovery.end_ns > 0));
+            assert_eq!(
+                error.read_stats(),
+                (Sq8ReadStats::default(), Sq8ReadStats::default())
+            );
+
+            // A one-GET allowance bridges everything between the first and last
+            // required page: more bytes, and a byte cap that is just short is refused.
+            let one_get = smallest_gap_cover(&closure, rows, row_bytes, 1);
+            assert_eq!(one_get.len(), 1);
+            let one_bytes = one_get[0].len();
+            assert!(one_bytes > planned);
+            let single = run_direct_http(
+                &fixture,
+                generation.direct_closure_search_with_store(
+                    store,
+                    &query,
+                    50,
+                    None,
+                    DirectClosureLimits {
+                        max_sq8_bytes: one_bytes,
+                        max_sq8_gets: 1,
+                    },
+                ),
+            )
+            .await
+            .unwrap();
+            assert_eq!(single.plan.ranges, one_get);
+            assert_eq!(single.plan.selected_pages, result.plan.selected_pages);
+            assert_eq!(single.ranked.stats.submitted_gets, 1);
+            let single_oracle = scalar_rank(
+                &sq8,
+                dimensions,
+                one_get[0].start / row_bytes..one_get[0].end / row_bytes,
+                &unit,
+                &low,
+                &step,
+            );
+            assert_hits_match(&single.ranked.candidates, &single_oracle);
+            fixture.arm(None);
+            let error = generation
+                .direct_closure_search_with_store(
+                    store,
+                    &query,
+                    50,
+                    None,
+                    DirectClosureLimits {
+                        max_sq8_bytes: one_bytes - 1,
+                        max_sq8_gets: 1,
+                    },
+                )
+                .await
+                .err()
+                .unwrap();
+            refused(&error, DirectClosureRejection::PlannedBytes);
+            assert!(fixture.snapshot().requests.is_empty());
+
+            // Exclusions use the historical roster rule and keep the rest of the ranking.
+            let mut pinned_limits = limits;
+            pinned_limits.already_pinned_bytes = 64;
+            let roster_generation = TwoBitGeneration::open_remote(
+                store,
+                &prefix,
+                &root_sha,
+                pinned_limits,
+                temp.path(),
+            )
+            .await
+            .unwrap();
+            let mut excluded = oracle[..3].iter().map(|r| r.1).collect::<Vec<_>>();
+            excluded.sort_unstable();
+            let filtered = run_direct_http(
+                &fixture,
+                roster_generation.direct_closure_search_with_store(
+                    store,
+                    &query,
+                    50,
+                    Some(&excluded),
+                    dlimits,
+                ),
+            )
+            .await
+            .unwrap();
+            let visible = oracle
+                .iter()
+                .filter(|r| !excluded.contains(&r.1))
+                .copied()
+                .collect::<Vec<_>>();
+            assert_hits_match(&filtered.ranked.candidates, &visible);
+            assert_eq!(filtered.ranked.candidates.len(), 50);
+            fixture.arm(None);
+            for bad in [vec![5, 3], vec![3, 3], vec![1; 9]] {
+                let error = roster_generation
+                    .direct_closure_search_with_store(store, &query, 50, Some(&bad), dlimits)
+                    .await
+                    .err()
+                    .unwrap();
+                assert!(matches!(
+                    error,
+                    TwoBitGenerationError::Invalid("search admission")
+                ));
+                assert_eq!(error.direct_resource_rejection(), None);
+            }
+            assert!(fixture.snapshot().requests.is_empty());
+
+            // Direct caps are independent of the historical clamp: a generation whose
+            // ordinary limits admit one page and one GET still serves the same query.
+            let narrow = TwoBitGeneration::open_remote(
+                store,
+                &prefix,
+                &root_sha,
+                TwoBitGenerationLimits {
+                    max_query_bytes: 256 * row_bytes,
+                    max_query_gets: 1,
+                    ..limits
+                },
+                temp.path(),
+            )
+            .await
+            .unwrap();
+            let narrow_result = run_direct_http(
+                &fixture,
+                narrow.direct_closure_search_with_store(store, &query, 50, None, dlimits),
+            )
+            .await
+            .unwrap();
+            assert_eq!(narrow_result.plan, result.plan);
+            assert_eq!(
+                narrow_result
+                    .ranked
+                    .candidates
+                    .iter()
+                    .map(|h| (h.ordinal, h.id, h.score.to_bits()))
+                    .collect::<Vec<_>>(),
+                direct_bits
+            );
+
+            // A second generation opened while the direct-enabled first stays pinned
+            // charges the first's whole direct-enabled model before its own.
+            let pinned = TwoBitGeneration::open_remote(
+                store,
+                &prefix,
+                &root_sha,
+                TwoBitGenerationLimits {
+                    already_pinned_bytes: memory.total_bytes,
+                    ..limits
+                },
+                temp.path(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                pinned.modeled_memory_bytes(),
+                generation.modeled_memory_bytes() + memory.total_bytes
+            );
+            let second = pinned.direct_closure_memory(dlimits).unwrap();
+            assert_eq!(
+                second.total_bytes,
+                memory.resident_bytes + memory.total_bytes + memory.direct_query_bytes
+            );
+            assert!(
+                TwoBitGeneration::open_remote(
+                    store,
+                    &prefix,
+                    &root_sha,
+                    TwoBitGenerationLimits {
+                        max_memory_bytes: pinned.modeled_memory_bytes() - 1,
+                        already_pinned_bytes: memory.total_bytes,
+                        ..limits
+                    },
+                    temp.path(),
+                )
+                .await
+                .is_err()
+            );
+            let mut pinned = pinned;
+            pinned.limits.max_memory_bytes = second.total_bytes - 1;
+            fixture.arm(None);
+            let error = pinned
+                .direct_closure_search_with_store(store, &query, 50, None, dlimits)
+                .await
+                .err()
+                .unwrap();
+            refused(&error, DirectClosureRejection::ModeledMemory);
+            assert!(fixture.snapshot().requests.is_empty());
+            pinned.limits.max_memory_bytes = second.total_bytes;
+            let admitted = run_direct_http(
+                &fixture,
+                pinned.direct_closure_search_with_store(store, &query, 50, None, dlimits),
+            )
+            .await
+            .unwrap();
+            assert_eq!(admitted.plan, result.plan);
+
+            // Historical search is unchanged after all of the above.
+            let again = run_source_and_sq8_http(
+                &fixture,
+                generation.search_with_store(store, &query, 10, None),
+            )
+            .await
+            .unwrap();
+            assert_eq!(again.plan, ordinary.plan);
+            assert_eq!(again.source_stats, ordinary.source_stats);
+            assert_eq!(again.ranked.stats, ordinary.ranked.stats);
+            assert_eq!(
+                again
+                    .ranked
+                    .candidates
+                    .iter()
+                    .map(|h| (h.ordinal, h.id, h.score.to_bits()))
+                    .collect::<Vec<_>>(),
+                ordinary_bits
+            );
+            fixture.finish();
+        })
+        .await
+        .expect("whole direct closure cold fixture deadline");
+    }
+
+    #[tokio::test]
+    async fn native_direct_closure_real_planner_bridge_counterexample_changes_winner() {
+        let deadline = Instant::now() + Duration::from_secs(90);
+        tokio::time::timeout(Duration::from_secs(90), async {
+            let ClassFixture {
+                temp,
+                root_sha,
+                sq8,
+                key,
+                prefix,
+                objects,
+                limits,
+                rows,
+                dimensions,
+            } = class_fixture(32);
+            let row_bytes = dimensions + 12;
+            let page_bytes = 256 * row_bytes;
+            let key_string = key.to_string();
+            let fixture = DirectHttp::new(objects, deadline);
+            let generation = TwoBitGeneration::open_remote(
+                fixture.reader.store(),
+                &prefix,
+                &root_sha,
+                limits,
+                temp.path(),
+            )
+            .await
+            .unwrap();
+            let store = fixture.reader.store();
+            let dlimits = DirectClosureLimits {
+                max_sq8_bytes: rows * row_bytes,
+                max_sq8_gets: 2,
+            };
+            // Class 12 occupies page 3 here, and no other class-12 page is in either cover.
+            let mut query = vec![0_f32; dimensions];
+            query[3] = 0.25;
+            query[12] = -1.5;
+            query[13] = 0.5;
+            let unit = cosine_unit(&query);
+            let normalized = normalize_two_bit_diagnostic_query(&query).unwrap();
+            assert_eq!(&*normalized, unit.as_slice());
+            let (low, step) = (vec![-1_f32; dimensions], vec![1_f32; dimensions]);
+            let page_units = |pages: &[usize]| {
+                pages
+                    .iter()
+                    .flat_map(|&page| page * 8..page * 8 + 8)
+                    .collect::<Vec<_>>()
+            };
+            let mut tops = Vec::new();
+            for (pages, ranges, bridges) in [
+                (
+                    vec![0_usize, 5, 15],
+                    vec![0..6 * page_bytes, 15 * page_bytes..16 * page_bytes],
+                    vec![1_usize, 2, 3, 4],
+                ),
+                (
+                    vec![0, 5, 8, 11, 15],
+                    vec![0..page_bytes, 5 * page_bytes..16 * page_bytes],
+                    vec![6, 7, 9, 10, 12, 13, 14],
+                ),
+            ] {
+                // The real admission path: checked walks -> closure -> deterministic cover.
+                let walks = vec![(0_usize, page_units(&pages))];
+                let plan = generation.direct_closure_plan(&walks, dlimits).unwrap();
+                assert_eq!(plan.selected_pages, pages);
+                assert_eq!(plan.target_pages, pages.len());
+                assert_eq!(plan.ranges, ranges);
+                assert_eq!(
+                    plan.ranges,
+                    smallest_gap_cover(
+                        &pages.iter().copied().collect(),
+                        rows,
+                        row_bytes,
+                        dlimits.max_sq8_gets
+                    )
+                );
+                assert_eq!(
+                    plan.planned_bytes,
+                    ranges.iter().map(|r| r.len()).sum::<usize>()
+                );
+                let covered = plan.planned_bytes / page_bytes;
+                assert_eq!(covered - pages.len(), bridges.len());
+                for page in 0..16 {
+                    let inside = plan
+                        .ranges
+                        .iter()
+                        .any(|r| r.start <= page * page_bytes && (page + 1) * page_bytes <= r.end);
+                    assert_eq!(inside, pages.contains(&page) || bridges.contains(&page));
+                }
+                let ranked = run_direct_http(
+                    &fixture,
+                    generation.direct_closure_rank(store, &normalized, &plan, 20, None, dlimits),
+                )
+                .await
+                .unwrap();
+                let state = fixture.snapshot();
+                let mut actual = state.requests.clone();
+                actual.sort();
+                assert_eq!(
+                    actual,
+                    plan.ranges
+                        .iter()
+                        .map(|r| -> DirectRequest {
+                            (
+                                key_string.clone(),
+                                false,
+                                Some((r.start, r.end)),
+                                Some(DIRECT_ETAG.into()),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                );
+                let fetched = plan
+                    .ranges
+                    .iter()
+                    .flat_map(|r| r.start / row_bytes..r.end / row_bytes)
+                    .collect::<Vec<_>>();
+                let oracle = scalar_rank(&sq8, dimensions, fetched.into_iter(), &unit, &low, &step);
+                assert_eq!(ranked.candidates.len(), 20);
+                assert_hits_match(&ranked.candidates, &oracle);
+                assert_geometry_agrees(&sq8, dimensions, &oracle, &unit, &low, &step);
+                assert_eq!(
+                    ranked.stats,
+                    Sq8ReadStats {
+                        submitted_gets: 2,
+                        verified_bytes: plan.planned_bytes,
+                        failed_gets: 0
+                    }
+                );
+                tops.push(ranked.candidates);
+            }
+            // Page 3 (bridge in the first cover only) supplies every first-cover winner and
+            // none of the second cover's: the larger required set is not a recall superset.
+            assert!(tops[0].iter().all(|hit| (768..1024).contains(&hit.ordinal)));
+            assert!(
+                tops[1]
+                    .iter()
+                    .all(|hit| !(768..1024).contains(&hit.ordinal))
+            );
+            assert!(tops[0][19].score < tops[1][0].score);
+            assert!(tops[0].iter().all(|a| tops[1].iter().all(|b| a.id != b.id)));
+            fixture.finish();
+        })
+        .await
+        .expect("whole bridge counterexample fixture deadline");
+    }
+
+    #[tokio::test]
+    async fn native_direct_closure_shares_the_query_slot_with_ordinary_search_and_drains() {
+        let deadline = Instant::now() + Duration::from_secs(90);
+        tokio::time::timeout(Duration::from_secs(90), async {
+            let ClassFixture {
+                temp,
+                root_sha,
+                key,
+                prefix,
+                objects,
+                limits,
+                rows,
+                dimensions,
+                ..
+            } = class_fixture(32);
+            let row_bytes = dimensions + 12;
+            let key_string = key.to_string();
+            let fixture = DirectHttp::new(objects, deadline);
+            let generation = TwoBitGeneration::open_remote(
+                fixture.reader.store(),
+                &prefix,
+                &root_sha,
+                limits,
+                temp.path(),
+            )
+            .await
+            .unwrap();
+            let store = fixture.reader.store();
+            let query = class_query(dimensions);
+            let dlimits = DirectClosureLimits {
+                max_sq8_bytes: rows * row_bytes,
+                max_sq8_gets: 32,
+            };
+            let is_source = |path: &String| path.ends_with("/plane/records.bin");
+
+            // Direct first: its held SQ8 bodies keep the only slot; a queued ordinary
+            // search issues no SOURCE GET until the direct query has fully finished.
+            fixture.arm(None);
+            let mut direct = Box::pin(generation.direct_closure_search_with_store(
+                store, &query, 10, None, dlimits,
+            ));
+            tokio::select! {
+                _ = &mut direct => panic!("direct returned with its SQ8 bodies held"),
+                () = fixture.wait(|s| s.active[1] >= 1) => {}
+            }
+            assert_eq!(generation.slots.available_permits(), 0);
+            let mut ordinary = Box::pin(generation.search_with_store(store, &query, 10, None));
+            tokio::select! {
+                _ = &mut ordinary => panic!("ordinary search bypassed the held direct slot"),
+                _ = &mut direct => panic!("direct returned with its SQ8 bodies held"),
+                () = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
+            assert_eq!(generation.slots.available_permits(), 0);
+            assert!(fixture.snapshot().requests.iter().all(|(path, _, _, _)| !is_source(path)));
+            fixture.release(1);
+            let direct = direct.await.unwrap();
+            assert_eq!(direct.source_stats, Sq8ReadStats::default());
+            let (ordinary, ()) = tokio::join!(ordinary, async {
+                fixture.wait(|s| s.active[0] >= 1).await;
+                fixture.release(0);
+            });
+            let ordinary = ordinary.unwrap();
+            assert!(ordinary.source_stats.submitted_gets > 0);
+            assert_eq!(generation.slots.available_permits(), 1);
+
+            // Ordinary first: a queued direct search issues no SQ8 GET while SOURCE is held.
+            fixture.arm(None);
+            let mut ordinary = Box::pin(generation.search_with_store(store, &query, 10, None));
+            tokio::select! {
+                _ = &mut ordinary => panic!("ordinary returned with SOURCE bodies held"),
+                () = fixture.wait(|s| s.active[0] >= 1) => {}
+            }
+            assert_eq!(generation.slots.available_permits(), 0);
+            let mut direct = Box::pin(generation.direct_closure_search_with_store(
+                store, &query, 10, None, dlimits,
+            ));
+            tokio::select! {
+                _ = &mut direct => panic!("direct bypassed the held ordinary slot"),
+                _ = &mut ordinary => panic!("ordinary returned with SOURCE bodies held"),
+                () = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
+            assert!(fixture.snapshot().requests.iter().all(|(path, _, _, _)| is_source(path)));
+            fixture.release(0);
+            let (ordinary, ()) = tokio::join!(ordinary, async {
+                fixture.wait(|s| s.active[1] >= 1).await;
+                fixture.release(1);
+            });
+            ordinary.unwrap();
+            direct.await.unwrap();
+            assert_eq!(generation.slots.available_permits(), 1);
+
+            // Drain: an early digest failure and a delayed stream failure leave a held
+            // valid sibling in flight; the slot spans all of them and every GET finishes.
+            let (result, _) = run_direct_http(
+                &fixture,
+                generation.diagnostic_direct_closure_search_with_store(store, &query, 10, dlimits),
+            )
+            .await
+            .unwrap();
+            let cover = result.plan.ranges.clone();
+            assert!(cover.len() >= 3);
+            let starts = [cover[0].start, cover[1].start, cover[2].start];
+            fixture.arm(Some((1, starts)));
+            let before = fixture.reader.transport_stats();
+            let mut query_future = Box::pin(generation.diagnostic_direct_closure_search_with_store(
+                store, &query, 10, dlimits,
+            ));
+            tokio::select! {
+                _ = &mut query_future => panic!("returned before the earlier stream error was released"),
+                () = fixture.wait(|s| s.finished[1].contains(&starts[1]) && s.active[1] >= 2) => {}
+            }
+            assert!(!fixture.snapshot().finished[1].contains(&starts[0]));
+            assert_eq!(generation.slots.available_permits(), 0);
+            fixture.release_error();
+            tokio::select! {
+                _ = &mut query_future => panic!("returned before the valid sibling drained"),
+                () = fixture.wait(|s| s.finished[1].contains(&starts[0])) => {}
+            }
+            assert!(!fixture.snapshot().finished[1].contains(&starts[2]));
+            tokio::select! {
+                _ = &mut query_future => panic!("cancelled the held valid sibling"),
+                () = tokio::time::sleep(Duration::from_millis(30)) => {}
+            }
+            assert_eq!(generation.slots.available_permits(), 0);
+            fixture.release_sibling();
+            let error = query_future.await.err().unwrap();
+            fn first_error(error: &TwoBitGenerationError) -> &DirectFetchError {
+                match error {
+                    TwoBitGenerationError::Query { error, .. } => first_error(error),
+                    TwoBitGenerationError::Read(failure) => &failure.error,
+                    _ => panic!("unexpected error: {error:?}"),
+                }
+            }
+            assert!(matches!(first_error(&error), DirectFetchError::Store(_)), "{error:?}");
+            assert_eq!(
+                error.read_stats(),
+                (
+                    Sq8ReadStats::default(),
+                    Sq8ReadStats {
+                        submitted_gets: cover.len(),
+                        verified_bytes: cover.iter().map(|r| r.len()).sum::<usize>()
+                            - cover[0].len()
+                            - cover[1].len(),
+                        failed_gets: 2,
+                    }
+                )
+            );
+            assert_eq!(error.router_stats(), Sq8ReadStats::default());
+            assert_eq!(error.direct_resource_rejection(), None);
+            assert!(error.stages().is_some_and(|s| s.sq8.end_ns >= s.sq8.start_ns && s.sq8.start_ns > 0));
+            assert_eq!(generation.slots.available_permits(), 1);
+            let mut state = fixture.snapshot();
+            assert!(state.errors.is_empty(), "{:?}", state.errors);
+            assert_eq!(state.active, [0; 3]);
+            state.finished[1].sort_unstable();
+            assert_eq!(state.finished[1], cover.iter().map(|r| r.start).collect::<Vec<_>>());
+            state.requests.sort();
+            assert!(state.requests.iter().all(|(path, _, _, _)| *path == key_string));
+            assert_eq!(state.requests.len(), cover.len());
+            let after = fixture.reader.transport_stats();
+            assert_eq!(after.attempts - before.attempts, cover.len() as u64);
+            assert_eq!(after.stream_failures - before.stream_failures, 1);
+            assert_eq!(
+                after.consumed_payload_bytes - before.consumed_payload_bytes,
+                (result.plan.planned_bytes - 1) as u64
+            );
+            fixture.finish();
+        })
+        .await
+        .expect("whole direct slot fixture deadline");
+    }
+
+    // Wraps the recording store: SQ8 responses can be falsified after authentication
+    // inputs are fixed (ETag, size, range, payload bytes) or refused as a failed precondition.
+    #[derive(Debug)]
+    struct SqFaultStore {
+        inner: RecordedStore,
+        sq8_path: String,
+        fault: std::sync::Mutex<&'static str>,
+    }
+    impl std::fmt::Display for SqFaultStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "sq8-fault-fixture")
+        }
+    }
+    #[async_trait::async_trait]
+    impl ObjectStore for SqFaultStore {
+        async fn get_opts(
+            &self,
+            path: &ObjectPath,
+            options: object_store::GetOptions,
+        ) -> object_store::Result<object_store::GetResult> {
+            let target = !options.head && path.as_ref() == self.sq8_path;
+            let fault = *self.fault.lock().unwrap();
+            if target && fault == "precondition" {
+                return Err(object_store::Error::Generic {
+                    store: "sq8-fault-fixture",
+                    source: std::io::Error::other("injected failed precondition").into(),
+                });
+            }
+            let mut result = self.inner.get_opts(path, options).await?;
+            if target {
+                match fault {
+                    "etag" => result.meta.e_tag = Some("\"replaced\"".into()),
+                    "size" => result.meta.size += 1,
+                    "range" => result.range.start += 1,
+                    "corrupt" | "short" | "long" => {
+                        let object_store::GetResultPayload::Stream(body) = result.payload else {
+                            unreachable!()
+                        };
+                        result.payload = object_store::GetResultPayload::Stream(
+                            body.map(move |chunk| {
+                                let mut bytes = chunk?.to_vec();
+                                match fault {
+                                    "corrupt" => bytes[0] ^= 1,
+                                    "short" => {
+                                        bytes.pop();
+                                    }
+                                    _ => bytes.push(0),
+                                }
+                                Ok(bytes::Bytes::from(bytes))
+                            })
+                            .boxed(),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            Ok(result)
+        }
+        async fn put_opts(
+            &self,
+            path: &ObjectPath,
+            body: object_store::PutPayload,
+            options: object_store::PutOptions,
+        ) -> object_store::Result<object_store::PutResult> {
+            self.inner.put_opts(path, body, options).await
+        }
+        async fn put_multipart_opts(
+            &self,
+            path: &ObjectPath,
+            options: object_store::PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+            self.inner.put_multipart_opts(path, options).await
+        }
+        fn delete_stream(
+            &self,
+            paths: futures_util::stream::BoxStream<'static, object_store::Result<ObjectPath>>,
+        ) -> futures_util::stream::BoxStream<'static, object_store::Result<ObjectPath>> {
+            self.inner.delete_stream(paths)
+        }
+        fn list(
+            &self,
+            prefix: Option<&ObjectPath>,
+        ) -> futures_util::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>>
+        {
+            self.inner.list(prefix)
+        }
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&ObjectPath>,
+        ) -> object_store::Result<object_store::ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+        async fn copy_opts(
+            &self,
+            from: &ObjectPath,
+            to: &ObjectPath,
+            options: object_store::CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+
+    struct TinyDirect {
+        temp: tempfile::TempDir,
+        store: SqFaultStore,
+        prefix: ObjectPath,
+        root_sha: String,
+        key: ObjectPath,
+        etag: String,
+        sq8: Vec<u8>,
+        low: Vec<f32>,
+        step: Vec<f32>,
+        limits: TwoBitGenerationLimits,
+    }
+
+    // Actual builder, publication and authenticated open at a small shape: dyadic
+    // low/step, nonzero codes, rows r, r+97, ... with identical codes and norm (exact
+    // score ties whose ID order differs from ordinal order), and one tail row.
+    async fn tiny_direct(rows: usize, dimensions: usize) -> TinyDirect {
+        use crate::two_bit_build::TwoBitGenerationBuilder;
+        use crate::two_bit_source::TwoBitSource;
+        use sha2::{Digest, Sha256};
+        let hash = |body: &[u8]| format!("{:x}", Sha256::digest(body));
+        let temp = tempfile::tempdir().unwrap();
+        let low = (0..dimensions)
+            .map(|d| -0.5 + 0.125 * (d % 4) as f32)
+            .collect::<Vec<_>>();
+        let step = (0..dimensions)
+            .map(|d| 0.0625 * (1 + d % 3) as f32)
+            .collect::<Vec<_>>();
+        let mut raw = Vec::new();
+        let mut sq8 = Vec::new();
+        for row in 0..rows {
+            let class = row % 97;
+            let id = 5_000 - ((row * 7 + 3) % rows) as i64;
+            let mut squared = 0_f64;
+            let mut codes = Vec::with_capacity(dimensions);
+            for d in 0..dimensions {
+                let code = ((class + 3 * d) % 11 + 1) as u8;
+                let value = low[d] + f32::from(code) * step[d];
+                squared += f64::from(value).powi(2);
+                raw.extend_from_slice(&value.to_le_bytes());
+                codes.push(code);
+            }
+            sq8.extend_from_slice(&id.to_le_bytes());
+            sq8.extend_from_slice(&(squared as f32).to_le_bytes());
+            sq8.extend_from_slice(&codes);
+        }
+        let raw_path = temp.path().join("raw");
+        let sq8_path = temp.path().join("sq8");
+        fs::write(&raw_path, &raw).unwrap();
+        fs::write(&sq8_path, &sq8).unwrap();
+        let inner = RecordedStore::default();
+        let sq8_sha = hash(&sq8);
+        let key = ObjectPath::from(format!("tiny/objects/{sq8_sha}"));
+        inner.put(&key, sq8.clone().into()).await.unwrap();
+        let etag = inner.head(&key).await.unwrap().e_tag.unwrap();
+        let root = temp.path().join("generation");
+        let order = (0..rows as u64).collect::<Vec<_>>();
+        let root_sha = TwoBitGenerationBuilder {
+            source: TwoBitSource {
+                raw: &raw_path,
+                raw_sha256: &hash(&raw),
+                sq8: &sq8_path,
+                sq8_sha256: &sq8_sha,
+                rows,
+                dimensions,
+            },
+            base_epoch: 0,
+            generation: 1,
+            low: &low,
+            step: &step,
+            sq8_object_key: key.as_ref(),
+            sq8_etag: &etag,
+        }
+        .build_with_discovery(Some(&order), DiscoveryMode::Semantic, &root, 128_000_000)
+        .unwrap();
+        let limits = TwoBitGenerationLimits {
+            max_memory_bytes: 512 * 1024 * 1024,
+            max_active_queries: 1,
+            max_query_bytes: 16_773_120,
+            max_query_gets: 32,
+            max_parallel_gets: 16,
+            max_source_bytes: 64 * 1024 * 1024,
+            max_source_gets: 128,
+            max_parallel_source_gets: 16,
+            max_query_scratch_bytes: 400_000 + TwoBitPlanTrace::scratch_bytes(rows),
+            already_pinned_bytes: 1024,
+        };
+        let head = crate::two_bit_store::publish_two_bit_generation(
+            &inner,
+            &ObjectPath::from("tiny/index"),
+            &root,
+            &root_sha,
+            limits,
+            None,
+        )
+        .await
+        .unwrap();
+        TinyDirect {
+            temp,
+            store: SqFaultStore {
+                inner,
+                sq8_path: key.to_string(),
+                fault: std::sync::Mutex::new("ok"),
+            },
+            prefix: head.metadata_prefix(),
+            root_sha,
+            key,
+            etag,
+            sq8,
+            low,
+            step,
+            limits,
+        }
+    }
+
+    #[tokio::test]
+    async fn native_direct_closure_tiny_widths_tail_ties_admission_and_authenticated_failures() {
+        let rows = 513;
+        for dimensions in [24_usize, 40] {
+            let tiny = tiny_direct(rows, dimensions).await;
+            let row_bytes = dimensions + 12;
+            let object_bytes = rows * row_bytes;
+            let mut generation = TwoBitGeneration::open_remote(
+                &tiny.store,
+                &tiny.prefix,
+                &tiny.root_sha,
+                tiny.limits,
+                tiny.temp.path(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                generation.remote_open_stats().unwrap().source_head_requests,
+                1
+            );
+            let reads = &tiny.store.inner.reads;
+            let dlimits = DirectClosureLimits {
+                max_sq8_bytes: object_bytes,
+                max_sq8_gets: 1,
+            };
+            let query = (0..dimensions)
+                .map(|d| 0.75 + 0.25 * ((d * 5) % 7) as f32 - if d % 3 == 0 { 1. } else { 0. })
+                .collect::<Vec<_>>();
+            let unit = cosine_unit(&query);
+
+            // All 513 rows (two full pages plus a one-row tail) in one range, ranked
+            // completely and compared with the scalar reference in literal order.
+            reads.lock().unwrap().clear();
+            let (result, trace) = generation
+                .diagnostic_direct_closure_search_with_store(&tiny.store, &query, rows, dlimits)
+                .await
+                .unwrap();
+            let recorded = reads.lock().unwrap().clone();
+            assert_eq!(
+                recorded,
+                vec![(
+                    tiny.key.to_string(),
+                    false,
+                    0..object_bytes as u64,
+                    Some(tiny.etag.clone())
+                )]
+            );
+            assert!(recorded.iter().all(|(path, _, _, _)| {
+                !path.ends_with("/plane/records.bin") && !path.ends_with("/router/leaves.bin")
+            }));
+            assert_eq!(result.plan.selected_pages, vec![0, 1, 2]);
+            assert_eq!(result.plan.ranges, vec![0..object_bytes]);
+            assert_eq!(result.plan.planned_bytes, object_bytes);
+            assert_eq!(
+                result.ranked.stats,
+                Sq8ReadStats {
+                    submitted_gets: 1,
+                    verified_bytes: object_bytes,
+                    failed_gets: 0
+                }
+            );
+            assert_eq!(result.source_stats, Sq8ReadStats::default());
+            assert_eq!(result.router_stats, Sq8ReadStats::default());
+            assert!(result.source_nomination_skipped);
+            assert_eq!(trace.semantic_leaves, vec![0]);
+            assert_eq!(trace.semantic_units, (0..17).collect::<Vec<_>>());
+            assert!(trace.semantic_seed_additions.is_empty());
+            let oracle = scalar_rank(&tiny.sq8, dimensions, 0..rows, &unit, &tiny.low, &tiny.step);
+            assert_eq!(result.ranked.candidates.len(), rows);
+            assert_hits_match(&result.ranked.candidates, &oracle);
+            assert_geometry_agrees(&tiny.sq8, dimensions, &oracle, &unit, &tiny.low, &tiny.step);
+            assert!(oracle.iter().any(|r| r.0 == rows - 1));
+            assert!(has_id_tie_against_ordinal_order(&oracle));
+            assert!(
+                tiny.sq8
+                    .chunks_exact(row_bytes)
+                    .all(|row| row[12..].iter().all(|&c| c > 0))
+            );
+            let top50 = generation
+                .direct_closure_search_with_store(&tiny.store, &query, 50, None, dlimits)
+                .await
+                .unwrap();
+            assert_hits_match(&top50.ranked.candidates, &oracle);
+            assert_eq!(top50.ranked.candidates.len(), 50);
+
+            // Exclusions keep the rest of the ranking; the roster fits the pinned bytes.
+            let mut excluded = oracle[..2].iter().map(|r| r.1).collect::<Vec<_>>();
+            excluded.sort_unstable();
+            let filtered = generation
+                .direct_closure_search_with_store(
+                    &tiny.store,
+                    &query,
+                    rows,
+                    Some(&excluded),
+                    dlimits,
+                )
+                .await
+                .unwrap();
+            let visible = oracle
+                .iter()
+                .filter(|r| !excluded.contains(&r.1))
+                .copied()
+                .collect::<Vec<_>>();
+            assert_eq!(filtered.ranked.candidates.len(), rows - 2);
+            assert_hits_match(&filtered.ranked.candidates, &visible);
+
+            // Admission failures: no request, no slot left held, no resource reason.
+            let permits = generation.slots.available_permits();
+            assert_eq!(permits, 1);
+            let limits_zero_bytes = DirectClosureLimits {
+                max_sq8_bytes: 0,
+                ..dlimits
+            };
+            let limits_zero_gets = DirectClosureLimits {
+                max_sq8_gets: 0,
+                ..dlimits
+            };
+            let limits_overflow = DirectClosureLimits {
+                max_sq8_bytes: usize::MAX,
+                ..dlimits
+            };
+            let mut wrong = query.clone();
+            wrong.pop();
+            let mut wide = query.clone();
+            wide.push(1.);
+            let zero = vec![0_f32; dimensions];
+            let mut nan = query.clone();
+            nan[1] = f32::NAN;
+            let mut inf = query.clone();
+            inf[2] = f32::INFINITY;
+            let huge = vec![1_f32; 1 << 20];
+            let cases: Vec<(&str, Vec<f32>, usize, DirectClosureLimits, bool)> = vec![
+                ("short", wrong, 10, dlimits, false),
+                ("wide", wide, 10, dlimits, false),
+                ("huge", huge, 10, dlimits, false),
+                ("top_k_zero", query.clone(), 0, dlimits, false),
+                (
+                    "top_k_rows_plus_one",
+                    query.clone(),
+                    rows + 1,
+                    dlimits,
+                    false,
+                ),
+                ("zero_bytes", query.clone(), 10, limits_zero_bytes, false),
+                ("zero_gets", query.clone(), 10, limits_zero_gets, false),
+                ("overflow", query.clone(), 10, limits_overflow, false),
+                ("zero_query", zero, 10, dlimits, false),
+                ("nan_query", nan, 10, dlimits, false),
+                ("inf_query", inf, 10, dlimits, false),
+            ];
+            for (name, bad, k, bad_limits, after_slot) in cases {
+                reads.lock().unwrap().clear();
+                let error = generation
+                    .direct_closure_search_with_store(&tiny.store, &bad, k, None, bad_limits)
+                    .await
+                    .err()
+                    .unwrap();
+                assert!(reads.lock().unwrap().is_empty(), "{name}");
+                assert_eq!(generation.slots.available_permits(), 1, "{name}");
+                assert_eq!(error.direct_resource_rejection(), None, "{name}");
+                assert_eq!(error.stages().is_some(), after_slot, "{name}: {error:?}");
+                assert_eq!(
+                    error.read_stats(),
+                    (Sq8ReadStats::default(), Sq8ReadStats::default())
+                );
+                // Every malformed input is refused during allocation-free admission.
+                assert!(
+                    matches!(
+                        error,
+                        TwoBitGenerationError::Invalid(_) | TwoBitGenerationError::Plane(_)
+                    ),
+                    "{name}: {error:?}"
+                );
+            }
+            // Trace scratch is checked before any allocation, only for diagnostic calls.
+            let scratch = generation.limits.max_query_scratch_bytes;
+            generation.limits.max_query_scratch_bytes = TwoBitPlanTrace::scratch_bytes(rows) - 1;
+            let error = generation
+                .diagnostic_direct_closure_search_with_store(&tiny.store, &query, 10, dlimits)
+                .await
+                .err()
+                .unwrap();
+            assert!(matches!(
+                error,
+                TwoBitGenerationError::Invalid("diagnostic scratch")
+            ));
+            assert!(reads.lock().unwrap().is_empty());
+            generation
+                .direct_closure_search_with_store(&tiny.store, &query, 10, None, dlimits)
+                .await
+                .unwrap();
+            generation.limits.max_query_scratch_bytes = scratch;
+            // Memory cap minus one and planned-byte cap minus one are machine-readable.
+            let memory = generation.direct_closure_memory(dlimits).unwrap();
+            generation.limits.max_memory_bytes = memory.total_bytes - 1;
+            reads.lock().unwrap().clear();
+            // Input validity precedes resource classification: with the cap one byte short,
+            // each malformed input is still a non-resource error with zero I/O.
+            let mut short_query = query.clone();
+            short_query.pop();
+            let mut nan_query = query.clone();
+            nan_query[1] = f32::NAN;
+            let mut inf_query = query.clone();
+            inf_query[2] = f32::NEG_INFINITY;
+            let malformed: Vec<(&str, Vec<f32>, usize)> = vec![
+                ("short", short_query, 10),
+                ("zero", vec![0_f32; dimensions], 10),
+                ("nan", nan_query, 10),
+                ("neg_inf", inf_query, 10),
+                ("top_k_zero", query.clone(), 0),
+                ("top_k_rows_plus_one", query.clone(), rows + 1),
+            ];
+            for (name, bad, k) in malformed {
+                let error = generation
+                    .direct_closure_search_with_store(&tiny.store, &bad, k, None, dlimits)
+                    .await
+                    .err()
+                    .unwrap();
+                assert_eq!(error.direct_resource_rejection(), None, "{name}: {error:?}");
+                assert!(reads.lock().unwrap().is_empty(), "{name}");
+                assert_eq!(generation.slots.available_permits(), 1, "{name}");
+            }
+            let error = generation
+                .direct_closure_search_with_store(&tiny.store, &query, 10, None, dlimits)
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(
+                error.direct_resource_rejection(),
+                Some(DirectClosureRejection::ModeledMemory)
+            );
+            assert!(reads.lock().unwrap().is_empty());
+            generation.limits.max_memory_bytes = memory.total_bytes;
+            generation
+                .direct_closure_search_with_store(&tiny.store, &query, 10, None, dlimits)
+                .await
+                .unwrap();
+            reads.lock().unwrap().clear();
+            let error = generation
+                .direct_closure_search_with_store(
+                    &tiny.store,
+                    &query,
+                    10,
+                    None,
+                    DirectClosureLimits {
+                        max_sq8_bytes: object_bytes - 1,
+                        ..dlimits
+                    },
+                )
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(
+                error.direct_resource_rejection(),
+                Some(DirectClosureRejection::PlannedBytes)
+            );
+            assert!(reads.lock().unwrap().is_empty());
+
+            // Authenticated response failures keep their charge and release the slot.
+            let failed = Sq8ReadStats {
+                submitted_gets: 1,
+                verified_bytes: 0,
+                failed_gets: 1,
+            };
+            for fault in [
+                "precondition",
+                "etag",
+                "size",
+                "range",
+                "corrupt",
+                "short",
+                "long",
+            ] {
+                *tiny.store.fault.lock().unwrap() = fault;
+                let error = generation
+                    .direct_closure_search_with_store(&tiny.store, &query, 10, None, dlimits)
+                    .await
+                    .err()
+                    .unwrap();
+                let TwoBitGenerationError::Query { error: inner, .. } = &error else {
+                    panic!("{fault}: {error:?}");
+                };
+                let TwoBitGenerationError::Read(failure) = inner.as_ref() else {
+                    panic!("{fault}: {inner:?}");
+                };
+                match fault {
+                    "precondition" => assert!(matches!(failure.error, DirectFetchError::Store(_))),
+                    "corrupt" | "short" => {
+                        assert!(matches!(failure.error, DirectFetchError::Page(_)))
+                    }
+                    _ => assert!(
+                        matches!(failure.error, DirectFetchError::UnexpectedMetadata),
+                        "{fault}: {failure:?}"
+                    ),
+                }
+                assert_eq!(
+                    error.read_stats(),
+                    (Sq8ReadStats::default(), failed),
+                    "{fault}"
+                );
+                assert_eq!(error.router_stats(), Sq8ReadStats::default());
+                assert_eq!(error.direct_resource_rejection(), None);
+                assert_eq!(generation.slots.available_permits(), 1, "{fault}");
+            }
+            *tiny.store.fault.lock().unwrap() = "ok";
+            let healthy = generation
+                .direct_closure_search_with_store(&tiny.store, &query, 10, None, dlimits)
+                .await
+                .unwrap();
+            assert_hits_match(&healthy.ranked.candidates, &oracle);
+
+            // The root is authenticated before any direct query can exist.
+            let mut bad_root = tiny.root_sha.clone();
+            bad_root.replace_range(..1, if bad_root.starts_with('0') { "1" } else { "0" });
+            assert!(
+                TwoBitGeneration::open_remote(
+                    &tiny.store,
+                    &tiny.prefix,
+                    &bad_root,
+                    tiny.limits,
+                    tiny.temp.path(),
+                )
+                .await
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn direct_closure_rejects_graph_discovery_before_any_io() {
+        use sha2::{Digest, Sha256};
+        let hash = |body: &[u8]| format!("{:x}", Sha256::digest(body));
+        let (rows, dimensions) = (513, 2);
+        let temp = tempfile::tempdir().unwrap();
+        let raw = (0..rows)
+            .flat_map(|id| {
+                (0..dimensions)
+                    .map(move |d| match d {
+                        0 => 1.0_f32 + (id % 7) as f32 * 0.2,
+                        _ => 0.1 + (id % 11) as f32 * 0.1,
+                    })
+                    .flat_map(f32::to_le_bytes)
+            })
+            .collect::<Vec<_>>();
+        let sq8 = (0..rows)
+            .flat_map(|id| {
+                let mut record = (id as i64).to_le_bytes().to_vec();
+                record.extend_from_slice(&5_f32.to_le_bytes());
+                record.extend((0..dimensions).map(|d| (d + 1) as u8));
+                record
+            })
+            .collect::<Vec<_>>();
+        let raw_path = temp.path().join("raw");
+        let sq8_path = temp.path().join("sq8");
+        fs::write(&raw_path, &raw).unwrap();
+        fs::write(&sq8_path, &sq8).unwrap();
+        let sq8_sha = hash(&sq8);
+        let key = format!("tenant/objects/{sq8_sha}");
+        let root = temp.path().join("generation");
+        let root_sha = crate::two_bit_build::TwoBitGenerationBuilder {
+            source: crate::two_bit_source::TwoBitSource {
+                raw: &raw_path,
+                raw_sha256: &hash(&raw),
+                sq8: &sq8_path,
+                sq8_sha256: &sq8_sha,
+                rows,
+                dimensions,
+            },
+            base_epoch: 0,
+            generation: 7,
+            low: &vec![0.0; dimensions],
+            step: &vec![1.0; dimensions],
+            sq8_object_key: &key,
+            sq8_etag: "etag",
+        }
+        .build(&root, 256_000_000)
+        .unwrap();
+        let limits = TwoBitGenerationLimits {
+            max_memory_bytes: 256_000_000,
+            max_active_queries: 1,
+            max_query_bytes: rows * (dimensions + 12),
+            max_query_gets: 32,
+            max_parallel_gets: 2,
+            max_source_bytes: 64 * 1024 * 1024,
+            max_source_gets: 128,
+            max_parallel_source_gets: 2,
+            max_query_scratch_bytes: 400_000,
+            already_pinned_bytes: 0,
+        };
+        let generation = TwoBitGeneration::open(&root, &root_sha, limits).unwrap();
+        assert_eq!(generation.discovery_mode(), DiscoveryMode::Graph);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        // An absent store proves no I/O could have been needed or attempted.
+        let error = runtime
+            .block_on(generation.direct_closure_search_with_store(
+                &object_store::memory::InMemory::new(),
+                &[1., 0.],
+                1,
+                None,
+                DirectClosureLimits {
+                    max_sq8_bytes: rows * (dimensions + 12),
+                    max_sq8_gets: 2,
+                },
+            ))
+            .err()
+            .unwrap();
+        assert!(matches!(
+            error,
+            TwoBitGenerationError::Invalid("direct closure requires semantic discovery")
+        ));
+        assert_eq!(error.direct_resource_rejection(), None);
     }
 }

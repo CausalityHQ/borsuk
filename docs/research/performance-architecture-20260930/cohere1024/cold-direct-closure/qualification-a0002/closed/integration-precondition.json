@@ -1,0 +1,11 @@
+{
+  "status": "INTEGRATION_PRECONDITION_ONLY_NOT_INTEGRATED",
+  "current_main": "aa095833445feeffd3accb43e9c68420b2ce9e99",
+  "qualified_candidate_pending": "2fb771bdb31f9490a3341bdbfa2b4ad510cfb487",
+  "native_delta": [
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+    "crates/borsuk/src/two_bit_generation.rs"
+  ],
+  "all_other_423_native_blobs_equal": true,
+  "qualification_required": true
+}
