@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-direct-closure-native-admission-closed-v1",
+  "instance_id": "i-0be614b9c2b3b60e5",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 0,
+  "binary_source_commit": "2fb771bdb31f9490a3341bdbfa2b4ad510cfb487",
+  "integration_commit": "290958155bcc11bf4b6c90d1fd95a6692f389b09",
+  "qualified_source_identity_sha256": "4d04840e2db4487f9e77ef57e5eadef42684ab3d354c1a51c2adc20a8c3474e9",
+  "evidence": {
+    "bytes": 2206914,
+    "sha256": "f6203a327ccce1089997a20d5d6f546b8c451f9e3b80dbe9745faae20f12a13f"
+  },
+  "terminal_delivery": "attempted",
+  "performance_claim": false
+}
