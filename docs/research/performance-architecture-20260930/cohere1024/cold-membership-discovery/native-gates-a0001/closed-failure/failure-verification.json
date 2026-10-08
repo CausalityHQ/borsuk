@@ -1,0 +1,16 @@
+{
+  "status": "EXECUTION_INVALID_TEST_FIXTURE",
+  "native_qualified": false,
+  "performance_claim": false,
+  "instance_id": "i-0347ca89de904bebc",
+  "terminated": true,
+  "source_commit": "b3262938bda351e8c71cd37d24c05cc3e508e7db",
+  "candidate_commit": "d9a0aa7ceffb005b5660cee7b0061f7278d4b4c2",
+  "evidence_sha256": "57689ec7f78e11ae3ff8668f8f4e1cf898c9ca195f3cb1f10cbf053043ee6e74",
+  "failed_stage": "affected-compile",
+  "stage_native_exit": "101",
+  "remaining_stages": "UNRUN",
+  "cause": "E0063 test-only SemanticUnitRouter initializer missing leaf_offsets and leaf_units",
+  "repair_message": "1791427680011008251-2965865",
+  "algorithm_rejected": false
+}

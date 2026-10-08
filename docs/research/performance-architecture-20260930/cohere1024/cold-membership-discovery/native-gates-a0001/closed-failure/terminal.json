@@ -1,0 +1,21 @@
+{
+  "schema": "borsuk-cold-membership-native-gates-v1",
+  "instance_id": "i-0347ca89de904bebc",
+  "phase": "native",
+  "original_exit": 1,
+  "exit": 1,
+  "native_exit": 1,
+  "source_commit": "b3262938bda351e8c71cd37d24c05cc3e508e7db",
+  "candidate_commit": "d9a0aa7ceffb005b5660cee7b0061f7278d4b4c2",
+  "native_source_file_count": 415,
+  "native_source_identity_sha256": "844234a8eece7de59134d9f14bae9cc55291513c45f6d565f061f838d10ef677",
+  "source_archive_sha256": "2a7df38a823316b01e6be2870b2099a5333f6525b3c0e9d3e75604ef993898ee",
+  "resolved_lock_sha256": "null",
+  "resolved_source_map_sha256": "null",
+  "source_identity_scope": "exact immutable full source; no lock mutation admitted",
+  "evidence": {
+    "bytes": 236887,
+    "sha256": "57689ec7f78e11ae3ff8668f8f4e1cf898c9ca195f3cb1f10cbf053043ee6e74"
+  },
+  "performance_claim": false
+}
