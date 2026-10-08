@@ -1,0 +1,69 @@
+{
+  "schema": "borsuk-native-s3-query-canary-preregistration-v1",
+  "status": "FROZEN_NATIVE_REDUCTION_AND_CANARY_NOT_LAUNCHED",
+  "maximum_attempts": 1,
+  "binary_source_commit": "31eca73431901c193aff598f4c6e44d3540594da",
+  "binary_sha256": "628f93148d767b7fc456e566139788d67cf98e323ec66ef4e6ebe10ef330e82b",
+  "stage_sha256": "235212cd9848d3b43d743d7207835b5b5feb8035323eff31b9b47dc9e1b3d388",
+  "config_sha256": "a3b8b1f37feb4ff7a812b70ef8b2dff548c93d8eb7639175195338c60e2c0228",
+  "invoked_config_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "native_expected_exit": 2,
+  "canary_expected_exit": 0,
+  "resources": {
+    "cpu": 1,
+    "memory_bytes": 536870912,
+    "swap_bytes": 0,
+    "pids": 256,
+    "native_seconds": 240,
+    "inner_seconds": 90,
+    "machine_seconds": 1800,
+    "scratch_bytes": 67108864
+  },
+  "cost_reservation": {
+    "compute_usd": 0.25,
+    "ancillary_usd": 0.15,
+    "total_usd": 0.4
+  },
+  "real_operations": [
+    "AWSCLI installation/IMDS credentials and staged binary/config/stage plus opaque request/truth transfers; full SHA checks, no native request/truth opening",
+    "runtime cgroup before-exec/readback",
+    "qualified runner CLI/config-SHA refusal",
+    "original exit2 and exact INVALID config/zero-query/zero-GET/truth-unopened receipt",
+    "scratch/pin cleanup, publication, same-instance termination/wait/collection"
+  ],
+  "not_exercised": [
+    "native IMDS/store creation; config refuses before backend construction",
+    "ANN query/scoring or GT decode",
+    "performance/recall/cost comparison"
+  ],
+  "claims_quality": false,
+  "failure_policy": "Expected SHA refusal alone is GO canary; unexpected native0/other failure, malformed output, nonzero queries/GET/truth-open, resource or cleanup drift INVALID. Preserve original and stop; no automatic repeat.",
+  "userdata_sha256": "d275ad54e5b877d18f9c9e403243ebd919693f7bc1a1da294a84c70c9434289f",
+  "prior_admission": {
+    "status": "CLOSED_NATIVE_RUNTIME_VERIFIED",
+    "receipt_sha256": "b4a789fa2d57c396c0362c867ca609b32e463382bdc88926462b517d5fcaa8a7",
+    "instance_terminated": true,
+    "native_semantic_validation": "First stage of this disposable verification host; failure blocks canary CLI. Formal cross-width parity remains pending."
+  },
+  "mock_checks": {
+    "stage-check.json": "65e914b84f0e59aeb3c86cfff21f226b1a2e22866af8e54dd4246cd44a75501a",
+    "wrapper-check.json": "85278ffaeec39b16cc834c25d8262f90b5814988f7f283cea5fd64dc4d9fab93"
+  },
+  "mock_check_resources": {
+    "unit": "borsuk-cold-canary-reduction-check-1",
+    "invocation": "38521cfe0b124dda86ea17b18ad66c69",
+    "exit": 0,
+    "cpu": 1,
+    "memory_max_bytes": 268435456,
+    "swap_max_bytes": 0,
+    "runtime_seconds": 23.478,
+    "peak": "17.2MiB"
+  },
+  "reduction_config_sha256": "89f7e831cdd648bd0316dea66aef637826c7c35545ee1343f12509a0de5f0d19",
+  "reducer_binary": {
+    "bytes": 1164808,
+    "sha256": "9ad7ce0fe8f461a3b8f7957812c798103f234a83d1df6748d5f04cb870c4694b"
+  },
+  "reduction_policy": "Qualified Rust completed-v2 validates independently pinned identity/inputs, full1000 seal, terminal and semantic rows before expected CLI refusal. Formal16/32 ordered-result/trace/charge parity remains a later mandatory gate; no timing/width decision from admission.",
+  "frozen_at": "2026-10-08T01:00:22.946876+00:00"
+}

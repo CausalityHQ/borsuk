@@ -1,0 +1,50 @@
+{
+  "status": "PASS",
+  "source_sha256": "235212cd9848d3b43d743d7207835b5b5feb8035323eff31b9b47dc9e1b3d388",
+  "cases": [
+    {
+      "case": "expected-refusal",
+      "exit": 0
+    },
+    {
+      "case": "unexpected-success",
+      "exit": 96
+    },
+    {
+      "case": "wrong-error",
+      "exit": 96
+    },
+    {
+      "case": "nonzero-query",
+      "exit": 96
+    },
+    {
+      "case": "scratch-leak",
+      "exit": 96
+    },
+    {
+      "case": "pin-change",
+      "exit": 96
+    },
+    {
+      "case": "bad-cap",
+      "exit": 1
+    },
+    {
+      "case": "reducer-fail",
+      "exit": 17
+    }
+  ],
+  "real": [
+    "shell stage",
+    "time/timeout",
+    "jq exact invalid/zero-query receipt check",
+    "pin rehash",
+    "scratch cleanup refusal"
+  ],
+  "mocked": [
+    "cgroup contents",
+    "Rust runner"
+  ],
+  "native_runtime_pass": false
+}
