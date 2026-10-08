@@ -1,0 +1,24 @@
+{
+  "status": "PASS_BOUNDED_SOURCE_AND_STAGING_CANARY",
+  "candidate": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "native_identity": "a7fe9601a9345da69223d75bf8fb6a765d1607c1f02b144e8e8763c90b0b2e8b",
+  "control_native_identity": "79ce83fe95557668591ea4e7193f651522b309569cd7988c9aeae56aac5f7b88",
+  "native_count": 415,
+  "support_count": 2454,
+  "stages": 1,
+  "real": [
+    "all exact archive/source/input pins",
+    "source-body admission",
+    "control two-file substitution and unchanged candidate",
+    "Bash syntax",
+    "missing marker refusal",
+    "prior13-stage completion and control-build INVALID pins"
+  ],
+  "mocked": [
+    "actual isolated-control compiler-artifact selector positive and eight provenance refusals; no copying before complete admission"
+  ],
+  "native_Cargo_rustc_execution": false,
+  "AWS": false,
+  "performance_claim": false,
+  "primitive_allowed": false
+}

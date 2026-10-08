@@ -1,0 +1,147 @@
+{
+  "status": "FROZEN_REVIEWED_ADMITTED_NATIVE_QUALIFICATION_ONLY",
+  "candidate": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "prefix": "research/semantic-router/20261008/cold-two-bit-four-row-control-build-a0001",
+  "source": {
+    "status": "SOURCE_BUNDLE_ONLY_NO_LAUNCH",
+    "candidate": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+    "file_count": 2454,
+    "native_file_count": 415,
+    "native_identity": "a7fe9601a9345da69223d75bf8fb6a765d1607c1f02b144e8e8763c90b0b2e8b",
+    "archive_bytes": 13243516,
+    "archive_sha256": "3cddd9eb0d2f079765522536f1e7eea88ee0dfc660af8d9ae8eacecd613ba6d8",
+    "control": {
+      "library_source": "c49a2e6d2a035bfaf42358fbf7fb60abf11e4222",
+      "native_identity": "79ce83fe95557668591ea4e7193f651522b309569cd7988c9aeae56aac5f7b88",
+      "derivation": "exact candidate archive with only the two library files replaced by authenticated c49a2e6d blobs; identical repaired runner and other native/support bytes",
+      "native_delta_paths": [
+        "crates/borsuk/src/rotated_two_bit.rs",
+        "crates/borsuk/src/two_bit_generation.rs"
+      ]
+    },
+    "changed_native_paths": [
+      "crates/borsuk/src/rotated_two_bit.rs",
+      "crates/borsuk/src/two_bit_generation.rs",
+      "crates/borsuk/src/bin/check_cohere_native_baseline.rs"
+    ],
+    "performance_claim": false
+  },
+  "inputs": {
+    "source-files.sha256": {
+      "bytes": 278704,
+      "sha256": "6de0a946b84c3dca699516af4558c054d8a085a5a2b88b0185ae0b786403e1bd"
+    },
+    "native-source.json": {
+      "bytes": 47205,
+      "sha256": "15c1886154ad86a793c77aeec0a17a4bf72562452c75482ed784b7f13c974a35"
+    },
+    "mandatory-tests.json": {
+      "bytes": 3,
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    "gates.sh": {
+      "bytes": 4466,
+      "sha256": "98010ed4b21560649ffb76f5355bd45adc329b6646623f94c9cf94159af309d5"
+    },
+    "select-probe.py": {
+      "bytes": 2027,
+      "sha256": "a618fdc1ceb505f6383925c3fac6178b4e9247ba34aeea450eacc8f19447a736"
+    },
+    "control-source-files.sha256": {
+      "bytes": 278704,
+      "sha256": "7a4a9a6c7b3c9f08c9bb92247513a65159a4dcd8ed5a829ffa49c22a41b0ab71"
+    },
+    "control-native-source.json": {
+      "bytes": 47205,
+      "sha256": "dab6248e7b8e18b0c411e0f1fdecd817cef205cf24a58de6e4d5aa77f832c7af"
+    },
+    "control-rotated_two_bit.rs": {
+      "bytes": 13999,
+      "sha256": "eddf88c6c8ee23a732751f49291293f1cc081545ebb9a21c149eb757aa5c38ec"
+    },
+    "control-two_bit_generation.rs": {
+      "bytes": 261849,
+      "sha256": "194115d67776ad9f620a704b8cb98beda16b4d879019c390b2a0d4a6901003e4"
+    },
+    "select-scalar-control.py": {
+      "bytes": 977,
+      "sha256": "a7df2923260d2e0f01e22997dada16508d0dbd798ba2d30d0614003feb8244f2"
+    }
+  },
+  "userdata": {
+    "bytes": 10206,
+    "sha256": "832bfdaaed22f2fadba481f39a9b64f77170e3440bb3bda3ef01a6bae321d06f"
+  },
+  "machine_seconds": 9000,
+  "build_seconds": 7200,
+  "build_memory_bytes": 8589934592,
+  "build_cpu": 2,
+  "build_jobs": 1,
+  "swap": 0,
+  "pids": 512,
+  "compute_reservation_usd": 1.5,
+  "ancillary_reservation_usd": 0.15,
+  "ebs_gib": 80,
+  "spot_bid_max_usd_per_hour": 0.5,
+  "serial_stages": [
+    {
+      "name": "control-release",
+      "argv": [
+        "env",
+        "CARGO_TARGET_DIR=/mnt/borsuk-http/target-control-isolated",
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "--manifest-path",
+        "/mnt/borsuk-http/control-source/Cargo.toml",
+        "-p",
+        "borsuk",
+        "--bin",
+        "check_cohere_native_baseline",
+        "--example",
+        "two_bit_http",
+        "--message-format=json"
+      ]
+    }
+  ],
+  "retained_roles": [
+    "control-check_cohere_native_baseline",
+    "control-two_bit_http"
+  ],
+  "matched_profile": "candidate and c49-library control share identical repaired runner, all other bytes, default release profile, explicit empty Rust flags, toolchain, dependencies and captured Cargo configuration admission; separate immutable copied serving artifacts",
+  "scratch": {
+    "codec": 532480,
+    "batch": 512,
+    "trace": "TwoBitPlanTrace::scratch_bytes(rows)"
+  },
+  "previous_review": "f9b98d02852a459f; unchanged SIMD kernel/dependencies; root additionally reviewed 04944 narrow runner/cfg(test) delta",
+  "primitive_run": false,
+  "cold_run": false,
+  "native_ANN_corpus_query_truth": false,
+  "source_admission": "PASS_BOUNDED_SOURCE_AND_STAGING_CANARY",
+  "staging_canary": "PASS_BOUNDED_SOURCE_AND_STAGING_CANARY",
+  "paid_launch_authorized": true,
+  "production_stack_qualified": false,
+  "performance_claim": false,
+  "interruption": "execution INVALID, preserve terminal, terminate/wait, no automatic replacement",
+  "availability_zone": "eu-central-1c",
+  "subnet_id": "subnet-0a12dbed0ca6fac25",
+  "retry_reason": "Demonstrated shared-target build reuse; fresh isolated control-only output, unchanged algorithm/profile/resources.",
+  "repair_of": {
+    "commit": "39ec911b93dec90c9a62c47d81cd6e4e5a01511c",
+    "attempt": "qualification-a0004",
+    "receipt_sha256": "82ffdadf3cc0edf0eef6f90300d65640553ae1a0da045821bf8ad09bef6ea1b9"
+  },
+  "scope": "One isolated control serving build; previously passed candidate tests/Clippy/testbuild are not repeated. No native ANN, primitive or performance execution.",
+  "control_target": "/mnt/borsuk-http/target-control-isolated",
+  "expected_serving_roles": [
+    "control-check_cohere_native_baseline",
+    "control-two_bit_http"
+  ],
+  "candidate_correctness_receipt": {
+    "path": "/data/target/borsuk-cold-membership-native/two-bit-four-row-qualification-a0004/independent-verification.json",
+    "bytes": 4293,
+    "sha256": "29ebccf8e7db82c0bdf9ede1a7181070fb852a9317a9506132398fc72005d3c4"
+  }
+}
