@@ -1,0 +1,18 @@
+{
+  "status": "TEST_ONLY_REPAIR_SOURCE_VERIFIED_NATIVE_UNRUN",
+  "commit": "2fb771bdb31f9490a3341bdbfa2b4ad510cfb487",
+  "parent": "92102c7d03a485bd33e1eac1e27cb4f64fb7c09e",
+  "changed_only": "crates/borsuk/src/two_bit_generation.rs",
+  "production_prefix_byte_identical": true,
+  "query_norm": 3.6742346141747673,
+  "prototype_squared_distances": [
+    1.3195861825602284,
+    1.4556689460481826,
+    1.5917517095361369,
+    1.7278344730240913
+  ],
+  "boundary_cutoff": 1.6740192879554099,
+  "expected_selected_leaves": 12,
+  "expected_leaf_units": 768,
+  "native_run": false
+}

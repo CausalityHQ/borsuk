@@ -1,0 +1,9 @@
+{
+  "retrieved_at": "2026-10-08T21:28:59Z",
+  "availability_zone": "eu-central-1c",
+  "instance_type": "c7i.2xlarge",
+  "spot_usd_per_hour": "0.205600",
+  "compute_cap_usd": 1.5,
+  "ancillary_cap_usd": 0.15,
+  "no_overlapping_borsuk_instances": true
+}

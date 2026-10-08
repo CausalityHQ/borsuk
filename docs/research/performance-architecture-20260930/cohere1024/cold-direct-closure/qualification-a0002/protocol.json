@@ -1,0 +1,91 @@
+{
+  "status": "FROZEN_SOURCE_REVIEWED_COMPILE_ONLY",
+  "paid_launch_authorized": true,
+  "ann_run": false,
+  "performance_claim": false,
+  "quality_claim": false,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "prefix": "research/semantic-router/20261008/cold-direct-closure-qualification-a0002",
+  "source": {
+    "status": "SOURCE_BUNDLE_ONLY_NOT_LAUNCHED",
+    "candidate": "2fb771bdb31f9490a3341bdbfa2b4ad510cfb487",
+    "file_count": 2464,
+    "native_file_count": 425,
+    "native_identity": "4d04840e2db4487f9e77ef57e5eadef42684ab3d354c1a51c2adc20a8c3474e9",
+    "archive_bytes": 13538735,
+    "archive_sha256": "477466d874c82faf67710f436fdddbea2b603b83387e49898381238bb0585c17",
+    "ann_run": false,
+    "performance_claim": false
+  },
+  "inputs": {
+    "source-files.sha256": {
+      "bytes": 280779,
+      "sha256": "025fed5f6758ece0adeafbbb114c54f7f5cd695d8b72ac7400fe4d0f23310358"
+    },
+    "native-source.json": {
+      "bytes": 49350,
+      "sha256": "00a1805e3d44343b727cfff8f5c30c17d7e86d3f3ab991bd5678045289dae16b"
+    },
+    "mandatory-tests.json": {
+      "bytes": 980,
+      "sha256": "fa8325c6d0d5ce1cdbdbe56801e598478cceeef8db356ffc54331838c69fd395"
+    },
+    "expected-test-inventory.json": {
+      "bytes": 3873,
+      "sha256": "c0fc48e30af66bd8593aa2e11ec2992ac2e83d3ba6f8004a0b05af4926c4a0e6"
+    },
+    "candidate-contract.json": {
+      "bytes": 35919,
+      "sha256": "7853daa71854544a6df33e86a8d5639996c8551baafc7a5a3aad2c0fbc4cb949"
+    },
+    "gates.sh": {
+      "bytes": 3576,
+      "sha256": "b8040c942e1ff806d77366241132104b79ea8fc29157b88e8c3cf1d5efcdd7bd"
+    }
+  },
+  "userdata": {
+    "bytes": 7779,
+    "sha256": "99b741b62ea759c1746e9a593f8399bceaff01f4a17d498d7c339aeaae2b28ea"
+  },
+  "build_seconds": 7200,
+  "gate_unit_seconds": 7440,
+  "machine_seconds": 9000,
+  "build_memory_bytes": 8589934592,
+  "build_cpu": 2,
+  "build_jobs": 1,
+  "swap": 0,
+  "pids": 512,
+  "compute_cap_usd": 1.5,
+  "ancillary_cap_usd": 0.15,
+  "ebs_gib": 80,
+  "mandatory_stages": [
+    "failing-layer",
+    "affected-lib",
+    "affected-bin",
+    "release",
+    "clippy",
+    "test-build"
+  ],
+  "inventory_stages": [
+    "lib-inventory",
+    "bin-inventory"
+  ],
+  "expected_test_counts": {
+    "lib": 26,
+    "bin": 13
+  },
+  "new_test_counts": {
+    "lib": 6,
+    "bin": 3
+  },
+  "spot_interruption": "discard incomplete qualification, preserve terminal/infrastructure evidence, no automatic duplicate launch",
+  "failure_policy": "compiler/setup INVALID; no recall/performance inference; repair SAME worker and record distinct attempt",
+  "source_code_integration": "only after native affected/release/Clippy/real test-build exits0",
+  "prior_failed_attempt": {
+    "source": "92102c7d03a485bd33e1eac1e27cb4f64fb7c09e",
+    "instance_id": "i-0f0f5b43b381d7af7",
+    "terminated": true,
+    "disposition": "CLOSED_FIXTURE_ASSERTION_FAILURE",
+    "repair": "test-only expected12leaves/768units; production byte-identical"
+  }
+}
