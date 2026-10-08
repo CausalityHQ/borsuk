@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-two-bit-four-row-compile-v1",
+  "instance_id": "i-011463724a641a73b",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 0,
+  "source_commit": "896d0423b8d1a904ba729f6714bf658d9a216486",
+  "candidate_commit": "896d0423b8d1a904ba729f6714bf658d9a216486",
+  "native_source_file_count": 415,
+  "native_source_identity_sha256": "80824b428624dc7d496993998c63f953f26483e75df2adb884e02ccab4b4c532",
+  "source_archive_sha256": "17969c5409da9920f3fd2e259d66f8a779a2995ffc3b6e80b1adbed08b9088bd",
+  "resolved_lock_sha256": "null",
+  "resolved_source_map_sha256": "null",
+  "source_identity_scope": "exact immutable full source; no lock mutation admitted",
+  "evidence": {
+    "bytes": 2459079,
+    "sha256": "2c53e23415079f36736bc64d2bc431d03561ba78688fb2e576563e4b97bd43e5"
+  },
+  "scope": "compile and bounded synthetic correctness only; primitive NOT_RUN; full qualification pending",
+  "performance_claim": false
+}

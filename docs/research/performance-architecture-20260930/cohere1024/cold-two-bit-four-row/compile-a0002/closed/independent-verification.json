@@ -1,0 +1,65 @@
+{
+  "status": "COMPILE_AND_SYNTHETIC_CORRECTNESS_VERIFIED_CODEGEN_PENDING",
+  "candidate": "896d0423b8d1a904ba729f6714bf658d9a216486",
+  "instance_id": "i-011463724a641a73b",
+  "native_file_count": 415,
+  "support_file_count": 2452,
+  "native_identity": "80824b428624dc7d496993998c63f953f26483e75df2adb884e02ccab4b4c532",
+  "full_source_before_after_equal": true,
+  "artifact_count": 86,
+  "stages": [
+    {
+      "name": "codec-debug",
+      "command": "cargo test --locked -p borsuk --lib rotated_two_bit::tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 4
+    },
+    {
+      "name": "planner-debug",
+      "command": "cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 8
+    },
+    {
+      "name": "codec-release",
+      "command": "cargo test --locked --release -p borsuk --lib rotated_two_bit::tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 4
+    },
+    {
+      "name": "planner-release",
+      "command": "cargo test --locked --release -p borsuk --lib two_bit_generation::source_walk_tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 8
+    },
+    {
+      "name": "integration",
+      "command": "cargo test --locked -p borsuk --test rotated_two_bit --test two_bit_source --test two_bit_generation -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 0
+    },
+    {
+      "name": "probe-compile",
+      "command": "cargo test --locked --release -p borsuk --lib --no-run --message-format=json",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 0
+    }
+  ],
+  "release_elf": {
+    "role": "probe-libtest",
+    "bytes": 88760048,
+    "sha256": "bbfa40b5cc2daca732fb0de19d87a059982ec11fd3fa41add19a7c96706ebb8a"
+  },
+  "codegen_qualified": false,
+  "primitive_run": false,
+  "workspace_clippy_and_testbuild": "NOT_RUN",
+  "production_integrated": false,
+  "performance_claim": false,
+  "at": "2026-10-08T12:07:20.097753+00:00"
+}

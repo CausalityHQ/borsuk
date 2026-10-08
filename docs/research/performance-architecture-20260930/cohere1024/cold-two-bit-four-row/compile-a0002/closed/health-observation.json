@@ -1,0 +1,10 @@
+{
+  "at": "2026-10-08T11:59:47.516371+00:00",
+  "instance_id": "i-011463724a641a73b",
+  "state": "running",
+  "system_status": "ok",
+  "instance_status": "ok",
+  "scheduled_events": null,
+  "describe_instance_status_exit": 0,
+  "scope": "infrastructure_only_no_incomplete_measurement_read"
+}

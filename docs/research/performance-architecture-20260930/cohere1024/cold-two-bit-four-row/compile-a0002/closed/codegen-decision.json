@@ -1,0 +1,25 @@
+{
+  "status": "CODEGEN_GATE_UNMET_NO_TIMING",
+  "source": "896d0423b8d1a904ba729f6714bf658d9a216486",
+  "elf": {
+    "bytes": 88760048,
+    "sha256": "bbfa40b5cc2daca732fb0de19d87a059982ec11fd3fa41add19a7c96706ebb8a"
+  },
+  "exact_remote_disassembly_reproduced": true,
+  "symbol_address": "0x1b6a700",
+  "symbol_bytes": 723,
+  "accumulation_sites": [
+    "0x1b6a820",
+    "0x1b6a826",
+    "0x1b6a82c",
+    "0x1b6a832"
+  ],
+  "observed": "four independent scalar addsd chains",
+  "required": "packed independent-row additions",
+  "packed_addition_present": false,
+  "primitive_run": false,
+  "performance_reject": false,
+  "serving_stack_qualified": false,
+  "production_integrated": false,
+  "at": "2026-10-08T12:08:32.808424+00:00"
+}
