@@ -1,0 +1,8 @@
+{
+  "status": "PASS_REAL_RETAINED_ELF_METADATA_SELECTOR_REPAIR",
+  "elf_sha256": "bbfa40b5cc2daca732fb0de19d87a059982ec11fd3fa41add19a7c96706ebb8a",
+  "symbol_resolved": true,
+  "old_scalar_screen_exit": 97,
+  "old_disposition_unchanged": true,
+  "native_execution": false
+}

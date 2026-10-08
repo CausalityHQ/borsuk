@@ -1,0 +1,40 @@
+{
+  "codec-debug": [
+    "rotated_two_bit::tests::four_row_literal_scalar_oracle_matrix",
+    "rotated_two_bit::tests::four_row_validation_and_scratch_boundaries",
+    "rotated_two_bit::tests::required_query_scratch_matches_exact_prepare_query_budget",
+    "rotated_two_bit::tests::required_query_scratch_rejects_invalid_or_overflowing_geometry"
+  ],
+  "planner-debug": [
+    "two_bit_generation::source_walk_tests::four_row_authenticated_plan_parity_and_errors",
+    "two_bit_generation::source_walk_tests::four_row_stateful_callback_and_buffered_error_priority",
+    "two_bit_generation::source_walk_tests::four_row_tiny_builder_serving_parity",
+    "two_bit_generation::source_walk_tests::diagnostic_source_walks_reject_missing_nonfinite_and_invalid_inputs",
+    "two_bit_generation::source_walk_tests::native_100k_d1024_generation_serving_scalar_oracle",
+    "two_bit_generation::source_walk_tests::paged_source_matches_reference_and_preserves_failure_charges",
+    "two_bit_generation::source_walk_tests::paged_source_cache_preserves_parity_admission_and_failure_drains",
+    "two_bit_generation::source_walk_tests::fragmented_paged_source_preserves_trace_and_rank_across_get_caps"
+  ],
+  "codec-release": [
+    "rotated_two_bit::tests::four_row_literal_scalar_oracle_matrix",
+    "rotated_two_bit::tests::four_row_validation_and_scratch_boundaries",
+    "rotated_two_bit::tests::required_query_scratch_matches_exact_prepare_query_budget",
+    "rotated_two_bit::tests::required_query_scratch_rejects_invalid_or_overflowing_geometry"
+  ],
+  "planner-release": [
+    "two_bit_generation::source_walk_tests::four_row_authenticated_plan_parity_and_errors",
+    "two_bit_generation::source_walk_tests::four_row_stateful_callback_and_buffered_error_priority",
+    "two_bit_generation::source_walk_tests::four_row_tiny_builder_serving_parity",
+    "two_bit_generation::source_walk_tests::diagnostic_source_walks_reject_missing_nonfinite_and_invalid_inputs",
+    "two_bit_generation::source_walk_tests::native_100k_d1024_generation_serving_scalar_oracle",
+    "two_bit_generation::source_walk_tests::paged_source_matches_reference_and_preserves_failure_charges",
+    "two_bit_generation::source_walk_tests::paged_source_cache_preserves_parity_admission_and_failure_drains",
+    "two_bit_generation::source_walk_tests::fragmented_paged_source_preserves_trace_and_rank_across_get_caps"
+  ],
+  "scalar-control-codec": [
+    "rotated_two_bit::tests::four_row_literal_scalar_oracle_matrix",
+    "rotated_two_bit::tests::four_row_validation_and_scratch_boundaries",
+    "rotated_two_bit::tests::required_query_scratch_matches_exact_prepare_query_budget",
+    "rotated_two_bit::tests::required_query_scratch_rejects_invalid_or_overflowing_geometry"
+  ]
+}

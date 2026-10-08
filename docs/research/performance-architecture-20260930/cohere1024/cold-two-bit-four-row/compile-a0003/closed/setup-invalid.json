@@ -1,0 +1,14 @@
+{
+  "status": "EXECUTION_INVALID_SELECTOR_DEMANGLER_SPELLING",
+  "at": "2026-10-08T12:38:29.418250+00:00",
+  "instance_id": "i-0b8caa338ddef2256",
+  "protocol_commit": "4b46e813388bc250a19abf15ae8f06063f1d33fc",
+  "source": "3138bfb0502c986d187e4098718f8b3945fd39c9",
+  "cause": "New selector reused stale temporary precursor and omitted the angle-bracket spelling already repaired in the closed a0002 selector. Independently observed actual prior authenticated ELF nm symbol <borsuk::rotated_two_bit::PreparedTwoBit>::score_four.",
+  "algorithm_rejected": false,
+  "performance_claim": false,
+  "native_source_and_limits_unchanged": true,
+  "termination_requested": true,
+  "terminal_collection_pending": true,
+  "repair_sha256": "88750f9a977bb25830bef655129f1cd483b5e33e56e43af73af68b7fa5caa6d2"
+}

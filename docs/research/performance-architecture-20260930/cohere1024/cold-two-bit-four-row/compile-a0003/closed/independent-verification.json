@@ -1,0 +1,16 @@
+{
+  "status": "EXECUTION_INVALID_ROOT_ABORTED_KNOWN_SELECTOR_SETUP_DEFECT",
+  "source": "3138bfb0502c986d187e4098718f8b3945fd39c9",
+  "instance_id": "i-0b8caa338ddef2256",
+  "archive_authentication": true,
+  "artifact_count": 24,
+  "native_stage_started": "probe-compile",
+  "native_stages_completed": 0,
+  "controller_original_exit": 0,
+  "native_exit": null,
+  "service": "code=killed/status=TERM",
+  "wait_exit": 0,
+  "algorithm_rejected": false,
+  "performance_claim": false,
+  "next_attempt": "same Rust source and resource/scientific limits; exact known demangler spelling repair only"
+}
