@@ -1,0 +1,144 @@
+{
+  "status": "REAL_INPUT_ADMISSION_PASSED_PENDING_FULL_NATIVE_REDUCTION",
+  "instance_id": "i-078fbe5e3f5db489a",
+  "terminated": true,
+  "original_session": 14509,
+  "runtime_caps_verified": true,
+  "memory_peak": 54743040,
+  "swap_peak": 0,
+  "oom": 0,
+  "native_summary": {
+    "all_queries_sealed": true,
+    "binding_charge": {
+      "failed_gets": 0,
+      "submitted_gets": 2,
+      "verified_bytes": 28307
+    },
+    "charges": {
+      "router": {
+        "failed_gets": 0,
+        "submitted_gets": 0,
+        "verified_bytes": 0
+      },
+      "source": {
+        "failed_gets": 0,
+        "submitted_gets": 27343,
+        "verified_bytes": 8971573248
+      },
+      "sq8": {
+        "failed_gets": 0,
+        "submitted_gets": 24600,
+        "verified_bytes": 16699756416
+      }
+    },
+    "complete": true,
+    "external_gate_required": true,
+    "generation_root_sha256": "ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df",
+    "k": 10,
+    "mean_recall10": 0.9723,
+    "observed_process_peak_bytes": 42852352,
+    "physical_s3_measured": false,
+    "prefix_bytes": 10677104,
+    "prefix_sha256": "b2ed2073b9e8b730d344569eefb04fae7addd57f6e35912eee60148adaa2b6f4",
+    "process_cpu_ns": 49769569677,
+    "process_wall_ns": 101236438342,
+    "queries": 1000,
+    "query_process_cpu_ns": 48101624319,
+    "query_wall_ns": 99339453640,
+    "recall_denominator": 10000,
+    "recall_numerator": 9723,
+    "requests_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+    "sealed_bytes": 10677527,
+    "sealed_sha256": "35e4df05d4c6b36b6ee90cc99a0e277b4fc63a6f9426c78bb59a1e616d400371",
+    "status": "MEASURED",
+    "sum": {
+      "failed_gets": 0,
+      "submitted_gets": 51943,
+      "verified_bytes": 25671329664
+    },
+    "total_hits10": 9723,
+    "transport_last_boundary": {
+      "after": {
+        "attempts": 51960,
+        "consumed_payload_bytes": 25671833997,
+        "dropped_error_bodies": 0,
+        "method_counts": [
+          51955,
+          4,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "status_counts": null,
+        "status_counts_entries": 2,
+        "stream_failures": 0,
+        "transport_failures": 0
+      },
+      "before": {
+        "attempts": 51915,
+        "consumed_payload_bytes": 25646812557,
+        "dropped_error_bodies": 0,
+        "method_counts": [
+          51910,
+          4,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "status_counts": null,
+        "status_counts_entries": 2,
+        "stream_failures": 0,
+        "transport_failures": 0
+      },
+      "billed_bytes": null,
+      "billed_requests": null,
+      "ordinal": 999,
+      "scope": "cumulative_process_native_transport",
+      "stage": "query",
+      "status_counts_omitted_from_terminal": true,
+      "unread_bytes": null,
+      "wire_bytes": null
+    },
+    "truth_sha256": "479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c",
+    "underfilled_queries": 0
+  },
+  "identity": {
+    "billed_bytes": null,
+    "billed_requests": null,
+    "binary_sha256": "ca1ae2496e110494e7f6c03ae16eea3d5ff262d66945a3c52775749ac0bcaeab",
+    "codec_source_sha256": "eddf88c6c8ee23a732751f49291293f1cc081545ebb9a21c149eb757aa5c38ec",
+    "config_sha256": "e604a1ca02644329113e6c11a935d67115f784c40008859966f7e332fae53a3a",
+    "external_gate_required": true,
+    "fetch_parallelism": 32,
+    "generation_source_sha256": "194115d67776ad9f620a704b8cb98beda16b4d879019c390b2a0d4a6901003e4",
+    "io_measurement": "logical_GET_charges_separate_from_cumulative_process_native_transport",
+    "native_transport_includes": "S3_and_IMDS_credential_requests_including_PUT",
+    "phase": "identity",
+    "physical_s3_measured": false,
+    "router_source_sha256": "12f7b05ed8fe208e5baae62b7c6f17763ff6794458afbb6dc0fe17793a19eba5",
+    "runner_source_sha256": "de6a9190c321d13423a8ef60191427e2825bc1f0201e0dc848597616d9b6b233",
+    "s3_credential_source": "imds_instance_role_only",
+    "schema": "borsuk-cohere-native-baseline-result-v2",
+    "scope": "AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS",
+    "source_plane_source_sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",
+    "truth_opened": false,
+    "unread_bytes": null,
+    "wire_bytes": null
+  },
+  "output": {
+    "bytes": 10777193,
+    "sha256": "1682fa546642e527411bade7f61f784ba07ed708b73ef61e5020da6864d445db"
+  },
+  "full_native_row_reduction_pending": true,
+  "performance_claim": false
+}

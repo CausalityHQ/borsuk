@@ -1,0 +1,64 @@
+{
+  "schema": "borsuk-native-s3-query-canary-preregistration-v1",
+  "status": "FROZEN_NATIVE_REDUCTION_AND_CANARY_NOT_LAUNCHED",
+  "maximum_attempts": 1,
+  "binary_source_commit": "fc8a23dac44ad635fc1236736df68878690a8389",
+  "binary_sha256": "ca1ae2496e110494e7f6c03ae16eea3d5ff262d66945a3c52775749ac0bcaeab",
+  "stage_sha256": "93c501b1267bbdafe7a9dd91173f6dd91ed73ad8e4c93f1832a0f2806682ad04",
+  "config_sha256": "e604a1ca02644329113e6c11a935d67115f784c40008859966f7e332fae53a3a",
+  "invoked_config_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "native_expected_exit": 2,
+  "canary_expected_exit": 0,
+  "resources": {
+    "cpu": 1,
+    "memory_bytes": 536870912,
+    "swap_bytes": 0,
+    "pids": 256,
+    "native_seconds": 240,
+    "inner_seconds": 90,
+    "machine_seconds": 1800,
+    "scratch_bytes": 67108864
+  },
+  "cost_reservation": {
+    "compute_usd": 0.25,
+    "ancillary_usd": 0.15,
+    "total_usd": 0.4
+  },
+  "real_operations": [
+    "AWSCLI installation/IMDS credentials and staged binary/config/stage plus opaque request/truth transfers; full SHA checks, no native request/truth opening",
+    "runtime cgroup before-exec/readback",
+    "qualified runner CLI/config-SHA refusal",
+    "original exit2 and exact INVALID config/zero-query/zero-GET/truth-unopened receipt",
+    "scratch/pin cleanup, publication, same-instance termination/wait/collection"
+  ],
+  "not_exercised": [
+    "native IMDS/store creation; config refuses before backend construction",
+    "ANN query/scoring or GT decode",
+    "performance/recall/cost comparison"
+  ],
+  "claims_quality": false,
+  "failure_policy": "Expected SHA refusal alone is GO canary; unexpected native0/other failure, malformed output, nonzero queries/GET/truth-open, resource or cleanup drift INVALID. Preserve original and stop; no automatic repeat.",
+  "userdata_sha256": "a433a69a0bb1a8e8d97ed85ced7522e8d12de0c5bdb9ca9626f78aace88bd3ce",
+  "prior_admission": {
+    "status": "CLOSED_RUNTIME_AUTH_RESOURCES_VERIFIED_NATIVE_FULL_REDUCTION_FIRST_ON_CANARY",
+    "receipt_sha256": "78c4e5ff698f450828433cf15b6fac008705d48f4ce4df2e2901c13da62c8521",
+    "instance_terminated": true
+  },
+  "mock_checks": {
+    "stage-check.json": "487f4ed0d4450a6123ccf5aeaee7d008581d1642a55a9fe0e0da0c4028a43d36",
+    "wrapper-check.json": "766c9b81abcc681cc443bb0c7671cbe806991902369a5ca3750af6fe2d33bb1f"
+  },
+  "mock_check_resources": {
+    "cpu": 1,
+    "memory_max_bytes": 268435456,
+    "swap_max_bytes": 0,
+    "exit": 0
+  },
+  "reduction_config_sha256": "cc9460f5f6ba8229318f103cb038f9dc081cefa6125cb747ae03798b8390a9d3",
+  "reducer_binary": {
+    "bytes": 1235680,
+    "sha256": "614f2c2afcd7bacf9a87a850147de2ebfd2f9e712219ce8d6438e388b1a50519"
+  },
+  "reduction_policy": "Qualified Rust completed-v2 validates closed full1000 output/seals/identity/inputs before wrong-SHA CLI refusal. Formal membership/control ABBA parity/tails remain pending; no performance selection from admission.",
+  "frozen_at": "2026-10-08T04:03:38.596301+00:00"
+}
