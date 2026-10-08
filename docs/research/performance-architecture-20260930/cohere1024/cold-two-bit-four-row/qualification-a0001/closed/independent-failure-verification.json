@@ -1,0 +1,37 @@
+{
+  "status": "EXECUTION_INVALID_TEST_FIXTURE_SHAPE",
+  "candidate": "04944c574ece595c43710974d89a75d759da2f7b",
+  "instance_id": "i-007484de7d7e0d980",
+  "terminated": true,
+  "wait_exit": 0,
+  "artifact_count": 60,
+  "source_before_after_equal": true,
+  "native_identity": "f4f34fd68c687249a914bf22ed58778d516dc31d8444b3625056b6c7b6da514c",
+  "runner_debug": {
+    "compiled": true,
+    "passed": [
+      "tests::actual_native_queries_seal_and_reduce_against_literal_oracles",
+      "tests::cold_fetch_parallelism_selector_is_explicit_and_bounded",
+      "tests::missing_or_tampered_truth_is_invalid_only_after_all_queries_are_sealed",
+      "tests::namespaced_pipeline_faults_preserve_binding_accounting_and_seal",
+      "tests::prefix_or_requests_tampering_blocks_first_truth_open",
+      "tests::production_contract_rejects_unknown_hash_geometry_and_caps",
+      "tests::reporting_underfill_keeps_fixed_ten_denominator_and_bounded_output",
+      "tests::secure_artifacts_reject_hash_length_eof_symlink_fifo_and_bad_rows",
+      "tests::source_binding_and_all_request_rows_fail_before_queries"
+    ],
+    "failed": [
+      "tests::scratch_formula_keeps_codec_and_trace_separate"
+    ],
+    "native_exit": 101,
+    "tee_exit": 0,
+    "log_sha256": "2f6b60492e24e6ab0c7003b837f29936bbff4c3fc752b030753a136f87752f72"
+  },
+  "remaining_stage_count": 12,
+  "remaining_stages": "UNRUN",
+  "root_cause": "new scratch formula test calls Shape::tiny(100000), which explicitly permits only K..=257; use Shape::PRODUCTION for the production arithmetic assertion",
+  "repair_scope": "existing test only; preserve algorithm, tiny guard, scientific limits and names",
+  "algorithm_rejected": false,
+  "performance_claim": false,
+  "at": "2026-10-08T14:31:13.107485+00:00"
+}
