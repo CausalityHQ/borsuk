@@ -1,0 +1,1500 @@
+
+/data/target/borsuk-cold-membership-native/qualification-a0003/check_cohere_native_baseline.binary:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+00000000004c26a0 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline>:
+  4c26a0:	55                   	push   %rbp
+  4c26a1:	41 57                	push   %r15
+  4c26a3:	41 56                	push   %r14
+  4c26a5:	41 55                	push   %r13
+  4c26a7:	41 54                	push   %r12
+  4c26a9:	53                   	push   %rbx
+  4c26aa:	48 81 ec 08 03 00 00 	sub    $0x308,%rsp
+  4c26b1:	4c 89 44 24 20       	mov    %r8,0x20(%rsp)
+  4c26b6:	49 89 f6             	mov    %rsi,%r14
+  4c26b9:	48 89 fb             	mov    %rdi,%rbx
+  4c26bc:	48 8b ae e8 01 00 00 	mov    0x1e8(%rsi),%rbp
+  4c26c3:	4c 8b ae f0 01 00 00 	mov    0x1f0(%rsi),%r13
+  4c26ca:	48 83 be 18 03 00 00 	cmpq   $0xffffffffffffffff,0x318(%rsi)
+  4c26d1:	ff 
+  4c26d2:	48 89 4c 24 70       	mov    %rcx,0x70(%rsp)
+  4c26d7:	48 89 94 24 40 01 00 	mov    %rdx,0x140(%rsp)
+  4c26de:	00 
+  4c26df:	0f 84 c6 00 00 00    	je     4c27ab <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x10b>
+  4c26e5:	4c 89 8c 24 48 01 00 	mov    %r9,0x148(%rsp)
+  4c26ec:	00 
+  4c26ed:	49 89 df             	mov    %rbx,%r15
+  4c26f0:	4c 89 eb             	mov    %r13,%rbx
+  4c26f3:	48 89 c8             	mov    %rcx,%rax
+  4c26f6:	48 c1 e0 05          	shl    $0x5,%rax
+  4c26fa:	48 01 d0             	add    %rdx,%rax
+  4c26fd:	48 89 94 24 a0 00 00 	mov    %rdx,0xa0(%rsp)
+  4c2704:	00 
+  4c2705:	48 89 84 24 a8 00 00 	mov    %rax,0xa8(%rsp)
+  4c270c:	00 
+  4c270d:	48 c7 84 24 b0 00 00 	movq   $0x0,0xb0(%rsp)
+  4c2714:	00 00 00 00 00 
+  4c2719:	48 c7 84 24 c0 00 00 	movq   $0x0,0xc0(%rsp)
+  4c2720:	00 00 00 00 00 
+  4c2725:	48 8d bc 24 c0 01 00 	lea    0x1c0(%rsp),%rdi
+  4c272c:	00 
+  4c272d:	48 8d b4 24 a0 00 00 	lea    0xa0(%rsp),%rsi
+  4c2734:	00 
+  4c2735:	e8 26 41 fd ff       	call   496860 <_RNvXNtNtCscHgRw1M2fX5_5alloc3vec14spec_from_iterINtB4_3VecjEINtB2_12SpecFromIterjINtNtNtNtCsc36rpYXAlPq_4core4iter8adapters7flatten7FlatMapINtNtNtB1q_5slice4iter4IterTjBK_EEINtNtB1m_3map3MapIB2e_jENCNCINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB3k_16TwoBitGeneration10plan_walksNCNCNCNvB3g_19plan_paged_measured0s_0s0_0E00ENCB3d_0EE9from_iterCsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c273a:	4c 8b ac 24 d0 01 00 	mov    0x1d0(%rsp),%r13
+  4c2741:	00 
+  4c2742:	4d 85 ed             	test   %r13,%r13
+  4c2745:	0f 84 88 00 00 00    	je     4c27d3 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x133>
+  4c274b:	4c 8b a4 24 c8 01 00 	mov    0x1c8(%rsp),%r12
+  4c2752:	00 
+  4c2753:	b8 01 00 00 00       	mov    $0x1,%eax
+  4c2758:	49 83 fd 01          	cmp    $0x1,%r13
+  4c275c:	0f 85 fb 12 00 00    	jne    4c3a5d <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x13bd>
+  4c2762:	49 89 dd             	mov    %rbx,%r13
+  4c2765:	4c 89 fb             	mov    %r15,%rbx
+  4c2768:	48 8b 8c 24 c0 01 00 	mov    0x1c0(%rsp),%rcx
+  4c276f:	00 
+  4c2770:	49 8d 04 c4          	lea    (%r12,%rax,8),%rax
+  4c2774:	4c 89 a4 24 a0 00 00 	mov    %r12,0xa0(%rsp)
+  4c277b:	00 
+  4c277c:	4c 89 a4 24 a8 00 00 	mov    %r12,0xa8(%rsp)
+  4c2783:	00 
+  4c2784:	48 89 8c 24 b0 00 00 	mov    %rcx,0xb0(%rsp)
+  4c278b:	00 
+  4c278c:	48 89 84 24 b8 00 00 	mov    %rax,0xb8(%rsp)
+  4c2793:	00 
+  4c2794:	48 8d bc 24 b8 02 00 	lea    0x2b8(%rsp),%rdi
+  4c279b:	00 
+  4c279c:	48 8d b4 24 a0 00 00 	lea    0xa0(%rsp),%rsi
+  4c27a3:	00 
+  4c27a4:	e8 07 6d fc ff       	call   4894b0 <_RINvMsi_NtNtNtCscHgRw1M2fX5_5alloc11collections5btree3mapINtB6_8BTreeMapjNtNtB8_7set_val9SetValZSTE27bulk_build_from_sorted_iterINtNtNtNtCsc36rpYXAlPq_4core4iter8adapters3map3MapINtNtNtBc_3vec9into_iter8IntoIterjENCINvMse_NtB8_3setINtB3y_8BTreeSetjE16from_sorted_iterB2Q_E0EECsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c27a9:	eb 6a                	jmp    4c2815 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x175>
+  4c27ab:	48 89 e8             	mov    %rbp,%rax
+  4c27ae:	48 c1 e8 08          	shr    $0x8,%rax
+  4c27b2:	40 80 fd 01          	cmp    $0x1,%bpl
+  4c27b6:	48 83 d8 ff          	sbb    $0xffffffffffffffff,%rax
+  4c27ba:	48 3d 9f 00 00 00    	cmp    $0x9f,%rax
+  4c27c0:	b9 9f 00 00 00       	mov    $0x9f,%ecx
+  4c27c5:	48 0f 42 c8          	cmovb  %rax,%rcx
+  4c27c9:	48 89 4c 24 78       	mov    %rcx,0x78(%rsp)
+  4c27ce:	41 b4 02             	mov    $0x2,%r12b
+  4c27d1:	eb 7b                	jmp    4c284e <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1ae>
+  4c27d3:	48 c7 84 24 b8 02 00 	movq   $0x0,0x2b8(%rsp)
+  4c27da:	00 00 00 00 00 
+  4c27df:	48 c7 84 24 c8 02 00 	movq   $0x0,0x2c8(%rsp)
+  4c27e6:	00 00 00 00 00 
+  4c27eb:	48 8b b4 24 c0 01 00 	mov    0x1c0(%rsp),%rsi
+  4c27f2:	00 
+  4c27f3:	48 85 f6             	test   %rsi,%rsi
+  4c27f6:	49 89 dd             	mov    %rbx,%r13
+  4c27f9:	4c 89 fb             	mov    %r15,%rbx
+  4c27fc:	74 17                	je     4c2815 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x175>
+  4c27fe:	48 8b bc 24 c8 01 00 	mov    0x1c8(%rsp),%rdi
+  4c2805:	00 
+  4c2806:	48 c1 e6 03          	shl    $0x3,%rsi
+  4c280a:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c280f:	ff 15 73 1a 6f 00    	call   *0x6f1a73(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c2815:	48 8b 84 24 c8 02 00 	mov    0x2c8(%rsp),%rax
+  4c281c:	00 
+  4c281d:	48 89 44 24 78       	mov    %rax,0x78(%rsp)
+  4c2822:	48 8d bc 24 b8 02 00 	lea    0x2b8(%rsp),%rdi
+  4c2829:	00 
+  4c282a:	e8 81 bd fc ff       	call   48e5b0 <_RNvXNtNtNtCscHgRw1M2fX5_5alloc11collections5btree3mapINtB2_8BTreeMapjNtNtB4_7set_val9SetValZSTENtNtNtCsc36rpYXAlPq_4core3ops4drop4Drop4dropCsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c282f:	49 83 be 18 03 00 00 	cmpq   $0xffffffffffffffff,0x318(%r14)
+  4c2836:	ff 
+  4c2837:	74 0a                	je     4c2843 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1a3>
+  4c2839:	45 0f b6 a6 38 04 00 	movzbl 0x438(%r14),%r12d
+  4c2840:	00 
+  4c2841:	eb 03                	jmp    4c2846 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1a6>
+  4c2843:	41 b4 02             	mov    $0x2,%r12b
+  4c2846:	4c 8b 8c 24 48 01 00 	mov    0x148(%rsp),%r9
+  4c284d:	00 
+  4c284e:	48 8b 84 24 48 03 00 	mov    0x348(%rsp),%rax
+  4c2855:	00 
+  4c2856:	48 8b 8c 24 40 03 00 	mov    0x340(%rsp),%rcx
+  4c285d:	00 
+  4c285e:	4d 8b be 90 07 00 00 	mov    0x790(%r14),%r15
+  4c2865:	4d 8b b6 98 07 00 00 	mov    0x798(%r14),%r14
+  4c286c:	48 89 ac 24 98 00 00 	mov    %rbp,0x98(%rsp)
+  4c2873:	00 
+  4c2874:	4c 89 8c 24 80 02 00 	mov    %r9,0x280(%rsp)
+  4c287b:	00 
+  4c287c:	48 89 8c 24 88 02 00 	mov    %rcx,0x288(%rsp)
+  4c2883:	00 
+  4c2884:	48 89 84 24 88 01 00 	mov    %rax,0x188(%rsp)
+  4c288b:	00 
+  4c288c:	48 8d 0d 85 3c d5 ff 	lea    -0x2ac37b(%rip),%rcx        # 216518 <anon.5f42c0c67cc31c229256f3ba5d41e2c9.60.llvm.4862663755141128461+0x10>
+  4c2893:	48 8d bc 24 b8 02 00 	lea    0x2b8(%rsp),%rdi
+  4c289a:	00 
+  4c289b:	be 08 00 00 00       	mov    $0x8,%esi
+  4c28a0:	41 b8 01 00 00 00    	mov    $0x1,%r8d
+  4c28a6:	31 d2                	xor    %edx,%edx
+  4c28a8:	49 89 e9             	mov    %rbp,%r9
+  4c28ab:	6a ff                	push   $0xffffffffffffffff
+  4c28ad:	6a 01                	push   $0x1
+  4c28af:	6a 01                	push   $0x1
+  4c28b1:	41 55                	push   %r13
+  4c28b3:	ff 15 67 24 6f 00    	call   *0x6f2467(%rip)        # bb4d20 <_DYNAMIC+0xd18>
+  4c28b9:	48 83 c4 20          	add    $0x20,%rsp
+  4c28bd:	48 8b b4 24 b8 02 00 	mov    0x2b8(%rsp),%rsi
+  4c28c4:	00 
+  4c28c5:	48 83 fe ff          	cmp    $0xffffffffffffffff,%rsi
+  4c28c9:	74 61                	je     4c292c <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x28c>
+  4c28cb:	4c 89 bc 24 60 02 00 	mov    %r15,0x260(%rsp)
+  4c28d2:	00 
+  4c28d3:	4c 89 b4 24 48 01 00 	mov    %r14,0x148(%rsp)
+  4c28da:	00 
+  4c28db:	4c 8b b4 24 d0 02 00 	mov    0x2d0(%rsp),%r14
+  4c28e2:	00 
+  4c28e3:	4c 8b bc 24 d8 02 00 	mov    0x2d8(%rsp),%r15
+  4c28ea:	00 
+  4c28eb:	48 85 f6             	test   %rsi,%rsi
+  4c28ee:	74 17                	je     4c2907 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x267>
+  4c28f0:	48 8b bc 24 c0 02 00 	mov    0x2c0(%rsp),%rdi
+  4c28f7:	00 
+  4c28f8:	48 c1 e6 03          	shl    $0x3,%rsi
+  4c28fc:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c2901:	ff 15 81 19 6f 00    	call   *0x6f1981(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c2907:	4d 85 f6             	test   %r14,%r14
+  4c290a:	74 15                	je     4c2921 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x281>
+  4c290c:	49 c1 e6 04          	shl    $0x4,%r14
+  4c2910:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c2915:	4c 89 ff             	mov    %r15,%rdi
+  4c2918:	4c 89 f6             	mov    %r14,%rsi
+  4c291b:	ff 15 67 19 6f 00    	call   *0x6f1967(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c2921:	41 80 fc 02          	cmp    $0x2,%r12b
+  4c2925:	75 18                	jne    4c293f <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x29f>
+  4c2927:	45 31 ff             	xor    %r15d,%r15d
+  4c292a:	eb 33                	jmp    4c295f <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x2bf>
+  4c292c:	0f b6 84 24 c0 02 00 	movzbl 0x2c0(%rsp),%eax
+  4c2933:	00 
+  4c2934:	c6 03 07             	movb   $0x7,(%rbx)
+  4c2937:	88 43 01             	mov    %al,0x1(%rbx)
+  4c293a:	e9 1d 02 00 00       	jmp    4c2b5c <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x4bc>
+  4c293f:	48 8b b4 24 98 00 00 	mov    0x98(%rsp),%rsi
+  4c2946:	00 
+  4c2947:	41 0f b6 fc          	movzbl %r12b,%edi
+  4c294b:	4c 89 ea             	mov    %r13,%rdx
+  4c294e:	ff 15 d4 23 6f 00    	call   *0x6f23d4(%rip)        # bb4d28 <_DYNAMIC+0xd20>
+  4c2954:	45 89 e7             	mov    %r12d,%r15d
+  4c2957:	84 c0                	test   %al,%al
+  4c2959:	0f 84 e7 01 00 00    	je     4c2b46 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x4a6>
+  4c295f:	4c 89 ac 24 58 02 00 	mov    %r13,0x258(%rsp)
+  4c2966:	00 
+  4c2967:	48 8b 8c 24 88 01 00 	mov    0x188(%rsp),%rcx
+  4c296e:	00 
+  4c296f:	b8 08 00 00 00       	mov    $0x8,%eax
+  4c2974:	48 89 8c 24 50 02 00 	mov    %rcx,0x250(%rsp)
+  4c297b:	00 
+  4c297c:	48 85 c9             	test   %rcx,%rcx
+  4c297f:	74 69                	je     4c29ea <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x34a>
+  4c2981:	41 f6 c7 01          	test   $0x1,%r15b
+  4c2985:	b9 00 10 00 00       	mov    $0x1000,%ecx
+  4c298a:	ba f0 09 00 00       	mov    $0x9f0,%edx
+  4c298f:	48 0f 45 d1          	cmovne %rcx,%rdx
+  4c2993:	48 8b 8c 24 98 00 00 	mov    0x98(%rsp),%rcx
+  4c299a:	00 
+  4c299b:	49 89 cd             	mov    %rcx,%r13
+  4c299e:	49 c1 ed 05          	shr    $0x5,%r13
+  4c29a2:	89 ce                	mov    %ecx,%esi
+  4c29a4:	83 e6 1f             	and    $0x1f,%esi
+  4c29a7:	48 83 fe 01          	cmp    $0x1,%rsi
+  4c29ab:	49 83 dd ff          	sbb    $0xffffffffffffffff,%r13
+  4c29af:	4c 39 ea             	cmp    %r13,%rdx
+  4c29b2:	4c 0f 42 ea          	cmovb  %rdx,%r13
+  4c29b6:	48 85 c9             	test   %rcx,%rcx
+  4c29b9:	74 2f                	je     4c29ea <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x34a>
+  4c29bb:	46 8d 34 ed 00 00 00 	lea    0x0(,%r13,8),%r14d
+  4c29c2:	00 
+  4c29c3:	ff 15 87 18 6f 00    	call   *0x6f1887(%rip)        # bb4250 <_DYNAMIC+0x248>
+  4c29c9:	be 08 00 00 00       	mov    $0x8,%esi
+  4c29ce:	4c 89 f7             	mov    %r14,%rdi
+  4c29d1:	ff 15 81 18 6f 00    	call   *0x6f1881(%rip)        # bb4258 <_DYNAMIC+0x250>
+  4c29d7:	48 85 c0             	test   %rax,%rax
+  4c29da:	75 11                	jne    4c29ed <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x34d>
+  4c29dc:	bf 08 00 00 00       	mov    $0x8,%edi
+  4c29e1:	4c 89 f6             	mov    %r14,%rsi
+  4c29e4:	ff 15 3e 19 6f 00    	call   *0x6f193e(%rip)        # bb4328 <_DYNAMIC+0x320>
+  4c29ea:	45 31 ed             	xor    %r13d,%r13d
+  4c29ed:	4c 89 ac 24 90 01 00 	mov    %r13,0x190(%rsp)
+  4c29f4:	00 
+  4c29f5:	48 89 84 24 98 01 00 	mov    %rax,0x198(%rsp)
+  4c29fc:	00 
+  4c29fd:	48 c7 84 24 a0 01 00 	movq   $0x0,0x1a0(%rsp)
+  4c2a04:	00 00 00 00 00 
+  4c2a09:	48 8d 84 24 88 01 00 	lea    0x188(%rsp),%rax
+  4c2a10:	00 
+  4c2a11:	48 89 84 24 90 02 00 	mov    %rax,0x290(%rsp)
+  4c2a18:	00 
+  4c2a19:	48 8d 84 24 90 01 00 	lea    0x190(%rsp),%rax
+  4c2a20:	00 
+  4c2a21:	48 89 84 24 98 02 00 	mov    %rax,0x298(%rsp)
+  4c2a28:	00 
+  4c2a29:	48 8d 84 24 98 00 00 	lea    0x98(%rsp),%rax
+  4c2a30:	00 
+  4c2a31:	48 89 84 24 a0 02 00 	mov    %rax,0x2a0(%rsp)
+  4c2a38:	00 
+  4c2a39:	48 8b 44 24 20       	mov    0x20(%rsp),%rax
+  4c2a3e:	48 89 84 24 a8 02 00 	mov    %rax,0x2a8(%rsp)
+  4c2a45:	00 
+  4c2a46:	48 8d 84 24 80 02 00 	lea    0x280(%rsp),%rax
+  4c2a4d:	00 
+  4c2a4e:	48 89 84 24 b0 02 00 	mov    %rax,0x2b0(%rsp)
+  4c2a55:	00 
+  4c2a56:	48 8d 05 04 2c de ff 	lea    -0x21d3fc(%rip),%rax        # 2a5661 <anon.76999235c249af5725505212bbd91e3f.50.llvm.7692639943174766126+0x2fe>
+  4c2a5d:	48 89 44 24 20       	mov    %rax,0x20(%rsp)
+  4c2a62:	48 8b 54 24 78       	mov    0x78(%rsp),%rdx
+  4c2a67:	48 85 d2             	test   %rdx,%rdx
+  4c2a6a:	74 20                	je     4c2a8c <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x3ec>
+  4c2a6c:	48 8b ac 24 98 00 00 	mov    0x98(%rsp),%rbp
+  4c2a73:	00 
+  4c2a74:	48 89 e8             	mov    %rbp,%rax
+  4c2a77:	48 c1 e8 08          	shr    $0x8,%rax
+  4c2a7b:	40 84 ed             	test   %bpl,%bpl
+  4c2a7e:	74 03                	je     4c2a83 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x3e3>
+  4c2a80:	48 ff c0             	inc    %rax
+  4c2a83:	48 39 c2             	cmp    %rax,%rdx
+  4c2a86:	0f 86 e5 00 00 00    	jbe    4c2b71 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x4d1>
+  4c2a8c:	b8 16 00 00 00       	mov    $0x16,%eax
+  4c2a91:	66 48 0f 6e e0       	movq   %rax,%xmm4
+  4c2a96:	45 31 ed             	xor    %r13d,%r13d
+  4c2a99:	8b 44 24 28          	mov    0x28(%rsp),%eax
+  4c2a9d:	8b 4c 24 2b          	mov    0x2b(%rsp),%ecx
+  4c2aa1:	89 4b 04             	mov    %ecx,0x4(%rbx)
+  4c2aa4:	89 43 01             	mov    %eax,0x1(%rbx)
+  4c2aa7:	0f 28 84 24 c0 01 00 	movaps 0x1c0(%rsp),%xmm0
+  4c2aae:	00 
+  4c2aaf:	0f 28 8c 24 d0 01 00 	movaps 0x1d0(%rsp),%xmm1
+  4c2ab6:	00 
+  4c2ab7:	0f 28 94 24 e0 01 00 	movaps 0x1e0(%rsp),%xmm2
+  4c2abe:	00 
+  4c2abf:	0f 28 9c 24 f0 01 00 	movaps 0x1f0(%rsp),%xmm3
+  4c2ac6:	00 
+  4c2ac7:	0f 11 43 20          	movups %xmm0,0x20(%rbx)
+  4c2acb:	0f 11 4b 30          	movups %xmm1,0x30(%rbx)
+  4c2acf:	0f 11 53 40          	movups %xmm2,0x40(%rbx)
+  4c2ad3:	0f 11 5b 50          	movups %xmm3,0x50(%rbx)
+  4c2ad7:	0f 28 84 24 00 02 00 	movaps 0x200(%rsp),%xmm0
+  4c2ade:	00 
+  4c2adf:	0f 11 43 60          	movups %xmm0,0x60(%rbx)
+  4c2ae3:	0f 28 84 24 10 02 00 	movaps 0x210(%rsp),%xmm0
+  4c2aea:	00 
+  4c2aeb:	0f 11 43 70          	movups %xmm0,0x70(%rbx)
+  4c2aef:	0f 28 84 24 20 02 00 	movaps 0x220(%rsp),%xmm0
+  4c2af6:	00 
+  4c2af7:	0f 11 83 80 00 00 00 	movups %xmm0,0x80(%rbx)
+  4c2afe:	66 0f 6f 84 24 30 02 	movdqa 0x230(%rsp),%xmm0
+  4c2b05:	00 00 
+  4c2b07:	f3 0f 7f 83 90 00 00 	movdqu %xmm0,0x90(%rbx)
+  4c2b0e:	00 
+  4c2b0f:	44 88 2b             	mov    %r13b,(%rbx)
+  4c2b12:	48 8b 44 24 20       	mov    0x20(%rsp),%rax
+  4c2b17:	48 89 43 08          	mov    %rax,0x8(%rbx)
+  4c2b1b:	66 0f 7f 63 10       	movdqa %xmm4,0x10(%rbx)
+  4c2b20:	48 8b b4 24 90 01 00 	mov    0x190(%rsp),%rsi
+  4c2b27:	00 
+  4c2b28:	48 85 f6             	test   %rsi,%rsi
+  4c2b2b:	74 2f                	je     4c2b5c <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x4bc>
+  4c2b2d:	48 8b bc 24 98 01 00 	mov    0x198(%rsp),%rdi
+  4c2b34:	00 
+  4c2b35:	48 c1 e6 03          	shl    $0x3,%rsi
+  4c2b39:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c2b3e:	ff 15 44 17 6f 00    	call   *0x6f1744(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c2b44:	eb 16                	jmp    4c2b5c <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x4bc>
+  4c2b46:	c6 03 00             	movb   $0x0,(%rbx)
+  4c2b49:	48 8d 05 e4 2a de ff 	lea    -0x21d51c(%rip),%rax        # 2a5634 <anon.76999235c249af5725505212bbd91e3f.50.llvm.7692639943174766126+0x2d1>
+  4c2b50:	48 89 43 08          	mov    %rax,0x8(%rbx)
+  4c2b54:	48 c7 43 10 17 00 00 	movq   $0x17,0x10(%rbx)
+  4c2b5b:	00 
+  4c2b5c:	48 89 d8             	mov    %rbx,%rax
+  4c2b5f:	48 81 c4 08 03 00 00 	add    $0x308,%rsp
+  4c2b66:	5b                   	pop    %rbx
+  4c2b67:	41 5c                	pop    %r12
+  4c2b69:	41 5d                	pop    %r13
+  4c2b6b:	41 5e                	pop    %r14
+  4c2b6d:	41 5f                	pop    %r15
+  4c2b6f:	5d                   	pop    %rbp
+  4c2b70:	c3                   	ret
+  4c2b71:	41 80 fc 02          	cmp    $0x2,%r12b
+  4c2b75:	75 2a                	jne    4c2ba1 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x501>
+  4c2b77:	48 3d 9f 00 00 00    	cmp    $0x9f,%rax
+  4c2b7d:	b9 9f 00 00 00       	mov    $0x9f,%ecx
+  4c2b82:	48 0f 42 c8          	cmovb  %rax,%rcx
+  4c2b86:	45 31 ed             	xor    %r13d,%r13d
+  4c2b89:	48 39 ca             	cmp    %rcx,%rdx
+  4c2b8c:	0f 85 1c 01 00 00    	jne    4c2cae <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x60e>
+  4c2b92:	b8 00 04 00 00       	mov    $0x400,%eax
+  4c2b97:	48 89 44 24 68       	mov    %rax,0x68(%rsp)
+  4c2b9c:	45 31 f6             	xor    %r14d,%r14d
+  4c2b9f:	eb 25                	jmp    4c2bc6 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x526>
+  4c2ba1:	44 89 f8             	mov    %r15d,%eax
+  4c2ba4:	f6 d0                	not    %al
+  4c2ba6:	0f b6 c0             	movzbl %al,%eax
+  4c2ba9:	83 e0 01             	and    $0x1,%eax
+  4c2bac:	c1 e0 09             	shl    $0x9,%eax
+  4c2baf:	48 05 00 02 00 00    	add    $0x200,%rax
+  4c2bb5:	41 b6 01             	mov    $0x1,%r14b
+  4c2bb8:	48 89 44 24 68       	mov    %rax,0x68(%rsp)
+  4c2bbd:	48 39 c2             	cmp    %rax,%rdx
+  4c2bc0:	0f 87 c6 fe ff ff    	ja     4c2a8c <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x3ec>
+  4c2bc6:	45 0f b6 c4          	movzbl %r12b,%r8d
+  4c2bca:	48 8d bc 24 a0 00 00 	lea    0xa0(%rsp),%rdi
+  4c2bd1:	00 
+  4c2bd2:	48 89 ee             	mov    %rbp,%rsi
+  4c2bd5:	48 8b 94 24 40 01 00 	mov    0x140(%rsp),%rdx
+  4c2bdc:	00 
+  4c2bdd:	48 8b 4c 24 70       	mov    0x70(%rsp),%rcx
+  4c2be2:	ff 15 48 1b 6f 00    	call   *0x6f1b48(%rip)        # bb4730 <_DYNAMIC+0x728>
+  4c2be8:	44 0f b6 ac 24 a0 00 	movzbl 0xa0(%rsp),%r13d
+  4c2bef:	00 00 
+  4c2bf1:	41 80 fd ff          	cmp    $0xff,%r13b
+  4c2bf5:	0f 84 c2 00 00 00    	je     4c2cbd <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x61d>
+  4c2bfb:	8b 84 24 a1 00 00 00 	mov    0xa1(%rsp),%eax
+  4c2c02:	8b 8c 24 a4 00 00 00 	mov    0xa4(%rsp),%ecx
+  4c2c09:	89 4c 24 2b          	mov    %ecx,0x2b(%rsp)
+  4c2c0d:	89 44 24 28          	mov    %eax,0x28(%rsp)
+  4c2c11:	48 8b 84 24 a8 00 00 	mov    0xa8(%rsp),%rax
+  4c2c18:	00 
+  4c2c19:	48 89 44 24 20       	mov    %rax,0x20(%rsp)
+  4c2c1e:	66 0f 6f a4 24 b0 00 	movdqa 0xb0(%rsp),%xmm4
+  4c2c25:	00 00 
+  4c2c27:	0f 28 84 24 c0 00 00 	movaps 0xc0(%rsp),%xmm0
+  4c2c2e:	00 
+  4c2c2f:	0f 29 84 24 c0 01 00 	movaps %xmm0,0x1c0(%rsp)
+  4c2c36:	00 
+  4c2c37:	0f 28 84 24 d0 00 00 	movaps 0xd0(%rsp),%xmm0
+  4c2c3e:	00 
+  4c2c3f:	0f 29 84 24 d0 01 00 	movaps %xmm0,0x1d0(%rsp)
+  4c2c46:	00 
+  4c2c47:	0f 28 84 24 e0 00 00 	movaps 0xe0(%rsp),%xmm0
+  4c2c4e:	00 
+  4c2c4f:	0f 29 84 24 e0 01 00 	movaps %xmm0,0x1e0(%rsp)
+  4c2c56:	00 
+  4c2c57:	0f 28 84 24 f0 00 00 	movaps 0xf0(%rsp),%xmm0
+  4c2c5e:	00 
+  4c2c5f:	0f 29 84 24 f0 01 00 	movaps %xmm0,0x1f0(%rsp)
+  4c2c66:	00 
+  4c2c67:	0f 28 84 24 00 01 00 	movaps 0x100(%rsp),%xmm0
+  4c2c6e:	00 
+  4c2c6f:	0f 29 84 24 00 02 00 	movaps %xmm0,0x200(%rsp)
+  4c2c76:	00 
+  4c2c77:	0f 28 84 24 10 01 00 	movaps 0x110(%rsp),%xmm0
+  4c2c7e:	00 
+  4c2c7f:	0f 29 84 24 10 02 00 	movaps %xmm0,0x210(%rsp)
+  4c2c86:	00 
+  4c2c87:	0f 28 84 24 20 01 00 	movaps 0x120(%rsp),%xmm0
+  4c2c8e:	00 
+  4c2c8f:	0f 29 84 24 20 02 00 	movaps %xmm0,0x220(%rsp)
+  4c2c96:	00 
+  4c2c97:	66 0f 6f 84 24 30 01 	movdqa 0x130(%rsp),%xmm0
+  4c2c9e:	00 00 
+  4c2ca0:	66 0f 7f 84 24 30 02 	movdqa %xmm0,0x230(%rsp)
+  4c2ca7:	00 00 
+  4c2ca9:	e9 eb fd ff ff       	jmp    4c2a99 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x3f9>
+  4c2cae:	b8 16 00 00 00       	mov    $0x16,%eax
+  4c2cb3:	66 48 0f 6e e0       	movq   %rax,%xmm4
+  4c2cb8:	e9 dc fd ff ff       	jmp    4c2a99 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x3f9>
+  4c2cbd:	48 8b 84 24 a8 00 00 	mov    0xa8(%rsp),%rax
+  4c2cc4:	00 
+  4c2cc5:	48 89 44 24 10       	mov    %rax,0x10(%rsp)
+  4c2cca:	48 8b 84 24 b0 00 00 	mov    0xb0(%rsp),%rax
+  4c2cd1:	00 
+  4c2cd2:	48 89 44 24 08       	mov    %rax,0x8(%rsp)
+  4c2cd7:	44 89 f0             	mov    %r14d,%eax
+  4c2cda:	4c 8b b4 24 b8 00 00 	mov    0xb8(%rsp),%r14
+  4c2ce1:	00 
+  4c2ce2:	84 c0                	test   %al,%al
+  4c2ce4:	0f 84 e8 00 00 00    	je     4c2dd2 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x732>
+  4c2cea:	48 8b 74 24 08       	mov    0x8(%rsp),%rsi
+  4c2cef:	4a 8d 14 f6          	lea    (%rsi,%r14,8),%rdx
+  4c2cf3:	48 8d bc 24 80 00 00 	lea    0x80(%rsp),%rdi
+  4c2cfa:	00 
+  4c2cfb:	e8 70 3a fd ff       	call   496770 <_RNvXNtNtCscHgRw1M2fX5_5alloc3vec14spec_from_iterINtB4_3VecjEINtB2_12SpecFromIterjINtNtNtNtCsc36rpYXAlPq_4core4iter8adapters3map3MapINtNtNtB1q_5slice4iter4IterjENCINvNtCsfLkMs0yQJT5_6borsuk18two_bit_generation29rank_walked_source_with_limitNCINvB2D_25plan_two_bit_source_walksNCNCNCNvMs4_B2D_NtB2D_16TwoBitGeneration19plan_paged_measured0s_0s0_0Es_0Es0_0EE9from_iterCsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c2d00:	4c 89 74 24 18       	mov    %r14,0x18(%rsp)
+  4c2d05:	4c 8b b4 24 90 00 00 	mov    0x90(%rsp),%r14
+  4c2d0c:	00 
+  4c2d0d:	4d 85 f6             	test   %r14,%r14
+  4c2d10:	74 5f                	je     4c2d71 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x6d1>
+  4c2d12:	48 8b 94 24 88 00 00 	mov    0x88(%rsp),%rdx
+  4c2d19:	00 
+  4c2d1a:	b8 01 00 00 00       	mov    $0x1,%eax
+  4c2d1f:	49 83 fe 01          	cmp    $0x1,%r14
+  4c2d23:	0f 85 c2 0d 00 00    	jne    4c3aeb <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x144b>
+  4c2d29:	48 8b 8c 24 80 00 00 	mov    0x80(%rsp),%rcx
+  4c2d30:	00 
+  4c2d31:	48 8d 04 c2          	lea    (%rdx,%rax,8),%rax
+  4c2d35:	48 89 94 24 a0 00 00 	mov    %rdx,0xa0(%rsp)
+  4c2d3c:	00 
+  4c2d3d:	48 89 94 24 a8 00 00 	mov    %rdx,0xa8(%rsp)
+  4c2d44:	00 
+  4c2d45:	48 89 8c 24 b0 00 00 	mov    %rcx,0xb0(%rsp)
+  4c2d4c:	00 
+  4c2d4d:	48 89 84 24 b8 00 00 	mov    %rax,0xb8(%rsp)
+  4c2d54:	00 
+  4c2d55:	48 8d bc 24 a8 01 00 	lea    0x1a8(%rsp),%rdi
+  4c2d5c:	00 
+  4c2d5d:	48 8d b4 24 a0 00 00 	lea    0xa0(%rsp),%rsi
+  4c2d64:	00 
+  4c2d65:	e8 46 67 fc ff       	call   4894b0 <_RINvMsi_NtNtNtCscHgRw1M2fX5_5alloc11collections5btree3mapINtB6_8BTreeMapjNtNtB8_7set_val9SetValZSTE27bulk_build_from_sorted_iterINtNtNtNtCsc36rpYXAlPq_4core4iter8adapters3map3MapINtNtNtBc_3vec9into_iter8IntoIterjENCINvMse_NtB8_3setINtB3y_8BTreeSetjE16from_sorted_iterB2Q_E0EECsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c2d6a:	4c 8b 74 24 18       	mov    0x18(%rsp),%r14
+  4c2d6f:	eb 41                	jmp    4c2db2 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x712>
+  4c2d71:	48 c7 84 24 a8 01 00 	movq   $0x0,0x1a8(%rsp)
+  4c2d78:	00 00 00 00 00 
+  4c2d7d:	48 c7 84 24 b8 01 00 	movq   $0x0,0x1b8(%rsp)
+  4c2d84:	00 00 00 00 00 
+  4c2d89:	48 8b b4 24 80 00 00 	mov    0x80(%rsp),%rsi
+  4c2d90:	00 
+  4c2d91:	48 85 f6             	test   %rsi,%rsi
+  4c2d94:	4c 8b 74 24 18       	mov    0x18(%rsp),%r14
+  4c2d99:	74 17                	je     4c2db2 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x712>
+  4c2d9b:	48 8b bc 24 88 00 00 	mov    0x88(%rsp),%rdi
+  4c2da2:	00 
+  4c2da3:	48 c1 e6 03          	shl    $0x3,%rsi
+  4c2da7:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c2dac:	ff 15 d6 14 6f 00    	call   *0x6f14d6(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c2db2:	48 8b 44 24 78       	mov    0x78(%rsp),%rax
+  4c2db7:	48 39 84 24 b8 01 00 	cmp    %rax,0x1b8(%rsp)
+  4c2dbe:	00 
+  4c2dbf:	0f 85 da 06 00 00    	jne    4c349f <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xdff>
+  4c2dc5:	48 8d bc 24 a8 01 00 	lea    0x1a8(%rsp),%rdi
+  4c2dcc:	00 
+  4c2dcd:	e8 de b7 fc ff       	call   48e5b0 <_RNvXNtNtNtCscHgRw1M2fX5_5alloc11collections5btree3mapINtB2_8BTreeMapjNtNtB4_7set_val9SetValZSTENtNtNtCsc36rpYXAlPq_4core3ops4drop4Drop4dropCsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c2dd2:	41 f6 c7 01          	test   $0x1,%r15b
+  4c2dd6:	ba 00 10 00 00       	mov    $0x1000,%edx
+  4c2ddb:	b8 f0 09 00 00       	mov    $0x9f0,%eax
+  4c2de0:	48 0f 44 d0          	cmove  %rax,%rdx
+  4c2de4:	41 80 fc 02          	cmp    $0x2,%r12b
+  4c2de8:	48 8b 4c 24 68       	mov    0x68(%rsp),%rcx
+  4c2ded:	48 0f 44 c8          	cmove  %rax,%rcx
+  4c2df1:	48 89 4c 24 68       	mov    %rcx,0x68(%rsp)
+  4c2df6:	49 89 ef             	mov    %rbp,%r15
+  4c2df9:	49 c1 ef 05          	shr    $0x5,%r15
+  4c2dfd:	89 e8                	mov    %ebp,%eax
+  4c2dff:	83 e0 1f             	and    $0x1f,%eax
+  4c2e02:	48 83 f8 01          	cmp    $0x1,%rax
+  4c2e06:	49 83 df ff          	sbb    $0xffffffffffffffff,%r15
+  4c2e0a:	4c 39 fa             	cmp    %r15,%rdx
+  4c2e0d:	4c 89 bc 24 48 02 00 	mov    %r15,0x248(%rsp)
+  4c2e14:	00 
+  4c2e15:	48 89 54 24 48       	mov    %rdx,0x48(%rsp)
+  4c2e1a:	4c 0f 42 fa          	cmovb  %rdx,%r15
+  4c2e1e:	48 85 ed             	test   %rbp,%rbp
+  4c2e21:	74 2c                	je     4c2e4f <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x7af>
+  4c2e23:	4d 89 f4             	mov    %r14,%r12
+  4c2e26:	45 89 fe             	mov    %r15d,%r14d
+  4c2e29:	41 c1 e6 04          	shl    $0x4,%r14d
+  4c2e2d:	ff 15 1d 14 6f 00    	call   *0x6f141d(%rip)        # bb4250 <_DYNAMIC+0x248>
+  4c2e33:	be 08 00 00 00       	mov    $0x8,%esi
+  4c2e38:	4c 89 f7             	mov    %r14,%rdi
+  4c2e3b:	ff 15 17 14 6f 00    	call   *0x6f1417(%rip)        # bb4258 <_DYNAMIC+0x250>
+  4c2e41:	48 85 c0             	test   %rax,%rax
+  4c2e44:	0f 84 b3 0d 00 00    	je     4c3bfd <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x155d>
+  4c2e4a:	4d 89 e6             	mov    %r12,%r14
+  4c2e4d:	eb 08                	jmp    4c2e57 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x7b7>
+  4c2e4f:	b8 08 00 00 00       	mov    $0x8,%eax
+  4c2e54:	45 31 ff             	xor    %r15d,%r15d
+  4c2e57:	4c 89 7c 24 30       	mov    %r15,0x30(%rsp)
+  4c2e5c:	48 89 44 24 38       	mov    %rax,0x38(%rsp)
+  4c2e61:	48 c7 44 24 40 00 00 	movq   $0x0,0x40(%rsp)
+  4c2e68:	00 00 
+  4c2e6a:	4d 85 f6             	test   %r14,%r14
+  4c2e6d:	0f 84 e1 00 00 00    	je     4c2f54 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x8b4>
+  4c2e73:	49 c1 e6 03          	shl    $0x3,%r14
+  4c2e77:	45 31 ff             	xor    %r15d,%r15d
+  4c2e7a:	b8 16 00 00 00       	mov    $0x16,%eax
+  4c2e7f:	66 48 0f 6e c0       	movq   %rax,%xmm0
+  4c2e84:	66 0f 7f 84 24 70 01 	movdqa %xmm0,0x170(%rsp)
+  4c2e8b:	00 00 
+  4c2e8d:	48 8d 05 b7 27 de ff 	lea    -0x21d849(%rip),%rax        # 2a564b <anon.76999235c249af5725505212bbd91e3f.50.llvm.7692639943174766126+0x2e8>
+  4c2e94:	48 89 44 24 20       	mov    %rax,0x20(%rsp)
+  4c2e99:	eb 31                	jmp    4c2ecc <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x82c>
+  4c2e9b:	48 8b 44 24 38       	mov    0x38(%rsp),%rax
+  4c2ea0:	48 89 e9             	mov    %rbp,%rcx
+  4c2ea3:	48 c1 e1 04          	shl    $0x4,%rcx
+  4c2ea7:	4c 89 24 08          	mov    %r12,(%rax,%rcx,1)
+  4c2eab:	f3 0f 7e 44 24 18    	movq   0x18(%rsp),%xmm0
+  4c2eb1:	66 0f d6 44 08 08    	movq   %xmm0,0x8(%rax,%rcx,1)
+  4c2eb7:	48 ff c5             	inc    %rbp
+  4c2eba:	48 89 6c 24 40       	mov    %rbp,0x40(%rsp)
+  4c2ebf:	49 83 c7 08          	add    $0x8,%r15
+  4c2ec3:	4d 39 fe             	cmp    %r15,%r14
+  4c2ec6:	0f 84 8a 00 00 00    	je     4c2f56 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x8b6>
+  4c2ecc:	48 8b 44 24 08       	mov    0x8(%rsp),%rax
+  4c2ed1:	4e 8b 24 38          	mov    (%rax,%r15,1),%r12
+  4c2ed5:	48 8d bc 24 a0 00 00 	lea    0xa0(%rsp),%rdi
+  4c2edc:	00 
+  4c2edd:	48 8d b4 24 90 02 00 	lea    0x290(%rsp),%rsi
+  4c2ee4:	00 
+  4c2ee5:	4c 89 e2             	mov    %r12,%rdx
+  4c2ee8:	e8 c3 46 00 00       	call   4c75b0 <_RNCINvNtCsfLkMs0yQJT5_6borsuk18two_bit_generation25plan_two_bit_source_walksNCNCNCNvMs4_B4_NtB4_16TwoBitGeneration19plan_paged_measured0s_0s0_0Es_0CsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c2eed:	44 0f b6 ac 24 a0 00 	movzbl 0xa0(%rsp),%r13d
+  4c2ef4:	00 00 
+  4c2ef6:	41 80 fd ff          	cmp    $0xff,%r13b
+  4c2efa:	0f 85 ee 05 00 00    	jne    4c34ee <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xe4e>
+  4c2f00:	f3 0f 7e 84 24 a8 00 	movq   0xa8(%rsp),%xmm0
+  4c2f07:	00 00 
+  4c2f09:	66 0f d6 44 24 18    	movq   %xmm0,0x18(%rsp)
+  4c2f0f:	66 48 0f 7e c0       	movq   %xmm0,%rax
+  4c2f14:	48 b9 ff ff ff ff ff 	movabs $0x7fffffffffffffff,%rcx
+  4c2f1b:	ff ff 7f 
+  4c2f1e:	48 21 c8             	and    %rcx,%rax
+  4c2f21:	48 b9 ff ff ff ff ff 	movabs $0x7fefffffffffffff,%rcx
+  4c2f28:	ff ef 7f 
+  4c2f2b:	48 39 c8             	cmp    %rcx,%rax
+  4c2f2e:	0f 8f 6f 06 00 00    	jg     4c35a3 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xf03>
+  4c2f34:	48 8b 6c 24 40       	mov    0x40(%rsp),%rbp
+  4c2f39:	48 3b 6c 24 30       	cmp    0x30(%rsp),%rbp
+  4c2f3e:	0f 85 57 ff ff ff    	jne    4c2e9b <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x7fb>
+  4c2f44:	48 8d 7c 24 30       	lea    0x30(%rsp),%rdi
+  4c2f49:	ff 15 e1 1d 6f 00    	call   *0x6f1de1(%rip)        # bb4d30 <_DYNAMIC+0xd28>
+  4c2f4f:	e9 47 ff ff ff       	jmp    4c2e9b <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x7fb>
+  4c2f54:	31 ed                	xor    %ebp,%ebp
+  4c2f56:	48 8b 74 24 10       	mov    0x10(%rsp),%rsi
+  4c2f5b:	48 85 f6             	test   %rsi,%rsi
+  4c2f5e:	74 19                	je     4c2f79 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x8d9>
+  4c2f60:	48 c1 e6 03          	shl    $0x3,%rsi
+  4c2f64:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c2f69:	48 8b 7c 24 08       	mov    0x8(%rsp),%rdi
+  4c2f6e:	ff 15 14 13 6f 00    	call   *0x6f1314(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c2f74:	48 8b 6c 24 40       	mov    0x40(%rsp),%rbp
+  4c2f79:	48 8b 74 24 38       	mov    0x38(%rsp),%rsi
+  4c2f7e:	48 c1 e5 04          	shl    $0x4,%rbp
+  4c2f82:	48 01 f5             	add    %rsi,%rbp
+  4c2f85:	48 8d bc 24 a0 00 00 	lea    0xa0(%rsp),%rdi
+  4c2f8c:	00 
+  4c2f8d:	48 89 ea             	mov    %rbp,%rdx
+  4c2f90:	e8 8b 30 fd ff       	call   496020 <_RNvXNtNtCscHgRw1M2fX5_5alloc3vec14spec_from_iterINtB4_3VecTjdEEINtB2_12SpecFromIterBU_INtNtNtNtCsc36rpYXAlPq_4core4iter8adapters3map3MapINtNtNtB1v_5slice4iter4IterBU_ENCINvNtCsfLkMs0yQJT5_6borsuk18two_bit_generation29rank_walked_source_with_limitNCINvB2K_25plan_two_bit_source_walksNCNCNCNvMs4_B2K_NtB2K_16TwoBitGeneration19plan_paged_measured0s_0s0_0Es_0Es1_0EE9from_iterCsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c2f95:	48 8d bc 24 50 01 00 	lea    0x150(%rsp),%rdi
+  4c2f9c:	00 
+  4c2f9d:	48 8d b4 24 a0 00 00 	lea    0xa0(%rsp),%rsi
+  4c2fa4:	00 
+  4c2fa5:	48 8b 54 24 68       	mov    0x68(%rsp),%rdx
+  4c2faa:	ff 15 88 1d 6f 00    	call   *0x6f1d88(%rip)        # bb4d38 <_DYNAMIC+0xd30>
+  4c2fb0:	4c 8b 7c 24 40       	mov    0x40(%rsp),%r15
+  4c2fb5:	48 8d bc 24 68 02 00 	lea    0x268(%rsp),%rdi
+  4c2fbc:	00 
+  4c2fbd:	48 8d b4 24 50 01 00 	lea    0x150(%rsp),%rsi
+  4c2fc4:	00 
+  4c2fc5:	e8 76 46 fd ff       	call   497640 <_RNvXsa_NtCscHgRw1M2fX5_5alloc3vecINtB5_3VecTjdEENtNtCsc36rpYXAlPq_4core5clone5Clone5cloneCsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c2fca:	48 8b bc 24 70 02 00 	mov    0x270(%rsp),%rdi
+  4c2fd1:	00 
+  4c2fd2:	4c 8b a4 24 78 02 00 	mov    0x278(%rsp),%r12
+  4c2fd9:	00 
+  4c2fda:	48 89 7c 24 10       	mov    %rdi,0x10(%rsp)
+  4c2fdf:	4c 89 e6             	mov    %r12,%rsi
+  4c2fe2:	e8 19 f6 ff ff       	call   4c2600 <_RINvMNtCsc36rpYXAlPq_4core5sliceSTjdE16sort_unstable_byNCINvNtCsfLkMs0yQJT5_6borsuk18two_bit_generation29rank_walked_source_with_limitNCINvBW_25plan_two_bit_source_walksNCNCNCNvMs4_BW_NtBW_16TwoBitGeneration19plan_paged_measured0s_0s0_0Es_0Es2_0ECsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c2fe7:	48 8b 84 24 68 02 00 	mov    0x268(%rsp),%rax
+  4c2fee:	00 
+  4c2fef:	48 89 84 24 80 01 00 	mov    %rax,0x180(%rsp)
+  4c2ff6:	00 
+  4c2ff7:	4d 85 e4             	test   %r12,%r12
+  4c2ffa:	0f 84 9d 01 00 00    	je     4c319d <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xafd>
+  4c3000:	4c 89 e0             	mov    %r12,%rax
+  4c3003:	48 c1 e0 04          	shl    $0x4,%rax
+  4c3007:	48 8b 4c 24 10       	mov    0x10(%rsp),%rcx
+  4c300c:	48 01 c8             	add    %rcx,%rax
+  4c300f:	48 89 84 24 40 02 00 	mov    %rax,0x240(%rsp)
+  4c3016:	00 
+  4c3017:	b8 16 00 00 00       	mov    $0x16,%eax
+  4c301c:	66 48 0f 6e c0       	movq   %rax,%xmm0
+  4c3021:	66 0f 7f 84 24 70 01 	movdqa %xmm0,0x170(%rsp)
+  4c3028:	00 00 
+  4c302a:	48 8d 05 1a 26 de ff 	lea    -0x21d9e6(%rip),%rax        # 2a564b <anon.76999235c249af5725505212bbd91e3f.50.llvm.7692639943174766126+0x2e8>
+  4c3031:	48 89 44 24 20       	mov    %rax,0x20(%rsp)
+  4c3036:	48 89 4c 24 08       	mov    %rcx,0x8(%rsp)
+  4c303b:	eb 1c                	jmp    4c3059 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x9b9>
+  4c303d:	48 8b 44 24 08       	mov    0x8(%rsp),%rax
+  4c3042:	48 83 c0 10          	add    $0x10,%rax
+  4c3046:	48 89 44 24 08       	mov    %rax,0x8(%rsp)
+  4c304b:	48 3b 84 24 40 02 00 	cmp    0x240(%rsp),%rax
+  4c3052:	00 
+  4c3053:	0f 84 44 01 00 00    	je     4c319d <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xafd>
+  4c3059:	48 8b 44 24 08       	mov    0x8(%rsp),%rax
+  4c305e:	48 8b 28             	mov    (%rax),%rbp
+  4c3061:	48 8d 0c ed 08 00 00 	lea    0x8(,%rbp,8),%rcx
+  4c3068:	00 
+  4c3069:	48 c1 e5 03          	shl    $0x3,%rbp
+  4c306d:	48 8b 84 24 48 02 00 	mov    0x248(%rsp),%rax
+  4c3074:	00 
+  4c3075:	48 39 c8             	cmp    %rcx,%rax
+  4c3078:	48 0f 42 c8          	cmovb  %rax,%rcx
+  4c307c:	48 39 cd             	cmp    %rcx,%rbp
+  4c307f:	73 bc                	jae    4c303d <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x99d>
+  4c3081:	49 89 ce             	mov    %rcx,%r14
+  4c3084:	4c 8b 64 24 40       	mov    0x40(%rsp),%r12
+  4c3089:	eb 2c                	jmp    4c30b7 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xa17>
+  4c308b:	48 8b 44 24 38       	mov    0x38(%rsp),%rax
+  4c3090:	4c 89 e1             	mov    %r12,%rcx
+  4c3093:	48 c1 e1 04          	shl    $0x4,%rcx
+  4c3097:	48 89 2c 08          	mov    %rbp,(%rax,%rcx,1)
+  4c309b:	f3 0f 7e 44 24 18    	movq   0x18(%rsp),%xmm0
+  4c30a1:	66 0f d6 44 08 08    	movq   %xmm0,0x8(%rax,%rcx,1)
+  4c30a7:	49 ff c4             	inc    %r12
+  4c30aa:	4c 89 64 24 40       	mov    %r12,0x40(%rsp)
+  4c30af:	48 ff c5             	inc    %rbp
+  4c30b2:	4c 39 f5             	cmp    %r14,%rbp
+  4c30b5:	74 86                	je     4c303d <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x99d>
+  4c30b7:	4c 3b 64 24 48       	cmp    0x48(%rsp),%r12
+  4c30bc:	0f 84 db 00 00 00    	je     4c319d <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xafd>
+  4c30c2:	4d 39 e7             	cmp    %r12,%r15
+  4c30c5:	0f 87 06 0a 00 00    	ja     4c3ad1 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1431>
+  4c30cb:	4d 85 ff             	test   %r15,%r15
+  4c30ce:	74 4e                	je     4c311e <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xa7e>
+  4c30d0:	48 8b 44 24 38       	mov    0x38(%rsp),%rax
+  4c30d5:	49 83 ff 01          	cmp    $0x1,%r15
+  4c30d9:	75 04                	jne    4c30df <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xa3f>
+  4c30db:	31 c9                	xor    %ecx,%ecx
+  4c30dd:	eb 35                	jmp    4c3114 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xa74>
+  4c30df:	4c 89 fa             	mov    %r15,%rdx
+  4c30e2:	31 c9                	xor    %ecx,%ecx
+  4c30e4:	66 66 66 2e 0f 1f 84 	data16 data16 cs nopw 0x0(%rax,%rax,1)
+  4c30eb:	00 00 00 00 00 
+  4c30f0:	48 89 ce             	mov    %rcx,%rsi
+  4c30f3:	48 89 d7             	mov    %rdx,%rdi
+  4c30f6:	48 d1 ef             	shr    $1,%rdi
+  4c30f9:	48 01 f9             	add    %rdi,%rcx
+  4c30fc:	49 89 c8             	mov    %rcx,%r8
+  4c30ff:	49 c1 e0 04          	shl    $0x4,%r8
+  4c3103:	4a 39 2c 00          	cmp    %rbp,(%rax,%r8,1)
+  4c3107:	48 0f 47 ce          	cmova  %rsi,%rcx
+  4c310b:	48 29 fa             	sub    %rdi,%rdx
+  4c310e:	48 83 fa 01          	cmp    $0x1,%rdx
+  4c3112:	77 dc                	ja     4c30f0 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xa50>
+  4c3114:	48 c1 e1 04          	shl    $0x4,%rcx
+  4c3118:	48 39 2c 08          	cmp    %rbp,(%rax,%rcx,1)
+  4c311c:	74 91                	je     4c30af <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xa0f>
+  4c311e:	48 8d bc 24 a0 00 00 	lea    0xa0(%rsp),%rdi
+  4c3125:	00 
+  4c3126:	48 8d b4 24 90 02 00 	lea    0x290(%rsp),%rsi
+  4c312d:	00 
+  4c312e:	48 89 ea             	mov    %rbp,%rdx
+  4c3131:	e8 7a 44 00 00       	call   4c75b0 <_RNCINvNtCsfLkMs0yQJT5_6borsuk18two_bit_generation25plan_two_bit_source_walksNCNCNCNvMs4_B4_NtB4_16TwoBitGeneration19plan_paged_measured0s_0s0_0Es_0CsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c3136:	44 0f b6 ac 24 a0 00 	movzbl 0xa0(%rsp),%r13d
+  4c313d:	00 00 
+  4c313f:	41 80 fd ff          	cmp    $0xff,%r13b
+  4c3143:	0f 85 eb 07 00 00    	jne    4c3934 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1294>
+  4c3149:	f3 0f 7e 84 24 a8 00 	movq   0xa8(%rsp),%xmm0
+  4c3150:	00 00 
+  4c3152:	66 0f d6 44 24 18    	movq   %xmm0,0x18(%rsp)
+  4c3158:	66 48 0f 7e c0       	movq   %xmm0,%rax
+  4c315d:	48 b9 ff ff ff ff ff 	movabs $0x7fffffffffffffff,%rcx
+  4c3164:	ff ff 7f 
+  4c3167:	48 21 c8             	and    %rcx,%rax
+  4c316a:	48 b9 ff ff ff ff ff 	movabs $0x7fefffffffffffff,%rcx
+  4c3171:	ff ef 7f 
+  4c3174:	48 39 c8             	cmp    %rcx,%rax
+  4c3177:	0f 8f 6c 08 00 00    	jg     4c39e9 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1349>
+  4c317d:	4c 8b 64 24 40       	mov    0x40(%rsp),%r12
+  4c3182:	4c 3b 64 24 30       	cmp    0x30(%rsp),%r12
+  4c3187:	0f 85 fe fe ff ff    	jne    4c308b <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x9eb>
+  4c318d:	48 8d 7c 24 30       	lea    0x30(%rsp),%rdi
+  4c3192:	ff 15 98 1b 6f 00    	call   *0x6f1b98(%rip)        # bb4d30 <_DYNAMIC+0xd28>
+  4c3198:	e9 ee fe ff ff       	jmp    4c308b <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x9eb>
+  4c319d:	48 8b b4 24 80 01 00 	mov    0x180(%rsp),%rsi
+  4c31a4:	00 
+  4c31a5:	48 85 f6             	test   %rsi,%rsi
+  4c31a8:	74 14                	je     4c31be <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xb1e>
+  4c31aa:	48 c1 e6 04          	shl    $0x4,%rsi
+  4c31ae:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c31b3:	48 8b 7c 24 10       	mov    0x10(%rsp),%rdi
+  4c31b8:	ff 15 ca 10 6f 00    	call   *0x6f10ca(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c31be:	48 8b 74 24 38       	mov    0x38(%rsp),%rsi
+  4c31c3:	48 8b 54 24 40       	mov    0x40(%rsp),%rdx
+  4c31c8:	48 c1 e2 04          	shl    $0x4,%rdx
+  4c31cc:	48 01 f2             	add    %rsi,%rdx
+  4c31cf:	48 8d bc 24 a0 00 00 	lea    0xa0(%rsp),%rdi
+  4c31d6:	00 
+  4c31d7:	e8 44 2e fd ff       	call   496020 <_RNvXNtNtCscHgRw1M2fX5_5alloc3vec14spec_from_iterINtB4_3VecTjdEEINtB2_12SpecFromIterBU_INtNtNtNtCsc36rpYXAlPq_4core4iter8adapters3map3MapINtNtNtB1v_5slice4iter4IterBU_ENCINvNtCsfLkMs0yQJT5_6borsuk18two_bit_generation29rank_walked_source_with_limitNCINvB2K_25plan_two_bit_source_walksNCNCNCNvMs4_B2K_NtB2K_16TwoBitGeneration19plan_paged_measured0s_0s0_0Es_0Es1_0EE9from_iterCsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c31dc:	4c 8b ac 24 40 01 00 	mov    0x140(%rsp),%r13
+  4c31e3:	00 
+  4c31e4:	48 8d bc 24 80 00 00 	lea    0x80(%rsp),%rdi
+  4c31eb:	00 
+  4c31ec:	48 8d b4 24 a0 00 00 	lea    0xa0(%rsp),%rsi
+  4c31f3:	00 
+  4c31f4:	48 8b 54 24 68       	mov    0x68(%rsp),%rdx
+  4c31f9:	ff 15 39 1b 6f 00    	call   *0x6f1b39(%rip)        # bb4d38 <_DYNAMIC+0xd30>
+  4c31ff:	48 8b b4 24 50 01 00 	mov    0x150(%rsp),%rsi
+  4c3206:	00 
+  4c3207:	48 85 f6             	test   %rsi,%rsi
+  4c320a:	74 17                	je     4c3223 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xb83>
+  4c320c:	48 8b bc 24 58 01 00 	mov    0x158(%rsp),%rdi
+  4c3213:	00 
+  4c3214:	48 c1 e6 04          	shl    $0x4,%rsi
+  4c3218:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c321d:	ff 15 65 10 6f 00    	call   *0x6f1065(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c3223:	48 8b 84 24 90 00 00 	mov    0x90(%rsp),%rax
+  4c322a:	00 
+  4c322b:	48 89 84 24 60 01 00 	mov    %rax,0x160(%rsp)
+  4c3232:	00 
+  4c3233:	f3 0f 6f 84 24 80 00 	movdqu 0x80(%rsp),%xmm0
+  4c323a:	00 00 
+  4c323c:	66 0f 7f 84 24 50 01 	movdqa %xmm0,0x150(%rsp)
+  4c3243:	00 00 
+  4c3245:	48 8b 74 24 78       	mov    0x78(%rsp),%rsi
+  4c324a:	4c 8b 74 24 70       	mov    0x70(%rsp),%r14
+  4c324f:	49 0f af f6          	imul   %r14,%rsi
+  4c3253:	48 8d bc 24 a0 00 00 	lea    0xa0(%rsp),%rdi
+  4c325a:	00 
+  4c325b:	b9 08 00 00 00       	mov    $0x8,%ecx
+  4c3260:	41 b8 08 00 00 00    	mov    $0x8,%r8d
+  4c3266:	31 d2                	xor    %edx,%edx
+  4c3268:	e8 43 bb fe ff       	call   4aedb0 <_RNvMs5_NtCscHgRw1M2fX5_5alloc7raw_vecNtB5_11RawVecInner15try_allocate_inCsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c326d:	48 8b bc 24 a8 00 00 	mov    0xa8(%rsp),%rdi
+  4c3274:	00 
+  4c3275:	83 bc 24 a0 00 00 00 	cmpl   $0x1,0xa0(%rsp)
+  4c327c:	01 
+  4c327d:	0f 84 e4 08 00 00    	je     4c3b67 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x14c7>
+  4c3283:	48 8b 84 24 b0 00 00 	mov    0xb0(%rsp),%rax
+  4c328a:	00 
+  4c328b:	48 89 7c 24 50       	mov    %rdi,0x50(%rsp)
+  4c3290:	48 89 44 24 58       	mov    %rax,0x58(%rsp)
+  4c3295:	48 c7 44 24 60 00 00 	movq   $0x0,0x60(%rsp)
+  4c329c:	00 00 
+  4c329e:	4d 85 f6             	test   %r14,%r14
+  4c32a1:	0f 84 95 03 00 00    	je     4c363c <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xf9c>
+  4c32a7:	4c 89 f0             	mov    %r14,%rax
+  4c32aa:	48 c1 e0 05          	shl    $0x5,%rax
+  4c32ae:	4c 01 e8             	add    %r13,%rax
+  4c32b1:	48 8b 4c 24 78       	mov    0x78(%rsp),%rcx
+  4c32b6:	48 ff c9             	dec    %rcx
+  4c32b9:	48 89 4c 24 08       	mov    %rcx,0x8(%rsp)
+  4c32be:	4c 8d b4 24 80 00 00 	lea    0x80(%rsp),%r14
+  4c32c5:	00 
+  4c32c6:	48 89 44 24 70       	mov    %rax,0x70(%rsp)
+  4c32cb:	eb 15                	jmp    4c32e2 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xc42>
+  4c32cd:	4c 8b ac 24 40 01 00 	mov    0x140(%rsp),%r13
+  4c32d4:	00 
+  4c32d5:	49 83 c5 20          	add    $0x20,%r13
+  4c32d9:	49 39 c5             	cmp    %rax,%r13
+  4c32dc:	0f 84 4b 03 00 00    	je     4c362d <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xf8d>
+  4c32e2:	49 8b 45 10          	mov    0x10(%r13),%rax
+  4c32e6:	49 8b 4d 18          	mov    0x18(%r13),%rcx
+  4c32ea:	48 8d 0c c8          	lea    (%rax,%rcx,8),%rcx
+  4c32ee:	48 89 84 24 a0 00 00 	mov    %rax,0xa0(%rsp)
+  4c32f5:	00 
+  4c32f6:	48 89 8c 24 a8 00 00 	mov    %rcx,0xa8(%rsp)
+  4c32fd:	00 
+  4c32fe:	48 8d 84 24 50 01 00 	lea    0x150(%rsp),%rax
+  4c3305:	00 
+  4c3306:	48 89 84 24 b0 00 00 	mov    %rax,0xb0(%rsp)
+  4c330d:	00 
+  4c330e:	4c 89 f7             	mov    %r14,%rdi
+  4c3311:	48 8d b4 24 a0 00 00 	lea    0xa0(%rsp),%rsi
+  4c3318:	00 
+  4c3319:	e8 22 2e fd ff       	call   496140 <_RNvXNtNtCscHgRw1M2fX5_5alloc3vec14spec_from_iterINtB4_3VecTjdEEINtB2_12SpecFromIterBU_INtNtNtNtCsc36rpYXAlPq_4core4iter8adapters3map3MapINtNtNtB1v_5slice4iter4IterjENCINvNtCsfLkMs0yQJT5_6borsuk18two_bit_generation29rank_walked_source_with_limitNCINvB2I_25plan_two_bit_source_walksNCNCNCNvMs4_B2I_NtB2I_16TwoBitGeneration19plan_paged_measured0s_0s0_0Es_0Es5_0EE9from_iterCsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c331e:	48 8d bc 24 a8 01 00 	lea    0x1a8(%rsp),%rdi
+  4c3325:	00 
+  4c3326:	4c 89 f6             	mov    %r14,%rsi
+  4c3329:	48 8b 54 24 68       	mov    0x68(%rsp),%rdx
+  4c332e:	ff 15 04 1a 6f 00    	call   *0x6f1a04(%rip)        # bb4d38 <_DYNAMIC+0xd30>
+  4c3334:	48 8b 84 24 b0 01 00 	mov    0x1b0(%rsp),%rax
+  4c333b:	00 
+  4c333c:	48 89 44 24 18       	mov    %rax,0x18(%rsp)
+  4c3341:	48 8b ac 24 b8 01 00 	mov    0x1b8(%rsp),%rbp
+  4c3348:	00 
+  4c3349:	48 8d 44 24 07       	lea    0x7(%rsp),%rax
+  4c334e:	48 89 84 24 a0 00 00 	mov    %rax,0xa0(%rsp)
+  4c3355:	00 
+  4c3356:	48 83 fd 02          	cmp    $0x2,%rbp
+  4c335a:	0f 83 00 01 00 00    	jae    4c3460 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xdc0>
+  4c3360:	48 3b 6c 24 78       	cmp    0x78(%rsp),%rbp
+  4c3365:	0f 82 5c 02 00 00    	jb     4c35c7 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xf27>
+  4c336b:	4d 8b 75 00          	mov    0x0(%r13),%r14
+  4c336f:	4c 8b 7c 24 60       	mov    0x60(%rsp),%r15
+  4c3374:	4c 3b 7c 24 50       	cmp    0x50(%rsp),%r15
+  4c3379:	75 0b                	jne    4c3386 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xce6>
+  4c337b:	48 8d 7c 24 50       	lea    0x50(%rsp),%rdi
+  4c3380:	ff 15 ba 19 6f 00    	call   *0x6f19ba(%rip)        # bb4d40 <_DYNAMIC+0xd38>
+  4c3386:	4c 89 ac 24 40 01 00 	mov    %r13,0x140(%rsp)
+  4c338d:	00 
+  4c338e:	4d 8d 67 01          	lea    0x1(%r15),%r12
+  4c3392:	48 8b 44 24 58       	mov    0x58(%rsp),%rax
+  4c3397:	4e 89 34 f8          	mov    %r14,(%rax,%r15,8)
+  4c339b:	4c 89 64 24 60       	mov    %r12,0x60(%rsp)
+  4c33a0:	48 83 7c 24 08 00    	cmpq   $0x0,0x8(%rsp)
+  4c33a6:	48 8b 44 24 70       	mov    0x70(%rsp),%rax
+  4c33ab:	74 7c                	je     4c3429 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xd89>
+  4c33ad:	48 c1 e5 04          	shl    $0x4,%rbp
+  4c33b1:	4c 8b 7c 24 18       	mov    0x18(%rsp),%r15
+  4c33b6:	4c 01 fd             	add    %r15,%rbp
+  4c33b9:	48 8b 4c 24 08       	mov    0x8(%rsp),%rcx
+  4c33be:	48 89 4c 24 20       	mov    %rcx,0x20(%rsp)
+  4c33c3:	49 39 ef             	cmp    %rbp,%r15
+  4c33c6:	74 61                	je     4c3429 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xd89>
+  4c33c8:	48 ff 4c 24 20       	decq   0x20(%rsp)
+  4c33cd:	0f 1f 00             	nopl   (%rax)
+  4c33d0:	4d 8b 2f             	mov    (%r15),%r13
+  4c33d3:	4d 39 f5             	cmp    %r14,%r13
+  4c33d6:	75 0b                	jne    4c33e3 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xd43>
+  4c33d8:	49 83 c7 10          	add    $0x10,%r15
+  4c33dc:	49 39 ef             	cmp    %rbp,%r15
+  4c33df:	75 ef                	jne    4c33d0 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xd30>
+  4c33e1:	eb 46                	jmp    4c3429 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xd89>
+  4c33e3:	4c 3b 64 24 50       	cmp    0x50(%rsp),%r12
+  4c33e8:	75 1d                	jne    4c3407 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xd67>
+  4c33ea:	ba 01 00 00 00       	mov    $0x1,%edx
+  4c33ef:	b9 08 00 00 00       	mov    $0x8,%ecx
+  4c33f4:	41 b8 08 00 00 00    	mov    $0x8,%r8d
+  4c33fa:	48 8d 7c 24 50       	lea    0x50(%rsp),%rdi
+  4c33ff:	4c 89 e6             	mov    %r12,%rsi
+  4c3402:	e8 19 a5 fe ff       	call   4ad920 <_RINvNvMs2_NtCscHgRw1M2fX5_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c3407:	49 83 c7 10          	add    $0x10,%r15
+  4c340b:	48 8b 44 24 58       	mov    0x58(%rsp),%rax
+  4c3410:	4e 89 2c e0          	mov    %r13,(%rax,%r12,8)
+  4c3414:	49 ff c4             	inc    %r12
+  4c3417:	4c 89 64 24 60       	mov    %r12,0x60(%rsp)
+  4c341c:	48 83 7c 24 20 00    	cmpq   $0x0,0x20(%rsp)
+  4c3422:	48 8b 44 24 70       	mov    0x70(%rsp),%rax
+  4c3427:	75 9a                	jne    4c33c3 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xd23>
+  4c3429:	48 8b b4 24 a8 01 00 	mov    0x1a8(%rsp),%rsi
+  4c3430:	00 
+  4c3431:	48 85 f6             	test   %rsi,%rsi
+  4c3434:	4c 8d b4 24 80 00 00 	lea    0x80(%rsp),%r14
+  4c343b:	00 
+  4c343c:	0f 84 8b fe ff ff    	je     4c32cd <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xc2d>
+  4c3442:	48 c1 e6 04          	shl    $0x4,%rsi
+  4c3446:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c344b:	48 8b 7c 24 18       	mov    0x18(%rsp),%rdi
+  4c3450:	ff 15 32 0e 6f 00    	call   *0x6f0e32(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c3456:	48 8b 44 24 70       	mov    0x70(%rsp),%rax
+  4c345b:	e9 6d fe ff ff       	jmp    4c32cd <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xc2d>
+  4c3460:	48 83 fd 15          	cmp    $0x15,%rbp
+  4c3464:	73 1f                	jae    4c3485 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xde5>
+  4c3466:	ba 01 00 00 00       	mov    $0x1,%edx
+  4c346b:	48 8b 7c 24 18       	mov    0x18(%rsp),%rdi
+  4c3470:	48 89 ee             	mov    %rbp,%rsi
+  4c3473:	48 8d 8c 24 a0 00 00 	lea    0xa0(%rsp),%rcx
+  4c347a:	00 
+  4c347b:	e8 60 bc fb ff       	call   47f0e0 <_RINvNtNtNtNtCsc36rpYXAlPq_4core5slice4sort6shared9smallsort25insertion_sort_shift_leftTjdENCINvMB8_SB1m_16sort_unstable_byNCINvNtCsfLkMs0yQJT5_6borsuk18two_bit_generation29rank_walked_source_with_limitNCINvB21_25plan_two_bit_source_walksNCNCNCNvMs4_B21_NtB21_16TwoBitGeneration19plan_paged_measured0s_0s0_0Es_0Es2_0E0ECsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c3480:	e9 db fe ff ff       	jmp    4c3360 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xcc0>
+  4c3485:	48 8b 7c 24 18       	mov    0x18(%rsp),%rdi
+  4c348a:	48 89 ee             	mov    %rbp,%rsi
+  4c348d:	48 8d 94 24 a0 00 00 	lea    0xa0(%rsp),%rdx
+  4c3494:	00 
+  4c3495:	e8 e6 dc fc ff       	call   491180 <_RINvNtNtNtCsc36rpYXAlPq_4core5slice4sort8unstable7ipnsortTjdENCINvMB6_SBT_16sort_unstable_byNCINvNtCsfLkMs0yQJT5_6borsuk18two_bit_generation29rank_walked_source_with_limitNCINvB1x_25plan_two_bit_source_walksNCNCNCNvMs4_B1x_NtB1x_16TwoBitGeneration19plan_paged_measured0s_0s0_0Es_0Es6_0E0ECsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c349a:	e9 c1 fe ff ff       	jmp    4c3360 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xcc0>
+  4c349f:	48 8d bc 24 a8 01 00 	lea    0x1a8(%rsp),%rdi
+  4c34a6:	00 
+  4c34a7:	e8 04 b1 fc ff       	call   48e5b0 <_RNvXNtNtNtCscHgRw1M2fX5_5alloc11collections5btree3mapINtB2_8BTreeMapjNtNtB4_7set_val9SetValZSTENtNtNtCsc36rpYXAlPq_4core3ops4drop4Drop4dropCsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c34ac:	b8 16 00 00 00       	mov    $0x16,%eax
+  4c34b1:	66 48 0f 6e c0       	movq   %rax,%xmm0
+  4c34b6:	66 0f 7f 84 24 70 01 	movdqa %xmm0,0x170(%rsp)
+  4c34bd:	00 00 
+  4c34bf:	48 8b 74 24 10       	mov    0x10(%rsp),%rsi
+  4c34c4:	48 85 f6             	test   %rsi,%rsi
+  4c34c7:	74 14                	je     4c34dd <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xe3d>
+  4c34c9:	48 c1 e6 03          	shl    $0x3,%rsi
+  4c34cd:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c34d2:	48 8b 7c 24 08       	mov    0x8(%rsp),%rdi
+  4c34d7:	ff 15 ab 0d 6f 00    	call   *0x6f0dab(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c34dd:	45 31 ed             	xor    %r13d,%r13d
+  4c34e0:	66 0f 6f a4 24 70 01 	movdqa 0x170(%rsp),%xmm4
+  4c34e7:	00 00 
+  4c34e9:	e9 ab f5 ff ff       	jmp    4c2a99 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x3f9>
+  4c34ee:	8b 84 24 a1 00 00 00 	mov    0xa1(%rsp),%eax
+  4c34f5:	8b 8c 24 a4 00 00 00 	mov    0xa4(%rsp),%ecx
+  4c34fc:	89 4c 24 2b          	mov    %ecx,0x2b(%rsp)
+  4c3500:	89 44 24 28          	mov    %eax,0x28(%rsp)
+  4c3504:	48 8b 84 24 a8 00 00 	mov    0xa8(%rsp),%rax
+  4c350b:	00 
+  4c350c:	48 89 44 24 20       	mov    %rax,0x20(%rsp)
+  4c3511:	0f 28 84 24 b0 00 00 	movaps 0xb0(%rsp),%xmm0
+  4c3518:	00 
+  4c3519:	0f 29 84 24 70 01 00 	movaps %xmm0,0x170(%rsp)
+  4c3520:	00 
+  4c3521:	0f 28 84 24 c0 00 00 	movaps 0xc0(%rsp),%xmm0
+  4c3528:	00 
+  4c3529:	0f 29 84 24 c0 01 00 	movaps %xmm0,0x1c0(%rsp)
+  4c3530:	00 
+  4c3531:	0f 28 84 24 d0 00 00 	movaps 0xd0(%rsp),%xmm0
+  4c3538:	00 
+  4c3539:	0f 29 84 24 d0 01 00 	movaps %xmm0,0x1d0(%rsp)
+  4c3540:	00 
+  4c3541:	0f 28 84 24 e0 00 00 	movaps 0xe0(%rsp),%xmm0
+  4c3548:	00 
+  4c3549:	0f 29 84 24 e0 01 00 	movaps %xmm0,0x1e0(%rsp)
+  4c3550:	00 
+  4c3551:	0f 28 84 24 f0 00 00 	movaps 0xf0(%rsp),%xmm0
+  4c3558:	00 
+  4c3559:	0f 29 84 24 f0 01 00 	movaps %xmm0,0x1f0(%rsp)
+  4c3560:	00 
+  4c3561:	0f 28 84 24 00 01 00 	movaps 0x100(%rsp),%xmm0
+  4c3568:	00 
+  4c3569:	0f 29 84 24 00 02 00 	movaps %xmm0,0x200(%rsp)
+  4c3570:	00 
+  4c3571:	0f 28 84 24 10 01 00 	movaps 0x110(%rsp),%xmm0
+  4c3578:	00 
+  4c3579:	0f 29 84 24 10 02 00 	movaps %xmm0,0x210(%rsp)
+  4c3580:	00 
+  4c3581:	0f 28 84 24 20 01 00 	movaps 0x120(%rsp),%xmm0
+  4c3588:	00 
+  4c3589:	0f 29 84 24 20 02 00 	movaps %xmm0,0x220(%rsp)
+  4c3590:	00 
+  4c3591:	0f 28 84 24 30 01 00 	movaps 0x130(%rsp),%xmm0
+  4c3598:	00 
+  4c3599:	0f 29 84 24 30 02 00 	movaps %xmm0,0x230(%rsp)
+  4c35a0:	00 
+  4c35a1:	eb 03                	jmp    4c35a6 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xf06>
+  4c35a3:	45 31 ed             	xor    %r13d,%r13d
+  4c35a6:	48 8b 74 24 10       	mov    0x10(%rsp),%rsi
+  4c35ab:	48 85 f6             	test   %rsi,%rsi
+  4c35ae:	0f 84 7d 04 00 00    	je     4c3a31 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1391>
+  4c35b4:	48 c1 e6 03          	shl    $0x3,%rsi
+  4c35b8:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c35bd:	48 8b 7c 24 08       	mov    0x8(%rsp),%rdi
+  4c35c2:	e9 64 04 00 00       	jmp    4c3a2b <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x138b>
+  4c35c7:	48 8b b4 24 a8 01 00 	mov    0x1a8(%rsp),%rsi
+  4c35ce:	00 
+  4c35cf:	48 85 f6             	test   %rsi,%rsi
+  4c35d2:	74 14                	je     4c35e8 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xf48>
+  4c35d4:	48 c1 e6 04          	shl    $0x4,%rsi
+  4c35d8:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c35dd:	48 8b 7c 24 18       	mov    0x18(%rsp),%rdi
+  4c35e2:	ff 15 a0 0c 6f 00    	call   *0x6f0ca0(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c35e8:	48 8b 74 24 50       	mov    0x50(%rsp),%rsi
+  4c35ed:	48 85 f6             	test   %rsi,%rsi
+  4c35f0:	74 14                	je     4c3606 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xf66>
+  4c35f2:	48 8b 7c 24 58       	mov    0x58(%rsp),%rdi
+  4c35f7:	48 c1 e6 03          	shl    $0x3,%rsi
+  4c35fb:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3600:	ff 15 82 0c 6f 00    	call   *0x6f0c82(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c3606:	b8 16 00 00 00       	mov    $0x16,%eax
+  4c360b:	66 48 0f 6e c0       	movq   %rax,%xmm0
+  4c3610:	66 0f 7f 84 24 70 01 	movdqa %xmm0,0x170(%rsp)
+  4c3617:	00 00 
+  4c3619:	48 8d 05 41 20 de ff 	lea    -0x21dfbf(%rip),%rax        # 2a5661 <anon.76999235c249af5725505212bbd91e3f.50.llvm.7692639943174766126+0x2fe>
+  4c3620:	48 89 44 24 20       	mov    %rax,0x20(%rsp)
+  4c3625:	45 31 ed             	xor    %r13d,%r13d
+  4c3628:	e9 e0 03 00 00       	jmp    4c3a0d <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x136d>
+  4c362d:	48 8b 74 24 60       	mov    0x60(%rsp),%rsi
+  4c3632:	48 83 fe 02          	cmp    $0x2,%rsi
+  4c3636:	0f 83 3e 05 00 00    	jae    4c3b7a <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x14da>
+  4c363c:	48 8d 7c 24 50       	lea    0x50(%rsp),%rdi
+  4c3641:	e8 ba 06 fd ff       	call   493d00 <_RINvMs_NtCscHgRw1M2fX5_5alloc3vecINtB5_3VecjE8dedup_byNCNvMs4_B5_Bv_5dedup0ECsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c3646:	48 8b 44 24 50       	mov    0x50(%rsp),%rax
+  4c364b:	48 8b 4c 24 58       	mov    0x58(%rsp),%rcx
+  4c3650:	48 8b 54 24 60       	mov    0x60(%rsp),%rdx
+  4c3655:	48 8d 14 d1          	lea    (%rcx,%rdx,8),%rdx
+  4c3659:	48 89 8c 24 a0 00 00 	mov    %rcx,0xa0(%rsp)
+  4c3660:	00 
+  4c3661:	48 89 8c 24 a8 00 00 	mov    %rcx,0xa8(%rsp)
+  4c3668:	00 
+  4c3669:	48 89 84 24 b0 00 00 	mov    %rax,0xb0(%rsp)
+  4c3670:	00 
+  4c3671:	48 89 94 24 b8 00 00 	mov    %rdx,0xb8(%rsp)
+  4c3678:	00 
+  4c3679:	48 8d 84 24 50 01 00 	lea    0x150(%rsp),%rax
+  4c3680:	00 
+  4c3681:	48 89 84 24 c0 00 00 	mov    %rax,0xc0(%rsp)
+  4c3688:	00 
+  4c3689:	48 8d bc 24 80 00 00 	lea    0x80(%rsp),%rdi
+  4c3690:	00 
+  4c3691:	48 8d b4 24 a0 00 00 	lea    0xa0(%rsp),%rsi
+  4c3698:	00 
+  4c3699:	e8 62 3e fd ff       	call   497500 <_RNvXs_NtNtCscHgRw1M2fX5_5alloc3vec16in_place_collectINtB6_3VecTjdEEINtNtB6_14spec_from_iter12SpecFromIterBY_INtNtNtNtCsc36rpYXAlPq_4core4iter8adapters3map3MapINtNtB6_9into_iter8IntoIterjENCINvNtCsfLkMs0yQJT5_6borsuk18two_bit_generation29rank_walked_source_with_limitNCINvB34_25plan_two_bit_source_walksNCNCNCNvMs4_B34_NtB34_16TwoBitGeneration19plan_paged_measured0s_0s0_0Es_0Es9_0EE9from_iterCsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c369e:	4c 8b bc 24 88 00 00 	mov    0x88(%rsp),%r15
+  4c36a5:	00 
+  4c36a6:	4c 8b b4 24 90 00 00 	mov    0x90(%rsp),%r14
+  4c36ad:	00 
+  4c36ae:	4c 89 ff             	mov    %r15,%rdi
+  4c36b1:	4c 89 f6             	mov    %r14,%rsi
+  4c36b4:	e8 97 ef ff ff       	call   4c2650 <_RINvMNtCsc36rpYXAlPq_4core5sliceSTjdE16sort_unstable_byNCINvNtCsfLkMs0yQJT5_6borsuk18two_bit_generation29rank_walked_source_with_limitNCINvBW_25plan_two_bit_source_walksNCNCNCNvMs4_BW_NtBW_16TwoBitGeneration19plan_paged_measured0s_0s0_0Es_0Esa_0ECsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c36b9:	4c 8b a4 24 80 00 00 	mov    0x80(%rsp),%r12
+  4c36c0:	00 
+  4c36c1:	48 8b b4 24 50 01 00 	mov    0x150(%rsp),%rsi
+  4c36c8:	00 
+  4c36c9:	48 85 f6             	test   %rsi,%rsi
+  4c36cc:	74 17                	je     4c36e5 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1045>
+  4c36ce:	48 8b bc 24 58 01 00 	mov    0x158(%rsp),%rdi
+  4c36d5:	00 
+  4c36d6:	48 c1 e6 04          	shl    $0x4,%rsi
+  4c36da:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c36df:	ff 15 a3 0b 6f 00    	call   *0x6f0ba3(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c36e5:	48 8b 74 24 30       	mov    0x30(%rsp),%rsi
+  4c36ea:	48 85 f6             	test   %rsi,%rsi
+  4c36ed:	74 14                	je     4c3703 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1063>
+  4c36ef:	48 8b 7c 24 38       	mov    0x38(%rsp),%rdi
+  4c36f4:	48 c1 e6 04          	shl    $0x4,%rsi
+  4c36f8:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c36fd:	ff 15 85 0b 6f 00    	call   *0x6f0b85(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c3703:	48 83 bc 24 50 02 00 	cmpq   $0x0,0x250(%rsp)
+  4c370a:	00 00 
+  4c370c:	0f 84 cc 00 00 00    	je     4c37de <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x113e>
+  4c3712:	4d 85 f6             	test   %r14,%r14
+  4c3715:	0f 84 f2 04 00 00    	je     4c3c0d <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x156d>
+  4c371b:	4c 8b ac 24 88 01 00 	mov    0x188(%rsp),%r13
+  4c3722:	00 
+  4c3723:	49 8b 07             	mov    (%r15),%rax
+  4c3726:	49 89 85 90 00 00 00 	mov    %rax,0x90(%r13)
+  4c372d:	48 8b 84 24 a0 01 00 	mov    0x1a0(%rsp),%rax
+  4c3734:	00 
+  4c3735:	48 89 84 24 b0 00 00 	mov    %rax,0xb0(%rsp)
+  4c373c:	00 
+  4c373d:	0f 10 84 24 90 01 00 	movups 0x190(%rsp),%xmm0
+  4c3744:	00 
+  4c3745:	0f 29 84 24 a0 00 00 	movaps %xmm0,0xa0(%rsp)
+  4c374c:	00 
+  4c374d:	49 8d 6d 18          	lea    0x18(%r13),%rbp
+  4c3751:	49 8b 75 18          	mov    0x18(%r13),%rsi
+  4c3755:	48 85 f6             	test   %rsi,%rsi
+  4c3758:	74 13                	je     4c376d <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x10cd>
+  4c375a:	49 8b 7d 20          	mov    0x20(%r13),%rdi
+  4c375e:	48 c1 e6 03          	shl    $0x3,%rsi
+  4c3762:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3767:	ff 15 1b 0b 6f 00    	call   *0x6f0b1b(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c376d:	48 8b 84 24 b0 00 00 	mov    0xb0(%rsp),%rax
+  4c3774:	00 
+  4c3775:	48 89 45 10          	mov    %rax,0x10(%rbp)
+  4c3779:	66 0f 6f 84 24 a0 00 	movdqa 0xa0(%rsp),%xmm0
+  4c3780:	00 00 
+  4c3782:	f3 0f 7f 45 00       	movdqu %xmm0,0x0(%rbp)
+  4c3787:	4c 89 f2             	mov    %r14,%rdx
+  4c378a:	48 c1 e2 04          	shl    $0x4,%rdx
+  4c378e:	4c 01 fa             	add    %r15,%rdx
+  4c3791:	31 ed                	xor    %ebp,%ebp
+  4c3793:	48 8d bc 24 a0 00 00 	lea    0xa0(%rsp),%rdi
+  4c379a:	00 
+  4c379b:	4c 89 fe             	mov    %r15,%rsi
+  4c379e:	e8 cd 2e fd ff       	call   496670 <_RNvXNtNtCscHgRw1M2fX5_5alloc3vec14spec_from_iterINtB4_3VecjEINtB2_12SpecFromIterjINtNtNtNtCsc36rpYXAlPq_4core4iter8adapters3map3MapINtNtNtB1q_5slice4iter4IterTjdEENCINvNtCsfLkMs0yQJT5_6borsuk18two_bit_generation25plan_two_bit_source_walksNCNCNCNvMs4_B2G_NtB2G_16TwoBitGeneration19plan_paged_measured0s_0s0_0Es0_0EE9from_iterCsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c37a3:	49 8b 75 00          	mov    0x0(%r13),%rsi
+  4c37a7:	48 85 f6             	test   %rsi,%rsi
+  4c37aa:	74 13                	je     4c37bf <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x111f>
+  4c37ac:	49 8b 7d 08          	mov    0x8(%r13),%rdi
+  4c37b0:	48 c1 e6 03          	shl    $0x3,%rsi
+  4c37b4:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c37b9:	ff 15 c9 0a 6f 00    	call   *0x6f0ac9(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c37bf:	48 8b 84 24 b0 00 00 	mov    0xb0(%rsp),%rax
+  4c37c6:	00 
+  4c37c7:	49 89 45 10          	mov    %rax,0x10(%r13)
+  4c37cb:	f3 0f 6f 84 24 a0 00 	movdqu 0xa0(%rsp),%xmm0
+  4c37d2:	00 00 
+  4c37d4:	f3 41 0f 7f 45 00    	movdqu %xmm0,0x0(%r13)
+  4c37da:	31 ed                	xor    %ebp,%ebp
+  4c37dc:	eb 0c                	jmp    4c37ea <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x114a>
+  4c37de:	40 b5 01             	mov    $0x1,%bpl
+  4c37e1:	4d 85 f6             	test   %r14,%r14
+  4c37e4:	0f 84 4c 04 00 00    	je     4c3c36 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1596>
+  4c37ea:	49 8b 07             	mov    (%r15),%rax
+  4c37ed:	48 c1 e0 08          	shl    $0x8,%rax
+  4c37f1:	48 89 84 24 80 00 00 	mov    %rax,0x80(%rsp)
+  4c37f8:	00 
+  4c37f9:	49 c1 e6 04          	shl    $0x4,%r14
+  4c37fd:	4d 01 fe             	add    %r15,%r14
+  4c3800:	4c 89 bc 24 a0 00 00 	mov    %r15,0xa0(%rsp)
+  4c3807:	00 
+  4c3808:	4c 89 b4 24 a8 00 00 	mov    %r14,0xa8(%rsp)
+  4c380f:	00 
+  4c3810:	48 c7 84 24 b0 00 00 	movq   $0x0,0xb0(%rsp)
+  4c3817:	00 00 00 00 00 
+  4c381c:	48 8d bc 24 c0 01 00 	lea    0x1c0(%rsp),%rdi
+  4c3823:	00 
+  4c3824:	48 8d b4 24 a0 00 00 	lea    0xa0(%rsp),%rsi
+  4c382b:	00 
+  4c382c:	e8 0f 2a fd ff       	call   496240 <_RNvXNtNtCscHgRw1M2fX5_5alloc3vec14spec_from_iterINtB4_3VecTjfEEINtB2_12SpecFromIterBU_INtNtNtNtCsc36rpYXAlPq_4core4iter8adapters3map3MapINtNtB1r_9enumerate9EnumerateINtNtNtB1v_5slice4iter4IterTjdEEENCINvNtCsfLkMs0yQJT5_6borsuk18two_bit_generation25plan_two_bit_source_walksNCNCNCNvMs4_B3f_NtB3f_16TwoBitGeneration19plan_paged_measured0s_0s0_0Es1_0EE9from_iterCsfIFohAlpPc8_28check_cohere_native_baseline>
+  4c3831:	4c 8b b4 24 c8 01 00 	mov    0x1c8(%rsp),%r14
+  4c3838:	00 
+  4c3839:	48 8b 94 24 d0 01 00 	mov    0x1d0(%rsp),%rdx
+  4c3840:	00 
+  4c3841:	4c 8b 8c 24 98 00 00 	mov    0x98(%rsp),%r9
+  4c3848:	00 
+  4c3849:	4c 89 c8             	mov    %r9,%rax
+  4c384c:	48 c1 e8 08          	shr    $0x8,%rax
+  4c3850:	41 80 f9 01          	cmp    $0x1,%r9b
+  4c3854:	48 83 d8 ff          	sbb    $0xffffffffffffffff,%rax
+  4c3858:	48 8d bc 24 a0 00 00 	lea    0xa0(%rsp),%rdi
+  4c385f:	00 
+  4c3860:	48 8d 8c 24 80 00 00 	lea    0x80(%rsp),%rcx
+  4c3867:	00 
+  4c3868:	41 b8 01 00 00 00    	mov    $0x1,%r8d
+  4c386e:	4c 89 f6             	mov    %r14,%rsi
+  4c3871:	ff b4 24 60 02 00 00 	push   0x260(%rsp)
+  4c3878:	ff b4 24 50 01 00 00 	push   0x150(%rsp)
+  4c387f:	50                   	push   %rax
+  4c3880:	ff b4 24 70 02 00 00 	push   0x270(%rsp)
+  4c3887:	ff 15 93 14 6f 00    	call   *0x6f1493(%rip)        # bb4d20 <_DYNAMIC+0xd18>
+  4c388d:	48 83 c4 20          	add    $0x20,%rsp
+  4c3891:	48 83 bc 24 a0 00 00 	cmpq   $0xffffffffffffffff,0xa0(%rsp)
+  4c3898:	00 ff 
+  4c389a:	74 42                	je     4c38de <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x123e>
+  4c389c:	0f 10 84 24 e0 00 00 	movups 0xe0(%rsp),%xmm0
+  4c38a3:	00 
+  4c38a4:	0f 11 43 48          	movups %xmm0,0x48(%rbx)
+  4c38a8:	f3 0f 6f 84 24 a0 00 	movdqu 0xa0(%rsp),%xmm0
+  4c38af:	00 00 
+  4c38b1:	0f 10 8c 24 b0 00 00 	movups 0xb0(%rsp),%xmm1
+  4c38b8:	00 
+  4c38b9:	0f 10 94 24 c0 00 00 	movups 0xc0(%rsp),%xmm2
+  4c38c0:	00 
+  4c38c1:	0f 10 9c 24 d0 00 00 	movups 0xd0(%rsp),%xmm3
+  4c38c8:	00 
+  4c38c9:	0f 11 5b 38          	movups %xmm3,0x38(%rbx)
+  4c38cd:	0f 11 53 28          	movups %xmm2,0x28(%rbx)
+  4c38d1:	0f 11 4b 18          	movups %xmm1,0x18(%rbx)
+  4c38d5:	f3 0f 7f 43 08       	movdqu %xmm0,0x8(%rbx)
+  4c38da:	b0 ff                	mov    $0xff,%al
+  4c38dc:	eb 0d                	jmp    4c38eb <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x124b>
+  4c38de:	0f b6 84 24 a8 00 00 	movzbl 0xa8(%rsp),%eax
+  4c38e5:	00 
+  4c38e6:	88 43 01             	mov    %al,0x1(%rbx)
+  4c38e9:	b0 07                	mov    $0x7,%al
+  4c38eb:	88 03                	mov    %al,(%rbx)
+  4c38ed:	48 8b b4 24 c0 01 00 	mov    0x1c0(%rsp),%rsi
+  4c38f4:	00 
+  4c38f5:	48 85 f6             	test   %rsi,%rsi
+  4c38f8:	74 12                	je     4c390c <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x126c>
+  4c38fa:	48 c1 e6 04          	shl    $0x4,%rsi
+  4c38fe:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3903:	4c 89 f7             	mov    %r14,%rdi
+  4c3906:	ff 15 7c 09 6f 00    	call   *0x6f097c(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c390c:	4d 85 e4             	test   %r12,%r12
+  4c390f:	74 15                	je     4c3926 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1286>
+  4c3911:	49 c1 e4 04          	shl    $0x4,%r12
+  4c3915:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c391a:	4c 89 ff             	mov    %r15,%rdi
+  4c391d:	4c 89 e6             	mov    %r12,%rsi
+  4c3920:	ff 15 62 09 6f 00    	call   *0x6f0962(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c3926:	40 84 ed             	test   %bpl,%bpl
+  4c3929:	0f 85 f1 f1 ff ff    	jne    4c2b20 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x480>
+  4c392f:	e9 28 f2 ff ff       	jmp    4c2b5c <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x4bc>
+  4c3934:	8b 84 24 a1 00 00 00 	mov    0xa1(%rsp),%eax
+  4c393b:	8b 8c 24 a4 00 00 00 	mov    0xa4(%rsp),%ecx
+  4c3942:	89 4c 24 2b          	mov    %ecx,0x2b(%rsp)
+  4c3946:	89 44 24 28          	mov    %eax,0x28(%rsp)
+  4c394a:	48 8b 84 24 a8 00 00 	mov    0xa8(%rsp),%rax
+  4c3951:	00 
+  4c3952:	48 89 44 24 20       	mov    %rax,0x20(%rsp)
+  4c3957:	0f 28 84 24 b0 00 00 	movaps 0xb0(%rsp),%xmm0
+  4c395e:	00 
+  4c395f:	0f 29 84 24 70 01 00 	movaps %xmm0,0x170(%rsp)
+  4c3966:	00 
+  4c3967:	0f 28 84 24 c0 00 00 	movaps 0xc0(%rsp),%xmm0
+  4c396e:	00 
+  4c396f:	0f 29 84 24 c0 01 00 	movaps %xmm0,0x1c0(%rsp)
+  4c3976:	00 
+  4c3977:	0f 28 84 24 d0 00 00 	movaps 0xd0(%rsp),%xmm0
+  4c397e:	00 
+  4c397f:	0f 29 84 24 d0 01 00 	movaps %xmm0,0x1d0(%rsp)
+  4c3986:	00 
+  4c3987:	0f 28 84 24 e0 00 00 	movaps 0xe0(%rsp),%xmm0
+  4c398e:	00 
+  4c398f:	0f 29 84 24 e0 01 00 	movaps %xmm0,0x1e0(%rsp)
+  4c3996:	00 
+  4c3997:	0f 28 84 24 f0 00 00 	movaps 0xf0(%rsp),%xmm0
+  4c399e:	00 
+  4c399f:	0f 29 84 24 f0 01 00 	movaps %xmm0,0x1f0(%rsp)
+  4c39a6:	00 
+  4c39a7:	0f 28 84 24 00 01 00 	movaps 0x100(%rsp),%xmm0
+  4c39ae:	00 
+  4c39af:	0f 29 84 24 00 02 00 	movaps %xmm0,0x200(%rsp)
+  4c39b6:	00 
+  4c39b7:	0f 28 84 24 10 01 00 	movaps 0x110(%rsp),%xmm0
+  4c39be:	00 
+  4c39bf:	0f 29 84 24 10 02 00 	movaps %xmm0,0x210(%rsp)
+  4c39c6:	00 
+  4c39c7:	0f 28 84 24 20 01 00 	movaps 0x120(%rsp),%xmm0
+  4c39ce:	00 
+  4c39cf:	0f 29 84 24 20 02 00 	movaps %xmm0,0x220(%rsp)
+  4c39d6:	00 
+  4c39d7:	0f 28 84 24 30 01 00 	movaps 0x130(%rsp),%xmm0
+  4c39de:	00 
+  4c39df:	0f 29 84 24 30 02 00 	movaps %xmm0,0x230(%rsp)
+  4c39e6:	00 
+  4c39e7:	eb 03                	jmp    4c39ec <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x134c>
+  4c39e9:	45 31 ed             	xor    %r13d,%r13d
+  4c39ec:	48 8b b4 24 80 01 00 	mov    0x180(%rsp),%rsi
+  4c39f3:	00 
+  4c39f4:	48 85 f6             	test   %rsi,%rsi
+  4c39f7:	74 14                	je     4c3a0d <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x136d>
+  4c39f9:	48 c1 e6 04          	shl    $0x4,%rsi
+  4c39fd:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3a02:	48 8b 7c 24 10       	mov    0x10(%rsp),%rdi
+  4c3a07:	ff 15 7b 08 6f 00    	call   *0x6f087b(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c3a0d:	48 8b b4 24 50 01 00 	mov    0x150(%rsp),%rsi
+  4c3a14:	00 
+  4c3a15:	48 85 f6             	test   %rsi,%rsi
+  4c3a18:	74 17                	je     4c3a31 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1391>
+  4c3a1a:	48 8b bc 24 58 01 00 	mov    0x158(%rsp),%rdi
+  4c3a21:	00 
+  4c3a22:	48 c1 e6 04          	shl    $0x4,%rsi
+  4c3a26:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3a2b:	ff 15 57 08 6f 00    	call   *0x6f0857(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c3a31:	48 8b 74 24 30       	mov    0x30(%rsp),%rsi
+  4c3a36:	48 85 f6             	test   %rsi,%rsi
+  4c3a39:	74 14                	je     4c3a4f <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x13af>
+  4c3a3b:	48 8b 7c 24 38       	mov    0x38(%rsp),%rdi
+  4c3a40:	48 c1 e6 04          	shl    $0x4,%rsi
+  4c3a44:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3a49:	ff 15 39 08 6f 00    	call   *0x6f0839(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c3a4f:	66 0f 6f a4 24 70 01 	movdqa 0x170(%rsp),%xmm4
+  4c3a56:	00 00 
+  4c3a58:	e9 3c f0 ff ff       	jmp    4c2a99 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x3f9>
+  4c3a5d:	49 83 fd 15          	cmp    $0x15,%r13
+  4c3a61:	0f 83 7d 01 00 00    	jae    4c3be4 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1544>
+  4c3a67:	4b 8d 04 ec          	lea    (%r12,%r13,8),%rax
+  4c3a6b:	49 8d 4c 24 08       	lea    0x8(%r12),%rcx
+  4c3a70:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3a75:	49 89 dd             	mov    %rbx,%r13
+  4c3a78:	4c 89 fb             	mov    %r15,%rbx
+  4c3a7b:	eb 13                	jmp    4c3a90 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x13f0>
+  4c3a7d:	4c 89 e7             	mov    %r12,%rdi
+  4c3a80:	48 89 37             	mov    %rsi,(%rdi)
+  4c3a83:	48 83 c1 08          	add    $0x8,%rcx
+  4c3a87:	48 83 c2 08          	add    $0x8,%rdx
+  4c3a8b:	48 39 c1             	cmp    %rax,%rcx
+  4c3a8e:	74 2c                	je     4c3abc <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x141c>
+  4c3a90:	4c 8b 41 f8          	mov    -0x8(%rcx),%r8
+  4c3a94:	48 8b 31             	mov    (%rcx),%rsi
+  4c3a97:	4c 39 c6             	cmp    %r8,%rsi
+  4c3a9a:	73 e7                	jae    4c3a83 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x13e3>
+  4c3a9c:	48 89 d7             	mov    %rdx,%rdi
+  4c3a9f:	4d 89 04 3c          	mov    %r8,(%r12,%rdi,1)
+  4c3aa3:	48 83 ff 08          	cmp    $0x8,%rdi
+  4c3aa7:	74 d4                	je     4c3a7d <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x13dd>
+  4c3aa9:	4d 8b 44 3c f0       	mov    -0x10(%r12,%rdi,1),%r8
+  4c3aae:	48 83 c7 f8          	add    $0xfffffffffffffff8,%rdi
+  4c3ab2:	4c 39 c6             	cmp    %r8,%rsi
+  4c3ab5:	72 e8                	jb     4c3a9f <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x13ff>
+  4c3ab7:	4c 01 e7             	add    %r12,%rdi
+  4c3aba:	eb c4                	jmp    4c3a80 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x13e0>
+  4c3abc:	4c 8b a4 24 c8 01 00 	mov    0x1c8(%rsp),%r12
+  4c3ac3:	00 
+  4c3ac4:	48 8b 84 24 d0 01 00 	mov    0x1d0(%rsp),%rax
+  4c3acb:	00 
+  4c3acc:	e9 97 ec ff ff       	jmp    4c2768 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xc8>
+  4c3ad1:	48 8d 0d d8 e2 60 00 	lea    0x60e2d8(%rip),%rcx        # ad1db0 <anon.d1a84f61350f2dfaccfecac42d9af38f.3.llvm.11980539456223788820+0x50>
+  4c3ad8:	31 ff                	xor    %edi,%edi
+  4c3ada:	4c 89 fe             	mov    %r15,%rsi
+  4c3add:	4c 89 e2             	mov    %r12,%rdx
+  4c3ae0:	ff 15 8a 08 6f 00    	call   *0x6f088a(%rip)        # bb4370 <_DYNAMIC+0x368>
+  4c3ae6:	e9 5f 01 00 00       	jmp    4c3c4a <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x15aa>
+  4c3aeb:	48 89 54 24 48       	mov    %rdx,0x48(%rsp)
+  4c3af0:	49 83 fe 15          	cmp    $0x15,%r14
+  4c3af4:	0f 83 1c 01 00 00    	jae    4c3c16 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1576>
+  4c3afa:	48 8b 4c 24 48       	mov    0x48(%rsp),%rcx
+  4c3aff:	4a 8d 04 f1          	lea    (%rcx,%r14,8),%rax
+  4c3b03:	48 83 c1 08          	add    $0x8,%rcx
+  4c3b07:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3b0c:	4c 8b 4c 24 48       	mov    0x48(%rsp),%r9
+  4c3b11:	eb 13                	jmp    4c3b26 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1486>
+  4c3b13:	4c 89 cf             	mov    %r9,%rdi
+  4c3b16:	48 89 37             	mov    %rsi,(%rdi)
+  4c3b19:	48 83 c1 08          	add    $0x8,%rcx
+  4c3b1d:	48 83 c2 08          	add    $0x8,%rdx
+  4c3b21:	48 39 c1             	cmp    %rax,%rcx
+  4c3b24:	74 2c                	je     4c3b52 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x14b2>
+  4c3b26:	4c 8b 41 f8          	mov    -0x8(%rcx),%r8
+  4c3b2a:	48 8b 31             	mov    (%rcx),%rsi
+  4c3b2d:	4c 39 c6             	cmp    %r8,%rsi
+  4c3b30:	73 e7                	jae    4c3b19 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1479>
+  4c3b32:	48 89 d7             	mov    %rdx,%rdi
+  4c3b35:	4d 89 04 39          	mov    %r8,(%r9,%rdi,1)
+  4c3b39:	48 83 ff 08          	cmp    $0x8,%rdi
+  4c3b3d:	74 d4                	je     4c3b13 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1473>
+  4c3b3f:	4d 8b 44 39 f0       	mov    -0x10(%r9,%rdi,1),%r8
+  4c3b44:	48 83 c7 f8          	add    $0xfffffffffffffff8,%rdi
+  4c3b48:	4c 39 c6             	cmp    %r8,%rsi
+  4c3b4b:	72 e8                	jb     4c3b35 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1495>
+  4c3b4d:	4c 01 cf             	add    %r9,%rdi
+  4c3b50:	eb c4                	jmp    4c3b16 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1476>
+  4c3b52:	48 8b 94 24 88 00 00 	mov    0x88(%rsp),%rdx
+  4c3b59:	00 
+  4c3b5a:	48 8b 84 24 90 00 00 	mov    0x90(%rsp),%rax
+  4c3b61:	00 
+  4c3b62:	e9 c2 f1 ff ff       	jmp    4c2d29 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x689>
+  4c3b67:	48 8b b4 24 b0 00 00 	mov    0xb0(%rsp),%rsi
+  4c3b6e:	00 
+  4c3b6f:	ff 15 b3 07 6f 00    	call   *0x6f07b3(%rip)        # bb4328 <_DYNAMIC+0x320>
+  4c3b75:	e9 d0 00 00 00       	jmp    4c3c4a <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x15aa>
+  4c3b7a:	49 89 de             	mov    %rbx,%r14
+  4c3b7d:	48 8b 7c 24 58       	mov    0x58(%rsp),%rdi
+  4c3b82:	48 83 fe 15          	cmp    $0x15,%rsi
+  4c3b86:	0f 83 c0 00 00 00    	jae    4c3c4c <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x15ac>
+  4c3b8c:	48 8d 04 f7          	lea    (%rdi,%rsi,8),%rax
+  4c3b90:	48 8d 4f 08          	lea    0x8(%rdi),%rcx
+  4c3b94:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3b99:	4c 89 f3             	mov    %r14,%rbx
+  4c3b9c:	eb 1a                	jmp    4c3bb8 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1518>
+  4c3b9e:	49 89 f8             	mov    %rdi,%r8
+  4c3ba1:	49 89 30             	mov    %rsi,(%r8)
+  4c3ba4:	4c 89 f3             	mov    %r14,%rbx
+  4c3ba7:	48 83 c1 08          	add    $0x8,%rcx
+  4c3bab:	48 83 c2 08          	add    $0x8,%rdx
+  4c3baf:	48 39 c1             	cmp    %rax,%rcx
+  4c3bb2:	0f 84 84 fa ff ff    	je     4c363c <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xf9c>
+  4c3bb8:	4c 8b 49 f8          	mov    -0x8(%rcx),%r9
+  4c3bbc:	48 8b 31             	mov    (%rcx),%rsi
+  4c3bbf:	4c 39 ce             	cmp    %r9,%rsi
+  4c3bc2:	73 e3                	jae    4c3ba7 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1507>
+  4c3bc4:	49 89 d0             	mov    %rdx,%r8
+  4c3bc7:	4e 89 0c 07          	mov    %r9,(%rdi,%r8,1)
+  4c3bcb:	49 83 f8 08          	cmp    $0x8,%r8
+  4c3bcf:	74 cd                	je     4c3b9e <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x14fe>
+  4c3bd1:	4e 8b 4c 07 f0       	mov    -0x10(%rdi,%r8,1),%r9
+  4c3bd6:	49 83 c0 f8          	add    $0xfffffffffffffff8,%r8
+  4c3bda:	4c 39 ce             	cmp    %r9,%rsi
+  4c3bdd:	72 e8                	jb     4c3bc7 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1527>
+  4c3bdf:	49 01 f8             	add    %rdi,%r8
+  4c3be2:	eb bd                	jmp    4c3ba1 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1501>
+  4c3be4:	48 8d 54 24 07       	lea    0x7(%rsp),%rdx
+  4c3be9:	4c 89 e7             	mov    %r12,%rdi
+  4c3bec:	4c 89 ee             	mov    %r13,%rsi
+  4c3bef:	ff 15 53 11 6f 00    	call   *0x6f1153(%rip)        # bb4d48 <_DYNAMIC+0xd40>
+  4c3bf5:	4c 89 e8             	mov    %r13,%rax
+  4c3bf8:	e9 65 eb ff ff       	jmp    4c2762 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xc2>
+  4c3bfd:	bf 08 00 00 00       	mov    $0x8,%edi
+  4c3c02:	4c 89 f6             	mov    %r14,%rsi
+  4c3c05:	ff 15 1d 07 6f 00    	call   *0x6f071d(%rip)        # bb4328 <_DYNAMIC+0x320>
+  4c3c0b:	eb 3d                	jmp    4c3c4a <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x15aa>
+  4c3c0d:	48 8d 15 6c e1 60 00 	lea    0x60e16c(%rip),%rdx        # ad1d80 <anon.d1a84f61350f2dfaccfecac42d9af38f.3.llvm.11980539456223788820+0x20>
+  4c3c14:	eb 27                	jmp    4c3c3d <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x159d>
+  4c3c16:	48 8d 54 24 07       	lea    0x7(%rsp),%rdx
+  4c3c1b:	48 8b 7c 24 48       	mov    0x48(%rsp),%rdi
+  4c3c20:	4c 89 f6             	mov    %r14,%rsi
+  4c3c23:	ff 15 1f 11 6f 00    	call   *0x6f111f(%rip)        # bb4d48 <_DYNAMIC+0xd40>
+  4c3c29:	4c 89 f0             	mov    %r14,%rax
+  4c3c2c:	48 8b 54 24 48       	mov    0x48(%rsp),%rdx
+  4c3c31:	e9 f3 f0 ff ff       	jmp    4c2d29 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x689>
+  4c3c36:	48 8d 15 5b e1 60 00 	lea    0x60e15b(%rip),%rdx        # ad1d98 <anon.d1a84f61350f2dfaccfecac42d9af38f.3.llvm.11980539456223788820+0x38>
+  4c3c3d:	40 b5 01             	mov    $0x1,%bpl
+  4c3c40:	31 ff                	xor    %edi,%edi
+  4c3c42:	31 f6                	xor    %esi,%esi
+  4c3c44:	ff 15 26 0d 6f 00    	call   *0x6f0d26(%rip)        # bb4970 <_DYNAMIC+0x968>
+  4c3c4a:	0f 0b                	ud2
+  4c3c4c:	48 8d 54 24 07       	lea    0x7(%rsp),%rdx
+  4c3c51:	ff 15 f9 10 6f 00    	call   *0x6f10f9(%rip)        # bb4d50 <_DYNAMIC+0xd48>
+  4c3c57:	4c 89 f3             	mov    %r14,%rbx
+  4c3c5a:	e9 dd f9 ff ff       	jmp    4c363c <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0xf9c>
+  4c3c5f:	e9 35 01 00 00       	jmp    4c3d99 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x16f9>
+  4c3c64:	48 89 c3             	mov    %rax,%rbx
+  4c3c67:	48 8b b4 24 80 00 00 	mov    0x80(%rsp),%rsi
+  4c3c6e:	00 
+  4c3c6f:	48 85 f6             	test   %rsi,%rsi
+  4c3c72:	0f 84 f3 00 00 00    	je     4c3d6b <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x16cb>
+  4c3c78:	48 c1 e6 03          	shl    $0x3,%rsi
+  4c3c7c:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3c81:	48 8b 7c 24 48       	mov    0x48(%rsp),%rdi
+  4c3c86:	ff 15 fc 05 6f 00    	call   *0x6f05fc(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c3c8c:	e9 da 00 00 00       	jmp    4c3d6b <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x16cb>
+  4c3c91:	48 89 c3             	mov    %rax,%rbx
+  4c3c94:	48 8b b4 24 c0 01 00 	mov    0x1c0(%rsp),%rsi
+  4c3c9b:	00 
+  4c3c9c:	48 85 f6             	test   %rsi,%rsi
+  4c3c9f:	0f 85 b1 01 00 00    	jne    4c3e56 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x17b6>
+  4c3ca5:	e9 be 01 00 00       	jmp    4c3e68 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x17c8>
+  4c3caa:	48 89 c3             	mov    %rax,%rbx
+  4c3cad:	48 8b b4 24 c0 01 00 	mov    0x1c0(%rsp),%rsi
+  4c3cb4:	00 
+  4c3cb5:	48 85 f6             	test   %rsi,%rsi
+  4c3cb8:	74 56                	je     4c3d10 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1670>
+  4c3cba:	48 c1 e6 04          	shl    $0x4,%rsi
+  4c3cbe:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3cc3:	4c 89 f7             	mov    %r14,%rdi
+  4c3cc6:	ff 15 bc 05 6f 00    	call   *0x6f05bc(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c3ccc:	eb 42                	jmp    4c3d10 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1670>
+  4c3cce:	48 89 c3             	mov    %rax,%rbx
+  4c3cd1:	48 8b b4 24 80 00 00 	mov    0x80(%rsp),%rsi
+  4c3cd8:	00 
+  4c3cd9:	48 85 f6             	test   %rsi,%rsi
+  4c3cdc:	0f 84 1d 01 00 00    	je     4c3dff <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x175f>
+  4c3ce2:	48 c1 e6 04          	shl    $0x4,%rsi
+  4c3ce6:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3ceb:	4c 89 ff             	mov    %r15,%rdi
+  4c3cee:	e9 06 01 00 00       	jmp    4c3df9 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1759>
+  4c3cf3:	e9 de 00 00 00       	jmp    4c3dd6 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1736>
+  4c3cf8:	48 89 c3             	mov    %rax,%rbx
+  4c3cfb:	48 8b b4 24 68 02 00 	mov    0x268(%rsp),%rsi
+  4c3d02:	00 
+  4c3d03:	e9 de 00 00 00       	jmp    4c3de6 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1746>
+  4c3d08:	e9 c9 00 00 00       	jmp    4c3dd6 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1736>
+  4c3d0d:	48 89 c3             	mov    %rax,%rbx
+  4c3d10:	4d 85 e4             	test   %r12,%r12
+  4c3d13:	74 15                	je     4c3d2a <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x168a>
+  4c3d15:	49 c1 e4 04          	shl    $0x4,%r12
+  4c3d19:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3d1e:	4c 89 ff             	mov    %r15,%rdi
+  4c3d21:	4c 89 e6             	mov    %r12,%rsi
+  4c3d24:	ff 15 5e 05 6f 00    	call   *0x6f055e(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c3d2a:	40 84 ed             	test   %bpl,%bpl
+  4c3d2d:	0f 85 0e 01 00 00    	jne    4c3e41 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x17a1>
+  4c3d33:	e9 30 01 00 00       	jmp    4c3e68 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x17c8>
+  4c3d38:	eb 08                	jmp    4c3d42 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x16a2>
+  4c3d3a:	48 89 c3             	mov    %rax,%rbx
+  4c3d3d:	e9 e1 00 00 00       	jmp    4c3e23 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1783>
+  4c3d42:	48 89 c3             	mov    %rax,%rbx
+  4c3d45:	48 8b b4 24 a8 01 00 	mov    0x1a8(%rsp),%rsi
+  4c3d4c:	00 
+  4c3d4d:	48 85 f6             	test   %rsi,%rsi
+  4c3d50:	74 4a                	je     4c3d9c <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x16fc>
+  4c3d52:	48 c1 e6 04          	shl    $0x4,%rsi
+  4c3d56:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3d5b:	48 8b 7c 24 18       	mov    0x18(%rsp),%rdi
+  4c3d60:	ff 15 22 05 6f 00    	call   *0x6f0522(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c3d66:	eb 34                	jmp    4c3d9c <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x16fc>
+  4c3d68:	48 89 c3             	mov    %rax,%rbx
+  4c3d6b:	48 83 7c 24 10 00    	cmpq   $0x0,0x10(%rsp)
+  4c3d71:	0f 84 ca 00 00 00    	je     4c3e41 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x17a1>
+  4c3d77:	48 8b 74 24 10       	mov    0x10(%rsp),%rsi
+  4c3d7c:	48 c1 e6 03          	shl    $0x3,%rsi
+  4c3d80:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3d85:	48 8b 7c 24 08       	mov    0x8(%rsp),%rdi
+  4c3d8a:	e9 ac 00 00 00       	jmp    4c3e3b <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x179b>
+  4c3d8f:	48 89 c3             	mov    %rax,%rbx
+  4c3d92:	e9 aa 00 00 00       	jmp    4c3e41 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x17a1>
+  4c3d97:	eb 42                	jmp    4c3ddb <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x173b>
+  4c3d99:	48 89 c3             	mov    %rax,%rbx
+  4c3d9c:	48 8b 74 24 50       	mov    0x50(%rsp),%rsi
+  4c3da1:	48 85 f6             	test   %rsi,%rsi
+  4c3da4:	74 59                	je     4c3dff <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x175f>
+  4c3da6:	48 8b 7c 24 58       	mov    0x58(%rsp),%rdi
+  4c3dab:	48 c1 e6 03          	shl    $0x3,%rsi
+  4c3daf:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3db4:	eb 43                	jmp    4c3df9 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1759>
+  4c3db6:	48 89 c3             	mov    %rax,%rbx
+  4c3db9:	48 83 7c 24 10 00    	cmpq   $0x0,0x10(%rsp)
+  4c3dbf:	74 62                	je     4c3e23 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1783>
+  4c3dc1:	48 8b 74 24 10       	mov    0x10(%rsp),%rsi
+  4c3dc6:	48 c1 e6 03          	shl    $0x3,%rsi
+  4c3dca:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3dcf:	48 8b 7c 24 08       	mov    0x8(%rsp),%rdi
+  4c3dd4:	eb 47                	jmp    4c3e1d <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x177d>
+  4c3dd6:	48 89 c3             	mov    %rax,%rbx
+  4c3dd9:	eb 24                	jmp    4c3dff <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x175f>
+  4c3ddb:	48 89 c3             	mov    %rax,%rbx
+  4c3dde:	48 8b b4 24 80 01 00 	mov    0x180(%rsp),%rsi
+  4c3de5:	00 
+  4c3de6:	48 85 f6             	test   %rsi,%rsi
+  4c3de9:	74 14                	je     4c3dff <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x175f>
+  4c3deb:	48 c1 e6 04          	shl    $0x4,%rsi
+  4c3def:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3df4:	48 8b 7c 24 10       	mov    0x10(%rsp),%rdi
+  4c3df9:	ff 15 89 04 6f 00    	call   *0x6f0489(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c3dff:	48 8b b4 24 50 01 00 	mov    0x150(%rsp),%rsi
+  4c3e06:	00 
+  4c3e07:	48 85 f6             	test   %rsi,%rsi
+  4c3e0a:	74 17                	je     4c3e23 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x1783>
+  4c3e0c:	48 8b bc 24 58 01 00 	mov    0x158(%rsp),%rdi
+  4c3e13:	00 
+  4c3e14:	48 c1 e6 04          	shl    $0x4,%rsi
+  4c3e18:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3e1d:	ff 15 65 04 6f 00    	call   *0x6f0465(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c3e23:	48 8b 74 24 30       	mov    0x30(%rsp),%rsi
+  4c3e28:	48 85 f6             	test   %rsi,%rsi
+  4c3e2b:	74 14                	je     4c3e41 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x17a1>
+  4c3e2d:	48 8b 7c 24 38       	mov    0x38(%rsp),%rdi
+  4c3e32:	48 c1 e6 04          	shl    $0x4,%rsi
+  4c3e36:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3e3b:	ff 15 47 04 6f 00    	call   *0x6f0447(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c3e41:	48 8b b4 24 90 01 00 	mov    0x190(%rsp),%rsi
+  4c3e48:	00 
+  4c3e49:	48 85 f6             	test   %rsi,%rsi
+  4c3e4c:	74 1a                	je     4c3e68 <_RINvMs4_NtCsfLkMs0yQJT5_6borsuk18two_bit_generationNtB6_16TwoBitGeneration10plan_walksNCNCNCNvB2_19plan_paged_measured0s_0s0_0ECsfIFohAlpPc8_28check_cohere_native_baseline+0x17c8>
+  4c3e4e:	4c 8b a4 24 98 01 00 	mov    0x198(%rsp),%r12
+  4c3e55:	00 
+  4c3e56:	48 c1 e6 03          	shl    $0x3,%rsi
+  4c3e5a:	ba 08 00 00 00       	mov    $0x8,%edx
+  4c3e5f:	4c 89 e7             	mov    %r12,%rdi
+  4c3e62:	ff 15 20 04 6f 00    	call   *0x6f0420(%rip)        # bb4288 <_DYNAMIC+0x280>
+  4c3e68:	48 89 df             	mov    %rbx,%rdi
+  4c3e6b:	e8 00 82 60 00       	call   acc070 <_Unwind_Resume@plt>

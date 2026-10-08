@@ -1,0 +1,41 @@
+{
+  "status": "BASELINE_SOURCE_AND_BINARIES_AUTHENTICATED_STACK_AUDIT_PENDING",
+  "baseline_commit": "c49a2e6d2a035bfaf42358fbf7fb60abf11e4222",
+  "qualified_source": "fc8a23dac44ad635fc1236736df68878690a8389",
+  "native_count": 415,
+  "native_identity": "0097af81fbf3e61a2050a77cb046adfbf0b02a745e73a2181e924cd2cb697eae",
+  "all_native_files_byte_identical": true,
+  "binaries": {
+    "check_cohere_native_baseline": {
+      "path": "/data/target/borsuk-cold-membership-native/qualification-a0003/check_cohere_native_baseline.binary",
+      "role": "check_cohere_native_baseline",
+      "bytes": 16470968,
+      "sha256": "ca1ae2496e110494e7f6c03ae16eea3d5ff262d66945a3c52775749ac0bcaeab"
+    },
+    "two_bit_http": {
+      "path": "/data/target/borsuk-cold-membership-native/qualification-a0003/two_bit_http.binary",
+      "role": "two_bit_http",
+      "bytes": 16389144,
+      "sha256": "1438b2289dac146d684c08de43b49c7db609d47d0c4372f7c43ecdbd28c1cd21"
+    }
+  },
+  "toolchain": "rustc 1.98.0 (88d9e12ae 2026-08-18)\ncargo 1.98.0 (797e8a9bc 2026-08-05)\n",
+  "release_command": "cargo build --locked --release -p borsuk --bin check_cohere_native_baseline --example compare_native_replay --example two_bit_http",
+  "compiler_environment_receipt_present": false,
+  "limitations": [
+    "No matched candidate production ELF yet.",
+    "Full compiler-environment equivalence and production caller/kernel stack including realignment remain unproved."
+  ],
+  "stack_qualified": false,
+  "primitive_allowed": false,
+  "native_execution": false,
+  "production_paged_planner": {
+    "symbol": "<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>",
+    "address": 4990624,
+    "bytes": 6096,
+    "assembly_sha256": "4889ccefb50f082c73340a3c72eadf33527aa6b54d1c8eddb3c514f90e879f9c",
+    "observed_prologue": "six pushes; sub $0x308,%rsp; return address",
+    "observed_entry_frame_bytes": 832,
+    "comparison_pending": true
+  }
+}
