@@ -1,0 +1,81 @@
+{
+  "status": "COMPILE_AND_SYNTHETIC_CORRECTNESS_VERIFIED_CODEGEN_PENDING",
+  "candidate": "3138bfb0502c986d187e4098718f8b3945fd39c9",
+  "instance_id": "i-0036b3a365147ea21",
+  "native_file_count": 415,
+  "support_file_count": 2454,
+  "native_identity": "784599b48775f185e16bdfd221164129dc33c7b65ec62a6f629229264bbb3adb",
+  "full_source_before_after_equal": true,
+  "artifact_count": 96,
+  "stages": [
+    {
+      "name": "probe-compile",
+      "command": "cargo test --locked --release -p borsuk --lib --no-run --message-format=json",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 0
+    },
+    {
+      "name": "codec-debug",
+      "command": "cargo test --locked -p borsuk --lib rotated_two_bit::tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 4
+    },
+    {
+      "name": "planner-debug",
+      "command": "cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 8
+    },
+    {
+      "name": "codec-release",
+      "command": "cargo test --locked --release -p borsuk --lib rotated_two_bit::tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 4
+    },
+    {
+      "name": "planner-release",
+      "command": "cargo test --locked --release -p borsuk --lib two_bit_generation::source_walk_tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 8
+    },
+    {
+      "name": "integration",
+      "command": "cargo test --locked -p borsuk --test rotated_two_bit --test two_bit_source --test two_bit_generation -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 0
+    },
+    {
+      "name": "scalar-control-codec",
+      "command": "env CARGO_TARGET_DIR=/mnt/borsuk-http/target-scalar-control cargo test --locked --features scalar-control -p borsuk --lib rotated_two_bit::tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 4
+    }
+  ],
+  "release_elf": {
+    "role": "probe-libtest",
+    "bytes": 88769888,
+    "sha256": "b0442b3bd294685ec0be3b0615447e998893b3fccb6c35d11a3b5ee3d895c25d"
+  },
+  "early_emission_screen": {
+    "status": "SCREEN_PASS_AUDIT_PENDING",
+    "packed_add_present": true,
+    "forbidden_mnemonics": [],
+    "qualification": false,
+    "primitive_run": false
+  },
+  "release_elf_before_after_equal": true,
+  "scalar_control_target_separate": true,
+  "codegen_qualified": false,
+  "primitive_run": false,
+  "workspace_clippy_and_testbuild": "NOT_RUN",
+  "production_integrated": false,
+  "performance_claim": false,
+  "at": "2026-10-08T13:21:58.317704+00:00"
+}

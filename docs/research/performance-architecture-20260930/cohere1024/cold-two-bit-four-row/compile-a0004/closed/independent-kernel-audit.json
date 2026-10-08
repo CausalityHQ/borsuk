@@ -1,0 +1,40 @@
+{
+  "status": "ORDERED_KERNEL_EMISSION_PASS_SERVING_STACK_PENDING",
+  "candidate": "3138bfb0502c986d187e4098718f8b3945fd39c9",
+  "instance_id": "i-0036b3a365147ea21",
+  "elf": {
+    "path": "/data/target/borsuk-cold-membership-native/two-bit-four-row-gate-a0004/probe-libtest",
+    "role": "probe-libtest",
+    "bytes": 88769888,
+    "sha256": "b0442b3bd294685ec0be3b0615447e998893b3fccb6c35d11a3b5ee3d895c25d"
+  },
+  "symbol": "<borsuk::rotated_two_bit::PreparedTwoBit>::score_four",
+  "address": "0x19d0690",
+  "bytes": 695,
+  "independent_disassembly_matches_authenticated_remote_bytes": true,
+  "disassembly_sha256": "5178c1de8b68eee7fcf041912cb78f895cf723bd06518458e9ff5a92a809fed3",
+  "manual_loop_audit": {
+    "byte_index": "rax advances by one; r11 is packed byte count; one backward branch to 0x19d0720",
+    "lookup_offset": "r10 advances by 256 table entries per byte; four checked row-indexed scalar loads",
+    "lane_0_1": "row0/row1 loads packed with unpcklpd into xmm10, then added only into xmm9",
+    "lane_2_3": "row2/row3 loads packed with movsd/movhpd into xmm10, then added only into xmm4",
+    "initializer": "both lanes of xmm9 and xmm4 start at literal f64 negative zero at 0x4b8990",
+    "sum_order": "one addition per lane per increasing byte; no split partial sums or cross-lane reduction",
+    "finalizers": "after the loop, row0 then row1 then row2 then row3 use unchanged scalar multiply/add/multiply/multiply and finite checks; upper-lane extraction occurs only after each preceding finalizer",
+    "packed_additions_per_byte": 2,
+    "fma": false,
+    "horizontal_arithmetic": false
+  },
+  "standalone_kernel_success_entry_frame_bytes": 80,
+  "standalone_kernel_stack_realignment_bytes": 0,
+  "production_serving_stack_qualified": false,
+  "primitive_allowed": false,
+  "primitive_run": false,
+  "performance_claim": false,
+  "remaining": [
+    "Candidate production serving ELF and matched-profile control caller/kernel frame accounting are not available from this compile-only job.",
+    "Cold runner currently supplies only codec+trace scratch and selects scalar fallback; prospective +512 admission and native dispatch regression are required.",
+    "Workspace Clippy and real unshimmed test compilation are not part of this seven-stage job."
+  ],
+  "at": "2026-10-08T13:28:20.804638+00:00"
+}

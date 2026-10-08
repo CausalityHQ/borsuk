@@ -1,0 +1,22 @@
+{
+  "status": "ORIGINAL_INSTANCE_ACTIVE_NATIVE_RESULT_PENDING",
+  "instance_id": "i-0036b3a365147ea21",
+  "watcher_session": 76745,
+  "state_observation": {
+    "at": "2026-10-08T12:58:50.771148+00:00",
+    "instance_id": "i-0036b3a365147ea21",
+    "state": "running",
+    "terminal_head_exit": 254
+  },
+  "cloudwatch_cpu": {
+    "namespace": "AWS/EC2",
+    "metric": "CPUUtilization",
+    "period_seconds": 300,
+    "timestamp": "2026-10-08T12:55:00+00:00",
+    "average_percent_of_eight_vcpu_instance": 12.710833333333333,
+    "maximum_percent": 12.713333333333333
+  },
+  "scope": "infrastructure health only; not scientific performance evidence",
+  "restart": false,
+  "performance_claim": false
+}

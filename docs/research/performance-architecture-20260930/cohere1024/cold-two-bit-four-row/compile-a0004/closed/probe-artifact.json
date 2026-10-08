@@ -1,0 +1,46 @@
+{
+  "status": "RELEASE_COMPILED_CODEGEN_AUDIT_PENDING",
+  "path": "/mnt/borsuk-http/source/target/release/deps/borsuk-b70945ff780bbfd9",
+  "bytes": 88769888,
+  "sha256": "b0442b3bd294685ec0be3b0615447e998893b3fccb6c35d11a3b5ee3d895c25d",
+  "cargo_artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///mnt/borsuk-http/source/crates/borsuk#0.1.0",
+    "manifest_path": "/mnt/borsuk-http/source/crates/borsuk/Cargo.toml",
+    "target": {
+      "kind": [
+        "lib"
+      ],
+      "crate_types": [
+        "lib"
+      ],
+      "name": "borsuk",
+      "src_path": "/mnt/borsuk-http/source/crates/borsuk/src/lib.rs",
+      "edition": "2024",
+      "doc": true,
+      "doctest": true,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "3",
+      "debuginfo": 0,
+      "debug_assertions": false,
+      "overflow_checks": false,
+      "test": true
+    },
+    "features": [
+      "default"
+    ],
+    "filenames": [
+      "/mnt/borsuk-http/source/target/release/deps/borsuk-b70945ff780bbfd9"
+    ],
+    "executable": "/mnt/borsuk-http/source/target/release/deps/borsuk-b70945ff780bbfd9",
+    "fresh": false
+  },
+  "kernel_address": 27068048,
+  "kernel_bytes": 695,
+  "ordered_sum_codegen_qualified": false,
+  "serving_stack_qualified": false,
+  "primitive_run": false,
+  "performance_claim": false
+}

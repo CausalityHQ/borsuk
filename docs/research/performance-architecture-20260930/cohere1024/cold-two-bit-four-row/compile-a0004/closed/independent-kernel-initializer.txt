@@ -1,0 +1,5 @@
+
+/data/target/borsuk-cold-membership-native/two-bit-four-row-gate-a0004/probe-libtest:     file format elf64-x86-64
+
+Contents of section .rodata:
+ 4b8990 00000000 00000080 00000000 00000080  ................

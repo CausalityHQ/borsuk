@@ -1,0 +1,172 @@
+
+/data/target/borsuk-cold-membership-native/two-bit-four-row-gate-a0004/probe-libtest:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+00000000019d0690 <_RNvMs1_NtCs4YbnGVz5TcO_6borsuk15rotated_two_bitNtB5_14PreparedTwoBit10score_four>:
+ 19d0690:	55                   	push   %rbp
+ 19d0691:	41 57                	push   %r15
+ 19d0693:	41 56                	push   %r14
+ 19d0695:	41 55                	push   %r13
+ 19d0697:	41 54                	push   %r12
+ 19d0699:	53                   	push   %rbx
+ 19d069a:	48 83 ec 18          	sub    $0x18,%rsp
+ 19d069e:	48 89 3c 24          	mov    %rdi,(%rsp)
+ 19d06a2:	f3 44 0f 10 42 10    	movss  0x10(%rdx),%xmm8
+ 19d06a8:	f3 0f 10 7a 14       	movss  0x14(%rdx),%xmm7
+ 19d06ad:	f3 0f 10 72 28       	movss  0x28(%rdx),%xmm6
+ 19d06b2:	f3 0f 10 6a 2c       	movss  0x2c(%rdx),%xmm5
+ 19d06b7:	f3 0f 10 5a 40       	movss  0x40(%rdx),%xmm3
+ 19d06bc:	f3 0f 10 52 44       	movss  0x44(%rdx),%xmm2
+ 19d06c1:	f3 0f 10 4a 58       	movss  0x58(%rdx),%xmm1
+ 19d06c6:	f3 0f 10 42 5c       	movss  0x5c(%rdx),%xmm0
+ 19d06cb:	4c 8b 5e 18          	mov    0x18(%rsi),%r11
+ 19d06cf:	4d 85 db             	test   %r11,%r11
+ 19d06d2:	48 89 74 24 10       	mov    %rsi,0x10(%rsp)
+ 19d06d7:	0f 84 e4 00 00 00    	je     19d07c1 <_RNvMs1_NtCs4YbnGVz5TcO_6borsuk15rotated_two_bitNtB5_14PreparedTwoBit10score_four+0x131>
+ 19d06dd:	48 8b 1a             	mov    (%rdx),%rbx
+ 19d06e0:	48 8b 42 08          	mov    0x8(%rdx),%rax
+ 19d06e4:	48 89 44 24 08       	mov    %rax,0x8(%rsp)
+ 19d06e9:	4c 8b 72 18          	mov    0x18(%rdx),%r14
+ 19d06ed:	48 8b 7a 20          	mov    0x20(%rdx),%rdi
+ 19d06f1:	4c 8b 7a 30          	mov    0x30(%rdx),%r15
+ 19d06f5:	4c 8b 4a 38          	mov    0x38(%rdx),%r9
+ 19d06f9:	4c 8b 62 48          	mov    0x48(%rdx),%r12
+ 19d06fd:	4c 8b 42 50          	mov    0x50(%rdx),%r8
+ 19d0701:	4c 8b 6e 08          	mov    0x8(%rsi),%r13
+ 19d0705:	48 8b 56 10          	mov    0x10(%rsi),%rdx
+ 19d0709:	66 44 0f 28 0d 7e 82 	movapd -0x1517d82(%rip),%xmm9        # 4b8990 <anon.6b481db4886e125e2bef4fd430cd3f54.2924.llvm.5586525562140736092+0x40>
+ 19d0710:	ae fe 
+ 19d0712:	45 31 d2             	xor    %r10d,%r10d
+ 19d0715:	31 c0                	xor    %eax,%eax
+ 19d0717:	66 41 0f 28 e1       	movapd %xmm9,%xmm4
+ 19d071c:	31 ed                	xor    %ebp,%ebp
+ 19d071e:	66 90                	xchg   %ax,%ax
+ 19d0720:	48 81 c5 00 01 00 00 	add    $0x100,%rbp
+ 19d0727:	0f 82 b8 01 00 00    	jb     19d08e5 <_RNvMs1_NtCs4YbnGVz5TcO_6borsuk15rotated_two_bitNtB5_14PreparedTwoBit10score_four+0x255>
+ 19d072d:	48 39 d5             	cmp    %rdx,%rbp
+ 19d0730:	0f 87 af 01 00 00    	ja     19d08e5 <_RNvMs1_NtCs4YbnGVz5TcO_6borsuk15rotated_two_bitNtB5_14PreparedTwoBit10score_four+0x255>
+ 19d0736:	48 39 44 24 08       	cmp    %rax,0x8(%rsp)
+ 19d073b:	0f 84 ce 01 00 00    	je     19d090f <_RNvMs1_NtCs4YbnGVz5TcO_6borsuk15rotated_two_bitNtB5_14PreparedTwoBit10score_four+0x27f>
+ 19d0741:	48 39 c7             	cmp    %rax,%rdi
+ 19d0744:	0f 84 da 01 00 00    	je     19d0924 <_RNvMs1_NtCs4YbnGVz5TcO_6borsuk15rotated_two_bitNtB5_14PreparedTwoBit10score_four+0x294>
+ 19d074a:	49 39 c1             	cmp    %rax,%r9
+ 19d074d:	0f 84 e1 01 00 00    	je     19d0934 <_RNvMs1_NtCs4YbnGVz5TcO_6borsuk15rotated_two_bitNtB5_14PreparedTwoBit10score_four+0x2a4>
+ 19d0753:	49 39 c0             	cmp    %rax,%r8
+ 19d0756:	0f 84 a0 01 00 00    	je     19d08fc <_RNvMs1_NtCs4YbnGVz5TcO_6borsuk15rotated_two_bitNtB5_14PreparedTwoBit10score_four+0x26c>
+ 19d075c:	0f b6 0c 03          	movzbl (%rbx,%rax,1),%ecx
+ 19d0760:	48 8d 0c cd 00 00 00 	lea    0x0(,%rcx,8),%rcx
+ 19d0767:	00 
+ 19d0768:	4c 01 e9             	add    %r13,%rcx
+ 19d076b:	f2 46 0f 10 14 d1    	movsd  (%rcx,%r10,8),%xmm10
+ 19d0771:	41 0f b6 0c 06       	movzbl (%r14,%rax,1),%ecx
+ 19d0776:	49 8d 4c cd 00       	lea    0x0(%r13,%rcx,8),%rcx
+ 19d077b:	f2 46 0f 10 1c d1    	movsd  (%rcx,%r10,8),%xmm11
+ 19d0781:	41 0f b6 0c 07       	movzbl (%r15,%rax,1),%ecx
+ 19d0786:	41 0f b6 34 04       	movzbl (%r12,%rax,1),%esi
+ 19d078b:	48 ff c0             	inc    %rax
+ 19d078e:	66 45 0f 14 d3       	unpcklpd %xmm11,%xmm10
+ 19d0793:	66 45 0f 58 ca       	addpd  %xmm10,%xmm9
+ 19d0798:	49 8d 4c cd 00       	lea    0x0(%r13,%rcx,8),%rcx
+ 19d079d:	49 8d 74 f5 00       	lea    0x0(%r13,%rsi,8),%rsi
+ 19d07a2:	f2 46 0f 10 14 d1    	movsd  (%rcx,%r10,8),%xmm10
+ 19d07a8:	66 46 0f 16 14 d6    	movhpd (%rsi,%r10,8),%xmm10
+ 19d07ae:	66 41 0f 58 e2       	addpd  %xmm10,%xmm4
+ 19d07b3:	49 89 ea             	mov    %rbp,%r10
+ 19d07b6:	49 39 c3             	cmp    %rax,%r11
+ 19d07b9:	0f 85 61 ff ff ff    	jne    19d0720 <_RNvMs1_NtCs4YbnGVz5TcO_6borsuk15rotated_two_bitNtB5_14PreparedTwoBit10score_four+0x90>
+ 19d07bf:	eb 0d                	jmp    19d07ce <_RNvMs1_NtCs4YbnGVz5TcO_6borsuk15rotated_two_bitNtB5_14PreparedTwoBit10score_four+0x13e>
+ 19d07c1:	66 0f 28 25 c7 81 ae 	movapd -0x1517e39(%rip),%xmm4        # 4b8990 <anon.6b481db4886e125e2bef4fd430cd3f54.2924.llvm.5586525562140736092+0x40>
+ 19d07c8:	fe 
+ 19d07c9:	66 44 0f 28 cc       	movapd %xmm4,%xmm9
+ 19d07ce:	48 8b 44 24 10       	mov    0x10(%rsp),%rax
+ 19d07d3:	f2 44 0f 10 50 20    	movsd  0x20(%rax),%xmm10
+ 19d07d9:	45 0f 57 db          	xorps  %xmm11,%xmm11
+ 19d07dd:	f3 45 0f 5a d8       	cvtss2sd %xmm8,%xmm11
+ 19d07e2:	f2 44 0f 10 40 28    	movsd  0x28(%rax),%xmm8
+ 19d07e8:	f2 45 0f 59 d9       	mulsd  %xmm9,%xmm11
+ 19d07ed:	f2 45 0f 58 da       	addsd  %xmm10,%xmm11
+ 19d07f2:	f2 45 0f 59 d8       	mulsd  %xmm8,%xmm11
+ 19d07f7:	f3 0f 5a ff          	cvtss2sd %xmm7,%xmm7
+ 19d07fb:	f2 41 0f 59 fb       	mulsd  %xmm11,%xmm7
+ 19d0800:	66 48 0f 7e f9       	movq   %xmm7,%rcx
+ 19d0805:	48 b8 ff ff ff ff ff 	movabs $0x7fffffffffffffff,%rax
+ 19d080c:	ff ff 7f 
+ 19d080f:	48 21 c1             	and    %rax,%rcx
+ 19d0812:	48 ba ff ff ff ff ff 	movabs $0x7fefffffffffffff,%rdx
+ 19d0819:	ff ef 7f 
+ 19d081c:	48 39 d1             	cmp    %rdx,%rcx
+ 19d081f:	0f 8f 89 00 00 00    	jg     19d08ae <_RNvMs1_NtCs4YbnGVz5TcO_6borsuk15rotated_two_bitNtB5_14PreparedTwoBit10score_four+0x21e>
+ 19d0825:	66 45 0f 15 c9       	unpckhpd %xmm9,%xmm9
+ 19d082a:	f3 0f 5a f6          	cvtss2sd %xmm6,%xmm6
+ 19d082e:	f2 41 0f 59 f1       	mulsd  %xmm9,%xmm6
+ 19d0833:	f2 41 0f 58 f2       	addsd  %xmm10,%xmm6
+ 19d0838:	f2 41 0f 59 f0       	mulsd  %xmm8,%xmm6
+ 19d083d:	f3 0f 5a ed          	cvtss2sd %xmm5,%xmm5
+ 19d0841:	f2 0f 59 ee          	mulsd  %xmm6,%xmm5
+ 19d0845:	66 48 0f 7e ea       	movq   %xmm5,%rdx
+ 19d084a:	48 21 c2             	and    %rax,%rdx
+ 19d084d:	48 b9 00 00 00 00 00 	movabs $0x7ff0000000000000,%rcx
+ 19d0854:	00 f0 7f 
+ 19d0857:	48 39 ca             	cmp    %rcx,%rdx
+ 19d085a:	7d 52                	jge    19d08ae <_RNvMs1_NtCs4YbnGVz5TcO_6borsuk15rotated_two_bitNtB5_14PreparedTwoBit10score_four+0x21e>
+ 19d085c:	f3 0f 5a db          	cvtss2sd %xmm3,%xmm3
+ 19d0860:	f2 0f 59 dc          	mulsd  %xmm4,%xmm3
+ 19d0864:	f2 41 0f 58 da       	addsd  %xmm10,%xmm3
+ 19d0869:	f2 41 0f 59 d8       	mulsd  %xmm8,%xmm3
+ 19d086e:	f3 0f 5a d2          	cvtss2sd %xmm2,%xmm2
+ 19d0872:	f2 0f 59 d3          	mulsd  %xmm3,%xmm2
+ 19d0876:	66 48 0f 7e d2       	movq   %xmm2,%rdx
+ 19d087b:	48 21 c2             	and    %rax,%rdx
+ 19d087e:	48 39 ca             	cmp    %rcx,%rdx
+ 19d0881:	7d 2b                	jge    19d08ae <_RNvMs1_NtCs4YbnGVz5TcO_6borsuk15rotated_two_bitNtB5_14PreparedTwoBit10score_four+0x21e>
+ 19d0883:	66 0f 15 e4          	unpckhpd %xmm4,%xmm4
+ 19d0887:	f3 0f 5a c9          	cvtss2sd %xmm1,%xmm1
+ 19d088b:	f2 0f 59 cc          	mulsd  %xmm4,%xmm1
+ 19d088f:	f2 41 0f 58 ca       	addsd  %xmm10,%xmm1
+ 19d0894:	f2 41 0f 59 c8       	mulsd  %xmm8,%xmm1
+ 19d0899:	f3 0f 5a c0          	cvtss2sd %xmm0,%xmm0
+ 19d089d:	f2 0f 59 c1          	mulsd  %xmm1,%xmm0
+ 19d08a1:	66 48 0f 7e c2       	movq   %xmm0,%rdx
+ 19d08a6:	48 21 c2             	and    %rax,%rdx
+ 19d08a9:	48 39 ca             	cmp    %rcx,%rdx
+ 19d08ac:	7c 1b                	jl     19d08c9 <_RNvMs1_NtCs4YbnGVz5TcO_6borsuk15rotated_two_bitNtB5_14PreparedTwoBit10score_four+0x239>
+ 19d08ae:	48 8b 04 24          	mov    (%rsp),%rax
+ 19d08b2:	c6 40 01 02          	movb   $0x2,0x1(%rax)
+ 19d08b6:	b1 01                	mov    $0x1,%cl
+ 19d08b8:	88 08                	mov    %cl,(%rax)
+ 19d08ba:	48 83 c4 18          	add    $0x18,%rsp
+ 19d08be:	5b                   	pop    %rbx
+ 19d08bf:	41 5c                	pop    %r12
+ 19d08c1:	41 5d                	pop    %r13
+ 19d08c3:	41 5e                	pop    %r14
+ 19d08c5:	41 5f                	pop    %r15
+ 19d08c7:	5d                   	pop    %rbp
+ 19d08c8:	c3                   	ret
+ 19d08c9:	48 8b 04 24          	mov    (%rsp),%rax
+ 19d08cd:	f2 0f 11 78 08       	movsd  %xmm7,0x8(%rax)
+ 19d08d2:	f2 0f 11 68 10       	movsd  %xmm5,0x10(%rax)
+ 19d08d7:	f2 0f 11 50 18       	movsd  %xmm2,0x18(%rax)
+ 19d08dc:	f2 0f 11 40 20       	movsd  %xmm0,0x20(%rax)
+ 19d08e1:	31 c9                	xor    %ecx,%ecx
+ 19d08e3:	eb d3                	jmp    19d08b8 <_RNvMs1_NtCs4YbnGVz5TcO_6borsuk15rotated_two_bitNtB5_14PreparedTwoBit10score_four+0x228>
+ 19d08e5:	49 8d b2 00 01 00 00 	lea    0x100(%r10),%rsi
+ 19d08ec:	48 8d 0d cd 14 6d 02 	lea    0x26d14cd(%rip),%rcx        # 40a1dc0 <anon.9f8c2c94171d89e1b82e7fa5f5f2455d.802.llvm.10580415916225759297+0x118>
+ 19d08f3:	4c 89 d7             	mov    %r10,%rdi
+ 19d08f6:	ff 15 94 8f 92 02    	call   *0x2928f94(%rip)        # 42f9890 <_DYNAMIC+0x240>
+ 19d08fc:	48 8d 15 a5 14 6d 02 	lea    0x26d14a5(%rip),%rdx        # 40a1da8 <anon.9f8c2c94171d89e1b82e7fa5f5f2455d.802.llvm.10580415916225759297+0x100>
+ 19d0903:	4c 89 c7             	mov    %r8,%rdi
+ 19d0906:	4c 89 c6             	mov    %r8,%rsi
+ 19d0909:	ff 15 b1 8f 92 02    	call   *0x2928fb1(%rip)        # 42f98c0 <_DYNAMIC+0x270>
+ 19d090f:	48 8d 15 4a 14 6d 02 	lea    0x26d144a(%rip),%rdx        # 40a1d60 <anon.9f8c2c94171d89e1b82e7fa5f5f2455d.802.llvm.10580415916225759297+0xb8>
+ 19d0916:	48 8b 7c 24 08       	mov    0x8(%rsp),%rdi
+ 19d091b:	48 89 fe             	mov    %rdi,%rsi
+ 19d091e:	ff 15 9c 8f 92 02    	call   *0x2928f9c(%rip)        # 42f98c0 <_DYNAMIC+0x270>
+ 19d0924:	48 8d 15 4d 14 6d 02 	lea    0x26d144d(%rip),%rdx        # 40a1d78 <anon.9f8c2c94171d89e1b82e7fa5f5f2455d.802.llvm.10580415916225759297+0xd0>
+ 19d092b:	48 89 fe             	mov    %rdi,%rsi
+ 19d092e:	ff 15 8c 8f 92 02    	call   *0x2928f8c(%rip)        # 42f98c0 <_DYNAMIC+0x270>
+ 19d0934:	48 8d 15 55 14 6d 02 	lea    0x26d1455(%rip),%rdx        # 40a1d90 <anon.9f8c2c94171d89e1b82e7fa5f5f2455d.802.llvm.10580415916225759297+0xe8>
+ 19d093b:	4c 89 cf             	mov    %r9,%rdi
+ 19d093e:	4c 89 ce             	mov    %r9,%rsi
+ 19d0941:	ff 15 79 8f 92 02    	call   *0x2928f79(%rip)        # 42f98c0 <_DYNAMIC+0x270>
