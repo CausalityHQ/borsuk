@@ -1,0 +1,341 @@
+{
+  "status": "FROZEN_AFTER_REAL_ADMISSION_AND_DISPOSABLE_CANARY_NOT_LAUNCHED",
+  "scope": "BASELINE_DIRECT_COLD_APPLICATION_CACHE_OFF_PAIRED_PERFORMANCE_FALSIFIER",
+  "candidate": "2fb771bdb31f9490a3341bdbfa2b4ad510cfb487",
+  "integration_commit": "290958155bcc11bf4b6c90d1fd95a6692f389b09",
+  "qualification": {
+    "status": "NATIVE_QUALIFIED_COMPILER_AND_SYNTHETIC_CORRECTNESS_ONLY",
+    "candidate": "2fb771bdb31f9490a3341bdbfa2b4ad510cfb487",
+    "instance_id": "i-02d745c13eee2b090",
+    "terminated": true,
+    "source_file_count": 425,
+    "native_source_identity_sha256": "4d04840e2db4487f9e77ef57e5eadef42684ab3d354c1a51c2adc20a8c3474e9",
+    "full_source_before_after_root_match": true,
+    "stages": [
+      {
+        "name": "failing-layer",
+        "command": "cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::native_direct_closure_cold_oracle_zero_source_memory_and_caps -- --exact --test-threads=1",
+        "exit": 0
+      },
+      {
+        "name": "lib-inventory",
+        "command": "cargo test --locked -p borsuk --lib source_walk_tests -- --list",
+        "exit": 0
+      },
+      {
+        "name": "bin-inventory",
+        "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --list",
+        "exit": 0
+      },
+      {
+        "name": "affected-lib",
+        "command": "cargo test --locked -p borsuk --lib source_walk_tests -- --test-threads=1",
+        "exit": 0
+      },
+      {
+        "name": "affected-bin",
+        "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+        "exit": 0
+      },
+      {
+        "name": "release",
+        "command": "cargo build --release --locked -p borsuk --lib --bin check_cohere_native_baseline",
+        "exit": 0
+      },
+      {
+        "name": "clippy",
+        "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+        "exit": 0
+      },
+      {
+        "name": "test-build",
+        "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+        "exit": 0
+      }
+    ],
+    "test_counts": {
+      "lib": 26,
+      "bin": 13
+    },
+    "binary": {
+      "bytes": 16381424,
+      "sha256": "67c7eb51e3ff6bb9b77c1c9f12cac3b402501b708d91bd6d95ea20b029a8ab0b"
+    },
+    "ann_run": false,
+    "performance_claim": false,
+    "quality_claim": false
+  },
+  "inputs": {
+    "A.config.json": {
+      "bytes": 1862,
+      "sha256": "cbe42b165fe1029e35f04e51c3a0389ee080183bc12b4adaa551582a3bfdb6ea"
+    },
+    "B.config.json": {
+      "bytes": 1923,
+      "sha256": "f705c9ef2a232013b7c27697f5fbe41969acec409625de519ba18434682ef799"
+    },
+    "stage.sh": {
+      "bytes": 2846,
+      "sha256": "8fc1ccc90230508b944def6b08bf3b8d8cda258323fe678fe885e0820d34b0c8"
+    },
+    "user-data.sh": {
+      "bytes": 8120,
+      "sha256": "035bb6db2601ab61852097f09a8a052ad7f30185e766b74296f4be5c17c5520d"
+    }
+  },
+  "binary": {
+    "bytes": 16381424,
+    "sha256": "67c7eb51e3ff6bb9b77c1c9f12cac3b402501b708d91bd6d95ea20b029a8ab0b"
+  },
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "prefix": "research/semantic-router/20261008/cold-direct-closure-cold-pair-a0001",
+  "native_envelope": {
+    "cpu": 1,
+    "memory_bytes": 536870912,
+    "swap": 0,
+    "pids": 256,
+    "arm_seconds": 1200,
+    "unit_seconds": 2460,
+    "machine_seconds": 3720,
+    "scratch_tmpfs_bytes": 67108864
+  },
+  "cost_caps_usd": {
+    "compute": 0.5,
+    "ancillary": 0.15
+  },
+  "order": [
+    "A_baseline_full1000",
+    "B_direct_full1000"
+  ],
+  "acceptance": [
+    "complete sealed native MEASURED both arms before truth",
+    "A all1000 ordered IDs and scorebits equal immutable B1 and B2",
+    "B >=9723/10000 hits; no underfill; per-query delta disclosed",
+    "direct query SOURCE GETs/bytes zero; startup SOURCE HEAD allowed and counted",
+    "exact pins; CPU/memory/swap/pids enforced; scratch clean; original instance terminated before collection"
+  ],
+  "failure_policy": {
+    "environment_config_transport": "INVALID_fix_and_rerun_unchanged_algorithm_limits",
+    "valid_input_enforced_memory_or_bytes": "RESOURCE_REJECT",
+    "quality": "QUALITY_REJECT"
+  },
+  "application_payload_cache": "off",
+  "backend_cache": "uncontrolled",
+  "vendor_win_claim": false,
+  "performance_claim": false,
+  "interruption": "INVALID; no automatic repeat",
+  "spot_quote": {
+    "SpotPriceHistory": [
+      {
+        "AvailabilityZone": "eu-central-1c",
+        "AvailabilityZoneId": "euc1-az1",
+        "InstanceType": "c7i.2xlarge",
+        "ProductDescription": "Linux/UNIX",
+        "SpotPrice": "0.205600",
+        "Timestamp": "2026-10-08T19:00:00+00:00"
+      }
+    ],
+    "NextToken": "eyJOZXh0VG9rZW4iOiBudWxsLCAiYm90b190cnVuY2F0ZV9hbW91bnQiOiAxfQ=="
+  },
+  "prior_admission": {
+    "path": "/data/target/borsuk-cold-membership-native/direct-closure-admission-a0001/independent-admission-verification.json",
+    "sha256": "0b4aca0c613e60336e04bde7a950a478ee1670d8ffb39211fb8741a4be511331"
+  },
+  "prior_canary": {
+    "path": "/data/target/borsuk-cold-membership-native/direct-closure-canary-a0001/independent-verification.json",
+    "sha256": "bd1c6eaece8732fc76ce66e1feeb4d5afcd9aed9f49d50edbb0f1a13798c9bd1"
+  },
+  "performance_method": {
+    "order": [
+      "A_baseline",
+      "B_direct"
+    ],
+    "queries_per_arm": 1000,
+    "query_concurrency": 1,
+    "fetch_parallelism": 32,
+    "application_payload_cache": "off",
+    "backend_cache": "uncontrolled, not guaranteed cold",
+    "quantiles": "nearest-rank ceil(p*N), no interpolation",
+    "serial_QPS": "N / sum(native query_wall_ns), startup and truth reduction reported separately",
+    "selection_gate": {
+      "B_hits_minimum": 9723,
+      "B_p90_over_A_max": 1.0,
+      "B_p95_over_A_max": 1.0,
+      "B_query_QPS_over_A_min": 1.0
+    },
+    "order_bias": "B follows A in one process per arm on same host; provider cache and temporal effects possible, no strict backend-cold or vendor-win conclusion",
+    "report": [
+      "p50,p90,p95,p99",
+      "query CPU/wall",
+      "native stage scopes",
+      "process RSS and cgroup peak",
+      "logical GET/verified bytes/failures",
+      "native transport counters/statuses with measurement scope",
+      "per-query hit deltas/lower tail",
+      "startup/binding/truth separate"
+    ],
+    "interrupt": "discard entire interrupted A/B cell; preserve receipt and no automatic retry",
+    "no_data_inspection_until_terminal": true,
+    "vendor": "saved S3 reference only; published Turbopuffer 10M cold mismatched population/load; no vendor rerun",
+    "cost": "record reservation and machine lifetime; logical request counts are not billed request proof, lifecycle cost unmeasured",
+    "claim_scope": "one frozen paired latency/throughput falsifier, not production or matched vendor win"
+  },
+  "frozen_at": "2026-10-08T22:27:38.795795+00:00",
+  "performance_claim_note": "Measurements authorized; no measured improvement, backend-cold, vendor or lifecycle win is claimed before closed audit",
+  "checks": {
+    "stage-check.json": {
+      "status": "SOURCE_BOUND_SHELL_MOCK_PASS_ONLY",
+      "source_sha256": "8fc1ccc90230508b944def6b08bf3b8d8cda258323fe678fe885e0820d34b0c8",
+      "cases": [
+        {
+          "case": "success",
+          "exit": 0,
+          "calls": [
+            "A",
+            "B"
+          ]
+        },
+        {
+          "case": "fail-A",
+          "exit": 17,
+          "calls": [
+            "A"
+          ]
+        },
+        {
+          "case": "resource-B",
+          "exit": 3,
+          "calls": [
+            "A",
+            "B"
+          ]
+        },
+        {
+          "case": "invalid-B",
+          "exit": 2,
+          "calls": [
+            "A",
+            "B"
+          ]
+        },
+        {
+          "case": "pin-drift",
+          "exit": 1,
+          "calls": [
+            "A"
+          ]
+        },
+        {
+          "case": "scratch-leak",
+          "exit": 96,
+          "calls": [
+            "A",
+            "B"
+          ]
+        },
+        {
+          "case": "bad-cap",
+          "exit": 1,
+          "calls": []
+        },
+        {
+          "case": "missing-authority",
+          "exit": 98,
+          "calls": []
+        }
+      ],
+      "real": [
+        "shell ordering",
+        "time/timeout",
+        "pin authentication",
+        "stop at native exit",
+        "scratch cleanup"
+      ],
+      "mocked": [
+        "native runner",
+        "kernel cgroup reads"
+      ],
+      "native_executed": false,
+      "launch_authorized": false
+    },
+    "wrapper-check.json": {
+      "status": "MOCK_WRAPPER_CHECK_PASS",
+      "cases": [
+        {
+          "case": "already-unloaded",
+          "actual_exit": 0,
+          "expected_exit": 0
+        },
+        {
+          "case": "success",
+          "actual_exit": 0,
+          "expected_exit": 0
+        },
+        {
+          "case": "timer-fail",
+          "actual_exit": 17,
+          "expected_exit": 17
+        },
+        {
+          "case": "apt-fail",
+          "actual_exit": 17,
+          "expected_exit": 17
+        },
+        {
+          "case": "identity-fail",
+          "actual_exit": 1,
+          "expected_exit": 1
+        },
+        {
+          "case": "download-fail",
+          "actual_exit": 19,
+          "expected_exit": 19
+        },
+        {
+          "case": "late-start",
+          "actual_exit": 95,
+          "expected_exit": 95
+        },
+        {
+          "case": "native-fail",
+          "actual_exit": 2,
+          "expected_exit": 2
+        },
+        {
+          "case": "terminal-fail",
+          "actual_exit": 96,
+          "expected_exit": 96
+        },
+        {
+          "case": "closeout-fail",
+          "actual_exit": 96,
+          "expected_exit": 96
+        }
+      ],
+      "source_sha256": "035bb6db2601ab61852097f09a8a052ad7f30185e766b74296f4be5c17c5520d",
+      "real": [
+        "bash control flow",
+        "jq terminal serialization",
+        "timeouts",
+        "tar",
+        "non-input SHA computation"
+      ],
+      "mocked": [
+        "systemd/cgroup/native publisher",
+        "IMDS/HTTP",
+        "AWS/S3",
+        "apt",
+        "mount/shutdown",
+        "input binary sizes and pin checks"
+      ],
+      "native_runtime_pass": false,
+      "cloud_operations": false
+    }
+  },
+  "local_resource_observation": "ActiveState=active\nInvocationID=adcf6bfa20a448d0aefd89db3e724973\nRuntimeMaxUSec=2min\nMemoryPeak=17911808\nMemorySwapPeak=0\nCPUQuotaPerSecUSec=1s\nMemoryMax=268435456\nMemorySwapMax=0\nTasksMax=128\n",
+  "userdata": {
+    "bytes": 8120,
+    "sha256": "035bb6db2601ab61852097f09a8a052ad7f30185e766b74296f4be5c17c5520d"
+  },
+  "maximum_attempts": 1
+}
