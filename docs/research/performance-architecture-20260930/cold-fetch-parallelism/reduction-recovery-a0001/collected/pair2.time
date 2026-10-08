@@ -1,0 +1,23 @@
+	Command being timed: "timeout --kill-after=10 120 /mnt/borsuk-retained-s3/reducer --paired-v2 /mnt/borsuk-retained-s3/pair2.config.json 5c5fcdd4576d22c7dcb71a27e07d868d3859e29b329b20e5a5ab0eb5da7e73ef /mnt/borsuk-retained-s3/evidence/pair2.report.json"
+	User time (seconds): 0.34
+	System time (seconds): 0.00
+	Percent of CPU this job got: 98%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.35
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 4360
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 1103
+	Voluntary context switches: 5
+	Involuntary context switches: 3
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 48
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

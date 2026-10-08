@@ -1,0 +1,8 @@
+/mnt/borsuk-retained-s3/reducer: OK
+/mnt/borsuk-retained-s3/pair1.config.json: OK
+/mnt/borsuk-retained-s3/pair2.config.json: OK
+/mnt/borsuk-retained-s3/A1.jsonl: OK
+/mnt/borsuk-retained-s3/B1.jsonl: OK
+/mnt/borsuk-retained-s3/B2.jsonl: OK
+/mnt/borsuk-retained-s3/A2.jsonl: OK
+/mnt/borsuk-retained-s3/stage.sh: OK

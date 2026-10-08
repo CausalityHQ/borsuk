@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-cold-fetch-reduction-recovery-v1",
+  "instance_id": "i-0addf68d4969f7e84",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 0,
+  "binary_source_commit": "0f617199cd521590e8760aca41f36bd730c5a5a7",
+  "integration_commit": "ee213f5ddb69f679540be573495a1cf109f9c760",
+  "qualified_source_identity_sha256": "89e258e26610f2304f063fa64e8597a5a934984e8afe7635358b223152128d50",
+  "evidence": {
+    "bytes": 12512,
+    "sha256": "50600a14cf728358e8616b2cd2d3502f37c09e408b3d8fe2bcc4c6d1929802d2"
+  },
+  "terminal_delivery": "attempted",
+  "performance_claim": false
+}

@@ -1,0 +1,44 @@
+{
+  "pair1.config.json": {
+    "ETag": "\"5637631f03c7d840a6bc59a57964a147\"",
+    "ChecksumCRC64NVME": "8X+zsUIG8xk=",
+    "ChecksumType": "FULL_OBJECT",
+    "ServerSideEncryption": "AES256"
+  },
+  "pair2.config.json": {
+    "ETag": "\"d4ae60d8a3816e237c69172cd1f34939\"",
+    "ChecksumCRC64NVME": "/hfBtb1s4ks=",
+    "ChecksumType": "FULL_OBJECT",
+    "ServerSideEncryption": "AES256"
+  },
+  "stage.sh": {
+    "ETag": "\"34b280bb58251e956e43d18ebd593381\"",
+    "ChecksumCRC64NVME": "oxIw7GLycRM=",
+    "ChecksumType": "FULL_OBJECT",
+    "ServerSideEncryption": "AES256"
+  },
+  "A1.jsonl": {
+    "ETag": "\"2e83f1ade804f8db69c1243d3728cde0\"",
+    "ChecksumCRC64NVME": "bBBYZxjplNI=",
+    "ChecksumType": "FULL_OBJECT",
+    "ServerSideEncryption": "AES256"
+  },
+  "B1.jsonl": {
+    "ETag": "\"bfb5b28b2355c4081fb0791c5db69dd3\"",
+    "ChecksumCRC64NVME": "Ehuo4G/Ztek=",
+    "ChecksumType": "FULL_OBJECT",
+    "ServerSideEncryption": "AES256"
+  },
+  "B2.jsonl": {
+    "ETag": "\"612bb4f7c1a1a53bc3240d88647894b0\"",
+    "ChecksumCRC64NVME": "d1eUtmMMkCQ=",
+    "ChecksumType": "FULL_OBJECT",
+    "ServerSideEncryption": "AES256"
+  },
+  "A2.jsonl": {
+    "ETag": "\"6332a78b07157143f4e8a85d74327271\"",
+    "ChecksumCRC64NVME": "zEnzTB+xFc4=",
+    "ChecksumType": "FULL_OBJECT",
+    "ServerSideEncryption": "AES256"
+  }
+}

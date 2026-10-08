@@ -1,0 +1,177 @@
+{
+  "status": "VERIFIED_CLOSED_NATIVE_REDUCTION",
+  "instance_id": "i-0addf68d4969f7e84",
+  "terminated": true,
+  "original_attempt_status": "EXECUTION_INVALID_CONFIGURATION_PRESERVED",
+  "query_reruns": 0,
+  "reducer_source_commit": "0f617199cd521590e8760aca41f36bd730c5a5a7",
+  "qualified_reducer_sha256": "9ad7ce0fe8f461a3b8f7957812c798103f234a83d1df6748d5f04cb870c4694b",
+  "both_pair_semantic_trace_logical_charge_parity": true,
+  "rows": [
+    {
+      "label": "A1",
+      "width": 16,
+      "statistics": {
+        "count": 1000,
+        "p50_ms": 180.421097,
+        "p90_ms": 205.769659,
+        "p90_ns": 205769659,
+        "p95_ms": 214.643245,
+        "p95_ns": 214643245,
+        "p99_ms": 236.365526,
+        "query_wall_ns": 184095182467,
+        "sequential_qps": 5.4319726708723355
+      },
+      "first_query_ms": 228.465878,
+      "recall": 0.9723,
+      "process_peak_bytes": 39407616,
+      "stage_wall_sums": {
+        "discovery_ns": 34663335848,
+        "max_leaf_peak_inflight": 16,
+        "planning_ns": 6272949110,
+        "source_ns": 65938832279,
+        "sq8_ns": 77182299067
+      },
+      "charges": {
+        "failed_gets": 0,
+        "submitted_gets": 67943,
+        "verified_bytes": 27259427868
+      }
+    },
+    {
+      "label": "B1",
+      "width": 32,
+      "statistics": {
+        "count": 1000,
+        "p50_ms": 127.500981,
+        "p90_ms": 150.817626,
+        "p90_ns": 150817626,
+        "p95_ms": 161.680695,
+        "p95_ns": 161680695,
+        "p99_ms": 188.447934,
+        "query_wall_ns": 131882173165,
+        "sequential_qps": 7.582525947224749
+      },
+      "first_query_ms": 136.706777,
+      "recall": 0.9723,
+      "process_peak_bytes": 50634752,
+      "stage_wall_sums": {
+        "discovery_ns": 34461919637,
+        "max_leaf_peak_inflight": 16,
+        "planning_ns": 6123896498,
+        "source_ns": 39389362086,
+        "sq8_ns": 51868581131
+      },
+      "charges": {
+        "failed_gets": 0,
+        "submitted_gets": 67943,
+        "verified_bytes": 27259427868
+      }
+    },
+    {
+      "label": "A2",
+      "width": 16,
+      "statistics": {
+        "count": 1000,
+        "p50_ms": 179.366762,
+        "p90_ms": 206.443248,
+        "p90_ns": 206443248,
+        "p95_ms": 213.968835,
+        "p95_ns": 213968835,
+        "p99_ms": 239.917146,
+        "query_wall_ns": 184262866583,
+        "sequential_qps": 5.427029431073985
+      },
+      "first_query_ms": 185.538594,
+      "recall": 0.9723,
+      "process_peak_bytes": 39518208,
+      "stage_wall_sums": {
+        "discovery_ns": 34233393258,
+        "max_leaf_peak_inflight": 16,
+        "planning_ns": 6278303655,
+        "source_ns": 66646904582,
+        "sq8_ns": 77065533379
+      },
+      "charges": {
+        "failed_gets": 0,
+        "submitted_gets": 67943,
+        "verified_bytes": 27259427868
+      }
+    },
+    {
+      "label": "B2",
+      "width": 32,
+      "statistics": {
+        "count": 1000,
+        "p50_ms": 128.024111,
+        "p90_ms": 152.109437,
+        "p90_ns": 152109437,
+        "p95_ms": 161.274391,
+        "p95_ns": 161274391,
+        "p99_ms": 200.921931,
+        "query_wall_ns": 133083449722,
+        "sequential_qps": 7.514082345242139
+      },
+      "first_query_ms": 344.421552,
+      "recall": 0.9723,
+      "process_peak_bytes": 50417664,
+      "stage_wall_sums": {
+        "discovery_ns": 34524244516,
+        "max_leaf_peak_inflight": 16,
+        "planning_ns": 6140441545,
+        "source_ns": 39857445094,
+        "sq8_ns": 52534688245
+      },
+      "charges": {
+        "failed_gets": 0,
+        "submitted_gets": 67943,
+        "verified_bytes": 27259427868
+      }
+    }
+  ],
+  "comparison": [
+    {
+      "control": "A1",
+      "candidate": "B1",
+      "p90_ratio": 0.7329439468041301,
+      "p95_ratio": 0.7532531247372821,
+      "serial_qps_ratio": 1.3959064978151023,
+      "direction_agrees": true
+    },
+    {
+      "control": "A2",
+      "candidate": "B2",
+      "p90_ratio": 0.7368099391654601,
+      "p95_ratio": 0.7537284156358565,
+      "serial_qps_ratio": 1.384566352675028,
+      "direction_agrees": true
+    }
+  ],
+  "selected_next_cold_configuration": 32,
+  "selection_scope": "100k cohort, same generation and query order, both pairs; no generic default or scale claim",
+  "reducer_resources": {
+    "cpu": 1,
+    "memory_cap_bytes": 536870912,
+    "peak_bytes": 2936832,
+    "swap_peak_bytes": 0,
+    "oom": 0,
+    "drained": true
+  },
+  "original_measurement_resources": {
+    "cpu_cap": 1,
+    "memory_cap_bytes": 536870912,
+    "swap_cap_bytes": 0,
+    "pids_cap": 256,
+    "per_process_peak_bytes": "native report and time files retained",
+    "cgroup_peak_and_oom_events": "NOT_COLLECTED after original reducer failed; unknown, not claimed zero"
+  },
+  "cache_scope": "local source/payload caches off; backend cache state uncontrolled",
+  "concurrent_service_capacity_claim": false,
+  "billed_cost": null,
+  "vendor_win_claim": false,
+  "performance_comparison_limitations": [
+    "S3 Vectors first pass cache state unknown; 0.67 percentage point recall difference",
+    "Turbopuffer published population10M differs100k; exact selected IDs/query split unpublished",
+    "No concurrent QPS or total lifecycle dollar qualification"
+  ]
+}
