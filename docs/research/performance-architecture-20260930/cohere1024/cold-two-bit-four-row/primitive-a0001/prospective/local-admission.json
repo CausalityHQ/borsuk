@@ -1,0 +1,10 @@
+{
+  "status": "SOURCE_BOUND_PRIMITIVE_ADMISSION_PASS_NATIVE_CANARY_PENDING",
+  "source_commit": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "exact_retained_elf_authenticated": true,
+  "input_pins_and_shell_syntax_verified": true,
+  "synthetic_math_accept_verified": true,
+  "synthetic_refusals": 13,
+  "native_execution": false,
+  "launch_allowed_after_frozen_protocol_and_native_canary": true
+}

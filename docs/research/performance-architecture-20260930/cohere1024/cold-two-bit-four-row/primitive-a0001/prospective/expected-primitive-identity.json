@@ -1,0 +1,8 @@
+{
+  "schema": "borsuk-two-bit-four-row-primitive-identity-v1",
+  "source_commit": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "executable_sha256": "1c1a700d09588f6b423521597cf9dce8af5179557aa63b16a79a0622639355c9",
+  "rotated_two_bit_sha256": "2f97ac15a2ffdcc69b78c67a74469703163520e075f85eaf01fba25a0c8727bd",
+  "two_bit_generation_sha256": "5d98b86bc8ec32a2e3ec3c96eb162f14298a1ad80534077f442e04d717c70282",
+  "codegen_receipt_sha256": "4ffa662f787dff4bf23a5b94e4209b3cbb39ebbbacb27fdc2ce63cc1c535cbef"
+}

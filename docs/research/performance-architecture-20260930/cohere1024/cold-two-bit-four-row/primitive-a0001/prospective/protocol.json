@@ -1,0 +1,93 @@
+{
+  "schema": "borsuk-two-bit-four-row-primitive-v1-protocol",
+  "status": "FROZEN_ASSETS_PENDING_LAUNCH",
+  "prefix": "research/semantic-router/20261008/cold-two-bit-four-row-primitive-a0001",
+  "candidate_commit": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "native_identity": "a7fe9601a9345da69223d75bf8fb6a765d1607c1f02b144e8e8763c90b0b2e8b",
+  "compile_receipt": {
+    "path": "/data/target/borsuk-cold-membership-native/two-bit-four-row-qualification-a0004/independent-verification.json",
+    "sha256": "29ebccf8e7db82c0bdf9ede1a7181070fb852a9317a9506132398fc72005d3c4"
+  },
+  "codegen_receipt": {
+    "path": "/data/target/borsuk-cold-membership-native/two-bit-four-row-control-build-a0001/qualified-codegen.json",
+    "sha256": "4ffa662f787dff4bf23a5b94e4209b3cbb39ebbbacb27fdc2ce63cc1c535cbef"
+  },
+  "same_retained_elf": {
+    "role": "probe-libtest",
+    "bytes": 88802352,
+    "sha256": "1c1a700d09588f6b423521597cf9dce8af5179557aa63b16a79a0622639355c9",
+    "key": "research/semantic-router/20261008/cold-two-bit-four-row-qualification-a0004/supplemental/probe-libtest",
+    "path": "/data/target/borsuk-cold-membership-native/two-bit-four-row-qualification-a0004/probe-libtest"
+  },
+  "inputs": {
+    "probe.sh": {
+      "bytes": 2512,
+      "sha256": "dd5c871f54cd015901d0542bb14a85e01a38cf07984564b41ace663eadca365b"
+    },
+    "probe-check.py": {
+      "bytes": 5993,
+      "sha256": "5230e9a40a54d45b2da2c6340a78a9a17498a714d3d886551d77487dd6395194"
+    },
+    "gates.sh": {
+      "bytes": 3055,
+      "sha256": "5a067f564e30949f14d4267ce26527a0eb0d8b71cd6d41407db8de2113fc2571"
+    },
+    "expected-primitive-identity.json": {
+      "bytes": 509,
+      "sha256": "42387013b9d78c452ad45945ecb7b76506f2e0f5f8f4ff951903131893e726aa"
+    },
+    "compile-receipt.json": {
+      "bytes": 4293,
+      "sha256": "29ebccf8e7db82c0bdf9ede1a7181070fb852a9317a9506132398fc72005d3c4"
+    },
+    "codegen-receipt.json": {
+      "bytes": 594,
+      "sha256": "4ffa662f787dff4bf23a5b94e4209b3cbb39ebbbacb27fdc2ce63cc1c535cbef"
+    }
+  },
+  "userdata": {
+    "bytes": 6127,
+    "sha256": "f74d9dd54bec2e126cf7fb7e534d31d2beff8380c2af89ced797b9e227f19a2c"
+  },
+  "probe_caps": {
+    "cpu": 1,
+    "allowed_cpus": [
+      0
+    ],
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "cpu_seconds": 30,
+    "wall_seconds": 120
+  },
+  "host": {
+    "type": "c7i.2xlarge",
+    "market": "Spot",
+    "machine_seconds": 1200,
+    "ebs_gib": 20,
+    "cpu": 2,
+    "memory_bytes": 8589934592,
+    "swap": 0
+  },
+  "cost_reservation": {
+    "compute_usd": 0.2,
+    "ancillary_usd": 0.15,
+    "spot_bid_max_usd_hour": 0.5
+  },
+  "screen": {
+    "geometries": 8,
+    "ordered_records": 80,
+    "blocks": 5,
+    "D1024_full_and_tail_median_max_ratio": 0.8,
+    "both_order_subsets_required": true,
+    "other_geometry_max_regression": 0.05,
+    "target_encoded_bytes_per_cell": 268435456,
+    "minimum_cell_cpu_ns": 50000000
+  },
+  "canary": "separate native --list disposable unit before timing; no ANN/data/truth",
+  "native_builds": 0,
+  "saved_s3_rerun": false,
+  "performance_scope": "primitive CPU only; no vendor/cold win",
+  "interruption": "INVALID; no automatic retry",
+  "test": "rotated_two_bit::tests::four_row_release_primitive_v1"
+}
