@@ -1,0 +1,15 @@
+{
+  "status": "PASS_NARROW_TEST_ONLY_SOURCE_REVIEW_NATIVE_UNVERIFIED",
+  "candidate": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "parent": "04944c574ece595c43710974d89a75d759da2f7b",
+  "changed_paths": [
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs"
+  ],
+  "production_runner_prefix_identical": true,
+  "kernel_and_generation_files_identical": true,
+  "all_test_names_and_caps_unchanged": true,
+  "original_fixture_failure_preserved": "125b3d557ec234afeeda2943db5839f3086802ec",
+  "native_execution": false,
+  "performance_claim": false,
+  "at": "2026-10-08T14:34:01.799942+00:00"
+}
