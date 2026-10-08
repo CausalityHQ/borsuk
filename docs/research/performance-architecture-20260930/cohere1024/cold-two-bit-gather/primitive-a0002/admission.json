@@ -1,0 +1,12 @@
+{
+  "status": "SOURCE_BOUND_ADMISSION_PASS",
+  "exit": 0,
+  "unit": "borsuk-gather-v2-runtime-admission.service",
+  "invocation": "49307a0465db488e9d2e39060329555d",
+  "native_execution": false,
+  "runtime_seconds": 0.213,
+  "peak_memory": "75M",
+  "swap_bytes": 0,
+  "remote_native_list_canary": "mandatory separate unit before timing",
+  "reuse": "unchanged gates.sh branch canary evidence; corrected v2 checker synthetic positives/negatives passed"
+}
