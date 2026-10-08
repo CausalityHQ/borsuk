@@ -1,0 +1,11 @@
+{
+  "status": "DISPOSABLE_CANARY_GO",
+  "instance_id": "i-015ef708a8bb43222",
+  "terminated": true,
+  "native_exit": 2,
+  "wrapper_exit": 0,
+  "zero_queries_GETs_truth": true,
+  "performance_claim": false,
+  "native_query_S3_SDK_exercised_here": false,
+  "prior_real_input_admission_sha256": "0b4aca0c613e60336e04bde7a950a478ee1670d8ffb39211fb8741a4be511331"
+}
