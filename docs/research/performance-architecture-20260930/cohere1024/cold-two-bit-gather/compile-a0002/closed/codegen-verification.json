@@ -1,0 +1,16 @@
+{
+  "status": "PASS_EXACT_GATHER_CODEGEN",
+  "elf_sha256": "d0594b70a48998adbabd3740d72995429849b282aaaa49aff2be54bbe42d6b20",
+  "elf_bytes": 88559992,
+  "gather_address": "0x29913d0",
+  "bound_guard_before_gather": "0x2991420..0x299142a: table last offset check before 0x299144f gather",
+  "lane_order": "0,1,2,3: vaddsd at 0x2991455,0x299145e,0x2991468,0x2991471, one xmm0 accumulator",
+  "initial_accumulator_bits": "8000000000000000",
+  "tail": "0..3 byte additions at 0x29914c4,0x29914e4,0x2991504, checked bounds per byte",
+  "no_horizontal_or_fma_in_gather": true,
+  "portable_default_compiler_flags": true,
+  "cpu": "Intel Xeon Platinum 8488C",
+  "microcode": "0x2b000661",
+  "native_primitive_run": false,
+  "production_qualified": false
+}

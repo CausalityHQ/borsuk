@@ -1,0 +1,78 @@
+{
+  "status": "COMPILE_AND_SYNTHETIC_CORRECTNESS_VERIFIED_CODEGEN_PENDING",
+  "candidate": "751b5327571c7fec17af4bbdd7f1b1594f0aaf9d",
+  "instance_id": "i-072b87a465792507a",
+  "source_file_count": 415,
+  "support_file_count": 2450,
+  "full_source_before_after_equal": true,
+  "artifact_count": 100,
+  "stages": [
+    {
+      "name": "codec-debug",
+      "command": "cargo test --locked -p borsuk --lib rotated_two_bit::tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 4
+    },
+    {
+      "name": "forced-avx2-debug",
+      "command": "cargo test --locked -p borsuk --lib rotated_two_bit::tests::two_bit_gather_forced_avx2_and_checked_bounds -- --ignored --exact --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 1
+    },
+    {
+      "name": "planner-debug",
+      "command": "cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 1
+    },
+    {
+      "name": "codec-release",
+      "command": "cargo test --locked --release -p borsuk --lib rotated_two_bit::tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 4
+    },
+    {
+      "name": "forced-avx2-release",
+      "command": "cargo test --locked --release -p borsuk --lib rotated_two_bit::tests::two_bit_gather_forced_avx2_and_checked_bounds -- --ignored --exact --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 1
+    },
+    {
+      "name": "planner-release",
+      "command": "cargo test --locked --release -p borsuk --lib two_bit_generation::source_walk_tests:: -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 1
+    },
+    {
+      "name": "integration",
+      "command": "cargo test --locked -p borsuk --test rotated_two_bit --test two_bit_source --test two_bit_generation -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 0
+    },
+    {
+      "name": "probe-compile",
+      "command": "cargo test --locked --release -p borsuk --lib --no-run --message-format=json",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "mandatory_count": 0
+    }
+  ],
+  "release_elf": {
+    "role": "probe-libtest",
+    "bytes": 88559992,
+    "sha256": "d0594b70a48998adbabd3740d72995429849b282aaaa49aff2be54bbe42d6b20"
+  },
+  "codegen_qualified": false,
+  "primitive_run": false,
+  "workspace_clippy_and_testbuild": "NOT_RUN",
+  "production_integrated": false,
+  "performance_claim": false,
+  "at": "2026-10-08T09:50:29.973858+00:00"
+}
