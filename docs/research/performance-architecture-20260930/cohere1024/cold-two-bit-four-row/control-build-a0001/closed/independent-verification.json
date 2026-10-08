@@ -1,0 +1,19 @@
+{
+  "status": "ISOLATED_CONTROL_BUILD_VERIFIED_SERVING_STACK_PENDING",
+  "instance_id": "i-0d12b4a605771cba6",
+  "candidate": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "control_library_source": "c49a2e6d2a035bfaf42358fbf7fb60abf11e4222",
+  "control_native_identity_sha256": "79ce83fe95557668591ea4e7193f651522b309569cd7988c9aeae56aac5f7b88",
+  "artifact_count": 61,
+  "stage_native_exit": 0,
+  "stage_tee_exit": 0,
+  "fresh_control_library_and_two_serving_artifacts": true,
+  "candidate_and_control_serving_hashes_differ": true,
+  "matched_toolchain_profile_inputs": true,
+  "source_before_after_equal": true,
+  "terminated_waited_and_drained": true,
+  "serving_stack_qualified": false,
+  "primitive_allowed": false,
+  "performance_claim": false,
+  "at": "2026-10-08T17:24:19.960642+00:00"
+}

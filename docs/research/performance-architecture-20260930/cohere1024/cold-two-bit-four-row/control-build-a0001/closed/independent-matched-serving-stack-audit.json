@@ -1,0 +1,57 @@
+{
+  "status": "MATCHED_SERVING_SCORING_STACK_PASS",
+  "source_commit": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "limit_increment_bytes": 512,
+  "records": [
+    {
+      "role": "baseline",
+      "candidate_elf_sha256": "73ae10b975053bef404cf6ea2ebd87f8eea034f9262c0455f38bde49abd1e5a6",
+      "control_elf_sha256": "73fab34f826add273336e137c1106f568c679ba457388aa56b434531c337ce17",
+      "frames_including_saved_registers_and_return_addresses": {
+        "candidate-root": 864,
+        "control-root": 832,
+        "candidate-helper": 496,
+        "control-helper": 272,
+        "candidate-kernel": 80,
+        "control-kernel": 16
+      },
+      "conservative_increment_bytes": 320,
+      "disassembly_sha256": {
+        "candidate-root": "52772c5f6b04deb06f1de51a1d27f7dadc287e32a119118abdf35c4b48335002",
+        "control-root": "dd7e0a84b53d511ff7d78c05b3157aed10dce6828a05b0e1e181ccdc5dbc187d",
+        "candidate-helper": "601177bb93848a0795968bcc7dedd7364c70c026ecb05ac86a96927d50252d85",
+        "control-helper": "6636555491376b266c24eed7f53516546c31b355158b366889759a3dd6149d6e",
+        "candidate-kernel": "1d6ec2f5787994d829c75e7df85ae43f0c3ea52b7e37f550de9144af3fb252bc",
+        "control-kernel": "50451417d4482937bba895875488375be7f341ed3db60b81dc9fd3062b591d08"
+      }
+    },
+    {
+      "role": "http",
+      "candidate_elf_sha256": "1739b475478a60ee11789597e542be749a7855bc5b90984faa509fbd9ad34d0c",
+      "control_elf_sha256": "1438b2289dac146d684c08de43b49c7db609d47d0c4372f7c43ecdbd28c1cd21",
+      "frames_including_saved_registers_and_return_addresses": {
+        "candidate-root": 864,
+        "control-root": 832,
+        "candidate-helper": 480,
+        "control-helper": 272,
+        "candidate-kernel": 80,
+        "control-kernel": 16
+      },
+      "conservative_increment_bytes": 304,
+      "disassembly_sha256": {
+        "candidate-root": "e9925ba1016ff844284b4be66a484ac0c0c6473c733ae4dc10846ae0a6573397",
+        "control-root": "0c85d5965df6061af0fa77efa6270e0fb04b9ed64af352a737fbbef61a518fde",
+        "candidate-helper": "3766ccd1405298e305631943c5309f613b0208894d14dd78b2f7d80e91304f8e",
+        "control-helper": "ec343e9b976889ed28bdac109f198e423f417fd4cf4818c920bab31562a588c3",
+        "candidate-kernel": "10a5a68561d8c9ec95c320b1ea7e8011f83f93a33ff402104ea384671cf5c0c5",
+        "control-kernel": "fb2f764fdda1695279a7a70dc49ce72dd6e283f49046b64f75e2a8e09a269ccf"
+      }
+    }
+  ],
+  "manual_callsite_audit": "No transient stack pushes at root-to-helper or helper-to-score callsites. Async caller frames candidate baseline3840/control3872 and candidate HTTP3584/control3600; outgoing arguments use preallocated frame slots. Conservative bound ignores these caller reductions. Error/panic/unwind paths are outside valid authenticated scoring path. Frame includes return addresses and saved registers.",
+  "ordered_kernel_receipt_sha256": "ac04281ff461fbb98082c15e9086b364fe793b5de98843653228e1b3d0f52ccf",
+  "primitive_allowed_after_campaign_admission": true,
+  "primitive_run": false,
+  "performance_claim": false,
+  "at": "2026-10-08T17:32:07.607838+00:00"
+}

@@ -1,0 +1,661 @@
+
+/data/target/borsuk-cold-membership-native/two-bit-four-row-qualification-a0004/candidate-check_cohere_native_baseline:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+000000000049f3a0 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}>:
+  49f3a0:	55                   	push   %rbp
+  49f3a1:	41 57                	push   %r15
+  49f3a3:	41 56                	push   %r14
+  49f3a5:	41 55                	push   %r13
+  49f3a7:	41 54                	push   %r12
+  49f3a9:	53                   	push   %rbx
+  49f3aa:	48 81 ec b8 01 00 00 	sub    $0x1b8,%rsp
+  49f3b1:	49 89 d7             	mov    %rdx,%r15
+  49f3b4:	48 89 7c 24 28       	mov    %rdi,0x28(%rsp)
+  49f3b9:	48 8b 06             	mov    (%rsi),%rax
+  49f3bc:	48 83 38 00          	cmpq   $0x0,(%rax)
+  49f3c0:	74 2b                	je     49f3ed <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x4d>
+  49f3c2:	48 8b 5e 08          	mov    0x8(%rsi),%rbx
+  49f3c6:	4c 8b 73 10          	mov    0x10(%rbx),%r14
+  49f3ca:	4c 3b 33             	cmp    (%rbx),%r14
+  49f3cd:	75 0f                	jne    49f3de <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x3e>
+  49f3cf:	48 89 df             	mov    %rbx,%rdi
+  49f3d2:	49 89 f4             	mov    %rsi,%r12
+  49f3d5:	ff 15 ed 6a 72 00    	call   *0x726aed(%rip)        # bc5ec8 <_DYNAMIC+0x860>
+  49f3db:	4c 89 e6             	mov    %r12,%rsi
+  49f3de:	48 8b 43 08          	mov    0x8(%rbx),%rax
+  49f3e2:	4e 89 3c f0          	mov    %r15,(%rax,%r14,8)
+  49f3e6:	49 ff c6             	inc    %r14
+  49f3e9:	4c 89 73 10          	mov    %r14,0x10(%rbx)
+  49f3ed:	48 8b 46 10          	mov    0x10(%rsi),%rax
+  49f3f1:	48 8b 08             	mov    (%rax),%rcx
+  49f3f4:	48 89 4c 24 20       	mov    %rcx,0x20(%rsp)
+  49f3f9:	48 8b 48 08          	mov    0x8(%rax),%rcx
+  49f3fd:	49 c1 e7 05          	shl    $0x5,%r15
+  49f401:	49 8d 57 20          	lea    0x20(%r15),%rdx
+  49f405:	48 8b 89 e8 01 00 00 	mov    0x1e8(%rcx),%rcx
+  49f40c:	48 39 d1             	cmp    %rdx,%rcx
+  49f40f:	48 0f 42 d1          	cmovb  %rcx,%rdx
+  49f413:	4c 8b 60 10          	mov    0x10(%rax),%r12
+  49f417:	48 89 54 24 38       	mov    %rdx,0x38(%rsp)
+  49f41c:	48 89 d1             	mov    %rdx,%rcx
+  49f41f:	4c 29 f9             	sub    %r15,%rcx
+  49f422:	f2 0f 10 15 e6 70 d7 	movsd  -0x288f1a(%rip),%xmm2        # 216510 <anon.5f42c0c67cc31c229256f3ba5d41e2c9.60.llvm.5877322400505431464+0x8>
+  49f429:	ff 
+  49f42a:	48 83 f9 04          	cmp    $0x4,%rcx
+  49f42e:	0f 82 47 06 00 00    	jb     49fa7b <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x6db>
+  49f434:	48 8b 40 18          	mov    0x18(%rax),%rax
+  49f438:	80 38 00             	cmpb   $0x0,(%rax)
+  49f43b:	0f 84 3a 06 00 00    	je     49fa7b <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x6db>
+  49f441:	4d 8b 34 24          	mov    (%r12),%r14
+  49f445:	4d 8b 6c 24 08       	mov    0x8(%r12),%r13
+  49f44a:	48 8d 9c 24 09 01 00 	lea    0x109(%rsp),%rbx
+  49f451:	00 
+  49f452:	f2 0f 10 15 b6 70 d7 	movsd  -0x288f4a(%rip),%xmm2        # 216510 <anon.5f42c0c67cc31c229256f3ba5d41e2c9.60.llvm.5877322400505431464+0x8>
+  49f459:	ff 
+  49f45a:	48 c7 44 24 08 00 00 	movq   $0x0,0x8(%rsp)
+  49f461:	00 00 
+  49f463:	4c 89 a4 24 90 00 00 	mov    %r12,0x90(%rsp)
+  49f46a:	00 
+  49f46b:	4c 89 74 24 30       	mov    %r14,0x30(%rsp)
+  49f470:	4c 89 ac 24 88 00 00 	mov    %r13,0x88(%rsp)
+  49f477:	00 
+  49f478:	49 8b 0e             	mov    (%r14),%rcx
+  49f47b:	4c 89 f8             	mov    %r15,%rax
+  49f47e:	48 f7 e1             	mul    %rcx
+  49f481:	0f 80 c5 07 00 00    	jo     49fc4c <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8ac>
+  49f487:	49 8b 55 08          	mov    0x8(%r13),%rdx
+  49f48b:	49 8b 75 10          	mov    0x10(%r13),%rsi
+  49f48f:	48 83 fe 01          	cmp    $0x1,%rsi
+  49f493:	74 3b                	je     49f4d0 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x130>
+  49f495:	48 85 f6             	test   %rsi,%rsi
+  49f498:	0f 84 58 09 00 00    	je     49fdf6 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0xa56>
+  49f49e:	31 ff                	xor    %edi,%edi
+  49f4a0:	49 89 f8             	mov    %rdi,%r8
+  49f4a3:	49 89 f1             	mov    %rsi,%r9
+  49f4a6:	49 d1 e9             	shr    $1,%r9
+  49f4a9:	4c 01 cf             	add    %r9,%rdi
+  49f4ac:	4c 8d 14 bf          	lea    (%rdi,%rdi,4),%r10
+  49f4b0:	4a 39 44 d2 20       	cmp    %rax,0x20(%rdx,%r10,8)
+  49f4b5:	49 0f 47 f8          	cmova  %r8,%rdi
+  49f4b9:	4c 29 ce             	sub    %r9,%rsi
+  49f4bc:	48 83 fe 01          	cmp    $0x1,%rsi
+  49f4c0:	77 de                	ja     49f4a0 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x100>
+  49f4c2:	eb 0e                	jmp    49f4d2 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x132>
+  49f4c4:	66 66 66 2e 0f 1f 84 	data16 data16 cs nopw 0x0(%rax,%rax,1)
+  49f4cb:	00 00 00 00 00 
+  49f4d0:	31 ff                	xor    %edi,%edi
+  49f4d2:	4c 8d 04 bf          	lea    (%rdi,%rdi,4),%r8
+  49f4d6:	31 f6                	xor    %esi,%esi
+  49f4d8:	4a 39 44 c2 20       	cmp    %rax,0x20(%rdx,%r8,8)
+  49f4dd:	40 0f 96 c6          	setbe  %sil
+  49f4e1:	48 01 fe             	add    %rdi,%rsi
+  49f4e4:	0f 84 62 07 00 00    	je     49fc4c <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8ac>
+  49f4ea:	48 8d 34 b6          	lea    (%rsi,%rsi,4),%rsi
+  49f4ee:	48 2b 44 f2 f8       	sub    -0x8(%rdx,%rsi,8),%rax
+  49f4f3:	0f 82 53 07 00 00    	jb     49fc4c <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8ac>
+  49f4f9:	48 89 c7             	mov    %rax,%rdi
+  49f4fc:	48 01 cf             	add    %rcx,%rdi
+  49f4ff:	0f 82 47 07 00 00    	jb     49fc4c <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8ac>
+  49f505:	48 8d 14 f2          	lea    (%rdx,%rsi,8),%rdx
+  49f509:	48 3b 7a e8          	cmp    -0x18(%rdx),%rdi
+  49f50d:	0f 87 42 07 00 00    	ja     49fc55 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8b5>
+  49f513:	48 8b 52 e0          	mov    -0x20(%rdx),%rdx
+  49f517:	bd 00 00 00 00       	mov    $0x0,%ebp
+  49f51c:	41 be 00 00 00 00    	mov    $0x0,%r14d
+  49f522:	be 00 00 00 00       	mov    $0x0,%esi
+  49f527:	48 85 d2             	test   %rdx,%rdx
+  49f52a:	0f 84 2c 07 00 00    	je     49fc5c <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8bc>
+  49f530:	66 0f 29 54 24 40    	movapd %xmm2,0x40(%rsp)
+  49f536:	48 01 c2             	add    %rax,%rdx
+  49f539:	48 8d ac 24 00 01 00 	lea    0x100(%rsp),%rbp
+  49f540:	00 
+  49f541:	48 89 ef             	mov    %rbp,%rdi
+  49f544:	48 8b 74 24 20       	mov    0x20(%rsp),%rsi
+  49f549:	ff 15 a9 69 72 00    	call   *0x7269a9(%rip)        # bc5ef8 <_DYNAMIC+0x890>
+  49f54f:	4c 8b b4 24 00 01 00 	mov    0x100(%rsp),%r14
+  49f556:	00 
+  49f557:	4d 85 f6             	test   %r14,%r14
+  49f55a:	0f 84 2c 07 00 00    	je     49fc8c <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8ec>
+  49f560:	0f b6 84 24 08 01 00 	movzbl 0x108(%rsp),%eax
+  49f567:	00 
+  49f568:	48 8b 0b             	mov    (%rbx),%rcx
+  49f56b:	48 8b 53 07          	mov    0x7(%rbx),%rdx
+  49f56f:	48 89 4c 24 10       	mov    %rcx,0x10(%rsp)
+  49f574:	48 89 54 24 17       	mov    %rdx,0x17(%rsp)
+  49f579:	88 84 24 a8 00 00 00 	mov    %al,0xa8(%rsp)
+  49f580:	48 8b 44 24 10       	mov    0x10(%rsp),%rax
+  49f585:	48 8b 4c 24 17       	mov    0x17(%rsp),%rcx
+  49f58a:	48 8d 94 24 a8 00 00 	lea    0xa8(%rsp),%rdx
+  49f591:	00 
+  49f592:	48 89 4a 08          	mov    %rcx,0x8(%rdx)
+  49f596:	48 89 42 01          	mov    %rax,0x1(%rdx)
+  49f59a:	4c 89 f8             	mov    %r15,%rax
+  49f59d:	48 83 c8 01          	or     $0x1,%rax
+  49f5a1:	48 8b 4c 24 30       	mov    0x30(%rsp),%rcx
+  49f5a6:	48 8b 09             	mov    (%rcx),%rcx
+  49f5a9:	48 f7 e1             	mul    %rcx
+  49f5ac:	be 01 00 00 00       	mov    $0x1,%esi
+  49f5b1:	0f 80 8a 06 00 00    	jo     49fc41 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8a1>
+  49f5b7:	49 8b 55 08          	mov    0x8(%r13),%rdx
+  49f5bb:	49 8b 7d 10          	mov    0x10(%r13),%rdi
+  49f5bf:	48 83 ff 01          	cmp    $0x1,%rdi
+  49f5c3:	74 4b                	je     49f610 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x270>
+  49f5c5:	48 85 ff             	test   %rdi,%rdi
+  49f5c8:	0f 84 73 06 00 00    	je     49fc41 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8a1>
+  49f5ce:	45 31 c0             	xor    %r8d,%r8d
+  49f5d1:	66 66 66 66 66 66 2e 	data16 data16 data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
+  49f5d8:	0f 1f 84 00 00 00 00 
+  49f5df:	00 
+  49f5e0:	4d 89 c1             	mov    %r8,%r9
+  49f5e3:	49 89 fa             	mov    %rdi,%r10
+  49f5e6:	49 d1 ea             	shr    $1,%r10
+  49f5e9:	4d 01 d0             	add    %r10,%r8
+  49f5ec:	4f 8d 1c 80          	lea    (%r8,%r8,4),%r11
+  49f5f0:	4a 39 44 da 20       	cmp    %rax,0x20(%rdx,%r11,8)
+  49f5f5:	4d 0f 47 c1          	cmova  %r9,%r8
+  49f5f9:	4c 29 d7             	sub    %r10,%rdi
+  49f5fc:	48 83 ff 01          	cmp    $0x1,%rdi
+  49f600:	77 de                	ja     49f5e0 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x240>
+  49f602:	eb 0f                	jmp    49f613 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x273>
+  49f604:	66 66 66 2e 0f 1f 84 	data16 data16 cs nopw 0x0(%rax,%rax,1)
+  49f60b:	00 00 00 00 00 
+  49f610:	45 31 c0             	xor    %r8d,%r8d
+  49f613:	4f 8d 0c 80          	lea    (%r8,%r8,4),%r9
+  49f617:	31 ff                	xor    %edi,%edi
+  49f619:	4a 39 44 ca 20       	cmp    %rax,0x20(%rdx,%r9,8)
+  49f61e:	40 0f 96 c7          	setbe  %dil
+  49f622:	4c 01 c7             	add    %r8,%rdi
+  49f625:	0f 84 16 06 00 00    	je     49fc41 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8a1>
+  49f62b:	48 8d 3c bf          	lea    (%rdi,%rdi,4),%rdi
+  49f62f:	48 2b 44 fa f8       	sub    -0x8(%rdx,%rdi,8),%rax
+  49f634:	0f 82 07 06 00 00    	jb     49fc41 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8a1>
+  49f63a:	49 89 c0             	mov    %rax,%r8
+  49f63d:	49 01 c8             	add    %rcx,%r8
+  49f640:	0f 82 fb 05 00 00    	jb     49fc41 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8a1>
+  49f646:	48 8d 14 fa          	lea    (%rdx,%rdi,8),%rdx
+  49f64a:	4c 3b 42 e8          	cmp    -0x18(%rdx),%r8
+  49f64e:	0f 87 ed 05 00 00    	ja     49fc41 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8a1>
+  49f654:	48 8b 52 e0          	mov    -0x20(%rdx),%rdx
+  49f658:	48 85 d2             	test   %rdx,%rdx
+  49f65b:	0f 84 e0 05 00 00    	je     49fc41 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8a1>
+  49f661:	48 01 c2             	add    %rax,%rdx
+  49f664:	48 89 ef             	mov    %rbp,%rdi
+  49f667:	48 8b 74 24 20       	mov    0x20(%rsp),%rsi
+  49f66c:	ff 15 86 68 72 00    	call   *0x726886(%rip)        # bc5ef8 <_DYNAMIC+0x890>
+  49f672:	48 8b ac 24 00 01 00 	mov    0x100(%rsp),%rbp
+  49f679:	00 
+  49f67a:	48 85 ed             	test   %rbp,%rbp
+  49f67d:	0f 84 12 06 00 00    	je     49fc95 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8f5>
+  49f683:	0f b6 84 24 08 01 00 	movzbl 0x108(%rsp),%eax
+  49f68a:	00 
+  49f68b:	48 8b 0b             	mov    (%rbx),%rcx
+  49f68e:	48 8b 53 07          	mov    0x7(%rbx),%rdx
+  49f692:	48 89 4c 24 10       	mov    %rcx,0x10(%rsp)
+  49f697:	48 89 54 24 17       	mov    %rdx,0x17(%rsp)
+  49f69c:	88 84 24 c0 00 00 00 	mov    %al,0xc0(%rsp)
+  49f6a3:	48 8b 44 24 10       	mov    0x10(%rsp),%rax
+  49f6a8:	48 8b 4c 24 17       	mov    0x17(%rsp),%rcx
+  49f6ad:	48 8d 94 24 a8 00 00 	lea    0xa8(%rsp),%rdx
+  49f6b4:	00 
+  49f6b5:	48 89 4a 20          	mov    %rcx,0x20(%rdx)
+  49f6b9:	48 89 42 19          	mov    %rax,0x19(%rdx)
+  49f6bd:	4c 89 f8             	mov    %r15,%rax
+  49f6c0:	48 83 c8 02          	or     $0x2,%rax
+  49f6c4:	48 8b 4c 24 30       	mov    0x30(%rsp),%rcx
+  49f6c9:	48 8b 09             	mov    (%rcx),%rcx
+  49f6cc:	48 f7 e1             	mul    %rcx
+  49f6cf:	be 02 00 00 00       	mov    $0x2,%esi
+  49f6d4:	0f 80 82 05 00 00    	jo     49fc5c <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8bc>
+  49f6da:	49 8b 55 08          	mov    0x8(%r13),%rdx
+  49f6de:	49 8b 7d 10          	mov    0x10(%r13),%rdi
+  49f6e2:	48 83 ff 01          	cmp    $0x1,%rdi
+  49f6e6:	74 48                	je     49f730 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x390>
+  49f6e8:	48 85 ff             	test   %rdi,%rdi
+  49f6eb:	0f 84 6b 05 00 00    	je     49fc5c <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8bc>
+  49f6f1:	45 31 c0             	xor    %r8d,%r8d
+  49f6f4:	66 66 66 2e 0f 1f 84 	data16 data16 cs nopw 0x0(%rax,%rax,1)
+  49f6fb:	00 00 00 00 00 
+  49f700:	4d 89 c1             	mov    %r8,%r9
+  49f703:	49 89 fa             	mov    %rdi,%r10
+  49f706:	49 d1 ea             	shr    $1,%r10
+  49f709:	4d 01 d0             	add    %r10,%r8
+  49f70c:	4f 8d 1c 80          	lea    (%r8,%r8,4),%r11
+  49f710:	4a 39 44 da 20       	cmp    %rax,0x20(%rdx,%r11,8)
+  49f715:	4d 0f 47 c1          	cmova  %r9,%r8
+  49f719:	4c 29 d7             	sub    %r10,%rdi
+  49f71c:	48 83 ff 01          	cmp    $0x1,%rdi
+  49f720:	77 de                	ja     49f700 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x360>
+  49f722:	eb 0f                	jmp    49f733 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x393>
+  49f724:	66 66 66 2e 0f 1f 84 	data16 data16 cs nopw 0x0(%rax,%rax,1)
+  49f72b:	00 00 00 00 00 
+  49f730:	45 31 c0             	xor    %r8d,%r8d
+  49f733:	4f 8d 0c 80          	lea    (%r8,%r8,4),%r9
+  49f737:	31 ff                	xor    %edi,%edi
+  49f739:	4a 39 44 ca 20       	cmp    %rax,0x20(%rdx,%r9,8)
+  49f73e:	40 0f 96 c7          	setbe  %dil
+  49f742:	4c 01 c7             	add    %r8,%rdi
+  49f745:	0f 84 11 05 00 00    	je     49fc5c <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8bc>
+  49f74b:	48 8d 3c bf          	lea    (%rdi,%rdi,4),%rdi
+  49f74f:	48 2b 44 fa f8       	sub    -0x8(%rdx,%rdi,8),%rax
+  49f754:	0f 82 02 05 00 00    	jb     49fc5c <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8bc>
+  49f75a:	49 89 c0             	mov    %rax,%r8
+  49f75d:	49 01 c8             	add    %rcx,%r8
+  49f760:	0f 82 f6 04 00 00    	jb     49fc5c <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8bc>
+  49f766:	48 8d 14 fa          	lea    (%rdx,%rdi,8),%rdx
+  49f76a:	4c 3b 42 e8          	cmp    -0x18(%rdx),%r8
+  49f76e:	0f 87 e8 04 00 00    	ja     49fc5c <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8bc>
+  49f774:	48 8b 52 e0          	mov    -0x20(%rdx),%rdx
+  49f778:	48 85 d2             	test   %rdx,%rdx
+  49f77b:	0f 84 db 04 00 00    	je     49fc5c <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8bc>
+  49f781:	48 01 c2             	add    %rax,%rdx
+  49f784:	48 8d bc 24 00 01 00 	lea    0x100(%rsp),%rdi
+  49f78b:	00 
+  49f78c:	48 8b 74 24 20       	mov    0x20(%rsp),%rsi
+  49f791:	ff 15 61 67 72 00    	call   *0x726761(%rip)        # bc5ef8 <_DYNAMIC+0x890>
+  49f797:	4c 8b a4 24 00 01 00 	mov    0x100(%rsp),%r12
+  49f79e:	00 
+  49f79f:	4d 85 e4             	test   %r12,%r12
+  49f7a2:	0f 84 f9 04 00 00    	je     49fca1 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x901>
+  49f7a8:	0f b6 84 24 08 01 00 	movzbl 0x108(%rsp),%eax
+  49f7af:	00 
+  49f7b0:	48 8b 0b             	mov    (%rbx),%rcx
+  49f7b3:	48 8b 53 07          	mov    0x7(%rbx),%rdx
+  49f7b7:	48 89 4c 24 10       	mov    %rcx,0x10(%rsp)
+  49f7bc:	48 89 54 24 17       	mov    %rdx,0x17(%rsp)
+  49f7c1:	88 84 24 d8 00 00 00 	mov    %al,0xd8(%rsp)
+  49f7c8:	48 8b 44 24 10       	mov    0x10(%rsp),%rax
+  49f7cd:	48 8b 4c 24 17       	mov    0x17(%rsp),%rcx
+  49f7d2:	48 8d 94 24 a8 00 00 	lea    0xa8(%rsp),%rdx
+  49f7d9:	00 
+  49f7da:	48 89 4a 38          	mov    %rcx,0x38(%rdx)
+  49f7de:	48 89 42 31          	mov    %rax,0x31(%rdx)
+  49f7e2:	4c 89 f8             	mov    %r15,%rax
+  49f7e5:	48 83 c8 03          	or     $0x3,%rax
+  49f7e9:	48 8b 4c 24 30       	mov    0x30(%rsp),%rcx
+  49f7ee:	48 8b 09             	mov    (%rcx),%rcx
+  49f7f1:	48 f7 e1             	mul    %rcx
+  49f7f4:	be 03 00 00 00       	mov    $0x3,%esi
+  49f7f9:	0f 80 46 04 00 00    	jo     49fc45 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8a5>
+  49f7ff:	49 8b 55 08          	mov    0x8(%r13),%rdx
+  49f803:	49 8b 7d 10          	mov    0x10(%r13),%rdi
+  49f807:	48 83 ff 01          	cmp    $0x1,%rdi
+  49f80b:	74 43                	je     49f850 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x4b0>
+  49f80d:	48 85 ff             	test   %rdi,%rdi
+  49f810:	0f 84 2f 04 00 00    	je     49fc45 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8a5>
+  49f816:	45 31 c0             	xor    %r8d,%r8d
+  49f819:	0f 1f 80 00 00 00 00 	nopl   0x0(%rax)
+  49f820:	4d 89 c1             	mov    %r8,%r9
+  49f823:	49 89 fa             	mov    %rdi,%r10
+  49f826:	49 d1 ea             	shr    $1,%r10
+  49f829:	4d 01 d0             	add    %r10,%r8
+  49f82c:	4f 8d 1c 80          	lea    (%r8,%r8,4),%r11
+  49f830:	4a 39 44 da 20       	cmp    %rax,0x20(%rdx,%r11,8)
+  49f835:	4d 0f 47 c1          	cmova  %r9,%r8
+  49f839:	4c 29 d7             	sub    %r10,%rdi
+  49f83c:	48 83 ff 01          	cmp    $0x1,%rdi
+  49f840:	77 de                	ja     49f820 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x480>
+  49f842:	eb 0f                	jmp    49f853 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x4b3>
+  49f844:	66 66 66 2e 0f 1f 84 	data16 data16 cs nopw 0x0(%rax,%rax,1)
+  49f84b:	00 00 00 00 00 
+  49f850:	45 31 c0             	xor    %r8d,%r8d
+  49f853:	4f 8d 0c 80          	lea    (%r8,%r8,4),%r9
+  49f857:	31 ff                	xor    %edi,%edi
+  49f859:	4a 39 44 ca 20       	cmp    %rax,0x20(%rdx,%r9,8)
+  49f85e:	40 0f 96 c7          	setbe  %dil
+  49f862:	4c 01 c7             	add    %r8,%rdi
+  49f865:	0f 84 da 03 00 00    	je     49fc45 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8a5>
+  49f86b:	48 8d 3c bf          	lea    (%rdi,%rdi,4),%rdi
+  49f86f:	48 2b 44 fa f8       	sub    -0x8(%rdx,%rdi,8),%rax
+  49f874:	0f 82 cb 03 00 00    	jb     49fc45 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8a5>
+  49f87a:	49 89 c0             	mov    %rax,%r8
+  49f87d:	49 01 c8             	add    %rcx,%r8
+  49f880:	0f 82 bf 03 00 00    	jb     49fc45 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8a5>
+  49f886:	48 8d 14 fa          	lea    (%rdx,%rdi,8),%rdx
+  49f88a:	4c 3b 42 e8          	cmp    -0x18(%rdx),%r8
+  49f88e:	0f 87 b1 03 00 00    	ja     49fc45 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8a5>
+  49f894:	48 8b 52 e0          	mov    -0x20(%rdx),%rdx
+  49f898:	48 85 d2             	test   %rdx,%rdx
+  49f89b:	0f 84 a4 03 00 00    	je     49fc45 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8a5>
+  49f8a1:	4c 89 bc 24 98 00 00 	mov    %r15,0x98(%rsp)
+  49f8a8:	00 
+  49f8a9:	4d 89 e7             	mov    %r12,%r15
+  49f8ac:	49 89 ec             	mov    %rbp,%r12
+  49f8af:	4c 89 f5             	mov    %r14,%rbp
+  49f8b2:	48 01 c2             	add    %rax,%rdx
+  49f8b5:	4c 8d b4 24 00 01 00 	lea    0x100(%rsp),%r14
+  49f8bc:	00 
+  49f8bd:	4c 89 f7             	mov    %r14,%rdi
+  49f8c0:	4c 8b 6c 24 20       	mov    0x20(%rsp),%r13
+  49f8c5:	4c 89 ee             	mov    %r13,%rsi
+  49f8c8:	ff 15 2a 66 72 00    	call   *0x72662a(%rip)        # bc5ef8 <_DYNAMIC+0x890>
+  49f8ce:	48 8b 84 24 00 01 00 	mov    0x100(%rsp),%rax
+  49f8d5:	00 
+  49f8d6:	48 85 c0             	test   %rax,%rax
+  49f8d9:	0f 84 cc 03 00 00    	je     49fcab <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x90b>
+  49f8df:	0f b6 8c 24 08 01 00 	movzbl 0x108(%rsp),%ecx
+  49f8e6:	00 
+  49f8e7:	48 8b 13             	mov    (%rbx),%rdx
+  49f8ea:	48 8b 73 07          	mov    0x7(%rbx),%rsi
+  49f8ee:	48 89 54 24 10       	mov    %rdx,0x10(%rsp)
+  49f8f3:	48 89 74 24 17       	mov    %rsi,0x17(%rsp)
+  49f8f8:	88 8c 24 f0 00 00 00 	mov    %cl,0xf0(%rsp)
+  49f8ff:	48 8b 4c 24 10       	mov    0x10(%rsp),%rcx
+  49f904:	48 8b 54 24 17       	mov    0x17(%rsp),%rdx
+  49f909:	48 8d b4 24 a8 00 00 	lea    0xa8(%rsp),%rsi
+  49f910:	00 
+  49f911:	48 89 56 50          	mov    %rdx,0x50(%rsi)
+  49f915:	48 89 4e 49          	mov    %rcx,0x49(%rsi)
+  49f919:	0f b6 4e 48          	movzbl 0x48(%rsi),%ecx
+  49f91d:	88 4b 47             	mov    %cl,0x47(%rbx)
+  49f920:	48 8b 4e 49          	mov    0x49(%rsi),%rcx
+  49f924:	48 89 4b 48          	mov    %rcx,0x48(%rbx)
+  49f928:	8b 4e 51             	mov    0x51(%rsi),%ecx
+  49f92b:	89 4b 50             	mov    %ecx,0x50(%rbx)
+  49f92e:	0f b7 4e 55          	movzwl 0x55(%rsi),%ecx
+  49f932:	66 89 4b 54          	mov    %cx,0x54(%rbx)
+  49f936:	0f b6 4e 57          	movzbl 0x57(%rsi),%ecx
+  49f93a:	88 4b 56             	mov    %cl,0x56(%rbx)
+  49f93d:	48 89 ac 24 00 01 00 	mov    %rbp,0x100(%rsp)
+  49f944:	00 
+  49f945:	0f 10 06             	movups (%rsi),%xmm0
+  49f948:	0f 11 43 ff          	movups %xmm0,-0x1(%rbx)
+  49f94c:	4c 89 a4 24 18 01 00 	mov    %r12,0x118(%rsp)
+  49f953:	00 
+  49f954:	0f 10 46 18          	movups 0x18(%rsi),%xmm0
+  49f958:	0f 11 43 17          	movups %xmm0,0x17(%rbx)
+  49f95c:	4c 89 bc 24 30 01 00 	mov    %r15,0x130(%rsp)
+  49f963:	00 
+  49f964:	0f 10 46 30          	movups 0x30(%rsi),%xmm0
+  49f968:	0f 11 43 2f          	movups %xmm0,0x2f(%rbx)
+  49f96c:	48 89 84 24 48 01 00 	mov    %rax,0x148(%rsp)
+  49f973:	00 
+  49f974:	48 8d 7c 24 50       	lea    0x50(%rsp),%rdi
+  49f979:	4c 89 ee             	mov    %r13,%rsi
+  49f97c:	4c 89 f2             	mov    %r14,%rdx
+  49f97f:	ff 15 7b 65 72 00    	call   *0x72657b(%rip)        # bc5f00 <_DYNAMIC+0x898>
+  49f985:	80 7c 24 50 00       	cmpb   $0x0,0x50(%rsp)
+  49f98a:	0f 85 26 04 00 00    	jne    49fdb6 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0xa16>
+  49f990:	f3 0f 7e 44 24 58    	movq   0x58(%rsp),%xmm0
+  49f996:	66 48 0f 7e c0       	movq   %xmm0,%rax
+  49f99b:	48 c1 e8 10          	shr    $0x10,%rax
+  49f99f:	48 89 84 24 80 00 00 	mov    %rax,0x80(%rsp)
+  49f9a6:	00 
+  49f9a7:	66 0f 10 6c 24 60    	movupd 0x60(%rsp),%xmm5
+  49f9ad:	f2 0f 10 64 24 70    	movsd  0x70(%rsp),%xmm4
+  49f9b3:	66 0f 28 5c 24 40    	movapd 0x40(%rsp),%xmm3
+  49f9b9:	66 0f 28 cb          	movapd %xmm3,%xmm1
+  49f9bd:	f2 0f 5f c8          	maxsd  %xmm0,%xmm1
+  49f9c1:	66 0f 28 c1          	movapd %xmm1,%xmm0
+  49f9c5:	f2 0f c2 c1 03       	cmpunordsd %xmm1,%xmm0
+  49f9ca:	66 0f 28 d0          	movapd %xmm0,%xmm2
+  49f9ce:	66 0f 55 d1          	andnpd %xmm1,%xmm2
+  49f9d2:	66 0f 54 c3          	andpd  %xmm3,%xmm0
+  49f9d6:	66 0f 56 c2          	orpd   %xmm2,%xmm0
+  49f9da:	66 0f 28 c8          	movapd %xmm0,%xmm1
+  49f9de:	f2 0f 5f cd          	maxsd  %xmm5,%xmm1
+  49f9e2:	66 0f 28 d1          	movapd %xmm1,%xmm2
+  49f9e6:	f2 0f c2 d1 03       	cmpunordsd %xmm1,%xmm2
+  49f9eb:	66 0f 54 c2          	andpd  %xmm2,%xmm0
+  49f9ef:	66 0f 55 d1          	andnpd %xmm1,%xmm2
+  49f9f3:	66 0f 56 d0          	orpd   %xmm0,%xmm2
+  49f9f7:	66 0f 29 ac 24 a0 01 	movapd %xmm5,0x1a0(%rsp)
+  49f9fe:	00 00 
+  49fa00:	66 0f 28 c5          	movapd %xmm5,%xmm0
+  49fa04:	66 0f 15 c5          	unpckhpd %xmm5,%xmm0
+  49fa08:	66 0f 28 ca          	movapd %xmm2,%xmm1
+  49fa0c:	f2 0f 5f c8          	maxsd  %xmm0,%xmm1
+  49fa10:	66 0f 28 c1          	movapd %xmm1,%xmm0
+  49fa14:	f2 0f c2 c1 03       	cmpunordsd %xmm1,%xmm0
+  49fa19:	66 0f 54 d0          	andpd  %xmm0,%xmm2
+  49fa1d:	66 0f 55 c1          	andnpd %xmm1,%xmm0
+  49fa21:	66 0f 56 c2          	orpd   %xmm2,%xmm0
+  49fa25:	66 0f 28 c8          	movapd %xmm0,%xmm1
+  49fa29:	f2 0f 11 64 24 78    	movsd  %xmm4,0x78(%rsp)
+  49fa2f:	f2 0f 5f cc          	maxsd  %xmm4,%xmm1
+  49fa33:	66 0f 28 d1          	movapd %xmm1,%xmm2
+  49fa37:	f2 0f c2 d1 03       	cmpunordsd %xmm1,%xmm2
+  49fa3c:	66 0f 54 c2          	andpd  %xmm2,%xmm0
+  49fa40:	66 0f 55 d1          	andnpd %xmm1,%xmm2
+  49fa44:	66 0f 56 d0          	orpd   %xmm0,%xmm2
+  49fa48:	4c 8b bc 24 98 00 00 	mov    0x98(%rsp),%r15
+  49fa4f:	00 
+  49fa50:	49 83 c7 04          	add    $0x4,%r15
+  49fa54:	48 8b 44 24 38       	mov    0x38(%rsp),%rax
+  49fa59:	4c 29 f8             	sub    %r15,%rax
+  49fa5c:	48 83 f8 03          	cmp    $0x3,%rax
+  49fa60:	4c 8b a4 24 90 00 00 	mov    0x90(%rsp),%r12
+  49fa67:	00 
+  49fa68:	4c 8b 74 24 30       	mov    0x30(%rsp),%r14
+  49fa6d:	4c 8b ac 24 88 00 00 	mov    0x88(%rsp),%r13
+  49fa74:	00 
+  49fa75:	0f 87 fd f9 ff ff    	ja     49f478 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0xd8>
+  49fa7b:	4c 3b 7c 24 38       	cmp    0x38(%rsp),%r15
+  49fa80:	0f 83 5a 01 00 00    	jae    49fbe0 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x840>
+  49fa86:	4d 8b 2c 24          	mov    (%r12),%r13
+  49fa8a:	4d 8b 64 24 08       	mov    0x8(%r12),%r12
+  49fa8f:	4c 8b 74 24 20       	mov    0x20(%rsp),%r14
+  49fa94:	66 66 66 2e 0f 1f 84 	data16 data16 cs nopw 0x0(%rax,%rax,1)
+  49fa9b:	00 00 00 00 00 
+  49faa0:	49 8b 6d 00          	mov    0x0(%r13),%rbp
+  49faa4:	4c 89 f8             	mov    %r15,%rax
+  49faa7:	48 f7 e5             	mul    %rbp
+  49faaa:	0f 80 46 01 00 00    	jo     49fbf6 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x856>
+  49fab0:	49 8b 4c 24 08       	mov    0x8(%r12),%rcx
+  49fab5:	49 8b 54 24 10       	mov    0x10(%r12),%rdx
+  49faba:	48 83 fa 01          	cmp    $0x1,%rdx
+  49fabe:	74 40                	je     49fb00 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x760>
+  49fac0:	48 85 d2             	test   %rdx,%rdx
+  49fac3:	0f 84 2d 01 00 00    	je     49fbf6 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x856>
+  49fac9:	31 f6                	xor    %esi,%esi
+  49facb:	0f 1f 44 00 00       	nopl   0x0(%rax,%rax,1)
+  49fad0:	48 89 f7             	mov    %rsi,%rdi
+  49fad3:	49 89 d0             	mov    %rdx,%r8
+  49fad6:	49 d1 e8             	shr    $1,%r8
+  49fad9:	4c 01 c6             	add    %r8,%rsi
+  49fadc:	4c 8d 0c b6          	lea    (%rsi,%rsi,4),%r9
+  49fae0:	4a 39 44 c9 20       	cmp    %rax,0x20(%rcx,%r9,8)
+  49fae5:	48 0f 47 f7          	cmova  %rdi,%rsi
+  49fae9:	4c 29 c2             	sub    %r8,%rdx
+  49faec:	48 83 fa 01          	cmp    $0x1,%rdx
+  49faf0:	77 de                	ja     49fad0 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x730>
+  49faf2:	eb 0e                	jmp    49fb02 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x762>
+  49faf4:	66 66 66 2e 0f 1f 84 	data16 data16 cs nopw 0x0(%rax,%rax,1)
+  49fafb:	00 00 00 00 00 
+  49fb00:	31 f6                	xor    %esi,%esi
+  49fb02:	48 8d 3c b6          	lea    (%rsi,%rsi,4),%rdi
+  49fb06:	31 d2                	xor    %edx,%edx
+  49fb08:	48 39 44 f9 20       	cmp    %rax,0x20(%rcx,%rdi,8)
+  49fb0d:	0f 96 c2             	setbe  %dl
+  49fb10:	48 01 f2             	add    %rsi,%rdx
+  49fb13:	0f 84 dd 00 00 00    	je     49fbf6 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x856>
+  49fb19:	48 8d 14 92          	lea    (%rdx,%rdx,4),%rdx
+  49fb1d:	48 2b 44 d1 f8       	sub    -0x8(%rcx,%rdx,8),%rax
+  49fb22:	0f 82 ce 00 00 00    	jb     49fbf6 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x856>
+  49fb28:	48 89 c6             	mov    %rax,%rsi
+  49fb2b:	48 01 ee             	add    %rbp,%rsi
+  49fb2e:	0f 82 c2 00 00 00    	jb     49fbf6 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x856>
+  49fb34:	48 8d 0c d1          	lea    (%rcx,%rdx,8),%rcx
+  49fb38:	48 3b 71 e8          	cmp    -0x18(%rcx),%rsi
+  49fb3c:	0f 87 b4 00 00 00    	ja     49fbf6 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x856>
+  49fb42:	48 8b 59 e0          	mov    -0x20(%rcx),%rbx
+  49fb46:	48 8d 0d 83 41 e1 ff 	lea    -0x1ebe7d(%rip),%rcx        # 2b3cd0 <anon.5f42c0c67cc31c229256f3ba5d41e2c9.275.llvm.5877322400505431464+0x2807>
+  49fb4d:	48 89 8c 24 08 01 00 	mov    %rcx,0x108(%rsp)
+  49fb54:	00 
+  49fb55:	48 c7 84 24 10 01 00 	movq   $0x15,0x110(%rsp)
+  49fb5c:	00 15 00 00 00 
+  49fb61:	c6 84 24 00 01 00 00 	movb   $0x0,0x100(%rsp)
+  49fb68:	00 
+  49fb69:	48 85 db             	test   %rbx,%rbx
+  49fb6c:	0f 84 84 00 00 00    	je     49fbf6 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x856>
+  49fb72:	66 0f 29 54 24 40    	movapd %xmm2,0x40(%rsp)
+  49fb78:	48 01 c3             	add    %rax,%rbx
+  49fb7b:	48 8d bc 24 00 01 00 	lea    0x100(%rsp),%rdi
+  49fb82:	00 
+  49fb83:	e8 f8 b1 ff ff       	call   49ad80 <core::ptr::drop_glue::<borsuk::two_bit_generation::TwoBitGenerationError>>
+  49fb88:	48 8d 7c 24 50       	lea    0x50(%rsp),%rdi
+  49fb8d:	4c 89 f6             	mov    %r14,%rsi
+  49fb90:	48 89 da             	mov    %rbx,%rdx
+  49fb93:	48 89 e9             	mov    %rbp,%rcx
+  49fb96:	ff 15 6c 63 72 00    	call   *0x72636c(%rip)        # bc5f08 <_DYNAMIC+0x8a0>
+  49fb9c:	80 7c 24 50 00       	cmpb   $0x0,0x50(%rsp)
+  49fba1:	0f 85 ad 01 00 00    	jne    49fd54 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x9b4>
+  49fba7:	66 0f 28 54 24 40    	movapd 0x40(%rsp),%xmm2
+  49fbad:	66 0f 28 ca          	movapd %xmm2,%xmm1
+  49fbb1:	f2 0f 5f 4c 24 58    	maxsd  0x58(%rsp),%xmm1
+  49fbb7:	49 ff c7             	inc    %r15
+  49fbba:	66 0f 28 c1          	movapd %xmm1,%xmm0
+  49fbbe:	f2 0f c2 c1 03       	cmpunordsd %xmm1,%xmm0
+  49fbc3:	66 0f 54 d0          	andpd  %xmm0,%xmm2
+  49fbc7:	66 0f 55 c1          	andnpd %xmm1,%xmm0
+  49fbcb:	66 0f 56 c2          	orpd   %xmm2,%xmm0
+  49fbcf:	66 0f 28 d0          	movapd %xmm0,%xmm2
+  49fbd3:	4c 3b 7c 24 38       	cmp    0x38(%rsp),%r15
+  49fbd8:	0f 85 c2 fe ff ff    	jne    49faa0 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x700>
+  49fbde:	eb 04                	jmp    49fbe4 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x844>
+  49fbe0:	66 0f 28 c2          	movapd %xmm2,%xmm0
+  49fbe4:	48 8b 44 24 28       	mov    0x28(%rsp),%rax
+  49fbe9:	f2 0f 11 40 08       	movsd  %xmm0,0x8(%rax)
+  49fbee:	c6 00 ff             	movb   $0xff,(%rax)
+  49fbf1:	e9 ae 01 00 00       	jmp    49fda4 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0xa04>
+  49fbf6:	8b 84 24 01 01 00 00 	mov    0x101(%rsp),%eax
+  49fbfd:	8b 8c 24 04 01 00 00 	mov    0x104(%rsp),%ecx
+  49fc04:	48 8b 5c 24 28       	mov    0x28(%rsp),%rbx
+  49fc09:	89 4b 04             	mov    %ecx,0x4(%rbx)
+  49fc0c:	89 43 01             	mov    %eax,0x1(%rbx)
+  49fc0f:	48 8d b4 24 18 01 00 	lea    0x118(%rsp),%rsi
+  49fc16:	00 
+  49fc17:	48 8d 7b 18          	lea    0x18(%rbx),%rdi
+  49fc1b:	ba 88 00 00 00       	mov    $0x88,%edx
+  49fc20:	ff 15 6a 5d 72 00    	call   *0x725d6a(%rip)        # bc5990 <memcpy@GLIBC_2.14>
+  49fc26:	c6 03 00             	movb   $0x0,(%rbx)
+  49fc29:	48 8d 05 a0 40 e1 ff 	lea    -0x1ebf60(%rip),%rax        # 2b3cd0 <anon.5f42c0c67cc31c229256f3ba5d41e2c9.275.llvm.5877322400505431464+0x2807>
+  49fc30:	48 89 43 08          	mov    %rax,0x8(%rbx)
+  49fc34:	48 c7 43 10 15 00 00 	movq   $0x15,0x10(%rbx)
+  49fc3b:	00 
+  49fc3c:	e9 63 01 00 00       	jmp    49fda4 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0xa04>
+  49fc41:	31 ed                	xor    %ebp,%ebp
+  49fc43:	eb 17                	jmp    49fc5c <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8bc>
+  49fc45:	4c 89 64 24 08       	mov    %r12,0x8(%rsp)
+  49fc4a:	eb 10                	jmp    49fc5c <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8bc>
+  49fc4c:	48 c7 44 24 08 00 00 	movq   $0x0,0x8(%rsp)
+  49fc53:	00 00 
+  49fc55:	31 ed                	xor    %ebp,%ebp
+  49fc57:	45 31 f6             	xor    %r14d,%r14d
+  49fc5a:	31 f6                	xor    %esi,%esi
+  49fc5c:	4c 89 b4 24 a0 00 00 	mov    %r14,0xa0(%rsp)
+  49fc63:	00 
+  49fc64:	48 89 ac 24 b8 00 00 	mov    %rbp,0xb8(%rsp)
+  49fc6b:	00 
+  49fc6c:	48 8b 44 24 08       	mov    0x8(%rsp),%rax
+  49fc71:	48 89 84 24 d0 00 00 	mov    %rax,0xd0(%rsp)
+  49fc78:	00 
+  49fc79:	48 c7 84 24 e8 00 00 	movq   $0x0,0xe8(%rsp)
+  49fc80:	00 00 00 00 00 
+  49fc85:	c6 44 24 40 ff       	movb   $0xff,0x40(%rsp)
+  49fc8a:	eb 5a                	jmp    49fce6 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x946>
+  49fc8c:	45 31 ff             	xor    %r15d,%r15d
+  49fc8f:	31 ed                	xor    %ebp,%ebp
+  49fc91:	31 f6                	xor    %esi,%esi
+  49fc93:	eb 21                	jmp    49fcb6 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x916>
+  49fc95:	be 01 00 00 00       	mov    $0x1,%esi
+  49fc9a:	45 31 ff             	xor    %r15d,%r15d
+  49fc9d:	31 ed                	xor    %ebp,%ebp
+  49fc9f:	eb 15                	jmp    49fcb6 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x916>
+  49fca1:	be 02 00 00 00       	mov    $0x2,%esi
+  49fca6:	45 31 ff             	xor    %r15d,%r15d
+  49fca9:	eb 0b                	jmp    49fcb6 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x916>
+  49fcab:	be 03 00 00 00       	mov    $0x3,%esi
+  49fcb0:	49 89 ee             	mov    %rbp,%r14
+  49fcb3:	4c 89 e5             	mov    %r12,%rbp
+  49fcb6:	4c 89 b4 24 a0 00 00 	mov    %r14,0xa0(%rsp)
+  49fcbd:	00 
+  49fcbe:	48 89 ac 24 b8 00 00 	mov    %rbp,0xb8(%rsp)
+  49fcc5:	00 
+  49fcc6:	4c 89 bc 24 d0 00 00 	mov    %r15,0xd0(%rsp)
+  49fccd:	00 
+  49fcce:	48 c7 84 24 e8 00 00 	movq   $0x0,0xe8(%rsp)
+  49fcd5:	00 00 00 00 00 
+  49fcda:	0f b6 84 24 08 01 00 	movzbl 0x108(%rsp),%eax
+  49fce1:	00 
+  49fce2:	88 44 24 40          	mov    %al,0x40(%rsp)
+  49fce6:	4c 8b 74 24 20       	mov    0x20(%rsp),%r14
+  49fceb:	48 c1 e6 03          	shl    $0x3,%rsi
+  49fcef:	4c 8d 2c 76          	lea    (%rsi,%rsi,2),%r13
+  49fcf3:	31 ed                	xor    %ebp,%ebp
+  49fcf5:	4c 8d 7c 24 50       	lea    0x50(%rsp),%r15
+  49fcfa:	4c 8d a4 24 00 01 00 	lea    0x100(%rsp),%r12
+  49fd01:	00 
+  49fd02:	48 8b 1d 07 62 72 00 	mov    0x726207(%rip),%rbx        # bc5f10 <_DYNAMIC+0x8a8>
+  49fd09:	eb 09                	jmp    49fd14 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x974>
+  49fd0b:	0f 1f 44 00 00       	nopl   0x0(%rax,%rax,1)
+  49fd10:	48 83 c5 18          	add    $0x18,%rbp
+  49fd14:	49 39 ed             	cmp    %rbp,%r13
+  49fd17:	74 55                	je     49fd6e <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x9ce>
+  49fd19:	48 8d 04 2c          	lea    (%rsp,%rbp,1),%rax
+  49fd1d:	48 05 a0 00 00 00    	add    $0xa0,%rax
+  49fd23:	48 83 38 00          	cmpq   $0x0,(%rax)
+  49fd27:	74 e7                	je     49fd10 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x970>
+  49fd29:	48 8b 48 10          	mov    0x10(%rax),%rcx
+  49fd2d:	48 89 8c 24 10 01 00 	mov    %rcx,0x110(%rsp)
+  49fd34:	00 
+  49fd35:	66 0f 10 00          	movupd (%rax),%xmm0
+  49fd39:	66 0f 29 84 24 00 01 	movapd %xmm0,0x100(%rsp)
+  49fd40:	00 00 
+  49fd42:	4c 89 ff             	mov    %r15,%rdi
+  49fd45:	4c 89 f6             	mov    %r14,%rsi
+  49fd48:	4c 89 e2             	mov    %r12,%rdx
+  49fd4b:	ff d3                	call   *%rbx
+  49fd4d:	80 7c 24 50 00       	cmpb   $0x0,0x50(%rsp)
+  49fd52:	74 bc                	je     49fd10 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x970>
+  49fd54:	0f b6 44 24 51       	movzbl 0x51(%rsp),%eax
+  49fd59:	c1 e0 08             	shl    $0x8,%eax
+  49fd5c:	48 83 c8 02          	or     $0x2,%rax
+  49fd60:	48 8b 4c 24 28       	mov    0x28(%rsp),%rcx
+  49fd65:	c6 01 03             	movb   $0x3,(%rcx)
+  49fd68:	48 89 41 08          	mov    %rax,0x8(%rcx)
+  49fd6c:	eb 36                	jmp    49fda4 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0xa04>
+  49fd6e:	0f b6 44 24 40       	movzbl 0x40(%rsp),%eax
+  49fd73:	89 c1                	mov    %eax,%ecx
+  49fd75:	c1 e1 08             	shl    $0x8,%ecx
+  49fd78:	48 83 c9 02          	or     $0x2,%rcx
+  49fd7c:	31 d2                	xor    %edx,%edx
+  49fd7e:	3c ff                	cmp    $0xff,%al
+  49fd80:	48 8d 05 49 3f e1 ff 	lea    -0x1ec0b7(%rip),%rax        # 2b3cd0 <anon.5f42c0c67cc31c229256f3ba5d41e2c9.275.llvm.5877322400505431464+0x2807>
+  49fd87:	48 0f 45 c1          	cmovne %rcx,%rax
+  49fd8b:	0f 95 c2             	setne  %dl
+  49fd8e:	8d 0c 52             	lea    (%rdx,%rdx,2),%ecx
+  49fd91:	48 8b 54 24 28       	mov    0x28(%rsp),%rdx
+  49fd96:	88 0a                	mov    %cl,(%rdx)
+  49fd98:	48 89 42 08          	mov    %rax,0x8(%rdx)
+  49fd9c:	48 c7 42 10 15 00 00 	movq   $0x15,0x10(%rdx)
+  49fda3:	00 
+  49fda4:	48 81 c4 b8 01 00 00 	add    $0x1b8,%rsp
+  49fdab:	5b                   	pop    %rbx
+  49fdac:	41 5c                	pop    %r12
+  49fdae:	41 5d                	pop    %r13
+  49fdb0:	41 5e                	pop    %r14
+  49fdb2:	41 5f                	pop    %r15
+  49fdb4:	5d                   	pop    %rbp
+  49fdb5:	c3                   	ret
+  49fdb6:	0f b6 44 24 51       	movzbl 0x51(%rsp),%eax
+  49fdbb:	48 8b 4c 24 28       	mov    0x28(%rsp),%rcx
+  49fdc0:	c6 01 03             	movb   $0x3,(%rcx)
+  49fdc3:	c6 41 08 02          	movb   $0x2,0x8(%rcx)
+  49fdc7:	88 41 09             	mov    %al,0x9(%rcx)
+  49fdca:	48 8b 84 24 80 00 00 	mov    0x80(%rsp),%rax
+  49fdd1:	00 
+  49fdd2:	89 41 0a             	mov    %eax,0xa(%rcx)
+  49fdd5:	48 c1 e8 20          	shr    $0x20,%rax
+  49fdd9:	66 89 41 0e          	mov    %ax,0xe(%rcx)
+  49fddd:	0f 28 84 24 a0 01 00 	movaps 0x1a0(%rsp),%xmm0
+  49fde4:	00 
+  49fde5:	0f 29 41 10          	movaps %xmm0,0x10(%rcx)
+  49fde9:	f2 0f 10 44 24 78    	movsd  0x78(%rsp),%xmm0
+  49fdef:	f2 0f 11 41 20       	movsd  %xmm0,0x20(%rcx)
+  49fdf4:	eb ae                	jmp    49fda4 <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0xa04>
+  49fdf6:	31 ed                	xor    %ebp,%ebp
+  49fdf8:	45 31 f6             	xor    %r14d,%r14d
+  49fdfb:	e9 5c fe ff ff       	jmp    49fc5c <borsuk::two_bit_generation::plan_source_walks_with_scorer::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_walks<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#1}::{closure#2}>::{closure#1}>::{closure#1}+0x8bc>

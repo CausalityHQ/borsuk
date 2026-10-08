@@ -1,0 +1,114 @@
+
+/data/target/borsuk-cold-membership-native/two-bit-four-row-control-build-a0001/control-check_cohere_native_baseline:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+000000000050d3b0 <<borsuk::rotated_two_bit::PreparedTwoBit>::score>:
+  50d3b0:	50                   	push   %rax
+  50d3b1:	48 8b 46 18          	mov    0x18(%rsi),%rax
+  50d3b5:	4c 8d 40 08          	lea    0x8(%rax),%r8
+  50d3b9:	4c 39 c1             	cmp    %r8,%rcx
+  50d3bc:	0f 85 39 01 00 00    	jne    50d4fb <<borsuk::rotated_two_bit::PreparedTwoBit>::score+0x14b>
+  50d3c2:	4c 8d 40 04          	lea    0x4(%rax),%r8
+  50d3c6:	48 83 f8 fb          	cmp    $0xfffffffffffffffb,%rax
+  50d3ca:	0f 87 46 01 00 00    	ja     50d516 <<borsuk::rotated_two_bit::PreparedTwoBit>::score+0x166>
+  50d3d0:	49 89 c9             	mov    %rcx,%r9
+  50d3d3:	4d 29 c1             	sub    %r8,%r9
+  50d3d6:	0f 82 3a 01 00 00    	jb     50d516 <<borsuk::rotated_two_bit::PreparedTwoBit>::score+0x166>
+  50d3dc:	49 83 f9 04          	cmp    $0x4,%r9
+  50d3e0:	0f 85 5c 01 00 00    	jne    50d542 <<borsuk::rotated_two_bit::PreparedTwoBit>::score+0x192>
+  50d3e6:	66 0f 6e 0c 02       	movd   (%rdx,%rax,1),%xmm1
+  50d3eb:	66 42 0f 6e 04 02    	movd   (%rdx,%r8,1),%xmm0
+  50d3f1:	66 0f 7e c1          	movd   %xmm0,%ecx
+  50d3f5:	66 41 0f 7e c8       	movd   %xmm1,%r8d
+  50d3fa:	45 8d 48 ff          	lea    -0x1(%r8),%r9d
+  50d3fe:	41 81 f9 ff ff 7f 00 	cmp    $0x7fffff,%r9d
+  50d405:	41 0f 92 c1          	setb   %r9b
+  50d409:	45 89 c2             	mov    %r8d,%r10d
+  50d40c:	41 81 e2 ff ff ff 7f 	and    $0x7fffffff,%r10d
+  50d413:	41 0f 94 c3          	sete   %r11b
+  50d417:	45 08 cb             	or     %r9b,%r11b
+  50d41a:	45 85 c0             	test   %r8d,%r8d
+  50d41d:	41 0f 99 c0          	setns  %r8b
+  50d421:	41 81 c2 00 00 80 ff 	add    $0xff800000,%r10d
+  50d428:	41 81 fa 00 00 00 7f 	cmp    $0x7f000000,%r10d
+  50d42f:	41 0f 92 c1          	setb   %r9b
+  50d433:	45 20 c1             	and    %r8b,%r9b
+  50d436:	45 08 d9             	or     %r11b,%r9b
+  50d439:	85 c9                	test   %ecx,%ecx
+  50d43b:	41 0f 99 c0          	setns  %r8b
+  50d43f:	41 89 ca             	mov    %ecx,%r10d
+  50d442:	41 81 e2 ff ff ff 7f 	and    $0x7fffffff,%r10d
+  50d449:	41 81 c2 00 00 80 ff 	add    $0xff800000,%r10d
+  50d450:	41 81 fa 00 00 00 7f 	cmp    $0x7f000000,%r10d
+  50d457:	41 0f 92 c2          	setb   %r10b
+  50d45b:	45 20 c2             	and    %r8b,%r10b
+  50d45e:	ff c9                	dec    %ecx
+  50d460:	81 f9 ff ff 7f 00    	cmp    $0x7fffff,%ecx
+  50d466:	0f 92 c1             	setb   %cl
+  50d469:	44 08 d1             	or     %r10b,%cl
+  50d46c:	41 84 c9             	test   %cl,%r9b
+  50d46f:	0f 84 86 00 00 00    	je     50d4fb <<borsuk::rotated_two_bit::PreparedTwoBit>::score+0x14b>
+  50d475:	48 85 c0             	test   %rax,%rax
+  50d478:	74 3e                	je     50d4b8 <<borsuk::rotated_two_bit::PreparedTwoBit>::score+0x108>
+  50d47a:	4c 8b 4e 08          	mov    0x8(%rsi),%r9
+  50d47e:	48 8b 4e 10          	mov    0x10(%rsi),%rcx
+  50d482:	f2 0f 10 15 fe 90 d0 	movsd  -0x2f6f02(%rip),%xmm2        # 216588 <anon.aa80e09cb2158b54db859bbd09b24c86.10.llvm.1496823458274821391+0x10>
+  50d489:	ff 
+  50d48a:	45 31 d2             	xor    %r10d,%r10d
+  50d48d:	45 31 db             	xor    %r11d,%r11d
+  50d490:	46 0f b6 04 1a       	movzbl (%rdx,%r11,1),%r8d
+  50d495:	4d 01 d0             	add    %r10,%r8
+  50d498:	49 39 c8             	cmp    %rcx,%r8
+  50d49b:	0f 83 8e 00 00 00    	jae    50d52f <<borsuk::rotated_two_bit::PreparedTwoBit>::score+0x17f>
+  50d4a1:	f2 43 0f 58 14 c1    	addsd  (%r9,%r8,8),%xmm2
+  50d4a7:	49 ff c3             	inc    %r11
+  50d4aa:	49 81 c2 00 01 00 00 	add    $0x100,%r10
+  50d4b1:	4c 39 d8             	cmp    %r11,%rax
+  50d4b4:	75 da                	jne    50d490 <<borsuk::rotated_two_bit::PreparedTwoBit>::score+0xe0>
+  50d4b6:	eb 08                	jmp    50d4c0 <<borsuk::rotated_two_bit::PreparedTwoBit>::score+0x110>
+  50d4b8:	f2 0f 10 15 c8 90 d0 	movsd  -0x2f6f38(%rip),%xmm2        # 216588 <anon.aa80e09cb2158b54db859bbd09b24c86.10.llvm.1496823458274821391+0x10>
+  50d4bf:	ff 
+  50d4c0:	f3 0f 5a c9          	cvtss2sd %xmm1,%xmm1
+  50d4c4:	f2 0f 59 ca          	mulsd  %xmm2,%xmm1
+  50d4c8:	f2 0f 58 4e 20       	addsd  0x20(%rsi),%xmm1
+  50d4cd:	f2 0f 59 4e 28       	mulsd  0x28(%rsi),%xmm1
+  50d4d2:	f3 0f 5a c0          	cvtss2sd %xmm0,%xmm0
+  50d4d6:	f2 0f 59 c1          	mulsd  %xmm1,%xmm0
+  50d4da:	66 48 0f 7e c0       	movq   %xmm0,%rax
+  50d4df:	48 b9 ff ff ff ff ff 	movabs $0x7fffffffffffffff,%rcx
+  50d4e6:	ff ff 7f 
+  50d4e9:	48 21 c1             	and    %rax,%rcx
+  50d4ec:	48 b8 00 00 00 00 00 	movabs $0x7ff0000000000000,%rax
+  50d4f3:	00 f0 7f 
+  50d4f6:	48 39 c1             	cmp    %rax,%rcx
+  50d4f9:	7c 0d                	jl     50d508 <<borsuk::rotated_two_bit::PreparedTwoBit>::score+0x158>
+  50d4fb:	c6 47 01 02          	movb   $0x2,0x1(%rdi)
+  50d4ff:	b0 01                	mov    $0x1,%al
+  50d501:	88 07                	mov    %al,(%rdi)
+  50d503:	48 89 f8             	mov    %rdi,%rax
+  50d506:	59                   	pop    %rcx
+  50d507:	c3                   	ret
+  50d508:	f2 0f 11 47 08       	movsd  %xmm0,0x8(%rdi)
+  50d50d:	31 c0                	xor    %eax,%eax
+  50d50f:	88 07                	mov    %al,(%rdi)
+  50d511:	48 89 f8             	mov    %rdi,%rax
+  50d514:	59                   	pop    %rcx
+  50d515:	c3                   	ret
+  50d516:	4c 8d 0d 9b 6e 5c 00 	lea    0x5c6e9b(%rip),%r9        # ad43b8 <anon.f14c37c10989103715e491adf46d04d7.695.llvm.17531991878569395651>
+  50d51d:	48 89 c7             	mov    %rax,%rdi
+  50d520:	4c 89 c6             	mov    %r8,%rsi
+  50d523:	48 89 ca             	mov    %rcx,%rdx
+  50d526:	4c 89 c9             	mov    %r9,%rcx
+  50d529:	ff 15 01 70 6a 00    	call   *0x6a7001(%rip)        # bb4530 <_DYNAMIC+0x368>
+  50d52f:	48 8d 15 02 6e 5c 00 	lea    0x5c6e02(%rip),%rdx        # ad4338 <anon.f14c37c10989103715e491adf46d04d7.354.llvm.17531991878569395651>
+  50d536:	4c 89 c7             	mov    %r8,%rdi
+  50d539:	48 89 ce             	mov    %rcx,%rsi
+  50d53c:	ff 15 ee 75 6a 00    	call   *0x6a75ee(%rip)        # bb4b30 <_DYNAMIC+0x968>
+  50d542:	48 8d 3d 87 af d9 ff 	lea    -0x265079(%rip),%rdi        # 2a84d0 <anon.f14c37c10989103715e491adf46d04d7.676.llvm.17531991878569395651>
+  50d549:	48 8d 0d 00 6e 5c 00 	lea    0x5c6e00(%rip),%rcx        # ad4350 <anon.f14c37c10989103715e491adf46d04d7.675.llvm.17531991878569395651>
+  50d550:	4c 8d 05 49 6e 5c 00 	lea    0x5c6e49(%rip),%r8        # ad43a0 <anon.f14c37c10989103715e491adf46d04d7.694.llvm.17531991878569395651>
+  50d557:	48 8d 54 24 07       	lea    0x7(%rsp),%rdx
+  50d55c:	be 2b 00 00 00       	mov    $0x2b,%esi
+  50d561:	ff 15 e9 6f 6a 00    	call   *0x6a6fe9(%rip)        # bb4550 <_DYNAMIC+0x388>

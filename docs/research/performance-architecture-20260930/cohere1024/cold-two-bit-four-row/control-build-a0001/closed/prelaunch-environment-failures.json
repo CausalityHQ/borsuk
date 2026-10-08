@@ -1,0 +1,24 @@
+{
+  "paid_instance_created_before_failures": false,
+  "failures": [
+    {
+      "launch_session": 56220,
+      "exit": 1,
+      "cause": "stale historical terminated-instance lookup returned empty Reservations",
+      "repair_commit": "4ebebf0369576d8f74549478f27ea8e4bed5d1f8",
+      "algorithm_changed": false
+    },
+    {
+      "launch_session": 4640,
+      "exit": 1,
+      "cause": "55s timeout of S3 HEAD inputs/mandatory-tests.json before launch-attempt creation",
+      "subsequent_same_object_head": {
+        "session": 25666,
+        "exit": 0,
+        "ContentLength": 3
+      },
+      "algorithm_changed": false
+    }
+  ],
+  "scientific_disposition": "execution environment defects, not algorithm rejection"
+}

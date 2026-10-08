@@ -1,0 +1,12 @@
+{
+  "schema": "borsuk-two-bit-four-row-codegen-v1",
+  "status": "ORDERED_SIMD_AND_MATCHED_PRODUCTION_STACK_PASS",
+  "source_commit": "fd2cb50ee5856a5c43131ca23d38c7be8c8bc73b",
+  "ordered_kernel_receipt_sha256": "ac04281ff461fbb98082c15e9086b364fe793b5de98843653228e1b3d0f52ccf",
+  "matched_stack_receipt_sha256": "53ed153fb3b76a586ee89f06aa84feb72aa89819cd30ec4e4b2407656054128d",
+  "probe_elf_sha256": "1c1a700d09588f6b423521597cf9dce8af5179557aa63b16a79a0622639355c9",
+  "max_conservative_increment_bytes": 320,
+  "limit_bytes": 512,
+  "primitive_run": false,
+  "performance_claim": false
+}
