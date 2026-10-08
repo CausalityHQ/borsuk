@@ -1,5 +1,5 @@
 import tempfile,pathlib,json,hashlib,subprocess,copy
-src=pathlib.Path('/tmp/borsuk-check-gather-primitive-v2.py').read_text()
+src=pathlib.Path(__file__).with_name('probe-check.py').read_text()
 with tempfile.TemporaryDirectory() as tmp:
  r=pathlib.Path(tmp);checker=r/'check.py';checker.write_text(src.replace("'/mnt/borsuk-http/evidence'",repr(tmp)))
  geometry=[];cells=[];screens=[]
