@@ -1,0 +1,7 @@
+{
+  "base": "a372f800a4554f175ed6cf1225e8692c4fb98a35",
+  "control_full_old_scorer_exact_after_whitespace_and_binding_rename": true,
+  "draft_sha256": "c7542dbb91f2064e4d4727cd7b873a55d755afd104d30aac992685ee389b6ff1",
+  "execution": "source text comparison only; no Rust/native execution",
+  "candidate_mutable": true
+}

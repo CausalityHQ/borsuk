@@ -1,0 +1,212 @@
+{
+  "status": "DRAFT_PENDING_EXACT_CHILD_OWN3_SOURCE",
+  "root_base": "a372f800a4554f175ed6cf1225e8692c4fb98a35",
+  "candidate_commit": null,
+  "source_manifest": null,
+  "mandatory_names": null,
+  "stages": [
+    {
+      "name": "codec-debug",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "rotated_two_bit::tests::",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "planner-debug",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "two_bit_generation::source_walk_tests::",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "codec-release",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "borsuk",
+        "--lib",
+        "rotated_two_bit::tests::",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "planner-release",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "borsuk",
+        "--lib",
+        "two_bit_generation::source_walk_tests::",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "integration",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--test",
+        "rotated_two_bit",
+        "--test",
+        "two_bit_source",
+        "--test",
+        "two_bit_generation",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "probe-compile",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "borsuk",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ]
+    },
+    {
+      "name": "release-artifacts",
+      "argv": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "borsuk",
+        "--bin",
+        "check_cohere_native_baseline",
+        "--bin",
+        "check_semantic_router_scorer",
+        "--example",
+        "two_bit_http"
+      ]
+    },
+    {
+      "name": "workspace-clippy",
+      "argv": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ]
+    },
+    {
+      "name": "real-test-build",
+      "argv": [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "BORSUK_TEST_BUILD_JOBS=1",
+        "CARGO_BUILD_JOBS=1",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ]
+    }
+  ],
+  "micro_insert_after": "probe-compile",
+  "micro_execution": "selected exact release libtest in own live-admitted leaf; pre-exec systemctl MainPID/ControlGroup/finite limits; original native and tee exits separately retained",
+  "micro_caps": {
+    "cpu": 1,
+    "allowed_cpus": [
+      0
+    ],
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "cpu_seconds": 30,
+    "wall_seconds": 120
+  },
+  "build_caps": {
+    "cpu": 2,
+    "allowed_cpus": [
+      0,
+      1
+    ],
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "pids": 512,
+    "cargo_jobs": 1,
+    "native_seconds": 7200,
+    "machine_seconds": 9000
+  },
+  "ISA": [
+    "x86_64",
+    "avx2"
+  ],
+  "correctness": "exact names mandatory in each owning debug/release stage; all old tests retained; source-before-after unchanged; candidate module assembly audit before micro; gather instruction and ordered scalar addition without FMA/horizontal reassociation",
+  "screen": "same executable complete frozen scalar scorer vs actual dispatch; symmetric black_box function-pointer calls; all80 records independent geometry/scorebits/CPU/math verification",
+  "REJECT": "remaining post-screen assurance may remain UNRUN; no source integration or cold run",
+  "PASS": "post-screen locked release/Clippy/real-testbuild then separate real1000-query input admission and staging canary before cold ABBA",
+  "INVALID": "repair demonstrated environment defect with same algorithm/limits, retain original attempt",
+  "paid_launch_permitted": false,
+  "S3_reference_rerun": false,
+  "cold_measurement": false,
+  "root_decision": "c61043614e6b0713be79d2448c1142e1d740f590",
+  "owned_paths": [
+    "crates/borsuk/src/lib.rs",
+    "crates/borsuk/src/rotated_two_bit.rs",
+    "crates/borsuk/src/two_bit_generation.rs"
+  ],
+  "safety_review": {
+    "group": "608c55fac4aa434c",
+    "decision": "A: checked x86_64 gather; deny unsafe by default, exact two private allowances",
+    "research_speed_prediction": "unmeasured serial-add bottleneck; no claimed speedup"
+  },
+  "before_micro_required": [
+    "Exact owned source bytes and full manifest pinned",
+    "Every mandatory ordinary name exactly once in owning debug and release stages",
+    "Forced AVX2 witness actually executed in both profiles",
+    "Truncated table checked panic and validation-before-table witnesses",
+    "Portable compiler flags: no global target-cpu=native or +avx2",
+    "Selected release executable disassembly: gather executed, original sequential scalar sums, no FMA/reassociation",
+    "CPU model and microcode recorded",
+    "Live pre-exec MainPID/ControlGroup and finite CPU/memory/swap/pids/deadline admission"
+  ],
+  "portability_before_integration": [
+    "Public dispatch on actual nonAVX2 x86_64 target/runtime",
+    "Non-x86 build qualification; scalar helper alone insufficient"
+  ],
+  "micro_verdict": {
+    "harness": "Receipt printed then assert ACCEPT; nonzero alone never classifies algorithm failure",
+    "root": "Independently recompute all 80 records, semantic seals and medians; classify ACCEPT/REJECT/INVALID from complete receipt plus native exit/resource evidence",
+    "reject": "Stop post-screen build stages; preserve source and evidence, do not integrate",
+    "invalid": "Repair demonstrated environment only, rerun unchanged algorithm/limits in distinct attempt"
+  }
+}
