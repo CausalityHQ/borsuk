@@ -1,0 +1,26 @@
+{
+  "status": "PENDING_RUNTIME_ADMISSION_NOT_A_MEASUREMENT",
+  "candidate_source": "2fb771bdb31f9490a3341bdbfa2b4ad510cfb487",
+  "qualification_attempt": "direct-closure-qualification-a0002",
+  "qualification_instance": "i-02d745c13eee2b090",
+  "qualified_binary": null,
+  "A_and_B_configs_unchanged": true,
+  "new_gate_order": [
+    "completed exact-source compiler qualification",
+    "A and B real-input native admission, complete authenticated request and truth validation under candidate runtime",
+    "separate disposable CLI/asset/SDK/resource/cleanup canary",
+    "freeze one A then B comparison on the same qualified binary"
+  ],
+  "native_admission": "Use existing Rust runner CONFIG CONFIG_SHA NEW_OUTPUT; production has no admission-only shortcut. Treat its complete admission runs as gates, not cold comparison repetitions. Reuse neither old-v2 admission nor old binary proof.",
+  "sealing": "Candidate runner completes and fsyncs all query output before opening truth body; require this in both admission receipts.",
+  "baseline_regression": "Compare every ordered query ID and score-bit roster against immutable closed B1 and B2; v3-added fields do not excuse ranking differences.",
+  "direct_recall": "Require at least 9723 hits of 10000; publish every per-query hit delta and lower tail, including bridge-population losses.",
+  "cap_refusal": "Valid-input enforced memory/byte cap is RESOURCE_REJECT; setup/auth/transport is INVALID. Predicted plan mismatch is INVALID_PLAN_PARITY.",
+  "measurement_launch_authorized": false,
+  "evidence_reduction": {
+    "old_native_reducer": "Rejects result-v3 and serving/direct_memory fields; do not route candidate evidence through its historical --completed-v2 or --membership-abba-v2 modes. Historical parser remains immutable.",
+    "quality_authority": "Candidate Rust runner authenticates and reduces its sealed complete1000 query prefix against exact pinned truth. Its native terminal numerator/denominator is authoritative.",
+    "root_evidence_audit": "Read only closed authenticated native JSONL and resource receipts to verify all query IDs/score bits, per-query recall deltas, measured native per-query wall quantiles and logical transport charges. No Python ANN, source decoding, truth scoring or new product/controller feature.",
+    "vendor_comparison": "Reuse immutable saved S3 reference. TP published workload remains mismatched; no paired win claim."
+  }
+}
