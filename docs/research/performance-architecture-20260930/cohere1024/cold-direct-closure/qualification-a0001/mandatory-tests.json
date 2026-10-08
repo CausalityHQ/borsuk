@@ -1,0 +1,15 @@
+{
+  "lib": [
+    "two_bit_generation::source_walk_tests::direct_bridge_counterexample_changes_population_and_winner_pure",
+    "two_bit_generation::source_walk_tests::native_direct_closure_cold_oracle_zero_source_memory_and_caps",
+    "two_bit_generation::source_walk_tests::native_direct_closure_real_planner_bridge_counterexample_changes_winner",
+    "two_bit_generation::source_walk_tests::native_direct_closure_shares_the_query_slot_with_ordinary_search_and_drains",
+    "two_bit_generation::source_walk_tests::native_direct_closure_tiny_widths_tail_ties_admission_and_authenticated_failures",
+    "two_bit_generation::source_walk_tests::direct_closure_rejects_graph_discovery_before_any_io"
+  ],
+  "bin": [
+    "tests::serving_mode_and_format_marker_are_required_explicit_and_strict",
+    "tests::actual_direct_closure_queries_match_the_baseline_control_with_zero_source",
+    "tests::direct_resource_rejections_are_terminal_machine_readable_and_distinct_from_invalid"
+  ]
+}

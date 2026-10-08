@@ -1,0 +1,10 @@
+{
+  "status": "SOURCE_BOUND_STATIC_AND_BASH_SYNTAX_CANARY_ONLY",
+  "ann_run": false,
+  "rust_native_executed": false,
+  "aws_bootstrap_executed": false,
+  "source_and_support_hashes_verified": true,
+  "shell_syntax_exit": 0,
+  "scope": "compiler campaign admission; actual toolchain/cgroup enforcement checked before remote Cargo",
+  "not_scientific_evidence": true
+}

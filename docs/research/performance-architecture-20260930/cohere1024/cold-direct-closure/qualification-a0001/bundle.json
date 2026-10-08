@@ -1,0 +1,11 @@
+{
+  "status": "SOURCE_BUNDLE_ONLY_NOT_LAUNCHED",
+  "candidate": "92102c7d03a485bd33e1eac1e27cb4f64fb7c09e",
+  "file_count": 2464,
+  "native_file_count": 425,
+  "native_identity": "445223b594ac8037db37360e71c6ab03f0c903e560b8727979f07a419b807f82",
+  "archive_bytes": 13539940,
+  "archive_sha256": "6f046ab8f3ada83748f8a14efffada4fd8c27a7d0029fc9ba29364780664390c",
+  "ann_run": false,
+  "performance_claim": false
+}

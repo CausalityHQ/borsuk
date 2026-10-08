@@ -1,0 +1,34 @@
+{
+  "status": "SOURCE_REVIEWED_NOT_NATIVE_QUALIFIED",
+  "candidate": "92102c7d03a485bd33e1eac1e27cb4f64fb7c09e",
+  "native_identity": "445223b594ac8037db37360e71c6ab03f0c903e560b8727979f07a419b807f82",
+  "owned_only": true,
+  "allocation_free_validity_before_resources": true,
+  "existing_cover_reused": true,
+  "stateless_api": true,
+  "full_reviews_reconciled": {
+    "reconciliation_commit": "276f68cad9780547526762743ef31b690904fd40",
+    "addendum_commit": "3d4b14365a7412a6a9110246d858b8d3f93d30a9",
+    "engineering_review": {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/cold-source-utilization/direct-closure-engineering-review.json",
+      "git_blob_at_reconciliation": "ad4a9b15a0a2bda9b222fb87ffe3a8cf0d89b795",
+      "consultation": "c7f35cb8c8e44267",
+      "group": "551e2ec7e1d0418c",
+      "read_in_full": true
+    },
+    "research_review": {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/cold-source-utilization/direct-closure-research-review.json",
+      "git_blob_at_reconciliation": "1d4687fae4bf5daf9ea128c61833ff3f78c53c84",
+      "consultation": "052d80843e694a39",
+      "read_in_full": true
+    },
+    "reconciliation": {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/cold-source-utilization/direct-closure-review-reconciliation.md",
+      "git_blob_at_reconciliation": "a736419a673bebca9b6c34167f0102536174a5f3",
+      "git_blob_at_addendum": "e7d9713fdf2ca6b01dcde62be26f225bf8252d3c",
+      "read_in_full": true,
+      "authority": "authoritative where reviewers disagree"
+    }
+  },
+  "native_tests_run": false
+}

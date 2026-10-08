@@ -1,0 +1,429 @@
+{
+  "schema": "borsuk-direct-sq8-closure-native-contract-v2",
+  "status": "UNVERIFIED_SOURCE_ONLY",
+  "status_detail": "No cargo, rustc, native, data, corpus, query, truth, cloud, network, consult or review was run by this worker. Only bounded rustfmt --check and git (diff/show/log) ran, inside a real 1 CPU / 256 MiB / swap 0 / 128 pids / 120 s cgroup scope (enforced limits printed: memory.max=268435456 memory.swap.max=0 pids.max=128 cpu.max=100000 100000). rustfmt validates syntax only; every type, borrow, lint and test expectation is uncompiled and unexecuted.",
+  "base_commit": "812fea2b882260e80856d972873aedd5004a4666",
+  "final_commit": "92102c7d03a485bd33e1eac1e27cb4f64fb7c09e",
+  "branch": "devbox/direct-sq8-closure-native",
+  "worktree": "/home/rb/worktrees/borsuk-direct-sq8-closure-native",
+  "worktree_alignment": "Provisioning HEAD was 37c4adcf (not an ancestor of the base; reachable from codex/prod-v8). The worktree was clean and was hard-reset to the exact base before any edit.",
+  "changed_paths_base_to_final": [
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+    "crates/borsuk/src/two_bit_generation.rs"
+  ],
+  "diffstat_base_to_final": [
+    ".../borsuk/src/bin/check_cohere_native_baseline.rs |  573 ++++-",
+    " crates/borsuk/src/two_bit_generation.rs            | 2219 +++++++++++++++++++-",
+    " 2 files changed, 2766 insertions(+), 26 deletions(-)"
+  ],
+  "owned_files": {
+    "crates/borsuk/src/two_bit_generation.rs": {
+      "sha256": "12f035a894d3da0765d659af91fcdf2bcde6bdb79bcb7bde7168e6a7ec15a890",
+      "git_blob": "c8628bf145481474c56795e093bac76c3bcaf1f8",
+      "checkpoint_sha256": "07002368a701b8572b67b54217eb90f447fa3a3d37a757eba1e2182667d0ffb7",
+      "checkpoint_git_blob": "1ec1f6e14f584adc3eb31d851e33e4398a429842",
+      "base_sha256": "194115d67776ad9f620a704b8cb98beda16b4d879019c390b2a0d4a6901003e4",
+      "base_git_blob": "05b94361d36641efd3af4e9028c1ac59f7e16a94"
+    },
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs": {
+      "sha256": "5d95114b1b27040e94f553c19c4ebfeaafe37d23ac04d9ae2d3436f92ee157c3",
+      "git_blob": "f1b3eb07f188f0684a18cd60fbf53413136dca09",
+      "checkpoint_sha256": "fc4bdfb99d963deaa373bde0c6f1b3b9bddc33b343b0b7683364675177ae93f8",
+      "checkpoint_git_blob": "c361cc6b6ed2e692bb9401b4ebfb900161cfaee0",
+      "base_sha256": "de6a9190c321d13423a8ef60191427e2825bc1f0201e0dc848597616d9b6b233",
+      "base_git_blob": "0df739a39acadc68a19707b68d0efa6f731ed9f5"
+    }
+  },
+  "unchanged_identity_pins": {
+    "note": "the runner identity record hashes these via include_bytes!; they are unchanged from base",
+    "sha256": {
+      "crates/borsuk/src/semantic_unit_router.rs": "12f7b05ed8fe208e5baae62b7c6f17763ff6794458afbb6dc0fe17793a19eba5",
+      "crates/borsuk/src/rotated_two_bit.rs": "eddf88c6c8ee23a732751f49291293f1cc081545ebb9a21c149eb757aa5c38ec",
+      "crates/borsuk/src/two_bit_source.rs": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0"
+    }
+  },
+  "identity_record_expectation": {
+    "runner_source_sha256": "5d95114b1b27040e94f553c19c4ebfeaafe37d23ac04d9ae2d3436f92ee157c3",
+    "generation_source_sha256": "12f035a894d3da0765d659af91fcdf2bcde6bdb79bcb7bde7168e6a7ec15a890",
+    "router_source_sha256": "12f7b05ed8fe208e5baae62b7c6f17763ff6794458afbb6dc0fe17793a19eba5",
+    "codec_source_sha256": "eddf88c6c8ee23a732751f49291293f1cc081545ebb9a21c149eb757aa5c38ec",
+    "source_plane_source_sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0"
+  },
+  "authority_read": [
+    "direct-closure-candidate-method.md (root authoritative, full)",
+    "direct-closure-serving-seam.md",
+    "a0002/closed/README.md"
+  ],
+  "library_api": {
+    "module": "borsuk::two_bit_generation",
+    "new_types": {
+      "DirectClosureLimits": {
+        "derive": "Clone, Copy, Debug, PartialEq, Eq",
+        "fields": {
+          "max_sq8_bytes": "usize, physical SQ8 bytes including bridge pages",
+          "max_sq8_gets": "usize, physical SQ8 range GETs"
+        },
+        "validation": "both must be > 0 (Invalid(\"direct closure limits\"))"
+      },
+      "DirectClosureMemory": {
+        "derive": "Clone, Copy, Debug, PartialEq, Eq, Serialize",
+        "fields": [
+          "resident_bytes: u64",
+          "direct_planner_bytes: u64",
+          "direct_query_bytes: u64",
+          "total_bytes: u64",
+          "cap_bytes: u64"
+        ]
+      },
+      "DirectClosureRejection": {
+        "derive": "Clone, Copy, Debug, PartialEq, Eq, Serialize",
+        "serde": "snake_case",
+        "variants": [
+          "ModeledMemory -> \"modeled_memory\"",
+          "PlannedBytes -> \"planned_bytes\""
+        ]
+      }
+    },
+    "new_methods": {
+      "TwoBitGeneration::direct_closure_memory(&self, DirectClosureLimits) -> Result<DirectClosureMemory>": "pure arithmetic; admits nothing",
+      "TwoBitGeneration::direct_closure_search_with_store(&self, &dyn ObjectStore, &[f32], top_k: usize, excluded_ids: Option<&[i64]>, DirectClosureLimits) -> Result<TwoBitSearchResult>": "opt-in; the only public entry point; no mutation snapshot support",
+      "TwoBitGeneration::diagnostic_direct_closure_search_with_store(&self, &dyn ObjectStore, &[f32], top_k: usize, DirectClosureLimits) -> Result<(TwoBitSearchResult, TwoBitPlanTrace)>": "#[doc(hidden)]; no exclusions; charged trace",
+      "TwoBitGenerationError::direct_resource_rejection(&self) -> Option<DirectClosureRejection>": "recurses through Query and RouterCharged; Some only for Invalid(\"direct closure memory cap\") and Invalid(\"direct closure byte cap\")"
+    },
+    "changed_existing": {
+      "TwoBitSearchResult": "gains pub source_nomination_skipped: bool (false in the historical path, true in direct). size_of::<TwoBitPlanTrace>() and TwoBitPlanTrace::scratch_bytes are byte-identical to base.",
+      "search_store_unadmitted": "stage-closing loop extracted to close_open_stages (identical body); no arithmetic change"
+    },
+    "unchanged": "open_inner and every modeled-memory and limit-clamp computation, plan_paged_measured, search*, search_with_mutations*, diagnostic_search_with_store, all default behavior"
+  },
+  "direct_semantics": {
+    "pipeline": "allocation-free admission -> slot -> normalize (owned copy only now) -> local_walks (production semantic discovery) -> admit_source_walks (checked walk/closure caps) -> required closure = {unit/8} -> plan_two_bit_source_cover(closure, rows, D+12, max_sq8_gets, max_sq8_bytes) (the existing pure checked cover; its only budget refusal, InsufficientBudget, is mapped to the typed direct byte refusal) -> rank_verified_sq8_pages_inner(max_gets = max_sq8_gets, max_bytes = max_sq8_bytes, max_parallel = generation max_parallel_gets, excluded_ids) -> underfill check identical to the historical one when there are no exclusions",
+    "zero_source": "no SOURCE or router GET; source_stats and router_stats are Sq8ReadStats::default(); the startup HEAD of plane/records.bin stays accounted in RemoteOpenStats.source_head_requests",
+    "plan_fields": {
+      "selected_pages": "REQUIRED closure pages ascending (never bridge pages)",
+      "ranges": "actual fetched byte ranges in increasing order, bridges included, last range clipped at the object end",
+      "planned_bytes": "sum of ranges",
+      "target_pages": "closure.len()",
+      "target_shortfall": 0,
+      "primary_pages_retained": 0
+    },
+    "bridge_accounting": "covered_pages = sum(ceil(range.len() / (256*(D+12)))); bridge_pages = covered_pages - selected_pages.len(), computed arithmetically by the runner; bridge pages are never enumerated or stored",
+    "trace": "semantic_leaves/semantic_units/semantic_seed_additions are the production discovery. ranked_candidate_pages, nomination_evaluated_units and discoveries are empty; primary_page is the unset default 0 and MUST NOT be read as a SOURCE best-ranked page whenever source_nomination_skipped is true (no SOURCE ranking is fabricated). size_of::<TwoBitPlanTrace>() and TwoBitPlanTrace::scratch_bytes are byte-identical to base.",
+    "stages": "discovery (normalize + local walks), planning (REAL direct cover computation: closure + cover + byte cap), sq8; stages.source is (0,0) = SOURCE skipped; leaf_peak_inflight 0; open stages are closed on every failure. stages.planning is NOT removed SOURCE nomination: receipts label it planning_scope=direct_cover_only (baseline: source_nomination_and_cover).",
+    "semaphore": "the same self.slots permit as historical search, acquired after static admission and held across discovery, cover, every drained GET and scoring, on success and failure",
+    "admission_order_before_any_allocation_slot_or_io": [
+      "borrowed query width: query.len() == authenticated pages.dimensions() else Invalid(\"search admission\") (no allocation; huge slices are only length-compared)",
+      "allocation-free f64 squared-norm scan of the borrowed query, the cosine_vector rule: non-finite or <= 0 -> Plane(Invalid(\"cosine vector norm\")) (zero/NaN/inf are NEVER resource outcomes)",
+      "discovery mode must be Semantic: Graph is explicitly unsupported by this arm (Invalid(\"direct closure requires semantic discovery\")); the existing helper does cap each walk's unit count, so no unboundedness claim is made, only that direct-Graph behavior is untested and unclaimed",
+      "top_k in 1..=rows and exclusion roster sorted-unique with len*8 <= already_pinned_bytes (Invalid(\"search admission\"))",
+      "limits > 0 (Invalid(\"direct closure limits\")) and, for diagnostic calls only, max_query_scratch_bytes >= TwoBitPlanTrace::scratch_bytes(rows) (Invalid(\"diagnostic scratch\"))",
+      "RESOURCE classification last: checked modeled-memory arithmetic (Invalid(\"direct closure planner memory\" | \"direct closure query memory\" | \"direct closure memory\") are non-typed), then total_bytes <= cap_bytes else Invalid(\"direct closure memory cap\") = typed ModeledMemory",
+      "then the slot; then, after local discovery and still before any GET, the cover bytes vs max_sq8_bytes else Invalid(\"direct closure byte cap\") = typed PlannedBytes"
+    ],
+    "post_slot_failures": "none from query validity: a malformed query can no longer reach the slot. Remaining post-slot failures are discovery/walk admission errors, the typed byte cap, and authenticated-read failures (Read with SQ8 charges only).",
+    "not_claimed": [
+      "no superset-recall claim (different bridges change the population)",
+      "no mutation support claim (excluded_ids only; search_with_mutations* unchanged)",
+      "no 100M or performance claim"
+    ],
+    "opt_in": "STATELESS: every direct call passes DirectClosureLimits explicitly. Per root scope correction (immediate-1791492889723909128) there is no stored mode, reservation or replacement builder; the research review's 'subtract old reservation' item applies only to stored builder state and is therefore not applicable."
+  },
+  "resource_model": {
+    "resident_bytes": "TwoBitGeneration::modeled_memory_bytes kept whole: metadata*3, codec, graph/router directory, the historical per-query payload and SOURCE budgets, validation page and already_pinned_bytes. NO SOURCE or baseline-query credit.",
+    "direct_planner_bytes": "1_048_576 + TwoBitPlanTrace::scratch_bytes(rows) + 4*D + 512*ceil(rows/256)",
+    "direct_query_bytes": "(3*max_sq8_bytes + direct_planner_bytes + ranking) * max_active_queries, ranking = 256*min(rows, max_sq8_bytes/(D+12)) + 4*D (crate::returned_sq8::query_payload_bytes)",
+    "total_bytes": "resident_bytes + direct_query_bytes",
+    "cap_bytes": "generation limits.max_memory_bytes (not raised; runner MEMORY_CAP 536870912)",
+    "pinned_generations": "a later generation opened with already_pinned_bytes = earlier total_bytes charges the earlier direct-enabled model whole; second.total = first.resident + first.total + direct_query (tested)",
+    "worked_example_D1024_N100000_gets32_bytes52428800_active1": {
+      "units": 3125,
+      "pages": 391,
+      "trace_scratch_bytes": 53304,
+      "planner": 1306168,
+      "rows_cap": 50606,
+      "ranking": 12959232,
+      "direct_query_bytes": 171551800,
+      "cap_512MiB": 536870912,
+      "max_resident_that_still_fits": 365319112,
+      "note": "resident_bytes is only known from the real open; the startup direct_admission record is authoritative"
+    }
+  },
+  "runner": {
+    "binary": "check_cohere_native_baseline",
+    "cli": "check_cohere_native_baseline CONFIG CONFIG_SHA NEW_OUTPUT",
+    "config_schema": "borsuk-cohere-native-baseline-config-v3",
+    "result_schema": "borsuk-cohere-native-baseline-result-v3",
+    "old_formats": "v2/v1 markers refuse by name in validate_config ('older formats refuse'); a v2-shaped config also fails to parse (serving missing). The compare_native_replay example reads historical v1/v2 records only and is untouched.",
+    "serving_required_no_default": {
+      "baseline": {
+        "serving": {
+          "mode": "baseline"
+        }
+      },
+      "direct_closure": {
+        "serving": {
+          "mode": "direct_closure",
+          "max_sq8_bytes": "usize",
+          "max_sq8_gets": "usize"
+        }
+      },
+      "strictness": "serde internally tagged, deny_unknown_fields; Baseline is an empty STRUCT variant so extra keys are rejected (a unit variant would silently ignore them)",
+      "sanity_bounds": "direct: max_sq8_bytes in 1..=536870912, max_sq8_gets in 1..=128; fetch_parallelism stays 16|32",
+      "open_limits_both_modes": "unchanged: max_query_bytes 16773120, max_query_gets 32, max_source_bytes 67108864, max_source_gets 128, max_active_queries 1, max_memory_bytes 536870912, scratch = 532480 + TwoBitPlanTrace::scratch_bytes(rows); direct caps never relax them"
+    },
+    "proposed_direct_gate_config_values": {
+      "serving": {
+        "mode": "direct_closure",
+        "max_sq8_bytes": 52428800,
+        "max_sq8_gets": 32
+      },
+      "fetch_parallelism": 32,
+      "note": "from the method doc; root still owns preregistration"
+    },
+    "phase_order_direct": [
+      "identity",
+      "bound_inputs",
+      "source_binding",
+      "generation_open",
+      "startup",
+      "direct_admission",
+      "query*",
+      "all_queries_sealed",
+      "recall*",
+      "terminal"
+    ],
+    "new_record_fields": {
+      "identity": [
+        "serving"
+      ],
+      "bound_inputs": [
+        "serving"
+      ],
+      "startup": [
+        "serving"
+      ],
+      "direct_admission": {
+        "limits": "serving",
+        "memory": "DirectClosureMemory",
+        "admitted": "bool",
+        "truth_opened": false
+      },
+      "query": {
+        "serving": "object",
+        "source_nomination_skipped": "bool; true only in direct mode",
+        "plan": {
+          "selected_pages": "[usize]",
+          "ranges": "[[start,end]]",
+          "planned_bytes": "usize",
+          "target_pages": "usize",
+          "target_shortfall": "usize",
+          "primary_pages_retained": "usize",
+          "covered_pages": "usize",
+          "bridge_pages": "usize"
+        },
+        "unchanged": "returned, charges{router,source,sq8}, sum, stages, trace, transport, query_wall_ns, query_process_cpu_ns",
+        "planning_scope": "\"direct_cover_only\" | \"source_nomination_and_cover\" (what stages.planning measures)"
+      },
+      "query_failure": {
+        "resource_rejection": "null | \"modeled_memory\" | \"planned_bytes\""
+      },
+      "MEASURED summary": [
+        "serving",
+        "direct_memory"
+      ]
+    },
+    "direct_invariants_enforced_each_query": "source_stats == default, router_stats == default and source_nomination_skipped == true, else INVALID",
+    "terminal_status": {
+      "MEASURED": {
+        "exit_code": 0
+      },
+      "INVALID": {
+        "exit_code": 2,
+        "meaning": "malformed config/format, authentication, transport, accounting, parity, output or any non-resource error"
+      },
+      "RESOURCE_REJECT": {
+        "exit_code": 3,
+        "meaning": "valid input refused by an ENFORCED library cap: direct modeled memory over cap (before any query) or planned cover bytes over max_sq8_bytes",
+        "fields": [
+          "status",
+          "complete=false",
+          "resource_rejection",
+          "stage",
+          "error",
+          "completed_queries",
+          "all_queries_sealed",
+          "truth_opened",
+          "charges",
+          "sum",
+          "binding_charge",
+          "direct_memory",
+          "transport_last_boundary",
+          "scope",
+          "host_oom_or_deadline_inferred=false",
+          "physical_s3_measured=false",
+          "external_gate_required=true"
+        ],
+        "never_sealed_never_reduced": true
+      },
+      "hard_error_path": "main's Err branch still prints INVALID and exits 2",
+      "host_oom_deadline": "NOT classified: the runner cannot observe them and an exit status never implies them; root must prove enforcement from cgroup evidence"
+    },
+    "root_decision_note": "typed library refusals are generic: planned_bytes and modeled_memory are machine-readable RESOURCE_REJECT reasons, not fixture verdicts. For the fixed preregistered fixture the replay predicts every closure below 50 MiB, so a planned_bytes refusal with matching inputs but contradictory closure/range costs is INVALID parity/code evidence; a true enforced memory/deadline failure is candidate rejection only after environment proof. Root adjudicates from query_failure + plan evidence; no exit-code inference."
+  },
+  "tests_added_unverified": {
+    "qualified_lib_test_names": [
+      "two_bit_generation::source_walk_tests::direct_bridge_counterexample_changes_population_and_winner_pure",
+      "two_bit_generation::source_walk_tests::native_direct_closure_cold_oracle_zero_source_memory_and_caps",
+      "two_bit_generation::source_walk_tests::native_direct_closure_real_planner_bridge_counterexample_changes_winner",
+      "two_bit_generation::source_walk_tests::native_direct_closure_shares_the_query_slot_with_ordinary_search_and_drains",
+      "two_bit_generation::source_walk_tests::native_direct_closure_tiny_widths_tail_ties_admission_and_authenticated_failures",
+      "two_bit_generation::source_walk_tests::direct_closure_rejects_graph_discovery_before_any_io"
+    ],
+    "qualified_bin_test_names": [
+      "tests::serving_mode_and_format_marker_are_required_explicit_and_strict",
+      "tests::actual_direct_closure_queries_match_the_baseline_control_with_zero_source",
+      "tests::direct_resource_rejections_are_terminal_machine_readable_and_distinct_from_invalid"
+    ],
+    "coverage": {
+      "lib (two_bit_generation::source_walk_tests)": [
+        "direct_bridge_counterexample_changes_population_and_winner_pure: {0,5,15} vs {0,5,8,11,15} at 2 GETs, partial final page, literal ranges and bytes, independent smallest-gap cover, pages 1..=4 vanish, the winning page-2 rows vanish; production rank_returned_ranges vs an independent scalar f32 reference on both populations",
+        "native_direct_closure_cold_oracle_zero_source_memory_and_caps: real builder objects over the cold HTTP fixture (65,536 rows, D32, gapped closure): zero SOURCE/leaf requests, full ordered request identity equals the independent cover, stats and transport parity, k=50 scalar oracle over every fetched row with literal ids/ordinals/score bits and id-tie-against-ordinal-order, f64 geometric cross-check, exact memory arithmetic, memory cap-1 and exact, byte cap-1, a 1-GET cover and its cap-1, exclusions and roster refusals, independence from the clamped max_query_*, a second generation pinned over the first (exact model and cap-1), ordinary search unchanged before and after",
+        "native_direct_closure_real_planner_bridge_counterexample_changes_winner: crafted checked walks through direct_closure_plan on the real generation, then real authenticated fetch and rank for both covers; page 3 supplies every winner of the first cover and none of the second",
+        "native_direct_closure_shares_the_query_slot_with_ordinary_search_and_drains: direct-first and ordinary-first on the single slot with held bodies and no cross-stage GET; early digest + delayed stream failure + held sibling drain with exact read_stats, one slot, request and transport parity",
+        "native_direct_closure_tiny_widths_tail_ties_admission_and_authenticated_failures: 513-row semantic generations at D=24 and D=40 (two full pages plus a one-row tail, exact ties, nonidentity IDs, nonzero codes, nonunit query): full 513-row oracle, top-50, exclusions; zero-I/O refusals for short/wide/huge/zero/NaN/inf queries, top_k 0 and rows+1, zero and overflowing caps, trace scratch-1, memory cap-1/exact, byte cap-1; precondition/etag/size/range/corrupt/short/long SQ8 faults keep their charge and release the slot; a wrong trusted root refuses at open",
+        "direct_closure_rejects_graph_discovery_before_any_io"
+      ],
+      "runner (check_cohere_native_baseline tests)": [
+        "serving_mode_and_format_marker_are_required_explicit_and_strict",
+        "actual_direct_closure_queries_match_the_baseline_control_with_zero_source: tiny257 D1024 actual builder/store; independent axis oracle; same ranking and bits as the SOURCE-nominating control; exact memory arithmetic; zero SOURCE/router charges",
+        "direct_resource_rejections_are_terminal_machine_readable_and_distinct_from_invalid"
+      ]
+    },
+    "repair_additions": [
+      "tiny test: zero, NaN, -inf, wrong-width, top_k 0 and rows+1 each combined with a memory cap one byte short must be NON-resource errors with zero I/O and an intact slot, then the valid query is the typed ModeledMemory refusal",
+      "tiny test: zero/NaN/inf queries are now allocation-free admission errors (raw Plane error, no stages)",
+      "runner tests: planning_scope asserted in both modes; direct planning interval reported with its scope while the SOURCE interval stays (0,0)"
+    ],
+    "existing_controls": "all pre-existing test bodies are unchanged except config_value() gaining {\"serving\":{\"mode\":\"baseline\"}} and the schema constant bump; execute_paths/execute_paths_with became #[cfg(test)] wrappers over the new execute_paths_status"
+  },
+  "uncertain_expectations_for_first_compile_and_run": [
+    "class-fixture tests assume the cold-fetch construction yields a closure of more than 32 runs (so a 32-GET cover bridges) and fewer than 256 covered pages; derived from the existing test's source_cover.len() > 32",
+    "tiny fixtures assume one semantic leaf, trace.semantic_units == 0..17, and that D=24 and D=40 build",
+    "serde: an internally tagged enum with an empty struct variant rejects extra keys (tested by the strictness test)",
+    "cold_http_fixture hold/release semantics: arm(None) holds stages 0 and 1 until release(stage)",
+    "tokio::select! sequencing in the slot test (50 ms sleep windows)"
+  ],
+  "remote_command_contract": {
+    "owner": "root",
+    "source": "fetch the exact final commit; verify the two git_blob values in owned_files and that git diff --name-only against base 812fea2b lists only those two paths; the full-source before/after match must hold",
+    "environment": "real env-unset (no RUSTFLAGS/CARGO_* shims); locked; serial: CARGO_BUILD_JOBS=1 and --test-threads=1 everywhere",
+    "ordered_commands": [
+      "rustfmt --edition 2024 --check crates/borsuk/src/two_bit_generation.rs crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+      "env CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk --lib --bin check_cohere_native_baseline",
+      "env CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests:: -- --test-threads=1",
+      "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1"
+    ],
+    "literal_actual_test_build_command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+    "test_build_script_behavior": "scripts/check_rust_test_build.sh runs `env CARGO_BUILD_JOBS=$JOBS cargo test --locked --workspace --all-targets --no-run`; a set BORSUK_TEST_BUILD_COMMAND replaces it with true/false (test-only), hence the explicit env -u",
+    "record": "command, revision, exit status for each step (AGENTS.md delivery policy)",
+    "fail_handling": "send concrete compiler/test repairs to this same worker; it holds and will not agent_complete without explicit root disposition"
+  },
+  "local_hold": "HOLD SAME worker. Not completed, archived, merged or pushed. No local cargo, rustc or native run.",
+  "known_open_items_for_root": [
+    "python/launcher/validator configs and docs that emit runner config v2 (for example the cold-source-utilization a0001/a0002 templates) need regeneration as v3 with serving; out of OWN2",
+    "Graph discovery is explicitly unsupported by this arm and refused with a test; no claim is made either way about direct-Graph behavior",
+    "the runner's caller_bytes pinned model is unchanged; direct admission is additive on the library model; no SOURCE credit was applied anywhere",
+    "an unchanged baseline A pass on the exact candidate revision must reproduce all 1000 closed B1/B2 returned IDs and score bits before comparing direct (serving baseline with unchanged limits); root-owned",
+    "no partial-run recall/performance acceptance; truth stays unopened until the complete durable query seal (runner behavior unchanged)"
+  ],
+  "commits": {
+    "base": "812fea2b882260e80856d972873aedd5004a4666",
+    "checkpoint_unverified": "bdc7be721d9986d2726d6491dd189db1e971ce8e",
+    "repair_unverified": "92102c7d03a485bd33e1eac1e27cb4f64fb7c09e",
+    "final": "92102c7d03a485bd33e1eac1e27cb4f64fb7c09e",
+    "note": "The bdc7be72 checkpoint is preserved and distinct; the repair commit sits directly on it and touches only the same two owned files."
+  },
+  "checkpoint_commit": "bdc7be721d9986d2726d6491dd189db1e971ce8e",
+  "diffstat_checkpoint_to_final": [
+    ".../borsuk/src/bin/check_cohere_native_baseline.rs | 15 ++++",
+    " crates/borsuk/src/two_bit_generation.rs            | 92 +++++++++++++++++-----",
+    " 2 files changed, 88 insertions(+), 19 deletions(-)"
+  ],
+  "consumed_evidence": {
+    "reviews": {
+      "reconciliation_commit": "276f68cad9780547526762743ef31b690904fd40",
+      "addendum_commit": "3d4b14365a7412a6a9110246d858b8d3f93d30a9",
+      "engineering_review": {
+        "path": "docs/research/performance-architecture-20260930/cohere1024/cold-source-utilization/direct-closure-engineering-review.json",
+        "git_blob_at_reconciliation": "ad4a9b15a0a2bda9b222fb87ffe3a8cf0d89b795",
+        "consultation": "c7f35cb8c8e44267",
+        "group": "551e2ec7e1d0418c",
+        "read_in_full": true
+      },
+      "research_review": {
+        "path": "docs/research/performance-architecture-20260930/cohere1024/cold-source-utilization/direct-closure-research-review.json",
+        "git_blob_at_reconciliation": "1d4687fae4bf5daf9ea128c61833ff3f78c53c84",
+        "consultation": "052d80843e694a39",
+        "read_in_full": true
+      },
+      "reconciliation": {
+        "path": "docs/research/performance-architecture-20260930/cohere1024/cold-source-utilization/direct-closure-review-reconciliation.md",
+        "git_blob_at_reconciliation": "a736419a673bebca9b6c34167f0102536174a5f3",
+        "git_blob_at_addendum": "e7d9713fdf2ca6b01dcde62be26f225bf8252d3c",
+        "read_in_full": true,
+        "authority": "authoritative where reviewers disagree"
+      }
+    },
+    "messages_from_borsuk_prod_ready_v9": [
+      {
+        "id": "1791490461397538519-3122928",
+        "topic": "provisioning/IO reminder: exact base, no local cargo",
+        "status": "consumed; /data checked (211G free), no extra checkout"
+      },
+      {
+        "id": "1791490695796013500-3122928",
+        "topic": "two source-contract hazards: bind width/finite-nonzero before allocation or I/O; selected_pages = required closure",
+        "status": "consumed; implemented and tested"
+      },
+      {
+        "id": "1791490810416704991-3122928",
+        "topic": "engineering critique additions: RESOURCE_REJECT vs INVALID, early validation incl. scratch/trace, explicit trace semantics, range identity, oracle k>10, disappearing-bridge winner, memory/pin/semaphore tests, default invariance, startup SOURCE HEAD",
+        "status": "consumed; implemented and tested"
+      },
+      {
+        "id": "1791491109338205095-3122928",
+        "topic": "research critique requirements (full text re-delivered and read; the first delivery was truncated at its tail)",
+        "status": "consumed in full; checked item by item against commits bdc7be72 + 92102c7d: explicit direct bytes/GETs go into the shared scorer (never self.limits); existing pure cover reused (plan_two_bit_source_cover); selected_pages = required closure; serving mode + exact plan.ranges in BOTH arms' query receipts; direct trace/receipt marks source_nomination_skipped, keeps production semantic unit/leaf/seed identities, leaves nomination primary_page unset (planning interval real, labelled planning_scope; SOURCE interval (0,0)); builder-replacement clause not applicable (stateless API); Graph rejected explicitly with one refusal test; no dataset specialization: geometry stays within the existing profile ceilings enforced at open (Native100k: rows <= 100000, dimensions <= 1024) and tests use D=24/32/40; oracle rows/ranges are literal or independently computed (manual tail-clip arithmetic in the pure test, independent smallest-gap cover plus recorded wire ranges elsewhere), not derived solely from plan.ranges/scorer; private production planner-from-walks seam (direct_closure_plan) used for the controlled bridge counterexample plus actual discovery->cover->read->scalar tests; exclusions are offered, so ordered-roster admission and oracle tests exist; ordinary and mutation paths untouched; root owns the single candidate-revision baseline A pass and the direct B run; typed resource errors stay generic and a planned_bytes hit inconsistent with the authenticated predicted ranges on the frozen workload is INVALID parity (root adjudicates)"
+      },
+      {
+        "id": "1791491123365311386-3122928",
+        "topic": "full reviews + reconciliation committed at 276f68ca",
+        "status": "consumed: both review JSON results and the reconciliation read in full from exact Git blobs"
+      },
+      {
+        "id": "1791491306036422344-3122928",
+        "topic": "error-priority: width, then allocation-free finite/positive norm scan, then top-k etc, then resource checks; combined invalid-norm + short-memory test",
+        "status": "consumed; implemented in admit_direct_closure and tested"
+      },
+      {
+        "id": "1791491505822614065-3122928",
+        "topic": "timing clarification: real direct cover planning interval allowed with planning_scope=direct_cover_only; unset primary_page with skipped marker acceptable",
+        "status": "consumed; implemented in the runner receipt and asserted"
+      },
+      {
+        "id": "1791492737646692336-682739",
+        "topic": "contract assurance: literal serial script command, qualified names, SHAs, consumed evidence",
+        "status": "consumed in this contract"
+      },
+      {
+        "id": "immediate-1791492889723909128-682739",
+        "topic": "scope correction: keep stateless DirectClosureLimits API, no builder state; minimal repair on the bdc7 checkpoint",
+        "status": "consumed; an uncommitted builder rewrite was discarded, nothing of it is in any commit"
+      }
+    ],
+    "root_addendum_3d4b1436": "read: planning_scope labelling, stateless limits are a valid opt-in, allocation-free validity precedes resource classification",
+    "not_launched": "no additional reviews, children, consultations, jobs or native runs"
+  }
+}
