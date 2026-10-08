@@ -1,0 +1,11 @@
+Reviewed committed `811c4217` against `0e65fc5d` using `git show`. No edits, native execution, data access, or network activity.
+
+- **P2 — Known deterministic test failure remains.** [check_semantic_router_scorer.rs:593](/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk/src/bin/check_semantic_router_scorer.rs:593) requires positive router bytes, while the new path always returns zero router charges. The proposed `== 0` repair is correct; retain the failed-source-GET and zero-SQ8 assertions. Comparing the entire router charge against `Sq8ReadStats::default()` would be stronger.
+
+- **Comparison limitation — Trace equality does not independently prove physical range equality.** [compare_native_replay.rs:1591](/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk/examples/compare_native_replay.rs:1591) compares ordered results, recall, trace hashes and aggregate charges. [TwoBitPlanTrace:573](/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk/src/two_bit_generation.rs:573) contains nomination information, but no actual source/SQ8 ranges. Different range plans with equal request counts and bytes could escape this comparison. The unchanged planner source and authored exact-read parity tests support the intervention; the reducer alone cannot establish physical-plan parity.
+
+- **Release limitation — Provenance and ABBA acceptance remain external.** Producer commit/archive fields receive syntax/distinctness checks, not verification against compiled artifacts. The reducer accepts two runs and explicitly leaves `performance_pass_claim` false. It cannot establish four distinct ABBA passes, consistent arm identities across both pairs, or the preregistered latency/QPS screen.
+
+I found **no additional concrete serving correctness or authentication defect**. Membership hash, source binding, per-leaf counts/rows, directory construction bounds and cumulative generation charges are checked; sorted union and seed completion reuse the existing semantics. Publication still validates original coefficients and prototypes.
+
+**Release remains unverified.** Run the required native correctness, compilation, Clippy and workspace test-build gates on the exact revision containing the test repair.

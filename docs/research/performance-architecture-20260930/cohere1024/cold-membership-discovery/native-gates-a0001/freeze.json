@@ -1,0 +1,38 @@
+{
+  "status": "FROZEN_NOT_LAUNCHED",
+  "source_preview": "b3262938bda351e8c71cd37d24c05cc3e508e7db",
+  "candidate": "d9a0aa7ceffb005b5660cee7b0061f7278d4b4c2",
+  "root_base": "0e65fc5d5c9bc1a1fa0826c87bd4e6138007e3bb",
+  "native_identity": "844234a8eece7de59134d9f14bae9cc55291513c45f6d565f061f838d10ef677",
+  "native_count": 415,
+  "support_count": 2450,
+  "archive_sha256": "2a7df38a823316b01e6be2870b2099a5333f6525b3c0e9d3e75604ef993898ee",
+  "archive_bytes": 13227987,
+  "cpu": 2,
+  "memory_bytes": 8589934592,
+  "swap_bytes": 0,
+  "pids": 512,
+  "compiler_jobs": 1,
+  "native_seconds": 7200,
+  "machine_seconds": 9000,
+  "spot_max_bid_usd_per_hour": 0.5,
+  "reservation_usd": {
+    "compute": 1.25,
+    "ancillary": 0.15,
+    "total": 1.4
+  },
+  "purpose": "compiler/synthetic native correctness only; no ANN performance measurement",
+  "support_sha256": {
+    "gates.sh": "e30ff6176dae64a7a71a1b028313ed80132056d4831e44c77222429ed6635808",
+    "user-data.sh": "af6022ee06ead1c14b26285f8aa8b40c95280eef6ee37986d5f12c11a73e5911",
+    "run-instances-pending.json": "2caefd241cf0f88b81ae9580211b20c5f14eab27667c13ddffea36304fc2b1c4",
+    "native-source.json": "8d0c16c06b570df22f1f69888fe4728e7e81621ffa841846b4b0a36c969738a2",
+    "mandatory-tests.json": "8b647f683b541800438cd333c8e0e6efa7e27f9e4ae4f8862d447816cb2fc784",
+    "source-contract.json": "d300a3e7ae78565d109505cd97db1299d8c7e2d5dba5a9018a46aff0030c2817",
+    "preview-source.json": "99855454139a2bdbde2930ad47adde0094f208d4c590085b71da79182d01fa5d",
+    "review-reconciliation.json": "75461d737262440d9f69c52e3c0ca1cb50aa7f7ef3fe2cf8c0a66081b1b3f03d"
+  },
+  "review_group": "107cf1d64a334d9b",
+  "frozen_at": "2026-10-08T02:32:58.410878+00:00",
+  "runtime_and_performance_claim": false
+}

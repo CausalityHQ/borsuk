@@ -1,0 +1,219 @@
+{
+  "status": "SOURCE_ONLY_ABBA_REPAIR_UNVERIFIED",
+  "candidate_commit": "d9a0aa7ceffb005b5660cee7b0061f7278d4b4c2",
+  "commit_parent_verified": "811c4217b6a2a251b69ab2b7248254e44ff86d71",
+  "commit_identity": "Roman Bartusiak <riomus@gmail.com>; unchanged author and committer, no attribution trailers",
+  "working_tree_clean": true,
+  "base_commit": "0e65fc5d5c9bc1a1fa0826c87bd4e6138007e3bb",
+  "owned_files": [
+    "crates/borsuk/src/semantic_unit_router.rs",
+    "crates/borsuk/src/two_bit_generation.rs",
+    "crates/borsuk/examples/compare_native_replay.rs"
+  ],
+  "base_sha256": {
+    "crates/borsuk/src/semantic_unit_router.rs": "b9abd271db66d45665304e72dc1a61b176fdbc47cd6f1a5618868a3c7443d0c2",
+    "crates/borsuk/src/two_bit_generation.rs": "bc0bc1b2b1ec8314128475e9da06003b93e9e4faea363dd345fba357d24f6c1c",
+    "crates/borsuk/examples/compare_native_replay.rs": "63de4283a328572c358eeb85b940c19a55f451b725e142551ae00d0c8db2e243"
+  },
+  "apis": {
+    "nomination": "SemanticUnitRouter::nominate_selected(&self, leaf_ids: &[usize]) -> Result<Nomination>",
+    "directory_capacity": "pub(crate) fn directory_allocation_bytes(units: usize, leaves: usize) -> Result<(usize, usize)>; persistent then construction peak",
+    "serving": "TwoBitGeneration::local_walks shared by local and paged planning; zero router GET/HEAD and leaf_peak_inflight",
+    "reducer": "compare_native_replay --membership-abba-v2 CONFIG CONFIG_SHA256 NEW_OUTPUT_JSON",
+    "reducer_config_schema": "borsuk-membership-abba-native-reduction-config-v1",
+    "reducer_report_schema": "borsuk-membership-abba-native-reduction-v1",
+    "reducer_config_fields": {
+      "schema": "borsuk-membership-abba-native-reduction-config-v1",
+      "runs": "Exactly four CompletedConfig objects in A1/B1/B2/A2 order. Each pins input path/bytes/SHA256 plus exact expected_identity and expected_bound_inputs.",
+      "runtime_config_sha256": "Required attempt-specific runtime config SHA256, identical to all four emitted identities. Root freezes a unique scratch_parent in the actual runtime config.",
+      "producer_source_commits": "[control, candidate] distinct 40-character lowercase Git commits; external root provenance authority.",
+      "producer_source_archive_sha256": "[control, candidate] distinct SHA256s; source/archive/binary binding is verified by external root frozen qualification receipts."
+    },
+    "reducer_allowed_identity_deltas": [
+      "binary_sha256",
+      "generation_source_sha256",
+      "router_source_sha256"
+    ],
+    "reducer_same_authority": "A1/A2 identities equal; B1/B2 identities equal. Between arms only binary_sha256, generation_source_sha256, router_source_sha256 differ. All four use the pinned runtime_config_sha256 and byte-for-byte-equivalent complete bound_inputs, width32/source_cache=off.",
+    "reducer_screen": "For BOTH B1-A1 and B2-A2: candidate p90*100 <= control p90*95; candidate p95*100 <= control p95*95; candidate total wall <= control total wall (1000 queries each, reciprocal serial QPS no regression). Integer decisions; historical comparison helper/threshold unchanged.",
+    "reducer_evidence_limits": "Nomination trace parity does not prove physical range parity. Root native exact-request fixture and unchanged source/SQ8 planner supply physical-plan evidence. Producer provenance and actual chronological execution order explicitly remain external root qualification/lifecycle receipt authority."
+  },
+  "mandatory_native_tests": [
+    {
+      "target": "--lib",
+      "name": "semantic_unit_router::tests::membership_directory_parity_and_capacity"
+    },
+    {
+      "target": "--lib",
+      "name": "semantic_unit_router::tests::refreshed_hashes_cannot_hide_bad_membership_partition_or_nonfinite_values"
+    },
+    {
+      "target": "--lib",
+      "name": "semantic_unit_router::tests::fresh_binary_root_selected_leaves_and_scattered_closure_without_training"
+    },
+    {
+      "target": "--lib",
+      "name": "two_bit_generation::source_walk_tests::native_full_sixteen_leaf_router_validation_d1024_and_d768"
+    },
+    {
+      "target": "--lib",
+      "name": "two_bit_generation::source_walk_tests::native_full_sixteen_leaf_generation_admission_d1024_and_d768"
+    },
+    {
+      "target": "--lib",
+      "name": "two_bit_generation::source_walk_tests::native_fresh1m_membership_nomination_parity_and_bounds"
+    },
+    {
+      "target": "--lib",
+      "name": "two_bit_generation::source_walk_tests::native_membership_discovery_leaf_authorized_parity"
+    },
+    {
+      "target": "--lib",
+      "name": "two_bit_generation::source_walk_tests::native_cold_fetch_parallelism_parity_and_drain"
+    },
+    {
+      "target": "--lib",
+      "name": "two_bit_generation::source_walk_tests::native_100k_d1024_generation_serving_scalar_oracle"
+    },
+    {
+      "target": "--lib",
+      "name": "two_bit_generation::source_walk_tests::semantic_d768_diagnostic_scratch_preserves_production_search"
+    },
+    {
+      "target": "--lib",
+      "name": "two_bit_generation::source_walk_tests::semantic_object_store_parity"
+    },
+    {
+      "target": "--example compare_native_replay",
+      "name": "tests::membership_abba_v2_parity_screens_and_refusals"
+    },
+    {
+      "target": "--example compare_native_replay",
+      "name": "tests::paired_v2_sealed_native_rows_statistics_and_create_only"
+    },
+    {
+      "target": "--example compare_native_replay",
+      "name": "tests::paired_v2_rejects_authenticated_semantic_plan_and_charge_changes"
+    },
+    {
+      "target": "--example compare_native_replay",
+      "name": "tests::paired_v2_rejects_pins_selectors_unknowns_and_failures"
+    },
+    {
+      "target": "--example compare_native_replay",
+      "name": "tests::paired_v2_rejects_duplicate_truncated_unsealed_and_unpinned_files"
+    },
+    {
+      "target": "--example compare_native_replay",
+      "name": "tests::completed_v2_quantiles_stages_and_create_only_report"
+    },
+    {
+      "target": "--example compare_native_replay",
+      "name": "tests::completed_v2_rejects_prefix_seal_and_full_file_tamper"
+    },
+    {
+      "target": "--example compare_native_replay",
+      "name": "tests::completed_v2_rejects_incomplete_reordered_and_unknown_rows"
+    },
+    {
+      "target": "--example compare_native_replay",
+      "name": "tests::completed_v2_rejects_pins_sums_and_transport_contradictions"
+    },
+    {
+      "target": "--example compare_native_replay",
+      "name": "tests::nearest_rank_and_sequential_qps_literal_golden"
+    },
+    {
+      "target": "--example compare_native_replay",
+      "name": "tests::four_authenticated_native_runs_and_completed_no_win"
+    },
+    {
+      "target": "--example compare_native_replay",
+      "name": "tests::invalid_tampered_out_of_order_and_semantic_mismatch"
+    },
+    {
+      "target": "--example compare_native_replay",
+      "name": "tests::bounded_files_reject_links_fifo_oversize_and_duplicate_evidence"
+    }
+  ],
+  "local_checks": "Only bounded rustfmt, git diff, source checks; CPU1/256MiB/noSwap/120s. Native tests UNRUN.",
+  "root_remote_gates": [
+    "cargo test --locked -p borsuk --lib semantic_unit_router::tests",
+    "cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests",
+    "cargo test --locked -p borsuk --bin check_semantic_router_scorer",
+    "cargo test --locked -p borsuk --bin check_cohere_native_baseline",
+    "cargo test --locked -p borsuk --example compare_native_replay",
+    "cargo build --locked --release -p borsuk --bin check_cohere_native_baseline --example compare_native_replay --example two_bit_http",
+    "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND CARGO_BUILD_JOBS=1 BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  ],
+  "disposition": "Hold this same worker for root compiler/critique repairs. No completion/archive until explicit parent disposition; no merge/push/operator/paid work.",
+  "candidate_sha256": {
+    "crates/borsuk/src/semantic_unit_router.rs": "0b81f0c6442b1dd648716bc475a6b33016125b96360acad0c9d582cd9a10a2bc",
+    "crates/borsuk/src/two_bit_generation.rs": "c5dfea328b1e6b7600a38b9e862059f5cf507dfa1e32518340470afc3d17192f",
+    "crates/borsuk/examples/compare_native_replay.rs": "67d1d77e7813f1e7321bfba65788291fcb6cf69119ac40e75ab89e56b11a8e57"
+  },
+  "local_check_receipts": [
+    {
+      "command": "systemd-run --user --scope --quiet -p CPUQuota=100% -p MemoryMax=256M -p MemorySwapMax=0 timeout 120s rustfmt --edition 2024 OWN3",
+      "exit": 0
+    },
+    {
+      "command": "systemd-run --user --scope --quiet -p CPUQuota=100% -p MemoryMax=256M -p MemorySwapMax=0 timeout 120s sh -c 'rustfmt --edition 2024 --check OWN3 && git diff --check && git diff --name-only && sha256sum OWN3'",
+      "exit": 0,
+      "changed_files_exactly_OWN3": true
+    },
+    {
+      "command": "systemd-run --user --scope --quiet -p CPUQuota=100% -p MemoryMax=256M -p MemorySwapMax=0 timeout 120s rustfmt --edition 2024 crates/borsuk/examples/compare_native_replay.rs",
+      "exit": 0
+    },
+    {
+      "command": "systemd-run --user --scope --quiet -p CPUQuota=100% -p MemoryMax=256M -p MemorySwapMax=0 timeout 120s sh -c 'rustfmt --edition 2024 --check crates/borsuk/examples/compare_native_replay.rs && git diff --check && git diff --name-only && sha256sum OWN3'",
+      "exit": 0,
+      "changed_files": [
+        "crates/borsuk/examples/compare_native_replay.rs"
+      ]
+    }
+  ],
+  "native_status": "ALL NATIVE TESTS UNRUN BY CHILD. No Cargo/rustc/native/data/GT/network/cloud/new consult/review jobs/children/operator/push/merge executed. Read both existing full review reports. Same worker held for root exact-source native gates.",
+  "root_owned_followup": {
+    "file": "crates/borsuk/src/bin/check_semantic_router_scorer.rs:593",
+    "finding": "Root owns replacing the existing positive-router-byte assertion with assert_eq!(error.router_stats(), Sq8ReadStats::default()); keep source-failure and zero-SQ8 assertions. Outside OWN3 and left untouched.",
+    "parent_message_id": "1791424503966962307-2965865"
+  },
+  "directory_accounting": {
+    "persistent": "4 * units + 8 * (leaves + 1)",
+    "construction_peak": "persistent + 16 * leaves; includes counts/cursor + row counts",
+    "generation": "Charged before router allocation; conservative root/prototype and concurrent query allocations preserved, removed unused leaf buffers. already_pinned_bytes added to full generation admission.",
+    "example_100k_units3125_leaves76": {
+      "persistent_payload_bytes": 13116,
+      "construction_payload_bytes": 14332
+    },
+    "runtime_memory_claim": false,
+    "scale10m": "UNQUALIFIED; no admission changes"
+  },
+  "fixtures": {
+    "native_parity": "Actual builder/open/source/SQ8 production APIs for rows1/33/257/16385, D2, original leaf-authorized nomination and sorted score-bit/trace/range/charge comparison; no remote leaf object plus attempt spy.",
+    "fresh1m": "Original full Fresh1m metadata fixture retained; replaced obsolete leaf scheduling expectations with membership nomination/trace/bounds parity and leaf validation corruption refusal. Cold source/SQ8 parallelism/drain fixture retained at widths16/32.",
+    "publication": "Original full coefficient/prototype corruption refusal tests preserved unchanged.",
+    "reducer": "Four independently pinned sealed 1000-query runs; valid pass plus exact5% thresholds, p90-only/p95-only failure, reciprocal QPS equality and 1ns regression, either pair fails, same-file and copied-output reuse, same-arm drift/unapproved component/config/input bindings, failed/unsealed/truncated evidence, and ordinal999 candidate/control parity changes. All authored UNRUN."
+  },
+  "root_broad_gate_scope": "Parent owns exact-source router/generation/source/store/ranges/baseline/reducer/retained_semantic_ integration tests, release baseline bin + compare_native_replay + two_bit_http, workspace correctness/suspicious Clippy and the actual environment-unset workspace test-build.",
+  "parent_gate_correction_message": "1791424102785859627-2965865",
+  "prior_source_snapshot": "811c4217b6a2a251b69ab2b7248254e44ff86d71",
+  "repair_changed_files": [
+    "crates/borsuk/examples/compare_native_replay.rs"
+  ],
+  "review_repair": {
+    "parent_message_id": "1791425844800866520-2965865",
+    "group": "107cf1d64a334d9b",
+    "full_reports_read": [
+      "/data/target/borsuk-cold-membership-native/research_critic.md",
+      "/data/target/borsuk-cold-membership-native/engineering_critic.md"
+    ],
+    "library_edits": false,
+    "new_review_jobs": false,
+    "old_modes": "paired-v2/completed-v2/historical logic unchanged; shared stage description corrected as requested.",
+    "previous_unreleased_membership_pair_mode": "replaced; no alias or compatibility mode"
+  }
+}

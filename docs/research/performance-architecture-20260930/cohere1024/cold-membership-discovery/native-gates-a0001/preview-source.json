@@ -1,0 +1,18 @@
+{
+  "status": "EXACT_SOURCE_PREVIEW_NATIVE_UNRUN",
+  "candidate": "d9a0aa7ceffb005b5660cee7b0061f7278d4b4c2",
+  "preview": "b3262938bda351e8c71cd37d24c05cc3e508e7db",
+  "tree": "0c94cdf70a2cdc28d76b20e8411ee8bc7df2b888",
+  "native_file_count": 415,
+  "support_file_count": 2450,
+  "native_identity_encoding": "sorted path NUL SHA LF",
+  "native_identity_sha256": "844234a8eece7de59134d9f14bae9cc55291513c45f6d565f061f838d10ef677",
+  "archive_sha256": "2a7df38a823316b01e6be2870b2099a5333f6525b3c0e9d3e75604ef993898ee",
+  "archive_bytes": 13227987,
+  "root_fixture_sha256": "efc9db7efca6dd7091d59bcafe714740b5cb1d24edbb9b946b16a40eab0612dd",
+  "review_group": "107cf1d64a334d9b",
+  "execution": false,
+  "archive_members_independently_verified": 2450,
+  "mandatory_name_count": 24,
+  "source_and_runtime_unverified": true
+}

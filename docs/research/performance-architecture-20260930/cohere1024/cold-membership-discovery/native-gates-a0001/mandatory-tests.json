@@ -1,0 +1,98 @@
+[
+  {
+    "target": "--lib",
+    "name": "semantic_unit_router::tests::membership_directory_parity_and_capacity"
+  },
+  {
+    "target": "--lib",
+    "name": "semantic_unit_router::tests::refreshed_hashes_cannot_hide_bad_membership_partition_or_nonfinite_values"
+  },
+  {
+    "target": "--lib",
+    "name": "semantic_unit_router::tests::fresh_binary_root_selected_leaves_and_scattered_closure_without_training"
+  },
+  {
+    "target": "--lib",
+    "name": "two_bit_generation::source_walk_tests::native_full_sixteen_leaf_router_validation_d1024_and_d768"
+  },
+  {
+    "target": "--lib",
+    "name": "two_bit_generation::source_walk_tests::native_full_sixteen_leaf_generation_admission_d1024_and_d768"
+  },
+  {
+    "target": "--lib",
+    "name": "two_bit_generation::source_walk_tests::native_fresh1m_membership_nomination_parity_and_bounds"
+  },
+  {
+    "target": "--lib",
+    "name": "two_bit_generation::source_walk_tests::native_membership_discovery_leaf_authorized_parity"
+  },
+  {
+    "target": "--lib",
+    "name": "two_bit_generation::source_walk_tests::native_cold_fetch_parallelism_parity_and_drain"
+  },
+  {
+    "target": "--lib",
+    "name": "two_bit_generation::source_walk_tests::native_100k_d1024_generation_serving_scalar_oracle"
+  },
+  {
+    "target": "--lib",
+    "name": "two_bit_generation::source_walk_tests::semantic_d768_diagnostic_scratch_preserves_production_search"
+  },
+  {
+    "target": "--lib",
+    "name": "two_bit_generation::source_walk_tests::semantic_object_store_parity"
+  },
+  {
+    "target": "--example compare_native_replay",
+    "name": "tests::membership_abba_v2_parity_screens_and_refusals"
+  },
+  {
+    "target": "--example compare_native_replay",
+    "name": "tests::paired_v2_sealed_native_rows_statistics_and_create_only"
+  },
+  {
+    "target": "--example compare_native_replay",
+    "name": "tests::paired_v2_rejects_authenticated_semantic_plan_and_charge_changes"
+  },
+  {
+    "target": "--example compare_native_replay",
+    "name": "tests::paired_v2_rejects_pins_selectors_unknowns_and_failures"
+  },
+  {
+    "target": "--example compare_native_replay",
+    "name": "tests::paired_v2_rejects_duplicate_truncated_unsealed_and_unpinned_files"
+  },
+  {
+    "target": "--example compare_native_replay",
+    "name": "tests::completed_v2_quantiles_stages_and_create_only_report"
+  },
+  {
+    "target": "--example compare_native_replay",
+    "name": "tests::completed_v2_rejects_prefix_seal_and_full_file_tamper"
+  },
+  {
+    "target": "--example compare_native_replay",
+    "name": "tests::completed_v2_rejects_incomplete_reordered_and_unknown_rows"
+  },
+  {
+    "target": "--example compare_native_replay",
+    "name": "tests::completed_v2_rejects_pins_sums_and_transport_contradictions"
+  },
+  {
+    "target": "--example compare_native_replay",
+    "name": "tests::nearest_rank_and_sequential_qps_literal_golden"
+  },
+  {
+    "target": "--example compare_native_replay",
+    "name": "tests::four_authenticated_native_runs_and_completed_no_win"
+  },
+  {
+    "target": "--example compare_native_replay",
+    "name": "tests::invalid_tampered_out_of_order_and_semantic_mismatch"
+  },
+  {
+    "target": "--example compare_native_replay",
+    "name": "tests::bounded_files_reject_links_fifo_oversize_and_duplicate_evidence"
+  }
+]

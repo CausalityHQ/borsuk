@@ -1,0 +1,51 @@
+{
+  "status": "SOURCE_REPAIRS_RECONCILED_NATIVE_UNRUN",
+  "review_group": "107cf1d64a334d9b",
+  "reviewed_candidate": "811c4217b6a2a251b69ab2b7248254e44ff86d71",
+  "reports": {
+    "engineering_critic.md": {
+      "bytes": 2218,
+      "sha256": "afe37c69bf275323a97b4be02946d7e9a5cca49facb534f9cc10bb87baad6c68"
+    },
+    "research_critic.md": {
+      "bytes": 6447,
+      "sha256": "4dbdfea853c3777be3f681742cd0c35236cfa37102bb5e1a5c15eb06a1bdbbe9"
+    }
+  },
+  "findings": [
+    {
+      "finding": "stale scorer assertion",
+      "action": "root-owned full router Sq8ReadStats::default assertion; source failed GET and zero SQ8 retained",
+      "state": "PREPARED_UNRUN"
+    },
+    {
+      "finding": "two independent pair reports cannot enforce four-run screen",
+      "action": "same worker implements one four-run attempt-bound reduction with per-arm identity consistency and both5percent p90/p95/noQPSregression thresholds",
+      "state": "COMMITTED_NATIVE_UNRUN"
+    },
+    {
+      "finding": "provenance and chronology external",
+      "action": "root exact-source native qualification archive/binary proof and four distinct stage UTC start/end receipts; report external gates explicitly",
+      "state": "PREREGISTERED_UNVERIFIED"
+    },
+    {
+      "finding": "nomination traces do not emit physical ranges",
+      "action": "retain explicit reducer limitation; require actual exact-request production API fixtures and unchanged source/SQ8 planner source",
+      "state": "NATIVE_TESTS_UNRUN"
+    },
+    {
+      "finding": "unused router helpers and retained membership Vec",
+      "action": "defer until cold measurement closes; no causal-confounding library optimization in current arm",
+      "state": "DEFERRED"
+    },
+    {
+      "finding": "discovery stage wording",
+      "action": "same worker corrects generic wording for metadata-only discovery",
+      "state": "COMMITTED_NATIVE_UNRUN"
+    }
+  ],
+  "serving_authentication_blocker_found": false,
+  "release_or_runtime_qualified": false,
+  "repaired_candidate": "d9a0aa7ceffb005b5660cee7b0061f7278d4b4c2",
+  "combined_preview": "b3262938bda351e8c71cd37d24c05cc3e508e7db"
+}
