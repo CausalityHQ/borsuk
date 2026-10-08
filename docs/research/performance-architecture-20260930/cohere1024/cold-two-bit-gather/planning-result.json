@@ -1,0 +1,345 @@
+{
+  "id": "3f2177a1579d4425",
+  "provider": "codex",
+  "model": "gpt-6.1-sol",
+  "effort": "high",
+  "fallbacks": [
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "provider": "claude",
+      "model": "claude-opus-5-5"
+    }
+  ],
+  "agent": "borsuk/prod-ready-v9",
+  "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+  "status": "completed",
+  "runner_started": true,
+  "started_at": 1791446078,
+  "timeout_seconds": 1200,
+  "deadline_at": 1791447278,
+  "budget_usd": null,
+  "prompt_preview": "Read-only planning specialist. Give one actionable plan, risks and a bounded falsifying test; do not edit files.\nRead-only bounded planning: repository /home/rb/worktrees/borsuk-prod-ready-v9 exact HEAD 0e86ce56eac3904c43852f6ba931298f6387c75a. Operator goal cold generic Rust S3 ANN latency/QPS at same recall; SIMD/parallelism requested. No edits, native/Cargo/data/network/jobs/children/reviews. Source via git show exact HEAD, avoid stale index/worktree. Evidence committed docs/research/performance-architecture-20260930/cohere1024/cold-membership-discovery/cold-abba-a0001/closed/README.md and cold CPU-profile directory (find only this docs subtree); page-auth-backend/receipt-repair-a0002/closed/README.md: valid SHA alternate backend REJECT saved5.26%<20%, source unintegrated. CPU sample shares twoBit score13.65%, SQ8 score13.43%, SHA34.65%; SQ8 already8/4/2/1 row-batches, do not repeat as new. PreparedTwoBit::score in rotated_two_bit.rs301+ validates recordlen/scale/inverse then sequential f64 table sum and exact final arithmetic. plan_two_bit_source_walks two_bit_generation.rs613+ scores each32-row unit using FnMut record callback; plane/store/HTTP may have additional callers. Find all actual hot callers before recommendation. Compare smallest across-independent-row batching (preserve each sequential accumulation), explicit x86 SIMD/gathers with generic scalar fallback, versus next SQ8 CPU change. Preserve exact IDs/scorebits/tie/error/callback order/auth/get/bytes/cache/memory and generic dimensions including padded tails; no FMA/reassociation or dataset specialization. Is exact score-bit parity feasible given Rust .sum folding/codegen? Do not assume vectorization benefit; inspect existing assembly proof if available metadata only, no broad cache scans. Return ONE concrete intervention, exact owned files/callsite, risks (including stateful callback first-error semantics), source-only implementation boundary, tiny independent oracle and a fast remote release primitive falsifier/resource/preregistered screen before real cold ABBA. No custom framework/new dependencies/Python product/controller. Distinguish a recommendation from measured gain. Keep output concise, evidence-rich.",
+  "prompt_sha256": "6b9cb61364b274f9c169d3e4c300b37a4be7e67ed26aceb06ce6a2cd1c005229",
+  "prompt_bytes": 2406,
+  "fingerprint": "fb550fccd786da53bb58dec3256b2977b0f057ef8f8a92c744b225fdad10cc7c",
+  "evidence": {
+    "git_commit": "0e86ce56eac3904c43852f6ba931298f6387c75a",
+    "git_branch": "devbox/prod-ready-v9",
+    "git_dirty": true,
+    "git_status_sha256": "ade28437182ac926504876c1451dd00b4d0483b16719297b28bff46fb43a134a",
+    "worktree_sha256": "132aa32d1aa9f06030f806c66adf98e0a0e435992b2fbf4bb42163cd4a2de197",
+    "worktree_evidence_truncated": true,
+    "active_goal": {
+      "id": "goal-1790540483-1790540483843307105-2322852",
+      "agent": "borsuk/prod-ready-v9",
+      "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+      "status": "queued",
+      "revision": 4,
+      "actor": "devbox",
+      "note": "re-apply delivery failed; prior goal state restored",
+      "created_at": 1790540483,
+      "updated_at": 1790781535
+    }
+  },
+  "previous_fingerprint": "57a7b775b93ffdc89116f538f96e2cb44c86cbfe463d84aaa0094867286d2339",
+  "reused": false,
+  "specialist_route": {
+    "model": "gpt-6.1-sol",
+    "effort": "high",
+    "source": "fallback"
+  },
+  "launch_command": "specialist_start",
+  "systemd_unit": "devbox-consult-3f2177a1579d4425.service",
+  "pid": 1750486,
+  "pgid": 1750486,
+  "attempt": 1,
+  "attempts": [
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "provider": "claude",
+      "model": "claude-opus-5-5"
+    }
+  ],
+  "attempt_history": [
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "budget_usd": null,
+      "timeout_seconds": 1187,
+      "started_at": 1791446091
+    }
+  ],
+  "exit_code": 0,
+  "finished_at": 1791446392,
+  "event_cursor": 77,
+  "events": [
+    {
+      "seq": 54,
+      "at": 1791446251,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 55,
+      "at": 1791446251,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 56,
+      "at": 1791446251,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 57,
+      "at": 1791446251,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 58,
+      "at": 1791446251,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 59,
+      "at": 1791446252,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 60,
+      "at": 1791446252,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 61,
+      "at": 1791446291,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 62,
+      "at": 1791446291,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 63,
+      "at": 1791446291,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 64,
+      "at": 1791446291,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 65,
+      "at": 1791446291,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 66,
+      "at": 1791446291,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 67,
+      "at": 1791446291,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 68,
+      "at": 1791446291,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 69,
+      "at": 1791446291,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 70,
+      "at": 1791446291,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 71,
+      "at": 1791446299,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 72,
+      "at": 1791446299,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 73,
+      "at": 1791446299,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 74,
+      "at": 1791446299,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 75,
+      "at": 1791446328,
+      "provider": "codex",
+      "kind": "partial",
+      "label": "Answer available"
+    },
+    {
+      "seq": 76,
+      "at": 1791446391,
+      "provider": "codex",
+      "kind": "partial",
+      "label": "Answer available"
+    },
+    {
+      "seq": 77,
+      "at": 1791446391,
+      "provider": "codex",
+      "kind": "phase",
+      "label": "Consultation completed",
+      "detail": "exit 0"
+    }
+  ],
+  "events_truncated": true,
+  "provider_events": {
+    "codex": [
+      {
+        "seq": 70,
+        "at": 1791446291,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 0"
+      },
+      {
+        "seq": 71,
+        "at": 1791446299,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command started"
+      },
+      {
+        "seq": 72,
+        "at": 1791446299,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 0"
+      },
+      {
+        "seq": 73,
+        "at": 1791446299,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command started"
+      },
+      {
+        "seq": 74,
+        "at": 1791446299,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 0"
+      },
+      {
+        "seq": 75,
+        "at": 1791446328,
+        "provider": "codex",
+        "kind": "partial",
+        "label": "Answer available"
+      },
+      {
+        "seq": 76,
+        "at": 1791446391,
+        "provider": "codex",
+        "kind": "partial",
+        "label": "Answer available"
+      },
+      {
+        "seq": 77,
+        "at": 1791446391,
+        "provider": "codex",
+        "kind": "phase",
+        "label": "Consultation completed",
+        "detail": "exit 0"
+      }
+    ]
+  },
+  "partial_result": "**Recommend one bounded intervention: AVX2 gathers within a single two-bit record, preserving the ordered scalar reduction.** This is a candidate to falsify, not a measured gain. All repository inspection used frozen commit `0e86ce56eac3904c43852f6ba931298f6387c75a`.\n\nThe [closed profile](/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/cohere1024/cold-cpu-profile/profile-a0001/closed/README.md) attributes 13.65% self CPU to two-bit scoring and 13.43% to SQ8 scoring. [SHA backend evidence](/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/cohere1024/cold-page-auth-backend/receipt-repair-a0002/closed/README.md) preserves the valid rejection: 5.2563% saving below 20%; candidate unintegrated. Existing assembly metadata proves SHA instructions, but provides no scoring-kernel proof.\n\nThe alternatives compare as follows:\n\n| Candidate | Assessment |\n|---|---|\n| Four independent rows, sequential accumulation per row | Better opportunity to hide accumulation latency, but prefetching through `FnMut` can invoke later callbacks before an earlier scoring error. Preserving that contract requires a separate internal path. |\n| Four lookup gathers within one row | Smallest shared intervention; leaves callbacks, validation order and row-at-a-time completion intact. |\n| Next SQ8 change | SQ8 already uses 8/4/2/1 row batches at `exact_sq8_nominee.rs:112\u2013168`. Explicit SIMD would need fresh codegen evidence; batching is not new work. |\n\n1. **Implementation boundary.** Change only [PreparedTwoBit::score](/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk/src/rotated_two_bit.rs:301), its inline tests, and one ignored release primitive-screen test. After existing record/scalar validation, runtime-dispatch an x86 AVX2 lookup helper. Gather four successive byte-table entries using a tile-relative base and indices `slot * 256 + word`, avoiding dimension-dependent signed-index overflow. Feed the four values into the original ordered `.sum::<f64>()`; handle remaining bytes scalarly. Keep the original scalar fallback and final arithmetic. No horizontal reduction, chunk sums, reassociation, FMA, new dependencies, configuration, format changes or table allocation.\n\n2. **Actual caller reach.** The cold path reaches `score` through [plan_two_bit_source_walks](/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk/src/two_bit_generation.rs:637), private `plan_walks:1823`, resident plane access at `1580`, and authenticated fetched-range access at `1730`. The HTTP example calls this generation\u2019s search API; `two_bit_store.rs` has no separate direct scoring call. Other direct callers include hierarchy validation at `hierarchical_semantic_cells.rs:810`, hierarchy searches at `2093/3196`, and nomination binaries at `two_bit_union_nomination.rs:170`, `two_bit_walk_nomination.rs:218`, `v295_rust_two_bit_route.rs:90`, and `v296_two_bit_validation_plans.rs:54`. They inherit the shared change without caller edits.\n\n3. **Parity oracle.** Exact score-bit parity is feasible, but Rust `.sum()` syntax alone is insufficient proof after changing its input iterator. Retain an independent copy of the frozen scalar expression, including reduction initialization and final operation order. Compare `Result` and `to_bits()` against forced scalar and AVX2 paths in debug/release. Cover cancellation, signed zero, all byte values, malformed lengths/scalars, nonfinite results, and dimensions `1,5,255,256,257,768,1024,1025`. Add a stateful planner callback test recording the exact invocation prefix through the first missing or invalid row. Inspect release assembly for ordered additions and absence of FMA/reassociation. Existing tolerance-based score tests are insufficient.\n\n4. **Fast remote falsifier.** After source-bound real-input admission and a separate disposable canary, preregister a same-executable scalar/AVX2 primitive screen on one bounded Spot host: CPU1, 512 MiB, swap0, pids256, measured phase \u2264120 seconds. Use fixed 32-row panels, black-box outputs, fixed repetitions and counterbalanced order; exclude preparation from timing. Proposed gate: zero parity/refusal differences, \u226520% median scoring-CPU saving in both orderings, and no >5% regression on other registered geometries. Preserve scratch/resource accounting; no cache or concurrency changes. Setup failures are INVALID. Sync terminal receipts, discard interrupted cells, and terminate compute immediately.\n\n5. **Only then qualify cold ABBA.** Compile affected targets, pass required workspace Clippy and complete test compilation, then freeze source/binary/configuration. Require full 1,000-query parity of ordered IDs, score bits, recall, ties, traces, authentication, GETs and bytes. Preregister fresh cold ABBA with CPU1, width32 and application caches off; use \u22655% p90/p95 improvement in both pairs and QPS nonregression as the new arm\u2019s acceptance screen.\n\nSkipped edits, execution, network, jobs and reviews. Main risk: gathers may cost more than scalar loads, while preserving ordered accumulation leaves its dependency chain intact.",
+  "partial_result_truncated": false,
+  "provider_partials": {
+    "codex": "**Recommend one bounded intervention: AVX2 gathers within a single two-bit record, preserving the ordered scalar reduction.** This is a candidate to falsify, not a measured gain. All repository inspection used frozen commit `0e86ce56eac3904c43852f6ba931298f6387c75a`.\n\nThe [closed profile](/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/cohere1024/cold-cpu-profile/profile-a0001/closed/README.md) attributes 13.65% self CPU to two-bit scoring and 13.43% to SQ8 scoring. [SHA backend evidence](/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/cohere1024/cold-page-auth-backend/receipt-repair-a0002/closed/README.md) preserves the valid rejection: 5.2563% saving below 20%; candidate unintegrated. Existing assembly metadata proves SHA instructions, but provides no scoring-kernel proof.\n\nThe alternatives compare as follows:\n\n| Candidate | Assessment |\n|---|---|\n| Four independent rows, sequential accumulation per row | Better opportunity to hide accumulation latency, but prefetching through `FnMut` can invoke later callbacks before an earlier scoring error. Preserving that contract requires a separate internal path. |\n| Four lookup gathers within one row | Smallest shared intervention; leaves callbacks, validation order and row-at-a-time completion intact. |\n| Next SQ8 change | SQ8 already uses 8/4/2/1 row batches at `exact_sq8_nominee.rs:112\u2013168`. Explicit SIMD would need fresh codegen evidence; batching is not new work. |\n\n1. **Implementation boundary.** Change only [PreparedTwoBit::score](/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk/src/rotated_two_bit.rs:301), its inline tests, and one ignored release primitive-screen test. After existing record/scalar validation, runtime-dispatch an x86 AVX2 lookup helper. Gather four successive byte-table entries using a tile-relative base and indices `slot * 256 + word`, avoiding dimension-dependent signed-index overflow. Feed the four values into the original ordered `.sum::<f64>()`; handle remaining bytes scalarly. Keep the original scalar fallback and final arithmetic. No horizontal reduction, chunk sums, reassociation, FMA, new dependencies, configuration, format changes or table allocation.\n\n2. **Actual caller reach.** The cold path reaches `score` through [plan_two_bit_source_walks](/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk/src/two_bit_generation.rs:637), private `plan_walks:1823`, resident plane access at `1580`, and authenticated fetched-range access at `1730`. The HTTP example calls this generation\u2019s search API; `two_bit_store.rs` has no separate direct scoring call. Other direct callers include hierarchy validation at `hierarchical_semantic_cells.rs:810`, hierarchy searches at `2093/3196`, and nomination binaries at `two_bit_union_nomination.rs:170`, `two_bit_walk_nomination.rs:218`, `v295_rust_two_bit_route.rs:90`, and `v296_two_bit_validation_plans.rs:54`. They inherit the shared change without caller edits.\n\n3. **Parity oracle.** Exact score-bit parity is feasible, but Rust `.sum()` syntax alone is insufficient proof after changing its input iterator. Retain an independent copy of the frozen scalar expression, including reduction initialization and final operation order. Compare `Result` and `to_bits()` against forced scalar and AVX2 paths in debug/release. Cover cancellation, signed zero, all byte values, malformed lengths/scalars, nonfinite results, and dimensions `1,5,255,256,257,768,1024,1025`. Add a stateful planner callback test recording the exact invocation prefix through the first missing or invalid row. Inspect release assembly for ordered additions and absence of FMA/reassociation. Existing tolerance-based score tests are insufficient.\n\n4. **Fast remote falsifier.** After source-bound real-input admission and a separate disposable canary, preregister a same-executable scalar/AVX2 primitive screen on one bounded Spot host: CPU1, 512 MiB, swap0, pids256, measured phase \u2264120 seconds. Use fixed 32-row panels, black-box outputs, fixed repetitions and counterbalanced order; exclude preparation from timing. Proposed gate: zero parity/refusal differences, \u226520% median scoring-CPU saving in both orderings, and no >5% regression on other registered geometries. Preserve scratch/resource accounting; no cache or concurrency changes. Setup failures are INVALID. Sync terminal receipts, discard interrupted cells, and terminate compute immediately.\n\n5. **Only then qualify cold ABBA.** Compile affected targets, pass required workspace Clippy and complete test compilation, then freeze source/binary/configuration. Require full 1,000-query parity of ordered IDs, score bits, recall, ties, traces, authentication, GETs and bytes. Preregister fresh cold ABBA with CPU1, width32 and application caches off; use \u22655% p90/p95 improvement in both pairs and QPS nonregression as the new arm\u2019s acceptance screen.\n\nSkipped edits, execution, network, jobs and reviews. Main risk: gathers may cost more than scalar loads, while preserving ordered accumulation leaves its dependency chain intact."
+  },
+  "providers_used": [
+    "codex"
+  ],
+  "active_provider": "codex",
+  "phase": "Consultation completed",
+  "input_bytes": 2406,
+  "output_bytes": 5112,
+  "elapsed_seconds": 314,
+  "progress": "Reading additional input from stdin...\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)\ndevbox-ask: codex consult still running (4m 30s)\ndevbox-ask: codex consult still running (5m 00s)",
+  "progress_truncated": false,
+  "result": "**Recommend one bounded intervention: AVX2 gathers within a single two-bit record, preserving the ordered scalar reduction.** This is a candidate to falsify, not a measured gain. All repository inspection used frozen commit `0e86ce56eac3904c43852f6ba931298f6387c75a`.\n\nThe [closed profile](/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/cohere1024/cold-cpu-profile/profile-a0001/closed/README.md) attributes 13.65% self CPU to two-bit scoring and 13.43% to SQ8 scoring. [SHA backend evidence](/home/rb/worktrees/borsuk-prod-ready-v9/docs/research/performance-architecture-20260930/cohere1024/cold-page-auth-backend/receipt-repair-a0002/closed/README.md) preserves the valid rejection: 5.2563% saving below 20%; candidate unintegrated. Existing assembly metadata proves SHA instructions, but provides no scoring-kernel proof.\n\nThe alternatives compare as follows:\n\n| Candidate | Assessment |\n|---|---|\n| Four independent rows, sequential accumulation per row | Better opportunity to hide accumulation latency, but prefetching through `FnMut` can invoke later callbacks before an earlier scoring error. Preserving that contract requires a separate internal path. |\n| Four lookup gathers within one row | Smallest shared intervention; leaves callbacks, validation order and row-at-a-time completion intact. |\n| Next SQ8 change | SQ8 already uses 8/4/2/1 row batches at `exact_sq8_nominee.rs:112\u2013168`. Explicit SIMD would need fresh codegen evidence; batching is not new work. |\n\n1. **Implementation boundary.** Change only [PreparedTwoBit::score](/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk/src/rotated_two_bit.rs:301), its inline tests, and one ignored release primitive-screen test. After existing record/scalar validation, runtime-dispatch an x86 AVX2 lookup helper. Gather four successive byte-table entries using a tile-relative base and indices `slot * 256 + word`, avoiding dimension-dependent signed-index overflow. Feed the four values into the original ordered `.sum::<f64>()`; handle remaining bytes scalarly. Keep the original scalar fallback and final arithmetic. No horizontal reduction, chunk sums, reassociation, FMA, new dependencies, configuration, format changes or table allocation.\n\n2. **Actual caller reach.** The cold path reaches `score` through [plan_two_bit_source_walks](/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk/src/two_bit_generation.rs:637), private `plan_walks:1823`, resident plane access at `1580`, and authenticated fetched-range access at `1730`. The HTTP example calls this generation\u2019s search API; `two_bit_store.rs` has no separate direct scoring call. Other direct callers include hierarchy validation at `hierarchical_semantic_cells.rs:810`, hierarchy searches at `2093/3196`, and nomination binaries at `two_bit_union_nomination.rs:170`, `two_bit_walk_nomination.rs:218`, `v295_rust_two_bit_route.rs:90`, and `v296_two_bit_validation_plans.rs:54`. They inherit the shared change without caller edits.\n\n3. **Parity oracle.** Exact score-bit parity is feasible, but Rust `.sum()` syntax alone is insufficient proof after changing its input iterator. Retain an independent copy of the frozen scalar expression, including reduction initialization and final operation order. Compare `Result` and `to_bits()` against forced scalar and AVX2 paths in debug/release. Cover cancellation, signed zero, all byte values, malformed lengths/scalars, nonfinite results, and dimensions `1,5,255,256,257,768,1024,1025`. Add a stateful planner callback test recording the exact invocation prefix through the first missing or invalid row. Inspect release assembly for ordered additions and absence of FMA/reassociation. Existing tolerance-based score tests are insufficient.\n\n4. **Fast remote falsifier.** After source-bound real-input admission and a separate disposable canary, preregister a same-executable scalar/AVX2 primitive screen on one bounded Spot host: CPU1, 512 MiB, swap0, pids256, measured phase \u2264120 seconds. Use fixed 32-row panels, black-box outputs, fixed repetitions and counterbalanced order; exclude preparation from timing. Proposed gate: zero parity/refusal differences, \u226520% median scoring-CPU saving in both orderings, and no >5% regression on other registered geometries. Preserve scratch/resource accounting; no cache or concurrency changes. Setup failures are INVALID. Sync terminal receipts, discard interrupted cells, and terminate compute immediately.\n\n5. **Only then qualify cold ABBA.** Compile affected targets, pass required workspace Clippy and complete test compilation, then freeze source/binary/configuration. Require full 1,000-query parity of ordered IDs, score bits, recall, ties, traces, authentication, GETs and bytes. Preregister fresh cold ABBA with CPU1, width32 and application caches off; use \u22655% p90/p95 improvement in both pairs and QPS nonregression as the new arm\u2019s acceptance screen.\n\nSkipped edits, execution, network, jobs and reviews. Main risk: gathers may cost more than scalar loads, while preserving ordered accumulation leaves its dependency chain intact.",
+  "result_truncated": false
+}
