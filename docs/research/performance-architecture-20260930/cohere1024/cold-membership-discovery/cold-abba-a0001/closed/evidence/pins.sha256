@@ -1,0 +1,8 @@
+ca1ae2496e110494e7f6c03ae16eea3d5ff262d66945a3c52775749ac0bcaeab  /mnt/borsuk-retained-s3/candidate
+0fd76aacea19b51e221f5dfb5d7d42ab0190fca51fe5f95a4ecf2942abad4f92  /mnt/borsuk-retained-s3/config.json
+8a7dc65e2cdda44969de8c15a9cd80a0c1e446bdccf9922d25b07381e19bbc99  /mnt/borsuk-retained-s3/stage.sh
+8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e  /mnt/borsuk-retained-s3/queries.f32
+479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c  /mnt/borsuk-retained-s3/truth.u64
+628f93148d767b7fc456e566139788d67cf98e323ec66ef4e6ebe10ef330e82b  /mnt/borsuk-retained-s3/control
+614f2c2afcd7bacf9a87a850147de2ebfd2f9e712219ce8d6438e388b1a50519  /mnt/borsuk-retained-s3/reducer
+e2b22755ec393d74c8c7f4b0ef0dd8e71c4ec1a692d5d63b1e25b4c5fba2f115  /mnt/borsuk-retained-s3/reduction-template.json

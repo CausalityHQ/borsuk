@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-cold-membership-abba-v1",
+  "instance_id": "i-0858be8fbbafb673a",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 0,
+  "control_source_commit": "31eca73431901c193aff598f4c6e44d3540594da",
+  "candidate_source_commit": "fc8a23dac44ad635fc1236736df68878690a8389",
+  "integration_commit": "2eb3645fecac120d5349e676758708318d891e04",
+  "qualified_source_identity_sha256": "0097af81fbf3e61a2050a77cb046adfbf0b02a745e73a2181e924cd2cb697eae",
+  "evidence": {
+    "bytes": 4839309,
+    "sha256": "99c1efb9922fa53e4dd9ea64e9183ad0ba1e21e0e42dd49171776249a6fd4c06"
+  },
+  "terminal_delivery": "attempted",
+  "performance_claim": false
+}
