@@ -1,0 +1,21 @@
+{
+  "schema": "borsuk-cold-fetch-paired-reducer-gates-v1",
+  "instance_id": "i-00d3d35529682020a",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 0,
+  "source_commit": "0f617199cd521590e8760aca41f36bd730c5a5a7",
+  "candidate_commit": "0f617199cd521590e8760aca41f36bd730c5a5a7",
+  "native_source_file_count": 415,
+  "native_source_identity_sha256": "89e258e26610f2304f063fa64e8597a5a934984e8afe7635358b223152128d50",
+  "source_archive_sha256": "8fb47c833f001a8142c4863530a332b12a4b83b28ff487c8249170b714bcbe40",
+  "resolved_lock_sha256": "null",
+  "resolved_source_map_sha256": "null",
+  "source_identity_scope": "exact immutable full source; no lock mutation admitted",
+  "evidence": {
+    "bytes": 664102,
+    "sha256": "08f76257123ad7540be75650d83a314df0cc1deaa7d5e354b034147397d87aa3"
+  },
+  "performance_claim": false
+}

@@ -1,7 +1,10 @@
-//! Offline reduction of four historical A1/B1/B2/A2 files or one sealed v2 file.
+//! Offline reduction of four historical A1/B1/B2/A2 files or sealed v2 outputs.
 //! This does not qualify resources, cost, cache state, or a vendor comparison.
 //! Single-file CLI: --completed-v2 CONFIG CONFIG_SHA256 NEW_OUTPUT_JSON.
 //! CONFIG pins the exact identity/bound_inputs rows and input path/bytes/SHA256.
+//! Paired CLI: --paired-v2 CONFIG CONFIG_SHA256 NEW_OUTPUT_JSON. CONFIG has
+//! schema borsuk-paired-native-reduction-config-v1 and two CompletedConfig arms,
+//! ordered fetch_parallelism 16 then 32, with source_cache off in both.
 
 use rustix::fs::{Mode, OFlags, openat};
 use serde::{
@@ -66,6 +69,7 @@ fn valid_sha(s: &str) -> bool {
 }
 
 const COMPLETED_SCHEMA: &str = "borsuk-completed-native-reduction-v1";
+const PAIRED_SCHEMA: &str = "borsuk-paired-native-reduction-v1";
 const CONFIG_CAP: u64 = 32 * 1024;
 
 #[derive(Deserialize)]
@@ -84,6 +88,13 @@ struct CompletedConfig {
     // Exact native rows, including phase, backend, and all source/input pins.
     expected_identity: Value,
     expected_bound_inputs: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PairedConfig {
+    schema: String,
+    arms: [CompletedConfig; 2],
 }
 
 // Value normally accepts duplicate keys. Reject them recursively before using
@@ -185,7 +196,20 @@ fn validate_v2_row(line: &[u8], phase: &str) -> Result<()> {
         "terminal" => "phase summary",
         _ => return Err("unknown v2 phase".into()),
     };
-    fields(&v, names)?;
+    if matches!(phase, "identity" | "bound_inputs") && v.get("fetch_parallelism").is_some() {
+        require(
+            matches!(v["fetch_parallelism"].as_u64(), Some(16 | 32)),
+            "fetch_parallelism must be integer 16 or 32",
+        )?;
+        if phase == "bound_inputs" {
+            fields(&v, &format!("{names} fetch_parallelism source_cache"))?;
+            require(v["source_cache"] == "off", "source cache must be off")?;
+        } else {
+            fields(&v, &format!("{names} fetch_parallelism"))?;
+        }
+    } else {
+        fields(&v, names)?;
+    }
     if matches!(phase, "source_binding" | "generation_open" | "query") {
         fields(&v["transport"], "stage ordinal before after")?;
     }
@@ -232,6 +256,13 @@ fn validate_v2_row(line: &[u8], phase: &str) -> Result<()> {
             }
         }
         "query" => {
+            fields(
+                &v["stages"],
+                "discovery source planning sq8 leaf_peak_inflight",
+            )?;
+            for stage in ["discovery", "source", "planning", "sq8"] {
+                fields(&v["stages"][stage], "start_ns end_ns")?;
+            }
             let t = &v["trace"];
             fields(
                 t,
@@ -989,6 +1020,11 @@ fn read_run_with(path: &Path, sha: &str, expected: Option<&CompletedConfig>) -> 
             "expected v2 input/root/backend pins",
         )?;
         validate_v2_inputs(&inputs, &c.expected_bound_inputs)?;
+        require(
+            c.expected_identity.get("fetch_parallelism")
+                == c.expected_bound_inputs.get("fetch_parallelism"),
+            "identity/input fetch_parallelism agreement",
+        )?;
         let binding: Value = rows.row("source_binding")?;
         let binding_charge: Charge = serde_json::from_value(binding["charges"].clone())?;
         binding_charge.validate()?;
@@ -1024,7 +1060,11 @@ fn read_run_with(path: &Path, sha: &str, expected: Option<&CompletedConfig>) -> 
     for ordinal in 0..COUNT {
         let q: Query = rows.row("query")?;
         let trace_sha256 = if completed.is_some() {
-            [0; 32]
+            // Native v2 Record emits transport AFTER trace. Hash the complete
+            // validated trace object, preserving every array's order. Runtime
+            // timing, inflight and transport fields are outside TwoBitPlanTrace.
+            let raw: Value = serde_json::from_slice(&rows.line)?;
+            Sha256::digest(serde_json::to_vec(&raw["trace"])?).into()
         } else {
             trace_fingerprint(&rows.line)?
         };
@@ -1237,9 +1277,9 @@ fn quantiles(samples: &[u64]) -> Result<(u64, [u64; 4])> {
     ))
 }
 
-fn reduce_completed(config_path: &Path, config_sha: &str) -> Result<Value> {
+fn read_config<T: DeserializeOwned>(config_path: &Path, config_sha: &str) -> Result<(T, u64)> {
     require(valid_sha(config_sha), "reduction config SHA256")?;
-    let config_label = config_path.to_str().ok_or("config path must be UTF-8")?;
+    require(config_path.to_str().is_some(), "config path must be UTF-8")?;
     let mut file = open_input(config_path)?;
     let original = file_identity(&file)?;
     require(
@@ -1256,12 +1296,24 @@ fn reduce_completed(config_path: &Path, config_sha: &str) -> Result<Value> {
         "config SHA/length/identity",
     )?;
     let UniqueJson(value) = serde_json::from_slice(&body)?;
-    let c: CompletedConfig = serde_json::from_value(value)?;
+    Ok((serde_json::from_value(value)?, original.len))
+}
+
+fn reduce_completed(config_path: &Path, config_sha: &str) -> Result<Value> {
+    let (c, config_bytes): (CompletedConfig, _) = read_config(config_path, config_sha)?;
     require(
         c.schema == "borsuk-completed-native-reduction-config-v1",
         "reduction config schema",
     )?;
     let run = read_run_with(&c.input.path, &c.input.sha256, Some(&c))?;
+    let mut report = completed_report(&c, &run)?;
+    report["config_path"] = json!(config_path);
+    report["config_sha256"] = json!(config_sha);
+    report["config_bytes"] = json!(config_bytes);
+    Ok(report)
+}
+
+fn completed_report(c: &CompletedConfig, run: &Run) -> Result<Value> {
     let e = run.completed.as_ref().ok_or("missing completed evidence")?;
     let stats = statistics(&run.samples.iter().map(|s| s.wall_ns).collect::<Vec<_>>())?;
     let mut distributions = serde_json::Map::new();
@@ -1278,7 +1330,6 @@ fn reduce_completed(config_path: &Path, config_sha: &str) -> Result<Value> {
     }
     Ok(
         json!({"schema":COMPLETED_SCHEMA,"status":"MEASURED","complete":true,
-        "config_path":config_label,"config_sha256":config_sha,"config_bytes":original.len,
         "result_path":c.input.path,"result_bytes":run.file_identity.len,"result_sha256":c.input.sha256,
         "identity":c.expected_identity,"inputs":c.expected_bound_inputs,"statistics":stats,
         "percentile_method":"nearest_rank","sequential_qps_definition":"query_count * 1e9 / sum(query_wall_ns); not concurrent service QPS",
@@ -1290,6 +1341,151 @@ fn reduce_completed(config_path: &Path, config_sha: &str) -> Result<Value> {
         "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
         "local_file_only":true,"external_resources_and_cost_gate_required":true,"qualified":false,
         "vendor_or_scientific_win_claim":false,"performance_pass_claim":false}),
+    )
+}
+
+fn reduce_paired(config_path: &Path, config_sha: &str) -> Result<Value> {
+    let (c, config_bytes): (PairedConfig, _) = read_config(config_path, config_sha)?;
+    require(
+        c.schema == "borsuk-paired-native-reduction-config-v1",
+        "paired config schema",
+    )?;
+    for (arm, parallelism) in c.arms.iter().zip([16, 32]) {
+        require(
+            arm.schema == "borsuk-completed-native-reduction-config-v1"
+                && arm.expected_identity["fetch_parallelism"] == parallelism
+                && arm.expected_bound_inputs["fetch_parallelism"] == parallelism,
+            "paired arms must be ordered integer fetch_parallelism 16 then 32",
+        )?;
+        // This experiment compares the retained production Cohere panel, not
+        // arbitrary matching outputs. Admit its pins before either input opens;
+        // the generic completed reducer and frozen historical mode stay separate.
+        let i: Inputs = serde_json::from_value(arm.expected_bound_inputs.clone())?;
+        require(
+            i.dataset == "CohereLabs/wikipedia-2023-11-embed-multilingual-v3"
+                && i.revision == "ade45fb52bd549f5e8c065636fe4160a43c2af36"
+                && i.metric == "cosine"
+                && i.tie_rule == "corpus_ordinal_ascending"
+                && i.rows == 100000
+                && i.dimensions == 1024
+                && i.count == COUNT
+                && i.k == K
+                && i.corpus_source_first == 0
+                && i.query_source_first == 100000
+                && i.profile == "native100k"
+                && !i.truth_opened
+                && i.requests_bytes == 4096000
+                && i.truth_bytes == 80000
+                && [
+                    i.requests_sha256.as_str(),
+                    i.truth_sha256.as_str(),
+                    i.native_source_sha256.as_str(),
+                    i.native_sq8_sha256.as_str(),
+                    i.native_order_sha256.as_str(),
+                ] == INPUT_SHA256,
+            "paired production benchmark pins",
+        )?;
+    }
+    let [a, b] = &c.arms;
+    let mut identity = a.expected_identity.clone();
+    require(
+        identity["config_sha256"] != b.expected_identity["config_sha256"],
+        "paired native configs must have distinct SHA256",
+    )?;
+    identity["config_sha256"] = b.expected_identity["config_sha256"].clone();
+    identity["fetch_parallelism"] = json!(32);
+    let mut inputs = a.expected_bound_inputs.clone();
+    inputs["fetch_parallelism"] = json!(32);
+    require(
+        identity == b.expected_identity && inputs == b.expected_bound_inputs,
+        "paired binary/source/benchmark/generation/backend/input/scoring pins differ",
+    )?;
+    let runs = [
+        read_run_with(&a.input.path, &a.input.sha256, Some(a))?,
+        read_run_with(&b.input.path, &b.input.sha256, Some(b))?,
+    ];
+    require(
+        a.input.sha256 != b.input.sha256
+            && (runs[0].file_identity.dev, runs[0].file_identity.ino)
+                != (runs[1].file_identity.dev, runs[1].file_identity.ino),
+        "duplicate paired run evidence",
+    )?;
+    for (ordinal, (a, b)) in runs[0].samples.iter().zip(&runs[1].samples).enumerate() {
+        // Count and underfill have already been checked against returned.len()
+        // in BOTH query and recall rows for all 1000 sealed ordinals.
+        require(
+            a.returned == b.returned
+                && a.hits10 == b.hits10
+                && a.charges == b.charges
+                && a.trace_sha256 == b.trace_sha256,
+            &format!("paired query {ordinal}: ordered hits/recall/plan/logical GET/bytes mismatch"),
+        )?;
+    }
+    let mut reports = Vec::with_capacity(2);
+    for (arm, run) in c.arms.iter().zip(&runs) {
+        // The maximum includes every query. Native100k selects at most16
+        // leaves, so neither fetch width can admit a larger per-query peak.
+        require(
+            run.stages.max_leaf_peak_inflight <= 16,
+            "paired Native100k query leaf_peak_inflight exceeds 16",
+        )?;
+        let e = run.completed.as_ref().ok_or("missing paired evidence")?;
+        let transport = &e.last.as_ref().ok_or("missing transport")?.after;
+        require(
+            transport.transport_failures == 0
+                && transport.stream_failures == 0
+                && transport.dropped_error_bodies == 0
+                && run.terminal.sum.failed_gets == 0,
+            "paired transport/logical GET failure",
+        )?;
+        require(
+            e.binding_charge
+                == runs[0]
+                    .completed
+                    .as_ref()
+                    .ok_or("missing binding")?
+                    .binding_charge,
+            "paired source binding charge mismatch",
+        )?;
+        let mut report = completed_report(arm, run)?;
+        report["fetch_parallelism"] = arm.expected_identity["fetch_parallelism"].clone();
+        report["first_query"] = json!({"ordinal":0,"query_wall_ns":run.samples[0].wall_ns,
+            "charges":run.samples[0].charges,"hits10":run.samples[0].hits10,
+            "returned_count":run.samples[0].returned.len(),
+            "underfill":run.samples[0].returned.len() < K,
+            "stage_wall_ns":{"discovery":e.stage_samples[0][0],"source":e.stage_samples[1][0],
+                "planning":e.stage_samples[2][0],"sq8":e.stage_samples[3][0]}});
+        reports.push(report);
+    }
+    let pooled = statistics(
+        &runs
+            .iter()
+            .flat_map(|r| r.samples.iter().map(|s| s.wall_ns))
+            .collect::<Vec<_>>(),
+    )?;
+    let [a, b] = runs.each_ref().map(|r| &r.stages);
+    let stage_totals = StageTotals {
+        discovery_ns: plus(a.discovery_ns, b.discovery_ns)?,
+        source_ns: plus(a.source_ns, b.source_ns)?,
+        planning_ns: plus(a.planning_ns, b.planning_ns)?,
+        sq8_ns: plus(a.sq8_ns, b.sq8_ns)?,
+        max_leaf_peak_inflight: a.max_leaf_peak_inflight.max(b.max_leaf_peak_inflight),
+    };
+    Ok(
+        json!({"schema":PAIRED_SCHEMA,"status":"MEASURED","complete":true,
+        "config_path":config_path,"config_sha256":config_sha,"config_bytes":config_bytes,
+        "semantic_parity":true,"trace_plan_parity":true,"logical_charge_parity":true,
+        "arms":reports,"pooled_both_arms":{"statistics":pooled,"stage_wall_sums":stage_totals},
+        "statistics_population":"all 1000 ordered queries per arm including first; pooled_both_arms includes all 2000 observations without arm selection",
+        "percentile_method":"nearest_rank",
+        "sequential_qps_definition":"query_count * 1e9 / sum(query_wall_ns); not concurrent service QPS",
+        "plan_scope":"complete ordered TwoBitPlanTrace; timing, inflight and transport fields are outside the plan",
+        "source_cache":"off","cache_state":"external cold/cache qualification required",
+        "local_file_only":true,"physical_s3":false,"external_resources_and_cost_gate_required":true,
+        "frozen_runtime_root_config_admission_required":true,"qualified":false,
+        "supervisor_resources_cost_and_cache_qualified":false,
+        "vendor_or_scientific_win_claim":false,"performance_pass_claim":false,
+        "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null}),
     )
 }
 
@@ -1478,6 +1674,18 @@ fn execute_report(
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
     let result = (|| -> Result<bool> {
+        if args.get(1).is_some_and(|arg| arg == "--paired-v2") {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --paired-v2 CONFIG CONFIG_SHA256 NEW_OUTPUT_JSON",
+            )?;
+            return execute_report(Path::new(&args[4]), PAIRED_SCHEMA, || {
+                reduce_paired(
+                    Path::new(&args[2]),
+                    args[3].to_str().ok_or("config SHA256 encoding")?,
+                )
+            });
+        }
         if args.get(1).is_some_and(|arg| arg == "--completed-v2") {
             require(
                 args.len() == 5,
@@ -1803,6 +2011,500 @@ mod tests {
         let path = dir.join("completed-config.json");
         std::fs::write(&path, &bytes).unwrap();
         (path, sha(&bytes))
+    }
+
+    fn paired_v2_fixture(parallelism: u64) -> Vec<Value> {
+        let mut rows = v2_fixture();
+        rows[0]["fetch_parallelism"] = json!(parallelism);
+        rows[0]["config_sha256"] = json!(if parallelism == 16 { "6" } else { "3" }.repeat(64));
+        rows[1]["fetch_parallelism"] = json!(parallelism);
+        rows[1]["source_cache"] = json!("off");
+        // Only output metadata is constructed; no corpus/query/truth body is
+        // opened. Literal production pins are independent of the admission code.
+        rows[1]["dataset"] = json!("CohereLabs/wikipedia-2023-11-embed-multilingual-v3");
+        rows[1]["revision"] = json!("ade45fb52bd549f5e8c065636fe4160a43c2af36");
+        rows[1]["rows"] = json!(100000);
+        rows[1]["dimensions"] = json!(1024);
+        rows[1]["query_source_first"] = json!(100000);
+        rows[1]["requests_bytes"] = json!(4096000);
+        for (key, pin) in [
+            (
+                "requests_sha256",
+                "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+            ),
+            (
+                "truth_sha256",
+                "479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c",
+            ),
+            (
+                "native_source_sha256",
+                "20936913f31e48ea67d462dfffc7a831569ff7467baebc63f2d622c8ff417dce",
+            ),
+            (
+                "native_sq8_sha256",
+                "07a14360b06add9a35f82b97f4e031690ff878ff497ee047902818823992337b",
+            ),
+            (
+                "native_order_sha256",
+                "6b6a67098330c76bfb89340065d9326fb3f23a1f6016fbae5b9fa7f0e29759c2",
+            ),
+        ] {
+            rows[1][key] = json!(pin);
+        }
+        rows[1]["backend"]["sq8_object_key"] = json!(format!(
+            "fixture/objects/{}",
+            rows[1]["native_sq8_sha256"].as_str().unwrap()
+        ));
+        rows[1005]["requests_sha256"] = rows[1]["requests_sha256"].clone();
+        for key in ["requests_sha256", "truth_sha256"] {
+            rows.last_mut().unwrap()["summary"][key] = rows[1][key].clone();
+        }
+        for row in &mut rows[5..1005] {
+            row["trace"]["discoveries"] = json!([{"seed_page":0,"seed_evaluated_units":[2,1],
+                "walk_evaluated_units":[3,4],"seed_work_exhausted":false,"walk_work_exhausted":true}]);
+            if parallelism == 32 {
+                row["query_wall_ns"] = json!(row["query_wall_ns"].as_u64().unwrap() * 2);
+                row["query_process_cpu_ns"] = json!(2);
+                row["stages"]["sq8"]["end_ns"] =
+                    json!(row["stages"]["sq8"]["end_ns"].as_u64().unwrap() + 1);
+            }
+        }
+        if parallelism == 32 {
+            // Legitimate cumulative transport variation is NOT logical charge
+            // or plan variation. Independently patch the native compact footer.
+            for row in &mut rows[2..1005] {
+                if row.get("transport").is_some() {
+                    for key in ["before", "after"] {
+                        row["transport"][key]["consumed_payload_bytes"] = json!(
+                            row["transport"][key]["consumed_payload_bytes"]
+                                .as_u64()
+                                .unwrap()
+                                + 7
+                        );
+                    }
+                }
+            }
+            let t = &mut rows.last_mut().unwrap()["summary"];
+            t["query_wall_ns"] = json!(1_001_000_000_000_u64);
+            t["process_wall_ns"] = json!(1_001_000_000_100_u64);
+            t["query_process_cpu_ns"] = json!(2000);
+            t["process_cpu_ns"] = json!(2100);
+            t["transport_last_boundary"]["before"]["consumed_payload_bytes"] = json!(300207);
+            t["transport_last_boundary"]["after"]["consumed_payload_bytes"] = json!(300507);
+        }
+        rows
+    }
+
+    fn paired_v2_config(
+        dir: &Path,
+        bytes: [&[u8]; 2],
+        expected: [&[Value]; 2],
+    ) -> (PathBuf, String) {
+        let arms: Vec<_> = bytes
+            .into_iter()
+            .zip(expected)
+            .enumerate()
+            .map(|(i, (bytes, rows))| {
+                let path = dir.join(format!("paired-{i}.jsonl"));
+                std::fs::write(&path, bytes).unwrap();
+                json!({"schema":"borsuk-completed-native-reduction-config-v1",
+                "input":{"path":path,"bytes":bytes.len(),"sha256":sha(bytes)},
+                "expected_identity":rows[0],"expected_bound_inputs":rows[1]})
+            })
+            .collect();
+        let body = serde_json::to_vec(
+            &json!({"schema":"borsuk-paired-native-reduction-config-v1","arms":arms}),
+        )
+        .unwrap();
+        let path = dir.join("paired-config.json");
+        std::fs::write(&path, &body).unwrap();
+        (path, sha(&body))
+    }
+
+    #[test]
+    fn paired_v2_sealed_native_rows_statistics_and_create_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = paired_v2_fixture(16);
+        let mut b = paired_v2_fixture(32);
+        authenticate(&mut a);
+        authenticate(&mut b);
+        let (config, pin) = paired_v2_config(dir.path(), [&encode(&a), &encode(&b)], [&a, &b]);
+        let report = reduce_paired(&config, &pin).unwrap();
+        for (index, first, p95, total, sq8) in [
+            (0, 1_000_000, 950.0, 500_500_000_000_u64, 500500),
+            (1, 2_000_000, 1900.0, 1_001_000_000_000_u64, 501500),
+        ] {
+            let arm = &report["arms"][index];
+            assert_eq!(arm["first_query"]["query_wall_ns"], first);
+            assert_eq!(arm["statistics"]["count"], 1000);
+            assert_eq!(arm["statistics"]["p95_ms"], p95);
+            assert_eq!(arm["statistics"]["query_wall_ns"], total);
+            assert_eq!(arm["stage_wall_sums"]["sq8_ns"], sq8);
+        }
+        let pooled = &report["pooled_both_arms"];
+        assert_eq!(pooled["statistics"]["count"], 2000);
+        assert_eq!(pooled["statistics"]["p50_ms"], 667.0);
+        assert_eq!(pooled["statistics"]["p90_ms"], 1600.0);
+        assert_eq!(pooled["statistics"]["p95_ms"], 1800.0);
+        assert_eq!(pooled["statistics"]["p99_ms"], 1960.0);
+        assert_eq!(pooled["statistics"]["query_wall_ns"], 1_501_500_000_000_u64);
+        assert!(
+            (pooled["statistics"]["sequential_qps"].as_f64().unwrap() - 1.332001332001332).abs()
+                < 1e-12
+        );
+        assert_eq!(pooled["stage_wall_sums"]["sq8_ns"], 1_002_000);
+        assert_eq!(report["trace_plan_parity"], true);
+        assert_eq!(report["logical_charge_parity"], true);
+        assert_eq!(report["performance_pass_claim"], false);
+        assert_eq!(report["qualified"], false);
+        let output = dir.path().join("paired-report");
+        assert!(execute_report(&output, PAIRED_SCHEMA, || reduce_paired(&config, &pin)).unwrap());
+        let original = std::fs::read(&output).unwrap();
+        assert!(
+            execute_report(&output, PAIRED_SCHEMA, || panic!(
+                "occupied output invoked reducer"
+            ))
+            .is_err()
+        );
+        assert_eq!(std::fs::read(&output).unwrap(), original);
+        // The single completed mode also admits the exact new native fields.
+        let (single, pin) = v2_config(dir.path(), &encode(&b), &b);
+        assert_eq!(
+            reduce_completed(&single, &pin).unwrap()["statistics"]["p95_ms"],
+            1900.0
+        );
+    }
+
+    #[test]
+    fn paired_v2_rejects_authenticated_semantic_plan_and_charge_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = paired_v2_fixture(16);
+        authenticate(&mut a);
+        let a_bytes = encode(&a);
+        // Each mutation remains a valid, re-sealed single run: paired parity,
+        // rather than stale checksums or inconsistent terminal sums, must fail.
+        for case in 0..14 {
+            let mut b = paired_v2_fixture(32);
+            match case {
+                0 => b[5]["returned"][9]["id"] = json!(11),
+                1 => b[5]["returned"][9]["score_bits"] = json!(0x4040_0000_u32),
+                2 => {
+                    b[1006]["hits10"] = json!(8);
+                    b[1006]["recall10"] = json!(0.8);
+                    let t = &mut b.last_mut().unwrap()["summary"];
+                    t["total_hits10"] = json!(8999);
+                    t["recall_numerator"] = json!(8999);
+                    t["mean_recall10"] = json!(0.8999);
+                }
+                3..=9 => {
+                    let key = [
+                        "ranked_candidate_pages",
+                        "nomination_evaluated_units",
+                        "primary_page",
+                        "discoveries",
+                        "semantic_leaves",
+                        "semantic_units",
+                        "semantic_seed_additions",
+                    ][case - 3];
+                    match key {
+                        "primary_page" => b[5]["trace"][key] = json!(1),
+                        "discoveries" => {
+                            b[5]["trace"][key][0]["seed_evaluated_units"] = json!([1, 2])
+                        }
+                        _ => {
+                            let ordered = b[5]["trace"][key].as_array_mut().unwrap();
+                            if ordered.len() > 1 {
+                                ordered.reverse();
+                            } else {
+                                ordered.push(json!(7));
+                            }
+                        }
+                    }
+                }
+                10 | 11 => {
+                    let key = if case == 10 {
+                        "submitted_gets"
+                    } else {
+                        "verified_bytes"
+                    };
+                    b[5]["charges"]["source"][key] =
+                        json!(b[5]["charges"]["source"][key].as_u64().unwrap() + 1);
+                    b[5]["sum"][key] = json!(b[5]["sum"][key].as_u64().unwrap() + 1);
+                    let t = &mut b.last_mut().unwrap()["summary"];
+                    t["charges"]["source"][key] =
+                        json!(t["charges"]["source"][key].as_u64().unwrap() + 1);
+                    t["sum"][key] = json!(t["sum"][key].as_u64().unwrap() + 1);
+                }
+                13 => b[1004]["returned"][9]["id"] = json!(11),
+                _ => {
+                    b[5]["returned"].as_array_mut().unwrap().pop();
+                    b[5]["returned_count"] = json!(9);
+                    b[5]["underfill"] = json!(true);
+                    b[1006]["returned_count"] = json!(9);
+                    b[1006]["underfill"] = json!(true);
+                    b.last_mut().unwrap()["summary"]["underfilled_queries"] = json!(1);
+                }
+            }
+            authenticate(&mut b);
+            let b_bytes = encode(&b);
+            let (single, single_pin) = v2_config(dir.path(), &b_bytes, &b);
+            assert!(
+                reduce_completed(&single, &single_pin).is_ok(),
+                "valid single case {case}"
+            );
+            let (config, pin) = paired_v2_config(dir.path(), [&a_bytes, &b_bytes], [&a, &b]);
+            let error = reduce_paired(&config, &pin).unwrap_err().to_string();
+            let ordinal = if case == 13 { 999 } else { 0 };
+            assert!(
+                error.contains(&format!("paired query {ordinal}:")),
+                "case {case}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn paired_v2_rejects_pins_selectors_unknowns_and_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = paired_v2_fixture(16);
+        authenticate(&mut a);
+        let a_bytes = encode(&a);
+        for case in 0..25 {
+            let mut b = paired_v2_fixture(32);
+            match case {
+                0..=5 => {
+                    let key = [
+                        "binary_sha256",
+                        "runner_source_sha256",
+                        "generation_source_sha256",
+                        "router_source_sha256",
+                        "codec_source_sha256",
+                        "source_plane_source_sha256",
+                    ][case];
+                    b[0][key] = json!("2".repeat(64));
+                }
+                6 => b[1]["backend"]["sq8_etag"] = json!("different-etag"),
+                7 => b[1]["generation_root_sha256"] = json!("2".repeat(64)),
+                8 => b[0]["config_sha256"] = a[0]["config_sha256"].clone(),
+                9 => b[1]["fetch_parallelism"] = json!(16),
+                10..=14 => {
+                    let v = [
+                        json!(17),
+                        json!(32.0),
+                        json!("32"),
+                        json!(true),
+                        Value::Null,
+                    ][case - 10]
+                        .clone();
+                    b[0]["fetch_parallelism"] = v.clone();
+                    b[1]["fetch_parallelism"] = v;
+                }
+                15 => b[1]["source_cache"] = json!("on"),
+                16 => b[5]["ignored"] = json!(1),
+                17 => b[5]["stages"]["discovery"]["ignored"] = json!(1),
+                18 => b[5]["trace"]["discoveries"][0]["ignored"] = json!(1),
+                19 => b[0]["ignored"] = json!(1),
+                20 => b[2]["success"] = json!(false),
+                21 => b.last_mut().unwrap()["summary"]["status"] = json!("INVALID"),
+                22 => {
+                    // Internally consistent native counters still disclose a
+                    // failed body; no timing claim may use this paired run.
+                    b[1004]["transport"]["after"]["stream_failures"] = json!(1);
+                    b.last_mut().unwrap()["summary"]["transport_last_boundary"]["after"]["stream_failures"] =
+                        json!(1);
+                }
+                23 => {
+                    b[0].as_object_mut().unwrap().remove("fetch_parallelism");
+                    b[1].as_object_mut().unwrap().remove("fetch_parallelism");
+                    b[1].as_object_mut().unwrap().remove("source_cache");
+                }
+                _ => b[1004]["stages"]["leaf_peak_inflight"] = json!(17),
+            }
+            authenticate(&mut b);
+            if case == 24 {
+                let (config, pin) = v2_config(dir.path(), &encode(&b), &b);
+                assert!(reduce_completed(&config, &pin).is_ok());
+            }
+            let (config, pin) = paired_v2_config(dir.path(), [&a_bytes, &encode(&b)], [&a, &b]);
+            let output = dir.path().join(format!("invalid-pair-{case}"));
+            assert!(
+                !execute_report(&output, PAIRED_SCHEMA, || reduce_paired(&config, &pin)).unwrap(),
+                "case {case}"
+            );
+            let report: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+            assert_eq!(report["status"], "INVALID");
+            assert_eq!(report["complete"], false);
+            if case == 24 {
+                assert_eq!(
+                    report["error"],
+                    "paired Native100k query leaf_peak_inflight exceeds 16"
+                );
+            }
+        }
+        // Individually valid new rows must agree on the selector even outside
+        // paired mode; old v2 rows remain covered by completed-mode fixtures.
+        let mut b = paired_v2_fixture(32);
+        b[1]["fetch_parallelism"] = json!(16);
+        authenticate(&mut b);
+        let (config, pin) = v2_config(dir.path(), &encode(&b), &b);
+        assert_eq!(
+            reduce_completed(&config, &pin).unwrap_err().to_string(),
+            "identity/input fetch_parallelism agreement"
+        );
+
+        // Both files and their expected rows agree on each wrong benchmark pin.
+        // Re-seal and rehash them so the failure cannot be blamed on stale pins.
+        for (key, wrong) in [
+            ("rows", json!(99999)),
+            ("dimensions", json!(16)),
+            ("count", json!(999)),
+            ("k", json!(9)),
+            ("dataset", json!("synthetic/native-fixture")),
+            ("revision", json!("fixture-revision")),
+            ("metric", json!("dot")),
+            ("tie_rule", json!("corpus_ordinal_descending")),
+            ("profile", json!("fresh1m")),
+            ("corpus_source_first", json!(1)),
+            ("query_source_first", json!(100001)),
+            ("requests_bytes", json!(4096004)),
+            ("truth_bytes", json!(80008)),
+            ("requests_sha256", json!("0".repeat(64))),
+            ("truth_sha256", json!("0".repeat(64))),
+            ("native_source_sha256", json!("0".repeat(64))),
+            ("native_sq8_sha256", json!("0".repeat(64))),
+            ("native_order_sha256", json!("0".repeat(64))),
+        ] {
+            let [mut a, mut b] = [paired_v2_fixture(16), paired_v2_fixture(32)];
+            for rows in [&mut a, &mut b] {
+                rows[1][key] = wrong.clone();
+                if matches!(key, "dimensions" | "count" | "k") {
+                    let i = &mut rows[1];
+                    i["requests_bytes"] =
+                        json!(i["count"].as_u64().unwrap() * i["dimensions"].as_u64().unwrap() * 4);
+                    i["truth_bytes"] =
+                        json!(i["count"].as_u64().unwrap() * i["k"].as_u64().unwrap() * 8);
+                }
+                rows[1]["backend"]["sq8_object_key"] = json!(format!(
+                    "fixture/objects/{}",
+                    rows[1]["native_sq8_sha256"].as_str().unwrap()
+                ));
+                rows[1005]["requests_sha256"] = rows[1]["requests_sha256"].clone();
+                for pin in ["requests_sha256", "truth_sha256"] {
+                    rows.last_mut().unwrap()["summary"][pin] = rows[1][pin].clone();
+                }
+                authenticate(rows);
+            }
+            let (config, pin) = paired_v2_config(dir.path(), [&encode(&a), &encode(&b)], [&a, &b]);
+            assert_eq!(
+                reduce_paired(&config, &pin).unwrap_err().to_string(),
+                "paired production benchmark pins",
+                "wrong {key}"
+            );
+            // The same error with no result files proves admission precedes open.
+            for name in ["paired-0.jsonl", "paired-1.jsonl"] {
+                std::fs::remove_file(dir.path().join(name)).unwrap();
+            }
+            assert_eq!(
+                reduce_paired(&config, &pin).unwrap_err().to_string(),
+                "paired production benchmark pins",
+                "pre-open {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn paired_v2_rejects_duplicate_truncated_unsealed_and_unpinned_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = paired_v2_fixture(16);
+        let mut b = paired_v2_fixture(32);
+        authenticate(&mut a);
+        authenticate(&mut b);
+        let a_bytes = encode(&a);
+        let b_bytes = encode(&b);
+        for case in 0..10 {
+            let mut rows = b.clone();
+            match case {
+                0 => rows[1005]["prefix_sha256"] = json!("0".repeat(64)),
+                1 => rows.last_mut().unwrap()["summary"]["sealed_bytes"] = json!(1),
+                2 => rows[1005]["requires_successful_sync"] = json!(false),
+                3 => rows[1005]["requires_successful_directory_sync"] = json!(false),
+                _ => (),
+            }
+            let mut bytes = encode(&rows);
+            match case {
+                4 => {
+                    bytes.pop();
+                }
+                5 => bytes.truncate(bytes.len() / 2),
+                6 => bytes.extend_from_slice(b"{}\n"),
+                7 => {
+                    bytes = String::from_utf8(bytes)
+                        .unwrap()
+                        .replacen(
+                            "\"fetch_parallelism\":32",
+                            "\"fetch_parallelism\":32,\"fetch_parallelism\":32",
+                            1,
+                        )
+                        .into_bytes();
+                }
+                8 => {
+                    bytes = String::from_utf8(bytes)
+                        .unwrap()
+                        .replacen("\"seed_page\":0", "\"seed_page\":0,\"seed_page\":0", 1)
+                        .into_bytes();
+                }
+                9 => {
+                    bytes = encode(&rows[..1005]);
+                }
+                _ => (),
+            }
+            let (config, pin) = paired_v2_config(dir.path(), [&a_bytes, &bytes], [&a, &b]);
+            let error = reduce_paired(&config, &pin).unwrap_err().to_string();
+            if matches!(case, 7 | 8) {
+                assert!(
+                    error.contains("duplicate JSON key"),
+                    "file case {case}: {error}"
+                );
+            }
+        }
+        for case in 0..6 {
+            let (config, pin) = paired_v2_config(dir.path(), [&a_bytes, &b_bytes], [&a, &b]);
+            let original = std::fs::read(&config).unwrap();
+            let mut value: Value = serde_json::from_slice(&original).unwrap();
+            match case {
+                0 => value["arms"][1]["input"]["bytes"] = json!(1),
+                1 => value["arms"][1]["input"]["sha256"] = json!("0".repeat(64)),
+                2 => value["ignored"] = json!(true),
+                3 => value["arms"][1]["expected_identity"]["config_sha256"] = json!("7".repeat(64)),
+                _ => (),
+            }
+            let mut bytes = serde_json::to_vec(&value).unwrap();
+            if case == 4 {
+                bytes = String::from_utf8(bytes)
+                    .unwrap()
+                    .replacen("\"arms\":", "\"arms\":[],\"arms\":", 1)
+                    .into_bytes();
+            }
+            std::fs::write(&config, &bytes).unwrap();
+            let config_sha = if case == 5 {
+                "0".repeat(64)
+            } else {
+                sha(&bytes)
+            };
+            let error = reduce_paired(&config, &config_sha).unwrap_err().to_string();
+            if case == 4 {
+                assert!(
+                    error.contains("duplicate JSON key"),
+                    "config duplicate: {error}"
+                );
+            }
+            if case == 5 {
+                assert!(reduce_paired(&config, &pin).is_ok());
+                let mut tampered = b_bytes.clone();
+                tampered.extend_from_slice(b" ");
+                std::fs::write(dir.path().join("paired-1.jsonl"), &tampered).unwrap();
+                assert!(reduce_paired(&config, &pin).is_err());
+            }
+        }
     }
 
     #[test]

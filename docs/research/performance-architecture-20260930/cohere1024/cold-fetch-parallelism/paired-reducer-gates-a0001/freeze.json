@@ -1,0 +1,57 @@
+{
+  "status": "FROZEN_NOT_LAUNCHED",
+  "preview": "0f617199cd521590e8760aca41f36bd730c5a5a7",
+  "cold_candidate": "d8e64dbc4a252bb009452922d40affe8321d8c47",
+  "reducer_candidate": "b736f1200b1a48cda4480756d55ccb9c3027e455",
+  "native_count": 415,
+  "support_count": 2450,
+  "native_identity": "89e258e26610f2304f063fa64e8597a5a934984e8afe7635358b223152128d50",
+  "archive": {
+    "source_preview": "0f617199cd521590e8760aca41f36bd730c5a5a7",
+    "archive_sha256": "8fb47c833f001a8142c4863530a332b12a4b83b28ff487c8249170b714bcbe40",
+    "archive_bytes": 13354234,
+    "support_count": 2450,
+    "native_count": 415,
+    "all_members_hash_match": true,
+    "only_changed_file_vs_original_source_preview": "crates/borsuk/examples/compare_native_replay.rs",
+    "old_archive_preserved": true,
+    "status": "EXACT_SOURCE_PACKAGE_NO_LAUNCH"
+  },
+  "native_seconds": 7200,
+  "machine_seconds": 9000,
+  "cpu": 2,
+  "memory_bytes": 8589934592,
+  "swap_bytes": 0,
+  "pids": 512,
+  "compiler_jobs": 1,
+  "reservation_usd": {
+    "compute": "1.25",
+    "ancillary": ".15",
+    "total": "1.40"
+  },
+  "spot_max_bid_usd_per_hour": ".50",
+  "support_sha256": {
+    "gates-draft.sh": "90d596d096ae0070574f6649d332378161e54020e11bd36a80895521367916de",
+    "user-data-draft.sh": "58ad03f0c7257b1038d7de787fca7bfc0e2711b783560904e8fa9c31309b8c19",
+    "source-files.sha256": "13167fcb57797d3b536a99924f33b83f780783bc98a1090476763d12182d34a0",
+    "native-source.json": "878ae3f94f07cf4665fc9e41866f39d3003ac7d06e9309aad98b1636b8503eec",
+    "run-instances-draft.json": "306eb8c23a3ed9f73718078bc37e9ca1cb65a11680f1c5fb88770029396f7aff"
+  },
+  "runtime_and_scientific_claim": false,
+  "staging": {
+    "source_upload_session": 3492,
+    "source_upload_exit": 0,
+    "support_upload_exit": 0,
+    "instance_launched": false
+  },
+  "qualified_library_main": "94c53bf44fe709a9bf3fdb64ebc53a3d8efe7056",
+  "prior_qualification": {
+    "session": 65959,
+    "instance_id": "i-08ea9aa14c4076479",
+    "terminated": true,
+    "receipt_path": "/data/target/borsuk-cold-fetch-native-gates-a0002/independent-verification.json",
+    "receipt_bytes": 4155,
+    "receipt_sha256": "2e7f4585659fb1f1db1e67ac65ee65277d97bb5f85e5eac77d9f1d9d09aae05b"
+  },
+  "review_reconciliation": "Both complete reports read; paired benchmark pin guard e976 and per-query Native100k leaf peak<=16 b736 repaired; independent runtime identity comes from qualified binary/component/source and publication receipts; ABBA timing protocol preregistered separately."
+}

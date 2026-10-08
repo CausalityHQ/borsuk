@@ -1,0 +1,11 @@
+{
+  "source_preview": "0f617199cd521590e8760aca41f36bd730c5a5a7",
+  "archive_sha256": "8fb47c833f001a8142c4863530a332b12a4b83b28ff487c8249170b714bcbe40",
+  "archive_bytes": 13354234,
+  "support_count": 2450,
+  "native_count": 415,
+  "all_members_hash_match": true,
+  "only_changed_file_vs_original_source_preview": "crates/borsuk/examples/compare_native_replay.rs",
+  "old_archive_preserved": true,
+  "status": "EXACT_SOURCE_PACKAGE_NO_LAUNCH"
+}

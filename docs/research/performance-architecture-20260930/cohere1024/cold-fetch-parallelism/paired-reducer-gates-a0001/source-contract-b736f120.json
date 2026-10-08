@@ -1,0 +1,157 @@
+{
+  "status": "REVIEW_REPAIRS_SOURCE_ONLY_UNVERIFIED_HOLD",
+  "base": "f4542d841cac56590fe511a7a14b2b9861f7a03c",
+  "commit": "b736f1200b1a48cda4480756d55ccb9c3027e455",
+  "owned_sha256": {
+    "crates/borsuk/examples/compare_native_replay.rs": "63de4283a328572c358eeb85b940c19a55f451b725e142551ae00d0c8db2e243"
+  },
+  "api": {
+    "cli": "compare_native_replay --paired-v2 CONFIG CONFIG_SHA256 NEW_OUTPUT_JSON",
+    "config_schema": "borsuk-paired-native-reduction-config-v1",
+    "config_shape": {
+      "schema": "borsuk-paired-native-reduction-config-v1",
+      "arms": [
+        {
+          "schema": "borsuk-completed-native-reduction-config-v1",
+          "input": {
+            "path": "absolute-or-relative native JSONL path",
+            "bytes": "exact u64 full-file length",
+            "sha256": "exact lowercase full-file SHA256"
+          },
+          "expected_identity": "exact emitted identity row with integer fetch_parallelism16",
+          "expected_bound_inputs": "exact emitted bound_inputs row with integer fetch_parallelism16 and source_cache off"
+        },
+        {
+          "schema": "borsuk-completed-native-reduction-config-v1",
+          "input": {
+            "path": "second native JSONL path",
+            "bytes": "exact u64 full-file length",
+            "sha256": "exact lowercase full-file SHA256"
+          },
+          "expected_identity": "exact emitted identity row with integer fetch_parallelism32",
+          "expected_bound_inputs": "exact emitted bound_inputs row with integer fetch_parallelism32 and source_cache off"
+        }
+      ]
+    },
+    "report_schema": "borsuk-paired-native-reduction-v1",
+    "comparison": "All other raw identity/bound_inputs pins identical, except config_sha256 must differ. Same externally admitted binary and five emitted source components. Each of1000 query ordinals checks ordered ID/scorebits, returned count/underfill, recall hits, per-component logical submitted GET/verified bytes/failed GET charge, and the validated ordered TwoBitPlanTrace fingerprint. Successful source binding charges also match. This is trace plus charge parity, not direct observation of physical source-page/SQ8-range rosters.",
+    "trace": "Native check_cohere_native_baseline::Record places transport after trace. Fingerprint canonical serde_json serialization of the complete validated TwoBitPlanTrace; all its arrays retain order and all discovery fields are included. No trace field exceptions. TwoBitPlanTrace does not contain physical source-page or SQ8-range lists: their equality is not directly proved by this report. Timing, leaf_peak_inflight, query CPU and cumulative transport are outside this trace and intentionally not part of trace parity.",
+    "statistics": "Each arm retains all1000-query nearest-rank wall/stage statistics, serial reciprocal QPS, stage totals and native evidence. First query separately per arm. Explicit pooled_both_arms includes all2000 observations with no selection. No timing gate, vendor win, cold/RSS/cost qualification.",
+    "compatibility": "Frozen historical four-arm paired/compare functions and old tests unchanged. Existing completed mode shares config/report helpers and admits only exact candidate additions: integer fetch_parallelism16|32 in BOTH identity/bound_inputs with agreement, source_cache off. Old completed rows without selector remain accepted.",
+    "failure": "Config, authentication, schema, transport/stream/non-success response/logical failures, incomplete/INVALID terminal or parity mismatch produce INVALID via existing create-only writer. Output occupied returns error without invoking reduction or modifying existing bytes.",
+    "production_admission": "Paired mode ONLY, before opening either result: exact CohereLabs/wikipedia-2023-11-embed-multilingual-v3 revision ade45fb52bd549f5e8c065636fe4160a43c2af36, cosine/corpus_ordinal_ascending, rows100000/D1024/count1000/k10, corpus_source_first0/query_source_first100000, native100k, truth unopened, request bytes4096000/truth bytes80000, all five retained requests/truth/native_source/native_sq8/native_order INPUT_SHA256 pins. Native production shape is from check_cohere_native_baseline::Shape::PRODUCTION/validate_config; exact retained pins already exist in this reducer and committed paired-retained-replay-inputs.json. Backend/generation/binary/source identities remain paired exact pins.",
+    "leaf_peak_admission": "Paired ONLY: max_leaf_peak_inflight across all1000 queries must be <=16 in each arm. This is equivalent to bounding every per-query observation. Native100k selected_leaf_limit is16, producer uses buffered(min(width,ids.len)). Generic completed and historical modes unchanged; no new telemetry.",
+    "independent_pin_admission": "ROOT responsibility BEFORE measurement/reduction: derive and preregister expected binary SHA from the frozen release-build receipt; emitted component SHAs from exact source, including SQ8 implementation through full binary/source identity; generation root, backend namespace and actual SQ8 ETag from independent publication receipts. Do not derive expected pins by copying result rows. Runtime binary/source/publication values intentionally not hardcoded into reducer source.",
+    "interpretation": "Arm timing is provisional until root obtains counterbalanced BA replication before choosing width. Native100k discovery concurrency is unchanged (max16 leaves), so discovery is an A/A drift control. Source/SQ8 inflight is not emitted; this report does not prove width32 transport occupancy. pooled_both_arms mixes treatments and is not either individual configuration's p95."
+  },
+  "caps": {
+    "config_bytes": 32768,
+    "result_bytes_per_arm": 67108864,
+    "line_bytes": 262144,
+    "report_bytes": 2097152,
+    "queries_per_arm": 1000,
+    "k": 10,
+    "inputs": 2,
+    "path_bytes": 4096,
+    "local": "CPUQuota=100%, MemoryMax=256M, MemorySwapMax=0, timeout120s rustfmt/static only",
+    "runtime": "Parent owns bounded remote native runtime. No local Cargo/rustc/native/data/truth/network/AWS/consult/review/children."
+  },
+  "exact_test_names": [
+    "tests::paired_v2_sealed_native_rows_statistics_and_create_only",
+    "tests::paired_v2_rejects_authenticated_semantic_plan_and_charge_changes",
+    "tests::paired_v2_rejects_pins_selectors_unknowns_and_failures",
+    "tests::paired_v2_rejects_duplicate_truncated_unsealed_and_unpinned_files"
+  ],
+  "mandatory_test_roster": [
+    {
+      "target": "borsuk example compare_native_replay",
+      "exact_name": "tests::paired_v2_sealed_native_rows_statistics_and_create_only",
+      "command": "CARGO_BUILD_JOBS=1 timeout 120s cargo test --locked -p borsuk --example compare_native_replay tests::paired_v2_sealed_native_rows_statistics_and_create_only -- --exact --nocapture --test-threads=1",
+      "expected_selected_test_count": 1,
+      "observed_test_count": null,
+      "execution": "UNRUN"
+    },
+    {
+      "target": "borsuk example compare_native_replay",
+      "exact_name": "tests::paired_v2_rejects_authenticated_semantic_plan_and_charge_changes",
+      "command": "CARGO_BUILD_JOBS=1 timeout 120s cargo test --locked -p borsuk --example compare_native_replay tests::paired_v2_rejects_authenticated_semantic_plan_and_charge_changes -- --exact --nocapture --test-threads=1",
+      "expected_selected_test_count": 1,
+      "observed_test_count": null,
+      "execution": "UNRUN"
+    },
+    {
+      "target": "borsuk example compare_native_replay",
+      "exact_name": "tests::paired_v2_rejects_pins_selectors_unknowns_and_failures",
+      "command": "CARGO_BUILD_JOBS=1 timeout 120s cargo test --locked -p borsuk --example compare_native_replay tests::paired_v2_rejects_pins_selectors_unknowns_and_failures -- --exact --nocapture --test-threads=1",
+      "expected_selected_test_count": 1,
+      "observed_test_count": null,
+      "execution": "UNRUN"
+    },
+    {
+      "target": "borsuk example compare_native_replay",
+      "exact_name": "tests::paired_v2_rejects_duplicate_truncated_unsealed_and_unpinned_files",
+      "command": "CARGO_BUILD_JOBS=1 timeout 120s cargo test --locked -p borsuk --example compare_native_replay tests::paired_v2_rejects_duplicate_truncated_unsealed_and_unpinned_files -- --exact --nocapture --test-threads=1",
+      "expected_selected_test_count": 1,
+      "observed_test_count": null,
+      "execution": "UNRUN"
+    }
+  ],
+  "remote_commands": {
+    "affected_compile": "CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --example compare_native_replay --no-run",
+    "affected_regressions": "CARGO_BUILD_JOBS=1 timeout 120s cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1",
+    "release": "CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk --example compare_native_replay",
+    "workspace_clippy": "CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "real_env_unset_test_build": "env -u BORSUK_TEST_BUILD_COMMAND CARGO_BUILD_JOBS=1 BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  },
+  "remote_protocol": "Root verifies exact source, compiles affected target first, then exact new tests (1 each) and all affected example regressions; release, full workspace Clippy, actual shim-unset testcompile exit0 before integration. 120s applies to already-built test execution, not compilation. Stop at failing layer, collect original terminal receipt, no overlapping/repeated jobs.",
+  "verification": {
+    "rustfmt": "PASS exit0 under CPU1/256MiB/swap0/120s scope",
+    "git_diff_check": "PASS exit0",
+    "compilation": "UNRUN",
+    "native_tests": "UNRUN",
+    "release": "UNRUN",
+    "workspace_clippy": "UNRUN",
+    "real_env_unset_test_build": "UNRUN",
+    "historical_preservation": "PASS exit0: static cmp of original paired/compare functions and entire existing completed/historical test tail against exact f4542d84 base; no historical pins/output or tests changed.",
+    "scope": "PASS exit0: ONLY owned example changed; repair parent e976ceb6 preserved atop f0a717f3; Roman identity/no trailers, clean worktree. Scoped cmp confirms shared reader/completed prefix, historical functions/old fixtures, old completed/historical tests unchanged versus e976.",
+    "native_test_count": "UNRUN: 4 new tests plus 8 existing example tests = expected12 total; exact new filters must each select1.",
+    "repair_checks": "CPUQuota100%/MemoryMax256M/MemorySwapMax0/timeout120s rustfmt --check, git diff --check, static preservation checks exit0. All Cargo/rustc/native execution remains UNRUN. Four existing new test names and expected12 total unchanged."
+  },
+  "scope": "Only existing reducer file. No dependencies/public APIs/scoring/input data or other worker/job/namespace touched. Source-only synthetic native-schema output fixtures are correctness checks, not measurement evidence.",
+  "handoff": "HOLD SAME worker; no agent_complete until root exact affected/release/workspaceClippy/env-unset testcompile0/integration disposition. Parent owns integration, resource qualification and paid measurement. No push/merge.",
+  "commit_author": "Roman Bartusiak <riomus@gmail.com>",
+  "branch": "devbox/cold-fetch-paired-rust-reducer-source-f4542d84",
+  "worktree_clean": true,
+  "fixture_scope": "Native-schema sealed output fixture metadata matches admitted production panel without constructing corpus/query/truth bodies. Both arms use legitimate leaf_peak_inflight1 matching one emitted semantic leaf. Wall/CPU/stage/cumulative transport observations differ; golden per-arm/pooled statistics unchanged. Existing rejection test now re-seals and repins final query999 at leaf_peak_inflight17, verifies generic completed admission still succeeds, and requires exact paired INVALID bound error. Existing4 test names unchanged; no new test function.",
+  "preserved_implementation_commit": "f0a717f37f9c68c0f45b9e5b33dd676c52dc17c6",
+  "production_admission_repair": {
+    "instruction": "1791417166299939736-2965865",
+    "commit": "e976ceb6dc93980e4ee5cfccd3f79c4a5f188738",
+    "source_diff": "127 insertions in own existing file:28 production admission lines and99 fixture/refusal lines; no generic completed/historical/library changes.",
+    "fixture": "Production metadata and all five hashes independently literal in paired_v2_fixture; sealed request/truth pins and backend SQ8 key match. No corpus/query/truth payloads constructed/opened.",
+    "refusals": "Existing paired_v2_rejects_pins_selectors_unknowns_and_failures now includes18 both-arm/config-matched resealed bad rows/D/count/k/dataset/revision/metric/tie/profile/split/byte/hash cases; adjusts dependent declared byte counts and repeated seal/footer/key pins. Each asserts the production-admission error with valid present result files, then removes both result files and asserts the same error before open. Test code authored, UNRUN.",
+    "reviews": "Historical state at e976 handoff was awaiting both original reports; both have now been read fully, see review_repair.",
+    "handoff": "Historical e976 source-only handoff preserved; current HOLD awaits root remote gates/integration as described in review_repair."
+  },
+  "preserved_geometry_repair_commit": "e976ceb6dc93980e4ee5cfccd3f79c4a5f188738",
+  "review_repair": {
+    "instruction": "1791417617158409736-2965865",
+    "original_critique": "216c15725b604a18",
+    "commit": "b736f1200b1a48cda4480756d55ccb9c3027e455",
+    "reports_read_fully": [
+      {
+        "path": "/data/target/borsuk-cold-fetch-paired-reducer-gates-a0001/research_critic.md",
+        "sha256": "9e953a9671cd92e244338c673b3823d3c1d786c8065c3cf954c7821a29c4d50f"
+      },
+      {
+        "path": "/data/target/borsuk-cold-fetch-paired-reducer-gates-a0001/engineering_critic.md",
+        "sha256": "014de45b592472d6274f2455660e1f15a5df7c261460aafc99a87abebecbb975"
+      }
+    ],
+    "reconciliation": "Both identify production geometry gap, repaired in e976. Engineering impossible-leaf-peak finding and research H2 repaired in b736. Research independent pin admission remains explicitly ROOT procedural responsibility; trace physical-roster limitation and BA/A-A/pooled-treatment interpretation recorded accurately. Optional telemetry/features/tests/reviews not added.",
+    "source_evidence": "semantic_unit_router::SemanticProfile::selected_leaf_limit Native100k=16; d8e64dbc two_bit_generation::semantic_walks_remote buffered(max_parallel_source_gets.min(ids.len())); existing StageTotals::add accumulates max for each of1000 ordered queries.",
+    "source_diff": "6 lines paired-only aggregate upper-bound check; remove impossible positive32 peak (inherits1); extend existing rejection test with final-query peak17, independently resealed/repinned and completed-mode-positive. +19/-3, OWN1.",
+    "native": "UNRUN; no local Cargo/rustc/native/data/truth/network/AWS/reviews/children/jobs.",
+    "handoff": "Both full original reports read. HOLD SAME worker pending root exact affected/release/workspaceClippy/real env-unset workspace testcompile0/integration; no agent_complete, merge or push."
+  }
+}

@@ -1,0 +1,109 @@
+{
+  "status": "NATIVE_QUALIFIED",
+  "source_preview": "0f617199cd521590e8760aca41f36bd730c5a5a7",
+  "candidate": "b736f1200b1a48cda4480756d55ccb9c3027e455",
+  "native_file_count": 415,
+  "support_file_count": 2450,
+  "all415_git_blob_hashes_match": true,
+  "full2450_source_before_after_match": true,
+  "all_recorded_argv_match_frozen_gate": true,
+  "terminal_artifact_count": 88,
+  "original_session": 37890,
+  "instance_id": "i-00d3d35529682020a",
+  "terminated": true,
+  "wait_exit": 0,
+  "stages": [
+    {
+      "name": "affected-compile",
+      "command": "cargo test --locked -p borsuk --example compare_native_replay --no-run",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "passed_counts": []
+    },
+    {
+      "name": "paired-exact-1",
+      "command": "timeout 120s cargo test --locked -p borsuk --example compare_native_replay tests::paired_v2_sealed_native_rows_statistics_and_create_only -- --exact --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "passed_counts": [
+        "1"
+      ]
+    },
+    {
+      "name": "paired-exact-2",
+      "command": "timeout 120s cargo test --locked -p borsuk --example compare_native_replay tests::paired_v2_rejects_authenticated_semantic_plan_and_charge_changes -- --exact --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "passed_counts": [
+        "1"
+      ]
+    },
+    {
+      "name": "paired-exact-3",
+      "command": "timeout 120s cargo test --locked -p borsuk --example compare_native_replay tests::paired_v2_rejects_pins_selectors_unknowns_and_failures -- --exact --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "passed_counts": [
+        "1"
+      ]
+    },
+    {
+      "name": "paired-exact-4",
+      "command": "timeout 120s cargo test --locked -p borsuk --example compare_native_replay tests::paired_v2_rejects_duplicate_truncated_unsealed_and_unpinned_files -- --exact --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "passed_counts": [
+        "1"
+      ]
+    },
+    {
+      "name": "example-regressions",
+      "command": "timeout 120s cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "passed_counts": [
+        "12"
+      ]
+    },
+    {
+      "name": "release",
+      "command": "cargo build --locked --release -p borsuk --example compare_native_replay",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "passed_counts": []
+    },
+    {
+      "name": "workspace-clippy",
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "passed_counts": []
+    },
+    {
+      "name": "real-test-build",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND CARGO_BUILD_JOBS=1 BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "native_exit": 0,
+      "tee_exit": 0,
+      "passed_counts": []
+    }
+  ],
+  "binary": {
+    "role": "compare_native_replay",
+    "bytes": 1164808,
+    "sha256": "9ad7ce0fe8f461a3b8f7957812c798103f234a83d1df6748d5f04cb870c4694b"
+  },
+  "memory_peak_bytes": 8589934592,
+  "memory_events": {
+    "low": "0",
+    "high": "0",
+    "max": "3161",
+    "oom": "0",
+    "oom_kill": "0",
+    "oom_group_kill": "0",
+    "sock_throttled": "0"
+  },
+  "swap_peak_bytes": 0,
+  "drained_pids": 2,
+  "performance_claim": false,
+  "downloaded_release_binary_hash_verified": true
+}
