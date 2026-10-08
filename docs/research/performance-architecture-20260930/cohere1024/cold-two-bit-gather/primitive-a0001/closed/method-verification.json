@@ -1,0 +1,15 @@
+{
+  "status": "METHOD_INVALID_FOR_ARCHITECTURE_DECISION",
+  "original_terminal_exit": 43,
+  "original_native_receipt": "REJECT",
+  "repaired_math_exit": 42,
+  "same_saved_records_no_native_rerun": true,
+  "verifier_root_cause": "codec pads complete 256-coordinate blocks plus next-power-of-two tail; packed bytes ceil(padded/4)",
+  "sample_min_cpu_ns": 1999606,
+  "sample_max_cpu_ns": 3000458,
+  "median_distance_to_whole_millisecond_ns": 123.4999999999431,
+  "precision_issue": "1-3ms CPU cells strongly quantized near whole milliseconds; ratio changes of 0.667/1/1.5 are too coarse for 5% regression gate",
+  "production_accepted": false,
+  "cold_or_vendor_claim": false,
+  "next_gate": "prospectively increase fixed repeated work per cell and require a minimum measured CPU duration; keep algorithm, acceptance ratios and resource ceilings unchanged"
+}
