@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-cold-fetch-abba-v1",
+  "instance_id": "i-0f992877edc2c3745",
+  "phase": "native",
+  "original_exit": 2,
+  "exit": 2,
+  "native_exit": 0,
+  "binary_source_commit": "31eca73431901c193aff598f4c6e44d7140594da",
+  "integration_commit": "94c53bf44fe709a9bf3fdb64ebc53a3d8efe7056",
+  "qualified_source_identity_sha256": "6dd4fbe0eeb512ef807868ba4088d35350eaaf93ab67fed6b9e7f204a5397a7b",
+  "evidence": {
+    "bytes": 4824642,
+    "sha256": "af92d3c3a559363cb030fba91ab1ff208240a2e2228e85402df536f6d94c3b72"
+  },
+  "terminal_delivery": "attempted",
+  "performance_claim": false
+}

@@ -1,0 +1,22 @@
+{
+  "status": "EXECUTION_INVALID_CONFIGURATION",
+  "instance_id": "i-0f992877edc2c3745",
+  "original_watcher_session": 98012,
+  "watcher_exit": 1,
+  "query_native_exits": {
+    "A1": 0,
+    "B1": 0,
+    "B2": 0,
+    "A2": 0
+  },
+  "pair1_reducer_exit": 2,
+  "pair1_error": "missing field `schema`",
+  "pair2": "UNRUN",
+  "terminal_source_pin": "corrupted by broad timer substitution; original preserved",
+  "actual_qualified_binary_pin": "628f93148d767b7fc456e566139788d67cf98e323ec66ef4e6ebe10ef330e82b",
+  "terminated": true,
+  "wait_exit": 0,
+  "algorithm_reject": false,
+  "performance_claim": false,
+  "recovery_scope": "Correct reducer config and rerun only native reduction over all4 immutable closed outputs; do not reissue queries or erase this INVALID attempt."
+}

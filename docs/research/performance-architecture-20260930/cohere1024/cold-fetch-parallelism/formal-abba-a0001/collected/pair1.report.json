@@ -1,0 +1,1 @@
+{"complete":false,"error":"missing field `schema`","external_resources_and_cost_gate_required":true,"frozen_runtime_root_config_admission_required":true,"local_file_only":true,"physical_s3":false,"qualified":false,"schema":"borsuk-paired-native-reduction-v1","status":"INVALID","supervisor_resources_cost_and_cache_qualified":false,"vendor_or_scientific_win_claim":false}

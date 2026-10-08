@@ -1,0 +1,8 @@
+/mnt/borsuk-retained-s3/runner: OK
+/mnt/borsuk-retained-s3/reducer: OK
+/mnt/borsuk-retained-s3/config-16.json: OK
+/mnt/borsuk-retained-s3/config-32.json: OK
+/mnt/borsuk-retained-s3/paired-reduction-template.json: OK
+/mnt/borsuk-retained-s3/stage.sh: OK
+/mnt/borsuk-retained-s3/queries.f32: OK
+/mnt/borsuk-retained-s3/truth.u64: OK
