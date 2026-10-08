@@ -1,0 +1,3 @@
+/mnt/borsuk-retained-s3/runner: OK
+/mnt/borsuk-retained-s3/config.json: OK
+/mnt/borsuk-retained-s3/stage.sh: OK

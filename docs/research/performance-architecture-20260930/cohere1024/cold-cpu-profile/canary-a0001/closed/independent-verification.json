@@ -1,0 +1,23 @@
+{
+  "status": "DISPOSABLE_CPU_PROFILER_PLATFORM_CANARY_PASS",
+  "instance_id": "i-00180615e2b84beec",
+  "terminated": true,
+  "wait_exit": 0,
+  "original_watch_session": 2702,
+  "evidence_bytes": 195899,
+  "evidence_sha256": "812d5f38cb9525f4f2af3fbf62c9742cf2f19c12b2a091ba9fd2978a8f576d3f",
+  "artifact_count": 40,
+  "artifact_sha_verified": true,
+  "stage_caps_verified": true,
+  "decoded_multiframe_samples": 117,
+  "peak_bytes": 88793088,
+  "perf_version": "perf version 7.0.14",
+  "kernel": "Linux ip-172-31-5-108 7.0.0-1013-aws #13~24.04.1-Ubuntu SMP PREEMPT Sat Sep  5 01:10:01 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux",
+  "native_queries": 0,
+  "native_gets": 0,
+  "truth_opened": false,
+  "ANN_claim": false,
+  "performance_claim": false,
+  "Rust_stack_attribution_verified": false,
+  "verification_repair": "Initial root check wrongly required executable DSO sha256sum in flat report; all sampled CPU belongs to libcrypto. Matching decoded SHA256_Update frames establish the preregistered platform check. No cloud/native rerun."
+}

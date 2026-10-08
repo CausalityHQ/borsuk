@@ -1,0 +1,2 @@
+linux-tools-7.0.0-1013-aws	7.0.0-1013.13~24.04.1
+linux-tools-common	6.8.0-146.146

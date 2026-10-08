@@ -1,0 +1,9 @@
+{
+  "status": "LAUNCHED_PENDING_PLATFORM_CANARY",
+  "instance_id": "i-00180615e2b84beec",
+  "launch_session": 50263,
+  "prefix": "research/semantic-router/20261008/cold-cpu-profile-canary-a0001",
+  "protocol_commit": "6f22093fa9dccd4e9674fdcc72a7ef5977726d33",
+  "background": true,
+  "performance_claim": false
+}

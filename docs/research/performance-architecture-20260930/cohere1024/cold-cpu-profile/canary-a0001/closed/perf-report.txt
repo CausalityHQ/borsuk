@@ -1,0 +1,1031 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 117  of event 'cpu-clock:u'
+# Event count (approx.): 1181818170
+#
+# Overhead  Shared Object     Symbol                  IPC   [IPC Coverage]
+# ........  ................  ......................  ....................
+#
+     5.98%  libcrypto.so.3    [.] 0x000000000033a106  -      -            
+            |          
+            |--0.85%--0x7d5584d3a106
+            |          SHA256_Update
+            |          0x5827728aec43
+            |          0x5827728aab85
+            |          0x7d558462a1c9
+            |          __libc_start_main
+            |          0x5827728aba64
+            |          
+            |--0.85%--0x7cac5233a106
+            |          SHA256_Update
+            |          0x6367e282ec43
+            |          0x6367e282ab85
+            |          0x7cac51c2a1c9
+            |          __libc_start_main
+            |          0x6367e282ba64
+            |          
+            |--0.85%--0x7abc9233a106
+            |          SHA256_Update
+            |          0x611bc6aadc43
+            |          0x611bc6aa9b85
+            |          0x7abc91c2a1c9
+            |          __libc_start_main
+            |          0x611bc6aaaa64
+            |          
+            |--0.85%--0x76843533a106
+            |          SHA256_Update
+            |          0x58a049a3ec43
+            |          0x58a049a3ab85
+            |          0x768434c2a1c9
+            |          __libc_start_main
+            |          0x58a049a3ba64
+            |          
+            |--0.85%--0x760bfbf3a106
+            |          SHA256_Update
+            |          0x651c5a759c43
+            |          0x651c5a755b85
+            |          0x760bfb82a1c9
+            |          __libc_start_main
+            |          0x651c5a756a64
+            |          
+            |--0.85%--0x757b3a73a106
+            |          SHA256_Update
+            |          0x5ce5a4947c43
+            |          0x5ce5a4943b85
+            |          0x757b3a02a1c9
+            |          __libc_start_main
+            |          0x5ce5a4944a64
+            |          
+             --0.85%--0x738e3213a106
+                       SHA256_Update
+                       0x5957f6ebbc43
+                       0x5957f6eb7b85
+                       0x738e31a2a1c9
+                       __libc_start_main
+                       0x5957f6eb8a64
+
+     5.98%  libcrypto.so.3    [.] 0x000000000033a11a  -      -            
+            |          
+            |--0.85%--0x7bdeb153a11a
+            |          SHA256_Update
+            |          0x63bba8208c43
+            |          0x63bba8204b85
+            |          0x7bdeb0e2a1c9
+            |          __libc_start_main
+            |          0x63bba8205a64
+            |          
+            |--0.85%--0x7a9823b3a11a
+            |          SHA256_Update
+            |          0x585d73d73c43
+            |          0x585d73d6fb85
+            |          0x7a982342a1c9
+            |          __libc_start_main
+            |          0x585d73d70a64
+            |          
+            |--0.85%--0x773c44d3a11a
+            |          SHA256_Update
+            |          0x5f88e8fb5c43
+            |          0x5f88e8fb1b85
+            |          0x773c4462a1c9
+            |          __libc_start_main
+            |          0x5f88e8fb2a64
+            |          
+            |--0.85%--0x76963673a11a
+            |          SHA256_Update
+            |          0x5633569c1c43
+            |          0x5633569bdb85
+            |          0x76963602a1c9
+            |          __libc_start_main
+            |          0x5633569bea64
+            |          
+            |--0.85%--0x767a5533a11a
+            |          SHA256_Update
+            |          0x56b18e9e9c43
+            |          0x56b18e9e5b85
+            |          0x767a54c2a1c9
+            |          __libc_start_main
+            |          0x56b18e9e6a64
+            |          
+            |--0.85%--0x75fc46d3a11a
+            |          SHA256_Update
+            |          0x55db1f3e5c43
+            |          0x55db1f3e1b85
+            |          0x75fc4662a1c9
+            |          __libc_start_main
+            |          0x55db1f3e2a64
+            |          
+             --0.85%--0x7411d8f3a11a
+                       SHA256_Update
+                       0x583a0aa64c43
+                       0x583a0aa60b85
+                       0x7411d882a1c9
+                       __libc_start_main
+                       0x583a0aa61a64
+
+     5.13%  libcrypto.so.3    [.] 0x000000000033a13d  -      -            
+            |          
+            |--0.85%--0x7bc3d833a13d
+            |          SHA256_Update
+            |          0x57611453ec43
+            |          0x57611453ab85
+            |          0x7bc3d7c2a1c9
+            |          __libc_start_main
+            |          0x57611453ba64
+            |          
+            |--0.85%--0x78b94a93a13d
+            |          SHA256_Update
+            |          0x5a764cef9c43
+            |          0x5a764cef5b85
+            |          0x78b94a22a1c9
+            |          __libc_start_main
+            |          0x5a764cef6a64
+            |          
+            |--0.85%--0x782c5d53a13d
+            |          SHA256_Update
+            |          0x578fcd0b2c43
+            |          0x578fcd0aeb85
+            |          0x782c5ce2a1c9
+            |          __libc_start_main
+            |          0x578fcd0afa64
+            |          
+            |--0.85%--0x769a32d3a13d
+            |          SHA256_Update
+            |          0x61fbca79bc43
+            |          0x61fbca797b85
+            |          0x769a3262a1c9
+            |          __libc_start_main
+            |          0x61fbca798a64
+            |          
+            |--0.85%--0x7639af93a13d
+            |          SHA256_Update
+            |          0x55929b7a3c43
+            |          0x55929b79fb85
+            |          0x7639af22a1c9
+            |          __libc_start_main
+            |          0x55929b7a0a64
+            |          
+             --0.85%--0x74ed0cd3a13d
+                       SHA256_Update
+                       0x617b12f82c43
+                       0x617b12f7eb85
+                       0x74ed0c62a1c9
+                       __libc_start_main
+                       0x617b12f7fa64
+
+     4.27%  libcrypto.so.3    [.] 0x0000000000339ebe  -      -            
+            |          
+            |--0.85%--0x7e4016939ebe
+            |          SHA256_Update
+            |          0x5c472e57dc43
+            |          0x5c472e579b85
+            |          0x7e401622a1c9
+            |          __libc_start_main
+            |          0x5c472e57aa64
+            |          
+            |--0.85%--0x7b716d539ebe
+            |          SHA256_Update
+            |          0x56be97ffdc43
+            |          0x56be97ff9b85
+            |          0x7b716ce2a1c9
+            |          __libc_start_main
+            |          0x56be97ffaa64
+            |          
+            |--0.85%--0x7673c0539ebe
+            |          SHA256_Update
+            |          0x5f449d210c43
+            |          0x5f449d20cb85
+            |          0x7673bfe2a1c9
+            |          __libc_start_main
+            |          0x5f449d20da64
+            |          
+            |--0.85%--0x713f63b39ebe
+            |          SHA256_Update
+            |          0x576606d42c43
+            |          0x576606d3eb85
+            |          0x713f6342a1c9
+            |          __libc_start_main
+            |          0x576606d3fa64
+            |          
+             --0.85%--0x70c4ad739ebe
+                       SHA256_Update
+                       0x6095a720dc43
+                       0x6095a7209b85
+                       0x70c4ad02a1c9
+                       __libc_start_main
+                       0x6095a720aa64
+
+     4.27%  libcrypto.so.3    [.] 0x0000000000339ee1  -      -            
+            |          
+            |--0.85%--0x7df08f139ee1
+            |          SHA256_Update
+            |          0x5ef21033ec43
+            |          0x5ef21033ab85
+            |          0x7df08ea2a1c9
+            |          __libc_start_main
+            |          0x5ef21033ba64
+            |          
+            |--0.85%--0x79aa80539ee1
+            |          SHA256_Update
+            |          0x5889945d6c43
+            |          0x5889945d2b85
+            |          0x79aa7fe2a1c9
+            |          __libc_start_main
+            |          0x5889945d3a64
+            |          
+            |--0.85%--0x791df1b39ee1
+            |          SHA256_Update
+            |          0x5a5b5495dc43
+            |          0x5a5b54959b85
+            |          0x791df142a1c9
+            |          __libc_start_main
+            |          0x5a5b5495aa64
+            |          
+            |--0.85%--0x77deadf39ee1
+            |          SHA256_Update
+            |          0x5ce4baba3c43
+            |          0x5ce4bab9fb85
+            |          0x77dead82a1c9
+            |          __libc_start_main
+            |          0x5ce4baba0a64
+            |          
+             --0.85%--0x76caabf39ee1
+                       SHA256_Update
+                       0x609966e23c43
+                       0x609966e1fb85
+                       0x76caab82a1c9
+                       __libc_start_main
+                       0x609966e20a64
+
+     4.27%  libcrypto.so.3    [.] 0x0000000000339f20  -      -            
+            |          
+            |--0.85%--0x7c6d99b39f20
+            |          SHA256_Update
+            |          0x643aa2aa5c43
+            |          0x643aa2aa1b85
+            |          0x7c6d9942a1c9
+            |          __libc_start_main
+            |          0x643aa2aa2a64
+            |          
+            |--0.85%--0x7a3d63d39f20
+            |          SHA256_Update
+            |          0x64887d5e4c43
+            |          0x64887d5e0b85
+            |          0x7a3d6362a1c9
+            |          __libc_start_main
+            |          0x64887d5e1a64
+            |          
+            |--0.85%--0x78f975739f20
+            |          SHA256_Update
+            |          0x5befb378ec43
+            |          0x5befb378ab85
+            |          0x78f97502a1c9
+            |          __libc_start_main
+            |          0x5befb378ba64
+            |          
+            |--0.85%--0x720d23d39f20
+            |          SHA256_Update
+            |          0x5ee05c442c43
+            |          0x5ee05c43eb85
+            |          0x720d2362a1c9
+            |          __libc_start_main
+            |          0x5ee05c43fa64
+            |          
+             --0.85%--0x71fe02539f20
+                       SHA256_Update
+                       0x5ef20b7ddc43
+                       0x5ef20b7d9b85
+                       0x71fe01e2a1c9
+                       __libc_start_main
+                       0x5ef20b7daa64
+
+     4.27%  libcrypto.so.3    [.] 0x000000000033a01f  -      -            
+            |          
+            |--0.85%--0x7fb75bb3a01f
+            |          SHA256_Update
+            |          0x5cc84df0dc43
+            |          0x5cc84df09b85
+            |          0x7fb75b42a1c9
+            |          __libc_start_main
+            |          0x5cc84df0aa64
+            |          
+            |--0.85%--0x79f97fd3a01f
+            |          SHA256_Update
+            |          0x613378888c43
+            |          0x613378884b85
+            |          0x79f97f62a1c9
+            |          __libc_start_main
+            |          0x613378885a64
+            |          
+            |--0.85%--0x71de3f73a01f
+            |          SHA256_Update
+            |          0x5df0d7914c43
+            |          0x5df0d7910b85
+            |          0x71de3f02a1c9
+            |          __libc_start_main
+            |          0x5df0d7911a64
+            |          
+            |--0.85%--0x710c4fd3a01f
+            |          SHA256_Update
+            |          0x5c34d2505c43
+            |          0x5c34d2501b85
+            |          0x710c4f62a1c9
+            |          __libc_start_main
+            |          0x5c34d2502a64
+            |          
+             --0.85%--0x701d47d3a01f
+                       SHA256_Update
+                       0x61179625ac43
+                       0x611796256b85
+                       0x701d4762a1c9
+                       __libc_start_main
+                       0x611796257a64
+
+     4.27%  libcrypto.so.3    [.] 0x000000000033a033  -      -            
+            |          
+            |--0.85%--0x7ceff393a033
+            |          SHA256_Update
+            |          0x5edc51ab7c43
+            |          0x5edc51ab3b85
+            |          0x7ceff322a1c9
+            |          __libc_start_main
+            |          0x5edc51ab4a64
+            |          
+            |--0.85%--0x7a14e173a033
+            |          SHA256_Update
+            |          0x61f7b5cd3c43
+            |          0x61f7b5ccfb85
+            |          0x7a14e102a1c9
+            |          __libc_start_main
+            |          0x61f7b5cd0a64
+            |          
+            |--0.85%--0x799c8e33a033
+            |          SHA256_Update
+            |          0x5cf4d701cc43
+            |          0x5cf4d7018b85
+            |          0x799c8dc2a1c9
+            |          __libc_start_main
+            |          0x5cf4d7019a64
+            |          
+            |--0.85%--0x73e0d373a033
+            |          SHA256_Update
+            |          0x568e2feedc43
+            |          0x568e2fee9b85
+            |          0x73e0d302a1c9
+            |          __libc_start_main
+            |          0x568e2feeaa64
+            |          
+             --0.85%--0x73db3d93a033
+                       SHA256_Update
+                       0x5db595318c43
+                       0x5db595314b85
+                       0x73db3d22a1c9
+                       __libc_start_main
+                       0x5db595315a64
+
+     4.27%  libcrypto.so.3    [.] 0x000000000033a154  -      -            
+            |          
+            |--0.85%--0x7c8f6a73a154
+            |          SHA256_Update
+            |          0x56b23cc8fc43
+            |          0x56b23cc8bb85
+            |          0x7c8f6a02a1c9
+            |          __libc_start_main
+            |          0x56b23cc8ca64
+            |          
+            |--0.85%--0x7b8d4cf3a154
+            |          SHA256_Update
+            |          0x59acc2566c43
+            |          0x59acc2562b85
+            |          0x7b8d4c82a1c9
+            |          __libc_start_main
+            |          0x59acc2563a64
+            |          
+            |--0.85%--0x79a74b13a154
+            |          SHA256_Update
+            |          0x63417242bc43
+            |          0x634172427b85
+            |          0x79a74aa2a1c9
+            |          __libc_start_main
+            |          0x634172428a64
+            |          
+            |--0.85%--0x793987d3a154
+            |          SHA256_Update
+            |          0x5a1972144c43
+            |          0x5a1972140b85
+            |          0x79398762a1c9
+            |          __libc_start_main
+            |          0x5a1972141a64
+            |          
+             --0.85%--0x71d541d3a154
+                       SHA256_Update
+                       0x5de24c665c43
+                       0x5de24c661b85
+                       0x71d54162a1c9
+                       __libc_start_main
+                       0x5de24c662a64
+
+     3.42%  libcrypto.so.3    [.] 0x0000000000339f3c  -      -            
+            |          
+            |--0.85%--0x7e9ff7739f3c
+            |          SHA256_Update
+            |          0x617b67071c43
+            |          0x617b6706db85
+            |          0x7e9ff702a1c9
+            |          __libc_start_main
+            |          0x617b6706ea64
+            |          
+            |--0.85%--0x7c772cb39f3c
+            |          SHA256_Update
+            |          0x577fada88c43
+            |          0x577fada84b85
+            |          0x7c772c42a1c9
+            |          __libc_start_main
+            |          0x577fada85a64
+            |          
+            |--0.85%--0x7c6bce539f3c
+            |          SHA256_Update
+            |          0x6177b3037c43
+            |          0x6177b3033b85
+            |          0x7c6bcde2a1c9
+            |          __libc_start_main
+            |          0x6177b3034a64
+            |          
+             --0.85%--0x77286e139f3c
+                       SHA256_Update
+                       0x591be50e0c43
+                       0x591be50dcb85
+                       0x77286da2a1c9
+                       __libc_start_main
+                       0x591be50dda64
+
+     3.42%  libcrypto.so.3    [.] 0x0000000000339f68  -      -            
+            |          
+            |--0.85%--0x7ac92ff39f68
+            |          SHA256_Update
+            |          0x5730ab72cc43
+            |          0x5730ab728b85
+            |          0x7ac92f82a1c9
+            |          __libc_start_main
+            |          0x5730ab729a64
+            |          
+            |--0.85%--0x79487bd39f68
+            |          SHA256_Update
+            |          0x590f59690c43
+            |          0x590f5968cb85
+            |          0x79487b62a1c9
+            |          __libc_start_main
+            |          0x590f5968da64
+            |          
+            |--0.85%--0x74bee0b39f68
+            |          SHA256_Update
+            |          0x5780b402ac43
+            |          0x5780b4026b85
+            |          0x74bee042a1c9
+            |          __libc_start_main
+            |          0x5780b4027a64
+            |          
+             --0.85%--0x73bae4139f68
+                       SHA256_Update
+                       0x617c6b18bc43
+                       0x617c6b187b85
+                       0x73bae3a2a1c9
+                       __libc_start_main
+                       0x617c6b188a64
+
+     3.42%  libcrypto.so.3    [.] 0x0000000000339fa6  -      -            
+            |          
+            |--0.85%--0x78efd6339fa6
+            |          SHA256_Update
+            |          0x595463d95c43
+            |          0x595463d91b85
+            |          0x78efd5c2a1c9
+            |          __libc_start_main
+            |          0x595463d92a64
+            |          
+            |--0.85%--0x77f1ecb39fa6
+            |          SHA256_Update
+            |          0x58da52aa8c43
+            |          0x58da52aa4b85
+            |          0x77f1ec42a1c9
+            |          __libc_start_main
+            |          0x58da52aa5a64
+            |          
+            |--0.85%--0x77988f739fa6
+            |          SHA256_Update
+            |          0x64d52f961c43
+            |          0x64d52f95db85
+            |          0x77988f02a1c9
+            |          __libc_start_main
+            |          0x64d52f95ea64
+            |          
+             --0.85%--0x72f1e7d39fa6
+                       SHA256_Update
+                       0x5aec69b17c43
+                       0x5aec69b13b85
+                       0x72f1e762a1c9
+                       __libc_start_main
+                       0x5aec69b14a64
+
+     3.42%  libcrypto.so.3    [.] 0x0000000000339fd3  -      -            
+            |          
+            |--0.85%--0x7a4719b39fd3
+            |          SHA256_Update
+            |          0x5979e3d6ec43
+            |          0x5979e3d6ab85
+            |          0x7a471942a1c9
+            |          __libc_start_main
+            |          0x5979e3d6ba64
+            |          
+            |--0.85%--0x79354b739fd3
+            |          SHA256_Update
+            |          0x598af8576c43
+            |          0x598af8572b85
+            |          0x79354b02a1c9
+            |          __libc_start_main
+            |          0x598af8573a64
+            |          
+            |--0.85%--0x763643539fd3
+            |          SHA256_Update
+            |          0x5f5110044c43
+            |          0x5f5110040b85
+            |          0x763642e2a1c9
+            |          __libc_start_main
+            |          0x5f5110041a64
+            |          
+             --0.85%--0x74ffa9b39fd3
+                       SHA256_Update
+                       0x555646b0ec43
+                       0x555646b0ab85
+                       0x74ffa942a1c9
+                       __libc_start_main
+                       0x555646b0ba64
+
+     3.42%  libcrypto.so.3    [.] 0x000000000033a0c3  -      -            
+            |          
+            |--0.85%--0x7835c333a0c3
+            |          SHA256_Update
+            |          0x5b730a10dc43
+            |          0x5b730a109b85
+            |          0x7835c2c2a1c9
+            |          __libc_start_main
+            |          0x5b730a10aa64
+            |          
+            |--0.85%--0x7777f093a0c3
+            |          SHA256_Update
+            |          0x56ce4c0cbc43
+            |          0x56ce4c0c7b85
+            |          0x7777f022a1c9
+            |          __libc_start_main
+            |          0x56ce4c0c8a64
+            |          
+            |--0.85%--0x74067d13a0c3
+            |          SHA256_Update
+            |          0x5e35afba4c43
+            |          0x5e35afba0b85
+            |          0x74067ca2a1c9
+            |          __libc_start_main
+            |          0x5e35afba1a64
+            |          
+             --0.85%--0x707b03d3a0c3
+                       SHA256_Update
+                       0x5597393dac43
+                       0x5597393d6b85
+                       0x707b0362a1c9
+                       __libc_start_main
+                       0x5597393d7a64
+
+     2.56%  libcrypto.so.3    [.] 0x0000000000339edd  -      -            
+            |          
+            |--0.85%--0x7e43f3739edd
+            |          SHA256_Update
+            |          0x575b76ac1c43
+            |          0x575b76abdb85
+            |          0x7e43f302a1c9
+            |          __libc_start_main
+            |          0x575b76abea64
+            |          
+            |--0.85%--0x7dc610139edd
+            |          SHA256_Update
+            |          0x63d7ed6cfc43
+            |          0x63d7ed6cbb85
+            |          0x7dc60fa2a1c9
+            |          __libc_start_main
+            |          0x63d7ed6cca64
+            |          
+             --0.85%--0x785c6a139edd
+                       SHA256_Update
+                       0x607b4bf70c43
+                       0x607b4bf6cb85
+                       0x785c69a2a1c9
+                       __libc_start_main
+                       0x607b4bf6da64
+
+     2.56%  libcrypto.so.3    [.] 0x0000000000339ef3  -      -            
+            |          
+            |--0.85%--0x78c90ef39ef3
+            |          SHA256_Update
+            |          0x5ad4f364bc43
+            |          0x5ad4f3647b85
+            |          0x78c90e82a1c9
+            |          __libc_start_main
+            |          0x5ad4f3648a64
+            |          
+            |--0.85%--0x77e0cef39ef3
+            |          SHA256_Update
+            |          0x5e54d6f6bc43
+            |          0x5e54d6f67b85
+            |          0x77e0ce82a1c9
+            |          __libc_start_main
+            |          0x5e54d6f68a64
+            |          
+             --0.85%--0x75dce4b39ef3
+                       SHA256_Update
+                       0x5d381347bc43
+                       0x5d3813477b85
+                       0x75dce442a1c9
+                       __libc_start_main
+                       0x5d3813478a64
+
+     2.56%  libcrypto.so.3    [.] 0x0000000000339f4c  -      -            
+            |          
+            |--0.85%--0x7f1853739f4c
+            |          SHA256_Update
+            |          0x58d1240f2c43
+            |          0x58d1240eeb85
+            |          0x7f185302a1c9
+            |          __libc_start_main
+            |          0x58d1240efa64
+            |          
+            |--0.85%--0x789ad8339f4c
+            |          SHA256_Update
+            |          0x602767034c43
+            |          0x602767030b85
+            |          0x789ad7c2a1c9
+            |          __libc_start_main
+            |          0x602767031a64
+            |          
+             --0.85%--0x72ef4dd39f4c
+                       SHA256_Update
+                       0x596564712c43
+                       0x59656470eb85
+                       0x72ef4d62a1c9
+                       __libc_start_main
+                       0x59656470fa64
+
+     2.56%  libcrypto.so.3    [.] 0x0000000000339f79  -      -            
+            |          
+            |--0.85%--0x7bfc10339f79
+            |          SHA256_Update
+            |          0x62b385a8bc43
+            |          0x62b385a87b85
+            |          0x7bfc0fc2a1c9
+            |          __libc_start_main
+            |          0x62b385a88a64
+            |          
+            |--0.85%--0x7b3d55939f79
+            |          SHA256_Update
+            |          0x619c47a11c43
+            |          0x619c47a0db85
+            |          0x7b3d5522a1c9
+            |          __libc_start_main
+            |          0x619c47a0ea64
+            |          
+             --0.85%--0x78bd46739f79
+                       SHA256_Update
+                       0x5fb91c65bc43
+                       0x5fb91c657b85
+                       0x78bd4602a1c9
+                       __libc_start_main
+                       0x5fb91c658a64
+
+     2.56%  libcrypto.so.3    [.] 0x0000000000339fef  -      -            
+            |          
+            |--0.85%--0x7b10f2339fef
+            |          SHA256_Update
+            |          0x64a50573ac43
+            |          0x64a505736b85
+            |          0x7b10f1c2a1c9
+            |          __libc_start_main
+            |          0x64a505737a64
+            |          
+            |--0.85%--0x7acc2e339fef
+            |          SHA256_Update
+            |          0x563ad5e3ac43
+            |          0x563ad5e36b85
+            |          0x7acc2dc2a1c9
+            |          __libc_start_main
+            |          0x563ad5e37a64
+            |          
+             --0.85%--0x72d155939fef
+                       SHA256_Update
+                       0x572d5b526c43
+                       0x572d5b522b85
+                       0x72d15522a1c9
+                       __libc_start_main
+                       0x572d5b523a64
+
+     2.56%  libcrypto.so.3    [.] 0x000000000033a063  -      -            
+            |          
+            |--0.85%--0x7dc25c53a063
+            |          SHA256_Update
+            |          0x6406faea2c43
+            |          0x6406fae9eb85
+            |          0x7dc25be2a1c9
+            |          __libc_start_main
+            |          0x6406fae9fa64
+            |          
+            |--0.85%--0x763cc933a063
+            |          SHA256_Update
+            |          0x57d2a2fcfc43
+            |          0x57d2a2fcbb85
+            |          0x763cc8c2a1c9
+            |          __libc_start_main
+            |          0x57d2a2fcca64
+            |          
+             --0.85%--0x71a98a73a063
+                       SHA256_Update
+                       0x56ac1d63fc43
+                       0x56ac1d63bb85
+                       0x71a98a02a1c9
+                       __libc_start_main
+                       0x56ac1d63ca64
+
+     2.56%  libcrypto.so.3    [.] 0x000000000033a0df  -      -            
+            |          
+            |--0.85%--0x7daafb53a0df
+            |          SHA256_Update
+            |          0x63e9ede7bc43
+            |          0x63e9ede77b85
+            |          0x7daafae2a1c9
+            |          __libc_start_main
+            |          0x63e9ede78a64
+            |          
+            |--0.85%--0x755d7e33a0df
+            |          SHA256_Update
+            |          0x5a1782911c43
+            |          0x5a178290db85
+            |          0x755d7dc2a1c9
+            |          __libc_start_main
+            |          0x5a178290ea64
+            |          
+             --0.85%--0x70b22a73a0df
+                       SHA256_Update
+                       0x573f618a6c43
+                       0x573f618a2b85
+                       0x70b22a02a1c9
+                       __libc_start_main
+                       0x573f618a3a64
+
+     1.71%  libcrypto.so.3    [.] 0x0000000000339ed0  -      -            
+            |          
+            |--0.85%--0x7ddebd339ed0
+            |          SHA256_Update
+            |          0x5b28b2266c43
+            |          0x5b28b2262b85
+            |          0x7ddebcc2a1c9
+            |          __libc_start_main
+            |          0x5b28b2263a64
+            |          
+             --0.85%--0x769c79739ed0
+                       SHA256_Update
+                       0x62b26ddd6c43
+                       0x62b26ddd2b85
+                       0x769c7902a1c9
+                       __libc_start_main
+                       0x62b26ddd3a64
+
+     1.71%  libcrypto.so.3    [.] 0x0000000000339f0f  -      -            
+            |          
+            |--0.85%--0x737742d39f0f
+            |          SHA256_Update
+            |          0x5665651e7c43
+            |          0x5665651e3b85
+            |          0x73774262a1c9
+            |          __libc_start_main
+            |          0x5665651e4a64
+            |          
+             --0.85%--0x703d70d39f0f
+                       SHA256_Update
+                       0x5dfade945c43
+                       0x5dfade941b85
+                       0x703d7062a1c9
+                       __libc_start_main
+                       0x5dfade942a64
+
+     1.71%  libcrypto.so.3    [.] 0x000000000033a003  -      -            
+            |          
+            |--0.85%--0x7c12b953a003
+            |          SHA256_Update
+            |          0x5beb131f0c43
+            |          0x5beb131ecb85
+            |          0x7c12b8e2a1c9
+            |          __libc_start_main
+            |          0x5beb131eda64
+            |          
+             --0.85%--0x76559393a003
+                       SHA256_Update
+                       0x60094c781c43
+                       0x60094c77db85
+                       0x76559322a1c9
+                       __libc_start_main
+                       0x60094c77ea64
+
+     1.71%  libcrypto.so.3    [.] 0x000000000033a0ab  -      -            
+            |          
+            |--0.85%--0x784ecb73a0ab
+            |          SHA256_Update
+            |          0x6517f5574c43
+            |          0x6517f5570b85
+            |          0x784ecb02a1c9
+            |          __libc_start_main
+            |          0x6517f5571a64
+            |          
+             --0.85%--0x727a0ff3a0ab
+                       SHA256_Update
+                       0x559f9b94fc43
+                       0x559f9b94bb85
+                       0x727a0f82a1c9
+                       __libc_start_main
+                       0x559f9b94ca64
+
+     1.71%  libcrypto.so.3    [.] 0x000000000033a0af  -      -            
+            |          
+            |--0.85%--0x7b57c3b3a0af
+            |          SHA256_Update
+            |          0x5f4c4e589c43
+            |          0x5f4c4e585b85
+            |          0x7b57c342a1c9
+            |          __libc_start_main
+            |          0x5f4c4e586a64
+            |          
+             --0.85%--0x71ead913a0af
+                       SHA256_Update
+                       0x577d93eadc43
+                       0x577d93ea9b85
+                       0x71ead8a2a1c9
+                       __libc_start_main
+                       0x577d93eaaa64
+
+     1.71%  libcrypto.so.3    [.] 0x000000000033a0f3  -      -            
+            |          
+            |--0.85%--0x7f07b713a0f3
+            |          SHA256_Update
+            |          0x5b10d8d1bc43
+            |          0x5b10d8d17b85
+            |          0x7f07b6a2a1c9
+            |          __libc_start_main
+            |          0x5b10d8d18a64
+            |          
+             --0.85%--0x71738393a0f3
+                       SHA256_Update
+                       0x5aef9f63ec43
+                       0x5aef9f63ab85
+                       0x71738322a1c9
+                       __libc_start_main
+                       0x5aef9f63ba64
+
+     1.71%  libcrypto.so.3    [.] 0x000000000033a14a  -      -            
+            |          
+            |--0.85%--0x7732ded3a14a
+            |          SHA256_Update
+            |          0x59e469e64c43
+            |          0x59e469e60b85
+            |          0x7732de62a1c9
+            |          __libc_start_main
+            |          0x59e469e61a64
+            |          
+             --0.85%--0x7513bdf3a14a
+                       SHA256_Update
+                       0x5746e5bcbc43
+                       0x5746e5bc7b85
+                       0x7513bd82a1c9
+                       __libc_start_main
+                       0x5746e5bc8a64
+
+     0.85%  libcrypto.so.3    [.] SHA256_Update       -      -            
+            |
+            ---SHA256_Update
+               0x5a3f39735c43
+               0x5a3f39731b85
+               0x7b67a942a1c9
+               __libc_start_main
+               0x5a3f39732a64
+
+     0.85%  libcrypto.so.3    [.] 0x0000000000339f0b  -      -            
+            |
+            ---0x7b7c39d39f0b
+               SHA256_Update
+               0x576cc120fc43
+               0x576cc120bb85
+               0x7b7c3962a1c9
+               __libc_start_main
+               0x576cc120ca64
+
+     0.85%  libcrypto.so.3    [.] 0x0000000000339f38  -      -            
+            |
+            ---0x7b2662139f38
+               SHA256_Update
+               0x561d94a4ec43
+               0x561d94a4ab85
+               0x7b2661a2a1c9
+               __libc_start_main
+               0x561d94a4ba64
+
+     0.85%  libcrypto.so.3    [.] 0x0000000000339f95  -      -            
+            |
+            ---0x777618f39f95
+               SHA256_Update
+               0x64b59aec8c43
+               0x64b59aec4b85
+               0x77761882a1c9
+               __libc_start_main
+               0x64b59aec5a64
+
+     0.85%  libcrypto.so.3    [.] 0x0000000000339fbe  -      -            
+            |
+            ---0x7c6f40339fbe
+               SHA256_Update
+               0x5be7f327ac43
+               0x5be7f3276b85
+               0x7c6f3fc2a1c9
+               __libc_start_main
+               0x5be7f3277a64
+
+     0.85%  libcrypto.so.3    [.] 0x0000000000339fc2  -      -            
+            |
+            ---0x742bdd139fc2
+               SHA256_Update
+               0x61145b25ec43
+               0x61145b25ab85
+               0x742bdca2a1c9
+               __libc_start_main
+               0x61145b25ba64
+
+     0.85%  libcrypto.so.3    [.] 0x0000000000339feb  -      -            
+            |
+            ---0x7d8529539feb
+               SHA256_Update
+               0x647673d82c43
+               0x647673d7eb85
+               0x7d8528e2a1c9
+               __libc_start_main
+               0x647673d7fa64
+
+     0.85%  libcrypto.so.3    [.] 0x000000000033a01b  -      -            
+            |
+            ---0x77370a53a01b
+               SHA256_Update
+               0x56ac387d4c43
+               0x56ac387d0b85
+               0x773709e2a1c9
+               __libc_start_main
+               0x56ac387d1a64
+
+     0.85%  libcrypto.so.3    [.] 0x000000000033a04f  -      -            
+            |
+            ---0x7bd56953a04f
+               SHA256_Update
+               0x575b46f26c43
+               0x575b46f22b85
+               0x7bd568e2a1c9
+               __libc_start_main
+               0x575b46f23a64
+
+     0.85%  libcrypto.so.3    [.] 0x000000000033a07f  -      -            
+            |
+            ---0x7d5567b3a07f
+               SHA256_Update
+               0x5914abb53c43
+               0x5914abb4fb85
+               0x7d556742a1c9
+               __libc_start_main
+               0x5914abb50a64
+
+     0.85%  libcrypto.so.3    [.] 0x000000000033a093  -      -            
+            |
+            ---0x7d255c53a093
+               SHA256_Update
+               0x5dd7d2e43c43
+               0x5dd7d2e3fb85
+               0x7d255be2a1c9
+               __libc_start_main
+               0x5dd7d2e40a64
+
+     0.85%  libcrypto.so.3    [.] 0x000000000033a0db  -      -            
+            |
+            ---0x7dc98c13a0db
+               SHA256_Update
+               0x5a524d9ffc43
+               0x5a524d9fbb85
+               0x7dc98ba2a1c9
+               __libc_start_main
+               0x5a524d9fca64
+
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

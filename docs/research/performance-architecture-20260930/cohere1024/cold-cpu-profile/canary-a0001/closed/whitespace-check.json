@@ -1,0 +1,8 @@
+{
+  "immutable_perf_log_whitespace_only": true,
+  "authored_and_other_receipt_diff_check_exit": 0,
+  "preserved_logs": [
+    "docs/research/performance-architecture-20260930/cohere1024/cold-cpu-profile/canary-a0001/closed/perf-report.txt",
+    "docs/research/performance-architecture-20260930/cohere1024/cold-cpu-profile/canary-a0001/closed/perf-samples.txt"
+  ]
+}

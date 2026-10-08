@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-cold-cpu-profile-canary-v1",
+  "instance_id": "i-00180615e2b84beec",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 2,
+  "binary_source_commit": "fc8a23dac44ad635fc1236736df68878690a8389",
+  "integration_commit": "2eb3645fecac120d5349e676758708318d891e04",
+  "qualified_source_identity_sha256": "0097af81fbf3e61a2050a77cb046adfbf0b02a745e73a2181e924cd2cb697eae",
+  "evidence": {
+    "bytes": 195899,
+    "sha256": "812d5f38cb9525f4f2af3fbf62c9742cf2f19c12b2a091ba9fd2978a8f576d3f"
+  },
+  "terminal_delivery": "attempted",
+  "performance_claim": false
+}

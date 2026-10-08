@@ -1,0 +1,2 @@
+[ perf record: Woken up 14 times to write data ]
+[ perf record: Captured and wrote 1.627 MB /mnt/borsuk-retained-s3/evidence/perf.data (117 samples) ]
