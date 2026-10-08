@@ -1,0 +1,332 @@
+{
+  "id": "b1fc8419c2504adc",
+  "provider": "claude",
+  "model": "claude-sonnet-5-5",
+  "effort": "xhigh",
+  "fallbacks": [
+    {
+      "provider": "claude",
+      "model": "claude-sonnet-5-5"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    }
+  ],
+  "agent": "borsuk/prod-ready-v9",
+  "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+  "status": "completed",
+  "runner_started": true,
+  "started_at": 1791489867,
+  "timeout_seconds": 1200,
+  "deadline_at": 1791491067,
+  "budget_usd": 4,
+  "prompt_preview": "Read-only planning specialist. Give one actionable plan, risks and a bounded falsifying test; do not edit files.\nRead-only bounded plan for ONE generic Rust direct-SQ8 serving falsifier, not implementation/paidwork. Repo /home/rb/worktrees/borsuk-prod-ready-v9 use Git HEAD blobs (physical worktree stale). Evidence docs/research/performance-architecture-20260930/cohere1024/cold-source-utilization/a0002/closed/{README.md,source-utilization.json,independent-verification.json}, direct-closure-serving-seam.md. Native analysis44e qualified33tests/release/Clippy/testbuild. New observed evidence: finer source cover ZERO saving; direct closure same nominations GET51943->26938 (-48.14%), bytes25,671,329,664->35,315,366,912 (+37.57%), direct median35,273,728/p95 40,843,264/max48,799,744B, all exceed prior16773120cap. Need choose whether one-wave direct SQ8 is worth cheapest REAL recall/resource falsifier; not automatic architecture winner. Existing generic plan_paged_measured source discovery then source nominees then SQ8. Can reuse local discovery, complete admitted closure, authenticated SQ8 scorer; bridge rows can differ and lose incidental originals (explicit counterexample in seam note). Propose exact small Rust API/change boundary, test assertions and measured resource gate for frozen Cohere100k/1000/D1024/k10 on same query/truth bytes. Explicit new envelope must be grounded in actual known costs, include score scratch/RSS/coexistence,32GET,bytes,deadline,oneCPU/fetch32; cannot silently raise historical arms or claim recall by superset. Preserve existing defaults/protocol results, library generic. No new multi-dataset/100B/warm/SIMD/controller work. Identify cheapest fast native correctness+real recall gate before cold latency run, causal hypothesis/kill criteria and source files. No code edits/Cargo/data/network/consults/children/paidjob; exact Git source reads only, no broad cache scans. Return concise actionable plan and unresolved resource evidence, not another broad research program.",
+  "prompt_sha256": "9622358709336559c82f154212d5b6a17870b11b3a138ada69b19af44bd7bd85",
+  "prompt_bytes": 2209,
+  "fingerprint": "b72619fd225b49161ddba8c985035573e62d7d37efced095ba3bb069401ccb8b",
+  "evidence": {
+    "git_commit": "f789ec2aabf26073c6bed1854bd35237dd7816aa",
+    "git_branch": "devbox/prod-ready-v9",
+    "git_dirty": true,
+    "git_status_sha256": "afafb6221ee208c0c560e170ea052ba5ea6105948f2185ac59ca90b7f1c2bff0",
+    "worktree_sha256": "3f7cc2b59543219927d3fdcd2ea8074b6a1687ad564f5bd6faf5d7a505693a3b",
+    "worktree_evidence_truncated": true,
+    "active_goal": {
+      "id": "goal-1790540483-1790540483843307105-2322852",
+      "agent": "borsuk/prod-ready-v9",
+      "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+      "status": "queued",
+      "revision": 4,
+      "actor": "devbox",
+      "note": "re-apply delivery failed; prior goal state restored",
+      "created_at": 1790540483,
+      "updated_at": 1790781535
+    }
+  },
+  "previous_fingerprint": "889ffd5b66b0db8044b79faa22445dba17f82f1666772c187109d93417850e51",
+  "reused": false,
+  "specialist_route": {
+    "model": "claude-sonnet-5-5",
+    "effort": "xhigh",
+    "source": "jev",
+    "decision_id": "c4d314bf-173f-47be-b872-d7d824c99fc2"
+  },
+  "launch_command": "specialist_start",
+  "systemd_unit": "devbox-consult-b1fc8419c2504adc.service",
+  "pid": 3435750,
+  "pgid": 3435750,
+  "attempt": 1,
+  "attempts": [
+    {
+      "provider": "claude",
+      "model": "claude-sonnet-5-5"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    }
+  ],
+  "attempt_history": [
+    {
+      "provider": "claude",
+      "model": "claude-sonnet-5-5",
+      "budget_usd": 4,
+      "timeout_seconds": 1199,
+      "started_at": 1791489868
+    }
+  ],
+  "exit_code": 0,
+  "finished_at": 1791490159,
+  "event_cursor": 46,
+  "events": [
+    {
+      "seq": 23,
+      "at": 1791489933,
+      "provider": "claude",
+      "kind": "tool",
+      "label": "Bash started"
+    },
+    {
+      "seq": 24,
+      "at": 1791489953,
+      "provider": "claude",
+      "kind": "tool",
+      "label": "Bash started"
+    },
+    {
+      "seq": 25,
+      "at": 1791489954,
+      "provider": "claude",
+      "kind": "tool",
+      "label": "Bash started"
+    },
+    {
+      "seq": 26,
+      "at": 1791489958,
+      "provider": "claude",
+      "kind": "tool",
+      "label": "Bash started"
+    },
+    {
+      "seq": 27,
+      "at": 1791490008,
+      "provider": "claude",
+      "kind": "tool",
+      "label": "Bash started"
+    },
+    {
+      "seq": 28,
+      "at": 1791490071,
+      "provider": "claude",
+      "kind": "tool",
+      "label": "Bash started"
+    },
+    {
+      "seq": 29,
+      "at": 1791490075,
+      "provider": "claude",
+      "kind": "tool",
+      "label": "Bash started"
+    },
+    {
+      "seq": 30,
+      "at": 1791490139,
+      "provider": "claude",
+      "kind": "partial",
+      "label": "Partial answer updated"
+    },
+    {
+      "seq": 31,
+      "at": 1791490140,
+      "provider": "claude",
+      "kind": "partial",
+      "label": "Partial answer updated"
+    },
+    {
+      "seq": 32,
+      "at": 1791490142,
+      "provider": "claude",
+      "kind": "partial",
+      "label": "Partial answer updated"
+    },
+    {
+      "seq": 33,
+      "at": 1791490143,
+      "provider": "claude",
+      "kind": "partial",
+      "label": "Partial answer updated"
+    },
+    {
+      "seq": 34,
+      "at": 1791490144,
+      "provider": "claude",
+      "kind": "partial",
+      "label": "Partial answer updated"
+    },
+    {
+      "seq": 35,
+      "at": 1791490145,
+      "provider": "claude",
+      "kind": "partial",
+      "label": "Partial answer updated"
+    },
+    {
+      "seq": 36,
+      "at": 1791490147,
+      "provider": "claude",
+      "kind": "partial",
+      "label": "Partial answer updated"
+    },
+    {
+      "seq": 37,
+      "at": 1791490148,
+      "provider": "claude",
+      "kind": "partial",
+      "label": "Partial answer updated"
+    },
+    {
+      "seq": 38,
+      "at": 1791490149,
+      "provider": "claude",
+      "kind": "partial",
+      "label": "Partial answer updated"
+    },
+    {
+      "seq": 39,
+      "at": 1791490150,
+      "provider": "claude",
+      "kind": "partial",
+      "label": "Partial answer updated"
+    },
+    {
+      "seq": 40,
+      "at": 1791490152,
+      "provider": "claude",
+      "kind": "partial",
+      "label": "Partial answer updated"
+    },
+    {
+      "seq": 41,
+      "at": 1791490153,
+      "provider": "claude",
+      "kind": "partial",
+      "label": "Partial answer updated"
+    },
+    {
+      "seq": 42,
+      "at": 1791490155,
+      "provider": "claude",
+      "kind": "partial",
+      "label": "Partial answer updated"
+    },
+    {
+      "seq": 43,
+      "at": 1791490156,
+      "provider": "claude",
+      "kind": "partial",
+      "label": "Partial answer updated"
+    },
+    {
+      "seq": 44,
+      "at": 1791490157,
+      "provider": "claude",
+      "kind": "partial",
+      "label": "Partial answer updated"
+    },
+    {
+      "seq": 45,
+      "at": 1791490158,
+      "provider": "claude",
+      "kind": "partial",
+      "label": "Partial answer updated"
+    },
+    {
+      "seq": 46,
+      "at": 1791490159,
+      "provider": "claude",
+      "kind": "phase",
+      "label": "Consultation completed",
+      "detail": "exit 0"
+    }
+  ],
+  "events_truncated": true,
+  "provider_events": {
+    "claude": [
+      {
+        "seq": 39,
+        "at": 1791490150,
+        "provider": "claude",
+        "kind": "partial",
+        "label": "Partial answer updated"
+      },
+      {
+        "seq": 40,
+        "at": 1791490152,
+        "provider": "claude",
+        "kind": "partial",
+        "label": "Partial answer updated"
+      },
+      {
+        "seq": 41,
+        "at": 1791490153,
+        "provider": "claude",
+        "kind": "partial",
+        "label": "Partial answer updated"
+      },
+      {
+        "seq": 42,
+        "at": 1791490155,
+        "provider": "claude",
+        "kind": "partial",
+        "label": "Partial answer updated"
+      },
+      {
+        "seq": 43,
+        "at": 1791490156,
+        "provider": "claude",
+        "kind": "partial",
+        "label": "Partial answer updated"
+      },
+      {
+        "seq": 44,
+        "at": 1791490157,
+        "provider": "claude",
+        "kind": "partial",
+        "label": "Partial answer updated"
+      },
+      {
+        "seq": 45,
+        "at": 1791490158,
+        "provider": "claude",
+        "kind": "partial",
+        "label": "Partial answer updated"
+      },
+      {
+        "seq": 46,
+        "at": 1791490159,
+        "provider": "claude",
+        "kind": "phase",
+        "label": "Consultation completed",
+        "detail": "exit 0"
+      }
+    ]
+  },
+  "partial_result": "**Plan: one-wave direct-closure SQ8 falsifier** (read-only; HEAD blobs only, no Cargo, no network, nothing edited)\n\n## Recommendation\nRun the cheapest real recall and resource falsifier. Do not run a cold latency campaign or call it the architecture winner yet.\n\n- **What the baseline fetches:** the cap is 16,773,120 B, which is about 63 pages. Median closure is 133 pages, so the baseline `choose_budgeted_pages_sparse` drops about half the discovered closure by source rank (`two_bit_generation.rs:~1741`, `budgeted_page_rank.rs:276`).\n- **What direct fetches:** every closure page in one wave, with no source-nomination truncation.\n- **Hypothesis (H):** part of the recall loss (97.23% baseline) is page truncation at source nomination, not the 2-bit quality. If H holds, direct closure should gain hits on queries where the baseline dropped pages.\n- **What would make it not worth it:** bytes are up 37.6%, and SQ8 scoring CPU on 1 vCPU roughly doubles in rows (about 34k vs 16k). The request saving may then not turn into latency. The only certain gain is lifecycle cost: GETs are down 48%.\n\n## Change boundary (generic, opt-in, defaults untouched)\nAll in `crates/borsuk/src/two_bit_generation.rs`:\n\n1. **Limits type.** Add `pub struct DirectClosureLimits { max_bytes: usize, max_gets: usize }`. Keep it outside `TwoBitGenerationLimits`, because `open_inner:1206` clamps `max_query_bytes` to 16,773,120 for semantic discovery. Leave that clamp alone.\n2. **Opt-in builder.** Add `with_direct_closure(self, DirectClosureLimits) -> Result<Self>`, mirroring `with_source_cache` (`:900`).\n   - It charges `returned_sq8::query_payload_bytes(geom, max_bytes, planner_bytes, max_active)` against `modeled_memory_bytes`.\n   - It rejects zero, overflow and over-cap values.\n   - Plain `search*` paths must stay byte-identical.\n3. **Direct planner.** Add `plan_direct_measured`.\n   - It reuses `normalize_two_bit_diagnostic_query`, `local_walks` and `admit_source_walks`.\n   - It skips `prepare_query` and the source fetch and nomination.\n   - It computes closure pages, then `cover_pages(.., D+12, 256, direct.max_gets)`.\n   - If the bytes exceed `max_bytes`, it returns `Budget(InsufficientBudget)` before any I/O.\n   - It fills `BudgetedPagePlan` with `selected_pages` as the covered pages including bridges, `target_pages = closure.len()` and `target_shortfall = 0`.\n4. **Shared scorer tail.** Extract the tail of `search_store_measured` (`:2230`) into `rank_planned(plan, max_gets, max_bytes, ..)`. Both arms then use one authenticated `rank_verified_sq8_pages_inner` and one write path.\n5. **Entry points.** Add `search_direct_with_store` and a `#[doc(hidden)] diagnostic_direct_search_with_store`, with the same slot acquire and `excluded_ids` handling.\n   - Mutation-snapshot search stays out of scope.\n6. **Harness.** In `bin/check_cohere_native_baseline.rs`, add an optional config field `serving: baseline | direct_closure{max_bytes,max_gets}` and bump the config and result schema.\n   - Baseline pins stay identical (16,773,120 / 32 / 512 MiB), so arm A reproduces.\n   - The direct arm calls `with_direct_closure` and the diagnostic direct search.\n   - Emit `plan.ranges` per query for both arms, so the incidental-page audit can be done offline.\n   - `reduce` and truth handling are unchanged.\n\n## Gate 0: local, no network (these are the only gates before the paid run)\nTests go in `source_walk_tests`, reusing the `RecordedStore` and `assert_paged_source` fixtures.\n\n- **T1 bridge counterexample.** Pages `{0,5,15}` vs `{0,5,8,11,15}` with a 2-GET cap give `[0,6),[15,16)` vs `[0,1),[5,16)`. Assert that pages 1\u20134 are fetched in the first case and not the second, through the real direct planner.\n- **T2 scalar oracle.** Use a partial final page, `excluded_ids` and several `top_k` values. Direct output must equal exhaustive `rank_returned_ranges_excluding` over exactly `plan.ranges`, with identical IDs and `score.to_bits()`.\n- **T3 accounting.** The `RecordedStore` log shows exactly `ranges.len()` SQ8 GETs and zero SOURCE GETs. Cap breach issues zero requests. Stale ETag keeps the charged failure and the drain of the other in-flight GETs.\n- **T4 admission.** `with_direct_closure` fails at `modeled - 1` (pattern at `:2956`). Without it, direct search errors before I/O.\n\nThen run `cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious` and `bash scripts/check_rust_test_build.sh`, and record revision and exit statuses.\n\n## Gate 1: real recall and resource falsifier (same frozen bytes)\nInputs: Cohere100k/1000/D1024/k10, requests sha `8460a81f\u2026`, truth sha `47906423\u2026`, generation `ac6cc1d4\u2026`. Order is ABBA, `A=baseline, B=direct`, one process per arm, as in the fetch-parallelism precedent.\n\nAdmission order:\n1. Run `validate_config`, authenticated requests, `bind_source` and `open_remote` with the direct config, truth unopened. This is metadata-only, but not offline (see unresolved item 1).\n2. Run a disposable canary smoke. Say which operations are real (local backend, `Shape::tiny`) and which are mocked.\n3. Freeze the source and run the paid measurement.\n\nHost setup:\n- Spot c7i.2xlarge in eu-central-1, quoted at $0.2064/h.\n- cgroup `cpu=1`, memory.max 512 MiB (unchanged), `fetch_parallelism=32`, `max_active_queries=1`, `native100k`.\n- Terminate at the terminal marker.\n- Expected cost is under $0.15 including about 158k GETs.\n\n**Direct-arm envelope (arm-specific, preregistered).**\n\n| Quantity | Value | Grounding |\n|---|---|---|\n| GETs | \u2264 32 | Historical cap; replay p95 and max are both 32 |\n| `max_bytes` | 52,428,800 (50 MiB) | 1.074\u00d7 the replay max of 48,799,744 B; not a universal gate |\n| Per-query parity | exact | Plan bytes and GETs must equal the replay's per-query `direct_closure_sq8_{bytes,gets}` |\n| Process peak RSS | \u2264 A's peak + 2\u00d752,428,800, and \u2264 256 MiB | Baseline cold runs peaked at 42\u201352 MB |\n| Wall deadline | 600 s per arm, 1,800 s per instance, 10 s per-query stall guard | Baseline is serial at about 10 QPS, so about 100 s per arm |\n\n- The modeled charge for 50 MiB is about 172 MB: 3\u00d752.4M plus ranking at about 13M plus planner scratch.\n- Do not raise the historical arms' caps.\n\n**Dispositions.**\n\n| Outcome | Disposition |\n|---|---|\n| T1\u2013T4 fail, or A's hits \u2260 the recorded 9,723 (97.23%) | INVALID; deterministic drift is an environment or code defect |\n| Per-query plan \u2260 replay, any GET or byte breach, any non-recall error | INVALID, not a performance KILL |\n| `hits_B < hits_A` | KILL for this workload; no latency run |\n| `hits_B \u2265 hits_A` and resource gates pass | Candidate; continue to the feasibility screen below |\n| H falsified: gains G\u22480 and regressions R\u22480 | Recall is identical, so the only benefit is \u221248% GETs; park |\n\nDefinitions and checks:\n- G is the number of queries where B has more hits than A. R is the number where B has fewer.\n- Direct fetches a superset of A's selected pages, so any regression is one of two things:\n  - **Lost incidental page:** A fetched a bridge page that is not in the closure and B's cover omitted it.\n  - **Displacement:** an extra row outranks a truth item under SQ8.\n- Both are separable offline from the emitted `plan.ranges` and `returned` lists.\n- H predicts the gains concentrate on queries where A's closure exceeded its roughly 63 pages.\n\n**Feasibility screen for a formal cold run.** This is diagnostic only, with no latency claim.\n- The paired per-query wall ratio B/A (median) must be \u2264 0.95, and B's p90 must be \u2264 A's.\n- `query_process_cpu_ns` for B minus A must be smaller than A's `stages.source` p50, which is the dependent wave being removed.\n- Otherwise the result is \"recall-only success, latency not promising\".\n\n## Unresolved resource evidence (each must be settled before the formal cold run)\n1. **`modeled_memory_bytes` of the open Native100k generation under the 512 MiB library cap.**\n   - It is crate-private and not in any committed receipt. The only committed value is 7.5 GB, for a different host.\n   - Admission step 1 must emit it (expose it as `#[doc(hidden)]`).\n   - If baseline + 172 MB exceeds the cap, the options are to credit back `source_query_memory` (up to about 134 MB, justified because a direct-mode instance never fetches SOURCE) or to preregister a larger library cap below the 512 MiB cgroup. Do not settle this before reading the number.\n2. **One-vCPU SQ8 scoring cost per 1k rows at D1024:** unmeasured. The `query_process_cpu_ns` difference between B and A will give it.\n3. **Whether 48 MB at fetch 32 saturates c7i bandwidth:** read from the `stages.sq8` split.\n4. **Concurrency:** 3\u00d750 MiB per slot is about 157 MB, so `max_active_queries>1` will not fit the 512 MiB cap without a real RSS model. The 4-slot HTTP example is out of scope.\n5. **Closure-containment ceiling for truth:** truth was never opened. Gate 1 measures only end-to-end recall; the offline `plan.ranges` + order-file audit gives containment as a diagnostic.",
+  "partial_result_truncated": false,
+  "provider_partials": {
+    "claude": "**Plan: one-wave direct-closure SQ8 falsifier** (read-only; HEAD blobs only, no Cargo, no network, nothing edited)\n\n## Recommendation\nRun the cheapest real recall and resource falsifier. Do not run a cold latency campaign or call it the architecture winner yet.\n\n- **What the baseline fetches:** the cap is 16,773,120 B, which is about 63 pages. Median closure is 133 pages, so the baseline `choose_budgeted_pages_sparse` drops about half the discovered closure by source rank (`two_bit_generation.rs:~1741`, `budgeted_page_rank.rs:276`).\n- **What direct fetches:** every closure page in one wave, with no source-nomination truncation.\n- **Hypothesis (H):** part of the recall loss (97.23% baseline) is page truncation at source nomination, not the 2-bit quality. If H holds, direct closure should gain hits on queries where the baseline dropped pages.\n- **What would make it not worth it:** bytes are up 37.6%, and SQ8 scoring CPU on 1 vCPU roughly doubles in rows (about 34k vs 16k). The request saving may then not turn into latency. The only certain gain is lifecycle cost: GETs are down 48%.\n\n## Change boundary (generic, opt-in, defaults untouched)\nAll in `crates/borsuk/src/two_bit_generation.rs`:\n\n1. **Limits type.** Add `pub struct DirectClosureLimits { max_bytes: usize, max_gets: usize }`. Keep it outside `TwoBitGenerationLimits`, because `open_inner:1206` clamps `max_query_bytes` to 16,773,120 for semantic discovery. Leave that clamp alone.\n2. **Opt-in builder.** Add `with_direct_closure(self, DirectClosureLimits) -> Result<Self>`, mirroring `with_source_cache` (`:900`).\n   - It charges `returned_sq8::query_payload_bytes(geom, max_bytes, planner_bytes, max_active)` against `modeled_memory_bytes`.\n   - It rejects zero, overflow and over-cap values.\n   - Plain `search*` paths must stay byte-identical.\n3. **Direct planner.** Add `plan_direct_measured`.\n   - It reuses `normalize_two_bit_diagnostic_query`, `local_walks` and `admit_source_walks`.\n   - It skips `prepare_query` and the source fetch and nomination.\n   - It computes closure pages, then `cover_pages(.., D+12, 256, direct.max_gets)`.\n   - If the bytes exceed `max_bytes`, it returns `Budget(InsufficientBudget)` before any I/O.\n   - It fills `BudgetedPagePlan` with `selected_pages` as the covered pages including bridges, `target_pages = closure.len()` and `target_shortfall = 0`.\n4. **Shared scorer tail.** Extract the tail of `search_store_measured` (`:2230`) into `rank_planned(plan, max_gets, max_bytes, ..)`. Both arms then use one authenticated `rank_verified_sq8_pages_inner` and one write path.\n5. **Entry points.** Add `search_direct_with_store` and a `#[doc(hidden)] diagnostic_direct_search_with_store`, with the same slot acquire and `excluded_ids` handling.\n   - Mutation-snapshot search stays out of scope.\n6. **Harness.** In `bin/check_cohere_native_baseline.rs`, add an optional config field `serving: baseline | direct_closure{max_bytes,max_gets}` and bump the config and result schema.\n   - Baseline pins stay identical (16,773,120 / 32 / 512 MiB), so arm A reproduces.\n   - The direct arm calls `with_direct_closure` and the diagnostic direct search.\n   - Emit `plan.ranges` per query for both arms, so the incidental-page audit can be done offline.\n   - `reduce` and truth handling are unchanged.\n\n## Gate 0: local, no network (these are the only gates before the paid run)\nTests go in `source_walk_tests`, reusing the `RecordedStore` and `assert_paged_source` fixtures.\n\n- **T1 bridge counterexample.** Pages `{0,5,15}` vs `{0,5,8,11,15}` with a 2-GET cap give `[0,6),[15,16)` vs `[0,1),[5,16)`. Assert that pages 1\u20134 are fetched in the first case and not the second, through the real direct planner.\n- **T2 scalar oracle.** Use a partial final page, `excluded_ids` and several `top_k` values. Direct output must equal exhaustive `rank_returned_ranges_excluding` over exactly `plan.ranges`, with identical IDs and `score.to_bits()`.\n- **T3 accounting.** The `RecordedStore` log shows exactly `ranges.len()` SQ8 GETs and zero SOURCE GETs. Cap breach issues zero requests. Stale ETag keeps the charged failure and the drain of the other in-flight GETs.\n- **T4 admission.** `with_direct_closure` fails at `modeled - 1` (pattern at `:2956`). Without it, direct search errors before I/O.\n\nThen run `cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious` and `bash scripts/check_rust_test_build.sh`, and record revision and exit statuses.\n\n## Gate 1: real recall and resource falsifier (same frozen bytes)\nInputs: Cohere100k/1000/D1024/k10, requests sha `8460a81f\u2026`, truth sha `47906423\u2026`, generation `ac6cc1d4\u2026`. Order is ABBA, `A=baseline, B=direct`, one process per arm, as in the fetch-parallelism precedent.\n\nAdmission order:\n1. Run `validate_config`, authenticated requests, `bind_source` and `open_remote` with the direct config, truth unopened. This is metadata-only, but not offline (see unresolved item 1).\n2. Run a disposable canary smoke. Say which operations are real (local backend, `Shape::tiny`) and which are mocked.\n3. Freeze the source and run the paid measurement.\n\nHost setup:\n- Spot c7i.2xlarge in eu-central-1, quoted at $0.2064/h.\n- cgroup `cpu=1`, memory.max 512 MiB (unchanged), `fetch_parallelism=32`, `max_active_queries=1`, `native100k`.\n- Terminate at the terminal marker.\n- Expected cost is under $0.15 including about 158k GETs.\n\n**Direct-arm envelope (arm-specific, preregistered).**\n\n| Quantity | Value | Grounding |\n|---|---|---|\n| GETs | \u2264 32 | Historical cap; replay p95 and max are both 32 |\n| `max_bytes` | 52,428,800 (50 MiB) | 1.074\u00d7 the replay max of 48,799,744 B; not a universal gate |\n| Per-query parity | exact | Plan bytes and GETs must equal the replay's per-query `direct_closure_sq8_{bytes,gets}` |\n| Process peak RSS | \u2264 A's peak + 2\u00d752,428,800, and \u2264 256 MiB | Baseline cold runs peaked at 42\u201352 MB |\n| Wall deadline | 600 s per arm, 1,800 s per instance, 10 s per-query stall guard | Baseline is serial at about 10 QPS, so about 100 s per arm |\n\n- The modeled charge for 50 MiB is about 172 MB: 3\u00d752.4M plus ranking at about 13M plus planner scratch.\n- Do not raise the historical arms' caps.\n\n**Dispositions.**\n\n| Outcome | Disposition |\n|---|---|\n| T1\u2013T4 fail, or A's hits \u2260 the recorded 9,723 (97.23%) | INVALID; deterministic drift is an environment or code defect |\n| Per-query plan \u2260 replay, any GET or byte breach, any non-recall error | INVALID, not a performance KILL |\n| `hits_B < hits_A` | KILL for this workload; no latency run |\n| `hits_B \u2265 hits_A` and resource gates pass | Candidate; continue to the feasibility screen below |\n| H falsified: gains G\u22480 and regressions R\u22480 | Recall is identical, so the only benefit is \u221248% GETs; park |\n\nDefinitions and checks:\n- G is the number of queries where B has more hits than A. R is the number where B has fewer.\n- Direct fetches a superset of A's selected pages, so any regression is one of two things:\n  - **Lost incidental page:** A fetched a bridge page that is not in the closure and B's cover omitted it.\n  - **Displacement:** an extra row outranks a truth item under SQ8.\n- Both are separable offline from the emitted `plan.ranges` and `returned` lists.\n- H predicts the gains concentrate on queries where A's closure exceeded its roughly 63 pages.\n\n**Feasibility screen for a formal cold run.** This is diagnostic only, with no latency claim.\n- The paired per-query wall ratio B/A (median) must be \u2264 0.95, and B's p90 must be \u2264 A's.\n- `query_process_cpu_ns` for B minus A must be smaller than A's `stages.source` p50, which is the dependent wave being removed.\n- Otherwise the result is \"recall-only success, latency not promising\".\n\n## Unresolved resource evidence (each must be settled before the formal cold run)\n1. **`modeled_memory_bytes` of the open Native100k generation under the 512 MiB library cap.**\n   - It is crate-private and not in any committed receipt. The only committed value is 7.5 GB, for a different host.\n   - Admission step 1 must emit it (expose it as `#[doc(hidden)]`).\n   - If baseline + 172 MB exceeds the cap, the options are to credit back `source_query_memory` (up to about 134 MB, justified because a direct-mode instance never fetches SOURCE) or to preregister a larger library cap below the 512 MiB cgroup. Do not settle this before reading the number.\n2. **One-vCPU SQ8 scoring cost per 1k rows at D1024:** unmeasured. The `query_process_cpu_ns` difference between B and A will give it.\n3. **Whether 48 MB at fetch 32 saturates c7i bandwidth:** read from the `stages.sq8` split.\n4. **Concurrency:** 3\u00d750 MiB per slot is about 157 MB, so `max_active_queries>1` will not fit the 512 MiB cap without a real RSS model. The 4-slot HTTP example is out of scope.\n5. **Closure-containment ceiling for truth:** truth was never opened. Gate 1 measures only end-to-end recall; the offline `plan.ranges` + order-file audit gives containment as a diagnostic."
+  },
+  "providers_used": [
+    "claude"
+  ],
+  "active_provider": "claude",
+  "phase": "Consultation completed",
+  "input_bytes": 2209,
+  "output_bytes": 8979,
+  "elapsed_seconds": 292,
+  "progress": "devbox-ask: claude consult still running (0m 30s)\ndevbox-ask: claude consult still running (1m 00s)\ndevbox-ask: claude consult still running (1m 30s)\ndevbox-ask: claude consult still running (2m 00s)\ndevbox-ask: claude consult still running (2m 30s)\ndevbox-ask: claude consult still running (3m 00s)\ndevbox-ask: claude consult still running (3m 30s)\ndevbox-ask: claude consult still running (4m 00s)\ndevbox-ask: claude consult still running (4m 30s)",
+  "progress_truncated": false,
+  "result": "**Plan: one-wave direct-closure SQ8 falsifier** (read-only; HEAD blobs only, no Cargo, no network, nothing edited)\n\n## Recommendation\nRun the cheapest real recall and resource falsifier. Do not run a cold latency campaign or call it the architecture winner yet.\n\n- **What the baseline fetches:** the cap is 16,773,120 B, which is about 63 pages. Median closure is 133 pages, so the baseline `choose_budgeted_pages_sparse` drops about half the discovered closure by source rank (`two_bit_generation.rs:~1741`, `budgeted_page_rank.rs:276`).\n- **What direct fetches:** every closure page in one wave, with no source-nomination truncation.\n- **Hypothesis (H):** part of the recall loss (97.23% baseline) is page truncation at source nomination, not the 2-bit quality. If H holds, direct closure should gain hits on queries where the baseline dropped pages.\n- **What would make it not worth it:** bytes are up 37.6%, and SQ8 scoring CPU on 1 vCPU roughly doubles in rows (about 34k vs 16k). The request saving may then not turn into latency. The only certain gain is lifecycle cost: GETs are down 48%.\n\n## Change boundary (generic, opt-in, defaults untouched)\nAll in `crates/borsuk/src/two_bit_generation.rs`:\n\n1. **Limits type.** Add `pub struct DirectClosureLimits { max_bytes: usize, max_gets: usize }`. Keep it outside `TwoBitGenerationLimits`, because `open_inner:1206` clamps `max_query_bytes` to 16,773,120 for semantic discovery. Leave that clamp alone.\n2. **Opt-in builder.** Add `with_direct_closure(self, DirectClosureLimits) -> Result<Self>`, mirroring `with_source_cache` (`:900`).\n   - It charges `returned_sq8::query_payload_bytes(geom, max_bytes, planner_bytes, max_active)` against `modeled_memory_bytes`.\n   - It rejects zero, overflow and over-cap values.\n   - Plain `search*` paths must stay byte-identical.\n3. **Direct planner.** Add `plan_direct_measured`.\n   - It reuses `normalize_two_bit_diagnostic_query`, `local_walks` and `admit_source_walks`.\n   - It skips `prepare_query` and the source fetch and nomination.\n   - It computes closure pages, then `cover_pages(.., D+12, 256, direct.max_gets)`.\n   - If the bytes exceed `max_bytes`, it returns `Budget(InsufficientBudget)` before any I/O.\n   - It fills `BudgetedPagePlan` with `selected_pages` as the covered pages including bridges, `target_pages = closure.len()` and `target_shortfall = 0`.\n4. **Shared scorer tail.** Extract the tail of `search_store_measured` (`:2230`) into `rank_planned(plan, max_gets, max_bytes, ..)`. Both arms then use one authenticated `rank_verified_sq8_pages_inner` and one write path.\n5. **Entry points.** Add `search_direct_with_store` and a `#[doc(hidden)] diagnostic_direct_search_with_store`, with the same slot acquire and `excluded_ids` handling.\n   - Mutation-snapshot search stays out of scope.\n6. **Harness.** In `bin/check_cohere_native_baseline.rs`, add an optional config field `serving: baseline | direct_closure{max_bytes,max_gets}` and bump the config and result schema.\n   - Baseline pins stay identical (16,773,120 / 32 / 512 MiB), so arm A reproduces.\n   - The direct arm calls `with_direct_closure` and the diagnostic direct search.\n   - Emit `plan.ranges` per query for both arms, so the incidental-page audit can be done offline.\n   - `reduce` and truth handling are unchanged.\n\n## Gate 0: local, no network (these are the only gates before the paid run)\nTests go in `source_walk_tests`, reusing the `RecordedStore` and `assert_paged_source` fixtures.\n\n- **T1 bridge counterexample.** Pages `{0,5,15}` vs `{0,5,8,11,15}` with a 2-GET cap give `[0,6),[15,16)` vs `[0,1),[5,16)`. Assert that pages 1\u20134 are fetched in the first case and not the second, through the real direct planner.\n- **T2 scalar oracle.** Use a partial final page, `excluded_ids` and several `top_k` values. Direct output must equal exhaustive `rank_returned_ranges_excluding` over exactly `plan.ranges`, with identical IDs and `score.to_bits()`.\n- **T3 accounting.** The `RecordedStore` log shows exactly `ranges.len()` SQ8 GETs and zero SOURCE GETs. Cap breach issues zero requests. Stale ETag keeps the charged failure and the drain of the other in-flight GETs.\n- **T4 admission.** `with_direct_closure` fails at `modeled - 1` (pattern at `:2956`). Without it, direct search errors before I/O.\n\nThen run `cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious` and `bash scripts/check_rust_test_build.sh`, and record revision and exit statuses.\n\n## Gate 1: real recall and resource falsifier (same frozen bytes)\nInputs: Cohere100k/1000/D1024/k10, requests sha `8460a81f\u2026`, truth sha `47906423\u2026`, generation `ac6cc1d4\u2026`. Order is ABBA, `A=baseline, B=direct`, one process per arm, as in the fetch-parallelism precedent.\n\nAdmission order:\n1. Run `validate_config`, authenticated requests, `bind_source` and `open_remote` with the direct config, truth unopened. This is metadata-only, but not offline (see unresolved item 1).\n2. Run a disposable canary smoke. Say which operations are real (local backend, `Shape::tiny`) and which are mocked.\n3. Freeze the source and run the paid measurement.\n\nHost setup:\n- Spot c7i.2xlarge in eu-central-1, quoted at $0.2064/h.\n- cgroup `cpu=1`, memory.max 512 MiB (unchanged), `fetch_parallelism=32`, `max_active_queries=1`, `native100k`.\n- Terminate at the terminal marker.\n- Expected cost is under $0.15 including about 158k GETs.\n\n**Direct-arm envelope (arm-specific, preregistered).**\n\n| Quantity | Value | Grounding |\n|---|---|---|\n| GETs | \u2264 32 | Historical cap; replay p95 and max are both 32 |\n| `max_bytes` | 52,428,800 (50 MiB) | 1.074\u00d7 the replay max of 48,799,744 B; not a universal gate |\n| Per-query parity | exact | Plan bytes and GETs must equal the replay's per-query `direct_closure_sq8_{bytes,gets}` |\n| Process peak RSS | \u2264 A's peak + 2\u00d752,428,800, and \u2264 256 MiB | Baseline cold runs peaked at 42\u201352 MB |\n| Wall deadline | 600 s per arm, 1,800 s per instance, 10 s per-query stall guard | Baseline is serial at about 10 QPS, so about 100 s per arm |\n\n- The modeled charge for 50 MiB is about 172 MB: 3\u00d752.4M plus ranking at about 13M plus planner scratch.\n- Do not raise the historical arms' caps.\n\n**Dispositions.**\n\n| Outcome | Disposition |\n|---|---|\n| T1\u2013T4 fail, or A's hits \u2260 the recorded 9,723 (97.23%) | INVALID; deterministic drift is an environment or code defect |\n| Per-query plan \u2260 replay, any GET or byte breach, any non-recall error | INVALID, not a performance KILL |\n| `hits_B < hits_A` | KILL for this workload; no latency run |\n| `hits_B \u2265 hits_A` and resource gates pass | Candidate; continue to the feasibility screen below |\n| H falsified: gains G\u22480 and regressions R\u22480 | Recall is identical, so the only benefit is \u221248% GETs; park |\n\nDefinitions and checks:\n- G is the number of queries where B has more hits than A. R is the number where B has fewer.\n- Direct fetches a superset of A's selected pages, so any regression is one of two things:\n  - **Lost incidental page:** A fetched a bridge page that is not in the closure and B's cover omitted it.\n  - **Displacement:** an extra row outranks a truth item under SQ8.\n- Both are separable offline from the emitted `plan.ranges` and `returned` lists.\n- H predicts the gains concentrate on queries where A's closure exceeded its roughly 63 pages.\n\n**Feasibility screen for a formal cold run.** This is diagnostic only, with no latency claim.\n- The paired per-query wall ratio B/A (median) must be \u2264 0.95, and B's p90 must be \u2264 A's.\n- `query_process_cpu_ns` for B minus A must be smaller than A's `stages.source` p50, which is the dependent wave being removed.\n- Otherwise the result is \"recall-only success, latency not promising\".\n\n## Unresolved resource evidence (each must be settled before the formal cold run)\n1. **`modeled_memory_bytes` of the open Native100k generation under the 512 MiB library cap.**\n   - It is crate-private and not in any committed receipt. The only committed value is 7.5 GB, for a different host.\n   - Admission step 1 must emit it (expose it as `#[doc(hidden)]`).\n   - If baseline + 172 MB exceeds the cap, the options are to credit back `source_query_memory` (up to about 134 MB, justified because a direct-mode instance never fetches SOURCE) or to preregister a larger library cap below the 512 MiB cgroup. Do not settle this before reading the number.\n2. **One-vCPU SQ8 scoring cost per 1k rows at D1024:** unmeasured. The `query_process_cpu_ns` difference between B and A will give it.\n3. **Whether 48 MB at fetch 32 saturates c7i bandwidth:** read from the `stages.sq8` split.\n4. **Concurrency:** 3\u00d750 MiB per slot is about 157 MB, so `max_active_queries>1` will not fit the 512 MiB cap without a real RSS model. The 4-slot HTTP example is out of scope.\n5. **Closure-containment ceiling for truth:** truth was never opened. Gate 1 measures only end-to-end recall; the offline `plan.ranges` + order-file audit gives containment as a diagnostic.",
+  "result_truncated": false
+}
