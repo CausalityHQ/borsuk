@@ -1,0 +1,12 @@
+{
+  "status": "SOURCE_SCOPE_AND_FROZEN_LAUNCH_GUARDS_VERIFIED",
+  "candidate": "04944c574ece595c43710974d89a75d759da2f7b",
+  "parent": "3138bfb0502c986d187e4098718f8b3945fd39c9",
+  "production_library_code_unchanged": true,
+  "codec_kernel_primitive_byte_identical": true,
+  "runner_delta": "checked512 and explicit startup batch component only; stronger existing tests",
+  "source_native_status": "UNVERIFIED",
+  "native_or_AWS_executed": false,
+  "production_stack_qualified": false,
+  "performance_claim": false
+}

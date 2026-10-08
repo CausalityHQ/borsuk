@@ -1,0 +1,23 @@
+{
+  "status": "PASS_BOUNDED_SOURCE_AND_STAGING_CANARY",
+  "candidate": "04944c574ece595c43710974d89a75d759da2f7b",
+  "native_identity": "f4f34fd68c687249a914bf22ed58778d516dc31d8444b3625056b6c7b6da514c",
+  "control_native_identity": "4c5dff40e340f004b50799650284c0b205f4068ba970125fb1e6122afaa3c03b",
+  "support_count": 2454,
+  "native_count": 415,
+  "stages": 13,
+  "real": [
+    "all source/archive/input pins",
+    "Bash syntax",
+    "tiny separate candidate/control transfer/hash/patch and candidate unchanged",
+    "missing frozen marker exit98"
+  ],
+  "mocked": [
+    "scalar release ELF metadata selection positive/duplicate/wrong-feature/wrong-directory"
+  ],
+  "native_Cargo_rustc_execution": false,
+  "AWS": false,
+  "performance_claim": false,
+  "production_stack_qualified": false,
+  "primitive_allowed": false
+}

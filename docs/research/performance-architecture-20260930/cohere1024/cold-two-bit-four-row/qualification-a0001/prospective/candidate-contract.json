@@ -1,0 +1,261 @@
+{
+  "status": "UNVERIFIED OWN3 scratch admission/dispatch-witness repair committed; same worker held for root exact-source native and production-ELF/stack gates",
+  "base": "c49a2e6d2a035bfaf42358fbf7fb60abf11e4222",
+  "owned_paths": [
+    "crates/borsuk/src/rotated_two_bit.rs",
+    "crates/borsuk/src/two_bit_generation.rs",
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs"
+  ],
+  "public_api": "PreparedTwoBit::score arithmetic and stateful plan_two_bit_source_walks callback ordering preserved",
+  "private_api": "unchanged validated records/authenticated batching; score_four uses existing simd_control::f64x4 with independent serial f64 lanes and scalar finalizers",
+  "scratch": {
+    "incremental_bytes": 512,
+    "fallback": "scalar if full preparation charge plus 512 exceeds existing query cap, non-x86/non-AVX2, or fewer than four rows"
+  },
+  "local_checks": {
+    "allowed": [
+      "source inspection",
+      "rustfmt",
+      "hashes"
+    ],
+    "cpu": 1,
+    "memory_mib": 256,
+    "swap_bytes": 0,
+    "wall_seconds": 120
+  },
+  "prohibited_local_work": [
+    "cargo",
+    "rustc",
+    "native execution",
+    "data",
+    "queries",
+    "GT",
+    "AWS",
+    "network",
+    "consultation",
+    "review",
+    "children",
+    "merge",
+    "push"
+  ],
+  "primitive": {
+    "ignored_release_test": "rotated_two_bit::tests::four_row_release_primitive_v1",
+    "dimensions": [
+      257,
+      768,
+      1024,
+      1025
+    ],
+    "panels": [
+      32,
+      17
+    ],
+    "blocks": 5,
+    "cells": 80,
+    "encoded_mib_per_cell": 256,
+    "min_cell_cpu_ms": 50,
+    "cpu_seconds": 30,
+    "wall_seconds": 120,
+    "memory_mib": 256,
+    "swap_bytes": 0,
+    "pids": 128
+  },
+  "handoff": "UNVERIFIED commit, exact owned SHA256, qualified tests and source/ELF sealing requirements; hold same worker until parent explicitly disposes",
+  "commit": "04944c574ece595c43710974d89a75d759da2f7b",
+  "git_tree": "f23ce9aa1c1fa21bcfa4081c53d321b5dda64ea3",
+  "owned_sha256": {
+    "crates/borsuk/src/rotated_two_bit.rs": "2f97ac15a2ffdcc69b78c67a74469703163520e075f85eaf01fba25a0c8727bd",
+    "crates/borsuk/src/two_bit_generation.rs": "5d98b86bc8ec32a2e3ec3c96eb162f14298a1ad80534077f442e04d717c70282",
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs": "4f818703e8c759e3b79ffadac49704369f7029304f9a2c31f602feb760506d0f"
+  },
+  "owned_manifest_sha256": "a2583cb1ef9fe9335b88298378f3ab5472c84a29f67918c9ae2f7d96290232de",
+  "owned_manifest_format": "ordered owned_paths; each line lowercase SHA256, two spaces, relative path, newline",
+  "owned_git_blobs": {
+    "crates/borsuk/src/rotated_two_bit.rs": "b13926bdc196409bfabe86d25582e23217ed327b",
+    "crates/borsuk/src/two_bit_generation.rs": "77c03ed1f15aad9114488bf92e9d374a59e6aa80",
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs": "4d7bcf6a8621b6ec91e289683170ea84be765fc1"
+  },
+  "author": "Roman Bartusiak <riomus@gmail.com>",
+  "local_evidence": [
+    "bounded CPU1/256MiB/swap0/pids128/120s rustfmt --check OWN3 exit0",
+    "git diff --check exit0",
+    "source assertions: rotated scorer/primitive byte-identical; generation production prefix changes only docs and cfg(test) observation; runner production prefix changes only fixed512/formula/startup; all existing test names/scientific/config constants retained",
+    "exact3138 descendant; clean working files match committed OWN3 hashes"
+  ],
+  "native_evidence": "NONE for new04944 source; no local Cargo/rustc/native execution. Parent reports original a0004/3138 all7 stages0 with96 authenticated artifacts and terminated instance; those receipts do not qualify changed source. Actual production ELF/stack audit still pending before primitive.",
+  "mandatory_qualified_tests_debug_and_release": [
+    "rotated_two_bit::tests::four_row_literal_scalar_oracle_matrix",
+    "rotated_two_bit::tests::four_row_validation_and_scratch_boundaries",
+    "rotated_two_bit::tests::required_query_scratch_matches_exact_prepare_query_budget",
+    "rotated_two_bit::tests::required_query_scratch_rejects_invalid_or_overflowing_geometry",
+    "two_bit_generation::source_walk_tests::four_row_authenticated_plan_parity_and_errors",
+    "two_bit_generation::source_walk_tests::four_row_stateful_callback_and_buffered_error_priority",
+    "two_bit_generation::source_walk_tests::four_row_tiny_builder_serving_parity",
+    "two_bit_generation::source_walk_tests::diagnostic_source_walks_reject_missing_nonfinite_and_invalid_inputs",
+    "two_bit_generation::source_walk_tests::native_100k_d1024_generation_serving_scalar_oracle",
+    "two_bit_generation::source_walk_tests::paged_source_matches_reference_and_preserves_failure_charges",
+    "two_bit_generation::source_walk_tests::paged_source_cache_preserves_parity_admission_and_failure_drains",
+    "two_bit_generation::source_walk_tests::fragmented_paged_source_preserves_trace_and_rank_across_get_caps"
+  ],
+  "parent_test_commands": {
+    "debug": [
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib rotated_two_bit::tests::four_row_literal_scalar_oracle_matrix -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib rotated_two_bit::tests::four_row_validation_and_scratch_boundaries -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib rotated_two_bit::tests::required_query_scratch_matches_exact_prepare_query_budget -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib rotated_two_bit::tests::required_query_scratch_rejects_invalid_or_overflowing_geometry -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::four_row_authenticated_plan_parity_and_errors -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::four_row_stateful_callback_and_buffered_error_priority -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::four_row_tiny_builder_serving_parity -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::diagnostic_source_walks_reject_missing_nonfinite_and_invalid_inputs -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::native_100k_d1024_generation_serving_scalar_oracle -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::paged_source_matches_reference_and_preserves_failure_charges -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::paged_source_cache_preserves_parity_admission_and_failure_drains -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::fragmented_paged_source_preserves_trace_and_rank_across_get_caps -- --exact --test-threads=1"
+    ],
+    "release": [
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib --release rotated_two_bit::tests::four_row_literal_scalar_oracle_matrix -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib --release rotated_two_bit::tests::four_row_validation_and_scratch_boundaries -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib --release rotated_two_bit::tests::required_query_scratch_matches_exact_prepare_query_budget -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib --release rotated_two_bit::tests::required_query_scratch_rejects_invalid_or_overflowing_geometry -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib --release two_bit_generation::source_walk_tests::four_row_authenticated_plan_parity_and_errors -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib --release two_bit_generation::source_walk_tests::four_row_stateful_callback_and_buffered_error_priority -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib --release two_bit_generation::source_walk_tests::four_row_tiny_builder_serving_parity -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib --release two_bit_generation::source_walk_tests::diagnostic_source_walks_reject_missing_nonfinite_and_invalid_inputs -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib --release two_bit_generation::source_walk_tests::native_100k_d1024_generation_serving_scalar_oracle -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib --release two_bit_generation::source_walk_tests::paged_source_matches_reference_and_preserves_failure_charges -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib --release two_bit_generation::source_walk_tests::paged_source_cache_preserves_parity_admission_and_failure_drains -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --lib --release two_bit_generation::source_walk_tests::fragmented_paged_source_preserves_trace_and_rank_across_get_caps -- --exact --test-threads=1"
+    ]
+  },
+  "parent_full_integration_gates": [
+    "root portability qualification for scalar non-AVX2/non-x86 paths",
+    "exact repaired-source debug/release 12 mandatory tests plus affected integrations; root-owned bounded native execution",
+    "exact retained repaired ELF and actual serving paths: packed independent-row additions, per-lane byte order, no horizontal/FMA/reassociation, <=512-byte cumulative incremental production caller+nested-kernel high-water against equivalent base",
+    "independent exact source/ELF/real PASS codegen seal and CPU1/cpuset/256MiB/swap0/pids128/30CPU/120wall enforcement before any primitive; unchanged timing thresholds",
+    "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk --bin check_cohere_native_baseline",
+    "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked --release -p borsuk --lib --no-run",
+    "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=target/four-row-scalar-control cargo test --locked --release -p borsuk --lib --features scalar-control --no-run",
+    "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+    "Existing12 lib mandatory names debug/release plus3 runner names debug/release; inspect actual production runner ELF and cumulative serving caller+nested-kernel stack before any primitive; native/scalar/non-x86 dispatch qualification remains root-owned"
+  ],
+  "assembly_gate_before_timing": "Inspect exact release ELF: PreparedTwoBit::score_four and actual score_authenticated_rows call sites; packed additions must combine independent rows, per-row serial order preserved, no FMA/horizontal/reassociation, total incremental scoring stack <=512 bytes. Compiler SIMD can be SSE2; AVX2 is dispatch eligibility only.",
+  "finite_bound": "Source-derived padded dimensions <2^32, blocks <=256, finite f32 domain yields conservative |score| <2^586; see score_four comment. No guessed dimension ceiling.",
+  "primitive_command": "$ELF --exact rotated_two_bit::tests::four_row_release_primitive_v1 --ignored --nocapture --test-threads=1",
+  "primitive_required_environment": {
+    "BORSUK_TWO_BIT_FOUR_ROW_SOURCE_COMMIT": "04944c574ece595c43710974d89a75d759da2f7b",
+    "BORSUK_TWO_BIT_FOUR_ROW_ROTATED_SHA256": "2f97ac15a2ffdcc69b78c67a74469703163520e075f85eaf01fba25a0c8727bd",
+    "BORSUK_TWO_BIT_FOUR_ROW_GENERATION_SHA256": "5d98b86bc8ec32a2e3ec3c96eb162f14298a1ad80534077f442e04d717c70282",
+    "BORSUK_TWO_BIT_FOUR_ROW_ELF_SHA256": "root-computed SHA256 of exact release ELF",
+    "BORSUK_TWO_BIT_FOUR_ROW_CODEGEN_SHA256": "root-computed SHA256 of passing exact-ELF assembly/stack inspection receipt"
+  },
+  "primitive_identity_schema": "borsuk.two-bit-four-row.primitive.v1",
+  "primitive_timed_boundary": "same production score_authenticated_rows, including checked header validation, batching, scalar tails and ordered unit maximum; no preparation in timing; row/table/per-score seals completed before first cell",
+  "disposition": "Do not merge/push/agent_complete/archive here. Parent qualifies/integrates or rejects. Hold same worker until explicit disposal.",
+  "original_candidate_commit": "6d6e679fcd4738a036ab8bfe716b86e54a916748",
+  "commit_chain": [
+    "c49a2e6d2a035bfaf42358fbf7fb60abf11e4222",
+    "6d6e679fcd4738a036ab8bfe716b86e54a916748",
+    "68eeca47fd4230b10b113cc257ef62e2a8f80c8b",
+    "896d0423b8d1a904ba729f6714bf658d9a216486",
+    "3138bfb0502c986d187e4098718f8b3945fd39c9",
+    "04944c574ece595c43710974d89a75d759da2f7b"
+  ],
+  "preserved_original_contract": "/tmp/borsuk-two-bit-four-row-native-contract-6d6e679f.json",
+  "review_repairs": [
+    {
+      "commit": "68eeca47fd4230b10b113cc257ef62e2a8f80c8b",
+      "parent_instruction": "1791458712935754960-2965865",
+      "scope": "TEST ONLY: four_row_tiny_builder_serving_parity uses build_with_order with identity raw-row permutation; logical application IDs and assertions unchanged",
+      "source_checks": "bounded rustfmt --check, git diff --check, exact replacement/production-invariance assertions exit0; clean committed source hashes",
+      "native": "not run"
+    },
+    {
+      "commit": "896d0423b8d1a904ba729f6714bf658d9a216486",
+      "parent_instruction": "1791458886274929421-2965865",
+      "scope": "TEST ONLY in existing four_row_authenticated_plan_parity_and_errors: unique maximum at every t in 0..32 and 32..49; mixed signed-zero literal folds; missing/malformed positions include 2 and 44..48 with original public prefixes retained",
+      "source_checks": "bounded rustfmt --check, git diff --check, exact unchanged outside existing test/function-name inventory checks exit0; scorer and primitive unchanged",
+      "native": "not run"
+    }
+  ],
+  "preserved_contracts": [
+    "/tmp/borsuk-two-bit-four-row-native-contract-6d6e679f.json",
+    "/tmp/borsuk-two-bit-four-row-native-contract-68eeca47.json",
+    "/tmp/borsuk-two-bit-four-row-native-contract-896d0423.json",
+    "/tmp/borsuk-two-bit-four-row-native-contract-3138bfb0.json"
+  ],
+  "review_evidence_commit": "29a39f43b9bade74529ab394dbf10627124c42fe",
+  "review_reconciliation": "Read research, engineering and reconciliation in full via git show without rebase. Builder and requested coverage fixes complete. Root retains packed independent-row SIMD, exact ELF/production stack, dispatch, resource and seal gates. No optional production changes or instrumentation.",
+  "prospective_repair_plan_commit": "74dc183db34c86304cf7766fec17d639bdf93ca4",
+  "prospective_repair_plan_path": "docs/research/performance-architecture-20260930/cohere1024/cold-two-bit-four-row/wide-repair-plan.md",
+  "source_repairs": [
+    {
+      "commit": "3138bfb0502c986d187e4098718f8b3945fd39c9",
+      "parent_instruction": "1791461917755692350-2965865",
+      "scope": "ONLY score_four: existing facade import, splat(-0.0), original checked loads, Add once per byte, to_array after loop, original scalar finalizers",
+      "source_checks": "bounded rustfmt --check and diff --check exit0; exact outside-function/checked-load/finalizer preservation; all 12 required names, facade Add and forbid(unsafe_code) retained; 5 additions/5 deletions; clean tree",
+      "native": "NONE on this repair"
+    },
+    {
+      "commit": "04944c574ece595c43710974d89a75d759da2f7b",
+      "parent_instruction": "1791466011835362566-2965865",
+      "scope": "OWN3; rotated_two_bit.rs pinned unchanged from3138; changes only generation scratch docs/cfg(test) plan observer+existing fixture and cold runner scratch/startup+existing tests",
+      "source_checks": [
+        "bounded CPU1/256MiB/swap0/pids128/120s rustfmt --check OWN3 exit0",
+        "git diff --check exit0",
+        "source assertions: rotated scorer/primitive byte-identical; generation production prefix changes only docs and cfg(test) observation; runner production prefix changes only fixed512/formula/startup; all existing test names/scientific/config constants retained",
+        "exact3138 descendant; clean working files match committed OWN3 hashes"
+      ],
+      "native": "NONE for this descendant"
+    }
+  ],
+  "closed_parent_qualification": {
+    "source_commit": "896d0423b8d1a904ba729f6714bf658d9a216486",
+    "closure_commit": "2073936cc5c93192f3066fc7b49a9343bb5081c5",
+    "disposition": "CODEGEN_GATE_UNMET_NO_TIMING",
+    "root_reported": "debug/release mandatory correctness and integrations passed; independently reproduced exact ELF emitted four scalar addsd; no timing or production integration",
+    "scope": "Immutable parent evidence; does not qualify this repaired source"
+  },
+  "launch_authorization": "NONE: source plan authorizes only bounded source work. Root must separately inspect and freeze any new native/archive/resource/cost protocol. No primitive before exact-ELF and production-stack PASS.",
+  "owned_scope": "OWN3; rotated_two_bit.rs pinned unchanged from3138; changes only generation scratch docs/cfg(test) plan observer+existing fixture and cold runner scratch/startup+existing tests",
+  "runner_scratch": {
+    "codec_bytes": 532480,
+    "batch_bytes": 512,
+    "trace_bytes": "TwoBitPlanTrace::scratch_bytes(config.rows)",
+    "total": "532480 + checked512 + trace",
+    "untraced_serving_allowance": 532992,
+    "startup_fields": [
+      "codec_scratch_bytes",
+      "batch_scratch_bytes",
+      "trace_scratch_bytes",
+      "query_scratch_bytes"
+    ],
+    "scientific_limits": "unchanged CPU/memory/GET/bytes/cache/query caps; no configuration option or schema-version change"
+  },
+  "dispatch_witness": "Existing four_row_tiny_builder_serving_parity records unit-level private plan_walks choice under cfg(test) only; nonempty units >=4, matching trace count, false at codec+trace and +511, independent host-qualified true at+512. No observer inside score_authenticated_rows/score_four or ignored primitive.",
+  "primitive_runner_binding": "Primitive code/schema/env shape unchanged. Root independently binds OWN3 archive, runner SHA and actual production-bin ELF; the existing primitive directly calls score_authenticated_rows and has no plan_walks observer overhead.",
+  "mandatory_runner_qualified_tests_debug_and_release": [
+    "tests::scratch_formula_keeps_codec_and_trace_separate",
+    "tests::actual_native_queries_seal_and_reduce_against_literal_oracles",
+    "tests::namespaced_pipeline_faults_preserve_binding_accounting_and_seal"
+  ],
+  "parent_runner_test_commands": {
+    "debug": [
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin check_cohere_native_baseline tests::scratch_formula_keeps_codec_and_trace_separate -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin check_cohere_native_baseline tests::actual_native_queries_seal_and_reduce_against_literal_oracles -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin check_cohere_native_baseline tests::namespaced_pipeline_faults_preserve_binding_accounting_and_seal -- --exact --test-threads=1"
+    ],
+    "release": [
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin check_cohere_native_baseline --release tests::scratch_formula_keeps_codec_and_trace_separate -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin check_cohere_native_baseline --release tests::actual_native_queries_seal_and_reduce_against_literal_oracles -- --exact --test-threads=1",
+      "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --bin check_cohere_native_baseline --release tests::namespaced_pipeline_faults_preserve_binding_accounting_and_seal -- --exact --test-threads=1"
+    ]
+  },
+  "literal_required_build_commands": {
+    "production_runner_release": "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk --bin check_cohere_native_baseline",
+    "default_library_release_test_compile": "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo test --locked --release -p borsuk --lib --no-run",
+    "scalar_control_separate_target_compile": "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=target/four-row-scalar-control cargo test --locked --release -p borsuk --lib --features scalar-control --no-run",
+    "workspace_clippy": "env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "unshimmed_workspace_test_build": "CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  }
+}
