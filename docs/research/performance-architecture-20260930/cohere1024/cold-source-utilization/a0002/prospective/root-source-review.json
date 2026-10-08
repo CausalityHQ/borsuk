@@ -1,0 +1,23 @@
+{
+  "status": "REQUIRED_REVIEW_REPAIRS_INDEPENDENTLY_CHECKED_NATIVE_UNRUN",
+  "review_group": "dd1e505d37bc425a",
+  "reviewed_original": "64d519b0da5d0d0d9eb0c4e415ec8a9f244d50ef",
+  "repaired_candidate": "44e116b9b8754cef0393fad1f96259bd583f3b7b",
+  "compiler_only_repair": "Exactly one crate recursion_limit256 attribute; original9b preserved; algorithm/config/resource limits unchanged",
+  "candidate_file_sha256": "a678fbea57d5edda265c4d7acc50fbf04456f1ef00f7c64f99f9ac9b4a86a11f",
+  "root_checks": [
+    "whole256-page/actual tail geometry and GET bounds",
+    "original SQ8 explicit historical cap",
+    "full completion zero-saving invariant",
+    "direct cap per-query flags and total",
+    "all13 old tests literal body unchanged",
+    "10 new tests retained",
+    "10 shared cover tests source unchanged",
+    "full dynamic425 native tree packaged"
+  ],
+  "original_closed_campaign_failed_gets": 0,
+  "local_checks_only": true,
+  "native_compilation": "UNRUN",
+  "native_source_integrated": false,
+  "claims_performance": false
+}

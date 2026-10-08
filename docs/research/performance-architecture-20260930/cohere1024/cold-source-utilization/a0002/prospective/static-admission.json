@@ -1,0 +1,68 @@
+{
+  "status": "STATIC_SOURCE_AND_INPUT_PINS_CHECKED_NOT_LAUNCHED",
+  "candidate": "44e116b9b8754cef0393fad1f96259bd583f3b7b",
+  "old_test_count": 13,
+  "new_test_count": 10,
+  "inherited_cover_tests": "actual remote inventory required",
+  "source_identity": "ab5b3bee8bd2df8be9de8eff07801227ebd26a4c628c5de9bd4b99ccce999174",
+  "native_file_count": 425,
+  "inputs": {
+    "source-files.sha256": {
+      "bytes": 280779,
+      "sha256": "6018e07bc9a68373976272a6807b0789b67406b161e279ab9fda18f7284b1773",
+      "remote_path": "source-files.sha256"
+    },
+    "native-source.json": {
+      "bytes": 49350,
+      "sha256": "1dd175c795de0a953149ae9d146555c85207ccba3204c9ad8c37d8555800a683",
+      "remote_path": "native-source.json"
+    },
+    "mandatory-tests.json": {
+      "bytes": 708,
+      "sha256": "aa1445da9b73cffa78ceeb275e7bf389514a74d55b306b7600493e95279eaf98",
+      "remote_path": "mandatory-tests.json"
+    },
+    "expected-test-inventory.json": {
+      "bytes": 2394,
+      "sha256": "922ff4060310194bd0f35578c8fd40f34a01df4d3502516beb174d388161f5bb",
+      "remote_path": "expected-test-inventory.json"
+    },
+    "candidate-contract.json": {
+      "bytes": 25877,
+      "sha256": "46b3ad916ca00b6979a978d4a1167f44d4569148e6de53fd58fc715fb9430c9b",
+      "remote_path": "candidate-contract.json"
+    },
+    "gates.sh": {
+      "bytes": 3776,
+      "sha256": "9a6b1fd5e92c1beb3bd750512a2c4b6a685a8cf03095b56da9bcaa5a4e364aa2",
+      "remote_path": "gates.sh"
+    },
+    "replay.sh": {
+      "bytes": 1566,
+      "sha256": "c30642e071d02c0e7f1a267b092002b1d4a3e1fae82c01eaa31025d2f366a985",
+      "remote_path": "replay.sh"
+    },
+    "replay-config.json": {
+      "bytes": 3606,
+      "sha256": "3c6bbb86904dffae46967bfa558cb79133d7e20e024a61a2e0891fec01395f93",
+      "remote_path": "replay-config.json"
+    },
+    "B1.jsonl": {
+      "bytes": 10777291,
+      "sha256": "29da105428503267e73e9e23e1a61bef9967ccdc9fb4f43ef64b23d306ba0cbb",
+      "remote_path": "inputs/B1.jsonl"
+    },
+    "replay-inputs.sha256": {
+      "bytes": 201,
+      "sha256": "825a73e2cd2502170f57aeda7c8fd0ea5b22c9677a205181169ec3a65a381459",
+      "remote_path": "replay-inputs.sha256"
+    }
+  },
+  "userdata": {
+    "bytes": 9412,
+    "sha256": "443a040a9ae53be86c37d53f3f79c6ba4b94d0153d59e3acaa59bc16f3d47924"
+  },
+  "native_compilation": "UNRUN",
+  "metadata_replay": "UNRUN",
+  "performance_claim": false
+}

@@ -1,0 +1,12 @@
+{
+  "status": "SOURCE_BUNDLE_ONLY_NOT_LAUNCHED",
+  "candidate": "44e116b9b8754cef0393fad1f96259bd583f3b7b",
+  "file_count": 2464,
+  "native_file_count": 425,
+  "native_identity": "ab5b3bee8bd2df8be9de8eff07801227ebd26a4c628c5de9bd4b99ccce999174",
+  "archive_bytes": 13501458,
+  "archive_sha256": "08868242ab8285fccf56b61b7d9eb94828fb8a6b5bc2bc1a7f6c753781cf9884",
+  "owned_file": "crates/borsuk/examples/compare_native_replay.rs",
+  "owned_sha256": "a678fbea57d5edda265c4d7acc50fbf04456f1ef00f7c64f99f9ac9b4a86a11f",
+  "performance_claim": false
+}

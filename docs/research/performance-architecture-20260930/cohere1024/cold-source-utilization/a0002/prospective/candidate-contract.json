@@ -1,0 +1,456 @@
+{
+  "status": "UNVERIFIED_ROOT_GATES_REQUIRED",
+  "exact_base": "7c11957d193a8474c24302c52e94de3f796e9a6e",
+  "commit": "44e116b9b8754cef0393fad1f96259bd583f3b7b",
+  "worktree": "/home/rb/worktrees/borsuk-cold-source-utilization-native",
+  "owned_file": "crates/borsuk/examples/compare_native_replay.rs",
+  "file_bytes": 220854,
+  "file_sha256": "a678fbea57d5edda265c4d7acc50fbf04456f1ef00f7c64f99f9ac9b4a86a11f",
+  "shared_cover_file": "crates/borsuk/src/budgeted_page_rank.rs",
+  "shared_cover_sha256": "19509a9dccdd5354fc9d6e8018491167bfc18145b9fe65b3c51df895a411ed36",
+  "api": "compare_native_replay --source-utilization CONFIG CONFIG_SHA256 NEW_REPORT_JSON",
+  "config_example": {
+    "expected_bound_inputs": {
+      "backend": {
+        "bucket": "borsuk-bench-453182569524-euc1",
+        "kind": "s3",
+        "physical_prefix": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store",
+        "region": "eu-central-1",
+        "sq8_etag": "\"f808095a3a2e788df2ae7d7d0e5423fa\"",
+        "sq8_object_key": "semantic/objects/07a14360b06add9a35f82b97f4e031690ff878ff497ee047902818823992337b"
+      },
+      "corpus_source_first": 0,
+      "count": 1000,
+      "credential_source": "imds_instance_role_only",
+      "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+      "dimensions": 1024,
+      "fetch_parallelism": 32,
+      "generation_prefix": "semantic/s3-native-publication-smoke-a0002/generations/ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df",
+      "generation_root_sha256": "ac6cc1d466864571ce047a6a6e32a9c6e0a7d95d9da5e29b4e4cd0ad788be4df",
+      "k": 10,
+      "metric": "cosine",
+      "native_order_sha256": "6b6a67098330c76bfb89340065d9326fb3f23a1f6016fbae5b9fa7f0e29759c2",
+      "native_source_sha256": "20936913f31e48ea67d462dfffc7a831569ff7467baebc63f2d622c8ff417dce",
+      "native_sq8_sha256": "07a14360b06add9a35f82b97f4e031690ff878ff497ee047902818823992337b",
+      "phase": "bound_inputs",
+      "profile": "native100k",
+      "query_source_first": 100000,
+      "requests_bytes": 4096000,
+      "requests_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+      "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+      "rows": 100000,
+      "source_cache": "off",
+      "tie_rule": "corpus_ordinal_ascending",
+      "truth_bytes": 80000,
+      "truth_opened": false,
+      "truth_sha256": "479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c"
+    },
+    "expected_identity": {
+      "billed_bytes": null,
+      "billed_requests": null,
+      "binary_sha256": "ca1ae2496e110494e7f6c03ae16eea3d5ff262d66945a3c52775749ac0bcaeab",
+      "codec_source_sha256": "eddf88c6c8ee23a732751f49291293f1cc081545ebb9a21c149eb757aa5c38ec",
+      "config_sha256": "0fd76aacea19b51e221f5dfb5d7d42ab0190fca51fe5f95a4ecf2942abad4f92",
+      "external_gate_required": true,
+      "fetch_parallelism": 32,
+      "generation_source_sha256": "194115d67776ad9f620a704b8cb98beda16b4d879019c390b2a0d4a6901003e4",
+      "io_measurement": "logical_GET_charges_separate_from_cumulative_process_native_transport",
+      "native_transport_includes": "S3_and_IMDS_credential_requests_including_PUT",
+      "phase": "identity",
+      "physical_s3_measured": false,
+      "router_source_sha256": "12f7b05ed8fe208e5baae62b7c6f17763ff6794458afbb6dc0fe17793a19eba5",
+      "runner_source_sha256": "de6a9190c321d13423a8ef60191427e2825bc1f0201e0dc848597616d9b6b233",
+      "s3_credential_source": "imds_instance_role_only",
+      "schema": "borsuk-cohere-native-baseline-result-v2",
+      "scope": "AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS",
+      "source_plane_source_sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",
+      "truth_opened": false,
+      "unread_bytes": null,
+      "wire_bytes": null
+    },
+    "input": {
+      "path": "/data/target/borsuk-cold-membership-native/membership-abba-a0001/collected/B1.jsonl",
+      "bytes": 10777291,
+      "sha256": "29da105428503267e73e9e23e1a61bef9967ccdc9fb4f43ef64b23d306ba0cbb"
+    },
+    "schema": "borsuk-source-utilization-config-v1",
+    "producer_source_commit": "fc8a23dac44ad635fc1236736df68878690a8389",
+    "producer_source_archive_sha256": "3927688ec1344c8c62058bcecd054251c4befcff1c6fd7dd800b1a860587faa2",
+    "record_bytes": 264,
+    "source_get_cap": 128,
+    "source_byte_cap": 67108864,
+    "source_unit_cap": 2544,
+    "direct_sq8_get_cap": 32,
+    "historical_sq8_query_byte_cap": 16773120
+  },
+  "config_example_authority": "Committed CLOSED membership B1 metadata only; root must admit archived producer, configured limits, trace bytes and any relocated input path before replay. Current reducer HEAD is not the historical producer. Historical SQ8 query byte cap 16773120 supplied by authenticated parent message 1791484877279768106-3122928 and independently matched in the archived producer limits function; strict config requires a positive explicit generic cap.",
+  "formulas": {
+    "padded_dimensions": "floor(D / 256) * 256 + (D % 256 == 0 ? 0 : next_power_of_two(D % 256))",
+    "record_bytes": "ceil(padded_dimensions / 4) + 8; dimensions explicitly authenticated, 1..=1024",
+    "walked": "semantic_units union exact lowest-page semantic_seed_additions; sorted prefix of nomination_evaluated_units",
+    "closure": "unique floor(walked_unit / 8), covering original 256-row pages",
+    "baseline": "shared cover_pages(closure, rows, record_bytes, 256, 128); exact recorded source GETs/bytes, zero failed GETs, <=67108864 bytes",
+    "ideal": "shared cover_pages(actual nomination_evaluated_units, rows, record_bytes, 32, SAME 128); final partial unit/page clipped at rows",
+    "payload": "sum(min(unit_rows, rows - unit * unit_rows) * record_bytes), checked arithmetic",
+    "completion_payload": "scored_payload_bytes - walked_payload_bytes",
+    "baseline_bridge": "baseline_bytes - closure_payload_bytes",
+    "unscored_closure": "closure_payload_bytes - scored_payload_bytes",
+    "ideal_bridge": "ideal_bytes - scored_payload_bytes",
+    "potential_saving": "baseline_bytes - ideal_bytes >= 0; optimistic upper bound on bytes that might be saved",
+    "completion_limit": "reached = scored_units == 2544; limited = scored_units < total closure units; report both frequencies",
+    "aggregates": "checked total plus integer nearest-rank median/p95/max over all exactly1000 ordered queries; zero values admitted",
+    "direct_closure_sq8": "shared cover_pages(SAME reconstructed256-row source closure, rows, dimensions+12, 256, direct_sq8_get_cap=32); final tail clipped; no future byte envelope admitted",
+    "mandatory_closure_sq8": "sum(min(256, rows-page*256)*(dimensions+12)); checked arithmetic",
+    "direct_closure_sq8_bridge": "direct_closure_sq8_bytes - mandatory_closure_sq8_bytes",
+    "original_source_sq8": "checked sum of recorded source+SQ8 verified_bytes/submitted_gets, excluding discovery charges from both costs",
+    "direct_minus_original": "signed direct SQ8 bytes/GETs minus recorded original source+SQ8 bytes/GETs; total/nearest-rank median/p95/max; positive bytes means increased cost",
+    "full_completion_invariant": "!completion_limited => ideal_bytes == baseline_bytes",
+    "original_sq8_charge_geometry": "verified_bytes > 0, divisible by dimensions+12, within population and historical_sq8_query_byte_cap; fetched rows are whole256-row pages with at most the single actual partial population tail; successful GETs in1..=min(32,fetched_page_count), failed GETs0",
+    "historical_sq8_exceedance": "direct_closure_sq8_exceeds_historical_byte_cap = direct_closure_sq8_bytes > historical_sq8_query_byte_cap; aggregate direct_closure_sq8_exceeds_historical_byte_cap_queries counts all exactly1000 booleans; flags do not reject counterfactual cost or admit a new production envelope"
+  },
+  "report_flags": {
+    "optimistic_hindsight": true,
+    "production_change": false,
+    "claims_quality": false,
+    "claims_latency": false,
+    "qualified": false,
+    "counterfactual_cost_only": true,
+    "score_or_recall_evaluated": false
+  },
+  "scientific_limit": "Actual source completion remains score-dependent hindsight. Direct SQ8 closure expansion is counterfactual cost only; broader scoring population and different gap coverage can change recall. No quality, latency, new byte envelope or production algorithm is qualified.",
+  "new_names": [
+    "compare_native_replay::read_run_observed",
+    "compare_native_replay::SourceUtilizationConfig",
+    "compare_native_replay::SourceUtilizationConfig::validate",
+    "compare_native_replay::SourceTrace",
+    "compare_native_replay::SourceUtilizationQuery",
+    "compare_native_replay::SOURCE_UTILIZATION_SCHEMA",
+    "compare_native_replay::source_record_bytes",
+    "compare_native_replay::source_ordinals",
+    "compare_native_replay::source_payload_bytes",
+    "compare_native_replay::source_utilization_query",
+    "compare_native_replay::source_utilization_report",
+    "compare_native_replay::source_report_cap",
+    "compare_native_replay::reduce_source_utilization",
+    "compare_native_replay::source_cover::cover_pages",
+    "compare_native_replay::tests::source_fixture",
+    "compare_native_replay::tests::source_config_value",
+    "compare_native_replay::tests::source_write_config",
+    "compare_native_replay::tests::source_query_fixture"
+  ],
+  "new_tests": [
+    "compare_native_replay::tests::source_utilization_unwalked_winner_full_completion_and_partial_tail",
+    "compare_native_replay::tests::source_utilization_shared_cover_tied_gaps_same_128_gets",
+    "compare_native_replay::tests::source_utilization_trace_and_charge_refusals",
+    "compare_native_replay::tests::source_utilization_authenticated_report_and_legacy_preservation",
+    "compare_native_replay::tests::source_utilization_report_cap_refuses_before_publication",
+    "compare_native_replay::tests::source_utilization_positive_bound_at_historical_completion_cap",
+    "compare_native_replay::tests::source_utilization_config_pins_duplicates_and_unknowns",
+    "compare_native_replay::tests::source_utilization_payload_sha_eof_seals_and_descriptor_mutations",
+    "compare_native_replay::tests::source_utilization_direct_closure_sq8_hand_counted_costs",
+    "compare_native_replay::tests::source_utilization_direct_closure_sq8_charge_refusals"
+  ],
+  "remote_mandatory_commands": [
+    "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1",
+    "env CARGO_BUILD_JOBS=1 cargo build --release --locked -p borsuk --example compare_native_replay",
+    "env CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  ],
+  "remote_replay_example_after_root_gates": "./target/release/examples/compare_native_replay --source-utilization /ABSOLUTE/ROOT-ADMITTED-SOURCE-CONFIG.json CONFIG_BYTES_LOWERCASE_SHA256 /ABSOLUTE/CREATE-ONLY-NEW-REPORT.json",
+  "local_checks": {
+    "compiled": false,
+    "tests_executed": false,
+    "clippy_executed": false,
+    "real_trace_replayed": false,
+    "rustfmt": "--check --edition 2024 --config skip_children=true (pass)",
+    "diff_ownership_identity_hash": "pass; only OWN1; Roman Bartusiak <riomus@gmail.com>; no trailers; all prior test bodies literal byte equality",
+    "service": "borsuk-source-utilization-recursion-repair-check-7cea4d07.service",
+    "invocation_id": "fb5efb5a03e84228bf21f5689b804556",
+    "exit_status": 0,
+    "limits": {
+      "CPUQuota": "100%",
+      "MemoryMax": "256M",
+      "MemorySwapMax": 0,
+      "RuntimeMaxSec": 120,
+      "TasksMax": 128
+    },
+    "runtime_seconds": 16.005,
+    "cpu_milliseconds": 296,
+    "memory_peak": "97.1M",
+    "swap_peak": 0,
+    "repaired_environment_attempts": [
+      {
+        "attempt": 1,
+        "exit_status": 127,
+        "reason": "systemd PATH omitted rtk"
+      },
+      {
+        "attempt": 2,
+        "exit_status": 1,
+        "reason": "systemd environment omitted configured RUSTUP_HOME"
+      }
+    ],
+    "commit_hooks": "disabled for this explicitly source-only UNVERIFIED commit; no local build authorization",
+    "previous_slice_source_check": {
+      "service": "borsuk-source-utilization-source-check-7cea4d07-r5.service",
+      "invocation_id": "4936e136c9684a7bbd600c8ae09caec2",
+      "exit_status": 0,
+      "source_sha256": "a9b236e0ccc85b79fa953c8abd8bebc01f29c53f92b43b910e7f299d795895cf"
+    },
+    "previous_amendment_source_check": {
+      "service": "borsuk-source-utilization-amendment-source-check-7cea4d07.service",
+      "invocation_id": "951cfb9ab59f4be5b6da0356e4a58065",
+      "exit_status": 0,
+      "runtime_seconds": 16.48,
+      "cpu_milliseconds": 292,
+      "memory_peak": "85.3M",
+      "swap_peak": 0
+    },
+    "native_status": "No local compiler/tests/native; original root a0001 inventory compilation failed on prior9b source. Repaired source has not been compiled; all mandatory gates and replay remain root-owned.",
+    "resource_evidence_scope": "Requested limits and original terminal receipt from own transient source-check service only; no retained live kernel limit readback or native runtime qualification",
+    "previous_review_repair_source_check": {
+      "service": "borsuk-source-utilization-review-repair-check-7cea4d07.service",
+      "invocation_id": "e23b2f60ab804a5a94d09c25f8a52912",
+      "exit_status": 0,
+      "runtime_seconds": 15.339,
+      "cpu_milliseconds": 310,
+      "memory_peak": "97.3M",
+      "swap_peak": 0
+    }
+  },
+  "root_disposition": "HOLD SAME worker; no agent_complete/archive until final exact source mandatory compile gates and disposition. Root owns full actual inherited example test inventory, integration, freezes and real trace replay. No merge or push performed.",
+  "remote_example_inventory_command": "env CARGO_BUILD_JOBS=1 cargo test --locked -p borsuk --example compare_native_replay -- --list",
+  "remote_example_inventory_requirement": "Root must retain actual --list inventory and broad test execution output, including inherited source_cover::tests::* and all old example tests. new_tests lists only the 10 newly authored source-utilization fixtures, not total inventory. Actual example harness names are tests::source_utilization_*; the harness omits the compare_native_replay crate prefix. No local inventory or native execution has occurred.",
+  "root_historical_source_authority": {
+    "schema": "borsuk-cold-source-utilization-root-input-authority-v1",
+    "status": "CLOSED_INPUTS_PINNED_REDUCER_UNQUALIFIED",
+    "historical_campaign": "cold-membership-abba-a0001",
+    "original_instance_id": "i-0858be8fbbafb673a",
+    "original_instance_terminated": true,
+    "producer_source_commit": "fc8a23dac44ad635fc1236736df68878690a8389",
+    "producer_source_archive_sha256": "3927688ec1344c8c62058bcecd054251c4befcff1c6fd7dd800b1a860587faa2",
+    "producer_native_generation_source_sha256": "194115d67776ad9f620a704b8cb98beda16b4d879019c390b2a0d4a6901003e4",
+    "producer_source_limit_authority": "crates/borsuk/src/bin/check_cohere_native_baseline.rs::limits and crates/borsuk/src/semantic_unit_router.rs::SemanticProfile::source_unit_limit at producer_source_commit",
+    "source_rows": 100000,
+    "dimensions": 1024,
+    "record_bytes": 264,
+    "source_get_cap": 128,
+    "source_byte_cap": 67108864,
+    "source_unit_cap": 2544,
+    "direct_sq8_get_cap": 32,
+    "direct_sq8_cost_only": true,
+    "record_bytes_formula": "ceil((floor(dimensions/256)*256 + (tail==0 ? 0 : next_power_of_two(tail)))/4) + 8; tail=dimensions%256",
+    "cover_arithmetic_unchanged": {
+      "path": "crates/borsuk/src/budgeted_page_rank.rs",
+      "historical_commit": "fc8a23dac44ad635fc1236736df68878690a8389",
+      "reviewed_commit": "7c11957d193a8474c24302c52e94de3f796e9a6e",
+      "git_diff_empty": true
+    },
+    "closed_evidence_archive": {
+      "key": "research/semantic-router/20261008/cold-membership-abba-a0001/evidence.tar.gz",
+      "bytes": 4839309,
+      "sha256": "99c1efb9922fa53e4dd9ea64e9183ad0ba1e21e0e42dd49171776249a6fd4c06"
+    },
+    "historical_reduction_config": {
+      "path": "/data/target/borsuk-cold-membership-native/membership-abba-a0001/collected/reduction.config.json",
+      "sha256": "d8911de7fd59a561257641ced566294fabb114654a437d45b306a9c4c7ad76b0",
+      "expected_identity_and_bound_inputs_source": "runs[1] for B1; runs[2] for B2"
+    },
+    "original_root_verification": {
+      "path": "/data/target/borsuk-cold-membership-native/membership-abba-a0001/independent-verification.json",
+      "sha256": "bb386754478447bb6ece9e1161caa3cfa5ac93d3c059d304413bb127ffedeacc"
+    },
+    "artifact_manifest": {
+      "path": "/data/target/borsuk-cold-membership-native/membership-abba-a0001/artifacts.sha256",
+      "sha256": "dece312422b6c38090760a177a3e9edcc9be354003cf32f4a461d6b85243483b"
+    },
+    "runs": [
+      {
+        "label": "B1",
+        "path": "/data/target/borsuk-cold-membership-native/membership-abba-a0001/collected/B1.jsonl",
+        "bytes": 10777291,
+        "sha256": "29da105428503267e73e9e23e1a61bef9967ccdc9fb4f43ef64b23d306ba0cbb"
+      },
+      {
+        "label": "B2",
+        "path": "/data/target/borsuk-cold-membership-native/membership-abba-a0001/collected/B2.jsonl",
+        "bytes": 10777322,
+        "sha256": "095a0487e1b93112b0c6d4c838d127acadedcb7a49878691208d8f32dc1cd3f5"
+      }
+    ],
+    "input_hash_check": {
+      "unit": "borsuk-source-utilization-input-pins-a0001.service",
+      "invocation_id": "c22ebe4b0afc4b0391620ec971841f74",
+      "exit": 0,
+      "runtime_ms": 98,
+      "cpu_ms": 90,
+      "reported_memory_peak": "21.9M",
+      "reported_swap_peak_bytes": 0,
+      "requested_cpu_quota_percent": 100,
+      "requested_memory_max_bytes": 268435456,
+      "requested_swap_max_bytes": 0,
+      "requested_runtime_max_seconds": 120,
+      "requested_tasks_max": 128,
+      "note": "Static full-file SHA/size check only. Transient unit unloaded after completion; no live kernel limit readback was retained. This is not a native runtime resource qualification."
+    },
+    "corpus_opened": false,
+    "requests_opened": false,
+    "truth_opened": false,
+    "replay_executed": false,
+    "claims_latency": false,
+    "claims_quality": false
+  },
+  "commits": [
+    "1658646ad487dc8c5c70f89f6b7fd23f690126a9",
+    "64d519b0da5d0d0d9eb0c4e415ec8a9f244d50ef",
+    "9b98778dec172972c2e57d695e26341a8cfb18be",
+    "44e116b9b8754cef0393fad1f96259bd583f3b7b"
+  ],
+  "amendment": {
+    "parent_message_id": "1791483376542473053-3122928",
+    "scope_doc_commit": "0945ed907aa245dbfce72a12b89bf491110959b3",
+    "scope_doc": "docs/research/performance-architecture-20260930/cohere1024/cold-source-utilization/one-wave-cost-scope.md",
+    "status": "UNVERIFIED_SOURCE_ONLY",
+    "fixture_costs": {
+      "contiguous": {
+        "direct_bytes": 14336,
+        "original_bytes": 13312,
+        "delta_bytes": 1024
+      },
+      "complete_closure": {
+        "direct_bytes": 14336,
+        "original_bytes": 20480,
+        "delta_bytes": -6144
+      },
+      "one_row_tail": {
+        "direct_bytes": 14364,
+        "original_bytes": 13324,
+        "delta_bytes": 1040
+      },
+      "fragmented_33_pages_32_GETs": {
+        "direct_bytes": 236572,
+        "mandatory_bytes": 229404,
+        "bridge_bytes": 7168,
+        "original_bytes": 105484,
+        "delta_bytes": 131088,
+        "direct_gets": 32,
+        "original_gets": 34
+      }
+    },
+    "fixtures_executed": false
+  },
+  "root_historical_source_authority_document": {
+    "commit": "3012a486e287096061348bf126eaedc01d64e824",
+    "path": "docs/research/performance-architecture-20260930/cohere1024/cold-source-utilization/input-authority.json",
+    "reconciled": true
+  },
+  "final_root_scope_reconciled": {
+    "source_scope_pointer_message": "1791483424175911559-3122928",
+    "hold_message": "1791484272627809546-3122928",
+    "opening_base_preserved": true,
+    "first_checkpoint_preserved": true,
+    "distinct_amendment_applied": true,
+    "source_held_unchanged": true,
+    "completed_reviews_message": "1791484877279768106-3122928",
+    "compiler_feedback_message": "1791486790134165424-3122928"
+  },
+  "root_owned_gates": {
+    "dual_critique_id": "dd1e505d37bc425a",
+    "config_draft": {
+      "path": "/tmp/borsuk-source-utilization-B1-config-draft.json",
+      "bytes": 3561,
+      "sha256": "4e8e27375d1db7f6a5cdfd1df6812a56e223cb997d622ed97c828fc07ba35d38",
+      "authority": "Authenticated parent message 1791484272627809546-3122928",
+      "locally_read": false,
+      "locally_executed": false,
+      "disposition": "Previously supplied pre-repair draft metadata only, superseded for replay: root must add historical_sq8_query_byte_cap=16773120 and authenticate new bytes/SHA; worker did not open old draft"
+    },
+    "compiler_and_replay": "root-owned; no worker launches",
+    "dual_critique_status": "both complete per authenticated parent; results archived root-side",
+    "original_a0001_inventory_compile": {
+      "instance_id": "i-031f52784480b4e71",
+      "frozen_protocol": "845844c55618432b1a978933a97805056c337c20",
+      "source_commit": "9b98778dec172972c2e57d695e26341a8cfb18be",
+      "status": "INVALID_COMPILER_RECURSION_LIMIT",
+      "native_exit": 101,
+      "qualification_wrapper_exit": 1,
+      "watcher_session": 55311,
+      "watcher_exit": 0,
+      "terminal_archived": true,
+      "instance_terminated_and_waited": true,
+      "four_mandatory_stages": "UNRUN",
+      "closed_B1_cost_replay": "UNRUN",
+      "lifecycle_authority": "Authenticated parent message1791486790134165424-3122928; worker independently read exact raw inventory error only",
+      "algorithm_or_quality_inference": false
+    }
+  },
+  "actual_new_example_test_names": [
+    "tests::source_utilization_unwalked_winner_full_completion_and_partial_tail",
+    "tests::source_utilization_shared_cover_tied_gaps_same_128_gets",
+    "tests::source_utilization_trace_and_charge_refusals",
+    "tests::source_utilization_authenticated_report_and_legacy_preservation",
+    "tests::source_utilization_report_cap_refuses_before_publication",
+    "tests::source_utilization_positive_bound_at_historical_completion_cap",
+    "tests::source_utilization_config_pins_duplicates_and_unknowns",
+    "tests::source_utilization_payload_sha_eof_seals_and_descriptor_mutations",
+    "tests::source_utilization_direct_closure_sq8_hand_counted_costs",
+    "tests::source_utilization_direct_closure_sq8_charge_refusals"
+  ],
+  "review_repair": {
+    "parent_message_ids": [
+      "1791484752810928746-3122928",
+      "1791484877279768106-3122928"
+    ],
+    "review_group_id": "dd1e505d37bc425a",
+    "critic_results_archive": "root-owned; both completed; worker did not launch additional reviews",
+    "preserved_source_checkpoint": "64d519b0da5d0d0d9eb0c4e415ec8a9f244d50ef",
+    "superseded_intermediate_repair_commit": "3eab5043b96c535ae5aa6af8a93cc3fae8e7afb5",
+    "superseded_intermediate_reason": "Unpublished repair commit amended with completed-reviews numerical requirements; opening base, first slice and distinct64d cost amendment unchanged",
+    "historical_sq8_query_byte_cap": 16773120,
+    "historical_sq8_query_byte_cap_authority": {
+      "parent_message_id": "1791484877279768106-3122928",
+      "producer_commit": "fc8a23dac44ad635fc1236736df68878690a8389",
+      "source_path": "crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+      "function": "limits",
+      "producer_literal": "max_query_bytes: 16_773_120",
+      "independently_matched_via_git_show": true
+    },
+    "new_test_roster_count": 10,
+    "existing_test_extensions": [
+      "whole-page/tail/GET authenticated refusal and legal positives with consistent totals and rebuilt seals",
+      "original SQ8 historical byte cap rejection/boundary acceptance with complete authenticated fixture",
+      "counterfactual equality/over-cap per-query flags and aggregate0/1000 counts",
+      "contiguous/tail/fragmented full completion byte equality",
+      "required positive generic config cap; zero/negative/missing/duplicate refusals"
+    ],
+    "fixtures_executed": false,
+    "production_change": false,
+    "status": "UNVERIFIED_SOURCE_ONLY_HOLD_SAME_WORKER"
+  },
+  "config_template": {
+    "path": "/tmp/borsuk-cold-source-utilization-B1-config-template.json",
+    "bytes": 3657,
+    "sha256": "5919ce679f9c87c9c44ca749e7f632be5537c4dec685cdb496ec3d1e63d1d24a",
+    "scope": "Root-supplied closed B1 metadata only; not executed; root admits final path and pins before replay"
+  },
+  "compiler_repair": {
+    "parent_message_id": "1791486790134165424-3122928",
+    "preserved_source_commit": "9b98778dec172972c2e57d695e26341a8cfb18be",
+    "repair_commit": "44e116b9b8754cef0393fad1f96259bd583f3b7b",
+    "exact_diff": "One added crate-level line: #![recursion_limit = \"256\"]; all other source bytes unchanged",
+    "original_log": {
+      "path": "/data/target/borsuk-cold-membership-native/source-utilization-a0001/collected/inventory.log",
+      "bytes": 213414,
+      "sha256": "9754b3b4f1952bb909925ff77088d3d19c2618a2c1964b931c397621549d6067",
+      "read": true
+    },
+    "original_error": "recursion limit reached while expanding $crate::json_internal! at compare_native_replay.rs:1809:9 in source_utilization_report",
+    "compiler_recommendation": "#![recursion_limit = \"256\"]",
+    "analogous_report_audit": "Read schema-bearing source_utilization_report and existing completed/paired/membership/legacy report constructors. They use the same recursive json! macro. Crate attribute applies to all; no report/schema/algorithm edits made.",
+    "new_test_roster_count": 10,
+    "test_bodies_unchanged": true,
+    "config_template_unchanged": true,
+    "production_change": false,
+    "status": "UNVERIFIED_SOURCE_ONLY_HOLD_SAME_WORKER"
+  }
+}

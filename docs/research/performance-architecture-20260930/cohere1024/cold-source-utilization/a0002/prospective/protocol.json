@@ -1,0 +1,117 @@
+{
+  "status": "FROZEN_REVIEWED_ADMITTED_NATIVE_QUALIFICATION_AND_METADATA_REPLAY_ONLY",
+  "paid_launch_authorized": true,
+  "ann_run": false,
+  "performance_claim": false,
+  "quality_claim": false,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "prefix": "research/semantic-router/20261008/cold-source-utilization-a0002",
+  "source": {
+    "status": "SOURCE_BUNDLE_ONLY_NOT_LAUNCHED",
+    "candidate": "44e116b9b8754cef0393fad1f96259bd583f3b7b",
+    "file_count": 2464,
+    "native_file_count": 425,
+    "native_identity": "ab5b3bee8bd2df8be9de8eff07801227ebd26a4c628c5de9bd4b99ccce999174",
+    "archive_bytes": 13501458,
+    "archive_sha256": "08868242ab8285fccf56b61b7d9eb94828fb8a6b5bc2bc1a7f6c753781cf9884",
+    "owned_file": "crates/borsuk/examples/compare_native_replay.rs",
+    "owned_sha256": "a678fbea57d5edda265c4d7acc50fbf04456f1ef00f7c64f99f9ac9b4a86a11f",
+    "performance_claim": false
+  },
+  "inputs": {
+    "source-files.sha256": {
+      "bytes": 280779,
+      "sha256": "6018e07bc9a68373976272a6807b0789b67406b161e279ab9fda18f7284b1773",
+      "remote_path": "source-files.sha256"
+    },
+    "native-source.json": {
+      "bytes": 49350,
+      "sha256": "1dd175c795de0a953149ae9d146555c85207ccba3204c9ad8c37d8555800a683",
+      "remote_path": "native-source.json"
+    },
+    "mandatory-tests.json": {
+      "bytes": 708,
+      "sha256": "aa1445da9b73cffa78ceeb275e7bf389514a74d55b306b7600493e95279eaf98",
+      "remote_path": "mandatory-tests.json"
+    },
+    "expected-test-inventory.json": {
+      "bytes": 2394,
+      "sha256": "922ff4060310194bd0f35578c8fd40f34a01df4d3502516beb174d388161f5bb",
+      "remote_path": "expected-test-inventory.json"
+    },
+    "candidate-contract.json": {
+      "bytes": 25877,
+      "sha256": "46b3ad916ca00b6979a978d4a1167f44d4569148e6de53fd58fc715fb9430c9b",
+      "remote_path": "candidate-contract.json"
+    },
+    "gates.sh": {
+      "bytes": 3776,
+      "sha256": "9a6b1fd5e92c1beb3bd750512a2c4b6a685a8cf03095b56da9bcaa5a4e364aa2",
+      "remote_path": "gates.sh"
+    },
+    "replay.sh": {
+      "bytes": 1566,
+      "sha256": "c30642e071d02c0e7f1a267b092002b1d4a3e1fae82c01eaa31025d2f366a985",
+      "remote_path": "replay.sh"
+    },
+    "replay-config.json": {
+      "bytes": 3606,
+      "sha256": "3c6bbb86904dffae46967bfa558cb79133d7e20e024a61a2e0891fec01395f93",
+      "remote_path": "replay-config.json"
+    },
+    "B1.jsonl": {
+      "bytes": 10777291,
+      "sha256": "29da105428503267e73e9e23e1a61bef9967ccdc9fb4f43ef64b23d306ba0cbb",
+      "remote_path": "inputs/B1.jsonl"
+    },
+    "replay-inputs.sha256": {
+      "bytes": 201,
+      "sha256": "825a73e2cd2502170f57aeda7c8fd0ea5b22c9677a205181169ec3a65a381459",
+      "remote_path": "replay-inputs.sha256"
+    }
+  },
+  "userdata": {
+    "bytes": 9412,
+    "sha256": "443a040a9ae53be86c37d53f3f79c6ba4b94d0153d59e3acaa59bc16f3d47924"
+  },
+  "build_seconds": 7200,
+  "gate_unit_seconds": 7440,
+  "machine_seconds": 9000,
+  "build_memory_bytes": 8589934592,
+  "build_cpu": 2,
+  "build_jobs": 1,
+  "swap": 0,
+  "pids": 512,
+  "compute_cap_usd": 1.5,
+  "ancillary_cap_usd": 0.15,
+  "ebs_gib": 80,
+  "replay": {
+    "cpu": 1,
+    "memory_bytes": 268435456,
+    "swap": 0,
+    "pids": 128,
+    "seconds": 120,
+    "network": "AF_UNIX",
+    "input_label": "B1",
+    "historical_sq8_query_byte_cap": 16773120
+  },
+  "mandatory_stages": [
+    "affected",
+    "release",
+    "clippy",
+    "test-build"
+  ],
+  "inventory_stage": "inventory",
+  "expected_test_count": 33,
+  "new_test_count": 10,
+  "prior_closed_proof": {
+    "path": "/data/target/borsuk-cold-membership-native/source-utilization-a0001/independent-failure-verification.json",
+    "bytes": 790,
+    "sha256": "f215a853c40840504b8d043112c232f9a4da79aaebbe85d577596cd20924d551"
+  },
+  "no_live_owned_job_at_freeze": true,
+  "interruptions": "discard and preserve this cell; separately recorded attempt only after closure",
+  "source_integration": "not authorized before actual native gates pass",
+  "metadata_replay_admission": "compiled source-bound native validator authenticates all1000 closed rows and original source charges; no ANN/vector/truth bodies",
+  "comparison": "no new vendor or latency comparison from this accounting run"
+}
