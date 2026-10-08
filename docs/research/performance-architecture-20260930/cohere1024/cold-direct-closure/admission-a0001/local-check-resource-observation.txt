@@ -1,0 +1,9 @@
+ActiveState=active
+InvocationID=c377c1935e0b4a82908c925db7329586
+RuntimeMaxUSec=2min
+ExecMainStatus=0
+ControlGroup=/user.slice/user-1001.slice/user@1001.service/app.slice/borsuk-direct-admission-source-check-a0001.service
+CPUQuotaPerSecUSec=1s
+MemoryMax=268435456
+MemorySwapMax=0
+TasksMax=128

@@ -1,0 +1,75 @@
+{
+  "status": "SOURCE_BOUND_SHELL_MOCK_PASS_ONLY",
+  "source_sha256": "e528f827c05e0e735f27fb61d127308e15ce0c02bd8afa2152510bc492d73383",
+  "cases": [
+    {
+      "case": "success",
+      "exit": 0,
+      "calls": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "case": "fail-A",
+      "exit": 17,
+      "calls": [
+        "A"
+      ]
+    },
+    {
+      "case": "resource-B",
+      "exit": 3,
+      "calls": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "case": "invalid-B",
+      "exit": 2,
+      "calls": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "case": "pin-drift",
+      "exit": 1,
+      "calls": [
+        "A"
+      ]
+    },
+    {
+      "case": "scratch-leak",
+      "exit": 96,
+      "calls": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "case": "bad-cap",
+      "exit": 1,
+      "calls": []
+    },
+    {
+      "case": "missing-authority",
+      "exit": 98,
+      "calls": []
+    }
+  ],
+  "real": [
+    "shell ordering",
+    "time/timeout",
+    "pin authentication",
+    "stop at native exit",
+    "scratch cleanup"
+  ],
+  "mocked": [
+    "native runner",
+    "kernel cgroup reads"
+  ],
+  "native_executed": false,
+  "launch_authorized": false
+}

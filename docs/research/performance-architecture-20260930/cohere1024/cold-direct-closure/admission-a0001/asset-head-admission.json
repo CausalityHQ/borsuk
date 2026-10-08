@@ -1,0 +1,26 @@
+{
+  "status": "HEAD_IDENTITIES_MATCH_NOT_BODY_RUNTIME_VALIDATION",
+  "observed_at": "2026-10-08T22:09:02.415623+00:00",
+  "objects": {
+    "requests": {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/prepared/queries.f32",
+      "bytes": 4096000,
+      "etag": "\"1553426815b5dbf6d916ccd12f1c227a\""
+    },
+    "truth": {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/prepared/truth.u64",
+      "bytes": 80000,
+      "etag": "\"04fc7819a26ce9b269bd25b23b514607\""
+    },
+    "runner": {
+      "key": "research/semantic-router/20261008/cold-direct-closure-qualification-a0002/supplemental/check_cohere_native_baseline",
+      "bytes": 16381424,
+      "etag": "\"9dbec96e1d5afa84cca23d07f4400be9-2\""
+    },
+    "sq8": {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/objects/07a14360b06add9a35f82b97f4e031690ff878ff497ee047902818823992337b",
+      "bytes": 103600000,
+      "etag": "\"f808095a3a2e788df2ae7d7d0e5423fa\""
+    }
+  }
+}
