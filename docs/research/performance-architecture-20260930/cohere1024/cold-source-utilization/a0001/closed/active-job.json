@@ -1,0 +1,10 @@
+{
+  "status": "TERMINATED_COLLECTED_NOT_YET_VERIFIED",
+  "instance_id": "i-031f52784480b4e71",
+  "protocol_commit": "845844c55618432b1a978933a97805056c337c20",
+  "prefix": "research/semantic-router/20261008/cold-source-utilization-a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "performance_claim": false,
+  "last_state": "running",
+  "closure": "TERMINAL"
+}

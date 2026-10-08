@@ -1,0 +1,18 @@
+{
+  "status": "EXECUTION_INVALID_COMPILER_MACRO_RECURSION",
+  "instance_id": "i-031f52784480b4e71",
+  "terminated_and_waited": true,
+  "source": "9b98778dec172972c2e57d695e26341a8cfb18be",
+  "full_native_file_count": 425,
+  "full_native_identity": "5f0688630765e86cc6cc145d20374c8aa1b1631acdaad28c51643df9d77259d5",
+  "full_source_before_after_git_match": true,
+  "authenticated_artifact_count": 42,
+  "inventory_compile_exit": 101,
+  "tests_executed": 0,
+  "required_stages": "ALL_FOUR_UNRUN",
+  "metadata_replay": "UNRUN",
+  "raw_log_sha256": "9754b3b4f1952bb909925ff77088d3d19c2618a2c1964b931c397621549d6067",
+  "repair": "crate recursion_limit256; unchanged algorithm/configuration/resource limits in new recorded attempt",
+  "algorithm_rejected": false,
+  "performance_claim": false
+}
