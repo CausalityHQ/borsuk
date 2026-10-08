@@ -1,0 +1,12 @@
+{
+  "status": "PASS_BOUNDED_SOURCE_AND_BOOTSTRAP_ADMISSION",
+  "candidate": "896d0423b8d1a904ba729f6714bf658d9a216486",
+  "source_identity": "80824b428624dc7d496993998c63f953f26483e75df2adb884e02ccab4b4c532",
+  "native_count": 415,
+  "support_count": 2452,
+  "stage_count": 6,
+  "selector_fixture": "synthetic metadata only; ambiguity refused; no assembly correctness claim",
+  "native_execution": false,
+  "AWS": false,
+  "performance_claim": false
+}

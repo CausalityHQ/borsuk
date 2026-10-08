@@ -1,0 +1,8 @@
+{
+  "status": "EXECUTION_INVALID_SPOT_CAPACITY_NO_NATIVE",
+  "error": "InsufficientInstanceCapacity",
+  "instance_created": false,
+  "native_execution": false,
+  "performance_reject": false,
+  "at": "2026-10-08T11:37:39.631030+00:00"
+}

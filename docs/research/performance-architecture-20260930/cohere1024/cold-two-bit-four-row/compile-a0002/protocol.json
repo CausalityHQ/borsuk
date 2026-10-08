@@ -1,0 +1,73 @@
+{
+  "status": "FROZEN_ASSETS_LAUNCH_PENDING_ADMISSION",
+  "prefix": "research/semantic-router/20261008/cold-two-bit-four-row-compile-a0002",
+  "candidate": "896d0423b8d1a904ba729f6714bf658d9a216486",
+  "source": {
+    "status": "SOURCE_SEALED_NATIVE_UNRUN",
+    "candidate": "896d0423b8d1a904ba729f6714bf658d9a216486",
+    "file_count": 2452,
+    "native_file_count": 415,
+    "native_identity": "80824b428624dc7d496993998c63f953f26483e75df2adb884e02ccab4b4c532",
+    "changed_native_paths": [
+      "crates/borsuk/src/rotated_two_bit.rs",
+      "crates/borsuk/src/two_bit_generation.rs"
+    ],
+    "archive_bytes": 13239554,
+    "archive_sha256": "17969c5409da9920f3fd2e259d66f8a779a2995ffc3b6e80b1adbed08b9088bd",
+    "support_policy": "prior2450 support plus2method docs; all415 current native files",
+    "performance_claim": false
+  },
+  "inputs": {
+    "source-files.sha256": {
+      "bytes": 278366,
+      "sha256": "c07b5ac1e8997d1a5a0c65f1bc510b586c0c04079a401a6b830292b5df13148b"
+    },
+    "native-source.json": {
+      "bytes": 47205,
+      "sha256": "1a7b4714532ea603773d391666d6435bd15cbc951ab543a853d2acd6177d3d70"
+    },
+    "mandatory-tests.json": {
+      "bytes": 2387,
+      "sha256": "bbb39a61097b3dd1ad26c1782725c2467d35fdb799cb86913fc02aa0e24e5d2d"
+    },
+    "gates.sh": {
+      "bytes": 3097,
+      "sha256": "a6c8c42b9d19ca9f7da4cea340fb3abb230903eab98142a36e49d9260d4070a9"
+    },
+    "select-probe.py": {
+      "bytes": 2108,
+      "sha256": "1bdd502320f46d14211abbd9c2f4eb2748efa8c37d251beb54eb6fa3c226af60"
+    }
+  },
+  "userdata": {
+    "bytes": 8582,
+    "sha256": "1557a2635a7823e72ba7194b53bcc285d72df6f4af62389a6427cad431e8e82e"
+  },
+  "machine_seconds": 9000,
+  "build_seconds": 7200,
+  "build_memory_bytes": 8589934592,
+  "build_cpu": 2,
+  "build_jobs": 1,
+  "swap": 0,
+  "compute_reservation_usd": 1.5,
+  "ancillary_reservation_usd": 0.15,
+  "ebs_gib": 80,
+  "spot_bid_max_usd_per_hour": 0.5,
+  "primitive_run": false,
+  "full_qualification": false,
+  "native_ANN_corpus_query_truth": false,
+  "review_group": "56b427bbd7ed4bc1",
+  "review_reconciliation_commit": "29a39f43b9bade74529ab394dbf10627124c42fe",
+  "interruption": "INVALID; preserve terminal, no automatic duplicate",
+  "assembly": "retained exact release ELF; codegen and serving-stack audit pending before any primitive",
+  "capacity_repair": {
+    "prior_attempt": "a0001",
+    "prior_status": "InsufficientInstanceCapacity; no instance/native created",
+    "old_AZ": "eu-central-1c",
+    "new_AZ": "eu-central-1b",
+    "subnet": "subnet-00243d923761c047c",
+    "VpcId": "vpc-02bed5aadbc3c0a2d",
+    "source_algorithm_limits_unchanged": true,
+    "no_automatic_third_attempt": true
+  }
+}
