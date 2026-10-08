@@ -1,0 +1,34 @@
+# Bounded SQ8 attribution increment
+
+Exact base: root main at the method commit; native tree matches qualified2fb771bd. Preserve the cold-pair a0001 PASS and its p99 regression; direct remains opt-in, baseline default. No routing, cover, score arithmetic, sort order, retries, caches, thread count, yields, or fetch scheduling change.
+
+## Reconciled evidence
+
+Both complete reviews were read. Root independently verified18 direct queries with wall-minus-process-CPU >=180ms, none in baseline at that threshold. The broader >=150ms event definition includes one baseline event. Whole-unit cpu.stat reports nr_throttled=0/throttled_usec=0. Successful HTTP206/attempt==logicalGET rules out observed HTTP retries, not TCP loss or receive-window waits. The research critic's categorical opening that the tail is 'not bytes' is too strong: byte/GET enrichment is a correlation, not an exclusion of transport shaping. Its TCP/RTO/persist explanations remain hypotheses. Global OFO/DSACK/zero-window counters alone cannot prove which S3 connection or server timer caused a stall. Do not turn those thresholds into an automatic causal label.
+
+Source confirms current-thread Tokio, concurrent range futures, inline copy/page authentication, then a barrier before scoring. Scoring cannot starve unfinished fetches within the same query. Existing combined SQ8 timing cannot isolate fetch/header/body/copy/authentication/scoring. More SQ8 bytes and rows create verified work growth; the current eight/four/two/one-row kernel already exists, and known wider-SIMD/SHA-provider failures remain preserved.
+
+Root additionally queried AWS describe-instance-types: c7i.2xlarge baseline3.125Gbps/peak12.5Gbps; direct verified payload/query-time rate3.013Gbps. ENA allowance, TCP/RTO and wire measurements were absent, so bandwidth saturation is unproven. See the preserved post-run observation, with first-party documentation links.
+
+## Owned Rust implementation, four files only
+
+- crates/borsuk/src/sq8_s3_range.rs
+- crates/borsuk/src/returned_sq8.rs (only if needed for separate roster/scoring/sort phase boundaries)
+- crates/borsuk/src/two_bit_generation.rs
+- crates/borsuk/src/bin/check_cohere_native_baseline.rs
+
+Add explicit bounded opt-in diagnostics with no timing/allocation work on ordinary production searches. Use existing generic authenticated scorer and transport. Record per range: enqueue/first poll or honest transport-entry boundary, headers, first/last chunk and exact EOF, maximum inter-chunk wait, copy aggregate time/count, authentication start/end, completion; preserve exact physical ranges and byte/chunk counts. Record all-ranges-complete and rank/score start/end; split roster/sort only if a small hook suffices. Do not add tasks/yields/custom wakers or clone the scorer just to instrument it. Label get_opts header interval as client queue/connect/TLS/server combined, and body gaps as application-observed polling gaps, not packet-arrival times. Do not sum overlapping fetch intervals. Retain bounded partial/failure diagnostics through full request drain.
+
+Library diagnostics use portable Instant-relative boundaries; runner binds query start/end to monotonic clock and process CPU. Runner may read bounded, named Linux TCP/CPU/scheduling snapshots outside the timed query window. Missing counters are explicit unavailable, never fabricated zero; host-wide counters are not per-S3-flow proof. No polling task or host sampler in this slice. Prospective diagnostic/counter allocations <=1MiB per active query, explicitly admitted/charged before any query payload opens; cap lengths/ranges/output before allocation. Current runner line64KiB/output64MiB limits remain; reject oversized serialization rather than silently grow.
+
+Extend the existing Rust runner's strict explicit execution configuration to Full or DiagnosticPanel{ordered unique original ordinals, trace enabled/disabled}. Full preserves the existing all1000 semantics. Panel accepts at most128 ordinals; validates/authenticates every original request row, even unused rows, before heavy index opens. Keep original request/truth/generation pins and original ordinal identities; execute each selected ordinal once, seal every executed result before truth, use the original truth offset, and report selected denominator/executed count separately from population count. Same query/score/reduction writer, not a cloned runner. Clearly mark panel output diagnostic, not population percentiles/full-cohort qualification. Replace schema marker if required; no legacy reader/alias or Python/controller changes. No benchmark-specific values in the generic library.
+
+## Falsifiers before remote qualification
+
+Preserve all existing test names. Add exact named real tiny HTTP/native fixtures proving trace-on/off ordered IDs/scorebits/plans/GETs/bytes parity for baseline and direct, concurrent range overlap and authentication/rank ordering, EOF/length/hash/metadata failure and full drain with truthful partial trace, before-opener diagnostic-memory refusal, Send/concurrency behavior, and bounded panel selection. Panel tests include original ordinal mapping/tail/ties, whole-request invalidity in an unselected row, duplicate/out-of-range/overcap selectors, selected denominator/seal-before-truth, corruption, output cap and counter-unavailable handling. Independent score oracle must remain independent; no timer threshold/flaky sleeps as correctness assertions.
+
+## Prospective next runtime gate (NOT frozen or launched)
+
+Choose128 unique ordinals from CLOSED B metadata: all18 prior >=180ms residual events plus110 largest remaining SQ8-byte plans (tie by GET count, then ordinal). Match the same IDs in baseline. Four64-query blocks A(first64),B(first64),B(last64),A(last64);256 searches, balanced block order, fresh Spot, CPU1/512MiB/swap0/query1/fetch32, app caches off/backend uncontrolled. This enriched panel diagnoses phases; it does not estimate population p99 or vendor performance. No automatic extension if tails do not reproduce.
+
+Root first requalifies exact code, then bounded real-input admission, then disposable staging/CLI/cleanup and trace-off/on overhead canary, then freezes this panel. Source-only worker does not launch any of them. Require every selected query's IDs/scorebits/plans/charges equal closed a0001, no authentication/drain/resource regression, bounded diagnostics, and declared trace-on/off perturbation <=2% aggregate CPU and <=1ms median added latency. Account for noise and report an inconclusive overhead gate; do not weaken it after measurement. Critical path must reconcile within max(1ms,2%); classify only measured phases, keep transport waits UNATTRIBUTED without connection/TCP proof. Any next causal algorithm/scheduling change follows these measurements, not the critic's timer hypothesis alone.

@@ -1,0 +1,126 @@
+{
+  "scope": "closed native wall/process-CPU residuals; residual is not a network measurement",
+  "groups": {
+    "A": {
+      "queries_with_wall_minus_CPU_at_least180ms": 0,
+      "rows": []
+    },
+    "B": {
+      "queries_with_wall_minus_CPU_at_least180ms": 18,
+      "rows": [
+        {
+          "ordinal": 86,
+          "wall_ms": 284.582527,
+          "cpu_ms": 82.274917,
+          "wall_minus_process_CPU_ms": 202.30761
+        },
+        {
+          "ordinal": 139,
+          "wall_ms": 274.431419,
+          "cpu_ms": 73.74726,
+          "wall_minus_process_CPU_ms": 200.684159
+        },
+        {
+          "ordinal": 370,
+          "wall_ms": 289.142175,
+          "cpu_ms": 87.768702,
+          "wall_minus_process_CPU_ms": 201.373473
+        },
+        {
+          "ordinal": 478,
+          "wall_ms": 268.221575,
+          "cpu_ms": 62.533658,
+          "wall_minus_process_CPU_ms": 205.687917
+        },
+        {
+          "ordinal": 499,
+          "wall_ms": 270.382787,
+          "cpu_ms": 63.753826,
+          "wall_minus_process_CPU_ms": 206.628961
+        },
+        {
+          "ordinal": 561,
+          "wall_ms": 273.160829,
+          "cpu_ms": 68.409545,
+          "wall_minus_process_CPU_ms": 204.751284
+        },
+        {
+          "ordinal": 572,
+          "wall_ms": 277.997028,
+          "cpu_ms": 77.91888,
+          "wall_minus_process_CPU_ms": 200.078148
+        },
+        {
+          "ordinal": 592,
+          "wall_ms": 267.295676,
+          "cpu_ms": 68.198757,
+          "wall_minus_process_CPU_ms": 199.096919
+        },
+        {
+          "ordinal": 632,
+          "wall_ms": 271.547689,
+          "cpu_ms": 70.143596,
+          "wall_minus_process_CPU_ms": 201.404093
+        },
+        {
+          "ordinal": 648,
+          "wall_ms": 273.141677,
+          "cpu_ms": 80.800515,
+          "wall_minus_process_CPU_ms": 192.341162
+        },
+        {
+          "ordinal": 690,
+          "wall_ms": 273.556454,
+          "cpu_ms": 59.187217,
+          "wall_minus_process_CPU_ms": 214.369237
+        },
+        {
+          "ordinal": 711,
+          "wall_ms": 267.741672,
+          "cpu_ms": 72.351713,
+          "wall_minus_process_CPU_ms": 195.389959
+        },
+        {
+          "ordinal": 729,
+          "wall_ms": 272.935076,
+          "cpu_ms": 80.673989,
+          "wall_minus_process_CPU_ms": 192.261087
+        },
+        {
+          "ordinal": 792,
+          "wall_ms": 271.84909,
+          "cpu_ms": 73.85128,
+          "wall_minus_process_CPU_ms": 197.99781
+        },
+        {
+          "ordinal": 848,
+          "wall_ms": 258.701034,
+          "cpu_ms": 58.332304,
+          "wall_minus_process_CPU_ms": 200.36873
+        },
+        {
+          "ordinal": 890,
+          "wall_ms": 265.256031,
+          "cpu_ms": 63.730118,
+          "wall_minus_process_CPU_ms": 201.525913
+        },
+        {
+          "ordinal": 981,
+          "wall_ms": 272.586144,
+          "cpu_ms": 71.525405,
+          "wall_minus_process_CPU_ms": 201.060739
+        },
+        {
+          "ordinal": 990,
+          "wall_ms": 271.331434,
+          "cpu_ms": 83.021985,
+          "wall_minus_process_CPU_ms": 188.309449
+        }
+      ]
+    }
+  },
+  "cgroup_cpu_stat_sha256": "af046e5ac08d639dcfc6c768b142c34786200e5e2c2294479d9658e7e7f194cc",
+  "nr_throttled": 0,
+  "throttled_usec": 0,
+  "interpretation": "Zero CFS throttling in this declared CPU1/cpuset0 unit; non-CPU residual does not alone distinguish TCP, connection setup, socket polling starvation or host scheduling."
+}

@@ -1,0 +1,26 @@
+{
+  "scope": "post-run read-only metadata and arithmetic; not proof of bandwidth throttling",
+  "observed_at": "2026-10-08T22:42:18.962345+00:00",
+  "instance_type": "c7i.2xlarge",
+  "aws_describe_instance_types_observed": {
+    "vcpus": 8,
+    "baseline_bandwidth_Gbps": 3.125,
+    "peak_bandwidth_Gbps": 12.5,
+    "default_ENA_queues": 8
+  },
+  "primary_sources": [
+    "https://docs.aws.amazon.com/ec2/latest/instancetypes/co.html",
+    "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-network-bandwidth.html"
+  ],
+  "native_verified_payload_rate_Gbps": {
+    "A": 2.087772407363498,
+    "B": 3.0133870996482206
+  },
+  "unknown": [
+    "ENA allowance-exceeded counters were not captured",
+    "TCP retransmission/RTO counters were not captured",
+    "NIC wire bytes and per-flow rate were not captured",
+    "network burst credits/state were not captured"
+  ],
+  "interpretation": "Direct payload rate is near the documented baseline, but peak exceeds baseline and the measurement includes CPU/latency. This does not establish network saturation or explain p99; next attribution must distinguish bandwidth/transport gaps from inline authentication and scoring."
+}
