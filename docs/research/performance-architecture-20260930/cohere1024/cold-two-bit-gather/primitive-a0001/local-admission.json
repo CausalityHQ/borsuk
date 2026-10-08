@@ -1,0 +1,13 @@
+{
+  "status": "PASS_ASSET_ADMISSION_LOCAL_ONLY",
+  "unit": "borsuk-gather-primitive-assets.service",
+  "invocation": "b7df6aa423c04ebb8dc844d3776d5dd4",
+  "exit": 0,
+  "cpu_quota_percent": 100,
+  "memory_max_bytes": 268435456,
+  "swap_max_bytes": 0,
+  "runtime_max_seconds": 120,
+  "peak_reported": "83.6M",
+  "native_execution": false,
+  "mandatory_remote_canary": "native exact ignored test listing in a separate disposable bounded unit before timing"
+}

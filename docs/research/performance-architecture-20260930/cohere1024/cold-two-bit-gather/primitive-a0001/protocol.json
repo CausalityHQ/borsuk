@@ -1,0 +1,81 @@
+{
+  "schema": "borsuk-two-bit-gather-primitive-v1-protocol",
+  "status": "FROZEN_ASSETS_PENDING_LAUNCH",
+  "prefix": "research/semantic-router/20261008/cold-two-bit-gather-primitive-a0001",
+  "candidate_commit": "751b5327571c7fec17af4bbdd7f1b1594f0aaf9d",
+  "native_identity": "3b8a5dc5f9f17bfc4780a1ce293e2c347976ae67b6400796ab6269b7fc877b41",
+  "compile_receipt": {
+    "path": "/data/target/borsuk-cold-membership-native/two-bit-gather-gate-a0002/independent-verification.json",
+    "sha256": "8e15fb8a6003cdfdab62c3dcdd43f9f2e9992a2ecc73c90629ecfb6930fff27a"
+  },
+  "codegen_receipt": {
+    "path": "/data/target/borsuk-cold-membership-native/two-bit-gather-gate-a0002/codegen-verification.json",
+    "sha256": "61bf0716540a81494bc3844f30f23c5798cc325946f1d1f3abbd7a1a6103a088"
+  },
+  "same_retained_elf": {
+    "path": "/data/target/borsuk-cold-membership-native/two-bit-gather-gate-a0002/probe-libtest.binary",
+    "bytes": 88559992,
+    "sha256": "d0594b70a48998adbabd3740d72995429849b282aaaa49aff2be54bbe42d6b20",
+    "key": "research/semantic-router/20261008/cold-two-bit-gather-compile-a0002/supplemental/probe-libtest"
+  },
+  "inputs": {
+    "probe.sh": {
+      "bytes": 2070,
+      "sha256": "ece48c77155b70226a2be8102a693c9ef7c5d8f7add8a591f90e8c206816b7be"
+    },
+    "probe-check.py": {
+      "bytes": 5427,
+      "sha256": "97beec072dc0b91aacb8c99f47c2babf7d70bd1ee0704f61f4465024166344f9"
+    },
+    "gates.sh": {
+      "bytes": 3062,
+      "sha256": "00937a9459ff199af23217675020683c83f62bfe3f22364c40e17f3c02bc6d4f"
+    },
+    "expected-primitive-identity.json": {
+      "bytes": 411,
+      "sha256": "4875aa3ba7942f6abcc597b5a78935a54784d047992dcd94fe2a9e5eb41040f2"
+    }
+  },
+  "userdata": {
+    "bytes": 5623,
+    "sha256": "171d9a46f16b74bdc544dc1be70cd539e479a30672441246f22ba03168255c88"
+  },
+  "probe_caps": {
+    "cpu": 1,
+    "allowed_cpus": [
+      0
+    ],
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "cpu_seconds": 30,
+    "wall_seconds": 120
+  },
+  "host": {
+    "type": "c7i.2xlarge",
+    "market": "Spot",
+    "machine_seconds": 1200,
+    "ebs_gib": 20,
+    "cpu": 2,
+    "memory_bytes": 8589934592,
+    "swap": 0
+  },
+  "cost_reservation": {
+    "compute_usd": 0.2,
+    "ancillary_usd": 0.15,
+    "spot_bid_max_usd_hour": 0.5
+  },
+  "screen": {
+    "geometries": 8,
+    "ordered_records": 80,
+    "blocks": 5,
+    "D1024_full_and_tail_median_max_ratio": 0.8,
+    "both_order_subsets_required": true,
+    "other_geometry_max_regression": 0.05
+  },
+  "canary": "separate native --list disposable unit before timing; no ANN/data/truth",
+  "native_builds": 0,
+  "saved_s3_rerun": false,
+  "performance_scope": "primitive CPU only; no vendor/cold win",
+  "interruption": "INVALID; no automatic retry"
+}

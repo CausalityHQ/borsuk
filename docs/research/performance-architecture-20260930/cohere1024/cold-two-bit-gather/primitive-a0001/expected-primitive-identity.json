@@ -1,0 +1,7 @@
+{
+  "schema": "borsuk-two-bit-gather-primitive-identity-v1",
+  "source_commit": "751b5327571c7fec17af4bbdd7f1b1594f0aaf9d",
+  "executable_sha256": "d0594b70a48998adbabd3740d72995429849b282aaaa49aff2be54bbe42d6b20",
+  "rotated_two_bit_sha256": "8ddb638b2fdb1610b05569faf29365911d096d401fc1cc05605a41d36eca959e",
+  "two_bit_generation_sha256": "a05a453f2c7da767f204e98bf4cd5fb9a1b26e1aa5ae4fe69499699504e05a5e"
+}
