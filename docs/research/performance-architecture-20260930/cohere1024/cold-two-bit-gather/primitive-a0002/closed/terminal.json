@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-two-bit-gather-primitive-v2",
+  "instance_id": "i-000581d6e3b92ef88",
+  "phase": "probe",
+  "original_exit": 42,
+  "exit": 42,
+  "native_exit": 42,
+  "candidate_commit": "45456b5168043d5405b7b792ed9360be5e657cfc",
+  "elf_sha256": "6ebd599e908ccc94802c8d4c92f647bbbbbb962250f95b48ad4bafe6b0167045",
+  "elf_bytes": 88558264,
+  "native_source_file_count": 415,
+  "native_source_identity_sha256": "687be03f5a5c1cbbb8834d55a2e02c5818c87493cb8fb0099b04eefa62cb3d7e",
+  "evidence": {
+    "bytes": 20831,
+    "sha256": "ed0370a42e305a2c0a5538ccf26bd23bf84a1dd41878ca2c36df96c9e3a85e05"
+  },
+  "scope": "bounded same-ELF ordered two-bit gather primitive; no ANN/corpus/query/truth or cold vendor claim",
+  "performance_claim": false
+}
