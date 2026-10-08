@@ -1,0 +1,72 @@
+{
+  "schema": "borsuk-two-bit-gather-primitive-v2-protocol",
+  "status": "PENDING_EXACT_METHOD_V2_COMPILE_AND_CODEGEN",
+  "prefix": "research/semantic-router/20261008/cold-two-bit-gather-primitive-a0002",
+  "candidate_commit": "45456b5168043d5405b7b792ed9360be5e657cfc",
+  "native_identity": "687be03f5a5c1cbbb8834d55a2e02c5818c87493cb8fb0099b04eefa62cb3d7e",
+  "compile_receipt": null,
+  "codegen_receipt": null,
+  "same_retained_elf": null,
+  "inputs": {
+    "probe.sh": {
+      "bytes": 2070,
+      "sha256": "ece48c77155b70226a2be8102a693c9ef7c5d8f7add8a591f90e8c206816b7be"
+    },
+    "probe-check.py": {
+      "bytes": 5701,
+      "sha256": "8c8fa37f39f2aa51768b075d046dad59e47059131327be3395384b4f2469c73e"
+    },
+    "gates.sh": {
+      "bytes": 3062,
+      "sha256": "00937a9459ff199af23217675020683c83f62bfe3f22364c40e17f3c02bc6d4f"
+    }
+  },
+  "userdata": null,
+  "probe_caps": {
+    "cpu": 1,
+    "allowed_cpus": [
+      0
+    ],
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "cpu_seconds": 30,
+    "wall_seconds": 120
+  },
+  "host": {
+    "type": "c7i.2xlarge",
+    "market": "Spot",
+    "machine_seconds": 1200,
+    "ebs_gib": 20,
+    "cpu": 2,
+    "memory_bytes": 8589934592,
+    "swap": 0
+  },
+  "cost_reservation": {
+    "compute_usd": 0.2,
+    "ancillary_usd": 0.15,
+    "spot_bid_max_usd_hour": 0.5
+  },
+  "screen": {
+    "geometries": 8,
+    "ordered_records": 80,
+    "blocks": 5,
+    "D1024_full_and_tail_median_max_ratio": 0.8,
+    "both_order_subsets_required": true,
+    "other_geometry_max_regression": 0.05,
+    "target_encoded_bytes_per_cell": 268435456,
+    "minimum_cell_cpu_ns": 50000000
+  },
+  "canary": "separate native --list disposable unit before timing; no ANN/data/truth",
+  "native_builds": 0,
+  "saved_s3_rerun": false,
+  "performance_scope": "primitive CPU only; no vendor/cold win",
+  "interruption": "INVALID; no automatic retry",
+  "remaining_admission": [
+    "exact closed compile-a0003 proof",
+    "exact current ELF and ordered assembly proof",
+    "current ELF identity",
+    "userdata hash",
+    "source-bound asset admission and native list canary"
+  ]
+}
