@@ -1,0 +1,16 @@
+{
+  "status": "MECHANICS_QUALIFIED_ONLY",
+  "source_commit": "caacd533c8e616705433891257d5d152cf592380",
+  "previous_attempts_preserved": [
+    "a0001",
+    "a0002"
+  ],
+  "summary": "84 fault tests, 44 real canary checks and all 12 native mechanics cases passed; original instance terminated before collection; independent six-asset and full-manifest replay passed",
+  "limits": "CPU1/AllowedCPUs0/256MiB/noSwap/pids128; phase120/120/300s; machine1800s",
+  "claims": {
+    "numerical_CPU_accuracy": false,
+    "overhead_GO": false,
+    "performance": false
+  },
+  "next": "Generic Rust scale admission and profile-preserving in-process compaction/restart/delete-all/refill; no new ANN benchmark numbers"
+}

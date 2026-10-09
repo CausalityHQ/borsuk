@@ -1,0 +1,68 @@
+{
+  "schema": "borsuk-native-cpu-mechanics-frozen-v1",
+  "frozen_at": "2026-10-09T08:12:29Z",
+  "driver_commit": "caacd533c8e616705433891257d5d152cf592380",
+  "driver_sha256": "1f17e7432af5c6c92148a85b9ecf89baf2de1060fb31e69b4b1d1a78d5211602",
+  "instance_request_sha256": "ea08c77087d01cae8d9e227f3a9a87651242febed990df84ec2fcb851becd894",
+  "userdata_sha256": "c5667676215ef9d1d5c9dc92b2856a8dd48d0127cc82e43fc6345b9258ec0e3d",
+  "watcher_sha256": "7f5ca292ea44bb58b4f528d39c9d847d7b552061ff14e46f4676647dea1123f9",
+  "assets": [
+    {
+      "name": "driver.sh",
+      "local_path": "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/fixture-driver-d5fd3ff1-unverified/verification-assets-a0003/driver.sh",
+      "s3_key": "research/semantic-router/20261009/native-cpu-fixture-mechanics-a0003/inputs/driver.sh",
+      "bytes": 71939,
+      "sha256": "1f17e7432af5c6c92148a85b9ecf89baf2de1060fb31e69b4b1d1a78d5211602"
+    },
+    {
+      "name": "fault-harness.sh",
+      "local_path": "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/fixture-driver-d5fd3ff1-unverified/verification-assets-a0003/fault-harness.sh",
+      "s3_key": "research/semantic-router/20261009/native-cpu-fixture-mechanics-a0003/inputs/fault-harness.sh",
+      "bytes": 60604,
+      "sha256": "8282d300191275c4011edb58c5eee229b8ede8232c3c446c0dae849b9b8dd291"
+    },
+    {
+      "name": "target-canary.sh",
+      "local_path": "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/fixture-driver-d5fd3ff1-unverified/verification-assets-a0003/target-canary.sh",
+      "s3_key": "research/semantic-router/20261009/native-cpu-fixture-mechanics-a0003/inputs/target-canary.sh",
+      "bytes": 21740,
+      "sha256": "0013d923e96a61e9bb38fc2f163d912616f3686210e2b53c610224e9b5177aab"
+    },
+    {
+      "name": "run-stages.sh",
+      "local_path": "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/fixture-driver-d5fd3ff1-unverified/verification-assets-a0003/run-stages.sh",
+      "s3_key": "research/semantic-router/20261009/native-cpu-fixture-mechanics-a0003/inputs/run-stages.sh",
+      "bytes": 3551,
+      "sha256": "bb7d1942e8385872807debc87179d5a6d8895db1321725ecc237b0acb9369dd1"
+    },
+    {
+      "name": "stage-admit.sh",
+      "local_path": "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/fixture-driver-d5fd3ff1-unverified/verification-assets-a0003/stage-admit.sh",
+      "s3_key": "research/semantic-router/20261009/native-cpu-fixture-mechanics-a0003/inputs/stage-admit.sh",
+      "bytes": 743,
+      "sha256": "d079e1fac2804c0aecbc055afd2a89e33c80cf6dadedb09204be96e7e481d591"
+    },
+    {
+      "name": "native_process_cpu",
+      "local_path": "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/native_process_cpu",
+      "s3_key": "research/semantic-router/20261009/native-lifecycle-cpu-qualification-a0001/supplemental/native_process_cpu",
+      "bytes": 826456,
+      "sha256": "1ce0405566852577e15dae1b7beeb626626af561d716af45baa75add4f6c4b74"
+    }
+  ],
+  "maximum_machine_seconds_from_request": 1800,
+  "reserved_total_usd": "0.15",
+  "no_retry": true,
+  "spot_interruption": "INVALID/incomplete; preserve original; no automatic relaunch",
+  "gate_order": [
+    "84 exact-source fault tests",
+    "44 real dummy canary checks",
+    "once-only 12 native mechanics calls"
+  ],
+  "claims": {
+    "performance": false,
+    "numerical_cpu_accuracy": false,
+    "overhead_GO": false
+  },
+  "acceptance": "Original exits and independent closed archive replay; exact same instance termination before collection"
+}

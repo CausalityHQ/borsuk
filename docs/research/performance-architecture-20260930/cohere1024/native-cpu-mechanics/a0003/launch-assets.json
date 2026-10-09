@@ -1,0 +1,49 @@
+{
+  "status": "PENDING_UPLOAD",
+  "assets": [
+    {
+      "name": "driver.sh",
+      "local_path": "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/fixture-driver-d5fd3ff1-unverified/verification-assets-a0003/driver.sh",
+      "s3_key": "research/semantic-router/20261009/native-cpu-fixture-mechanics-a0003/inputs/driver.sh",
+      "bytes": 71939,
+      "sha256": "1f17e7432af5c6c92148a85b9ecf89baf2de1060fb31e69b4b1d1a78d5211602"
+    },
+    {
+      "name": "fault-harness.sh",
+      "local_path": "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/fixture-driver-d5fd3ff1-unverified/verification-assets-a0003/fault-harness.sh",
+      "s3_key": "research/semantic-router/20261009/native-cpu-fixture-mechanics-a0003/inputs/fault-harness.sh",
+      "bytes": 60604,
+      "sha256": "8282d300191275c4011edb58c5eee229b8ede8232c3c446c0dae849b9b8dd291"
+    },
+    {
+      "name": "target-canary.sh",
+      "local_path": "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/fixture-driver-d5fd3ff1-unverified/verification-assets-a0003/target-canary.sh",
+      "s3_key": "research/semantic-router/20261009/native-cpu-fixture-mechanics-a0003/inputs/target-canary.sh",
+      "bytes": 21740,
+      "sha256": "0013d923e96a61e9bb38fc2f163d912616f3686210e2b53c610224e9b5177aab"
+    },
+    {
+      "name": "run-stages.sh",
+      "local_path": "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/fixture-driver-d5fd3ff1-unverified/verification-assets-a0003/run-stages.sh",
+      "s3_key": "research/semantic-router/20261009/native-cpu-fixture-mechanics-a0003/inputs/run-stages.sh",
+      "bytes": 3551,
+      "sha256": "bb7d1942e8385872807debc87179d5a6d8895db1321725ecc237b0acb9369dd1"
+    },
+    {
+      "name": "stage-admit.sh",
+      "local_path": "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/fixture-driver-d5fd3ff1-unverified/verification-assets-a0003/stage-admit.sh",
+      "s3_key": "research/semantic-router/20261009/native-cpu-fixture-mechanics-a0003/inputs/stage-admit.sh",
+      "bytes": 743,
+      "sha256": "d079e1fac2804c0aecbc055afd2a89e33c80cf6dadedb09204be96e7e481d591"
+    },
+    {
+      "name": "native_process_cpu",
+      "local_path": "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/native_process_cpu",
+      "s3_key": "research/semantic-router/20261009/native-lifecycle-cpu-qualification-a0001/supplemental/native_process_cpu",
+      "bytes": 826456,
+      "sha256": "1ce0405566852577e15dae1b7beeb626626af561d716af45baa75add4f6c4b74"
+    }
+  ],
+  "no_native_execution_yet": true,
+  "performance_claim": false
+}

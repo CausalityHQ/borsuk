@@ -1,0 +1,42 @@
+{
+  "status": "MECHANICS_QUALIFIED_ONLY",
+  "instance_id": "i-0859cfa4af1c46825",
+  "terminated": true,
+  "original_watcher_exit": 0,
+  "driver_commit": "caacd533c8e616705433891257d5d152cf592380",
+  "driver_sha256": "1f17e7432af5c6c92148a85b9ecf89baf2de1060fb31e69b4b1d1a78d5211602",
+  "archive": {
+    "bytes": 1205701,
+    "sha256": "31f6007a0a237ff6103580dca524567a2f8e2bdc5115995d6353687eec46d527"
+  },
+  "six_asset_bodies_exact_match": true,
+  "original_stage_exits": [
+    0,
+    0,
+    0
+  ],
+  "faults": {
+    "passed": 84,
+    "failed": 0,
+    "skipped": 0
+  },
+  "canary": {
+    "checks": 44,
+    "all_pass": true,
+    "manifest_verified": true
+  },
+  "native": {
+    "cases": 12,
+    "fixture_processes": 15,
+    "mock_seams_active": false,
+    "deadline_fired": false,
+    "result_terminal_hashes_verified": true,
+    "full_manifest_verified": true
+  },
+  "claims": {
+    "performance": false,
+    "numerical_CPU_accuracy": false,
+    "overhead_GO": false
+  },
+  "integration_pending": true
+}
