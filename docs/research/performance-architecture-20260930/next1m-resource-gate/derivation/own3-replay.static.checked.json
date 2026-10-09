@@ -1,0 +1,35 @@
+{
+  "archive_repair": "all header identities and file-as-directory ancestor checks",
+  "bytes": 60816,
+  "candidate": "9244e2a721a917070b1bd90c285b910e44e00179",
+  "checks": {
+    "defect_handler_exit_2_ast": 0,
+    "diff_check": 0,
+    "exact_one_file": 0,
+    "operator_identity": 0,
+    "py_compile": 0
+  },
+  "limits": {
+    "allowed_cpus": "0",
+    "cpu_percent": 100,
+    "memory_bytes": 268435456,
+    "runtime_seconds": 120,
+    "swap_bytes": 0,
+    "tasks": 128
+  },
+  "native_qualification": false,
+  "performance_claim": false,
+  "preserved_parent": "99753cfc23bdfc97504992c65c30f7d6fd23b749",
+  "remaining": [
+    "disposable composition canary",
+    "target cloud-init 0/2/3 mapping",
+    "root EC2 volume deletion evidence",
+    "real role input write denial",
+    "independent replay on target evidence"
+  ],
+  "resource_unit": "3c5b857b783e46e9a405ec8980a7db0a",
+  "runtime_executed": false,
+  "schema": "borsuk-native-scale-replay-source-check-v1",
+  "sha256": "147672f9493b616ea748b566b16f805ed758b4b55b7742dcff5c7fac08561109",
+  "status": "SOURCE_CHECKED_RUNTIME_UNVERIFIED"
+}
