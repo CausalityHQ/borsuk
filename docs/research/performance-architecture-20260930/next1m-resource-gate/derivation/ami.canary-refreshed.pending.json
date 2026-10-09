@@ -1,0 +1,30 @@
+[
+    {
+        "ImageId": "ami-0b8a830d6339a9758",
+        "State": "available",
+        "Architecture": "x86_64",
+        "RootDeviceName": "/dev/sda1",
+        "RootDeviceType": "ebs",
+        "VirtualizationType": "hvm",
+        "BlockDeviceMappings": [
+            {
+                "Ebs": {
+                    "DeleteOnTermination": true,
+                    "SnapshotId": "snap-092018bfedac13319",
+                    "VolumeSize": 8,
+                    "VolumeType": "gp3",
+                    "Encrypted": false
+                },
+                "DeviceName": "/dev/sda1"
+            },
+            {
+                "DeviceName": "/dev/sdb",
+                "VirtualName": "ephemeral0"
+            },
+            {
+                "DeviceName": "/dev/sdc",
+                "VirtualName": "ephemeral1"
+            }
+        ]
+    }
+]

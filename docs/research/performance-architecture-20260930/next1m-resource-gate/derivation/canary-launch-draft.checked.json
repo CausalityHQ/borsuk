@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-next1m-canary-launch-draft-check-v1",
+  "status": "PENDING_NOT_LAUNCH_ADMITTED",
+  "launch_request_sha256": "57fcbdce5ddd2455ff818414d1cdcf97a1d368b2faedd162d1c25dfe2be92726",
+  "launch_request_check": {"unit": "run-p2439991-i665023908.service", "invocation_id": "0135b03305ea426a8a4f3abdd6b5d4de", "exit": 0},
+  "ami_metadata_sha256": "bd1e27b1a5a33d8b88d69fd519facbb052e905a5703b92c1ebaef470da3f050f",
+  "ami_check": {"unit": "run-p2580585-i665166332.service", "exit": 0, "state": "available", "architecture": "x86_64", "root_device": "/dev/sda1"},
+  "spot_metadata_sha256": "522bdb082fb9e92b3133b7bfff5d9a22664bb9a55df7dc2ac5a08def994c098f",
+  "spot_check": {"unit": "run-p2580587-i665162274.service", "exit": 0, "price_usd_per_hour": "0.204400", "price_timestamp": "2026-10-09T18:00:00+00:00", "capacity_guaranteed": false},
+  "proposed_bid_usd_per_hour": "0.59",
+  "proposed_root_gib": 80,
+  "proposed_fresh_scratch_gib": 40,
+  "encrypted_delete_on_termination": true,
+  "pending_fields": ["controller_authority_pending", "ClientToken", "UserData", "instance_Name_tag"],
+  "source_review_complete": false,
+  "runtime_canary_run": false,
+  "instance_launched": false,
+  "performance_claim": false
+}
