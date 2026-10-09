@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-sq8-attribution-native-admission-closed-v1",
+  "instance_id": "i-09dd6eda0a44bd8a1",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 0,
+  "binary_source_commit": "516ee0fd1faf79498ebf2818accd7985c6549f62",
+  "integration_commit": "fd408f6f6868cc38c0208f94ad27cadd4dd0b769",
+  "qualified_source_identity_sha256": "ac878008affeaab7115e463038b68a59ef220feea865f195c0920d42d394af77",
+  "evidence": {
+    "bytes": 1382945,
+    "sha256": "abd72f384c5c82d85a4826d2e918010f3c05519afbe38e60151d2654984e9c24"
+  },
+  "terminal_delivery": "attempted",
+  "performance_claim": false
+}

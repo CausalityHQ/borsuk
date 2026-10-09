@@ -1,0 +1,84 @@
+{
+  "status": "REAL_INPUT_ADMITTED",
+  "candidate": "516ee0fd1faf79498ebf2818accd7985c6549f62",
+  "instance_id": "i-09dd6eda0a44bd8a1",
+  "terminated": true,
+  "binary": {
+    "bytes": 16843992,
+    "sha256": "e39b0bfd18a6a98c2830046ae2d0bbe386991bd86812fed9810fa3d8232fb836"
+  },
+  "selected_original_queries": 128,
+  "native_searches": 512,
+  "runs": [
+    {
+      "run": "A_first-untraced",
+      "queries": 64,
+      "semantic_parity": true,
+      "old_recall_parity": true,
+      "sealed_before_truth": true,
+      "diagnostic_on": false
+    },
+    {
+      "run": "A_first-trace",
+      "queries": 64,
+      "semantic_parity": true,
+      "old_recall_parity": true,
+      "sealed_before_truth": true,
+      "diagnostic_on": true
+    },
+    {
+      "run": "B_first-untraced",
+      "queries": 64,
+      "semantic_parity": true,
+      "old_recall_parity": true,
+      "sealed_before_truth": true,
+      "diagnostic_on": false
+    },
+    {
+      "run": "B_first-trace",
+      "queries": 64,
+      "semantic_parity": true,
+      "old_recall_parity": true,
+      "sealed_before_truth": true,
+      "diagnostic_on": true
+    },
+    {
+      "run": "B_last-untraced",
+      "queries": 64,
+      "semantic_parity": true,
+      "old_recall_parity": true,
+      "sealed_before_truth": true,
+      "diagnostic_on": false
+    },
+    {
+      "run": "B_last-trace",
+      "queries": 64,
+      "semantic_parity": true,
+      "old_recall_parity": true,
+      "sealed_before_truth": true,
+      "diagnostic_on": true
+    },
+    {
+      "run": "A_last-untraced",
+      "queries": 64,
+      "semantic_parity": true,
+      "old_recall_parity": true,
+      "sealed_before_truth": true,
+      "diagnostic_on": false
+    },
+    {
+      "run": "A_last-trace",
+      "queries": 64,
+      "semantic_parity": true,
+      "old_recall_parity": true,
+      "sealed_before_truth": true,
+      "diagnostic_on": true
+    }
+  ],
+  "all_original_requests_authenticated": true,
+  "all_selected_ordered_ID_scorebit_plan_trace_charge_parity": true,
+  "no_quality_change": true,
+  "performance_claim": false,
+  "vendor_win_claim": false,
+  "overhead_acceptance": "NOT_EVALUATED_SEPARATE_CANARY_REQUIRED"
+}
