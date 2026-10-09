@@ -43,7 +43,7 @@ const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
 // v4 adds the required explicit `execution` (full or diagnostic panel); v3 and older refuse.
 const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v4";
 const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v4";
-const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v1";
+const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v2";
 // Diagnostic panel bounds. A panel line is serialized and admitted whole (newline included)
 // below this cap BEFORE any byte is published; full execution keeps LINE_CAP unchanged.
 const PANEL_MAX_ORDINALS: usize = 128;
@@ -4505,6 +4505,7 @@ mod tests {
             for query in &on {
                 let diag = &query["diagnostic"];
                 assert_eq!(diag["schema"], DIAGNOSTIC_SCHEMA);
+                assert_eq!(diag["schema"], "borsuk-sq8-range-attribution-diagnostic-v2");
                 let trace = &diag["sq8_range_trace"];
                 let fields = trace["range_fields"].as_array().unwrap();
                 assert_eq!(fields.len(), 22);

@@ -1,0 +1,84 @@
+{
+  "status": "NATIVE_QUALIFIED_COMPILER_AND_SYNTHETIC_CORRECTNESS_ONLY",
+  "candidate": "b82e524c5fe4d50a0428af887f5c3fb23785e97e",
+  "instance_id": "i-0174741616505dbda",
+  "terminated": true,
+  "source_file_count": 425,
+  "native_source_identity_sha256": "7a3f7af1f50add7ec36b98c3133cfe42199d0e7b8ffa3ccb7d392fb1f832e852",
+  "full_source_before_after_root_match": true,
+  "stages": [
+    {
+      "name": "range-inventory",
+      "command": "cargo test --locked -p borsuk --lib sq8_s3_range::tests -- --list",
+      "exit": 0
+    },
+    {
+      "name": "rank-inventory",
+      "command": "cargo test --locked -p borsuk --lib returned_sq8::tests -- --list",
+      "exit": 0
+    },
+    {
+      "name": "lib-inventory",
+      "command": "cargo test --locked -p borsuk --lib source_walk_tests -- --list",
+      "exit": 0
+    },
+    {
+      "name": "bin-inventory",
+      "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --list",
+      "exit": 0
+    },
+    {
+      "name": "affected-ranges",
+      "command": "cargo test --locked -p borsuk --lib sq8_s3_range::tests -- --test-threads=1",
+      "exit": 0
+    },
+    {
+      "name": "affected-ranking",
+      "command": "cargo test --locked -p borsuk --lib returned_sq8::tests -- --test-threads=1",
+      "exit": 0
+    },
+    {
+      "name": "range-layout",
+      "command": "cargo test --locked -p borsuk --lib sq8_s3_range::tests::range_future_and_outcome_layout_stay_within_the_modeled_allowance -- --exact --nocapture --test-threads=1",
+      "exit": 0
+    },
+    {
+      "name": "affected-lib",
+      "command": "cargo test --locked -p borsuk --lib source_walk_tests -- --test-threads=1",
+      "exit": 0
+    },
+    {
+      "name": "affected-bin",
+      "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+      "exit": 0
+    },
+    {
+      "name": "release",
+      "command": "cargo build --release --locked -p borsuk --lib --bin check_cohere_native_baseline",
+      "exit": 0
+    },
+    {
+      "name": "clippy",
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "exit": 0
+    },
+    {
+      "name": "test-build",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "exit": 0
+    }
+  ],
+  "test_counts": {
+    "ranges": 20,
+    "ranking": 6,
+    "generation": 30,
+    "bin": 26
+  },
+  "binary": {
+    "bytes": 16849216,
+    "sha256": "aee74ada05fef61ae4bf3dcea5fd53a1a2353ec00a6d7c7c82269f3c18f33f31"
+  },
+  "ann_run": false,
+  "performance_claim": false,
+  "quality_claim": false
+}

@@ -850,19 +850,23 @@ async fn fetch_verified_pages_core(
         span.outcome = "store_body";
     });
     let mut collected = BytesMut::with_capacity(expected_len);
+    let mut mark = probe.as_deref().map(Probe::now_ns);
     loop {
-        let waited_from = probe.as_deref().map(Probe::now_ns);
         let next = stream.next().await;
-        if let (Some(probe), Some(from)) = (probe.as_deref_mut(), waited_from) {
-            let now = probe.now_ns();
-            probe.span.note_wait(from, now);
+        let arrived = probe.as_deref().map(Probe::now_ns);
+        if let (Some(probe), Some(from), Some(to)) = (probe.as_deref_mut(), mark, arrived) {
+            probe.span.note_wait(from, to);
         }
         let Some(next) = next else {
-            stamp(&mut probe, |span, ns| span.eof_ns = Some(ns));
+            if let (Some(probe), Some(ns)) = (probe.as_deref_mut(), arrived) {
+                probe.span.eof_ns = Some(ns);
+            }
             break;
         };
         let chunk = next.map_err(RangeFetchError::Store)?;
-        stamp(&mut probe, |span, ns| span.note_chunk(ns, chunk.len()));
+        if let (Some(probe), Some(ns)) = (probe.as_deref_mut(), arrived) {
+            probe.span.note_chunk(ns, chunk.len());
+        }
         let new_len = collected
             .len()
             .checked_add(chunk.len())
@@ -871,11 +875,10 @@ async fn fetch_verified_pages_core(
             stamp(&mut probe, |span, _| span.outcome = "overlong");
             return Err(RangeFetchError::UnexpectedMetadata);
         }
-        let copied_from = probe.as_deref().map(Probe::now_ns);
         collected.extend_from_slice(&chunk);
-        if let (Some(probe), Some(from)) = (probe.as_deref_mut(), copied_from) {
-            let now = probe.now_ns();
-            probe.span.note_copy(from, now);
+        mark = probe.as_deref().map(Probe::now_ns);
+        if let (Some(probe), Some(from), Some(to)) = (probe.as_deref_mut(), arrived, mark) {
+            probe.span.note_copy(from, to);
         }
     }
     let bytes = collected.freeze();
@@ -903,8 +906,16 @@ struct Probe {
     span: RangeSpan,
 }
 
+// Keep test instrumentation outside the async frame and its admission model.
+#[cfg(test)]
+thread_local! {
+    static PROBE_CLOCK_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 impl Probe {
     fn now_ns(&self) -> u64 {
+        #[cfg(test)]
+        PROBE_CLOCK_READS.with(|reads| reads.set(reads.get() + 1));
         ns_since(self.origin)
     }
 }
@@ -946,8 +957,9 @@ const OUTCOME_VECTOR_GROWTH_FACTOR: usize = 3;
 /// trace's origin. `None` means the boundary was never reached, never zero.
 /// Ranges overlap in time: never sum their intervals. The headers interval
 /// (`request_ns` to `headers_ns`) is `get_opts` as a whole: client queue,
-/// connect, TLS and server combined. Body gaps are application-observed waits
-/// inside `stream.next()` (including executor scheduling), not packet arrival.
+/// connect, TLS and server combined. Body gaps include `stream.next()`, executor
+/// scheduling and loop-back observer bookkeeping; they do not identify TCP waits.
+/// Observer bookkeeping has no asserted nanosecond error bound.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RangeSpan {
     /// Position in the sorted range plan.
@@ -979,10 +991,13 @@ pub struct RangeSpan {
     /// Body frames received and their total bytes, including any overlong frame.
     pub chunks: u32,
     pub body_bytes: u64,
-    /// Longest single wait for the next body frame, and when that wait ended.
+    /// Longest interval from prior copy completion (or the initial pre-poll mark)
+    /// to next body frame or EOF, including loop-back observer bookkeeping,
+    /// and when that interval ended.
     pub max_body_gap_ns: u64,
     pub max_body_gap_end_ns: Option<u64>,
-    /// Aggregate time and count of the inline body copies into the collector.
+    /// Aggregate arrival-to-copy-completion time and copy count; time includes
+    /// note_wait, note_chunk and length validation, rather than pure memcpy time.
     pub copy_ns: u64,
     pub copy_count: u32,
     /// Where the range stopped: invalid_request, store_headers, metadata, store_body,
@@ -1801,6 +1816,283 @@ mod tests {
         )
         .unwrap();
         (authority, object)
+    }
+
+    /// Script the collector's exact stream items, independent of HTTP coalescing.
+    #[derive(Debug)]
+    struct ChunkStore {
+        inner: InMemory,
+        chunks: Vec<Option<Bytes>>,
+    }
+
+    impl std::fmt::Display for ChunkStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("chunk-fixture")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for ChunkStore {
+        async fn get_opts(
+            &self,
+            path: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<object_store::GetResult> {
+            let mut result = self.inner.get_opts(path, options).await?;
+            result.payload = GetResultPayload::Stream(
+                stream::iter(self.chunks.clone().into_iter().map(|chunk| {
+                    chunk.ok_or_else(|| object_store::Error::Generic {
+                        store: "chunk-fixture",
+                        source: std::io::Error::other("injected EOF error").into(),
+                    })
+                }))
+                .boxed(),
+            );
+            Ok(result)
+        }
+
+        async fn put_opts(
+            &self,
+            path: &Path,
+            body: PutPayload,
+            options: object_store::PutOptions,
+        ) -> object_store::Result<object_store::PutResult> {
+            self.inner.put_opts(path, body, options).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            path: &Path,
+            options: object_store::PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+            self.inner.put_multipart_opts(path, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            paths: stream::BoxStream<'static, object_store::Result<Path>>,
+        ) -> stream::BoxStream<'static, object_store::Result<Path>> {
+            self.inner.delete_stream(paths)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<object_store::ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: object_store::CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+
+    fn assert_body_boundaries(span: &RangeSpan) {
+        let chain = [
+            span.first_poll_ns,
+            span.request_ns,
+            span.headers_ns,
+            span.metadata_ns,
+            span.first_chunk_ns,
+            span.last_chunk_ns,
+            span.eof_ns,
+            span.auth_start_ns,
+            span.auth_end_ns,
+            span.complete_ns,
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        assert!(chain.windows(2).all(|w| w[0] <= w[1]), "{chain:?}");
+        if let Some(eof) = span.eof_ns {
+            let metadata = span.metadata_ns.unwrap();
+            assert!(span.copy_ns + span.max_body_gap_ns <= eof - metadata);
+            if let Some(gap_end) = span.max_body_gap_end_ns {
+                assert!(metadata <= gap_end && gap_end <= eof);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn traced_body_clock_reuse_counts_chunks_and_failure_boundaries() {
+        let (authority, object) = short_tail_authority();
+        let tail = Bytes::copy_from_slice(&object[3328..]);
+        let mut changed = tail.to_vec();
+        changed[0] ^= 1;
+        let mut overlong = tail.to_vec();
+        overlong.push(0);
+        let cases = [
+            ("coalesced", vec![Some(tail.clone())], "ok", 1, 1, 11),
+            (
+                "multi-empty",
+                vec![
+                    Some(tail.slice(..17)),
+                    Some(Bytes::new()),
+                    Some(tail.slice(17..)),
+                ],
+                "ok",
+                3,
+                3,
+                15,
+            ),
+            (
+                "eof-error",
+                vec![Some(tail.clone()), None],
+                "store_body",
+                1,
+                1,
+                9,
+            ),
+            (
+                "overlong",
+                vec![Some(Bytes::from(overlong))],
+                "overlong",
+                1,
+                0,
+                8,
+            ),
+            (
+                "truncated",
+                vec![Some(tail.slice(..tail.len() - 1))],
+                "page_auth",
+                1,
+                1,
+                11,
+            ),
+            ("empty-body", vec![], "page_auth", 0, 0, 9),
+            (
+                "auth-failure",
+                vec![Some(Bytes::from(changed))],
+                "page_auth",
+                1,
+                1,
+                11,
+            ),
+        ];
+        for (name, chunks, outcome, chunk_count, copy_count, clock_count) in cases {
+            let store = ChunkStore {
+                inner: InMemory::new(),
+                chunks,
+            };
+            let location = Path::from("sq8.bin");
+            let etag = store
+                .put(&location, PutPayload::from(object.clone()))
+                .await
+                .unwrap()
+                .e_tag
+                .unwrap();
+            for tracing in [false, true] {
+                PROBE_CLOCK_READS.with(|reads| reads.set(0));
+                let (result, probe) = fetch_verified_pages_traced(
+                    &store,
+                    &location,
+                    &authority,
+                    1,
+                    1,
+                    &etag,
+                    tail.len(),
+                    tracing.then(|| (Instant::now(), 0)),
+                )
+                .await;
+                assert_eq!(result.is_ok(), outcome == "ok", "{name}");
+                assert_eq!(
+                    PROBE_CLOCK_READS.with(|reads| reads.get()),
+                    if tracing { clock_count } else { 0 },
+                    "{name}"
+                );
+                if let Ok(verified) = result.as_ref() {
+                    assert_eq!(verified.start, 3328);
+                    assert_eq!(verified.bytes, tail);
+                }
+                match name {
+                    "eof-error" => assert!(matches!(result, Err(RangeFetchError::Store(_)))),
+                    "overlong" => {
+                        assert!(matches!(result, Err(RangeFetchError::UnexpectedMetadata)))
+                    }
+                    "auth-failure" => assert!(matches!(
+                        result,
+                        Err(RangeFetchError::Page(PageError::HashMismatch))
+                    )),
+                    _ => (),
+                }
+                if let Some(probe) = probe {
+                    let span = &probe.span;
+                    assert_eq!(span.outcome, outcome, "{name}");
+                    assert_eq!(
+                        (span.chunks, span.copy_count),
+                        (chunk_count, copy_count),
+                        "{name}"
+                    );
+                    let expected_bytes =
+                        store.chunks.iter().flatten().map(Bytes::len).sum::<usize>();
+                    assert_eq!(span.body_bytes, expected_bytes as u64, "{name}");
+                    assert_eq!(
+                        span.eof_ns.is_some(),
+                        !matches!(name, "eof-error" | "overlong")
+                    );
+                    assert_eq!(span.auth_start_ns.is_some(), span.eof_ns.is_some());
+                    assert_eq!(span.auth_end_ns.is_some(), span.eof_ns.is_some());
+                    assert_eq!(span.first_chunk_ns.is_some(), chunk_count > 0);
+                    assert_eq!(span.last_chunk_ns.is_some(), chunk_count > 0);
+                    assert!(span.complete_ns.is_some());
+                    assert_body_boundaries(span);
+                    if outcome == "ok" {
+                        // Four pre-body boundaries + initial mark + EOF + auth pair + completion.
+                        assert_eq!(clock_count, 2 * u64::from(span.chunks) + 9);
+                    }
+                } else {
+                    assert!(!tracing);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn real_http_traced_body_clock_count_matches_delivered_chunks() {
+        let (authority, object) = short_tail_authority();
+        let tail = &object[3328..];
+        let (reader, stop, requests, server) = http_fixture(http_response(
+            "206 Partial Content",
+            Some("bytes 3328-3548/3549"),
+            "\"frozen\"",
+            tail.len(),
+            tail,
+        ));
+        PROBE_CLOCK_READS.with(|reads| reads.set(0));
+        let (result, probe) = fetch_verified_pages_traced(
+            reader.store(),
+            &Path::from("sq8.bin"),
+            &authority,
+            1,
+            1,
+            "\"frozen\"",
+            tail.len(),
+            Some((Instant::now(), 0)),
+        )
+        .await;
+        let reads = PROBE_CLOCK_READS.with(|reads| reads.get());
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+        assert_eq!(result.unwrap().bytes.as_ref(), tail);
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        let span = &probe.unwrap().span;
+        assert!(span.chunks >= 1);
+        assert_eq!(span.chunks, span.copy_count);
+        assert_eq!(span.body_bytes, tail.len() as u64);
+        assert_eq!(reads, 2 * u64::from(span.chunks) + 9);
+        assert_body_boundaries(span);
     }
 
     fn http_response(

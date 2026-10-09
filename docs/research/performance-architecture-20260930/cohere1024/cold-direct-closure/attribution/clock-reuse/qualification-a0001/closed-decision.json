@@ -1,0 +1,41 @@
+{
+  "status": "NATIVE_QUALIFIED_COMPILER_AND_SYNTHETIC_CORRECTNESS_ONLY",
+  "candidate": "b82e524c5fe4d50a0428af887f5c3fb23785e97e",
+  "instance_id": "i-0174741616505dbda",
+  "terminated_before_collection": true,
+  "original_watcher_session": 43463,
+  "watcher_exit": 0,
+  "root_verifier_exit": 0,
+  "root_verifier_unit": "borsuk-clock-reuse-root-verify-a0001",
+  "root_verifier_runtime_seconds": 4.42,
+  "root_verifier_cpu_seconds": 0.444,
+  "root_verifier_peak_reported": "115.6M",
+  "root_verifier_swap_bytes": 0,
+  "test_counts": {
+    "ranges": 20,
+    "ranking": 6,
+    "generation": 30,
+    "bin": 26
+  },
+  "binary": {
+    "bytes": 16849216,
+    "sha256": "aee74ada05fef61ae4bf3dcea5fd53a1a2353ec00a6d7c7c82269f3c18f33f31"
+  },
+  "native_source_identity_sha256": "7a3f7af1f50add7ec36b98c3133cfe42199d0e7b8ffa3ccb7d392fb1f832e852",
+  "evidence": {
+    "bytes": 828227,
+    "sha256": "6803945f543fff8cc6f4fdb052b2b46bf8c84cd1aec88559fd177452d4eaa347"
+  },
+  "clock_reads_success": "2*delivered_chunks+9 Probe::now_ns calls",
+  "disabled_scope": "zero Probe::now_ns calls; no runtime speed claim",
+  "future_sizes": {
+    "production": 576,
+    "body": 448,
+    "plain": 528
+  },
+  "canary_a0001": "INCONCLUSIVE_UNCHANGED",
+  "ann_run": false,
+  "performance_claim": false,
+  "vendor_win_claim": false,
+  "performance_launch_authorized": false
+}

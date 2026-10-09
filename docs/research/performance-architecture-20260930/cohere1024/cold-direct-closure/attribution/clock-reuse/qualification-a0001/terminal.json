@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-sq8-clock-reuse-native-qualification-closed-v1",
+  "instance_id": "i-0174741616505dbda",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "qualification_exit": 0,
+  "source_commit": "b82e524c5fe4d50a0428af887f5c3fb23785e97e",
+  "native_source_file_count": 425,
+  "native_source_identity_sha256": "7a3f7af1f50add7ec36b98c3133cfe42199d0e7b8ffa3ccb7d392fb1f832e852",
+  "source_archive_sha256": "7ad0b09bb2077e9a125da698a0a3a819772a4f6c54ea9827261b0157a4f30248",
+  "evidence": {
+    "bytes": 828227,
+    "sha256": "6803945f543fff8cc6f4fdb052b2b46bf8c84cd1aec88559fd177452d4eaa347"
+  },
+  "scope": "compiler and synthetic correctness qualification only",
+  "ann_run": false,
+  "performance_claim": false,
+  "quality_claim": false
+}
